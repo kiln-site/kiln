@@ -16,6 +16,7 @@ import type { BackupRun } from "@/lib/backup-runs"
 import { relayFleetInstance } from "@/lib/relay-fleet"
 import {
   accessCapabilitiesQueryOptions,
+  appBackupsQueryOptions,
   appDirectoryQueryOptions,
   backupRunsInfiniteQueryOptions,
   backupStorageQueryOptions,
@@ -130,6 +131,120 @@ it("resolves backup identity cards by target kind and Relay, keeping missing tar
   } finally {
     client.clear()
   }
+})
+
+it("waits to offer New Backup until a scoped volume is found, so it can't back up the whole App instead", () => {
+  const appId = "a1b2c3d4".repeat(5)
+  const volume = `${appId}/data`
+  const render = (backups: unknown) => {
+    const client = new QueryClient()
+    const router = createRouter({
+      routeTree: createRootRoute(),
+      history: createMemoryHistory({ initialEntries: ["/backups/runs"] }),
+    })
+    client.setQueryData(accessCapabilitiesQueryOptions().queryKey, {
+      canManageAccess: true,
+      canManageRelays: true,
+      canUpdateHearth: true,
+      canUpdateRelays: true,
+      grants: [],
+      isPlatformAdmin: true,
+      isRelayCreator: false,
+      pendingScopes: [],
+      relayConfigured: true,
+      user: {
+        email: "admin@example.test",
+        emailVerified: true,
+        id: "admin",
+        isDevelopmentBypass: false,
+        name: "Admin",
+        role: "admin",
+        twoFactorEnabled: false,
+      },
+    })
+    client.setQueryData(backupStorageQueryOptions().queryKey, [])
+    client.setQueryData(appDirectoryQueryOptions().queryKey, [
+      {
+        createdAt: "2026-10-23T12:00:00.000Z",
+        id: appId,
+        name: "Website",
+        permissions: [],
+        relayId: "relay-a",
+        relayName: "Relay A",
+        shortId: appId.slice(0, 8),
+      },
+    ])
+    client.setQueryData(relaySnapshotQueryOptions().queryKey, {
+      nodes: [],
+      instances: [],
+    })
+    client.setQueryData(managedDatabaseDirectoryQueryOptions().queryKey, [])
+    if (backups) {
+      client.setQueryData(
+        appBackupsQueryOptions("relay-a", appId).queryKey,
+        backups as never
+      )
+    }
+    try {
+      const markup = renderToStaticMarkup(
+        <QueryClientProvider client={client}>
+          <RouterContextProvider router={router}>
+            <TooltipProvider>
+              <BackupsPage
+                filters={{
+                  kind: "app",
+                  relay: "relay-a",
+                  server: appId,
+                  volume,
+                }}
+                onFiltersChange={() => {}}
+                searchStore={createBackupSearchStore("")}
+              />
+            </TooltipProvider>
+          </RouterContextProvider>
+        </QueryClientProvider>
+      )
+      const button = /<button[^>]*aria-label="New Backup"[^>]*>/u.exec(markup)
+      expect(button).not.toBeNull()
+      return /\sdisabled=""/u.test(button![0])
+    } finally {
+      client.clear()
+    }
+  }
+  const listed = (available: boolean) => ({
+    available,
+    batch: [],
+    targets: [
+      {
+        id: appId,
+        kind: "app",
+        latest: null,
+        name: null,
+        restore: null,
+        unfinished: null,
+      },
+      ...(available
+        ? [
+            {
+              id: volume,
+              kind: "volume",
+              latest: null,
+              name: "data",
+              restore: null,
+              unfinished: null,
+            },
+          ]
+        : []),
+    ],
+    uncovered: [],
+    used: [],
+  })
+
+  // Still looking it up, or its Relay can't say whether it exists.
+  expect(render(null)).toBe(true)
+  expect(render(listed(false))).toBe(true)
+  // Found, so New Backup opens with it chosen.
+  expect(render(listed(true))).toBe(false)
 })
 
 function server(id: string, name: string, relayId: string) {

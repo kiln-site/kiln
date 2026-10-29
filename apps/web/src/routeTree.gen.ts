@@ -94,7 +94,6 @@ import { Route as ApiRelayTerminalRelayIdRouteImport } from './routes/api.relay-
 import { Route as ApiRelaysJoinRouteImport } from './routes/api.relays.join'
 import { Route as AppAppAppIdIndexRouteImport } from './routes/_app/app/$appId.index'
 import { Route as AppAppAppIdSplatRouteImport } from './routes/_app/app/$appId.$'
-import { Route as AppAppAppIdBackupsRouteImport } from './routes/_app/app/$appId.backups'
 import { Route as AppAppAppIdFilesRouteImport } from './routes/_app/app/$appId.files'
 import { Route as AppAppAppIdInfoRouteImport } from './routes/_app/app/$appId.info'
 import { Route as AppAppAppIdLogsRouteImport } from './routes/_app/app/$appId.logs'
@@ -563,11 +562,6 @@ const AppAppAppIdSplatRoute = AppAppAppIdSplatRouteImport.update({
   path: '/$',
   getParentRoute: () => AppAppAppIdRoute,
 } as any)
-const AppAppAppIdBackupsRoute = AppAppAppIdBackupsRouteImport.update({
-  id: '/backups',
-  path: '/backups',
-  getParentRoute: () => AppAppAppIdRoute,
-} as any)
 const AppAppAppIdFilesRoute = AppAppAppIdFilesRouteImport.update({
   id: '/files',
   path: '/files',
@@ -861,7 +855,6 @@ export interface FileRoutesByFullPath {
   '/kiln/': typeof AppKilnIndexRoute
   '/settings/': typeof AppSettingsIndexRoute
   '/app/$appId/$': typeof AppAppAppIdSplatRoute
-  '/app/$appId/backups': typeof AppAppAppIdBackupsRoute
   '/app/$appId/files': typeof AppAppAppIdFilesRouteWithChildren
   '/app/$appId/info': typeof AppAppAppIdInfoRoute
   '/app/$appId/logs': typeof AppAppAppIdLogsRoute
@@ -979,7 +972,6 @@ export interface FileRoutesByTo {
   '/kiln': typeof AppKilnIndexRoute
   '/settings': typeof AppSettingsIndexRoute
   '/app/$appId/$': typeof AppAppAppIdSplatRoute
-  '/app/$appId/backups': typeof AppAppAppIdBackupsRoute
   '/app/$appId/files': typeof AppAppAppIdFilesRouteWithChildren
   '/app/$appId/info': typeof AppAppAppIdInfoRoute
   '/app/$appId/logs': typeof AppAppAppIdLogsRoute
@@ -1108,7 +1100,6 @@ export interface FileRoutesById {
   '/_app/kiln/': typeof AppKilnIndexRoute
   '/_app/settings/': typeof AppSettingsIndexRoute
   '/_app/app/$appId/$': typeof AppAppAppIdSplatRoute
-  '/_app/app/$appId/backups': typeof AppAppAppIdBackupsRoute
   '/_app/app/$appId/files': typeof AppAppAppIdFilesRouteWithChildren
   '/_app/app/$appId/info': typeof AppAppAppIdInfoRoute
   '/_app/app/$appId/logs': typeof AppAppAppIdLogsRoute
@@ -1237,7 +1228,6 @@ export interface FileRouteTypes {
     | '/kiln/'
     | '/settings/'
     | '/app/$appId/$'
-    | '/app/$appId/backups'
     | '/app/$appId/files'
     | '/app/$appId/info'
     | '/app/$appId/logs'
@@ -1355,7 +1345,6 @@ export interface FileRouteTypes {
     | '/kiln'
     | '/settings'
     | '/app/$appId/$'
-    | '/app/$appId/backups'
     | '/app/$appId/files'
     | '/app/$appId/info'
     | '/app/$appId/logs'
@@ -1483,7 +1472,6 @@ export interface FileRouteTypes {
     | '/_app/kiln/'
     | '/_app/settings/'
     | '/_app/app/$appId/$'
-    | '/_app/app/$appId/backups'
     | '/_app/app/$appId/files'
     | '/_app/app/$appId/info'
     | '/_app/app/$appId/logs'
@@ -2167,13 +2155,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAppAppIdSplatRouteImport
       parentRoute: typeof AppAppAppIdRoute
     }
-    '/_app/app/$appId/backups': {
-      id: '/_app/app/$appId/backups'
-      path: '/backups'
-      fullPath: '/app/$appId/backups'
-      preLoaderRoute: typeof AppAppAppIdBackupsRouteImport
-      parentRoute: typeof AppAppAppIdRoute
-    }
     '/_app/app/$appId/files': {
       id: '/_app/app/$appId/files'
       path: '/files'
@@ -2591,7 +2572,6 @@ const AppAppAppIdFilesRouteWithChildren =
 
 interface AppAppAppIdRouteChildren {
   AppAppAppIdSplatRoute: typeof AppAppAppIdSplatRoute
-  AppAppAppIdBackupsRoute: typeof AppAppAppIdBackupsRoute
   AppAppAppIdFilesRoute: typeof AppAppAppIdFilesRouteWithChildren
   AppAppAppIdInfoRoute: typeof AppAppAppIdInfoRoute
   AppAppAppIdLogsRoute: typeof AppAppAppIdLogsRoute
@@ -2603,7 +2583,6 @@ interface AppAppAppIdRouteChildren {
 
 const AppAppAppIdRouteChildren: AppAppAppIdRouteChildren = {
   AppAppAppIdSplatRoute: AppAppAppIdSplatRoute,
-  AppAppAppIdBackupsRoute: AppAppAppIdBackupsRoute,
   AppAppAppIdFilesRoute: AppAppAppIdFilesRouteWithChildren,
   AppAppAppIdInfoRoute: AppAppAppIdInfoRoute,
   AppAppAppIdLogsRoute: AppAppAppIdLogsRoute,

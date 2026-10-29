@@ -9,6 +9,7 @@ const backupSearchSchema = z.object({
   relay: z.string().max(120).optional(),
   search: z.string().max(160).optional(),
   server: z.string().max(120).optional(),
+  volume: z.string().max(200).optional(),
   status: z.enum(["available", "active", "failed"]).optional(),
 })
 

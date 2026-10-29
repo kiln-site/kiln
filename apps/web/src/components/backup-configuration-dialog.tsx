@@ -37,8 +37,13 @@ import { timestampedBackupName } from "@/lib/backup-name"
 export interface BackupConfigurationTarget {
   id: string
   key: string
-  kind: "database" | "instance" | "platform"
+  consistencyChoice?: {
+    stoppedDescription?: string | undefined
+    stoppedUnavailable: string | null
+  }
+  kind: "app" | "volume" | "database" | "instance" | "platform"
   name: string
+  description?: string
   relayId: string
   relayName: string
 }
@@ -63,7 +68,7 @@ interface BackupStorageOption {
 export function BackupConfigurationDialog({
   allowDefaultDestination = true,
   allowIncremental,
-  consistencyChoice,
+  consistencyChoice: fixedConsistencyChoice,
   description = "Relay runs this job in its single durable queue. Servers remain online while their data is archived.",
   error,
   initialDestinationKeys,
@@ -130,11 +135,14 @@ export function BackupConfigurationDialog({
   const [consistency, setConsistency] = React.useState<"live" | "stopped">(
     "live"
   )
-  const effectiveConsistency =
-    consistencyChoice?.stoppedUnavailable === null ? consistency : "live"
   const target = showTarget
     ? targets.find((candidate) => candidate.key === targetKeyValue)
     : undefined
+  const consistencyChoice = showTarget
+    ? target?.consistencyChoice
+    : fixedConsistencyChoice
+  const effectiveConsistency =
+    consistencyChoice?.stoppedUnavailable === null ? consistency : "live"
   const incrementalAllowed = showTarget
     ? target?.kind === "instance"
     : (allowIncremental ?? false)
@@ -276,7 +284,11 @@ export function BackupConfigurationDialog({
             targetKind={target?.kind}
             onToggleDestination={toggleDestination}
           />
-          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+          {error ? (
+            <p role="alert" className="text-xs text-destructive">
+              {error}
+            </p>
+          ) : null}
         </div>
         <DialogFooter>
           <Button
@@ -615,11 +627,17 @@ function backupTargetItem(
   return {
     identity: {
       id: target.id,
-      kind: target.kind === "instance" ? "server" : "database",
+      kind:
+        target.kind === "instance"
+          ? "server"
+          : target.kind === "volume"
+            ? "relay"
+            : target.kind,
       relayId: target.relayId,
     },
     key: target.key,
-    meta: `${target.relayName} · ${target.id.slice(0, 8)}`,
+    meta:
+      target.description ?? `${target.relayName} · ${target.id.slice(0, 8)}`,
     name: target.name,
     searchText: `${target.id} ${target.relayName}`,
   }

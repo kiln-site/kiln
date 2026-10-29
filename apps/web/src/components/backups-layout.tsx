@@ -49,6 +49,7 @@ const BackupsNavigation = React.memo(function BackupsNavigation() {
             kind: previous.kind,
             relay: previous.relay,
             server: previous.server,
+            volume: previous.volume,
           })}
           {...props}
         />

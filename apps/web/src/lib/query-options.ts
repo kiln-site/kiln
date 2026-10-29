@@ -158,7 +158,7 @@ export const queryKeys = {
     policy: (relayId: string, target: BackupTarget) =>
       ["backups", "policy", relayId, target.kind, target.id] as const,
     storage: ["backups", "storage"] as const,
-    /** An App's Backups tab. */
+    /** An App's backup settings. */
     app: (relayId: string, appId: string) =>
       ["backups", "app", relayId, appId] as const,
     /** Restores whose swap didn't finish, on every Relay. */
@@ -882,7 +882,7 @@ export function relayWebRoutesQueryOptions(relayId: string) {
 
 // Sizes are Docker's last measure, taken in the background; changes
 // refresh the list through the `relay-volumes` topic.
-// An App's Backups tab: what's backed up and what isn't. Checked often while
+// An App's backup settings: what's backed up and what isn't. Checked often while
 // a backup of it runs.
 export function appBackupsQueryOptions(relayId: string, appId: string) {
   return queryOptions({

@@ -20,6 +20,7 @@ export interface BackupFilters {
   relay?: string
   search?: string
   server?: string
+  volume?: string
   status?: "active" | "available" | "failed"
 }
 

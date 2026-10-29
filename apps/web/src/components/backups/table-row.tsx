@@ -1023,8 +1023,7 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
     )
   }
 
-  // An App's folder and its own volumes are on its Backups tab; a Kiln
-  // volume is on its Relay's volumes.
+  // App targets open their App's Info page; Kiln volumes open the Relay.
   const owner =
     targetKind === "app"
       ? targetId
@@ -1037,7 +1036,7 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
         className={className}
         params={{ appId: owner }}
         preload="intent"
-        to="/app/$appId/backups"
+        to="/app/$appId/info"
       >
         {children}
       </Link>

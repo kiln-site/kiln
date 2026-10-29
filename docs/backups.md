@@ -516,16 +516,16 @@ or a volume says whether it was taken live or stopped, and its restore
 dialog says what must be stopped (the App, or every container that mounts
 the volume, listing those running and the Apps that use it).
 
-An App's Backups tab lists its folder and each volume it owns, each with its
-newest backup, a Back up action, and a Restore from it. "Back up App" starts
-a backup of each together, recording them as one batch (`batch_id`), and the
-tab says whether all of the newest batch succeeded. Below, it lists what the
-App mounts that its backups don't cover: Kiln volumes it uses, which are
-backed up on their own from their Relay's volumes page, and the mounts the
-Relay reports as uncovered. Every backup dialog for an App's folder or a
-volume offers live (the default) or stopped; stopped needs `app.manage`.
-Stopped, "Back up App" sends its backups as one batch, so the Relay copies
-the folder and every owned volume within one stopped window.
+An App's Info rail opens Backups scoped to the App. Each named volume in
+its Volumes table also opens Backups scoped to that volume, with a clearable
+volume filter; the picker still shows the App. Backup settings retain the
+App's Folder and Volume sections.
+
+New Backup offers Apps alongside game servers, databases and Kiln. An App
+backup includes its folder and every volume it owns together. A volume scope
+also offers that volume on its own. Both offer Live or Stopped, subject to
+permission to manage the App (or, for a Kiln volume, Apps on the Relay).
+Stopped App backups run as one batch, stopping the App once for all targets.
 
 The Settings page configures an App's folder and each volume it owns
 (choosing the App) and each Kiln volume on a Relay ("Kiln volumes on …"),
@@ -533,8 +533,8 @@ with the same permissions as backing them up: retention, the platform
 ceiling, the destination, and exclusions, which apply to an App's folder
 and a volume as to a game server's, relative to their roots.
 
-A restore whose swap didn't finish shows on the Backups page and on its
-App's tab as "A restore didn't finish", with Finish and Abandon for those
+A restore whose swap didn't finish shows on the Backups page as
+"A restore didn't finish", with Finish and Abandon for those
 who may restore its target (`backup.restore.unfinished` lists them; Hearth
 calls `backup.restore.resolve`, checking authority over every App that uses
 the target).

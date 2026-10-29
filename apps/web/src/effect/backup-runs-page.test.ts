@@ -118,6 +118,57 @@ describeMysql("backup runs page", () => {
             }),
             ["website", "website-db", "worker"]
           )
+          // A volume filter narrows the result but never grants access.
+          const scope = {
+            kind: "volume" as const,
+            relayId: "relay-a",
+            targetId: `${website}/pgdata`,
+          }
+          assert.deepStrictEqual(
+            yield* pageIds({
+              scope,
+              isAdmin: false,
+              allowedScopes: relayBackups,
+            }),
+            []
+          )
+          assert.deepStrictEqual(
+            yield* pageIds({
+              scope,
+              isAdmin: false,
+              appScopes: [{ appId: worker, relayId: "relay-a" }],
+            }),
+            []
+          )
+          assert.deepStrictEqual(
+            yield* pageIds({
+              scope,
+              isAdmin: false,
+              appScopes: [{ appId: website, relayId: "relay-a" }],
+            }),
+            ["website-db"]
+          )
+          const sharedScope = {
+            kind: "volume" as const,
+            relayId: "relay-a",
+            targetId: shared,
+          }
+          assert.deepStrictEqual(
+            yield* pageIds({
+              scope: sharedScope,
+              isAdmin: false,
+              appScopes: [{ appId: website, relayId: "relay-a" }],
+            }),
+            []
+          )
+          assert.deepStrictEqual(
+            yield* pageIds({
+              scope: sharedScope,
+              isAdmin: false,
+              allowedScopes: relayBackups,
+            }),
+            ["shared"]
+          )
           assert.deepStrictEqual(
             yield* pageIds({
               appScopes: [{ appId: website, relayId: "relay-b" }],

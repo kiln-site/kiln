@@ -41,33 +41,55 @@ const backupStatusFilterOptions: ReadonlyArray<{
 
 export const BackupToolbar = React.memo(function BackupToolbar({
   canCreate,
+  createDisabledReason = null,
   dialogStore,
   searchStore,
   statusFilterStore,
+  volumeControl,
 }: {
+  volumeControl?: React.ReactNode
   canCreate: boolean
+  /** Why New Backup waits, shown on hover. */
+  createDisabledReason?: string | null
   dialogStore: BackupDialogStore
   searchStore: BackupSearchStore
   statusFilterStore: BackupStatusFilterStore
 }) {
+  const newBackupButton = (
+    <Button
+      aria-label="New Backup"
+      disabled={!canCreate || createDisabledReason !== null}
+      type="button"
+      onClick={() => dialogStore.open({ kind: "create" })}
+    >
+      <Plus /> <span className="hidden sm:inline">New Backup</span>
+    </Button>
+  )
   return (
     <DataTableToolbar
       actions={
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              aria-label="New Backup"
-              disabled={!canCreate}
-              type="button"
-              onClick={() => dialogStore.open({ kind: "create" })}
-            >
-              <Plus /> <span className="hidden sm:inline">New Backup</span>
-            </Button>
+            {createDisabledReason ? (
+              // A disabled button gets no hover, so its wrapper takes it.
+              <span tabIndex={0} className="inline-flex outline-none">
+                {newBackupButton}
+              </span>
+            ) : (
+              newBackupButton
+            )}
           </TooltipTrigger>
-          <TooltipContent side="bottom">New Backup</TooltipContent>
+          <TooltipContent side="bottom">
+            {createDisabledReason ?? "New Backup"}
+          </TooltipContent>
         </Tooltip>
       }
-      controls={<BackupStatusFilter statusFilterStore={statusFilterStore} />}
+      controls={
+        <>
+          {volumeControl}
+          <BackupStatusFilter statusFilterStore={statusFilterStore} />
+        </>
+      }
       leading={<BackupSyncButton />}
       search={{
         ariaLabel: "Search backups",

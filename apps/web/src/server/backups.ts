@@ -232,7 +232,7 @@ export const createResourceBackup = createServerFn({ method: "POST" })
     createResourceBackupHandler(await requireEligibleResourceUser(), data)
   )
 
-// An App's Backups tab: its folder and the volumes its Compose project
+// An App's backup settings: its folder and the volumes its Compose project
 // owns, each with its newest backup, and what it mounts that isn't covered.
 export const getAppBackups = createServerFn({ method: "GET" })
   .validator(appBackupsInputSchema)

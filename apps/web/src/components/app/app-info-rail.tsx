@@ -2,6 +2,7 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import {
+  Archive,
   ArrowRightLeft,
   GitCommitHorizontal,
   History,
@@ -74,6 +75,15 @@ export function AppInfoRail({ app, routeId }: { app: App; routeId: string }) {
         >
           Databases
         </InfoRailLink>
+        {app.permissions.includes("app.read") ? (
+          <InfoRailLink
+            to="/backups/runs"
+            search={{ kind: "app", relay: app.relayId, server: app.id }}
+            leading={<Archive />}
+          >
+            Backups
+          </InfoRailLink>
+        ) : null}
         <AppEnvironmentRow app={app} routeId={routeId} />
       </InfoRailGroup>
       <AppOwner appId={app.id} relayId={app.relayId} />

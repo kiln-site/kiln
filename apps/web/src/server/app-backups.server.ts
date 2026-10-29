@@ -41,12 +41,12 @@ import {
   requireBackupTargetRestore,
 } from "@/server/backup-target-access.server"
 
-// Server-only work behind an App's Backups tab and unfinished restores; the
+// Server-only work behind an App's backup settings and unfinished restores; the
 // server functions in ./backups authenticate the caller first.
 
 type ResourceTarget = BackupTarget & { kind: "app" | "volume" }
 
-/** What an App's Backups tab shows: what's backed up, and what isn't. */
+/** What an App's backup settings show: what's backed up, and what isn't. */
 export async function getAppBackupsHandler(
   user: AuthenticatedUser,
   data: { appId: string; relayId: string }

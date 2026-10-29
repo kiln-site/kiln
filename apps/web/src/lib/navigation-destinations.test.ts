@@ -209,6 +209,25 @@ describe("navigation destinations", () => {
     }
   )
 
+  it("allows App readers into the shared Backups page", () => {
+    const access: NavigationAccessCapabilities = {
+      canManageAccess: false,
+      canManageRelays: false,
+      isPlatformAdmin: false,
+      isRelayCreator: false,
+      grants: [
+        {
+          relayId: "relay-one",
+          resourceId: "app-one",
+          resourceType: "app",
+          permissions: ["app.read"],
+        },
+      ],
+    }
+    expect(canAccessBackups(access)).toBe(true)
+    expect(canAccessBackups({ ...access, grants: [] })).toBe(false)
+  })
+
   it("shows a Relay Creator the workspace their first Relay will open", () => {
     const relayCreator: NavigationAccessCapabilities = {
       canManageAccess: true,

@@ -22,6 +22,7 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Trash2,
+  X,
 } from "lucide-react"
 import {
   backupStorageProviderName,
@@ -94,7 +95,11 @@ import {
 } from "@/components/backups/table-row"
 import { formatBytes } from "@/lib/format-bytes"
 import { BackupToolbar } from "@/components/backups/toolbar"
-import { grantsAllowBackup } from "@/lib/backup-target-permissions"
+import { grantHasPermission } from "@/lib/permissions"
+import {
+  backupTargetApp,
+  grantsAllowBackup,
+} from "@/lib/backup-target-permissions"
 import {
   accessCapabilitiesQueryOptions,
   appBackupsQueryOptions,
@@ -108,6 +113,8 @@ import {
   relayVolumesQueryOptions,
 } from "@/lib/query-options"
 import {
+  createAppBackups,
+  createResourceBackup,
   createDatabaseBackup,
   createInstanceBackup,
   createPlatformBackup,
@@ -148,7 +155,7 @@ import {
 import { forkPromise } from "@/effect/promise"
 import { reportBrowserError } from "@/lib/browser-telemetry"
 type BackupStorage = Awaited<ReturnType<typeof getBackupStorage>>[number]
-type CreateTarget = BackupConfigurationTarget
+type CreateTarget = BackupConfigurationTarget & { wholeApp?: boolean }
 
 const completedDeleteFeedbackMs = 1_000
 const backupDataTableRowKey = (backup: Backup) => backup.id
@@ -485,6 +492,20 @@ export const BackupsPage = React.memo(function BackupsPage({
           server.id
         )
       ) ||
+      (filters.kind === "app" &&
+        Boolean(
+          filters.volume &&
+          filters.relay &&
+          hasBackupResourcePermission(
+            capabilities,
+            filters.relay,
+            "volume",
+            filters.volume
+          )
+        )) ||
+      apps.some((app) =>
+        hasBackupResourcePermission(capabilities, app.relayId, "app", app.id)
+      ) ||
       databases.some(
         (database) =>
           database.supportsImportExport &&
@@ -495,7 +516,16 @@ export const BackupsPage = React.memo(function BackupsPage({
             database.id
           )
       ),
-    [capabilities, databases, topology.nodes.length, topology.servers]
+    [
+      apps,
+      capabilities,
+      databases,
+      filters.kind,
+      filters.relay,
+      filters.volume,
+      topology.nodes.length,
+      topology.servers,
+    ]
   )
   const canCreateBackup = React.useCallback(
     (backup: Backup) =>
@@ -537,7 +567,14 @@ export const BackupsPage = React.memo(function BackupsPage({
       <DataTableWorkspace
         before={<BackupRunsSyncKick />}
         toolbar={
-          <BackupToolbar
+          <ScopedBackupToolbar
+            filters={filters}
+            volumeControl={
+              <BackupVolumeFilter
+                filters={filters}
+                onFiltersChange={onFiltersChange}
+              />
+            }
             canCreate={canCreateAny}
             dialogStore={dialogStore}
             searchStore={searchStore}
@@ -557,6 +594,7 @@ export const BackupsPage = React.memo(function BackupsPage({
           targetInstances={targetInstances}
           nameStore={nameStore}
           searchStore={searchStore}
+          volume={filters.kind === "app" ? filters.volume : undefined}
           selectedKind={selectedKind}
           selectedServer={selectedServer}
           selectionStore={selectionStore}
@@ -564,6 +602,118 @@ export const BackupsPage = React.memo(function BackupsPage({
         />
       </DataTableWorkspace>
     </div>
+  )
+})
+
+// New Backup waits for a scoped volume. Until it's found, the dialog would
+// preselect the App and back up the whole App instead; a volume confirmed
+// deleted falls back to the App on purpose. Only this subscribes to the
+// volume lookup, so its data doesn't rerender the page.
+const ScopedBackupToolbar = React.memo(function ScopedBackupToolbar({
+  filters,
+  ...props
+}: Omit<React.ComponentProps<typeof BackupToolbar>, "createDisabledReason"> & {
+  filters: BackupFilters
+}) {
+  const { deleted, loading, volume } = useBackupScopeVolumes(filters)
+  const scoped = filters.kind === "app" && Boolean(filters.volume)
+  const reason =
+    !scoped || volume || deleted
+      ? null
+      : loading
+        ? "Finding the volume…"
+        : "The volume can’t be found right now. Clear its filter to back up the App."
+  return <BackupToolbar {...props} createDisabledReason={reason} />
+})
+
+// App-owned volume identities are readable with app.read. Only a successful
+// inventory can establish deletion; an offline Relay or denied read cannot.
+function useBackupScopeVolumes(filters: BackupFilters) {
+  const id = filters.kind === "app" ? filters.volume : undefined
+  const owner = id ? backupTargetApp({ kind: "volume", id }) : null
+  const { data: capabilities } = useQuery(accessCapabilitiesQueryOptions())
+  const canReadRelay =
+    capabilities?.isPlatformAdmin ||
+    capabilities?.grants.some(
+      (grant) =>
+        grant.relayId === filters.relay &&
+        grant.resourceType === "relay" &&
+        grantHasPermission(grant, "relay.read")
+    )
+  const app = useQuery({
+    ...appBackupsQueryOptions(
+      filters.relay ?? "",
+      owner ?? filters.server ?? ""
+    ),
+    enabled: Boolean(id && (owner || filters.server) && filters.relay),
+    refetchInterval: false,
+    staleTime: 5 * 60_000,
+  })
+  const relay = useQuery({
+    ...relayVolumesQueryOptions(filters.relay ?? ""),
+    enabled: Boolean(filters.kind === "app" && filters.relay && canReadRelay),
+    refetchInterval: false,
+    staleTime: 5 * 60_000,
+  })
+  const volume = React.useMemo(() => {
+    const found = relay.data?.volumes.find((volume) => volume.id === id)
+    if (!owner) {
+      const used = app.data?.available
+        ? app.data.used.find((volume) => volume.id === id)
+        : undefined
+      return found ?? (used ? { ...used, owner: null } : undefined)
+    }
+    const target = app.data?.targets.find(
+      (target) => target.kind === "volume" && target.id === id
+    )
+    return target && app.data?.available
+      ? {
+          id: target.id,
+          name: target.name ?? id!,
+          owner: { appId: owner, volume: target.name ?? id! },
+        }
+      : undefined
+  }, [app.data, relay.data, id, owner])
+  const known = owner ? app.data?.available === true : relay.isSuccess
+  return {
+    volume,
+    listing: relay.data,
+    deleted: Boolean(id && known && !volume),
+    loading: Boolean(id && (owner ? app.isLoading : relay.isLoading)),
+  }
+}
+
+const BackupVolumeFilter = React.memo(function BackupVolumeFilter({
+  filters,
+  onFiltersChange,
+}: {
+  filters: BackupFilters
+  onFiltersChange: (change: Partial<BackupFilters>) => void
+}) {
+  const volume =
+    filters.kind === "app" && filters.server && filters.relay
+      ? filters.volume
+      : undefined
+  const resolved = useBackupScopeVolumes(filters)
+  if (!volume) return null
+  const found = resolved.volume
+  return (
+    <Button
+      variant="secondary"
+      type="button"
+      aria-label="Clear volume filter"
+      onClick={() => onFiltersChange({ volume: undefined })}
+    >
+      Volume {found?.owner?.volume ?? found?.name ?? volume.split("/").at(-1)}
+      {resolved.deleted
+        ? " (deleted)"
+        : !found
+          ? resolved.loading
+            ? " (loading…)"
+            : " (unavailable)"
+          : ""}
+      <X />
+    </Button>
   )
 })
 
@@ -613,15 +763,32 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       ) ?? null,
     [filters.kind, filters.relay, filters.server, scopeOptions]
   )
+  const { volume: scopedVolume, listing: volumeListing } =
+    useBackupScopeVolumes(filters)
   const createTargets = React.useMemo(
     () =>
       availableCreateTargets({
+        apps,
+        volume: scopedVolume,
+        volumeListing,
+        volumeRelayId: filters.relay,
         capabilities,
         databases,
         kiln,
         servers: backupScope.servers,
       }),
-    [backupScope.servers, capabilities, databases, kiln]
+    [
+      apps,
+      backupScope.servers,
+      capabilities,
+      databases,
+      kiln,
+      filters.kind,
+      filters.relay,
+      filters.volume,
+      scopedVolume,
+      volumeListing,
+    ]
   )
   const targetNames = React.useMemo(() => {
     const names = new Map<string, string>()
@@ -644,9 +811,12 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       new Map(storage.map((destination) => [destination.id, destination.name])),
     [storage]
   )
-  const scopedCreateTargetKey = selectedServer
-    ? selectedBackupCreateTargetKey(selectedServer)
-    : undefined
+  const scopedCreateTargetKey =
+    selectedServer?.kind === "app" && scopedVolume?.id
+      ? targetKey("volume", selectedServer.relayId, scopedVolume.id)
+      : selectedServer
+        ? selectedBackupCreateTargetKey(selectedServer)
+        : undefined
   const selectedCreateTargetKey = createTargets.some(
     (target) => target.key === scopedCreateTargetKey
   )
@@ -654,25 +824,14 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
     : undefined
   const canManageSelectedTarget = Boolean(
     selectedServer &&
-    (selectedServer.kind === "app"
-      ? capabilities.isPlatformAdmin ||
-        grantsAllowBackup(
-          capabilities.grants,
-          {
-            id: selectedServer.id,
-            kind: "app",
-            relayId: selectedServer.relayId,
-          },
-          "backup.create"
-        )
-      : createTargets.some(
-          (target) =>
-            target.key === selectedBackupCreateTargetKey(selectedServer)
-        ))
+    createTargets.some(
+      (target) => target.key === selectedBackupCreateTargetKey(selectedServer)
+    )
   )
   const selectServer = React.useCallback(
     (server: BackupScopeOption | null) => {
       onFiltersChange({
+        volume: undefined,
         kind: server?.kind,
         relay: server?.relayId,
         server: server?.id,
@@ -682,7 +841,12 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
   )
   const selectKind = React.useCallback(
     (kind: NonNullable<BackupFilters["kind"]>) => {
-      onFiltersChange({ kind, relay: undefined, server: undefined })
+      onFiltersChange({
+        kind,
+        relay: undefined,
+        server: undefined,
+        volume: undefined,
+      })
     },
     [onFiltersChange]
   )
@@ -789,6 +953,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   nameStore,
   searchStore,
   selectedKind,
+  volume,
   selectedServer,
   selectionStore,
   statusFilterStore,
@@ -804,6 +969,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   targetInstances: ReadonlyMap<string, BackupTargetIdentity>
   nameStore: BackupNameStore
   searchStore: BackupSearchStore
+  volume?: string
   selectedKind: BackupFilters["kind"] | null
   selectedServer: BackupScopeOption | null
   selectionStore: BackupSelectionStore
@@ -830,14 +996,17 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
   }, [search])
   const app = React.useMemo(
     () =>
-      selectedServer?.kind === "app"
+      selectedServer?.kind === "app" && !volume
         ? { appId: selectedServer.id, relayId: selectedServer.relayId }
         : null,
-    [selectedServer]
+    [selectedServer, volume]
   )
   const scope = React.useMemo((): BackupRunScope | null => {
     // An App's backups are those of what it owns or uses (`app`).
-    if (selectedServer?.kind === "app") return null
+    if (selectedServer?.kind === "app")
+      return volume
+        ? { kind: "volume", relayId: selectedServer.relayId, targetId: volume }
+        : null
     if (selectedServer) {
       return {
         kind: backupRunTargetKind(selectedServer.kind),
@@ -846,7 +1015,7 @@ const BackupDataSurface = React.memo(function BackupDataSurface({
       }
     }
     return selectedKind ? { kind: backupRunTargetKind(selectedKind) } : null
-  }, [selectedKind, selectedServer])
+  }, [selectedKind, selectedServer, volume])
   const queryInput = React.useMemo(
     () => ({
       app,
@@ -1355,6 +1524,22 @@ function CreateBackupDialog({
           data: { ...data, databaseId: target.id },
         })
       }
+      if (target.kind === "app" && target.wholeApp)
+        return createAppBackups({
+          data: {
+            ...data,
+            appId: target.id,
+            consistency: configuration.consistency,
+          },
+        })
+      if (target.kind === "volume" || target.kind === "app")
+        return createResourceBackup({
+          data: {
+            ...data,
+            target: { kind: target.kind, id: target.id },
+            consistency: configuration.consistency,
+          },
+        })
       return createPlatformBackup({ data })
     },
     onSuccess: async (result, configuration) => {
@@ -1371,6 +1556,7 @@ function CreateBackupDialog({
 
   return (
     <BackupConfigurationDialog
+      description="Choose what to back up and where to keep it. The Relay queues the backup durably."
       error={create.error?.message}
       initialTargetKey={initialTargetKey}
       onOpenChange={onOpenChange}
@@ -1413,6 +1599,7 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
   const kiln = useKilnBackupHost(capabilities.isPlatformAdmin)
   const configurableOptions = React.useMemo(() => {
     const targets = availableCreateTargets({
+      apps,
       capabilities,
       databases,
       kiln,
@@ -1460,6 +1647,7 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
   const selectTarget = React.useCallback(
     (target: BackupScopeOption | null) => {
       onFiltersChange({
+        volume: undefined,
         kind: target?.kind,
         relay: target?.relayId,
         server: target?.id,
@@ -2448,21 +2636,129 @@ function selectedBackupCreateTargetKey(selected: BackupScopeOption): string {
   if (kind === "relay") {
     return targetKey("platform", selected.relayId, "kiln")
   }
-  return targetKey("instance", selected.relayId, selected.id)
+  return targetKey(
+    kind === "app" ? "app" : "instance",
+    selected.relayId,
+    selected.id
+  )
 }
 
 function availableCreateTargets({
+  apps,
+  volume,
+  volumeRelayId,
+  volumeListing,
   capabilities,
   databases,
   kiln,
   servers,
 }: {
+  apps: Awaited<ReturnType<typeof getAppDirectory>>
+  volume?:
+    | Pick<import("@workspace/contracts").RelayVolume, "id" | "name" | "owner">
+    | undefined
+  volumeListing?: import("@workspace/contracts").RelayVolumes | undefined
+  volumeRelayId?: string | undefined
   capabilities: Awaited<ReturnType<typeof getAccessCapabilities>>
   databases: Awaited<ReturnType<typeof getManagedDatabaseDirectory>>
   kiln: KilnBackupHost | null
   servers: ReturnType<typeof selectBackupScope>["servers"]
 }): Array<CreateTarget> {
   const targets: Array<CreateTarget> = []
+  const consistencyChoice = (
+    relayId: string,
+    appIds: ReadonlyArray<string> | undefined,
+    wholeApp = false
+  ) => ({
+    ...(wholeApp
+      ? {
+          stoppedDescription:
+            "Stops every App using its folder or volumes, then starts them again",
+        }
+      : {}),
+    // An App-scoped reader may not list Relay consumers. Unknown consumers
+    // leave Stopped enabled; the server checks all of them before dispatch.
+    stoppedUnavailable:
+      capabilities.isPlatformAdmin ||
+      appIds === undefined ||
+      appIds.every((appId) =>
+        capabilities.grants.some(
+          (grant) =>
+            grant.relayId === relayId &&
+            grantHasPermission(grant, "app.manage") &&
+            (grant.resourceType === "relay" ||
+              (grant.resourceType === "app" && grant.resourceId === appId))
+        )
+      )
+        ? null
+        : "Stopping it takes permission to manage every App that uses it",
+  })
+  const listing = volumeListing?.protection.ready ? volumeListing : undefined
+  const users = (volume: import("@workspace/contracts").RelayVolume) => [
+    ...(volume.owner ? [volume.owner.appId] : []),
+    ...volume.users.map((user) => user.appId),
+  ]
+  for (const app of apps) {
+    if (hasBackupResourcePermission(capabilities, app.relayId, "app", app.id))
+      targets.push(
+        {
+          ...app,
+          kind: "app",
+          wholeApp: true,
+          description: "The whole App: its folder and its volumes",
+          key: targetKey("app", app.relayId, app.id),
+          consistencyChoice: consistencyChoice(
+            app.relayId,
+            listing && volumeRelayId === app.relayId
+              ? [
+                  app.id,
+                  ...listing.volumes
+                    .filter(
+                      (volume) =>
+                        volume.id !== null && volume.owner?.appId === app.id
+                    )
+                    .flatMap(users),
+                ]
+              : undefined,
+            true
+          ),
+        },
+        {
+          ...app,
+          kind: "app",
+          name: `${app.name} folder`,
+          key: `${targetKey("app", app.relayId, app.id)}:folder`,
+          consistencyChoice: consistencyChoice(app.relayId, [app.id]),
+        }
+      )
+  }
+  if (
+    volume?.id &&
+    volumeRelayId &&
+    hasBackupResourcePermission(
+      capabilities,
+      volumeRelayId,
+      "volume",
+      volume.id
+    )
+  ) {
+    targets.push({
+      id: volume.id,
+      key: targetKey("volume", volumeRelayId, volume.id),
+      kind: "volume",
+      name: `Volume ${volume.owner?.volume ?? volume.name}`,
+      relayId: volumeRelayId,
+      relayName:
+        apps.find((app) => app.relayId === volumeRelayId)?.relayName ??
+        volumeRelayId,
+      consistencyChoice: consistencyChoice(
+        volumeRelayId,
+        listing?.volumes.find((item) => item.id === volume.id)
+          ? users(listing.volumes.find((item) => item.id === volume.id)!)
+          : undefined
+      ),
+    })
+  }
   for (const server of servers) {
     if (
       hasBackupResourcePermission(

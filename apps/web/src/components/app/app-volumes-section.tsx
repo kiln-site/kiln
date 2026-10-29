@@ -1,7 +1,14 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { AppMount, RelayVolume } from "@workspace/contracts"
-import { FileText, FolderTree, HardDrive, Settings2 } from "lucide-react"
+import { Link } from "@tanstack/react-router"
+import {
+  Archive,
+  FileText,
+  FolderTree,
+  HardDrive,
+  Settings2,
+} from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 
@@ -22,12 +29,17 @@ import {
   defineDataTable,
 } from "@/lib/data-table"
 import type { DataTableSource } from "@/lib/data-table-source"
-import { relayVolumesQueryOptions } from "@/lib/query-options"
+import { grantsAllowBackup } from "@/lib/backup-target-permissions"
+import {
+  accessCapabilitiesQueryOptions,
+  appBackupsQueryOptions,
+  relayVolumesQueryOptions,
+} from "@/lib/query-options"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 
 // A mount the config keeps, or one the Compose file declares. Each row
 // carries what its cells need, so the columns don't change with the data.
-type MountRow =
+type MountRow = { backupVolumeId?: string | undefined } & (
   | {
       app: App
       canManage: boolean
@@ -45,6 +57,7 @@ type MountRow =
       kind: "compose"
       mount: ComposeMount
     }
+)
 
 const mountColumnHelper = createDataTableColumnHelper<MountRow>()
 
@@ -67,18 +80,50 @@ export function AppVolumesSection({
   const compose = useAppRunsCompose(app)
   const { mounts } = config
   const composeFile = useAppComposeMounts(app, config)
-  const { data: volumeNames } = useQuery({
+  const { data: capabilities } = useQuery(accessCapabilitiesQueryOptions())
+  const { data: volumes } = useQuery({
     ...relayVolumesQueryOptions(app.relayId),
+    select: mountVolumeDetails,
+    refetchInterval: false,
+    staleTime: 5 * 60_000,
     enabled: mounts.some((mount) => mount.source.type === "volume"),
-    select: volumeNamesById,
   })
-  const rows = React.useMemo(
-    (): Array<MountRow> => [
+  const { data: ownedVolumes } = useQuery({
+    ...appBackupsQueryOptions(app.relayId, app.id),
+    select: appVolumeDetails,
+    refetchInterval: false,
+    staleTime: 5 * 60_000,
+    enabled: Boolean(
+      composeFile?.mounts?.some(
+        (mount) => mount.kind === "volume" && mount.source
+      )
+    ),
+  })
+  const volumeNames = React.useMemo(
+    () => (volumes ? volumeNamesById(volumes) : undefined),
+    [volumes]
+  )
+  const rows = React.useMemo((): Array<MountRow> => {
+    const readable = (id: string | undefined) =>
+      id &&
+      capabilities &&
+      (capabilities.isPlatformAdmin ||
+        grantsAllowBackup(
+          capabilities.grants,
+          { id, kind: "volume", relayId: app.relayId },
+          "backup.read"
+        ))
+        ? id
+        : undefined
+    return [
       ...mounts.map((mount) => ({
         app,
         canManage,
         id: `config:${mount.id}`,
         kind: "config" as const,
+        backupVolumeId: readable(
+          mount.source.type === "volume" ? mount.source.volumeId : undefined
+        ),
         mount,
         mounts,
         routeId,
@@ -89,11 +134,26 @@ export function AppVolumesSection({
         file: composeFile?.path ?? "compose.yaml",
         id: `compose:${mount.key}`,
         kind: "compose" as const,
+        backupVolumeId: readable(
+          mount.kind === "volume" && mount.source
+            ? (ownedVolumes?.find((volume) => volume.name === mount.source)
+                ?.id ?? undefined)
+            : undefined
+        ),
         mount,
       })),
-    ],
-    [app, canManage, composeFile, mounts, routeId, volumeNames]
-  )
+    ]
+  }, [
+    app,
+    canManage,
+    capabilities,
+    composeFile,
+    mounts,
+    ownedVolumes,
+    routeId,
+    volumeNames,
+    volumes,
+  ])
   const empty = rows.length === 0
   return (
     <InfoSection
@@ -184,27 +244,24 @@ const MountsTable = React.memo(function MountsTable({
           }),
           ...(compose
             ? [
-                mountColumnHelper.accessor(
-                  (row) => row.mount.service ?? "",
-                  {
-                    id: "service",
-                    header: "Service",
-                    sortFn: "text",
-                    cell: ({ row }) =>
-                      row.original.mount.service ? (
-                        <ServiceTag
-                          app={row.original.app}
-                          service={row.original.mount.service}
-                        />
-                      ) : (
-                        <span className="text-muted-foreground">Every</span>
-                      ),
-                    meta: dataTableColumnMeta({
-                      hideBelow: "sm",
-                      width: "8rem",
-                    }),
-                  }
-                ),
+                mountColumnHelper.accessor((row) => row.mount.service ?? "", {
+                  id: "service",
+                  header: "Service",
+                  sortFn: "text",
+                  cell: ({ row }) =>
+                    row.original.mount.service ? (
+                      <ServiceTag
+                        app={row.original.app}
+                        service={row.original.mount.service}
+                      />
+                    ) : (
+                      <span className="text-muted-foreground">Every</span>
+                    ),
+                  meta: dataTableColumnMeta({
+                    hideBelow: "sm",
+                    width: "8rem",
+                  }),
+                }),
               ]
             : []),
           mountColumnHelper.accessor(
@@ -219,6 +276,28 @@ const MountsTable = React.memo(function MountsTable({
               meta: dataTableColumnMeta({ hideBelow: "md", width: "7rem" }),
             }
           ),
+          mountColumnHelper.accessor((row) => row.backupVolumeId ?? "", {
+            id: "backups",
+            header: "",
+            cell: ({ row }) =>
+              row.original.backupVolumeId ? (
+                <Button asChild size="xs" variant="outline">
+                  <Link
+                    to="/backups/runs"
+                    search={{
+                      kind: "app",
+                      relay: row.original.app.relayId,
+                      server: row.original.app.id,
+                      volume: row.original.backupVolumeId,
+                    }}
+                  >
+                    <Archive />
+                    Backups
+                  </Link>
+                </Button>
+              ) : null,
+            meta: dataTableColumnMeta({ width: "7rem" }),
+          }),
         ]),
         getRowId: (row) => row.id,
       }),
@@ -307,8 +386,24 @@ function ComposeMountSource({
   )
 }
 
+// Select only identity: backup task updates must not repaint the Info table.
+function appVolumeDetails(data: {
+  targets: ReadonlyArray<{ id: string; kind: string; name: string | null }>
+}) {
+  return data.targets
+    .filter((target) => target.kind === "volume")
+    .map(({ id, name }) => ({ id, name }))
+}
+
+// Ignore measurement and mount updates: these rows only need identity and names.
+function mountVolumeDetails(data: { volumes: ReadonlyArray<RelayVolume> }) {
+  return {
+    volumes: data.volumes.map(({ id, name, owner }) => ({ id, name, owner })),
+  }
+}
+
 function volumeNamesById(data: {
-  volumes: ReadonlyArray<RelayVolume>
+  volumes: ReadonlyArray<Pick<RelayVolume, "id" | "name">>
 }): ReadonlyMap<string, string> {
   return new Map(
     data.volumes.flatMap((volume) =>
