@@ -569,13 +569,13 @@ export function DeleteDatabaseDialog({
     },
   })
 
+  // Not while it's deleting: the request carries on either way.
+  const close = (next: boolean) => {
+    if (!remove.isPending) onOpenChange(next)
+  }
+
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!remove.isPending) onOpenChange(next)
-      }}
-    >
+    <Dialog open={open} onOpenChange={close}>
       <DialogContent className="sm:max-w-md">
         <form
           className="grid gap-4"
@@ -607,9 +607,10 @@ export function DeleteDatabaseDialog({
           ) : null}
           <DialogFooter>
             <Button
+              disabled={remove.isPending}
               type="button"
               variant="ghost"
-              onClick={() => onOpenChange(false)}
+              onClick={() => close(false)}
             >
               Cancel
             </Button>

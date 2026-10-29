@@ -85,6 +85,25 @@ describeMysql("deletion confirmation", () => {
     )
 
     it.effect(
+      "stops checking passwords after five wrong ones, the right one too",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          for (let attempt = 0; attempt < 5; attempt += 1) {
+            yield* Effect.flip(confirm("Survival", `wrong ${attempt}`))
+          }
+          const checked = verified.count
+
+          const refused = yield* Effect.flip(
+            confirm("Survival", "correct horse battery")
+          )
+
+          assert.strictEqual(refused._tag, "PasswordAttemptsError")
+          assert.strictEqual(verified.count, checked)
+        })
+    )
+
+    it.effect(
       "accepts the name, typed with stray spaces, and the password",
       () =>
         Effect.gen(function* () {

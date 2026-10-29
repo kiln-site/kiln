@@ -219,7 +219,9 @@ kiln server delete <server> --confirm <name>
 `--confirm` takes the server's name exactly as `kiln server info <server>`
 shows it, the same confirmation Hearth asks for. The CLI then asks for the
 account password without echoing it; pipe it with `--password-stdin` when
-there's no terminal. A wrong name or password deletes nothing. Deletion
+there's no terminal. A wrong name or password deletes nothing. After five
+wrong passwords in 15 minutes, the account's password checks are refused
+(`rate_limited`) until the oldest ages out; don't retry in a loop. Deletion
 requires full CLI access and the `instance.delete` and `backup.create`
 permissions: the server is frozen and backed up in full first, then deleted.
 A deletion that outlasts the request carries on in the background; one that

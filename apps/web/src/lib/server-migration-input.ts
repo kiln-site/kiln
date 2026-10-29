@@ -4,6 +4,8 @@ import {
 } from "@workspace/contracts"
 import { z } from "zod"
 
+import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
+
 /** What someone chose to carry over when copying a game server. */
 export const serverMigrationOptionsSchema = z.object({
   /**
@@ -45,6 +47,12 @@ export const serverReferenceSchema = z.object({
 })
 
 export const startServerMigrationInputSchema = serverReferenceSchema.extend({
+  /**
+   * A move that deletes the old server asks what deleting it does: its
+   * name and the account password. Kept apart from `options`, which the
+   * migration stores.
+   */
+  confirmation: deleteConfirmationSchema.optional(),
   destinationRelayId: z.string().min(1).max(64),
   mode: z.enum(["duplicate", "migrate"]),
   name: relayInstanceNameSchema,

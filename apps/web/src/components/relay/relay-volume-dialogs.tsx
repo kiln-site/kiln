@@ -260,7 +260,12 @@ export function DeleteVolumeDialog({
             <p className="text-xs text-destructive">{remove.error.message}</p>
           ) : null}
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onClose}>
+            <Button
+              disabled={remove.isPending}
+              type="button"
+              variant="ghost"
+              onClick={onClose}
+            >
               Cancel
             </Button>
             <Button

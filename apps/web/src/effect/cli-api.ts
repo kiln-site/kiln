@@ -1004,6 +1004,15 @@ export const deleteCliServerEffect = Effect.fn("cli.api.servers.delete")(
     }).pipe(
       Effect.catchTag("AuthenticationError", (error) =>
         Effect.fail(forbidden(error.message))
+      ),
+      Effect.catchTag("PasswordAttemptsError", (error) =>
+        Effect.fail(
+          CliAccessError.make({
+            code: "rate_limited",
+            message: error.message,
+            retryable: true,
+          })
+        )
       )
     )
     yield* Effect.tryPromise({

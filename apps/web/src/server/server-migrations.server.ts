@@ -41,6 +41,7 @@ import {
   listServerMigrationsEffect,
   startServerMigrationEffect,
 } from "@/lib/server-migrations.server"
+import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
 import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import { relayResourceLimitsRequest } from "@/lib/resource-limits.server"
 import type {
@@ -293,6 +294,12 @@ export async function startServerMigrationHandler(
   if (options.deleteSource) {
     authorization.require("instance.delete")
     authorization.require("backup.create")
+    await requireDeleteConfirmation({
+      confirmation: data.confirmation?.confirmation ?? "",
+      name: instance.name,
+      password: data.confirmation?.password ?? "",
+      user,
+    })
     await resolveAuthorizedBackupStorageSelection({
       relayId: relay.id,
       targetId: instance.id,

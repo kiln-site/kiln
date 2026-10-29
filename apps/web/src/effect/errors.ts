@@ -115,6 +115,12 @@ export class AuthenticationError extends Schema.TaggedError<AuthenticationError>
   }
 ) {}
 
+/** Too many wrong account passwords lately: none is checked until it passes. */
+export class PasswordAttemptsError extends Schema.TaggedError<PasswordAttemptsError>()(
+  "PasswordAttemptsError",
+  { message: Schema.String }
+) {}
+
 export class RelayUnavailableError extends Schema.TaggedError<RelayUnavailableError>()(
   "RelayUnavailableError",
   {
