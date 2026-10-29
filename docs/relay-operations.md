@@ -356,8 +356,9 @@ What quieting changes is recorded with the freeze before it's made. From then on
 refuse any operation that touches the resource when its turn comes,
 whoever asks, including one already waiting: power, console input, files,
 uploads, SFTP, restores, deploys, schedules, and crash recovery. They answer
-`operation_refused`, as for an unfinished restore. Only its final backup (`backup.create`), its deletion,
-and `resource.freeze` / `resource.unfreeze` still run. Nested work inside an
+`operation_refused`, as an unfinished restore's fence does. Only its final
+backup (`backup.create`), its deletion, and `resource.freeze` /
+`resource.unfreeze` still run. Nested work inside an
 operation already granted isn't checked, and Tailscale changes leave a
 frozen member's network as it was. Terminals need a running container, so a
 stopped resource has none.

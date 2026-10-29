@@ -15,7 +15,11 @@ import {
   resourceReplaceLocks,
 } from "./operation-plans.js"
 import { fakeDocker } from "./test/docker.js"
-import { relayHarness, TEST_NAMESPACE, type RelayHarness } from "./test/relay.js"
+import {
+  relayHarness,
+  TEST_NAMESPACE,
+  type RelayHarness,
+} from "./test/relay.js"
 
 const serverId = "a".repeat(40)
 const otherServerId = "b".repeat(40)
@@ -24,6 +28,8 @@ const appId = "e".repeat(40)
 const deletion = "11111111-1111-4111-8111-111111111111"
 const otherDeletion = "22222222-2222-4222-8222-222222222222"
 const resolve = (reference: string) => reference
+// No volume here belongs to an App, and no App names a volume.
+const none = () => []
 const quiet = async () => {}
 
 afterEach(() => {
@@ -50,7 +56,8 @@ const control = (operation: string, payload: Record<string, unknown>) =>
   controlRequestLocks(
     operation as Parameters<typeof controlRequestLocks>[0],
     payload,
-    resolve
+    resolve,
+    none
   )!
 
 const backupOf = (kind: "create" | "restore") =>
@@ -58,9 +65,9 @@ const backupOf = (kind: "create" | "restore") =>
     { kind, target: { id: serverId, kind: "instance" } } as Parameters<
       typeof backupTaskLocks
     >[0],
-    resolve
+    resolve,
+    none
   )
-
 
 describe("resources frozen for deletion", () => {
   it("refuses every change to a frozen game server but its final backup and deletion", async () => {
@@ -113,14 +120,14 @@ describe("resources frozen for deletion", () => {
         control("instance.console.write", { instanceId: serverId })
       )
     ).toBe(refused)
-    expect(
-      await attempt(harness, "backup.restore", backupOf("restore"))
-    ).toBe(refused)
+    expect(await attempt(harness, "backup.restore", backupOf("restore"))).toBe(
+      refused
+    )
 
     // Its final backup and its deletion still run, and nothing else waits.
-    expect(
-      await attempt(harness, "backup.create", backupOf("create"))
-    ).toBe("ran")
+    expect(await attempt(harness, "backup.create", backupOf("create"))).toBe(
+      "ran"
+    )
     expect(
       await attempt(
         harness,
@@ -150,7 +157,8 @@ describe("resources frozen for deletion", () => {
     } as const
     const stop = async () => {
       const instance = await harness.docker.findInstance(serverId)
-      if (instance) await harness.lifecycle.runInstanceAction(instance, "stop", [])
+      if (instance)
+        await harness.lifecycle.runInstanceAction(instance, "stop", [])
     }
     await harness.freezes.freeze(frozen, stop)
     expect(server.state.running).toBe(false)
@@ -232,7 +240,12 @@ describe("resources frozen for deletion", () => {
       await attempt(
         harness,
         "backup.create",
-        controlRequestLocks("database.dump.export", { databaseId }, resolve)!
+        controlRequestLocks(
+          "database.dump.export",
+          { databaseId },
+          resolve,
+          none
+        )!
       )
     ).toBe("ran")
   })
