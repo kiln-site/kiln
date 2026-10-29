@@ -1,3 +1,4 @@
+import type { BackupTargetKind } from "@workspace/contracts"
 import { z } from "zod"
 
 import type { CursorPage } from "@/lib/cursor-page"
@@ -56,6 +57,7 @@ export interface BackupRun {
     | "database_dump"
     | "platform_bundle"
     | "restic_snapshot"
+    | "tar_archive"
   backupMode: "full" | "incremental"
   bytes: number | null
   checksumSha256: string | null
@@ -72,7 +74,7 @@ export interface BackupRun {
   status: "available" | "deleted" | "deleting" | "failed" | "queued" | "running"
   storageId: string | null
   targetId: string
-  targetKind: "database" | "instance" | "platform"
+  targetKind: BackupTargetKind
   taskBytesCompleted: number
   taskBytesTotal: number | null
   taskCurrentArtifactId: string | null

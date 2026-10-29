@@ -23,7 +23,10 @@ import {
   SlidersHorizontal,
   Trash2,
 } from "lucide-react"
-import { backupStorageProviderName } from "@workspace/contracts"
+import {
+  backupStorageProviderName,
+  type BackupTargetKind,
+} from "@workspace/contracts"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -44,7 +47,7 @@ import {
 } from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 import { Switch } from "@workspace/ui/components/switch"
-import type { HearthBackupTarget } from "@/lib/backup-targets"
+import type { BackupTarget } from "@workspace/contracts"
 import { KilnRestoreDialog } from "@/components/backups/kiln-restore-dialog"
 import { BackupTargetSettings } from "@/components/backups/target-settings"
 import {
@@ -85,7 +88,7 @@ import {
 } from "@/components/backups/table-row"
 import { formatBytes } from "@/lib/format-bytes"
 import { BackupToolbar } from "@/components/backups/toolbar"
-import { grantHasPermission } from "@/lib/permissions"
+import { grantsAllowBackup } from "@/lib/backup-target-permissions"
 import {
   accessCapabilitiesQueryOptions,
   backupRunsInfiniteQueryOptions,
@@ -2151,7 +2154,7 @@ function kilnScopeOption(kiln: KilnBackupHost): ServerPickerOption {
   }
 }
 
-function backupPolicyTarget(target: ServerPickerOption): HearthBackupTarget {
+function backupPolicyTarget(target: ServerPickerOption): BackupTarget {
   const kind = target.kind ?? "server"
   return {
     id: target.id,
@@ -2237,18 +2240,15 @@ function availableCreateTargets({
 function hasBackupResourcePermission(
   capabilities: Awaited<ReturnType<typeof getAccessCapabilities>>,
   relayId: string,
-  resourceType: "database" | "instance",
+  resourceType: Exclude<BackupTargetKind, "platform">,
   resourceId: string,
   permission: "backup.create" | "backup.download" = "backup.create"
 ): boolean {
   if (capabilities.isPlatformAdmin) return true
-  return capabilities.grants.some(
-    (grant) =>
-      grant.relayId === relayId &&
-      grantHasPermission(grant, permission) &&
-      (grant.resourceType === "relay" ||
-        (grant.resourceType === resourceType &&
-          grant.resourceId === resourceId))
+  return grantsAllowBackup(
+    capabilities.grants,
+    { id: resourceId, kind: resourceType, relayId },
+    permission
   )
 }
 

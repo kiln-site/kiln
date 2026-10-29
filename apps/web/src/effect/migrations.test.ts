@@ -11,6 +11,7 @@ import { domainZones } from "@/migrations/0015_domain_zones"
 import { securityReports } from "@/migrations/0031_security_reports"
 import { cloudflareConnections } from "@/migrations/0035_cloudflare_connections"
 import { tailscaleMemberIds } from "@/migrations/0039_tailscale_member_ids"
+import { backupResourceTargets } from "@/migrations/0042_backup_resource_targets"
 import { baselineTables } from "@/migrations/baseline-schema"
 import { describeMysql, testDatabaseClient } from "@/test/database"
 import {
@@ -766,6 +767,72 @@ describeMysql("database migrations", () => {
           // A retry after a crash changes nothing more.
           yield* tailscaleMemberIds.run
           expect(yield* deployments).toEqual(after)
+          expect(yield* ledger).toEqual(migrationIds)
+        }),
+      120_000
+    )
+
+    it.effect(
+      "keeps every backup row while backups take Apps and volumes as targets",
+      () =>
+        Effect.gen(function* () {
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter(
+              (migration) => migration.id < backupResourceTargets.id
+            )
+          )
+          yield* insertRelay("relay-a")
+          yield* insertBackup("00000000-0000-4000-8000-000000000001", {
+            relay_id: "relay-a",
+            target_id: "inst-a",
+          })
+          yield* insertRows("backup_policy", {
+            relay_id: "relay-a",
+            target_kind: "database",
+            target_id: "db-a",
+            exclude_patterns: "[]",
+            quantity_limit: 3,
+            created_at: 1_000,
+            updated_at: 1_000,
+          })
+          yield* applyMigrations(migrations)
+
+          expect(
+            yield* selectRows<Record<string, unknown>>("backup")
+          ).toMatchObject([
+            {
+              artifact_kind: "archive",
+              consistency: null,
+              target_id: "inst-a",
+              target_kind: "instance",
+            },
+          ])
+          expect(yield* selectRows("backup_policy")).toMatchObject([
+            { quantity_limit: 3, target_id: "db-a", target_kind: "database" },
+          ])
+          // An App's volume: its App's ID, then its name in Compose.
+          const volume = `${"a".repeat(40)}/${"v".repeat(159)}`
+          yield* insertBackup("00000000-0000-4000-8000-000000000002", {
+            artifact_kind: "tar_archive",
+            consistency: "stopped",
+            relay_id: "relay-a",
+            target_id: volume,
+            target_kind: "volume",
+          })
+          yield* insertRows("backup_policy", {
+            relay_id: "relay-a",
+            target_kind: "app",
+            target_id: "a".repeat(40),
+            exclude_patterns: "[]",
+            created_at: 1_000,
+            updated_at: 1_000,
+          })
+          expect(
+            (yield* selectRows<{ target_id: string }>("backup")).map(
+              (row) => row.target_id
+            )
+          ).toContain(volume)
           expect(yield* ledger).toEqual(migrationIds)
         }),
       120_000

@@ -31,7 +31,7 @@ import {
   engineProductLabel,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
-import type { HearthBackupTarget } from "@/lib/backup-targets"
+import type { BackupTarget } from "@workspace/contracts"
 import { EditableIcon } from "@/components/icon-editor-dialog"
 import {
   InfoCopyValue,
@@ -354,7 +354,7 @@ export function RestoreBackupLink({
   emptyMessage: string
   relayId: string
   search: { kind: "database" | "relay"; relay: string; server: string }
-  target: HearthBackupTarget
+  target: BackupTarget
 }) {
   const { data } = useQuery(backupUsageQueryOptions(relayId, target))
   if (data && data.quantityAvailable > 0) {

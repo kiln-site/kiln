@@ -78,6 +78,7 @@ import {
   requireRelayPermissionEffect,
 } from "@/lib/access-control"
 import { hasBackupPermission } from "@/lib/backup-access"
+import type { BackupAction } from "@/lib/backup-target-permissions"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { signLocalBackupDownload } from "@/backups/destinations/local"
 import { signS3BackupDownload } from "@/backups/destinations/s3"
@@ -1398,7 +1399,7 @@ const loadCliBackupForAction = Effect.fn("cli.api.backups.action.authorize")(
   function* (
     principal: CliPrincipal,
     backupId: string,
-    permission: AccessPermission
+    permission: BackupAction
   ) {
     const backup = (yield* loadCliBackupCatalogEffect()).find(
       (candidate) => candidate.id === backupId

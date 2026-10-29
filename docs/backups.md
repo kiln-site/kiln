@@ -79,12 +79,39 @@ Targets are:
   `<App ID>/<key>` for one an App's Compose project declares (see
   [App deployments](app-deployments.md#volumes)).
 
-Relays back up and restore Apps and volumes; Hearth catalogs, authorizes,
-and offers them in a later layer, and until then accepts only the first
-three.
+Apps and volumes are archived as `tar_archive`, always full, and a backup
+records whether it was taken live or with what uses it stopped, so a
+dispatch after a restart asks the Relay for the same. Target IDs are up to
+200 ASCII characters; an S3 object key encodes each as one path segment,
+so an App's volume's slash never nests its backups under another target's
+(keys for other targets are unchanged).
+
+A backup's contents are its resource's data, so acting on a backup takes
+the authority reading or writing that data does
+(`lib/backup-target-permissions.ts`):
+
+- Game servers and databases take `backup.*` on the Relay or on themselves.
+- An App's folder, and a volume its Compose project owns, follow the App:
+  seeing its backups takes `app.read`; making or downloading one
+  `app.files.read`, as reading its files does; restoring or deleting one
+  `app.files.write`, as replacing them does. The Relay's `backup.*`
+  grants don't reach them. App owners hold neither file permission, since
+  an App's files reach the node through its Compose file, so, as with its
+  configuration, only people with App permissions on the Relay back an App
+  up. Restoring needs no `app.manage`: the Relay requires the App stopped
+  and replaces only files `app.files.write` could already change, and the
+  Compose file isn't among them (Hearth sends it with each deployment).
+- A Kiln volume, shared by design, takes `backup.*` on the Relay.
+- A stopped backup also takes `app.manage` on every App it stops and
+  starts again, as starting and stopping them does.
+- Restoring a volume also takes `app.files.write` on every App that uses
+  it, as the Relay reports them; while the Relay can't tell which Apps use
+  it yet, the restore is refused.
+- Kiln's own backups are an administrator's alone.
 
 Reasons are `manual`, `pre_restore`, `final_delete`, and `scheduled`.
-Artifact kinds start with `archive`, `database_dump`, and `platform_bundle`.
+Artifact kinds are `archive`, `database_dump`, `platform_bundle`,
+`restic_snapshot`, and `tar_archive`.
 A `full`/`incremental` mode is recorded independently so a future Restic
 artifact does not require a catalog migration.
 

@@ -25,6 +25,7 @@ import {
   reserveDatabaseBackupEffect,
   reserveInstanceBackupEffect,
   reservePlatformBackupEffect,
+  reserveResourceBackupEffect,
   updateBackupExcludesEffect,
   updateBackupLimitsEffect,
   type BackupCatalogRecord,
@@ -47,6 +48,17 @@ import {
   resolveScopeAuthorization,
 } from "@/lib/scope-authorization.server"
 import { hasBackupPermission } from "@/lib/backup-access"
+import {
+  appBackupPermission,
+  backupTargetApp,
+} from "@/lib/backup-target-permissions"
+import {
+  backupTargetUsers,
+  requireAppsPermission,
+  requireBackupTargetPermission,
+  requireBackupTargetRestore,
+} from "@/server/backup-target-access.server"
+import { loadAppConfigEffect } from "@/effect/managed-apps"
 import {
   resolveAuthorizedBackupStorageSelection,
   resolveBackupStorageSelection,
@@ -98,6 +110,7 @@ import type {
   InstanceBackupInput,
   PlatformBackupInput,
   RenameBackupInput,
+  ResourceBackupInput,
 } from "@/server/backups"
 
 // The backup server functions in ./backups authenticate the caller and hand
@@ -245,6 +258,68 @@ export async function createPlatformBackupHandler(
   )
 }
 
+/**
+ * Backs up an App's folder or a volume, live or with every App that uses it
+ * stopped, which takes permission to start and stop each of them.
+ */
+export async function createResourceBackupHandler(
+  user: AuthenticatedUser,
+  data: ResourceBackupInput
+) {
+  const relay = await requireBackupRelay(data.relayId)
+  const { target } = data
+  await requireBackupTargetPermission(user, relay.id, target, "backup.create")
+  const app = backupTargetApp(target)
+  if (
+    app &&
+    !(await runAppEffect(
+      "backups.appTarget",
+      loadAppConfigEffect(relay.id, app)
+    ))
+  ) {
+    throw new Error("App not found on this Relay")
+  }
+  if (data.consistency === "stopped") {
+    await requireAppsPermission(
+      user,
+      relay.id,
+      await backupTargetUsers(relay, target, user.id),
+      "app.manage",
+      "A stopped backup stops and starts every App that uses what it backs up; you need permission to manage each"
+    )
+  }
+  const storageIds = await resolveBackupStorageSelection({
+    ...data,
+    targetId: target.id,
+    targetKind: target.kind,
+  })
+  await validateRequestedStorage({ storageIds }, user.id, false, () =>
+    requireBackupTargetPermission(user, relay.id, target, "backup.download")
+  )
+  const input = await runAppEffect(
+    "backups.reserveResource",
+    reserveResourceBackupEffect({
+      backupId: randomUUID(),
+      consistency: data.consistency ?? "live",
+      createdBy: user.id,
+      name: data.name,
+      relayId: relay.id,
+      requestedMaxBytes: data.maxBytes ?? null,
+      storageIds,
+      targetId: target.id,
+      targetKind: target.kind,
+      taskId: randomUUID(),
+    })
+  )
+  publishBackupChange(relay.id, input.backupId)
+  return dispatchAndLoadReservedBackup(
+    relay,
+    input,
+    user.id,
+    "backups.getAfterResourceCreate"
+  )
+}
+
 async function dispatchAndLoadReservedBackup(
   relay: PersistedRelay,
   input: BackupDispatch,
@@ -276,9 +351,9 @@ export async function getBackupRunsPageHandler(
   const page = await runAppEffect(
     "backups.page",
     listBackupCatalogPageEffect({
-      allowedScopes: isPlatformAdmin(user)
-        ? []
-        : backupReadableGrants(await listUserGrants(user.id)),
+      ...(isPlatformAdmin(user)
+        ? { allowedScopes: [], appScopes: [] }
+        : backupReadableScopes(await listUserGrants(user.id))),
       cursor,
       direction: query.direction,
       isAdmin: isPlatformAdmin(user),
@@ -315,9 +390,9 @@ export async function getBackupRunForQueryHandler(
   const page = await runAppEffect(
     "backups.getForQuery",
     listBackupCatalogPageEffect({
-      allowedScopes: isPlatformAdmin(user)
-        ? []
-        : backupReadableGrants(await listUserGrants(user.id)),
+      ...(isPlatformAdmin(user)
+        ? { allowedScopes: [], appScopes: [] }
+        : backupReadableScopes(await listUserGrants(user.id))),
       backupId: data.backupId,
       cursor: null,
       direction: query.direction,
@@ -389,14 +464,12 @@ export async function getBackupUsageHandler(
     }
     target = { id: kilnInstallationId(), kind: "platform" }
   } else {
-    await requireRelayPermission({
-      ...(target.kind === "database"
-        ? { databaseId: target.id }
-        : { instanceId: target.id }),
-      permission: "backup.read",
-      relayId: data.relayId,
+    await requireBackupTargetPermission(
       user,
-    })
+      data.relayId,
+      target,
+      "backup.read"
+    )
   }
   return runAppEffect(
     "backups.getUsage",
@@ -859,6 +932,81 @@ export async function restoreDatabaseBackupHandler(
   }
 }
 
+/**
+ * Restores an App's folder or a volume. It takes permission to restore the
+ * target and to change the files of every App that uses it; the Relay
+ * refuses while anything that mounts it runs.
+ */
+export async function restoreResourceBackupHandler(
+  user: AuthenticatedUser,
+  data: BackupRestoreInput
+) {
+  const backup = await runAppEffect(
+    "backups.getForResourceRestore",
+    getBackupCatalogRecordEffect(data.backupId)
+  )
+  if (
+    !backup ||
+    backup.status !== "available" ||
+    (backup.targetKind !== "app" && backup.targetKind !== "volume") ||
+    backup.artifactKind !== "tar_archive" ||
+    backup.backupMode !== "full"
+  ) {
+    throw new Error("Backup is not available for an App or volume restore")
+  }
+  const relay = await requireBackupRelay(backup.relayId)
+  const target = { id: backup.targetId, kind: backup.targetKind }
+  await requireBackupTargetRestore(user, relay, target)
+  if (data.safetyBackup) {
+    await requireBackupTargetPermission(user, relay.id, target, "backup.create")
+  }
+  const safetyStorageIds = data.safetyBackup
+    ? await resolveAuthorizedBackupStorageSelection({
+        relayId: relay.id,
+        targetId: target.id,
+        targetKind: target.kind,
+        user,
+      })
+    : undefined
+  const safety = data.safetyBackup
+    ? await runAppEffect(
+        "backups.reserveResourceSafety",
+        reserveResourceBackupEffect({
+          backupId: randomUUID(),
+          consistency: "live",
+          createdBy: user.id,
+          name: `Before restoring ${backup.name}`.slice(0, 120),
+          reason: "pre_restore",
+          relayId: relay.id,
+          requestedMaxBytes: null,
+          storageIds: safetyStorageIds,
+          targetId: target.id,
+          targetKind: target.kind,
+          taskId: randomUUID(),
+        })
+      )
+    : null
+  const restore = await runAppEffect(
+    "backups.reserveResourceRestore",
+    reserveBackupRestoreEffect({
+      backupId: backup.id,
+      dependsOnTaskId: safety?.taskId ?? null,
+      requestedBy: user.id,
+      taskId: randomUUID(),
+    })
+  )
+  publishBackupChange(relay.id, backup.id)
+  if (safety) publishBackupChange(relay.id, safety.backupId)
+  const dispatched = await Promise.allSettled([
+    dispatchBackupTask(relay, safety ?? restore, user.id),
+  ])
+  return {
+    relayAccepted: dispatched[0]?.status === "fulfilled",
+    restoreTaskId: restore.taskId,
+    safetyBackupId: safety?.backupId ?? null,
+  }
+}
+
 export async function updateBackupLimitsHandler(
   user: AuthenticatedUser,
   data: BackupLimitsInput
@@ -872,14 +1020,12 @@ export async function updateBackupLimitsHandler(
   }
   // Retention deletes the backups it no longer keeps.
   if (data.target.kind !== "platform") {
-    await requireRelayPermission({
-      ...(data.target.kind === "database"
-        ? { databaseId: data.target.id }
-        : { instanceId: data.target.id }),
-      permission: "backup.delete",
-      relayId: data.relayId,
+    await requireBackupTargetPermission(
       user,
-    })
+      data.relayId,
+      data.target,
+      "backup.delete"
+    )
   }
   await runAppEffect(
     "backups.updateLimits",
@@ -926,14 +1072,12 @@ async function requireBackupPolicyTarget(
     }
     return { id: kilnInstallationId(), kind: "platform" }
   }
-  await requireRelayPermission({
-    ...(input.target.kind === "database"
-      ? { databaseId: input.target.id }
-      : { instanceId: input.target.id }),
-    permission: "backup.create",
-    relayId: input.relayId,
+  await requireBackupTargetPermission(
     user,
-  })
+    input.relayId,
+    input.target,
+    "backup.create"
+  )
   return input.target
 }
 
@@ -1047,10 +1191,24 @@ async function requireBackupRelay(relayId: string): Promise<PersistedRelay> {
   return activeRelay(relayId)
 }
 
-// Backups live on Relays, game servers and databases, never on one app.
-function backupReadableGrants(grants: ReadonlyArray<AccessGrant>) {
-  return grants.filter(
-    (grant): grant is AccessGrant & { resourceType: AccessGrantScopeType } =>
-      grant.resourceType !== "app" && grantHasPermission(grant, "backup.read")
-  )
+// Backup grants live on Relays, game servers, and databases, never on one
+// App; an App's backups follow the App's own permissions.
+function backupReadableScopes(grants: ReadonlyArray<AccessGrant>) {
+  return {
+    allowedScopes: grants.filter(
+      (grant): grant is AccessGrant & { resourceType: AccessGrantScopeType } =>
+        grant.resourceType !== "app" && grantHasPermission(grant, "backup.read")
+    ),
+    appScopes: grants.flatMap((grant) =>
+      (grant.resourceType === "relay" || grant.resourceType === "app") &&
+      grantHasPermission(grant, appBackupPermission("backup.read"))
+        ? [
+            {
+              appId: grant.resourceType === "app" ? grant.resourceId : null,
+              relayId: grant.relayId,
+            },
+          ]
+        : []
+    ),
+  }
 }

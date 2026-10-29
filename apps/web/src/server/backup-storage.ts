@@ -3,10 +3,7 @@ import { randomUUID } from "node:crypto"
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 
-import {
-  type HearthBackupTarget,
-  hearthBackupTargetSchema,
-} from "@/lib/backup-targets"
+import { type BackupTarget, backupTargetSchema } from "@workspace/contracts"
 
 import {
   relayIdSchema,
@@ -24,11 +21,7 @@ import {
   type BackupStorageRecord,
 } from "@/backups/destinations/s3"
 import { runAppEffect } from "@/effect/runtime"
-import {
-  hasPlatformPermission,
-  isPlatformAdmin,
-  requireRelayPermission,
-} from "@/lib/access-control"
+import { hasPlatformPermission, isPlatformAdmin } from "@/lib/access-control"
 import {
   publishBackupSettingsChange,
   publishBackupStorageChange,
@@ -61,7 +54,7 @@ export const backupStorageInputSchema = z.strictObject({
 const preferredStorageInputSchema = z.strictObject({
   relayId: relayIdSchema,
   storageId: backupStorageIdSchema.nullable(),
-  target: hearthBackupTargetSchema,
+  target: backupTargetSchema,
 })
 
 export const getBackupStorage = createServerFn({ method: "GET" }).handler(
@@ -205,14 +198,14 @@ export const setPreferredBackupStorage = createServerFn({ method: "POST" })
         throw new Error("Backup destination is unavailable")
       }
       if (storage.ownerUserId !== null && target.kind !== "platform") {
-        await requireRelayPermission({
-          ...(target.kind === "database"
-            ? { databaseId: target.id }
-            : { instanceId: target.id }),
-          permission: "backup.download",
-          relayId: data.relayId,
+        const { requireBackupTargetPermission } =
+          await import("@/server/backup-target-access.server")
+        await requireBackupTargetPermission(
           user,
-        })
+          data.relayId,
+          target,
+          "backup.download"
+        )
       }
     }
     await runAppEffect(
@@ -229,23 +222,23 @@ export const setPreferredBackupStorage = createServerFn({ method: "POST" })
   })
 
 async function requireBackupPolicyTarget(
-  input: { relayId: string; target: HearthBackupTarget },
+  input: { relayId: string; target: BackupTarget },
   user: Awaited<ReturnType<typeof requireEligibleResourceUser>>
-): Promise<HearthBackupTarget> {
+): Promise<BackupTarget> {
   if (input.target.kind === "platform") {
     if (!isPlatformAdmin(user)) {
       throw new Error("Platform backup settings require administrator access")
     }
     return { id: kilnInstallationId(), kind: "platform" }
   }
-  await requireRelayPermission({
-    ...(input.target.kind === "database"
-      ? { databaseId: input.target.id }
-      : { instanceId: input.target.id }),
-    permission: "backup.create",
-    relayId: input.relayId,
+  const { requireBackupTargetPermission } =
+    await import("@/server/backup-target-access.server")
+  await requireBackupTargetPermission(
     user,
-  })
+    input.relayId,
+    input.target,
+    "backup.create"
+  )
   return input.target
 }
 

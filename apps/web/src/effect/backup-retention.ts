@@ -1,6 +1,8 @@
 import { Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
+import type { BackupTargetKind } from "@workspace/contracts"
+
 import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 
@@ -22,7 +24,7 @@ interface RetentionPolicyRow extends RowDataPacket {
   retention_days: number | null
   size_limit_bytes: number | string | null
   target_id: string
-  target_kind: "database" | "instance" | "platform"
+  target_kind: BackupTargetKind
 }
 
 interface KeptBackupRow extends RowDataPacket {

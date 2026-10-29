@@ -2,9 +2,11 @@ import { createServerFn } from "@tanstack/react-start"
 import { getRequest } from "@tanstack/react-start/server"
 import { z } from "zod"
 
-import { hearthBackupTargetSchema } from "@/lib/backup-targets"
-
-import { relayIdSchema } from "@workspace/contracts"
+import {
+  backupConsistencySchema,
+  backupTargetSchema,
+  relayIdSchema,
+} from "@workspace/contracts"
 
 import {
   backupRunsQuerySchema,
@@ -18,6 +20,7 @@ import {
   createDatabaseBackupHandler,
   createInstanceBackupHandler,
   createPlatformBackupHandler,
+  createResourceBackupHandler,
   deleteBackupHandler,
   getBackupDownloadUrlHandler,
   getBackupPolicyHandler,
@@ -27,6 +30,7 @@ import {
   renameBackupHandler,
   restoreDatabaseBackupHandler,
   restoreInstanceBackupHandler,
+  restoreResourceBackupHandler,
   syncBackupRunsHandler,
   updateBackupExcludesHandler,
   updateBackupLimitsHandler,
@@ -75,6 +79,24 @@ const platformBackupInputSchema = z.strictObject({
   relayId: relayIdSchema,
   storageId: z.uuid().nullable().optional(),
   storageIds: z.array(z.uuid().nullable()).min(1).max(16).optional(),
+})
+
+// An App's folder, or a volume: one Kiln made, or `<App ID>/<key>` for one
+// an App's Compose project declares.
+const resourceBackupInputSchema = z.strictObject({
+  consistency: backupConsistencySchema.optional(),
+  maxBytes: z
+    .number()
+    .int()
+    .positive()
+    .max(Number.MAX_SAFE_INTEGER)
+    .nullable()
+    .optional(),
+  name: z.string().trim().min(1).max(120),
+  relayId: relayIdSchema,
+  storageId: z.uuid().nullable().optional(),
+  storageIds: z.array(z.uuid().nullable()).min(1).max(16).optional(),
+  target: backupTargetSchema.extend({ kind: z.enum(["app", "volume"]) }),
 })
 
 const backupIdInputSchema = z.strictObject({ backupId: z.uuid() })
@@ -131,7 +153,7 @@ const backupLimitsInputSchema = z
       .positive()
       .max(Number.MAX_SAFE_INTEGER)
       .nullable(),
-    target: hearthBackupTargetSchema,
+    target: backupTargetSchema,
   })
   .refine((input) => input.scope === "platform" || input.quantityLimit !== 0, {
     message: "Keep at least one backup",
@@ -141,17 +163,18 @@ const backupLimitsInputSchema = z
 const backupExcludesInputSchema = z.strictObject({
   exclude: z.array(z.string().trim().min(1).max(1_024)).max(1_000),
   relayId: relayIdSchema,
-  target: hearthBackupTargetSchema,
+  target: backupTargetSchema,
 })
 
 const backupPolicyInputSchema = z.strictObject({
   relayId: relayIdSchema,
-  target: hearthBackupTargetSchema,
+  target: backupTargetSchema,
 })
 
 export type InstanceBackupInput = z.infer<typeof instanceBackupInputSchema>
 export type DatabaseBackupInput = z.infer<typeof databaseBackupInputSchema>
 export type PlatformBackupInput = z.infer<typeof platformBackupInputSchema>
+export type ResourceBackupInput = z.infer<typeof resourceBackupInputSchema>
 export type BackupIdInput = z.infer<typeof backupIdInputSchema>
 export type BackupRunForQueryInput = z.infer<typeof backupRunForQuerySchema>
 export type BackupRemovalInput = z.infer<typeof backupRemovalInputSchema>
@@ -182,6 +205,12 @@ export const createPlatformBackup = createServerFn({ method: "POST" })
   .validator(platformBackupInputSchema)
   .handler(async ({ data }) =>
     createPlatformBackupHandler(await requireEligibleResourceUser(), data)
+  )
+
+export const createResourceBackup = createServerFn({ method: "POST" })
+  .validator(resourceBackupInputSchema)
+  .handler(async ({ data }) =>
+    createResourceBackupHandler(await requireEligibleResourceUser(), data)
   )
 
 export const getBackupRunsPage = createServerFn({ method: "GET" })
@@ -259,6 +288,12 @@ export const restoreDatabaseBackup = createServerFn({ method: "POST" })
   .validator(backupRestoreInputSchema)
   .handler(async ({ data }) =>
     restoreDatabaseBackupHandler(await requireEligibleResourceUser(), data)
+  )
+
+export const restoreResourceBackup = createServerFn({ method: "POST" })
+  .validator(backupRestoreInputSchema)
+  .handler(async ({ data }) =>
+    restoreResourceBackupHandler(await requireEligibleResourceUser(), data)
   )
 
 export const updateBackupLimits = createServerFn({ method: "POST" })

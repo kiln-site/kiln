@@ -7,6 +7,7 @@ import {
   LoaderCircle,
   ShieldCheck,
 } from "lucide-react"
+import type { BackupTarget } from "@workspace/contracts"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -71,7 +72,7 @@ export function BackupTargetSettings({
   policy: BackupPolicy
   relayId: string
   storage: ReadonlyArray<BackupStorage>
-  target: { id: string; kind: "database" | "instance" | "platform" }
+  target: BackupTarget
 }) {
   const queryClient = useQueryClient()
   const initial = React.useMemo(

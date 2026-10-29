@@ -38,6 +38,7 @@ const pageInput = (
   input: Partial<BackupCatalogPageInput>
 ): BackupCatalogPageInput => ({
   allowedScopes: [],
+  appScopes: [],
   cursor: null,
   direction: "desc",
   isAdmin: true,
@@ -57,6 +58,76 @@ const pageIds = (input: Partial<BackupCatalogPageInput>) =>
 
 describeMysql("backup runs page", () => {
   layer(TestDatabase)((it) => {
+    it.effect(
+      "lists an App's backups only to those who can read the App, and a Kiln volume's to the Relay's backup readers",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const website = "a".repeat(40)
+          const worker = "b".repeat(40)
+          const shared = "c".repeat(40)
+          const tar = { artifact_kind: "tar_archive", relay_id: "relay-a" }
+          yield* insertCatalogBackup("website", {
+            ...tar,
+            target_id: website,
+            target_kind: "app",
+          })
+          yield* insertCatalogBackup("website-db", {
+            ...tar,
+            target_id: `${website}/pgdata`,
+            target_kind: "volume",
+          })
+          yield* insertCatalogBackup("worker", {
+            ...tar,
+            target_id: worker,
+            target_kind: "app",
+          })
+          yield* insertCatalogBackup("shared", {
+            ...tar,
+            target_id: shared,
+            target_kind: "volume",
+          })
+          yield* insertCatalogBackup("server", {
+            relay_id: "relay-a",
+            target_id: "inst-a",
+          })
+          const relayBackups = [
+            {
+              relayId: "relay-a",
+              resourceType: "relay" as const,
+              resourceId: "relay-a",
+            },
+          ]
+
+          // The Relay's backup readers see a Kiln volume's, never an App's.
+          assert.sameMembers(
+            yield* pageIds({ allowedScopes: relayBackups, isAdmin: false }),
+            ["server", "shared"]
+          )
+          assert.sameMembers(
+            yield* pageIds({
+              appScopes: [{ appId: website, relayId: "relay-a" }],
+              isAdmin: false,
+            }),
+            ["website", "website-db"]
+          )
+          assert.sameMembers(
+            yield* pageIds({
+              appScopes: [{ appId: null, relayId: "relay-a" }],
+              isAdmin: false,
+            }),
+            ["website", "website-db", "worker"]
+          )
+          assert.deepStrictEqual(
+            yield* pageIds({
+              appScopes: [{ appId: website, relayId: "relay-b" }],
+              isAdmin: false,
+            }),
+            []
+          )
+        })
+    )
+
     it.effect("shows non-admins only backups their grants cover", () =>
       Effect.gen(function* () {
         yield* resetDatabase

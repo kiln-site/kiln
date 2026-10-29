@@ -1,4 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
+import type { BackupTargetKind } from "@workspace/contracts"
 import { Clock, Effect, Result } from "effect"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../../../keyring.mjs"
@@ -303,7 +304,7 @@ export const setBackupPolicyStorageEffect = Effect.fn(
   relayId: string
   storageId: string | null
   targetId: string
-  targetKind: "database" | "instance" | "platform"
+  targetKind: BackupTargetKind
 }) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -353,13 +354,7 @@ export const setBackupPolicyStorageEffect = Effect.fn(
         `UPDATE ${databaseTable("backup_policy")}
             SET storage_id = ?, updated_at = ?
           WHERE relay_id = ? AND target_kind = ? AND target_id = ?`,
-        [
-          input.storageId,
-          now,
-          input.relayId,
-          input.targetKind,
-          input.targetId,
-        ]
+        [input.storageId, now, input.relayId, input.targetKind, input.targetId]
       )
     })
   )

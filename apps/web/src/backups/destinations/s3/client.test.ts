@@ -80,6 +80,37 @@ describe("S3 backup storage", () => {
     ).toMatch(/\/backup-abcdef01\.kiln$/u)
   })
 
+  it("keeps an App's volume's ID one key segment, so it can't nest under another target", () => {
+    const appId = "a".repeat(40)
+    const key = backupObjectKey({
+      artifactKind: "tar_archive",
+      backupId: "abcdef01-0000-4000-8000-000000000001",
+      installationId: "kiln.dev",
+      objectPrefix: "team/backups",
+      relayId: "relay-id",
+      targetId: `${appId}/pgdata`,
+      targetKind: "volume",
+    })
+    expect(key).toBe(
+      `team/backups/kiln/kiln.dev/relay-id/volume/${appId}%2Fpgdata/abcdef01-0000-4000-8000-000000000001/backup-abcdef01.tar.gz`
+    )
+    // A volume named by the App's ID alone has a key of its own beside it.
+    expect(
+      backupObjectKey({
+        artifactKind: "tar_archive",
+        backupId: "abcdef01-0000-4000-8000-000000000001",
+        installationId: "kiln.dev",
+        objectPrefix: "team/backups",
+        relayId: "relay-id",
+        targetId: appId,
+        targetKind: "volume",
+      }).startsWith(`team/backups/kiln/kiln.dev/relay-id/volume/${appId}/`)
+    ).toBe(true)
+    expect(
+      key.startsWith(`team/backups/kiln/kiln.dev/relay-id/volume/${appId}/`)
+    ).toBe(false)
+  })
+
   it("rejects private, local, reserved, and invalid addresses", () => {
     expect(isPublicS3Address("8.8.8.8")).toBe(true)
     expect(isPublicS3Address("2606:4700:4700::1111")).toBe(true)

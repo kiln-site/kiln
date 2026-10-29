@@ -1,5 +1,7 @@
+import type { BackupTargetKind } from "@workspace/contracts"
+
 import { loadBackupStorageEffect } from "@/backups/destinations/s3"
-import { requireRelayPermission } from "@/lib/access-control"
+import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { getBackupPolicyEffect } from "@/effect/backups"
 import { runAppEffect } from "@/effect/runtime"
@@ -8,7 +10,7 @@ import { runAppEffect } from "@/effect/runtime"
 export async function resolveBackupStorageSelection(input: {
   relayId: string
   targetId: string
-  targetKind: "instance" | "database"
+  targetKind: Exclude<BackupTargetKind, "platform">
   storageId?: string | null
   storageIds?: ReadonlyArray<string | null>
 }): Promise<Array<string | null>> {
@@ -42,15 +44,14 @@ export async function resolveAuthorizedBackupStorageSelection(
       ) {
         throw new Error("Backup destination is unavailable")
       }
+      // A personal destination is the user's to download from.
       if (storage.ownerUserId !== null) {
-        await requireRelayPermission({
-          ...(input.targetKind === "database"
-            ? { databaseId: input.targetId }
-            : { instanceId: input.targetId }),
-          permission: "backup.download",
-          relayId: input.relayId,
-          user: input.user,
-        })
+        await requireBackupTargetPermission(
+          input.user,
+          input.relayId,
+          { id: input.targetId, kind: input.targetKind },
+          "backup.download"
+        )
       }
     })
   )

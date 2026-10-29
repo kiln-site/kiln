@@ -83,7 +83,7 @@ type BackupAvailabilityState =
   | "working"
 type BackupTargetPresentation = {
   id: string
-  kindLabel: "Database" | "Game Server" | "Kiln"
+  kindLabel: string
   name: string
 }
 const activeStatuses = new Set(["queued", "running", "deleting"])
@@ -926,7 +926,12 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
       ? { id: relayId, kind: "relay", platform: true, relayId }
       : {
           id: targetId,
-          kind: targetKind === "database" ? "database" : "server",
+          kind:
+            targetKind === "database"
+              ? "database"
+              : targetKind === "app"
+                ? "app"
+                : "server",
           relayId,
         }
   const identity = (
@@ -1201,13 +1206,23 @@ function backupTargetPresentation(
   const shortId = backup.targetId.slice(0, 8)
   return {
     id: backup.targetId,
-    kindLabel: backup.targetKind === "database" ? "Database" : "Game Server",
+    kindLabel: targetKindLabels[backup.targetKind],
     name: targetName === backup.targetId ? shortId : targetName,
   }
 }
 
+const targetKindLabels: Record<Backup["targetKind"], string> = {
+  app: "App",
+  database: "Database",
+  instance: "Game Server",
+  platform: "Kiln",
+  volume: "Volume",
+}
+
 function missingTargetMessage(kind: Backup["targetKind"]): string {
   if (kind === "database") return "This database no longer exists"
+  if (kind === "app") return "This App no longer exists"
+  if (kind === "volume") return "This volume no longer exists"
   if (kind === "platform") return "The Relay Kiln was backed up on is gone"
   return "This game server no longer exists"
 }
@@ -1417,7 +1432,7 @@ function availabilityStateLabel(state: BackupAvailabilityState): string {
 }
 
 export function targetKey(
-  kind: "database" | "instance" | "platform",
+  kind: Backup["targetKind"],
   relayId: string,
   targetId: string
 ): string {

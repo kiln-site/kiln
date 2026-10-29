@@ -1,7 +1,7 @@
 import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect } from "effect"
 
-import type { BackupArtifactKind } from "@workspace/contracts"
+import type { BackupArtifactKind, BackupTargetKind } from "@workspace/contracts"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 import { Database } from "@/effect/database"
@@ -21,7 +21,7 @@ export interface BackupDownloadShare {
   sharedBy: string
   sourceName: string
   targetId: string
-  targetKind: "database" | "instance" | "platform"
+  targetKind: BackupTargetKind
 }
 
 interface BackupDownloadShareRow extends RowDataPacket {

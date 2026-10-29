@@ -21,6 +21,7 @@ import { Effect, Result, Schedule } from "effect"
 import {
   backupArtifactFilename,
   type BackupArtifactKind,
+  type BackupTargetKind,
 } from "@workspace/contracts"
 
 import { BackupStorageError } from "@/effect/errors"
@@ -145,7 +146,7 @@ export function backupObjectKey(input: {
   objectPrefix: string
   relayId: string
   targetId: string
-  targetKind: "database" | "instance" | "platform"
+  targetKind: BackupTargetKind
 }): string {
   return [
     backupObjectKeyPrefix(input),
@@ -159,7 +160,7 @@ export function backupObjectKeyPrefix(input: {
   objectPrefix: string
   relayId: string
   targetId: string
-  targetKind: "database" | "instance" | "platform"
+  targetKind: BackupTargetKind
 }): string {
   return [
     input.objectPrefix,

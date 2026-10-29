@@ -3,6 +3,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect } from "effect"
 
 import type {
+  BackupConsistency,
   BackupCreateTaskInput,
   BackupDeleteTaskInput,
   BackupRestoreTaskInput,
@@ -124,6 +125,7 @@ interface BackupRow extends RowDataPacket {
     | "database_dump"
     | "platform_bundle"
     | "restic_snapshot"
+    | "tar_archive"
   backup_mode: "full" | "incremental"
   bytes: number | string | null
   checksum_sha256: string | null
@@ -143,7 +145,7 @@ interface BackupRow extends RowDataPacket {
   storage_id: string | null
   status: "available" | "deleted" | "deleting" | "failed" | "queued" | "running"
   target_id: string
-  target_kind: "database" | "instance" | "platform"
+  target_kind: BackupTargetKind
   task_error: string | null
   task_error_code: string | null
   task_bytes_completed: number | string
@@ -165,11 +167,17 @@ interface BackupCatalogPageRow extends BackupRow {
 }
 
 export interface BackupCatalogPageInput {
+  /** Where the user may read backups of game servers, databases, and Kiln volumes. */
   allowedScopes: ReadonlyArray<{
     relayId: string
     resourceType: "relay" | "instance" | "database"
     resourceId: string
   }>
+  /**
+   * Where the user may read Apps, whose folders' and own volumes' backups
+   * follow them: every App on a Relay, when `appId` is null.
+   */
+  appScopes: ReadonlyArray<{ appId: string | null; relayId: string }>
   backupId?: string
   cursor: { id: string; value: number | string | null } | null
   direction: "asc" | "desc"
@@ -177,11 +185,11 @@ export interface BackupCatalogPageInput {
   limit: number
   scope:
     | {
-        kind: "database" | "instance" | "platform"
+        kind: BackupTargetKind
         relayId: string
         targetId: string
       }
-    | { kind: "database" | "instance" | "platform" }
+    | { kind: BackupTargetKind }
     | null
   search: string
   sort: "createdAt" | "name" | "size" | "target"
@@ -201,6 +209,7 @@ interface DispatchableBackupRow extends RowDataPacket {
   backup_mode: BackupRow["backup_mode"]
   bytes: number | string | null
   checksum_sha256: string | null
+  consistency: BackupConsistency | null
   create_task_id: string | null
   exclude_patterns: unknown
   linked_from_backup_id: string | null
@@ -414,6 +423,8 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
   function* (input: {
     artifactKind: BackupCreateTaskInput["artifactKind"]
     backupId: string
+    /** An App's folder or a volume's; absent is live. */
+    consistency?: BackupConsistency
     createdBy: string
     exclude: ReadonlyArray<string>
     mode?: BackupCreateTaskInput["mode"]
@@ -626,9 +637,9 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
           `INSERT INTO ${databaseTable("backup")}
             (id, relay_id, target_kind, target_id, storage_id, artifact_kind,
              backup_mode, reason, status, name, object_key, repository_id,
-             warnings, created_by, created_at, updated_at)
+             consistency, warnings, created_by, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?,
-                   'queued', ?, ?, ?, JSON_ARRAY(), ?, ?, ?)`,
+                   'queued', ?, ?, ?, ?, JSON_ARRAY(), ?, ?, ?)`,
           [
             input.backupId,
             input.relayId,
@@ -641,6 +652,7 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
             input.name,
             primaryArtifact.objectKey,
             repositoryId,
+            input.consistency ?? null,
             input.createdBy,
             now,
             now,
@@ -721,6 +733,7 @@ const reserveBackupCreateEffect = Effect.fn("backups.reserveCreate")(
           artifacts,
           artifactKind,
           backupId: input.backupId,
+          ...(input.consistency ? { consistency: input.consistency } : {}),
           exclude: parseExcludes(policy.exclude_patterns),
           kind: "create",
           maxBytes: reservation.maxBytes,
@@ -795,6 +808,32 @@ export const reservePlatformBackupEffect = Effect.fn("backups.reservePlatform")(
       artifactKind: "platform_bundle",
       exclude: [],
       targetKind: "platform",
+    })
+)
+
+/**
+ * Reserves a backup of an App's folder or a volume, archived through Docker
+ * on its Relay, live or with what uses it stopped. Always full.
+ */
+export const reserveResourceBackupEffect = Effect.fn("backups.reserveResource")(
+  (input: {
+    backupId: string
+    consistency: BackupConsistency
+    createdBy: string
+    name: string
+    reason?: BackupCreateTaskInput["reason"]
+    relayId: string
+    requestedMaxBytes: number | null
+    storageIds?: ReadonlyArray<string | null>
+    targetId: string
+    targetKind: "app" | "volume"
+    taskId: string
+  }) =>
+    reserveBackupCreateEffect({
+      ...input,
+      artifactKind: "tar_archive",
+      exclude: [],
+      mode: "full",
     })
 )
 
@@ -1419,6 +1458,11 @@ export const getBackupCatalogRecordEffect = Effect.fn("backups.get")(function* (
   return backupCatalogRecordFromRow(row, artifacts.map(backupArtifactFromRow))
 })
 
+// Backups that follow an App: its folder's, and those of volumes its Compose
+// project owns, whose IDs are `<App ID>/<key>`.
+const appBackupSql = `(backup.target_kind = 'app'
+  OR (backup.target_kind = 'volume' AND backup.target_id LIKE '%/%'))`
+
 export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
   input: BackupCatalogPageInput
 ) {
@@ -1427,7 +1471,7 @@ export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
   const values: Array<boolean | null | number | string> = []
 
   if (!input.isAdmin) {
-    if (input.allowedScopes.length === 0) {
+    if (input.allowedScopes.length === 0 && input.appScopes.length === 0) {
       return { hasMore: false, items: [] as Array<BackupCatalogPageRecord> }
     }
     const relayScopes = new Set(
@@ -1448,13 +1492,30 @@ export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
       if (seen.has(key)) continue
       seen.add(key)
       if (scope.resourceType === "relay") {
-        scopeClauses.push("backup.relay_id = ?")
+        // An App's backups follow the App, not the Relay's backup grants.
+        scopeClauses.push(`(backup.relay_id = ? AND NOT ${appBackupSql})`)
         values.push(scope.relayId)
       } else {
         scopeClauses.push(
           "(backup.relay_id = ? AND backup.target_kind = ? AND backup.target_id = ?)"
         )
         values.push(scope.relayId, scope.resourceType, scope.resourceId)
+      }
+    }
+    const appRelays = new Set(
+      input.appScopes.flatMap((scope) =>
+        scope.appId === null ? [scope.relayId] : []
+      )
+    )
+    for (const scope of input.appScopes) {
+      if (scope.appId === null) {
+        scopeClauses.push(`(backup.relay_id = ? AND ${appBackupSql})`)
+        values.push(scope.relayId)
+      } else if (!appRelays.has(scope.relayId)) {
+        scopeClauses.push(`(backup.relay_id = ? AND (
+            (backup.target_kind = 'app' AND backup.target_id = ?)
+            OR (backup.target_kind = 'volume' AND backup.target_id LIKE ?)))`)
+        values.push(scope.relayId, scope.appId, `${scope.appId}/%`)
       }
     }
     clauses.push(
@@ -1672,6 +1733,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
             task.created_at AS task_created_at_ms,
             backup.storage_id, backup.object_key,
             backup.linked_from_backup_id, backup.linked_from_target_id,
+            backup.consistency,
             COALESCE(policy.exclude_patterns, JSON_ARRAY()) AS exclude_patterns
        FROM ${databaseTable("backup")} backup
        JOIN ${databaseTable("backup_task")} task
@@ -1686,7 +1748,8 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
           (backup.backup_mode = 'full'
             AND ((backup.target_kind = 'instance' AND backup.artifact_kind = 'archive')
               OR (backup.target_kind = 'database' AND backup.artifact_kind = 'database_dump')
-              OR (backup.target_kind = 'platform' AND backup.artifact_kind = 'platform_bundle')))
+              OR (backup.target_kind = 'platform' AND backup.artifact_kind = 'platform_bundle')
+              OR (backup.target_kind IN ('app', 'volume') AND backup.artifact_kind = 'tar_archive')))
           OR (backup.backup_mode = 'incremental'
             AND backup.target_kind = 'instance'
             AND backup.artifact_kind = 'restic_snapshot')
@@ -1803,6 +1866,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
       artifacts: artifacts.map(dispatchArtifact),
       artifactKind: row.artifact_kind,
       backupId: row.backup_id,
+      ...(row.consistency ? { consistency: row.consistency } : {}),
       exclude: parseExcludes(row.exclude_patterns),
       kind: "create",
       maxBytes: nullableDatabaseNumber(
@@ -1858,7 +1922,8 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
                 AND (
                   (backup.backup_mode = 'full'
                     AND ((backup.target_kind = 'instance' AND backup.artifact_kind = 'archive')
-                      OR (backup.target_kind = 'database' AND backup.artifact_kind = 'database_dump')))
+                      OR (backup.target_kind = 'database' AND backup.artifact_kind = 'database_dump')
+                      OR (backup.target_kind IN ('app', 'volume') AND backup.artifact_kind = 'tar_archive')))
                   OR (backup.backup_mode = 'incremental'
                     AND backup.target_kind = 'instance'
                     AND backup.artifact_kind = 'restic_snapshot'
@@ -1928,18 +1993,23 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
                 LIMIT 1`,
               [backup.relay_id, backup.target_kind, backup.target_id]
             )
+          // Apps and volumes have no final deletions of their own yet.
           const finalDeletionTable =
             backup.target_kind === "database"
               ? "backup_final_database_delete"
-              : "backup_final_delete"
-          const finalDeletions = yield* transaction.queryRows<RowDataPacket>(
-            `SELECT target_id
-                 FROM ${databaseTable(finalDeletionTable)}
-                WHERE relay_id = ? AND target_id = ?
-                  AND status IN ('backing_up', 'deleting')
-                LIMIT 1`,
-            [backup.relay_id, backup.target_id]
-          )
+              : backup.target_kind === "instance"
+                ? "backup_final_delete"
+                : null
+          const finalDeletions = finalDeletionTable
+            ? yield* transaction.queryRows<RowDataPacket>(
+                `SELECT target_id
+                   FROM ${databaseTable(finalDeletionTable)}
+                  WHERE relay_id = ? AND target_id = ?
+                    AND status IN ('backing_up', 'deleting')
+                  LIMIT 1`,
+                [backup.relay_id, backup.target_id]
+              )
+            : []
           if (conflictingTasks[0] || finalDeletions[0]) {
             return yield* BackupStorageError.make({
               code: "restore_in_progress",
@@ -3578,10 +3648,10 @@ const refuseIfFinalDeletionInProgress = Effect.fnUntraced(function* (
     operation: string
     relayId: string
     targetId: string
-    targetKind: "database" | "instance" | "platform"
+    targetKind: BackupTargetKind
   }
 ) {
-  if (input.targetKind === "platform") return
+  if (input.targetKind !== "database" && input.targetKind !== "instance") return
   const table =
     input.targetKind === "database"
       ? "backup_final_database_delete"
