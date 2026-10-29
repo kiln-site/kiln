@@ -54,6 +54,12 @@ Before editing files for a substantial task:
   `error.fingerprint` that groups occurrences. They go to whichever OTLP
   backend `OTEL_EXPORTER_OTLP_ENDPOINT` names; Kiln's maintainers read traces
   in Tempo and logs in Loki through Grafana.
+- For live telemetry queries, first check the local shell environment for
+  `KILN_GRAFANA_URL` and `KILN_GRAFANA_TOKEN`. Use that URL's Grafana HTTP API
+  with the token as a Bearer credential; `/api/datasources` lists available
+  sources, and `/api/datasources/proxy/uid/<uid>/...` proxies their APIs.
+  Prefer this access before SSH or asking the user for connection details.
+  Check variable presence without printing the token, and never commit it.
 - Name spans with `Effect.fn("Area.operation")` or `Effect.withSpan`, keep
   names stable and put IDs in attributes. Give long-lived loops and workers no
   span of their own, span each unit of work instead, and use metrics, not
