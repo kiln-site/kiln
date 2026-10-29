@@ -27,6 +27,8 @@ import { Effect, Fiber, ManagedRuntime } from "effect"
 import { onTestFinished } from "vite-plus/test"
 
 import { appProvisioning } from "../app-provisioning.js"
+import { DockerEngine } from "../docker-engine.js"
+import { RelayVolumes } from "../volumes.js"
 import { AppDriver } from "../apps.js"
 import { BrickCatalog } from "../bricks.js"
 import { loadConfig, type RelayConfig } from "../config.js"
@@ -134,6 +136,13 @@ export async function relayHarness(
       lanes
     )
     lifecycles.push(lifecycle)
+    // What a deployment's external volumes are, as the Relay's own finds.
+    const volumes = new RelayVolumes(
+      config,
+      new DockerEngine(config.dockerSocket),
+      state,
+      () => lifecycle.hostDataDirectory()
+    )
     const apps = new AppDriver(
       config,
       () => lifecycle.hostDataDirectory(),
@@ -160,7 +169,8 @@ export async function relayHarness(
       },
       lanes,
       { allocations: docker.allocations, state },
-      databaseConnections
+      databaseConnections,
+      (dockerNames) => Effect.runPromise(volumes.idsByDockerName(dockerNames))
     )
     lifecycle.useAppServiceContainers(async (appId, service) => {
       await apps.get(appId)

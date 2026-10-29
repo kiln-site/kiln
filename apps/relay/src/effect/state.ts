@@ -861,6 +861,18 @@ export class RelayStateStore extends Context.Service<
      * Forgets that a Hearth has sent its Apps' configurations, so deletion
      * waits until it sends them again; what it named stays.
      */
+    /**
+     * Notes that a person changed an App's power: started, stopped,
+     * restarted, deployed, or deleted it.
+     */
+    readonly bumpAppPowerRevision: (
+      appId: string,
+      now: number
+    ) => Effect.Effect<void, RelayStateError>
+    /** Each App's power revision; one never changed is 0, and left out. */
+    readonly listAppPowerRevisions: (
+      appIds: ReadonlyArray<string>
+    ) => Effect.Effect<ReadonlyMap<string, number>, RelayStateError>
     readonly holdVolumeReferenceImport: (
       clientId: string
     ) => Effect.Effect<void, RelayStateError>
@@ -1541,6 +1553,16 @@ const migrations = SqliteMigrator.fromRecord({
       CREATE INDEX IF NOT EXISTS relay_app_volume_references_volume
       ON relay_app_volume_references (volume_id)
     `
+  }),
+  // How many times a person has changed each App's power, so a start a
+  // stopped backup owes from before isn't made over a later choice.
+  "30_app_power_revisions": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE IF NOT EXISTS relay_app_power_revisions (
+      app_id TEXT PRIMARY KEY NOT NULL,
+      revision INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    ) STRICT`
   }),
 })
 
@@ -3932,6 +3954,31 @@ const makeRelayStateStore = Effect.gen(function* () {
           })
         )
       ),
+    bumpAppPowerRevision: (appId, now) =>
+      run(
+        "bump_app_power_revision",
+        sql`
+          INSERT INTO relay_app_power_revisions (app_id, revision, updated_at)
+          VALUES (${appId}, 1, ${now})
+          ON CONFLICT (app_id) DO UPDATE
+          SET revision = revision + 1, updated_at = excluded.updated_at
+        `.pipe(Effect.asVoid)
+      ),
+    listAppPowerRevisions: (appIds) =>
+      appIds.length === 0
+        ? Effect.succeed(new Map<string, number>())
+        : run(
+            "list_app_power_revisions",
+            sql<{ appId: string; revision: number }>`
+              SELECT app_id AS appId, revision
+              FROM relay_app_power_revisions
+              WHERE app_id IN ${sql.in(appIds)}
+            `.pipe(
+              Effect.map(
+                (rows) => new Map(rows.map((row) => [row.appId, row.revision]))
+              )
+            )
+          ),
     holdVolumeReferenceImport: (clientId) =>
       run(
         "hold_volume_reference_import",

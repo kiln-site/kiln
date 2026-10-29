@@ -22,7 +22,7 @@ import {
 import { basename, dirname, relative, resolve, sep } from "node:path"
 import { constants as zlibConstants } from "node:zlib"
 import { logException } from "@workspace/telemetry"
-import { Effect, Fiber, Predicate, Queue, Result } from "effect"
+import { Effect, Fiber, Option, Queue, Result, Schema } from "effect"
 import ZipStream from "zip-stream"
 
 import {
@@ -67,6 +67,7 @@ import type { OperationLanes } from "./operation-lanes.js"
 import {
   appLifecycleLocks,
   appReplaceLocks,
+  appStartLocks,
   backupTaskLocks,
 } from "./operation-plans.js"
 import { backupPathIsExcluded } from "./backups/exclude.js"
@@ -176,6 +177,8 @@ export interface BackupApps {
   isRunning(appId: string): Promise<boolean>
   start(appId: string): Promise<void>
   stop(appId: string): Promise<void>
+  /** The managed volumes starting the App mounts, by ID. */
+  volumes(appId: string): Promise<ReadonlyArray<string>>
 }
 
 /** A managed volume as backups find it, by its ID. */
@@ -944,9 +947,9 @@ export class BackupManager {
     })
   }
 
-  // Stops each running App, journaling them first when they start again
-  // after. One that won't stop fails the backup, and those stopped before
-  // it start again.
+  // Stops each running App, journaling them first, with the power intent
+  // each had, when they start again after. One that won't stop fails the
+  // backup, and those stopped before it start again.
   #stopApps(taskId: string, apps: ReadonlyArray<string>, restart: boolean) {
     return Effect.gen({ self: this }, function* () {
       const running: Array<string> = []
@@ -955,20 +958,25 @@ export class BackupManager {
           running.push(appId)
         }
       }
-      if (running.length === 0) return running
-      if (restart) yield* this.#journalStoppedApps(taskId, running)
-      const stopped: Array<string> = []
-      for (const appId of running) {
+      if (running.length === 0) return []
+      const revisions = yield* this.#state.listAppPowerRevisions(running)
+      const entries = running.map((appId): StoppedApp => ({
+        appId,
+        revision: revisions.get(appId) ?? 0,
+      }))
+      if (restart) yield* this.#journalStoppedApps(taskId, entries)
+      const stopped: Array<StoppedApp> = []
+      for (const entry of entries) {
         const result = yield* Effect.result(
-          promiseEffect(() => this.#apps!.stop(appId))
+          promiseEffect(() => this.#apps!.stop(entry.appId))
         )
         if (Result.isSuccess(result)) {
-          stopped.push(appId)
+          stopped.push(entry)
           continue
         }
         // One whose stop failed may be partly stopped, so it starts again
         // with the others.
-        if (restart) yield* this.#startApps(taskId, [...stopped, appId])
+        if (restart) yield* this.#startApps(taskId, [...stopped, entry])
         return yield* Effect.fail(
           RelayBackupError.make({
             code: "app_stop_failed",
@@ -984,20 +992,22 @@ export class BackupManager {
 
   // Starts Apps a backup stopped again, answering a warning for each that
   // won't. Those that won't stay journaled, for the Relay to start when it
-  // next starts; the rest are forgotten.
-  #startApps(taskId: string, apps: ReadonlyArray<string>) {
+  // next starts; the rest are forgotten, as is one whose power a person has
+  // changed since.
+  #startApps(taskId: string, apps: ReadonlyArray<StoppedApp>) {
     return Effect.gen({ self: this }, function* () {
       const warnings: Array<string> = []
-      const unstarted: Array<string> = []
-      for (const appId of apps) {
+      const unstarted: Array<StoppedApp> = []
+      for (const entry of apps) {
+        if (!(yield* this.#stillOwed(entry))) continue
         const started = yield* Effect.result(
-          promiseEffect(() => this.#apps!.start(appId))
+          promiseEffect(() => this.#apps!.start(entry.appId))
         )
         if (Result.isFailure(started)) {
-          unstarted.push(appId)
+          unstarted.push(entry)
           warnings.push(
             backupWarning(
-              `App ${appId.slice(0, 8)} couldn't be started again after the backup: ${backupErrorMessage(started.failure)}`
+              `App ${entry.appId.slice(0, 8)} couldn't be started again after the backup: ${backupErrorMessage(started.failure)}`
             )
           )
         }
@@ -1008,59 +1018,58 @@ export class BackupManager {
   }
 
   /**
-   * Starts Apps a stopped backup left stopped, those of one task or, at
-   * startup, of every task a stop cut off, each in its lifecycle lane.
+   * Starts, as the Relay starts, the Apps stopped backups still owe a
+   * start, each in its lifecycle lane, unless a person has changed its
+   * power since the backup stopped it: what they chose stands.
    */
-  #restartStoppedApps(taskId?: string) {
+  #restartStoppedApps() {
     return Effect.gen({ self: this }, function* () {
       if (!this.#apps) return
-      const directory = stoppedAppsDirectory(this.#config)
-      const names = yield* promiseEffect(async () => {
-        await mkdir(directory, { mode: 0o700, recursive: true })
-        return readdir(directory)
-      })
-      for (const name of names) {
-        if (!name.endsWith(".json")) continue
-        const id = name.slice(0, -".json".length)
-        if (taskId !== undefined && id !== taskId) continue
-        const apps = yield* promiseEffect(() =>
-          readFile(resolve(directory, name), "utf8")
-        ).pipe(
-          Effect.map((text) =>
-            Result.getOrElse(
-              Result.try(() => {
-                const parsed = JSON.parse(text) as unknown
-                return Array.isArray(parsed)
-                  ? parsed.filter(Predicate.isString)
-                  : []
-              }),
-              () => []
-            )
+      for (const { apps, taskId } of yield* this.#readStoppedApps()) {
+        const unstarted: Array<StoppedApp> = []
+        for (const entry of apps) {
+          const { appId } = entry
+          // As a person's start does, it waits for any restore of a
+          // volume the App mounts.
+          yield* promiseEffect(() => this.#apps!.volumes(appId)).pipe(
+            Effect.flatMap((volumes) =>
+              this.#lanes.run(
+                {
+                  label: "backup.app.restart",
+                  locks: appStartLocks(appId, volumes),
+                },
+                Effect.gen({ self: this }, function* () {
+                  if (!(yield* this.#stillOwed(entry))) return
+                  yield* promiseEffect(() => this.#apps!.start(appId))
+                })
+              )
+            ),
+            Effect.catch((cause) => {
+              unstarted.push(entry)
+              return Effect.logWarning(
+                "An App a stopped backup stopped couldn't be started again",
+                { appId, cause }
+              )
+            })
           )
-        )
-        const unstarted: Array<string> = []
-        for (const appId of apps) {
-          yield* this.#lanes
-            .run(
-              { label: "backup.app.restart", locks: appLifecycleLocks(appId) },
-              promiseEffect(() => this.#apps!.start(appId))
-            )
-            .pipe(
-              Effect.catch((cause) => {
-                unstarted.push(appId)
-                return Effect.logWarning(
-                  "An App a stopped backup stopped couldn't be started again",
-                  { appId, cause }
-                )
-              })
-            )
         }
-        yield* this.#keepStoppedApps(id, unstarted)
+        yield* this.#keepStoppedApps(taskId, unstarted)
       }
     }).pipe(Effect.ignore)
   }
 
-  #journalStoppedApps(taskId: string, apps: ReadonlyArray<string>) {
+  // Whether a start is still owed: no one has changed the App's power since.
+  #stillOwed(entry: StoppedApp) {
+    return this.#state
+      .listAppPowerRevisions([entry.appId])
+      .pipe(
+        Effect.map(
+          (revisions) => (revisions.get(entry.appId) ?? 0) === entry.revision
+        )
+      )
+  }
+
+  #journalStoppedApps(taskId: string, apps: ReadonlyArray<StoppedApp>) {
     const directory = stoppedAppsDirectory(this.#config)
     return promiseEffect(async () => {
       await mkdir(directory, { mode: 0o700, recursive: true })
@@ -1074,8 +1083,40 @@ export class BackupManager {
     })
   }
 
+  // Every task's journal of the Apps it stopped and still owes a start.
+  #readStoppedApps() {
+    const directory = stoppedAppsDirectory(this.#config)
+    return Effect.gen(function* () {
+      const names = yield* promiseEffect(async () => {
+        await mkdir(directory, { mode: 0o700, recursive: true })
+        return readdir(directory)
+      })
+      const journals: Array<{ apps: Array<StoppedApp>; taskId: string }> = []
+      for (const name of names.sort()) {
+        if (!name.endsWith(".json")) continue
+        const text = yield* promiseEffect(() =>
+          readFile(resolve(directory, name), "utf8")
+        )
+        const apps = Option.getOrElse(
+          decodeStoppedApps(
+            Result.getOrElse(
+              Result.try((): unknown => JSON.parse(text)),
+              () => null
+            )
+          ),
+          () => []
+        )
+        journals.push({
+          apps: [...apps],
+          taskId: name.slice(0, -".json".length),
+        })
+      }
+      return journals
+    })
+  }
+
   // Keeps only the Apps a task still owes a start, forgetting it once none.
-  #keepStoppedApps(taskId: string, apps: ReadonlyArray<string>) {
+  #keepStoppedApps(taskId: string, apps: ReadonlyArray<StoppedApp>) {
     if (apps.length > 0) {
       return this.#journalStoppedApps(taskId, apps).pipe(Effect.ignore)
     }
@@ -1948,6 +1989,19 @@ export class BackupManager {
     })
   }
 }
+
+/**
+ * An App a stopped backup stopped, with the revision of its power intent
+ * then: a start is owed only while no one has changed its power since.
+ */
+const StoppedAppSchema = Schema.Struct({
+  appId: Schema.String,
+  revision: Schema.Number,
+})
+type StoppedApp = typeof StoppedAppSchema.Type
+const decodeStoppedApps = Schema.decodeUnknownOption(
+  Schema.Array(StoppedAppSchema)
+)
 
 // Where a stopped backup records the Apps it stopped, by task.
 function stoppedAppsDirectory(config: RelayConfig): string {

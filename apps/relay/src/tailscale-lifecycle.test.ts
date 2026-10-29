@@ -572,6 +572,7 @@ describe("Tailscale member identities", () => {
               operation,
               payload,
               (reference) => reference,
+              () => [],
               async (id) => {
                 const { bindings } =
                   await harness.lifecycle.tailscaleStackPlan(id)

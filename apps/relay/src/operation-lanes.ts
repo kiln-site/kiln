@@ -82,13 +82,7 @@ export class OperationLanes extends Lanes {
         busy: "The Relay is busy; try again shortly",
         paused: (label) => `${label} didn't run: this Relay is paused`,
       },
-      refuse: (label, locks) => {
-        for (const refusal of refusals) {
-          const reason = refusal(label, locks)
-          if (reason) return reason
-        }
-        return null
-      },
+      refuse: (label, locks) => firstRefusal(refusals, label, locks),
       waitAttribute: "relay.lanes.wait_ms",
     })
     this.#refusals = refusals
@@ -98,4 +92,24 @@ export class OperationLanes extends Lanes {
   addRefusal(refusal: LaneRefusal): void {
     this.#refusals.push(refusal)
   }
+
+  /**
+   * Why work would be refused, for locks an operation takes once it's
+   * running (`runNested`), which the lanes don't check themselves.
+   */
+  refusalFor(label: string, locks: ReadonlyArray<LaneLock>): string | null {
+    return firstRefusal(this.#refusals, label, locks)
+  }
+}
+
+function firstRefusal(
+  refusals: ReadonlyArray<LaneRefusal>,
+  label: string,
+  locks: ReadonlyArray<LaneLock>
+): string | null {
+  for (const refusal of refusals) {
+    const reason = refusal(label, locks)
+    if (reason) return reason
+  }
+  return null
 }

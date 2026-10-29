@@ -139,7 +139,10 @@ worker locks the work when it runs it:
   restore replaces the App. A restore whose swap didn't finish keeps its
   target fenced: the lanes refuse every operation that locks it, and those
   that start, deploy, or replace an App using the volume, until its
-  recovery (`backup.restore.recover`) finishes or abandons it.
+  recovery (`backup.restore.recover`) finishes or abandons it. Starting
+  or deleting an App holds every managed volume it mounts shared, and a
+  deployment holds those its Compose file names as `external` too, in a
+  nested step before it makes containers, checked against the same fences.
 - **Provisioning** holds the new server exclusively while it's created.
   Jobs for different instances run at once, up to half the host's cores
   (two to four), so a slow image download or install doesn't hold up the

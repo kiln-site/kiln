@@ -77,6 +77,19 @@ export function appReplaceLocks(appId: string): Array<LaneLock> {
   return [exclusive(laneKeys.app(appId))]
 }
 
+/**
+ * Starting an App, which also reads every volume it mounts: a restore of one
+ * holds it alone, so the App waits for it rather than start on half its
+ * files, even an App that began using the volume after the restore checked
+ * which Apps did.
+ */
+export function appStartLocks(
+  appId: string,
+  volumeIds: ReadonlyArray<string>
+): Array<LaneLock> {
+  return [...appLifecycleLocks(appId), ...volumeReferenceLocks(volumeIds)]
+}
+
 export function databaseLocks(databaseId: string): Array<LaneLock> {
   return [exclusive(laneKeys.database(databaseId))]
 }
@@ -282,6 +295,11 @@ export function controlRequestContinues(
  */
 export type InstanceResolver = (reference: string) => string | Promise<string>
 
+/** The managed volumes an App mounts or its configuration names, by ID. */
+export type AppVolumesResolver = (
+  appId: string
+) => ReadonlyArray<string> | Promise<ReadonlyArray<string>>
+
 /** The Apps that own or use a volume, by its ID. */
 export type VolumeAppsResolver = (
   volumeId: string
@@ -297,6 +315,7 @@ export function controlRequestLocks(
   operation: RelayControlOperation,
   payload: Readonly<Record<string, unknown>>,
   resolveInstance: InstanceResolver,
+  resolveAppVolumes: AppVolumesResolver,
   readTailscaleStack?: TailscaleStackReader
 ): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> | null {
   const instance = (
@@ -311,6 +330,15 @@ export function controlRequestLocks(
   const app = (locks: (id: string) => Array<LaneLock>, field = "appId") => {
     const id = stringField(payload, field)
     return id === null ? null : locks(id)
+  }
+  // With every volume the App mounts, held shared.
+  const appWithVolumes = (locks: (id: string) => Array<LaneLock>) => {
+    const id = stringField(payload, "appId")
+    if (id === null) return null
+    return Promise.resolve(resolveAppVolumes(id)).then((volumeIds) => [
+      ...locks(id),
+      ...volumeReferenceLocks(volumeIds),
+    ])
   }
   const database = (
     locks: (id: string) => Array<LaneLock>,
@@ -599,17 +627,20 @@ export function controlRequestLocks(
 
     case "app.create":
       return app(appReplaceLocks, "id")
-    // Clears its routes once the App is gone, in a nested step.
+    // Clears its routes once the App is gone, in a nested step; it waits
+    // for any restore of a volume it mounts or owns.
     case "app.delete":
-      return app(appReplaceLocks)
+      return appWithVolumes(appReplaceLocks)
     // A deploy only checks and records the deployment; its worker takes the
     // App's lifecycle lock for the build itself. App changes that reserve
     // capacity take the node's allocations in a nested step, inside the
     // lifecycle lock, so a deployment's container start can too.
     case "app.limits.write":
     case "app.deploy":
-    case "app.action":
       return app(appLifecycleLocks)
+    // Starting it reads what it mounts (see appStartLocks).
+    case "app.action":
+      return appWithVolumes(appLifecycleLocks)
     case "app.network.routes.write":
       return app((id) => [...appLifecycleLocks(id), exclusive(laneKeys.routes)])
     // Apart from the App's lifecycle, so saving its configuration never

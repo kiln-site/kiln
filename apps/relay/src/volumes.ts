@@ -406,6 +406,41 @@ export class RelayVolumes {
     }).pipe(this.#references.shared, Effect.withSpan("RelayVolumes.delete"))
   }
 
+  /**
+   * The managed volumes an App's containers or its configuration mount, and
+   * those its Compose project owns, by ID: what starting or deleting it
+   * reads or removes.
+   */
+  appVolumeIds(appId: string) {
+    return this.#inventory().pipe(
+      Effect.map(({ volumes }) =>
+        volumes.flatMap((volume) =>
+          volume.id !== null &&
+          (volume.owner?.appId === appId ||
+            volume.users.some((user) => user.appId === appId))
+            ? [volume.id]
+            : []
+        )
+      ),
+      Effect.withSpan("RelayVolumes.appVolumeIds", {
+        attributes: { "relay.app_id": appId },
+      })
+    )
+  }
+
+  /** The managed volumes with these Docker names, by ID. */
+  idsByDockerName(dockerNames: ReadonlyArray<string>) {
+    const names = new Set(dockerNames)
+    return this.#inventory().pipe(
+      Effect.map(({ volumes }) =>
+        volumes.flatMap((volume) =>
+          volume.id !== null && names.has(volume.dockerName) ? [volume.id] : []
+        )
+      ),
+      Effect.withSpan("RelayVolumes.idsByDockerName")
+    )
+  }
+
   /** Notes a Hearth's new control connection, which owes a fresh import. */
   clientConnected(clientId: string, connectionId: string) {
     this.#connections.set(clientId, connectionId)

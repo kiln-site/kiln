@@ -983,7 +983,12 @@ describe("database mutation serialization", () => {
         harness.lanes.run(
           {
             label: operation,
-            locks: controlRequestLocks(operation, payload, (ref) => ref)!,
+            locks: controlRequestLocks(
+              operation,
+              payload,
+              (ref) => ref,
+              () => []
+            )!,
           },
           Effect.promise(run)
         )
@@ -1504,7 +1509,12 @@ describe("connections of every member kind", () => {
         harness.lanes.run(
           {
             label: operation,
-            locks: controlRequestLocks(operation, payload, (ref) => ref)!,
+            locks: controlRequestLocks(
+              operation,
+              payload,
+              (ref) => ref,
+              () => []
+            )!,
           },
           Effect.promise(run)
         )

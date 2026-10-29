@@ -92,6 +92,7 @@ function backups(harness: RelayHarness, volumes: RelayVolumes) {
         stop: async (id) => {
           await harness.apps.action({ action: "stop", appId: id })
         },
+        volumes: (id) => Effect.runPromise(volumes.appVolumeIds(id)),
       },
       config: harness.config,
       fences: fencesOf.get(harness)!,
@@ -620,6 +621,34 @@ it("starts again an App whose stop failed partway, and still owes the start when
 
   await backups(harness, volumes)
   expect(await running()).toBe(true)
+  expect(
+    await readdir(join(harness.config.dataDirectory, "backup-state", "stopped"))
+  ).toEqual([])
+})
+
+it("leaves stopped an App whose power a person changed after a stopped backup owed it a start", async () => {
+  const { harness, volumes } = await relay()
+  kilnVolume()
+  await harness.apps.create({ id: appId, name: "Website" })
+  const app = await deploy(harness, mountsVolume)
+  const container = app.containers[0]!.id
+  const running = async () =>
+    (await harness.apps.get(appId)).containers.some(
+      (candidate) => candidate.running
+    )
+  const manager = await backups(harness, volumes)
+  fakeDocker.failNext({ command: "start", target: container }, "busy")
+  await runTask(
+    manager,
+    createInput({ id: volumeId, kind: "volume" }, { consistency: "stopped" })
+  )
+  expect(await running()).toBe(false)
+
+  // A person stops it, as the control socket records.
+  await Effect.runPromise(harness.state.bumpAppPowerRevision(appId, Date.now()))
+  await backups(harness, volumes)
+
+  expect(await running()).toBe(false)
   expect(
     await readdir(join(harness.config.dataDirectory, "backup-state", "stopped"))
   ).toEqual([])

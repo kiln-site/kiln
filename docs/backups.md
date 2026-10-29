@@ -221,7 +221,10 @@ container that isn't an App's mounts it, since Kiln can't stop and start it
 as its owner would. Apps it stopped are journaled first, so a Relay that
 stops midway starts them again when it starts; one that won't start again
 is a warning on the backup, which still succeeds, and stays journaled for
-the Relay's next start. If an App can't be stopped, the backup fails and
+the Relay's next start. The journal records each App's power-intent
+revision, which every start, stop, restart, deployment, or deletion a
+person asks for advances; a start is owed only while it's unchanged, so a
+later choice stands. If an App can't be stopped, the backup fails and
 every App it stopped starts again, the one whose stop failed included,
 since it may be partly stopped. The Apps a stopped backup or a restore of a
 volume locks are looked up before it waits its turn and checked again once
@@ -325,6 +328,12 @@ restores of it, saying the restore must finish first. The Relay tries to
 finish it when it next starts, under the restore's own locks, unless
 something runs on the target, as when Docker's restart policy started an
 App, since moving the restored files in would overwrite what it wrote.
+Starting, deploying, or deleting an App holds every managed volume it
+mounts shared: a start or deletion those its containers mount or its
+configuration names, and a deployment also every volume its Compose file
+names as `external`, by Docker name, held from before its containers are
+made. So a restore, which holds the volume alone, comes wholly before or
+after, and an unfinished one refuses them.
 `backup.restore.resolve` finishes it on request, stopping the Apps running
 on it first (another container mounting a volume still refuses), or
 abandons it, leaving the target as it is and dropping the staging folder.

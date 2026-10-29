@@ -2210,6 +2210,7 @@ async function startRelay(
         request.operation,
         request.payload as Record<string, unknown>,
         options.resolveInstance ?? ((reference) => reference),
+        () => [],
         options.readTailscaleStack
       ),
     identity: {
