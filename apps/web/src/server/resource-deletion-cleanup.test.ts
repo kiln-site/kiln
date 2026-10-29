@@ -69,6 +69,8 @@ const now = 1_700_000_000_000
 const sharedSchedule = "11111111-1111-4111-8111-111111111111"
 const aloneSchedule = "22222222-2222-4222-8222-222222222222"
 const crossRelaySchedule = "33333333-3333-4333-8333-333333333333"
+const sharedAppSchedule = "44444444-4444-4444-8444-444444444444"
+const aloneAppSchedule = "55555555-5555-4555-8555-555555555555"
 const remoteDatabaseId = "f".repeat(40)
 const keyOf = (relay: string, id: string) => `${relay}:database:${id}`
 
@@ -126,7 +128,12 @@ const insertIcon = (kind: string, id: string) =>
 
 const insertSchedule = (
   id: string,
-  targets: ReadonlyArray<{ id: string; relayId: string; name: string }>,
+  targets: ReadonlyArray<{
+    id: string
+    kind?: string
+    relayId: string
+    name: string
+  }>,
   actions: ReadonlyArray<Record<string, unknown>> = [
     { duration: 5, type: "wait", unit: "seconds" },
   ]
@@ -160,7 +167,7 @@ const insertSchedule = (
         relay_id: target.relayId,
         schedule_id: id,
         target_id: target.id,
-        target_kind: "database",
+        target_kind: target.kind ?? "database",
         target_name: target.name,
       })
       yield* insertRows("schedule_deployment", {
@@ -433,6 +440,29 @@ describeMysql("cleaning up after a deleted resource", () => {
         yield* insertFavorite("user-one", "app", otherAppId)
         yield* insertIcon("app", appId)
         yield* insertIcon("app", otherAppId)
+        // A command runs in a service of each App; one schedule backs up
+        // only the deleted App.
+        const deletedKey = `${relayId}:app:${appId}`
+        const otherKey = `${relayId}:app:${otherAppId}`
+        yield* insertSchedule(
+          sharedAppSchedule,
+          [
+            { id: appId, kind: "app", name: "site", relayId },
+            { id: otherAppId, kind: "app", name: "other", relayId },
+          ],
+          [
+            {
+              authorizedTargets: 2,
+              command: "./migrate",
+              services: { [deletedKey]: "web", [otherKey]: "worker" },
+              targetKeys: [deletedKey, otherKey],
+              type: "console_command",
+            },
+          ]
+        )
+        yield* insertSchedule(aloneAppSchedule, [
+          { id: appId, kind: "app", name: "site", relayId },
+        ])
 
         yield* cleanUpDeletedResourceEffect(
           { id: appId, kind: "app", relayId },
@@ -458,6 +488,37 @@ describeMysql("cleaning up after a deleted resource", () => {
           ids(yield* selectRows<{ subject_id: string }>("icon"), "subject_id"),
           [otherAppId]
         )
+        // Its schedules go on without it, or go with it.
+        assert.deepStrictEqual(
+          (yield* selectRows<{ schedule_id: string; target_id: string }>(
+            "schedule_target"
+          ))
+            .filter((row) => row.schedule_id !== aloneAppSchedule)
+            .map((row) => [row.schedule_id, row.target_id]),
+          [[sharedAppSchedule, otherAppId]]
+        )
+        const [command] = yield* selectRows<{
+          action_config: unknown
+          schedule_id: string
+        }>("schedule_action").pipe(
+          Effect.map((rows) =>
+            rows.filter((row) => row.schedule_id === sharedAppSchedule)
+          )
+        )
+        const config = (
+          typeof command?.action_config === "string"
+            ? JSON.parse(command.action_config)
+            : command?.action_config
+        ) as { services: Record<string, string>; targetKeys: Array<string> }
+        assert.deepStrictEqual(config.targetKeys, [otherKey])
+        assert.deepStrictEqual(config.services, { [otherKey]: "worker" })
+        const [alone] = yield* selectRows<{
+          deleted_at: number | null
+          id: string
+        }>("schedule").pipe(
+          Effect.map((rows) => rows.filter((row) => row.id === aloneAppSchedule))
+        )
+        assert.isNotNull(alone?.deleted_at)
       })
     )
   })

@@ -54,6 +54,7 @@ export function insertSchedule(
   now: number
 ) {
   return Effect.gen(function* () {
+    yield* refuseResourcesBeingDeleted(transaction, schedule.targets)
     yield* transaction.execute(
       `INSERT INTO ${databaseTable("schedule")}
          (id, name, cron_expression, timezone, enabled,

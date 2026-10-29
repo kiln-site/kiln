@@ -70,16 +70,13 @@ export const cleanUpDeletedResourceEffect = Effect.fn(
       )
     )
   }
-  if (kind !== "app") {
-    // Apps can't be shared, so they have no grants, and schedules don't
-    // target them yet.
-    yield* deleteResourceAccessEffect(relayId, kind, id)
-    yield* promiseEffect(async () => {
-      const { removeDeletedResourceFromSchedules } =
-        await import("@/server/schedules")
-      await removeDeletedResourceFromSchedules({ id, kind, relayId }, subject)
-    })
-  }
+  // Apps can't be shared, so they have no grants.
+  if (kind !== "app") yield* deleteResourceAccessEffect(relayId, kind, id)
+  yield* promiseEffect(async () => {
+    const { removeDeletedResourceFromSchedules } =
+      await import("@/server/schedules")
+    await removeDeletedResourceFromSchedules({ id, kind, relayId }, subject)
+  })
   if (kind !== "database") {
     yield* deleteResourceGitHubSyncsEffect(relayId, kind, id)
   }

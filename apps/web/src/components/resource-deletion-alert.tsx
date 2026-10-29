@@ -232,7 +232,7 @@ function SkipFinalBackupDialog({
             <DialogDescription>
               Without a final backup, this {subject} and its data are gone for
               good. Backups made before stay.
-              {subject === "game server" || subject === "database"
+              {subject !== "volume"
                 ? " Schedules left with nothing else to run on are deleted too."
                 : null}
             </DialogDescription>

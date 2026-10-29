@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
-import { Deferred, Effect, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
 
 import { reserveBackupRestoreEffect } from "@/effect/backups"
 import { Database } from "@/effect/database"
-import { ResourceDeletionConflictError } from "@/effect/resource-deletions"
+import { databasePool } from "@/lib/database"
+import {
+  ResourceDeletionConflictError,
+  requestResourceDeletionRowEffect,
+} from "@/effect/resource-deletions"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { insertSchedule } from "@/server/schedule-deployment.server"
@@ -150,6 +154,170 @@ const completeBackup = (target: { id: string; kind: string }) =>
 
 describeMysql("Deleting a game server or database", () => {
   layer(Lanes, { timeout: 120_000 })((it) => {
+    it.effect(
+      "retries the whole deletion request after a schedule fence deadlock",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* seedApp()
+          yield* insertDeletion({
+            resource_kind: "app",
+            resource_id: appId,
+            status: "cancelled",
+          })
+          const database = yield* Database
+          const scheduleId = randomUUID()
+          yield* database.transaction("test.schedule", (transaction) =>
+            insertSchedule(
+              transaction,
+              {
+                actions: [],
+                cron: "daily",
+                enabled: true,
+                id: scheduleId,
+                name: "Nightly",
+                revision: 1,
+                targets: [{ id: appId, kind: "app", name: "Site", relayId }],
+                timezone: "UTC",
+              },
+              owner.id,
+              at
+            )
+          )
+          yield* insertRows("schedule_deployment", {
+            schedule_id: scheduleId,
+            relay_id: relayId,
+            desired_revision: 1,
+            status: "applied",
+            created_at: at,
+            updated_at: at,
+          })
+          yield* Effect.promise(async () => {
+            const connection = await databasePool.getConnection()
+            let deleting: Promise<unknown> | undefined
+            try {
+              await connection.beginTransaction()
+              // Make MySQL choose the cheaper deletion request as victim.
+              for (let n = 0; n < 50; n++)
+                await connection.execute(
+                  "INSERT INTO kiln_setting (id, setting_key, setting_value, created_at, updated_at) VALUES (?, ?, 'null', 1000, 1000)",
+                  [randomUUID(), `deadlock-${n}`]
+                )
+              await connection.execute(
+                "UPDATE kiln_schedule_target SET target_name = 'Edited' WHERE schedule_id = ?",
+                [scheduleId]
+              )
+              deleting = Effect.runPromise(
+                requestResourceDeletionRowEffect({
+                  finalBackup: false,
+                  kind: "app",
+                  relayId,
+                  resourceId: appId,
+                  storageId: null,
+                  user: owner,
+                }).pipe(Effect.provideService(Database, database))
+              )
+              void deleting.catch(() => undefined)
+              // Wait for the actual lock conflict, without clock sleeps.
+              let blocked = false
+              for (let n = 0; n < 1000 && !blocked; n++) {
+                const [rows] = await connection.query(
+                  "SELECT 1 FROM performance_schema.data_lock_waits waits JOIN performance_schema.data_locks locks ON locks.ENGINE_LOCK_ID = waits.REQUESTING_ENGINE_LOCK_ID WHERE locks.OBJECT_SCHEMA = DATABASE() AND locks.OBJECT_NAME = 'kiln_schedule_target'"
+                )
+                blocked = (rows as unknown[]).length > 0
+              }
+              assert.isTrue(blocked)
+              await connection.query(
+                "SELECT status FROM kiln_resource_deletion WHERE relay_id = ? AND resource_kind = 'app' AND resource_id = ? FOR SHARE",
+                [relayId, appId]
+              )
+              await connection.commit()
+              await deleting
+            } finally {
+              await connection.rollback()
+              connection.release()
+              await deleting?.catch(() => undefined)
+            }
+          })
+          assert.strictEqual(
+            (yield* selectRows<{ status: string }>("resource_deletion"))[0]
+              ?.status,
+            "pending"
+          )
+          assert.strictEqual(
+            (yield* selectRows<{ status: string }>("schedule_deployment"))[0]
+              ?.status,
+            "pending"
+          )
+        }).pipe(TestClock.withLive),
+      60000
+    )
+    for (const kind of ["instance", "database", "app"] as const) {
+      it.effect(
+        `serializes a ${kind} deletion against a schedule being saved`,
+        () =>
+          Effect.gen(function* () {
+            yield* seed
+            if (kind === "app") yield* seedApp()
+            const id =
+              kind === "app"
+                ? appId
+                : kind === "database"
+                  ? databaseId
+                  : serverId
+            const database = yield* Database
+            const scheduleId = randomUUID()
+            const saved = yield* Deferred.make<void>()
+            const release = yield* Deferred.make<void>()
+            const schedule = {
+              actions: [],
+              cron: "daily",
+              enabled: true,
+              id: scheduleId,
+              name: "Nightly",
+              revision: 1,
+              targets: [{ id, kind, name: "Target", relayId }],
+              timezone: "UTC",
+            }
+            const writer = yield* Effect.forkChild(
+              database.transaction("test.save", (transaction) =>
+                Effect.gen(function* () {
+                  yield* insertSchedule(transaction, schedule, owner.id, at)
+                  yield* transaction.execute(
+                    "INSERT INTO kiln_schedule_deployment (schedule_id, relay_id, desired_revision, status, created_at, updated_at) VALUES (?, ?, 1, 'applied', ?, ?)",
+                    [scheduleId, relayId, at, at]
+                  )
+                  yield* Deferred.succeed(saved, undefined)
+                  yield* Deferred.await(release)
+                })
+              )
+            )
+            yield* Deferred.await(saved)
+            const deleting = yield* Effect.forkChild(
+              requestResourceDeletionRowEffect({
+                finalBackup: false,
+                kind,
+                relayId,
+                resourceId: id,
+                storageId: null,
+                user: owner,
+              })
+            )
+            yield* Deferred.succeed(release, undefined)
+            yield* Fiber.join(writer)
+            yield* Fiber.join(deleting)
+            const deployments = yield* selectRows<{
+              schedule_id: string
+              status: string
+            }>("schedule_deployment")
+            assert.strictEqual(
+              deployments.find((row) => row.schedule_id === scheduleId)?.status,
+              "pending"
+            )
+          }).pipe(TestClock.withLive),
+        60000
+      )
+    }
     it.effect(
       "restores nothing of a resource its Relay began deleting, though its deletion stopped",
       () =>
@@ -784,7 +952,10 @@ describeMysql("Deleting a game server or database", () => {
         Effect.gen(function* () {
           yield* seed
           yield* insertDeletion({ status: "backing_up" })
-          yield* (yield* Database).execute("test.appDeletion", "UPDATE kiln_resource_deletion SET resource_kind = 'app'")
+          yield* (yield* Database).execute(
+            "test.appDeletion",
+            "UPDATE kiln_resource_deletion SET resource_kind = 'app'"
+          )
           const database = yield* Database
           const setDeletion = (set: string) =>
             database.execute(
@@ -830,18 +1001,25 @@ describeMysql("Deleting a game server or database", () => {
           // Cleanup holds the deletion row while a stale save starts.
           const locked = yield* Deferred.make<void>()
           const saving = yield* Deferred.make<void>()
-          const [, raced] = yield* Effect.all([
-            database.transaction("test.cleanup", (transaction) => Effect.gen(function* () {
-              yield* transaction.execute("UPDATE kiln_resource_deletion SET status = 'completed'")
-              yield* Deferred.succeed(locked, undefined)
-              yield* Deferred.await(saving)
-            })),
-            Effect.gen(function* () {
-              yield* Deferred.await(locked)
-              yield* Deferred.succeed(saving, undefined)
-              return yield* Effect.flip(save())
-            })
-          ], { concurrency: "unbounded" })
+          const [, raced] = yield* Effect.all(
+            [
+              database.transaction("test.cleanup", (transaction) =>
+                Effect.gen(function* () {
+                  yield* transaction.execute(
+                    "UPDATE kiln_resource_deletion SET status = 'completed'"
+                  )
+                  yield* Deferred.succeed(locked, undefined)
+                  yield* Deferred.await(saving)
+                })
+              ),
+              Effect.gen(function* () {
+                yield* Deferred.await(locked)
+                yield* Deferred.succeed(saving, undefined)
+                return yield* Effect.flip(save())
+              }),
+            ],
+            { concurrency: "unbounded" }
+          )
           assert.strictEqual(raced.message, "Survival was deleted")
           assert.lengthOf(yield* selectRows("schedule"), 0)
 

@@ -22,6 +22,8 @@ import {
 } from "@workspace/contracts/schedules"
 
 import { Database } from "@/effect/database"
+import { isDeadlock } from "@/effect/database-deadlocks"
+import { refuseResourcesBeingDeleted } from "@/effect/resource-deletions"
 import { forkAppEffect, runAppEffect } from "@/effect/runtime"
 import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
@@ -442,20 +444,29 @@ export const removeDeletedResourceFromSchedules = createServerOnlyFn(async (
               }
               const schedule = scheduleDefinitionSchema.parse({
                 // An action that named it names the rest; one that named
-                // only it keeps an empty list rather than running on all.
+                // only it keeps an empty list rather than running on all. A
+                // command forgets the service it ran in on a deleted App.
                 actions: actions.map((action) => {
                   const parsed = scheduleActionSchema.parse(
                     jsonValue(action.action_config)
                   )
-                  return parsed.type === "wait" ||
-                    parsed.targetKeys === undefined
-                    ? parsed
-                    : {
-                        ...parsed,
-                        targetKeys: parsed.targetKeys.filter(
-                          (key) => key !== deletedKey
-                        ),
-                      }
+                  const scoped =
+                    parsed.type === "wait" || parsed.targetKeys === undefined
+                      ? parsed
+                      : {
+                          ...parsed,
+                          targetKeys: parsed.targetKeys.filter(
+                            (key) => key !== deletedKey
+                          ),
+                        }
+                  if (scoped.type !== "console_command" || !scoped.services)
+                    return scoped
+                  const { [deletedKey]: _deleted, ...services } =
+                    scoped.services
+                  const { services: _all, ...rest } = scoped
+                  return Object.keys(services).length > 0
+                    ? { ...rest, services }
+                    : rest
                 }),
                 continueOnFailure: Boolean(row.continue_on_failure),
                 cron: row.cron_expression,
@@ -768,9 +779,10 @@ async function saveNewSchedule(
     Effect.gen(function* () {
       const database = yield* Database
       const now = yield* Clock.currentTimeMillis
-      yield* database.transaction("schedules.create", (transaction) =>
+      const create = database.transaction("schedules.create", (transaction) =>
         insertSchedule(transaction, schedule, createdBy, now)
       )
+      yield* create.pipe(Effect.catchIf(isDeadlock, () => create))
     })
   )
 }
@@ -784,8 +796,11 @@ async function replaceSchedule(
     Effect.gen(function* () {
       const database = yield* Database
       const now = yield* Clock.currentTimeMillis
-      yield* database.transaction("schedules.update", (transaction) =>
+      const replace = database.transaction("schedules.update", (transaction) =>
         Effect.gen(function* () {
+          // Deletion locks its fence before invalidating schedule targets.
+          // Take that same order before replacing any rows of the schedule.
+          yield* refuseResourcesBeingDeleted(transaction, schedule.targets)
           const result = yield* transaction.execute(
             `UPDATE ${databaseTable("schedule")}
                 SET name = ?, cron_expression = ?, timezone = ?, enabled = ?,
@@ -820,10 +835,10 @@ async function replaceSchedule(
           yield* insertScheduleParts(transaction, schedule, now)
         })
       )
+      yield* replace.pipe(Effect.catchIf(isDeadlock, () => replace))
     })
   )
 }
-
 
 function requestScheduleReconciliation(
   schedules: ReadonlyArray<ScheduleDefinition>

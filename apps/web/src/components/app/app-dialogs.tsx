@@ -89,7 +89,8 @@ export function DeleteAppDialog({
             <DialogDescription>
               Its containers, networks, built images, folder, and the volumes
               its Compose project made will be permanently removed. Kiln volumes
-              it mounts, and volumes other Apps also use, stay.
+              it mounts, and volumes other Apps also use, stay. Schedules left
+              with nothing else to run on are deleted too.
             </DialogDescription>
           </DialogHeader>
           <FinalBackupFields

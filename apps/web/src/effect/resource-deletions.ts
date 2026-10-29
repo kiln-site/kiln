@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { Clock, Data, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
+import { isDeadlock } from "./database-deadlocks"
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { invalidateScheduleDeploymentsEffect } from "@/effect/schedule-invalidation"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -216,7 +217,7 @@ export const requestResourceDeletionRowEffect = Effect.fn(
 }) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  return yield* database.transaction(
+  const request = database.transaction(
     "resource_deletion_request",
     (transaction) =>
       Effect.gen(function* () {
@@ -315,6 +316,7 @@ export const requestResourceDeletionRowEffect = Effect.fn(
         return toResourceDeletion(row)
       })
   )
+  return yield* request.pipe(Effect.catchIf(isDeadlock, () => request))
 })
 
 /**
@@ -492,8 +494,18 @@ export const refuseResourcesBeingDeleted = Effect.fnUntraced(function* (
     relayId: string
   }>
 ) {
-  for (const resource of resources) {
-    if (resource.kind !== "instance" && resource.kind !== "database" && resource.kind !== "app") continue
+  const ordered = [...resources].sort((a, b) =>
+    `${a.relayId}\0${a.kind}\0${a.id}`.localeCompare(
+      `${b.relayId}\0${b.kind}\0${b.id}`
+    )
+  )
+  for (const resource of ordered) {
+    if (
+      resource.kind !== "instance" &&
+      resource.kind !== "database" &&
+      resource.kind !== "app"
+    )
+      continue
     const [deletion] = yield* transaction.queryRows<
       RowDataPacket & {
         relay_deleted_at: number | string | null
