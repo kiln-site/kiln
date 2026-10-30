@@ -71,6 +71,11 @@ Before editing files for a substantial task:
   `apps/relay/src/operation-plans.ts`, and Relay-initiated work admits itself
   the same way, rather than adding a lock of its own. See
   [Relay operations](docs/relay-operations.md).
+- Hearth and every Relay run the same Kiln version. Don't build for mixed
+  versions: no capability negotiation, feature flags for older peers,
+  optional protocol fields kept for compatibility, or fallbacks for a peer
+  that lacks something. The one exception is updating: an outdated Relay
+  must still be able to connect far enough for Hearth to update it.
 - The Relay drives Docker through its Engine API client
   (`apps/relay/src/docker-engine.ts`). Use the API for what the daemon does,
   run Docker's standalone binaries only for client-side work like Compose and
@@ -85,8 +90,9 @@ Add or keep a test only when it protects one of:
 - Security boundaries: authentication, permissions, credentials and secrets,
   path traversal, SSRF, parsing untrusted input.
 - Data loss: backups, restores, file writes, migrations, deletion ordering.
-- Formats other versions depend on: the Relay protocol, Docker labels, on-disk
-  and backup formats, CLI config, release manifests.
+- Formats that outlive a release: Docker labels, on-disk and backup formats,
+  stored data, CLI config, release manifests, and the update path an outdated
+  Relay uses.
 - Non-trivial state machines and concurrency: power state, crash recovery,
   reconnects, races, cancellation.
 - A regression you just fixed.
