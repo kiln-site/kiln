@@ -20,7 +20,8 @@ import {
   advanceSubjectAcrossEnabledRelaysEffect,
   type AuthorizationScope,
 } from "@/lib/authorization-revision"
-import { serialized } from "@/operations/serialized"
+import { exclusive } from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
 
 // What a Relay holds of who may do what reaches it in its own lane, one
 // change at a time, apart from the resources it guards: a revocation never
@@ -32,7 +33,12 @@ const inAuthorizationLane = <A>(
 ) =>
   runAppEffect(
     kind,
-    serialized(kind, [`authorization:${relayId}`], promiseEffect(run))
+    inLanes(
+      kind,
+      "Sending this Relay who may do what",
+      [exclusive(`relay:${relayId}#authorization`)],
+      promiseEffect(run)
+    )
   )
 
 interface PendingDeliveryRow extends RowDataPacket {

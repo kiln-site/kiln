@@ -2,8 +2,9 @@ import { Cause, Duration, Effect, Schedule } from "effect"
 
 import { forkAppWorker } from "@/effect/runtime"
 
-import { dispatchDurableOperations } from "./durable"
+import { dispatchDurableOperations, restoreLockingOperations } from "./durable"
 import { OperationsEngineService } from "./engine-service"
+import { closeLanes } from "./lanes"
 import { forgetFinishedOperations, undispatchedOperations } from "./records"
 
 // Finished operations are kept this long, for their timings and for Relay
@@ -33,14 +34,33 @@ const every = <E, R>(
   )
 
 /**
- * Starts the operations engine with Hearth, so work a previous Hearth left
- * unfinished resumes without waiting for a request to need the engine, and
- * forgets finished operations past their retention.
+ * Starts the operations engine with Hearth: takes back the locks of durable
+ * operations a previous Hearth left running before anything else is
+ * admitted, resumes their work without waiting for a request to need the
+ * engine, and forgets finished operations past their retention.
  */
 export function startOperationsEngine(): void {
+  const openLanes = closeLanes()
   forkAppWorker(
     Effect.all(
       [
+        // Nothing is admitted until the locks of durable operations still
+        // running are taken back. Should MySQL stay away, the lanes open
+        // anyway after a while rather than refuse everything.
+        restoreLockingOperations.pipe(
+          Effect.retry({
+            schedule: Schedule.exponential("500 millis").pipe(
+              Schedule.upTo({ duration: "1 minute" })
+            ),
+          }),
+          Effect.catchCause((cause) =>
+            Effect.logError(
+              "Durable operations' locks weren't taken back",
+              cause
+            )
+          ),
+          Effect.ensuring(openLanes)
+        ),
         every(
           SWEEP,
           "Operations engine not started yet",

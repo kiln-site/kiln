@@ -42,6 +42,7 @@ import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay } from "@/lib/relay-registry"
 import { currentActingUser } from "@/operations/acting-user"
 import { durableOperation, startDurableOperation } from "@/operations/durable"
+import { exclusive, resourceKey, type Initiator } from "@/operations/lanes"
 import { RelayCommandError, relayCommand } from "@/operations/relay-command"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
@@ -133,10 +134,19 @@ const BackupCheck = Schema.Struct({
   state: Schema.Literals(["available", "failed", "missing", "running"]),
 })
 
+// A deletion holds the whole resource until it ends, so nothing else changes
+// it meanwhile: a person is told it's being deleted, and Hearth's own work
+// waits. Keeping it holds the same.
+const deletionLocks = (input: DeletionInput) => [
+  exclusive(resourceKey(input.kind, input.relayId, input.resourceId)),
+]
+
 export const deleteResource = durableOperation({
+  doing: (input) => `Deleting this ${noun(input.kind)}`,
   error: ResourceDeletionError,
   input: DeletionInput,
   kind: "resource.delete",
+  locks: deletionLocks,
   run: (input) =>
     deletionSteps(input).pipe(
       // Recorded on the deletion, for its person to see and act on. A run
@@ -685,9 +695,11 @@ const recordStatus = (
   )
 
 export const keepResource = durableOperation({
+  doing: (input) => `Keeping this ${noun(input.kind)}`,
   error: ResourceDeletionError,
   input: DeletionInput,
   kind: "resource.delete.cancel",
+  locks: deletionLocks,
   run: (input) =>
     Effect.gen(function* () {
       const current = yield* Activity.make({
@@ -741,9 +753,11 @@ export const keepResource = durableOperation({
   version: 1,
 })
 
-// Admits the operation that carries out a deletion's current attempt. One
-// already admitted under its key is the same operation.
-const startAttempt = (deletion: ResourceDeletion) =>
+// Starts the operation that carries out a deletion's current attempt. One
+// already started under its key is the same operation. A person's attempt
+// is refused while something else changes the resource, and recorded as
+// failed with why, for them to try again; Hearth's own waits.
+const startAttempt = (deletion: ResourceDeletion, initiator: Initiator) =>
   startDurableOperation(
     deletion.status === "cancelling" ? keepResource : deleteResource,
     {
@@ -756,7 +770,22 @@ const startAttempt = (deletion: ResourceDeletion) =>
     {
       actorId: deletion.requestedBy,
       idempotencyKey: `${deletion.id}:${deletion.attempt}`,
+      initiator,
     }
+  ).pipe(
+    Effect.tapErrorTag("OperationBusyError", (busy) =>
+      recordResourceDeletionStatusEffect({
+        attempt: deletion.attempt,
+        error: busy.message,
+        from: [deletion.status],
+        id: deletion.id,
+        status: "failed",
+      }).pipe(
+        Effect.tap(() => Effect.sync(() => publishDeletionChange(deletion))),
+        Effect.tap(deliverSchedules),
+        Effect.ignore
+      )
+    )
   )
 
 /**
@@ -786,7 +815,7 @@ export const reconcileResourceDeletions = Effect.fnUntraced(function* () {
             Effect.tap(deliverSchedules),
             Effect.asVoid
           )
-        : startAttempt(deletion).pipe(Effect.asVoid),
+        : startAttempt(deletion, "system").pipe(Effect.asVoid),
     { discard: true }
   ).pipe(
     Effect.withSpan("ResourceDeletions.reconcile", {
@@ -838,7 +867,7 @@ export const requestResourceDeletionEffect = Effect.fn(
   })
   yield* deliverSchedules
   if (unfinishedDeletionStatuses.some((status) => status === deletion.status)) {
-    yield* startAttempt(deletion)
+    yield* startAttempt(deletion, "person")
   }
   publishDeletionChange(deletion)
   return deletion
@@ -914,7 +943,7 @@ export const cancelResourceDeletionEffect = Effect.fn(
     input.kind,
     input.resourceId
   )
-  yield* startAttempt(deletion)
+  yield* startAttempt(deletion, "person")
   publishDeletionChange(deletion)
   return deletion
 })

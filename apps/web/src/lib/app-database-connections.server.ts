@@ -11,7 +11,8 @@ import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import { loadPersistedRelay, type PersistedRelay } from "@/lib/relay-registry"
-import { serialized } from "@/operations/serialized"
+import { exclusive } from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
 
 // Relays keep every database connection, Apps' too. Apps' used to be kept
 // in their configs (`databaseIds`); Hearth hands those to each Relay, then
@@ -116,9 +117,10 @@ const handOverInLane = (relay: PersistedRelay) =>
     finished.has(relay.id)
       ? Effect.succeed({ unreadable: [] as ReadonlyArray<string> })
       : // One handover per Relay at a time.
-        serialized(
+        inLanes(
           "apps.databaseConnections.import",
-          [`database-connections:${relay.id}`],
+          "Handing Apps' database connections to this Relay",
+          [exclusive(`relay:${relay.id}#database-connections`)],
           handOver(relay)
         ).pipe(
           Effect.tap(({ unreadable }) =>

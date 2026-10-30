@@ -9,7 +9,7 @@ import { RelayUnavailableError } from "@/effect/errors"
 import { promiseEffect } from "@/effect/promise"
 import { relayJournal, relayRpc } from "@/lib/relay-connection"
 
-import { CurrentOperation } from "./durable"
+import { CurrentOperation } from "./current"
 import { activeRelay } from "@/lib/relay-registry"
 
 /**

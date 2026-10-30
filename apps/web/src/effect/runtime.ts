@@ -12,6 +12,7 @@ import {
   type OperationsEngineService,
 } from "../operations/engine-service"
 import { isExpectedAppError } from "../observability/error-policy"
+import { inCurrentOperation } from "../operations/current"
 
 declare const __KILN_TELEMETRY_DEFAULTS__: Telemetry.TelemetryDefaults
 
@@ -63,7 +64,9 @@ export async function runAppEffect<TResult, TError>(
   options?: { signal?: AbortSignal }
 ): Promise<TResult> {
   const exit = await runtime.runPromiseExit(
-    Telemetry.withActiveParent(Effect.withSpan(effect, name)),
+    inCurrentOperation(
+      Telemetry.withActiveParent(Effect.withSpan(effect, name))
+    ),
     options
   )
   if (Exit.isSuccess(exit)) return exit.value
@@ -80,7 +83,9 @@ export async function runAppEffect<TResult, TError>(
 export function runAppEffectUntraced<TResult, TError>(
   effect: Effect.Effect<TResult, TError, AppServices>
 ): Promise<TResult> {
-  return runtime.runPromise(Effect.withTracerEnabled(effect, false))
+  return runtime.runPromise(
+    inCurrentOperation(Effect.withTracerEnabled(effect, false))
+  )
 }
 
 export function forkAppEffect<TResult, TError>(

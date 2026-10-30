@@ -1,6 +1,6 @@
 /**
  * Lock keys and modes, shared by every home of operation lanes: the Relay's
- * in-memory lanes and Hearth's MySQL-backed ones.
+ * in-memory lanes and Hearth's.
  *
  * An operation names the resources it touches as keys, each shared or
  * exclusive. A whole resource and its parts are separate keys: work on a part

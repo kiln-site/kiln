@@ -1,13 +1,23 @@
 import { Effect } from "effect"
 
+import { withCurrentOperation } from "@/operations/current"
+
 export type PromiseSettlement<TInput, TResult> =
   | { input: TInput; status: "fulfilled"; value: TResult }
   | { input: TInput; reason: unknown; status: "rejected" }
 
+/**
+ * Runs promise code from an effect. Inside an operation, effects the code
+ * starts through `runAppEffect` run inside it too.
+ */
 export function promiseEffect<TResult>(
   run: () => PromiseLike<TResult>
 ): Effect.Effect<TResult, unknown> {
-  return Effect.tryPromise({ try: run, catch: (cause) => cause })
+  return withCurrentOperation(run).pipe(
+    Effect.flatMap((inside) =>
+      Effect.tryPromise({ try: inside, catch: (cause) => cause })
+    )
+  )
 }
 
 export function recoverPromise<TResult, TFallback>(

@@ -44,7 +44,8 @@ import { relayJsonEffect } from "@/lib/relay-client"
 import { shortIdRouteIdentifier } from "@/lib/short-id-route"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceAccess } from "@/server/domain-resource-access.server"
-import { serialized } from "@/operations/serialized"
+import { exclusive } from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
 import { requireFastReservedPatterns } from "@/server/reserved-names"
 import {
   invalidateManagedDomainAddressesEffect,
@@ -397,7 +398,8 @@ function zoneNameFor(
 // Saving or removing a Cloudflare connection holds it, so two changes to
 // one connection, its token and domains, don't interleave. Reading its
 // zones needs no lock.
-const connectionKey = (connectionId: string) => `connection:${connectionId}`
+const connectionLock = (connectionId: string) =>
+  exclusive(`cloudflare-connection:${connectionId}`)
 
 /** The zones a pasted token, or a saved connection's, can manage. */
 export async function discoverCloudflareDomainsHandler(
@@ -500,9 +502,10 @@ export async function saveDomainConnectionHandler(
   requireFastReservedPatterns(blacklistPatterns)
   await runAppEffect(
     "domains.connection.save",
-    serialized(
+    inLanes(
       "dns.connection.save",
-      [connectionKey(id)],
+      "Saving this Cloudflare connection",
+      [connectionLock(id)],
       saveDomainConnectionEffect({
         apiToken: data.apiToken,
         blacklistPatterns,
@@ -535,9 +538,10 @@ export async function deleteDomainConnectionHandler(
   if (!existing || !canManageConnection(user, existing.connection)) return
   await runAppEffect(
     "domains.connection.delete",
-    serialized(
+    inLanes(
       "dns.connection.delete",
-      [connectionKey(data.id)],
+      "Removing this Cloudflare connection",
+      [connectionLock(data.id)],
       requireConnectionUnusedEffect(data.id).pipe(
         Effect.andThen(deleteDomainConnectionEffect(data.id)),
         Effect.andThen(invalidateManagedDomainAddressesEffect)

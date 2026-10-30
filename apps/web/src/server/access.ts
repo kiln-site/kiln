@@ -40,6 +40,12 @@ import {
 } from "@/lib/instance-registry"
 import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
 import { transferAppOwnershipHandler } from "@/server/app-access"
+import { exclusive } from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import {
   isAccountEnabled,
   isAccountVerified,
@@ -488,26 +494,45 @@ export const acceptAccessInvitation = createServerFn({ method: "POST" })
     return { accepted: true }
   })
 
+/**
+ * Takes a person's platform access away. Holds the person, so two changes
+ * to one account's access never interleave.
+ */
+const removeUserAccess = operation<
+  z.infer<typeof removePlatformAccessSchema>
+>()({
+  name: "user.access.remove",
+  doing: "Changing this person's access",
+  authorize: ({ user }) =>
+    Effect.gen(function* () {
+      const person = yield* signedIn(user)
+      if (!isPlatformAdmin(person)) {
+        return yield* Effect.fail(
+          new Error("Only a platform administrator can remove platform access")
+        )
+      }
+      return person
+    }),
+  locks: ({ input }) => [exclusive(`user:${input.userId}`)],
+  run: ({ context: person, input }) =>
+    removePlatformAccessEffect({
+      actingUserId: person.id,
+      developmentBypass: person.isDevelopmentBypass,
+      targetUserId: input.userId,
+    }),
+  audit: ({ input }) => ({ id: input.userId, kind: "user" }),
+  publish: ({ exit, input }) => {
+    if (exit._tag === "Success") publishAccessPolicyChange([input.userId], true)
+  },
+})
+
 export const removePlatformAccess = createServerFn({ method: "POST" })
   .validator(removePlatformAccessSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    if (!isPlatformAdmin(user)) {
-      throw new Error(
-        "Only a platform administrator can remove platform access"
-      )
-    }
-    const result = await runAppEffect(
-      "access.platform.remove",
-      removePlatformAccessEffect({
-        actingUserId: user.id,
-        developmentBypass: user.isDevelopmentBypass,
-        targetUserId: data.userId,
-      })
-    )
-    publishAccessPolicyChange([data.userId], true)
-    return result
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(removeUserAccess, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 export const transferResourceOwnership = createServerFn({ method: "POST" })
   .validator(transferResourceOwnershipSchema)

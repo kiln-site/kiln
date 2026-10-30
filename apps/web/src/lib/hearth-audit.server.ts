@@ -196,6 +196,49 @@ export const recordRelayChangeFinished = Effect.fn(
   )
 })
 
+/**
+ * Records a Hearth operation that ended: who ran it, on what, and how it
+ * went. A failure keeps only its error's tag, as a Relay change's does.
+ */
+export const recordOperationAudit = Effect.fn("audit.recordOperation")(
+  function* (input: {
+    readonly action: string
+    readonly actor: AuditActor
+    readonly errorCode?: string | undefined
+    readonly finishedAt: number
+    readonly occurredAt: number
+    readonly operationId: string
+    readonly outcome: "failed" | "succeeded"
+    readonly relayId?: string | null | undefined
+    readonly target: AuditTarget
+  }) {
+    const database = yield* Database
+    yield* database.execute(
+      "audit.recordOperation",
+      `INSERT INTO ${databaseTable("audit_event")}
+         (id, occurred_at, finished_at, actor_kind, actor_user_id,
+          actor_credential_id, action, target_kind, target_id, relay_id,
+          operation_id, outcome, error_code)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        randomUUID(),
+        input.occurredAt,
+        input.finishedAt,
+        input.actor.kind,
+        input.actor.userId,
+        input.actor.credentialId,
+        input.action,
+        input.target.kind,
+        input.target.id.slice(0, 128),
+        input.relayId ?? null,
+        input.operationId,
+        input.outcome,
+        input.errorCode?.slice(0, 64) ?? null,
+      ]
+    )
+  }
+)
+
 interface PendingRow extends RowDataPacket {
   id: string
   occurred_at: number | string

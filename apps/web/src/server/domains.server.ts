@@ -17,7 +17,7 @@ import {
   updateCloudflareAddressRecordEffect,
   updateCloudflareSrvRecordEffect,
 } from "@/effect/cloudflare-api"
-import { ensuringPromise } from "@/effect/promise"
+import { promiseEffect } from "@/effect/promise"
 import {
   activateInstanceDomainAssignmentEffect,
   anyDomainConnectionEffect,
@@ -76,7 +76,14 @@ import { vanityLabelAllowed } from "@/server/reserved-names"
 import { publishDomainChange } from "@/lib/domain-realtime.server"
 import type { FleetRelayInstance } from "@/lib/relay-fleet"
 import { relayConnectionSnapshot } from "@/lib/relay-connection"
-import { withDnsChange } from "@/lib/dns-operations"
+import { dnsKey, withDnsChange } from "@/lib/dns-operations"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { exclusive } from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { activeRelay } from "@/lib/relay-registry"
 import { relayJsonEffect } from "@/lib/relay-client"
@@ -205,129 +212,170 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
   }
 }
 
+// Changing a game server's domains holds its DNS, so two changes to them
+// never interleave, and deleting it turns them away.
+const instanceDns = (scope: { instanceId: string; relayId: string }) =>
+  exclusive(
+    dnsKey({
+      relayId: scope.relayId,
+      resourceId: scope.instanceId,
+      resourceType: "instance",
+    })
+  )
+const changingDomains = "Changing this game server's domains"
+
 /**
  * Points a new domain at a game server. Its first domain becomes its connect
  * address; later ones do when `primary` is set. Needs the game server's
  * network, and a vanity domain it may use: its owner's, the platform's, or
  * the person's own.
  */
+export const addInstanceDomain = operation<CreateInstanceDomainInput>()({
+  name: "domain.add",
+  doing: changingDomains,
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(() =>
+          loadWritableInstanceFor(person, input.relayId, input.instanceId)
+        )
+      )
+    ),
+  locks: ({ input }) => [instanceDns(input)],
+  run: ({ context: instance, input, user }) =>
+    Effect.gen(function* () {
+      const person = yield* signedIn(user)
+      const created = yield* createInstanceDomainEffect(
+        { ...instance, relayId: input.relayId },
+        input,
+        domainActor(person)
+      ).pipe(
+        Effect.catchTag("HostnameInUseError", (error) =>
+          explainHostnameInUseEffect(person, error)
+        )
+      )
+      // Adding a domain undoes a removal.
+      yield* setInstanceDomainOptOutEffect(
+        input.relayId,
+        input.instanceId,
+        false
+      )
+      return created
+    }),
+  audit: ({ input }) => ({
+    id: input.instanceId,
+    kind: "instance",
+    relayId: input.relayId,
+  }),
+  // A failed create still leaves a failed row behind.
+  publish: ({ input }) =>
+    publishDomainChange({
+      instanceId: input.instanceId,
+      relayId: input.relayId,
+    }),
+})
+
 export async function createInstanceDomainHandler(
   data: CreateInstanceDomainInput
 ) {
-  const { instance, user } = await loadWritableInstance(
-    data.relayId,
-    data.instanceId
-  )
-  // A failed create still leaves a failed row behind, so publish either way.
-  return ensuringPromise(
-    () =>
-      runAppEffect(
-        "domains.instance.create",
-        withInstanceDomainLock(
-          "dns.domain.create",
-          [data],
-          createInstanceDomainEffect(
-            { ...instance, relayId: data.relayId },
-            data,
-            domainActor(user)
-          ).pipe(
-            // Adding a domain undoes a removal.
-            Effect.tap(() =>
-              setInstanceDomainOptOutEffect(
-                data.relayId,
-                data.instanceId,
-                false
-              )
-            )
-          )
-        ).pipe(
-          Effect.catchTag("HostnameInUseError", (error) =>
-            explainHostnameInUseEffect(user, error)
-          )
-        )
-      ),
-    () =>
-      publishDomainChange({
-        instanceId: data.instanceId,
-        relayId: data.relayId,
-      })
-  )
+  const user = await requireEligibleResourceUser()
+  return runOperationPromise(addInstanceDomain, data, { user })
 }
+
+// The game server a domain points at, once the person may change it.
+const loadDomainScope = (user: AuthenticatedUser | null, id: string) =>
+  Effect.gen(function* () {
+    const person = yield* signedIn(user)
+    const assignment = yield* loadInstanceDomainAssignmentEffect(id)
+    if (!assignment) return null
+    yield* promiseEffect(() =>
+      requireRelayPermission({
+        instanceId: assignment.instanceId,
+        permission: "instance.network.write",
+        relayId: assignment.relayId,
+        user: person,
+      })
+    )
+    return {
+      instanceId: assignment.instanceId,
+      person,
+      relayId: assignment.relayId,
+    }
+  })
+
+export const renameInstanceDomain = operation<UpdateInstanceDomainInput>()({
+  name: "domain.rename",
+  doing: changingDomains,
+  authorize: ({ input, user }) =>
+    Effect.gen(function* () {
+      const scope = yield* loadDomainScope(user, input.id)
+      if (!scope) return yield* Effect.fail(new Error("Domain not found"))
+      const instance = yield* promiseEffect(() =>
+        loadWritableInstanceFor(scope.person, scope.relayId, scope.instanceId)
+      )
+      return { ...scope, instance }
+    }),
+  locks: ({ context }) => [instanceDns(context)],
+  run: ({ context, input }) =>
+    updateInstanceDomainEffect(
+      { ...context.instance, relayId: context.relayId },
+      input,
+      domainActor(context.person)
+    ).pipe(
+      Effect.catchTag("HostnameInUseError", (error) =>
+        explainHostnameInUseEffect(context.person, error)
+      )
+    ),
+  audit: ({ context }) => ({
+    id: context.instanceId,
+    kind: "instance",
+    relayId: context.relayId,
+  }),
+  // A failed rename can still clear leftover records.
+  publish: ({ context }) => publishDomainChange(context),
+})
 
 export async function updateInstanceDomainHandler(
   data: UpdateInstanceDomainInput
 ) {
   // Signed in before the lookup, so an ID's existence isn't revealed.
-  await requireEligibleResourceUser()
-  const assignment = await runAppEffect(
-    "domains.assignment.load",
-    loadInstanceDomainAssignmentEffect(data.id)
-  )
-  if (!assignment) throw new Error("Domain not found")
-  const scope = {
-    instanceId: assignment.instanceId,
-    relayId: assignment.relayId,
-  }
-  const { instance, user } = await loadWritableInstance(
-    scope.relayId,
-    scope.instanceId
-  )
-  // A failed rename can still clear leftover records, so publish either way.
-  return ensuringPromise(
-    () =>
-      runAppEffect(
-        "domains.instance.update",
-        withInstanceDomainLock(
-          "dns.domain.rename",
-          [scope],
-          updateInstanceDomainEffect(
-            { ...instance, relayId: scope.relayId },
-            data,
-            domainActor(user)
-          )
-        ).pipe(
-          Effect.catchTag("HostnameInUseError", (error) =>
-            explainHostnameInUseEffect(user, error)
-          )
-        )
-      ),
-    () => publishDomainChange(scope)
-  )
+  const user = await requireEligibleResourceUser()
+  return runOperationPromise(renameInstanceDomain, data, { user })
 }
 
 /**
  * Removes one domain. Removing a game server's last domain keeps it removed:
  * starts, port changes, and Sync skip the server until a domain is added again.
  */
+export const removeInstanceDomain = operation<RemoveInstanceDomainInput>()({
+  name: "domain.remove",
+  doing: changingDomains,
+  authorize: ({ input, user }) => loadDomainScope(user, input.id),
+  locks: ({ context }) => (context ? [instanceDns(context)] : []),
+  run: ({ context, input }) =>
+    context
+      ? removeInstanceDomainEffect(
+          context.relayId,
+          context.instanceId,
+          input.id
+        )
+      : Effect.void,
+  audit: ({ context }) =>
+    context
+      ? { id: context.instanceId, kind: "instance", relayId: context.relayId }
+      : null,
+  // A failed removal still changes the row.
+  publish: ({ context }) => {
+    if (context) publishDomainChange(context)
+  },
+})
+
 export async function removeInstanceDomainHandler(
   data: RemoveInstanceDomainInput
 ) {
   // Signed in before the lookup, so an ID's existence isn't revealed.
   const user = await requireEligibleResourceUser()
-  const assignment = await runAppEffect(
-    "domains.assignment.load",
-    loadInstanceDomainAssignmentEffect(data.id)
-  )
-  if (!assignment) return
-  const scope = {
-    instanceId: assignment.instanceId,
-    relayId: assignment.relayId,
-  }
-  await requireRelayPermission({
-    instanceId: scope.instanceId,
-    permission: "instance.network.write",
-    relayId: scope.relayId,
-    user,
-  })
-  // A failed removal still changes the row, so publish either way.
-  await ensuringPromise(
-    () =>
-      runAppEffect(
-        "domains.instance.remove",
-        removeInstanceDomainEffect(scope.relayId, scope.instanceId, data.id)
-      ),
-    () => publishDomainChange(scope)
-  )
+  await runOperationPromise(removeInstanceDomain, data, { user })
 }
 
 export async function provisionInstanceDomainBestEffort(
@@ -1610,8 +1658,11 @@ export function managedAddressForInstance(
     : instance.connectAddress
 }
 
-async function loadWritableInstance(relayId: string, instanceId: string) {
-  const user = await requireEligibleResourceUser()
+async function loadWritableInstanceFor(
+  user: AuthenticatedUser,
+  relayId: string,
+  instanceId: string
+) {
   const relay = await requiredRelay(relayId)
   await requireRelayPermission({
     instanceId,
@@ -1627,7 +1678,7 @@ async function loadWritableInstance(relayId: string, instanceId: string) {
   )
   const instance = snapshot.instances.find((item) => item.id === instanceId)
   if (!instance) throw new Error("Instance not found")
-  return { instance: relayInstanceSchema.parse(instance), user }
+  return relayInstanceSchema.parse(instance)
 }
 
 async function requiredRelay(id: string): Promise<PersistedRelay> {

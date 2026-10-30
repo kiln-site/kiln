@@ -1,112 +1,155 @@
 # Hearth operations
 
-Hearth runs two kinds of work that need more than a request handler: short
-changes that must not interleave, and long changes that must survive a
-restart. Each has one small tool in `apps/web/src/operations`. The Relay
-keeps its own lanes for the resources it runs (see
-[Relay operations](relay-operations.md)); Hearth doesn't repeat them.
+Every change Hearth makes is an **operation**: one definition that says what
+it takes, who may run it, what it changes, and the work itself. One pipeline
+runs every operation the same way, so a new feature writes only its own
+logic, and conflicts, durability, audit, realtime updates and tracing come
+with it. The code is in `apps/web/src/operations`.
 
 Hearth runs as one process (see
-[Relay browser sessions](relay-browser-sessions-plan.md)), so anything that
-only has to hold while Hearth runs lives in memory.
+[Relay browser sessions](relay-browser-sessions-plan.md)), so its lanes live
+in memory, like each Relay's (see [Relay operations](relay-operations.md)).
 
-## Short changes: `serialized`
-
-`serialized(kind, keys, effect)` runs `effect` once no other serialized
-change holds any of `keys`, waiting its turn. Keys are taken in sorted order,
-so two changes can't wait on each other. A caller that gives up while it
-waits withdraws it; once it runs, it finishes. Nothing is kept in MySQL: a
-restart ends every short change.
-
-Use it for changes that read, decide and write, and would corrupt each other
-run side by side:
-
-| Key                            | Used by                                       |
-| ------------------------------ | --------------------------------------------- |
-| `dns:<kind>:<relay>/<id>`      | Changing a resource's DNS records             |
-| `authorization:<relay>`        | Sending a Relay who may do what               |
-| `database-connections:<relay>` | Handing Apps' database connections to a Relay |
-| `connection:<id>`              | Saving or removing a Cloudflare connection    |
-
-Never start one from inside another holding the same key: it would wait for
-itself.
-
-## Long changes: durable operations
-
-A durable operation is an Effect workflow: a list of steps (`Activity`)
-whose finished results are stored in MySQL, so after a restart it carries on
-from the step it was in, and a finished step doesn't run again. Waits that
-outlive a restart use `DurableClock.sleep`.
+## Defining one
 
 ```ts
-export const deliverInvitation = durableOperation({
-  kind: "invitation.deliver",
-  version: 1,
-  input: Schema.Struct({ invitationId: Schema.String }),
-  run: ({ invitationId }) => Effect.gen(function* () { ... }),
-})
-
-yield* startDurableOperation(deliverInvitation, { invitationId }, {
-  actorId,
-  idempotencyKey: invitationId,
+export const addInstanceDomain = operation<CreateInstanceDomainInput>()({
+  name: "domain.add",
+  // What it's doing, for whoever its locks turn away.
+  doing: "Changing this game server's domains",
+  // Who may run it, and what the run needs; an Effect.
+  authorize: ({ input, user }) => loadWritableInstance(user, input),
+  // What it changes, as lane keys.
+  locks: ({ input }) => [exclusive(dnsKey(input))],
+  run: ({ input, user, context }) => createInstanceDomainEffect(...),
+  audit: ({ input }) => ({ kind: "instance", id: input.instanceId, relayId: input.relayId }),
+  publish: ({ input }) => publishDomainChange(input),
 })
 ```
 
-- **Recorded first.** `startDurableOperation` writes one `operation` row
-  with its input, who asked, and the span that asked, then starts its
-  workflow. With an idempotency key, starting it again returns the same
-  operation.
-- **Ended once.** The workflow's last step records how it ended
-  (`succeeded`, `failed`, or `interrupted` when cancelled) and why.
-- **Restarts.** Effect's cluster resumes started workflows when Hearth
-  starts. One recorded but never started, as when Hearth stopped between the
-  two, is started by a sweep every minute.
-- **No pausing, no repair flows.** An operation finishes or fails with a
-  message for its person. A step that can't know what happened, as when a
-  Relay lost track of a change, fails saying so. A feature that needs more,
-  such as deletion's retry and keep, keeps that in its own rows.
+A server function or CLI endpoint runs it for the person it signed in, in
+its handler:
 
-Today's durable operations are invitation emails, Tailscale network
-deletion, and deleting a game server, database, App or volume.
+```ts
+.handler(async ({ data }) =>
+  runOperationPromise(addInstanceDomain, data, {
+    user: await requireEligibleResourceUser(),
+  })
+)
+```
 
-### Relay changes from a step
+## The pipeline
 
-`relayCommand` sends one change to a Relay at most once. It stores the
-change's ID before sending it, and if the step runs again after a restart it
-asks the Relay how that ID went (`operation.get`) instead of sending it
-again. See [Operation IDs](relay-operations.md#operation-ids).
+Every run goes through the same steps, in one `Operations.<name>` span:
 
-### Conflicting changes
+1. **Authorize.** `authorize` checks the actor may run it and loads what the
+   run needs (`Operations.authorize` span). Nothing is locked yet.
+2. **Take its lanes.** Its locks are admitted to Hearth's lanes, the same
+   kernel the Relays run (`@workspace/operations`): each key is a lane,
+   shared or exclusive, and work on different keys runs at once.
+   - A **person's** operation is refused at once when another holds a lock
+     it needs, or waits ahead for one, naming what: "Deleting this game
+     server is in progress. Try again once it's done." Hearth doesn't queue
+     people's changes. One that conflicts with nothing runs.
+   - **Hearth's own** work, a schedule, worker or reconciler, waits its
+     turn, and is authorized again once it has, since what it read may have
+     changed. One that waits over 30 seconds logs what it waits behind.
+   - An operation run **inside another** runs under its parent's locks and
+     takes none of its own. It may only need what its parent holds: the same
+     keys, or parts of a whole its parent holds exclusively. Needing more is
+     a bug and fails at once, rather than deadlock: declare those locks on
+     the outer operation. Inside means anything the operation's run reaches,
+     including promise code through `promiseEffect` and the effects it starts
+     with `runAppEffect`.
+3. **Run.** Once it starts it finishes, even if the person leaves; one still
+   waiting is withdrawn.
+4. **After.** Whatever the outcome, `publish` sends realtime updates. The
+   audit event is written off the request's path, best effort: a failed
+   audit or publish is logged and never turns a change that went through
+   into an error.
 
-No two of today's durable operations change the same thing, so none takes a
-lock. When one does, as moving a game server would against backing it up,
-the rule is:
+Errors keep their type for the caller. A refusal is `OperationBusyError`,
+whose message is what the person sees.
 
-- A person's change is refused at once with what's running, such as "Can't
-  move Alpha: it's being backed up". Hearth doesn't queue people's changes.
-- A schedule's step waits for the running one to end.
+### Durable operations
 
-Build that with the first operation that needs it.
+`durableOperation` defines one that survives a restart, with the same
+`doing` and `locks`. Its `run` is an Effect workflow: steps (`Activity`)
+whose results are stored, waits that outlive a restart (`DurableClock`), and
+Relay changes sent at most once (`relayCommand`).
 
-### What operators see
+- `startDurableOperation` takes its lanes like any operation, refusing a
+  person's or waiting for Hearth's own, then records it (its input, locks
+  and who asked) and starts its workflow, and returns its ID.
+- Its locks are held until the workflow ends, however long that is, across
+  restarts: before Hearth admits anything after it starts, it takes back
+  the locks of every durable operation still running.
+- Most durable operations take no locks. One that only does its own work,
+  such as sending an invitation's email or deleting a Tailscale network,
+  is kept to one run by its idempotency key, and holding a lock while it
+  waits days between retries would only get in the way. Deleting a
+  resource holds it whole, so nothing else changes it until the deletion
+  ends.
+- An idempotency key makes starting it again return the same operation.
+- It finishes or fails with a message; there's no paused state.
 
-Platform administrators see running operations and those that ended
-recently on the Operations page, live. Finished rows and their workflow
-history are kept 30 days.
+Hearth runs as one process, and a deploy stops the old one before the new
+one starts. The Relays order their own work, such as a backup, in their own
+lanes; Hearth's lanes order what Hearth does.
 
-### Tracing
+### Lane keys
 
-`startDurableOperation` is an `Operations.start` span; each run is an
-`Operations.run` span linked to it, with `operation.id` and
-`operation.kind`, and Effect's workflow engine adds a span per step. A
-serialized change is an `Operations.serialized` span with how long it
-waited (`operation.wait_ms`).
+A key names a whole (`instance:<relay>/<id>`) or a part of one, after `#`
+(`instance:<relay>/<id>#dns`). Taking a part also takes its whole shared,
+so taking the whole exclusively, as deleting it does, waits for or turns
+away every part.
 
-## Adding a durable operation
+| Key                               | Changes                                                |
+| --------------------------------- | ------------------------------------------------------ |
+| `instance:<relay>/<id>`           | A game server; `app:`, `database:`, `volume:` likewise |
+| `instance:<relay>/<id>#dns`       | Its DNS records and web routes                         |
+| `user:<id>`                       | An account and its access                              |
+| `relay:<id>#authorization`        | What a Relay holds of who may do what                  |
+| `relay:<id>#database-connections` | Apps' database connections handover                    |
+| `cloudflare-connection:<id>`      | A Cloudflare connection                                |
 
-1. Write its steps as `Activity`s that are safe to run again: read what's
-   already done before doing it.
-2. Register its layer in `operations/workflows.ts`. Keep a removed one
-   registered until its unfinished runs have drained.
-3. If something must start it again after an upgrade, as a reconciler of its
-   own rows does, give it an idempotency key.
+## Tracing and metrics
+
+- **Spans.** `Operations.<name>` wraps a run, with `operation.id`,
+  `operation.name`, `operation.initiator` (`person`, `system`),
+  `operation.parent_id`, `operation.locks`, `operation.wait_ms`,
+  `operation.outcome` and, when refused, `operation.blocked_by`. Its
+  children are `Operations.authorize` and the work's own spans. A durable
+  run is `Operations.<name>` with `operation.durable`, linked to the
+  `Operations.start` span of the request that started it; Effect's workflow
+  engine adds a span per step.
+- **Logs.** Every log line inside a run carries `operation.id` and
+  `operation.name`.
+- **Metrics.** `hearth.operation.duration` (by `operation.name` and
+  `operation.outcome`) and `hearth.operation.wait.duration` (by
+  `operation.name`) histograms, and `hearth.operation.refused` by
+  `operation.name`. Durable operations add `hearth.operations.duration` and
+  `hearth.operations.finished` by `operation.kind`.
+
+## What operators see
+
+The Operations page shows what runs now and what each waiting operation
+waits on, live from the lanes, and durable operations that ended in the
+last 30 days.
+
+## Adding an operation
+
+1. Define it with `operation<Input>()({ ... })`, and run it from the
+   server function's handler with `runOperationPromise`. Keep `run` to the
+   feature's own logic.
+2. Name every key it changes: a part (`#dns`) for a change to one part of a
+   resource, the whole for a change to all of it. Declare on the outer
+   operation every lock the work it reaches needs.
+3. Make it durable only when it has steps that must survive a restart.
+   Write each step so it's safe to run again.
+4. Run Kiln's promise code from an operation through `promiseEffect`, so
+   what it starts stays inside the operation.
+
+For a step several features share that must not interleave with itself,
+such as a DNS update, `inLanes(name, doing, locks, effect)` runs it as an
+operation of whatever runs it.

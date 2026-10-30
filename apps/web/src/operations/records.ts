@@ -6,8 +6,9 @@
  */
 import { randomUUID } from "node:crypto"
 
+import type { LaneLock } from "@workspace/operations"
 import type { RowDataPacket } from "mysql2/promise"
-import { Clock, Duration, Effect, Metric, Option } from "effect"
+import { Clock, Deferred, Duration, Effect, Metric, Option } from "effect"
 
 import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
@@ -52,24 +53,29 @@ export const recordOperation = Effect.fn("Operations.record")(
     readonly input: unknown
     readonly idempotencyKey?: string | undefined
     readonly actorId?: string | null | undefined
+    /** Chosen before it's recorded, as when its lanes were taken first. */
+    readonly id?: string | undefined
+    /** The locks it holds until it ends. */
+    readonly locks?: ReadonlyArray<LaneLock> | undefined
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     const span = yield* Effect.option(Effect.currentSpan)
-    const id = randomUUID()
+    const id = record.id ?? randomUUID()
     const inserted = yield* database.execute(
       "operations.record",
       `INSERT ${record.idempotencyKey === undefined ? "" : "IGNORE"}
        INTO ${operationTable}
-       (id, kind, version, idempotency_key, input, state, actor_id,
+       (id, kind, version, idempotency_key, input, locks, state, actor_id,
         trace_id, span_id, trace_sampled, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)`,
       [
         id,
         record.kind,
         record.version,
         record.idempotencyKey ?? null,
         JSON.stringify(record.input ?? null),
+        record.locks?.length ? JSON.stringify(record.locks) : null,
         record.actorId ?? null,
         Option.isSome(span) ? span.value.traceId : null,
         Option.isSome(span) ? span.value.spanId : null,
@@ -137,6 +143,7 @@ export const finishOperation = Effect.fn("Operations.finish")(function* (
     [outcome, error?.slice(0, 1024) ?? null, now, now, id]
   )
   if (ended.affectedRows === 0) return
+  yield* endedHere(id)
   const kind = { "operation.kind": row.kind }
   yield* Metric.update(
     Metric.withAttributes(finished, { ...kind, "operation.outcome": outcome }),
@@ -148,6 +155,98 @@ export const finishOperation = Effect.fn("Operations.finish")(function* (
   )
   publishOperationsChange()
 })
+
+/** The operation recorded under an idempotency key, if any. */
+export const findOperation = Effect.fnUntraced(function* (
+  kind: string,
+  idempotencyKey: string
+) {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<
+    RowDataPacket & { id: string; state: OperationState }
+  >(
+    "operations.find",
+    `SELECT id, state FROM ${operationTable}
+      WHERE kind = ? AND idempotency_key = ?`,
+    [kind, idempotencyKey]
+  )
+  return row ? { id: row.id, state: row.state } : null
+})
+
+// Operations of this process waiting for one to end, woken as it does.
+const endings = ((
+  globalThis as typeof globalThis & {
+    kilnOperationEndings?: Map<string, Deferred.Deferred<void>>
+  }
+).kilnOperationEndings ??= new Map<string, Deferred.Deferred<void>>())
+
+const endedHere = (id: string) =>
+  Effect.suspend(() => {
+    const ending = endings.get(id)
+    endings.delete(id)
+    return ending ? Deferred.succeed(ending, undefined) : Effect.void
+  })
+
+// How often one waiting for an operation to end looks for itself, in case
+// it ended some other way, such as by a migration.
+const ENDED_CHECK = "30 seconds"
+
+/** Waits until an operation is no longer running. */
+export const awaitOperationEnd = (
+  id: string
+): Effect.Effect<void, never, Database> =>
+  Effect.gen(function* () {
+    let ending = endings.get(id)
+    if (!ending) {
+      ending = yield* Deferred.make<void>()
+      endings.set(id, ending)
+    }
+    const stillRunning: Effect.Effect<boolean, never, Database> = Effect.gen(
+      function* () {
+        const record = yield* loadOperation(id).pipe(
+          Effect.catch(() => Effect.succeed({ state: "running" as const }))
+        )
+        return record !== null && record.state === "running"
+      }
+    )
+    const watch = Effect.gen(function* () {
+      while (yield* stillRunning) yield* Effect.sleep(ENDED_CHECK)
+    })
+    yield* Effect.raceFirst(Deferred.await(ending), watch)
+  })
+
+/** Durable operations still running that hold locks, oldest first. */
+export const lockingOperations = Effect.fnUntraced(function* () {
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & {
+      actor_id: string | null
+      created_at: number
+      id: string
+      input: unknown
+      kind: string
+      locks: unknown
+    }
+  >(
+    "operations.locking",
+    `SELECT id, kind, actor_id, input, locks, created_at FROM ${operationTable}
+      WHERE state = 'running' AND locks IS NOT NULL
+      ORDER BY created_at`
+  )
+  return rows.map((row) => ({
+    actorId: row.actor_id,
+    createdAt: Number(row.created_at),
+    id: row.id,
+    input: typeof row.input === "string" ? JSON.parse(row.input) : row.input,
+    kind: row.kind,
+    locks: parseLocks(row.locks),
+  }))
+})
+
+function parseLocks(value: unknown): ReadonlyArray<LaneLock> {
+  const parsed = typeof value === "string" ? JSON.parse(value) : value
+  return Array.isArray(parsed) ? (parsed as ReadonlyArray<LaneLock>) : []
+}
 
 /**
  * Operations running whose workflow wasn't started, oldest first. One that
@@ -240,6 +339,8 @@ export interface OperationRecord {
   readonly id: string
   readonly input: unknown
   readonly kind: string
+  /** The locks it holds until it ends. */
+  readonly locks: ReadonlyArray<LaneLock>
   readonly state: OperationState
   /** The span that started it, for a run to link to. */
   readonly trace: {
@@ -259,6 +360,7 @@ export const loadOperation = Effect.fnUntraced(function* (id: string) {
       id: string
       input: unknown
       kind: string
+      locks: unknown
       span_id: string | null
       state: OperationState
       trace_id: string | null
@@ -267,7 +369,7 @@ export const loadOperation = Effect.fnUntraced(function* (id: string) {
     }
   >(
     "operations.load",
-    `SELECT id, kind, version, input, state, actor_id, error,
+    `SELECT id, kind, version, input, locks, state, actor_id, error,
             trace_id, span_id, trace_sampled
        FROM ${operationTable} WHERE id = ?`,
     [id]
@@ -279,6 +381,7 @@ export const loadOperation = Effect.fnUntraced(function* (id: string) {
     id: row.id,
     input: typeof row.input === "string" ? JSON.parse(row.input) : row.input,
     kind: row.kind,
+    locks: row.locks === null ? [] : parseLocks(row.locks),
     state: row.state,
     trace:
       row.trace_id && row.span_id

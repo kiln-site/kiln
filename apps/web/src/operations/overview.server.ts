@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 
+import { hearthLanes, laneOccupants, type Initiator } from "./lanes"
 import type { OperationState } from "./records"
 
 const operationTable = databaseTable("operation")
@@ -24,10 +25,31 @@ export interface OperationView {
   readonly state: OperationState
 }
 
+/** An operation in the lanes now, running or waiting its turn. */
+export interface LaneView {
+  readonly actor: { readonly id: string; readonly name: string } | null
+  readonly admittedAt: number
+  readonly doing: string
+  readonly durable: boolean
+  readonly id: string
+  readonly initiator: Initiator
+  readonly locks: ReadonlyArray<{ readonly key: string; readonly mode: string }>
+  readonly name: string
+  readonly startedAt: number | null
+  /** What a waiting one waits for: each holder or one ahead, by key. */
+  readonly waitingOn: ReadonlyArray<{
+    readonly holds: boolean
+    readonly key: string
+    readonly name: string
+  }>
+}
+
 export interface OperationsOverview {
-  /** What runs now, oldest first. */
+  /** What's in the lanes now, in the order it arrived. */
+  readonly lanes: ReadonlyArray<LaneView>
+  /** Durable operations running now, oldest first. */
   readonly running: ReadonlyArray<OperationView>
-  /** The latest to end, newest first. */
+  /** The latest durable operations to end, newest first. */
   readonly recent: ReadonlyArray<OperationView>
 }
 
@@ -43,7 +65,10 @@ type OperationRow = RowDataPacket & {
 
 const columns = "id, kind, state, actor_id, error, created_at, finished_at"
 
-/** Hearth's durable operations running now, and what ended last. */
+/**
+ * What's in Hearth's lanes now, live, and its durable operations running
+ * and ended last.
+ */
 export const loadOperationsOverview = Effect.fn("Operations.overview")(
   function* () {
     const database = yield* Database
@@ -61,12 +86,20 @@ export const loadOperationsOverview = Effect.fn("Operations.overview")(
         ORDER BY finished_at DESC
         LIMIT ${RECENT_LIMIT}`
     )
+    const lanes = hearthLanes.describe()
+    const occupants = [...lanes.active, ...lanes.waiting].flatMap((entry) => {
+      const occupant = laneOccupants.get(entry.label)
+      return occupant ? [{ entry, occupant }] : []
+    })
     const actorIds = [
-      ...new Set(
-        [...running, ...recent].flatMap((row) =>
+      ...new Set([
+        ...[...running, ...recent].flatMap((row) =>
           row.actor_id ? [row.actor_id] : []
-        )
-      ),
+        ),
+        ...occupants.flatMap(({ occupant }) =>
+          occupant.actorId ? [occupant.actorId] : []
+        ),
+      ]),
     ]
     const actorRows =
       actorIds.length === 0
@@ -91,7 +124,30 @@ export const loadOperationsOverview = Effect.fn("Operations.overview")(
       kind: row.kind,
       state: row.state,
     })
+    const actorOf = (id: string | null) =>
+      id ? { id, name: names.get(id) ?? "Someone" } : null
     return {
+      lanes: occupants
+        .map(({ entry, occupant }) => ({
+          actor: actorOf(occupant.actorId),
+          admittedAt: occupant.admittedAt,
+          doing: occupant.doing,
+          durable: occupant.durable,
+          id: occupant.id,
+          initiator: occupant.initiator,
+          locks: entry.locks ?? [],
+          name: occupant.name,
+          startedAt: occupant.startedAt,
+          waitingOn:
+            "waitingOn" in entry
+              ? entry.waitingOn.map((reason) => ({
+                  holds: reason.holds,
+                  key: reason.key,
+                  name: laneOccupants.get(reason.id)?.name ?? reason.id,
+                }))
+              : [],
+        }))
+        .sort((left, right) => left.admittedAt - right.admittedAt),
       recent: recent.map(view),
       running: running.map(view),
     } satisfies OperationsOverview

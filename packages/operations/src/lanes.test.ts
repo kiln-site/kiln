@@ -35,6 +35,41 @@ const start = Effect.fnUntraced(function* (
 
 describe("operation lanes", () => {
   it.effect(
+    "refuses at once, naming what's in the way, an operation that would wait",
+    () =>
+      Effect.gen(function* () {
+        const lanes = new OperationLanes()
+        const log: Array<string> = []
+        const holder = yield* start(lanes, log, "holder", [exclusive("a")])
+        const queued = yield* start(lanes, log, "queued", [
+          exclusive("b"),
+          shared("a"),
+        ])
+        const refused = (locks: ReadonlyArray<LaneLock>) =>
+          lanes
+            .run({ label: "impatient", locks, whenBusy: "refuse" }, Effect.void)
+            .pipe(Effect.flip)
+        // Held, or wanted by one waiting ahead of it.
+        const byHolder = yield* refused([shared("a")])
+        const byQueue = yield* refused([exclusive("b")])
+        assert.deepStrictEqual(
+          [byHolder.reason, byHolder.blockedBy],
+          ["busy", ["holder"]]
+        )
+        assert.deepStrictEqual(byQueue.blockedBy, ["queued"])
+        // Nothing in its way: it runs, and it held no place in line.
+        yield* lanes.run(
+          { label: "free", locks: [exclusive("c")], whenBusy: "refuse" },
+          Effect.sync(() => log.push("free"))
+        )
+        yield* holder.finish
+        assert.deepStrictEqual(log, ["holder", "free", "queued"])
+        yield* queued.finish
+        assert.deepStrictEqual(yield* Fiber.join(queued.fiber), "queued")
+      })
+  )
+
+  it.effect(
     "keeps later shared work behind a waiting exclusive operation",
     () =>
       Effect.gen(function* () {
