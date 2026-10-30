@@ -20,6 +20,7 @@ import {
   advanceSubjectAcrossEnabledRelaysEffect,
   type AuthorizationScope,
 } from "@/lib/authorization-revision"
+import { outsideOperation } from "@/operations/current"
 import { exclusive } from "@/operations/lanes"
 import { inLanes } from "@/operations/operation"
 
@@ -104,7 +105,9 @@ export function wakeAuthorizationDelivery(relayId: string): void {
     clearTimeout(state.retry)
     state.retry = null
   }
-  if (!state.running) void drain(relayId, state)
+  // Woken from the change that needs delivering, often inside its
+  // operation, but never waited for: it takes its own lane.
+  if (!state.running) outsideOperation(() => void drain(relayId, state))
 }
 
 export async function recordAuthorizationChange(input: {
