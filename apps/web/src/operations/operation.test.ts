@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest"
-import { Deferred, Effect, Fiber } from "effect"
+import { Deferred, Effect, Fiber, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll } from "vite-plus/test"
 
@@ -9,10 +9,14 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 
 // Registers resource deletion, whose locks a restart takes back.
 import "@/lib/resource-deletion.server"
-import { restoreLockingOperations } from "./durable"
-import { exclusive, partKey, resourceKey, shared } from "./lanes"
+import {
+  durableOperation,
+  restoreLockingOperations,
+  startDurableOperation,
+} from "./durable"
+import { exclusive, laneOccupants, partKey, resourceKey, shared } from "./lanes"
 import { operation, runOperation } from "./operation"
-import { finishOperation, recordOperation } from "./records"
+import { findOperation, finishOperation, recordOperation } from "./records"
 
 afterAll(() => disposeAppRuntime())
 
@@ -224,6 +228,50 @@ describeMysql("Hearth operations", () => {
           assert.strictEqual(yield* Fiber.join(waiting), 2)
           assert.deepStrictEqual(published, ["delete"])
         })
+    )
+
+    it.effect(
+      "never starts a durable change whose caller gave up while it waited",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const release = yield* Deferred.make<void>()
+          const holder = yield* runOperation(
+            holding("test.delete", "Deleting this game server", [
+              exclusive(server),
+            ]),
+            release,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+
+          const caller = yield* startDurableOperation(
+            durableOperation({
+              input: Schema.Struct({}),
+              kind: "test.durable",
+              locks: () => [exclusive(server)],
+              run: () => Effect.void,
+              version: 1,
+            }),
+            {},
+            { idempotencyKey: "abandoned", initiator: "system" }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          // Queued behind the deletion before its caller gives up.
+          yield* Effect.sync(() =>
+            [...laneOccupants.values()].some(
+              (occupant) => occupant.name === "test.durable"
+            )
+          ).pipe(
+            Effect.repeat({ until: (queued) => queued }),
+            Effect.timeout("5 seconds")
+          )
+          yield* Fiber.interrupt(caller)
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(holder)
+          yield* Effect.sleep("50 millis")
+
+          assert.isNull(yield* findOperation("test.durable", "abandoned"))
+        }).pipe(TestClock.withLive)
     )
   })
 })

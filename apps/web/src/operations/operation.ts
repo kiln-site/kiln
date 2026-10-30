@@ -362,7 +362,11 @@ const record = (
 // to try again; Hearth's own work waits as long as it takes.
 const STARTING_WAIT = "15 seconds"
 
-const awaitLanesOpen = (initiator: Initiator, name: string) =>
+/**
+ * Waits for the lanes to open, as they are but while Hearth starts: Hearth's
+ * own work as long as it takes, a person up to 15 seconds.
+ */
+export const awaitLanesOpen = (initiator: Initiator, name: string) =>
   initiator === "system"
     ? lanesOpen
     : lanesOpen.pipe(

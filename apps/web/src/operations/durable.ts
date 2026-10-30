@@ -22,14 +22,13 @@ import type { DatabaseError } from "@/effect/errors"
 import { OperationsEngineService, withOperationsEngine } from "./engine-service"
 import {
   hearthLanes,
-  lanesOpen,
   occupy,
   vacate,
   withWholes,
   type Initiator,
 } from "./lanes"
 import { runningAs } from "./current"
-import { OperationBusyError, refusal } from "./operation"
+import { awaitLanesOpen, OperationBusyError, refusal } from "./operation"
 import {
   awaitOperationEnd,
   findOperation,
@@ -242,30 +241,36 @@ export const startDurableOperation = <
         recorded.existing ? Effect.void : dispatchSoon(recorded.id)
       )
     )
+    const initiator =
+      options.initiator ?? (options.actorId ? "person" : "system")
+    // Nothing starts while startup takes back the locks of what's running.
+    yield* awaitLanesOpen(initiator, operation.kind)
     if (locks.length === 0) return (yield* start).id
-    yield* lanesOpen
     const started = yield* Deferred.make<string>()
     const services = yield* Effect.context<Database>()
-    const holder: Fiber.Fiber<unknown, DatabaseError | OperationBusyError> =
-      yield* holdLanes<DatabaseError>({
-        actorId: options.actorId ?? null,
-        doing: operation.doing(input),
-        id,
-        initiator: options.initiator ?? (options.actorId ? "person" : "system"),
-        locks,
-        name: operation.kind,
-        // Recorded once its lanes are its, then held until it ends.
-        run: start.pipe(
-          Effect.tap((recorded) => Deferred.succeed(started, recorded.id)),
-          Effect.andThen((recorded) => awaitOperationEnd(recorded.id)),
-          Effect.provideContext(services)
-        ),
-      })
+    const holder = yield* holdLanes<DatabaseError>({
+      actorId: options.actorId ?? null,
+      doing: operation.doing(input),
+      id,
+      initiator,
+      locks,
+      name: operation.kind,
+      // Recorded once its lanes are its, then held until it ends.
+      run: start.pipe(
+        Effect.tap((recorded) => Deferred.succeed(started, recorded.id)),
+        Effect.andThen((recorded) => awaitOperationEnd(recorded.id)),
+        Effect.provideContext(services)
+      ),
+    })
     return yield* Effect.raceFirst(
       Deferred.await(started),
-      Fiber.join(holder).pipe(
+      Fiber.join(holder.fiber).pipe(
         Effect.andThen(Effect.die("The operation ended before it was recorded"))
       )
+    ).pipe(
+      // A caller that gives up while it waits withdraws it; once it's
+      // recorded, it goes on.
+      Effect.onInterrupt(() => Effect.sync(holder.withdraw))
     )
   }).pipe(Effect.withSpan("Operations.start"))
 
@@ -291,7 +296,10 @@ const holdLanes = <E>(hold: {
   readonly locks: ReadonlyArray<LaneLock>
   readonly name: string
   readonly run: Effect.Effect<unknown, E>
-}): Effect.Effect<Fiber.Fiber<unknown, E | OperationBusyError>> =>
+}): Effect.Effect<{
+  readonly fiber: Fiber.Fiber<unknown, E | OperationBusyError>
+  readonly withdraw: () => void
+}> =>
   Effect.gen(function* () {
     const label = `${hold.name}#${hold.id}`
     const ticket = hearthLanes.admit({
@@ -309,7 +317,7 @@ const holdLanes = <E>(hold: {
       name: hold.name,
       startedAt: Date.now(),
     })
-    return yield* ticket.run(hold.run).pipe(
+    const fiber = yield* ticket.run(hold.run).pipe(
       Effect.catch((error): Effect.Effect<never, E | OperationBusyError> =>
         error instanceof LaneRejectedError
           ? refusal(hold.name, error)
@@ -318,6 +326,7 @@ const holdLanes = <E>(hold: {
       Effect.ensuring(vacate(label)),
       Effect.forkDetach
     )
+    return { fiber, withdraw: ticket.cancel }
   })
 
 /**
