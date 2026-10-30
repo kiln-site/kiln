@@ -1,6 +1,9 @@
 const EXPECTED_ERROR_TAGS = new Set([
   "AuthenticationError",
   "DomainConfigurationError",
+  // A person's change refused while something else changes what it would:
+  // they're told what, and counted by hearth.operation.refused.
+  "OperationBusyError",
   "PasswordAttemptsError",
   "PermissionDeniedError",
   "ResourceBeingDeletedError",
