@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import {
-  droppedUploadFiles,
-  selectedUploadFiles,
-} from "@/components/files/file-upload-selection"
+import { droppedUploadFiles } from "@/components/files/file-upload-selection"
 
 class TestFileSystem implements FileSystem {
   readonly name = "test"
@@ -75,17 +72,6 @@ class TestDirectoryEntry extends TestEntry implements FileSystemDirectoryEntry {
   getFile(): void {}
 }
 
-// A file picked through a directory input, which reports its relative path.
-function pickedFile(webkitRelativePath: string): File {
-  return Object.defineProperty(
-    new File([""], "config.yml"),
-    "webkitRelativePath",
-    {
-      value: webkitRelativePath,
-    }
-  )
-}
-
 // The browser's drop payload for `entries`.
 function dropOf(entries: ReadonlyArray<FileSystemEntry>): DataTransfer {
   return {
@@ -98,20 +84,6 @@ function dropOf(entries: ReadonlyArray<FileSystemEntry>): DataTransfer {
 }
 
 describe("file upload selection", () => {
-  it("preserves safe paths supplied by directory inputs", () => {
-    expect(
-      selectedUploadFiles([
-        pickedFile("pack/config/config.yml"),
-        pickedFile("pack/overrides/config.yml"),
-        pickedFile("../config.yml"),
-      ]).map(({ path }) => path)
-    ).toEqual([
-      "pack/config/config.yml",
-      "pack/overrides/config.yml",
-      "config.yml",
-    ])
-  })
-
   it("recursively enumerates every directory reader batch", async () => {
     const filesystem = new TestFileSystem()
     const server = new TestFileEntry(

@@ -13,7 +13,7 @@ import { migrations } from "@/migrations"
 // Runs against real MySQL when KILN_TEST_MYSQL=1 and DB_* point at a server
 // that can create `<DB_NAME>_<worker>` databases (CI does this). Otherwise
 // these suites are skipped.
-export const mysqlEnabled = process.env.KILN_TEST_MYSQL === "1"
+const mysqlEnabled = process.env.KILN_TEST_MYSQL === "1"
 
 export const describeMysql = mysqlEnabled ? describe : describe.skip
 

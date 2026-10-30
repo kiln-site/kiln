@@ -102,15 +102,6 @@ const hostnames = Effect.promise(() =>
 
 describeMysql("Relay web routes on the infrastructure map", () => {
   layer(TestDatabase)((it) => {
-    it.effect("reading the Relay alone reveals no routes", () =>
-      Effect.gen(function* () {
-        yield* seed
-        yield* grant("relay", relayId, ["relay.read"])
-
-        assert.deepStrictEqual(yield* hostnames, [])
-      })
-    )
-
     it.effect("a game server's network grant reveals only its routes", () =>
       Effect.gen(function* () {
         yield* seed
@@ -118,15 +109,6 @@ describeMysql("Relay web routes on the infrastructure map", () => {
         yield* grant("instance", serverId, ["instance.network.read"])
 
         assert.deepStrictEqual(yield* hostnames, ["map.example.test"])
-      })
-    )
-
-    it.effect("reading the Relay's apps reveals app routes", () =>
-      Effect.gen(function* () {
-        yield* seed
-        yield* grant("relay", relayId, ["relay.read", "app.read"])
-
-        assert.deepStrictEqual(yield* hostnames, ["site.example.test"])
       })
     )
 

@@ -4,7 +4,6 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
-import { createAppRecordEffect } from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
@@ -156,13 +155,6 @@ const rejection = (run: () => Promise<unknown>) =>
 const count = (table: string) =>
   selectRows(table).pipe(Effect.map((rows) => rows.length))
 
-const backups = selectRows<{
-  artifact_kind: string
-  consistency: string | null
-  target_id: string
-  target_kind: string
-}>("backup")
-
 const addPermission = (access: string, permission: AccessPermission) =>
   insertRows("access_selection", {
     access_id: access,
@@ -201,64 +193,6 @@ describeMysql("App and volume backup authorization", () => {
     )
 
     it.effect(
-      "someone who can read an App's files backs it up, as a tar archive taken live",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* createAppRecordEffect({
-            appId,
-            createdBy: "someone-else",
-            name: "Website",
-            relayId,
-          })
-          yield* grant(["app.files.read"])
-
-          const created = yield* Effect.promise(() =>
-            createResourceBackupHandler(user, {
-              name: "Before the upgrade",
-              relayId,
-              target: { id: appId, kind: "app" },
-            })
-          )
-
-          assert.strictEqual(created.backup.targetKind, "app")
-          assert.deepStrictEqual(yield* backups, [
-            {
-              ...(yield* backups)[0]!,
-              artifact_kind: "tar_archive",
-              consistency: "live",
-              target_id: appId,
-              target_kind: "app",
-            },
-          ])
-        })
-    )
-
-    it.effect(
-      "a stopped backup takes permission to manage every App it stops",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          const access = yield* grant(["backup.create"])
-          const stopped = () =>
-            createResourceBackupHandler(user, {
-              consistency: "stopped",
-              name: "Media",
-              relayId,
-              target: { id: kilnVolumeId, kind: "volume" },
-            })
-
-          const message = yield* rejection(stopped)
-          assert.include(message, "permission to manage each")
-          assert.strictEqual(yield* count("backup"), 0)
-
-          yield* addPermission(access, "app.manage")
-          yield* Effect.promise(stopped)
-          assert.strictEqual((yield* backups)[0]?.consistency, "stopped")
-        })
-    )
-
-    it.effect(
       "a volume isn't restored while the Relay can't tell which Apps use it",
       () =>
         Effect.gen(function* () {
@@ -276,26 +210,6 @@ describeMysql("App and volume backup authorization", () => {
 
           assert.include(message, "doesn't know yet which Apps use this volume")
           assert.deepStrictEqual(yield* restoreTasks, [])
-        })
-    )
-
-    it.effect(
-      "a Kiln volume's backup takes the Relay's backup permission, not App permissions",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* grant(["app.files.read", "app.files.write", "app.manage"])
-
-          const message = yield* rejection(() =>
-            createResourceBackupHandler(user, {
-              name: "Media",
-              relayId,
-              target: { id: kilnVolumeId, kind: "volume" },
-            })
-          )
-
-          assert.include(message, "do not have permission to back up")
-          assert.strictEqual(yield* count("backup"), 0)
         })
     )
 

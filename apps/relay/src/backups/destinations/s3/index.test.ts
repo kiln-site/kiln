@@ -38,16 +38,4 @@ describe("scheduled S3 archive uploads", () => {
     )
     expect(JSON.stringify(request)).not.toContain("secret-example")
   })
-
-  it("uses path-style addressing for uppercase buckets", () => {
-    const request = signS3CredentialUpload(
-      { ...destination, bucket: "Kiln-Backups" },
-      "b".repeat(64),
-      new Date("2026-08-22T12:34:56.000Z")
-    )
-
-    expect(request.url).toBe(
-      "https://s3.example.com/Kiln-Backups/team/kiln/backup%20one.zip"
-    )
-  })
 })

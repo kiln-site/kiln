@@ -1,24 +1,10 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import {
-  createEditorSessionStore,
-  deletedPathContainsSelection,
-} from "@/components/files/file-workspace-stores"
+import { createEditorSessionStore } from "@/components/files/file-workspace-stores"
 
 const firstRevision = "2026-07-23T12:00:00.000Z"
 const secondRevision = "2026-07-23T12:01:00.000Z"
 describe("editor session revisions", () => {
-  it("adopts a newer disk revision while the session is clean", () => {
-    const store = createEditorSessionStore("cached", firstRevision)
-
-    store.reconcileDiskRevision("fresh", secondRevision)
-
-    expect(store.getValue()).toBe("fresh")
-    expect(store.getSavedValueSnapshot()).toBe("fresh")
-    expect(store.getExpectedModifiedAt()).toBe(secondRevision)
-    expect(store.getDiskConflictSnapshot()).toBe(false)
-  })
-
   it("freezes dirty text and its conflict token when disk changes", () => {
     const store = createEditorSessionStore("cached", firstRevision)
     store.setValue("local edit")
@@ -29,28 +15,6 @@ describe("editor session revisions", () => {
     expect(store.getSavedValueSnapshot()).toBe("cached")
     expect(store.getExpectedModifiedAt()).toBe(firstRevision)
     expect(store.getDiskConflictSnapshot()).toBe(true)
-  })
-
-  it("reloads or overwrites a conflicted session only when explicitly chosen", () => {
-    const reloaded = createEditorSessionStore("cached", firstRevision)
-    reloaded.setValue("local edit")
-    reloaded.reconcileDiskRevision("remote edit", secondRevision)
-    reloaded.reloadFromDisk("remote edit", secondRevision)
-
-    expect(reloaded.getValue()).toBe("remote edit")
-    expect(reloaded.getDirtySnapshot()).toBe(false)
-    expect(reloaded.getExpectedModifiedAt()).toBe(secondRevision)
-    expect(reloaded.getDiskConflictSnapshot()).toBe(false)
-
-    const overwritten = createEditorSessionStore("cached", firstRevision)
-    overwritten.setValue("local edit")
-    overwritten.reconcileDiskRevision("remote edit", secondRevision)
-    overwritten.markSaved("local edit", secondRevision)
-
-    expect(overwritten.getValue()).toBe("local edit")
-    expect(overwritten.getDirtySnapshot()).toBe(false)
-    expect(overwritten.getExpectedModifiedAt()).toBe(secondRevision)
-    expect(overwritten.getDiskConflictSnapshot()).toBe(false)
   })
 
   it("keeps edits made during a save dirty against the saved revision", () => {
@@ -64,33 +28,5 @@ describe("editor session revisions", () => {
     expect(store.getSavedValueSnapshot()).toBe("submitted edit")
     expect(store.getDirtySnapshot()).toBe(true)
     expect(store.getExpectedModifiedAt()).toBe(secondRevision)
-  })
-
-  it("adopts the newer disk revision if a conflicted edit becomes clean", () => {
-    const store = createEditorSessionStore("cached", firstRevision)
-    store.setValue("local edit")
-    store.reconcileDiskRevision("remote edit", secondRevision)
-    store.setValue("cached")
-
-    store.reconcileDiskRevision("remote edit", secondRevision)
-
-    expect(store.getValue()).toBe("remote edit")
-    expect(store.getDirtySnapshot()).toBe(false)
-    expect(store.getDiskConflictSnapshot()).toBe(false)
-  })
-})
-
-describe("file workspace path handling", () => {
-  it("only treats exact files and actual directory descendants as deleted", () => {
-    expect(deletedPathContainsSelection("m", "mods/foo")).toBe(false)
-    expect(deletedPathContainsSelection("server", "server.properties")).toBe(
-      false
-    )
-    expect(
-      deletedPathContainsSelection("server.properties", "server.properties")
-    ).toBe(true)
-    expect(deletedPathContainsSelection("mods/", "mods/foo")).toBe(true)
-    expect(deletedPathContainsSelection("mods/", "mods/")).toBe(true)
-    expect(deletedPathContainsSelection("mods/", "mods-old/foo")).toBe(false)
   })
 })

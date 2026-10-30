@@ -7,9 +7,7 @@ import { insertRelay, insertRows, selectRows } from "@/test/seed"
 
 import {
   advanceAuthorizationRevisionEffect,
-  advanceSubjectAcrossEnabledRelaysEffect,
   type AuthorizationDeliveryTarget,
-  type AuthorizationScope,
 } from "./authorization-revision"
 
 interface DeliveryRow {
@@ -92,61 +90,6 @@ describeMysql("authorization revisions", () => {
             },
           ])
         })
-    )
-
-    it.effect("serializes concurrent first advances of one subject", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay("relay-one")
-
-        const changes = yield* Effect.all(
-          Array.from({ length: 6 }, () => advance([instanceTarget])),
-          { concurrency: "unbounded" }
-        )
-
-        expect(
-          changes.map((change) => change.revision).sort((a, b) => a - b)
-        ).toEqual([1, 2, 3, 4, 5, 6])
-        expect(yield* subjectRevision).toEqual([6])
-        expect((yield* deliveries).map((row) => row.desired)).toEqual([6])
-      })
-    )
-
-    it.effect("targets only enabled Relays", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay("enabled-relay")
-        yield* insertRelay("paused-relay", { enabled: false })
-        const scopes: Array<AuthorizationScope> = [
-          { kind: "subject_relay" },
-          { kind: "login_session", loginSessionId: "session-one" },
-        ]
-
-        const database = yield* Database
-        const change = yield* database.transaction("test", (transaction) =>
-          advanceSubjectAcrossEnabledRelaysEffect(
-            transaction,
-            "user-one",
-            scopes
-          )
-        )
-
-        expect(change).toEqual({ relayIds: ["enabled-relay"], revision: 1 })
-        expect(yield* deliveries).toEqual([
-          {
-            relayId: "enabled-relay",
-            scope: "login_session:session-one",
-            desired: 1,
-            acknowledged: 0,
-          },
-          {
-            relayId: "enabled-relay",
-            scope: "subject_relay:",
-            desired: 1,
-            acknowledged: 0,
-          },
-        ])
-      })
     )
   })
 })

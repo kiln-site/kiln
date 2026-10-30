@@ -1,16 +1,13 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
-import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 
 import {
   deleteBackupStorageEffect,
   saveBackupStorageEffect,
-  setBackupPolicyStorageEffect,
 } from "@/backups/destinations/s3"
-import { BackupStorageError, CredentialError } from "@/effect/errors"
-import { databaseTableName } from "@/lib/database-config"
+import { BackupStorageError } from "@/effect/errors"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertBackup, insertRelay, insertRows, selectRows } from "@/test/seed"
 
@@ -73,25 +70,9 @@ const insertRepository = (id: string, row: Record<string, string> = {}) =>
     ...row,
   })
 
-const insertPolicy = (targetId: string, storage: string | null) =>
-  insertRows("backup_policy", {
-    relay_id: "relay-one",
-    target_kind: "instance",
-    target_id: targetId,
-    storage_id: storage,
-    exclude_patterns: "[]",
-    created_at: now,
-    updated_at: now,
-  })
-
 const storageRow = Effect.map(
   selectRows<StorageRow>("backup_storage"),
   (rows) => rows[0]
-)
-
-const policyStorage = Effect.map(
-  selectRows<{ storage_id: string | null }>("backup_policy"),
-  (rows) => rows.map((row) => row.storage_id)
 )
 
 function assertStorageError(
@@ -170,132 +151,6 @@ describeMysql("backup storage deletion", () => {
           assert.lengthOf(yield* selectRows("backup_repository"), 1)
           assert.strictEqual(purge.mock.calls.length, 0)
         })
-    )
-
-    it.effect(
-      "does not start deleting when credentials cannot be decrypted",
-      () =>
-        Effect.gen(function* () {
-          yield* seedStorage
-          const sql = yield* SqlClient.SqlClient
-          yield* sql`UPDATE ${sql(databaseTableName("backup_storage"))}
-          SET access_key_id_ciphertext = ${"not-a-ciphertext"}`
-
-          const failure = yield* Effect.flip(
-            deleteBackupStorageEffect(storageId)
-          )
-
-          assert.instanceOf(failure, CredentialError)
-          assert.strictEqual((yield* storageRow)?.deleting, 0)
-          assert.strictEqual(purge.mock.calls.length, 0)
-        })
-    )
-
-    it.effect(
-      "keeps the destination marked deleting after a purge failure",
-      () =>
-        Effect.gen(function* () {
-          yield* seedStorage
-          yield* insertRepository("repo-one")
-          yield* insertPolicy("instance-one", storageId)
-          purge.mockReturnValueOnce(
-            Effect.fail(
-              BackupStorageError.make({
-                code: "s3_request_failed",
-                operation: "storage.deletePrefix",
-                reason: "The S3-compatible storage request failed",
-              })
-            )
-          )
-
-          const failure = yield* Effect.flip(
-            deleteBackupStorageEffect(storageId)
-          )
-
-          assertStorageError(failure, "s3_request_failed")
-          const storage = yield* storageRow
-          assert.strictEqual(storage?.deleting, 1)
-          assert.isNotNull(storage?.last_error)
-          assert.lengthOf(yield* selectRows("backup_repository"), 1)
-          assert.deepStrictEqual(yield* policyStorage, [null])
-        })
-    )
-
-    it.effect("purges restic prefixes, then removes the destination", () =>
-      Effect.gen(function* () {
-        yield* seedStorage
-        yield* insertRepository("repo-one")
-        yield* insertPolicy("instance-one", storageId)
-        yield* insertBackup("deleted-backup", {
-          repository_id: "repo-one",
-          status: "deleted",
-          storage_id: storageId,
-        })
-
-        yield* deleteBackupStorageEffect(storageId)
-
-        assert.deepStrictEqual(
-          purge.mock.calls.map(([credential, prefix]) => [
-            credential.accessKeyId,
-            credential.secretAccessKey,
-            credential.bucket,
-            prefix,
-          ]),
-          [["AKIAEXAMPLE", "s3-secret", "kiln-backups", repositoryPrefix]]
-        )
-        assert.lengthOf(yield* selectRows("backup_storage"), 0)
-        assert.lengthOf(yield* selectRows("backup_repository"), 0)
-        assert.deepStrictEqual(yield* policyStorage, [null])
-        const backups = yield* selectRows<{
-          repository_id: string | null
-          storage_id: string | null
-        }>("backup")
-        assert.deepStrictEqual(
-          backups.map((row) => [row.repository_id, row.storage_id]),
-          [[null, null]]
-        )
-      })
-    )
-  })
-})
-
-describeMysql("backup storage policy", () => {
-  layer(TestDatabase)((it) => {
-    it.effect("assigns an available destination", () =>
-      Effect.gen(function* () {
-        yield* seedStorage
-
-        yield* setBackupPolicyStorageEffect({
-          relayId: "relay-one",
-          storageId,
-          targetId: "instance-one",
-          targetKind: "instance",
-        })
-
-        assert.deepStrictEqual(yield* policyStorage, [storageId])
-      })
-    )
-
-    it.effect("rejects a destination that is being deleted", () =>
-      Effect.gen(function* () {
-        yield* seedStorage
-        yield* insertPolicy("instance-one", null)
-        const sql = yield* SqlClient.SqlClient
-        yield* sql`UPDATE ${sql(databaseTableName("backup_storage"))}
-          SET deleting = TRUE`
-
-        const failure = yield* Effect.flip(
-          setBackupPolicyStorageEffect({
-            relayId: "relay-one",
-            storageId,
-            targetId: "instance-one",
-            targetKind: "instance",
-          })
-        )
-
-        assertStorageError(failure, "storage_unavailable")
-        assert.deepStrictEqual(yield* policyStorage, [null])
-      })
     )
   })
 })

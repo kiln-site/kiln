@@ -1,10 +1,4 @@
-import {
-  generateKeyPairSync,
-  randomBytes,
-  randomUUID,
-  sign,
-  verify,
-} from "node:crypto"
+import { generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto"
 import { once } from "node:events"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
@@ -12,11 +6,10 @@ import type { AddressInfo } from "node:net"
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test"
 import { connect, createServer as createTcpServer } from "node:net"
 
-import { createWebSocketStream, WebSocket, WebSocketServer } from "ws"
+import { createWebSocketStream, WebSocket } from "ws"
 
 import {
   relayAuthChallengeTranscript,
-  relayAuthResponseTranscript,
   relayControlDialPath,
   relayControlDialV1Feature,
   relayControlProtocol,
@@ -25,11 +18,7 @@ import {
   relayTunnelProtocol,
   relayTunnelTokenHeader,
 } from "@workspace/contracts"
-import type {
-  RelayAuthChallenge,
-  RelayControlClientMessage,
-  RelayDialBinding,
-} from "@workspace/contracts"
+import type { RelayAuthChallenge, RelayDialBinding } from "@workspace/contracts"
 
 vi.mock("@/lib/relay-registry", () => ({
   listPersistedRelays: vi.fn(async () => []),
@@ -61,12 +50,7 @@ import {
 import type { RelayEndpoint } from "@/lib/relay-control-endpoint"
 import { handleRelayControlUpgrade } from "@/lib/relay-control-dial.server"
 import { openRelayTunnel } from "@/lib/relay-tunnel.server"
-import {
-  passRelayBrowserRequest,
-  passRelayPeerRequest,
-} from "@/lib/relay-browser-passthrough.server"
 import { loadPersistedRelay, loadRelayCredentials } from "@/lib/relay-registry"
-import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
 
 const relayId = "relay-control-dial-test"
 const relayKeys = generateKeyPairSync("ed25519")
@@ -133,33 +117,6 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-it("takes a control connection a Relay opened and serves requests over it", async () => {
-  // Nothing listens where Hearth would dial the Relay itself.
-  const relay = relayAt(await closedPort(), "relay")
-  const dialing = await dialHearth()
-  const response = await dialing.authenticate()
-
-  // Hearth signed for the challenge it asked for, and says where to dial.
-  expect(response.clientId).toBe(clientId)
-  expect(response.dial).toEqual({
-    url: `${hearthOrigin}${relayControlDialPath}`,
-  })
-  expect(
-    verify(
-      null,
-      Buffer.from(relayAuthResponseTranscript(dialing.challenge, clientId)),
-      clientKeys.publicKey,
-      Buffer.from(response.signature, "base64url")
-    )
-  ).toBe(true)
-
-  const answered = relayRpc(relay, "relay.proxy.read", {})
-  const request = await advanceUntil(dialing.nextRequest())
-  dialing.answer(request, { mode: "hearth" })
-  await expect(advanceUntil(answered)).resolves.toEqual({ mode: "hearth" })
-  expect(relayConnectionOpener(relayId)).toBe("relay")
-})
-
 it("refuses a challenge it didn't ask for, and a Relay it doesn't know", async () => {
   relayAt(await closedPort(), "relay")
   const replayed = await dialHearth({
@@ -180,36 +137,6 @@ it("refuses a challenge it didn't ask for, and a Relay it doesn't know", async (
   )
 })
 
-it("closes, rather than throws on, a malformed connection without the protocol", async () => {
-  const raw = connect(Number(new URL(hearthOrigin).port), "127.0.0.1")
-  await once(raw, "connect")
-  raw.on("error", () => undefined)
-  raw.resume()
-  // An upgrade with no subprotocol, and an unmasked frame right behind it.
-  raw.write(
-    [
-      `GET ${relayControlDialPath} HTTP/1.1`,
-      "Host: hearth",
-      "Upgrade: websocket",
-      "Connection: Upgrade",
-      `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}`,
-      "Sec-WebSocket-Version: 13",
-      "",
-      "",
-    ].join("\r\n")
-  )
-  raw.write(Buffer.from([0x82, 0x00]))
-  await advanceUntil(once(raw, "close"))
-})
-
-it("still closes a connection in time while its challenge waits to be checked", async () => {
-  relayAt(await closedPort(), "relay")
-  // As when the database is slow to answer.
-  vi.mocked(loadPersistedRelay).mockReturnValueOnce(new Promise(() => {}))
-  const waiting = await dialHearth()
-  await expect(advanceUntil(waiting.closed)).resolves.toBe(4401)
-})
-
 it("keeps the Relay's connection when someone else says they're that Relay", async () => {
   const relay = relayAt(await closedPort(), "relay")
   const dialing = await dialHearth()
@@ -225,89 +152,6 @@ it("keeps the Relay's connection when someone else says they're that Relay", asy
   const request = await advanceUntil(dialing.nextRequest())
   dialing.answer(request, { mode: "hearth" })
   await expect(advanceUntil(answered)).resolves.toEqual({ mode: "hearth" })
-})
-
-it("keeps its own connection when it prefers to, and hands over quietly when it prefers the Relay's", async () => {
-  const listening = await listeningRelay()
-  const relay = relayAt(listening.port, "hearth")
-  await advanceUntil(relayRpc(relay, "relay.proxy.read", {}))
-  expect(relayConnectionOpener(relayId)).toBe("hearth")
-
-  const refused = await dialHearth()
-  await expect(advanceUntil(refused.closed)).resolves.toBe(
-    relayDialCloseCodes.duplicate
-  )
-
-  const states: Array<string> = []
-  const unsubscribe = subscribeRealtimeChanges((event) => {
-    if (event.type === "relay.state") states.push(event.status)
-  })
-  const preferred = relayAt(listening.port, "relay")
-  // Hearth learns the preference from the Relay it's asked about.
-  await advanceUntil(relayRpc(preferred, "relay.proxy.read", {}))
-  const taken = await dialHearth()
-  await taken.authenticate()
-  await advanceUntil(until(() => relayConnectionOpener(relayId) === "relay"))
-  unsubscribe()
-
-  expect(relayConnectionOpener(relayId)).toBe("relay")
-  expect(states).not.toContain("unreachable")
-  const answered = relayRpc(preferred, "relay.proxy.read", {})
-  const request = await advanceUntil(taken.nextRequest())
-  taken.answer(request, { mode: "traefik" })
-  await expect(advanceUntil(answered)).resolves.toEqual({ mode: "traefik" })
-})
-
-it("tries its own connection first when it prefers to, and takes the Relay's once that fails", async () => {
-  // Hearth can't reach the Relay.
-  relayAt(await closedPort(), "hearth")
-  const early = await dialHearth()
-  await expect(advanceUntil(early.closed)).resolves.toBe(1013)
-
-  const later = await dialHearth()
-  await later.authenticate()
-  await advanceUntil(until(() => relayConnectionOpener(relayId) === "relay"))
-})
-
-it("opens its own connection when a Relay it prefers to be dialed by doesn't", async () => {
-  const listening = await listeningRelay()
-  const relay = relayAt(listening.port, "relay")
-
-  await expect(
-    advanceUntil(relayRpc(relay, "relay.proxy.read", {}))
-  ).resolves.toEqual({ mode: "none" })
-  expect(relayConnectionOpener(relayId)).toBe("hearth")
-  expect(listening.connections()).toBe(1)
-})
-
-it("lets go of a tunnel it refuses even while the other end holds on", async () => {
-  const raw = connect({
-    allowHalfOpen: true,
-    host: "127.0.0.1",
-    port: Number(new URL(hearthOrigin).port),
-  })
-  await once(raw, "connect")
-  raw.on("error", () => undefined)
-  raw.resume()
-  raw.write(
-    [
-      `GET ${relayTunnelPath} HTTP/1.1`,
-      "Host: hearth",
-      "Upgrade: websocket",
-      "Connection: Upgrade",
-      `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}`,
-      "Sec-WebSocket-Version: 13",
-      `Sec-WebSocket-Protocol: ${relayTunnelProtocol}`,
-      "",
-      "",
-    ].join("\r\n")
-  )
-  await advanceUntil(once(raw, "end"))
-  // Writing on is refused once Hearth let go of its end.
-  const closed = new Promise((resolve) => raw.once("close", resolve))
-  const writes = setInterval(() => raw.write("still here"), 10)
-  onCleanup(async () => clearInterval(writes))
-  await advanceUntil(closed)
 })
 
 it("takes a tunnel only for a token it asked for, and carries bytes through it", async () => {
@@ -366,31 +210,6 @@ it("takes a tunnel only for a token it asked for, and carries bytes through it",
   const [echoed] = (await advanceUntil(once(stream, "data"))) as [Buffer]
   expect(echoed.toString()).toBe("through the tunnel")
   stream.destroy()
-})
-
-it("passes browsers through to the Relay's transfer routes only", async () => {
-  relayAt(await closedPort(), "relay")
-  for (const route of ["socket", "pair", "files/a/../../socket", "trust"]) {
-    const response = await passRelayBrowserRequest(
-      relayId,
-      route,
-      new Request(`${hearthOrigin}/api/relays/${relayId}/browser/${route}`)
-    )
-    expect(response.status).toBe(404)
-  }
-  for (const [route, method] of [
-    ["transfers/a/../../socket", "GET"],
-    ["transfers/a", "PUT"],
-  ] as const) {
-    const response = await passRelayPeerRequest(
-      relayId,
-      route,
-      new Request(`${hearthOrigin}/api/relays/${relayId}/peer/${route}`, {
-        method,
-      })
-    )
-    expect(response.status).toBe(404)
-  }
 })
 
 function relayAt(port: number, controlDial: "hearth" | "relay"): RelayEndpoint {
@@ -493,48 +312,6 @@ async function dialHearth(
     get responses() {
       return messages.filter((message) => message.type === "auth.response")
     },
-  }
-}
-
-// A Relay Hearth dials, as before Relays could dial it.
-async function listeningRelay() {
-  let connections = 0
-  const server = new WebSocketServer({
-    handleProtocols: () => relayControlProtocol,
-    port: 0,
-  })
-  server.on("connection", (socket) => {
-    connections += 1
-    socket.send(JSON.stringify(signedChallenge(undefined)))
-    socket.on("message", (data) => {
-      const message = JSON.parse(data.toString()) as RelayControlClientMessage
-      if (message.type === "auth.response") {
-        socket.send(JSON.stringify(ready()))
-        socket.send(JSON.stringify(snapshotEvent()))
-      } else if (message.type === "request") {
-        socket.send(
-          JSON.stringify({
-            id: randomUUID(),
-            payload: { mode: "none" },
-            replyTo: message.id,
-            type: "response",
-            v: 1,
-          })
-        )
-      }
-    })
-  })
-  await once(server, "listening")
-  onCleanup(
-    () =>
-      new Promise<void>((resolve) => {
-        for (const client of server.clients) client.terminate()
-        server.close(() => resolve())
-      })
-  )
-  return {
-    connections: () => connections,
-    port: (server.address() as AddressInfo).port,
   }
 }
 

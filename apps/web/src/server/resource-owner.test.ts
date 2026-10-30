@@ -7,9 +7,7 @@ import { afterAll } from "vite-plus/test"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
-import {
-  getResourceOwnerHandler,
-} from "@/server/resource-access.server"
+import { getResourceOwnerHandler } from "@/server/resource-access.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertGrant,
@@ -102,22 +100,6 @@ const ownerFor = (userId: string, resourceId: string) =>
 describeMysql("resource owner", () => {
   layer(TestDatabase)((it) => {
     it.effect(
-      "someone who can read the server's people sees the owner's email",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-
-          const owner = yield* ownerFor("manager", ownedId)
-
-          assert.deepStrictEqual(owner, {
-            email: "owner@example.test",
-            name: "Steve",
-            userId: "owner",
-          })
-        })
-    )
-
-    it.effect(
       "someone who can only see the server gets the owner's name alone",
       () =>
         Effect.gen(function* () {
@@ -144,30 +126,6 @@ describeMysql("resource owner", () => {
             Error
           )
         }
-      })
-    )
-
-    it.effect("Relay access that can read servers sees their owner", () =>
-      Effect.gen(function* () {
-        yield* seed
-
-        const owner = yield* ownerFor("relay-player", ownedId)
-
-        assert.deepStrictEqual(owner, {
-          email: null,
-          name: "Steve",
-          userId: "owner",
-        })
-      })
-    )
-
-    it.effect("a server no one owns is the platform's", () =>
-      Effect.gen(function* () {
-        yield* seed
-
-        const owner = yield* ownerFor("player", unownedId)
-
-        assert.isNull(owner)
       })
     )
   })

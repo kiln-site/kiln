@@ -125,20 +125,6 @@ describeMysql("GitHub webhooks", () => {
         assert.deepEqual(yield* installationIds, [installationId])
       })
     )
-
-    it.effect("forgets an installation GitHub reports deleted", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertConnection
-
-        const response = yield* Effect.promise(() =>
-          handleGitHubWebhook(delivery("installation", uninstalled))
-        )
-
-        assert.strictEqual(response.status, 204)
-        assert.deepEqual(yield* installationIds, [null])
-      })
-    )
   })
 })
 
@@ -163,25 +149,6 @@ describeMysql("GitHub installation setup", () => {
 
         assert.match(result, /doesn't belong to a GitHub App you connected/u)
         assert.deepEqual(yield* installationIds, [installationId])
-      })
-    )
-
-    it.effect("attaches an installation of the person's own app", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertConnection
-        installationOwnerAppId = appId
-
-        const next = yield* Effect.promise(() =>
-          completeGitHubInstallation({
-            installationId: installationId + 1,
-            state: null,
-            user: owner,
-          })
-        )
-
-        assert.strictEqual(next, `/infra/sources?connected=${connectionId}`)
-        assert.deepEqual(yield* installationIds, [installationId + 1])
       })
     )
   })

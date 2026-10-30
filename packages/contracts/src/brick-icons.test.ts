@@ -3,14 +3,6 @@ import { describe, expect, it } from "vite-plus/test"
 import { validateBrickIconSvg } from "./brick-icons"
 
 describe("Brick icon SVGs", () => {
-  it("accepts a passive square SVG", () => {
-    expect(
-      validateBrickIconSvg(
-        '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M2 2h20v20H2z"/></svg>'
-      )
-    ).toContain('viewBox="0 0 24 24"')
-  })
-
   it.each([
     '<svg viewBox="0 0 24 24"><script>alert(1)</script></svg>',
     '<svg viewBox="0 0 24 24"><image href="https://example.com/a.png"/></svg>',

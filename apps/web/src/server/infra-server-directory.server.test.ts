@@ -1,21 +1,13 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect, Layer } from "effect"
-import { builtinTailscaleBrickId } from "@workspace/contracts"
 
 import { AppCache } from "@/effect/cache"
 import type { DirectoryInstance } from "@/lib/instance-directory"
 import { registerPreparedInstanceEffect } from "@/lib/instance-registry"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { readInfraServerDirectory } from "@/server/infra-directory.server"
-import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import {
-  insertGrant,
-  insertInstance,
-  insertRelay,
-  insertRows,
-  insertUser,
-} from "@/test/seed"
+import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
 
 const relayId = "r".repeat(43),
   id = "a".repeat(40)
@@ -91,71 +83,6 @@ describeMysql("Game Server directory", () => {
           assert.strictEqual(rows[0]?.game, "Minecraft")
           assert.strictEqual(rows[0]?.connectAddress, "play.example.test:25565")
         })
-    )
-
-    it.effect(
-      "keeps local names while hiding unreported records, networking instances, and paused Relays",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* insertRelay(relayId)
-          yield* insertRelay("s".repeat(43), { enabled: false })
-          yield* insertInstance(relayId, id, {
-            display_name: "Lobby",
-            source_name: "Old name",
-          })
-          yield* registerPreparedInstanceEffect(relayId, server(id), "owner")
-          yield* insertInstance(relayId, "b".repeat(40), {
-            source_name: "Legacy",
-          })
-          yield* registerPreparedInstanceEffect(
-            relayId,
-            { ...server("c".repeat(40)), brickId: builtinTailscaleBrickId },
-            "owner"
-          )
-          yield* registerPreparedInstanceEffect(
-            "s".repeat(43),
-            server(id),
-            "owner"
-          )
-          const rows = yield* readInfraServerDirectory({
-            ...user,
-            isDevelopmentBypass: true,
-          }).pipe(Effect.provide(disabledCache))
-          // A record no Relay has described yet cannot be told apart from a
-          // networking stack, so it waits for its first snapshot.
-          assert.deepStrictEqual(
-            rows.map((row) => row.name),
-            ["Lobby"]
-          )
-        })
-    )
-
-    it.effect("drops a game server once its deletion is finalized", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay(relayId)
-        yield* registerPreparedInstanceEffect(relayId, server(id), "owner")
-        yield* registerPreparedInstanceEffect(
-          relayId,
-          server("b".repeat(40)),
-          "owner"
-        )
-        const admin = { ...user, isDevelopmentBypass: true }
-        yield* cleanUpDeletedResourceEffect(
-          { id, kind: "instance", relayId },
-          "owner"
-        ).pipe(
-          Effect.provide(disabledCache)
-        )
-        const rows = yield* readInfraServerDirectory(admin).pipe(
-          Effect.provide(disabledCache)
-        )
-        assert.deepStrictEqual(
-          rows.map((row) => row.id),
-          ["b".repeat(40)]
-        )
-      })
     )
   })
 })

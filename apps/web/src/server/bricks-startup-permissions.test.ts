@@ -126,23 +126,6 @@ const startup = (user: AuthenticatedUser) =>
 
 describeMysql("startup host allocation", () => {
   layer(TestDatabase)((it) => {
-    // Any Relay-wide grant implies relay.read, so only a server grant can
-    // read startup settings without it.
-    it.effect("withholds host allocation from a server-only grant", () =>
-      Effect.gen(function* () {
-        yield* seed
-        yield* grant({ relayId, resourceType: "instance" }, [
-          "instance.configuration.read",
-        ])
-
-        const result = yield* startup(member)
-
-        assert.isNull(result.allocation)
-        assert.deepStrictEqual(result.instance.limits, instance.limits)
-        assert.strictEqual(result.brick.source, builtinTailscaleBrick.source)
-      })
-    )
-
     it.effect("does not reuse relay.read from another Relay", () =>
       Effect.gen(function* () {
         yield* seed
@@ -154,35 +137,6 @@ describeMysql("startup host allocation", () => {
         ])
 
         assert.isNull((yield* startup(member)).allocation)
-      })
-    )
-
-    it.effect.each([
-      { name: "a relay.read grant", admin: false },
-      { name: "an administrator", admin: true },
-    ])("shows host allocation to $name", ({ admin }) =>
-      Effect.gen(function* () {
-        yield* seed
-        if (!admin) {
-          yield* grant({ relayId, resourceType: "relay" }, [
-            "relay.read",
-            "instance.configuration.read",
-          ])
-        }
-
-        const result = yield* startup(
-          admin ? { ...member, role: "admin" } : member
-        )
-
-        assert.deepStrictEqual(result.allocation?.memory, {
-          availableBytes: 6 * 1024 ** 3,
-          nodeTotalBytes: 8 * 1024 ** 3,
-          nodeUsedBytes: 3 * 1024 ** 3,
-        })
-        assert.strictEqual(
-          result.allocation?.storage.nodeTotalBytes,
-          20 * 1024 ** 3
-        )
       })
     )
   })

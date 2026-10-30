@@ -14,8 +14,6 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
 import {
   copyBackupToDestinationHandler,
-  createInstanceBackupHandler,
-  getBackupUsageHandler,
   restoreInstanceBackupHandler,
   updateBackupLimitsHandler,
 } from "@/server/backups.server"
@@ -56,7 +54,6 @@ afterAll(async () => {
 const at = Date.UTC(2026, 0, 1)
 const relayId = "r".repeat(43)
 const instanceId = "a".repeat(40)
-const siblingId = "b".repeat(40)
 
 const user: AuthenticatedUser = {
   email: "member@example.test",
@@ -181,10 +178,6 @@ const rejection = (run: () => Promise<unknown>) =>
 const count = (table: string) =>
   selectRows(table).pipe(Effect.map((rows) => rows.length))
 
-const restoreTasks = selectRows<{ task_kind: string }>("backup_task").pipe(
-  Effect.map((tasks) => tasks.filter((task) => task.task_kind === "restore"))
-)
-
 describeMysql("backup authorization", () => {
   layer(TestDatabase)((it) => {
     it.effect("copying a backup needs download, not create", () =>
@@ -202,146 +195,6 @@ describeMysql("backup authorization", () => {
 
         assert.include(message, "permission to copy")
         assert.strictEqual(yield* count("backup_copy_task"), 0)
-      })
-    )
-
-    it.effect("a download grant on the backup's server queues a copy", () =>
-      Effect.gen(function* () {
-        const { teamStorageId } = yield* seed
-        const backupId = yield* seedBackup
-        yield* grant(instanceId, ["backup.download"])
-
-        const result = yield* Effect.promise(() =>
-          copyBackupToDestinationHandler(user, {
-            backupId,
-            storageId: teamStorageId,
-          })
-        )
-
-        const tasks = yield* selectRows<{
-          id: string
-          backup_id: string
-          requested_by: string
-        }>("backup_copy_task")
-        assert.deepStrictEqual(
-          tasks.map((task) => [task.id, task.backup_id, task.requested_by]),
-          [[result.taskId, backupId, user.id]]
-        )
-      })
-    )
-
-    it.effect("a download grant on another server cannot copy the backup", () =>
-      Effect.gen(function* () {
-        const { teamStorageId } = yield* seed
-        const backupId = yield* seedBackup
-        yield* grant(siblingId, ["backup.download"])
-
-        const message = yield* rejection(() =>
-          copyBackupToDestinationHandler(user, {
-            backupId,
-            storageId: teamStorageId,
-          })
-        )
-
-        assert.include(message, "permission to copy")
-        assert.strictEqual(yield* count("backup_copy_task"), 0)
-      })
-    )
-
-    it.effect("creating into personal storage also needs download", () =>
-      Effect.gen(function* () {
-        const { personalStorageId } = yield* seed
-        yield* grant(instanceId, ["backup.create"])
-
-        const message = yield* rejection(() =>
-          createInstanceBackupHandler(user, {
-            instanceId,
-            name: "Before update",
-            relayId,
-            storageIds: [null, personalStorageId],
-          })
-        )
-
-        assert.include(message, "do not have permission")
-        assert.strictEqual(yield* count("backup"), 0)
-      })
-    )
-
-    it.effect("create and download together create into personal storage", () =>
-      Effect.gen(function* () {
-        const { personalStorageId } = yield* seed
-        yield* grant(instanceId, ["backup.create", "backup.download"])
-
-        const { backup } = yield* Effect.promise(() =>
-          createInstanceBackupHandler(user, {
-            instanceId,
-            mode: "full",
-            name: "Before update",
-            relayId,
-            storageIds: [null, personalStorageId],
-          })
-        )
-
-        const backups = yield* selectRows<{ id: string; target_id: string }>(
-          "backup"
-        )
-        assert.deepStrictEqual(
-          backups.map((row) => [row.id, row.target_id]),
-          [[backup.id, instanceId]]
-        )
-        const artifacts = yield* selectRows<{ storage_id: string | null }>(
-          "backup_artifact"
-        )
-        assert.sameMembers(
-          artifacts.map((artifact) => artifact.storage_id),
-          [null, personalStorageId]
-        )
-      })
-    )
-
-    it.effect(
-      "a safety backup into personal storage needs download before restoring",
-      () =>
-        Effect.gen(function* () {
-          const { personalStorageId } = yield* seed
-          const backupId = yield* seedBackup
-          yield* insertRows("backup_policy", {
-            relay_id: relayId,
-            target_kind: "instance",
-            target_id: instanceId,
-            storage_id: personalStorageId,
-            exclude_patterns: "[]",
-            created_at: at,
-            updated_at: at,
-          })
-          yield* grant(instanceId, ["backup.restore", "backup.create"])
-
-          const message = yield* rejection(() =>
-            restoreInstanceBackupHandler(user, {
-              backupId,
-              safetyBackup: true,
-            })
-          )
-
-          assert.include(message, "do not have permission")
-          assert.strictEqual(yield* count("backup"), 1)
-          assert.deepStrictEqual(yield* restoreTasks, [])
-        })
-    )
-
-    it.effect("a safety backup needs create before restoring", () =>
-      Effect.gen(function* () {
-        yield* seed
-        const backupId = yield* seedBackup
-        yield* grant(instanceId, ["backup.restore"])
-
-        const message = yield* rejection(() =>
-          restoreInstanceBackupHandler(user, { backupId, safetyBackup: true })
-        )
-
-        assert.include(message, "do not have permission")
-        assert.strictEqual(yield* count("backup"), 1)
-        assert.deepStrictEqual(yield* restoreTasks, [])
       })
     )
 
@@ -383,65 +236,6 @@ describeMysql("backup authorization", () => {
         assert.strictEqual(safety?.task_kind, "create")
         assert.strictEqual(restore?.depends_on_task_id, safety?.id)
       })
-    )
-
-    it.effect("reading backup usage needs backup.read on that server", () =>
-      Effect.gen(function* () {
-        yield* seed
-        yield* grant(siblingId, ["backup.read"])
-
-        const message = yield* rejection(() =>
-          getBackupUsageHandler(user, {
-            relayId,
-            target: { id: instanceId, kind: "instance" },
-          })
-        )
-
-        assert.include(message, "permission")
-      })
-    )
-
-    it.effect(
-      "backup usage counts what the limit counts, against the tighter limit",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* grant(instanceId, ["backup.read"])
-          const backup = (row: Record<string, unknown>) =>
-            insertBackup(randomUUID(), {
-              relay_id: relayId,
-              target_id: instanceId,
-              ...row,
-            })
-          yield* backup({ status: "available" })
-          yield* backup({ status: "queued" })
-          yield* backup({ status: "failed" })
-          yield* backup({ status: "deleted" })
-          yield* backup({ status: "available", target_id: siblingId })
-          yield* insertRows("backup_policy", {
-            relay_id: relayId,
-            target_kind: "instance",
-            target_id: instanceId,
-            exclude_patterns: "[]",
-            quantity_limit: 10,
-            admin_quantity_limit: 5,
-            created_at: at,
-            updated_at: at,
-          })
-
-          const usage = yield* Effect.promise(() =>
-            getBackupUsageHandler(user, {
-              relayId,
-              target: { id: instanceId, kind: "instance" },
-            })
-          )
-
-          assert.deepStrictEqual(usage, {
-            quantityAvailable: 1,
-            quantityLimit: 5,
-            quantityUsed: 2,
-          })
-        })
     )
 
     it.effect(

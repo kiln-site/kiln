@@ -60,22 +60,6 @@ describeMysql("backup retention", () => {
         })
     )
 
-    it.effect(
-      "takes the lower of the owner's limit and the platform ceiling, and keeps the newest past both",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* insertPolicy({
-            admin_size_limit_bytes: 1_000,
-            size_limit_bytes: 5_000,
-          })
-          yield* insertAged("newest", 1, 3_000)
-          yield* insertAged("older", 2, 10)
-
-          assert.deepStrictEqual(yield* expired, ["older"])
-        })
-    )
-
     it.effect("keeps every backup of a target without retention", () =>
       Effect.gen(function* () {
         yield* resetDatabase

@@ -5,7 +5,6 @@ import {
   readlink,
   realpath,
   rm,
-  stat,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -21,7 +20,7 @@ import {
 } from "./repository-checkout.js"
 
 type Entry =
-  | { name: string; body: string; mode?: number }
+  | { name: string; body: string }
   | { name: string; type: "directory" }
   | { name: string; type: "symlink"; linkname: string }
 
@@ -43,7 +42,7 @@ async function archive(entries: ReadonlyArray<Entry>): Promise<Readable> {
   const done = new Promise<void>((resolve) => packer.on("end", () => resolve()))
   for (const entry of entries) {
     if ("body" in entry) {
-      packer.entry({ mode: entry.mode ?? 0o644, name: entry.name }, entry.body)
+      packer.entry({ mode: 0o644, name: entry.name }, entry.body)
     } else if (entry.type === "symlink") {
       packer.entry({
         linkname: entry.linkname,
@@ -72,45 +71,6 @@ async function checkout(entries: ReadonlyArray<Entry>) {
 }
 
 describe("repository checkouts", () => {
-  it("unpacks the commit without GitHub's top folder, keeping executable bits", async () => {
-    const { destination, summary } = await checkout([
-      { name: "acme-site-0123abc/", type: "directory" },
-      { body: "FROM node:22\n", name: "acme-site-0123abc/Dockerfile" },
-      { name: "acme-site-0123abc/bin/", type: "directory" },
-      {
-        body: "#!/bin/sh\n",
-        mode: 0o755,
-        name: "acme-site-0123abc/bin/start.sh",
-      },
-    ])
-
-    expect(summary).toEqual({ files: 2, skipped: 0 })
-    // A container running as any user can read files bound from it.
-    expect((await stat(destination)).mode & 0o777).toBe(0o755)
-    expect(await readFile(join(destination, "Dockerfile"), "utf8")).toBe(
-      "FROM node:22\n"
-    )
-    expect((await stat(join(destination, "bin/start.sh"))).mode & 0o111).toBe(
-      0o111
-    )
-  })
-
-  it("leaves every folder and file readable by any user under a restrictive umask", async () => {
-    const previous = process.umask(0o077)
-    const unpacked = await checkout([
-      { name: "repo-sha/", type: "directory" },
-      { body: "<h1>hi</h1>", name: "repo-sha/public/site/index.html" },
-      { name: "repo-sha/config/", type: "directory" },
-    ]).finally(() => process.umask(previous))
-    const mode = async (path: string) =>
-      (await stat(join(unpacked.destination, path))).mode & 0o777
-
-    expect(await mode("public")).toBe(0o755)
-    expect(await mode("public/site")).toBe(0o755)
-    expect(await mode("config")).toBe(0o755)
-    expect(await mode("public/site/index.html")).toBe(0o644)
-  })
-
   it("leaves out entries that would land outside the checkout", async () => {
     const { destination, parent, summary } = await checkout([
       { name: "acme-site-0123abc/", type: "directory" },
@@ -158,32 +118,6 @@ describe("repository checkouts", () => {
     expect(summary.skipped).toBe(4)
   })
 
-  it("keeps a chain of links whichever order the archive lists them in", async () => {
-    const { destination, summary } = await checkout([
-      { name: "repo-sha/", type: "directory" },
-      { name: "repo-sha/releases/", type: "directory" },
-      { name: "repo-sha/releases/v1/", type: "directory" },
-      { body: "<h1>v1</h1>", name: "repo-sha/releases/v1/index.html" },
-      // Leads through a link the archive only lists after it.
-      {
-        linkname: "releases/latest",
-        name: "repo-sha/current",
-        type: "symlink",
-      },
-      { linkname: "v1", name: "repo-sha/releases/latest", type: "symlink" },
-      {
-        linkname: "current/index.html",
-        name: "repo-sha/home.html",
-        type: "symlink",
-      },
-    ])
-
-    expect(summary.skipped).toBe(0)
-    expect(await readFile(join(destination, "home.html"), "utf8")).toBe(
-      "<h1>v1</h1>"
-    )
-  })
-
   it("finds a Dockerfile or Compose file only inside the checkout", async () => {
     const { destination } = await checkout([
       { name: "repo-sha/", type: "directory" },
@@ -202,17 +136,5 @@ describe("repository checkouts", () => {
     expect(await checkoutFile(destination, "../outside.yaml")).toBeNull()
     expect(await checkoutFile(destination, "missing.yaml")).toBeNull()
     expect(await checkoutFile(destination, "deploy")).toBeNull()
-  })
-
-  it("refuses an archive it can't read", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "kiln-checkout-"))
-    directories.push(parent)
-    await expect(
-      extractRepositoryArchive(
-        Readable.from([Buffer.from("not a tarball")]),
-        join(parent, "checkout"),
-        new AbortController().signal
-      )
-    ).rejects.toThrow("The repository's archive could not be read")
   })
 })

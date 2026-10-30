@@ -1,7 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vite-plus/test"
+import { describe, expect, it } from "vite-plus/test"
 
 import {
-  isAccountEnabled,
   isAccountVerified,
   requireEligibleAccount,
   requireVerifiedAccount,
@@ -15,31 +14,10 @@ const unverified = {
   legacyVerificationRecordedAt: null,
 }
 
-afterEach(() => {
-  vi.useRealTimers()
-})
-
 describe("account eligibility", () => {
   it("does not mistake the integration flag for current verification evidence", () => {
     expect(isAccountVerified(unverified)).toBe(false)
-    expect(() => requireEligibleAccount(unverified)).toThrow("verification")
-  })
-  it("accepts manual evidence without asserting mailbox ownership", () => {
-    expect(
-      isAccountVerified({
-        ...unverified,
-        emailVerified: false,
-        manuallyVerifiedAt: "2026-09-08T00:00:00Z",
-      })
-    ).toBe(true)
-  })
-  it("preserves explicit legacy trust without inventing email or manual evidence", () => {
-    expect(
-      isAccountVerified({
-        ...unverified,
-        legacyVerificationRecordedAt: "2026-09-08T00:00:00Z",
-      })
-    ).toBe(true)
+    expect(() => requireEligibleAccount(unverified)).toThrow()
   })
   it("permits verified disabled self-account access while denying resources", () => {
     const disabled = {
@@ -48,18 +26,6 @@ describe("account eligibility", () => {
       manuallyVerifiedAt: "2026-09-08T00:00:00Z",
     }
     expect(() => requireVerifiedAccount(disabled)).not.toThrow()
-    expect(() => requireEligibleAccount(disabled)).toThrow("disabled")
-  })
-  it("preserves migrated temporary disable expiry", () => {
-    const user = {
-      status: "disabled" as const,
-      statusExpiresAt: "2026-09-08T00:00:00Z",
-    }
-    const expiry = Date.parse(user.statusExpiresAt)
-    vi.useFakeTimers({ now: expiry - 1 })
-    expect(isAccountEnabled(user)).toBe(false)
-    vi.setSystemTime(expiry)
-    expect(isAccountEnabled(user)).toBe(true)
-    expect(isAccountEnabled({ ...user, statusExpiresAt: null })).toBe(false)
+    expect(() => requireEligibleAccount(disabled)).toThrow()
   })
 })

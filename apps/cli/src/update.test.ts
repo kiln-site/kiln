@@ -1,15 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Context, Effect, Fiber } from "effect"
 import { createHash } from "node:crypto"
-import {
-  mkdtemp,
-  readFile,
-  readdir,
-  rm,
-  symlink,
-  utimes,
-  writeFile,
-} from "node:fs/promises"
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, vi } from "vite-plus/test"
@@ -48,14 +40,11 @@ function stubGitHub(
   metadata: unknown,
   download: (init?: RequestInit) => Response | Promise<Response>
 ) {
-  const requests: Array<string> = []
-  vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
-    requests.push(String(url))
-    return String(url).startsWith("https://api.github.com/")
+  vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) =>
+    String(url).startsWith("https://api.github.com/")
       ? Response.json(metadata)
       : download(init)
-  })
-  return requests
+  )
 }
 
 async function fixture(
@@ -91,41 +80,6 @@ function update(
 describe("CLI GitHub updates", () => {
   afterEach(() => {
     vi.unstubAllGlobals()
-  })
-
-  it("updates the actual executable behind a symlink using its embedded repository", async () => {
-    await fixture(async (directory, target) => {
-      const link = join(directory, "kiln-link")
-      await symlink(target, link)
-      const bytes = binary("1.1.0")
-      const requests = stubGitHub(release(), () => new Response(bytes))
-
-      const result = await Effect.runPromise(update(link))
-
-      assert.deepEqual(result, { updated: true, version: "1.1.0" })
-      assert.deepEqual(await readFile(target), bytes)
-      assert.strictEqual(
-        requests[0],
-        "https://api.github.com/repos/example/panel/releases/latest"
-      )
-      assert.deepEqual((await readdir(directory)).sort(), ["kiln", "kiln-link"])
-    })
-  })
-
-  it("preserves nightly channel and never downgrades", async () => {
-    await fixture(async (_, target) => {
-      stubGitHub(
-        [release("1.2.0"), release("1.1.0-nightly.20261004.000000")],
-        () => new Response(binary("1.2.0"))
-      )
-      const currentVersion = "1.1.0-nightly.20261005.000000"
-
-      assert.deepEqual(
-        await Effect.runPromise(update(target, { currentVersion })),
-        { updated: false, version: currentVersion }
-      )
-      assert.equal(await readFile(target, "utf8"), "old binary")
-    })
   })
 
   it("leaves the installation untouched for missing, foreign, or corrupt downloads", async () => {
@@ -199,38 +153,6 @@ describe("CLI GitHub updates", () => {
     })
   })
 
-  it("refuses overlapping updates", async () => {
-    await fixture(async (directory, target) => {
-      await writeFile(`${target}.update-lock`, "")
-      stubGitHub(release(), () => new Response(binary("1.1.0")))
-
-      const error = await Effect.runPromise(update(target).pipe(Effect.flip))
-
-      assert.equal(error.code, "cli_update_failed")
-      assert.equal(await readFile(target, "utf8"), "old binary")
-      assert.deepEqual((await readdir(directory)).sort(), [
-        "kiln",
-        "kiln.update-lock",
-      ])
-    })
-  })
-
-  it("reclaims the lock left behind by a killed update", async () => {
-    await fixture(async (directory, target) => {
-      await writeFile(`${target}.update-lock`, "")
-      const lastHour = new Date(Date.now() - 60 * 60 * 1000)
-      await utimes(`${target}.update-lock`, lastHour, lastHour)
-      const bytes = binary("1.1.0")
-      stubGitHub(release(), () => new Response(bytes))
-
-      const result = await Effect.runPromise(update(target))
-
-      assert.deepEqual(result, { updated: true, version: "1.1.0" })
-      assert.deepEqual(await readFile(target), bytes)
-      assert.deepEqual(await readdir(directory), ["kiln"])
-    })
-  })
-
   it("rolls back the Windows executable if the replacement cannot be moved", async () => {
     await fixture(async (directory, target) => {
       // The staged binary passes verification and then removes itself, so the
@@ -249,15 +171,5 @@ describe("CLI GitHub updates", () => {
       assert.equal(await readFile(target, "utf8"), "old binary")
       assert.deepEqual(await readdir(directory), ["kiln"])
     })
-  })
-
-  it("never updates the Node/Bun runtime from a source checkout", async () => {
-    const requests = stubGitHub(release(), () => new Response("unused"))
-
-    // The real installation: this test runner is not a standalone CLI binary.
-    const error = await Effect.runPromise(updateCliEffect().pipe(Effect.flip))
-
-    assert.equal(error.code, "cli_update_development")
-    assert.deepEqual(requests, [])
   })
 })

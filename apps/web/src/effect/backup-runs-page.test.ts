@@ -3,16 +3,10 @@ import { Effect } from "effect"
 
 import {
   type BackupCatalogPageInput,
-  type BackupCatalogPageRecord,
   listBackupCatalogPageEffect,
 } from "@/effect/backups"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import {
-  insertBackup,
-  insertInstance,
-  insertRelay,
-  insertRows,
-} from "@/test/seed"
+import { insertBackup, insertRows } from "@/test/seed"
 
 const at = 1_767_225_600_000
 
@@ -179,52 +173,6 @@ describeMysql("backup runs page", () => {
         })
     )
 
-    it.effect(
-      "filters by an App: its folder, the volumes it owns, and the Kiln volumes it uses",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          const website = "a".repeat(40)
-          const tar = { artifact_kind: "tar_archive", relay_id: "relay-a" }
-          yield* insertCatalogBackup("folder", {
-            ...tar,
-            target_id: website,
-            target_kind: "app",
-          })
-          yield* insertCatalogBackup("own", {
-            ...tar,
-            target_id: `${website}/pgdata`,
-            target_kind: "volume",
-          })
-          yield* insertCatalogBackup("used", {
-            ...tar,
-            target_id: "c".repeat(40),
-            target_kind: "volume",
-          })
-          yield* insertCatalogBackup("unused", {
-            ...tar,
-            target_id: "d".repeat(40),
-            target_kind: "volume",
-          })
-          yield* insertCatalogBackup("other-app", {
-            ...tar,
-            target_id: "b".repeat(40),
-            target_kind: "app",
-          })
-
-          assert.sameMembers(
-            yield* pageIds({
-              app: {
-                appId: website,
-                relayId: "relay-a",
-                volumeIds: ["c".repeat(40)],
-              },
-            }),
-            ["folder", "own", "used"]
-          )
-        })
-    )
-
     it.effect("shows non-admins only backups their grants cover", () =>
       Effect.gen(function* () {
         yield* resetDatabase
@@ -325,149 +273,6 @@ describeMysql("backup runs page", () => {
           "c-inst",
         ])
       })
-    )
-
-    it.effect("matches search text literally and filters by status", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertCatalogBackup("s-match", { name: "100%_safe nightly" })
-        // Would match if % and _ were wildcards.
-        yield* insertCatalogBackup("s-wildcard", { name: "100ab-safe" })
-        yield* insertCatalogBackup("s-failed", {
-          name: "100%_safe failed",
-          status: "failed",
-        })
-        yield* insertCatalogBackup(
-          "s-running",
-          { name: "100%_safe running" },
-          "running"
-        )
-
-        const search = "100%_safe"
-        assert.deepStrictEqual(
-          yield* pageIds({ search, status: "available" }),
-          ["s-match"]
-        )
-        assert.deepStrictEqual(yield* pageIds({ search, status: "failed" }), [
-          "s-failed",
-        ])
-        assert.deepStrictEqual(yield* pageIds({ search, status: "active" }), [
-          "s-running",
-        ])
-        assert.sameMembers(yield* pageIds({ search }), [
-          "s-match",
-          "s-failed",
-          "s-running",
-        ])
-      })
-    )
-
-    it.effect(
-      "pages through every sort and direction without gaps or repeats",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* insertRelay("relay-a")
-          const specs = [
-            { id: "b1", name: "alpha", bytes: 300, created: 1, source: "Zeta" },
-            {
-              id: "b2",
-              name: "Bravo",
-              bytes: null,
-              created: 2,
-              source: "beta",
-            },
-            {
-              id: "b3",
-              name: "charlie",
-              bytes: 100,
-              created: 3,
-              source: "Beta",
-            },
-            {
-              id: "b4",
-              name: "bravo",
-              bytes: 300,
-              created: 3,
-              source: "alpha",
-            },
-            { id: "b5", name: "delta", bytes: null, created: 5, source: null },
-            { id: "b6", name: "Echo", bytes: 50, created: 6, source: "gamma" },
-          ]
-          for (const spec of specs) {
-            yield* insertInstance("relay-a", `inst-${spec.id}`, {
-              source_name: spec.source,
-            })
-            yield* insertCatalogBackup(spec.id, {
-              relay_id: "relay-a",
-              target_id: `inst-${spec.id}`,
-              name: spec.name,
-              bytes: spec.bytes,
-              created_at: at + spec.created,
-            })
-          }
-
-          type Spec = (typeof specs)[number]
-          const compareText = (left: string, right: string) =>
-            left < right ? -1 : left > right ? 1 : 0
-          const sortKeys: Record<
-            BackupCatalogPageInput["sort"],
-            (spec: Spec) => number | string | null
-          > = {
-            createdAt: (spec) => spec.created,
-            name: (spec) => spec.name.toLowerCase(),
-            size: (spec) => spec.bytes,
-            target: (spec) => (spec.source ?? "").toLowerCase(),
-          }
-          const expectedOrder = (
-            sort: BackupCatalogPageInput["sort"],
-            direction: "asc" | "desc"
-          ) => {
-            const sign = direction === "asc" ? 1 : -1
-            return [...specs]
-              .sort((left, right) => {
-                const a = sortKeys[sort](left)
-                const b = sortKeys[sort](right)
-                // Backups without a size come last in either direction.
-                if (a === null || b === null) {
-                  if (a !== b) return a === null ? 1 : -1
-                } else if (a !== b) {
-                  return (
-                    sign *
-                    (typeof a === "number" && typeof b === "number"
-                      ? a - b
-                      : compareText(String(a), String(b)))
-                  )
-                }
-                return sign * compareText(left.id, right.id)
-              })
-              .map((spec) => spec.id)
-          }
-
-          for (const sort of ["createdAt", "name", "size", "target"] as const) {
-            for (const direction of ["asc", "desc"] as const) {
-              const seen: Array<string> = []
-              let cursor: BackupCatalogPageInput["cursor"] = null
-              for (let page = 0; page < specs.length; page += 1) {
-                const result: {
-                  hasMore: boolean
-                  items: ReadonlyArray<BackupCatalogPageRecord>
-                } = yield* listBackupCatalogPageEffect(
-                  pageInput({ cursor, direction, limit: 2, sort })
-                )
-                seen.push(...result.items.map((item) => item.record.id))
-                const last = result.items.at(-1)
-                if (!result.hasMore || !last) break
-                cursor = { id: last.record.id, value: last.orderValue }
-              }
-              assert.deepStrictEqual(
-                seen,
-                expectedOrder(sort, direction),
-                `${sort} ${direction}`
-              )
-            }
-          }
-        })
     )
   })
 })

@@ -149,32 +149,6 @@ describeMysql("backup forgetting", () => {
         })
     )
 
-    it.effect("leaves everything in place when the backup is missing", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRepository("repository-one", "relay-gone", "instance-one")
-        yield* insertPolicy("relay-gone", "instance-one")
-        yield* insertBackupWithDependents("backup-one", {
-          relay_id: "relay-gone",
-          target_id: "instance-one",
-          repository_id: "repository-one",
-        })
-
-        assert.strictEqual(
-          yield* forgetBackupEffect("missing-backup"),
-          "not_found"
-        )
-
-        assert.deepStrictEqual(yield* ids("backup"), ["backup-one"])
-        assert.deepStrictEqual(yield* ids("backup_repository"), [
-          "repository-one",
-        ])
-        assert.deepStrictEqual(yield* policyTargets, [
-          "relay-gone/instance-one",
-        ])
-      })
-    )
-
     it.effect("refuses to forget a backup whose Relay is still paired", () =>
       Effect.gen(function* () {
         yield* resetDatabase

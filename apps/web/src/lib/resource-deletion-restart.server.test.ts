@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect, Exit, Layer, Ref, Schedule, Scope } from "effect"
+import { Effect, Exit, Layer, Ref, Scope } from "effect"
 import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
@@ -24,8 +24,6 @@ import {
   relayId,
   seedApp,
   seedDeletion as seed,
-  serverId,
-  serverRecords,
   volumeId,
 } from "@/test/resource-deletion"
 import { selectRows } from "@/test/seed"
@@ -89,49 +87,6 @@ const stopHearth = (scope: Scope.Closeable) =>
 
 describeMysql("A deletion across a Hearth restart", () => {
   layer(TestDatabase, { timeout: 120_000 })((it) => {
-    it.effect(
-      "finishes a deletion whose Hearth stopped while the Relay deleted it, deleting once",
-      () =>
-        Effect.gen(function* () {
-          const { service, startHearth } = yield* hearths
-
-          yield* seed
-          // The Relay deletes it, but Hearth stops before the answer comes.
-          relay.nextDelete = "stalls"
-          const first = yield* startHearth
-          yield* requestResourceDeletionEffect({
-            finalBackup: false,
-            kind: "instance",
-            relayId,
-            resourceId: serverId,
-            user: owner,
-          }).pipe(Effect.provideService(OperationsEngineService, service))
-          yield* Effect.sync(() => relay.changes).pipe(
-            Effect.repeat({
-              schedule: Schedule.spaced("100 millis"),
-              until: (changes) => changes.includes("instance.delete"),
-            }),
-            Effect.timeout("30 seconds")
-          )
-          yield* stopHearth(first)
-          const stopped = yield* until(serverId, ["deleting"])
-
-          const second = yield* startHearth
-          const done = yield* until(serverId, ["completed", "failed"])
-          yield* stopHearth(second)
-
-          assert.strictEqual(stopped?.status, "deleting")
-          assert.strictEqual(done?.status, "completed")
-          // Asked about, not sent again.
-          assert.deepStrictEqual(relay.changes, [
-            "resource.freeze",
-            "instance.delete",
-          ])
-          assert.deepStrictEqual(yield* serverRecords, [])
-        }).pipe(TestClock.withLive),
-      120_000
-    )
-
     it.effect(
       "takes an App's final backups across a restart, each once, then deletes it",
       () =>

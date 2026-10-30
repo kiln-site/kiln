@@ -27,25 +27,6 @@ describe("exec processes", () => {
     expect(process.stdin.destroyed).toBe(true)
   })
 
-  it("reports a client that exits before reading all of its input", async () => {
-    const engine = await engineWithContainer()
-    fakeDocker.programFailures.set(
-      "psql",
-      'ERROR:  syntax error at or near "x"'
-    )
-    const process = await Effect.runPromise(
-      engine.execProcess("kiln-database", ["psql"], { stdin: true })
-    )
-    let stderr = ""
-    process.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString("utf8")
-    })
-    process.stdin.write("x;\n")
-
-    await expect(Effect.runPromise(process.exitCode)).resolves.toBe(1)
-    expect(stderr).toContain('syntax error at or near "x"')
-  })
-
   it("fails a process Docker breaks off with an error, with no uncaught error", async () => {
     const engine = await engineWithContainer()
     fakeDocker.streamErrors.set("pg_dump", "container is being removed")

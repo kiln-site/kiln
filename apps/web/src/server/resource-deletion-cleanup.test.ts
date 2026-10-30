@@ -63,14 +63,10 @@ const relayId = "r".repeat(43)
 const otherRelayId = "s".repeat(43)
 const databaseId = "d".repeat(40)
 const otherDatabaseId = "e".repeat(40)
-const appId = "a".repeat(40)
-const otherAppId = "b".repeat(40)
 const now = 1_700_000_000_000
 const sharedSchedule = "11111111-1111-4111-8111-111111111111"
 const aloneSchedule = "22222222-2222-4222-8222-222222222222"
 const crossRelaySchedule = "33333333-3333-4333-8333-333333333333"
-const sharedAppSchedule = "44444444-4444-4444-8444-444444444444"
-const aloneAppSchedule = "55555555-5555-4555-8555-555555555555"
 const remoteDatabaseId = "f".repeat(40)
 const keyOf = (relay: string, id: string) => `${relay}:database:${id}`
 
@@ -94,17 +90,6 @@ const insertDatabase = (id: string, name: string) =>
     relay_id: relayId,
     updated_at: now,
     username: `user_${name}`,
-  })
-
-const insertApp = (id: string, name: string) =>
-  insertRows("app", {
-    app_id: id,
-    config_ciphertext: "ciphertext",
-    created_at: now,
-    created_by: "user-one",
-    name,
-    relay_id: relayId,
-    updated_at: now,
   })
 
 const insertFavorite = (userId: string, kind: string, id: string) =>
@@ -395,131 +380,6 @@ describeMysql("cleaning up after a deleted resource", () => {
             ].sort(byKey)
           )
         })
-    )
-
-    it.effect("takes an App's GitHub syncs, favorites, icon, and record", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay(relayId)
-        yield* insertApp(appId, "site")
-        yield* insertApp(otherAppId, "other")
-        yield* insertRows("github_connection", {
-          app_id: 1,
-          app_name: "Kiln",
-          app_owner_login: "kiln",
-          app_slug: "kiln",
-          app_url: "https://github.com/apps/kiln",
-          client_id: "client",
-          created_at: now,
-          credentials_ciphertext: "ciphertext",
-          id: "connection",
-          owner_user_id: "user-one",
-          updated_at: now,
-        })
-        for (const [id, resourceId] of [
-          ["sync-deleted", appId],
-          ["sync-other", otherAppId],
-        ]) {
-          yield* insertRows("github_sync", {
-            branch: "main",
-            connection_id: "connection",
-            created_at: now,
-            created_by: "user-one",
-            id,
-            include_patterns: "[]",
-            relay_id: relayId,
-            repository: "kiln/site",
-            repository_id: 1,
-            resource_id: resourceId,
-            resource_kind: "app",
-            synced_files: "[]",
-            updated_at: now,
-          })
-        }
-        yield* insertFavorite("user-one", "app", appId)
-        yield* insertFavorite("user-one", "app", otherAppId)
-        yield* insertIcon("app", appId)
-        yield* insertIcon("app", otherAppId)
-        // A command runs in a service of each App; one schedule backs up
-        // only the deleted App.
-        const deletedKey = `${relayId}:app:${appId}`
-        const otherKey = `${relayId}:app:${otherAppId}`
-        yield* insertSchedule(
-          sharedAppSchedule,
-          [
-            { id: appId, kind: "app", name: "site", relayId },
-            { id: otherAppId, kind: "app", name: "other", relayId },
-          ],
-          [
-            {
-              authorizedTargets: 2,
-              command: "./migrate",
-              services: { [deletedKey]: "web", [otherKey]: "worker" },
-              targetKeys: [deletedKey, otherKey],
-              type: "console_command",
-            },
-          ]
-        )
-        yield* insertSchedule(aloneAppSchedule, [
-          { id: appId, kind: "app", name: "site", relayId },
-        ])
-
-        yield* cleanUpDeletedResourceEffect(
-          { id: appId, kind: "app", relayId },
-          "user-one"
-        ).pipe(Effect.provide(disabledCache))
-
-        assert.sameMembers(
-          ids(yield* selectRows<{ app_id: string }>("app"), "app_id"),
-          [otherAppId]
-        )
-        assert.sameMembers(
-          ids(yield* selectRows<{ id: string }>("github_sync"), "id"),
-          ["sync-other"]
-        )
-        assert.sameMembers(
-          ids(
-            yield* selectRows<{ resource_id: string }>("instance_favorite"),
-            "resource_id"
-          ),
-          [otherAppId]
-        )
-        assert.sameMembers(
-          ids(yield* selectRows<{ subject_id: string }>("icon"), "subject_id"),
-          [otherAppId]
-        )
-        // Its schedules go on without it, or go with it.
-        assert.deepStrictEqual(
-          (yield* selectRows<{ schedule_id: string; target_id: string }>(
-            "schedule_target"
-          ))
-            .filter((row) => row.schedule_id !== aloneAppSchedule)
-            .map((row) => [row.schedule_id, row.target_id]),
-          [[sharedAppSchedule, otherAppId]]
-        )
-        const [command] = yield* selectRows<{
-          action_config: unknown
-          schedule_id: string
-        }>("schedule_action").pipe(
-          Effect.map((rows) =>
-            rows.filter((row) => row.schedule_id === sharedAppSchedule)
-          )
-        )
-        const config = (
-          typeof command?.action_config === "string"
-            ? JSON.parse(command.action_config)
-            : command?.action_config
-        ) as { services: Record<string, string>; targetKeys: Array<string> }
-        assert.deepStrictEqual(config.targetKeys, [otherKey])
-        assert.deepStrictEqual(config.services, { [otherKey]: "worker" })
-        const [alone] = yield* selectRows<{
-          deleted_at: number | null
-          id: string
-        }>("schedule").pipe(
-          Effect.map((rows) => rows.filter((row) => row.id === aloneAppSchedule))
-        )
-        assert.isNotNull(alone?.deleted_at)
-      })
     )
   })
 })

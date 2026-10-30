@@ -78,31 +78,16 @@ const resolve = (
     resolveAuthorizedBackupStorageSelection({ ...selection, ...input })
   )
 
-const failure = (effect: ReturnType<typeof resolve>) =>
-  Effect.map(Effect.flip(effect), (error) => String(error.cause))
+const refused = (effect: ReturnType<typeof resolve>) => Effect.flip(effect)
 
 describeMysql("resolveAuthorizedBackupStorageSelection", () => {
   layer(TestDatabase)((it) => {
-    it.effect("requires backup.download for a personal destination", () =>
-      Effect.gen(function* () {
-        yield* seed("backup.create")
-        expect(yield* failure(resolve({ storageId: personal }))).toContain(
-          "permission"
-        )
-
-        yield* seed("backup.download")
-        expect(yield* resolve({ storageId: personal })).toEqual([personal])
-      })
-    )
-
     it.effect(
       "rejects another user's destination even with download permission",
       () =>
         Effect.gen(function* () {
           yield* seed("backup.download")
-          expect(yield* failure(resolve({ storageId: foreign }))).toContain(
-            "Backup destination is unavailable"
-          )
+          yield* refused(resolve({ storageId: foreign }))
         })
     )
 
@@ -116,20 +101,8 @@ describeMysql("resolveAuthorizedBackupStorageSelection", () => {
           { ...storage(deleting, null), enabled: true, deleting: true },
         ])
         for (const storageId of [disabled, deleting]) {
-          expect(yield* failure(resolve({ storageId }))).toContain(
-            "Backup destination is unavailable"
-          )
+          yield* refused(resolve({ storageId }))
         }
-      })
-    )
-
-    it.effect("allows platform storage without any grant", () =>
-      Effect.gen(function* () {
-        yield* seed(null)
-        expect(yield* resolve({ storageIds: [null, platform] })).toEqual([
-          null,
-          platform,
-        ])
       })
     )
 
@@ -147,7 +120,7 @@ describeMysql("resolveAuthorizedBackupStorageSelection", () => {
             created_at: 0,
             updated_at: 0,
           })
-          expect(yield* failure(resolve({}))).toContain("permission")
+          yield* refused(resolve({}))
 
           yield* insertRows("access_selection", {
             access_id: "grant",

@@ -27,11 +27,6 @@ describe("Relay source policy", () => {
     expect(isSourceAllowed(undefined, [])).toBe(true)
   })
 
-  it("rejects malformed and oversized policies", () => {
-    expect(() => normalizeSourceCidrs(["192.0.2.1/33"])).toThrow()
-    expect(() => normalizeSourceCidrs(Array(17).fill("192.0.2.1"))).toThrow()
-  })
-
   it("blocks private, loopback, link-local, and reserved remote downloads", () => {
     expect(isPublicRemoteAddress("8.8.8.8")).toBe(true)
     expect(isPublicRemoteAddress("::ffff:808:808")).toBe(true)

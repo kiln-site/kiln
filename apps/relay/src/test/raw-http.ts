@@ -32,16 +32,3 @@ export function sendRawRequest(
   })
   return socket
 }
-
-/** Resolves with the response status line of a raw request. */
-export function rawStatusLine(port: number, target: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const socket = sendRawRequest(port, target)
-    let received = ""
-    socket.on("data", (chunk) => {
-      received += chunk.toString("latin1")
-    })
-    socket.once("close", () => resolve(received.split("\r\n")[0] ?? ""))
-    socket.once("error", reject)
-  })
-}

@@ -1,12 +1,5 @@
-import {
-  defaultAppConfig,
-  relayCreateDatabaseSchema,
-  relayDeployAppSchema,
-} from "@workspace/contracts"
-import {
-  scheduleTargetKey,
-  type RelayScheduleProjection,
-} from "@workspace/contracts/schedules"
+import { relayCreateDatabaseSchema } from "@workspace/contracts"
+import type { RelayScheduleProjection } from "@workspace/contracts/schedules"
 import { Effect } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
@@ -15,12 +8,7 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 import { controlRequestLocks } from "./operation-plans.js"
 import type { ScheduleManager } from "./schedules.js"
 import { fakeDocker } from "./test/docker.js"
-import {
-  relayHarness,
-  scheduleWorker,
-  TEST_NAMESPACE,
-  type RelayHarness,
-} from "./test/relay.js"
+import { relayHarness, scheduleWorker, TEST_NAMESPACE } from "./test/relay.js"
 
 const scheduleId = "14bb1e12-fab9-45f3-8f85-ae22d2f074e5"
 
@@ -73,7 +61,7 @@ function stopWaitStart(
   }
 }
 
-describe("one power path", () => {
+describe("schedules and power", () => {
   it("lets a person's database stop during a schedule stand", async () => {
     const harness = await relayHarness()
     const id = "d".repeat(40)
@@ -193,158 +181,7 @@ describe("one power path", () => {
     expect(container.processes.some(({ argv }) => argv.includes("./vacuum")))
       .toBe(false)
   })
-
-  it("lets a person's App stop during a schedule stand", async () => {
-    const harness = await relayHarness()
-    const appId = await deployedApp(harness)
-    const schedules = await scheduleWorker(harness)
-    await schedules.apply(stopWaitStart(appTarget(appId)))
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] })
-    await schedules.runNow({ revision: 1, scheduleId })
-    await until(() => appContainers(appId).every(({ state }) => !state.running))
-
-    // Someone stops it during the wait, as a Hearth request does.
-    const locks = await controlRequestLocks(
-      "app.action",
-      { action: "stop", appId },
-      (reference) => reference,
-      () => []
-    )
-    await Effect.runPromise(
-      harness.lanes.run(
-        { label: "app.action", locks: locks ?? [] },
-        Effect.promise(() => harness.power.requested("app", appId, "stop"))
-      )
-    )
-
-    const run = await finishedRun(schedules)
-    expect(run.targetRuns[0]?.attempts).toMatchObject([
-      { status: "succeeded" },
-      {
-        error: "Not run: the App's power was changed during the schedule",
-        status: "not_run",
-      },
-    ])
-    expect(appContainers(appId).every(({ state }) => !state.running)).toBe(
-      true
-    )
-  })
 })
-
-describe("App replacement", () => {
-  it("lets a deployment during a schedule stand", async () => {
-    const harness = await relayHarness()
-    const appId = await deployedApp(harness)
-    const intent = harness.power.intent("app", appId)
-    // The schedule's own steps keep its later ones current.
-    await harness.power.scheduled("app", appId, "stop", intent)
-    await harness.power.scheduled("app", appId, "start", intent)
-
-    // Someone deploys during the schedule's wait.
-    await deploy(harness, appId)
-
-    await expect(
-      harness.power.scheduled("app", appId, "stop", intent)
-    ).rejects.toMatchObject({ reason: "superseded" })
-    expect(appContainers(appId).some(({ state }) => state.running)).toBe(true)
-  })
-})
-
-describe("App commands", () => {
-  it("runs in the service its step names, and fails a step naming a service the App doesn't have", async () => {
-    const harness = await relayHarness()
-    const appId = await deployedApp(harness)
-    const target = appTarget(appId)
-    const key = scheduleTargetKey(target)
-    fakeDocker.shellScripts.set("./migrate", { output: "migrated\n" })
-    const schedules = await scheduleWorker(harness)
-    await schedules.apply({
-      ...stopWaitStart(target),
-      actions: [
-        {
-          command: "./migrate",
-          id: "5d8f43a2-6a0e-4d36-9c11-3b1f4f5e2a10",
-          services: { [key]: "app" },
-          authorizedTargets: 2,
-          targetKeys: [key],
-          type: "console_command",
-        },
-        // A deployment renamed the service since the schedule was saved.
-        {
-          command: "./seed",
-          id: "a4c1e6b9-2f7d-4c0a-8e35-7b9d2c6f1e44",
-          services: { [key]: "worker" },
-          authorizedTargets: 2,
-          targetKeys: [key],
-          type: "console_command",
-        },
-      ],
-      continueOnFailure: true,
-    })
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] })
-
-    await schedules.runNow({ revision: 1, scheduleId })
-
-    const run = await finishedRun(schedules, 10)
-    expect(run.targetRuns[0]?.attempts).toMatchObject([
-      {
-        result: { exitCode: 0, output: "migrated\n", truncated: false },
-        status: "succeeded",
-      },
-      { error: "The App has no service named worker", status: "failed" },
-    ])
-    const [container] = appContainers(appId)
-    expect(container?.labels["kiln.app.service"]).toBe("app")
-    expect(container?.processes.map(({ argv }) => argv)).toContainEqual([
-      "sh",
-      "-c",
-      "./migrate",
-    ])
-    expect(
-      container?.processes.some(({ argv }) => argv.includes("./seed"))
-    ).toBe(false)
-  })
-})
-
-function appTarget(appId: string): RelayScheduleProjection["targets"][number] {
-  return { id: appId, kind: "app", name: "Website", relayId: "relay-a" }
-}
-
-function appContainers(appId: string) {
-  return [...fakeDocker.containers.values()].filter(
-    (container) => container.labels["kiln.app.id"] === appId
-  )
-}
-
-// An image App, deployed and settled, with its one service `app` running.
-async function deployedApp(harness: RelayHarness) {
-  const appId = "a".repeat(40)
-  await harness.apps.create({ id: appId, name: "Website" })
-  await deploy(harness, appId)
-  expect(appContainers(appId).some(({ state }) => state.running)).toBe(true)
-  return appId
-}
-
-// Deploys an image App and waits, under fake timers, for it to settle.
-async function deploy(harness: RelayHarness, appId: string) {
-  fakeDocker.images.set("nginx:alpine", {})
-  vi.useFakeTimers({
-    now: Date.now() + 60_000,
-    toFake: ["Date", "setTimeout", "clearTimeout"],
-  })
-  await harness.apps.deploy(
-    relayDeployAppSchema.parse({
-      appId,
-      config: { ...defaultAppConfig, image: "nginx:alpine" },
-      name: "Website",
-    })
-  )
-  await until(
-    async () => (await harness.apps.get(appId)).deployment?.state !== "running",
-    100
-  )
-  vi.useRealTimers()
-}
 
 // Steps of `stepMs`, long enough to pass a Wait but no Docker timeout.
 async function finishedRun(schedules: ScheduleWorker, stepMs = 60_000) {

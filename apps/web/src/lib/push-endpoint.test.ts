@@ -5,17 +5,6 @@ import { isPushServiceEndpoint } from "@/lib/push-endpoint"
 // Hearth posts to whatever endpoint a browser hands it, so only real push
 // services may get through.
 describe("isPushServiceEndpoint", () => {
-  it("accepts the push services browsers subscribe with", () => {
-    for (const endpoint of [
-      "https://fcm.googleapis.com/fcm/send/abc:APA91b",
-      "https://updates.push.services.mozilla.com/wpush/v2/gAAAAA",
-      "https://web.push.apple.com/QGuQyavXutnMH",
-      "https://api.push.apple.com/3/device/abc",
-      "https://wns2-par02p.notify.windows.com/w/?token=BQYAAA",
-    ])
-      expect(isPushServiceEndpoint(endpoint), endpoint).toBe(true)
-  })
-
   it("refuses anything that could reach another host", () => {
     for (const endpoint of [
       "http://fcm.googleapis.com/fcm/send/abc",

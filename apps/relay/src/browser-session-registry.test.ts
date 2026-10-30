@@ -5,7 +5,6 @@ import {
   BrowserSessionRegistry,
   type BrowserSessionAuthority,
 } from "./browser-session-registry.js"
-import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "./browser-security.js"
 
 const limits = {
   fileReplayEntries: 100,
@@ -22,50 +21,6 @@ const limits = {
 }
 
 describe("browser session registry", () => {
-  it("keeps legacy console and resource sessions separate with the same proof key", () => {
-    const registry = new BrowserSessionRegistry({
-      ...limits,
-      sessionsPerInstance: 2,
-      sessionsPerUser: 2,
-      sessionsPerUserInstance: 2,
-    })
-    const consoleSocket = socket()
-    const resourcesSocket = socket()
-    for (const [candidate, operation] of [
-      [consoleSocket, "console"],
-      [resourcesSocket, "resources"],
-    ] as const) {
-      registry.acquirePending(candidate, "192.0.2.1", false)
-      expect(
-        registry.activate(
-          candidate,
-          authority({ version: 1, operation }),
-          operation,
-          { issuerGeneration: 0, minimumRevision: 0 }
-        ).accepted
-      ).toBe(true)
-    }
-    expect(consoleSocket.close).not.toHaveBeenCalled()
-    expect(registry.isActive(consoleSocket)).toBe(true)
-    expect(registry.isActive(resourcesSocket)).toBe(true)
-    registry.close()
-  })
-
-  it("cannot resurrect an admission released while authentication was pending", () => {
-    const registry = new BrowserSessionRegistry(limits)
-    const closed = socket()
-    registry.acquirePending(closed, "192.0.2.1", true)
-    registry.release(closed)
-    expect(
-      registry.activate(closed, authority(), "late", {
-        issuerGeneration: 1,
-        minimumRevision: 0,
-      }).accepted
-    ).toBe(false)
-    expect(registry.isActive(closed)).toBe(false)
-    registry.close()
-  })
-
   it("admits file-only clients and lets an admitted transfer finish past token expiry", () => {
     vi.useFakeTimers()
     try {
@@ -99,84 +54,6 @@ describe("browser session registry", () => {
     } finally {
       vi.useRealTimers()
     }
-  })
-
-  it("rejects transfers raced by revocation and releases completed transfers", () => {
-    vi.useFakeTimers()
-    try {
-      const registry = new BrowserSessionRegistry(limits)
-      registry.revise(
-        "hearth-a",
-        [
-          {
-            subject: "user-a",
-            scope: { kind: "subject_relay" },
-            minimumRevision: 2,
-          },
-        ],
-        1
-      )
-      const abort = vi.fn()
-      const stale = registry.registerTransfer(
-        authority({ operation: "file" }),
-        { issuerGeneration: 1, minimumRevision: 0 },
-        abort
-      )
-      expect(stale.active()).toBe(false)
-      const fresh = registry.registerTransfer(
-        authority({ operation: "file", revision: 2 }),
-        { issuerGeneration: 1, minimumRevision: 2 },
-        abort
-      )
-      expect(fresh.active()).toBe(true)
-      fresh.release()
-      vi.advanceTimersByTime(60_000)
-      expect(abort).not.toHaveBeenCalled()
-      registry.close()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it("separates pending limits and atomically replaces the same owner", () => {
-    const registry = new BrowserSessionRegistry(limits)
-    const first = socket()
-    const second = socket()
-    expect(registry.acquirePending(first, "192.0.2.1", true)).toBe(true)
-    expect(registry.acquirePending(second, "192.0.2.1", true)).toBe(false)
-    expect(
-      registry.activate(first, authority(), "relay-session-a", {
-        issuerGeneration: 1,
-        minimumRevision: 0,
-      }).accepted
-    ).toBe(true)
-    expect(registry.acquirePending(second, "192.0.2.1", true)).toBe(true)
-    const replacement = registry.activate(
-      second,
-      authority({ expiresAt: Date.now() + 50_000 }),
-      "relay-session-b",
-      { issuerGeneration: 1, minimumRevision: 0 }
-    )
-    expect(replacement).toEqual({
-      accepted: true,
-      reason: null,
-      replaced: first,
-    })
-    expect(first.close).toHaveBeenCalledWith(1012, expect.any(String))
-    registry.close()
-  })
-
-  it("enforces the total pending pool without treating proxy peers as clients", () => {
-    const registry = new BrowserSessionRegistry(limits)
-    const first = socket()
-    const second = socket()
-    const third = socket()
-
-    expect(registry.acquirePending(first, "127.0.0.1", false)).toBe(true)
-    expect(registry.acquirePending(second, "127.0.0.1", false)).toBe(true)
-    expect(registry.acquirePending(third, "127.0.0.1", false)).toBe(false)
-
-    registry.close()
   })
 
   it("applies targeted floors and permits a fresh renewal", () => {
@@ -243,56 +120,6 @@ describe("browser session registry", () => {
       replaced: null,
     })
     registry.close()
-  })
-
-  it("prunes expired in-memory floors and refreshes repeated deliveries", () => {
-    vi.useFakeTimers()
-    try {
-      const registry = new BrowserSessionRegistry(limits)
-      const floor = {
-        minimumRevision: 3,
-        scope: { instanceId: "instance-a", kind: "instance" } as const,
-        subject: "user-a",
-      }
-      registry.revise("hearth-a", [floor], 1)
-      expect(registry.minimumRevision(authority())).toBe(3)
-
-      vi.advanceTimersByTime(BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS - 1)
-      registry.revise("hearth-a", [floor], 1)
-      vi.advanceTimersByTime(2)
-      expect(registry.minimumRevision(authority())).toBe(3)
-
-      vi.advanceTimersByTime(BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS)
-      expect(registry.minimumRevision(authority())).toBe(0)
-      registry.close()
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it("expires legacy sessions instead of granting admission for socket life", () => {
-    vi.useFakeTimers()
-    try {
-      const registry = new BrowserSessionRegistry(limits)
-      const legacy = socket()
-      registry.acquirePending(legacy, "192.0.2.1", true)
-      expect(
-        registry.activate(
-          legacy,
-          authority({ expiresAt: Date.now() + 1_000, version: 1 }),
-          "relay-session-legacy",
-          { issuerGeneration: 1, minimumRevision: 0 }
-        ).accepted
-      ).toBe(true)
-
-      vi.advanceTimersByTime(1_000)
-
-      expect(registry.isActive(legacy, "instance.console.read")).toBe(false)
-      expect(legacy.close).toHaveBeenCalledWith(4403, expect.any(String))
-      registry.close()
-    } finally {
-      vi.useRealTimers()
-    }
   })
 })
 

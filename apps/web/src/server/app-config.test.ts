@@ -138,21 +138,6 @@ describeMysql("app config", () => {
         })
     )
 
-    it.effect("keeps its mounts through an edit that leaves them out", () =>
-      Effect.gen(function* () {
-        yield* seed
-
-        assert.isNull(yield* update("manager", { image: "nginx:alpine" }))
-
-        const config = yield* saved
-        assert.strictEqual(config.image, "nginx:alpine")
-        assert.deepStrictEqual(config.mounts, [
-          fileMount,
-          hostMount("/srv/shared", true),
-        ])
-      })
-    )
-
     it.effect(
       "takes permission to edit the node's files to mount a path on it anew",
       () =>

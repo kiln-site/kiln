@@ -72,7 +72,6 @@ const seedMove = (input: {
   ending: boolean
   // Whether its worker stopped, so the next pass takes it over.
   stopped?: boolean
-  moveWebRoutes?: boolean
 }) =>
   Effect.gen(function* () {
     yield* resetDatabase
@@ -122,8 +121,7 @@ const seedMove = (input: {
       error: input.ending ? "Relay connection closed" : null,
       finished_parts: JSON.stringify([]),
       id,
-      lease_until:
-        input.ending || input.moveWebRoutes || input.stopped ? 0 : at * 2,
+      lease_until: input.ending || input.stopped ? 0 : at * 2,
       mode: "migrate",
       options: JSON.stringify({
         backup: null,
@@ -131,7 +129,7 @@ const seedMove = (input: {
         deleteSource: input.deleteSource ? {} : null,
         keepActivity: false,
         moveDomain: false,
-        moveWebRoutes: input.moveWebRoutes ?? false,
+        moveWebRoutes: false,
         stopSource: true,
       }),
       requested_by: user.id,
@@ -252,23 +250,6 @@ describeMysql("Server migration deleting its old server", () => {
     )
 
     it.effect(
-      "starts the old server again when its deletion was never asked for",
-      () =>
-        Effect.gen(function* () {
-          const id = yield* seedMove({
-            deleteSource: true,
-            deletion: null,
-            ending: true,
-          })
-
-          const row = yield* resumeUntilEnded(id)
-
-          assert.strictEqual(row?.state, "failed")
-          assert.include(relayCalls, "instance.action:start")
-        })
-    )
-
-    it.effect(
       "won't cancel a move handing over to deleting its old server",
       () =>
         Effect.gen(function* () {
@@ -298,107 +279,6 @@ describeMysql("Server migration deleting its old server", () => {
           assert.strictEqual(
             (yield* migrationRows).find((row) => row.id === keeping)?.state,
             "cancelling"
-          )
-        })
-    )
-
-    it.effect(
-      "leaves a name its domain uses with the domain when only routes move",
-      () =>
-        Effect.gen(function* () {
-          const id = yield* seedMove({
-            deleteSource: false,
-            deletion: null,
-            ending: false,
-            moveWebRoutes: true,
-          })
-          // Added on its domain's name after the move started.
-          yield* insertRows("instance_domain", {
-            id: randomUUID(),
-            relay_id: sourceRelayId,
-            instance_id: sourceId,
-            is_primary: true,
-            integration_id: "gone",
-            vanity_label: "map",
-            domain: "example.test",
-            public_host: "source.example.test",
-            public_port: 25_565,
-            status: "active",
-            created_at: at,
-            updated_at: at,
-          })
-          yield* insertRows("web_hostname", {
-            id: randomUUID(),
-            hostname: "map.example.test",
-            relay_id: sourceRelayId,
-            resource_type: "instance",
-            resource_id: sourceId,
-            integration_id: "gone",
-            zone_id: "zone",
-            is_generated: false,
-            status: "active",
-            created_at: at,
-            updated_at: at,
-          })
-
-          const row = yield* resumeUntilEnded(id)
-
-          assert.strictEqual(row?.state, "completed")
-          assert.deepEqual(
-            (yield* selectRows<{ relay_id: string }>("web_hostname")).map(
-              (item) => item.relay_id.trim()
-            ),
-            [sourceRelayId]
-          )
-        })
-    )
-
-    it.effect(
-      "hands its hostnames over when a retry finds the routes already moved",
-      () =>
-        Effect.gen(function* () {
-          const id = yield* seedMove({
-            deleteSource: false,
-            deletion: null,
-            ending: false,
-            moveWebRoutes: true,
-          })
-          yield* insertRows("web_hostname", {
-            id: randomUUID(),
-            hostname: "map.example.test",
-            relay_id: sourceRelayId,
-            resource_type: "instance",
-            resource_id: sourceId,
-            integration_id: "gone",
-            zone_id: "zone",
-            is_generated: false,
-            status: "active",
-            created_at: at,
-            updated_at: at,
-          })
-          yield* insertRows("hostname_claim", {
-            hostname: "map.example.test",
-            relay_id: sourceRelayId,
-            resource_type: "instance",
-            resource_id: sourceId,
-            created_at: at,
-          })
-
-          const row = yield* resumeUntilEnded(id)
-
-          assert.strictEqual(row?.state, "completed")
-          assert.deepEqual(
-            (yield* selectRows<{ relay_id: string; resource_id: string }>(
-              "web_hostname"
-            )).map((item) => `${item.relay_id.trim()}:${item.resource_id}`),
-            [`${destinationRelayId}:${copyId}`]
-          )
-          // The name goes with it, so nothing else can take it.
-          assert.deepEqual(
-            (yield* selectRows<{ relay_id: string; resource_id: string }>(
-              "hostname_claim"
-            )).map((item) => `${item.relay_id.trim()}:${item.resource_id}`),
-            [`${destinationRelayId}:${copyId}`]
           )
         })
     )

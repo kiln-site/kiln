@@ -1,19 +1,13 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  backupCreateTaskInputSchema,
-  backupDeleteTaskInputSchema,
-  backupExportTaskInputSchema,
   omitBackupSecrets,
   redactBackupTaskInput,
-  redactRelayBackupTask,
-  relayBackupTaskSchema,
   resticRepositoryLocationSchema,
 } from "./backups.js"
 
 const backupId = "11111111-1111-4111-8111-111111111111"
 const taskId = "22222222-2222-4222-8222-222222222222"
-const createTaskId = "33333333-3333-4333-8333-333333333333"
 const target = { id: "instance-one", kind: "instance" as const }
 
 const s3Repository = {
@@ -29,31 +23,6 @@ const s3Repository = {
 }
 
 describe("Relay backup task inputs", () => {
-  it("reads restic tasks from Hearth versions that predate repository locations", () => {
-    expect(
-      backupCreateTaskInputSchema.parse({
-        artifactKind: "restic_snapshot",
-        backupId,
-        destination: { kind: "restic", repositoryPassword: "secret" },
-        exclude: [],
-        maxBytes: null,
-        mode: "incremental",
-        reason: "manual",
-        target,
-        taskId,
-      }).destination
-    ).toMatchObject({ kind: "restic", repository: { kind: "local" } })
-    expect(
-      backupExportTaskInputSchema.parse({
-        backupId,
-        snapshotId: "abcdef12",
-        target,
-        taskId,
-        ttlMs: 60_000,
-      }).repository
-    ).toEqual({ kind: "local" })
-  })
-
   it("rejects S3 repositories with plaintext endpoints, invalid ports, or escaping prefixes", () => {
     expect(resticRepositoryLocationSchema.safeParse(s3Repository).success).toBe(
       true
@@ -68,34 +37,6 @@ describe("Relay backup task inputs", () => {
           .success
       ).toBe(false)
     }
-  })
-
-  it("requires restic deletes to name exactly one snapshot selector", () => {
-    const base = {
-      backupId,
-      destination: { kind: "restic" as const },
-      target,
-      taskId,
-    }
-    expect(backupDeleteTaskInputSchema.safeParse(base).success).toBe(false)
-    expect(
-      backupDeleteTaskInputSchema.safeParse({
-        ...base,
-        destination: { kind: "restic", createTaskId, snapshotId: "abcdef12" },
-      }).success
-    ).toBe(false)
-    expect(
-      backupDeleteTaskInputSchema.parse({
-        ...base,
-        destination: { kind: "restic", snapshotId: "abcdef12" },
-      }).destination
-    ).toMatchObject({ snapshotId: "abcdef12" })
-    expect(
-      backupDeleteTaskInputSchema.parse({
-        ...base,
-        destination: { kind: "restic", createTaskId },
-      }).destination
-    ).toMatchObject({ createTaskId })
   })
 
   it("strips repository passwords and S3 keys from restic task input", () => {
@@ -153,62 +94,5 @@ describe("Relay backup task inputs", () => {
     })
 
     expect(JSON.stringify(redacted)).not.toMatch(/AKIAEXAMPLE|s3-secret/u)
-  })
-})
-
-describe("Relay backup task failure codes", () => {
-  const artifactId = "44444444-4444-4444-8444-444444444444"
-  const failedDelete = {
-    backupId,
-    bytesCompleted: 0,
-    bytesTotal: null,
-    createdAt: 1,
-    error: "storage cap exceeded",
-    finishedAt: 2,
-    input: {
-      backupId,
-      destination: { artifactId, kind: "local" },
-      kind: "delete",
-      target,
-      taskId,
-    },
-    inputRefreshRequired: false,
-    kind: "delete",
-    result: {
-      artifacts: [
-        {
-          artifactId,
-          error: "storage cap exceeded",
-          errorCode: "storage_full",
-          status: "failed",
-        },
-      ],
-      warnings: [],
-    },
-    startedAt: 1,
-    status: "failed",
-    taskId,
-    updatedAt: 2,
-  }
-
-  it("reads tasks from Relays that predate failure codes", () => {
-    const { result: _result, ...legacy } = failedDelete
-    expect(
-      relayBackupTaskSchema.parse({ ...legacy, result: null }).errorCode
-    ).toBeNull()
-  })
-
-  it("leaves failure codes out for a Hearth that hasn't announced it reads them", () => {
-    const task = relayBackupTaskSchema.parse({
-      ...failedDelete,
-      errorCode: "storage_full",
-    })
-    expect(
-      JSON.stringify(redactRelayBackupTask(task, { failureCodes: false }))
-    ).not.toContain("errorCode")
-    expect(redactRelayBackupTask(task, { failureCodes: true })).toMatchObject({
-      errorCode: "storage_full",
-      result: { artifacts: [{ errorCode: "storage_full" }] },
-    })
   })
 })

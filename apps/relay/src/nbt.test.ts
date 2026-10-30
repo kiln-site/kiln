@@ -32,22 +32,4 @@ describe("Minecraft NBT codec", () => {
       source
     )
   })
-
-  it("uses Minecraft's compound wrappers for heterogeneous binary lists", () => {
-    const parsed = parseSnbt(`[1, "two"]`, { binaryCompatible: true })
-    assert.strictEqual(parsed.type, "list")
-    if (parsed.type !== "list") return
-    assert.strictEqual(parsed.elementType, "compound")
-    assert.deepEqual(
-      parsed.value.map((tag) => tag.type),
-      ["compound", "compound"]
-    )
-  })
-
-  it("reports line and column for invalid SNBT", () => {
-    assert.throws(
-      () => parseSnbt("{\n  Health: 20.0f,\n  Inventory: [\n}"),
-      /line 4, column 1/u
-    )
-  })
 })

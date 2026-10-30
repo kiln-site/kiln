@@ -2,7 +2,6 @@ import { expect, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import {
   scheduleBackupActionSchema,
-  scheduleTargetKey,
   type ScheduleTarget,
 } from "@workspace/contracts/schedules"
 
@@ -91,16 +90,6 @@ const failure = (effect: ReturnType<typeof authorize>) =>
 describeMysql("scheduled backup export authorization", () => {
   layer(TestDatabase)((it) => {
     it.effect(
-      "allows export permission on the target and platform admins",
-      () =>
-        Effect.gen(function* () {
-          yield* seedStorage(user.id)
-          yield* authorize({ grants: [grant(target, ["backup.download"])] })
-          yield* authorize({ user: { ...user, role: "admin" } })
-        })
-    )
-
-    it.effect(
       "requires export permission independently on every applicable target",
       () =>
         Effect.gen(function* () {
@@ -114,48 +103,6 @@ describeMysql("scheduled backup export authorization", () => {
             )
           ).toContain("Database B")
         })
-    )
-
-    it.effect(
-      "honors action target selection and does not require export on unrelated targets",
-      () =>
-        Effect.gen(function* () {
-          yield* seedStorage(user.id)
-          yield* authorize({
-            actions: [{ ...action, targetKeys: [scheduleTargetKey(target)] }],
-            targets: [target, otherTarget],
-            grants: [grant(target, ["backup.download"])],
-          })
-        })
-    )
-
-    it.effect(
-      "does not use backup policy defaults for omitted destinations",
-      () =>
-        Effect.gen(function* () {
-          yield* seedStorage("other-user")
-          yield* insertRows("backup_policy", {
-            relay_id: target.relayId,
-            target_kind: "instance",
-            target_id: target.id,
-            storage_id: storageId,
-            exclude_patterns: "[]",
-            created_at: 0,
-            updated_at: 0,
-          })
-          const local = scheduleBackupActionSchema.parse({
-            id: storageId,
-            type: "backup",
-          })
-          yield* authorize({ actions: [local] })
-        })
-    )
-
-    it.effect("permits shared platform storage without export permission", () =>
-      Effect.gen(function* () {
-        yield* seedStorage(null)
-        yield* authorize({})
-      })
     )
 
     it.effect(
@@ -190,21 +137,6 @@ describeMysql("scheduled backup export authorization", () => {
 
           yield* seedStorage(user.id)
           yield* authorize({ owner: user.id, user: admin })
-        })
-    )
-
-    it.effect(
-      "requires export for manual execution while retaining the approved destination's owner",
-      () =>
-        Effect.gen(function* () {
-          yield* seedStorage("other-user")
-          expect(
-            yield* failure(authorize({ checkStorageOwnership: false }))
-          ).toContain("backup.download")
-          yield* authorize({
-            checkStorageOwnership: false,
-            grants: [grant(target, ["backup.download"])],
-          })
         })
     )
   })

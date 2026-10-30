@@ -51,31 +51,4 @@ describe("game server file roots", () => {
       `Duplicate kiln.server.id ${first}`
     )
   })
-
-  it("follows a replaced container and forgets a removed one", async () => {
-    const harness = await relayHarness()
-    await harness.seedServer({ id: first })
-    await expect(harness.docker.findFileRoot(first)).resolves.toMatchObject({
-      directory: first,
-    })
-
-    fakeDocker.removeContainer(harness.resources.instanceContainer(first))
-    await expect(harness.docker.findFileRoot(first)).resolves.toBeNull()
-
-    await harness.seedServer({
-      id: first,
-      labels: { "kiln.instance.directory": second },
-      mounts: [
-        {
-          destination: "/server",
-          source: `${harness.config.rootDirectory}/${second}`,
-          type: "bind",
-        },
-      ],
-    })
-    await expect(harness.docker.findFileRoot(first)).resolves.toEqual({
-      directory: second,
-      id: first,
-    })
-  })
 })

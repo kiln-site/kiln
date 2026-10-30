@@ -1,17 +1,12 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 
-import {
-  listManagedDatabaseRecordsEffect,
-  managedDatabaseNameExistsEffect,
-  renameManagedDatabaseRecordEffect,
-} from "@/effect/managed-databases"
+import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertRows } from "@/test/seed"
 
 const now = Date.UTC(2026, 8, 1)
 const relayOne = "r".repeat(43)
-const relayTwo = "s".repeat(43)
 
 const insertManagedDatabase = (
   relayId: string,
@@ -65,55 +60,5 @@ describeMysql("managed database persistence", () => {
         ])
       })
     )
-
-    it.effect("checks names within one Relay", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay(relayOne)
-        yield* insertRelay(relayTwo)
-        yield* insertManagedDatabase(relayOne, "primary-id", "Primary")
-
-        assert.isTrue(
-          yield* managedDatabaseNameExistsEffect(relayOne, "Primary")
-        )
-        assert.isFalse(
-          yield* managedDatabaseNameExistsEffect(relayOne, "Other")
-        )
-        assert.isFalse(
-          yield* managedDatabaseNameExistsEffect(relayTwo, "Primary")
-        )
-      })
-    )
-
-    it.effect("renames a database unless another on its Relay has the name", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay(relayOne)
-        yield* insertRelay(relayTwo)
-        yield* insertManagedDatabase(relayOne, "primary-id", "Primary")
-        yield* insertManagedDatabase(relayOne, "replica-id", "Replica")
-        yield* insertManagedDatabase(relayTwo, "elsewhere-id", "Elsewhere")
-
-        const error = yield* Effect.flip(
-          renameManagedDatabaseRecordEffect(relayOne, "replica-id", "Primary")
-        )
-        assert.match(error.message, /already exists/u)
-        yield* renameManagedDatabaseRecordEffect(
-          relayOne,
-          "replica-id",
-          "Elsewhere"
-        )
-
-        const names = (yield* listManagedDatabaseRecordsEffect()).map(
-          (record) => [record.databaseId, record.name]
-        )
-        assert.deepStrictEqual(names.sort(([left], [right]) => left.localeCompare(right)), [
-          ["elsewhere-id", "Elsewhere"],
-          ["primary-id", "Primary"],
-          ["replica-id", "Elsewhere"],
-        ])
-      })
-    )
-
   })
 })

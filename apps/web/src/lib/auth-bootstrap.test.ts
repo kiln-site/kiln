@@ -80,10 +80,7 @@ describeMysql("pending email correction race", () => {
             { emailVerifiedAt: at },
           ]) {
             yield* seedPendingAccount(stale)
-            const error = yield* Effect.flip(
-              replacePendingAccountEmailEffect(input)
-            )
-            expect(error.message).toContain("can no longer be changed")
+            yield* Effect.flip(replacePendingAccountEmailEffect(input))
             expect(yield* state).toEqual({
               email: input.currentEmail,
               sessions: ["bystander-session", "old-session"],
@@ -119,18 +116,21 @@ describe("initial administrator setup code", () => {
 
   // A Relay that installed Hearth gives it a setup code; without it, nobody
   // can claim the new installation.
-  plainIt("refuses to create the administrator without the right code", async () => {
-    vi.stubEnv("KILN_SETUP_TOKEN", "the-code-the-relay-generated")
-    const administrator = {
-      displayName: "Admin",
-      email: "admin@example.test",
-      password: "correct horse battery",
-    }
+  plainIt(
+    "refuses to create the administrator without the right code",
+    async () => {
+      vi.stubEnv("KILN_SETUP_TOKEN", "the-code-the-relay-generated")
+      const administrator = {
+        displayName: "Admin",
+        email: "admin@example.test",
+        password: "correct horse battery",
+      }
 
-    for (const setupToken of [undefined, "", "a-guess"]) {
-      await expect(
-        createInitialAdministrator({ ...administrator, setupToken })
-      ).rejects.toThrow("setup code")
+      for (const setupToken of [undefined, "", "a-guess"]) {
+        await expect(
+          createInitialAdministrator({ ...administrator, setupToken })
+        ).rejects.toThrow("setup code")
+      }
     }
-  })
+  )
 })

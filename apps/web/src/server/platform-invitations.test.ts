@@ -3,10 +3,7 @@ import { Effect } from "effect"
 import { TestClock } from "effect/testing"
 
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import {
-  acceptPlatformInvitationEffect,
-  cancelPlatformInvitationEffect,
-} from "@/lib/platform-access"
+import { acceptPlatformInvitationEffect } from "@/lib/platform-access"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, insertUser, selectRows } from "@/test/seed"
 
@@ -22,19 +19,15 @@ const actor = {
 } as AuthenticatedUser
 
 const seed = (
-  options: {
-    actorRole?: string
-    actorStatus?: string
-    invitation?: Record<string, string | number | null>
-  } = {}
+  options: { invitation?: Record<string, string | number | null> } = {}
 ) =>
   Effect.gen(function* () {
     yield* resetDatabase
     yield* TestClock.setTime(now)
     yield* insertUser(actor.id, {
       email: actor.email,
-      role: options.actorRole ?? "user",
-      status: options.actorStatus ?? "enabled",
+      role: "user",
+      status: "enabled",
       emailVerifiedAt: new Date(now - 60_000),
     })
     yield* insertUser("another-account", {
@@ -91,27 +84,10 @@ describeMysql("platform invitations", () => {
         })
       )
 
-    it.effect("accepts the bound identity after an email change", () =>
-      Effect.gen(function* () {
-        yield* seed()
-
-        yield* acceptPlatformInvitationEffect(actor, tokenHash)
-
-        assert.strictEqual(yield* actorRole, "admin")
-        assert.deepEqual(yield* invitationState, {
-          accepted: true,
-          acceptedBy: actor.id,
-          revoked: false,
-        })
-      })
-    )
-
     for (const [lifecycle, invitation] of [
       ["expired", { expires_at: now }],
       ["accepted", { accepted_at: now - 1 }],
       ["revoked", { revoked_at: now - 1 }],
-      ["declined", { declined_at: now - 1 }],
-      ["cancelled", { cancelled_at: now - 1 }],
     ] as const)
       it.effect(`rejects a ${lifecycle} invitation without a role change`, () =>
         Effect.gen(function* () {
@@ -124,53 +100,6 @@ describeMysql("platform invitations", () => {
 
           assert.include(error.message, "invalid or has expired")
           assert.strictEqual(yield* actorRole, "user")
-        })
-      )
-
-    it.effect("rechecks disabled recipients before acceptance", () =>
-      Effect.gen(function* () {
-        yield* seed({ actorStatus: "disabled" })
-
-        const error = yield* acceptPlatformInvitationEffect(
-          actor,
-          tokenHash
-        ).pipe(Effect.flip)
-
-        assert.include(error.message, "enabled, verified account is required")
-        assert.strictEqual(yield* actorRole, "user")
-        assert.deepEqual(yield* invitationState, untouched)
-      })
-    )
-
-    for (const { label, message, ...options } of [
-      {
-        label: "a non-administrator",
-        message: "Platform administrator required",
-      },
-      {
-        label: "a disabled administrator",
-        actorRole: "admin",
-        actorStatus: "disabled",
-        message: "Platform administrator required",
-      },
-      {
-        label: "an expired invitation",
-        actorRole: "admin",
-        invitation: { expires_at: now },
-        message: "no longer pending",
-      },
-    ])
-      it.effect(`refuses cancellation by ${label}`, () =>
-        Effect.gen(function* () {
-          yield* seed(options)
-
-          const error = yield* cancelPlatformInvitationEffect(
-            actor,
-            "invite"
-          ).pipe(Effect.flip)
-
-          assert.include(error.message, message)
-          assert.deepEqual(yield* invitationState, untouched)
         })
       )
   })

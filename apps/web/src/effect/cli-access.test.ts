@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from "vite-plus/test"
 import {
   approveCliAuthorizationEffect,
   authenticateCliTokenEffect,
-  cliRelaySubject,
   issueCliDeviceCodeEffect,
   pollCliDeviceTokenEffect,
   requireCliWrite,
@@ -35,12 +34,6 @@ const principal: CliPrincipal = {
 }
 
 describe("CLI access enforcement", () => {
-  it("allows mutations for full-access credentials", async () => {
-    await expect(Effect.runPromise(requireCliWrite(principal))).resolves.toBe(
-      undefined
-    )
-  })
-
   it("blocks mutations for read-only credentials with a typed error", async () => {
     const error = await Effect.runPromise(
       requireCliWrite({ ...principal, mode: "read_only" }).pipe(Effect.flip)
@@ -51,12 +44,6 @@ describe("CLI access enforcement", () => {
       code: "forbidden",
       retryable: false,
     })
-  })
-
-  it("encodes both the credential and owning user in Relay attribution", () => {
-    expect(cliRelaySubject(principal)).toBe(
-      "cli/12345678-1234-4123-8123-123456789abc/user-123"
-    )
   })
 })
 

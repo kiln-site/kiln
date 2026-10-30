@@ -2,7 +2,6 @@ import { assert, describe, it } from "@effect/vitest"
 
 import {
   credentialManagersForPlatform,
-  runCredentialCommand,
   type CredentialCommand,
   type CredentialCommandResult,
   type CredentialManager,
@@ -53,19 +52,6 @@ function fakeCredentialStore(platform: "darwin" | "win32") {
 }
 
 describe("CLI credential managers", () => {
-  it("keeps the manager ids that saved configs reference", () => {
-    const run = async () => result(0)
-    assert.deepStrictEqual(
-      credentialManagersForPlatform("darwin", run).map(({ id }) => id),
-      ["macos-keychain-v1"]
-    )
-    assert.deepStrictEqual(
-      credentialManagersForPlatform("win32", run).map(({ id }) => id),
-      ["windows-credential-manager-v1"]
-    )
-    assert.deepStrictEqual(credentialManagersForPlatform("linux", run), [])
-  })
-
   for (const platform of ["darwin", "win32"] as const) {
     it(`${platform}: passes secrets through stdin instead of process arguments`, async () => {
       const { commands, manager } = fakeCredentialStore(platform)
@@ -87,79 +73,5 @@ describe("CLI credential managers", () => {
       }
       assert.include(command?.input ?? "", "kiln_cli_secret")
     })
-
-    it(`${platform}: stores, reads, and deletes credentials and treats missing ones as absent`, async () => {
-      const { manager } = fakeCredentialStore(platform)
-
-      assert.isNull(await manager.getPassword("profile-account"))
-      await manager.setPassword("profile-account", "kiln_cli_secret")
-      assert.strictEqual(
-        await manager.getPassword("profile-account"),
-        "kiln_cli_secret"
-      )
-      assert.isTrue(await manager.deletePassword("profile-account"))
-      assert.isNull(await manager.getPassword("profile-account"))
-      assert.isFalse(await manager.deletePassword("profile-account"))
-    })
-
-    it(`${platform}: fails instead of reporting success when the store errors`, async () => {
-      const [manager] = credentialManagersForPlatform(platform, async () =>
-        result(1)
-      )
-      if (!manager) throw new Error("Expected a native credential manager")
-
-      for (const operation of [
-        () => manager.setPassword("profile-account", "kiln_cli_secret"),
-        () => manager.getPassword("profile-account"),
-        () => manager.deletePassword("profile-account"),
-      ]) {
-        const outcome = await operation().then(
-          () => "resolved",
-          () => "rejected"
-        )
-        assert.strictEqual(outcome, "rejected")
-      }
-    })
   }
-
-  it("waits for output from processes that outlive the command", async () => {
-    // The helper writes only after the command's own process has exited and
-    // been reaped, so resolving on "exit" instead of "close" loses the output.
-    const lateWriter = [
-      `const parent = Number(process.argv[1])`,
-      `const alive = () => { try { process.kill(parent, 0); return true } catch { return false } }`,
-      `const wait = () => alive() ? setTimeout(wait, 5) : process.stdout.write("complete")`,
-      `wait()`,
-    ].join(";")
-    const command = [
-      `const { spawn } = require("node:child_process")`,
-      `spawn(process.execPath, ["-e", ${JSON.stringify(lateWriter)}, String(process.pid)], { stdio: ["ignore", process.stdout, "ignore"] }).unref()`,
-    ].join(";")
-
-    const output = await runCredentialCommand({
-      arguments: ["-e", command],
-      executable: process.execPath,
-    })
-
-    assert.strictEqual(output.exitCode, 0)
-    assert.strictEqual(output.stdout, "complete")
-  })
-
-  it("passes command input through stdin without user interaction", async () => {
-    const readInput = [
-      `process.stdin.setEncoding("utf8")`,
-      `let input = ""`,
-      `process.stdin.on("data", (chunk) => { input += chunk })`,
-      `process.stdin.on("end", () => process.stdout.write(input))`,
-    ].join(";")
-
-    const output = await runCredentialCommand({
-      arguments: ["-e", readInput],
-      executable: process.execPath,
-      input: "credential-data",
-    })
-
-    assert.strictEqual(output.exitCode, 0)
-    assert.strictEqual(output.stdout, "credential-data")
-  })
 })

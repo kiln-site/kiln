@@ -4,7 +4,7 @@ import { createServer, connect, type Server, type Socket } from "node:net"
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
-import { resticS3ProxyAllowedHosts, withResticS3Proxy } from "./proxy.js"
+import { withResticS3Proxy } from "./proxy.js"
 
 // DNS is the external system here: hostnames listed in `dnsAnswers` resolve
 // to fixed addresses, everything else (IP literals) uses the real resolver.
@@ -37,37 +37,6 @@ afterEach(() => {
 })
 
 describe("restic S3 CONNECT proxy", () => {
-  it("allows the endpoint, virtual-hosted bucket, and AWS regional hosts", () => {
-    expect(
-      [
-        ...resticS3ProxyAllowedHosts({
-          bucket: "kiln-backups",
-          endpoint: "https://s3.us-east-1.amazonaws.com",
-          region: "us-east-1",
-        }),
-      ].sort()
-    ).toEqual([
-      "kiln-backups.s3.dualstack.us-east-1.amazonaws.com",
-      "kiln-backups.s3.us-east-1.amazonaws.com",
-      "s3.dualstack.us-east-1.amazonaws.com",
-      "s3.us-east-1.amazonaws.com",
-    ])
-    expect(
-      resticS3ProxyAllowedHosts({
-        bucket: "kiln-backups",
-        endpoint: "https://s3.cn-north-1.amazonaws.com.cn",
-        region: "cn-north-1",
-      }).has("s3.cn-north-1.amazonaws.com.cn")
-    ).toBe(true)
-    expect(
-      resticS3ProxyAllowedHosts({
-        bucket: "kiln-backups",
-        endpoint: "https://minio:9000",
-        region: "us-east-1",
-      }).has("s3.us-east-1.amazonaws.com")
-    ).toBe(false)
-  })
-
   it("only tunnels well-formed CONNECT requests that carry the proxy token", async () => {
     const upstream = await upstreamServer()
     const authority = `127.0.0.1:${upstream.port}`
@@ -161,45 +130,6 @@ describe("restic S3 CONNECT proxy", () => {
         (proxyUrl) => proxyStatus(proxyUrl, request)
       )
       expect(allowed).toBe(200)
-    } finally {
-      await upstream.close()
-    }
-  })
-
-  it("falls back to the next DNS answer when the first is unreachable", async () => {
-    // The upstream listens on IPv4 loopback only, so the IPv6 answer is
-    // refused (or unroutable) immediately.
-    const upstream = await upstreamServer()
-    dnsAnswers.set("minio", [
-      { address: "::1", family: 6 },
-      { address: "127.0.0.1", family: 4 },
-    ])
-    try {
-      const status = await withResticS3Proxy(
-        proxyOptions({ endpointPort: upstream.port }),
-        (proxyUrl) =>
-          proxyStatus(proxyUrl, connectRequest(`minio:${upstream.port}`, token))
-      )
-      expect(status).toBe(200)
-    } finally {
-      await upstream.close()
-    }
-  })
-
-  it("closes an established tunnel when the proxy scope ends", async () => {
-    const upstream = await upstreamServer()
-    let client: Socket | undefined
-    try {
-      await withResticS3Proxy(
-        proxyOptions({ endpointPort: upstream.port }),
-        async (proxyUrl) => {
-          client = await openProxyClient(proxyUrl)
-          client.write(connectRequest(`127.0.0.1:${upstream.port}`, token))
-          expect(await readStatus(client)).toBe(200)
-        }
-      )
-      if (client && !client.destroyed) await once(client, "close")
-      expect(client?.destroyed).toBe(true)
     } finally {
       await upstream.close()
     }

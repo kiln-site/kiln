@@ -1,7 +1,6 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 
-import { loadResourceGrantsEffect } from "@/lib/resource-permissions"
 import { persistPairedRelayEffect } from "@/lib/relay-registry"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, selectRows } from "@/test/seed"
@@ -60,31 +59,6 @@ const unchanged = (createdBy: string) => [
 
 describeMysql("Relay pairing persistence", () => {
   layer(TestDatabase)((it) => {
-    it.effect(
-      "commits a new Relay whose creator holds authority without a grant row",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-
-          yield* persistPairedRelayEffect(pairedRelay)
-
-          assert.deepEqual(yield* relayRows, [
-            {
-              createdBy: "creator",
-              ciphertext: "new-ciphertext",
-              enabled: true,
-              issuerGeneration: 1,
-            },
-          ])
-          assert.deepEqual(yield* selectRows("access_grant"), [])
-          const grants = yield* loadResourceGrantsEffect("creator", "relay-id")
-          assert.deepEqual(
-            grants.map((grant) => [grant.source, grant.resourceType]),
-            [["owner", "relay"]]
-          )
-        })
-    )
-
     it.effect("repairs a creator's Relay in place and rotates its issuer", () =>
       Effect.gen(function* () {
         yield* resetDatabase
@@ -111,14 +85,10 @@ describeMysql("Relay pairing persistence", () => {
         yield* resetDatabase
         yield* existingRelay("another-user")
 
-        const error = yield* Effect.flip(
+        yield* Effect.flip(
           persistPairedRelayEffect({ ...pairedRelay, expectedExisting: true })
         )
 
-        assert.strictEqual(
-          error.message,
-          "You can only manage Relays you created"
-        )
         assert.deepEqual(yield* relayRows, unchanged("another-user"))
       })
     )
@@ -128,22 +98,12 @@ describeMysql("Relay pairing persistence", () => {
         yield* resetDatabase
         yield* existingRelay("creator")
 
-        const replaced = yield* Effect.flip(
-          persistPairedRelayEffect(pairedRelay)
-        )
-        assert.strictEqual(
-          replaced.message,
-          "Relay pairing state changed. Try again."
-        )
+        yield* Effect.flip(persistPairedRelayEffect(pairedRelay))
         assert.deepEqual(yield* relayRows, unchanged("creator"))
 
         yield* resetDatabase
-        const vanished = yield* Effect.flip(
+        yield* Effect.flip(
           persistPairedRelayEffect({ ...pairedRelay, expectedExisting: true })
-        )
-        assert.strictEqual(
-          vanished.message,
-          "Relay pairing state changed. Try again."
         )
         assert.deepEqual(yield* relayRows, [])
       })

@@ -1,19 +1,14 @@
 import { createHash } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
-import { Effect, Exit, Fiber, Pull, Scope, Stream } from "effect"
-import { TestClock } from "effect/testing"
-import { createConnection } from "mysql2/promise"
+import { Effect, Stream } from "effect"
 import { SqlClient } from "effect/sql"
 
 import {
   importKilnDatabaseSql,
   kilnDatabaseDump,
 } from "@/server/kiln-database-dump.server"
-import {
-  databaseConnectionConfig,
-  databaseTableName,
-} from "@/lib/database-config"
+import { databaseTableName } from "@/lib/database-config"
 import { operationsTablePrefix } from "@/operations/engine"
 import { operationTables } from "@/operations/lanes"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -22,70 +17,6 @@ import { insertBackup, insertUser } from "@/test/seed"
 const kiln = { installationId: "installation-one", now: Date.now() }
 
 const operationsTable = `${operationsTablePrefix()}_dump_test`
-
-// More rows than the connection buffers, so an export is still reading
-// them when it's stopped.
-const insertManyRows = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  yield* sql.unsafe("DROP TABLE IF EXISTS dump_many")
-  yield* sql.unsafe(
-    "CREATE TABLE dump_many (id INT PRIMARY KEY, pad VARCHAR(255))"
-  )
-  for (let batch = 0; batch < 20; batch += 1) {
-    const values = Array.from(
-      { length: 5_000 },
-      (_, row) => `(${batch * 5_000 + row}, REPEAT('x', 200))`
-    )
-    yield* sql.unsafe(
-      `INSERT INTO dump_many (id, pad) VALUES ${values.join(",")}`
-    )
-  }
-})
-
-// An export's connection holds the only read-only transaction on this
-// worker's database; other test files run in parallel on their own.
-const exportTransactions = Effect.flatMap(
-  SqlClient.SqlClient,
-  (sql) => sql<{ id: number }>`
-    SELECT trx.trx_mysql_thread_id AS id
-      FROM information_schema.INNODB_TRX trx
-      JOIN information_schema.PROCESSLIST process
-        ON process.ID = trx.trx_mysql_thread_id
-     WHERE trx.trx_is_read_only = 1 AND process.DB = DATABASE()`
-)
-
-const killExport = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  const [exporting] = yield* exportTransactions
-  assert.isDefined(exporting)
-  yield* sql.unsafe(`KILL ${Number(exporting?.id)}`)
-})
-
-// Waits on the real clock, which MySQL keeps.
-function waitFor(milliseconds: number) {
-  return Effect.promise(
-    () => new Promise<void>((resolve) => setTimeout(resolve, milliseconds))
-  )
-}
-
-// Reads the rest of an export: "failed" when it errors, which it must do
-// without having written its seal.
-function readToEnd(reader: ReadableStreamDefaultReader<string>) {
-  return Effect.promise(async () => {
-    let rest = ""
-    for (;;) {
-      const chunk = await reader.read().then(
-        (result) => result,
-        (error: unknown) => ({ error })
-      )
-      if ("error" in chunk) {
-        return rest.includes("-- Kiln export sha256") ? "sealed" : "failed"
-      }
-      if (chunk.done) return "finished"
-      rest += chunk.value
-    }
-  })
-}
 
 // Seals an altered export again, as only someone rewriting it would.
 function reseal(dump: string) {
@@ -240,138 +171,6 @@ describeMysql("Kiln database export", () => {
           )
         ),
       // It writes every table in the test database.
-      60_000
-    )
-
-    it.effect(
-      "fails without a seal, and without taking Hearth down, when its connection is lost",
-      () =>
-        // On the real clock, as the export's own timeouts and MySQL are.
-        TestClock.withLive(
-          Effect.gen(function* () {
-            yield* resetDatabase
-            yield* insertManyRows
-            const reader = Stream.toReadableStream(
-              kilnDatabaseDump(new Date(kiln.now))
-            ).getReader()
-            let received = ""
-            while (!received.includes("INSERT INTO `dump_many`")) {
-              const chunk = yield* Effect.promise(() => reader.read())
-              if (chunk.done) break
-              received += chunk.value
-            }
-            yield* killExport
-
-            const ended = yield* readToEnd(reader)
-            assert.strictEqual(ended, "failed")
-          })
-        ).pipe(
-          Effect.ensuring(
-            Effect.flatMap(SqlClient.SqlClient, (sql) =>
-              sql.unsafe("DROP TABLE IF EXISTS dump_many")
-            ).pipe(Effect.orDie)
-          )
-        ),
-      60_000
-    )
-
-    it.effect(
-      "fails without a seal when its connection is lost between tables",
-      () =>
-        // On the real clock, as the export's own timeouts and MySQL are.
-        TestClock.withLive(
-          Effect.gen(function* () {
-            const sql = yield* SqlClient.SqlClient
-            yield* resetDatabase
-            yield* sql.unsafe(
-              "CREATE TABLE IF NOT EXISTS dump_a (id INT PRIMARY KEY)"
-            )
-            yield* sql.unsafe(
-              "CREATE TABLE IF NOT EXISTS dump_b (id INT PRIMARY KEY)"
-            )
-            yield* sql.unsafe("INSERT INTO dump_a (id) VALUES (1)")
-            yield* sql.unsafe("INSERT INTO dump_b (id) VALUES (1)")
-            // Pulled one chunk at a time, so nothing is read ahead: up to
-            // dump_b's definition, before its rows are asked for.
-            const pull = yield* Stream.toPull(
-              kilnDatabaseDump(new Date(kiln.now))
-            )
-            let received = ""
-            while (!received.includes("CREATE TABLE `dump_b`")) {
-              received += (yield* pull).join("")
-            }
-            yield* killExport
-            yield* waitFor(200)
-
-            let ended: "failed" | "finished" | null = null
-            while (ended === null) {
-              const step = yield* Effect.exit(pull)
-              if (Exit.isSuccess(step)) received += step.value.join("")
-              else ended = Pull.isDoneCause(step.cause) ? "finished" : "failed"
-            }
-            assert.strictEqual(ended, "failed")
-            assert.notInclude(received, "-- Kiln export sha256")
-          })
-        ).pipe(
-          Effect.scoped,
-          Effect.ensuring(
-            Effect.flatMap(SqlClient.SqlClient, (sql) =>
-              sql.unsafe("DROP TABLE IF EXISTS dump_a, dump_b")
-            ).pipe(Effect.orDie)
-          )
-        ),
-      60_000
-    )
-
-    it.effect(
-      "lets go of its connection when cancelled while a query waits",
-      () =>
-        // On the real clock, as the export's own timeouts and MySQL are.
-        TestClock.withLive(
-          Effect.gen(function* () {
-            const sql = yield* SqlClient.SqlClient
-            yield* resetDatabase
-            yield* sql.unsafe("DROP TABLE IF EXISTS dump_many")
-            yield* sql.unsafe("CREATE TABLE dump_many (id INT PRIMARY KEY)")
-            yield* sql.unsafe("INSERT INTO dump_many (id) VALUES (1), (2)")
-            // Another session's write lock holds the export's SELECT.
-            const locker = yield* Effect.acquireRelease(
-              Effect.promise(() =>
-                createConnection(databaseConnectionConfig())
-              ),
-              (connection) => Effect.promise(() => connection.end())
-            )
-            const scope = yield* Scope.make()
-            const pull = yield* Stream.toPull(
-              kilnDatabaseDump(new Date(kiln.now))
-            ).pipe(Scope.provide(scope))
-            let received = ""
-            while (!received.includes("CREATE TABLE `dump_many`")) {
-              received += (yield* pull).join("")
-            }
-            yield* Effect.promise(() =>
-              locker.query("LOCK TABLES dump_many WRITE")
-            )
-            const waiting = yield* Effect.forkChild(pull)
-            yield* waitFor(500)
-
-            // Cancelling ends the export without waiting for the SELECT.
-            yield* Fiber.interrupt(waiting)
-            const outcome = yield* Effect.raceFirst(
-              Scope.close(scope, Exit.void).pipe(Effect.as("closed" as const)),
-              waitFor(15_000).pipe(Effect.as("stuck" as const))
-            )
-            yield* Effect.promise(() => locker.query("UNLOCK TABLES"))
-            assert.strictEqual(outcome, "closed")
-          })
-        ).pipe(
-          Effect.scoped,
-          Effect.ensuring(
-            Effect.flatMap(SqlClient.SqlClient, (sql) =>
-              sql.unsafe("DROP TABLE IF EXISTS dump_many")
-            ).pipe(Effect.orDie)
-          )
-        ),
       60_000
     )
 

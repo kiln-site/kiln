@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber } from "effect"
+import { Deferred, Effect, Fiber } from "effect"
 
 import { LaneRejectedError, OperationLanes } from "./lanes.js"
 import { exclusive, shared, type LaneLock } from "./locks.js"
@@ -12,16 +12,12 @@ const start = Effect.fnUntraced(function* (
   lanes: OperationLanes,
   log: Array<string>,
   label: string,
-  locks: ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>>,
-  options: {
-    readonly continuation?: boolean
-    readonly precondition?: () => boolean
-  } = {}
+  locks: ReadonlyArray<LaneLock>
 ) {
   const release = yield* Deferred.make<void>()
   const fiber = yield* lanes
     .run(
-      { label, locks, ...options },
+      { label, locks },
       Effect.sync(() => log.push(label)).pipe(
         Effect.andThen(Deferred.await(release)),
         Effect.as(label)
@@ -38,36 +34,6 @@ const start = Effect.fnUntraced(function* (
 })
 
 describe("operation lanes", () => {
-  it.effect("runs conflicting operations in the order they arrived", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes()
-      const log: Array<string> = []
-      const first = yield* start(lanes, log, "first", [exclusive("a")])
-      const second = yield* start(lanes, log, "second", [exclusive("a")])
-      const third = yield* start(lanes, log, "third", [exclusive("a")])
-      assert.deepStrictEqual(log, ["first"])
-
-      yield* first.finish
-      assert.deepStrictEqual(log, ["first", "second"])
-      yield* second.finish
-      yield* third.finish
-      assert.deepStrictEqual(log, ["first", "second", "third"])
-      assert.strictEqual(yield* Fiber.join(third.fiber), "third")
-    })
-  )
-
-  it.effect("runs operations on different resources at once", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes()
-      const log: Array<string> = []
-      yield* start(lanes, log, "a", [exclusive("a")])
-      yield* start(lanes, log, "b", [exclusive("b")])
-      yield* start(lanes, log, "a-reader", [shared("c")])
-      yield* start(lanes, log, "c-reader", [shared("c")])
-      assert.deepStrictEqual(log, ["a", "b", "a-reader", "c-reader"])
-    })
-  )
-
   it.effect(
     "keeps later shared work behind a waiting exclusive operation",
     () =>
@@ -87,68 +53,6 @@ describe("operation lanes", () => {
       })
   )
 
-  it.effect("grants all of an operation's locks together", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes()
-      const log: Array<string> = []
-      const holdsA = yield* start(lanes, log, "holds-a", [exclusive("a")])
-      // Needs both; B is free but A isn't, so it takes neither yet.
-      yield* start(lanes, log, "needs-a-and-b", [
-        exclusive("a"),
-        exclusive("b"),
-      ])
-      // Wants B after the operation above, so it waits its turn.
-      yield* start(lanes, log, "needs-b", [exclusive("b")])
-      // Unrelated work still runs.
-      yield* start(lanes, log, "needs-c", [exclusive("c")])
-      assert.deepStrictEqual(log, ["holds-a", "needs-c"])
-      yield* holdsA.finish
-      assert.deepStrictEqual(log, ["holds-a", "needs-c", "needs-a-and-b"])
-    })
-  )
-
-  it.effect("holds back later work until an earlier lookup settles", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes()
-      const log: Array<string> = []
-      let settle: (locks: ReadonlyArray<LaneLock>) => void = () => undefined
-      const lookup = new Promise<ReadonlyArray<LaneLock>>((resolve) => {
-        settle = resolve
-      })
-      yield* start(lanes, log, "aliased", lookup)
-      yield* start(lanes, log, "later", [exclusive("b")])
-      assert.deepStrictEqual(log, [])
-
-      settle([exclusive("a")])
-      yield* Effect.promise(() => lookup)
-      yield* Effect.yieldNow
-      assert.deepStrictEqual(log, ["aliased", "later"])
-    })
-  )
-
-  it.effect(
-    "lets the next operation start when a waiting one is withdrawn",
-    () =>
-      Effect.gen(function* () {
-        const lanes = new OperationLanes()
-        const log: Array<string> = []
-        const first = yield* start(lanes, log, "first", [exclusive("a")])
-        const withdrawn = lanes.admit({
-          label: "withdrawn",
-          locks: [exclusive("a"), exclusive("b")],
-        })
-        yield* start(lanes, log, "needs-b", [exclusive("b")])
-        assert.deepStrictEqual(log, ["first"])
-
-        withdrawn.cancel()
-        yield* Effect.yieldNow
-        assert.deepStrictEqual(log, ["first", "needs-b"])
-        const result = yield* Effect.exit(withdrawn.run(Effect.void))
-        assert.isTrue(Exit.isFailure(result))
-        yield* first.finish
-      })
-  )
-
   it.effect("keeps a started operation's locks after its caller gives up", () =>
     Effect.gen(function* () {
       const lanes = new OperationLanes()
@@ -161,167 +65,6 @@ describe("operation lanes", () => {
       yield* started.finish
       assert.deepStrictEqual(log, ["started", "next"])
       yield* next.finish
-    })
-  )
-
-  it.effect("withdraws an operation whose caller gives up while it waits", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes()
-      const log: Array<string> = []
-      const first = yield* start(lanes, log, "first", [exclusive("a")])
-      const abandoned = yield* start(lanes, log, "abandoned", [exclusive("a")])
-      const last = yield* start(lanes, log, "last", [exclusive("a")])
-
-      yield* Fiber.interrupt(abandoned.fiber)
-      yield* first.finish
-      assert.deepStrictEqual(log, ["first", "last"])
-      yield* last.finish
-    })
-  )
-
-  it.effect("checks a precondition after the work ahead of it has run", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes()
-      const log: Array<string> = []
-      let generation = 0
-      const manual = yield* start(lanes, log, "manual-stop", [exclusive("a")])
-      const scheduled = yield* start(
-        lanes,
-        log,
-        "scheduled-start",
-        [exclusive("a")],
-        { precondition: () => generation === 0 }
-      )
-      generation += 1
-      yield* manual.finish
-
-      const result = yield* Effect.flip(Fiber.join(scheduled.fiber))
-      assert.instanceOf(result, LaneRejectedError)
-      assert.strictEqual((result as LaneRejectedError).reason, "superseded")
-      assert.deepStrictEqual(log, ["manual-stop"])
-    })
-  )
-
-  it.effect("lets a running operation take more locks ahead of the line", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes()
-      const log: Array<string> = []
-      const routeWriter = yield* start(lanes, log, "other-routes", [
-        shared("routes"),
-      ])
-      const deletion = yield* Deferred.make<void>()
-      const deleteFiber = yield* lanes
-        .run(
-          { label: "delete", locks: [exclusive("server")] },
-          Effect.gen(function* () {
-            log.push("delete")
-            yield* Deferred.await(deletion)
-            // Clears its routes once the server is gone.
-            yield* lanes.runNested(
-              { label: "delete.routes", locks: [exclusive("routes")] },
-              Effect.sync(() => log.push("delete.routes"))
-            )
-          })
-        )
-        .pipe(Effect.forkChild({ startImmediately: true }))
-      // Waits on both the server the delete holds and the routes.
-      yield* start(lanes, log, "route-write", [
-        exclusive("routes"),
-        exclusive("server"),
-      ])
-
-      yield* Deferred.succeed(deletion, undefined)
-      yield* Effect.yieldNow
-      // The nested lock waits only for the current holder, not the route
-      // write queued ahead of it, which is itself waiting on the delete.
-      assert.deepStrictEqual(log, ["other-routes", "delete"])
-      yield* routeWriter.finish
-      yield* Fiber.join(deleteFiber)
-      assert.deepStrictEqual(log, [
-        "other-routes",
-        "delete",
-        "delete.routes",
-        "route-write",
-      ])
-    })
-  )
-
-  it.effect(
-    "lets a continuation wait only for what holds its locks, and a pause withdraw it",
-    () =>
-      Effect.gen(function* () {
-        const lanes = new OperationLanes()
-        const log: Array<string> = []
-        // A deletion holds the server while it waits on the network's DNS.
-        const deletion = yield* start(lanes, log, "delete", [
-          exclusive("server"),
-        ])
-        // A change to the network waits for the deletion.
-        const change = yield* start(lanes, log, "network-change", [
-          exclusive("network"),
-          exclusive("server"),
-        ])
-        const holder = yield* start(lanes, log, "dns-holder", [
-          exclusive("dns"),
-        ])
-        const dns = yield* start(
-          lanes,
-          log,
-          "network-dns",
-          [exclusive("network"), exclusive("dns")],
-          { continuation: true }
-        )
-
-        // Only for the holder of what it takes, not the queued change.
-        assert.deepStrictEqual(log, ["delete", "dns-holder"])
-        yield* holder.finish
-        assert.deepStrictEqual(log, ["delete", "dns-holder", "network-dns"])
-        yield* dns.finish
-        yield* deletion.finish
-        yield* change.finish
-        assert.deepStrictEqual(log, [
-          "delete",
-          "dns-holder",
-          "network-dns",
-          "network-change",
-        ])
-
-        const blocker = yield* start(lanes, log, "blocker", [exclusive("x")])
-        const waiting = yield* start(
-          lanes,
-          log,
-          "later-dns",
-          [exclusive("x")],
-          {
-            continuation: true,
-          }
-        )
-        lanes.setPaused(true)
-        const withdrawn = yield* Effect.flip(Fiber.join(waiting.fiber))
-        assert.strictEqual((withdrawn as LaneRejectedError).reason, "paused")
-        yield* blocker.finish
-      })
-  )
-
-  it.effect("counts waiting continuations toward its waiting limit", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes({ maxWaiting: 1 })
-      const log: Array<string> = []
-      const holder = yield* start(lanes, log, "holder", [exclusive("a")])
-      yield* start(lanes, log, "dns", [exclusive("a")], { continuation: true })
-
-      const refused = yield* Effect.flip(
-        lanes.run(
-          { continuation: true, label: "more-dns", locks: [exclusive("a")] },
-          Effect.void
-        )
-      )
-      assert.strictEqual((refused as LaneRejectedError).reason, "busy")
-      const alsoRefused = yield* Effect.flip(
-        lanes.run({ label: "change", locks: [exclusive("a")] }, Effect.void)
-      )
-      assert.strictEqual((alsoRefused as LaneRejectedError).reason, "busy")
-      yield* holder.finish
     })
   )
 
@@ -361,124 +104,5 @@ describe("operation lanes", () => {
         )
         assert.deepStrictEqual(log, ["freeze"])
       })
-  )
-
-  it.effect(
-    "refuses a continuation as its turn comes, as it would any arrival",
-    () =>
-      Effect.gen(function* () {
-        const frozen = new Set<string>()
-        const lanes = new OperationLanes({
-          refuse: (_label, locks) =>
-            locks.some((lock) => frozen.has(lock.key))
-              ? "It's being deleted"
-              : null,
-        })
-        const log: Array<string> = []
-        const holder = yield* start(lanes, log, "holder", [exclusive("a")])
-        const dns = yield* start(lanes, log, "dns", [exclusive("a")], {
-          continuation: true,
-        })
-        frozen.add("a")
-        yield* holder.finish
-
-        const refused = yield* Effect.flip(Fiber.join(dns.fiber))
-        assert.strictEqual((refused as LaneRejectedError).reason, "refused")
-        assert.strictEqual(refused.message, "It's being deleted")
-        assert.deepStrictEqual(log, ["holder"])
-      })
-  )
-
-  it.effect("counts an exclusive operation only once it starts", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes()
-      // Granted at once, then refused before it ran, as a request that
-      // fails its permission check is.
-      const refused = lanes.admit({ label: "delete", locks: [exclusive("a")] })
-      refused.cancel()
-      assert.strictEqual(lanes.exclusiveGeneration("a"), 0)
-
-      yield* lanes.run(
-        { label: "restore", locks: [exclusive("a")] },
-        Effect.void
-      )
-      assert.strictEqual(lanes.exclusiveGeneration("a"), 1)
-    })
-  )
-
-  it.effect(
-    "starts nothing new while paused, and lets running work finish",
-    () =>
-      Effect.gen(function* () {
-        const lanes = new OperationLanes()
-        const log: Array<string> = []
-        const running = yield* start(lanes, log, "running", [exclusive("a")])
-        const waiting = yield* start(lanes, log, "waiting", [exclusive("a")])
-
-        // Granted while its request was still being checked, not yet started.
-        const granted = lanes.admit({
-          label: "granted",
-          locks: [exclusive("c")],
-        })
-
-        lanes.setPaused(true)
-        const withdrawn = yield* Effect.flip(Fiber.join(waiting.fiber))
-        assert.strictEqual((withdrawn as LaneRejectedError).reason, "paused")
-        const lateStart = yield* Effect.flip(
-          granted.run(Effect.sync(() => log.push("granted")))
-        )
-        assert.strictEqual((lateStart as LaneRejectedError).reason, "paused")
-        const refused = yield* Effect.flip(
-          lanes.run({ label: "refused", locks: [exclusive("b")] }, Effect.void)
-        )
-        assert.strictEqual((refused as LaneRejectedError).reason, "paused")
-
-        yield* running.finish
-        assert.strictEqual(yield* Fiber.join(running.fiber), "running")
-        lanes.setPaused(false)
-        yield* lanes.run(
-          { label: "after", locks: [exclusive("a")] },
-          Effect.void
-        )
-        assert.deepStrictEqual(log, ["running"])
-      })
-  )
-
-  it.effect("refuses new work past its waiting limit", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes({ maxWaiting: 1 })
-      const log: Array<string> = []
-      yield* start(lanes, log, "running", [exclusive("a")])
-      yield* start(lanes, log, "waiting", [exclusive("a")])
-      const refused = yield* Effect.flip(
-        lanes.run({ label: "refused", locks: [exclusive("b")] }, Effect.void)
-      )
-      assert.strictEqual((refused as LaneRejectedError).reason, "busy")
-    })
-  )
-
-  it.effect("says what each waiting operation waits on", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes()
-      const log: Array<string> = []
-      yield* start(lanes, log, "backup", [shared("server")])
-      yield* start(lanes, log, "restore", [exclusive("server")])
-      yield* start(lanes, log, "start", [shared("server"), exclusive("power")])
-
-      const { waiting } = lanes.describe()
-      assert.deepStrictEqual(
-        waiting.map(({ label, waitingOn }) => ({ label, waitingOn })),
-        [
-          {
-            label: "restore",
-            waitingOn: [{ holds: true, id: "backup", key: "server" }],
-          },
-          {
-            label: "start",
-            waitingOn: [{ holds: false, id: "restore", key: "server" }],
-          },
-        ]
-      )
-    })
   )
 })

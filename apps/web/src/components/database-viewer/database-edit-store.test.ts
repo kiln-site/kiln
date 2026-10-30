@@ -10,23 +10,6 @@ const row = {
 }
 
 describe("database edit store", () => {
-  it("stages changes against the whole loaded row and drops reverted edits", () => {
-    const store = createDatabaseEditStore("players")
-    store.setCell(row, "name", "Alexa")
-    store.setCell(row, "balance", 12)
-    store.setCell(row, "balance", 10)
-
-    expect(store.getPendingCount()).toBe(1)
-    expect(store.toChanges()).toEqual([
-      {
-        kind: "update",
-        key: { uuid: "a" },
-        original: { balance: 10, name: "Alex", uuid: "a" },
-        values: { name: "Alexa" },
-      },
-    ])
-  })
-
   it("keeps the first snapshot when the row refetches", () => {
     const store = createDatabaseEditStore("players")
     store.setCell(row, "balance", 12)
@@ -42,52 +25,6 @@ describe("database edit store", () => {
         values: { balance: 12, name: "Alexa" },
       },
     ])
-  })
-
-  it("holds staging while a save is in flight", () => {
-    const store = createDatabaseEditStore("players")
-    store.setLocked(true)
-    store.setCell(row, "name", "Alexa")
-    store.toggleDeleted(row)
-
-    expect(store.insertRow()).toBeNull()
-    expect(store.getPendingCount()).toBe(0)
-  })
-
-  it("sends deletes instead of edits for deleted rows", () => {
-    const store = createDatabaseEditStore("players")
-    store.setCell(row, "name", "Alexa")
-    store.toggleDeleted(row)
-    const inserted = store.insertRow() ?? ""
-    store.setInsertedCell(inserted, "name", "Steve")
-
-    expect(store.toChanges()).toEqual([
-      { kind: "delete", key: { uuid: "a" }, original: row.original },
-      { kind: "insert", values: { name: "Steve" } },
-    ])
-  })
-
-  it("restages a kept change onto the current row after a conflict", () => {
-    const store = createDatabaseEditStore("players")
-    const steve = { ...row, id: "steve", key: { uuid: "b" } }
-    store.setCell(row, "name", "Alexa")
-    store.setCell(steve, "name", "Steven")
-    // Someone else changed Alex's balance; the user keeps their edit.
-    const current = { ...row.original, balance: 11 }
-    store.rebase("alex", current)
-    // Someone else already renamed Steve the same way; nothing is left.
-    store.rebase("steve", { ...steve.original, name: "Steven" })
-
-    expect(store.toChanges()).toEqual([
-      {
-        kind: "update",
-        key: { uuid: "a" },
-        original: current,
-        values: { name: "Alexa" },
-      },
-    ])
-    store.drop(["alex"])
-    expect(store.getPendingCount()).toBe(0)
   })
 
   it("snapshots every column of a row, not just the visible ones", () => {

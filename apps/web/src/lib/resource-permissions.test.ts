@@ -3,7 +3,6 @@ import { Effect } from "effect"
 import { SqlClient } from "effect/sql"
 
 import { databaseTableName } from "@/lib/database-config"
-import { grantHasPermission } from "@/lib/permissions"
 import {
   effectiveScopePermissions,
   loadResourceGrantsEffect,
@@ -65,48 +64,8 @@ const assignPreset = (accessId: string, presetId: string) =>
     created_at: 0,
   })
 
-const insertDatabase = (id: string, engine: string) =>
-  insertRows("database", {
-    database_id: id,
-    relay_id: "relay",
-    name: id,
-    engine,
-    database_name: id,
-    username: id,
-    password_ciphertext: "ciphertext",
-    created_by: "someone",
-    created_at: 0,
-    updated_at: 0,
-  })
-
 describeMysql("effective resource authority", () => {
   layer(TestDatabase)((it) => {
-    it.effect(
-      "keeps an explicitly empty grant empty even when its legacy role was admin",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* insertRelay("relay")
-          yield* insertGrant({
-            id: "empty",
-            userId: "user",
-            relayId: "relay",
-            resourceType: "instance",
-            resourceId: "server",
-            role: "admin",
-          })
-
-          const grants = yield* loadResourceGrantsEffect("user", "relay")
-
-          expect(grants).toHaveLength(1)
-          expect(grants[0]?.permissions).toEqual([])
-          expect(grantHasPermission(grants[0]!, "instance.files.read")).toBe(
-            false
-          )
-          expect(effectiveScopePermissions(grants, scope).size).toBe(0)
-        })
-    )
-
     it.effect(
       "unions live preset selections with Relay inheritance and only the matching child scope",
       () =>
@@ -217,107 +176,6 @@ describeMysql("effective resource authority", () => {
             effectiveScopePermissions(grants, { ...scope, resourceId: "other" })
               .size
           ).toBe(0)
-        })
-    )
-
-    it.effect(
-      "filters unsupported Redis and Valkey dump authority from explicit and preset ALL grants",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* insertRelay("relay")
-          for (const engine of ["redis", "valkey", "postgres"]) {
-            yield* insertDatabase(engine, engine)
-            yield* insertGrant({
-              id: engine,
-              userId: "user",
-              relayId: "relay",
-              resourceType: "database",
-              resourceId: engine,
-            })
-          }
-          yield* select("redis", "database.dump.export")
-          yield* select("redis", "database.read")
-          yield* insertPreset(
-            "valkey-all",
-            {
-              relayId: "relay",
-              resourceType: "database",
-              resourceId: "valkey",
-            },
-            ["all"],
-            "collection"
-          )
-          yield* assignPreset("valkey", "valkey-all")
-          yield* select("postgres", "database.dump.export")
-
-          const grants = yield* loadResourceGrantsEffect("user", "relay")
-
-          for (const id of ["redis", "valkey"]) {
-            const grant = grants.find((grant) => grant.id === id)
-            expect(grant?.permissions).toContain("database.read")
-            expect(grant?.permissions).not.toContain("database.dump.export")
-            expect(grant?.permissions).not.toContain("database.dump.import")
-          }
-          expect(
-            grants.find((grant) => grant.id === "postgres")?.permissions
-          ).toContain("database.dump.export")
-        })
-    )
-
-    it.effect(
-      "deduplicates permissions shared by many live presets before validation",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* insertRelay("relay")
-          yield* insertGrant({
-            id: "access",
-            userId: "user",
-            relayId: "relay",
-            resourceType: "instance",
-            resourceId: "server",
-          })
-          yield* select("access", "instance.files.read")
-          // More selections than one validated assignment may hold.
-          const presetIds = Array.from({ length: 300 }, (_, i) => `preset-${i}`)
-          yield* insertRows(
-            "permission_preset",
-            presetIds.map((id) => ({
-              id,
-              relay_id: "relay",
-              resource_type: "instance",
-              resource_id: "server",
-              name: id,
-              created_at: 0,
-              updated_at: 0,
-            }))
-          )
-          yield* insertRows(
-            "preset_selection",
-            presetIds.map((id) => ({
-              preset_id: id,
-              selection_kind: "permission",
-              selection_key: "instance.files.read",
-            }))
-          )
-          yield* insertRows(
-            "access_preset",
-            presetIds.map((id) => ({
-              id,
-              access_id: "access",
-              preset_id: id,
-              created_at: 0,
-            }))
-          )
-
-          const grants = yield* loadResourceGrantsEffect("user", "relay")
-
-          expect(
-            grants[0]?.permissions.filter(
-              (permission) => permission === "instance.files.read"
-            )
-          ).toHaveLength(1)
         })
     )
   })

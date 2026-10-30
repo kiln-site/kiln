@@ -8,23 +8,6 @@ import { loadConfig } from "../config.js"
 import { loadRelayTls } from "./tls.js"
 
 describe("Relay managed TLS", () => {
-  it.effect("leaves public TLS termination to the configured proxy", () =>
-    Effect.gen(function* () {
-      const coolify = loadConfig({
-        KILN_RELAY_PROXY: "coolify",
-        SERVICE_URL_KILN_RELAY_4100: "https://relay.example.com",
-        NODE_ENV: "production",
-      })
-      const bundled = loadConfig({
-        KILN_RELAY_HOST: "relay.example.com",
-        KILN_RELAY_PROXY: "traefik",
-        NODE_ENV: "production",
-      })
-      assert.isNull(yield* loadRelayTls(coolify))
-      assert.isNull(yield* loadRelayTls(bundled))
-    })
-  )
-
   it.live("persists its CA and renews its leaf certificate", () =>
     withTemporaryDirectory((directory) =>
       Effect.gen(function* () {

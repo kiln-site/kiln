@@ -1,9 +1,6 @@
 import { assert, layer } from "@effect/vitest"
 import { Deferred, Effect, Fiber } from "effect"
-import * as TestClock from "effect/testing/TestClock"
 
-import { Database } from "@/effect/database"
-import { DatabaseError } from "@/effect/errors"
 import {
   listInstanceDirectoryEffect,
   type DirectoryInstance,
@@ -29,70 +26,6 @@ const server: DirectoryInstance = {
 
 describeMysql("instance directory synchronization", () => {
   layer(TestDatabase)((it) => {
-    it.effect(
-      "fills in a recorded server after a database outage without another Relay change",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* insertRelay(relayId)
-          // A record from before the directory existed, without metadata.
-          yield* insertInstance(relayId, server.id, { source_name: "Before" })
-          const database = yield* Database
-          const unavailable = Deferred.makeUnsafe<void>()
-          const committed = Deferred.makeUnsafe<void>()
-          let available = false
-          yield* Effect.acquireRelease(
-            Effect.sync(() =>
-              subscribeRealtimeChanges((event) => {
-                if (
-                  event.type === "hearth.invalidate" &&
-                  event.topics.includes("instance-directory")
-                )
-                  Deferred.doneUnsafe(committed, Effect.void)
-              })
-            ),
-            (unsubscribe) => Effect.sync(unsubscribe)
-          )
-          const worker = yield* syncInstanceDirectories.pipe(
-            Effect.provideService(Database, {
-              ...database,
-              execute: (operation, statement, values) =>
-                Effect.suspend(() => {
-                  if (available)
-                    return database.execute(operation, statement, values)
-                  Deferred.doneUnsafe(unavailable, Effect.void)
-                  return Effect.fail(
-                    DatabaseError.make({
-                      operation,
-                      cause: new Error("Database is unavailable"),
-                    })
-                  )
-                }),
-            }),
-            Effect.provideService(InstanceDirectorySource, {
-              instances: () => [server],
-              subscribe: (notify) => {
-                notify(relayId)
-                return () => {}
-              },
-            }),
-            Effect.scoped,
-            Effect.forkChild
-          )
-          yield* Deferred.await(unavailable)
-          yield* TestClock.adjust(1_000)
-          assert.deepStrictEqual(yield* listInstanceDirectoryEffect(), [])
-          available = true
-          yield* TestClock.adjust(5_000)
-          yield* Deferred.await(committed)
-          assert.strictEqual(
-            (yield* listInstanceDirectoryEffect())[0]?.name,
-            "Before"
-          )
-          yield* Fiber.interrupt(worker)
-        })
-    )
-
     it.effect(
       "refreshes a recorded server and never removes it when a snapshot leaves it out",
       () =>

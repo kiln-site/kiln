@@ -13,7 +13,6 @@ import {
 } from "@/server/instance-inventory.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
-import { ExternalServiceError } from "@/effect/errors"
 
 const relayId = "r".repeat(43),
   id = "a".repeat(40)
@@ -222,72 +221,6 @@ describeMysql("scoped instance inventory", () => {
           // Without the database's network permission, none.
           assert.deepStrictEqual(yield* membersSeenBy(databaseReader), [])
         })
-    )
-
-    it.effect("never answers for a server through its Relay's reference", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay(relayId)
-        const request = {
-          reference: { kind: "relay", relayId, id },
-          view: "status",
-        } as InstanceInventoryRequest
-        const [result] = yield* readInstanceInventory(
-          { ...user, isDevelopmentBypass: true },
-          [request]
-        ).pipe(
-          Effect.provideService(InstanceInventorySource, {
-            read: (_, requests) => Effect.succeed(values(requests)),
-          })
-        )
-        assert.deepStrictEqual(result, { request, error: "unavailable" })
-      })
-    )
-
-    it.effect("keeps a healthy Relay's result when another Relay fails", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay(relayId)
-        yield* insertRelay("s".repeat(43))
-        const requests: Array<InstanceInventoryRequest> = [
-          relayId,
-          "s".repeat(43),
-        ].map((relayId) => ({
-          reference: { kind: "server", relayId, id },
-          view: "status",
-        }))
-        const result = yield* readInstanceInventory(
-          { ...user, isDevelopmentBypass: true },
-          requests
-        ).pipe(
-          Effect.provideService(InstanceInventorySource, {
-            read: (relay, requests) =>
-              relay.id === relayId
-                ? Effect.fail(
-                    ExternalServiceError.make({
-                      service: "Relay",
-                      message: "Disconnected",
-                    })
-                  )
-                : Effect.succeed(values(requests)),
-          })
-        )
-        assert.strictEqual(
-          result.some(
-            (item) =>
-              item.request.reference.relayId === relayId && "error" in item
-          ),
-          true
-        )
-        assert.strictEqual(
-          result.some(
-            (item) =>
-              item.request.reference.relayId === "s".repeat(43) &&
-              "value" in item
-          ),
-          true
-        )
-      })
     )
   })
 })

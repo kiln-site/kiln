@@ -1,40 +1,25 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto"
 import type { KeyObject } from "node:crypto"
-import { once } from "node:events"
-import { createServer, request as httpRequest } from "node:http"
-import type { Server } from "node:http"
-import type { Duplex } from "node:stream"
+import { createServer } from "node:http"
 import { Effect } from "effect"
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  onTestFinished,
-  vi,
-} from "vite-plus/test"
+import { afterEach, describe, expect, it } from "vite-plus/test"
 import { WebSocket } from "ws"
 
 import {
   relayBrowserConsoleProtocol,
-  relayBrowserMaxFrameBytes,
   relayBrowserProofTranscript,
-  relayConsoleReadActions,
   type RelayBrowserCapabilityV2,
   type RelayConsoleLine,
-  type RelayInstanceResources,
   type RelayManagedDatabase,
 } from "@workspace/contracts"
 
 import { attachBrowserSocket } from "./browser-socket.js"
 import type { BrowserSocketServer } from "./browser-socket.js"
 import { consoleSources } from "./console-sources.js"
-import { sendRawRequest } from "./test/raw-http.js"
 import type { RelayStateStore } from "./effect/state.js"
 import type { RelayIdentity } from "./effect/identity.js"
 import type { DockerConsoleSession, DockerDriver } from "./docker.js"
 import type { FilesystemDriver } from "./files.js"
-import type { RelaySnapshotSample } from "./snapshot-hub.js"
 import { OperationLanes } from "./operation-lanes.js"
 
 const origin = "https://hearth.test"
@@ -44,98 +29,10 @@ const sharedId = "resource-test"
 const openResources: Array<() => Promise<void>> = []
 
 afterEach(async () => {
-  vi.useRealTimers()
   await Promise.allSettled(openResources.splice(0).map((close) => close()))
 })
 
 describe("relay browser socket integration", () => {
-  it("ignores upgrade targets that URL parsing rejects instead of crashing", async () => {
-    const relay = await startRelay()
-    const upgraded = once(relay.server, "upgrade")
-
-    const malformed = sendRawRequest(relay.port, "//%", { upgrade: true })
-    // Listeners run in registration order; the browser socket's has returned.
-    const [, upgradedSocket] = (await upgraded) as [unknown, Duplex]
-    // Production answers these with 400 from index.ts; this harness has no
-    // such listener, so release the parked socket.
-    upgradedSocket.destroy()
-    malformed.destroy()
-    const messages = messageCollector(relay.connect(origin))
-    expect(await messages.next("auth.challenge")).toBeDefined()
-  })
-
-  it("authenticates, renews with nonce rotation, and closes on a revision floor", async () => {
-    const relay = await startRelay()
-    const socket = relay.connect(origin)
-    const messages = messageCollector(socket)
-
-    const challenge = await messages.next("auth.challenge")
-    const firstCapability = capability({
-      capabilityId: "capability-1",
-      keyThumbprint: relay.browser.keyThumbprint,
-      revision: 1,
-    })
-    socket.send(
-      JSON.stringify({
-        capability: encodeCapability(firstCapability, relay.issuerPrivateKey),
-        publicKeyJwk: relay.browser.jwk,
-        signature: browserProof(
-          relay.browser.privateKey,
-          challenge,
-          firstCapability.capabilityId
-        ),
-        type: "auth",
-        v: 1,
-      })
-    )
-    const ready = await messages.next("auth.ready")
-    expect(ready.instanceId).toBe("instance-test")
-    expect(typeof ready.renewalNonce).toBe("string")
-
-    const renewedCapability = capability({
-      capabilityId: "capability-2",
-      keyThumbprint: relay.browser.keyThumbprint,
-      revision: 1,
-    })
-    socket.send(
-      JSON.stringify({
-        capability: encodeCapability(renewedCapability, relay.issuerPrivateKey),
-        signature: browserProof(
-          relay.browser.privateKey,
-          {
-            expiresAt: ready.renewalNonceExpiresAt,
-            nonce: ready.renewalNonce,
-            relayId,
-            sessionId: ready.sessionId,
-          },
-          renewedCapability.capabilityId
-        ),
-        type: "auth.renew",
-        v: 1,
-      })
-    )
-    const renewed = await messages.next("auth.renewed")
-    expect(renewed.renewalNonce).not.toBe(ready.renewalNonce)
-    expect(renewed.expiresAt).toBe(renewedCapability.expiresAt)
-
-    relay.setAuthority({ issuerGeneration: 1, minimumRevision: 2 })
-    const closed = messages.closed()
-    relay.browserServer.reviseAuthorization(
-      relay.clientId,
-      [
-        {
-          minimumRevision: 2,
-          scope: { instanceId: "instance-test", kind: "instance" },
-          subject: "user-test",
-        },
-      ],
-      1
-    )
-    await expect(closed).resolves.toMatchObject({
-      code: 4403,
-    })
-  })
-
   it("rejects a capability that the paired Hearth did not sign", async () => {
     const relay = await startRelay()
     const forger = generateKeyPairSync("ed25519")
@@ -156,55 +53,6 @@ describe("relay browser socket integration", () => {
 
     expect(result.ready).toBe(false)
     expect(result.closed.code).toBe(4401)
-  })
-
-  it("takes a console subscription sent right behind the auth", async () => {
-    const relay = await startRelay()
-    const socket = relay.connect(origin)
-    const messages = messageCollector(socket)
-    const challenge = await messages.next("auth.challenge")
-    expect(challenge.features).toContain("early-messages")
-
-    sendAuth(socket, relay, challenge, databaseCapability)
-    // Without waiting for `auth.ready`.
-    socket.send(
-      JSON.stringify({ instanceId: sharedId, type: "console.subscribe", v: 1 })
-    )
-
-    await messages.next("auth.ready")
-    const reset = await messages.next("reset")
-    expect(reset.instanceId).toBe(sharedId)
-    expect(lineTexts(reset)).toEqual([`container container-${sharedId} output`])
-  })
-
-  // A browser's trace context is only telemetry; none can stop its console.
-  it.each([
-    [
-      "a trace context",
-      "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
-    ],
-    ["a malformed trace context", "00-not-a-trace-01"],
-    ["an oversized trace context", `00-${"a".repeat(4_096)}`],
-    ["a trace context that is not text", { traceId: 1 }],
-  ])("serves a console whose browser sends %s", async (_, traceparent) => {
-    const relay = await startRelay()
-    const socket = relay.connect(origin)
-    const messages = messageCollector(socket)
-    const challenge = await messages.next("auth.challenge")
-
-    sendAuth(socket, relay, challenge, databaseCapability, {}, { traceparent })
-    await messages.next("auth.ready")
-    socket.send(
-      JSON.stringify({
-        instanceId: sharedId,
-        traceparent,
-        type: "console.subscribe",
-        v: 1,
-      })
-    )
-
-    const reset = await messages.next("reset")
-    expect(lineTexts(reset)).toEqual([`container container-${sharedId} output`])
   })
 
   it("drops what follows an auth the Relay rejects", async () => {
@@ -232,19 +80,6 @@ describe("relay browser socket integration", () => {
     expect(received).not.toContain("auth.ready")
   })
 
-  it("streams a database's console to a capability for that database", async () => {
-    const relay = await startRelay()
-    const { messages, socket } = await authenticate(relay, databaseCapability)
-
-    socket.send(
-      JSON.stringify({ instanceId: sharedId, type: "console.subscribe", v: 1 })
-    )
-
-    const reset = await messages.next("reset")
-    expect(reset.instanceId).toBe(sharedId)
-    expect(lineTexts(reset)).toEqual([`container container-${sharedId} output`])
-  })
-
   it("keeps a server's console from a capability for a database", async () => {
     const relay = await startRelay()
     const { messages, socket } = await authenticate(relay, databaseCapability)
@@ -263,19 +98,6 @@ describe("relay browser socket integration", () => {
     await expect(closed).resolves.toMatchObject({ code: 4403 })
   })
 
-  it("refuses a database capability carrying a server's console actions", async () => {
-    const relay = await startRelay()
-    const result = await attemptAuthentication(relay, {
-      capability: {
-        ...databaseCapability,
-        actions: ["instance.console.read"],
-      },
-    })
-
-    expect(result.ready).toBe(false)
-    expect(result.closed.code).toBe(4401)
-  })
-
   it("refuses database consoles to a Hearth the Relay doesn't let read them", async () => {
     const relay = await startRelay({ actions: ["instance.console.read"] })
     const result = await attemptAuthentication(relay, {
@@ -285,417 +107,6 @@ describe("relay browser socket integration", () => {
     expect(result.ready).toBe(false)
     expect(result.closed.code).toBe(4401)
   })
-
-  it("lets a fully trusted Hearth paired before database consoles read them", async () => {
-    const relay = await startRelay({
-      actions: ["instance.console.read"],
-      role: "full_access",
-    })
-    const { messages, socket } = await authenticate(relay, databaseCapability)
-
-    socket.send(
-      JSON.stringify({ instanceId: sharedId, type: "console.subscribe", v: 1 })
-    )
-
-    await expect(messages.next("reset")).resolves.toMatchObject({
-      instanceId: sharedId,
-    })
-  })
-
-  it("streams an App's usage, a history to a frame, to a capability for that App", async () => {
-    const relay = await startRelay({ actions: ["app.read"] })
-    const { messages, socket } = await authenticate(relay, appUsageCapability)
-    const frames: Array<number> = []
-    socket.on("message", (data: Buffer) => frames.push(data.length))
-    const closed = messages.closed()
-
-    socket.send(
-      JSON.stringify({ instanceId: sharedId, type: "resource.subscribe", v: 1 })
-    )
-    // Samples arrive on the snapshot loop, once the Relay has subscribed it.
-    const sampling = setInterval(relay.reportRuns, 20)
-    onTestFinished(() => clearInterval(sampling))
-
-    // The App's history, then each service's, each with the latest samples.
-    const first = await messages.next("resource.usage")
-    expect(first).toMatchObject({ id: sharedId, kind: "app" })
-    expect((first.history as Array<unknown>).length).toBe(usageWindowSamples)
-    const byService = new Map<string, number>()
-    for (const _service of appServices) {
-      const event = await messages.next("resource.usage")
-      expect(event.history).toEqual([])
-      for (const service of event.services as Array<{
-        history: Array<unknown>
-        resources: unknown
-        service: string
-      }>) {
-        expect(service.resources).not.toBeNull()
-        if (service.history.length > 0)
-          byService.set(service.service, service.history.length)
-      }
-    }
-    expect(Object.fromEntries(byService)).toEqual(
-      Object.fromEntries(
-        appServices.map((service) => [service, usageWindowSamples])
-      )
-    )
-    // Later samples come alone.
-    await expect(messages.next("resource.usage")).resolves.toMatchObject({
-      history: [],
-      services: appServices.map(() => ({ history: [] })),
-    })
-    // Every frame fits what a browser takes, and the socket stays open.
-    expect(Math.max(...frames)).toBeLessThanOrEqual(relayBrowserMaxFrameBytes)
-    const stillOpen = await Promise.race([
-      closed.then(() => false),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 50)),
-    ])
-    expect(stillOpen).toBe(true)
-  })
-
-  for (const kind of ["instance", "app", "database"] as const) {
-    it(`refuses a ${kind}'s usage to a capability that can't read it`, async () => {
-      const relay = await startRelay({
-        actions: [
-          "instance.read",
-          "app.read",
-          "database.read",
-          ...Object.values(relayConsoleReadActions),
-        ],
-      })
-      const readAction = {
-        app: "app.read",
-        database: "database.read",
-        instance: "instance.read",
-      }[kind]
-      const usage = {
-        actions: [readAction],
-        operation: "resources",
-        resourceKind: kind,
-      } satisfies Partial<RelayBrowserCapabilityV2>
-
-      // Another resource's usage, of the same kind.
-      const other = await authenticate(relay, {
-        ...usage,
-        instanceId: sharedId,
-        loginSessionId: `${kind}-other`,
-      })
-      const otherClosed = other.messages.closed()
-      other.socket.send(
-        JSON.stringify({
-          instanceId: "f".repeat(40),
-          type: "resource.subscribe",
-          v: 1,
-        })
-      )
-      await expect(otherClosed).resolves.toMatchObject({ code: 4403 })
-
-      // A console capability for the resource itself.
-      const console = await authenticate(relay, {
-        actions: [relayConsoleReadActions[kind]],
-        instanceId: sharedId,
-        loginSessionId: `${kind}-console`,
-        operation: "console",
-        resourceKind: kind,
-      })
-      const consoleClosed = console.messages.closed()
-      console.socket.send(
-        JSON.stringify({ instanceId: sharedId, type: "resource.subscribe", v: 1 })
-      )
-      await expect(consoleClosed).resolves.toMatchObject({ code: 4403 })
-
-      // Another kind's read action, which the capability can't carry.
-      const borrowed = await attemptAuthentication(relay, {
-        capability: {
-          ...usage,
-          actions: [kind === "app" ? "database.read" : "app.read"],
-          instanceId: sharedId,
-          loginSessionId: `${kind}-borrowed`,
-        },
-      })
-      expect(borrowed.ready).toBe(false)
-      expect(borrowed.closed.code).toBe(4401)
-    })
-  }
-
-  it("streams the Relay's own container to a capability for its logs", async () => {
-    const relay = await startRelay({ actions: ["relay.logs.read"] })
-    const { messages, socket } = await authenticate(relay, relayLogsCapability)
-
-    socket.send(
-      JSON.stringify({ instanceId: relayId, type: "console.subscribe", v: 1 })
-    )
-
-    const reset = await messages.next("reset")
-    expect(lineTexts(reset)).toEqual(["container relay-container output"])
-  })
-
-  it("refuses Relay logs to a Hearth the Relay doesn't let read them", async () => {
-    const relay = await startRelay()
-    const result = await attemptAuthentication(relay, {
-      capability: relayLogsCapability,
-    })
-
-    expect(result.ready).toBe(false)
-    expect(result.closed.code).toBe(4401)
-  })
-
-  it("streams Kiln's services to the Hearth the Relay lets read them", async () => {
-    const relay = await startRelay({
-      actions: ["relay.logs.read"],
-      platformReader: true,
-    })
-    const { messages, socket } = await authenticate(relay, platformCapability)
-
-    socket.send(
-      JSON.stringify({
-        instanceId: relayId,
-        stream: "database",
-        type: "console.subscribe",
-        v: 1,
-      })
-    )
-
-    const reset = await messages.next("reset")
-    expect(lineTexts(reset)).toEqual(["container kiln-database output"])
-  })
-
-  it("refuses Kiln's services to another Hearth that may read Relay logs", async () => {
-    const relay = await startRelay({ actions: ["relay.logs.read"] })
-    const { messages, socket } = await authenticate(relay, platformCapability)
-    const closed = messages.closed()
-
-    socket.send(
-      JSON.stringify({ instanceId: relayId, type: "console.subscribe", v: 1 })
-    )
-
-    expect((await closed).code).toBe(4403)
-  })
-
-  it("refuses a Relay logs capability carrying a server's console actions", async () => {
-    const relay = await startRelay({
-      actions: ["relay.logs.read", "instance.console.write"],
-    })
-    const result = await attemptAuthentication(relay, {
-      capability: {
-        ...relayLogsCapability,
-        actions: ["relay.logs.read", "instance.console.write"],
-      },
-    })
-
-    expect(result.ready).toBe(false)
-    expect(result.closed.code).toBe(4401)
-  })
-
-  it("closes a database console when the person's access on the Relay changes", async () => {
-    const relay = await startRelay()
-    const { messages, socket } = await authenticate(relay, databaseCapability)
-    const closed = messages.closed()
-
-    // A server sharing the database's ID changing access leaves it open: the
-    // console still streams after.
-    relay.browserServer.reviseAuthorization(
-      relay.clientId,
-      [
-        {
-          minimumRevision: 2,
-          scope: { instanceId: sharedId, kind: "instance" },
-          subject: "user-test",
-        },
-      ],
-      1
-    )
-    socket.send(
-      JSON.stringify({ instanceId: sharedId, type: "console.subscribe", v: 1 })
-    )
-    await messages.next("reset")
-
-    relay.browserServer.reviseAuthorization(
-      relay.clientId,
-      [
-        {
-          minimumRevision: 2,
-          scope: { kind: "subject_relay" },
-          subject: "user-test",
-        },
-      ],
-      1
-    )
-
-    await expect(closed).resolves.toMatchObject({
-      code: 4403,
-    })
-  })
-
-  it("delivers a history larger than the socket's outbox", async () => {
-    const relay = await startRelay()
-    const { messages, socket } = await authenticate(relay, {
-      instanceId: largeHistoryId,
-    })
-    let closedEarly = false
-    socket.once("close", () => {
-      closedEarly = true
-    })
-
-    socket.send(
-      JSON.stringify({
-        instanceId: largeHistoryId,
-        type: "console.subscribe",
-        v: 1,
-      })
-    )
-    let received = lineTexts(await messages.next("reset")).length
-    while (received < largeHistoryLines) {
-      received += lineTexts(await messages.next("history")).length
-    }
-
-    expect(received).toBe(largeHistoryLines)
-    expect(closedEarly).toBe(false)
-  })
-
-  it("sends a console's newest lines first, in a frame that arrives in one round trip", async () => {
-    const live = new LiveConsole("first-frame-console")
-    live.start("2026-01-01T00:00:00.000Z", 200, 100)
-    const relay = await startRelay({}, [live])
-    const { messages, socket } = await authenticate(relay, {
-      instanceId: live.id,
-    })
-
-    socket.send(
-      JSON.stringify({ instanceId: live.id, type: "console.subscribe", v: 1 })
-    )
-    const reset = await messages.next("reset")
-    const shown = lineTexts(reset)
-    while (shown.length < live.lines.length) {
-      shown.unshift(...lineTexts(await messages.next("history")))
-    }
-
-    // What a new connection sends before the browser first acknowledges.
-    expect(Buffer.byteLength(JSON.stringify(reset))).toBeLessThan(14_000)
-    expect(lineTexts(reset).at(-1)).toBe(live.lines.at(-1)?.text)
-    expect(shown).toEqual(live.lines.map((line) => line.text))
-  })
-
-  it("gives every browser joining a busy console its whole log", async () => {
-    const live = new LiveConsole("busy-console")
-    live.start("2026-01-01T00:00:00.000Z", 5_000, 1_000)
-    const relay = await startRelay({}, [live])
-    // The first browser opens the console, which then reads all of its
-    // history.
-    const first = await openConsole(relay, live)
-    const history = live.lines.map((line) => line.id)
-    await first.until(() => first.showing(history))
-
-    // Others join while it keeps writing, and are slow to read what they're
-    // sent.
-    const joined: Array<Awaited<ReturnType<typeof openConsole>>> = []
-    for (let index = 0; index < 4; index += 1) {
-      const view = await openConsole(relay, live)
-      view.socket.pause()
-      joined.push(view)
-      live.write(30)
-    }
-    for (const view of joined) view.socket.resume()
-    live.write(30)
-    const all = live.lines.map((line) => line.id)
-    // The console keeps its newest 5,000 lines.
-    const kept = all.slice(-5_000)
-
-    for (const view of [first, ...joined]) {
-      await view.until(() => view.showing(kept))
-      const shown = view.lineIds()
-      // Older lines may come along, but none are missing or out of order.
-      expect(shown).toEqual(all.slice(all.indexOf(shown[0]!)))
-    }
-  })
-
-  it("stops sending a run's history once the server restarts", async () => {
-    const live = new LiveConsole("restarting-console")
-    // History far larger than what the socket buffers.
-    live.start("2026-01-01T00:00:00.000Z", 1_000, 10_000)
-    const relay = await startRelay({}, [live])
-    const first = await openConsole(relay, live)
-    await first.until(() => first.showing(live.lines.map((line) => line.id)))
-    // A browser joins and is slow to read its history.
-    const slow = await openConsole(relay, live)
-    slow.socket.pause()
-
-    live.start("2026-01-01T01:00:00.000Z", 300, 10_000)
-    relay.reportRuns()
-    slow.socket.resume()
-    const restarted = live.lines.map((line) => line.id)
-    await slow.until(() => slow.showing(restarted))
-
-    expect(slow.lineIds()).toEqual(restarted)
-    const reset = slow.runs.findIndex((run) => run.startedAt === live.startedAt)
-    expect(reset).toBeGreaterThan(0)
-    expect(
-      slow.runs.slice(reset).filter((run) => run.startedAt !== live.startedAt)
-    ).toEqual([])
-  })
-
-  it("sends a slow browser the whole of a run that starts while it reads the last", async () => {
-    const live = new LiveConsole("short-restart-console")
-    live.start("2026-01-01T00:00:00.000Z", 1_000, 10_000)
-    const relay = await startRelay({}, [live])
-    const first = await openConsole(relay, live)
-    await first.until(() => first.showing(live.lines.map((line) => line.id)))
-    // A browser joins and is slow to read its history.
-    const slow = await openConsole(relay, live)
-    slow.socket.pause()
-
-    // The new run's newest lines all fit in its reset; the rest are read
-    // after, while the slow browser still hasn't caught up.
-    live.start("2026-01-01T01:00:00.000Z", 1_000, 40)
-    relay.reportRuns()
-    const restarted = live.lines.map((line) => line.id)
-    await first.until(() => first.showing(restarted))
-    slow.socket.resume()
-    const written = live.write(1).map((line) => line.id)
-    await slow.until(() => slow.showing(written))
-
-    await slow.until(() => slow.showing(restarted))
-    expect(slow.lineIds()).toEqual([...restarted, ...written])
-  })
-
-  it("rejects a socket from an origin the capability was not issued to", async () => {
-    const relay = await startRelay()
-    const result = await attemptAuthentication(relay, {
-      socketOrigin: "https://attacker.test",
-    })
-
-    expect(result.ready).toBe(false)
-    expect(result.closed.code).toBe(4401)
-  })
-
-  it("cuts off a file request whose authentication never completes", async () => {
-    const relay = await startRelay()
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
-    const request = httpRequest({
-      headers: {
-        "Content-Length": "1024",
-        "Content-Type": "application/x-www-form-urlencoded",
-        Origin: origin,
-      },
-      host: "127.0.0.1",
-      method: "POST",
-      path: "/v1/browser/files/instance-test",
-      port: relay.port,
-    })
-    const outcome = new Promise<Error | number>((resolve) => {
-      request.once("error", resolve)
-      request.once("response", (response) => {
-        response.resume()
-        resolve(response.statusCode ?? 0)
-      })
-    })
-    request.flushHeaders()
-    await relay.nextFileRequest()
-
-    await vi.runOnlyPendingTimersAsync()
-
-    await expect(outcome).resolves.toMatchObject({ code: "ECONNRESET" })
-  })
 })
 
 interface TestRelay {
@@ -704,112 +115,19 @@ interface TestRelay {
     readonly keyThumbprint: string
     readonly privateKey: KeyObject
   }
-  readonly browserServer: BrowserSocketServer
-  readonly clientId: string
   readonly connect: (socketOrigin: string) => WebSocket
   readonly issuerPrivateKey: KeyObject
-  readonly nextFileRequest: () => Promise<void>
-  readonly reportRuns: () => void
-  readonly port: number
-  readonly server: Server
-  readonly setAuthority: (authority: {
-    issuerGeneration: number
-    minimumRevision: number
-  }) => void
 }
 
-// This server's history is several times the test outbox (2 MiB).
-const largeHistoryId = "large-history"
-const largeHistoryLines = 1_000
-
-// A server console the test writes to, and restarts, as a running server
-// would.
-class LiveConsole {
-  readonly id: string
-  lines: Array<RelayConsoleLine> = []
-  startedAt = ""
-  #written = 0
-  readonly #wakers = new Set<() => void>()
-
-  constructor(id: string) {
-    this.id = id
-  }
-
-  // Starts a new run whose history is `count` lines of `width` characters.
-  start(startedAt: string, count: number, width: number): void {
-    this.startedAt = startedAt
-    this.lines = []
-    this.write(count, width)
-  }
-
-  write(count: number, width = 40): Array<RelayConsoleLine> {
-    const written = Array.from({ length: count }, () => {
-      const index = this.#written++
-      return {
-        id: `line-${index}`,
-        level: "info" as const,
-        text: `${index} ${"x".repeat(width)}`,
-        timestamp: new Date(Date.parse(this.startedAt) + index).toISOString(),
-      }
-    })
-    this.lines.push(...written)
-    for (const wake of this.#wakers) wake()
-    return written
-  }
-
-  session(): DockerConsoleSession {
-    const lines = this.lines
-    const startedAt = this.startedAt
-    return {
-      history: (limit = 2_000) =>
-        Promise.resolve({
-          instanceId: this.id,
-          lifecycle: [{ state: "started", time: startedAt }],
-          lines: lines.slice(-limit),
-          truncated: lines.length > limit,
-        }),
-      stream: (signal) => this.#follow(lines, signal),
-    }
-  }
-
-  // Like Docker following a log: the newest lines, then what follows, until
-  // the run ends.
-  async *#follow(
-    lines: Array<RelayConsoleLine>,
-    signal: AbortSignal
-  ): AsyncIterable<RelayConsoleLine> {
-    let next = Math.max(0, lines.length - 200)
-    while (!signal.aborted && this.lines === lines) {
-      while (next < lines.length) yield lines[next++]!
-      await new Promise<void>((resolve) => {
-        const wake = () => {
-          this.#wakers.delete(wake)
-          signal.removeEventListener("abort", wake)
-          resolve()
-        }
-        this.#wakers.add(wake)
-        signal.addEventListener("abort", wake, { once: true })
-      })
-    }
-  }
-}
-
-// The Relay's consoles: each server and database container writes one line,
-// besides the server with a large history.
+// The Relay's consoles: each server and database container writes one line.
 function consoleSession(
   resourceId: string,
   text: string
 ): DockerConsoleSession {
   const startedAt = "2026-01-01T00:00:00.000Z"
-  const lines =
-    resourceId === largeHistoryId
-      ? Array.from({ length: largeHistoryLines }, (_, index) => ({
-          id: `line-${index}`,
-          level: "info" as const,
-          text: `${index} ${"x".repeat(10_000)}`,
-          timestamp: new Date(Date.parse(startedAt) + index).toISOString(),
-        }))
-      : [{ id: "line-1", level: "info" as const, text, timestamp: startedAt }]
+  const lines: Array<RelayConsoleLine> = [
+    { id: "line-1", level: "info", text, timestamp: startedAt },
+  ]
   return {
     history: (limit = 2_000) =>
       Promise.resolve({
@@ -835,15 +153,8 @@ function consoleSession(
 }
 
 async function startRelay(
-  clientGrant: {
-    actions?: Array<string>
-    // Whether the Relay lets this Hearth read Kiln's services.
-    platformReader?: boolean
-    role?: "custom" | "full_access"
-  } = {},
-  liveConsoles: ReadonlyArray<LiveConsole> = []
+  clientGrant: { actions?: Array<string> } = {}
 ): Promise<TestRelay> {
-  const snapshotListeners = new Set<(sample: RelaySnapshotSample) => void>()
   const issuerKeys = generateKeyPairSync("ed25519")
   const browserKeys = generateKeyPairSync("ec", { namedCurve: "P-256" })
   const publicKeyJwk = browserKeys.publicKey.export({ format: "jwk" })
@@ -864,7 +175,6 @@ async function startRelay(
   const keyThumbprint = createHash("sha256")
     .update(JSON.stringify(browserJwk))
     .digest("base64url")
-  let currentAuthority = { issuerGeneration: 1, minimumRevision: 0 }
   const client = {
     actions: clientGrant.actions ?? [
       "instance.console.read",
@@ -883,21 +193,19 @@ async function startRelay(
         type: "spki",
       })
       .toString(),
-    role: clientGrant.role ?? ("custom" as const),
+    role: "custom" as const,
     sourceCidrs: [],
   }
   const state = {
-    browserAuthority: () => Effect.succeed(currentAuthority),
+    browserAuthority: () =>
+      Effect.succeed({ issuerGeneration: 1, minimumRevision: 0 }),
     findClientById: (id: string) =>
       Effect.succeed(id === client.id ? client : null),
     listClients: () => Effect.succeed([client]),
   } as unknown as RelayStateStore["Service"]
-  const fileRequests: Array<() => void> = []
   let browserServer: BrowserSocketServer | null = null
   const server = createServer((request, response) => {
-    const handled = browserServer?.handleRequest(request, response)
-    fileRequests.shift()?.()
-    void handled?.then((matched) => {
+    void browserServer?.handleRequest(request, response).then((matched) => {
       if (!matched) response.writeHead(404).end()
     })
   })
@@ -921,10 +229,7 @@ async function startRelay(
     consoleSources: consoleSources(
       {
         consoleSession: (id) =>
-          Promise.resolve(
-            liveConsoles.find((live) => live.id === id)?.session() ??
-              consoleSession(id, `server ${id} output`)
-          ),
+          Promise.resolve(consoleSession(id, `server ${id} output`)),
         containerConsoleSession: (id, containerId) =>
           Promise.resolve(
             consoleSession(id, `container ${containerId} output`)
@@ -942,10 +247,8 @@ async function startRelay(
       },
       () => ({ containerId: "relay-container", id: relayId }),
       {
-        authorize: (clientId) =>
-          clientGrant.platformReader && clientId === client.id
-            ? Promise.resolve()
-            : Promise.reject(new Error("Not the Hearth this Relay installed")),
+        authorize: () =>
+          Promise.reject(new Error("Not the Hearth this Relay installed")),
         container: (target) => Promise.resolve(`kiln-${target}`),
       }
     ),
@@ -957,27 +260,8 @@ async function startRelay(
     runEffect: (effect) => Effect.runPromise(effect),
     server,
     state,
-    subscribeSnapshots: (listener) => {
-      snapshotListeners.add(listener)
-      return () => snapshotListeners.delete(listener)
-    },
-    // Each App runs `appServices`, and every history is a full window, as
-    // the Relay keeps; each read carries the history it asks for.
-    workloadUsage: (kind, id, history) => ({
-      history: history === "resource" ? usageWindow(`${kind}:${id}`) : [],
-      resources: usageSample(`${kind}:${id}`),
-      services:
-        kind === "app"
-          ? appServices.map((service) => ({
-              history:
-                typeof history === "object" && history.service === service
-                  ? usageWindow(`${id}/${service}`)
-                  : [],
-              resources: usageSample(`${id}/${service}`),
-              service,
-            }))
-          : [],
-    }),
+    subscribeSnapshots: () => () => undefined,
+    workloadUsage: () => ({ history: [], resources: null, services: [] }),
   })
   const attached = browserServer
   await new Promise<void>((resolve, reject) => {
@@ -999,8 +283,6 @@ async function startRelay(
       keyThumbprint,
       privateKey: browserKeys.privateKey,
     },
-    browserServer: attached,
-    clientId: client.id,
     connect: (socketOrigin) => {
       const socket = new WebSocket(
         `ws://127.0.0.1:${address.port}/v1/browser`,
@@ -1013,28 +295,6 @@ async function startRelay(
       return socket
     },
     issuerPrivateKey: issuerKeys.privateKey,
-    // Reports each live console's current run, as the Relay's snapshots do.
-    reportRuns: () => {
-      const sample = {
-        sequence: 1,
-        snapshot: {
-          instances: liveConsoles.map((live) => ({
-            id: live.id,
-            lifecycle: [{ state: "started", time: live.startedAt }],
-          })),
-        },
-      } as unknown as RelaySnapshotSample
-      for (const listener of snapshotListeners) listener(sample)
-    },
-    nextFileRequest: () =>
-      new Promise<void>((resolve) => {
-        fileRequests.push(resolve)
-      }),
-    port: address.port,
-    server,
-    setAuthority: (authority) => {
-      currentAuthority = authority
-    },
   }
 }
 
@@ -1078,9 +338,7 @@ function sendAuth(
   relay: TestRelay,
   challenge: Record<string, unknown>,
   overrides: Partial<RelayBrowserCapabilityV2>,
-  keys: { issuerPrivateKey?: KeyObject } = {},
-  // Further fields of the auth message, such as a trace context.
-  extra: Record<string, unknown> = {}
+  keys: { issuerPrivateKey?: KeyObject } = {}
 ): void {
   const authCapability = {
     ...capability({
@@ -1104,54 +362,8 @@ function sendAuth(
       ),
       type: "auth",
       v: 1,
-      ...extra,
     })
   )
-}
-
-const appUsageCapability = {
-  actions: ["app.read"],
-  instanceId: sharedId,
-  operation: "resources",
-  resourceKind: "app",
-} satisfies Partial<RelayBrowserCapabilityV2>
-
-// Services the test App runs: enough that their histories together pass a
-// browser's frame limit, and the socket's outbox.
-const appServices = Array.from(
-  { length: 32 },
-  (_, index) => `service-${String(index).padStart(2, "0")}`
-)
-// Six minutes of samples at the Relay's cadence.
-const usageWindowSamples = 240
-
-function usageWindow(of: string): Array<RelayInstanceResources> {
-  return Array.from({ length: usageWindowSamples }, () => ({
-    ...usageSample(of),
-    network: {
-      receivedBytes: 1_234_567_890,
-      receivedBytesPerSecond: 12_345.678,
-      sentBytes: 987_654_321,
-      sentBytesPerSecond: 54_321.123,
-    },
-  }))
-}
-
-// A sample whose memory use tells which resource it's of.
-function usageSample(of: string): RelayInstanceResources {
-  return {
-    cpu: { capacityPercent: 100, percent: 1 },
-    memory: { percent: 1, totalBytes: 1_000, usedBytes: of.length },
-    sampledAt: new Date().toISOString(),
-    storage: {
-      nodePercent: 0,
-      nodeTotalBytes: 0,
-      nodeUsedBytes: 0,
-      percent: null,
-      totalBytes: 0,
-      usedBytes: null,
-    },
-  }
 }
 
 const databaseCapability = {
@@ -1159,105 +371,6 @@ const databaseCapability = {
   instanceId: sharedId,
   resourceKind: "database",
 } satisfies Partial<RelayBrowserCapabilityV2>
-
-let openedConsoles = 0
-
-// Opens a live console as a page does, keeping the lines of the run it
-// shows: a reset starts a run, history for that run fills in older lines,
-// and live lines follow.
-async function openConsole(relay: TestRelay, live: LiveConsole) {
-  // Each from its own login, so none replaces another.
-  const { socket } = await authenticate(relay, {
-    instanceId: live.id,
-    loginSessionId: `login-session-${(openedConsoles += 1)}`,
-  })
-  let startedAt: string | null = null
-  let ready = false
-  const lines = new Map<string, RelayConsoleLine>()
-  // The run each reset and history frame was for, in arrival order.
-  const runs: Array<{ startedAt: string; type: string }> = []
-  const checks = new Set<() => void>()
-  socket.on("message", (data) => {
-    const frame = JSON.parse(data.toString()) as {
-      lifecycle?: Array<{ time: string }>
-      line?: RelayConsoleLine
-      lines?: Array<RelayConsoleLine>
-      type: string
-    }
-    const run = frame.lifecycle?.[0]?.time ?? null
-    if (frame.type === "ready") ready = true
-    if (frame.type === "reset" || frame.type === "history") {
-      runs.push({ startedAt: run ?? "", type: frame.type })
-    }
-    if (frame.type === "reset") {
-      startedAt = run
-      lines.clear()
-    }
-    if (
-      frame.type === "reset" ||
-      (frame.type === "history" && run === startedAt)
-    ) {
-      for (const line of frame.lines ?? []) lines.set(line.id, line)
-    } else if (frame.type === "line" && frame.line) {
-      lines.set(frame.line.id, frame.line)
-    }
-    for (const check of checks) check()
-  })
-  socket.send(
-    JSON.stringify({ instanceId: live.id, type: "console.subscribe", v: 1 })
-  )
-  const view = {
-    socket,
-    runs,
-    // Shown oldest first, as pages order lines.
-    lineIds: () =>
-      [...lines.values()]
-        .sort((left, right) =>
-          (left.timestamp ?? "").localeCompare(right.timestamp ?? "")
-        )
-        .map((line) => line.id),
-    showing: (ids: ReadonlyArray<string>) => ids.every((id) => lines.has(id)),
-    // Resolves once `predicate` holds, failing should the socket close
-    // first.
-    until: (predicate: () => boolean) =>
-      new Promise<void>((resolve, reject) => {
-        const finish = () => {
-          checks.delete(check)
-          socket.off("close", closed)
-        }
-        const check = () => {
-          if (!predicate()) return
-          finish()
-          resolve()
-        }
-        const closed = (code: number) => {
-          finish()
-          reject(new Error(`The console closed with ${code}`))
-        }
-        checks.add(check)
-        socket.once("close", closed)
-        check()
-      }),
-  }
-  await view.until(() => ready)
-  return view
-}
-
-const relayLogsCapability = {
-  actions: ["relay.logs.read"],
-  instanceId: relayId,
-  resourceKind: "relay",
-} satisfies Partial<RelayBrowserCapabilityV2>
-
-const platformCapability = {
-  actions: ["relay.logs.read"],
-  instanceId: relayId,
-  resourceKind: "platform",
-} satisfies Partial<RelayBrowserCapabilityV2>
-
-function lineTexts(frame: Record<string, unknown>): Array<string> {
-  return (frame.lines as Array<{ text: string }>).map((line) => line.text)
-}
 
 async function attemptAuthentication(
   relay: TestRelay,

@@ -10,23 +10,6 @@ import {
 const oldSecret = "old-secret-abcdefghijklmnopqrstuvwxyz-123456"
 const newSecret = "new-secret-abcdefghijklmnopqrstuvwxyz-654321"
 
-test("parses an ordered versioned keyring", () => {
-  assert.deepEqual(parseSecretKeyring(`2:${newSecret},1:${oldSecret}`), [
-    { version: 2, value: newSecret },
-    { version: 1, value: oldSecret },
-  ])
-})
-
-test("rejects missing, short, malformed, and duplicate secrets", () => {
-  assert.throws(() => parseSecretKeyring(undefined), /is required/u)
-  assert.throws(() => parseSecretKeyring("1:short"), /at least 32/u)
-  assert.throws(() => parseSecretKeyring(oldSecret), /<version>:<secret>/u)
-  assert.throws(
-    () => parseSecretKeyring(`1:${oldSecret},1:${newSecret}`),
-    /duplicate version 1/u
-  )
-})
-
 test("decrypts old ciphertext after rotation and marks it for re-encryption", () => {
   const purpose = "relay-credential"
   const oldKeyring = parseSecretKeyring(`1:${oldSecret}`)

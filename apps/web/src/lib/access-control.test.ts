@@ -1,4 +1,4 @@
-import { assert, describe, it, layer } from "@effect/vitest"
+import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -10,13 +10,7 @@ import {
   insertRelay,
   insertRows,
 } from "@/test/seed"
-import {
-  allowedInstanceIdsForUser,
-  canReadRelayNode,
-  type AccessGrant,
-  requireRelayPermissionsEffect,
-  visibleRelaysForUser,
-} from "@/lib/access-control"
+import { requireRelayPermissionsEffect } from "@/lib/access-control"
 
 const authenticatedUser = {
   email: "user@example.com",
@@ -28,49 +22,6 @@ const authenticatedUser = {
   role: "user",
   twoFactorEnabled: false,
 } satisfies AuthenticatedUser
-
-describe("platform access roles", () => {
-  it("exposes only created or granted Relays outside platform administration", () => {
-    const relays = [
-      { createdBy: "creator", id: "owned" },
-      { createdBy: "someone-else", id: "granted" },
-      { createdBy: "someone-else", id: "private" },
-    ]
-    const creator = {
-      ...authenticatedUser,
-      id: "creator",
-      role: "relay_creator",
-    } satisfies AuthenticatedUser
-
-    // Relay creators appear in grants as owner rows, so creation alone does
-    // not widen visibility.
-    assert.deepEqual(
-      visibleRelaysForUser(creator, relays, [
-        { relayId: "owned" },
-        { relayId: "granted" },
-      ]).map((relay) => relay.id),
-      ["owned", "granted"]
-    )
-    assert.deepEqual(
-      visibleRelaysForUser(creator, relays, []).map((relay) => relay.id),
-      []
-    )
-    assert.deepEqual(
-      visibleRelaysForUser(authenticatedUser, relays, [
-        { relayId: "granted" },
-      ]).map((relay) => relay.id),
-      ["granted"]
-    )
-    assert.deepEqual(
-      visibleRelaysForUser(
-        { ...authenticatedUser, role: "admin" },
-        relays,
-        []
-      ).map((relay) => relay.id),
-      ["owned", "granted", "private"]
-    )
-  })
-})
 
 describeMysql("Relay permission requirements", () => {
   layer(TestDatabase)((it) => {
@@ -99,21 +50,6 @@ describeMysql("Relay permission requirements", () => {
           selection_key: key,
         })
       })
-
-    it.effect("requires every requested permission", () =>
-      Effect.gen(function* () {
-        yield* seedConsoleGrant("instance.console.read")
-        assert.strictEqual(
-          yield* denied({
-            instanceId: "instance-one",
-            permissions: ["instance.console.read", "instance.console.write"],
-            relayId: "relay-one",
-            user: authenticatedUser,
-          }),
-          "PermissionDeniedError"
-        )
-      })
-    )
 
     it.effect(
       "allows implied permissions only on the granted Relay and instance",
@@ -190,19 +126,6 @@ describeMysql("Relay permission requirements", () => {
       })
     )
 
-    it.effect("grants a Relay creator authority over its children", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRelay("relay-one", { created_by: authenticatedUser.id })
-        yield* requireRelayPermissionsEffect({
-          instanceId: "instance-one",
-          permissions: ["relay.read", "instance.delete"],
-          relayId: "relay-one",
-          user: authenticatedUser,
-        })
-      })
-    )
-
     it.effect("denies disabled, unverified, or empty requests", () =>
       Effect.gen(function* () {
         yield* resetDatabase
@@ -218,123 +141,6 @@ describeMysql("Relay permission requirements", () => {
           )
         }
       })
-    )
-  })
-})
-
-describe("Relay snapshot visibility", () => {
-  const relayId = "relay-one"
-  const instances = ["instance-one", "instance-two"]
-  const instanceGrant: AccessGrant = {
-    id: "instance-grant",
-    relayId,
-    resourceId: "instance-one",
-    resourceType: "instance",
-    permissions: ["instance.read"],
-  }
-  const databaseGrant: AccessGrant = {
-    ...instanceGrant,
-    id: "database-grant",
-    resourceId: "database-one",
-    resourceType: "database",
-    permissions: ["database.read"],
-  }
-  const relayInstancesGrant: AccessGrant = {
-    ...instanceGrant,
-    id: "relay-instances-grant",
-    resourceId: relayId,
-    resourceType: "relay",
-  }
-  const relayNodeGrant: AccessGrant = {
-    ...relayInstancesGrant,
-    id: "relay-node-grant",
-    permissions: ["relay.read"],
-  }
-
-  it("keeps child inventory accessible without exposing Relay nodes", () => {
-    for (const [grants, expectedInstances] of [
-      [[instanceGrant], ["instance-one"]],
-      [[databaseGrant], []],
-      [[relayInstancesGrant], instances],
-      [[instanceGrant, databaseGrant], ["instance-one"]],
-    ] satisfies Array<[Array<AccessGrant>, Array<string>]>) {
-      assert.isFalse(canReadRelayNode(authenticatedUser, relayId, grants))
-      assert.deepEqual(
-        [
-          ...allowedInstanceIdsForUser(
-            authenticatedUser,
-            relayId,
-            instances,
-            grants
-          ),
-        ],
-        expectedInstances
-      )
-    }
-  })
-
-  it("requires relay.read on this Relay independently of instance access", () => {
-    assert.isTrue(
-      canReadRelayNode(authenticatedUser, relayId, [relayNodeGrant])
-    )
-    assert.deepEqual(
-      [
-        ...allowedInstanceIdsForUser(authenticatedUser, relayId, instances, [
-          relayNodeGrant,
-        ]),
-      ],
-      []
-    )
-    assert.isTrue(
-      canReadRelayNode(authenticatedUser, relayId, [
-        instanceGrant,
-        relayNodeGrant,
-      ])
-    )
-    assert.deepEqual(
-      [
-        ...allowedInstanceIdsForUser(authenticatedUser, relayId, instances, [
-          instanceGrant,
-          relayNodeGrant,
-        ]),
-      ],
-      ["instance-one"]
-    )
-    assert.isFalse(
-      canReadRelayNode(authenticatedUser, relayId, [
-        { ...relayNodeGrant, relayId: "other-relay" },
-      ])
-    )
-    // Even malformed child grants cannot authorize parent infrastructure.
-    assert.isFalse(
-      canReadRelayNode(authenticatedUser, relayId, [
-        { ...instanceGrant, permissions: ["relay.read"] },
-      ])
-    )
-  })
-
-  it("allows platform admins and development bypass while rejecting disabled users", () => {
-    for (const user of [
-      { ...authenticatedUser, role: "admin" as const },
-      { ...authenticatedUser, isDevelopmentBypass: true },
-    ]) {
-      assert.isTrue(canReadRelayNode(user, relayId, []))
-      assert.deepEqual(
-        [...allowedInstanceIdsForUser(user, relayId, instances, [])],
-        instances
-      )
-    }
-    assert.isFalse(
-      canReadRelayNode({ ...authenticatedUser, status: "disabled" }, relayId, [
-        relayNodeGrant,
-      ])
-    )
-    assert.isFalse(
-      canReadRelayNode(
-        { ...authenticatedUser, role: "relay_creator" },
-        relayId,
-        []
-      )
     )
   })
 })

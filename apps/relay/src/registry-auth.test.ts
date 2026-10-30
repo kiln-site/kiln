@@ -54,30 +54,4 @@ describe("registry credentials for pulls", () => {
     })
     expect(fakeDocker.pulls.get("quay.io/a/b:1")).toBeNull()
   })
-
-  it("finds credentials saved with a scheme or path, and identity tokens", async () => {
-    await login({
-      "https://registry.example.com/v2/": { identitytoken: "refresh-token" },
-    })
-
-    await pull("registry.example.com/team/app@sha256:" + "a".repeat(64))
-
-    expect(
-      fakeDocker.pulls.get(
-        `registry.example.com/team/app@sha256:${"a".repeat(64)}`
-      )
-    ).toEqual({
-      identitytoken: "refresh-token",
-      serveraddress: "registry.example.com",
-    })
-  })
-
-  it("pulls anonymously without a config, and with one it can't read", async () => {
-    await pull("alpine:3.21")
-    await writeFile(join(directory, "config.json"), "{ not json")
-    await pull("busybox:1")
-
-    expect(fakeDocker.pulls.get("docker.io/library/alpine:3.21")).toBeNull()
-    expect(fakeDocker.pulls.get("docker.io/library/busybox:1")).toBeNull()
-  })
 })

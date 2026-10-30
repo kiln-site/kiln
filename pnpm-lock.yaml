@@ -517,9 +517,6 @@ importers:
         specifier: 4.1.0
         version: 4.1.0
     devDependencies:
-      '@effect/vitest':
-        specifier: 4.1.0
-        version: 4.1.0(effect@4.1.0)(vitest@5.0.1)
       '@types/node':
         specifier: ^22.20.5
         version: 22.20.5

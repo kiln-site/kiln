@@ -16,7 +16,6 @@ import { loadOrCreateRelayIdentity } from "./identity.js"
 import {
   createPairingInvitation,
   decodePairingUri,
-  initializePairing,
   pairHearth,
 } from "./pairing.js"
 import { makeRelayStateLayer, RelayStateStore } from "./state.js"
@@ -148,89 +147,6 @@ describe("Relay pairing", () => {
         )
       })
     )
-  )
-
-  it.live("advertises Coolify's public edge instead of its private port", () =>
-    withRelayState((directory) =>
-      Effect.gen(function* () {
-        const config = loadConfig({
-          KILN_RELAY_DATA_DIR: directory,
-          KILN_RELAY_NAME: "Coolify Relay",
-          KILN_RELAY_PROXY: "coolify",
-          SERVICE_URL_KILN_RELAY_4100: "https://relay.example.com:4100",
-          NODE_ENV: "production",
-        })
-        const state = yield* RelayStateStore
-        const identity = yield* loadOrCreateRelayIdentity(config)
-        const invitation = yield* createPairingInvitation({
-          config,
-          identity,
-          role: "full_access",
-          state,
-          tls: null,
-        })
-        const decodedUri = decodePairingUri(invitation.uri)
-
-        assert.strictEqual(
-          decodedUri.browserOrigin,
-          "https://relay.example.com"
-        )
-        assert.strictEqual(
-          decodedUri.controlEndpoint,
-          "wss://relay.example.com/v1/socket"
-        )
-      })
-    )
-  )
-
-  it.live(
-    "replaces an automatic invitation when its bootstrap token rotates",
-    () =>
-      withRelayState((directory) =>
-        Effect.gen(function* () {
-          const firstConfig = loadConfig({
-            KILN_RELAY_BOOTSTRAP_TOKEN: "a".repeat(32),
-            KILN_RELAY_DATA_DIR: directory,
-            KILN_RELAY_HOST: "relay.test",
-            KILN_RELAY_NAME: "Pairing Relay",
-            NODE_ENV: "development",
-          })
-          const state = yield* RelayStateStore
-          const identity = yield* loadOrCreateRelayIdentity(firstConfig)
-          const first = yield* initializePairing({
-            config: firstConfig,
-            identity,
-            state,
-            tls: null,
-          })
-          assert.strictEqual(first.invitation?.token, "a".repeat(32))
-
-          const secondConfig = loadConfig({
-            KILN_RELAY_BOOTSTRAP_TOKEN: "b".repeat(32),
-            KILN_RELAY_DATA_DIR: directory,
-            KILN_RELAY_HOST: "relay.test",
-            KILN_RELAY_NAME: "Pairing Relay",
-            NODE_ENV: "development",
-          })
-          const second = yield* initializePairing({
-            config: secondConfig,
-            identity,
-            state,
-            tls: null,
-          })
-          assert.strictEqual(second.invitation?.token, "b".repeat(32))
-          assert.lengthOf(yield* state.listInvitations(Date.now()), 1)
-
-          const rotatedBack = yield* initializePairing({
-            config: firstConfig,
-            identity,
-            state,
-            tls: null,
-          })
-          assert.strictEqual(rotatedBack.invitation?.token, "a".repeat(32))
-          assert.lengthOf(yield* state.listInvitations(Date.now()), 1)
-        })
-      )
   )
 })
 

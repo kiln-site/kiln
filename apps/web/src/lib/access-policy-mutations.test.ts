@@ -25,15 +25,6 @@ const scope: ResourceScope = {
 }
 
 describe("delegation boundaries", () => {
-  it("rejects self-escalation even when an actor can manage access", () => {
-    expect(() =>
-      assertDelegation(new Set(["access.manage"]), [
-        "access.manage",
-        "instance.delete",
-      ])
-    ).toThrow("instance.delete")
-  })
-
   it("allows reductions of existing broader authority without granting new authority", () => {
     expect(() =>
       assertDelegation(

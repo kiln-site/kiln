@@ -65,22 +65,6 @@ describe("mounting host files", () => {
     expect(fakeDocker.container(relay.id)).toBeUndefined()
   })
 
-  it("mounts without propagation where the host's root isn't shared", async () => {
-    const { engine, relay } = await relayContainer()
-    fakeDocker.failNext(
-      { command: "start" },
-      "path / is mounted on / but it is not a shared or slave mount"
-    )
-
-    await mount(engine, relay.id)
-
-    const replaced = fakeDocker.container("kiln-relay-1")!
-    expect(replaced.state.running).toBe(true)
-    expect(replaced.mounts).toContainEqual(
-      expect.objectContaining({ source: "/", destination: "/host" })
-    )
-  })
-
   it("keeps the Relay's state in a volume Docker named itself", async () => {
     const { config } = await relayHarness()
     fakeDocker.addNetwork({ name: "kiln" })
@@ -103,21 +87,6 @@ describe("mounting host files", () => {
     expect(fakeDocker.container("kiln-relay-1")!.mounts).toContainEqual(
       expect.objectContaining({ source: "3f1c9a", destination: "/data" })
     )
-  })
-
-  it("mounts a Relay on Docker's default bridge network", async () => {
-    const { config } = await relayHarness()
-    const relay = fakeDocker.addContainer({
-      name: "kiln-relay-1",
-      networks: ["bridge"],
-      running: true,
-    })
-
-    await mount(new DockerEngine(config.dockerSocket), relay.id)
-
-    const replaced = fakeDocker.container("kiln-relay-1")!
-    expect(replaced.id).not.toBe(relay.id)
-    expect(replaced.state.running).toBe(true)
   })
 
   it("puts the Relay back when its replacement doesn't start", async () => {

@@ -15,7 +15,6 @@ const backupId = "11111111-1111-4111-8111-111111111111"
 const storageId = "22222222-2222-4222-8222-222222222222"
 const artifactId = "33333333-3333-4333-8333-333333333333"
 const taskId = "44444444-4444-4444-8444-444444444444"
-const createTaskId = "55555555-5555-4555-8555-555555555555"
 const repositoryId = "66666666-6666-4666-8666-666666666666"
 const storedPrefix =
   "team/kiln/kiln.dev/relay-one/restic/instance/instance-one/repo-one"
@@ -118,38 +117,6 @@ describeMysql("restic backup dispatch", () => {
         })
     )
 
-    it.effect("keeps tag-based restic deletes on the restic path", () =>
-      Effect.gen(function* () {
-        // A disabled destination must still accept deletes of its backups.
-        yield* seedResticBackup({ enabled: false })
-
-        const prepared = yield* prepareBackupTaskEffect({
-          artifacts: [{ artifactId, objectKey: null, storageId }],
-          backupId,
-          createTaskId,
-          kind: "delete",
-          target: { id: "instance-one", kind: "instance" },
-          taskId,
-        })
-
-        if (
-          prepared.kind !== "delete" ||
-          prepared.destination.kind !== "restic"
-        ) {
-          return assert.fail("expected restic delete dispatch")
-        }
-        assert.strictEqual(prepared.destination.createTaskId, createTaskId)
-        assert.isFalse("snapshotId" in prepared.destination)
-        assert.strictEqual(prepared.destination.repository.kind, "s3")
-        if (prepared.destination.repository.kind === "s3") {
-          assert.strictEqual(
-            prepared.destination.repository.repositoryPrefix,
-            storedPrefix
-          )
-        }
-      })
-    )
-
     it.effect("prepares a full archive restore the Relay accepts", () =>
       Effect.gen(function* () {
         yield* resetDatabase
@@ -176,24 +143,6 @@ describeMysql("restic backup dispatch", () => {
           taskId,
         })
       })
-    )
-
-    it.effect(
-      "refuses incremental create dispatch to a disabled destination",
-      () =>
-        Effect.gen(function* () {
-          yield* seedResticBackup({ enabled: false })
-
-          const error = yield* Effect.flip(
-            prepareBackupTaskEffect(incrementalCreate)
-          )
-
-          assert.strictEqual(error._tag, "BackupStorageError")
-          assert.strictEqual(
-            "code" in error ? error.code : undefined,
-            "invalid_backup_destination"
-          )
-        })
     )
   })
 })

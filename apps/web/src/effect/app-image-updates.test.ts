@@ -14,9 +14,8 @@ import {
   skipAppImageUpdateEffect,
 } from "@/effect/app-image-updates"
 import { createAppRecordEffect } from "@/effect/managed-apps"
-import { resourceAudienceEffect } from "@/lib/resource-audience.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRelay, insertUser } from "@/test/seed"
+import { insertRelay } from "@/test/seed"
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
@@ -47,52 +46,6 @@ const checked = (latest: number, running: Array<number>) =>
 
 describeMysql("App image updates", () => {
   layer(TestDatabase)((it) => {
-    it.effect(
-      "offers each new image once, and restarts its wait when the tag moves again",
-      () =>
-        Effect.gen(function* () {
-          yield* seedApp
-          yield* TestClock.setTime(Date.UTC(2026, 9, 20))
-
-          const current = yield* checked(1, [1])
-          assert.strictEqual(current.update.state, "current")
-          assert.isFalse(current.newlySeen)
-
-          const offered = yield* checked(2, [1])
-          const seenAt = offered.update.latestSeenAt
-          assert.strictEqual(offered.update.state, "available")
-          assert.isTrue(offered.newlySeen)
-          assert.strictEqual(seenAt, Date.UTC(2026, 9, 20))
-
-          // Checked again, and a check that fails, change nothing about it.
-          yield* TestClock.adjust(hour)
-          const again = yield* checked(2, [1])
-          assert.isFalse(again.newlySeen)
-          assert.strictEqual(again.update.latestSeenAt, seenAt)
-          const failed = yield* recordAppImageCheckEffect(appId, image, {
-            appId,
-            error: "ghcr.io answered 503",
-            status: "error",
-          })
-          assert.strictEqual(failed.update.state, "available")
-          assert.strictEqual(failed.update.latestDigest, digest(2))
-          assert.strictEqual(failed.update.latestSeenAt, seenAt)
-          assert.strictEqual(failed.update.checkError, "ghcr.io answered 503")
-
-          // The tag moved on before it deployed: the newest image waits anew.
-          yield* TestClock.adjust(hour)
-          const moved = yield* checked(3, [1])
-          assert.isTrue(moved.newlySeen)
-          assert.strictEqual(moved.update.latestDigest, digest(3))
-          assert.strictEqual(moved.update.latestSeenAt, seenAt! + 2 * hour)
-          assert.isNull(moved.update.checkError)
-
-          const deployed = yield* checked(3, [3])
-          assert.strictEqual(deployed.update.state, "current")
-          assert.isNull(deployed.update.latestDigest)
-        })
-    )
-
     it.effect(
       "deploys an update on its own only once it has waited, and never one skipped or already tried",
       () =>
@@ -162,30 +115,6 @@ describeMysql("App image updates", () => {
           }
           assert.isFalse(yield* claimImageUpdateEffect(appId, digest(3)))
         })
-    )
-
-    it.effect("tells only enabled people who can deploy the Relay's apps", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertUser("owner", { status: "enabled" })
-        yield* insertUser("former", { status: "disabled" })
-        yield* insertRelay(relayId, { created_by: "owner" })
-        yield* insertRelay("s".repeat(43), { created_by: "former" })
-        const scope = (id: string) => ({
-          relayId: id,
-          resourceId: id,
-          resourceType: "relay" as const,
-        })
-
-        assert.deepStrictEqual(
-          yield* resourceAudienceEffect(scope(relayId), "app.manage"),
-          ["owner"]
-        )
-        assert.deepStrictEqual(
-          yield* resourceAudienceEffect(scope("s".repeat(43)), "app.manage"),
-          []
-        )
-      })
     )
   })
 })

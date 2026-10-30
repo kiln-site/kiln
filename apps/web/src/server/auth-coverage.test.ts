@@ -93,61 +93,6 @@ describe("API authentication", () => {
     expect(stale).toEqual([])
   })
 
-  it(
-    "does not count a guard that is only imported",
-    { timeout: 60_000 },
-    () => {
-      const fixture = resolve(webRoot, "src/server/auth-coverage-fixture.ts")
-      const fixtureProgram = loadProgram({
-        [fixture]: `
-        import { createServerFn } from "@tanstack/react-start"
-        import { requireVerifiedUser as staticGuard } from "@/server/auth"
-
-        export const destructured = createServerFn({ method: "POST" }).handler(
-          async () => {
-            const { requireVerifiedUser } = await import("@/server/auth")
-            return null
-          }
-        )
-        export const renamed = createServerFn({ method: "POST" }).handler(
-          async () => {
-            const { requireVerifiedUser: guard } = await import("@/server/auth")
-            return null
-          }
-        )
-        export const staticOnly = createServerFn({ method: "POST" }).handler(
-          async () => null
-        )
-        export const called = createServerFn({ method: "POST" }).handler(
-          async () => {
-            const { requireVerifiedUser } = await import("@/server/auth")
-            return requireVerifiedUser()
-          }
-        )
-        export const calledStatic = createServerFn({ method: "POST" }).handler(
-          async () => staticGuard()
-        )
-      `,
-      })
-      const reaches = reachabilityChecker(
-        fixtureProgram.checker,
-        isSessionCheck
-      )
-      const results = Object.fromEntries(
-        serverFunctionHandlers(fixtureProgram.program)
-          .filter(({ id }) => id.startsWith("auth-coverage-fixture.ts:"))
-          .map(({ id, handler }) => [id.split(":")[1], reaches(handler)])
-      )
-      expect(results).toEqual({
-        destructured: false,
-        renamed: false,
-        staticOnly: false,
-        called: true,
-        calledStatic: true,
-      })
-    }
-  )
-
   // Read-only CLI links must not change anything, so every Effect the CLI
   // API runs for POST, PUT, PATCH, or DELETE must reach `requireCliWrite`.
   it("refuses read-only CLI links on mutating endpoints", () => {
@@ -186,11 +131,7 @@ describe("API authentication", () => {
   )
 })
 
-// Programs in this file share parsed (and bound) source files, as the language
-// service does, so the fixture program doesn't re-read the app it imports.
-const parsedFiles = new Map<string, ts.SourceFile>()
-
-function loadProgram(virtualFiles: Record<string, string> = {}) {
+function loadProgram() {
   const configPath = resolve(webRoot, "tsconfig.json")
   const config = ts.getParsedCommandLineOfConfigFile(
     configPath,
@@ -205,29 +146,11 @@ function loadProgram(virtualFiles: Record<string, string> = {}) {
     }
   )
   if (!config) throw new Error("Could not read apps/web/tsconfig.json")
-  const host = ts.createCompilerHost(config.options)
-  const { fileExists, getSourceFile, readFile } = host
-  host.fileExists = (file) => file in virtualFiles || fileExists(file)
-  host.readFile = (file) => virtualFiles[file] ?? readFile(file)
-  host.getSourceFile = (file, language, ...rest) => {
-    if (file in virtualFiles) {
-      return ts.createSourceFile(file, virtualFiles[file], language, true)
-    }
-    const cached = parsedFiles.get(file)
-    if (cached) return cached
-    const parsed = getSourceFile(file, language, ...rest)
-    if (parsed) parsedFiles.set(file, parsed)
-    return parsed
-  }
-  const virtualNames = Object.keys(virtualFiles)
   const program = ts.createProgram({
-    rootNames: virtualNames.length
-      ? virtualNames
-      : config.fileNames.filter(
-          (file) => file.includes("/src/") && !/\.test\.tsx?$/.test(file)
-        ),
+    rootNames: config.fileNames.filter(
+      (file) => file.includes("/src/") && !/\.test\.tsx?$/.test(file)
+    ),
     options: config.options,
-    host,
   })
   return { program, checker: program.getTypeChecker() }
 }

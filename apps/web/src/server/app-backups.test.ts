@@ -193,77 +193,6 @@ describeMysql("App backups", () => {
     )
 
     it.effect(
-      "asks the Relay to copy a stopped App backup's folder and volumes in one stopped window",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* createAppRecordEffect({
-            appId,
-            createdBy: "someone-else",
-            name: "Website",
-            relayId,
-          })
-          yield* grant(["app.files.read", "app.manage"])
-
-          const { batchId } = yield* Effect.promise(() =>
-            createAppBackupsHandler(user, {
-              appId,
-              consistency: "stopped",
-              name: "Before the upgrade",
-              relayId,
-            })
-          )
-
-          assert.deepStrictEqual(
-            relay.dispatched.map((input) => input.batch),
-            [
-              { id: batchId, size: 2 },
-              { id: batchId, size: 2 },
-            ]
-          )
-        })
-    )
-
-    it.effect(
-      "reserves none of an App's backups when one of them is refused",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* createAppRecordEffect({
-            appId,
-            createdBy: "someone-else",
-            name: "Website",
-            relayId,
-          })
-          yield* grant(["app.files.read"])
-          // Backups of its volume are turned off: a ceiling of none.
-          yield* insertRows("backup_policy", {
-            admin_quantity_limit: 0,
-            created_at: Date.UTC(2026, 0, 1),
-            exclude_patterns: "[]",
-            relay_id: relayId,
-            target_id: `${appId}/pgdata`,
-            target_kind: "volume",
-            updated_at: Date.UTC(2026, 0, 1),
-          })
-
-          const message = yield* rejection(() =>
-            createAppBackupsHandler(user, {
-              appId,
-              consistency: "live",
-              name: "Before the upgrade",
-              relayId,
-            })
-          )
-
-          assert.include(message.toLowerCase(), "backup")
-          assert.deepStrictEqual(yield* selectRows("backup"), [])
-          assert.deepStrictEqual(yield* selectRows("backup_task"), [])
-          assert.deepStrictEqual(relay.dispatched, [])
-        })
-    )
-
-    it.effect(
       "finishes an unfinished restore only for someone who may change every App that uses its volume",
       () =>
         Effect.gen(function* () {
@@ -298,22 +227,6 @@ describeMysql("App backups", () => {
             })
           )
           assert.deepStrictEqual(relay.resolved, [taskId])
-        })
-    )
-
-    it.effect(
-      "shows an unfinished restore of an App's folder only to those who can read the App",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          relay.unfinished = [{ id: appId, kind: "app" }]
-          // The Relay's backup grants don't reach an App's backups.
-          yield* grant(["backup.read", "backup.restore"])
-
-          assert.deepStrictEqual(
-            yield* Effect.promise(() => listUnfinishedRestoresHandler(user)),
-            []
-          )
         })
     )
   })

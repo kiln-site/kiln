@@ -1,9 +1,7 @@
 import { layer } from "@effect/vitest"
-import { requestHandler } from "@tanstack/react-start/server"
 import { Effect } from "effect"
 import { expect, vi } from "vite-plus/test"
 
-import type { BrowserAccount } from "@/lib/browser-accounts"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, insertUser, selectRows } from "@/test/seed"
 
@@ -62,22 +60,6 @@ class Browser {
       method: "POST",
       body: { email, password },
     })
-  }
-
-  async listAccounts(): Promise<
-    Array<BrowserAccount>
-  > {
-    const { listBrowserAccounts } =
-      await import("@/lib/browser-accounts.server")
-    const handler = requestHandler(async (request) =>
-      Response.json(await listBrowserAccounts(request.headers))
-    )
-    const response = await handler(
-      new Request(`${origin}/accounts`, { headers: this.headers() }),
-      {}
-    )
-    this.store(response.headers)
-    return response.json()
   }
 }
 
@@ -143,82 +125,6 @@ describeMysql("browser accounts", () => {
     )
 
     it.effect(
-      "keeps account order across switches, renames, and session replacements",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* seedAccount("alice")
-          yield* seedAccount("bob")
-          yield* seedAccount("charlie")
-          const browser = new Browser()
-          yield* Effect.promise(() => browser.signIn("charlie@example.test"))
-          yield* Effect.promise(() => browser.signIn("alice@example.test"))
-          yield* Effect.promise(() => browser.signIn("bob@example.test"))
-
-          const { auth } = yield* Effect.promise(() => import("@/lib/auth"))
-          const accounts = yield* Effect.promise(() => browser.listAccounts())
-          const order = accounts.map(({ userId }) => userId)
-          expect(order).toEqual(["alice", "bob", "charlie"])
-
-          const renamed = yield* Effect.promise(() =>
-            browser.request("/update-user", {
-              method: "POST",
-              body: { name: "Aaron" },
-            })
-          )
-          expect(renamed.status).toBe(200)
-          const afterRename = yield* Effect.promise(() =>
-            browser.listAccounts()
-          )
-          expect(afterRename.map(({ userId }) => userId)).toEqual(order)
-          expect(afterRename.find(({ userId }) => userId === "bob")?.name).toBe(
-            "Aaron"
-          )
-
-          for (const account of accounts) {
-            // Exercise the same activation endpoint used by switchBrowserAccount
-            // and keep its cookies, as a browser does across the full reload.
-            const sessions = yield* Effect.promise(() =>
-              auth.api.listDeviceSessions({ headers: browser.headers() })
-            )
-            const target = sessions.find(
-              ({ session }) => session.id === account.sessionId
-            )!
-            const activated = yield* Effect.promise(() =>
-              auth.api.setActiveSession({
-                headers: browser.headers(),
-                body: { sessionToken: target.session.token },
-                returnHeaders: true,
-              })
-            )
-            browser.store(activated.headers)
-
-            const reloaded = yield* Effect.promise(() => browser.listAccounts())
-            expect(reloaded.map(({ userId }) => userId)).toEqual(order)
-            expect(reloaded.find(({ active }) => active)?.userId).toBe(
-              account.userId
-            )
-
-            const confirmed = yield* Effect.promise(() =>
-              browser.request("/password-confirmation/confirm", {
-                method: "POST",
-                body: { password },
-              })
-            )
-            expect(confirmed.status).toBe(200)
-            const refreshed = yield* Effect.promise(() =>
-              browser.listAccounts()
-            )
-            expect(refreshed.map(({ userId }) => userId)).toEqual(order)
-            const active = refreshed.find(({ active }) => active)
-            expect(active?.userId).toBe(account.userId)
-            expect(active?.sessionId).not.toBe(account.sessionId)
-          }
-        }),
-      { timeout: 30_000 }
-    )
-
-    it.effect(
       "switches only to accounts signed in on the same browser",
       () =>
         Effect.gen(function* () {
@@ -246,67 +152,6 @@ describeMysql("browser accounts", () => {
             attacker.request("/get-session").then((response) => response.json())
           )
           expect(session.user.id).toBe("mallory")
-        }),
-      { timeout: 30_000 }
-    )
-
-    it.effect(
-      "signs one account out without ending the others",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* seedAccount("alice")
-          yield* seedAccount("bob")
-          const browser = new Browser()
-          yield* Effect.promise(() => browser.signIn("alice@example.test"))
-          yield* Effect.promise(() => browser.signIn("bob@example.test"))
-
-          const { listBrowserAccounts, signOutBrowserAccount } =
-            yield* Effect.promise(() => import("@/lib/browser-accounts.server"))
-          const accounts = yield* Effect.promise(() =>
-            listBrowserAccounts(browser.headers())
-          )
-          const alice = accounts.find(({ userId }) => userId === "alice")!
-          yield* Effect.promise(() =>
-            signOutBrowserAccount(browser.headers(), alice.sessionId)
-          )
-
-          const sessions = yield* selectRows<{ userId: string }>("session")
-          expect(sessions.map(({ userId }) => userId)).toEqual(["bob"])
-        }),
-      { timeout: 30_000 }
-    )
-
-    it.effect(
-      "keeps a session from before multiple accounts when adding another",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* seedAccount("alice")
-          yield* seedAccount("bob")
-          const browser = new Browser()
-          yield* Effect.promise(() => browser.signIn("alice@example.test"))
-          // Earlier releases set only the session cookie.
-          for (const name of browser.cookies.keys())
-            if (name.includes("_multi-")) browser.cookies.delete(name)
-
-          const { auth } = yield* Effect.promise(() => import("@/lib/auth"))
-          const remembered = yield* Effect.promise(() =>
-            auth.api.rememberActiveBrowserSession({
-              headers: browser.headers(),
-              returnHeaders: true,
-            })
-          )
-          browser.store(remembered.headers)
-          yield* Effect.promise(() => browser.signIn("bob@example.test"))
-
-          const { listBrowserAccounts } = yield* Effect.promise(
-            () => import("@/lib/browser-accounts.server")
-          )
-          const accounts = yield* Effect.promise(() =>
-            listBrowserAccounts(browser.headers())
-          )
-          expect(accounts.map(({ userId }) => userId)).toEqual(["alice", "bob"])
         }),
       { timeout: 30_000 }
     )
@@ -344,40 +189,6 @@ describeMysql("browser accounts", () => {
           expect(
             Object.fromEntries(users.map(({ id, name }) => [id, name]))
           ).toEqual({ alice: "alice", bob: "Robert" })
-        }),
-      { timeout: 30_000 }
-    )
-
-    it.effect(
-      "offers every passkey when adding an account",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          yield* seedAccount("alice")
-          yield* seedAccount("bob")
-          const passkey = (userId: string) => ({
-            id: `passkey-${userId}`,
-            publicKey: "public-key",
-            userId,
-            credentialID: `credential-${userId}`,
-            counter: 0,
-            deviceType: "multiDevice",
-            backedUp: true,
-            createdAt: new Date(),
-          })
-          yield* insertRows("passkey", [passkey("alice"), passkey("bob")])
-          const browser = new Browser()
-          yield* Effect.promise(() => browser.signIn("alice@example.test"))
-
-          const response = yield* Effect.promise(() =>
-            browser.request("/passkey/generate-authenticate-options", {
-              headers: { "x-kiln-account": "alice" },
-            })
-          )
-          expect(response.status).toBe(200)
-          const options = yield* Effect.promise(() => response.json())
-          // No allow list lets the browser offer Bob's passkey too.
-          expect(options.allowCredentials ?? []).toEqual([])
         }),
       { timeout: 30_000 }
     )

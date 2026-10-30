@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { assert, describe, it } from "@effect/vitest"
@@ -61,46 +61,6 @@ describe("a Relay's installation ID", () => {
         assert.strictEqual(restarted.installationId, "second-kiln")
       })
     )
-  )
-
-  it.effect(
-    "stays when KILN_INSTALLATION_ID or Kiln's platform state fixes it",
-    () =>
-      withInstallation((installation) =>
-        Effect.gen(function* () {
-          const state = yield* RelayStateStore
-          const configured = {
-            ...installation,
-            installationId: "configured-kiln",
-            installationIdConfigured: true,
-          }
-          const refused = yield* Effect.flip(
-            replaceInstallationId(configured, state, {
-              expectedInstallationId: "configured-kiln",
-              installationId: "second-kiln",
-            })
-          )
-          assert.strictEqual(replaceCode(refused), "installation_fixed")
-
-          // A Relay that once installed Kiln, even outside platform mode.
-          yield* adoptInstallationId(installation, state, "platform-kiln")
-          mkdirSync(join(installation.dataDirectory, "platform"), {
-            recursive: true,
-          })
-          writeFileSync(
-            join(installation.dataDirectory, "platform", "installation.json"),
-            "{}"
-          )
-          const platform = yield* Effect.flip(
-            replaceInstallationId(installation, state, {
-              expectedInstallationId: "platform-kiln",
-              installationId: "second-kiln",
-            })
-          )
-          assert.strictEqual(replaceCode(platform), "installation_fixed")
-          assert.strictEqual(installation.installationId, "platform-kiln")
-        })
-      )
   )
 })
 

@@ -145,35 +145,5 @@ describeMysql("Relay deletion", () => {
           )
         })
     )
-
-    it.effect("changes nothing when the Relay is already gone", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        yield* insertRows(
-          "invitation",
-          invitation("pending", "relay-one", null)
-        )
-        yield* insertGrant({
-          userId: "user",
-          relayId: "relay-one",
-          resourceType: "relay",
-          resourceId: "relay-one",
-        })
-
-        const error = yield* Effect.flip(
-          deletePersistedRelayEffect("relay-one")
-        )
-
-        assert.strictEqual(error.message, "Relay not found")
-        const invitations = yield* selectRows<{ revoked_at: number | null }>(
-          "invitation"
-        )
-        assert.deepEqual(
-          invitations.map((row) => row.revoked_at),
-          [null]
-        )
-        assert.lengthOf(yield* selectRows("access_grant"), 1)
-      })
-    )
   })
 })

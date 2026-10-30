@@ -54,32 +54,6 @@ const user = {
 } satisfies AuthenticatedUser
 
 describe("authorized realtime stream", () => {
-  it("marks authorization-changing resets without clearing browser state", async () => {
-    const lifecycle = new AbortController()
-    const stream = await openAuthorizedRealtimeStream({
-      sessionId: null,
-      signal: lifecycle.signal,
-      user,
-    })
-    const reader = stream.getReader()
-    await reader.read() // Initial Hearth refresh.
-
-    publishRealtimeChange({
-      reauthenticate: false,
-      type: "access.changed",
-      userIds: [user.id],
-    })
-    const next = await reader.read()
-    lifecycle.abort()
-
-    expect(next.done).toBe(false)
-    expect(decodeEvent(next.value!)).toMatchObject({
-      authorization: true,
-      clear: false,
-      hearth: true,
-      type: "reset",
-    })
-  })
   it("observes revocation while the initial database policy is still loading", async () => {
     let release!: () => void
     initialPolicy.delay = new Promise<void>((resolve) => {

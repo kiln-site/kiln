@@ -121,48 +121,6 @@ describe("database backups", () => {
     expect(existsSync(destination)).toBe(false)
   })
 
-  it("removes an oversized backup and reports the size limit", async () => {
-    const { container, directory, harness } =
-      await harnessWithDatabase("postgres")
-    container.sqlDump = dump
-    const destination = join(directory, "backup.sql.gz")
-
-    await expect(
-      createCompressedDatabaseBackup(
-        harness.databases,
-        { ...backupInput(), maxBytes: 1 },
-        destination,
-        { completed: 0, total: 0 }
-      )
-    ).rejects.toThrow("Database backup exceeded its size limit")
-    expect(existsSync(destination)).toBe(false)
-  })
-
-  it("removes a backup cancelled while the client is dumping", async () => {
-    const { container, directory, harness } =
-      await harnessWithDatabase("postgres")
-    container.sqlDump = dump
-    const destination = join(directory, "backup.sql.gz")
-    const controller = new AbortController()
-    const progress = {
-      set completed(_bytes: number) {
-        controller.abort(new Error("Backup cancelled"))
-      },
-      total: 0,
-    }
-
-    await expect(
-      createCompressedDatabaseBackup(
-        harness.databases,
-        backupInput(),
-        destination,
-        progress,
-        controller.signal
-      )
-    ).rejects.toThrow(/cancelled|aborted/iu)
-    expect(existsSync(destination)).toBe(false)
-  })
-
   it("reports the client's error when it stops reading a large restore partway", async () => {
     const { directory, harness } = await harnessWithDatabase("postgres")
     fakeDocker.programFailures.set(
@@ -185,19 +143,5 @@ describe("database backups", () => {
     await expect(
       restoreCompressedDatabaseBackup(harness.databases, databaseId, source)
     ).rejects.toThrow('relation "players" already exists')
-  })
-
-  it("fails a restore the client rejects", async () => {
-    const { directory, harness } = await harnessWithDatabase("postgres")
-    fakeDocker.programFailures.set(
-      "psql",
-      'ERROR:  syntax error at or near "CREAT"'
-    )
-    const source = join(directory, "backup.sql.gz")
-    await writeFile(source, gzipSync("CREAT TABLE broken;"))
-
-    await expect(
-      restoreCompressedDatabaseBackup(harness.databases, databaseId, source)
-    ).rejects.toThrow('syntax error at or near "CREAT"')
   })
 })

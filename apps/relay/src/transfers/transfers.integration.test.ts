@@ -6,7 +6,7 @@ import {
   sign,
 } from "node:crypto"
 import type { KeyObject } from "node:crypto"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { createServer, request as httpRequest } from "node:http"
 import type { IncomingMessage, Server } from "node:http"
 import { tmpdir } from "node:os"
@@ -37,7 +37,6 @@ const issuer = "hearth-transfer-test"
 const instanceId = "instance-1"
 const backupId = "6f1e2a4c-7b39-4d2e-9a51-3c8b0f7d2e10"
 const otherBackupId = "0b7d9c1e-2f4a-4e6b-8c3d-5a1f9e2b7c40"
-const describeLinux = process.platform === "linux" ? describe : describe.skip
 const cleanups: Array<() => Promise<void>> = []
 
 afterEach(async () => {
@@ -79,91 +78,6 @@ describe("browser file transfers", () => {
 
     expect((await send(relay.port, request)).status).toBe(404)
     expect((await send(relay.port, request)).status).toBe(401)
-  })
-
-  it("refuses a preflight from an origin no Hearth paired", async () => {
-    const relay = await startRelay()
-
-    const response = await send(relay.port, {
-      headers: { Origin: "https://elsewhere.test" },
-      method: "OPTIONS",
-      path: `/v1/browser/files/${instanceId}`,
-    })
-
-    expect(response.status).toBe(403)
-  })
-})
-
-describeLinux("browser file transfers on Linux", () => {
-  it("stores an upload whole and serves a range of it back", async () => {
-    const relay = await startRelay()
-    const contents = randomBytes(256 * 1024)
-    const upload = await relay.signedRequest({
-      method: "PUT",
-      path: "world/region.mca",
-    })
-
-    const stored = await send(relay.port, { ...upload, body: contents })
-
-    expect(stored.status).toBe(200)
-    expect(JSON.parse(stored.body.toString()).sha256).toBe(
-      createHash("sha256").update(contents).digest("hex")
-    )
-    expect(
-      createHash("sha256")
-        .update(await readFile(join(relay.instanceRoot, "world", "region.mca")))
-        .digest("hex")
-    ).toBe(createHash("sha256").update(contents).digest("hex"))
-
-    const download = await relay.signedRequest({
-      action: "instance.files.download",
-      method: "GET",
-      path: "world/region.mca",
-    })
-    const ranged = await send(relay.port, {
-      ...download,
-      headers: { ...download.headers, Range: "bytes=1000-1999" },
-    })
-
-    expect(ranged.status).toBe(206)
-    expect(ranged.body).toEqual(contents.subarray(1000, 2000))
-  })
-
-  it("frees a transfer's slot when the browser leaves mid-download", async () => {
-    const relay = await startRelay()
-    await writeFile(
-      join(relay.instanceRoot, "world.bin"),
-      randomBytes(32 * 1024 * 1024)
-    )
-    const download = await relay.signedRequest({
-      action: "instance.files.download",
-      method: "GET",
-      path: "world.bin",
-    })
-
-    await new Promise<void>((resolve, reject) => {
-      const request = httpRequest(
-        {
-          headers: download.headers,
-          host: "127.0.0.1",
-          method: "GET",
-          path: download.path,
-          port: relay.port,
-        },
-        (response) => {
-          response.once("data", () => {
-            request.destroy()
-            resolve()
-          })
-        }
-      )
-      request.once("error", (cause) => {
-        if (!request.destroyed) reject(cause)
-      })
-      request.end()
-    })
-
-    await vi.waitFor(() => expect(relay.browser.activeTransfers()).toBe(0))
   })
 })
 

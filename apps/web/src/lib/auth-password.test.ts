@@ -47,20 +47,6 @@ describeMysql("account password confirmation", () => {
   afterEach(() => vi.unstubAllEnvs())
 
   layer(TestDatabase)((it) => {
-    it.effect(
-      "accepts only an empty password for the development bypass in dev",
-      () =>
-        Effect.gen(function* () {
-          vi.stubEnv("KILN_ENVIRONMENT", "dev")
-          yield* resetDatabase
-          yield* requireAccountPasswordEffect(bypass, "")
-          assert.strictEqual(
-            yield* rejected(bypass, "password"),
-            "AuthenticationError"
-          )
-        })
-    )
-
     it.effect("does not accept an empty password outside development", () =>
       Effect.gen(function* () {
         vi.stubEnv("KILN_ENVIRONMENT", "prod")

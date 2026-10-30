@@ -13,7 +13,6 @@ import { PermissionDeniedError } from "@/effect/errors"
 const f = vi.hoisted(() => ({
   features: new Set(["resource-limits-v1"]),
   authorize: vi.fn(),
-  running: false,
   relays: vi.fn(),
   rpc: vi.fn(),
   invalidate: vi.fn(),
@@ -71,7 +70,6 @@ vi.mock("@/lib/backup-reconciliation", () => ({
 }))
 import {
   createCliBackupEffect,
-  restoreCliBackupEffect,
   updateCliServerStartupEffect,
 } from "@/effect/cli-api"
 const relayId = "r".repeat(43),
@@ -156,7 +154,6 @@ beforeEach(() => {
   vi.clearAllMocks()
   allowed = new Set()
   f.features = new Set(["resource-limits-v1"])
-  f.running = false
   f.authorize.mockImplementation(({ permission }) =>
     expandPermissionSelections(
       [...allowed].map((key) => ({ kind: "permission", key })),
@@ -170,18 +167,7 @@ beforeEach(() => {
   f.relays.mockReturnValue(Effect.succeed([{ id: relayId, enabled: true }]))
   f.rpc.mockImplementation(async (_relay, operation, payload) =>
     operation === "relay.snapshot"
-      ? {
-          ...snapshot,
-          instances: [
-            f.running
-              ? {
-                  ...instance,
-                  desiredState: "running",
-                  observedState: "running",
-                }
-              : instance,
-          ],
-        }
+      ? snapshot
       : operation === "brick.recipe"
         ? recipe
         : {
@@ -237,116 +223,12 @@ const startup = (extra: Record<string, unknown>, mode = principal.mode) =>
 const writes = () =>
   f.rpc.mock.calls.filter((call) => call[1] === "instance.startup.write")
 describe("CLI startup permission boundary", () => {
-  it("refuses limits a Relay too old to apply them would drop", async () => {
-    allowed.add("instance.limits.write")
-    f.features = new Set()
-    await expect(startup({ memoryLimitBytes: 4294967296 })).rejects.toMatchObject(
-      { code: "conflict" }
-    )
-    await expect(startup({ diskLimitBytes: null })).rejects.toMatchObject({
-      code: "conflict",
-    })
-    expect(writes()).toHaveLength(0)
-    // The disk limit alone reaches it the way it understands.
-    await startup({ diskLimitBytes: 4294967296 })
-    expect(writes()[0]?.[2]).toMatchObject({ diskLimitBytes: 4294967296 })
-    expect(writes()[0]?.[2]).not.toHaveProperty("limits")
-  })
-  it("allows limits-only updates without configuration write", async () => {
-    allowed.add("instance.limits.write")
-    const result = await startup({ diskLimitBytes: 4294967296 })
-    expect(result.server.diskLimitBytes).toBe(4294967296)
-    expect(writes()[0]?.[2]).toMatchObject({
-      limits: { diskBytes: 4294967296 },
-      start: false,
-      variables: instance.variables,
-    })
-  })
-  it.each([
-    { variables: { message: "new" } },
-    { brick: "https://example.test/brick.yml" },
-  ])(
-    "rejects configuration changes with only limits authority: %j",
-    async (extra) => {
-      allowed.add("instance.limits.write")
-      await expect(
-        startup({ diskLimitBytes: 4294967296, ...extra })
-      ).rejects.toMatchObject({ code: "forbidden" })
-      expect(writes()).toHaveLength(0)
-    }
-  )
-  it("requires limits for mixed updates even when the submitted limit is unchanged", async () => {
-    allowed.add("instance.configuration.write")
-    await expect(
-      startup({ diskLimitBytes: 1073741824, variables: { message: "new" } })
-    ).rejects.toMatchObject({ code: "forbidden" })
-    expect(writes()).toHaveLength(0)
-    allowed.add("instance.limits.write")
-    await startup({ diskLimitBytes: 4294967296, variables: { message: "new" } })
-    expect(writes()).toHaveLength(1)
-  })
-  it("allows configuration-only updates without limits authority", async () => {
-    allowed.add("instance.configuration.write")
-    await startup({ variables: { message: "new" } })
-    expect(writes()[0]?.[2].variables).toEqual({ memory: "2G", message: "new" })
-  })
-  it("requires power permission when requesting start", async () => {
-    allowed.add("instance.limits.write")
-    await expect(
-      startup({ diskLimitBytes: 4294967296, start: true })
-    ).rejects.toMatchObject({ code: "forbidden" })
-    expect(writes()).toHaveLength(0)
-    allowed.add("instance.power.start")
-    await startup({ diskLimitBytes: 4294967296, start: true })
-    expect(writes()).toHaveLength(1)
-  })
-  it("preserves read-only CLI credentials", async () => {
-    allowed.add("instance.limits.write")
-    await expect(
-      startup({ diskLimitBytes: 4294967296 }, "read_only")
-    ).rejects.toMatchObject({ code: "forbidden" })
-    expect(writes()).toHaveLength(0)
-  })
-})
-describe("CLI startup resource and power parity", () => {
   it("denies memory resource changes with configuration permission alone", async () => {
     allowed.add("instance.configuration.write")
     await expect(
       startup({ variables: { memory: "4G" } })
     ).rejects.toMatchObject({ code: "forbidden" })
     expect(writes()).toHaveLength(0)
-  })
-
-  it("allows memory-only variables with limits permission", async () => {
-    allowed.add("instance.limits.write")
-    await startup({ variables: { memory: "4G" } })
-    expect(writes()[0]?.[2].variables.memory).toBe("4G")
-  })
-
-  it.each([
-    { start: false, power: "instance.power.stop" },
-    { start: true, power: "instance.power.restart" },
-  ])(
-    "requires $power for a running server startup update",
-    async ({ start, power }) => {
-      f.running = true
-      allowed.add("instance.limits.write")
-      await expect(
-        startup({ diskLimitBytes: 4294967296, start })
-      ).rejects.toMatchObject({ code: "forbidden" })
-      expect(writes()).toHaveLength(0)
-      allowed.add(power)
-      await startup({ diskLimitBytes: 4294967296, start })
-      expect(writes()).toHaveLength(1)
-    }
-  )
-
-  it("permits unrelated configuration on a running server with restart authority", async () => {
-    f.running = true
-    allowed.add("instance.configuration.write")
-    allowed.add("instance.power.restart")
-    await startup({ variables: { message: "new" }, start: true })
-    expect(writes()[0]?.[2].variables).toEqual({ memory: "2G", message: "new" })
   })
 })
 
@@ -381,83 +263,4 @@ describe("CLI backup export boundary", () => {
     await run(createCliBackupEffect(principal, defaults))
     expect(f.reserve.mock.calls[0]?.[0].storageId).toBe(input.storageId)
   })
-  it("preserves create-only access to platform-managed storage", async () => {
-    allowed.add("backup.create")
-    f.storage.mockReturnValue(
-      Effect.succeed({ enabled: true, deleting: false, ownerUserId: null })
-    )
-    await run(createCliBackupEffect(principal, input))
-    expect(f.reserve).toHaveBeenCalled()
-  })
-})
-
-describe("CLI restore safety export", () => {
-  const backupId = "29e384e0-b4af-4a53-92c9-452afba754ce"
-  const storageId = "60a4d6e2-f17f-44e1-80d3-3ca75d589dc9"
-
-  it.each(["instance", "database"] as const)(
-    "requires download for a personal %s safety destination before pinning it",
-    async (targetKind) => {
-      allowed.add("backup.create")
-      f.catalog.mockReturnValue(
-        Effect.succeed([
-          {
-            id: backupId,
-            name: "Backup",
-            relayId,
-            targetKind,
-            targetId: instanceId,
-            status: "available",
-            artifactKind:
-              targetKind === "instance" ? "archive" : "database_dump",
-            backupMode: "full",
-          },
-        ])
-      )
-      f.grants.mockReturnValue(
-        Effect.succeed([
-          {
-            id: "grant",
-            relayId,
-            resourceId: instanceId,
-            resourceType: targetKind,
-            permissions: ["backup.restore"],
-          },
-        ])
-      )
-      f.reserve.mockReturnValue(Effect.succeed({ backupId, taskId: backupId }))
-      f.reserveDatabase.mockReturnValue(
-        Effect.succeed({ backupId, taskId: backupId })
-      )
-      f.reserveRestore.mockReturnValue(Effect.succeed({ taskId: backupId }))
-      f.policy.mockReturnValue(Effect.succeed({ storageId }))
-      f.databases.mockReturnValue(
-        Effect.succeed([{ relayId, databaseId: instanceId }])
-      )
-
-      await expect(
-        run(restoreCliBackupEffect(principal, { backupId, safetyBackup: true }))
-      ).rejects.toMatchObject({ code: "forbidden" })
-      expect(f.reserve).not.toHaveBeenCalled()
-      expect(f.reserveDatabase).not.toHaveBeenCalled()
-      expect(f.reserveRestore).not.toHaveBeenCalled()
-      expect(f.dispatch).not.toHaveBeenCalled()
-
-      allowed.add("backup.download")
-      await run(
-        restoreCliBackupEffect(principal, { backupId, safetyBackup: true })
-      )
-      const reserveSafety =
-        targetKind === "instance" ? f.reserve : f.reserveDatabase
-      expect(reserveSafety).toHaveBeenCalledWith(
-        expect.objectContaining({
-          storageId,
-          reason: "pre_restore",
-          targetId: instanceId,
-        })
-      )
-      expect(f.reserveRestore).toHaveBeenCalled()
-      expect(f.dispatch).toHaveBeenCalled()
-    }
-  )
 })

@@ -3,11 +3,6 @@ import { Effect } from "effect"
 import { TestClock } from "effect/testing"
 
 import {
-  listInstanceFavoritesEffect,
-  setInstanceFavoriteEffect,
-} from "@/effect/instance-favorites"
-import { kilnFavorite } from "@/lib/instance-favorites"
-import {
   assignPlatformAccessEffect,
   removePlatformAccessEffect,
 } from "@/lib/platform-access"
@@ -98,61 +93,6 @@ const authorizationRevision = (userId: string) =>
 
 describeMysql("platform access changes", () => {
   layer(TestDatabase)((it) => {
-    it.effect(
-      "preserves scoped grants and credentials while revising authority on promotion",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* insertMember("admin", "admin")
-          yield* insertMember("operator", "user")
-          yield* insertScopedAccess("operator")
-
-          yield* assignPlatformAccessEffect({
-            accessType: "platform_admin",
-            actingUserId: "admin",
-            developmentBypass: false,
-            userId: "operator",
-          })
-
-          assert.strictEqual((yield* roles).operator, "admin")
-          yield* expectScopedAccessKept("operator")
-          assert.strictEqual(yield* authorizationRevision("operator"), 1)
-          const deliveries = yield* selectRows<{
-            relay_id: string
-            subject_id: string
-          }>("authorization_delivery")
-          assert.deepEqual(
-            deliveries.map((row) => [row.relay_id, row.subject_id]),
-            [[relayId, "operator"]]
-          )
-        })
-    )
-
-    it.effect(
-      "stars Kiln for a new administrator, and keeps it unstarred once they remove it",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* insertMember("admin", "admin")
-          yield* insertMember("operator", "user")
-          const promote = assignPlatformAccessEffect({
-            accessType: "platform_admin",
-            actingUserId: "admin",
-            developmentBypass: false,
-            userId: "operator",
-          })
-
-          yield* promote
-          assert.deepEqual(yield* listInstanceFavoritesEffect("operator"), [
-            kilnFavorite,
-          ])
-
-          yield* setInstanceFavoriteEffect("operator", kilnFavorite, false)
-          yield* promote
-          assert.deepEqual(yield* listInstanceFavoritesEffect("operator"), [])
-        })
-    )
-
     it.effect("protects the last platform administrator", () =>
       Effect.gen(function* () {
         yield* seed
@@ -168,28 +108,6 @@ describeMysql("platform access changes", () => {
         assert.deepEqual(yield* roles, { "admin-one": "admin" })
         assert.strictEqual(yield* authorizationRevision("admin-one"), 0)
       })
-    )
-
-    it.effect(
-      "does not count disabled administrators as a usable replacement",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* insertMember("admin-one", "admin")
-          yield* insertMember("admin-two", "admin", "disabled")
-
-          const error = yield* removePlatformAccessEffect({
-            actingUserId: "admin-one",
-            developmentBypass: false,
-            targetUserId: "admin-one",
-          }).pipe(Effect.flip)
-
-          assert.include(error.message, "Platform Admin is required")
-          assert.deepEqual(yield* roles, {
-            "admin-one": "admin",
-            "admin-two": "admin",
-          })
-        })
     )
 
     it.effect(

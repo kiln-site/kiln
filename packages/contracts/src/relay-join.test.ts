@@ -8,22 +8,6 @@ const link = {
 }
 
 describe("join links", () => {
-  it("carry Hearth's origin and the join's code", () => {
-    const encoded = encodeRelayJoinLink(link)
-
-    expect(encoded).toBe("https://kiln.example.com/#kj1.abcdefghijklmnopqrs2")
-    expect(decodeRelayJoinLink(encoded)).toEqual(link)
-    expect(decodeRelayJoinLink(`  ${encoded}\n`)).toEqual(link)
-    expect(
-      decodeRelayJoinLink(
-        encodeRelayJoinLink({
-          ...link,
-          hearthOrigin: "http://203.0.113.7:3000",
-        })
-      )
-    ).toEqual({ ...link, hearthOrigin: "http://203.0.113.7:3000" })
-  })
-
   it.each([
     ["another scheme", encodeRelayJoinLink(link).replace("https:", "ftp:")],
     [

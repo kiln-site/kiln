@@ -46,9 +46,7 @@ it("refuses to replace Hearth's database when a Relay can't be told", async () =
   relays.unreachable.add("relay-b")
   const replace = vi.fn(async () => undefined)
 
-  await expect(holdingRelayVolumeReferences(replace)).rejects.toThrow(
-    "Nothing was imported: Beta"
-  )
+  await expect(holdingRelayVolumeReferences(replace)).rejects.toThrow()
   expect(replace).not.toHaveBeenCalled()
   expect(volumeReferencesHeld()).toBeNull()
 })

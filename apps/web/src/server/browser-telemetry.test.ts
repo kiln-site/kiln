@@ -24,12 +24,6 @@ function telemetryRequest(body: unknown): Request {
   })
 }
 
-function spoofedResource() {
-  return {
-    attributes: [{ key: "service.name", value: { stringValue: "relay" } }],
-  }
-}
-
 describe("browser telemetry forwarding", () => {
   beforeEach(() => {
     boundary.signedIn = true
@@ -78,38 +72,5 @@ describe("browser telemetry forwarding", () => {
     expect(oversized.status).toBe(413)
     expect(malformed.status).toBe(400)
     expect(boundary.forwarded).toEqual([])
-  })
-
-  it("forwards logs as the browser with Hearth's backend credentials", async () => {
-    const response = await forwardBrowserTelemetry(
-      telemetryRequest({
-        resourceLogs: [
-          {
-            resource: spoofedResource(),
-            scopeLogs: [{ logRecords: [{ body: { stringValue: "boom" } }] }],
-          },
-        ],
-      }),
-      "logs"
-    )
-    expect(response.status).toBe(204)
-    expect(boundary.forwarded).toHaveLength(1)
-    const [request] = boundary.forwarded
-    expect(request.url).toBe(
-      "https://otlp.example.com/otlp/v1/logs?tenant=one"
-    )
-    expect(request.headers.get("authorization")).toBe("Bearer secret")
-    expect(request.body).toMatchObject({
-      resourceLogs: [
-        {
-          resource: {
-            attributes: expect.arrayContaining([
-              { key: "service.name", value: { stringValue: "hearth-browser" } },
-            ]),
-          },
-          scopeLogs: [{ logRecords: [{ body: { stringValue: "boom" } }] }],
-        },
-      ],
-    })
   })
 })

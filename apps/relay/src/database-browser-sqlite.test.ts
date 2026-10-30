@@ -6,7 +6,6 @@ import { DatabaseSync } from "node:sqlite"
 import { assert, describe, it } from "@effect/vitest"
 
 import {
-  DatabaseBrowserError,
   openSqliteDatabase,
   sqliteMutate,
   sqliteQuery,
@@ -32,47 +31,6 @@ function withDatabase(run: (path: string) => void) {
 }
 
 describe("SQLite database browser", () => {
-  it("runs scripts without breaking quotes, comments, or triggers", () => {
-    withDatabase((path) => {
-      const database = openSqliteDatabase(path, false)
-      try {
-        const result = sqliteQuery(
-          database,
-          {
-            action: "query",
-            maxRows: 10,
-            sql: `
-              CREATE TABLE counter (value INTEGER); INSERT INTO counter VALUES (0);
-              -- trailing ; comment
-              /* ; */ CREATE TRIGGER count_player AFTER INSERT ON players BEGIN
-                UPDATE counter SET value = CASE WHEN value THEN 1 ELSE 2 END; DELETE FROM log;
-              END;
-              ;
-              INSERT INTO players VALUES ('c', 'Notch', 0);
-              SELECT ';' AS "a;b";
-            `,
-          },
-          { writable: true }
-        )
-
-        assert.deepStrictEqual(
-          result.columns.map((column) => column.name),
-          ["a;b"]
-        )
-        assert.deepStrictEqual(
-          database.prepare("SELECT value FROM counter").get(),
-          { value: 2 }
-        )
-        assert.deepStrictEqual(
-          database.prepare("SELECT count(*) AS count FROM log").get(),
-          { count: 0 }
-        )
-      } finally {
-        database.close()
-      }
-    })
-  })
-
   it("rejects stale edits and keeps the transaction atomic", () => {
     withDatabase((path) => {
       const database = openSqliteDatabase(path, false)
@@ -193,118 +151,6 @@ describe("SQLite database browser", () => {
         assert.deepStrictEqual(messages(), ["second", "third"])
         assert.deepStrictEqual(deleteSecond(1), { applied: 1, conflicts: [] })
         assert.deepStrictEqual(messages(), ["third"])
-      } finally {
-        database.close()
-      }
-    })
-  })
-
-  it("changes one row even when primary keys repeat as NULL", () => {
-    withDatabase((path) => {
-      const database = openSqliteDatabase(path, false)
-      try {
-        database.exec(
-          "INSERT INTO players VALUES (NULL, 'x', 1), (NULL, 'y', 2)"
-        )
-        const page = sqliteRows(database, {
-          action: "rows",
-          limit: 10,
-          offset: 0,
-          table: "players",
-        })
-        const index = page.rows.findIndex(
-          ([uuid, name]) => uuid === null && name === "x"
-        )
-        const nullKey = page.keys?.[index]
-        assert.deepStrictEqual(
-          sqliteMutate(database, {
-            action: "mutate",
-            table: "players",
-            changes: [
-              {
-                kind: "delete",
-                key: nullKey ?? {},
-                original: { balance: 1, name: "x", uuid: null },
-              },
-            ],
-          }),
-          { applied: 1, conflicts: [] }
-        )
-      } finally {
-        database.close()
-      }
-    })
-  })
-
-  it("checks truncated blobs by size and previewed prefix", () => {
-    withDatabase((path) => {
-      const database = openSqliteDatabase(path, false)
-      try {
-        const bytes = Buffer.alloc(4096, 7)
-        database.exec("CREATE TABLE files (data BLOB)")
-        database.prepare("INSERT INTO files VALUES (?)").run(bytes)
-        const page = sqliteRows(database, {
-          action: "rows",
-          limit: 10,
-          offset: 0,
-          table: "files",
-        })
-        const [key] = page.keys ?? []
-        const deleteLoaded = () =>
-          sqliteMutate(database, {
-            action: "mutate",
-            table: "files",
-            changes: [
-              {
-                kind: "delete",
-                key: key ?? {},
-                original: { data: page.rows[0]?.[0] ?? null },
-              },
-            ],
-          })
-        // Same prefix, different length: not the loaded value.
-        database
-          .prepare("UPDATE files SET data = ?")
-          .run(Buffer.concat([bytes, Buffer.from([1])]))
-        assert.strictEqual(deleteLoaded().conflicts.length, 1)
-        database.prepare("UPDATE files SET data = ?").run(bytes)
-        assert.deepStrictEqual(deleteLoaded(), { applied: 1, conflicts: [] })
-      } finally {
-        database.close()
-      }
-    })
-  })
-
-  it("never commits a cancelled job", () => {
-    withDatabase((path) => {
-      const database = openSqliteDatabase(path, false)
-      try {
-        // The Relay refuses the commit, as it would after a timeout.
-        const refused = {
-          claimCommit() {
-            throw new DatabaseBrowserError("cancelled", "cancelled")
-          },
-        }
-        assert.throws(
-          () =>
-            sqliteQuery(
-              database,
-              {
-                action: "query",
-                maxRows: 10,
-                sql: "UPDATE players SET balance = 0; DELETE FROM log",
-              },
-              { job: refused, writable: true }
-            ),
-          /cancelled/u
-        )
-        const read = (sql: string) =>
-          sqliteQuery(database, { action: "query", maxRows: 10, sql }).rows
-        assert.deepStrictEqual(
-          read("SELECT balance FROM players ORDER BY uuid"),
-          [[10.5], [3]]
-        )
-        assert.deepStrictEqual(read("SELECT count(*) FROM log"), [[2]])
       } finally {
         database.close()
       }

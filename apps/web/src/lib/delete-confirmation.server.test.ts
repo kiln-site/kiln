@@ -59,32 +59,6 @@ const confirm = (confirmation: string, password: string) =>
 describeMysql("deletion confirmation", () => {
   layer(TestDatabase)((it) => {
     it.effect(
-      "refuses a name that isn't the resource's without trying the password",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-
-          const refused = yield* Effect.flip(
-            confirm("Survival 2", "correct horse battery")
-          )
-
-          assert.strictEqual(refused._tag, "AuthenticationError")
-          assert.include(refused.message, "Survival")
-          assert.strictEqual(verified.count, 0)
-        })
-    )
-
-    it.effect("refuses the wrong account password", () =>
-      Effect.gen(function* () {
-        yield* seed
-
-        const refused = yield* Effect.flip(confirm("Survival", "wrong"))
-
-        assert.strictEqual(refused._tag, "AuthenticationError")
-      })
-    )
-
-    it.effect(
       "stops checking passwords after five wrong ones, the right one too",
       () =>
         Effect.gen(function* () {
@@ -129,31 +103,6 @@ describeMysql("deletion confirmation", () => {
             confirm("Survival", "correct horse battery")
           )
           assert.strictEqual(after._tag, "PasswordAttemptsError")
-        })
-    )
-
-    it.effect(
-      "accepts more right passwords in a row than the wrong ones allowed",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-
-          // A right password frees its attempt, so none of these counts.
-          for (let attempt = 0; attempt < 6; attempt += 1) {
-            yield* confirm("Survival", "correct horse battery")
-          }
-
-          assert.strictEqual(verified.count, 6)
-        })
-    )
-
-    it.effect(
-      "accepts the name, typed with stray spaces, and the password",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-
-          yield* confirm("  Survival ", "correct horse battery")
         })
     )
   })

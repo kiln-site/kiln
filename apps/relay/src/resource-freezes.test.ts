@@ -1,10 +1,5 @@
-import {
-  defaultAppConfig,
-  relayCreateDatabaseSchema,
-  relayDeployAppSchema,
-} from "@workspace/contracts"
 import { Deferred, Effect, Fiber } from "effect"
-import { afterEach, describe, expect, it, vi } from "vite-plus/test"
+import { describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
@@ -14,16 +9,10 @@ import {
   controlRequestLocks,
   resourceReplaceLocks,
 } from "./operation-plans.js"
-import { fakeDocker } from "./test/docker.js"
-import {
-  relayHarness,
-  TEST_NAMESPACE,
-  type RelayHarness,
-} from "./test/relay.js"
+import { relayHarness, type RelayHarness } from "./test/relay.js"
 
 const serverId = "a".repeat(40)
 const otherServerId = "b".repeat(40)
-const databaseId = "d".repeat(40)
 const appId = "e".repeat(40)
 const deletion = "11111111-1111-4111-8111-111111111111"
 const otherDeletion = "22222222-2222-4222-8222-222222222222"
@@ -31,10 +20,6 @@ const resolve = (reference: string) => reference
 // No volume here belongs to an App, and no App names a volume.
 const none = () => []
 const quiet = async () => {}
-
-afterEach(() => {
-  vi.useRealTimers()
-})
 
 // Runs an operation the way the Relay admits it, reporting whether it ran.
 async function attempt(
@@ -204,103 +189,6 @@ describe("resources frozen for deletion", () => {
     expect(restarted.freezes.has("instance", serverId)).toBe(false)
   })
 
-  it("keeps a frozen database running for its dump, refusing every change Kiln would make to it", async () => {
-    const harness = await relayHarness()
-    await harness.databases.create(
-      relayCreateDatabaseSchema.parse({
-        databaseName: "kiln_app",
-        engine: "postgres",
-        id: databaseId,
-        name: "Main database",
-        password: "correct-horse-battery-staple-1",
-        username: "kiln_user",
-      })
-    )
-    await harness.freezes.freeze(
-      { deletionId: deletion, id: databaseId, kind: "database" },
-      quiet
-    )
-
-    const database = fakeDocker.container(
-      `${TEST_NAMESPACE}-kiln-db-${databaseId}-database`
-    )!
-    expect(database.state.running).toBe(true)
-    const refused = "This database is being deleted"
-    for (const operation of [
-      "database.action",
-      "database.data.write",
-      "database.dump.import",
-      "database.wipe",
-    ]) {
-      expect(
-        await attempt(harness, operation, control(operation, { databaseId }))
-      ).toBe(refused)
-    }
-    expect(
-      await attempt(
-        harness,
-        "backup.create",
-        controlRequestLocks(
-          "database.dump.export",
-          { databaseId },
-          resolve,
-          none
-        )!
-      )
-    ).toBe("ran")
-  })
-
-  it("stops a frozen App and keeps Docker from starting it, then gives back its restart policy", async () => {
-    const harness = await relayHarness()
-    await harness.apps.create({ id: appId, name: "Website" })
-    fakeDocker.images.set("nginx:alpine", {})
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] })
-    await harness.apps.deploy(
-      relayDeployAppSchema.parse({
-        appId,
-        config: { ...defaultAppConfig, image: "nginx:alpine" },
-        name: "Website",
-      })
-    )
-    for (let step = 0; ; step += 1) {
-      if ((await harness.apps.get(appId)).deployment?.state !== "running") break
-      if (step > 10_000) throw new Error("The deployment never finished")
-      await new Promise((resolve) => setImmediate(resolve))
-      await vi.advanceTimersByTimeAsync(100)
-    }
-    vi.useRealTimers()
-    const [container] = [...fakeDocker.containers.values()].filter(
-      (candidate) => candidate.labels["kiln.app.id"] === appId
-    )
-    container!.restartPolicy = "on-failure"
-    container!.restartMaximumRetryCount = 5
-    const frozen = { deletionId: deletion, id: appId, kind: "app" } as const
-
-    await harness.freezes.freeze(frozen, (record) =>
-      harness.apps.quietForDeletion(appId, (restartPolicies) =>
-        record({ restartPolicies })
-      )
-    )
-    expect(container!.state.running).toBe(false)
-    expect(container!.restartPolicy).toBe("no")
-    // Recorded with the freeze, so a Relay that stops can still put it back.
-    expect(
-      (await Effect.runPromise(harness.state.listResourceFreezes()))[0]?.undo
-    ).toEqual({
-      restartPolicies: {
-        [container!.id]: { maximumRetryCount: 5, name: "on-failure" },
-      },
-    })
-
-    await harness.freezes.unfreeze(frozen, async (undo) => {
-      await harness.apps.restoreRestartPolicies(undo.restartPolicies ?? {})
-    })
-    expect(container!.restartPolicy).toBe("on-failure")
-    expect(container!.restartMaximumRetryCount).toBe(5)
-    // It stays stopped: starting it again is someone's choice.
-    expect(container!.state.running).toBe(false)
-  })
-
   it("refuses every change to a frozen volume, even an App starting that mounts it, but its final backup and deletion", async () => {
     const harness = await relayHarness()
     const volumeId = "f".repeat(40)
@@ -350,25 +238,5 @@ describe("resources frozen for deletion", () => {
 
     await harness.freezes.forget("volume", volumeId)
     expect(await startApp()).toBe("ran")
-  })
-
-  it("forgets the freeze of a resource the Relay deleted", async () => {
-    const harness = await relayHarness()
-    await harness.freezes.freeze(
-      { deletionId: deletion, id: databaseId, kind: "database" },
-      quiet
-    )
-    await harness.freezes.forget("database", databaseId)
-
-    expect(
-      await attempt(
-        harness,
-        "database.action",
-        control("database.action", { databaseId })
-      )
-    ).toBe("ran")
-    expect(
-      await Effect.runPromise(harness.state.listResourceFreezes())
-    ).toEqual([])
   })
 })

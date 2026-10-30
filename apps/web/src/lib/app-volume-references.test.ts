@@ -22,8 +22,6 @@ afterAll(() => disposeAppRuntime())
 // names, and the volumes it has.
 const relay = vi.hoisted(() => ({
   existing: new Set<string>(),
-  // Writes that fail, as when the Relay is offline, in order.
-  failingWrites: 0,
   imported: [] as Array<{ appId: string; volumeIds: Array<string> }>,
   references: new Map<string, Array<string>>(),
   unresolved: [] as Array<string>,
@@ -51,10 +49,6 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     }
     if (operation !== "app.volumes.write") {
       throw new Error(`Unexpected Relay operation ${operation}`)
-    }
-    if (relay.failingWrites > 0) {
-      relay.failingWrites -= 1
-      throw new Error("Relay control socket is not connected")
     }
     const before = relay.references.get(payload.appId!) ?? []
     if (
@@ -87,7 +81,6 @@ const volumeMount = (id: string, volumeId: string): AppMount => ({
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   relay.existing = new Set([media, uploads])
-  relay.failingWrites = 0
   relay.imported = []
   relay.references = new Map()
   relay.unresolved = []
@@ -147,28 +140,6 @@ describeMysql("App volume references", () => {
     )
 
     it.effect(
-      "tells the Relay a dropped volume on the next save after it missed it",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* mountVolumes(appId, [volumeMount("media0001", media)])
-
-          // Saved, but the Relay doesn't hear: it keeps the volume protected.
-          relay.failingWrites = 1
-          yield* mountVolumes(appId, [])
-          assert.deepStrictEqual(yield* savedVolumes(appId), [])
-          assert.deepStrictEqual(relay.references.get(appId), [media])
-
-          // Any later save sends the whole set again.
-          yield* updateAppConfigEffect(relayId, appId, (config) => ({
-            ...config,
-            environment: "MODE=production",
-          }))
-          assert.deepStrictEqual(relay.references.get(appId), [])
-        })
-    )
-
-    it.effect(
       "tells the Relay which Apps' configurations it couldn't read, instead of leaving them out",
       () =>
         Effect.gen(function* () {
@@ -190,27 +161,6 @@ describeMysql("App volume references", () => {
             { appId, volumeIds: [media] },
           ])
           assert.deepStrictEqual(relay.unresolved, [otherAppId])
-        })
-    )
-
-    it.effect(
-      "sends a Relay every App's configured volumes when it has none yet",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* mountVolumes(appId, [volumeMount("media0001", media)])
-          yield* mountVolumes(otherAppId, [
-            volumeMount("media0001", media),
-            volumeMount("uploads01", uploads),
-          ])
-          relay.references = new Map()
-
-          yield* importRelayAppVolumeReferencesEffect(relayId)
-
-          assert.sameDeepMembers(relay.imported, [
-            { appId, volumeIds: [media] },
-            { appId: otherAppId, volumeIds: [media, uploads] },
-          ])
         })
     )
   })

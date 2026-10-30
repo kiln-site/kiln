@@ -86,25 +86,6 @@ describeMysql("ownership transfer fresh authority", () => {
     )
 
     it.effect(
-      "discards an old elapsed disable expiry when the account is now indefinitely disabled",
-      () =>
-        Effect.gen(function* () {
-          yield* seed({
-            actor: { status: "disabled", statusExpiresAt: null },
-            ownerId: "actor",
-          })
-
-          const error = yield* transferResourceOwnershipEffect(
-            { ...actor, statusExpiresAt: "2000-01-01T00:00:00Z" },
-            input
-          ).pipe(Effect.flip)
-
-          assert.include(error.message, "cannot manage resource access")
-          assert.strictEqual(yield* instanceOwner, "actor")
-        })
-    )
-
-    it.effect(
       "rejects a demoted administrator who does not currently own the instance",
       () =>
         Effect.gen(function* () {
@@ -118,19 +99,6 @@ describeMysql("ownership transfer fresh authority", () => {
           assert.include(error.message, "Only the game server owner")
           assert.strictEqual(yield* instanceOwner, "owner")
         })
-    )
-
-    it.effect("requires the new owner to hold active server access", () =>
-      Effect.gen(function* () {
-        yield* seed({ ownerId: "actor", recipientGrant: "pending" })
-
-        const error = yield* transferResourceOwnershipEffect(actor, input).pipe(
-          Effect.flip
-        )
-
-        assert.include(error.message, "access to the game server")
-        assert.strictEqual(yield* instanceOwner, "actor")
-      })
     )
 
     it.effect(

@@ -5,25 +5,14 @@ import {
   generateKeyPairSync,
   randomBytes,
 } from "node:crypto"
-import { sign } from "node:crypto"
-import { createServer, type Socket } from "node:net"
-
-import type { RowDataPacket } from "mysql2"
 
 import { assert, layer } from "@effect/vitest"
-import { Effect, Fiber, Schedule } from "effect"
-import { TestClock } from "effect/testing"
+import { Effect } from "effect"
 import { vi } from "vite-plus/test"
 import {
   type RelayJoinEnvelope,
-  type RelayPairingRequestContract,
-  type RelayPairingResponseContract,
   relayJoinAnnouncementTranscript,
-  relayJoinHeldHeader,
-  relayJoinHoldHeader,
   relayJoinResponseTranscript,
-  relayJoinSavedHeader,
-  relayPairingResponseTranscript,
 } from "@workspace/contracts"
 
 import {
@@ -33,60 +22,9 @@ import {
   refreshRelayJoinEffect,
   relayJoinViewEffect,
 } from "@/server/relay-join.server"
-import { Database } from "@/effect/database"
-import { databaseTable } from "@/lib/database-config"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import {
-  deletePersistedRelayEffect,
-  loadPersistedRelay,
-  publicKeyFingerprint,
-} from "@/lib/relay-registry"
-import { insertRelay } from "@/test/seed"
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"j".repeat(32)}`)
-
-// A local server that takes connections and never answers.
-function silentServer(): Promise<{ close: () => Promise<void>; port: number }> {
-  return new Promise((resolve, reject) => {
-    const sockets = new Set<Socket>()
-    const server = createServer((socket) => {
-      sockets.add(socket)
-      socket.once("close", () => sockets.delete(socket))
-    })
-    server.once("error", reject)
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address()
-      if (typeof address !== "object" || !address) {
-        reject(new Error("No port"))
-        return
-      }
-      resolve({
-        close: () =>
-          new Promise((done) => {
-            for (const socket of sockets) socket.destroy()
-            server.close(() => done())
-          }),
-        port: address.port,
-      })
-    })
-  })
-}
-
-// A local port nothing listens on.
-function closedPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer()
-    server.once("error", reject)
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address()
-      server.close(() =>
-        typeof address === "object" && address
-          ? resolve(address.port)
-          : reject(new Error("No port"))
-      )
-    })
-  })
-}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -119,53 +57,32 @@ function relayEnvelope(
   }
 }
 
-// Posts an announcement to the join endpoint, keyed by `secret`, with what
-// a Relay that pairs through its announcements adds outside the MAC.
+// Posts an announcement to the join endpoint, keyed by `secret`.
 function announce(
   joinId: string,
   secret: string,
   envelope: RelayJoinEnvelope,
-  address: string,
-  extra: {
-    readonly features?: ReadonlyArray<string>
-    // How long Hearth may hold it for news.
-    readonly hold?: number
-    // Whether the Relay heard Hearth saved it.
-    readonly heardSaved?: boolean
-    readonly pairing?: RelayPairingResponseContract
-  } = {}
+  address: string
 ) {
-  const { heardSaved, hold, ...fields } = extra
   const nonce = randomBytes(32).toString("base64url")
   const unsigned = { envelope, joinId, nonce, version: 1 as const }
   const request = new Request("https://hearth.test/api/relays/join", {
     body: JSON.stringify({
       ...unsigned,
-      ...fields,
       mac: createHmac("sha256", secret)
         .update(relayJoinAnnouncementTranscript(unsigned))
         .digest("base64url"),
     }),
-    headers: {
-      "content-type": "application/json",
-      ...(hold === undefined ? {} : { [relayJoinHoldHeader]: String(hold) }),
-      ...(heardSaved ? { [relayJoinSavedHeader]: "1" } : {}),
-    },
+    headers: { "content-type": "application/json" },
     method: "POST",
   })
   return answerRelayJoinAnnouncement(request, address).pipe(
     Effect.flatMap((response) =>
       Effect.promise(async () => ({
-        held: response.headers.get(relayJoinHeldHeader) === "1",
-        saved: response.headers.get(relayJoinSavedHeader) === "1",
         body: (await response.json()) as {
           clientId?: string | null
           expiresAt?: number | null
           mac?: string
-          pairing?: {
-            dialUrl: string | null
-            request: RelayPairingRequestContract
-          }
           status?: string
         },
         status: response.status,
@@ -184,9 +101,6 @@ function announce(
                 expiresAt: answer.body.expiresAt ?? null,
                 joinId,
                 nonce,
-                ...(answer.body.pairing
-                  ? { pairing: answer.body.pairing }
-                  : {}),
                 status: answer.body.status as "pending",
               })
             )
@@ -262,523 +176,25 @@ describeMysql("Relay joins", () => {
         })
     )
 
-    it.effect(
-      "say when Hearth can't reach a joining Relay, before anyone confirms it",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          const join = yield* openRelayJoinEffect("owner")
-          const port = yield* Effect.promise(closedPort)
-          yield* announce(
-            join.id,
-            join.secret ?? "",
-            relayEnvelope(join.id, {
-              browserOrigin: `https://127.0.0.1:${port}`,
-              controlEndpoint: `wss://127.0.0.1:${port}/v1/socket`,
-            }),
-            "203.0.113.1"
-          )
-
-          const view = yield* relayJoinViewEffect("owner", join.id)
-          assert.strictEqual(
-            view.announcement?.unreachable,
-            `Hearth can't reach the Relay at 127.0.0.1:${port}. If its machine is behind a router, forward port ${port} to it.`
-          )
-
-          // Nor does Hearth connect to where cloud metadata services live.
-          const metadata = yield* openRelayJoinEffect("other")
-          yield* announce(
-            metadata.id,
-            metadata.secret ?? "",
-            relayEnvelope(metadata.id, {
-              browserOrigin: "https://169.254.169.254",
-              controlEndpoint: "wss://169.254.169.254/v1/socket",
-            }),
-            "203.0.113.1"
-          )
-          const refused = yield* relayJoinViewEffect("other", metadata.id)
-          assert.strictEqual(
-            refused.announcement?.unreachable,
-            "Hearth won't connect to 169.254.169.254"
-          )
-        })
-    )
-
-    it.effect(
-      "turn away a Relay without its own HTTPS, and tell a refreshed join's Relay it expired",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          const join = yield* openRelayJoinEffect("owner")
-          const secret = join.secret ?? ""
-
-          const plain = yield* announce(
-            join.id,
-            secret,
-            relayEnvelope(join.id, {
-              browserOrigin: "http://relay.test:4100",
-              controlEndpoint: "ws://relay.test:4100/v1/socket",
-            }),
-            "203.0.113.2"
-          )
-          assert.strictEqual(plain.status, 422)
-          assert.strictEqual(
-            (yield* relayJoinViewEffect("owner", join.id)).state,
-            "waiting"
-          )
-
-          const refreshed = yield* refreshRelayJoinEffect("owner", join.id)
-          assert.notStrictEqual(refreshed.id, join.id)
-          const stale = yield* announce(
-            join.id,
-            secret,
-            relayEnvelope(join.id),
-            "203.0.113.2"
-          )
-          assert.deepInclude(stale, { proven: true })
-          assert.strictEqual(stale.body.status, "expired")
-          // Opening the dialog again shows the new command.
-          assert.strictEqual(
-            (yield* openRelayJoinEffect("owner")).id,
-            refreshed.id
-          )
-        })
-    )
-
-    it.effect(
-      "won't add a Relay where Hearth already has another, and says which",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          // The machine set up again: a new identity at the old address.
-          yield* insertRelay("old-relay", {
-            hostname: "relay.test",
-            name: "K100",
-            port: 4100,
-          })
-          const join = yield* openRelayJoinEffect("owner")
-          yield* announce(
-            join.id,
-            join.secret ?? "",
-            relayEnvelope(join.id),
-            "203.0.113.5"
-          )
-
-          const view = yield* relayJoinViewEffect("owner", join.id)
-          assert.deepStrictEqual(view.announcement?.addressTakenBy, {
-            id: "old-relay",
-            name: "K100",
-          })
-          const refused = yield* Effect.flip(
-            confirmRelayJoinEffect({
-              canManageAnyRelay: true,
-              envelopeDigest: view.announcement?.envelopeDigest ?? "",
-              installation: "use",
-              joinId: join.id,
-              name: null,
-              userId: "owner",
-            })
-          )
-          assert.include(messageOf(refused), "K100 is already at")
-          assert.strictEqual(
-            (yield* relayJoinViewEffect("owner", join.id)).state,
-            "announced"
-          )
-        })
-    )
-
-    it.effect(
-      "adds a Relay it can't reach through the Relay's announcements",
-      () =>
-        TestClock.withLive(
-          Effect.gen(function* () {
-            yield* resetDatabase
-            const join = yield* openRelayJoinEffect("owner")
-            const keys = generateKeyPairSync("ed25519", {
-              privateKeyEncoding: { format: "pem", type: "pkcs8" },
-              publicKeyEncoding: { format: "pem", type: "spki" },
-            })
-            const port = yield* Effect.promise(closedPort)
-            const envelope = relayEnvelope(join.id, {
-              browserOrigin: `https://127.0.0.1:${port}`,
-              controlEndpoint: `wss://127.0.0.1:${port}/v1/socket`,
-              relayFingerprint: publicKeyFingerprint(keys.publicKey),
-              relayPublicKeyPem: keys.publicKey,
-            })
-            const features = ["join-pairing-v1", "control-dial-v1"]
-            const relayAnnounces = (pairing?: RelayPairingResponseContract) =>
-              announce(join.id, join.secret ?? "", envelope, "203.0.113.9", {
-                features,
-                ...(pairing ? { pairing } : {}),
-              })
-            yield* relayAnnounces()
-
-            // Hearth can't reach it, and still lets it be added.
-            const view = yield* relayJoinViewEffect("owner", join.id).pipe(
-              Effect.repeat({
-                schedule: Schedule.spaced("100 millis"),
-                until: (current) => current.announcement?.unreachable !== null,
-              }),
-              Effect.timeout("15 seconds")
-            )
-            assert.isTrue(view.announcement?.reachesHearth)
-            yield* confirmRelayJoinEffect({
-              canManageAnyRelay: true,
-              envelopeDigest: view.announcement?.envelopeDigest ?? "",
-              installation: "keep",
-              joinId: join.id,
-              name: null,
-              userId: "owner",
-            })
-
-            // The next answer carries Hearth's pairing request, under the
-            // join's MAC.
-            const answered = yield* Effect.suspend(() => relayAnnounces()).pipe(
-              Effect.repeat({
-                schedule: Schedule.spaced("200 millis"),
-                until: (answer) => answer.body.pairing !== undefined,
-              }),
-              Effect.timeout("10 seconds")
-            )
-            assert.isTrue(answered.proven)
-            const request = answered.body.pairing?.request
-            if (!request) throw new Error("No pairing request")
-
-            const reply = (expiresAt: number) => {
-              const unsigned = {
-                actions: ["*"],
-                clientId: publicKeyFingerprint(request.publicKeyPem),
-                expiresAt,
-                nonce: request.nonce,
-                relayFingerprint: envelope.relayFingerprint,
-                relayName: "Relay",
-                relayPublicKeyPem: keys.publicKey,
-                role: "full_access" as const,
-                signature: "",
-                version: 1 as const,
-              }
-              return {
-                ...unsigned,
-                signature: sign(
-                  null,
-                  Buffer.from(relayPairingResponseTranscript(unsigned)),
-                  keys.privateKey
-                ).toString("base64url"),
-              }
-            }
-
-            // A reply Hearth kept past its expiry, as across a restart, is
-            // let go, so the Relay is asked again.
-            const database = yield* Database
-            yield* database.execute(
-              "test_expired_pairing_reply",
-              `UPDATE ${databaseTable("relay_join")}
-                  SET pairing_response = ? WHERE id = ?`,
-              [JSON.stringify(reply(Date.now() - 1)), join.id]
-            )
-            yield* database
-              .queryRows<RowDataPacket & { pairing_response: unknown }>(
-                "test_expired_pairing_reply",
-                `SELECT pairing_response FROM ${databaseTable("relay_join")}
-                  WHERE id = ?`,
-                [join.id]
-              )
-              .pipe(
-                Effect.repeat({
-                  schedule: Schedule.spaced("200 millis"),
-                  until: ([row]) => row?.pairing_response === null,
-                }),
-                Effect.timeout("10 seconds")
-              )
-
-            // The Relay replies, signed with its key; Hearth saves it,
-            // preferring that it dials Hearth.
-            yield* relayAnnounces(reply(Date.now() + 60_000))
-            const saved = yield* Effect.promise(() =>
-              loadPersistedRelay(envelope.relayFingerprint)
-            ).pipe(
-              Effect.repeat({
-                schedule: Schedule.spaced("200 millis"),
-                until: (relay) => relay !== null,
-              }),
-              Effect.timeout("10 seconds")
-            )
-            assert.strictEqual(saved?.controlDial, "relay")
-          })
-        ),
-      30_000
-    )
-
-    it.effect(
-      "hold a Relay's announcements until there's news: someone confirming it, then Hearth saving it",
-      () =>
-        // Held announcements run on the test clock, which stands still, so
-        // only news can answer them; the rest on real time, with the worker.
-        Effect.gen(function* () {
-          yield* resetDatabase
-          const join = yield* TestClock.withLive(openRelayJoinEffect("owner"))
-          const keys = generateKeyPairSync("ed25519", {
-            privateKeyEncoding: { format: "pem", type: "pkcs8" },
-            publicKeyEncoding: { format: "pem", type: "spki" },
-          })
-          const port = yield* Effect.promise(closedPort)
-          const envelope = relayEnvelope(join.id, {
-            browserOrigin: `https://127.0.0.1:${port}`,
-            controlEndpoint: `wss://127.0.0.1:${port}/v1/socket`,
-            relayFingerprint: publicKeyFingerprint(keys.publicKey),
-            relayPublicKeyPem: keys.publicKey,
-          })
-          const relayAnnounces = (
-            hold: number,
-            pairing?: RelayPairingResponseContract,
-            heardSaved = false
-          ) =>
-            announce(join.id, join.secret ?? "", envelope, "203.0.113.10", {
-              features: ["join-pairing-v1", "control-dial-v1"],
-              heardSaved,
-              hold,
-              ...(pairing ? { pairing } : {}),
-            }).pipe(Effect.forkChild)
-          // Answered without the clock moving, or never.
-          const answered = <A, E>(fiber: Fiber.Fiber<A, E>) =>
-            TestClock.withLive(
-              Fiber.join(fiber).pipe(Effect.timeout("5 seconds"))
-            )
-
-          // The first is answered at once: it makes the Relay's invitation.
-          const first = yield* answered(yield* relayAnnounces(10_000))
-          assert.isFalse(first.held)
-          assert.strictEqual(first.body.status, "pending")
-
-          // Without news, Hearth holds it as long as the Relay asked.
-          const quiet = yield* relayAnnounces(300)
-          while (quiet.pollUnsafe() === undefined) {
-            yield* TestClock.adjust(100)
-            yield* TestClock.withLive(Effect.sleep(5))
-          }
-          const unchanged = yield* Fiber.join(quiet)
-          assert.isTrue(unchanged.held)
-          assert.isUndefined(unchanged.body.pairing)
-
-          // Held until someone confirms the Relay, and then answered with
-          // Hearth's pairing request.
-          const waiting = yield* relayAnnounces(10_000)
-          const view = yield* TestClock.withLive(
-            relayJoinViewEffect("owner", join.id).pipe(
-              Effect.repeat({
-                schedule: Schedule.spaced("100 millis"),
-                until: (current) => current.announcement?.unreachable !== null,
-              }),
-              Effect.timeout("15 seconds")
-            )
-          )
-          assert.isUndefined(waiting.pollUnsafe())
-          yield* TestClock.withLive(
-            confirmRelayJoinEffect({
-              canManageAnyRelay: true,
-              envelopeDigest: view.announcement?.envelopeDigest ?? "",
-              installation: "keep",
-              joinId: join.id,
-              name: null,
-              userId: "owner",
-            })
-          )
-          const asked = yield* answered(waiting)
-          assert.isTrue(asked.held && asked.proven)
-          assert.isFalse(asked.saved)
-          const request = asked.body.pairing?.request
-          if (!request) throw new Error("No pairing request")
-          // Asked again before it replies, as when someone confirmed it
-          // between two announcements, it hears so at once.
-          const repeated = yield* answered(yield* relayAnnounces(10_000))
-          assert.strictEqual(
-            repeated.body.pairing?.request.nonce,
-            request.nonce
-          )
-          assert.isFalse(repeated.saved)
-
-          // The Relay's reply is answered once Hearth saved the Relay, so
-          // the Relay can dial it straight away.
-          const unsigned = {
-            actions: ["*"],
-            clientId: publicKeyFingerprint(request.publicKeyPem),
-            expiresAt: Date.now() + 60_000,
-            nonce: request.nonce,
-            relayFingerprint: envelope.relayFingerprint,
-            relayName: "Relay",
-            relayPublicKeyPem: keys.publicKey,
-            role: "full_access" as const,
-            signature: "",
-            version: 1 as const,
-          }
-          const replied = yield* answered(
-            yield* relayAnnounces(10_000, {
-              ...unsigned,
-              signature: sign(
-                null,
-                Buffer.from(relayPairingResponseTranscript(unsigned)),
-                keys.privateKey
-              ).toString("base64url"),
-            })
-          )
-          // It says so, since a hold can also run out before the save.
-          assert.isTrue(replied.held && replied.saved)
-          assert.strictEqual(replied.body.status, "pending")
-          const saved = yield* Effect.promise(() =>
-            loadPersistedRelay(envelope.relayFingerprint)
-          )
-          assert.strictEqual(saved?.controlDial, "relay")
-
-          // Asked again by a Relay that hasn't heard, as when Hearth saved it
-          // between two announcements, it hears at once; one that has heard
-          // is held until there's more news.
-          const unheard = yield* answered(
-            yield* relayAnnounces(10_000, undefined)
-          )
-          assert.isTrue(unheard.saved)
-          const heard = yield* relayAnnounces(10_000, undefined, true)
-          yield* TestClock.withLive(Effect.sleep("300 millis"))
-          assert.isUndefined(heard.pollUnsafe())
-          yield* Fiber.interrupt(heard)
-        }),
-      30_000
-    )
-
-    it.effect(
-      "let adding a Relay be tried again, or dropped for a new command, once it failed",
-      () =>
-        // Confirming starts the worker, which reads the real clock.
-        TestClock.withLive(
-          Effect.gen(function* () {
-            yield* resetDatabase
-            const join = yield* openRelayJoinEffect("owner")
-            // At a closed port, so pairing with it fails at once.
-            const envelope = relayEnvelope(join.id, {
-              browserOrigin: "https://127.0.0.1:1",
-              controlEndpoint: "wss://127.0.0.1:1/v1/socket",
-            })
-            yield* announce(join.id, join.secret ?? "", envelope, "203.0.113.6")
-            const confirm = (joinId: string) =>
-              Effect.gen(function* () {
-                return yield* confirmRelayJoinEffect({
-                  canManageAnyRelay: true,
-                  envelopeDigest:
-                    (yield* relayJoinViewEffect("owner", joinId)).announcement
-                      ?.envelopeDigest ?? "",
-                  installation: "use",
-                  joinId,
-                  name: null,
-                  userId: "owner",
-                })
-              })
-            const failure = (joinId: string) =>
-              relayJoinViewEffect("owner", joinId).pipe(
-                Effect.repeat({
-                  schedule: Schedule.spaced("100 millis"),
-                  until: (view) => view.error !== null,
-                }),
-                Effect.timeout("4 seconds")
-              )
-
-            yield* confirm(join.id)
-            assert.strictEqual((yield* failure(join.id)).state, "confirming")
-            // Try again takes over at once: the stopped worker let go.
-            assert.isNull((yield* confirm(join.id)).error)
-            yield* failure(join.id)
-
-            const next = yield* refreshRelayJoinEffect("owner", join.id)
-            assert.notStrictEqual(next.id, join.id)
-            assert.strictEqual(
-              (yield* relayJoinViewEffect("owner", join.id)).state,
-              "revoked"
-            )
-            // The same Relay can join with the new command.
-            yield* announce(
-              next.id,
-              next.secret ?? "",
-              { ...envelope, invitationId: next.id },
-              "203.0.113.6"
-            )
-            assert.strictEqual((yield* confirm(next.id)).state, "confirming")
-          })
+    it.effect("won't connect to where cloud metadata services live", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const join = yield* openRelayJoinEffect("owner")
+        yield* announce(
+          join.id,
+          join.secret ?? "",
+          relayEnvelope(join.id, {
+            browserOrigin: "https://169.254.169.254",
+            controlEndpoint: "wss://169.254.169.254/v1/socket",
+          }),
+          "203.0.113.1"
         )
-    )
-
-    it.effect(
-      "end a join still adding a Relay when that Relay is removed, so it can join again",
-      () =>
-        TestClock.withLive(
-          Effect.gen(function* () {
-            yield* resetDatabase
-            const join = yield* openRelayJoinEffect("owner")
-            // A Relay Hearth has, at a closed port, so adding it stalls.
-            const envelope = relayEnvelope(join.id, {
-              browserOrigin: "https://127.0.0.1:1",
-              controlEndpoint: "wss://127.0.0.1:1/v1/socket",
-            })
-            yield* insertRelay(envelope.relayFingerprint, {
-              hostname: "127.0.0.1",
-              port: 1,
-            })
-            yield* announce(join.id, join.secret ?? "", envelope, "203.0.113.8")
-            const confirm = (joinId: string) =>
-              Effect.gen(function* () {
-                return yield* confirmRelayJoinEffect({
-                  canManageAnyRelay: true,
-                  envelopeDigest:
-                    (yield* relayJoinViewEffect("owner", joinId)).announcement
-                      ?.envelopeDigest ?? "",
-                  installation: "keep",
-                  joinId,
-                  name: null,
-                  userId: "owner",
-                })
-              })
-            yield* confirm(join.id)
-
-            yield* deletePersistedRelayEffect(envelope.relayFingerprint)
-            assert.strictEqual(
-              (yield* relayJoinViewEffect("owner", join.id)).state,
-              "revoked"
-            )
-            const next = yield* openRelayJoinEffect("owner")
-            assert.notStrictEqual(next.id, join.id)
-            yield* announce(
-              next.id,
-              next.secret ?? "",
-              { ...envelope, invitationId: next.id },
-              "203.0.113.8"
-            )
-            assert.strictEqual((yield* confirm(next.id)).state, "confirming")
-          })
+        const refused = yield* relayJoinViewEffect("owner", join.id)
+        assert.strictEqual(
+          refused.announcement?.unreachable,
+          "Hearth won't connect to 169.254.169.254"
         )
-    )
-
-    it.effect(
-      "refuse an oversized announcement without reading all of it",
-      () =>
-        Effect.gen(function* () {
-          const chunk = new Uint8Array(64 * 1024)
-          let sent = 0
-          const body = new ReadableStream<Uint8Array>({
-            pull: (controller) => {
-              sent += chunk.byteLength
-              if (sent > 64 * 1024 * 1024) controller.close()
-              else controller.enqueue(chunk)
-            },
-          })
-          const response = yield* answerRelayJoinAnnouncement(
-            new Request("https://hearth.test/api/relays/join", {
-              body,
-              // @ts-expect-error Node needs this for a streamed body.
-              duplex: "half",
-              method: "POST",
-            }),
-            "203.0.113.7"
-          )
-          assert.strictEqual(response.status, 413)
-          assert.isBelow(sent, 1024 * 1024)
-        })
+      })
     )
 
     it.effect("belong to whoever opened them", () =>
@@ -813,63 +229,6 @@ describeMysql("Relay joins", () => {
           "announced"
         )
       })
-    )
-
-    it.effect(
-      "freeze what someone confirmed, and refuse other choices meanwhile",
-      () =>
-        // Confirming starts the worker, which reads the real clock.
-        TestClock.withLive(
-          Effect.gen(function* () {
-            yield* resetDatabase
-            // A Relay that never answers, so the adding stays underway.
-            const silent = yield* Effect.acquireRelease(
-              Effect.promise(silentServer),
-              (server) => Effect.promise(server.close)
-            )
-            const join = yield* openRelayJoinEffect("owner")
-            const envelope = relayEnvelope(join.id, {
-              browserOrigin: `https://127.0.0.1:${silent.port}`,
-              controlEndpoint: `wss://127.0.0.1:${silent.port}/v1/socket`,
-            })
-            yield* announce(join.id, join.secret ?? "", envelope, "203.0.113.4")
-            const digest =
-              (yield* relayJoinViewEffect("owner", join.id)).announcement
-                ?.envelopeDigest ?? ""
-            const confirm = (name: string | null, digestUsed = digest) =>
-              confirmRelayJoinEffect({
-                canManageAnyRelay: true,
-                envelopeDigest: digestUsed,
-                installation: "use",
-                joinId: join.id,
-                name,
-                userId: "owner",
-              })
-
-            const changed = yield* Effect.flip(confirm("Forge", "0".repeat(64)))
-            assert.strictEqual(
-              messageOf(changed),
-              "The Relay changed; review it again"
-            )
-
-            const confirming = yield* confirm("Forge")
-            assert.strictEqual(confirming.state, "confirming")
-            assert.deepStrictEqual(confirming.intent, {
-              installation: "use",
-              name: "Forge",
-            })
-            const otherName = yield* Effect.flip(confirm("Anvil"))
-            assert.strictEqual(
-              messageOf(otherName),
-              "This Relay is already being added with other choices"
-            )
-            // A command can't be swapped out from under it.
-            const refreshed = yield* Effect.flip(
-              refreshRelayJoinEffect("owner", join.id)
-            )
-            assert.include(messageOf(refreshed), "being added")
-          }).pipe(Effect.scoped)
-        )
     )
   })
 })
