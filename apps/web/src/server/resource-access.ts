@@ -234,6 +234,17 @@ const inviteAccess = operation<z.infer<typeof inviteAccessSchema>>()({
   ],
   run: ({ context: user, input }) =>
     promiseEffect(() => inviteResourceAccessHandler(user, input)),
+  // The person invited, once they have an account to name: an address stays
+  // out of the audit. Its Relay when every resource shares one.
+  audit: ({ exit, input }) => {
+    if (exit._tag !== "Success") return null
+    const relayIds = new Set(input.targets.map((target) => target.relayId))
+    return {
+      id: exit.value.userId,
+      kind: "user",
+      relayId: relayIds.size === 1 ? [...relayIds][0]! : null,
+    }
+  },
 })
 
 export const inviteResourceAccess = createServerFn({ method: "POST" })
