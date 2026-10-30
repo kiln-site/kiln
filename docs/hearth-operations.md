@@ -123,7 +123,9 @@ away every part.
 - **Spans.** `Operations.<name>` wraps a run, with `operation.id`,
   `operation.name`, `operation.initiator` (`person`, `system`),
   `operation.parent_id`, `operation.locks`, `operation.wait_ms`,
-  `operation.outcome` and, when refused, `operation.blocked_by`. Its
+  `operation.outcome` and, when refused, `operation.blocked_by`. A run
+  turned away before it starts, by `authorize` or by Hearth still starting,
+  gets its outcome and metrics too, though it writes no audit event. Its
   children are `Operations.authorize` and the work's own spans. A durable
   run is `Operations.<name>` with `operation.durable`, linked to the
   `Operations.start` span of the request that started it; Effect's workflow
