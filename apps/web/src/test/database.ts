@@ -39,14 +39,14 @@ export const TestDatabase = Layer.effect(
   Effect.map(SqlClient.SqlClient, (sql) => makeDatabase(Effect.succeed(sql)))
 ).pipe(Layer.provideMerge(migratedClient))
 
-// Empties every table except the migration ledgers and the operations
-// engine's shard locks and runners, which a running engine holds: emptied
-// under it, it would stop until it took its shards back.
+// Empties every table except the migration ledgers (Kiln's and the operations
+// engine's two) and the engine's shard locks and runners, which a running
+// engine holds: emptied under it, it would stop until it took its shards back.
 export const resetDatabase = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
   const ledger = databaseTableName("schema_migration")
   const engineState = new Set(
-    ["locks", "runners", "migrations"].map(
+    ["locks", "runners", "migrations", "runner_migrations"].map(
       (name) => `${operationsTablePrefix()}_${name}`
     )
   )

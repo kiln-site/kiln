@@ -187,13 +187,6 @@ export function makeDatabase(
               isSqlError(error)
                 ? DatabaseError.make({ operation, cause: error })
                 : error
-            ),
-            // Effect SQL turns a failed COMMIT into a defect. Keep it typed
-            // so callers can handle it like any query.
-            Effect.catchDefect((defect) =>
-              isSqlError(defect)
-                ? Effect.fail(DatabaseError.make({ operation, cause: defect }))
-                : Effect.die(defect)
             )
           )
       ).pipe(Effect.withSpan(`db.${operation}`)),
