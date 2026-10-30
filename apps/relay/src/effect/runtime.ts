@@ -3,6 +3,7 @@ import { Effect, Layer, ManagedRuntime, Option, Tracer } from "effect"
 import type { Fiber } from "effect"
 import { Headers, HttpTraceContext } from "effect/http"
 
+import { loadOrCreateRelayIdentity } from "./identity.js"
 import { makeRelayStateLayer, RelayStateStore } from "./state.js"
 import { relayBuildCommit, relayBuildVersion } from "../build-info.js"
 import { relayStateDatabasePath, type RelayConfig } from "../config.js"
@@ -22,8 +23,10 @@ let runtime: ManagedRuntime.ManagedRuntime<RelayStateStore, unknown> | null =
 
 export function initializeRelayRuntime(config: RelayConfig): void {
   if (runtime) return
-  // The installation ID is the one saved when the Relay starts; one Hearth
-  // sends later is reported from the next start.
+  // The installation ID and Relay name are the ones saved when the Relay
+  // starts; changes to either are reported from the next start. Relays of one
+  // installation are told apart by their ID, the fingerprint Hearth knows
+  // them by, which never changes.
   const telemetry = Layer.unwrap(
     Effect.gen(function* () {
       const installationId = config.installationIdConfigured
@@ -31,6 +34,10 @@ export function initializeRelayRuntime(config: RelayConfig): void {
         : yield* savedInstallationId(yield* RelayStateStore).pipe(
             Effect.orElseSucceed(() => null)
           )
+      // Startup loads it again; this first load creates it on a new Relay.
+      const identity = yield* loadOrCreateRelayIdentity(config).pipe(
+        Effect.orElseSucceed(() => null)
+      )
       return Telemetry.layer(
         {
           serviceName: "relay",
@@ -41,6 +48,12 @@ export function initializeRelayRuntime(config: RelayConfig): void {
               : {}),
             ...(installationId
               ? { "kiln.installation_id": installationId }
+              : {}),
+            ...(identity
+              ? {
+                  "service.instance.id": identity.fingerprint,
+                  "kiln.relay.name": identity.name,
+                }
               : {}),
           },
         },
