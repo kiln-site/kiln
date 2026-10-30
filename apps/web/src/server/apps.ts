@@ -426,7 +426,12 @@ const appWebRoutesSchema = appInputSchema.extend({
 const saveAppWebRoutes = operation<z.infer<typeof appWebRoutesSchema>>()({
   name: "webRoutes.app.save",
   doing: "Changing this App's web routes",
-  authorize: ({ user }) => signedIn(user),
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) =>
+        promiseEffect(() => authorizedAppFor(person, input, "app.manage"))
+      )
+    ),
   locks: ({ input }) => [
     exclusive(
       dnsKey({

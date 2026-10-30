@@ -691,7 +691,19 @@ const saveInstanceWebRoutes = operation<
 >()({
   name: "webRoutes.instance.save",
   doing: "Changing this game server's web routes",
-  authorize: ({ user }) => signedIn(user),
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) =>
+        promiseEffect(() =>
+          requireRelayPermission({
+            instanceId: input.instanceId,
+            permission: "instance.network.write",
+            relayId: input.relayId,
+            user: person,
+          })
+        )
+      )
+    ),
   locks: ({ input }) => [
     exclusive(
       dnsKey({
@@ -722,12 +734,9 @@ async function updateInstanceWebRoutesHandler(
   user: AuthenticatedUser,
   data: z.infer<typeof instanceWebRoutesSchema>
 ) {
-  await requireRelayPermission({
-    instanceId: data.instanceId,
-    permission: "instance.network.write",
-    relayId: data.relayId,
-    user,
-  })
+  // Checked as the operation was authorized. The person is passed in: code
+  // inside an operation never reads the request's session.
+  const relay = await activeRelay(data.relayId)
   const resource = {
     relayId: data.relayId,
     resourceId: data.instanceId,
@@ -741,20 +750,21 @@ async function updateInstanceWebRoutesHandler(
     data.routes.flatMap(webRouteHostnames),
     async () =>
       relayInstanceWebRouteStateSchema.parse(
-        await relayRequest(
-          `/v1/instances/${encodeURIComponent(data.instanceId)}/web-routes`,
-          {
-            body: JSON.stringify({
-              routes: webRoutesForRelay(data.relayId, data.routes),
-            }),
-            headers: { "Content-Type": "application/json" },
-            method: "PUT",
-          },
-          "instance.network.write",
-          data.instanceId,
-          data.relayId,
-          240_000
-        )
+        await (
+          await relayFetch(
+            relay,
+            `/v1/instances/${encodeURIComponent(data.instanceId)}/web-routes`,
+            {
+              body: JSON.stringify({
+                routes: webRoutesForRelay(data.relayId, data.routes),
+              }),
+              headers: { "Content-Type": "application/json" },
+              method: "PUT",
+            },
+            240_000,
+            user.id
+          )
+        ).json()
       )
   )
   publishRealtimeChange({

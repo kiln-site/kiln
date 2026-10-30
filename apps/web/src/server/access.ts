@@ -39,7 +39,10 @@ import {
   wakeDisplacedOwnerDelivery,
 } from "@/lib/instance-registry"
 import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
-import { transferAppOwnershipHandler } from "@/server/app-access"
+import {
+  requireAppTransferable,
+  transferAppOwnershipHandler,
+} from "@/server/app-access"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { accessKey, exclusive, userKey } from "@/operations/lanes"
 import {
@@ -647,7 +650,12 @@ const transferApp = operation<z.infer<typeof transferAppOwnershipSchema>>()({
   doing: "Changing who owns this App",
   authorize: ({ input, user }) =>
     signedIn(user).pipe(
-      Effect.tap(() => promiseEffect(() => requiredRelay(input.relayId)))
+      Effect.tap((person) =>
+        promiseEffect(async () => {
+          await requiredRelay(input.relayId)
+          await requireAppTransferable(person, input)
+        })
+      )
     ),
   locks: ({ input }) => [
     exclusive(accessKey("app", input.relayId, input.appId)),

@@ -133,7 +133,8 @@ export function lockAccessScopeEffect(
  * inside the same transaction) to avoid reloading per target in bulk edits.
  */
 export function scopeAuthorityEffect(
-  transaction: DatabaseTransaction,
+  // None to check before a change takes its transaction.
+  transaction: DatabaseTransaction | undefined,
   actor: AuthenticatedUser,
   scope: ResourceScope,
   permission: AccessPermission,

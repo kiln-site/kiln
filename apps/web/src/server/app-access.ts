@@ -235,12 +235,11 @@ export async function getAppOwnerHandler(
  * an administrator or the app's owner, and a new owner with Relay access.
  * Asking by email keeps the Relay's people out of the owner's view.
  */
-export async function transferAppOwnershipHandler(
+/** Refuses all but an App's owner or an administrator its transfer. */
+export async function requireAppTransferable(
   user: AuthenticatedUser,
-  data: { appId: string; email: string; relayId: string }
-): Promise<{ previousOwnerId: string | null; userId: string }> {
-  // Only the owner or an administrator learns anything about the email; the
-  // transfer checks this again while it holds the app.
+  data: { appId: string; relayId: string }
+): Promise<void> {
   const [apps] = await databasePool.query<
     Array<RowDataPacket & { owner_id: string | null }>
   >(
@@ -250,6 +249,15 @@ export async function transferAppOwnershipHandler(
   if (!apps[0]) throw new Error("App not found")
   if (!isPlatformAdmin(user) && apps[0].owner_id !== user.id)
     throw new Error("Only the app owner can transfer ownership")
+}
+
+export async function transferAppOwnershipHandler(
+  user: AuthenticatedUser,
+  data: { appId: string; email: string; relayId: string }
+): Promise<{ previousOwnerId: string | null; userId: string }> {
+  // Only the owner or an administrator learns anything about the email; the
+  // transfer checks this again while it holds the app.
+  await requireAppTransferable(user, data)
   const [rows] = await databasePool.query<
     Array<RowDataPacket & { id: string }>
   >(`SELECT id FROM ${databaseTable("user")} WHERE email = ? LIMIT 1`, [

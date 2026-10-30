@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { createServerFn } from "@tanstack/react-start"
+import type { AccessPermission } from "@workspace/contracts"
 import { Clock, Effect } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
@@ -22,6 +23,7 @@ import type { DatabaseTransaction } from "@/effect/database"
 import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import type { ResourceScope } from "@/lib/resource-permissions"
 import { accessKey, exclusive } from "@/operations/lanes"
 import {
   operation,
@@ -197,12 +199,31 @@ interface InvitationRow extends RowDataPacket {
   delivery_status: string
 }
 
+// Whether the person may make a change on each resource, checked before it
+// holds them, so one who may not learns nothing of what else runs there,
+// and checked again inside the change's own transaction.
+const mayChange = (
+  user: AuthenticatedUser | null,
+  scopes: ReadonlyArray<ResourceScope>,
+  permission: AccessPermission
+) =>
+  signedIn(user).pipe(
+    Effect.tap((person) =>
+      Effect.forEach(
+        scopes,
+        (scope) => scopeAuthorityEffect(undefined, person, scope, permission),
+        { discard: true }
+      )
+    )
+  )
+
 const inviteAccessSchema = inviteSchema
 
 const inviteAccess = operation<z.infer<typeof inviteAccessSchema>>()({
   name: "access.invite",
   doing: "Changing who may use this",
-  authorize: ({ user }) => signedIn(user),
+  authorize: ({ input, user }) =>
+    mayChange(user, input.targets, "access.invite"),
   locks: ({ input }) => [
     exclusive(`email:${input.email}`),
     ...input.targets.map((target) =>
@@ -562,8 +583,30 @@ const decideInvitation = operation<z.infer<typeof decideInvitationSchema>>()({
         const snapshot = snapshots[0]
         if (!snapshot?.access_id) throw new Error("Invitation not found")
         const scope = scopeFromRow(snapshot)
-        return { person, scope }
-      })
+        return { person, scope, snapshot }
+      }).pipe(
+        // Only its invitee may accept or decline it, or an administrator
+        // accept it for them; only who manages its resource may cancel it.
+        Effect.tap(({ person, scope, snapshot }) => {
+          const admin = person.isDevelopmentBypass || person.role === "admin"
+          if (data.force && (!admin || data.decision !== "accept"))
+            return Effect.fail(
+              new Error(
+                "Only platform administrators can accept for another user"
+              )
+            )
+          if (data.decision === "cancel")
+            return scopeAuthorityEffect(
+              undefined,
+              person,
+              scope,
+              "access.manage"
+            )
+          return !data.force && snapshot.user_id !== person.id
+            ? Effect.fail(new Error("Invitation not found"))
+            : Effect.void
+        })
+      )
     }),
   locks: ({ context: { scope } }) => [
     exclusive(accessKey(scope.resourceType, scope.relayId, scope.resourceId)),
@@ -688,7 +731,8 @@ const savePresetSchema = resourceScopeSchema.extend({
 const savePreset = operation<z.infer<typeof savePresetSchema>>()({
   name: "access.preset.save",
   doing: "Changing who may use this",
-  authorize: ({ user }) => signedIn(user),
+  authorize: ({ input, user }) =>
+    mayChange(user, [input], input.id ? "preset.manage" : "preset.create"),
   locks: ({ input }) => [
     exclusive(accessKey(input.resourceType, input.relayId, input.resourceId)),
   ],
@@ -821,7 +865,7 @@ const deletePresetSchema = resourceScopeSchema.extend({
 const deletePreset = operation<z.infer<typeof deletePresetSchema>>()({
   name: "access.preset.delete",
   doing: "Changing who may use this",
-  authorize: ({ user }) => signedIn(user),
+  authorize: ({ input, user }) => mayChange(user, [input], "preset.manage"),
   locks: ({ input }) => [
     exclusive(accessKey(input.resourceType, input.relayId, input.resourceId)),
   ],
@@ -897,7 +941,7 @@ const updateAccessSchema = resourceScopeSchema
 const updateAccess = operation<z.infer<typeof updateAccessSchema>>()({
   name: "access.update",
   doing: "Changing who may use this",
-  authorize: ({ user }) => signedIn(user),
+  authorize: ({ input, user }) => mayChange(user, [input], "access.manage"),
   locks: ({ input }) => [
     exclusive(accessKey(input.resourceType, input.relayId, input.resourceId)),
   ],
