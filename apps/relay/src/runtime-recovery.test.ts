@@ -76,6 +76,16 @@ const crashed = (
 
 const dockerIdle = Effect.promise(() => fakeDocker.idle())
 
+// A recovery restart runs on its own fiber and does async work before it
+// calls Docker, so under load it can outlast a quiet moment on the socket.
+const startsReached = (
+  container: { readonly starts: number },
+  starts: number
+) =>
+  Effect.promise(() =>
+    vi.waitFor(() => assert.strictEqual(container.starts, starts))
+  ).pipe(Effect.andThen(dockerIdle))
+
 const makeManager = (
   environment: Record<string, string> = {},
   lanes = new OperationLanes()
@@ -142,8 +152,7 @@ describe("runtime recovery", () => {
           restarting.get(instanceId)?.recovery?.phase,
           "restarting"
         )
-        yield* dockerIdle
-        assert.strictEqual(container.starts, 1)
+        yield* startsReached(container, 1)
 
         const secondStartedAt = new Date(firstRetryAt + 1_000).toISOString()
         yield* reconcileAt(manager, firstRetryAt + 2_000, [
@@ -169,7 +178,7 @@ describe("runtime recovery", () => {
 
         const secondRetryAt = secondCrashAt + 15_000
         yield* reconcileAt(manager, secondRetryAt, [secondCrash])
-        yield* dockerIdle
+        yield* startsReached(container, 2)
 
         const exhausted = yield* reconcileAt(manager, secondRetryAt + 2_000, [
           crashed(instanceId, {
@@ -276,8 +285,7 @@ describe("runtime recovery", () => {
 
         lanes.setPaused(false)
         yield* reconcileAt(manager, startedAtMs + 601_000, [crash])
-        yield* dockerIdle
-        assert.strictEqual(container.starts, 1)
+        yield* startsReached(container, 1)
       })
     )
 
@@ -637,7 +645,7 @@ describe("runtime recovery", () => {
           yield* manager.recordProvisioned(instanceId, "running")
           yield* reconcileAt(manager, 200, [stopped])
           const restarting = yield* reconcileAt(manager, 201, [stopped])
-          yield* dockerIdle
+          yield* startsReached(container, 1)
 
           const confirmationAt = Date.parse(
             restarting.get(instanceId)?.recovery?.nextAttemptAt ?? ""
