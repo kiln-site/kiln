@@ -35,7 +35,7 @@ import {
   findOperation,
   finishOperation,
   loadOperation,
-  lockingOperations,
+  runningOperations,
   recordExecution,
   recordOperation,
   type OperationOutcome,
@@ -128,7 +128,9 @@ export const durableOperation = <
           (work) =>
             runningAs(
               {
-                held: withWholes(record?.locks ?? []),
+                // As its definition declares them, so one recorded before
+                // operations kept their locks holds them too.
+                held: withWholes(options.locks?.(input) ?? []),
                 id: operationId,
                 initiator: "system",
                 name: options.kind,
@@ -325,7 +327,8 @@ const holdLanes = <E>(hold: {
  */
 export const restoreLockingOperations = Effect.gen(function* () {
   const services = yield* Effect.context<Database>()
-  const running = yield* lockingOperations()
+  const running = yield* runningOperations()
+  let restored = 0
   for (const operation of running) {
     const definition = [...durableKinds.values()].find(
       (kind) => kind.kind === operation.kind
@@ -337,6 +340,14 @@ export const restoreLockingOperations = Effect.gen(function* () {
           ) as unknown as Schema.Codec<unknown>
         )(operation.input)
       : Option.none()
+    // Its definition's locks, or those it was recorded with when this
+    // Hearth no longer knows the kind.
+    const locks = withWholes(
+      definition && Option.isSome(input)
+        ? definition.locks(input.value)
+        : operation.locks
+    )
+    if (locks.length === 0) continue
     yield* holdLanes({
       actorId: operation.actorId,
       doing:
@@ -345,14 +356,15 @@ export const restoreLockingOperations = Effect.gen(function* () {
           : "Another change",
       id: operation.id,
       initiator: "system",
-      locks: withWholes(operation.locks),
+      locks,
       name: operation.kind,
       run: awaitOperationEnd(operation.id).pipe(
         Effect.provideContext(services)
       ),
     })
+    restored++
   }
-  yield* Effect.annotateCurrentSpan("operations.restored", running.length)
+  yield* Effect.annotateCurrentSpan("operations.restored", restored)
 }).pipe(Effect.withSpan("Operations.restore"))
 
 /**

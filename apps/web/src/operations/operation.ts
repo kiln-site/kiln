@@ -188,30 +188,51 @@ export const runOperation = <Input, Context, A, E, R>(
       "operation.locks",
       locks.map((lock) => `${lock.mode}:${lock.key}`).join(" ")
     )
-    let startedAt = admittedAt
+    // Runs the work and everything that follows it, on the fiber that
+    // finishes it even if the caller gives up: timings, publishing, the
+    // audit, and leaving the operator's view.
     const run = (
       held: ReadonlyArray<LaneLock>,
-      waited: boolean
-    ): Effect.Effect<A, E, R> =>
+      waited: boolean,
+      label: string | null
+    ): Effect.Effect<A, E, R | Database> =>
       Effect.gen(function* () {
-        startedAt = yield* Clock.currentTimeMillis
-        // What it read may have changed while it waited.
-        if (waited && definition.authorize) {
-          context = yield* authorize.pipe(
-            Effect.withSpan("Operations.authorize")
-          )
+        const startedAt = yield* Clock.currentTimeMillis
+        const occupant = label ? laneOccupants.get(label) : undefined
+        if (occupant) occupant.startedAt = startedAt
+        const exit = yield* Effect.gen(function* () {
+          // What it read may have changed while it waited.
+          if (waited && definition.authorize) {
+            context = yield* authorize.pipe(
+              Effect.withSpan("Operations.authorize")
+            )
+          }
+          return yield* definition.run({ ...args, context, operationId: id })
+        }).pipe(
+          (work) =>
+            runningAs({ held, id, initiator, name: definition.name }, work),
+          Effect.annotateLogs({
+            "operation.id": id,
+            "operation.name": definition.name,
+          }),
+          Effect.exit
+        )
+        const finishedAt = yield* Clock.currentTimeMillis
+        yield* record(
+          definition.name,
+          Exit.isSuccess(exit) ? "succeeded" : outcomeOf(exit.cause),
+          { admittedAt, finishedAt, startedAt }
+        )
+        if (!Exit.isFailure(exit) || !Cause.hasInterruptsOnly(exit.cause)) {
+          yield* afterRun(definition, args, context, exit, {
+            admittedAt,
+            finishedAt,
+            id,
+          })
         }
-        return yield* definition.run({ ...args, context, operationId: id })
-      }).pipe(
-        (work) =>
-          runningAs({ held, id, initiator, name: definition.name }, work),
-        Effect.annotateLogs({
-          "operation.id": id,
-          "operation.name": definition.name,
-        })
-      )
+        return yield* exit
+      }).pipe(Effect.ensuring(label ? vacate(label) : Effect.void))
 
-    let exit: Exit.Exit<A, E | OperationBusyError>
     if (parent) {
       // Run inside its parent, under the locks the parent holds.
       const missing = uncovered(locks, parent.held)
@@ -222,93 +243,76 @@ export const runOperation = <Input, Context, A, E, R>(
           )
         )
       }
-      exit = yield* Effect.exit(run(parent.held, false))
-    } else {
-      yield* lanesOpen
-      const label = `${definition.name}#${id}`
-      const services = yield* Effect.context<R>()
-      const ticket = hearthLanes.admit({
-        label,
-        locks,
-        whenBusy: initiator === "person" ? "refuse" : "wait",
-      })
-      yield* occupy(label, {
-        actorId: caller.user?.id ?? null,
-        admittedAt,
-        doing: doingOf(definition, input),
-        durable: false,
-        id,
-        initiator,
-        name: definition.name,
-        startedAt: null,
-      })
-      exit = yield* ticket
-        .run(
-          Effect.suspend(() => {
-            const occupant = laneOccupants.get(label)
-            if (occupant) occupant.startedAt = Date.now()
-            return run(locks, Date.now() - admittedAt > WAITED_MS)
-          }).pipe(Effect.provideContext(services))
-        )
-        .pipe(
-          Effect.catch((error): Effect.Effect<never, E | OperationBusyError> =>
-            error instanceof LaneRejectedError
-              ? refusal(definition.name, error)
-              : Effect.fail(error)
-          ),
-          Effect.ensuring(vacate(label)),
-          // Waiting this long is likely work that can't start until
-          // something it waits behind ends: say what.
-          (waiting) =>
-            Effect.raceFirst(
-              waiting,
-              Effect.sleep(SLOW_WAIT).pipe(
-                Effect.andThen(
-                  Effect.suspend(() =>
-                    laneOccupants.get(label)?.startedAt === null
-                      ? Effect.logWarning(
-                          `${definition.name} has waited ${SLOW_WAIT} for its lanes`,
-                          hearthLanes
-                            .describe()
-                            .waiting.find((entry) => entry.label === label)
-                            ?.waitingOn ?? []
-                        )
-                      : Effect.void
-                  )
-                ),
-                Effect.andThen(Effect.never)
-              )
-            ),
-          Effect.exit
-        )
+      return yield* run(parent.held, false, null)
     }
-
-    const finishedAt = yield* Clock.currentTimeMillis
-    const outcome = Exit.isSuccess(exit) ? "succeeded" : outcomeOf(exit.cause)
-    const metric = { "operation.name": definition.name }
-    yield* Effect.annotateCurrentSpan({
-      "operation.outcome": outcome,
-      "operation.wait_ms": startedAt - admittedAt,
+    yield* awaitLanesOpen(initiator, definition.name)
+    const label = `${definition.name}#${id}`
+    const services = yield* Effect.context<R | Database>()
+    const ticket = hearthLanes.admit({
+      label,
+      locks,
+      whenBusy: initiator === "person" ? "refuse" : "wait",
     })
-    yield* Metric.update(
-      Metric.withAttributes(waitDuration, metric),
-      (startedAt - admittedAt) / 1000
-    )
-    yield* Metric.update(
-      Metric.withAttributes(runDuration, {
-        ...metric,
-        "operation.outcome": outcome,
-      }),
-      (finishedAt - admittedAt) / 1000
-    )
-    if (outcome !== "refused" && outcome !== "interrupted") {
-      yield* afterRun(definition, args, context, exit as Exit.Exit<A, E>, {
-        admittedAt,
-        finishedAt,
-        id,
-      })
-    }
-    return yield* exit
+    yield* occupy(label, {
+      actorId: caller.user?.id ?? null,
+      admittedAt,
+      doing: doingOf(definition, input),
+      durable: false,
+      id,
+      initiator,
+      name: definition.name,
+      startedAt: null,
+    })
+    return yield* ticket
+      .run(
+        run(locks, !ticket.grantedAtOnce, label).pipe(
+          Effect.provideContext(services)
+        )
+      )
+      .pipe(
+        Effect.catch((error): Effect.Effect<never, E | OperationBusyError> =>
+          error instanceof LaneRejectedError
+            ? refusal(definition.name, error).pipe(
+                Effect.tapError(() =>
+                  record(definition.name, "refused", {
+                    admittedAt,
+                    finishedAt: admittedAt,
+                    startedAt: admittedAt,
+                  })
+                )
+              )
+            : Effect.fail(error)
+        ),
+        // Withdrawn before it started: it leaves the view here. Once it
+        // starts, the work's own fiber does.
+        Effect.onExit(() =>
+          laneOccupants.get(label)?.startedAt === null
+            ? vacate(label)
+            : Effect.void
+        ),
+        // Waiting this long is likely work that can't start until
+        // something it waits behind ends: say what.
+        (waiting) =>
+          Effect.raceFirst(
+            waiting,
+            Effect.sleep(SLOW_WAIT).pipe(
+              Effect.andThen(
+                Effect.suspend(() =>
+                  laneOccupants.get(label)?.startedAt === null
+                    ? Effect.logWarning(
+                        `${definition.name} has waited ${SLOW_WAIT} for its lanes`,
+                        hearthLanes
+                          .describe()
+                          .waiting.find((entry) => entry.label === label)
+                          ?.waitingOn ?? []
+                      )
+                    : Effect.void
+                )
+              ),
+              Effect.andThen(Effect.never)
+            )
+          )
+      )
   }).pipe(Effect.withSpan(`Operations.${definition.name}`))
 
 /**
@@ -326,11 +330,53 @@ export function runOperationPromise<Input, Context, A, E, R>(
   )
 }
 
-// Granted later than this after it arrived, it waited, and is authorized
-// again before it runs.
-const WAITED_MS = 5
-
 const SLOW_WAIT = "30 seconds"
+
+// Notes how a run went on its span and in the metrics.
+const record = (
+  name: string,
+  outcome: Outcome,
+  timing: { admittedAt: number; finishedAt: number; startedAt: number }
+) =>
+  Effect.gen(function* () {
+    const metric = { "operation.name": name }
+    yield* Effect.annotateCurrentSpan({
+      "operation.outcome": outcome,
+      "operation.wait_ms": timing.startedAt - timing.admittedAt,
+    })
+    if (outcome === "refused") return
+    yield* Metric.update(
+      Metric.withAttributes(waitDuration, metric),
+      (timing.startedAt - timing.admittedAt) / 1000
+    )
+    yield* Metric.update(
+      Metric.withAttributes(runDuration, {
+        ...metric,
+        "operation.outcome": outcome,
+      }),
+      (timing.finishedAt - timing.admittedAt) / 1000
+    )
+  })
+
+// How long a person waits for Hearth to finish starting before being told
+// to try again; Hearth's own work waits as long as it takes.
+const STARTING_WAIT = "15 seconds"
+
+const awaitLanesOpen = (initiator: Initiator, name: string) =>
+  initiator === "system"
+    ? lanesOpen
+    : lanesOpen.pipe(
+        Effect.timeoutOrElse({
+          duration: STARTING_WAIT,
+          orElse: () =>
+            Effect.fail(
+              new OperationBusyError({
+                message: "Hearth is still starting. Try again shortly.",
+                operation: name,
+              })
+            ),
+        })
+      )
 
 function doingOf<Input>(
   definition: { readonly doing: string | ((input: Input) => string) },
@@ -397,22 +443,27 @@ const afterRun = <Input, Context, A, E>(
         )
       )
     }
-    const target = definition.audit?.({ ...args, context })
-    if (!target) return
+    const audit = definition.audit
+    if (!audit) return
     const errorCode = Exit.isFailure(exit)
       ? errorTag(Cause.squash(exit.cause))
       : undefined
-    yield* recordOperationAudit({
-      action: definition.name,
-      actor: args.actor,
-      errorCode,
-      finishedAt: timing.finishedAt,
-      occurredAt: timing.admittedAt,
-      operationId: timing.id,
-      outcome: Exit.isSuccess(exit) ? "succeeded" : "failed",
-      relayId: target.relayId ?? null,
-      target: { id: target.id, kind: target.kind },
-    }).pipe(
+    yield* Effect.try(() => audit({ ...args, context })).pipe(
+      Effect.flatMap((target) =>
+        target
+          ? recordOperationAudit({
+              action: definition.name,
+              actor: args.actor,
+              errorCode,
+              finishedAt: timing.finishedAt,
+              occurredAt: timing.admittedAt,
+              operationId: timing.id,
+              outcome: Exit.isSuccess(exit) ? "succeeded" : "failed",
+              relayId: target.relayId ?? null,
+              target: { id: target.id, kind: target.kind },
+            })
+          : Effect.void
+      ),
       Effect.catchCause((cause) =>
         Effect.logWarning(`Auditing ${definition.name} failed`, cause)
       ),

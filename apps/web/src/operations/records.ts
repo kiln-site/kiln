@@ -215,8 +215,8 @@ export const awaitOperationEnd = (
     yield* Effect.raceFirst(Deferred.await(ending), watch)
   })
 
-/** Durable operations still running that hold locks, oldest first. */
-export const lockingOperations = Effect.fnUntraced(function* () {
+/** Durable operations still running, oldest first, with what they hold. */
+export const runningOperations = Effect.fnUntraced(function* () {
   const database = yield* Database
   const rows = yield* database.queryRows<
     RowDataPacket & {
@@ -228,9 +228,9 @@ export const lockingOperations = Effect.fnUntraced(function* () {
       locks: unknown
     }
   >(
-    "operations.locking",
+    "operations.running",
     `SELECT id, kind, actor_id, input, locks, created_at FROM ${operationTable}
-      WHERE state = 'running' AND locks IS NOT NULL
+      WHERE state = 'running'
       ORDER BY created_at`
   )
   return rows.map((row) => ({
@@ -239,7 +239,7 @@ export const lockingOperations = Effect.fnUntraced(function* () {
     id: row.id,
     input: typeof row.input === "string" ? JSON.parse(row.input) : row.input,
     kind: row.kind,
-    locks: parseLocks(row.locks),
+    locks: row.locks === null ? [] : parseLocks(row.locks),
   }))
 })
 

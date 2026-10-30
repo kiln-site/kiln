@@ -82,8 +82,11 @@ Relay changes sent at most once (`relayCommand`).
   person's or waiting for Hearth's own, then records it (its input, locks
   and who asked) and starts its workflow, and returns its ID.
 - Its locks are held until the workflow ends, however long that is, across
-  restarts: before Hearth admits anything after it starts, it takes back
-  the locks of every durable operation still running.
+  restarts. They're the ones its definition declares, also for one
+  recorded before it kept them. When Hearth starts, it takes back the locks
+  of every durable operation still running before it admits anything else
+  or resumes their workflows, retrying until MySQL answers. Meanwhile a
+  person is told after 15 seconds that Hearth is still starting.
 - Most durable operations take no locks. One that only does its own work,
   such as sending an invitation's email or deleting a Tailscale network,
   is kept to one run by its idempotency key, and holding a lock while it

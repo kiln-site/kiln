@@ -139,7 +139,7 @@ describeMysql("Hearth operations", () => {
     )
 
     it.effect(
-      "takes back a durable operation's locks after a restart, until it ends",
+      "takes back a durable operation's locks after a restart, until it ends, though it was recorded without them",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
@@ -153,7 +153,8 @@ describeMysql("Hearth operations", () => {
               resourceId: "alpha",
             },
             kind: "resource.delete",
-            locks: [exclusive(server)],
+            // Recorded before operations kept their locks: its definition
+            // still says what it holds.
             version: 1,
           })
           yield* restoreLockingOperations
@@ -175,6 +176,54 @@ describeMysql("Hearth operations", () => {
             "changed"
           )
         }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "publishes a change whose caller gave up once it started, and authorizes again what waited",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const release = yield* Deferred.make<void>()
+          const published: Array<string> = []
+          const started = yield* Deferred.make<void>()
+          const caller = yield* runOperation(
+            operation<void>()({
+              doing: "Deleting this game server",
+              locks: () => [exclusive(server)],
+              name: "test.delete",
+              publish: () => {
+                published.push("delete")
+              },
+              run: () =>
+                Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Deferred.await(release))
+                ),
+            }),
+            undefined,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Deferred.await(started)
+
+          // Hearth's own change waits behind it, then reads again.
+          let authorized = 0
+          const waiting = yield* runOperation(
+            operation<void>()({
+              authorize: () => Effect.sync(() => ++authorized),
+              doing: "Changing its DNS",
+              locks: () => [exclusive(serverDns)],
+              name: "test.dns",
+              run: ({ context }) => Effect.succeed(context),
+            }),
+            undefined,
+            { user: null }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+
+          // The person leaves; the deletion finishes and still publishes.
+          yield* Fiber.interrupt(caller)
+          yield* Deferred.succeed(release, undefined)
+          assert.strictEqual(yield* Fiber.join(waiting), 2)
+          assert.deepStrictEqual(published, ["delete"])
+        })
     )
   })
 })

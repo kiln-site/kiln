@@ -42,49 +42,53 @@ const every = <E, R>(
 export function startOperationsEngine(): void {
   const openLanes = closeLanes()
   forkAppWorker(
-    Effect.all(
-      [
-        // Nothing is admitted until the locks of durable operations still
-        // running are taken back. Should MySQL stay away, the lanes open
-        // anyway after a while rather than refuse everything.
-        restoreLockingOperations.pipe(
-          Effect.retry({
-            schedule: Schedule.exponential("500 millis").pipe(
-              Schedule.upTo({ duration: "1 minute" })
-            ),
-          }),
-          Effect.catchCause((cause) =>
-            Effect.logError(
-              "Durable operations' locks weren't taken back",
-              cause
-            )
+    Effect.gen(function* () {
+      // Nothing is admitted until the locks of durable operations still
+      // running are taken back, however long MySQL takes to answer, and
+      // their workflows resume only after.
+      yield* restoreLockingOperations.pipe(
+        Effect.tapCause((cause) =>
+          Effect.logError(
+            "Durable operations' locks aren't taken back yet; nothing is admitted until they are",
+            cause
+          )
+        ),
+        Effect.retry({
+          schedule: Schedule.min([
+            Schedule.exponential("500 millis"),
+            Schedule.spaced("30 seconds"),
+          ]),
+        }),
+        Effect.andThen(openLanes)
+      )
+      yield* Effect.all(
+        [
+          every(
+            SWEEP,
+            "Operations engine not started yet",
+            Effect.gen(function* () {
+              const { engine } = yield* OperationsEngineService
+              // Traced: workflows built with it keep the context it's built
+              // in.
+              yield* engine
+              // A sweep that finds nothing to do leaves no trace.
+              const undispatched = yield* Effect.withTracerEnabled(
+                undispatchedOperations(),
+                false
+              )
+              if (undispatched.length > 0) {
+                yield* dispatchDurableOperations(undispatched)
+              }
+            })
           ),
-          Effect.ensuring(openLanes)
-        ),
-        every(
-          SWEEP,
-          "Operations engine not started yet",
-          Effect.gen(function* () {
-            const { engine } = yield* OperationsEngineService
-            // Traced: workflows built with it keep the context it's built in.
-            yield* engine
-            // A sweep that finds nothing to do leaves no trace.
-            const undispatched = yield* Effect.withTracerEnabled(
-              undispatchedOperations(),
-              false
-            )
-            if (undispatched.length > 0) {
-              yield* dispatchDurableOperations(undispatched)
-            }
-          })
-        ),
-        every(
-          "1 hour",
-          "Operations retention failed",
-          forgetFinishedOperations(RETENTION)
-        ),
-      ],
-      { concurrency: "unbounded", discard: true }
-    ).pipe(Effect.ignore)
+          every(
+            "1 hour",
+            "Operations retention failed",
+            forgetFinishedOperations(RETENTION)
+          ),
+        ],
+        { concurrency: "unbounded", discard: true }
+      )
+    }).pipe(Effect.ignore)
   )
 }

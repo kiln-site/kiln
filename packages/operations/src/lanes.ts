@@ -70,6 +70,11 @@ export interface LaneTicket {
   ) => Effect.Effect<A, E | LaneRejectedError>
   /** Withdraws an operation that hasn't started. Running ones are unaffected. */
   readonly cancel: () => void
+  /**
+   * Whether it was granted as it was admitted. One that wasn't waited, and
+   * whatever it read before may have changed.
+   */
+  readonly grantedAtOnce: boolean
 }
 
 /** What the lanes hold and what waits on what, for diagnostics. */
@@ -312,6 +317,7 @@ export class OperationLanes {
     }
     return {
       cancel: () => this.#cancel(waiter),
+      grantedAtOnce: waiter.state === "granted",
       run: (effect) => this.#run(waiter, effect),
     }
   }
