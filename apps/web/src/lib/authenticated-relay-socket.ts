@@ -15,6 +15,7 @@ import {
   Schedule,
   Stream,
 } from "effect"
+import { Base64Url } from "effect/encoding"
 
 import { startBrowserSpan, traceBrowser } from "@/lib/browser-telemetry"
 import type { RelayBrowserCredentials } from "@/lib/relay-browser-credentials"
@@ -231,7 +232,7 @@ export function maintainRelayBrowserLease(
           opened.socket.send(
             JSON.stringify({
               capability: capability.capability,
-              signature: bytesToBase64Url(new Uint8Array(proof)),
+              signature: Base64Url.encode(new Uint8Array(proof)),
               type: "auth.renew",
               v: 1,
             })
@@ -405,7 +406,7 @@ export function authenticateRelayBrowserSocket(
       JSON.stringify({
         capability: input.capability,
         publicKeyJwk: input.credentials.publicKeyJwk,
-        signature: bytesToBase64Url(new Uint8Array(proof)),
+        signature: Base64Url.encode(new Uint8Array(proof)),
         ...(input.traceparent ? { traceparent: input.traceparent } : {}),
         type: "auth",
         v: 1,
@@ -740,9 +741,11 @@ function authenticationMessage(
 function capabilityId(capability: string): string {
   const encoded = capability.split(".", 1)[0]
   if (!encoded) throw new Error("Hearth returned an invalid Relay capability")
-  const base64 = encoded.replaceAll("-", "+").replaceAll("_", "/")
   const value = JSON.parse(
-    atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="))
+    Result.getOrThrowWith(
+      Base64Url.decodeString(encoded),
+      () => new Error("Hearth returned an invalid Relay capability")
+    )
   ) as unknown
   if (!value || typeof value !== "object" || !("capabilityId" in value)) {
     throw new Error("Hearth returned an invalid Relay capability")
@@ -777,15 +780,6 @@ function renewalState(
             : sessionIdFallback!,
       }
     : null
-}
-
-function bytesToBase64Url(value: Uint8Array): string {
-  let binary = ""
-  for (const byte of value) binary += String.fromCharCode(byte)
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/u, "")
 }
 
 function asError(cause: unknown): Error {

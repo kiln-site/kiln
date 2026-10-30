@@ -1,4 +1,6 @@
 import { showToast } from "@workspace/ui/components/sonner"
+import { Result } from "effect"
+import { Base64Url } from "effect/encoding"
 
 import {
   getPushNotificationState,
@@ -96,7 +98,9 @@ export async function unsubscribeThisDevice(): Promise<void> {
 // key, as before the database was reset.
 async function browserSubscription(publicKey: string) {
   const registration = await pushRegistration()
-  const applicationServerKey = base64UrlBytes(publicKey)
+  const applicationServerKey = new Uint8Array(
+    Result.getOrThrow(Base64Url.decode(publicKey))
+  )
   const existing = await registration.pushManager.getSubscription()
   if (existing) {
     const key = existing.options.applicationServerKey
@@ -108,12 +112,6 @@ async function browserSubscription(publicKey: string) {
     applicationServerKey,
     userVisibleOnly: true,
   })
-}
-
-function base64UrlBytes(value: string) {
-  const base64 = value.replace(/-/g, "+").replace(/_/g, "/")
-  const binary = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="))
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array) {

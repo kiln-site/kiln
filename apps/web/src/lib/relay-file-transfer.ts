@@ -6,7 +6,8 @@
  * them; the promise wrappers below run them through browser telemetry.
  */
 import { relayBrowserRequestProofTranscript } from "@workspace/contracts"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option, Result, Schema } from "effect"
+import { Base64Url, Hex } from "effect/encoding"
 
 import {
   currentBrowserTraceparent,
@@ -238,7 +239,7 @@ export const downloadRelayArchiveEffect = Effect.fn(
   const digest = yield* Effect.promise(() =>
     crypto.subtle.digest("SHA-256", new TextEncoder().encode(serializedPaths))
   )
-  const path = `@archive/${hex(new Uint8Array(digest))}`
+  const path = `@archive/${Hex.encode(new Uint8Array(digest))}`
   const authorization = yield* authorizeRelayFileRequest(
     { ...input, path },
     "POST"
@@ -486,7 +487,7 @@ const saveThroughHearth = Effect.fn("RelayTransfer.saveThroughHearth")(
     return {
       modifiedAt: saved.modifiedAt,
       path: saved.path,
-      sha256: hex(new Uint8Array(digest)),
+      sha256: Hex.encode(new Uint8Array(digest)),
       size: bytes.byteLength,
     } satisfies RelayUploadResult
   }
@@ -527,7 +528,10 @@ const authorizeRelayFileRequest = Effect.fn("RelayTransfer.authorize")(
         }),
     })
     const payload = yield* Schema.decodeUnknownEffect(CapabilityPayload)(
-      atobBase64Url(issued.capability.split(".", 1)[0] ?? "")
+      Result.getOrElse(
+        Base64Url.decodeString(issued.capability.split(".", 1)[0] ?? ""),
+        () => ""
+      )
     ).pipe(
       Effect.mapError(
         (cause) =>
@@ -538,7 +542,7 @@ const authorizeRelayFileRequest = Effect.fn("RelayTransfer.authorize")(
           })
       )
     )
-    const nonce = bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)))
+    const nonce = Base64Url.encode(crypto.getRandomValues(new Uint8Array(32)))
     const requestedAt = Date.now()
     const proof = yield* Effect.promise(() =>
       crypto.subtle.sign(
@@ -577,8 +581,8 @@ const authorizeRelayFileRequest = Effect.fn("RelayTransfer.authorize")(
       headers: {
         Authorization: `Kiln ${issued.capability}`,
         "X-Kiln-Nonce": nonce,
-        "X-Kiln-Proof": bytesToBase64Url(new Uint8Array(proof)),
-        "X-Kiln-Public-Key": bytesToBase64Url(
+        "X-Kiln-Proof": Base64Url.encode(new Uint8Array(proof)),
+        "X-Kiln-Public-Key": Base64Url.encode(
           new TextEncoder().encode(JSON.stringify(keys.publicKeyJwk))
         ),
         "X-Kiln-Requested-At": String(requestedAt),
@@ -697,24 +701,4 @@ function failureMessage(
     onNone: () => `Relay ${operation} failed with HTTP ${status}`,
     onSome: (failure) => failure.error,
   })
-}
-
-function hex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-    ""
-  )
-}
-
-function bytesToBase64Url(value: Uint8Array): string {
-  let binary = ""
-  for (const byte of value) binary += String.fromCharCode(byte)
-  return btoa(binary)
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/u, "")
-}
-
-function atobBase64Url(value: string): string {
-  const base64 = value.replaceAll("-", "+").replaceAll("_", "/")
-  return atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="))
 }
