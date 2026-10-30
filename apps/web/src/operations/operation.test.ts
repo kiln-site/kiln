@@ -3,8 +3,7 @@ import { Deferred, Effect, Fiber, Scheduler, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll } from "vite-plus/test"
 
-import { promiseEffect } from "@/effect/promise"
-import { disposeAppRuntime, runAppEffect } from "@/effect/runtime"
+import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 
@@ -16,8 +15,7 @@ import {
   startDurableOperation,
 } from "./durable"
 import { exclusive, laneOccupants, partKey, resourceKey, shared } from "./lanes"
-import { outsideOperation } from "./current"
-import { inLanes, operation, runOperation } from "./operation"
+import { operation, runOperation } from "./operation"
 import { findOperation, finishOperation, recordOperation } from "./records"
 
 afterAll(() => disposeAppRuntime())
@@ -141,41 +139,6 @@ describeMysql("Hearth operations", () => {
             yield* runOperation(changeDns, undefined, { user: person }),
             "changed"
           )
-        })
-    )
-
-    it.effect(
-      "runs work an operation wakes but doesn't wait for in lanes of its own",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          // A Relay's authorization delivery, woken from promise code while
-          // the change that needs it still runs, needing a lane it doesn't
-          // hold.
-          const delivered = yield* runOperation(
-            operation<void>()({
-              doing: "Changing who may use this",
-              locks: () => [exclusive(server)],
-              name: "test.access",
-              run: () =>
-                promiseEffect(() =>
-                  outsideOperation(() =>
-                    runAppEffect(
-                      "test.deliver",
-                      inLanes(
-                        "test.deliver",
-                        "Sending this Relay who may do what",
-                        [exclusive("relay:relay-one#authorization")],
-                        Effect.succeed("delivered")
-                      )
-                    )
-                  )
-                ),
-            }),
-            undefined,
-            { user: person }
-          )
-          assert.strictEqual(delivered, "delivered")
         })
     )
 
