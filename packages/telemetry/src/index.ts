@@ -187,8 +187,10 @@ const sampledTracer = Effect.gen(function* () {
   return Tracer.make({
     span(options) {
       // Decide once per trace; child spans inherit `sampled` from the root.
+      // A span without a parent starts a trace even when not marked `root`.
+      const root = options.root || Option.isNone(options.parent)
       return tracer.span(
-        options.root && options.sampled
+        root && options.sampled
           ? { ...options, sampled: Math.random() < ratio }
           : options
       )
