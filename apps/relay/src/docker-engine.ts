@@ -23,8 +23,8 @@
 import { Agent, type IncomingHttpHeaders, request } from "node:http"
 import { type Duplex, PassThrough, type Readable, Writable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
-import { extract as createTarExtractor } from "tar-stream"
-import { Effect, Predicate, Result } from "effect"
+import { Bytes, Effect, Predicate, Result, Stream } from "effect"
+import { Tar } from "effect/encoding"
 
 import {
   normalizedReference,
@@ -510,18 +510,18 @@ export class DockerEngine {
               Effect.flatMap((archive) =>
                 archive === null
                   ? Effect.succeed(null)
-                  : Effect.tryPromise({
-                      try: () => firstTarFile(archive, maxBytes),
-                      catch: (cause) =>
-                        new DockerEngineError({
-                          cause,
-                          operation,
-                          reason:
-                            cause instanceof Error
-                              ? cause.message
-                              : "Docker returned an invalid archive",
-                        }),
-                    })
+                  : firstTarFile(archive, maxBytes).pipe(
+                      Effect.mapError(
+                        (cause) =>
+                          new DockerEngineError({
+                            cause,
+                            operation,
+                            reason: Tar.isTarError(cause)
+                              ? "Docker returned an invalid archive"
+                              : cause.message,
+                          })
+                      )
+                    )
               )
             )
       )
@@ -1994,50 +1994,37 @@ export function ensureImage(
 }
 
 // The file at the start of a container archive, which holds just the path
-// asked for.
+// asked for. Each body is read before the entry stream moves on, as
+// `Tar.decode` requires, and the whole archive is read so a truncated one
+// fails rather than yielding a partial file.
 function firstTarFile(
   archive: Buffer,
   maxBytes: number
-): Promise<{ bytes: Buffer; modifiedAt: number }> {
-  return new Promise((resolve, reject) => {
-    const extractor = createTarExtractor()
-    let settled = false
-    const settle = (result: () => void) => {
-      if (settled) return
-      settled = true
-      result()
-      extractor.destroy()
-    }
-    extractor.on("entry", (header, stream, next) => {
-      if (header.type !== "file") {
-        stream.resume()
-        settle(() => reject(new Error("Path is not a file")))
-        return
+): Effect.Effect<{ bytes: Buffer; modifiedAt: number }, Error | Tar.TarError> {
+  let first: { bytes: Buffer; modifiedAt: number } | undefined
+  return Stream.make(new Uint8Array(archive)).pipe(
+    Stream.pipeThroughChannel(Tar.decode()),
+    Stream.mapEffect((entry) => {
+      if (first !== undefined) return Stream.runDrain(entry.body)
+      if (entry.header.type !== "File") {
+        return Effect.fail(new Error("Path is not a file"))
       }
-      if ((header.size ?? 0) > maxBytes) {
-        stream.resume()
-        settle(() => reject(new Error("File is too large for an icon")))
-        return
+      if (entry.header.size > maxBytes) {
+        return Effect.fail(new Error("File is too large for an icon"))
       }
-      const chunks: Array<Buffer> = []
-      stream.on("data", (chunk: unknown) => {
-        if (Buffer.isBuffer(chunk)) chunks.push(chunk)
+      return Effect.map(Stream.runCollect(entry.body), (chunks) => {
+        const bytes = Bytes.concat(chunks)
+        first = {
+          bytes: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+          modifiedAt: entry.header.mtime.getTime(),
+        }
       })
-      stream.on("end", () => {
-        settle(() =>
-          resolve({
-            bytes: Buffer.concat(chunks),
-            modifiedAt: header.mtime?.getTime() ?? 0,
-          })
-        )
-        next()
-      })
-      stream.on("error", (error) => settle(() => reject(error)))
-    })
-    extractor.on("finish", () =>
-      settle(() => reject(new Error("Docker returned an empty archive")))
+    }),
+    Stream.runDrain,
+    Effect.flatMap(() =>
+      first === undefined
+        ? Effect.fail(new Error("Docker returned an empty archive"))
+        : Effect.succeed(first)
     )
-    extractor.on("error", (error) => settle(() => reject(error)))
-    extractor.end(archive)
-  })
+  )
 }
