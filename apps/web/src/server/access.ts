@@ -44,7 +44,7 @@ import {
   transferAppOwnershipHandler,
 } from "@/server/app-access"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { accessKey, exclusive, userKey } from "@/operations/lanes"
+import { accessKey, emailKey, exclusive, userKey } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -265,7 +265,7 @@ const grantPlatformAccess = operation<z.infer<typeof accessAssignmentSchema>>()(
         })
       }),
     locks: ({ context: { existing }, input }) => [
-      exclusive(`email:${input.email}`),
+      exclusive(emailKey(input.email)),
       ...(existing[0] ? [exclusive(userKey(existing[0].id))] : []),
     ],
     run: ({ context: { existing, person }, input }) =>
