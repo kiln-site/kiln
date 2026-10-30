@@ -193,7 +193,25 @@ export const runOperation = <Input, Context, A, E, R>(
       "operation.parent_id": parent?.id ?? "",
     })
 
-    let context = yield* authorize.pipe(Effect.withSpan("Operations.authorize"))
+    // A run that ends before it starts, turned away by its own checks or
+    // by Hearth still starting, is noted as refused or failed all the same.
+    const endedBeforeRun = <Failure>(cause: Cause.Cause<Failure>) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.void
+        : Clock.currentTimeMillis.pipe(
+            Effect.flatMap((finishedAt) =>
+              record(definition.name, outcomeOf(cause), {
+                admittedAt,
+                finishedAt,
+                startedAt: admittedAt,
+              })
+            )
+          )
+
+    let context = yield* authorize.pipe(
+      Effect.withSpan("Operations.authorize"),
+      Effect.onError(endedBeforeRun)
+    )
     const locks = withWholes(definition.locks({ ...args, context }))
     yield* Effect.annotateCurrentSpan(
       "operation.locks",
@@ -252,11 +270,19 @@ export const runOperation = <Input, Context, A, E, R>(
           new Error(
             `${definition.name} needs ${missing.map((lock) => lock.key).join(", ")}, which ${parent.name} doesn't hold: declare them on ${parent.name}`
           )
-        )
+        ).pipe(Effect.onError(endedBeforeRun))
       }
       return yield* run(parent.held, false, null)
     }
-    yield* awaitLanesOpen(initiator, definition.name)
+    yield* awaitLanesOpen(initiator, definition.name).pipe(
+      Effect.tapError(() =>
+        Metric.update(
+          Metric.withAttributes(refusals, { "operation.name": definition.name }),
+          1
+        )
+      ),
+      Effect.onError(endedBeforeRun)
+    )
     const label = `${definition.name}#${id}`
     const services = yield* Effect.context<R | Database>()
     // Admitted and set to be withdrawn in one step that can't be cut off,
