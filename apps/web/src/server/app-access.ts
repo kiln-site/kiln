@@ -35,7 +35,7 @@ export async function authorizedApp(
   return authorizedAppFor(await requireEligibleResourceUser(), data, permission)
 }
 
-async function authorizedAppFor(
+export async function authorizedAppFor(
   user: AuthenticatedUser,
   data: { appId: string; relayId: string },
   permission: AccessPermission

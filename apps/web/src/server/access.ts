@@ -16,7 +16,7 @@ import { AccessInvitationEmail } from "@/emails/access-invitation-email"
 import { kilnEmailAttachments } from "@/emails/kiln-email"
 import { Database } from "@/effect/database"
 import { runAppEffect } from "@/effect/runtime"
-import { forkPromise } from "@/effect/promise"
+import { forkPromise, promiseEffect } from "@/effect/promise"
 import {
   isPlatformAdmin,
   isRelayCreator,
@@ -40,7 +40,8 @@ import {
 } from "@/lib/instance-registry"
 import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
 import { transferAppOwnershipHandler } from "@/server/app-access"
-import { exclusive } from "@/operations/lanes"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { accessKey, exclusive, userKey } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -229,160 +230,198 @@ export const getAccessCapabilities = createServerFn({ method: "GET" }).handler(
   }
 )
 
+// Gives a person platform access, or invites them by email when they have
+// no account to sign in with yet. Holds their address, and their account
+// when they have one, so two changes to one person's access never
+// interleave.
+const grantPlatformAccess = operation<z.infer<typeof accessAssignmentSchema>>()(
+  {
+    name: "access.platform.grant",
+    doing: "Changing this person's access",
+    authorize: ({ input: data, user }) =>
+      Effect.gen(function* () {
+        const person = yield* signedIn(user)
+        if (!isPlatformAdmin(person))
+          return yield* Effect.fail(
+            new Error(
+              "Only a platform administrator can assign platform access"
+            )
+          )
+        return yield* promiseEffect(async () => {
+          const [existing] = await databasePool.query<
+            Array<ExistingAccessUserRow>
+          >(
+            `SELECT auth_user.id, auth_user.name, auth_user.email, auth_user.role,
+            (EXISTS (SELECT 1 FROM ${databaseTable("account")} WHERE userId = auth_user.id)
+             OR EXISTS (SELECT 1 FROM ${databaseTable("passkey")} WHERE userId = auth_user.id)) AS has_credentials
+             FROM ${databaseTable("user")} AS auth_user WHERE auth_user.email = ? LIMIT 1`,
+            [data.email]
+          )
+          return { existing, person }
+        })
+      }),
+    locks: ({ context: { existing }, input }) => [
+      exclusive(`email:${input.email}`),
+      ...(existing[0] ? [exclusive(userKey(existing[0].id))] : []),
+    ],
+    run: ({ context: { existing, person }, input }) =>
+      promiseEffect(() => grantOrInvite(person, input, existing)),
+    // Only an account's ID: an address stays out of the audit.
+    audit: ({ context: { existing } }) =>
+      existing[0] ? { id: existing[0].id, kind: "user" } : null,
+  }
+)
+
 export const grantOrInviteAccess = createServerFn({ method: "POST" })
   .validator(accessAssignmentSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    if (!isPlatformAdmin(user))
-      throw new Error(
-        "Only a platform administrator can assign platform access"
-      )
-    const [existing] = await databasePool.query<Array<ExistingAccessUserRow>>(
-      `SELECT auth_user.id, auth_user.name, auth_user.email, auth_user.role,
-        (EXISTS (SELECT 1 FROM ${databaseTable("account")} WHERE userId = auth_user.id)
-         OR EXISTS (SELECT 1 FROM ${databaseTable("passkey")} WHERE userId = auth_user.id)) AS has_credentials
-         FROM ${databaseTable("user")} AS auth_user WHERE auth_user.email = ? LIMIT 1`,
-      [data.email]
-    )
-    if (data.userId && existing[0]?.id !== data.userId)
-      throw new Error(
-        "The account changed. Refresh the user list and try again."
-      )
-    if (existing[0] && (data.userId || existing[0].has_credentials)) {
-      await runAppEffect(
-        "access.platform.assign",
-        assignPlatformAccessEffect({
-          accessType: data.accessType,
-          actingUserId: user.id,
-          developmentBypass: user.isDevelopmentBypass,
-          userId: existing[0].id,
-        })
-      )
-      publishAccessPolicyChange([existing[0].id], true)
-      return {
-        email: data.email,
-        inviteUrl: null,
-        kind: "granted",
-        notificationStatus: "disabled" as AccessNotificationStatus,
-      } satisfies DirectAccessResult
-    }
-    const id = randomUUID()
-    const token = randomBytes(32).toString("base64url")
-    const now = Date.now()
-    const expiresAt = now + 7 * 24 * 60 * 60 * 1000
+  .handler(async ({ data }) =>
+    runOperationPromise(grantPlatformAccess, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+async function grantOrInvite(
+  user: AuthenticatedUser,
+  data: z.infer<typeof accessAssignmentSchema>,
+  existing: Array<ExistingAccessUserRow>
+) {
+  if (data.userId && existing[0]?.id !== data.userId)
+    throw new Error("The account changed. Refresh the user list and try again.")
+  if (existing[0] && (data.userId || existing[0].has_credentials)) {
     await runAppEffect(
-      "access.platform.invite",
-      Effect.gen(function* () {
-        const database = yield* Database
-        return yield* database.transaction("access.platform.invite", (tx) =>
-          Effect.gen(function* () {
-            const admins = yield* tx.queryRows<PlatformRoleUserRow>(
-              `SELECT * FROM ${databaseTable("user")} WHERE role = 'admin' ORDER BY id FOR UPDATE`
-            )
-            if (
-              !user.isDevelopmentBypass &&
-              !admins.some(
-                (admin) =>
-                  admin.id === user.id &&
-                  isAccountEnabled(admin) &&
-                  isAccountVerified(admin)
-              )
-            )
-              return yield* Effect.fail(
-                new Error("Platform administrator required")
-              )
-            yield* tx.execute(
-              `INSERT INTO ${databaseTable("user")} (id, email, name, emailVerified, role, status, statusChangedAt, createdAt, updatedAt)
-          VALUES (?, ?, ?, FALSE, 'user', 'enabled', ?, ?, ?)
-          ON DUPLICATE KEY UPDATE id = id`,
-              [
-                randomUUID(),
-                data.email,
-                displayNameFromEmail(data.email),
-                new Date(now),
-                new Date(now),
-                new Date(now),
-              ]
-            )
-            const subjects = yield* tx.queryRows<ExistingAccessUserRow>(
-              `SELECT id FROM ${databaseTable("user")} WHERE email = ? FOR UPDATE`,
-              [data.email]
-            )
-            const subject = subjects[0]
-            if (!subject)
-              return yield* Effect.fail(
-                new Error("Could not create invited user")
-              )
-            yield* tx.execute(
-              `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ? WHERE user_id = ? AND access_type = ? AND accepted_at IS NULL AND revoked_at IS NULL`,
-              [now, now, subject.id, data.accessType]
-            )
-            yield* tx.execute(
-              `INSERT INTO ${databaseTable("invitation")} (id, token_hash, email, user_id, access_type, invited_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                id,
-                hashToken(token),
-                data.email,
-                subject.id,
-                data.accessType,
-                user.id,
-                expiresAt,
-                now,
-              ]
-            )
-            yield* tx.execute(
-              `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'platform.invitation.created', ?, ?)`,
-              [
-                subject.id,
-                JSON.stringify({
-                  actorId: user.id,
-                  invitationId: id,
-                  accessType: data.accessType,
-                }),
-                now,
-              ]
-            )
-          })
-        )
+      "access.platform.assign",
+      assignPlatformAccessEffect({
+        accessType: data.accessType,
+        actingUserId: user.id,
+        developmentBypass: user.isDevelopmentBypass,
+        userId: existing[0].id,
       })
     )
-    const inviteUrl = new URL("/invite", publicUrl())
-    inviteUrl.searchParams.set("token", token)
-    const delivery = emailDeliveryConfig()
-    if (delivery) {
-      const response = await new Resend(delivery.apiKey).emails.send(
-        {
-          from: delivery.from,
-          to: [data.email],
-          subject: "You've been invited to Kiln",
-          react: AccessInvitationEmail({
-            hearthUrl: publicUrl(),
-            inviteUrl: inviteUrl.toString(),
-            inviterName: user.name,
-            resourceName: "Kiln",
-            role:
-              data.accessType === "platform_admin"
-                ? "a platform administrator"
-                : "a Relay creator",
-            scope: "platform",
-          }),
-          attachments: kilnEmailAttachments,
-        },
-        { idempotencyKey: `access-invitation/${id}` }
-      )
-      await databasePool.execute(
-        `UPDATE ${databaseTable("invitation")} SET delivery_status = ? WHERE id = ?`,
-        [response.error ? "failed" : "sent", id]
-      )
-    }
-    publishAccessCollectionChange()
+    publishAccessPolicyChange([existing[0].id], true)
     return {
-      expiresAt: new Date(expiresAt).toISOString(),
-      id,
-      inviteUrl: inviteUrl.toString(),
-      kind: "invitation",
-    } satisfies InvitationAccessResult
-  })
+      email: data.email,
+      inviteUrl: null,
+      kind: "granted",
+      notificationStatus: "disabled" as AccessNotificationStatus,
+    } satisfies DirectAccessResult
+  }
+  const id = randomUUID()
+  const token = randomBytes(32).toString("base64url")
+  const now = Date.now()
+  const expiresAt = now + 7 * 24 * 60 * 60 * 1000
+  await runAppEffect(
+    "access.platform.invite",
+    Effect.gen(function* () {
+      const database = yield* Database
+      return yield* database.transaction("access.platform.invite", (tx) =>
+        Effect.gen(function* () {
+          const admins = yield* tx.queryRows<PlatformRoleUserRow>(
+            `SELECT * FROM ${databaseTable("user")} WHERE role = 'admin' ORDER BY id FOR UPDATE`
+          )
+          if (
+            !user.isDevelopmentBypass &&
+            !admins.some(
+              (admin) =>
+                admin.id === user.id &&
+                isAccountEnabled(admin) &&
+                isAccountVerified(admin)
+            )
+          )
+            return yield* Effect.fail(
+              new Error("Platform administrator required")
+            )
+          yield* tx.execute(
+            `INSERT INTO ${databaseTable("user")} (id, email, name, emailVerified, role, status, statusChangedAt, createdAt, updatedAt)
+        VALUES (?, ?, ?, FALSE, 'user', 'enabled', ?, ?, ?)
+        ON DUPLICATE KEY UPDATE id = id`,
+            [
+              randomUUID(),
+              data.email,
+              displayNameFromEmail(data.email),
+              new Date(now),
+              new Date(now),
+              new Date(now),
+            ]
+          )
+          const subjects = yield* tx.queryRows<ExistingAccessUserRow>(
+            `SELECT id FROM ${databaseTable("user")} WHERE email = ? FOR UPDATE`,
+            [data.email]
+          )
+          const subject = subjects[0]
+          if (!subject)
+            return yield* Effect.fail(
+              new Error("Could not create invited user")
+            )
+          yield* tx.execute(
+            `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ? WHERE user_id = ? AND access_type = ? AND accepted_at IS NULL AND revoked_at IS NULL`,
+            [now, now, subject.id, data.accessType]
+          )
+          yield* tx.execute(
+            `INSERT INTO ${databaseTable("invitation")} (id, token_hash, email, user_id, access_type, invited_by, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              id,
+              hashToken(token),
+              data.email,
+              subject.id,
+              data.accessType,
+              user.id,
+              expiresAt,
+              now,
+            ]
+          )
+          yield* tx.execute(
+            `INSERT INTO ${databaseTable("auth_audit")} (user_id, event, metadata, created_at) VALUES (?, 'platform.invitation.created', ?, ?)`,
+            [
+              subject.id,
+              JSON.stringify({
+                actorId: user.id,
+                invitationId: id,
+                accessType: data.accessType,
+              }),
+              now,
+            ]
+          )
+        })
+      )
+    })
+  )
+  const inviteUrl = new URL("/invite", publicUrl())
+  inviteUrl.searchParams.set("token", token)
+  const delivery = emailDeliveryConfig()
+  if (delivery) {
+    const response = await new Resend(delivery.apiKey).emails.send(
+      {
+        from: delivery.from,
+        to: [data.email],
+        subject: "You've been invited to Kiln",
+        react: AccessInvitationEmail({
+          hearthUrl: publicUrl(),
+          inviteUrl: inviteUrl.toString(),
+          inviterName: user.name,
+          resourceName: "Kiln",
+          role:
+            data.accessType === "platform_admin"
+              ? "a platform administrator"
+              : "a Relay creator",
+          scope: "platform",
+        }),
+        attachments: kilnEmailAttachments,
+      },
+      { idempotencyKey: `access-invitation/${id}` }
+    )
+    await databasePool.execute(
+      `UPDATE ${databaseTable("invitation")} SET delivery_status = ? WHERE id = ?`,
+      [response.error ? "failed" : "sent", id]
+    )
+  }
+  publishAccessCollectionChange()
+  return {
+    expiresAt: new Date(expiresAt).toISOString(),
+    id,
+    inviteUrl: inviteUrl.toString(),
+    kind: "invitation",
+  } satisfies InvitationAccessResult
+}
 
 export const listPendingPlatformInvitations = createServerFn({ method: "GET" })
   .validator(
@@ -474,11 +513,27 @@ export const getInvitationPreview = createServerFn({ method: "GET" })
     }
   })
 
+const acceptPlatformInvitation = operation<z.infer<typeof tokenSchema>>()({
+  name: "access.platform.accept",
+  doing: "Changing this person's access",
+  authorize: ({ user }) => signedIn(user),
+  locks: ({ context: person }) => [exclusive(userKey(person.id))],
+  run: ({ context: person, input }) =>
+    acceptPlatformInvitationEffect(person, hashToken(input.token)).pipe(
+      Effect.as({ accepted: true })
+    ),
+  audit: ({ context: person }) => ({ id: person.id, kind: "user" }),
+  publish: ({ context: person, exit }) => {
+    if (exit._tag === "Success") publishAccessPolicyChange([person.id], true)
+  },
+})
+
 export const acceptAccessInvitation = createServerFn({ method: "POST" })
   .validator(tokenSchema)
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
     const invitation = await readInvitation(data.token)
+    // A resource's invitation is decided as its own operation.
     if (invitation?.access_type === "scoped") {
       const { decideResourceInvitation } =
         await import("@/server/resource-access")
@@ -486,18 +541,9 @@ export const acceptAccessInvitation = createServerFn({ method: "POST" })
         data: { id: invitation.id, decision: "accept", force: false },
       })
     }
-    await runAppEffect(
-      "access.platform.accept",
-      acceptPlatformInvitationEffect(user, hashToken(data.token))
-    )
-    publishAccessPolicyChange([user.id], true)
-    return { accepted: true }
+    return runOperationPromise(acceptPlatformInvitation, data, { user })
   })
 
-/**
- * Takes a person's platform access away. Holds the person, so two changes
- * to one account's access never interleave.
- */
 const removeUserAccess = operation<
   z.infer<typeof removePlatformAccessSchema>
 >()({
@@ -513,7 +559,7 @@ const removeUserAccess = operation<
       }
       return person
     }),
-  locks: ({ input }) => [exclusive(`user:${input.userId}`)],
+  locks: ({ input }) => [exclusive(userKey(input.userId))],
   run: ({ context: person, input }) =>
     removePlatformAccessEffect({
       actingUserId: person.id,
@@ -534,40 +580,61 @@ export const removePlatformAccess = createServerFn({ method: "POST" })
     })
   )
 
+// Moving ownership changes who may do what on it.
+const transferOwnership = operation<
+  z.infer<typeof transferResourceOwnershipSchema>
+>()({
+  name: "access.ownership.transfer",
+  doing: "Changing who may use this",
+  authorize: ({ input, user }) =>
+    Effect.gen(function* () {
+      const person = yield* signedIn(user)
+      const relay = yield* promiseEffect(() => requiredRelay(input.relayId))
+      if (input.resourceType === "relay" && input.resourceId !== relay.id)
+        return yield* Effect.fail(new Error("Resource not found"))
+      // Authorize before resolving ownership: that lookup may call the
+      // Relay and backfill owner_id, which no unprivileged caller should
+      // trigger. Apps have no people of their own; the transfer itself
+      // admits only an administrator or the app's owner.
+      if (input.resourceType !== "app") {
+        const authorization = yield* promiseEffect(() =>
+          resolveScopeAuthorization({ user: person, scope: input })
+        )
+        authorization.require("access.manage")
+      }
+      return { person, relay }
+    }),
+  locks: ({ input }) => [
+    exclusive(accessKey(input.resourceType, input.relayId, input.resourceId)),
+  ],
+  run: ({ context: { person, relay }, input }) =>
+    Effect.gen(function* () {
+      if (input.resourceType === "instance")
+        yield* promiseEffect(() => instanceOwnerId(relay, input.resourceId))
+      const result = yield* transferResourceOwnershipEffect(person, input)
+      publishAccessPolicyChange(
+        [result.previousOwnerId, input.userId].filter(
+          (userId): userId is string => userId !== null
+        ),
+        false,
+        relay.id
+      )
+      return { transferred: result.transferred }
+    }),
+  audit: ({ input }) => ({
+    id: input.resourceId,
+    kind: input.resourceType,
+    relayId: input.relayId,
+  }),
+})
+
 export const transferResourceOwnership = createServerFn({ method: "POST" })
   .validator(transferResourceOwnershipSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const relay = await requiredRelay(data.relayId)
-    if (data.resourceType === "relay" && data.resourceId !== relay.id)
-      throw new Error("Resource not found")
-    // Authorize before resolving ownership: that lookup may call the Relay
-    // and backfill owner_id, which no unprivileged caller should trigger.
-    // Apps have no people of their own; the transfer itself admits only an
-    // administrator or the app's owner.
-    if (data.resourceType !== "app") {
-      const authorization = await resolveScopeAuthorization({
-        user,
-        scope: data,
-      })
-      authorization.require("access.manage")
-    }
-    if (data.resourceType === "instance")
-      await instanceOwnerId(relay, data.resourceId)
-
-    const result = await runAppEffect(
-      "access.resource.transferOwnership",
-      transferResourceOwnershipEffect(user, data)
-    )
-    publishAccessPolicyChange(
-      [result.previousOwnerId, data.userId].filter(
-        (userId): userId is string => userId !== null
-      ),
-      false,
-      relay.id
-    )
-    return { transferred: result.transferred }
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(transferOwnership, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 const transferAppOwnershipSchema = z.object({
   appId: appIdSchema,
@@ -575,38 +642,75 @@ const transferAppOwnershipSchema = z.object({
   relayId: relayIdSchema,
 })
 
+const transferApp = operation<z.infer<typeof transferAppOwnershipSchema>>()({
+  name: "access.app.transfer",
+  doing: "Changing who owns this App",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap(() => promiseEffect(() => requiredRelay(input.relayId)))
+    ),
+  locks: ({ input }) => [
+    exclusive(accessKey("app", input.relayId, input.appId)),
+  ],
+  run: ({ context: person, input }) =>
+    promiseEffect(() => transferAppOwnershipHandler(person, input)).pipe(
+      Effect.map((result) => {
+        publishAccessPolicyChange(
+          [result.previousOwnerId, result.userId].filter(
+            (userId): userId is string => userId !== null
+          ),
+          false,
+          input.relayId
+        )
+        return { transferred: true }
+      })
+    ),
+  audit: ({ input }) => ({
+    id: input.appId,
+    kind: "app",
+    relayId: input.relayId,
+  }),
+})
+
 export const transferAppOwnership = createServerFn({ method: "POST" })
   .validator(transferAppOwnershipSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    await requiredRelay(data.relayId)
-    const result = await transferAppOwnershipHandler(user, data)
-    publishAccessPolicyChange(
-      [result.previousOwnerId, result.userId].filter(
-        (userId): userId is string => userId !== null
-      ),
-      false,
-      data.relayId
-    )
-    return { transferred: true }
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(transferApp, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+const revokePlatformInvitation = operation<
+  z.infer<typeof revokeInvitationSchema>
+>()({
+  name: "access.platform.revoke",
+  doing: "Changing this invitation",
+  authorize: ({ user }) =>
+    signedIn(user).pipe(
+      Effect.filterOrFail(
+        isPlatformAdmin,
+        () =>
+          new Error("Only a platform administrator can revoke this invitation")
+      )
+    ),
+  locks: ({ input }) => [exclusive(`invitation:${input.id}`)],
+  run: ({ context: person, input }) =>
+    cancelPlatformInvitationEffect(person, input.id).pipe(
+      Effect.as({ revoked: true })
+    ),
+  audit: ({ input }) => ({ id: input.id, kind: "invitation" }),
+  publish: ({ exit }) => {
+    if (exit._tag === "Success") publishAccessCollectionChange()
+  },
+})
 
 export const revokeAccessInvitation = createServerFn({ method: "POST" })
   .validator(revokeInvitationSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    if (!isPlatformAdmin(user)) {
-      throw new Error(
-        "Only a platform administrator can revoke this invitation"
-      )
-    }
-    await runAppEffect(
-      "access.platform.cancel",
-      cancelPlatformInvitationEffect(user, data.id)
-    )
-    publishAccessCollectionChange()
-    return { revoked: true }
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(revokePlatformInvitation, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 async function requiredRelay(relayId: string) {
   const relay = await relayById(relayId)

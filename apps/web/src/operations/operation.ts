@@ -140,6 +140,17 @@ export const signedIn = (
     ? Effect.succeed(user)
     : Effect.die(new Error("This needs a signed-in person"))
 
+/** The person an operation runs for, who must administer the platform. */
+export const platformAdministrator = (
+  user: AuthenticatedUser | null
+): Effect.Effect<AuthenticatedUser, Error> =>
+  signedIn(user).pipe(
+    Effect.filterOrFail(
+      (person) => person.role === "admin",
+      () => new Error("Platform administrator required")
+    )
+  )
+
 /** The audit's actor for a caller. */
 export function actorOf(caller: OperationCaller): AuditActor {
   if (!caller.user) return { credentialId: null, kind: "system", userId: null }

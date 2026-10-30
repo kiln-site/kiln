@@ -29,6 +29,7 @@ import { runAppEffect } from "@/effect/runtime"
 import { listWebHostnamesEffect } from "@/effect/web-hostnames"
 import { isPlatformAdmin } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { promiseEffect } from "@/effect/promise"
 import {
   domainHasActiveSrvRecord,
   managedDomainConnectAddress,
@@ -45,7 +46,11 @@ import { shortIdRouteIdentifier } from "@/lib/short-id-route"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceAccess } from "@/server/domain-resource-access.server"
 import { exclusive } from "@/operations/lanes"
-import { inLanes } from "@/operations/operation"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import { requireFastReservedPatterns } from "@/server/reserved-names"
 import {
   invalidateManagedDomainAddressesEffect,
@@ -429,10 +434,12 @@ export async function discoverCloudflareDomainsHandler(
  * domains are vanity domains. A person's own, or the platform's for an
  * administrator.
  */
-export async function saveDomainConnectionHandler(
+// What a save needs once the person may make it and Cloudflare answered:
+// read and checked before the connection is held.
+async function prepareConnectionSave(
+  user: AuthenticatedUser,
   data: SaveDomainConnectionInput
 ) {
-  const user = await requireEligibleResourceUser()
   const existing = data.id
     ? await runAppEffect(
         "domains.connection.load",
@@ -500,26 +507,44 @@ export async function saveDomainConnectionHandler(
     data.blacklistPatterns ?? existing?.connection.blacklistPatterns ?? []
   )
   requireFastReservedPatterns(blacklistPatterns)
-  await runAppEffect(
-    "domains.connection.save",
-    inLanes(
-      "dns.connection.save",
-      "Saving this Cloudflare connection",
-      [connectionLock(id)],
-      saveDomainConnectionEffect({
-        apiToken: data.apiToken,
-        blacklistPatterns,
-        domains,
-        id,
-        insert: !existing,
-        name: data.name,
-        ownerId,
-        zones,
-      }).pipe(Effect.andThen(invalidateManagedDomainAddressesEffect))
-    )
-  )
-  publishDomainChange()
-  return { id }
+  return { domains, existing, id, ownerId, zones, blacklistPatterns }
+}
+
+const saveConnection = operation<SaveDomainConnectionInput>()({
+  name: "dns.connection.save",
+  doing: "Saving this Cloudflare connection",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(() => prepareConnectionSave(person, input))
+      )
+    ),
+  locks: ({ context }) => [connectionLock(context.id)],
+  run: ({ context, input }) =>
+    saveDomainConnectionEffect({
+      apiToken: input.apiToken,
+      blacklistPatterns: context.blacklistPatterns,
+      domains: context.domains,
+      id: context.id,
+      insert: !context.existing,
+      name: input.name,
+      ownerId: context.ownerId,
+      zones: context.zones,
+    }).pipe(
+      Effect.andThen(invalidateManagedDomainAddressesEffect),
+      Effect.as({ id: context.id })
+    ),
+  audit: ({ context }) => ({ id: context.id, kind: "cloudflare-connection" }),
+  publish: ({ exit }) => {
+    if (exit._tag === "Success") publishDomainChange()
+  },
+})
+
+export async function saveDomainConnectionHandler(
+  data: SaveDomainConnectionInput
+) {
+  const user = await requireEligibleResourceUser()
+  return runOperationPromise(saveConnection, data, { user })
 }
 
 /**
@@ -527,28 +552,38 @@ export async function saveDomainConnectionHandler(
  * domains, or web routes or app addresses use it: their names stay theirs
  * until they're removed.
  */
+const deleteConnection = operation<DeleteDomainConnectionInput>()({
+  name: "dns.connection.delete",
+  doing: "Removing this Cloudflare connection",
+  authorize: ({ input, user }) =>
+    Effect.gen(function* () {
+      const person = yield* signedIn(user)
+      const existing = yield* loadDomainConnectionEffect(input.id)
+      return (
+        existing !== null && canManageConnection(person, existing.connection)
+      )
+    }),
+  locks: ({ context: allowed, input }) =>
+    allowed ? [connectionLock(input.id)] : [],
+  run: ({ context: allowed, input }) =>
+    allowed
+      ? requireConnectionUnusedEffect(input.id).pipe(
+          Effect.andThen(deleteDomainConnectionEffect(input.id)),
+          Effect.andThen(invalidateManagedDomainAddressesEffect)
+        )
+      : Effect.void,
+  audit: ({ context: allowed, input }) =>
+    allowed ? { id: input.id, kind: "cloudflare-connection" } : null,
+  publish: ({ context: allowed, exit }) => {
+    if (allowed && exit._tag === "Success") publishDomainChange()
+  },
+})
+
 export async function deleteDomainConnectionHandler(
   data: DeleteDomainConnectionInput
 ) {
   const user = await requireEligibleResourceUser()
-  const existing = await runAppEffect(
-    "domains.connection.load",
-    loadDomainConnectionEffect(data.id)
-  )
-  if (!existing || !canManageConnection(user, existing.connection)) return
-  await runAppEffect(
-    "domains.connection.delete",
-    inLanes(
-      "dns.connection.delete",
-      "Removing this Cloudflare connection",
-      [connectionLock(data.id)],
-      requireConnectionUnusedEffect(data.id).pipe(
-        Effect.andThen(deleteDomainConnectionEffect(data.id)),
-        Effect.andThen(invalidateManagedDomainAddressesEffect)
-      )
-    )
-  )
-  publishDomainChange()
+  await runOperationPromise(deleteConnection, data, { user })
 }
 
 /**

@@ -19,7 +19,15 @@ import {
   resolveInvitationNotificationsEffect,
 } from "@/effect/notifications"
 import type { DatabaseTransaction } from "@/effect/database"
+import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { accessKey, exclusive } from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import type { InvitationOutcome } from "@/lib/notifications"
 import { databaseTable } from "@/lib/database-config"
 import { databasePool } from "@/lib/database"
@@ -189,192 +197,211 @@ interface InvitationRow extends RowDataPacket {
   delivery_status: string
 }
 
+const inviteAccessSchema = inviteSchema
+
+const inviteAccess = operation<z.infer<typeof inviteAccessSchema>>()({
+  name: "access.invite",
+  doing: "Changing who may use this",
+  authorize: ({ user }) => signedIn(user),
+  locks: ({ input }) => [
+    exclusive(`email:${input.email}`),
+    ...input.targets.map((target) =>
+      exclusive(
+        accessKey(target.resourceType, target.relayId, target.resourceId)
+      )
+    ),
+  ],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => inviteResourceAccessHandler(user, input)),
+})
+
 export const inviteResourceAccess = createServerFn({ method: "POST" })
-  .validator(inviteSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const targets = [...data.targets].sort(compareAccessScopes)
-    if (
-      new Set(targets.map((scope) => JSON.stringify(scopeValues(scope))))
-        .size !== targets.length
-    )
-      throw new Error("Choose each resource only once")
-    const result = await runAppEffect(
-      "access.invite",
-      accessPolicyTransaction("access.invite", (tx) =>
-        Effect.gen(function* () {
-          const actor = yield* lockAccessActorEffect(tx, user)
-          const now = yield* Clock.currentTimeMillis
-          // Reserve the same identity for concurrent invitations; never replace credentials or trust.
+  .validator(inviteAccessSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(inviteAccess, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+async function inviteResourceAccessHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof inviteAccessSchema>
+) {
+  const targets = [...data.targets].sort(compareAccessScopes)
+  if (
+    new Set(targets.map((scope) => JSON.stringify(scopeValues(scope)))).size !==
+    targets.length
+  )
+    throw new Error("Choose each resource only once")
+  const result = await runAppEffect(
+    "access.invite",
+    accessPolicyTransaction("access.invite", (tx) =>
+      Effect.gen(function* () {
+        const actor = yield* lockAccessActorEffect(tx, user)
+        const now = yield* Clock.currentTimeMillis
+        // Reserve the same identity for concurrent invitations; never replace credentials or trust.
+        yield* tx.execute(
+          `INSERT INTO ${databaseTable("user")} (id, name, email, emailVerified, status, role, statusChangedAt, createdAt, updatedAt)
+    VALUES (?, ?, ?, FALSE, 'enabled', 'user', ?, ?, ?) ON DUPLICATE KEY UPDATE id = id`,
+          [
+            randomUUID(),
+            displayNameFromEmail(data.email),
+            data.email,
+            new Date(now),
+            new Date(now),
+            new Date(now),
+          ]
+        )
+        const users = yield* tx.queryRows<UserRow>(
+          `SELECT id, email, name FROM ${databaseTable("user")} WHERE email = ? FOR UPDATE`,
+          [data.email]
+        )
+        const recipient = users[0]!
+        const invitations: Array<{
+          id: string
+          accessId: string
+          scope: AccessGrantScope
+          inviteUrl: string
+          expiresAt: string
+          resourceName: string
+          existing: boolean
+        }> = []
+        // One grant load per Relay for the whole submission, not per target.
+        const actorGrants = new Map<string, ResolvedAccessGrant[]>()
+        for (const target of targets) {
+          const resource = yield* lockAccessScopeEffect(tx, target)
+          let actorRelayGrants = actorGrants.get(target.relayId)
+          if (!actorRelayGrants) {
+            actorRelayGrants = yield* loadResourceGrantsEffect(
+              actor.id,
+              target.relayId,
+              tx
+            )
+            actorGrants.set(target.relayId, actorRelayGrants)
+          }
+          const authority = yield* scopeAuthorityEffect(
+            tx,
+            actor,
+            target,
+            "access.invite",
+            actorRelayGrants
+          )
+          const proposed = yield* resolveAssignmentEffect(tx, target, target)
+          yield* Effect.try({
+            try: () => assertDelegation(authority, proposed),
+            catch: (cause) =>
+              cause instanceof Error
+                ? cause
+                : new Error("You cannot grant the selected permissions"),
+          })
+          if (!proposed.length)
+            return yield* Effect.fail(
+              new Error("Select at least one permission or preset")
+            )
+          const grants = yield* tx.queryRows<GrantRow>(
+            `SELECT id, state FROM ${databaseTable("access_grant")} WHERE user_id = ? AND relay_id = ? AND resource_type = ? AND resource_id = ? FOR UPDATE`,
+            [recipient.id, ...scopeValues(target)]
+          )
+          const existing = grants[0]
+          if (
+            existing?.state === "active" ||
+            resource.owner_id === recipient.id
+          ) {
+            invitations.push({
+              id: existing?.id ?? "",
+              accessId: existing?.id ?? "",
+              scope: target,
+              inviteUrl: "",
+              expiresAt: "",
+              resourceName: resource.name ?? target.resourceId,
+              existing: true,
+            })
+            continue
+          }
+          const accessId = existing?.id ?? randomUUID()
           yield* tx.execute(
-            `INSERT INTO ${databaseTable("user")} (id, name, email, emailVerified, status, role, statusChangedAt, createdAt, updatedAt)
-      VALUES (?, ?, ?, FALSE, 'enabled', 'user', ?, ?, ?) ON DUPLICATE KEY UPDATE id = id`,
+            `INSERT INTO ${databaseTable("access_grant")} (id, user_id, relay_id, resource_type, resource_id, state, granted_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+      ON DUPLICATE KEY UPDATE state = 'pending', revision = revision + 1, granted_by = VALUES(granted_by), updated_at = VALUES(updated_at)`,
+            [accessId, recipient.id, ...scopeValues(target), actor.id, now, now]
+          )
+          yield* writeAccessAssignmentEffect(tx, accessId, target, actor.id)
+          yield* cancelPendingInvitationsEffect(
+            tx,
+            recipient.id,
+            accessId,
+            actor.id,
+            now
+          )
+          const id = randomUUID(),
+            token = randomBytes(32).toString("base64url"),
+            expiresAt = now + 7 * 86400000
+          yield* tx.execute(
+            `INSERT INTO ${databaseTable("invitation")} (id, token_hash, email, access_id, user_id, access_type, relay_id, instance_id, database_id, invited_by, expires_at, delivery_status, created_at)
+      VALUES (?, ?, ?, ?, ?, 'scoped', ?, ?, ?, ?, ?, 'pending', ?)`,
             [
-              randomUUID(),
-              displayNameFromEmail(data.email),
-              data.email,
-              new Date(now),
-              new Date(now),
-              new Date(now),
+              id,
+              createHash("sha256").update(token).digest("hex"),
+              recipient.email,
+              accessId,
+              recipient.id,
+              target.relayId,
+              target.resourceType === "instance" ? target.resourceId : null,
+              target.resourceType === "database" ? target.resourceId : null,
+              actor.id,
+              expiresAt,
+              now,
             ]
           )
-          const users = yield* tx.queryRows<UserRow>(
-            `SELECT id, email, name FROM ${databaseTable("user")} WHERE email = ? FOR UPDATE`,
-            [data.email]
-          )
-          const recipient = users[0]!
-          const invitations: Array<{
-            id: string
-            accessId: string
-            scope: AccessGrantScope
-            inviteUrl: string
-            expiresAt: string
-            resourceName: string
-            existing: boolean
-          }> = []
-          // One grant load per Relay for the whole submission, not per target.
-          const actorGrants = new Map<string, ResolvedAccessGrant[]>()
-          for (const target of targets) {
-            const resource = yield* lockAccessScopeEffect(tx, target)
-            let actorRelayGrants = actorGrants.get(target.relayId)
-            if (!actorRelayGrants) {
-              actorRelayGrants = yield* loadResourceGrantsEffect(
-                actor.id,
-                target.relayId,
-                tx
-              )
-              actorGrants.set(target.relayId, actorRelayGrants)
-            }
-            const authority = yield* scopeAuthorityEffect(
-              tx,
-              actor,
-              target,
-              "access.invite",
-              actorRelayGrants
-            )
-            const proposed = yield* resolveAssignmentEffect(tx, target, target)
-            yield* Effect.try({
-              try: () => assertDelegation(authority, proposed),
-              catch: (cause) =>
-                cause instanceof Error
-                  ? cause
-                  : new Error("You cannot grant the selected permissions"),
-            })
-            if (!proposed.length)
-              return yield* Effect.fail(
-                new Error("Select at least one permission or preset")
-              )
-            const grants = yield* tx.queryRows<GrantRow>(
-              `SELECT id, state FROM ${databaseTable("access_grant")} WHERE user_id = ? AND relay_id = ? AND resource_type = ? AND resource_id = ? FOR UPDATE`,
-              [recipient.id, ...scopeValues(target)]
-            )
-            const existing = grants[0]
-            if (
-              existing?.state === "active" ||
-              resource.owner_id === recipient.id
-            ) {
-              invitations.push({
-                id: existing?.id ?? "",
-                accessId: existing?.id ?? "",
-                scope: target,
-                inviteUrl: "",
-                expiresAt: "",
-                resourceName: resource.name ?? target.resourceId,
-                existing: true,
-              })
-              continue
-            }
-            const accessId = existing?.id ?? randomUUID()
-            yield* tx.execute(
-              `INSERT INTO ${databaseTable("access_grant")} (id, user_id, relay_id, resource_type, resource_id, state, granted_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)
-        ON DUPLICATE KEY UPDATE state = 'pending', revision = revision + 1, granted_by = VALUES(granted_by), updated_at = VALUES(updated_at)`,
-              [
-                accessId,
-                recipient.id,
-                ...scopeValues(target),
-                actor.id,
-                now,
-                now,
-              ]
-            )
-            yield* writeAccessAssignmentEffect(tx, accessId, target, actor.id)
-            yield* cancelPendingInvitationsEffect(
-              tx,
-              recipient.id,
-              accessId,
-              actor.id,
-              now
-            )
-            const id = randomUUID(),
-              token = randomBytes(32).toString("base64url"),
-              expiresAt = now + 7 * 86400000
-            yield* tx.execute(
-              `INSERT INTO ${databaseTable("invitation")} (id, token_hash, email, access_id, user_id, access_type, relay_id, instance_id, database_id, invited_by, expires_at, delivery_status, created_at)
-        VALUES (?, ?, ?, ?, ?, 'scoped', ?, ?, ?, ?, ?, 'pending', ?)`,
-              [
-                id,
-                createHash("sha256").update(token).digest("hex"),
-                recipient.email,
-                accessId,
-                recipient.id,
-                target.relayId,
-                target.resourceType === "instance" ? target.resourceId : null,
-                target.resourceType === "database" ? target.resourceId : null,
-                actor.id,
-                expiresAt,
-                now,
-              ]
-            )
-            yield* auditAccessEffect(tx, actor.id, "access.invited", {
-              userId: recipient.id,
-              invitationId: id,
-              accessId,
-              scope: target,
-            })
-            yield* notifyUsersEffect([recipient.id], `access.invited:${id}`, {
-              actorName: user.name,
-              invitationId: id,
-              kind: "access.invited",
-              resource: {
-                id: target.resourceId,
-                name: resource.name ?? target.resourceId,
-                relayId: target.relayId,
-                type: target.resourceType,
-              },
-            })
-            const url = new URL("/invite", kilnPublicUrl())
-            url.searchParams.set("token", token)
-            invitations.push({
-              id,
-              accessId,
-              scope: target,
-              inviteUrl: url.toString(),
-              expiresAt: new Date(expiresAt).toISOString(),
-              resourceName: resource.name ?? target.resourceId,
-              existing: false,
-            })
-          }
-          return { userId: recipient.id, invitations }
-        })
-      )
+          yield* auditAccessEffect(tx, actor.id, "access.invited", {
+            userId: recipient.id,
+            invitationId: id,
+            accessId,
+            scope: target,
+          })
+          yield* notifyUsersEffect([recipient.id], `access.invited:${id}`, {
+            actorName: user.name,
+            invitationId: id,
+            kind: "access.invited",
+            resource: {
+              id: target.resourceId,
+              name: resource.name ?? target.resourceId,
+              relayId: target.relayId,
+              type: target.resourceType,
+            },
+          })
+          const url = new URL("/invite", kilnPublicUrl())
+          url.searchParams.set("token", token)
+          invitations.push({
+            id,
+            accessId,
+            scope: target,
+            inviteUrl: url.toString(),
+            expiresAt: new Date(expiresAt).toISOString(),
+            resourceName: resource.name ?? target.resourceId,
+            existing: false,
+          })
+        }
+        return { userId: recipient.id, invitations }
+      })
     )
-    await publishResourceAccessChange(
-      [result.userId],
-      targets.map((target) => target.relayId)
+  )
+  await publishResourceAccessChange(
+    [result.userId],
+    targets.map((target) => target.relayId)
+  )
+  if (result.invitations.some((item) => !item.existing))
+    publishNotificationChange([result.userId])
+  const { startInvitationDelivery } =
+    await import("@/lib/access-invitation-delivery")
+  await runAppEffect(
+    "access.invitation.deliver",
+    startInvitationDelivery(
+      result.invitations.flatMap((item) => (item.existing ? [] : [item.id])),
+      user.id
     )
-    if (result.invitations.some((item) => !item.existing))
-      publishNotificationChange([result.userId])
-    const { startInvitationDelivery } =
-      await import("@/lib/access-invitation-delivery")
-    await runAppEffect(
-      "access.invitation.deliver",
-      startInvitationDelivery(
-        result.invitations.flatMap((item) => (item.existing ? [] : [item.id])),
-        user.id
-      )
-    )
-    return result
-  })
+  )
+  return result
+}
 
 const iso = (value: number | null) =>
   value === null ? null : new Date(value).toISOString()
@@ -513,420 +540,514 @@ export const getResourceInvitation = createServerFn({ method: "GET" })
     }
   })
 
+const decideInvitationSchema = z.object({
+  id: z.uuid(),
+  decision: z.enum(["accept", "decline", "cancel"]),
+  force: z.boolean().default(false),
+})
+
+// Deciding an invitation changes who may use its resource, read from the
+// invitation itself.
+const decideInvitation = operation<z.infer<typeof decideInvitationSchema>>()({
+  name: "access.invitation.decide",
+  doing: "Changing who may use this",
+  authorize: ({ input: data, user }) =>
+    Effect.gen(function* () {
+      const person = yield* signedIn(user)
+      return yield* promiseEffect(async () => {
+        const [snapshots] = await databasePool.query<Array<InvitationRow>>(
+          `${invitationSelect} WHERE i.id = ?`,
+          [data.id]
+        )
+        const snapshot = snapshots[0]
+        if (!snapshot?.access_id) throw new Error("Invitation not found")
+        const scope = scopeFromRow(snapshot)
+        return { person, scope }
+      })
+    }),
+  locks: ({ context: { scope } }) => [
+    exclusive(accessKey(scope.resourceType, scope.relayId, scope.resourceId)),
+  ],
+  run: ({ context: { person, scope }, input }) =>
+    promiseEffect(() => decideResourceInvitationHandler(person, input, scope)),
+  audit: ({ context: { scope } }) => ({
+    id: scope.resourceId,
+    kind: scope.resourceType,
+    relayId: scope.relayId,
+  }),
+})
+
 export const decideResourceInvitation = createServerFn({ method: "POST" })
-  .validator(
-    z.object({
-      id: z.uuid(),
-      decision: z.enum(["accept", "decline", "cancel"]),
-      force: z.boolean().default(false),
+  .validator(decideInvitationSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(decideInvitation, data, {
+      user: await requireEligibleResourceUser(),
     })
   )
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const [snapshots] = await databasePool.query<Array<InvitationRow>>(
-      `${invitationSelect} WHERE i.id = ?`,
-      [data.id]
-    )
-    const snapshot = snapshots[0]
-    if (!snapshot?.access_id) throw new Error("Invitation not found")
-    const scope = scopeFromRow(snapshot)
-    const result = await runAppEffect(
-      "access.invitation.decide",
-      accessPolicyTransaction("access.invitation.decide", (tx) =>
-        Effect.gen(function* () {
-          const actor = yield* lockAccessActorEffect(tx, user)
-          yield* lockAccessScopeEffect(tx, scope)
-          const now = yield* Clock.currentTimeMillis
-          const rows = yield* tx.queryRows<InvitationRow>(
-            `SELECT i.*, g.resource_type, g.resource_id FROM ${databaseTable("invitation")} i JOIN ${databaseTable("access_grant")} g ON g.id = i.access_id WHERE i.id = ? FOR UPDATE`,
-            [data.id]
+
+async function decideResourceInvitationHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof decideInvitationSchema>,
+  scope: ReturnType<typeof scopeFromRow>
+) {
+  const result = await runAppEffect(
+    "access.invitation.decide",
+    accessPolicyTransaction("access.invitation.decide", (tx) =>
+      Effect.gen(function* () {
+        const actor = yield* lockAccessActorEffect(tx, user)
+        yield* lockAccessScopeEffect(tx, scope)
+        const now = yield* Clock.currentTimeMillis
+        const rows = yield* tx.queryRows<InvitationRow>(
+          `SELECT i.*, g.resource_type, g.resource_id FROM ${databaseTable("invitation")} i JOIN ${databaseTable("access_grant")} g ON g.id = i.access_id WHERE i.id = ? FOR UPDATE`,
+          [data.id]
+        )
+        const invitation = rows[0]
+        if (!invitation)
+          return yield* Effect.fail(new Error("Invitation not found"))
+        const admin = actor.isDevelopmentBypass || actor.role === "admin"
+        if (data.force && (!admin || data.decision !== "accept"))
+          return yield* Effect.fail(
+            new Error(
+              "Only platform administrators can accept for another user"
+            )
           )
-          const invitation = rows[0]
-          if (!invitation)
-            return yield* Effect.fail(new Error("Invitation not found"))
-          const admin = actor.isDevelopmentBypass || actor.role === "admin"
-          if (data.force && (!admin || data.decision !== "accept"))
-            return yield* Effect.fail(
-              new Error(
-                "Only platform administrators can accept for another user"
-              )
-            )
-          if (data.decision === "cancel")
-            yield* scopeAuthorityEffect(tx, actor, scope, "access.manage")
-          else if (!data.force && invitation.user_id !== actor.id)
-            return yield* Effect.fail(new Error("Invitation not found"))
-          if (invitation.accepted_at && data.decision === "accept")
-            return { userId: invitation.user_id, scope, accepted: true }
-          if (invitation.declined_at && data.decision === "decline")
-            return { userId: invitation.user_id, scope, accepted: false }
-          if (
-            invitation.accepted_at ||
-            invitation.declined_at ||
-            invitation.revoked_at ||
-            invitation.cancelled_at ||
-            invitation.expires_at <= now
+        if (data.decision === "cancel")
+          yield* scopeAuthorityEffect(tx, actor, scope, "access.manage")
+        else if (!data.force && invitation.user_id !== actor.id)
+          return yield* Effect.fail(new Error("Invitation not found"))
+        if (invitation.accepted_at && data.decision === "accept")
+          return { userId: invitation.user_id, scope, accepted: true }
+        if (invitation.declined_at && data.decision === "decline")
+          return { userId: invitation.user_id, scope, accepted: false }
+        if (
+          invitation.accepted_at ||
+          invitation.declined_at ||
+          invitation.revoked_at ||
+          invitation.cancelled_at ||
+          invitation.expires_at <= now
+        )
+          return yield* Effect.fail(
+            new Error("This invitation is no longer pending")
           )
-            return yield* Effect.fail(
-              new Error("This invitation is no longer pending")
-            )
-          if (data.decision === "accept") {
-            yield* tx.execute(
-              `UPDATE ${databaseTable("invitation")} SET accepted_at = ?, accepted_by = ?, acceptance_method = ? WHERE id = ?`,
-              [now, actor.id, data.force ? "admin" : "self", data.id]
-            )
-            yield* tx.execute(
-              `UPDATE ${databaseTable("access_grant")} SET state = 'active', revision = revision + 1, updated_at = ? WHERE id = ? AND state = 'pending'`,
-              [now, invitation.access_id]
-            )
-            yield* advanceScopeAccessEffect(tx, invitation.user_id, scope)
-          } else {
-            yield* tx.execute(
-              data.decision === "decline"
-                ? `UPDATE ${databaseTable("invitation")} SET declined_at = ? WHERE id = ?`
-                : `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ?, cancelled_by = ? WHERE id = ?`,
-              data.decision === "decline"
-                ? [now, data.id]
-                : [now, now, actor.id, data.id]
-            )
-          }
-          yield* resolveInvitationNotificationsEffect(
-            invitation.user_id,
-            [data.id],
-            invitationOutcomes[data.decision]
+        if (data.decision === "accept") {
+          yield* tx.execute(
+            `UPDATE ${databaseTable("invitation")} SET accepted_at = ?, accepted_by = ?, acceptance_method = ? WHERE id = ?`,
+            [now, actor.id, data.force ? "admin" : "self", data.id]
           )
-          yield* auditAccessEffect(
-            tx,
-            actor.id,
-            `access.invitation.${data.decision}`,
-            {
-              invitationId: data.id,
-              userId: invitation.user_id,
-              scope,
-              force: data.force,
-            }
+          yield* tx.execute(
+            `UPDATE ${databaseTable("access_grant")} SET state = 'active', revision = revision + 1, updated_at = ? WHERE id = ? AND state = 'pending'`,
+            [now, invitation.access_id]
           )
-          return {
+          yield* advanceScopeAccessEffect(tx, invitation.user_id, scope)
+        } else {
+          yield* tx.execute(
+            data.decision === "decline"
+              ? `UPDATE ${databaseTable("invitation")} SET declined_at = ? WHERE id = ?`
+              : `UPDATE ${databaseTable("invitation")} SET revoked_at = ?, cancelled_at = ?, cancelled_by = ? WHERE id = ?`,
+            data.decision === "decline"
+              ? [now, data.id]
+              : [now, now, actor.id, data.id]
+          )
+        }
+        yield* resolveInvitationNotificationsEffect(
+          invitation.user_id,
+          [data.id],
+          invitationOutcomes[data.decision]
+        )
+        yield* auditAccessEffect(
+          tx,
+          actor.id,
+          `access.invitation.${data.decision}`,
+          {
+            invitationId: data.id,
             userId: invitation.user_id,
             scope,
-            accepted: data.decision === "accept",
+            force: data.force,
           }
-        })
-      )
+        )
+        return {
+          userId: invitation.user_id,
+          scope,
+          accepted: data.decision === "accept",
+        }
+      })
     )
-    await publishResourceAccessChange([result.userId], [result.scope.relayId])
-    publishNotificationChange([result.userId])
-    return result
-  })
+  )
+  await publishResourceAccessChange([result.userId], [result.scope.relayId])
+  publishNotificationChange([result.userId])
+  return result
+}
+
+const savePresetSchema = resourceScopeSchema.extend({
+  id: z.uuid().optional(),
+  revision: z.number().int().positive().optional(),
+  name: z.string().trim().min(1).max(120),
+  selections: permissionSelectionsSchema,
+})
+
+const savePreset = operation<z.infer<typeof savePresetSchema>>()({
+  name: "access.preset.save",
+  doing: "Changing who may use this",
+  authorize: ({ user }) => signedIn(user),
+  locks: ({ input }) => [
+    exclusive(accessKey(input.resourceType, input.relayId, input.resourceId)),
+  ],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => savePermissionPresetHandler(user, input)),
+  audit: ({ input }) => ({
+    id: input.resourceId,
+    kind: input.resourceType,
+    relayId: input.relayId,
+  }),
+})
 
 export const savePermissionPreset = createServerFn({ method: "POST" })
-  .validator(
-    resourceScopeSchema.extend({
-      id: z.uuid().optional(),
-      revision: z.number().int().positive().optional(),
-      name: z.string().trim().min(1).max(120),
-      selections: permissionSelectionsSchema,
+  .validator(savePresetSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(savePreset, data, {
+      user: await requireEligibleResourceUser(),
     })
   )
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const result = await runAppEffect(
-      "access.preset.save",
-      accessPolicyTransaction("access.preset.save", (tx) =>
-        Effect.gen(function* () {
-          const actor = yield* lockAccessActorEffect(tx, user)
-          yield* lockAccessScopeEffect(tx, data)
-          const authority = yield* scopeAuthorityEffect(
-            tx,
-            actor,
-            data,
-            data.id ? "preset.manage" : "preset.create"
+
+async function savePermissionPresetHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof savePresetSchema>
+) {
+  const result = await runAppEffect(
+    "access.preset.save",
+    accessPolicyTransaction("access.preset.save", (tx) =>
+      Effect.gen(function* () {
+        const actor = yield* lockAccessActorEffect(tx, user)
+        yield* lockAccessScopeEffect(tx, data)
+        const authority = yield* scopeAuthorityEffect(
+          tx,
+          actor,
+          data,
+          data.id ? "preset.manage" : "preset.create"
+        )
+        const capabilities = yield* scopeCapabilitiesEffect(tx, data)
+        const proposed = yield* Effect.try({
+          try: () =>
+            expandPermissionSelections(
+              data.selections,
+              data.resourceType,
+              capabilities
+            ),
+          catch: (cause) =>
+            cause instanceof Error
+              ? cause
+              : new Error("Invalid permission selection"),
+        })
+        let previous: Array<PermissionSelection> = []
+        if (data.id) {
+          const rows = yield* tx.queryRows<PresetRow>(
+            `SELECT id, revision FROM ${databaseTable("permission_preset")} WHERE id = ? AND relay_id = ? AND resource_type = ? AND resource_id = ? FOR UPDATE`,
+            [data.id, ...scopeValues(data)]
           )
-          const capabilities = yield* scopeCapabilitiesEffect(tx, data)
-          const proposed = yield* Effect.try({
-            try: () =>
-              expandPermissionSelections(
-                data.selections,
-                data.resourceType,
-                capabilities
+          if (!rows[0]) return yield* Effect.fail(new Error("Preset not found"))
+          if (Number(rows[0].revision) !== data.revision)
+            return yield* Effect.fail(
+              new Error("This preset changed; refresh before saving")
+            )
+          const selections = yield* tx.queryRows<SelectionRow>(
+            `SELECT selection_kind, selection_key FROM ${databaseTable("preset_selection")} WHERE preset_id = ?`,
+            [data.id]
+          )
+          previous = selections.map((row) => ({
+            kind: row.selection_kind,
+            key: row.selection_key,
+          }))
+        }
+        yield* Effect.try({
+          try: () =>
+            assertDelegation(
+              authority,
+              proposed,
+              expandStoredSelections(previous, data.resourceType, capabilities)
+            ),
+          catch: (cause) =>
+            cause instanceof Error
+              ? cause
+              : new Error("You cannot grant the selected permissions"),
+        })
+        const id = data.id ?? randomUUID()
+        const now = yield* Clock.currentTimeMillis
+        if (data.id)
+          yield* tx.execute(
+            `UPDATE ${databaseTable("permission_preset")} SET name = ?, revision = revision + 1, updated_by = ?, updated_at = ? WHERE id = ?`,
+            [data.name, actor.id, now, id]
+          )
+        else
+          yield* tx.execute(
+            `INSERT INTO ${databaseTable("permission_preset")} (id, relay_id, resource_type, resource_id, name, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, ...scopeValues(data), data.name, actor.id, actor.id, now, now]
+          )
+        yield* tx.execute(
+          `DELETE FROM ${databaseTable("preset_selection")} WHERE preset_id = ?`,
+          [id]
+        )
+        for (const selection of new Map(
+          data.selections.map((item) => [`${item.kind}:${item.key}`, item])
+        ).values())
+          yield* tx.execute(
+            `INSERT INTO ${databaseTable("preset_selection")} (preset_id, selection_kind, selection_key) VALUES (?, ?, ?)`,
+            [id, selection.kind, selection.key]
+          )
+        const affected = yield* tx.queryRows<GrantRow>(
+          `SELECT DISTINCT g.user_id FROM ${databaseTable("access_preset")} a JOIN ${databaseTable("access_grant")} g ON g.id = a.access_id WHERE a.preset_id = ? AND g.state = 'active' ORDER BY g.user_id`,
+          [id]
+        )
+        for (const row of affected)
+          yield* advanceScopeAccessEffect(tx, row.user_id, data)
+        yield* auditAccessEffect(
+          tx,
+          actor.id,
+          data.id ? "access.preset.updated" : "access.preset.created",
+          { presetId: id, scope: data, affected: affected.length }
+        )
+        return { id, userIds: affected.map((row) => row.user_id) }
+      })
+    )
+  )
+  await publishResourceAccessChange(result.userIds, [data.relayId])
+  return { id: result.id }
+}
+
+const deletePresetSchema = resourceScopeSchema.extend({
+  id: z.uuid(),
+  revision: z.number().int().positive(),
+})
+
+const deletePreset = operation<z.infer<typeof deletePresetSchema>>()({
+  name: "access.preset.delete",
+  doing: "Changing who may use this",
+  authorize: ({ user }) => signedIn(user),
+  locks: ({ input }) => [
+    exclusive(accessKey(input.resourceType, input.relayId, input.resourceId)),
+  ],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => deletePermissionPresetHandler(user, input)),
+  audit: ({ input }) => ({
+    id: input.resourceId,
+    kind: input.resourceType,
+    relayId: input.relayId,
+  }),
+})
+
+export const deletePermissionPreset = createServerFn({ method: "POST" })
+  .validator(deletePresetSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(deletePreset, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+async function deletePermissionPresetHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof deletePresetSchema>
+) {
+  await runAppEffect(
+    "access.preset.delete",
+    accessPolicyTransaction("access.preset.delete", (tx) =>
+      Effect.gen(function* () {
+        const actor = yield* lockAccessActorEffect(tx, user)
+        yield* lockAccessScopeEffect(tx, data)
+        yield* scopeAuthorityEffect(tx, actor, data, "preset.manage")
+        const used = yield* tx.queryRows<RowDataPacket>(
+          `SELECT a.id FROM ${databaseTable("access_preset")} a JOIN ${databaseTable("access_grant")} g ON g.id = a.access_id WHERE a.preset_id = ? AND g.state <> 'revoked' LIMIT 1`,
+          [data.id]
+        )
+        if (used.length)
+          return yield* Effect.fail(
+            new Error(
+              "Remove this preset from its assignments before deleting it"
+            )
+          )
+        yield* tx.execute(
+          `DELETE a FROM ${databaseTable("access_preset")} a JOIN ${databaseTable("access_grant")} g ON g.id = a.access_id WHERE a.preset_id = ? AND g.state = 'revoked'`,
+          [data.id]
+        )
+        const result = yield* tx.execute(
+          `DELETE FROM ${databaseTable("permission_preset")} WHERE id = ? AND relay_id = ? AND resource_type = ? AND resource_id = ? AND revision = ?`,
+          [data.id, ...scopeValues(data), data.revision]
+        )
+        if (!result.affectedRows)
+          return yield* Effect.fail(
+            new Error("Preset changed or no longer exists")
+          )
+        yield* auditAccessEffect(tx, actor.id, "access.preset.deleted", {
+          presetId: data.id,
+          scope: data,
+        })
+      })
+    )
+  )
+  await publishResourceAccessChange([], [data.relayId])
+  return { deleted: true }
+}
+
+const updateAccessSchema = resourceScopeSchema
+  .extend(assignmentSchema.shape)
+  .extend({
+    id: z.uuid(),
+    revision: z.number().int().positive(),
+    revoke: z.boolean().default(false),
+  })
+
+const updateAccess = operation<z.infer<typeof updateAccessSchema>>()({
+  name: "access.update",
+  doing: "Changing who may use this",
+  authorize: ({ user }) => signedIn(user),
+  locks: ({ input }) => [
+    exclusive(accessKey(input.resourceType, input.relayId, input.resourceId)),
+  ],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => updateResourceAccessHandler(user, input)),
+  audit: ({ input }) => ({
+    id: input.resourceId,
+    kind: input.resourceType,
+    relayId: input.relayId,
+  }),
+})
+
+export const updateResourceAccess = createServerFn({ method: "POST" })
+  .validator(updateAccessSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(updateAccess, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+async function updateResourceAccessHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof updateAccessSchema>
+) {
+  const result = await runAppEffect(
+    "access.update",
+    accessPolicyTransaction("access.update", (tx) =>
+      Effect.gen(function* () {
+        const actor = yield* lockAccessActorEffect(tx, user),
+          resource = yield* lockAccessScopeEffect(tx, data)
+        const now = yield* Clock.currentTimeMillis
+        const authority = yield* scopeAuthorityEffect(
+          tx,
+          actor,
+          data,
+          "access.manage"
+        )
+        const rows = yield* tx.queryRows<GrantRow>(
+          `SELECT * FROM ${databaseTable("access_grant")} WHERE id = ? AND relay_id = ? AND resource_type = ? AND resource_id = ? FOR UPDATE`,
+          [data.id, ...scopeValues(data)]
+        )
+        const grant = rows[0]
+        if (!grant) return yield* Effect.fail(new Error("Access not found"))
+        if (resource.owner_id === grant.user_id)
+          return yield* Effect.fail(
+            new Error("Transfer ownership before changing the owner's access")
+          )
+        if (Number(grant.revision) !== data.revision)
+          return yield* Effect.fail(
+            new Error("This access changed; refresh before saving")
+          )
+        if (!data.revoke) {
+          const oldSelections = yield* tx.queryRows<SelectionRow>(
+            `SELECT selection_kind, selection_key FROM ${databaseTable("access_selection")} WHERE access_id = ?`,
+            [grant.id]
+          )
+          const oldPresets = yield* tx.queryRows<AssignmentRow>(
+            `SELECT preset_id, builtin_key FROM ${databaseTable("access_preset")} WHERE access_id = ?`,
+            [grant.id]
+          )
+          const previous = yield* resolveAssignmentEffect(
+            tx,
+            data,
+            {
+              selections: oldSelections.map((s) => ({
+                kind: s.selection_kind,
+                key: s.selection_key,
+              })),
+              presetIds: oldPresets.flatMap((p) =>
+                p.preset_id ? [p.preset_id] : []
               ),
-            catch: (cause) =>
-              cause instanceof Error
-                ? cause
-                : new Error("Invalid permission selection"),
-          })
-          let previous: Array<PermissionSelection> = []
-          if (data.id) {
-            const rows = yield* tx.queryRows<PresetRow>(
-              `SELECT id, revision FROM ${databaseTable("permission_preset")} WHERE id = ? AND relay_id = ? AND resource_type = ? AND resource_id = ? FOR UPDATE`,
-              [data.id, ...scopeValues(data)]
-            )
-            if (!rows[0])
-              return yield* Effect.fail(new Error("Preset not found"))
-            if (Number(rows[0].revision) !== data.revision)
-              return yield* Effect.fail(
-                new Error("This preset changed; refresh before saving")
-              )
-            const selections = yield* tx.queryRows<SelectionRow>(
-              `SELECT selection_kind, selection_key FROM ${databaseTable("preset_selection")} WHERE preset_id = ?`,
-              [data.id]
-            )
-            previous = selections.map((row) => ({
-              kind: row.selection_kind,
-              key: row.selection_key,
-            }))
-          }
+              builtinKeys: oldPresets.flatMap((p) =>
+                p.builtin_key ? [p.builtin_key] : []
+              ),
+            },
+            { stored: true }
+          )
+          const proposed = yield* resolveAssignmentEffect(tx, data, data)
           yield* Effect.try({
-            try: () =>
-              assertDelegation(
-                authority,
-                proposed,
-                expandStoredSelections(
-                  previous,
-                  data.resourceType,
-                  capabilities
-                )
-              ),
+            try: () => assertDelegation(authority, proposed, previous),
             catch: (cause) =>
               cause instanceof Error
                 ? cause
                 : new Error("You cannot grant the selected permissions"),
           })
-          const id = data.id ?? randomUUID()
-          const now = yield* Clock.currentTimeMillis
-          if (data.id)
-            yield* tx.execute(
-              `UPDATE ${databaseTable("permission_preset")} SET name = ?, revision = revision + 1, updated_by = ?, updated_at = ? WHERE id = ?`,
-              [data.name, actor.id, now, id]
-            )
-          else
-            yield* tx.execute(
-              `INSERT INTO ${databaseTable("permission_preset")} (id, relay_id, resource_type, resource_id, name, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                id,
-                ...scopeValues(data),
-                data.name,
-                actor.id,
-                actor.id,
-                now,
-                now,
-              ]
-            )
-          yield* tx.execute(
-            `DELETE FROM ${databaseTable("preset_selection")} WHERE preset_id = ?`,
-            [id]
-          )
-          for (const selection of new Map(
-            data.selections.map((item) => [`${item.kind}:${item.key}`, item])
-          ).values())
-            yield* tx.execute(
-              `INSERT INTO ${databaseTable("preset_selection")} (preset_id, selection_kind, selection_key) VALUES (?, ?, ?)`,
-              [id, selection.kind, selection.key]
-            )
-          const affected = yield* tx.queryRows<GrantRow>(
-            `SELECT DISTINCT g.user_id FROM ${databaseTable("access_preset")} a JOIN ${databaseTable("access_grant")} g ON g.id = a.access_id WHERE a.preset_id = ? AND g.state = 'active' ORDER BY g.user_id`,
-            [id]
-          )
-          for (const row of affected)
-            yield* advanceScopeAccessEffect(tx, row.user_id, data)
-          yield* auditAccessEffect(
+          yield* writeAccessAssignmentEffect(tx, grant.id, data, actor.id)
+        } else {
+          yield* cancelPendingInvitationsEffect(
             tx,
+            grant.user_id,
+            grant.id,
             actor.id,
-            data.id ? "access.preset.updated" : "access.preset.created",
-            { presetId: id, scope: data, affected: affected.length }
+            now
           )
-          return { id, userIds: affected.map((row) => row.user_id) }
-        })
-      )
-    )
-    await publishResourceAccessChange(result.userIds, [data.relayId])
-    return { id: result.id }
-  })
-
-export const deletePermissionPreset = createServerFn({ method: "POST" })
-  .validator(
-    resourceScopeSchema.extend({
-      id: z.uuid(),
-      revision: z.number().int().positive(),
-    })
-  )
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    await runAppEffect(
-      "access.preset.delete",
-      accessPolicyTransaction("access.preset.delete", (tx) =>
-        Effect.gen(function* () {
-          const actor = yield* lockAccessActorEffect(tx, user)
-          yield* lockAccessScopeEffect(tx, data)
-          yield* scopeAuthorityEffect(tx, actor, data, "preset.manage")
-          const used = yield* tx.queryRows<RowDataPacket>(
-            `SELECT a.id FROM ${databaseTable("access_preset")} a JOIN ${databaseTable("access_grant")} g ON g.id = a.access_id WHERE a.preset_id = ? AND g.state <> 'revoked' LIMIT 1`,
-            [data.id]
-          )
-          if (used.length)
-            return yield* Effect.fail(
-              new Error(
-                "Remove this preset from its assignments before deleting it"
-              )
-            )
-          yield* tx.execute(
-            `DELETE a FROM ${databaseTable("access_preset")} a JOIN ${databaseTable("access_grant")} g ON g.id = a.access_id WHERE a.preset_id = ? AND g.state = 'revoked'`,
-            [data.id]
-          )
-          const result = yield* tx.execute(
-            `DELETE FROM ${databaseTable("permission_preset")} WHERE id = ? AND relay_id = ? AND resource_type = ? AND resource_id = ? AND revision = ?`,
-            [data.id, ...scopeValues(data), data.revision]
-          )
-          if (!result.affectedRows)
-            return yield* Effect.fail(
-              new Error("Preset changed or no longer exists")
-            )
-          yield* auditAccessEffect(tx, actor.id, "access.preset.deleted", {
-            presetId: data.id,
-            scope: data,
-          })
-        })
-      )
-    )
-    await publishResourceAccessChange([], [data.relayId])
-    return { deleted: true }
-  })
-
-export const updateResourceAccess = createServerFn({ method: "POST" })
-  .validator(
-    resourceScopeSchema.extend(assignmentSchema.shape).extend({
-      id: z.uuid(),
-      revision: z.number().int().positive(),
-      revoke: z.boolean().default(false),
-    })
-  )
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const result = await runAppEffect(
-      "access.update",
-      accessPolicyTransaction("access.update", (tx) =>
-        Effect.gen(function* () {
-          const actor = yield* lockAccessActorEffect(tx, user),
-            resource = yield* lockAccessScopeEffect(tx, data)
-          const now = yield* Clock.currentTimeMillis
-          const authority = yield* scopeAuthorityEffect(
-            tx,
-            actor,
-            data,
-            "access.manage"
-          )
-          const rows = yield* tx.queryRows<GrantRow>(
-            `SELECT * FROM ${databaseTable("access_grant")} WHERE id = ? AND relay_id = ? AND resource_type = ? AND resource_id = ? FOR UPDATE`,
-            [data.id, ...scopeValues(data)]
-          )
-          const grant = rows[0]
-          if (!grant) return yield* Effect.fail(new Error("Access not found"))
-          if (resource.owner_id === grant.user_id)
-            return yield* Effect.fail(
-              new Error("Transfer ownership before changing the owner's access")
-            )
-          if (Number(grant.revision) !== data.revision)
-            return yield* Effect.fail(
-              new Error("This access changed; refresh before saving")
-            )
-          if (!data.revoke) {
-            const oldSelections = yield* tx.queryRows<SelectionRow>(
-              `SELECT selection_kind, selection_key FROM ${databaseTable("access_selection")} WHERE access_id = ?`,
-              [grant.id]
-            )
-            const oldPresets = yield* tx.queryRows<AssignmentRow>(
-              `SELECT preset_id, builtin_key FROM ${databaseTable("access_preset")} WHERE access_id = ?`,
-              [grant.id]
-            )
-            const previous = yield* resolveAssignmentEffect(
-              tx,
-              data,
-              {
-                selections: oldSelections.map((s) => ({
-                  kind: s.selection_kind,
-                  key: s.selection_key,
-                })),
-                presetIds: oldPresets.flatMap((p) =>
-                  p.preset_id ? [p.preset_id] : []
-                ),
-                builtinKeys: oldPresets.flatMap((p) =>
-                  p.builtin_key ? [p.builtin_key] : []
-                ),
-              },
-              { stored: true }
-            )
-            const proposed = yield* resolveAssignmentEffect(tx, data, data)
-            yield* Effect.try({
-              try: () => assertDelegation(authority, proposed, previous),
-              catch: (cause) =>
-                cause instanceof Error
-                  ? cause
-                  : new Error("You cannot grant the selected permissions"),
-            })
-            yield* writeAccessAssignmentEffect(tx, grant.id, data, actor.id)
-          } else {
-            yield* cancelPendingInvitationsEffect(
-              tx,
-              grant.user_id,
-              grant.id,
-              actor.id,
-              now
-            )
-          }
-          yield* tx.execute(
-            `UPDATE ${databaseTable("access_grant")} SET state = ?, revision = revision + 1, updated_at = ? WHERE id = ?`,
-            [data.revoke ? "revoked" : grant.state, now, grant.id]
-          )
-          yield* advanceScopeAccessEffect(tx, grant.user_id, data)
-          yield* auditAccessEffect(
-            tx,
-            actor.id,
-            data.revoke ? "access.revoked" : "access.updated",
-            { userId: grant.user_id, accessId: grant.id, scope: data }
-          )
-          const remaining = data.revoke
-            ? effectiveScopePermissions(
-                yield* loadResourceGrantsEffect(
-                  grant.user_id,
-                  data.relayId,
-                  tx,
-                  data
-                ),
+        }
+        yield* tx.execute(
+          `UPDATE ${databaseTable("access_grant")} SET state = ?, revision = revision + 1, updated_at = ? WHERE id = ?`,
+          [data.revoke ? "revoked" : grant.state, now, grant.id]
+        )
+        yield* advanceScopeAccessEffect(tx, grant.user_id, data)
+        yield* auditAccessEffect(
+          tx,
+          actor.id,
+          data.revoke ? "access.revoked" : "access.updated",
+          { userId: grant.user_id, accessId: grant.id, scope: data }
+        )
+        const remaining = data.revoke
+          ? effectiveScopePermissions(
+              yield* loadResourceGrantsEffect(
+                grant.user_id,
+                data.relayId,
+                tx,
                 data
-              ).size > 0
-            : false
-          // Cancelling a pending invitation or trimming a grant that broader
-          // access still covers takes nothing away from the user.
-          const removed = data.revoke && grant.state === "active" && !remaining
-          if (removed)
-            yield* notifyUsersEffect(
-              [grant.user_id],
-              `access.removed:${grant.id}:${Number(grant.revision) + 1}`,
-              {
-                actorName: user.name,
-                kind: "access.removed",
-                resource: {
-                  id: data.resourceId,
-                  name: resource.name ?? data.resourceId,
-                  relayId: data.relayId,
-                  type: data.resourceType,
-                },
+              ),
+              data
+            ).size > 0
+          : false
+        // Cancelling a pending invitation or trimming a grant that broader
+        // access still covers takes nothing away from the user.
+        const removed = data.revoke && grant.state === "active" && !remaining
+        if (removed)
+          yield* notifyUsersEffect(
+            [grant.user_id],
+            `access.removed:${grant.id}:${Number(grant.revision) + 1}`,
+            {
+              actorName: user.name,
+              kind: "access.removed",
+              resource: {
+                id: data.resourceId,
+                name: resource.name ?? data.resourceId,
+                relayId: data.relayId,
+                type: data.resourceType,
               },
-              // Removing your own access tells you nothing new.
-              { actorUserId: user.id }
-            )
-          return {
-            userId: grant.user_id,
-            inheritedAccessRemains: remaining,
-            removed,
-          }
-        })
-      )
+            },
+            // Removing your own access tells you nothing new.
+            { actorUserId: user.id }
+          )
+        return {
+          userId: grant.user_id,
+          inheritedAccessRemains: remaining,
+          removed,
+        }
+      })
     )
-    await publishResourceAccessChange([result.userId], [data.relayId])
-    // Revoking removes access or cancels a pending invitation.
-    if (data.revoke) publishNotificationChange([result.userId])
-    return result
-  })
+  )
+  await publishResourceAccessChange([result.userId], [data.relayId])
+  // Revoking removes access or cancels a pending invitation.
+  if (data.revoke) publishNotificationChange([result.userId])
+  return result
+}
 
 // Inheritance must be filtered before pagination. Cache the catalog's transitive
 // read selectors once per child kind; preset contents remain live SQL lookups.

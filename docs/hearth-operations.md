@@ -151,7 +151,12 @@ last 30 days.
 3. Make it durable only when it has steps that must survive a restart.
    Write each step so it's safe to run again.
 4. Run Kiln's promise code from an operation through `promiseEffect`, so
-   what it starts stays inside the operation.
+   what it starts stays inside the operation. Pass it the person the
+   operation runs for: it mustn't read the request's session itself.
+5. Every mutating server function runs an operation.
+   `server/auth-coverage.test.ts` checks each reaches `runOperationPromise`
+   or `startDurableOperation`. Those not moved yet are listed there, and the
+   list only shrinks.
 
 For a step several features share that must not interleave with itself,
 such as a DNS update, `inLanes(name, doing, locks, effect)` runs it as an

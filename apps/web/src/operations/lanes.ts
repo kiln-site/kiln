@@ -100,6 +100,22 @@ export const resourceKey = (
 ) => `${kind}:${relayId}/${id}`
 
 /**
+ * Who may do what on a game server, database, App, or Relay: its people,
+ * invitations and owner.
+ */
+export const accessKey = (
+  kind: "app" | "database" | "instance" | "relay",
+  relayId: string,
+  id: string
+) =>
+  kind === "relay"
+    ? `relay:${relayId}#access`
+    : partKey(resourceKey(kind, relayId, id), "access")
+
+/** A person's account and what they may do. */
+export const userKey = (id: string) => `user:${id}`
+
+/**
  * A part of something with a key of its own, such as a game server's DNS
  * (`instance:<relay>/<id>#dns`). Taking a part also takes the whole shared,
  * so taking the whole exclusively waits for, or turns away, every part.

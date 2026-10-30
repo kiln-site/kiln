@@ -4,11 +4,17 @@ import type { RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 
 import { Database } from "@/effect/database"
-import { runAppEffect } from "@/effect/runtime"
+import { promiseEffect } from "@/effect/promise"
 import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { advanceSubjectAcrossEnabledRelaysEffect } from "@/lib/authorization-revision"
 import { databaseTable } from "@/lib/database-config"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { exclusive, userKey } from "@/operations/lanes"
+import {
+  operation,
+  platformAdministrator,
+  runOperationPromise,
+} from "@/operations/operation"
 import {
   assertRequestRateLimit,
   requestClientAddress,
@@ -71,20 +77,19 @@ export const getUserAccess = createServerFn({ method: "GET" })
     getUserAccessHandler(await requireEligibleResourceUser(), data.userId)
   )
 
-export const setUserStatus = createServerFn({ method: "POST" })
-  .validator(
-    subjectSchema.extend({
-      status: z.enum(["enabled", "disabled"]),
-      reason: z.string().trim().max(1000).optional(),
-    })
-  )
-  .handler(async ({ data }) => {
-    const actor = await requireEligibleResourceUser()
-    if (actor.role !== "admin")
-      throw new Error("Platform administrator required")
-    const change = await runAppEffect(
-      "users.status",
-      Effect.gen(function* () {
+const userStatusSchema = subjectSchema.extend({
+  status: z.enum(["enabled", "disabled"]),
+  reason: z.string().trim().max(1000).optional(),
+})
+
+const changeUserStatus = operation<z.infer<typeof userStatusSchema>>()({
+  name: "user.status",
+  doing: "Changing this person's account",
+  authorize: ({ user }) => platformAdministrator(user),
+  locks: ({ input }) => [exclusive(userKey(input.userId))],
+  run: ({ input: data, context: actor }) =>
+    Effect.gen(function* () {
+      const change = yield* Effect.gen(function* () {
         const database = yield* Database
         return yield* database.transaction("users.status", (transaction) =>
           Effect.gen(function* () {
@@ -130,7 +135,7 @@ export const setUserStatus = createServerFn({ method: "POST" })
             const now = yield* Clock.currentTimeMillis
             yield* transaction.execute(
               `UPDATE ${databaseTable("user")} SET status = ?, statusChangedAt = ?,
-             statusChangedBy = ?, statusReason = ?, statusExpiresAt = NULL, updatedAt = ? WHERE id = ?`,
+           statusChangedBy = ?, statusReason = ?, statusExpiresAt = NULL, updatedAt = ? WHERE id = ?`,
               [
                 data.status,
                 new Date(now),
@@ -161,20 +166,30 @@ export const setUserStatus = createServerFn({ method: "POST" })
           })
         )
       })
-    )
-    await publishUserChange(data.userId, change?.relayIds ?? [])
-    return { status: data.status }
-  })
+      yield* promiseEffect(() =>
+        publishUserChange(data.userId, change?.relayIds ?? [])
+      )
+      return { status: data.status }
+    }),
+  audit: ({ input }) => ({ id: input.userId, kind: "user" }),
+})
 
-export const manuallyVerifyUser = createServerFn({ method: "POST" })
-  .validator(subjectSchema)
-  .handler(async ({ data }) => {
-    const actor = await requireEligibleResourceUser()
-    if (actor.role !== "admin")
-      throw new Error("Platform administrator required")
-    const change = await runAppEffect(
-      "users.verify",
-      Effect.gen(function* () {
+export const setUserStatus = createServerFn({ method: "POST" })
+  .validator(userStatusSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(changeUserStatus, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+const verifyUser = operation<z.infer<typeof subjectSchema>>()({
+  name: "user.verify",
+  doing: "Changing this person's account",
+  authorize: ({ user }) => platformAdministrator(user),
+  locks: ({ input }) => [exclusive(userKey(input.userId))],
+  run: ({ input: data, context: actor }) =>
+    Effect.gen(function* () {
+      const change = yield* Effect.gen(function* () {
         const database = yield* Database
         return yield* database.transaction("users.verify", (transaction) =>
           Effect.gen(function* () {
@@ -203,7 +218,7 @@ export const manuallyVerifyUser = createServerFn({ method: "POST" })
             const now = yield* Clock.currentTimeMillis
             yield* transaction.execute(
               `UPDATE ${databaseTable("user")} SET manuallyVerifiedAt = ?,
-             manuallyVerifiedBy = ?, updatedAt = ? WHERE id = ?`,
+           manuallyVerifiedBy = ?, updatedAt = ? WHERE id = ?`,
               [new Date(now), actor.id, new Date(now), data.userId]
             )
             yield* transaction.execute(
@@ -218,24 +233,46 @@ export const manuallyVerifyUser = createServerFn({ method: "POST" })
           })
         )
       })
-    )
-    await publishUserChange(data.userId, change?.relayIds ?? [])
-    return { verified: true }
-  })
+      yield* promiseEffect(() =>
+        publishUserChange(data.userId, change?.relayIds ?? [])
+      )
+      return { verified: true as const }
+    }),
+  audit: ({ input }) => ({ id: input.userId, kind: "user" }),
+})
+
+export const manuallyVerifyUser = createServerFn({ method: "POST" })
+  .validator(subjectSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(verifyUser, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+const issueClaim = operation<z.infer<typeof subjectSchema>>()({
+  name: "user.claim.issue",
+  doing: "Changing this person's account",
+  authorize: ({ user }) => platformAdministrator(user),
+  locks: ({ input }) => [exclusive(userKey(input.userId))],
+  run: ({ context: actor, input }) =>
+    promiseEffect(async () => {
+      const { issueManualAccountClaim } = await import("@/lib/account-claims")
+      return issueManualAccountClaim({
+        userId: input.userId,
+        actorId: actor.id,
+        developmentBypass: actor.isDevelopmentBypass,
+      })
+    }),
+  audit: ({ input }) => ({ id: input.userId, kind: "user" }),
+})
 
 export const issueAccountClaim = createServerFn({ method: "POST" })
   .validator(subjectSchema)
-  .handler(async ({ data }) => {
-    const actor = await requireEligibleResourceUser()
-    if (actor.role !== "admin")
-      throw new Error("Platform administrator required")
-    const { issueManualAccountClaim } = await import("@/lib/account-claims")
-    return issueManualAccountClaim({
-      userId: data.userId,
-      actorId: actor.id,
-      developmentBypass: actor.isDevelopmentBypass,
+  .handler(async ({ data }) =>
+    runOperationPromise(issueClaim, data, {
+      user: await requireEligibleResourceUser(),
     })
-  })
+  )
 
 export const requestAccountClaim = createServerFn({ method: "POST" })
   .validator(
