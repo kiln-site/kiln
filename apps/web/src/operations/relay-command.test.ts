@@ -1,5 +1,4 @@
 import { assert, layer } from "@effect/vitest"
-import { exclusive } from "@workspace/operations"
 import { Effect, Layer, Schedule, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
@@ -10,7 +9,7 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay } from "@/test/seed"
 
 import { durableOperation, startDurableOperation } from "./durable"
-import { loadOperation } from "./lanes"
+import { loadOperation } from "./records"
 import { RelayCommandError, relayCommand } from "./relay-command"
 import { testOperationsEngine } from "./test/engine"
 
@@ -90,7 +89,6 @@ const start = durableOperation({
   error: RelayCommandError,
   input: Schema.Struct({ server: Schema.String }),
   kind: "test.start",
-  locks: ({ server }) => [exclusive(`instance:${server}`)],
   run: ({ server }) =>
     relayCommand({
       name: "start",

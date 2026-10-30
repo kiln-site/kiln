@@ -2,7 +2,6 @@ import {
   relayBrowserAuthorizationReviseMaxItems,
   relayBrowserCapabilityV2Feature,
 } from "@workspace/contracts"
-import { exclusive } from "@workspace/operations"
 import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect } from "effect"
 import { z } from "zod"
@@ -21,29 +20,20 @@ import {
   advanceSubjectAcrossEnabledRelaysEffect,
   type AuthorizationScope,
 } from "@/lib/authorization-revision"
-import { quickOperation, runOperation } from "@/operations/run"
+import { serialized } from "@/operations/serialized"
 
 // What a Relay holds of who may do what reaches it in its own lane, one
 // change at a time, apart from the resources it guards: a revocation never
 // waits behind a long change to a server.
-const inAuthorizationLane = (() => {
-  const kinds = new Map<string, ReturnType<typeof quickOperation<string>>>()
-  return <A>(kind: string, relayId: string, run: () => Promise<A>) => {
-    let operation = kinds.get(kind)
-    if (!operation) {
-      operation = quickOperation<string>({
-        kind,
-        locks: (relay) => [exclusive(`authorization:${relay}`)],
-        version: 1,
-      })
-      kinds.set(kind, operation)
-    }
-    return runAppEffect(
-      kind,
-      runOperation(operation, relayId, promiseEffect(run))
-    )
-  }
-})()
+const inAuthorizationLane = <A>(
+  kind: string,
+  relayId: string,
+  run: () => Promise<A>
+) =>
+  runAppEffect(
+    kind,
+    serialized(kind, [`authorization:${relayId}`], promiseEffect(run))
+  )
 
 interface PendingDeliveryRow extends RowDataPacket {
   desired_revision: string

@@ -10,7 +10,7 @@ import {
 } from "@/server/kiln-database-dump.server"
 import { databaseTableName } from "@/lib/database-config"
 import { operationsTablePrefix } from "@/operations/engine"
-import { operationTables } from "@/operations/lanes"
+import { operationTables } from "@/operations/records"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertBackup, insertUser } from "@/test/seed"
 

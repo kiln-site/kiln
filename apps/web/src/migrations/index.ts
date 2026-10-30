@@ -44,6 +44,7 @@ import { scheduleProjectionGenerations } from "./0043_schedule_projection_genera
 import { resourceDeletions } from "./0044_resource_deletions"
 import { backupBatches } from "./0045_backup_batches"
 import { scheduleAppTargets } from "./0046_schedule_app_targets"
+import { simpleOperations } from "./0047_simple_operations"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -91,4 +92,5 @@ export const migrations: ReadonlyArray<Migration> = [
   resourceDeletions,
   backupBatches,
   scheduleAppTargets,
+  simpleOperations,
 ]

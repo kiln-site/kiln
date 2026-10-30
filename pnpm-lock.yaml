@@ -336,9 +336,6 @@ importers:
       '@workspace/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@workspace/operations':
-        specifier: workspace:*
-        version: link:../../packages/operations
       '@workspace/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry

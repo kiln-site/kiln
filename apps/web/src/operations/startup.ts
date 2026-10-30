@@ -4,30 +4,20 @@ import { forkAppWorker } from "@/effect/runtime"
 
 import { dispatchDurableOperations } from "./durable"
 import { OperationsEngineService } from "./engine-service"
-import {
-  DRIVER_HEARTBEAT,
-  forgetFinishedOperations,
-  heartbeatDriver,
-  recoverOperations,
-  retireDriver,
-  undispatchedOperations,
-} from "./lanes"
+import { forgetFinishedOperations, undispatchedOperations } from "./records"
 
 // Finished operations are kept this long, for their timings and for Relay
 // commands whose outcomes might still be checked against them.
 const RETENTION = "30 days"
 
-// Every so often, the work of a Hearth whose heartbeat stopped is taken
-// over, and a durable operation granted but not started, as one whose start
-// failed while MySQL or the engine was away, is started.
-const SWEEP = "15 seconds"
+// Every so often, a durable operation recorded but whose workflow didn't
+// start, as when Hearth stopped between the two or the engine was away, is
+// started. Workflows that started resume with the engine.
+const SWEEP = "1 minute"
 
 // Runs `effect` every `interval` for as long as Hearth runs, whatever one
 // run does short of Hearth stopping, so one failure, even a defect such as
 // the engine failing to build, stops none of the others.
-const untraced = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.withTracerEnabled(effect, false)
-
 const every = <E, R>(
   interval: Duration.Input,
   label: string,
@@ -44,29 +34,13 @@ const every = <E, R>(
 
 /**
  * Starts the operations engine with Hearth, so work a previous Hearth left
- * unfinished resumes without waiting for a request to need the engine. Each
- * part runs on its own: this Hearth's heartbeat and taking over a stopped
- * Hearth's work need only MySQL, so they go on while the engine can't start;
- * starting granted durable work tries the engine again each time; finished
- * operations are forgotten past their retention. Stopping, it says so, so
- * the next Hearth needn't wait.
+ * unfinished resumes without waiting for a request to need the engine, and
+ * forgets finished operations past their retention.
  */
 export function startOperationsEngine(): void {
   forkAppWorker(
     Effect.all(
       [
-        // Checks that find nothing to do leave no trace; work they find
-        // does, and recovery logs what it took over.
-        every(
-          DRIVER_HEARTBEAT,
-          "Operations heartbeat failed",
-          untraced(heartbeatDriver())
-        ),
-        every(
-          SWEEP,
-          "Operations recovery failed",
-          untraced(recoverOperations())
-        ),
         every(
           SWEEP,
           "Operations engine not started yet",
@@ -74,8 +48,14 @@ export function startOperationsEngine(): void {
             const { engine } = yield* OperationsEngineService
             // Traced: workflows built with it keep the context it's built in.
             yield* engine
-            const granted = yield* untraced(undispatchedOperations())
-            if (granted.length > 0) yield* dispatchDurableOperations(granted)
+            // A sweep that finds nothing to do leaves no trace.
+            const undispatched = yield* Effect.withTracerEnabled(
+              undispatchedOperations(),
+              false
+            )
+            if (undispatched.length > 0) {
+              yield* dispatchDurableOperations(undispatched)
+            }
           })
         ),
         every(
@@ -85,6 +65,6 @@ export function startOperationsEngine(): void {
         ),
       ],
       { concurrency: "unbounded", discard: true }
-    ).pipe(Effect.ensuring(retireDriver().pipe(Effect.ignore)), Effect.ignore)
+    ).pipe(Effect.ignore)
   )
 }

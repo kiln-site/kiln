@@ -1,6 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
 import { relayDatabaseNetworkImportResultSchema } from "@workspace/contracts"
-import { exclusive } from "@workspace/operations"
 import { Clock, Effect } from "effect"
 
 import { Database } from "@/effect/database"
@@ -12,7 +11,7 @@ import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import { loadPersistedRelay, type PersistedRelay } from "@/lib/relay-registry"
-import { quickOperation, runOperation } from "@/operations/run"
+import { serialized } from "@/operations/serialized"
 
 // Relays keep every database connection, Apps' too. Apps' used to be kept
 // in their configs (`databaseIds`); Hearth hands those to each Relay, then
@@ -45,13 +44,6 @@ declare global {
 // Relays whose handover this process has seen complete, so the check costs
 // nothing after.
 const finished = (globalThis.kilnDatabaseConnectionImports ??= new Set())
-
-// One handover per Relay at a time, across every Hearth process.
-const handover = quickOperation<string>({
-  kind: "apps.databaseConnections.import",
-  locks: (relayId) => [exclusive(`database-connections:${relayId}`)],
-  version: 1,
-})
 
 interface ImportRow extends RowDataPacket {
   configs_cleared_at: number | null
@@ -123,7 +115,12 @@ const handOverInLane = (relay: PersistedRelay) =>
   Effect.suspend(() =>
     finished.has(relay.id)
       ? Effect.succeed({ unreadable: [] as ReadonlyArray<string> })
-      : runOperation(handover, relay.id, handOver(relay)).pipe(
+      : // One handover per Relay at a time.
+        serialized(
+          "apps.databaseConnections.import",
+          [`database-connections:${relay.id}`],
+          handOver(relay)
+        ).pipe(
           Effect.tap(({ unreadable }) =>
             Effect.sync(() => {
               if (unreadable.length === 0) finished.add(relay.id)

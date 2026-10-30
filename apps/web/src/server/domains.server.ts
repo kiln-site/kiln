@@ -130,8 +130,7 @@ function withInstanceDomainLock<A, E, R>(
     readonly instanceId: string
     readonly relayId: string
   }>,
-  effect: Effect.Effect<A, E, R>,
-  actorId: string | null = null
+  effect: Effect.Effect<A, E, R>
 ) {
   return withDnsChange(
     kind,
@@ -140,8 +139,7 @@ function withInstanceDomainLock<A, E, R>(
       resourceId: instanceId,
       resourceType: "instance" as const,
     })),
-    effect,
-    actorId
+    effect
   )
 }
 
@@ -241,8 +239,7 @@ export async function createInstanceDomainHandler(
                 false
               )
             )
-          ),
-          user.id
+          )
         ).pipe(
           Effect.catchTag("HostnameInUseError", (error) =>
             explainHostnameInUseEffect(user, error)
@@ -287,8 +284,7 @@ export async function updateInstanceDomainHandler(
             { ...instance, relayId: scope.relayId },
             data,
             domainActor(user)
-          ),
-          user.id
+          )
         ).pipe(
           Effect.catchTag("HostnameInUseError", (error) =>
             explainHostnameInUseEffect(user, error)

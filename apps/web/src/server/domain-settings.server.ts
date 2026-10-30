@@ -6,7 +6,6 @@ import {
   relayProxyConfigurationV1Feature,
   relaySnapshotSchema,
 } from "@workspace/contracts"
-import { exclusive } from "@workspace/operations"
 import { Effect } from "effect"
 
 import { listCloudflareZonesEffect } from "@/effect/cloudflare-api"
@@ -45,7 +44,7 @@ import { relayJsonEffect } from "@/lib/relay-client"
 import { shortIdRouteIdentifier } from "@/lib/short-id-route"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceAccess } from "@/server/domain-resource-access.server"
-import { quickOperation, runOperation } from "@/operations/run"
+import { serialized } from "@/operations/serialized"
 import { requireFastReservedPatterns } from "@/server/reserved-names"
 import {
   invalidateManagedDomainAddressesEffect,
@@ -398,19 +397,7 @@ function zoneNameFor(
 // Saving or removing a Cloudflare connection holds it, so two changes to
 // one connection, its token and domains, don't interleave. Reading its
 // zones needs no lock.
-const connectionLocks = ({ connectionId }: { connectionId: string }) => [
-  exclusive(`connection:${connectionId}`),
-]
-const saveConnection = quickOperation({
-  kind: "dns.connection.save",
-  locks: connectionLocks,
-  version: 1,
-})
-const deleteConnection = quickOperation({
-  kind: "dns.connection.delete",
-  locks: connectionLocks,
-  version: 1,
-})
+const connectionKey = (connectionId: string) => `connection:${connectionId}`
 
 /** The zones a pasted token, or a saved connection's, can manage. */
 export async function discoverCloudflareDomainsHandler(
@@ -513,9 +500,9 @@ export async function saveDomainConnectionHandler(
   requireFastReservedPatterns(blacklistPatterns)
   await runAppEffect(
     "domains.connection.save",
-    runOperation(
-      saveConnection,
-      { connectionId: id },
+    serialized(
+      "dns.connection.save",
+      [connectionKey(id)],
       saveDomainConnectionEffect({
         apiToken: data.apiToken,
         blacklistPatterns,
@@ -525,8 +512,7 @@ export async function saveDomainConnectionHandler(
         name: data.name,
         ownerId,
         zones,
-      }).pipe(Effect.andThen(invalidateManagedDomainAddressesEffect)),
-      { actorId: user.id }
+      }).pipe(Effect.andThen(invalidateManagedDomainAddressesEffect))
     )
   )
   publishDomainChange()
@@ -549,14 +535,13 @@ export async function deleteDomainConnectionHandler(
   if (!existing || !canManageConnection(user, existing.connection)) return
   await runAppEffect(
     "domains.connection.delete",
-    runOperation(
-      deleteConnection,
-      { connectionId: data.id },
+    serialized(
+      "dns.connection.delete",
+      [connectionKey(data.id)],
       requireConnectionUnusedEffect(data.id).pipe(
         Effect.andThen(deleteDomainConnectionEffect(data.id)),
         Effect.andThen(invalidateManagedDomainAddressesEffect)
-      ),
-      { actorId: user.id }
+      )
     )
   )
   publishDomainChange()

@@ -71,6 +71,9 @@ Before editing files for a substantial task:
   `apps/relay/src/operation-plans.ts`, and Relay-initiated work admits itself
   the same way, rather than adding a lock of its own. See
   [Relay operations](docs/relay-operations.md).
+- Hearth's long changes that must survive a restart are durable operations,
+  and short changes that mustn't interleave are `serialized`. See
+  [Hearth operations](docs/hearth-operations.md).
 - Hearth and every Relay run the same Kiln version. Don't build for mixed
   versions: no capability negotiation, feature flags for older peers,
   optional protocol fields kept for compatibility, or fallbacks for a peer

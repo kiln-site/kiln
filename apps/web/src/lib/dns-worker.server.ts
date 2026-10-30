@@ -12,8 +12,8 @@ import { reconcileDueWebHostnamesEffect } from "@/server/web-hostnames.server"
  * records Cloudflare refused or that a restart cut short, renames under
  * way, and deletes, from what MySQL holds. Requests do the work themselves
  * first; this is how it's finished whatever happened to them. Each
- * resource's attempt is a DNS change in Hearth's operation lanes, like a
- * request's, so the two never interleave (`dns-operations.ts`).
+ * resource's attempt is a serialized DNS change, like a request's, so the
+ * two never interleave (`dns-operations.ts`).
  */
 export function startDnsWorker(): void {
   startPollingWorker("Domains.dns", passDnsWorker)

@@ -1,4 +1,3 @@
-import type { LaneLock } from "@workspace/operations"
 import {
   Cause,
   Context,
@@ -6,6 +5,7 @@ import {
   Exit,
   Layer,
   Option,
+  Schedule,
   Schema,
   Tracer,
 } from "effect"
@@ -15,18 +15,16 @@ import { Database } from "@/effect/database"
 
 import { OperationsEngineService, withOperationsEngine } from "./engine-service"
 import {
-  admitOperation,
   finishOperation,
   loadOperation,
-  setGrantedHandler,
-  startOperation,
-} from "./lanes"
-import { errorOf, outcomeOf, whileMySqlIsAway } from "./run"
+  recordExecution,
+  recordOperation,
+  type OperationOutcome,
+} from "./records"
 
 /**
- * A kind of long change that survives a restart: admitted in line, then run
- * as a workflow once its locks are granted. Its finished steps are stored and
- * not run again; its locks are released when the workflow ends.
+ * A kind of long change that survives a restart: recorded, then run as a
+ * workflow whose finished steps are stored and not run again.
  */
 export interface DurableOperation<
   Input extends Schema.Top = Schema.Top,
@@ -37,7 +35,6 @@ export interface DurableOperation<
   readonly kind: string
   readonly version: number
   readonly input: Input
-  readonly locks: (input: Input["Type"]) => ReadonlyArray<LaneLock>
   readonly workflow: Workflow.Workflow<
     string,
     Schema.Struct<{ readonly operationId: Schema.String }>,
@@ -75,7 +72,6 @@ export const durableOperation = <
   readonly input: Input
   readonly success?: Success
   readonly error?: Failure
-  readonly locks: (input: Input["Type"]) => ReadonlyArray<LaneLock>
   readonly run: (
     input: Input["Type"],
     operation: { readonly id: string }
@@ -118,7 +114,7 @@ export const durableOperation = <
         )
       }).pipe(Effect.exit)
       // Waiting to resume, or stopped with Hearth: the workflow runs again
-      // later and keeps its locks until it ends.
+      // later, and ends then.
       if (
         Exit.isFailure(exit) &&
         Cause.hasInterruptsOnly(exit.cause) &&
@@ -141,7 +137,6 @@ export const durableOperation = <
     input: options.input,
     kind: options.kind,
     layer,
-    locks: options.locks,
     version: options.version,
     workflow: workflow as DurableOperation<
       Input,
@@ -158,9 +153,10 @@ export const durableOperation = <
 }
 
 /**
- * Admits a durable operation and returns its ID at once; it starts when its
- * locks are granted. With an idempotency key, starting it again returns the
- * same operation.
+ * Records a durable operation and starts its workflow, returning its ID.
+ * With an idempotency key, starting it again returns the same operation.
+ * Should the workflow not start, as while the engine can't, the operation
+ * stays recorded and startup's sweep starts it.
  */
 export const startDurableOperation = Effect.fn("Operations.start")(function* <
   Input extends Schema.Top,
@@ -178,22 +174,29 @@ export const startDurableOperation = Effect.fn("Operations.start")(function* <
   const encoded = yield* Schema.encodeUnknownEffect(
     Schema.toCodecJson(operation.input)
   )(input).pipe(Effect.orDie)
-  const admitted = yield* admitOperation({
+  const recorded = yield* recordOperation({
     actorId: options.actorId,
-    durable: true,
     idempotencyKey: options.idempotencyKey,
     input: encoded,
     kind: operation.kind,
-    locks: operation.locks(input),
     version: operation.version,
   })
-  return admitted.id
+  // Started off the caller's fiber, where the engine runs: all of Hearth,
+  // though not every test.
+  const engine = yield* Effect.serviceOption(OperationsEngineService)
+  if (Option.isSome(engine)) {
+    yield* dispatchDurableOperations([recorded.id]).pipe(
+      Effect.provideService(OperationsEngineService, engine.value),
+      Effect.forkDetach
+    )
+  }
+  return recorded.id
 })
 
 /**
- * Starts the workflow of each granted durable operation, once. A workflow
- * already started for it is found by the operation's ID, so starting again
- * after a restart is harmless.
+ * Starts the workflow of each running durable operation. A workflow already
+ * started for it is found by the operation's ID, so starting again after a
+ * restart is harmless.
  */
 export const dispatchDurableOperations = (
   ids: ReadonlyArray<string>
@@ -203,7 +206,7 @@ export const dispatchDurableOperations = (
 const dispatch = Effect.fnUntraced(
   function* (id: string) {
     const record = yield* loadOperation(id).pipe(Effect.orDie)
-    if (!record?.durable || record.state !== "granted") return
+    if (record?.state !== "running") return
     const operation = durableKinds.get(`${record.kind}@${record.version}`)
     if (!operation) {
       return yield* finishOperation(
@@ -219,11 +222,7 @@ const dispatch = Effect.fnUntraced(
       { discard: true }
     ) as Effect.Effect<string, never, WorkflowEngine.WorkflowEngine>
     const executionId = yield* withOperationsEngine(execute).pipe(Effect.orDie)
-    // A workflow quick enough to end before this is already recorded.
-    yield* startOperation(id, executionId).pipe(
-      Effect.catchTag("OperationEndedError", () => Effect.void),
-      Effect.orDie
-    )
+    yield* recordExecution(id, executionId).pipe(Effect.orDie)
   },
   (effect, id) =>
     effect.pipe(
@@ -236,25 +235,25 @@ const dispatch = Effect.fnUntraced(
     )
 )
 
-// A decision anywhere that grants a durable operation starts its workflow,
-// off the decision's own fiber, where the engine runs: all of Hearth, though
-// not every test. Otherwise startup's sweep starts it.
-setGrantedHandler((ids) =>
-  Effect.serviceOption(OperationsEngineService).pipe(
-    Effect.flatMap((engine) =>
-      Option.isNone(engine)
-        ? Effect.void
-        : dispatchDurableOperations(ids).pipe(
-            Effect.provideService(OperationsEngineService, engine.value),
-            // Traced whatever granted it, such as an untraced background
-            // check that took over a stopped Hearth's work.
-            Effect.withTracerEnabled(true),
-            Effect.forkDetach,
-            Effect.asVoid
-          )
-    )
-  )
-)
+/**
+ * Tries a write of the operation's own again until MySQL answers, backing
+ * off to every 30 seconds.
+ */
+export const whileMySqlIsAway = Schedule.min([
+  Schedule.exponential("1 second"),
+  Schedule.spaced("30 seconds"),
+])
+
+export function outcomeOf(exit: Exit.Exit<unknown, unknown>): OperationOutcome {
+  if (Exit.isSuccess(exit)) return "succeeded"
+  return Cause.hasInterruptsOnly(exit.cause) ? "interrupted" : "failed"
+}
+
+export function errorOf(exit: Exit.Exit<unknown, unknown>): string | undefined {
+  if (Exit.isSuccess(exit)) return undefined
+  const error = Cause.squash(exit.cause)
+  return error instanceof Error ? error.message : String(error)
+}
 
 // A step's own reads and writes of the operation are tried again until
 // MySQL answers (`whileMySqlIsAway`): a step that failed for it would end

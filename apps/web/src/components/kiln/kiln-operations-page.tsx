@@ -1,9 +1,8 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Lock, LockOpen, Workflow } from "lucide-react"
+import { Workflow } from "lucide-react"
 
 import { Badge } from "@workspace/ui/components/badge"
-import { Progress } from "@workspace/ui/components/progress"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { operationsOverviewQueryOptions } from "@/lib/operations-queries"
@@ -12,22 +11,19 @@ import type {
   OperationsOverview,
 } from "@/operations/overview.server"
 
-// Hearth's operation lanes for its operator: what runs now, what waits and
-// on what, and what ended last, with anything that failed or was cut off.
+// Hearth's durable operations for its operator: what runs now, and what
+// ended last, with anything that failed or was cut off.
 export function KilnOperationsPage() {
   const { data } = useQuery(operationsOverviewQueryOptions())
-  const overview: OperationsOverview = data ?? { active: [], recent: [] }
-  const running = overview.active.filter((item) => item.state !== "waiting")
-  const waiting = overview.active.filter((item) => item.state === "waiting")
+  const overview: OperationsOverview = data ?? { recent: [], running: [] }
   const attention = overview.recent.filter(
     (item) => item.state === "failed" || item.state === "interrupted"
   )
   return (
     <div className="min-h-0 flex-1 overflow-y-auto bg-card">
       <div className="mx-auto flex w-full max-w-[90rem] flex-col gap-5 px-3 py-3 sm:px-5 sm:py-5">
-        <dl className="grid grid-cols-3 overflow-hidden rounded-lg border border-border/65">
-          <Count label="Running" value={running.length} />
-          <Count label="Waiting" value={waiting.length} />
+        <dl className="grid grid-cols-2 overflow-hidden rounded-lg border border-border/65">
+          <Count label="Running" value={overview.running.length} />
           <Count
             label="Failed or cut off"
             tone={attention.length > 0 ? "destructive" : undefined}
@@ -35,9 +31,9 @@ export function KilnOperationsPage() {
           />
         </dl>
         <Section
-          empty="Nothing is running or waiting."
-          items={overview.active}
-          title="In the lanes"
+          empty="Nothing is running."
+          items={overview.running}
+          title="Running"
         />
         <Section
           empty="No operation has ended yet."
@@ -108,7 +104,6 @@ const OperationRow = React.memo(function OperationRow({
 }: {
   item: OperationView
 }) {
-  const ended = item.finishedAt !== null
   return (
     <li className="grid gap-1.5 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-x-4">
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -116,11 +111,6 @@ const OperationRow = React.memo(function OperationRow({
           {item.kind}
         </span>
         <StateBadge state={item.state} />
-        {item.durable ? (
-          <Badge variant="outline" className="type-meta h-4 px-1 font-mono">
-            durable
-          </Badge>
-        ) : null}
         <span className="type-meta text-muted-foreground">
           {item.actor ? item.actor.name : "Hearth"}
         </span>
@@ -128,63 +118,6 @@ const OperationRow = React.memo(function OperationRow({
       <span className="type-meta font-mono text-muted-foreground tabular-nums sm:row-span-2 sm:self-start sm:text-right">
         <Timing item={item} />
       </span>
-      {item.progress && !ended ? (
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="type-meta truncate text-foreground/90">
-            {item.progress.message}
-          </span>
-          {item.progress.total ? (
-            <Progress
-              aria-label={item.progress.message}
-              className="h-1 w-24 shrink-0"
-              value={
-                (100 * (item.progress.done ?? 0)) /
-                Math.max(item.progress.total, 1)
-              }
-            />
-          ) : null}
-        </div>
-      ) : null}
-      {item.waitingOn.length > 0 ? (
-        <p className="type-meta min-w-0 text-muted-foreground">
-          {item.waitingOn.map((reason, index) => (
-            <React.Fragment key={`${reason.operationId}:${reason.key}`}>
-              {index > 0 ? "; " : null}
-              {reason.holds ? "Behind " : "In line after "}
-              <span className="font-mono text-foreground/90">
-                {reason.kind}
-              </span>
-              {" on "}
-              <span className="font-mono">{reason.key}</span>
-            </React.Fragment>
-          ))}
-        </p>
-      ) : null}
-      {item.locks.length > 0 && !ended ? (
-        <div className="flex min-w-0 flex-wrap gap-1">
-          {item.locks.map((lock) => (
-            <Badge
-              key={lock.key}
-              variant="outline"
-              className={cn(
-                "type-meta h-5 gap-1 px-1.5 font-mono",
-                !lock.held && "border-dashed text-muted-foreground"
-              )}
-              title={`${lock.held ? "Holds" : "Wants"} ${lock.mode} ${lock.key}`}
-            >
-              {lock.held ? (
-                <Lock className="size-3" />
-              ) : (
-                <LockOpen className="size-3" />
-              )}
-              {lock.key}
-              {lock.mode === "shared" ? (
-                <span className="text-muted-foreground">shared</span>
-              ) : null}
-            </Badge>
-          ))}
-        </div>
-      ) : null}
       {item.error ? (
         <p className="type-meta min-w-0 break-words text-destructive">
           {item.error}
@@ -195,13 +128,11 @@ const OperationRow = React.memo(function OperationRow({
 })
 
 const stateLabels: Record<OperationView["state"], string> = {
-  cancelled: "Withdrawn",
+  cancelled: "Cancelled",
   failed: "Failed",
-  granted: "Starting",
   interrupted: "Cut off",
   running: "Running",
   succeeded: "Done",
-  waiting: "Waiting",
 }
 
 function StateBadge({ state }: { state: OperationView["state"] }) {
@@ -210,7 +141,7 @@ function StateBadge({ state }: { state: OperationView["state"] }) {
       variant={
         state === "failed" || state === "interrupted"
           ? "destructive"
-          : state === "running" || state === "granted"
+          : state === "running"
             ? "secondary"
             : "outline"
       }
@@ -221,27 +152,19 @@ function StateBadge({ state }: { state: OperationView["state"] }) {
   )
 }
 
-// How long it has waited or run so far, or how long it took once it ended.
+// How long it has run so far, or how long it took once it ended.
 function Timing({ item }: { item: OperationView }) {
   if (item.finishedAt !== null) {
-    const from = item.startedAt ?? item.admittedAt
     return (
       <>
-        took {formatElapsed(item.finishedAt - from)} ·{" "}
+        took {formatElapsed(item.finishedAt - item.createdAt)} ·{" "}
         <Ago at={item.finishedAt} />
-      </>
-    )
-  }
-  if (item.startedAt !== null) {
-    return (
-      <>
-        running <Since at={item.startedAt} />
       </>
     )
   }
   return (
     <>
-      waiting <Since at={item.admittedAt} />
+      running <Since at={item.createdAt} />
     </>
   )
 }

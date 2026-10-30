@@ -15,7 +15,7 @@ import { KilnDatabaseError } from "@/effect/errors"
 import { forkPromise } from "@/effect/promise"
 import { databaseConnectionConfig, databaseTable } from "@/lib/database-config"
 import { operationsTablePrefix } from "@/operations/engine"
-import { operationTables } from "@/operations/lanes"
+import { operationTables } from "@/operations/records"
 
 // Hearth's own database as a SQL file, read and written through Hearth's own
 // login. The file recreates every table from one consistent snapshot, so the

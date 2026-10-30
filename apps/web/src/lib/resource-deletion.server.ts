@@ -5,7 +5,6 @@ import {
   relaySnapshotSchema,
   relayVolumesSchema,
 } from "@workspace/contracts"
-import { exclusive, shared } from "@workspace/operations"
 import { Cause, Duration, Effect, Schema } from "effect"
 import { Activity, DurableClock } from "effect/workflow"
 import { z } from "zod"
@@ -60,20 +59,14 @@ import { deliverPendingSchedules } from "@/server/schedule-deployment.server"
 // cleanup always finishes, as system work, whoever asked.
 //
 // Keeping a resource after its deletion failed is an operation of its own,
-// `resource.delete.cancel`, in the same lane, so it never runs alongside a
-// deletion of it: it lets the resource go on its Relay, then records it kept.
-// Each attempt at either is recorded on the row before its operation is
-// admitted, and a reconciler admits any attempt whose operation is missing.
+// `resource.delete.cancel`: it lets the resource go on its Relay, then
+// records it kept. Each attempt at either is recorded on the row before its
+// operation starts, and every write an operation makes names its attempt and
+// the statuses it may move from, so an attempt that's been replaced changes
+// nothing. A reconciler starts any attempt whose operation is missing.
 //
-// Both hold the resource shared and its deletion exclusive, not the whole
-// resource: cleanup changes the resource's DNS, which takes the resource
-// shared and its DNS exclusive, and would otherwise wait for it. The final
-// backup takes no Hearth locks. Keep it that way as Apps and volumes plug
-// in: a deletion must never wait on a child operation that needs the whole
-// resource exclusively (an App's volumes, say), since it holds the resource
-// shared and the child would wait for it forever. Do such work as steps of
-// this operation instead, as an App's final backups are: its folder, then
-// each of its volumes, one after another.
+// A final backup is taken as steps of this operation, never as an operation
+// of its own: an App's folder, then each of its volumes, one after another.
 
 /** A step of a deletion that stopped it, with what to tell its person. */
 export class ResourceDeletionError extends Schema.TaggedError<ResourceDeletionError>()(
@@ -111,15 +104,6 @@ type DeletionPlan = typeof DeletionPlan.Type
 
 const AppDeleted = Schema.Struct({ deleted: Schema.Literal(true) })
 
-const deletionLocks = (resource: {
-  kind: ResourceDeletionKind
-  relayId: string
-  resourceId: string
-}) => {
-  const whole = `${resource.kind}:${resource.relayId}/${resource.resourceId}`
-  return [shared(whole), exclusive(`${whole}/delete`)]
-}
-
 // How long to wait before looking at the final backup again: soon at first,
 // then every half minute while it runs.
 const backupCheckDelay = (check: number) =>
@@ -153,7 +137,6 @@ export const deleteResource = durableOperation({
   error: ResourceDeletionError,
   input: DeletionInput,
   kind: "resource.delete",
-  locks: deletionLocks,
   run: (input) =>
     deletionSteps(input).pipe(
       // Recorded on the deletion, for its person to see and act on. A run
@@ -705,7 +688,6 @@ export const keepResource = durableOperation({
   error: ResourceDeletionError,
   input: DeletionInput,
   kind: "resource.delete.cancel",
-  locks: deletionLocks,
   run: (input) =>
     Effect.gen(function* () {
       const current = yield* Activity.make({

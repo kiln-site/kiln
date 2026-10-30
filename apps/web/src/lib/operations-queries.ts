@@ -12,7 +12,7 @@ export function operationsOverviewQueryOptions() {
     queryKey: ["operations", "overview"],
     queryFn: () => getOperationsOverview(),
     refetchInterval: (query) =>
-      query.state.data?.active.length ? 5_000 : false,
+      query.state.data?.running.length ? 5_000 : false,
     staleTime: 2_000,
   })
 }

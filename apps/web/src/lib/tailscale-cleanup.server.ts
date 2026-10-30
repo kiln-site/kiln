@@ -1,4 +1,3 @@
-import { exclusive } from "@workspace/operations"
 import { Duration, Effect, Schema } from "effect"
 import { Activity, DurableClock } from "effect/workflow"
 
@@ -39,7 +38,6 @@ import { durableOperation, startDurableOperation } from "@/operations/durable"
 export const deleteTailscaleNetwork = durableOperation({
   input: Schema.Struct({ networkId: Schema.String }),
   kind: "tailscale.network.delete",
-  locks: ({ networkId }) => [exclusive(`network:${networkId}`)],
   run: ({ networkId }) =>
     Effect.gen(function* () {
       for (let round = 1; ; round++) {

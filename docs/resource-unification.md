@@ -5,9 +5,8 @@ under [Stacks](#stacks)), and running in production. Kiln began with game server
 came later, and several features were never brought over or were built a
 second time beside the first. This plan makes database networks, Tailscale,
 deletion, backups, and automations work the same way for every resource,
-and records what stays different on purpose. It pauses the
-[operation lanes](hearth-operations-plan.md) after phase 4 and comes before
-the rest of phase 5.
+and records what stays different on purpose. Its long changes run as
+[Hearth operations](hearth-operations.md).
 
 ## Words used here
 

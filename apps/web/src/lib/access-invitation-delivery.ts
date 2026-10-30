@@ -1,6 +1,5 @@
 import { Resend } from "resend"
 import type { RowDataPacket } from "mysql2/promise"
-import { exclusive } from "@workspace/operations"
 import { Clock, Duration, Effect, Schema } from "effect"
 import { Activity, DurableClock } from "effect/workflow"
 
@@ -34,7 +33,6 @@ const RETRY_AFTER_LAST: Duration.Input = "6 hours"
 export const deliverInvitation = durableOperation({
   input: Schema.Struct({ invitationId: Schema.String }),
   kind: "invitation.deliver",
-  locks: ({ invitationId }) => [exclusive(`invitation:${invitationId}`)],
   run: ({ invitationId }) =>
     Effect.gen(function* () {
       for (let attempt = 1; ; attempt++) {
