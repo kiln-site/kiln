@@ -12,7 +12,7 @@ import {
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 
-import { Clock, Context, Effect, Schema } from "effect"
+import { Clock, Context, Effect, Schedule, Schema } from "effect"
 import {
   compareKilnReleaseVersions,
   isKilnNightlyVersion,
@@ -313,12 +313,14 @@ const replaceBinary = Effect.fn("cli.update.replaceBinary")(
     // Windows can move the running image aside, but cannot overwrite/delete it.
     // Keep it until the next update, when the previous process has exited.
     const backup = `${target}.old`
-    yield* updateOperation(() => rm(backup, { force: true }))
-    yield* updateOperation(() => rename(target, backup))
-    yield* updateOperation(() => rename(staged, target)).pipe(
+    yield* updateOperation(() =>
+      rm(backup, { force: true, maxRetries: 25, retryDelay: 200 })
+    )
+    yield* windowsRename(target, backup)
+    yield* windowsRename(staged, target).pipe(
       Effect.catch((cause) =>
         Effect.gen(function* () {
-          yield* updateOperation(() => rename(backup, target))
+          yield* windowsRename(backup, target)
           return yield* cause
         })
       )
@@ -327,6 +329,21 @@ const replaceBinary = Effect.fn("cli.update.replaceBinary")(
   // Cancellation must not leave the Windows two-rename transaction halfway through.
   Effect.uninterruptible
 )
+
+// Windows briefly locks an executable that was just written or run (antivirus
+// scans, a process still exiting), failing renames until it lets go.
+function windowsRename(from: string, to: string) {
+  return updateOperation(() => rename(from, to)).pipe(
+    Effect.retry({
+      schedule: Schedule.spaced("200 millis"),
+      times: 25,
+      while: (error) => {
+        const code = (error.cause as NodeJS.ErrnoException | undefined)?.code
+        return code === "EBUSY" || code === "EPERM" || code === "EACCES"
+      },
+    })
+  )
+}
 
 function isStandaloneCliBinary(entrypointPath: string): boolean {
   const normalizedPath = entrypointPath.replaceAll("\\", "/").toLowerCase()

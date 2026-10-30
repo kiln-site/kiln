@@ -187,5 +187,10 @@ globalThis.fetch = async (url) => {
     "GitHub bootstrap installation, self-update, npm reinstall, and standalone replacement passed."
   )
 } finally {
-  await rm(directory, { recursive: true, force: true })
+  await rm(directory, {
+    recursive: true,
+    force: true,
+    maxRetries: 25,
+    retryDelay: 200,
+  })
 }
