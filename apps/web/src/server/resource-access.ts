@@ -24,7 +24,7 @@ import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { ResourceScope } from "@/lib/resource-permissions"
-import { accessKey, exclusive } from "@/operations/lanes"
+import { accessKey, emailKey, exclusive } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -232,7 +232,7 @@ const inviteAccess = operation<z.infer<typeof inviteAccessSchema>>()({
       }))
     ),
   locks: ({ input }) => [
-    exclusive(`email:${input.email}`),
+    exclusive(emailKey(input.email)),
     ...input.targets.map((target) =>
       exclusive(
         accessKey(target.resourceType, target.relayId, target.resourceId)

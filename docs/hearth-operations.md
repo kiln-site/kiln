@@ -114,6 +114,7 @@ away every part.
 | `instance:<relay>/<id>`           | A game server; `app:`, `database:`, `volume:` likewise |
 | `instance:<relay>/<id>#dns`       | Its DNS records and web routes                         |
 | `user:<id>`                       | An account and its access                              |
+| `email:<hash>`                    | Access for an address, before or without an account    |
 | `relay:<id>#authorization`        | What a Relay holds of who may do what                  |
 | `relay:<id>#database-connections` | Apps' database connections handover                    |
 | `cloudflare-connection:<id>`      | A Cloudflare connection                                |

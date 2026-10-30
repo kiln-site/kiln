@@ -2,6 +2,8 @@
  * Hearth's operation lanes (docs/hearth-operations.md): the same in-memory
  * kernel each Relay runs, one per process, since Hearth runs as one.
  */
+import { createHash } from "node:crypto"
+
 import {
   OperationLanes,
   exclusive,
@@ -114,6 +116,13 @@ export const accessKey = (
 
 /** A person's account and what they may do. */
 export const userKey = (id: string) => `user:${id}`
+
+/**
+ * An address someone is invited at, before or without an account. Hashed:
+ * lane keys reach spans, logs and the Operations page, an address mustn't.
+ */
+export const emailKey = (email: string) =>
+  `email:${createHash("sha256").update(email).digest("hex").slice(0, 32)}`
 
 /**
  * A part of something with a key of its own, such as a game server's DNS
