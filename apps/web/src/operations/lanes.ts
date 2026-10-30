@@ -61,12 +61,12 @@ export const hearthLanes = state.lanes
 /** Everything in the lanes, by its kernel label. */
 export const laneOccupants: ReadonlyMap<string, LaneOccupant> = state.occupants
 
-// The operator's view of the lanes follows them, coalesced.
-export const occupy = (label: string, occupant: LaneOccupant) =>
-  Effect.sync(() => {
-    state.occupants.set(label, occupant)
-    publishOperationsChange()
-  })
+// The operator's view of the lanes follows them, coalesced. Noted as the
+// operation is admitted, in the same step, so nothing comes between.
+export const occupy = (label: string, occupant: LaneOccupant): void => {
+  state.occupants.set(label, occupant)
+  publishOperationsChange()
+}
 
 export const vacate = (label: string) =>
   Effect.sync(() => {

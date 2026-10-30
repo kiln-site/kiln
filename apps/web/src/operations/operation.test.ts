@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Schema } from "effect"
+import { Deferred, Effect, Fiber, Scheduler, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll } from "vite-plus/test"
 
@@ -255,7 +255,11 @@ describeMysql("Hearth operations", () => {
             }),
             {},
             { idempotencyKey: "abandoned", initiator: "system" }
-          ).pipe(Effect.forkChild({ startImmediately: true }))
+          ).pipe(
+            // Yielding often, so giving up can land anywhere in its start.
+            Effect.provideService(Scheduler.MaxOpsBeforeYield, 10),
+            Effect.forkChild({ startImmediately: true })
+          )
           // Queued behind the deletion before its caller gives up.
           yield* Effect.sync(() =>
             [...laneOccupants.values()].some(
@@ -271,6 +275,17 @@ describeMysql("Hearth operations", () => {
           yield* Effect.sleep("50 millis")
 
           assert.isNull(yield* findOperation("test.durable", "abandoned"))
+          // And it left nothing behind holding the server.
+          assert.strictEqual(
+            yield* runOperation(
+              holding("test.after", "Changing it", [exclusive(server)]),
+              yield* Deferred.make<void>().pipe(
+                Effect.tap((done) => Deferred.succeed(done, undefined))
+              ),
+              { user: person }
+            ).pipe(Effect.as("ran")),
+            "ran"
+          )
         }).pipe(TestClock.withLive)
     )
   })

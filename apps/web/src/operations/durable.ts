@@ -248,29 +248,35 @@ export const startDurableOperation = <
     if (locks.length === 0) return (yield* start).id
     const started = yield* Deferred.make<string>()
     const services = yield* Effect.context<Database>()
-    const holder = yield* holdLanes<DatabaseError>({
-      actorId: options.actorId ?? null,
-      doing: operation.doing(input),
-      id,
-      initiator,
-      locks,
-      name: operation.kind,
-      // Recorded once its lanes are its, then held until it ends.
-      run: start.pipe(
-        Effect.tap((recorded) => Deferred.succeed(started, recorded.id)),
-        Effect.andThen((recorded) => awaitOperationEnd(recorded.id)),
-        Effect.provideContext(services)
-      ),
-    })
-    return yield* Effect.raceFirst(
-      Deferred.await(started),
-      Fiber.join(holder.fiber).pipe(
-        Effect.andThen(Effect.die("The operation ended before it was recorded"))
-      )
-    ).pipe(
-      // A caller that gives up while it waits withdraws it; once it's
-      // recorded, it goes on.
-      Effect.onInterrupt(() => Effect.sync(holder.withdraw))
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const holder = yield* holdLanes<DatabaseError>({
+          actorId: options.actorId ?? null,
+          doing: operation.doing(input),
+          id,
+          initiator,
+          locks,
+          name: operation.kind,
+          // Recorded once its lanes are its, then held until it ends.
+          run: start.pipe(
+            Effect.tap((recorded) => Deferred.succeed(started, recorded.id)),
+            Effect.andThen((recorded) => awaitOperationEnd(recorded.id)),
+            Effect.provideContext(services)
+          ),
+        })
+        // A caller that gives up while it waits withdraws it, set before it can
+        // give up; once it's recorded, it goes on.
+        return yield* restore(
+          Effect.raceFirst(
+            Deferred.await(started),
+            Fiber.join(holder.fiber).pipe(
+              Effect.andThen(
+                Effect.die("The operation ended before it was recorded")
+              )
+            )
+          )
+        ).pipe(Effect.onInterrupt(() => Effect.sync(holder.withdraw)))
+      })
     )
   }).pipe(Effect.withSpan("Operations.start"))
 
@@ -307,7 +313,7 @@ const holdLanes = <E>(hold: {
       locks: hold.locks,
       whenBusy: hold.initiator === "person" ? "refuse" : "wait",
     })
-    yield* occupy(label, {
+    occupy(label, {
       actorId: hold.actorId,
       admittedAt: Date.now(),
       doing: hold.doing,
@@ -327,7 +333,11 @@ const holdLanes = <E>(hold: {
       Effect.forkDetach
     )
     return { fiber, withdraw: ticket.cancel }
-  })
+  }).pipe(
+    // Admitted, noted, and its holder forked, in one step that can't be cut
+    // off: none can be left holding a place in line with nothing to end it.
+    Effect.uninterruptible
+  )
 
 /**
  * Takes back the locks of every durable operation a previous Hearth left

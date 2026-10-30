@@ -248,71 +248,77 @@ export const runOperation = <Input, Context, A, E, R>(
     yield* awaitLanesOpen(initiator, definition.name)
     const label = `${definition.name}#${id}`
     const services = yield* Effect.context<R | Database>()
-    const ticket = hearthLanes.admit({
-      label,
-      locks,
-      whenBusy: initiator === "person" ? "refuse" : "wait",
-    })
-    yield* occupy(label, {
-      actorId: caller.user?.id ?? null,
-      admittedAt,
-      doing: doingOf(definition, input),
-      durable: false,
-      id,
-      initiator,
-      name: definition.name,
-      startedAt: null,
-    })
-    return yield* ticket
-      .run(
-        run(locks, !ticket.grantedAtOnce, label).pipe(
-          Effect.provideContext(services)
-        )
-      )
-      .pipe(
-        Effect.catch((error): Effect.Effect<never, E | OperationBusyError> =>
-          error instanceof LaneRejectedError
-            ? refusal(definition.name, error).pipe(
-                Effect.tapError(() =>
-                  record(definition.name, "refused", {
-                    admittedAt,
-                    finishedAt: admittedAt,
-                    startedAt: admittedAt,
-                  })
-                )
-              )
-            : Effect.fail(error)
-        ),
-        // Withdrawn before it started: it leaves the view here. Once it
-        // starts, the work's own fiber does.
-        Effect.onExit(() =>
-          laneOccupants.get(label)?.startedAt === null
-            ? vacate(label)
-            : Effect.void
-        ),
-        // Waiting this long is likely work that can't start until
-        // something it waits behind ends: say what.
-        (waiting) =>
-          Effect.raceFirst(
-            waiting,
-            Effect.sleep(SLOW_WAIT).pipe(
-              Effect.andThen(
-                Effect.suspend(() =>
-                  laneOccupants.get(label)?.startedAt === null
-                    ? Effect.logWarning(
-                        `${definition.name} has waited ${SLOW_WAIT} for its lanes`,
-                        hearthLanes
-                          .describe()
-                          .waiting.find((entry) => entry.label === label)
-                          ?.waitingOn ?? []
-                      )
-                    : Effect.void
-                )
-              ),
-              Effect.andThen(Effect.never)
+    // Admitted and set to be withdrawn in one step that can't be cut off,
+    // so a caller that gives up can never leave it holding a place in line.
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.suspend(() => {
+        const ticket = hearthLanes.admit({
+          label,
+          locks,
+          whenBusy: initiator === "person" ? "refuse" : "wait",
+        })
+        occupy(label, {
+          actorId: caller.user?.id ?? null,
+          admittedAt,
+          doing: doingOf(definition, input),
+          durable: false,
+          id,
+          initiator,
+          name: definition.name,
+          startedAt: null,
+        })
+        return restore(
+          ticket.run(
+            run(locks, !ticket.grantedAtOnce, label).pipe(
+              Effect.provideContext(services)
             )
           )
-      )
+        ).pipe(Effect.onInterrupt(() => Effect.sync(ticket.cancel)))
+      })
+    ).pipe(
+      Effect.catch((error): Effect.Effect<never, E | OperationBusyError> =>
+        error instanceof LaneRejectedError
+          ? refusal(definition.name, error).pipe(
+              Effect.tapError(() =>
+                record(definition.name, "refused", {
+                  admittedAt,
+                  finishedAt: admittedAt,
+                  startedAt: admittedAt,
+                })
+              )
+            )
+          : Effect.fail(error)
+      ),
+      // Withdrawn before it started: it leaves the view here. Once it
+      // starts, the work's own fiber does.
+      Effect.onExit(() =>
+        laneOccupants.get(label)?.startedAt === null
+          ? vacate(label)
+          : Effect.void
+      ),
+      // Waiting this long is likely work that can't start until
+      // something it waits behind ends: say what.
+      (waiting) =>
+        Effect.raceFirst(
+          waiting,
+          Effect.sleep(SLOW_WAIT).pipe(
+            Effect.andThen(
+              Effect.suspend(() =>
+                laneOccupants.get(label)?.startedAt === null
+                  ? Effect.logWarning(
+                      `${definition.name} has waited ${SLOW_WAIT} for its lanes`,
+                      hearthLanes
+                        .describe()
+                        .waiting.find((entry) => entry.label === label)
+                        ?.waitingOn ?? []
+                    )
+                  : Effect.void
+              )
+            ),
+            Effect.andThen(Effect.never)
+          )
+        )
+    )
   }).pipe(Effect.withSpan(`Operations.${definition.name}`))
 
 /**
