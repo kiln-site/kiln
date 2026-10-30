@@ -110,43 +110,20 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
       void recheckInstanceObservations(queryClient, {
         queryKey: instanceInventoryScope({ kind: "server", relayId, id }),
       })
-    if (!instances.isReady()) {
-      const snapshot = queryClient.getQueryData<RelayFleetSnapshot>(
-        queryKeys.relay.snapshot
-      )
-      // With no fleet loaded there is nothing to patch; its first reader
-      // fetches it fresh.
-      queryClient.setQueryData<Array<FleetInstance>>(
-        queryKeys.relay.instances,
-        (current) => {
-          const rows = current ?? snapshot?.instances
-          return rows && applyRealtimeInstancesEvent(rows, event)
-        }
-      )
-      if (instanceIdentityChanged) {
-        void invalidateNameDependentBackupRuns(queryClient)
+    const snapshot = queryClient.getQueryData<RelayFleetSnapshot>(
+      queryKeys.relay.snapshot
+    )
+    // The fleet collection follows this Query, as for every other fleet
+    // write. A direct collection write would stop it following later Query
+    // updates, such as stream recovery. With no fleet loaded there is
+    // nothing to patch; its first reader fetches it fresh.
+    queryClient.setQueryData<Array<FleetInstance>>(
+      queryKeys.relay.instances,
+      (current) => {
+        const rows = current ?? snapshot?.instances
+        return rows && applyRealtimeInstancesEvent(rows, event)
       }
-      return
-    }
-    instances.utils.writeBatch(() => {
-      for (const item of event.upserted) {
-        const key = `${item.relayId}:${item.id}`
-        instances.utils.writeUpsert(
-          mergeRealtimeInstance(
-            instances.get(key) as FleetInstance | undefined,
-            item
-          )
-        )
-      }
-      const deletedKeys = [
-        ...new Set(
-          event.deleted.map(
-            ({ instanceId, relayId }) => `${relayId}:${instanceId}`
-          )
-        ),
-      ].filter((key) => instances.has(key))
-      if (deletedKeys.length > 0) instances.utils.writeDelete(deletedKeys)
-    })
+    )
     if (instanceIdentityChanged) {
       void invalidateNameDependentBackupRuns(queryClient)
     }
@@ -178,15 +155,17 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
       )
       return
     }
-    const changed = instances.toArray.flatMap((instance) =>
-      relayStatusChanged(instance, event)
-        ? [withRelayStatus(instance, event)]
-        : []
+    queryClient.setQueryData<Array<FleetInstance>>(
+      queryKeys.relay.instances,
+      (current) =>
+        current?.some((instance) => relayStatusChanged(instance, event))
+          ? current.map((instance) =>
+              relayStatusChanged(instance, event)
+                ? withRelayStatus(instance, event)
+                : instance
+            )
+          : current
     )
-    // Query Collection manual writes commit the collection and its backing
-    // TanStack Query cache together. A second setQueryData here would notify
-    // subscribers twice for the same reachability transition.
-    if (changed.length > 0) instances.utils.writeUpsert(changed)
   }
 }
 
