@@ -223,7 +223,14 @@ const inviteAccess = operation<z.infer<typeof inviteAccessSchema>>()({
   name: "access.invite",
   doing: "Changing who may use this",
   authorize: ({ input, user }) =>
-    mayChange(user, input.targets, "access.invite"),
+    mayChange(user, input.targets, "access.invite").pipe(
+      Effect.map((person) => ({
+        // Who was invited, noted once their invitations are committed, so
+        // the audit names them even if starting delivery then fails.
+        invited: { userId: null as string | null },
+        person,
+      }))
+    ),
   locks: ({ input }) => [
     exclusive(`email:${input.email}`),
     ...input.targets.map((target) =>
@@ -232,15 +239,19 @@ const inviteAccess = operation<z.infer<typeof inviteAccessSchema>>()({
       )
     ),
   ],
-  run: ({ context: user, input }) =>
-    promiseEffect(() => inviteResourceAccessHandler(user, input)),
+  run: ({ context: { invited, person }, input }) =>
+    promiseEffect(() =>
+      inviteResourceAccessHandler(person, input, (userId) => {
+        invited.userId = userId
+      })
+    ),
   // The person invited, once they have an account to name: an address stays
   // out of the audit. Its Relay when every resource shares one.
-  audit: ({ exit, input }) => {
-    if (exit._tag !== "Success") return null
+  audit: ({ context: { invited }, input }) => {
+    if (!invited.userId) return null
     const relayIds = new Set(input.targets.map((target) => target.relayId))
     return {
-      id: exit.value.userId,
+      id: invited.userId,
       kind: "user",
       relayId: relayIds.size === 1 ? [...relayIds][0]! : null,
     }
@@ -257,7 +268,8 @@ export const inviteResourceAccess = createServerFn({ method: "POST" })
 
 async function inviteResourceAccessHandler(
   user: AuthenticatedUser,
-  data: z.infer<typeof inviteAccessSchema>
+  data: z.infer<typeof inviteAccessSchema>,
+  committed: (userId: string) => void
 ) {
   const targets = [...data.targets].sort(compareAccessScopes)
   if (
@@ -417,6 +429,7 @@ async function inviteResourceAccessHandler(
       })
     )
   )
+  committed(result.userId)
   await publishResourceAccessChange(
     [result.userId],
     targets.map((target) => target.relayId)

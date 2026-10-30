@@ -83,15 +83,9 @@ export interface Operation<Input, Context, A, E, R> {
       readonly operationId: string
     }
   ) => Effect.Effect<A, E, R>
-  /**
-   * What the audit records it changed, if anything worth recording, given
-   * how the run ended.
-   */
+  /** What the audit records it changed, if anything worth recording. */
   readonly audit?: (
-    args: OperationArgs<Input> & {
-      readonly context: Context
-      readonly exit: Exit.Exit<A, E>
-    }
+    args: OperationArgs<Input> & { readonly context: Context }
   ) => (AuditTarget & { readonly relayId?: string | null }) | null
   /**
    * Tells open pages what changed. Runs however the run ended, since a
@@ -475,7 +469,7 @@ const afterRun = <Input, Context, A, E>(
     const errorCode = Exit.isFailure(exit)
       ? errorTag(Cause.squash(exit.cause))
       : undefined
-    yield* Effect.try(() => audit({ ...args, context, exit })).pipe(
+    yield* Effect.try(() => audit({ ...args, context })).pipe(
       Effect.flatMap((target) =>
         target
           ? recordOperationAudit({
