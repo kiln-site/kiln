@@ -240,6 +240,33 @@ const ownedResources = {
 } as const
 
 /**
+ * Refuses all but the owner or an administrator a resource's transfer, as
+ * the transfer does again while it holds the resource: checked before the
+ * transfer takes its lanes.
+ */
+export function requireTransferableEffect(
+  user: AuthenticatedUser,
+  scope: ResourceScope
+) {
+  const resource = ownedResources[scope.resourceType]
+  return Effect.gen(function* () {
+    const database = yield* Database
+    const ownerId = yield* database.transaction(
+      "access.resource.transferable",
+      (transaction) =>
+        lockAccessScopeEffect(transaction, scope).pipe(
+          Effect.map((target) => target.owner_id)
+        )
+    )
+    if (!isPlatformAdmin(user) && ownerId !== user.id) {
+      return yield* Effect.fail(
+        new Error(`Only the ${resource.label} owner can transfer ownership`)
+      )
+    }
+  })
+}
+
+/**
  * Makes `userId` the owner of a Relay, game server, database or app. Only an
  * administrator or the current owner may, and the new owner needs an active
  * account and access there already: to own the Relay or hold a grant on it

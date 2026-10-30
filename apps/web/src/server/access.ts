@@ -61,6 +61,7 @@ import {
   cancelPlatformInvitationEffect,
   assignPlatformAccessEffect,
   removePlatformAccessEffect,
+  requireTransferableEffect,
   transferResourceOwnershipEffect,
 } from "@/lib/platform-access"
 
@@ -597,14 +598,18 @@ const transferOwnership = operation<
         return yield* Effect.fail(new Error("Resource not found"))
       // Authorize before resolving ownership: that lookup may call the
       // Relay and backfill owner_id, which no unprivileged caller should
-      // trigger. Apps have no people of their own; the transfer itself
-      // admits only an administrator or the app's owner.
+      // trigger. Apps have no people of their own.
       if (input.resourceType !== "app") {
         const authorization = yield* promiseEffect(() =>
           resolveScopeAuthorization({ user: person, scope: input })
         )
         authorization.require("access.manage")
       }
+      if (input.resourceType === "instance")
+        yield* promiseEffect(() => instanceOwnerId(relay, input.resourceId))
+      // Only an administrator or its owner may transfer it, as the transfer
+      // checks again while it holds it.
+      yield* requireTransferableEffect(person, input)
       return { person, relay }
     }),
   locks: ({ input }) => [
@@ -612,8 +617,6 @@ const transferOwnership = operation<
   ],
   run: ({ context: { person, relay }, input }) =>
     Effect.gen(function* () {
-      if (input.resourceType === "instance")
-        yield* promiseEffect(() => instanceOwnerId(relay, input.resourceId))
       const result = yield* transferResourceOwnershipEffect(person, input)
       publishAccessPolicyChange(
         [result.previousOwnerId, input.userId].filter(
