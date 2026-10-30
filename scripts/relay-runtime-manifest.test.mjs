@@ -42,6 +42,31 @@ test("Relay runtime lock matches the runtime manifest", async () => {
   )
 })
 
+// Images install runtime manifests apart from the workspace, so a pin left
+// behind ships a different library than the one the bundle was built against.
+test("Runtime manifests pin the versions the apps build with", async () => {
+  const rootPackage = await readPackage("package.json")
+  for (const app of ["relay", "web", "marketing"]) {
+    const [appPackage, runtimePackage] = await Promise.all([
+      readPackage(`apps/${app}/package.json`),
+      readPackage(`apps/${app}/package.runtime.json`),
+    ])
+    for (const [name, version] of Object.entries(
+      runtimePackage.dependencies
+    )) {
+      const built =
+        appPackage.dependencies?.[name] ?? rootPackage.devDependencies?.[name]
+      // Ranges resolve through the workspace lockfile; only exact pins compare.
+      if (!built || !/^\d/u.test(built)) continue
+      assert.equal(
+        version,
+        built,
+        `apps/${app}/package.runtime.json pins ${name} ${version}, but the app builds with ${built}`
+      )
+    }
+  }
+})
+
 async function readPackage(path) {
   return JSON.parse(await readFile(new URL(path, workspaceRoot), "utf8"))
 }

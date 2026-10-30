@@ -4,11 +4,11 @@
   "type": "module",
   "packageManager": "pnpm@10.34.6",
   "dependencies": {
-    "@effect/sql-sqlite-node": "4.0.1",
+    "@effect/sql-sqlite-node": "4.1.0",
     "@peculiar/x509": "2.1.0",
     "@xterm/addon-serialize": "0.14.0",
     "@xterm/headless": "6.0.0",
-    "effect": "4.0.1",
+    "effect": "4.1.0",
     "minimatch": "10.2.6",
     "mysql2": "3.24.5",
     "pg": "8.23.1",

@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@effect/sql-sqlite-node':
-        specifier: 4.0.1
-        version: 4.0.1(effect@4.0.1)
+        specifier: 4.1.0
+        version: 4.1.0(effect@4.1.0)
       '@peculiar/x509':
         specifier: 2.1.0
         version: 2.1.0
@@ -21,8 +21,8 @@ importers:
         specifier: 6.0.0
         version: 6.0.0
       effect:
-        specifier: 4.0.1
-        version: 4.0.1
+        specifier: 4.1.0
+        version: 4.1.0
       minimatch:
         specifier: 10.2.6
         version: 10.2.6
@@ -59,10 +59,10 @@ importers:
 
 packages:
 
-  '@effect/sql-sqlite-node@4.0.1':
-    resolution: {integrity: sha512-VBlNvfFRxyyiu1viNygxA0ZVGZcpxBHA3+QLobaLQSXgAP0submgo98IzioWTHzdZUc9Xodi7ICci5ehhbD2fQ==}
+  '@effect/sql-sqlite-node@4.1.0':
+    resolution: {integrity: sha512-Z8PxzlVlfp5JCGYAg9CwehHkvLEwMf/NF7htdDkKy65G4vE78ARkDMUSyeIzZ1zpadMxbbCEUJ2FM9M5/0Nxgg==}
     peerDependencies:
-      effect: ^4.0.1
+      effect: ^4.1.0
 
   '@peculiar/asn1-asym-key@2.10.0':
     resolution: {integrity: sha512-1R8xUTeqcUTSMLFTTCzJyFuKiq3y25EQKs9DezUetJ8qMqbJyxo3XkzykiwwT/Xzlt5/vRzS/sW4M1r+pq1FTg==}
@@ -223,8 +223,8 @@ packages:
     resolution: {integrity: sha512-IBWsY8xznyQrcHn8h4bC8/4ErNke5elzgG8GcqF4RFPw6aHkWWRc7Tgw6upjaTX/CT/yQgqYENkxYsTYN+hW2g==}
     engines: {node: '>=18'}
 
-  effect@4.0.1:
-    resolution: {integrity: sha512-b1VlQG9g8fwxE5QnIZuPoOP/0MsqHJSRKxUijjoM80E5q95FXrX5yWtY5XI8G+GJsBQAVSDbLS458z9a++uVvw==}
+  effect@4.1.0:
+    resolution: {integrity: sha512-lGx2MJJyrXA8RZb2UpQ/0Nkb5Utaimby7oD92+18noBxLPE85IFOvptdzau8dvcxAOwfwHo9iqapbKeFzqQM/Q==}
 
   event-target-shim@5.0.1:
     resolution: {integrity: sha512-i/2XbnSz/uxRCU6+NdVJgKWDTM427+MqYbkQzD321DuCQJUqOuJKIA0IM2+W2xtYHdKOmZ4dR6fExsd4SXL+WQ==}
@@ -436,9 +436,9 @@ packages:
 
 snapshots:
 
-  '@effect/sql-sqlite-node@4.0.1(effect@4.0.1)':
+  '@effect/sql-sqlite-node@4.1.0(effect@4.1.0)':
     dependencies:
-      effect: 4.0.1
+      effect: 4.1.0
 
   '@peculiar/asn1-asym-key@2.10.0':
     dependencies:
@@ -642,7 +642,7 @@ snapshots:
       crc-32: 1.2.2
       readable-stream: 4.7.0
 
-  effect@4.0.1: {}
+  effect@4.1.0: {}
 
   event-target-shim@5.0.1: {}
 
