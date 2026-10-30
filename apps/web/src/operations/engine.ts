@@ -1,6 +1,6 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 
-import { Crypto, Duration, Effect, Layer, Option } from "effect"
+import { Duration, Effect, Layer, Option } from "effect"
 import {
   ClusterWorkflowEngine,
   RunnerHealth,
@@ -11,7 +11,7 @@ import {
   SqlMessageStorage,
   SqlRunnerStorage,
 } from "effect/cluster"
-import { systemError } from "effect/PlatformError"
+import { Digest } from "effect/crypto"
 
 import { databaseTablePrefix } from "@/lib/database-config"
 
@@ -24,33 +24,6 @@ import { databaseTablePrefix } from "@/lib/database-config"
 export function operationsTablePrefix(): string {
   return `${databaseTablePrefix()}ops`
 }
-
-const digests = {
-  "SHA-1": "sha1",
-  "SHA-256": "sha256",
-  "SHA-384": "sha384",
-  "SHA-512": "sha512",
-} as const
-
-/** Node's crypto, which the cluster uses to shorten long message keys. */
-export const NodeCrypto = Layer.succeed(Crypto.Crypto)(
-  Crypto.make({
-    digest: (algorithm, data) =>
-      Effect.try({
-        try: () =>
-          new Uint8Array(createHash(digests[algorithm]).update(data).digest()),
-        catch: (cause) =>
-          systemError({
-            _tag: "Unknown",
-            cause,
-            description: `Could not hash with ${algorithm}`,
-            method: "digest",
-            module: "Crypto",
-          }),
-      }),
-    randomBytes: (size) => new Uint8Array(randomBytes(size)),
-  })
-)
 
 /**
  * Hearth's durable workflow engine: Effect's cluster in a single process,
@@ -99,5 +72,6 @@ export const OperationsEngine = ClusterWorkflowEngine.layer.pipe(
       shardsPerGroup: 16,
     })
   ),
-  Layer.provide(NodeCrypto)
+  // The cluster hashes long message keys with SHA-256 before storing them.
+  Layer.provide(Digest.layerWebCrypto)
 )

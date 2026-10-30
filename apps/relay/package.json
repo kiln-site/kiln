@@ -10,14 +10,14 @@
     "start": "node dist/src/index.mjs"
   },
   "dependencies": {
-    "@effect/sql-sqlite-node": "4.0.1",
+    "@effect/sql-sqlite-node": "4.1.0",
     "@peculiar/x509": "2.1.0",
     "@workspace/contracts": "workspace:*",
     "@workspace/operations": "workspace:*",
     "@workspace/telemetry": "workspace:*",
     "@xterm/addon-serialize": "0.14.0",
     "@xterm/headless": "6.0.0",
-    "effect": "4.0.1",
+    "effect": "4.1.0",
     "minimatch": "10.2.6",
     "mysql2": "3.24.5",
     "pg": "8.23.1",
@@ -31,7 +31,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@effect/vitest": "4.0.1",
+    "@effect/vitest": "4.1.0",
     "@types/node": "^22.20.5",
     "@types/pg": "8.23.1",
     "@types/ssh2": "1.15.6",

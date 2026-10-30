@@ -68,6 +68,7 @@ const DatabaseTest = Layer.effect(Database)(
       })
     ),
     compiler: MysqlClient.makeCompiler(),
+    driver: "mysql",
     spanAttributes: [],
   }).pipe(Effect.map((sql) => makeDatabase(Effect.succeed(sql))))
 ).pipe(Layer.provide(Reactivity.layer))

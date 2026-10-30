@@ -8,7 +8,7 @@
     "lint": "vp lint src"
   },
   "dependencies": {
-    "effect": "4.0.1"
+    "effect": "4.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

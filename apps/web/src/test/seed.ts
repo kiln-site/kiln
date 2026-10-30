@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 
-import { Effect } from "effect"
+import { Array as Arr, Effect } from "effect"
 import { SqlClient } from "effect/sql"
 
 import { databaseTableName } from "@/lib/database-config"
@@ -20,9 +20,11 @@ export const insertRows = Effect.fnUntraced(function* (
   rows: Row | ReadonlyArray<Row>
 ) {
   const sql = yield* SqlClient.SqlClient
-  yield* sql`INSERT INTO ${sql(databaseTableName(table))} ${sql.insert(
-    Array.isArray(rows) ? rows : [rows]
-  )}`
+  const values: ReadonlyArray<Row> = Array.isArray(rows)
+    ? (rows as ReadonlyArray<Row>)
+    : [rows as Row]
+  if (!Arr.isReadonlyArrayNonEmpty(values)) return
+  yield* sql`INSERT INTO ${sql(databaseTableName(table))} ${sql.insert(values)}`
 })
 
 // Every row of a Kiln table, for asserting what a call left behind.

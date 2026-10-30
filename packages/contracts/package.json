@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "cron-parser": "5.10.1",
-    "effect": "4.0.1",
+    "effect": "4.1.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
