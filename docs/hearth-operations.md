@@ -60,7 +60,9 @@ Every run goes through the same steps, in one `Operations.<name>` span:
      a bug and fails at once, rather than deadlock: declare those locks on
      the outer operation. Inside means anything the operation's run reaches,
      including promise code through `promiseEffect` and the effects it starts
-     with `runAppEffect`.
+     with `runAppEffect`. Work it only wakes and doesn't wait for, such as
+     Relay authorization delivery, starts with `outsideOperation` and takes
+     its own lanes.
 3. **Run.** Once it starts it finishes, even if the person leaves; one still
    waiting is withdrawn.
 4. **After.** Whatever the outcome, `publish` sends realtime updates. The

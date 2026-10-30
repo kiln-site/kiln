@@ -55,6 +55,14 @@ export const withCurrentOperation = <A>(
     return operation ? () => operationStorage().run(operation, run) : run
   })
 
+/**
+ * Runs promise code apart from the operation that starts it, as Hearth's own
+ * work: a worker an operation wakes but doesn't wait for, whose effects take
+ * their own lanes rather than running inside the operation while it lasts.
+ */
+export const outsideOperation = <A>(run: () => A): A =>
+  storage ? storage.exit(run) : run()
+
 /** Gives an effect started from promise code the operation it runs for. */
 export const inCurrentOperation = <A, E, R>(
   effect: Effect.Effect<A, E, R>

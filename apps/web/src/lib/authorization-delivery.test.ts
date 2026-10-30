@@ -1,8 +1,13 @@
 import { expect, layer } from "@effect/vitest"
 import { Effect } from "effect"
+import { TestClock } from "effect/testing"
 import { afterEach, vi } from "vite-plus/test"
 
 import { Database } from "@/effect/database"
+import { promiseEffect } from "@/effect/promise"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { exclusive, resourceKey } from "@/operations/lanes"
+import { operation, runOperation } from "@/operations/operation"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertRows, selectRows } from "@/test/seed"
 
@@ -19,6 +24,7 @@ vi.mock("@/lib/relay-connection", () => ({
 import {
   acknowledgeAuthorizationDeliveryEffect,
   synchronizeRelayIssuerGeneration,
+  wakeAuthorizationDelivery,
 } from "./authorization-delivery"
 
 interface RelayGenerationRow {
@@ -103,6 +109,63 @@ describeMysql("authorization delivery", () => {
           expect(current).toBe(10)
           expect(yield* generation("relay-one")).toEqual([10, 10])
         })
+    )
+
+    it.effect(
+      "delivers a change to its Relay while the operation that made it still runs",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* relayWithGeneration("relay-one", 3, 3)
+          yield* insertRows("authorization_delivery", [
+            delivery("relay-one", "alpha", 2),
+          ])
+          let heard = () => {}
+          const delivered = new Promise<void>((resolve) => {
+            heard = resolve
+          })
+          relay.rpc.mockImplementation(
+            async (
+              _relay,
+              _method,
+              input: {
+                items: Array<unknown>
+                minimumIssuerGeneration: number
+              }
+            ) => {
+              heard()
+              return {
+                issuerGeneration: input.minimumIssuerGeneration,
+                items: input.items,
+              }
+            }
+          )
+
+          // A change to a game server's access, as inviting someone is, that
+          // wakes delivery and lasts until its Relay has heard.
+          yield* runOperation(
+            operation<void>()({
+              doing: "Changing who may use this",
+              locks: () => [
+                exclusive(resourceKey("instance", "relay-one", "alpha")),
+              ],
+              name: "test.access",
+              run: () =>
+                promiseEffect(() => {
+                  wakeAuthorizationDelivery("relay-one")
+                  return delivered
+                }).pipe(Effect.timeout("5 seconds")),
+            }),
+            undefined,
+            { user: { id: "person-one" } as AuthenticatedUser }
+          )
+
+          yield* deliveries.pipe(
+            Effect.filterOrFail((rows) => Object.keys(rows).length === 0),
+            Effect.eventually,
+            Effect.timeout("5 seconds")
+          )
+        }).pipe(TestClock.withLive)
     )
 
     it.effect(
