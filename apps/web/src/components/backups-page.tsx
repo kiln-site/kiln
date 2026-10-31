@@ -120,6 +120,7 @@ import {
   createPlatformBackup,
   deleteBackup,
   getBackupDownloadUrl,
+  getBackupExportState,
   restoreDatabaseBackup,
   restoreInstanceBackup,
   syncBackupRuns,
@@ -1263,26 +1264,29 @@ function DownloadBackupDialog({
   )
   const signDownload = useMutation({
     mutationFn: async (mode: "download" | "link") => {
-      let poll = false
       for (;;) {
         const result = await getBackupDownloadUrl({
           data: {
             artifactId,
             backupId: backup.id,
             expiresInSeconds: mode === "download" ? 300 : expiresInSeconds,
-            poll,
             preview: shouldPreviewBackupDownload(
               mode,
               readFileDownloadPreferences().previewBackupDownloads
             ),
           },
         })
-        poll = true
-        if (!("url" in result)) {
+        if ("url" in result) return result
+        // A snapshot's export is being prepared: ask for the download again
+        // once it's ready, or gone and needs preparing again.
+        for (;;) {
           await new Promise((resolve) => setTimeout(resolve, 1_000))
-          continue
+          const { state } = await getBackupExportState({
+            data: { backupId: backup.id },
+          })
+          if (state === "failed") throw new Error("The snapshot export failed")
+          if (state !== "preparing") break
         }
-        return result
       }
     },
     onSuccess: (result, mode) => {

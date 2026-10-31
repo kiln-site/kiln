@@ -2741,6 +2741,50 @@ export type BackupExportReservation =
       kind: "dispatch"
     }
 
+/**
+ * How a snapshot's latest export is coming along: `preparing`, `ready` to
+ * sign until it expires, `failed`, or `none` when there's none to use.
+ */
+export const backupExportStateEffect = Effect.fn("backups.exportState")(
+  function* (backupId: string) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const rows = yield* database.queryRows<
+      {
+        created_at: number
+        finished_at: number | null
+        reserved_bytes: number | string | null
+        status: BackupRow["task_status"]
+      } & RowDataPacket
+    >(
+      "backup_export_state",
+      `SELECT task.status, task.reserved_bytes, task.created_at,
+              task.finished_at
+         FROM ${databaseTable("backup_task")} task
+        WHERE task.backup_id = ? AND task.task_kind = 'export'
+        ORDER BY task.created_at DESC, task.id DESC
+        LIMIT 1`,
+      [backupId]
+    )
+    const latest = rows[0]
+    if (!latest) return { state: "none" as const }
+    if (latest.status === "queued" || latest.status === "running") {
+      return { state: "preparing" as const }
+    }
+    if (latest.status !== "succeeded") return { state: "failed" as const }
+    const expiresAt =
+      (latest.finished_at ?? latest.created_at) +
+      clampBackupExportTtlMs(
+        // Export tasks store the requested TTL (ms) in reserved_bytes.
+        nullableDatabaseNumber(latest.reserved_bytes, "export ttl") ??
+          BACKUP_EXPORT_TTL_MIN_MS
+      )
+    return expiresAt > now
+      ? { state: "ready" as const }
+      : { state: "none" as const }
+  }
+)
+
 export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
   function* (input: {
     backupId: string

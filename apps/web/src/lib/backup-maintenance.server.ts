@@ -10,8 +10,12 @@ import {
 import { reserveBackupDeleteEffect } from "@/effect/backups"
 import { promiseEffect } from "@/effect/promise"
 import { forkAppWorker } from "@/effect/runtime"
+import { backupKey } from "@/lib/backup-lanes"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
+import { outsideOperation } from "@/operations/current"
+import { exclusive } from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
 
 // Looks after backups between runs: creates a fresh installation's daily
 // Kiln backup once it can, catalogs what Relays backed up on their own, and
@@ -77,21 +81,29 @@ const applyRetention = Effect.fn("backupMaintenance.applyRetention")(
       if (started >= MAX_DELETES_PER_SWEEP) break
       const relay = relays.get(backup.relayId)
       if (!relay?.enabled) continue
-      yield* Effect.gen(function* () {
-        // Fails when it's no longer deletable, such as mid-restore; a later
-        // sweep looks again.
-        const input = yield* reserveBackupDeleteEffect({
-          backupId: backup.backupId,
-          requestedBy: null,
-          taskId: randomUUID(),
+      // Holding the backup, as a person deleting or restoring it does, so
+      // retention waits for them rather than racing them.
+      yield* inLanes(
+        "backup.retention.delete",
+        "Deleting this backup",
+        [exclusive(backupKey(backup.backupId))],
+        Effect.gen(function* () {
+          // Fails when it's no longer deletable, such as mid-restore; a later
+          // sweep looks again.
+          const input = yield* reserveBackupDeleteEffect({
+            backupId: backup.backupId,
+            requestedBy: null,
+            taskId: randomUUID(),
+          })
+          started += 1
+          publishBackupChange(relay.id, backup.backupId)
+          // Undelivered, the delete waits queued; the Relay's next
+          // reconciliation sends it. Null when only the record went, its
+          // archive still shared with a linked backup.
+          if (input)
+            yield* promiseEffect(() => dispatchBackupTask(relay, input))
         })
-        started += 1
-        publishBackupChange(relay.id, backup.backupId)
-        // Undelivered, the delete waits queued; the Relay's next
-        // reconciliation sends it. Null when only the record went, its
-        // archive still shared with a linked backup.
-        if (input) yield* promiseEffect(() => dispatchBackupTask(relay, input))
-      }).pipe(
+      ).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning(
             `Retention couldn't delete backup ${backup.backupId} yet`,
@@ -138,10 +150,14 @@ export function startBackupMaintenance(): void {
  */
 export function requestBackupRetention(): void {
   if (globalThis.kilnBackupRetentionRequest) return
-  const timer = setTimeout(() => {
-    globalThis.kilnBackupRetentionRequest = undefined
-    forkAppWorker(applyRetentionLogged)
-  }, REQUESTED_SWEEP_DELAY_MS)
+  // Asked for by an operation, such as changing a retention, which doesn't
+  // wait for the sweep: it takes its own lanes.
+  const timer = outsideOperation(() =>
+    setTimeout(() => {
+      globalThis.kilnBackupRetentionRequest = undefined
+      forkAppWorker(applyRetentionLogged)
+    }, REQUESTED_SWEEP_DELAY_MS)
+  )
   timer.unref()
   globalThis.kilnBackupRetentionRequest = timer
 }
