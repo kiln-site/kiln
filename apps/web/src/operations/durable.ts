@@ -569,21 +569,12 @@ const holdLanes = <E>(hold: {
 }> =>
   Effect.gen(function* () {
     const label = `${hold.name}#${hold.id}`
-    const whenBusy =
-      hold.whenBusy ??
-      (hold.initiator === "person" ? personWhenBusy : undefined)
-    // The lanes decide as they admit it; noted, so a caller can tell.
-    let refused = false
     const ticket = hearthLanes.admit({
       label,
       locks: hold.locks,
-      whenBusy: whenBusy
-        ? (inTheWay) => {
-            const decision = whenBusy(inTheWay)
-            refused = decision === "refuse"
-            return decision
-          }
-        : "wait",
+      whenBusy:
+        hold.whenBusy ??
+        (hold.initiator === "person" ? personWhenBusy : "wait"),
     })
     occupy(label, {
       actorId: hold.actorId,
@@ -606,7 +597,7 @@ const holdLanes = <E>(hold: {
         waitUntil: hold.waitUntil,
       }
     ).pipe(Effect.ensuring(vacate(label)), Effect.forkDetach)
-    return { fiber, refused, withdraw: ticket.cancel }
+    return { fiber, refused: ticket.refusedAtOnce, withdraw: ticket.cancel }
   }).pipe(
     // Admitted, noted, and its holder forked, in one step that can't be cut
     // off: none can be left holding a place in line with nothing to end it.

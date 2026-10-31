@@ -14,6 +14,7 @@ import {
 } from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { databaseTableName } from "@/lib/database-config"
+import { operationsTablePrefix } from "@/operations/engine"
 import { queueDurableOperation } from "@/operations/durable"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -23,6 +24,7 @@ import { insertRelay, insertRows, insertUser } from "@/test/seed"
 // while it runs, as the Relay does, and an outcome journal by command ID.
 const relay = vi.hoisted(() => ({
   count: 0,
+  configs: [] as Array<{ environment?: string } | undefined>,
   deployments: new Map<string, { id: string; state: string }>(),
   journal: new Map<string, { result: unknown; status: "succeeded" }>(),
   sent: [] as Array<string>,
@@ -37,6 +39,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     operation: string,
     payload: {
       appId?: string
+      config?: { environment?: string }
       operationId?: string
       requests?: Array<{ id: string }>
     },
@@ -58,6 +61,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       const deployment = { id: `deployment-${++relay.count}`, state: "running" }
       relay.deployments.set(appId, deployment)
       relay.sent.push(appId)
+      relay.configs.push(payload.config)
       const result = relayApp(appId)
       if (frame.operationId) {
         relay.journal.set(frame.operationId, { result, status: "succeeded" })
@@ -81,6 +85,7 @@ const first = "a".repeat(40)
 const second = "b".repeat(40)
 // Apart from the others, whose deployments a test may leave running.
 const third = "c".repeat(40)
+const fourth = "d".repeat(40)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -201,6 +206,41 @@ describeMysql("App deployments", () => {
             history.succeeded?.relayDeploymentId,
             "deployment-1"
           )
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "send an App's secrets to its Relay without keeping them in the operation",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.configs.length = 0
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* seedApp(fourth)
+          const secret = "DATABASE_PASSWORD=never-kept-in-the-clear"
+          yield* updateAppConfigEffect(relayId, fourth, (config) => ({
+            ...config,
+            environment: secret,
+          }))
+
+          yield* deploy(fourth)
+          yield* until(() => sentTo(fourth) === 1)
+          assert.strictEqual(relay.configs.at(-1)?.environment, secret)
+
+          // Nothing the operation stored holds it.
+          const sql = yield* SqlClient.SqlClient
+          for (const table of ["messages", "replies"]) {
+            const rows =
+              yield* sql`SELECT * FROM ${sql(`${operationsTablePrefix()}_${table}`)}`
+            assert.isFalse(JSON.stringify(rows).includes("never-kept"), table)
+          }
         }).pipe(TestClock.withLive),
       60_000
     )

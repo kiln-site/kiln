@@ -113,10 +113,11 @@ export function publishAppDeploymentChange(relayId: string): void {
 }
 
 /**
- * What a deployment sends its Relay, decided when its turn comes: the app's
- * saved configuration, and for a GitHub app the commit asked for, or its
- * branch's head, with what makes the token that checks it out, which is
- * made as it's sent and never kept. Null when there's nothing to deploy: a
+ * What a deployment sends its Relay, decided when its turn comes: for a
+ * GitHub app the commit asked for, or its branch's head, with what makes
+ * the token that checks it out. The app's saved configuration, which holds
+ * its secrets, and the token are read and made as it's sent and never kept,
+ * as a workflow's steps are, in the clear. Null when there's nothing to deploy: a
  * push or poll for the commit the app last tried, so a failing commit or a
  * rollback isn't redeployed every minute; a poll while the Relay is
  * offline, which checks again once it's back; an image update no longer
@@ -125,7 +126,6 @@ export function publishAppDeploymentChange(relayId: string): void {
 const DeployPlan = Schema.Struct({
   payload: Schema.Struct({
     appId: Schema.String,
-    config: Schema.Unknown,
     github: Schema.optionalKey(
       Schema.Struct({
         build: Schema.Unknown,
@@ -221,7 +221,6 @@ const prepareAppDeploymentEffect = Effect.fn("Apps.deploy.prepare")(function* (
   const plan: DeployPlan = {
     payload: {
       appId: request.appId,
-      config: app.config,
       ...(github && {
         github: {
           build: github.source.build,
@@ -889,7 +888,7 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
       payload: plan.payload,
       recover: currentDeployment(input),
       relayId: input.relayId,
-      sendPayload: withCheckoutToken(plan),
+      sendPayload: asSent(plan),
       timeoutMs: 30_000,
     }).pipe(Effect.result)
     if (Result.isFailure(sent)) {
@@ -956,24 +955,37 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
     })
   })
 
-// The payload as it's sent, with a token made now to check out its commit.
-const withCheckoutToken = (plan: DeployPlan) =>
-  plan.token === null || plan.payload.github === undefined
-    ? Effect.succeed(plan.payload)
-    : checkoutToken(plan.token).pipe(
-        Effect.map((token) => ({
-          ...plan.payload,
-          github: { ...plan.payload.github!, token },
-        })),
-        Effect.mapError(
-          (cause) =>
-            new RelayCommandError({
-              code: "github_token",
-              message: errorMessage(cause),
-              retryable: false,
-            })
-        )
+// The payload as it's sent: the app's saved configuration, read now, and a
+// token made now to check out its commit.
+const asSent = (plan: DeployPlan) =>
+  Effect.gen(function* () {
+    const app = yield* loadAppConfigEffect(
+      plan.record.relayId,
+      plan.record.appId
+    ).pipe(Effect.mapError(sendError("app_config")))
+    if (!app) {
+      return yield* sendError("app_config")(new Error("App not found"))
+    }
+    // What was decided for one source doesn't deploy another.
+    if (app.config.sourceType !== plan.record.sourceType) {
+      return yield* sendError("app_config")(
+        new Error("The app's source changed; deploy it again")
       )
+    }
+    const payload = { ...plan.payload, config: app.config }
+    if (plan.token === null || payload.github === undefined) return payload
+    const token = yield* checkoutToken(plan.token).pipe(
+      Effect.mapError(sendError("github_token"))
+    )
+    return { ...payload, github: { ...payload.github, token } }
+  })
+
+const sendError = (code: string) => (cause: unknown) =>
+  new RelayCommandError({
+    code,
+    message: errorMessage(cause),
+    retryable: false,
+  })
 
 // What the reply to a send whose answer was lost would have said: the app
 // as its Relay has it now, whose deployment is this one.

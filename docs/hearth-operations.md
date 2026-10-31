@@ -199,8 +199,9 @@ update is deployed as they asked, and shows as queued until its turn
 (`queueDurableOperation`): it takes its place in line as they ask, so a
 deletion or restore of the App turns it away at once as it would any
 change of theirs, and only behind other work does it wait. The
-token that checks out a GitHub commit is made as it's sent and never kept,
-and a reply lost to a restart is read back (`relayCommand`), not sent again.
+App's saved configuration, which holds its secrets, is read as it's sent
+and the token that checks out a GitHub commit made then, neither kept in
+the operation's steps, which are stored in the clear; a reply lost to a restart is read back (`relayCommand`), not sent again.
 Deleting an App stops its build on the Relay first (`app.deployment.abort`),
 so the deletion doesn't wait for the build it removes.
 
