@@ -56,15 +56,12 @@ const confirmedCliDeletions = ["deleteCliServerEffect"]
 // Mutating server functions that don't run as operations yet. Move them
 // area by area; never add one.
 const notYetOperations = new Set<string>([
-  "app-deployments.ts:redeployAppDeployment",
-  "app-deployments.ts:saveAppGitHubSource",
   "app-image-updates.ts:checkAppImageUpdate",
   "app-image-updates.ts:deployAppImageUpdate",
   "app-image-updates.ts:saveAppImageUpdatePolicy",
   "app-image-updates.ts:skipAppImageUpdate",
   "apps.ts:claimAppTerminal",
   "apps.ts:createApp",
-  "apps.ts:deployApp",
   "apps.ts:renameApp",
   "apps.ts:restartAppTerminal",
   "apps.ts:runAppAction",

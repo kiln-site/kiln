@@ -63,10 +63,12 @@ import {
   updateAppConfigHandler,
 } from "@/server/app-access"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { resourceOperation } from "@/server/resource-operation.server"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { dnsKey } from "@/lib/dns-operations"
+import { appDeploymentLocks } from "@/lib/app-lanes"
 import { exclusive } from "@/operations/lanes"
 import {
   operation,
@@ -316,10 +318,15 @@ export const renameApp = createServerFn({ method: "POST" })
 // Deploys the saved configuration, a GitHub app its branch's head. The
 // Relay answers once the deployment starts; its log and the app's state
 // follow it from there, and Hearth records how it ends.
-export const deployApp = createServerFn({ method: "POST" })
-  .validator(appInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedApp(data, "app.manage")
+const deployAppNow = resourceOperation({
+  kind: "app",
+  id: (input: z.infer<typeof appInputSchema>) => input.appId,
+  name: "app.deploy",
+  doing: "Deploying this App",
+  permission: () => "app.manage",
+  alsoLocks: (input) => appDeploymentLocks(input.relayId, input.appId),
+  run: async (user, data) => {
+    const { relay } = await authorizedAppFor(user, data, "app.manage")
     const { startAppDeploymentEffect } =
       await import("@/lib/app-deployments.server")
     const started = await runAppEffect(
@@ -333,7 +340,16 @@ export const deployApp = createServerFn({ method: "POST" })
     )
     publishAppChange(relay.id, false)
     return started!.app
-  })
+  },
+})
+
+export const deployApp = createServerFn({ method: "POST" })
+  .validator(appInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(deployAppNow, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 // Saves the app's limits and applies them to its running containers. A
 // removed memory or CPU limit applies when the app next deploys.
