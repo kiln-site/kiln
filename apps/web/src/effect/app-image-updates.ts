@@ -155,6 +155,16 @@ export const recordAppImageCheckEffect = Effect.fn("apps.imageUpdates.record")(
             [appId]
           )
           const previous = row ? toUpdate(row) : null
+          // One asked before what's recorded, answering later, says less
+          // than it: kept out, its effects with it.
+          if (previous?.checkedAt != null && askedAt < previous.checkedAt) {
+            return {
+              changed: false,
+              newFailure: false,
+              newlySeen: false,
+              update: previous,
+            }
+          }
           // Checked when it was asked, which is what what it found
           // describes; a deployment since makes it stale.
           const next = nextUpdate(previous, appId, image, result, askedAt)

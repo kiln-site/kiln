@@ -195,6 +195,7 @@ export async function getAppDeploymentSummaryHandler(data: {
       app.config.sourceType === "image" && app.config.image !== ""
         ? imageUpdatesView(
             app.config.image,
+            imageUpdate,
             currentImageUpdate(
               imageUpdate,
               app.config.image,
@@ -210,15 +211,19 @@ export async function getAppDeploymentSummaryHandler(data: {
  * last check found for the image its config names now; one saved since
  * hasn't been checked.
  */
-function imageUpdatesView(image: string, update: AppImageUpdate | null) {
+// The app's saved policy, and what the last check found, if it still
+// describes the app (`currentImageUpdate`).
+function imageUpdatesView(
+  image: string,
+  saved: AppImageUpdate | null,
+  current: AppImageUpdate | null
+) {
   const policy = {
-    delayHours: update?.delayHours ?? defaultAppImageUpdatePolicy.delayHours,
-    mode: update?.mode ?? defaultAppImageUpdatePolicy.mode,
+    delayHours: saved?.delayHours ?? defaultAppImageUpdatePolicy.delayHours,
+    mode: saved?.mode ?? defaultAppImageUpdatePolicy.mode,
   }
   // A digest never moves, so there's nothing to check.
   const pinned = image.includes("@")
-  // Already judged to describe the App (`currentImageUpdate`).
-  const current = update
   return {
     ...policy,
     autoUpdateAt: current && autoUpdateAt(current),

@@ -4,6 +4,7 @@ import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 
 import {
+  loadAppImageUpdateEffect,
   recordAppImageCheckEffect,
   saveAppImageUpdatePolicyEffect,
 } from "@/effect/app-image-updates"
@@ -105,6 +106,53 @@ describeMysql("App image checks", () => {
           })
           yield* resolveAppImageUpdateNotificationsEffect(relayId, appId)
           assert.deepStrictEqual(yield* open, [])
+        })
+    )
+
+    it.effect(
+      "keep what a newer check found over an older one answering late",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(relayId)
+          yield* insertUser("user")
+          yield* createAppRecordEffect({
+            appId,
+            createdBy: "user",
+            name: "Website",
+            relayId,
+          })
+          yield* saveAppImageUpdatePolicyEffect(appId, {
+            delayHours: 0,
+            mode: "notify",
+          })
+          const askedAt = 1_800_000_000_000
+          const newer = yield* recordAppImageCheckEffect(
+            appId,
+            image,
+            {
+              appId,
+              latestDigest: digest(3),
+              runningDigests: [digest(1)],
+              status: "checked",
+            },
+            askedAt
+          )
+          assert.isTrue(newer.newlySeen)
+
+          // Asked earlier, it answers after: it says nothing new.
+          const older = yield* recordAppImageCheckEffect(
+            appId,
+            image,
+            { appId, error: "registry timed out", status: "error" },
+            askedAt - 60_000
+          )
+          assert.isFalse(older.newFailure)
+          assert.isFalse(older.newlySeen)
+
+          const kept = yield* loadAppImageUpdateEffect(appId)
+          assert.strictEqual(kept?.latestDigest, digest(3))
+          assert.strictEqual(kept?.checkedAt, askedAt)
         })
     )
 
