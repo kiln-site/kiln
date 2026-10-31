@@ -33,7 +33,6 @@ import {
   updateTargetVersion,
   validateUpdateManifest,
 } from "@/lib/update-manifest"
-import type { AuthenticatedUser } from "@/lib/auth-session"
 import { exclusive, hearthKey, partKey, relayKey } from "@/operations/lanes"
 import {
   operation,
@@ -362,272 +361,289 @@ export const getReleaseHistory = createServerFn({ method: "GET" })
 
 const releaseHistoryPageSize = 60
 
-// Holds what each update replaces while it's handed to its Relay: the
-// Relay's process, as restarting it does, or Hearth itself. The Relay runs
-// the update from there and refuses another meanwhile.
-const startUpdates = operation<z.infer<typeof startUpdatesSchema>>()({
+// Hands one Relay its updates, holding what they replace: its process, as
+// restarting it does, or Hearth itself. The Relay runs them from there and
+// refuses another meanwhile, so the next Relay's needn't wait on this one.
+const handOverUpdates = operation<{
+  readonly components: ReadonlyArray<"hearth" | "relay">
+  readonly relay: PersistedRelay
+  readonly request: Record<string, unknown>
+}>()({
   name: "updates.start",
   doing: "Updating Kiln",
   authorize: ({ input, user }) =>
     signedIn(user).pipe(
       Effect.filterOrFail(
         (person) =>
-          isPlatformAdmin(person) ||
-          !input.targets.some((target) => target.component === "hearth"),
+          isPlatformAdmin(person) || !input.components.includes("hearth"),
         () => new Error("Only a platform administrator can update Hearth")
+      ),
+      Effect.tap((person) =>
+        promiseEffect(() =>
+          requireRelayPermission({
+            user: person,
+            relayId: input.relay.id,
+            permission: "relay.update",
+          })
+        )
       )
     ),
   locks: ({ input }) =>
-    input.targets.flatMap((target) =>
-      target.component === "hearth"
-        ? [exclusive(hearthKey)]
-        : target.relayId
-          ? [exclusive(partKey(relayKey(target.relayId), "process"))]
-          : []
+    input.components.map((component) =>
+      exclusive(
+        component === "hearth"
+          ? hearthKey
+          : partKey(relayKey(input.relay.id), "process")
+      )
     ),
   run: ({ context: user, input }) =>
-    promiseEffect(() => startUpdatesFor(user, input)),
-  // Each Relay records the update it accepts, as it does every change.
+    Effect.gen(function* () {
+      // The Hearth that starts next shouldn't tell this admin about the
+      // update they started.
+      if (input.components.includes("hearth")) {
+        const { recordHearthUpdateRequestEffect } = yield* promiseEffect(
+          () => import("@/lib/kiln-update-notifications")
+        )
+        yield* recordHearthUpdateRequestEffect(user.id).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Could not record who updated Hearth", cause)
+          )
+        )
+      }
+      // This Hearth may be replaced before every Relay answers. Each Relay
+      // still finishes what it accepted and reports it, named by the
+      // request, in its snapshot, which the browser reads back
+      // (getSystemUpdates).
+      return yield* promiseEffect(async () => {
+        const { relayRpc } = await import("@/lib/relay-connection")
+        return relayRpc(
+          input.relay,
+          "relay.update.apply",
+          input.request,
+          15 * 60_000,
+          user.id
+        )
+      }).pipe(
+        Effect.flatMap((response) =>
+          Effect.try({
+            try: () => parseUpdateOperations(response),
+            catch: (cause) => cause,
+          })
+        ),
+        Effect.mapError(
+          (cause) =>
+            new UpdateApplyError(
+              errorMessage(cause),
+              !relayAnsweredRequest(cause)
+            )
+        )
+      )
+    }),
+  audit: ({ input }) => ({
+    id: input.relay.id,
+    kind: "relay",
+    relayId: input.relay.id,
+  }),
 })
 
 export const startSystemUpdates = createServerFn({ method: "POST" })
   .validator(startUpdatesSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(startUpdates, data, {
-      user: await requireUpdateAccess(),
-    })
-  )
-
-async function startUpdatesFor(
-  user: AuthenticatedUser,
-  data: z.infer<typeof startUpdatesSchema>
-) {
-  const releases = await runAppEffect(
-    "updates.latest-release",
-    listKilnReleasesEffect()
-  )
-  const latestRelease = releases[0]
-  if (!latestRelease) {
-    throw new Error("No public Kiln release is available to install")
-  }
-  const [manifest, relays, { relayRpc }, hearthContainer] = await Promise.all([
-    runAppEffect(
-      "updates.manifest",
-      kilnReleaseManifestEffect(latestRelease.tag)
-    ),
-    updateRelaysForUser(user),
-    import("@/lib/relay-connection"),
-    data.targets.some(({ component }) => component === "hearth")
-      ? getContainerHostname()
-      : Promise.resolve(null),
-  ])
-  const prepared = await Effect.runPromise(
-    Effect.forEach(
-      data.targets,
-      (requested) =>
-        Effect.tryPromise({
-          try: async () => {
-            validateUpdateManifest(
-              manifest,
-              latestRelease.version,
-              requested.component
-            )
-            // Hearth's update runs on the Relay the browser was shown, so
-            // that's the one it looks for the update on if the reply is
-            // lost. The inspection below checks it can update Hearth.
-            const relay =
-              requested.component === "relay" || requested.relayId
-                ? await selectedRelay(relays, requested.relayId)
-                : await coLocatedRelay(relays, hearthContainer ?? "", relayRpc)
-            const inspection = systemInspectionSchema.parse(
-              await relayRpc(
-                relay,
-                "relay.system.inspect",
-                requested.component === "relay"
-                  ? {}
-                  : { container: hearthContainer },
-                15_000
+  .handler(async ({ data }) => {
+    const user = await requireUpdateAccess()
+    if (
+      !isPlatformAdmin(user) &&
+      data.targets.some((target) => target.component === "hearth")
+    ) {
+      throw new Error("Only a platform administrator can update Hearth")
+    }
+    const releases = await runAppEffect(
+      "updates.latest-release",
+      listKilnReleasesEffect()
+    )
+    const latestRelease = releases[0]
+    if (!latestRelease) {
+      throw new Error("No public Kiln release is available to install")
+    }
+    const [manifest, relays, { relayRpc }, hearthContainer] = await Promise.all(
+      [
+        runAppEffect(
+          "updates.manifest",
+          kilnReleaseManifestEffect(latestRelease.tag)
+        ),
+        updateRelaysForUser(user),
+        import("@/lib/relay-connection"),
+        data.targets.some(({ component }) => component === "hearth")
+          ? getContainerHostname()
+          : Promise.resolve(null),
+      ]
+    )
+    const prepared = await Effect.runPromise(
+      Effect.forEach(
+        data.targets,
+        (requested) =>
+          Effect.tryPromise({
+            try: async () => {
+              validateUpdateManifest(
+                manifest,
+                latestRelease.version,
+                requested.component
               )
-            )
-            if (
-              inspection.component !== requested.component ||
-              !inspection.eligible
-            ) {
-              throw new Error(
-                inspection.reason ??
-                  `This ${requested.component} container cannot be updated`
+              // Hearth's update runs on the Relay the browser was shown, so
+              // that's the one it looks for the update on if the reply is
+              // lost. The inspection below checks it can update Hearth.
+              const relay =
+                requested.component === "relay" || requested.relayId
+                  ? await selectedRelay(relays, requested.relayId)
+                  : await coLocatedRelay(
+                      relays,
+                      hearthContainer ?? "",
+                      relayRpc
+                    )
+              const inspection = systemInspectionSchema.parse(
+                await relayRpc(
+                  relay,
+                  "relay.system.inspect",
+                  requested.component === "relay"
+                    ? {}
+                    : { container: hearthContainer },
+                  15_000
+                )
               )
-            }
-            return {
-              component: requested.component,
-              relay,
-              targetContainer: inspection.container,
-              targetImage: immutableImage(
-                manifest.components[requested.component]
-              ),
-            }
-          },
-          catch: (cause) => cause,
-        }).pipe(
-          Effect.match({
-            onFailure: (cause) => ({
-              failure: {
+              if (
+                inspection.component !== requested.component ||
+                !inspection.eligible
+              ) {
+                throw new Error(
+                  inspection.reason ??
+                    `This ${requested.component} container cannot be updated`
+                )
+              }
+              return {
                 component: requested.component,
-                message: errorMessage(cause),
-                outcomeUnknown: false,
-                relayId: requested.relayId,
-              },
-            }),
-            onSuccess: (target) => ({ target }),
-          })
-        ),
-      { concurrency: "unbounded" }
-    )
-  )
-  const failures = prepared.flatMap((result) =>
-    "failure" in result ? [result.failure] : []
-  )
-  const groups = new Map<
-    string,
-    {
-      relay: PersistedRelay
-      targets: Array<{
-        component: "hearth" | "relay"
-        targetContainer: string
-        targetImage: string
-      }>
-    }
-  >()
-  for (const result of prepared) {
-    if (!("target" in result)) continue
-    const group = groups.get(result.target.relay.id) ?? {
-      relay: result.target.relay,
-      targets: [],
-    }
-    group.targets.push({
-      component: result.target.component,
-      targetContainer: result.target.targetContainer,
-      targetImage: result.target.targetImage,
-    })
-    groups.set(result.target.relay.id, group)
-  }
-
-  const targetVersion = updateTargetVersion(manifest)
-  const batchResults = await Effect.runPromise(
-    Effect.forEach(
-      groups.values(),
-      (group) =>
-        Effect.tryPromise({
-          try: async () => {
-            await requireRelayPermission({
-              user,
-              relayId: group.relay.id,
-              permission: "relay.update",
-            })
-            const legacyTarget =
-              group.targets.length === 1 ? group.targets[0] : undefined
-            // The Hearth that starts next shouldn't tell this admin about
-            // the update they started.
-            if (group.targets.some(({ component }) => component === "hearth")) {
-              const { recordHearthUpdateRequestEffect } =
-                await import("@/lib/kiln-update-notifications")
-              await runAppEffect(
-                "updates.record-request",
-                recordHearthUpdateRequestEffect(user.id).pipe(
-                  Effect.catchCause((cause) =>
-                    Effect.logWarning(
-                      "Could not record who updated Hearth",
-                      cause
-                    )
-                  )
-                )
-              )
-            }
-            // This Hearth may be replaced before every Relay answers. Each
-            // Relay still finishes what it accepted and reports it, named
-            // by the request, in its snapshot, which the browser reads
-            // back (getSystemUpdates).
-            const operations = await runAppEffect(
-              "updates.apply",
-              Effect.tryPromise({
-                try: () =>
-                  relayRpc(
-                    group.relay,
-                    "relay.update.apply",
-                    {
-                      helperImage: immutableImage(manifest.components.relay),
-                      ...(data.requestId ? { requestId: data.requestId } : {}),
-                      targets: group.targets.map((target) => ({
-                        targetContainer: target.targetContainer,
-                        targetImage: target.targetImage,
-                        version: targetVersion,
-                      })),
-                      // A single target can also be understood by Relays from before
-                      // batched updates, preserving the rolling upgrade path.
-                      ...(legacyTarget
-                        ? {
-                            targetContainer: legacyTarget.targetContainer,
-                            targetImage: legacyTarget.targetImage,
-                            version: targetVersion,
-                          }
-                        : {}),
-                    },
-                    15 * 60_000,
-                    user.id
-                  ),
-                catch: (cause) => cause,
-              }).pipe(
-                Effect.flatMap((response) =>
-                  Effect.try({
-                    try: () => parseUpdateOperations(response),
-                    catch: (cause) => cause,
-                  })
+                relay,
+                targetContainer: inspection.container,
+                targetImage: immutableImage(
+                  manifest.components[requested.component]
                 ),
-                Effect.mapError(
-                  (cause) =>
-                    new UpdateApplyError(
-                      errorMessage(cause),
-                      !relayAnsweredRequest(cause)
-                    )
-                )
-              )
-            )
-            return { group, operations }
-          },
-          catch: (cause) => cause,
-        }).pipe(
-          Effect.match({
-            onFailure: (cause) => ({
-              failures: group.targets.map((target) => ({
-                component: target.component,
-                message: errorMessage(cause),
-                // The Relay may have started it; its snapshot will say.
-                outcomeUnknown:
-                  cause instanceof UpdateApplyError && cause.outcomeUnknown,
-                relayId: target.component === "relay" ? group.relay.id : null,
-              })),
-              started: [],
-            }),
-            onSuccess: ({ group: successfulGroup, operations }) => ({
-              failures: [],
-              started: operations.map((operation) => ({
-                operation,
-                relayId: successfulGroup.relay.id,
-              })),
-            }),
-          })
-        ),
-      { concurrency: "unbounded" }
+              }
+            },
+            catch: (cause) => cause,
+          }).pipe(
+            Effect.match({
+              onFailure: (cause) => ({
+                failure: {
+                  component: requested.component,
+                  message: errorMessage(cause),
+                  outcomeUnknown: false,
+                  relayId: requested.relayId,
+                },
+              }),
+              onSuccess: (target) => ({ target }),
+            })
+          ),
+        { concurrency: "unbounded" }
+      )
     )
-  )
-  return {
-    failures: [
-      ...failures,
-      ...batchResults.flatMap((result) => result.failures),
-    ],
-    started: batchResults.flatMap((result) => result.started),
-  }
-}
+    const failures = prepared.flatMap((result) =>
+      "failure" in result ? [result.failure] : []
+    )
+    const groups = new Map<
+      string,
+      {
+        relay: PersistedRelay
+        targets: Array<{
+          component: "hearth" | "relay"
+          targetContainer: string
+          targetImage: string
+        }>
+      }
+    >()
+    for (const result of prepared) {
+      if (!("target" in result)) continue
+      const group = groups.get(result.target.relay.id) ?? {
+        relay: result.target.relay,
+        targets: [],
+      }
+      group.targets.push({
+        component: result.target.component,
+        targetContainer: result.target.targetContainer,
+        targetImage: result.target.targetImage,
+      })
+      groups.set(result.target.relay.id, group)
+    }
+
+    const targetVersion = updateTargetVersion(manifest)
+    const batchResults = await Effect.runPromise(
+      Effect.forEach(
+        groups.values(),
+        (group) =>
+          Effect.tryPromise({
+            try: async () => {
+              const legacyTarget =
+                group.targets.length === 1 ? group.targets[0] : undefined
+              const operations = await runOperationPromise(
+                handOverUpdates,
+                {
+                  components: group.targets.map(({ component }) => component),
+                  relay: group.relay,
+                  request: {
+                    helperImage: immutableImage(manifest.components.relay),
+                    ...(data.requestId ? { requestId: data.requestId } : {}),
+                    targets: group.targets.map((target) => ({
+                      targetContainer: target.targetContainer,
+                      targetImage: target.targetImage,
+                      version: targetVersion,
+                    })),
+                    // A single target can also be understood by Relays from
+                    // before batched updates, preserving the rolling upgrade
+                    // path.
+                    ...(legacyTarget
+                      ? {
+                          targetContainer: legacyTarget.targetContainer,
+                          targetImage: legacyTarget.targetImage,
+                          version: targetVersion,
+                        }
+                      : {}),
+                  },
+                },
+                { user }
+              )
+              return { group, operations }
+            },
+            catch: (cause) => cause,
+          }).pipe(
+            Effect.match({
+              onFailure: (cause) => ({
+                failures: group.targets.map((target) => ({
+                  component: target.component,
+                  message: errorMessage(cause),
+                  // The Relay may have started it; its snapshot will say.
+                  outcomeUnknown:
+                    cause instanceof UpdateApplyError && cause.outcomeUnknown,
+                  relayId: target.component === "relay" ? group.relay.id : null,
+                })),
+                started: [],
+              }),
+              onSuccess: ({ group: successfulGroup, operations }) => ({
+                failures: [],
+                started: operations.map((operation) => ({
+                  operation,
+                  relayId: successfulGroup.relay.id,
+                })),
+              }),
+            })
+          ),
+        { concurrency: "unbounded" }
+      )
+    )
+    return {
+      failures: [
+        ...failures,
+        ...batchResults.flatMap((result) => result.failures),
+      ],
+      started: batchResults.flatMap((result) => result.started),
+    }
+  })
 
 export const getSystemUpdateStatus = createServerFn({ method: "POST" })
   .validator(updateStatusSchema)
