@@ -1323,43 +1323,56 @@ export const recordInstanceDomainSyncErrorEffect = Effect.fn(
   )
 })
 
-// What a game server's domains say while their address is being brought in
-// line after a change; the DNS worker picks up any left saying so.
-const addressUpdatePending = "Waiting to update its address"
-
 /**
- * Marks a game server's domains as needing their address checked, before a
- * change that may move it hands that check off, so the DNS worker finishes
- * it if the check never does.
+ * Asks for a game server's domains to follow its address, before a change
+ * that may move it hands that check off, so the DNS worker finishes it if
+ * the check never does.
  */
-export const markInstanceDomainsPendingEffect = Effect.fn(
-  "domains.assignments.markPending"
+export const requestInstanceDomainAddressEffect = Effect.fn(
+  "domains.assignments.requestAddress"
 )(function* (relayId: string, instanceId: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
-    "domains.assignments.markPending",
+    "domains.assignments.requestAddress",
     `UPDATE ${databaseTable("instance_domain")}
-        SET last_error = ?, updated_at = ?
-      WHERE relay_id = ? AND instance_id = ?
-        AND status = 'active' AND last_error IS NULL`,
-    [addressUpdatePending, now, relayId, instanceId]
+        SET address_requested_at = ?
+      WHERE relay_id = ? AND instance_id = ?`,
+    [now, relayId, instanceId]
   )
 })
 
-/** Clears that mark once the check has run, whatever it found to do. */
-export const clearInstanceDomainsPendingEffect = Effect.fn(
-  "domains.assignments.clearPending"
+/**
+ * Answers the requests made before `before`, when a check read the address
+ * then; one made since waits for the next.
+ */
+export const answerInstanceDomainAddressEffect = Effect.fn(
+  "domains.assignments.answerAddress"
+)(function* (relayId: string, instanceId: string, before: number) {
+  const database = yield* Database
+  yield* database.execute(
+    "domains.assignments.answerAddress",
+    `UPDATE ${databaseTable("instance_domain")}
+        SET address_requested_at = NULL
+      WHERE relay_id = ? AND instance_id = ? AND address_requested_at < ?`,
+    [relayId, instanceId, before]
+  )
+})
+
+/** Whether a game server's domains wait on a check of its address. */
+export const instanceDomainAddressRequestedEffect = Effect.fn(
+  "domains.assignments.addressRequested"
 )(function* (relayId: string, instanceId: string) {
   const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  yield* database.execute(
-    "domains.assignments.clearPending",
-    `UPDATE ${databaseTable("instance_domain")}
-        SET last_error = NULL, updated_at = ?
-      WHERE relay_id = ? AND instance_id = ? AND last_error = ?`,
-    [now, relayId, instanceId, addressUpdatePending]
+  const rows = yield* database.queryRows<RowDataPacket & { found: number }>(
+    "domains.assignments.addressRequested",
+    `SELECT 1 AS found FROM ${databaseTable("instance_domain")}
+      WHERE relay_id = ? AND instance_id = ?
+        AND address_requested_at IS NOT NULL
+      LIMIT 1`,
+    [relayId, instanceId]
   )
+  return rows.length > 0
 })
 
 /** Clears the error of a domain found in step again. */
@@ -1502,9 +1515,10 @@ export const deferInstanceDomainsEffect = Effect.fn(
 })
 
 // An active domain with an error is one whose records didn't follow its
-// game server's endpoint.
+// game server's endpoint; one with an address request may not have yet.
 const assignmentNeedsWork = `(status IN ('pending', 'error', 'removing')
-  OR next_domain IS NOT NULL OR last_error IS NOT NULL)`
+  OR next_domain IS NOT NULL OR last_error IS NOT NULL
+  OR address_requested_at IS NOT NULL)`
 
 function publicConnection(
   row: DomainConnectionRow,
