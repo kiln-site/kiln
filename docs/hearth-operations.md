@@ -85,9 +85,12 @@ whose message is what the person sees.
 whose results are stored, waits that outlive a restart (`DurableClock`), and
 Relay changes sent at most once (`relayCommand`).
 
-- `startDurableOperation` takes its lanes like any operation, refusing a
-  person's or waiting for Hearth's own, then records it (its input, locks
-  and who asked) and starts its workflow, and returns its ID.
+- `startDurableOperation` takes its lanes as any operation does
+  (`awaitTurn`): a person waits behind the same kind of change and is
+  refused by work on a whole, Hearth's own waits. Its `authorize` is checked
+  first, before an idempotency key can hand back an operation, and again
+  once it has waited. Then it's recorded (its input, locks and who asked),
+  its workflow starts, and it returns its ID.
 - Its locks are held until the workflow ends, however long that is, across
   restarts. They're the ones its definition declares, also for one
   recorded before it kept them. When Hearth starts, it takes back the locks

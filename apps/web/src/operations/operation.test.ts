@@ -491,6 +491,72 @@ describeMysql("Hearth operations", () => {
     )
 
     it.effect(
+      "admits a person's durable change as any other, checking them again",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const deploy = partKey(server, "deploy")
+          const deploying = durableOperation({
+            input: Schema.Struct({}),
+            kind: "test.durable.deploy",
+            locks: () => [exclusive(deploy)],
+            run: () => Effect.void,
+            version: 1,
+          })
+          const release = yield* Deferred.make<void>()
+          const first = yield* runOperation(
+            holding("test.deploy", "Deploying this game server", [
+              exclusive(deploy),
+            ]),
+            release,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+
+          // Behind the same kind of change it waits, and is checked again
+          // once it has: one no longer allowed is never recorded.
+          let allowed = true
+          const authorize = Effect.suspend(() =>
+            allowed ? Effect.void : Effect.fail(new Error("No longer allowed"))
+          )
+          const waiting = yield* startDurableOperation(
+            deploying,
+            {},
+            { actorId: person.id, authorize, idempotencyKey: "revoked" }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.sync(() =>
+            [...laneOccupants.values()].some(
+              (occupant) => occupant.name === "test.durable.deploy"
+            )
+          ).pipe(
+            Effect.repeat({ until: (queued) => queued }),
+            Effect.timeout("5 seconds")
+          )
+          assert.isUndefined(waiting.pollUnsafe())
+          allowed = false
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(first)
+          const refused = yield* Fiber.join(waiting).pipe(Effect.flip)
+          assert.strictEqual((refused as Error).message, "No longer allowed")
+          assert.isNull(yield* findOperation("test.durable.deploy", "revoked"))
+
+          // Nor does starting it again hand back one it may not see.
+          const kept = yield* startDurableOperation(
+            deploying,
+            {},
+            { actorId: person.id, idempotencyKey: "kept" }
+          )
+          const again = yield* startDurableOperation(
+            deploying,
+            {},
+            { actorId: person.id, authorize, idempotencyKey: "kept" }
+          ).pipe(Effect.flip)
+          assert.strictEqual((again as Error).message, "No longer allowed")
+          yield* finishOperation(kept, "succeeded")
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
       "never starts a durable change whose caller gave up while it waited",
       () =>
         Effect.gen(function* () {

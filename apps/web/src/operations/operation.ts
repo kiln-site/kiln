@@ -347,10 +347,8 @@ const attempt = <Input, Context, A, E, R>(
       Effect.onError(endedBeforeRun)
     )
     const label = `${definition.name}#${id}`
-    // Its place in line, once admitted, for the wait cap to withdraw, and
-    // why it did.
+    // Its place in line, once admitted, for the wait cap to withdraw.
     let admitted: LaneTicket | undefined
-    let timedOut: LaneRejectedError | undefined
     const services = yield* Effect.context<R | Database>()
     // Admitted and set to be withdrawn in one step that can't be cut off,
     // so a caller that gives up can never leave it holding a place in line.
@@ -380,78 +378,109 @@ const attempt = <Input, Context, A, E, R>(
         ).pipe(Effect.onInterrupt(() => Effect.sync(ticket.cancel)))
       })
     ).pipe(
-      Effect.catch(
-        (
-          error
-        ): Effect.Effect<never, E | OperationBusyError | LocksMovedError> =>
-          error instanceof LaneRejectedError
-            ? refusal(definition.name, timedOut ?? error).pipe(
-                Effect.tapError(() =>
-                  record(definition.name, "refused", {
-                    admittedAt,
-                    finishedAt: admittedAt,
-                    startedAt: admittedAt,
-                  })
-                )
-              )
-            : Effect.fail(error)
-      ),
+      (waiting) =>
+        awaitTurn(waiting, {
+          initiator,
+          label,
+          name: definition.name,
+          onRefused: record(definition.name, "refused", {
+            admittedAt,
+            finishedAt: admittedAt,
+            startedAt: admittedAt,
+          }),
+          ticket: () => admitted,
+          waitUntil,
+        }),
       // Withdrawn before it started: it leaves the view here. Once it
       // starts, the work's own fiber does.
       Effect.onExit(() =>
         laneOccupants.get(label)?.startedAt === null
           ? vacate(label)
           : Effect.void
-      ),
-      // A person waits so long, then is told what's in the way. Hearth's
-      // own work waiting this long is likely work that can't start until
-      // something it waits behind ends: say what.
-      (waiting) =>
-        Effect.raceFirst(
-          waiting,
-          Effect.suspend(() =>
-            initiator === "person"
-              ? Clock.currentTimeMillis.pipe(
-                  Effect.flatMap((now) =>
-                    Effect.sleep(Duration.millis(Math.max(0, waitUntil - now)))
-                  )
-                )
-              : Effect.sleep(SLOW_WAIT)
-          ).pipe(
-            Effect.andThen(
-              Effect.suspend(() => {
-                const waitingOn =
-                  hearthLanes
-                    .describe()
-                    .waiting.find((entry) => entry.label === label)
-                    ?.waitingOn ?? []
-                if (initiator === "system") {
-                  return laneOccupants.get(label)?.startedAt === null
-                    ? Effect.logWarning(
-                        `${definition.name} has waited ${SLOW_WAIT} for its lanes`,
-                        waitingOn
-                      )
-                    : Effect.void
-                }
-                // What's in the way, noted before it's withdrawn, in the
-                // same step as finding it hasn't started; the wait then
-                // ends refused, naming it. One that has started runs to
-                // the end, and the caller gets its result.
-                const blockedBy = [...new Set(waitingOn.map(({ id }) => id))]
-                timedOut = new LaneRejectedError({
-                  blockedBy,
-                  message: `${label} waited as long as a person does on ${blockedBy.join(", ")}`,
-                  reason: "busy",
-                })
-                admitted?.withdraw()
-                return Effect.void
-              })
-            ),
-            Effect.andThen(Effect.never)
-          )
-        )
+      )
     )
   }).pipe(Effect.withSpan(`Operations.${definition.name}`))
+
+/**
+ * Waits for an admitted operation's turn, as every operation and durable
+ * start does (`waiting` is its ticket's run). A person waits until
+ * `waitUntil`; then, if it hasn't started, it's withdrawn in the same step
+ * as finding so, and refused naming what was in the way. One that started
+ * runs to the end, and the caller gets its result. Hearth's own work that
+ * waits `SLOW_WAIT` logs what it waits behind. A lane's refusal becomes the
+ * person's `OperationBusyError`, after `onRefused`.
+ */
+export const awaitTurn = <A, E, R>(
+  waiting: Effect.Effect<A, E | LaneRejectedError, R>,
+  turn: {
+    readonly initiator: Initiator
+    readonly label: string
+    readonly name: string
+    readonly onRefused: Effect.Effect<void, never, R>
+    readonly ticket: () => LaneTicket | undefined
+    readonly waitUntil: number
+  }
+): Effect.Effect<A, Exclude<E, LaneRejectedError> | OperationBusyError, R> => {
+  let timedOut: LaneRejectedError | undefined
+  const waitingOn = () =>
+    hearthLanes.describe().waiting.find((entry) => entry.label === turn.label)
+      ?.waitingOn ?? []
+  const deadline =
+    turn.initiator === "person"
+      ? Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) =>
+            Effect.sleep(Duration.millis(Math.max(0, turn.waitUntil - now)))
+          ),
+          Effect.andThen(
+            Effect.sync(() => {
+              // What's in the way, noted before it's withdrawn.
+              const blockedBy = [...new Set(waitingOn().map(({ id }) => id))]
+              timedOut = new LaneRejectedError({
+                blockedBy,
+                message: `${turn.label} waited as long as a person does on ${blockedBy.join(", ")}`,
+                reason: "busy",
+              })
+              turn.ticket()?.withdraw()
+            })
+          )
+        )
+      : Effect.sleep(SLOW_WAIT).pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              laneOccupants.get(turn.label)?.startedAt === null
+                ? Effect.logWarning(
+                    `${turn.name} has waited ${SLOW_WAIT} for its lanes`,
+                    waitingOn()
+                  )
+                : Effect.void
+            )
+          )
+        )
+  return Effect.raceFirst(
+    waiting.pipe(
+      Effect.catch(
+        (
+          error
+        ): Effect.Effect<
+          never,
+          Exclude<E, LaneRejectedError> | OperationBusyError,
+          R
+        > =>
+          error instanceof LaneRejectedError
+            ? refusal(turn.name, timedOut ?? error).pipe(
+                Effect.tapError(() => turn.onRefused)
+              )
+            : Effect.fail(error as Exclude<E, LaneRejectedError>)
+      )
+    ),
+    deadline.pipe(Effect.andThen(Effect.never))
+  )
+}
+
+/** When a person who starts waiting now stops: `PERSON_WAIT` from now. */
+export const personWaitUntil = Clock.currentTimeMillis.pipe(
+  Effect.map((now) => now + Duration.toMillis(PERSON_WAIT))
+)
 
 /**
  * Runs `definition` from a request or the CLI and returns its result, as a
@@ -479,7 +508,7 @@ const PERSON_WAIT = Duration.seconds(30)
  * another power action or config save, and is turned away at once by work
  * on a whole: replacing or removing it, or something it belongs to.
  */
-const personWhenBusy = (
+export const personWhenBusy = (
   inTheWay: ReadonlyArray<{ readonly key: string }>
 ): "refuse" | "wait" =>
   inTheWay.some(({ key }) => !key.includes("#")) ? "refuse" : "wait"
