@@ -1,14 +1,19 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect, Layer, Schedule } from "effect"
+import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
 
-import { latestAppDeploymentsEffect } from "@/effect/app-deployments"
+import {
+  latestAppDeploymentsEffect,
+  loadAppDeploymentRequestEffect,
+} from "@/effect/app-deployments"
 import {
   createAppRecordEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
+import { databaseTableName } from "@/lib/database-config"
 import { queueDurableOperation } from "@/operations/durable"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -74,6 +79,8 @@ afterAll(() => disposeAppRuntime())
 const relayId = "r".repeat(43)
 const first = "a".repeat(40)
 const second = "b".repeat(40)
+// Apart from the others, whose deployments a test may leave running.
+const third = "c".repeat(40)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -193,6 +200,67 @@ describeMysql("App deployments", () => {
           assert.strictEqual(
             history.succeeded?.relayDeploymentId,
             "deployment-1"
+          )
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "settle what a deletion skipped, so a request after it fails queues anew",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.count = 0
+          relay.deployments.clear()
+          relay.journal.clear()
+          relay.sent.length = 0
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* seedApp(third)
+          yield* insertRows("resource_deletion", {
+            actor: "{}",
+            created_at: 0,
+            final_backup: 0,
+            id: "11111111-1111-4111-8111-111111111111",
+            relay_id: relayId,
+            requested_by: "owner",
+            resource_id: third,
+            resource_kind: "app",
+            status: "pending",
+            updated_at: 0,
+          })
+          const { queueAppDeploymentEffect } = yield* Effect.promise(
+            () => import("@/lib/app-deployments.server")
+          )
+          const settled = Effect.suspend(() =>
+            loadAppDeploymentRequestEffect(third)
+          ).pipe(
+            Effect.repeat({
+              schedule: Schedule.spaced("100 millis"),
+              until: (pending) => pending === null,
+            }),
+            Effect.timeout("20 seconds")
+          )
+
+          // Being deleted: nothing deploys, and the update it asked is settled.
+          yield* queueAppDeploymentEffect(third, relayId, "update")
+          yield* settled
+          assert.isNull((yield* latestAppDeploymentsEffect(third)).latest)
+
+          // The deletion was cancelled: the next update is taken up afresh,
+          // as far as this Relay can, which can't deploy updates.
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`UPDATE ${sql(databaseTableName("resource_deletion"))} SET status = 'cancelled'`
+          yield* queueAppDeploymentEffect(third, relayId, "update")
+          yield* settled
+          assert.strictEqual(
+            (yield* latestAppDeploymentsEffect(third)).latest?.status,
+            "failed"
           )
         }).pipe(TestClock.withLive),
       60_000

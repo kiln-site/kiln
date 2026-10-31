@@ -791,20 +791,22 @@ const provisioningState = (input: DeployInput) =>
 // as a deployment, for whoever looks; a poll's, every minute, isn't.
 const takeTurn = (input: DeployInput, id: string) =>
   Effect.gen(function* () {
+    const pending = input.explicit
+      ? null
+      : yield* loadAppDeploymentRequestEffect(input.appId)
     const deletion = yield* findResourceDeletionEffect(
       input.relayId,
       "app",
       input.appId
     )
+    // Being deleted: nothing deploys, and what was asked is settled, so a
+    // request after a deletion that failed or was kept queues anew.
     if (
       deletion &&
       unfinishedDeletionStatuses.some((status) => status === deletion.status)
     ) {
-      return { plan: null, revision: null }
+      return { plan: null, revision: pending?.revision ?? null }
     }
-    const pending = input.explicit
-      ? null
-      : yield* loadAppDeploymentRequestEffect(input.appId)
     const request = input.explicit
       ? ({
           appId: input.appId,

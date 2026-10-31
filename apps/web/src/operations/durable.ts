@@ -388,7 +388,6 @@ export const queueDurableOperation = <
             Effect.andThen(
               takeTurn({
                 actorId,
-                checkFirst: false,
                 doing: operation.doing(input),
                 id: recorded.id,
                 locks,
@@ -411,10 +410,9 @@ const endedBadly = (state: string) =>
 
 // A waiting operation taking its turn: held in its lanes as Hearth's own
 // work, then started, its workflow run once its locks are its. Who asked is
-// checked again once it waited, or first, as for one a restart found.
+// checked again just before it starts, however it got its turn.
 const takeTurn = (waiting: {
   readonly actorId: string | null
-  readonly checkFirst: boolean
   readonly doing: string
   readonly id: string
   readonly locks: ReadonlyArray<LaneLock>
@@ -423,9 +421,9 @@ const takeTurn = (waiting: {
 }) =>
   Effect.gen(function* () {
     const services = yield* Effect.context<Database>()
-    const start = (waited: boolean) =>
+    const start = () =>
       Effect.gen(function* () {
-        if (waiting.recheck && (waited || waiting.checkFirst)) {
+        if (waiting.recheck) {
           const allowed = yield* Effect.exit(waiting.recheck)
           if (allowed._tag === "Failure") {
             const failure = Cause.squash(allowed.cause)
@@ -445,7 +443,7 @@ const takeTurn = (waiting: {
         yield* awaitOperationEnd(waiting.id)
       }).pipe(Effect.provideContext(services))
     if (waiting.locks.length === 0) {
-      yield* start(false).pipe(Effect.forkDetach)
+      yield* start().pipe(Effect.forkDetach)
       return
     }
     yield* holdLanes({
@@ -484,7 +482,6 @@ export const readmitWaitingOperations = Effect.gen(function* () {
     const known = definition && Option.isSome(input) ? input.value : null
     yield* takeTurn({
       actorId: operation.actorId,
-      checkFirst: true,
       doing: known !== null ? definition!.doing(known) : "Another change",
       id: operation.id,
       locks: withWholes(
