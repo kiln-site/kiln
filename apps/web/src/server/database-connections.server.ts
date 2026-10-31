@@ -134,13 +134,11 @@ export const connectDatabase = operation<DatabaseConnectionInput>()({
     ),
   locks: ({ input }) => [
     exclusive(resourceKey("database", input.relayId, input.databaseId)),
-    // A game server joining it is everyday work its Relay keeps in order;
-    // Apps and databases hold theirs whole until their own changes.
-    input.member.kind === "instance"
-      ? shared(resourceKey("instance", input.relayId, input.member.id))
-      : exclusive(
-          resourceKey(input.member.kind, input.relayId, input.member.id)
-        ),
+    // A game server or App joining it is everyday work its Relay keeps in
+    // order; a database member holds itself whole until its own change.
+    input.member.kind === "database"
+      ? exclusive(resourceKey("database", input.relayId, input.member.id))
+      : shared(resourceKey(input.member.kind, input.relayId, input.member.id)),
     ...(input.member.kind === "app"
       ? [exclusive(partKey(relayKey(input.relayId), "database-connections"))]
       : []),

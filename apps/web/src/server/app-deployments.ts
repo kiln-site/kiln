@@ -82,7 +82,7 @@ const saveGitHubSource = resourceOperation({
   name: "app.source.save",
   doing: "Changing this App's source",
   permission: () => "app.manage",
-  lock: "whole",
+  lock: { part: "config" },
   alsoLocks: (input) =>
     input.deploy ? appDeploymentLocks(input.relayId, input.appId) : [],
   run: saveAppGitHubSourceHandler,

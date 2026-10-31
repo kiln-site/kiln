@@ -173,7 +173,11 @@ A backup or restore holds what its data belongs to: the game server or
 database, or the App for its folder and the volumes it owns, since deleting
 the App takes them with it.
 
-Starting an App's deployment holds the App and
+An App's changes take its parts too: `#config` for its configuration and
+limits, `#name`, `#power`, and `#deploy` for starting a deployment. Its image
+update settings and what a check found hold it shared.
+
+Starting an App's deployment holds its `#deploy` and
 `relay:<id>#database-connections` (`appDeploymentLocks`), whoever starts
 it; Hearth's own deployments wait their turn, and the wait for a running
 deployment to end happens with no lane held. A GitHub sync fetches with
