@@ -48,7 +48,7 @@ stack, and worktree cleanup.
    `fix/panel-disconnect` or `chore/repo-cleanup`), without personal or agent prefixes.
    Use a short, human PR title in `<type>(<scope>): <title>` format. Scopes are
    `hearth`, `bricks`, `relay`, `marketing` for the kiln.site marketing site,
-   and `repo` for repo-wide changes.
+   `docs` for the docs at kiln.site/docs, and `repo` for repo-wide changes.
 5. Use this description format:
 
    ```md

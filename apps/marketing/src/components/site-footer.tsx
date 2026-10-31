@@ -4,9 +4,7 @@ import { DEFAULT_KILN_GIT_REPO } from "@workspace/contracts"
 
 import { socialLinks } from "@/lib/social-links"
 
-import { ComingSoon } from "~/components/coming-soon"
 import { KilnMark } from "~/components/kiln-mark"
-import { comingSoon } from "~/lib/coming-soon"
 import { signInUrl } from "~/lib/plans"
 import { newTab } from "~/lib/new-tab"
 import { useSiteConfig } from "~/lib/use-site-config"
@@ -46,11 +44,7 @@ export function SiteFooter() {
               <Link to="/compare">Compare</Link>
             </FooterLink>
             <FooterLink>
-              <ComingSoon soon={comingSoon.docs} label="Docs">
-                <a href={docsUrl} {...newTab}>
-                  Docs
-                </a>
-              </ComingSoon>
+              <a href={`${docsUrl}/`}>Docs</a>
             </FooterLink>
             <FooterLink>
               <a href={signInUrl(hearthUrl)}>Log in</a>

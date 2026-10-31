@@ -12,7 +12,7 @@ export interface SiteConfig {
 export const getSiteConfig = createServerFn({ method: "GET" }).handler(
   (): SiteConfig => ({
     analytics: analyticsConfig(),
-    docsUrl: baseUrl(process.env.KILN_DOCS_URL, "https://docs.kiln.site"),
+    docsUrl: baseUrl(process.env.KILN_DOCS_URL, "https://kiln.site/docs"),
     hearthUrl: baseUrl(process.env.KILN_HEARTH_URL, "https://panel.kiln.site"),
     siteUrl: baseUrl(process.env.KILN_SITE_URL, "https://kiln.site"),
   })

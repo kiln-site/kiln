@@ -117,7 +117,7 @@ pnpm --filter marketing dev
 
 It serves `http://localhost:3100`. `KILN_HEARTH_URL` (default
 `https://panel.kiln.site`) is where Log in, Sign up, and plan buttons point, and
-`KILN_DOCS_URL` (default `https://docs.kiln.site`) is where docs links point,
+`KILN_DOCS_URL` (default `https://kiln.site/docs`) is where docs links point,
 and `KILN_SITE_URL` (default `https://kiln.site`) is the site's own address for
 canonical links and link previews. All three are read when the site serves a
 request, not at build time. `robots.txt`, `sitemap.xml`, and `llms.txt` in
@@ -175,6 +175,50 @@ docker run -p 3000:3000 -e KILN_HEARTH_URL=https://panel.kiln.site \
 The first publish creates the GHCR package as private. Make it public in the
 package's settings, as with the other images (see [Forking](forking.md)). Run
 the workflow by hand to publish without a change.
+
+## Docs site
+
+`apps/docs` is Kiln's documentation at kiln.site/docs, another TanStack Start
+app with no database or Relay. Pages are Markdown in `apps/docs/content`; read
+[Writing Kiln's docs](../apps/docs/CONTENT.md) before adding one.
+
+```sh
+pnpm --filter docs dev
+```
+
+It serves `http://localhost:3200/docs`. Every route and asset lives under
+`/docs`, the base path the app is built for; set `KILN_DOCS_BASE_PATH` when
+building to serve it somewhere else. `content-plugin.ts` compiles the Markdown
+at build time, with syntax highlighting, into one module per page, and builds
+the search index, which loads the first time someone opens search
+(<kbd>⌘K</kbd>, <kbd>Ctrl</kbd> <kbd>K</kbd>, or <kbd>/</kbd>). The sidebar's
+order is `src/content/navigation.ts`. `/docs/llms.txt`, `/docs/llms-full.txt`,
+`/docs/sitemap.xml`, and each page's Markdown at `/docs/markdown/<page>` come
+from the same files. `KILN_SITE_URL` and the Umami variables work as they do on
+the marketing site.
+
+To see both together locally, run the docs and start the marketing site with
+`KILN_DOCS_ORIGIN=http://localhost:3200`; it then passes `/docs` through, as
+kiln.site does. In production the marketing image does the same when
+`KILN_DOCS_ORIGIN` names the docs container, or whatever is in front of both
+can route `/docs` to the docs image instead.
+
+Walkthroughs (`src/components/walkthroughs`) draw Hearth with its own
+components from `apps/web/src`, through the `@/` alias as the marketing site's
+demos do, with made-up values and nothing fetched. They render in a desktop-
+sized iframe so Hearth's breakpoints see a laptop on any screen, and load only
+on the pages that use them. A component they import has to be listed with
+`@source` in `apps/docs/src/styles.css`.
+
+The **Docs image** workflow builds `ghcr.io/kiln-site/docs` on PRs that touch
+the docs or the shared UI, and publishes `latest` and `sha-<commit>` from
+`main`, like the marketing image. It listens on port 3000 and serves `/docs`:
+
+```sh
+docker run -p 3001:3000 ghcr.io/kiln-site/docs:latest
+docker run -p 3000:3000 -e KILN_DOCS_ORIGIN=http://host.docker.internal:3001 \
+  ghcr.io/kiln-site/marketing:latest
+```
 
 ## PR titles
 

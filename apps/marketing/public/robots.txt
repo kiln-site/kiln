@@ -27,3 +27,4 @@ User-agent: Google-Extended
 Allow: /
 
 Sitemap: https://kiln.site/sitemap.xml
+Sitemap: https://kiln.site/docs/sitemap.xml

@@ -47,6 +47,16 @@ const config = defineConfig(({ command }) => ({
     allowedHosts: [".ts.net"],
     forwardConsole: false,
     host: "0.0.0.0",
+    // With KILN_DOCS_ORIGIN set, /docs comes from the docs app, as it does on
+    // kiln.site (see scripts/serve.mjs).
+    proxy: process.env.KILN_DOCS_ORIGIN
+      ? {
+          "^/docs([/?]|$)": {
+            target: process.env.KILN_DOCS_ORIGIN,
+            ws: true,
+          },
+        }
+      : undefined,
   },
   plugins: lazyPlugins(() => [
     stubHearthServer(),
