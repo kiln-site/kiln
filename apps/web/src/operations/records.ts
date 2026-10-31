@@ -239,6 +239,21 @@ export const startWaitingOperation = Effect.fnUntraced(function* (id: string) {
   return started.affectedRows === 1
 })
 
+/**
+ * Lets an operation that failed, was cut off, or cancelled give up its
+ * idempotency key, so another may be queued under it.
+ */
+export const releaseIdempotencyKey = Effect.fnUntraced(function* (id: string) {
+  const database = yield* Database
+  yield* database.execute(
+    "operations.releaseKey",
+    `UPDATE ${operationTable}
+        SET idempotency_key = NULL
+      WHERE id = ? AND state IN ('failed', 'interrupted', 'cancelled')`,
+    [id]
+  )
+})
+
 /** Durable operations waiting their turn, oldest first, as for a restart. */
 export const waitingOperations = Effect.fnUntraced(function* () {
   const database = yield* Database

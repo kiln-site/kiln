@@ -35,7 +35,7 @@ import {
   loadAppImageUpdateEffect,
 } from "@/effect/app-image-updates"
 import type { Database } from "@/effect/database"
-import { ExternalServiceError, type DatabaseError } from "@/effect/errors"
+import { ExternalServiceError } from "@/effect/errors"
 import {
   getGitHubCommitEffect,
   githubInstallationTokenEffect,
@@ -57,6 +57,8 @@ import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { outsideOperation } from "@/operations/current"
 import { durableOperation, queueDurableOperation } from "@/operations/durable"
+import { currentActingUser } from "@/operations/acting-user"
+import { developmentBypassUserId } from "@/lib/development-bypass"
 import { loadOperation } from "@/operations/records"
 import { RelayCommandError, relayCommand } from "@/operations/relay-command"
 import { appDeploymentLocks } from "@/lib/app-lanes"
@@ -678,20 +680,46 @@ const Taken = Schema.Struct({
  * current deployment of the app is this one, since only this holds it.
  */
 export const deployAppOperation = durableOperation({
+  // A person's: they may still manage the app, as their account stands.
+  authorize: (input, actorId) =>
+    actorId === developmentBypassUserId
+      ? Effect.void
+      : currentActingUser(actorId, {
+          email: "",
+          emailVerified: false,
+          id: actorId,
+          isDevelopmentBypass: false,
+          name: "",
+          role: "user",
+          twoFactorEnabled: false,
+        }).pipe(
+          Effect.flatMap((user) =>
+            promiseEffect(() =>
+              requireRelayPermission({
+                appId: input.appId,
+                permission: "app.manage",
+                relayId: input.relayId,
+                user,
+              })
+            )
+          )
+        ),
   doing: () => "Deploying this App",
   input: DeployInput,
   kind: "app.deploy",
   locks: (input) => appDeploymentLocks(input.relayId, input.appId),
+  // A failure ends it failed, so the request it was for queues another.
   run: (input, operation) =>
     deploySteps(input, operation.id).pipe(
-      Effect.catchCause((cause) =>
+      Effect.tapCause((cause) =>
         Cause.hasInterruptsOnly(cause)
-          ? Effect.failCause(cause)
+          ? Effect.void
           : logException(Cause.squash(cause), {
               operation: "Apps.deploy",
               attributes: { "app.id": input.appId, "relay.id": input.relayId },
             })
-      )
+      ),
+      Effect.orDie
     ),
   version: 1,
 })
@@ -1017,11 +1045,15 @@ const queueRequestedDeployment = (
   appId: string,
   relayId: string,
   acknowledged: number
-): Effect.Effect<string, DatabaseError, Database> =>
+): Effect.Effect<string, unknown, Database> =>
   queueDurableOperation(
     deployAppOperation,
     { appId, relayId },
-    { idempotencyKey: `request:${relayId}/${appId}:${acknowledged}` }
+    {
+      // One that failed leaves the request for another.
+      again: true,
+      idempotencyKey: `request:${relayId}/${appId}:${acknowledged}`,
+    }
   )
 
 /**

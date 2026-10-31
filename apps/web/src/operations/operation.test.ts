@@ -12,10 +12,18 @@ import "@/lib/resource-deletion.server"
 import {
   durableOperation,
   queueDurableOperation,
+  readmitWaitingOperations,
   restoreLockingOperations,
   startDurableOperation,
 } from "./durable"
-import { exclusive, laneOccupants, partKey, resourceKey, shared } from "./lanes"
+import {
+  closeLanes,
+  exclusive,
+  laneOccupants,
+  partKey,
+  resourceKey,
+  shared,
+} from "./lanes"
 import { operation, runOperation } from "./operation"
 import { findOperation, finishOperation, recordOperation } from "./records"
 
@@ -607,6 +615,81 @@ describeMysql("Hearth operations", () => {
             Effect.timeout("5 seconds")
           )
           yield* finishOperation(id, "succeeded")
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "queues durable changes past startup, checks who asked when their turn comes, and retries a failed one",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          let allowed = true
+          const queued = durableOperation({
+            authorize: () =>
+              Effect.suspend(() =>
+                allowed
+                  ? Effect.void
+                  : Effect.fail(new Error("No longer allowed"))
+              ),
+            input: Schema.Struct({ name: Schema.String }),
+            kind: "test.durable.checked",
+            locks: ({ name }) => [exclusive(partKey(server, name))],
+            run: () => Effect.void,
+            version: 1,
+          })
+          const state = (key: string) =>
+            findOperation("test.durable.checked", key).pipe(
+              Effect.map((found) => found?.state)
+            )
+          const until = (key: string, wanted: string) =>
+            state(key).pipe(
+              Effect.repeat({ until: (now) => now === wanted }),
+              Effect.timeout("5 seconds")
+            )
+
+          // While startup takes back what's running, it's recorded and waits.
+          const open = closeLanes()
+          yield* queueDurableOperation(
+            queued,
+            { name: "early" },
+            { idempotencyKey: "early" }
+          )
+          yield* Effect.sleep("100 millis")
+          assert.strictEqual(yield* state("early"), "waiting")
+          yield* open
+          yield* until("early", "running")
+
+          // One waiting with nothing taking its turn, as a restart finds it,
+          // is checked first: whoever asked may no longer.
+          yield* recordOperation({
+            actorId: person.id,
+            idempotencyKey: "restored",
+            input: { name: "restored" },
+            kind: "test.durable.checked",
+            locks: [exclusive(partKey(server, "restored"))],
+            state: "waiting",
+            version: 1,
+          })
+          allowed = false
+          yield* readmitWaitingOperations
+          yield* until("restored", "failed")
+
+          // A key whose operation failed queues another.
+          allowed = true
+          const again = yield* queueDurableOperation(
+            queued,
+            { name: "restored" },
+            { actorId: person.id, again: true, idempotencyKey: "restored" }
+          )
+          yield* until("restored", "running")
+          assert.strictEqual(
+            (yield* findOperation("test.durable.checked", "restored"))?.id,
+            again
+          )
+          for (const key of ["early", "restored"]) {
+            const found = yield* findOperation("test.durable.checked", key)
+            yield* finishOperation(found!.id, "succeeded")
+          }
         }).pipe(TestClock.withLive)
     )
 
