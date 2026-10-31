@@ -633,6 +633,49 @@ describeMysql("Hearth operations", () => {
     )
 
     it.effect(
+      "keeps one not ready waiting, still joined and cancellable, until it is",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          let ready = false
+          const queued = durableOperation({
+            input: Schema.Struct({ asks: Schema.Array(Schema.String) }),
+            join: (waiting, asked) => ({
+              asks: [...waiting.asks, ...asked.asks],
+            }),
+            kind: "test.durable.ready",
+            locks: () => [exclusive(partKey(server, "deploy"))],
+            ready: () => Effect.sync(() => ready),
+            run: () => Effect.void,
+            version: 1,
+          })
+          const queue = (ask: string) =>
+            queueDurableOperation(queued, { asks: [ask] }, { key: "alpha" })
+          const state = (id: string) =>
+            loadOperation(id).pipe(Effect.map((found) => found?.state))
+
+          // Its turn comes while what it needs isn't there: it gives its
+          // turn back, and what's asked meanwhile still joins it.
+          const id = yield* queue("one")
+          yield* Effect.sleep("200 millis")
+          assert.strictEqual(yield* state(id), "waiting")
+          assert.strictEqual(yield* queue("two"), id)
+
+          // Ready by the sweep after: it starts, with both asks.
+          ready = true
+          yield* readmitWaitingOperations
+          yield* state(id).pipe(
+            Effect.repeat({ until: (now) => now === "running" }),
+            Effect.timeout("5 seconds")
+          )
+          assert.deepStrictEqual((yield* loadOperation(id))?.input, {
+            asks: ["one", "two"],
+          })
+          yield* finishOperation(id, "succeeded")
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
       "queues durable changes past startup, and takes up one left waiting",
       () =>
         Effect.gen(function* () {

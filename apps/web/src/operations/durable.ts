@@ -70,6 +70,10 @@ export interface DurableOperation<
   readonly doing: (input: Input["Type"]) => string
   /** What one waiting runs once more is asked of it under its key. */
   readonly join: (waiting: Input["Type"], asked: Input["Type"]) => Input["Type"]
+  /** Whether one queued can start now its turn has come. */
+  readonly ready: (
+    input: Input["Type"]
+  ) => Effect.Effect<boolean, never, Database>
   readonly workflow: Workflow.Workflow<
     string,
     Schema.Struct<{ readonly operationId: Schema.String }>,
@@ -116,6 +120,16 @@ export const durableOperation = <
     waiting: Input["Type"],
     asked: Input["Type"]
   ) => Input["Type"]
+  /**
+   * Whether one queued can start now its turn has come, as when what it
+   * needs is there. One that can't gives its turn back and stays waiting,
+   * so what's asked meanwhile still joins it and it can still be
+   * cancelled; it's tried again within a minute. It answers from what its
+   * key names, which joining doesn't change.
+   */
+  readonly ready?: (
+    input: Input["Type"]
+  ) => Effect.Effect<boolean, never, Database>
   readonly run: (
     input: Input["Type"],
     operation: { readonly id: string }
@@ -194,6 +208,7 @@ export const durableOperation = <
   const definition: DurableOperation<Input, Success, Failure, R> = {
     doing: options.doing ?? (() => "Another change"),
     join: options.join ?? ((waiting) => waiting),
+    ready: options.ready ?? (() => Effect.succeed(true)),
     input: options.input,
     kind: options.kind,
     locks: options.locks ?? (() => []),
@@ -397,6 +412,7 @@ export const queueDurableOperation = <
                 id: queued.id,
                 locks,
                 name: operation.kind,
+                ready: operation.ready(input),
               })
             ),
             Effect.provideContext(services),
@@ -410,18 +426,21 @@ export const queueDurableOperation = <
 
 // A waiting operation taking its turn: held in its lanes as Hearth's own
 // work, however long its turn takes, then started, its workflow run once
-// its locks are its.
+// its locks are its. One not ready gives its turn back, still waiting, for
+// the sweep to take up again.
 const takeTurn = (waiting: {
   readonly actorId: string | null
   readonly doing: string
   readonly id: string
   readonly locks: ReadonlyArray<LaneLock>
   readonly name: string
+  readonly ready: Effect.Effect<boolean, never, Database>
 }) =>
   Effect.gen(function* () {
     const services = yield* Effect.context<Database>()
     const start = () =>
       Effect.gen(function* () {
+        if (!(yield* waiting.ready)) return
         // Held until MySQL answers, so its turn isn't given up meanwhile.
         const started = yield* startWaitingOperation(waiting.id).pipe(
           Effect.retry({ schedule: whileMySqlIsAway })
@@ -476,6 +495,7 @@ export const readmitWaitingOperations = Effect.gen(function* () {
         known !== null ? definition!.locks(known) : operation.locks
       ),
       name: operation.kind,
+      ready: known !== null ? definition!.ready(known) : Effect.succeed(true),
     })
   }
 })

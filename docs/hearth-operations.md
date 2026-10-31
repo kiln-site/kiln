@@ -111,8 +111,11 @@ Relay changes sent at most once (`relayCommand`).
   what's asked while it waits joins it, by its definition's `join`, rather
   than queueing another; it gives up the key as it starts, so what's asked
   then queues one behind it. Asks during the same work make one run after
-  it, and the pipeline, not the feature, keeps what was asked. One still
-  waiting can be cancelled (`cancelWaitingOperation`).
+  it, and the pipeline, not the feature, keeps what was asked. A
+  definition's `ready` says whether one can start when its turn comes, as
+  when what it needs is there; one that can't gives its turn back, still
+  waiting, joinable and holding no lanes, and is tried again within a
+  minute. One still waiting can be cancelled (`cancelWaitingOperation`).
 - It finishes or fails with a message; there's no paused state.
 
 Hearth runs as one process, and a deploy stops the old one before the new
