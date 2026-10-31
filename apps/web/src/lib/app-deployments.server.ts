@@ -170,6 +170,8 @@ const DeployPlan = Schema.Struct({
       repositoryId: Schema.Number,
     })
   ),
+  /** The image an image app's plan was made for. */
+  image: Schema.NullOr(Schema.String),
 })
 type DeployPlan = typeof DeployPlan.Type
 
@@ -259,6 +261,7 @@ const prepareAppDeploymentEffect = Effect.fn("Apps.deploy.prepare")(function* (
       triggeredBy: request.userId,
     },
     token: github?.token ?? null,
+    image: app.config.sourceType === "image" ? app.config.image : null,
   }
   return plan
 })
@@ -445,13 +448,24 @@ const githubCommit = Effect.fnUntraced(function* (
     appId: connection.appId,
     privateKey: connection.privateKey,
   }
+  // A push's or poll's commit only while the app deploys from where it
+  // came: one from a branch the app no longer deploys deploys nothing. A
+  // person's ask that joined it deploys the newest.
+  const pinned =
+    request.pinned?.source === `${source.repositoryId}/${source.branch}`
+      ? request.pinned.commitSha
+      : undefined
+  if (
+    request.pinned &&
+    pinned === undefined &&
+    (request.trigger === "push" || request.trigger === "poll")
+  ) {
+    return null
+  }
   const commit = yield* getGitHubCommitEffect(
     yield* githubInstallationTokenEffect(credentials, installation.id),
     source.repository,
-    request.commit ??
-      (request.pinned?.source === `${source.repositoryId}/${source.branch}`
-        ? request.pinned.commitSha
-        : source.branch)
+    request.commit ?? pinned ?? source.branch
   )
   return {
     commit,
@@ -719,10 +733,19 @@ export const deployAppOperation = durableOperation({
   input: DeployInput,
   kind: deployAppKind,
   locks: (input) => appDeploymentLocks(input.relayId, input.appId),
-  // Starts once its Relay is there to deploy it: until then it waits,
-  // holding nothing, so what's asked meanwhile joins it, it can be
-  // cancelled, and a deletion of the app isn't kept waiting.
-  ready: (input) => relayReachable(input.relayId),
+  // Starts once its Relay is there to deploy it, and no deployment from
+  // before deployments queued, which nothing holds, still runs: the minute
+  // sweep settles that. Until then it waits, holding nothing, so what's
+  // asked meanwhile joins it, it can be cancelled, and a deletion of the
+  // app isn't kept waiting.
+  ready: (input) =>
+    Effect.all([
+      relayReachable(input.relayId),
+      latestAppDeploymentsEffect(input.appId).pipe(
+        Effect.map(({ latest }) => latest?.status !== "running"),
+        Effect.catch(() => Effect.succeed(false))
+      ),
+    ]).pipe(Effect.map(([reachable, settled]) => reachable && settled)),
   // A failure ends it failed, so what it was for is asked again.
   run: (input, operation) =>
     deploySteps(input, operation.id).pipe(
@@ -1124,8 +1147,20 @@ const asSent = (plan: DeployPlan) =>
     if (!app) {
       return yield* sendError("app_config")(new Error("App not found"))
     }
-    // What was decided for one source doesn't deploy another.
-    if (app.config.sourceType !== plan.record.sourceType) {
+    // What was decided for one source doesn't deploy another: another
+    // kind, image, or repository than the plan was made for, as after an
+    // edit while it waited to be sent.
+    const source =
+      plan.token === null
+        ? null
+        : yield* loadAppGitHubSourceEffect(plan.record.appId).pipe(
+            Effect.mapError(sendError("app_config"))
+          )
+    if (
+      app.config.sourceType !== plan.record.sourceType ||
+      (plan.image !== null && app.config.image !== plan.image) ||
+      (plan.token !== null && source?.repositoryId !== plan.token.repositoryId)
+    ) {
       return yield* sendError("app_config")(
         new Error("The app's source changed; deploy it again")
       )

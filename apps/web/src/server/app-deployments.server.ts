@@ -46,11 +46,8 @@ import {
   deployAppKind,
   publishAppDeploymentChange,
 } from "@/lib/app-deployments.server"
-import {
-  activeOperations,
-  cancelWaitingOperation,
-  waitingOperation,
-} from "@/operations/records"
+import { cancelQueuedOperation } from "@/operations/durable"
+import { activeOperations, waitingOperation } from "@/operations/records"
 import { runOperationPromise } from "@/operations/operation"
 import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { publishGitHubSyncChange } from "@/lib/github-sync.server"
@@ -216,7 +213,7 @@ export async function cancelQueuedAppDeployHandler(
     waiting?.id === data.operationId &&
     (await runAppEffect(
       "apps.deploy.cancel",
-      cancelWaitingOperation(waiting.id)
+      cancelQueuedOperation(waiting.id)
     ))
   publishAppDeploymentChange(relay.id)
   if (!cancelled) throw new Error("That deploy has already started")

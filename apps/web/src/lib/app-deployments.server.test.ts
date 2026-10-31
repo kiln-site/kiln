@@ -4,7 +4,11 @@ import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
 
-import { latestAppDeploymentsEffect } from "@/effect/app-deployments"
+import {
+  finishAppDeploymentEffect,
+  insertAppDeploymentEffect,
+  latestAppDeploymentsEffect,
+} from "@/effect/app-deployments"
 import {
   createAppRecordEffect,
   updateAppConfigEffect,
@@ -12,6 +16,7 @@ import {
 import { disposeAppRuntime } from "@/effect/runtime"
 import { databaseTableName } from "@/lib/database-config"
 import { operationsTablePrefix } from "@/operations/engine"
+import { readmitWaitingOperations } from "@/operations/durable"
 import { loadOperation } from "@/operations/records"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -88,6 +93,7 @@ const third = "c".repeat(40)
 const fourth = "d".repeat(40)
 const fifth = "e".repeat(40)
 const sixth = "f".repeat(40)
+const seventh = "7".repeat(40)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -328,6 +334,64 @@ describeMysql("App deployments", () => {
           relay.missing.delete(sixth)
           yield* ask(sixth)
           yield* until(() => sentTo(sixth) === 1)
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "wait for a deployment from before deployments queued to end, then deploy",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.sent.length = 0
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* seedApp(seventh)
+          // Running as Hearth upgraded, with no operation holding it.
+          yield* insertAppDeploymentEffect({
+            appId: seventh,
+            branch: null,
+            commitAuthor: null,
+            commitMessage: null,
+            commitSha: null,
+            error: null,
+            finishedAt: null,
+            id: "11111111-2222-4333-8444-555555555555",
+            imageDigest: null,
+            relayDeploymentId: "20261031090000",
+            relayId,
+            repository: null,
+            rolling: null,
+            sourceType: "image",
+            startedAt: new Date().toISOString(),
+            status: "running",
+            trigger: "manual",
+            triggeredBy: null,
+          })
+
+          // Asked meanwhile, it waits rather than meet the build running.
+          const id = yield* ask(seventh)
+          yield* Effect.sleep("500 millis")
+          assert.strictEqual((yield* loadOperation(id))?.state, "waiting")
+          assert.strictEqual(sentTo(seventh), 0)
+
+          // Settled, as the minute sweep does, it deploys.
+          yield* finishAppDeploymentEffect(
+            "11111111-2222-4333-8444-555555555555",
+            {
+              error: null,
+              finishedAt: new Date().toISOString(),
+              rolling: null,
+              status: "succeeded",
+            }
+          )
+          yield* readmitWaitingOperations
+          yield* until(() => sentTo(seventh) === 1)
         }).pipe(TestClock.withLive),
       60_000
     )
