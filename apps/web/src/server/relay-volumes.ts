@@ -26,7 +26,13 @@ import {
 } from "@/lib/resource-deletion.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
-import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
+import {
+  exclusive,
+  partKey,
+  relayKey,
+  resourceKey,
+  shared,
+} from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -139,14 +145,17 @@ export const createRelayVolume = createServerFn({ method: "POST" })
     })
   )
 
-// Holds what the volume belongs to: itself, or the App that owns it, whose
-// deletion takes it.
+// Holds its name, and shared what the volume belongs to: itself, or the App
+// that owns it, whose deletion takes it.
 const renameVolume = operation<z.infer<typeof renameVolumeSchema>>()({
   name: "volume.rename",
   doing: "Renaming this volume",
   authorize: ({ input, user }) => relayConfigurator(user, input.relayId),
   locks: ({ input }) => [
     exclusive(
+      partKey(resourceKey("volume", input.relayId, input.volumeId), "name")
+    ),
+    shared(
       backupTargetKey(input.relayId, { id: input.volumeId, kind: "volume" })
     ),
   ],

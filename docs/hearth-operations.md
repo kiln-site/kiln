@@ -47,13 +47,18 @@ Every run goes through the same steps, in one `Operations.<name>` span:
 2. **Take its lanes.** Its locks are admitted to Hearth's lanes, the same
    kernel the Relays run (`@workspace/operations`): each key is a lane,
    shared or exclusive, and work on different keys runs at once.
-   - A **person's** operation is refused at once when another holds a lock
-     it needs, or waits ahead for one, naming what: "Deleting this game
-     server is in progress. Try again once it's done." Hearth doesn't queue
-     people's changes. One that conflicts with nothing runs.
+   - A **person's** operation is refused at once when work on a whole is in
+     its way, replacing or removing it, naming what: "Deleting this game
+     server is in progress. Try again once it's done." Behind work on a
+     part, the same kind of everyday change, such as another power action,
+     it waits its turn, up to 30 seconds, then is refused the same way. One
+     that conflicts with nothing runs.
    - **Hearth's own** work, a schedule, worker or reconciler, waits its
      turn, and is authorized again once it has, since what it read may have
-     changed. One that waits over 30 seconds logs what it waits behind.
+     changed. One that waits over 30 seconds logs what it waits behind. A
+     person's that waited is authorized again too. If what it found then
+     needs locks it doesn't hold, as a backup whose preferred destination
+     changed, it takes its turn again with them rather than run without.
    - An operation run **inside another** runs under its parent's locks and
      takes none of its own. It may only need what its parent holds: the same
      keys, or parts of a whole its parent holds exclusively. Needing more is
@@ -109,10 +114,40 @@ A key names a whole (`instance:<relay>/<id>`) or a part of one, after `#`
 so taking the whole exclusively, as deleting it does, waits for or turns
 away every part.
 
+An everyday change mustn't turn away another everyday change. Each takes
+the least that keeps it safe (`resourceOperation`'s `lock`):
+
+- **The whole, exclusive**, only to replace or remove it: deleting,
+  wiping, restoring, importing.
+- **A part, exclusive**, for one kind of change applied on the Relay and
+  saved in Hearth in turn, which another of its kind mustn't interleave
+  with: `#power`, `#config`, `#name`, `#ports`.
+- **The whole, shared**, for everything the Relay or the database already
+  keeps in order: file writes, port reservations, database connections.
+
+Work a change reaches that takes locks of its own is declared on the
+change, so it runs inside it: a start, a port change and a startup change
+each provision the game server's domains, so each also takes its `#dns`.
+Features declare what they change and leave ordering to the lanes; they
+don't keep queues, markers or timestamps of their own.
+
+Whole keys that aren't resources follow the same rule: a backup takes
+`#name` to rename it and `#task` to cancel it, a GitHub sync `#settings` to
+change it and `#files` to write them, a GitHub connection `#installation`
+for what GitHub reports, a Cloudflare connection `#settings` to save it.
+A backup destination's save takes `#settings`, which reserving a backup to
+it takes shared, so each waits for the other. Deleting any of them takes it
+whole, as reinstalling a game server does. An account
+(`user:<id>`) and a CLI request (`cli-device:<id>`) stay whole on purpose:
+sign-ins wait for nothing while an administrator changes the account, and a
+request is answered once.
+
 | Key                               | Changes                                                |
 | --------------------------------- | ------------------------------------------------------ |
 | `instance:<relay>/<id>`           | A game server; `app:`, `database:`, `volume:` likewise |
 | `instance:<relay>/<id>#dns`       | Its DNS records and web routes                         |
+| `instance:<relay>/<id>#power`     | Starting, stopping or restarting it                    |
+| `#config`, `#name`, `#ports`      | Its startup, its name, its ports                       |
 | `user:<id>`                       | An account and its access                              |
 | `user:<id>#session:<id>`          | One of its browser sessions, signing it out            |
 | `user:<id>#cli-credential:<id>`   | One of its linked CLIs, unlinking it                   |
@@ -129,7 +164,7 @@ away every part.
 | `cloudflare-connection:<id>`      | A Cloudflare connection                                |
 | `hearth`                          | Hearth itself: its update, and platform backups        |
 | `backup:<id>`                     | A backup: changing it, or restoring from it            |
-| `backup-storage:<id>`             | A backup destination, and backups reserved to it       |
+| `backup-storage:<id>`             | A backup destination; `#settings` saving it            |
 | `<resource>#backup-policy`        | What its backups keep, leave out, and where they go    |
 | `github-sync:<id>`                | A GitHub sync: changing it, or writing a file for it   |
 | `github-connection:<id>`          | A GitHub connection; what reads through it, shared     |

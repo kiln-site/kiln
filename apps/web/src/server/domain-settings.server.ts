@@ -45,7 +45,7 @@ import { relayJsonEffect } from "@/lib/relay-client"
 import { shortIdRouteIdentifier } from "@/lib/short-id-route"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceAccess } from "@/server/domain-resource-access.server"
-import { exclusive } from "@/operations/lanes"
+import { exclusive, partKey } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -400,11 +400,11 @@ function zoneNameFor(
   return best
 }
 
-// Saving or removing a Cloudflare connection holds it, so two changes to
-// one connection, its token and domains, don't interleave. Reading its
-// zones needs no lock.
-const connectionLock = (connectionId: string) =>
-  exclusive(`cloudflare-connection:${connectionId}`)
+// Saving a Cloudflare connection holds its settings, so two saves of its
+// token and domains don't interleave; removing it holds it whole. Reading
+// its zones needs no lock.
+const connectionKey = (connectionId: string) =>
+  `cloudflare-connection:${connectionId}`
 
 /** The zones a pasted token, or a saved connection's, can manage. */
 export async function discoverCloudflareDomainsHandler(
@@ -519,7 +519,9 @@ const saveConnection = operation<SaveDomainConnectionInput>()({
         promiseEffect(() => prepareConnectionSave(person, input))
       )
     ),
-  locks: ({ context }) => [connectionLock(context.id)],
+  locks: ({ context }) => [
+    exclusive(partKey(connectionKey(context.id), "settings")),
+  ],
   run: ({ context, input }) =>
     saveDomainConnectionEffect({
       apiToken: input.apiToken,
@@ -564,7 +566,7 @@ const deleteConnection = operation<DeleteDomainConnectionInput>()({
       )
     }),
   locks: ({ context: allowed, input }) =>
-    allowed ? [connectionLock(input.id)] : [],
+    allowed ? [exclusive(connectionKey(input.id))] : [],
   run: ({ context: allowed, input }) =>
     allowed
       ? requireConnectionUnusedEffect(input.id).pipe(

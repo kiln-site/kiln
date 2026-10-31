@@ -16,14 +16,21 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { hasBackupPermission } from "@/lib/backup-access"
 import {
   backupKey,
-  backupStorageKey,
+  backupStorageSettingsKey,
   backupTargetKey,
 } from "@/lib/backup-lanes"
 import { resolveBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import type { BackupCatalogRecord } from "@/effect/backups"
 import type { BackupTarget } from "@workspace/contracts"
 import type { BackupAction } from "@/lib/backup-target-permissions"
-import { exclusive, partKey, shared, type LaneLock } from "@/operations/lanes"
+import {
+  exclusive,
+  lockAs,
+  partKey,
+  shared,
+  type LaneLock,
+  type LockPolicy,
+} from "@/operations/lanes"
 import { operation, signedIn } from "@/operations/operation"
 import {
   createAppBackupsHandler,
@@ -75,7 +82,7 @@ const destinations = (
   storageIds: ReadonlyArray<string | null> | undefined
 ): Array<LaneLock> =>
   [...new Set(storageIds ?? [])].flatMap((id) =>
-    id ? [shared(backupStorageKey(id))] : []
+    id ? [shared(backupStorageSettingsKey(id))] : []
   )
 
 const permitted = (
@@ -446,9 +453,10 @@ async function requireBackupAction(
   }
 }
 
-// A change to one backup: it holds that backup, exclusively unless it only
-// reads from it, as copying and downloading do. Each checks the person may
-// do it before any lane is taken; the run says why one that's gone can't.
+// A change to one backup, holding it as `lock` says: whole to delete it, a
+// part to rename or cancel it, shared to read from it, as copying and
+// downloading do. Each checks the person may do it before any lane is
+// taken; the run says why one that's gone can't.
 const backupOperation = <
   Input extends { readonly backupId: string },
   A,
@@ -457,7 +465,7 @@ const backupOperation = <
   readonly doing: string | ((input: Input) => string)
   readonly action: (input: Input) => BackupAction
   readonly denied: (input: Input) => string
-  readonly reads?: boolean
+  readonly lock: LockPolicy
   readonly alsoLocks?: (input: Input) => Array<LaneLock>
   readonly handler: (user: AuthenticatedUser, input: Input) => Promise<A>
 }) =>
@@ -491,9 +499,7 @@ const backupOperation = <
         )
       ),
     locks: ({ input }) => [
-      definition.reads
-        ? shared(backupKey(input.backupId))
-        : exclusive(backupKey(input.backupId)),
+      lockAs(backupKey(input.backupId), definition.lock),
       ...(definition.alsoLocks?.(input) ?? []),
     ],
     run: ({ context, input }) =>
@@ -508,6 +514,7 @@ const backupOperation = <
 export const cancelBackup = backupOperation({
   name: "backup.cancel",
   doing: "Cancelling this backup",
+  lock: { part: "task" },
   action: () => "backup.create",
   denied: () => "You do not have permission to cancel this backup",
   handler: (user, input: BackupIdInput) => cancelBackupHandler(user, input),
@@ -515,6 +522,7 @@ export const cancelBackup = backupOperation({
 
 export const removeBackup = backupOperation({
   name: "backup.delete",
+  lock: "whole",
   doing: (input: BackupRemovalInput) =>
     input.mode === "forget" ? "Removing this backup" : "Deleting this backup",
   action: (input) =>
@@ -526,6 +534,7 @@ export const removeBackup = backupOperation({
 export const renameBackup = backupOperation({
   name: "backup.rename",
   doing: "Renaming this backup",
+  lock: { part: "name" },
   action: () => "backup.create",
   denied: () => "You do not have permission to rename this backup",
   handler: (user, input: RenameBackupInput) => renameBackupHandler(user, input),
@@ -536,7 +545,7 @@ export const copyBackup = backupOperation({
   doing: "Copying this backup",
   action: () => "backup.download",
   denied: () => "You do not have permission to copy this backup",
-  reads: true,
+  lock: "shared",
   alsoLocks: (input: CopyBackupInput) => destinations([input.storageId]),
   handler: copyBackupToDestinationHandler,
 })
@@ -548,7 +557,7 @@ export const downloadBackup = backupOperation({
   doing: "Preparing a download of this backup",
   action: () => "backup.download",
   denied: () => "You do not have permission to download this backup",
-  reads: true,
+  lock: "shared",
   handler: (user, input: BackupDownloadInput) =>
     getBackupDownloadUrlHandler(user, input),
 })

@@ -6,8 +6,12 @@
  */
 import { randomUUID } from "node:crypto"
 
-import { LaneRejectedError, type LaneLock } from "@workspace/operations"
-import { Cause, Clock, Effect, Exit, Metric, Schema } from "effect"
+import {
+  LaneRejectedError,
+  type LaneLock,
+  type LaneTicket,
+} from "@workspace/operations"
+import { Cause, Clock, Duration, Effect, Exit, Metric, Schema } from "effect"
 
 import { Database } from "@/effect/database"
 import { runAppEffect } from "@/effect/runtime"
@@ -171,6 +175,47 @@ export const runOperation = <Input, Context, A, E, R>(
   input: Input,
   caller: OperationCaller
 ): Effect.Effect<A, E | OperationBusyError, R | Database> =>
+  // A person waits up to PERSON_WAIT in all, however often they take their
+  // turn again.
+  Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) =>
+      attempt(
+        definition,
+        input,
+        caller,
+        now + Duration.toMillis(PERSON_WAIT)
+      ).pipe(
+        Effect.retry({
+          times: 2,
+          while: (error) => Schema.is(LocksMovedError)(error),
+        })
+      )
+    ),
+    Effect.catchIf(
+      (error) => Schema.is(LocksMovedError)(error),
+      () =>
+        Effect.fail(
+          new OperationBusyError({
+            message: "What this changes kept changing. Try again shortly.",
+            operation: definition.name,
+          })
+        )
+    )
+  ) as Effect.Effect<A, E | OperationBusyError, R | Database>
+
+// What a run that waited found, checked again, needs locks it doesn't hold:
+// it takes its turn again with them rather than run without.
+class LocksMovedError extends Schema.TaggedError<LocksMovedError>()(
+  "LocksMovedError",
+  {}
+) {}
+
+const attempt = <Input, Context, A, E, R>(
+  definition: Operation<Input, Context, A, E, R>,
+  input: Input,
+  caller: OperationCaller,
+  waitUntil: number
+): Effect.Effect<A, E | OperationBusyError | LocksMovedError, R | Database> =>
   Effect.gen(function* () {
     const id = randomUUID()
     const parent = yield* CurrentOperation
@@ -224,17 +269,33 @@ export const runOperation = <Input, Context, A, E, R>(
       held: ReadonlyArray<LaneLock>,
       waited: boolean,
       label: string | null
-    ): Effect.Effect<A, E, R | Database> =>
+    ): Effect.Effect<A, E | LocksMovedError, R | Database> =>
       Effect.gen(function* () {
         const startedAt = yield* Clock.currentTimeMillis
         const occupant = label ? laneOccupants.get(label) : undefined
         if (occupant) occupant.startedAt = startedAt
+        // What it read may have changed while it waited, as which backup
+        // destination is preferred: checked again, and taken from the top
+        // if it now changes something its locks don't cover.
+        const rechecked =
+          waited && definition.authorize
+            ? yield* authorize.pipe(
+                Effect.withSpan("Operations.authorize"),
+                Effect.exit
+              )
+            : null
+        if (rechecked && Exit.isSuccess(rechecked)) {
+          const needed = withWholes(
+            definition.locks({ ...args, context: rechecked.value })
+          )
+          if (uncovered(needed, held).length > 0) {
+            return yield* new LocksMovedError()
+          }
+          context = rechecked.value
+        }
         const exit = yield* Effect.gen(function* () {
-          // What it read may have changed while it waited.
-          if (waited && definition.authorize) {
-            context = yield* authorize.pipe(
-              Effect.withSpan("Operations.authorize")
-            )
+          if (rechecked && Exit.isFailure(rechecked)) {
+            return yield* Effect.failCause(rechecked.cause)
           }
           return yield* definition.run({ ...args, context, operationId: id })
         }).pipe(
@@ -277,23 +338,27 @@ export const runOperation = <Input, Context, A, E, R>(
     yield* awaitLanesOpen(initiator, definition.name).pipe(
       Effect.tapError(() =>
         Metric.update(
-          Metric.withAttributes(refusals, { "operation.name": definition.name }),
+          Metric.withAttributes(refusals, {
+            "operation.name": definition.name,
+          }),
           1
         )
       ),
       Effect.onError(endedBeforeRun)
     )
     const label = `${definition.name}#${id}`
+    // Its place in line, once admitted, for the wait cap to withdraw.
+    let admitted: LaneTicket | undefined
     const services = yield* Effect.context<R | Database>()
     // Admitted and set to be withdrawn in one step that can't be cut off,
     // so a caller that gives up can never leave it holding a place in line.
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.suspend(() => {
-        const ticket = hearthLanes.admit({
+        const ticket = (admitted = hearthLanes.admit({
           label,
           locks,
-          whenBusy: initiator === "person" ? "refuse" : "wait",
-        })
+          whenBusy: initiator === "person" ? personWhenBusy : "wait",
+        }))
         occupy(label, {
           actorId: caller.user?.id ?? null,
           admittedAt,
@@ -313,18 +378,21 @@ export const runOperation = <Input, Context, A, E, R>(
         ).pipe(Effect.onInterrupt(() => Effect.sync(ticket.cancel)))
       })
     ).pipe(
-      Effect.catch((error): Effect.Effect<never, E | OperationBusyError> =>
-        error instanceof LaneRejectedError
-          ? refusal(definition.name, error).pipe(
-              Effect.tapError(() =>
-                record(definition.name, "refused", {
-                  admittedAt,
-                  finishedAt: admittedAt,
-                  startedAt: admittedAt,
-                })
+      Effect.catch(
+        (
+          error
+        ): Effect.Effect<never, E | OperationBusyError | LocksMovedError> =>
+          error instanceof LaneRejectedError
+            ? refusal(definition.name, error).pipe(
+                Effect.tapError(() =>
+                  record(definition.name, "refused", {
+                    admittedAt,
+                    finishedAt: admittedAt,
+                    startedAt: admittedAt,
+                  })
+                )
               )
-            )
-          : Effect.fail(error)
+            : Effect.fail(error)
       ),
       // Withdrawn before it started: it leaves the view here. Once it
       // starts, the work's own fiber does.
@@ -333,24 +401,64 @@ export const runOperation = <Input, Context, A, E, R>(
           ? vacate(label)
           : Effect.void
       ),
-      // Waiting this long is likely work that can't start until
+      // A person waits so long, then is told what's in the way. Hearth's
+      // own work waiting this long is likely work that can't start until
       // something it waits behind ends: say what.
       (waiting) =>
         Effect.raceFirst(
           waiting,
-          Effect.sleep(SLOW_WAIT).pipe(
+          Effect.suspend(() =>
+            initiator === "person"
+              ? Clock.currentTimeMillis.pipe(
+                  Effect.flatMap((now) =>
+                    Effect.sleep(Duration.millis(Math.max(0, waitUntil - now)))
+                  )
+                )
+              : Effect.sleep(SLOW_WAIT)
+          ).pipe(
             Effect.andThen(
-              Effect.suspend(() =>
-                laneOccupants.get(label)?.startedAt === null
-                  ? Effect.logWarning(
-                      `${definition.name} has waited ${SLOW_WAIT} for its lanes`,
-                      hearthLanes
-                        .describe()
-                        .waiting.find((entry) => entry.label === label)
-                        ?.waitingOn ?? []
+              Effect.suspend(() => {
+                // Withdrawn in the same step as finding it hasn't started:
+                // one that has runs to the end, and the caller gets its
+                // result.
+                if (initiator === "person") {
+                  if (admitted && !admitted.withdraw()) return Effect.void
+                } else if (laneOccupants.get(label)?.startedAt !== null) {
+                  return Effect.void
+                }
+                const waitingOn =
+                  hearthLanes
+                    .describe()
+                    .waiting.find((entry) => entry.label === label)
+                    ?.waitingOn ?? []
+                if (initiator === "system") {
+                  return Effect.logWarning(
+                    `${definition.name} has waited ${SLOW_WAIT} for its lanes`,
+                    waitingOn
+                  )
+                }
+                const blockedBy = [...new Set(waitingOn.map(({ id }) => id))]
+                return refusal(
+                  definition.name,
+                  new LaneRejectedError({
+                    blockedBy,
+                    message: `${label} waited as long as a person does on ${blockedBy.join(", ")}`,
+                    reason: "busy",
+                  })
+                ).pipe(
+                  Effect.tapError(() =>
+                    Clock.currentTimeMillis.pipe(
+                      Effect.flatMap((finishedAt) =>
+                        record(definition.name, "refused", {
+                          admittedAt,
+                          finishedAt,
+                          startedAt: finishedAt,
+                        })
+                      )
                     )
-                  : Effect.void
-              )
+                  )
+                )
+              })
             ),
             Effect.andThen(Effect.never)
           )
@@ -374,6 +482,20 @@ export function runOperationPromise<Input, Context, A, E, R>(
 }
 
 const SLOW_WAIT = "30 seconds"
+
+// How long a person waits behind everyday work before being told what's in
+// the way.
+const PERSON_WAIT = Duration.seconds(30)
+
+/**
+ * A person waits behind everyday work on a part of what they change, as
+ * another power action or config save, and is turned away at once by work
+ * on a whole: replacing or removing it, or something it belongs to.
+ */
+const personWhenBusy = (
+  inTheWay: ReadonlyArray<{ readonly key: string }>
+): "refuse" | "wait" =>
+  inTheWay.some(({ key }) => !key.includes("#")) ? "refuse" : "wait"
 
 // Notes how a run went on its span and in the metrics.
 const record = (
