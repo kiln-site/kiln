@@ -44,7 +44,7 @@ import { outsideOperation } from "@/operations/current"
 import { durableOperation, queueDurableOperation } from "@/operations/durable"
 import { Activity } from "effect/workflow"
 import { exclusive, partKey, shared } from "@/operations/lanes"
-import { inLanes } from "@/operations/operation"
+import { inLanes, OperationBusyError } from "@/operations/operation"
 import { githubSyncTargetAccess } from "@/lib/github-sync-targets"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
@@ -437,6 +437,8 @@ export async function enqueueGitHubSync(
 }
 
 // A poll's run, in the sync's lanes, by whatever asked, which doesn't wait.
+// Only if nothing's in its way: a sync busy now is polled again next
+// minute, so polls never pile up behind a long run.
 function pollGitHubSync(syncId: string): void {
   outsideOperation(() =>
     forkAppWorker(
@@ -447,15 +449,19 @@ function pollGitHubSync(syncId: string): void {
           "github.sync.poll",
           "Syncing files from GitHub",
           syncRunLocks(sync.value),
-          runQueuedSync(syncId, "poll")
+          runQueuedSync(syncId, "poll"),
+          { onlyIfFree: true }
         )
       }).pipe(
-        Effect.catchCause((cause) =>
-          logException(Cause.squash(cause), {
-            operation: "github.sync.poll",
-            attributes: { "github.sync.id": syncId },
-          })
-        )
+        Effect.catchCause((cause) => {
+          const failure = Cause.squash(cause)
+          return failure instanceof OperationBusyError
+            ? Effect.void
+            : logException(failure, {
+                operation: "github.sync.poll",
+                attributes: { "github.sync.id": syncId },
+              })
+        })
       )
     )
   )
