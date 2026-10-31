@@ -338,7 +338,7 @@ const changeAppConfig = resourceOperation({
   kind: "app",
   id: (input: z.infer<typeof appConfigInputSchema>) => input.appId,
   name: "app.config.update",
-  lock: "whole",
+  lock: { part: "config" },
   doing: "Changing this App's configuration",
   permission: () => "app.manage",
   run: async (user, data) => {
@@ -364,7 +364,7 @@ const renameAppNow = resourceOperation({
   kind: "app",
   id: (input: z.infer<typeof appRenameInputSchema>) => input.appId,
   name: "app.rename",
-  lock: "whole",
+  lock: { part: "name" },
   doing: "Renaming this App",
   permission: () => "app.manage",
   run: async (user, data) => {
@@ -393,7 +393,7 @@ const deployAppNow = resourceOperation({
   kind: "app",
   id: (input: z.infer<typeof appInputSchema>) => input.appId,
   name: "app.deploy",
-  lock: "whole",
+  lock: { part: "deploy" },
   doing: "Deploying this App",
   permission: () => "app.manage",
   alsoLocks: (input) => appDeploymentLocks(input.relayId, input.appId),
@@ -429,7 +429,7 @@ const changeAppLimits = resourceOperation({
   kind: "app",
   id: (input: z.infer<typeof appLimitsInputSchema>) => input.appId,
   name: "app.limits.update",
-  lock: "whole",
+  lock: { part: "config" },
   doing: "Changing this App's limits",
   permission: () => "app.manage",
   run: async (user, data) => {
@@ -474,7 +474,7 @@ const runAppActionNow = resourceOperation({
   kind: "app",
   id: (input: z.infer<typeof appActionInputSchema>) => input.appId,
   name: "app.power",
-  lock: "whole",
+  lock: { part: "power" },
   doing: "Changing this App's power",
   permission: () => "app.manage",
   run: async (user, data) => {

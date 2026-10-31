@@ -32,7 +32,8 @@ const policyInputSchema = appInputSchema.extend({
 
 const skipInputSchema = appInputSchema.extend({ digest: imageDigestSchema })
 
-// Each holds the App; deploying its update holds what a deployment does.
+// Each holds the App shared: its image updates are its own settings and
+// what a check found. Deploying an update holds what a deployment does.
 const imageOperation = <Input extends z.infer<typeof appInputSchema>, A>(
   name: string,
   doing: string,
@@ -45,7 +46,7 @@ const imageOperation = <Input extends z.infer<typeof appInputSchema>, A>(
     name,
     doing,
     permission: () => "app.manage",
-    lock: "whole",
+    lock: deploys ? { part: "deploy" } : "shared",
     alsoLocks: (input) =>
       deploys ? appDeploymentLocks(input.relayId, input.appId) : [],
     run,

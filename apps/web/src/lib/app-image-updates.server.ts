@@ -30,7 +30,7 @@ import {
 } from "@/effect/notifications"
 import { forkAppWorker } from "@/effect/runtime"
 import { outsideOperation } from "@/operations/current"
-import { exclusive, resourceKey } from "@/operations/lanes"
+import { resourceKey, shared } from "@/operations/lanes"
 import { inLanes } from "@/operations/operation"
 import { databaseTable } from "@/lib/database-config"
 import {
@@ -379,7 +379,7 @@ const checkAppImagesEffect = (
     inLanes(
       "app.image.check.record",
       "Checking this App's image",
-      [exclusive(resourceKey("app", relay.id, appId))],
+      [shared(resourceKey("app", relay.id, appId))],
       recordAppImageAnswersEffect(relay, appId, asked, actorUserId)
     ).pipe(
       Effect.tap((appChanged) =>
