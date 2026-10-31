@@ -124,7 +124,13 @@ away every part.
 | `relay:<id>#authorization`        | What a Relay holds of who may do what                  |
 | `relay:<id>#database-connections` | Apps' database connections handover                    |
 | `cloudflare-connection:<id>`      | A Cloudflare connection                                |
-| `hearth`                          | Hearth itself, while its update starts                 |
+| `hearth`                          | Hearth itself: its update, and platform backups        |
+| `backup:<id>`                     | A backup: changing it, or restoring from it            |
+| `backup-storage:<id>`             | A backup destination, and backups reserved to it       |
+
+A backup or restore holds what its data belongs to: the game server or
+database, or the App for its folder and the volumes it owns, since deleting
+the App takes them with it.
 
 ## Tracing and metrics
 
