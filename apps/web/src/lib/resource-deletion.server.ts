@@ -42,7 +42,13 @@ import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay } from "@/lib/relay-registry"
 import { currentActingUser } from "@/operations/acting-user"
 import { durableOperation, startDurableOperation } from "@/operations/durable"
-import { exclusive, resourceKey, type Initiator } from "@/operations/lanes"
+import {
+  exclusive,
+  resourceKey,
+  shared,
+  type Initiator,
+} from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
 import { RelayCommandError, relayCommand } from "@/operations/relay-command"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup"
@@ -753,40 +759,79 @@ export const keepResource = durableOperation({
   version: 1,
 })
 
+// Asks the Relay to stop an App's running build before its deletion waits
+// for the whole App, which the build's deployment holds a part of until it
+// ends. Holding the App shared, it runs beside that deployment. Best
+// effort: an App with no build, a Relay that can't hear it now, or a turn
+// that doesn't come soon, as behind another deletion of it, leaves the
+// deletion to take its turn as before.
+const abortAppDeployment = (deletion: ResourceDeletion) =>
+  inLanes(
+    "app.deployment.abort",
+    "Stopping this App's deployment",
+    [shared(resourceKey("app", deletion.relayId, deletion.resourceId))],
+    promiseEffect(async () => {
+      const relay = await activeRelay(deletion.relayId)
+      await relayRpc(
+        relay,
+        "app.deployment.abort",
+        { appId: deletion.resourceId },
+        15_000
+      )
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          "Couldn't stop an App's deployment before deleting it",
+          cause
+        )
+      )
+    )
+  ).pipe(Effect.timeoutOption("10 seconds"), Effect.asVoid)
+
 // Starts the operation that carries out a deletion's current attempt. One
 // already started under its key is the same operation. A person's attempt
 // is refused while something else changes the resource, and recorded as
-// failed with why, for them to try again; Hearth's own waits.
+// failed with why, for them to try again; Hearth's own waits. Deleting an
+// App stops its build first.
 const startAttempt = (deletion: ResourceDeletion, initiator: Initiator) =>
-  startDurableOperation(
-    deletion.status === "cancelling" ? keepResource : deleteResource,
-    {
-      attempt: deletion.attempt,
-      deletionId: deletion.id,
-      kind: deletion.kind,
-      relayId: deletion.relayId,
-      resourceId: deletion.resourceId,
-    },
-    {
-      actorId: deletion.requestedBy,
-      idempotencyKey: `${deletion.id}:${deletion.attempt}`,
-      initiator,
-    }
-  ).pipe(
-    Effect.tapErrorTag("OperationBusyError", (busy) =>
-      recordResourceDeletionStatusEffect({
-        attempt: deletion.attempt,
-        error: busy.message,
-        from: [deletion.status],
-        id: deletion.id,
-        status: "failed",
-      }).pipe(
-        Effect.tap(() => Effect.sync(() => publishDeletionChange(deletion))),
-        Effect.tap(deliverSchedules),
-        Effect.ignore
+  (deletion.kind === "app" && deletion.status !== "cancelling"
+    ? abortAppDeployment(deletion)
+    : Effect.void
+  )
+    .pipe(
+      Effect.andThen(
+        startDurableOperation(
+          deletion.status === "cancelling" ? keepResource : deleteResource,
+          {
+            attempt: deletion.attempt,
+            deletionId: deletion.id,
+            kind: deletion.kind,
+            relayId: deletion.relayId,
+            resourceId: deletion.resourceId,
+          },
+          {
+            actorId: deletion.requestedBy,
+            idempotencyKey: `${deletion.id}:${deletion.attempt}`,
+            initiator,
+          }
+        )
       )
     )
-  )
+    .pipe(
+      Effect.tapErrorTag("OperationBusyError", (busy) =>
+        recordResourceDeletionStatusEffect({
+          attempt: deletion.attempt,
+          error: busy.message,
+          from: [deletion.status],
+          id: deletion.id,
+          status: "failed",
+        }).pipe(
+          Effect.tap(() => Effect.sync(() => publishDeletionChange(deletion))),
+          Effect.tap(deliverSchedules),
+          Effect.ignore
+        )
+      )
+    )
 
 /**
  * Admits every running attempt whose operation is missing, as after Hearth

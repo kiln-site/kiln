@@ -173,8 +173,10 @@ describeMysql("Deleting a game server or database", () => {
 
           assert.strictEqual(app?.status, "failed")
           assert.strictEqual(volume?.status, "failed")
-          // Frozen, and nothing deleted, on the Relay or in Hearth.
+          // The App's build stopped, both frozen, and nothing deleted, on the
+          // Relay or in Hearth.
           assert.deepStrictEqual(relay.changes, [
+            "app.deployment.abort",
             "resource.freeze",
             "resource.freeze",
           ])
