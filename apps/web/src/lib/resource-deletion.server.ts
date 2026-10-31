@@ -788,6 +788,20 @@ const abortAppDeployment = (deletion: ResourceDeletion) =>
     )
   ).pipe(Effect.timeoutOption("10 seconds"), Effect.asVoid)
 
+// Stops the App's build for its deletion, only while whoever asked may
+// still delete it: one who no longer may has it refused, and stops nothing.
+const stopBuildFor = (deletion: ResourceDeletion) =>
+  checkAccess({
+    attempt: deletion.attempt,
+    deletionId: deletion.id,
+    kind: deletion.kind,
+    relayId: deletion.relayId,
+    resourceId: deletion.resourceId,
+  }).pipe(
+    Effect.andThen(abortAppDeployment(deletion)),
+    Effect.catchCause(() => Effect.void)
+  )
+
 // Starts the operation that carries out a deletion's current attempt. One
 // already started under its key is the same operation. A person's attempt
 // is refused while something else changes the resource, and recorded as
@@ -795,7 +809,7 @@ const abortAppDeployment = (deletion: ResourceDeletion) =>
 // App stops its build first.
 const startAttempt = (deletion: ResourceDeletion, initiator: Initiator) =>
   (deletion.kind === "app" && deletion.status !== "cancelling"
-    ? abortAppDeployment(deletion)
+    ? stopBuildFor(deletion)
     : Effect.void
   )
     .pipe(

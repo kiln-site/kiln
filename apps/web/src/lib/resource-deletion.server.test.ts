@@ -202,6 +202,20 @@ describeMysql("Deleting a game server or database", () => {
           assert.strictEqual(failed?.status, "failed")
           assert.deepStrictEqual(relay.changes, [])
           assert.deepStrictEqual(yield* serverRecords, [serverId])
+
+          // Nor an App's build stopped for them.
+          yield* seedApp([])
+          yield* requestResourceDeletionEffect({
+            finalBackup: false,
+            kind: "app",
+            relayId,
+            resourceId: appId,
+            storageId: null,
+            user: stranger,
+          }).pipe(Effect.ignore)
+          yield* until(appId, ["failed", "completed"])
+          assert.deepStrictEqual(relay.changes, [])
+          assert.deepStrictEqual(yield* appRecords, [appId])
         }).pipe(TestClock.withLive),
       60_000
     )
