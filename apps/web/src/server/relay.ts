@@ -75,6 +75,7 @@ import {
 } from "@/lib/permissions"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { resourceOperation } from "@/server/resource-operation.server"
 import {
   AuthenticationError,
   ExternalServiceError,
@@ -131,7 +132,7 @@ import {
 } from "@/lib/relay-selectors"
 import { updateInstanceSourceName } from "@/lib/instance-registry"
 import { dnsKey } from "@/lib/dns-operations"
-import { exclusive } from "@/operations/lanes"
+import { exclusive, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -508,48 +509,60 @@ function warnRelayUnavailable(relayId: string, cause: unknown) {
   console.warn(`[Kiln Relay] Could not reach Relay ${relayId}:`, cause)
 }
 
+const renameInstance = resourceOperation({
+  kind: "instance",
+  id: (input: z.infer<typeof instanceNameInputSchema>) => input.instanceId,
+  name: "instance.rename",
+  doing: "Renaming this game server",
+  permission: () => "instance.configuration.write",
+  run: renameInstanceHandler,
+})
+
 export const updateInstanceName = createServerFn({ method: "POST" })
   .validator(instanceNameInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireRelayPermission({
-      user,
-      relayId: relay.id,
-      permission: "instance.configuration.write",
-      instanceId: data.instanceId,
+  .handler(async ({ data }) =>
+    runOperationPromise(renameInstance, data, {
+      user: await instanceSessionUser(),
     })
-    const snapshot = relaySnapshotSchema.parse(
-      await relayRequestRaw(relay, "/v1/snapshot")
-    )
-    const instance = snapshot.instances.find(
-      (item) => item.id === data.instanceId
-    )
-    if (!instance) throw new Error("Instance not found")
+  )
 
-    const renamed = relayInstanceSchema.parse(
-      await relayRequestRaw(
-        relay,
-        `/v1/instances/${encodeURIComponent(instance.id)}`,
-        {
-          body: JSON.stringify({ name: data.name }),
-          method: "PUT",
-        },
-        undefined,
-        user.id
-      )
+async function renameInstanceHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof instanceNameInputSchema>
+) {
+  const relay = await instanceRelay(data.relayId)
+  const snapshot = relaySnapshotSchema.parse(
+    await relayRequestRaw(relay, "/v1/snapshot")
+  )
+  const instance = snapshot.instances.find(
+    (item) => item.id === data.instanceId
+  )
+  if (!instance) throw new Error("Instance not found")
+
+  const renamed = relayInstanceSchema.parse(
+    await relayRequestRaw(
+      relay,
+      `/v1/instances/${encodeURIComponent(instance.id)}`,
+      {
+        body: JSON.stringify({ name: data.name }),
+        method: "PUT",
+      },
+      undefined,
+      user.id
     )
-    await updateInstanceSourceName(relay.id, renamed)
-    await runAppEffect(
-      "relay.snapshot.invalidate",
-      invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
-    )
-    publishRealtimeChange({
-      instance: renamed,
-      relayId: relay.id,
-      type: "instance.upsert",
-    })
-    return { ...projectRelayInstanceOverview(renamed), relayId: relay.id }
+  )
+  await updateInstanceSourceName(relay.id, renamed)
+  await runAppEffect(
+    "relay.snapshot.invalidate",
+    invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
+  )
+  publishRealtimeChange({
+    instance: renamed,
+    relayId: relay.id,
+    type: "instance.upsert",
   })
+  return { ...projectRelayInstanceOverview(renamed), relayId: relay.id }
+}
 
 export const deleteInstance = createServerFn({ method: "POST" })
   .validator(deleteInstanceInputSchema)
@@ -625,35 +638,58 @@ export const completeRelayConsoleCommand = createServerFn({ method: "POST" })
     return relayConsoleCompletionSchema.parse(value)
   })
 
+const removeDatabaseConnectionInputSchema =
+  relayRemoveDatabaseConnectionSchema.extend({ relayId: relayIdSchema })
+
+// Holds the database it disconnects from shared, so its deletion waits.
+const disconnectInstanceDatabase = resourceOperation({
+  kind: "instance",
+  id: (input: z.infer<typeof removeDatabaseConnectionInputSchema>) =>
+    input.instanceId,
+  name: "instance.database.disconnect",
+  doing: "Changing this game server's database connections",
+  permission: () => "instance.network.write",
+  alsoLocks: (input) => [
+    shared(resourceKey("database", input.databaseRelayId, input.databaseId)),
+  ],
+  run: removeInstanceDatabaseConnectionHandler,
+})
+
 export const removeInstanceDatabaseConnection = createServerFn({
   method: "POST",
 })
-  .validator(
-    relayRemoveDatabaseConnectionSchema.extend({ relayId: relayIdSchema })
-  )
-  .handler(async ({ data }) => {
-    const value = await relayRequest(
-      `/v1/instances/${encodeURIComponent(data.instanceId)}/database-connections`,
-      {
-        body: JSON.stringify({
-          databaseId: data.databaseId,
-          databaseRelayId: data.databaseRelayId,
-        }),
-        headers: { "Content-Type": "application/json" },
-        method: "DELETE",
-      },
-      "instance.network.write",
-      data.instanceId,
-      data.relayId
-    )
-    publishRealtimeChange({
-      type: "hearth.invalidate",
-      audience: { kind: "relays", relayIds: [data.relayId] },
-      scope: { relayId: data.relayId },
-      topics: ["databases"],
+  .validator(removeDatabaseConnectionInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(disconnectInstanceDatabase, data, {
+      user: await instanceSessionUser(),
     })
-    return { ...relayInstanceSchema.parse(value), relayId: data.relayId }
+  )
+
+async function removeInstanceDatabaseConnectionHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof removeDatabaseConnectionInputSchema>
+) {
+  const value = await relayInstanceRequest(
+    user,
+    data.relayId,
+    `/v1/instances/${encodeURIComponent(data.instanceId)}/database-connections`,
+    {
+      body: JSON.stringify({
+        databaseId: data.databaseId,
+        databaseRelayId: data.databaseRelayId,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "DELETE",
+    }
+  )
+  publishRealtimeChange({
+    type: "hearth.invalidate",
+    audience: { kind: "relays", relayIds: [data.relayId] },
+    scope: { relayId: data.relayId },
+    topics: ["databases"],
   })
+  return { ...relayInstanceSchema.parse(value), relayId: data.relayId }
+}
 
 export const getInstanceWebRoutes = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)
@@ -727,7 +763,7 @@ export const updateInstanceWebRoutes = createServerFn({ method: "POST" })
   .validator(instanceWebRoutesSchema)
   .handler(async ({ data }) =>
     runOperationPromise(saveInstanceWebRoutes, data, {
-      user: await requireEligibleResourceUser(),
+      user: await instanceSessionUser(),
     })
   )
 
@@ -779,93 +815,132 @@ async function updateInstanceWebRoutesHandler(
   return routes
 }
 
+const changeInstancePorts = resourceOperation({
+  kind: "instance",
+  id: (input: z.infer<typeof portsInputSchema>) => input.instanceId,
+  name: "instance.ports.update",
+  doing: "Changing this game server's ports",
+  permission: (input) => instancePortsWritePermission(input.ports),
+  run: updateInstancePortsHandler,
+})
+
 export const updateInstancePorts = createServerFn({ method: "POST" })
   .validator(portsInputSchema)
-  .handler(async ({ data }) => {
-    const permission = instancePortsWritePermission(data.ports)
-    const value = await relayRequest(
-      `/v1/instances/${encodeURIComponent(data.instanceId)}/ports`,
-      {
-        body: JSON.stringify({ ports: data.ports }),
-        headers: { "Content-Type": "application/json" },
-        method: "PUT",
-      },
-      permission,
-      data.instanceId,
-      data.relayId,
-      240_000
-    )
-    const instance = relayInstanceSchema.parse(value)
-    await syncInstanceDomainAfterPortUpdateBestEffort(
-      instance,
-      data.relayId,
-      data.ports
-    )
-    await runAppEffect(
-      "relay.snapshot.invalidate",
-      invalidateRelayCache(relayCachePolicy.snapshot(data.relayId))
-    )
-    publishRealtimeChange({
-      instance,
-      relayId: data.relayId,
-      type: "instance.upsert",
+  .handler(async ({ data }) =>
+    runOperationPromise(changeInstancePorts, data, {
+      user: await instanceSessionUser(),
     })
-    return { ...projectRelayInstanceOverview(instance), relayId: data.relayId }
+  )
+
+async function updateInstancePortsHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof portsInputSchema>
+) {
+  const value = await relayInstanceRequest(
+    user,
+    data.relayId,
+    `/v1/instances/${encodeURIComponent(data.instanceId)}/ports`,
+    {
+      body: JSON.stringify({ ports: data.ports }),
+      headers: { "Content-Type": "application/json" },
+      method: "PUT",
+    },
+    240_000
+  )
+  const instance = relayInstanceSchema.parse(value)
+  await syncInstanceDomainAfterPortUpdateBestEffort(
+    instance,
+    data.relayId,
+    data.ports
+  )
+  await runAppEffect(
+    "relay.snapshot.invalidate",
+    invalidateRelayCache(relayCachePolicy.snapshot(data.relayId))
+  )
+  publishRealtimeChange({
+    instance,
+    relayId: data.relayId,
+    type: "instance.upsert",
   })
+  return { ...projectRelayInstanceOverview(instance), relayId: data.relayId }
+}
+
+const leaseInstancePort = resourceOperation({
+  kind: "instance",
+  id: (input: z.infer<typeof portLeaseInputSchema>) => input.instanceId,
+  name: "instance.port.reserve",
+  doing: "Changing this game server's ports",
+  permission: (input) =>
+    input.externalPort === undefined
+      ? "instance.network.write"
+      : "instance.network.public-port.write",
+  run: reserveInstancePortHandler,
+})
 
 export const reserveInstancePort = createServerFn({ method: "POST" })
   .validator(portLeaseInputSchema)
-  .handler(async ({ data }) => {
-    const permission =
-      data.externalPort === undefined
-        ? "instance.network.write"
-        : "instance.network.public-port.write"
-    const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireRelayPermission({
-      user,
-      relayId: relay.id,
-      permission,
-      instanceId: data.instanceId,
+  .handler(async ({ data }) =>
+    runOperationPromise(leaseInstancePort, data, {
+      user: await instanceSessionUser(),
     })
-    const response = await relayFetch(
-      relay,
-      `/v1/instances/${encodeURIComponent(data.instanceId)}/ports`,
-      {
-        body: JSON.stringify({
-          externalPort: data.externalPort,
-          leaseId: data.leaseId,
-          overridePortRange: hasPlatformPermission(
-            user,
-            "platform.network.override-public-port-range"
-          ),
-          protocol: data.protocol,
-        }),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      },
-      undefined,
-      user.id
-    )
-    const value = await response.json()
-    return relayInstancePortLeaseSchema.parse(value)
-  })
+  )
 
-export const releaseInstancePort = createServerFn({ method: "POST" })
-  .validator(portLeaseReleaseInputSchema)
-  .handler(async ({ data }) => {
-    await relayRequest(
+async function reserveInstancePortHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof portLeaseInputSchema>
+) {
+  const relay = await instanceRelay(data.relayId)
+  const response = await relayFetch(
+    relay,
+    `/v1/instances/${encodeURIComponent(data.instanceId)}/ports`,
+    {
+      body: JSON.stringify({
+        externalPort: data.externalPort,
+        leaseId: data.leaseId,
+        overridePortRange: hasPlatformPermission(
+          user,
+          "platform.network.override-public-port-range"
+        ),
+        protocol: data.protocol,
+      }),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    },
+    undefined,
+    user.id
+  )
+  const value = await response.json()
+  return relayInstancePortLeaseSchema.parse(value)
+}
+
+const releaseInstancePortLease = resourceOperation({
+  kind: "instance",
+  id: (input: z.infer<typeof portLeaseReleaseInputSchema>) => input.instanceId,
+  name: "instance.port.release",
+  doing: "Changing this game server's ports",
+  permission: () => "instance.network.write",
+  run: async (user, data) => {
+    await relayInstanceRequest(
+      user,
+      data.relayId,
       `/v1/instances/${encodeURIComponent(data.instanceId)}/ports`,
       {
         body: JSON.stringify({ leaseId: data.leaseId }),
         headers: { "Content-Type": "application/json" },
         method: "DELETE",
-      },
-      "instance.network.write",
-      data.instanceId,
-      data.relayId
+      }
     )
     return { released: true as const }
-  })
+  },
+})
+
+export const releaseInstancePort = createServerFn({ method: "POST" })
+  .validator(portLeaseReleaseInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(releaseInstancePortLease, data, {
+      user: await instanceSessionUser(),
+    })
+  )
 
 export const getRelayTree = createServerFn({ method: "GET" })
   .validator(treeInputSchema)
@@ -1219,39 +1294,51 @@ export const updateRelayFilePin = createServerFn({ method: "POST" })
     return nextActivity
   })
 
+const powerInstance = resourceOperation({
+  kind: "instance",
+  id: (input: z.infer<typeof actionInputSchema>) => input.instanceId,
+  name: "instance.power",
+  doing: "Changing this game server's power",
+  permission: (input) => `instance.power.${input.action}`,
+  run: performInstanceActionHandler,
+})
+
 export const performRelayAction = createServerFn({ method: "POST" })
   .validator(actionInputSchema)
-  .handler(async ({ data }) => {
-    const { instanceId, action } = data
-    const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireRelayPermission({
-      user,
-      relayId: relay.id,
-      permission: `instance.power.${action}`,
-      instanceId,
+  .handler(async ({ data }) =>
+    runOperationPromise(powerInstance, data, {
+      user: await instanceSessionUser(),
     })
-    const response = await relayFetch(
-      relay,
-      `/v1/instances/${encodeURIComponent(instanceId)}/actions`,
-      { method: "POST", body: JSON.stringify({ action }) },
-      relayControlDeadlineMs("instance.action"),
-      user.id
-    )
-    const instance = relayInstanceSchema.parse(await response.json())
-    if (action === "start" || action === "restart") {
-      await provisionInstanceDomainBestEffort(instance, relay.id)
-    }
-    await runAppEffect(
-      "relay.snapshot.invalidate",
-      invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
-    )
-    publishRealtimeChange({
-      instance,
-      relayId: relay.id,
-      type: "instance.upsert",
-    })
-    return { ...projectRelayInstanceOverview(instance), relayId: relay.id }
+  )
+
+async function performInstanceActionHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof actionInputSchema>
+) {
+  const { instanceId, action } = data
+  const relay = await instanceRelay(data.relayId)
+  const response = await relayFetch(
+    relay,
+    `/v1/instances/${encodeURIComponent(instanceId)}/actions`,
+    { method: "POST", body: JSON.stringify({ action }) },
+    relayControlDeadlineMs("instance.action"),
+    user.id
+  )
+  const instance = relayInstanceSchema.parse(await response.json())
+  if (action === "start" || action === "restart") {
+    await provisionInstanceDomainBestEffort(instance, relay.id)
+  }
+  await runAppEffect(
+    "relay.snapshot.invalidate",
+    invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
+  )
+  publishRealtimeChange({
+    instance,
+    relayId: relay.id,
+    type: "instance.upsert",
   })
+  return { ...projectRelayInstanceOverview(instance), relayId: relay.id }
+}
 
 export const uploadToMclogs = createServerFn({ method: "POST" })
   .validator(mclogsUploadInputSchema)
@@ -1633,7 +1720,14 @@ function instanceRelayAccess(relayId: string) {
 }
 
 async function findInstanceRelay(relayId: string) {
-  const user = await Effect.runPromise(
+  const user = await instanceSessionUser()
+  return { relay: await instanceRelay(relayId), user }
+}
+
+// The signed-in person, refused as expected rather than as a failure when
+// the session is gone.
+function instanceSessionUser() {
+  return Effect.runPromise(
     Effect.tryPromise({
       try: requireEligibleResourceUser,
       catch: (cause) =>
@@ -1643,13 +1737,29 @@ async function findInstanceRelay(relayId: string) {
         }),
     })
   )
-  const relay = await activeRelay(relayId, () =>
+}
+
+function instanceRelay(relayId: string) {
+  return activeRelay(relayId, () =>
     ResourceNotFoundError.make({
       resource: "relay",
       message: "No Relay owns this instance",
     })
   )
-  return { relay, user }
+}
+
+// A request to a game server's Relay for an operation that has checked the
+// person may make it.
+async function relayInstanceRequest(
+  user: AuthenticatedUser,
+  relayId: string,
+  path: string,
+  init: RequestInit,
+  timeoutMs?: number
+): Promise<unknown> {
+  const relay = await instanceRelay(relayId)
+  const response = await relayFetch(relay, path, init, timeoutMs, user.id)
+  return response.json()
 }
 
 async function authorizedFleetSnapshot(

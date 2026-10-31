@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start"
+import { Effect } from "effect"
 import {
   type Brick,
   type BrickRecipe,
@@ -45,7 +46,16 @@ import {
   relayCachePolicy,
   writeRelayCache,
 } from "@/lib/relay-client"
+import { promiseEffect } from "@/effect/promise"
+import { provisioningInstanceId } from "@/lib/provisioning.server"
+import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { resourceOperation } from "@/server/resource-operation.server"
 import { visibleBrickCatalogs } from "@/server/brick-catalogs.server"
 import {
   getInstanceStartupHandler,
@@ -193,38 +203,85 @@ export const getBrickVersions = createServerFn({ method: "GET" })
     )
   })
 
+// Holds the game server it creates, by the ID its idempotency key gives
+// it, and its Relay shared, so the Relay isn't removed meanwhile. The Relay
+// is read once admitted, so one removed since can't gain the server.
+const createInstance = operation<
+  z.infer<typeof hearthCreateInstanceInputSchema>
+>()({
+  name: "instance.create",
+  doing: "Creating this game server",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) =>
+        promiseEffect(() =>
+          requireRelayPermission({
+            permission: "instance.create",
+            relayId: input.relayId,
+            user: person,
+          })
+        )
+      )
+    ),
+  locks: ({ input }) => [
+    exclusive(
+      resourceKey(
+        "instance",
+        input.relayId,
+        provisioningInstanceId(input.idempotencyKey)
+      )
+    ),
+    shared(relayKey(input.relayId)),
+  ],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => createInstanceHandler(user, input)),
+  audit: ({ input }) => ({
+    id: provisioningInstanceId(input.idempotencyKey),
+    kind: "instance",
+    relayId: input.relayId,
+  }),
+})
+
 export const createBrickInstance = createServerFn({ method: "POST" })
   .validator(hearthCreateInstanceInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const relay = await requiredRelay(data.relayId)
-    await requireRelayProvisionAccess(user, relay)
-    const recipeDefinition = await requiredVisibleRecipeDefinition(
-      user,
-      data.recipe
-    )
-    const { idempotencyKey, limits, relayId: _, ...createInput } = data
-    const input = relayCreateInstanceSchema.parse({
-      ...createInput,
-      ...relayResourceLimitsRequest(
-        relay.id,
-        {
-          cpuMillis: null,
-          diskBytes: createInput.diskLimitBytes,
-          memoryBytes: null,
-        },
-        limits
-      ),
-      recipeDefinition,
+  .handler(async ({ data }) =>
+    runOperationPromise(createInstance, data, {
+      user: await requireEligibleResourceUser(),
     })
-    return provisionServer({
-      create: input,
-      idempotencyKey,
-      ownerId: user.id,
-      relay,
-      requestedBy: user.id,
-    })
+  )
+
+async function createInstanceHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof hearthCreateInstanceInputSchema>
+) {
+  const relay = await requiredRelay(data.relayId)
+  await requireRelayProvisionAccess(user, relay)
+  const recipeDefinition = await requiredVisibleRecipeDefinition(
+    user,
+    data.recipe
+  )
+  const { idempotencyKey, limits, relayId: _, ...createInput } = data
+  const input = relayCreateInstanceSchema.parse({
+    ...createInput,
+    ...relayResourceLimitsRequest(
+      relay.id,
+      {
+        cpuMillis: null,
+        diskBytes: createInput.diskLimitBytes,
+        memoryBytes: null,
+      },
+      limits
+    ),
+    recipeDefinition,
   })
+  return provisionServer({
+    create: input,
+    idempotencyKey,
+    ownerId: user.id,
+    relay,
+    requestedBy: user.id,
+  })
+}
 
 export const getInstanceRecipe = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)
@@ -275,116 +332,129 @@ export function startupNetworkChanged(
   )
 }
 
+// Startup weighs several permissions against what changes, so only reading
+// its configuration is checked before the lanes; the run checks the rest.
+const changeInstanceStartup = resourceOperation({
+  kind: "instance",
+  id: (input: z.infer<typeof hearthUpdateInstanceStartupInputSchema>) =>
+    input.instanceId,
+  name: "instance.startup.update",
+  doing: "Changing this game server's startup",
+  permission: () => "instance.configuration.read",
+  run: updateInstanceStartupHandler,
+})
+
 export const updateInstanceStartup = createServerFn({ method: "POST" })
   .validator(hearthUpdateInstanceStartupInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const relay = await requiredRelay(data.relayId)
-    // Startup weighs read, configuration, limits, network, and power authority.
-    // Resolve the grants once and answer every check from the local set.
-    const authorization = await resolveScopeAuthorization({
-      scope: instanceScope(relay.id, data.instanceId),
-      user,
+  .handler(async ({ data }) =>
+    runOperationPromise(changeInstanceStartup, data, {
+      user: await requireEligibleResourceUser(),
     })
-    authorization.require("instance.configuration.read")
-    const existing = await requiredRelayInstance(relay, data.instanceId)
-    const submittedRecipe = data.recipe
-    const recipeChanged =
-      !data.reinstall &&
-      isBrickSourceChange(existing.brickSource, submittedRecipe)
-    const recipeDefinition = recipeChanged
-      ? await requiredVisibleRecipeDefinition(user, submittedRecipe)
-      : null
-    const networkChanged = startupNetworkChanged(existing.tailscale, data)
-    let configurationChanged = Boolean(data.reinstall || recipeChanged)
-    const requestedLimits =
-      data.limits ??
-      (data.diskLimitBytes === undefined
-        ? undefined
-        : { diskBytes: data.diskLimitBytes })
-    let limitsChanged =
-      !data.reinstall &&
-      !resourceLimitsEqual(
-        resolveResourceLimits(existing.limits, requestedLimits),
-        existing.limits
-      )
-    if (!data.reinstall) {
-      const { brick: previousRecipe } = await loadInstanceRecipe(
-        relay,
-        existing
-      )
-      const nextRecipe = recipeDefinition ?? previousRecipe
-      configurationChanged ||= startupConfigurationChanged(
-        previousRecipe,
-        nextRecipe,
-        existing.variables ?? {},
-        data.variables ?? {}
-      )
-      limitsChanged ||= startupResourceLimitsChanged(
-        previousRecipe,
-        nextRecipe,
-        existing.variables ?? {},
-        data.variables ?? {}
-      )
-    }
-    if (networkChanged) authorization.require("instance.network.write")
-    if (configurationChanged)
-      authorization.require("instance.configuration.write")
-    if (limitsChanged) authorization.require("instance.limits.write")
-    // Applying unchanged settings still rebuilds the container. A read grant
-    // alone must never authorize this mutation.
-    if (
-      !configurationChanged &&
-      !limitsChanged &&
-      !networkChanged &&
-      !authorization.allows("instance.configuration.write") &&
-      !authorization.allows("instance.limits.write")
-    ) {
-      authorization.require("instance.network.write")
-    }
-    const powerPermission = startupPowerPermission(existing, data)
-    if (powerPermission) authorization.require(powerPermission)
-    const {
-      diskLimitBytes: _diskLimitBytes,
-      limits: _limits,
-      recipeDefinition: _untrustedRecipeDefinition,
-      ...trustedData
-    } = data
-    const input = relayUpdateInstanceStartupSchema.parse({
-      ...trustedData,
-      ...(data.reinstall
-        ? {}
-        : relayResourceLimitsRequest(
-            relay.id,
-            existing.limits,
-            requestedLimits
-          )),
-      ...(recipeDefinition ? { recipeDefinition } : {}),
-    })
-    const instance = relayInstanceSchema.parse(
-      await requestRelay(
-        relay,
-        `/v1/instances/${encodeURIComponent(data.instanceId)}/startup`,
-        {
-          method: "PUT",
-          body: JSON.stringify(input),
-        },
-        360_000,
-        user.id
-      )
-    )
-    await provisionInstanceDomainBestEffort(instance, relay.id)
-    await runAppEffect(
-      "relay.snapshot.invalidate",
-      invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
-    )
-    publishRealtimeChange({
-      instance,
-      relayId: relay.id,
-      type: "instance.upsert",
-    })
-    return instance
+  )
+
+async function updateInstanceStartupHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof hearthUpdateInstanceStartupInputSchema>
+) {
+  const relay = await requiredRelay(data.relayId)
+  // Startup weighs read, configuration, limits, network, and power authority.
+  // Resolve the grants once and answer every check from the local set.
+  const authorization = await resolveScopeAuthorization({
+    scope: instanceScope(relay.id, data.instanceId),
+    user,
   })
+  authorization.require("instance.configuration.read")
+  const existing = await requiredRelayInstance(relay, data.instanceId)
+  const submittedRecipe = data.recipe
+  const recipeChanged =
+    !data.reinstall &&
+    isBrickSourceChange(existing.brickSource, submittedRecipe)
+  const recipeDefinition = recipeChanged
+    ? await requiredVisibleRecipeDefinition(user, submittedRecipe)
+    : null
+  const networkChanged = startupNetworkChanged(existing.tailscale, data)
+  let configurationChanged = Boolean(data.reinstall || recipeChanged)
+  const requestedLimits =
+    data.limits ??
+    (data.diskLimitBytes === undefined
+      ? undefined
+      : { diskBytes: data.diskLimitBytes })
+  let limitsChanged =
+    !data.reinstall &&
+    !resourceLimitsEqual(
+      resolveResourceLimits(existing.limits, requestedLimits),
+      existing.limits
+    )
+  if (!data.reinstall) {
+    const { brick: previousRecipe } = await loadInstanceRecipe(relay, existing)
+    const nextRecipe = recipeDefinition ?? previousRecipe
+    configurationChanged ||= startupConfigurationChanged(
+      previousRecipe,
+      nextRecipe,
+      existing.variables ?? {},
+      data.variables ?? {}
+    )
+    limitsChanged ||= startupResourceLimitsChanged(
+      previousRecipe,
+      nextRecipe,
+      existing.variables ?? {},
+      data.variables ?? {}
+    )
+  }
+  if (networkChanged) authorization.require("instance.network.write")
+  if (configurationChanged)
+    authorization.require("instance.configuration.write")
+  if (limitsChanged) authorization.require("instance.limits.write")
+  // Applying unchanged settings still rebuilds the container. A read grant
+  // alone must never authorize this mutation.
+  if (
+    !configurationChanged &&
+    !limitsChanged &&
+    !networkChanged &&
+    !authorization.allows("instance.configuration.write") &&
+    !authorization.allows("instance.limits.write")
+  ) {
+    authorization.require("instance.network.write")
+  }
+  const powerPermission = startupPowerPermission(existing, data)
+  if (powerPermission) authorization.require(powerPermission)
+  const {
+    diskLimitBytes: _diskLimitBytes,
+    limits: _limits,
+    recipeDefinition: _untrustedRecipeDefinition,
+    ...trustedData
+  } = data
+  const input = relayUpdateInstanceStartupSchema.parse({
+    ...trustedData,
+    ...(data.reinstall
+      ? {}
+      : relayResourceLimitsRequest(relay.id, existing.limits, requestedLimits)),
+    ...(recipeDefinition ? { recipeDefinition } : {}),
+  })
+  const instance = relayInstanceSchema.parse(
+    await requestRelay(
+      relay,
+      `/v1/instances/${encodeURIComponent(data.instanceId)}/startup`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      },
+      360_000,
+      user.id
+    )
+  )
+  await provisionInstanceDomainBestEffort(instance, relay.id)
+  await runAppEffect(
+    "relay.snapshot.invalidate",
+    invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
+  )
+  publishRealtimeChange({
+    instance,
+    relayId: relay.id,
+    type: "instance.upsert",
+  })
+  return instance
+}
 
 function recipePreview(brick: z.infer<typeof brickSchema>) {
   const { iconSvg: _iconSvg, ...recipe } = brick
