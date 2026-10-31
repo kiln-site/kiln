@@ -107,6 +107,9 @@ export const resourceKey = (
  */
 export const relayKey = (id: string) => `relay:${id}`
 
+/** Hearth itself: updating it replaces its container. */
+export const hearthKey = "hearth"
+
 /**
  * Who may do what on a game server, database, App, or Relay: its people,
  * invitations and owner.

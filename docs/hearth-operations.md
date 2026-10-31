@@ -120,10 +120,11 @@ away every part.
 | `relay:<id>#proxy`, `#tailscale`  | Its proxy, its Tailscale                               |
 | `relay:<id>#connections`          | Its pairing invitations and connected clients          |
 | `relay:<id>#host-files`           | Its host files mount                                   |
-| `relay:<id>#process`              | Restarting it or its host                              |
+| `relay:<id>#process`              | Restarting it or its host, and starting updates on it  |
 | `relay:<id>#authorization`        | What a Relay holds of who may do what                  |
 | `relay:<id>#database-connections` | Apps' database connections handover                    |
 | `cloudflare-connection:<id>`      | A Cloudflare connection                                |
+| `hearth`                          | Hearth itself, while its update starts                 |
 
 ## Tracing and metrics
 
