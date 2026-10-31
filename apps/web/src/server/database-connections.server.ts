@@ -11,7 +11,13 @@ import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { exclusive, partKey, relayKey, resourceKey } from "@/operations/lanes"
+import {
+  exclusive,
+  partKey,
+  relayKey,
+  resourceKey,
+  shared,
+} from "@/operations/lanes"
 import { operation, signedIn } from "@/operations/operation"
 import {
   databaseForViewer,
@@ -128,7 +134,13 @@ export const connectDatabase = operation<DatabaseConnectionInput>()({
     ),
   locks: ({ input }) => [
     exclusive(resourceKey("database", input.relayId, input.databaseId)),
-    exclusive(resourceKey(input.member.kind, input.relayId, input.member.id)),
+    // A game server joining it is everyday work its Relay keeps in order;
+    // Apps and databases hold theirs whole until their own changes.
+    input.member.kind === "instance"
+      ? shared(resourceKey("instance", input.relayId, input.member.id))
+      : exclusive(
+          resourceKey(input.member.kind, input.relayId, input.member.id)
+        ),
     ...(input.member.kind === "app"
       ? [exclusive(partKey(relayKey(input.relayId), "database-connections"))]
       : []),
