@@ -45,6 +45,8 @@ export const RelayConnectionToastMonitor = React.memo(
     const previousStatuses = React.useRef(
       new Map<string, RelayReachability[number]["status"]>()
     )
+    // Relays whose connection toasts were held back for an update.
+    const previouslyUpdating = React.useRef(new Set<string>())
     const activeToastIds = React.useRef(new Set<string>())
     const cleanupTimer = React.useRef<number | undefined>(undefined)
 
@@ -58,6 +60,7 @@ export const RelayConnectionToastMonitor = React.memo(
         cleanupTimer.current = window.setTimeout(() => {
           cleanupTimer.current = undefined
           previousStatuses.current.clear()
+          previouslyUpdating.current.clear()
           for (const toastId of activeToastIds.current) dismissToast(toastId)
           activeToastIds.current.clear()
         }, 0)
@@ -69,6 +72,7 @@ export const RelayConnectionToastMonitor = React.memo(
         string,
         RelayReachability[number]["status"]
       >()
+      const nextUpdating = new Set<string>()
 
       for (const relay of relays) {
         const disconnectToastId = relayDisconnectToastId(relay.id)
@@ -76,9 +80,11 @@ export const RelayConnectionToastMonitor = React.memo(
         const previousStatus = previousStatuses.current.get(relay.id)
         // Hearth sees it updating, or this tab started or follows its update.
         const updating = relay.updating || isRelaySystemUpdateActive(relay.id)
+        const wasUpdating = previouslyUpdating.current.has(relay.id)
         nextStatuses.set(relay.id, relay.status)
 
         if (updating) {
+          nextUpdating.add(relay.id)
           dismissToast(disconnectToastId)
           dismissToast(reconnectToastId)
           activeToastIds.current.delete(disconnectToastId)
@@ -89,8 +95,12 @@ export const RelayConnectionToastMonitor = React.memo(
           }
         } else if (
           relay.status === "unreachable" &&
-          previousStatus !== relay.status
+          // Still away once its update stopped holding the toast back, as
+          // when Hearth stops counting a Relay away too long as updating.
+          (previousStatus !== relay.status || wasUpdating)
         ) {
+          // Its reconnecting is told now, not taken as the update's.
+          consumeRelayUpdateReconnect(relay.id)
           dismissToast(reconnectToastId)
           activeToastIds.current.add(disconnectToastId)
           showToast({
@@ -137,6 +147,7 @@ export const RelayConnectionToastMonitor = React.memo(
       }
 
       previousStatuses.current = nextStatuses
+      previouslyUpdating.current = nextUpdating
     }, [relays, router])
 
     return null

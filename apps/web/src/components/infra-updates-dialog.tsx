@@ -689,7 +689,9 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
     }
 
     if (hearth) {
-      if (failures.length === 0) dismissToast(systemUpdateToastId)
+      if (failures.length === 0 && completedBatch.unconfirmed.length === 0) {
+        dismissToast(systemUpdateToastId)
+      }
       setHearthCompletion(hearth)
     }
   }, [
