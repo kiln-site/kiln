@@ -78,6 +78,8 @@ import {
 } from "@/lib/relay-registry"
 import { readLimitedText } from "@/lib/request-body"
 import { outsideOperation } from "@/operations/current"
+import { exclusive, relayKey } from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
 import { assertRequestRateLimit } from "@/lib/request-rate-limit"
 
 // Joins: adding a Relay from the install command in the Add Relay dialog.
@@ -1142,7 +1144,16 @@ const driveJoin = Effect.fnUntraced(function* (
           yield* claimWrite(joinId, generation, "error = error", [])
           renewedAt = now
         }
-        return yield* joinStep(row, generation, untilChange).pipe(
+        // Each step holds the Relay it adds, as pairing it from the dialog
+        // does, so neither changes its credentials, clients or proxy under
+        // the other. Its writes still check the claim it waited with.
+        const envelope = json(row.envelope)
+        return yield* inLanes(
+          "relay.join.step",
+          "Pairing this Relay",
+          envelope ? [exclusive(relayKey(envelope.relayFingerprint))] : [],
+          joinStep(row, generation, untilChange)
+        ).pipe(
           Effect.as("next" as const),
           Effect.catch((cause) =>
             cause instanceof StaleClaim
