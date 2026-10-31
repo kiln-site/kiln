@@ -127,6 +127,7 @@ away every part.
 | `hearth`                          | Hearth itself: its update, and platform backups        |
 | `backup:<id>`                     | A backup: changing it, or restoring from it            |
 | `backup-storage:<id>`             | A backup destination, and backups reserved to it       |
+| `<resource>#backup-policy`        | What its backups keep, leave out, and where they go    |
 
 A backup or restore holds what its data belongs to: the game server or
 database, or the App for its folder and the volumes it owns, since deleting

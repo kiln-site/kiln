@@ -21,7 +21,9 @@ import {
 } from "@/lib/backup-lanes"
 import { resolveBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import type { BackupCatalogRecord } from "@/effect/backups"
-import { exclusive, shared, type LaneLock } from "@/operations/lanes"
+import type { BackupTarget } from "@workspace/contracts"
+import type { BackupAction } from "@/lib/backup-target-permissions"
+import { exclusive, partKey, shared, type LaneLock } from "@/operations/lanes"
 import { operation, signedIn } from "@/operations/operation"
 import {
   createAppBackupsHandler,
@@ -29,17 +31,32 @@ import {
 } from "@/server/app-backups.server"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import {
+  cancelBackupHandler,
+  copyBackupToDestinationHandler,
   createDatabaseBackupHandler,
   createInstanceBackupHandler,
   createPlatformBackupHandler,
   createResourceBackupHandler,
+  deleteBackupHandler,
+  getBackupDownloadUrlHandler,
+  renameBackupHandler,
+  syncBackupRunsHandler,
+  updateBackupExcludesHandler,
+  updateBackupLimitsHandler,
   restoreDatabaseBackupHandler,
   restoreInstanceBackupHandler,
   restoreResourceBackupHandler,
 } from "@/server/backups.server"
 import type {
+  BackupDownloadInput,
+  BackupExcludesInput,
+  BackupIdInput,
+  BackupLimitsInput,
+  BackupRemovalInput,
   BackupRestoreInput,
+  CopyBackupInput,
   DatabaseBackupInput,
+  RenameBackupInput,
   InstanceBackupInput,
   PlatformBackupInput,
   ResourceBackupInput,
@@ -428,3 +445,178 @@ async function requireBackupAction(
     throw new Error("You do not have permission to restore this backup")
   }
 }
+
+// A change to one backup: it holds that backup, exclusively unless it only
+// reads from it, as copying and downloading do. Each checks the person may
+// do it before any lane is taken; the run says why one that's gone can't.
+const backupOperation = <
+  Input extends { readonly backupId: string },
+  A,
+>(definition: {
+  readonly name: string
+  readonly doing: string | ((input: Input) => string)
+  readonly action: (input: Input) => BackupAction
+  readonly denied: (input: Input) => string
+  readonly reads?: boolean
+  readonly alsoLocks?: (input: Input) => Array<LaneLock>
+  readonly handler: (user: AuthenticatedUser, input: Input) => Promise<A>
+}) =>
+  operation<Input>()({
+    name: definition.name,
+    doing: definition.doing,
+    authorize: ({ input, user }) =>
+      signedIn(user).pipe(
+        Effect.flatMap((person) =>
+          Effect.gen(function* () {
+            const backup = yield* getBackupCatalogRecordEffect(input.backupId)
+            if (backup) {
+              yield* promiseEffect(async () => {
+                const grants = isPlatformAdmin(person)
+                  ? []
+                  : await listUserGrants(person.id)
+                if (
+                  !hasBackupPermission(
+                    person,
+                    grants,
+                    backup,
+                    definition.action(input)
+                  )
+                ) {
+                  throw new Error(definition.denied(input))
+                }
+              })
+            }
+            return { relayId: backup?.relayId ?? null, user: person }
+          })
+        )
+      ),
+    locks: ({ input }) => [
+      definition.reads
+        ? shared(backupKey(input.backupId))
+        : exclusive(backupKey(input.backupId)),
+      ...(definition.alsoLocks?.(input) ?? []),
+    ],
+    run: ({ context, input }) =>
+      promiseEffect(() => definition.handler(context.user, input)),
+    audit: ({ context, input }) => ({
+      id: input.backupId,
+      kind: "backup",
+      relayId: context.relayId,
+    }),
+  })
+
+export const cancelBackup = backupOperation({
+  name: "backup.cancel",
+  doing: "Cancelling this backup",
+  action: () => "backup.create",
+  denied: () => "You do not have permission to cancel this backup",
+  handler: (user, input: BackupIdInput) => cancelBackupHandler(user, input),
+})
+
+export const removeBackup = backupOperation({
+  name: "backup.delete",
+  doing: (input: BackupRemovalInput) =>
+    input.mode === "forget" ? "Removing this backup" : "Deleting this backup",
+  action: (input) =>
+    input.mode === "forget" ? "backup.read" : "backup.delete",
+  denied: (input) => `You do not have permission to ${input.mode} this backup`,
+  handler: deleteBackupHandler,
+})
+
+export const renameBackup = backupOperation({
+  name: "backup.rename",
+  doing: "Renaming this backup",
+  action: () => "backup.create",
+  denied: () => "You do not have permission to rename this backup",
+  handler: (user, input: RenameBackupInput) => renameBackupHandler(user, input),
+})
+
+export const copyBackup = backupOperation({
+  name: "backup.copy",
+  doing: "Copying this backup",
+  action: () => "backup.download",
+  denied: () => "You do not have permission to copy this backup",
+  reads: true,
+  alsoLocks: (input: CopyBackupInput) => destinations([input.storageId]),
+  handler: copyBackupToDestinationHandler,
+})
+
+// Signing a link, or preparing a snapshot's export to sign one for. Asking
+// how an export is coming along is a read (getBackupExportState).
+export const downloadBackup = backupOperation({
+  name: "backup.download",
+  doing: "Preparing a download of this backup",
+  action: () => "backup.download",
+  denied: () => "You do not have permission to download this backup",
+  reads: true,
+  handler: (user, input: BackupDownloadInput) =>
+    getBackupDownloadUrlHandler(user, input),
+})
+
+// What a target's backups keep and leave out, and where they go.
+export const backupPolicyLock = (
+  relayId: string,
+  target: { id: string; kind: BackupTarget["kind"] }
+) => exclusive(partKey(backupTargetKey(relayId, target), "backup-policy"))
+
+// Who may change a target's backup settings: an administrator the
+// platform's, and whoever may back up any other.
+export const backupSettingsPerson = (
+  user: AuthenticatedUser | null,
+  input: { relayId: string; target: BackupTarget }
+) =>
+  signedIn(user).pipe(
+    Effect.tap((person) =>
+      input.target.kind === "platform"
+        ? isPlatformAdmin(person)
+          ? Effect.void
+          : Effect.fail(
+              new Error("Platform backup settings require administrator access")
+            )
+        : promiseEffect(() =>
+            requireBackupTargetPermission(
+              person,
+              input.relayId,
+              input.target,
+              "backup.create"
+            )
+          )
+    )
+  )
+
+const policyAudit = (input: { relayId: string; target: BackupTarget }) => ({
+  id: input.target.kind === "platform" ? kilnInstallationId() : input.target.id,
+  kind: input.target.kind,
+  relayId: input.relayId,
+})
+
+export const changeBackupLimits = operation<BackupLimitsInput>()({
+  name: "backup.policy.limits",
+  doing: "Changing these backup settings",
+  authorize: ({ input, user }) => backupSettingsPerson(user, input),
+  locks: ({ input }) => [backupPolicyLock(input.relayId, input.target)],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => updateBackupLimitsHandler(user, input)),
+  audit: ({ input }) => policyAudit(input),
+})
+
+export const changeBackupExcludes = operation<BackupExcludesInput>()({
+  name: "backup.policy.excludes",
+  doing: "Changing these backup settings",
+  authorize: ({ input, user }) => backupSettingsPerson(user, input),
+  locks: ({ input }) => [backupPolicyLock(input.relayId, input.target)],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => updateBackupExcludesHandler(user, input)),
+  audit: ({ input }) => policyAudit(input),
+})
+
+// Catalogs what the Relays report and sends them tasks they haven't taken.
+// It takes no lanes: each task it sends was already admitted when it was
+// reserved, and the catalog follows what the Relays did.
+export const syncBackups = operation<void>()({
+  name: "backup.sync",
+  doing: "Syncing backups",
+  authorize: ({ user }) => signedIn(user),
+  locks: () => [],
+  run: ({ context: user }) => promiseEffect(() => syncBackupRunsHandler(user)),
+})
