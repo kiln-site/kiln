@@ -9,13 +9,54 @@ import {
   relayResourcesV1Feature,
   relayRestartV1Feature,
 } from "@workspace/contracts"
+import { Effect } from "effect"
 import { z } from "zod"
 
+import { promiseEffect } from "@/effect/promise"
+import { requireRelayPermission } from "@/lib/access-control"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import type { AccessPermission } from "@/lib/permissions"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { databaseRpc } from "@/server/managed-database-access"
+import { exclusive, partKey, relayKey } from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
+import { requireEligibleResourceUser } from "@/server/auth"
+import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
 import { authorizedRelay } from "@/server/relay-access"
 
 const targetSchema = z.object({ relayId: relayIdSchema })
+const restartHostSchema = targetSchema.extend({
+  password: z.string().max(128),
+})
+
+// The person an operation runs for, who may `permission` on the Relay.
+const relayFor = (
+  user: AuthenticatedUser | null,
+  relayId: string,
+  permission: AccessPermission
+) =>
+  signedIn(user).pipe(
+    Effect.flatMap((person) =>
+      promiseEffect(async () => {
+        await requireRelayPermission({ permission, relayId, user: person })
+        return { relay: await requiredRelay(relayId), user: person }
+      })
+    )
+  )
+
+const relayAudit = (relayId: string) => ({
+  id: relayId,
+  kind: "relay",
+  relayId,
+})
+
+// Restarting the Relay or its host, and updating it, replace or stop its
+// process, so they take the same part of it.
+const relayProcess = (relayId: string) =>
+  exclusive(partKey(relayKey(relayId), "process"))
 
 export const getRelayHostAccess = createServerFn({ method: "GET" })
   .validator(targetSchema)
@@ -26,16 +67,28 @@ export const getRelayHostAccess = createServerFn({ method: "GET" })
     )
   })
 
+const mountHostFiles = operation<z.infer<typeof targetSchema>>()({
+  name: "relay.hostFiles.mount",
+  doing: "Opening this Relay's host files",
+  authorize: ({ input, user }) =>
+    relayFor(user, input.relayId, "relay.files.mount"),
+  locks: ({ input }) => [
+    exclusive(partKey(relayKey(input.relayId), "host-files")),
+  ],
+  run: ({ context: { relay, user } }) =>
+    promiseEffect(() =>
+      databaseRpc(relay, "relay.host.files.mount", {}, 60_000, user.id)
+    ).pipe(Effect.as({ started: true })),
+  audit: ({ input }) => relayAudit(input.relayId),
+})
+
 export const mountRelayHostFiles = createServerFn({ method: "POST" })
   .validator(targetSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedRelay(
-      data.relayId,
-      "relay.files.mount"
-    )
-    await databaseRpc(relay, "relay.host.files.mount", {}, 60_000, user.id)
-    return { started: true }
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(mountHostFiles, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 export const writeRelayTerminal = createServerFn({ method: "POST" })
   .validator(relayHostTerminalWriteSchema.extend(targetSchema.shape))
@@ -69,30 +122,59 @@ export const restartRelayTerminal = createServerFn({ method: "POST" })
 
 // Requires `relay.update`, as updating already restarts the Relay. Game
 // servers, apps, and databases keep running.
+const restartRelayProcess = operation<z.infer<typeof targetSchema>>()({
+  name: "relay.restart",
+  doing: "Restarting this Relay",
+  authorize: ({ input, user }) => relayFor(user, input.relayId, "relay.update"),
+  locks: ({ input }) => [relayProcess(input.relayId)],
+  run: ({ context: { relay, user } }) =>
+    promiseEffect(async () => {
+      await requireRelayRestart(relay)
+      await databaseRpc(relay, "relay.restart", {}, 30_000, user.id)
+      return { restarting: true }
+    }),
+  audit: ({ input }) => relayAudit(input.relayId),
+})
+
 export const restartRelay = createServerFn({ method: "POST" })
   .validator(targetSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedRelay(data.relayId, "relay.update")
-    await requireRelayRestart(relay)
-    await databaseRpc(relay, "relay.restart", {}, 30_000, user.id)
-    return { restarting: true }
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(restartRelayProcess, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 // Requires `relay.terminal`, as a root shell on the host could reboot it
 // anyway, and the account password, as it takes down everything on the host.
+const rebootRelayHost = operation<z.infer<typeof restartHostSchema>>()({
+  name: "relay.host.restart",
+  doing: "Restarting this Relay",
+  authorize: ({ input, user }) =>
+    relayFor(user, input.relayId, "relay.terminal").pipe(
+      Effect.tap(({ user: person }) =>
+        promiseEffect(async () => {
+          const { requireAccountPassword } = await import("@/lib/auth-password")
+          await requireAccountPassword(person, input.password)
+        })
+      )
+    ),
+  locks: ({ input }) => [relayProcess(input.relayId)],
+  run: ({ context: { relay, user } }) =>
+    promiseEffect(async () => {
+      await requireRelayRestart(relay)
+      await databaseRpc(relay, "relay.host.restart", {}, 120_000, user.id)
+      return { restarting: true }
+    }),
+  audit: ({ input }) => relayAudit(input.relayId),
+})
+
 export const restartRelayHost = createServerFn({ method: "POST" })
-  .validator(targetSchema.extend({ password: z.string().max(128) }))
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedRelay(
-      data.relayId,
-      "relay.terminal"
-    )
-    const { requireAccountPassword } = await import("@/lib/auth-password")
-    await requireAccountPassword(user, data.password)
-    await requireRelayRestart(relay)
-    await databaseRpc(relay, "relay.host.restart", {}, 120_000, user.id)
-    return { restarting: true }
-  })
+  .validator(restartHostSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(rebootRelayHost, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 async function requireRelayRestart(relay: PersistedRelay): Promise<void> {
   const { isRelayUpdating, relayConnectionFeatures } =

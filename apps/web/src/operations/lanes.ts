@@ -102,6 +102,12 @@ export const resourceKey = (
 ) => `${kind}:${relayId}/${id}`
 
 /**
+ * A Relay as a whole. Removing or pairing it takes it exclusively; a change
+ * to one part of it, such as its proxy, takes that part (`partKey`).
+ */
+export const relayKey = (id: string) => `relay:${id}`
+
+/**
  * Who may do what on a game server, database, App, or Relay: its people,
  * invitations and owner.
  */
@@ -110,9 +116,10 @@ export const accessKey = (
   relayId: string,
   id: string
 ) =>
-  kind === "relay"
-    ? `relay:${relayId}#access`
-    : partKey(resourceKey(kind, relayId, id), "access")
+  partKey(
+    kind === "relay" ? relayKey(relayId) : resourceKey(kind, relayId, id),
+    "access"
+  )
 
 /** A person's account and what they may do. */
 export const userKey = (id: string) => `user:${id}`
