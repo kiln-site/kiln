@@ -1,5 +1,6 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
+import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 
 import {
@@ -10,8 +11,12 @@ import {
   createAppRecordEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
+import { insertAppDeploymentEffect } from "@/effect/app-deployments"
 import { notifyUsersEffect, openSourceKeysEffect } from "@/effect/notifications"
-import { recordCheckedAppImageEffect } from "@/lib/app-image-updates.server"
+import {
+  recordCheckedAppImageEffect,
+  resolveAppImageUpdateNotificationsEffect,
+} from "@/lib/app-image-updates.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertUser } from "@/test/seed"
@@ -25,6 +30,84 @@ const digest = (n: number) => `sha256:${String(n).repeat(64)}`
 
 describeMysql("App image checks", () => {
   layer(TestDatabase)((it) => {
+    it.effect(
+      "stop offering an update a check found before the App deployed again",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(relayId)
+          yield* insertUser("user")
+          yield* createAppRecordEffect({
+            appId,
+            createdBy: "user",
+            name: "Website",
+            relayId,
+          })
+          yield* updateAppConfigEffect(relayId, appId, (config) => ({
+            ...config,
+            image,
+            sourceType: "image",
+          }))
+          yield* saveAppImageUpdatePolicyEffect(appId, {
+            delayHours: 0,
+            mode: "notify",
+          })
+          const askedAt = 1_800_000_000_000
+          yield* TestClock.setTime(askedAt)
+          yield* recordAppImageCheckEffect(
+            appId,
+            image,
+            {
+              appId,
+              latestDigest: digest(2),
+              runningDigests: [digest(1)],
+              status: "checked",
+            },
+            askedAt
+          )
+          const sourceKey = `app.image-update:${appId}:${digest(2)}`
+          yield* notifyUsersEffect(["user"], sourceKey, {
+            digest: digest(2),
+            image,
+            kind: "app.image-update",
+            resource: { id: appId, name: "Website", relayId, type: "app" },
+          })
+          const open = openSourceKeysEffect(
+            "app.image-update",
+            `app.image-update:${appId}:`
+          )
+
+          // Still what the App runs: the offer stands.
+          yield* resolveAppImageUpdateNotificationsEffect(relayId, appId)
+          assert.deepStrictEqual(yield* open, [sourceKey])
+
+          // A deployment since may have changed what it runs: what the check
+          // found no longer offers anything, until the next one.
+          yield* insertAppDeploymentEffect({
+            appId,
+            branch: null,
+            commitAuthor: null,
+            commitMessage: null,
+            commitSha: null,
+            error: null,
+            finishedAt: null,
+            id: "deployment-after-check",
+            imageDigest: null,
+            relayDeploymentId: "20261031120000",
+            relayId,
+            repository: null,
+            rolling: null,
+            sourceType: "image",
+            startedAt: new Date(askedAt + 60_000).toISOString(),
+            status: "running",
+            trigger: "manual",
+            triggeredBy: "user",
+          })
+          yield* resolveAppImageUpdateNotificationsEffect(relayId, appId)
+          assert.deepStrictEqual(yield* open, [])
+        })
+    )
+
     it.effect(
       "keep an update announced after an older check found checks off",
       () =>
@@ -48,12 +131,17 @@ describeMysql("App image checks", () => {
             delayHours: 0,
             mode: "notify",
           })
-          yield* recordAppImageCheckEffect(appId, image, {
+          yield* recordAppImageCheckEffect(
             appId,
-            latestDigest: digest(2),
-            runningDigests: [digest(1)],
-            status: "checked",
-          })
+            image,
+            {
+              appId,
+              latestDigest: digest(2),
+              runningDigests: [digest(1)],
+              status: "checked",
+            },
+            yield* Clock.currentTimeMillis
+          )
           const sourceKey = `app.image-update:${appId}:${digest(2)}`
           yield* notifyUsersEffect(["user"], sourceKey, {
             digest: digest(2),

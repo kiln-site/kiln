@@ -138,7 +138,8 @@ export const recordAppImageCheckEffect = Effect.fn("apps.imageUpdates.record")(
   function* (
     appId: string,
     image: string,
-    result: Exclude<RelayAppImageCheckResult, { status: "deploying" }>
+    result: Exclude<RelayAppImageCheckResult, { status: "deploying" }>,
+    askedAt: number
   ) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
@@ -154,7 +155,9 @@ export const recordAppImageCheckEffect = Effect.fn("apps.imageUpdates.record")(
             [appId]
           )
           const previous = row ? toUpdate(row) : null
-          const next = nextUpdate(previous, appId, image, result, now)
+          // Checked when it was asked, which is what what it found
+          // describes; a deployment since makes it stale.
+          const next = nextUpdate(previous, appId, image, result, askedAt)
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("app_image_update")}
                (app_id, mode, delay_hours, state, image, running_digest,
@@ -193,7 +196,11 @@ export const recordAppImageCheckEffect = Effect.fn("apps.imageUpdates.record")(
             newlySeen ||
             previous?.state !== next.state ||
             previous?.checkError !== next.checkError
-          return { changed, newlySeen, update: next }
+          // A registry that keeps failing fails every check: only a new
+          // failure is worth reporting.
+          const newFailure =
+            next.checkError !== null && previous?.checkError !== next.checkError
+          return { changed, newFailure, newlySeen, update: next }
         })
     )
   }
@@ -262,6 +269,39 @@ function nextUpdate(
       }
     }
   }
+}
+
+/**
+ * What a check found, if it still describes the App: it asked about the
+ * image the App names now, and no deployment has started since it asked,
+ * which may have changed what runs. Checks take no lock, so what one
+ * recorded is judged here, where it's used, rather than kept from being
+ * recorded.
+ */
+export function currentImageUpdate(
+  update: AppImageUpdate | null,
+  image: string,
+  latestDeploymentStartedAt: string | null
+): AppImageUpdate | null {
+  return update && describesApp(update, image, latestDeploymentStartedAt)
+    ? update
+    : null
+}
+
+/** Whether a check's record still describes the App, as above. */
+export function describesApp(
+  checked: { readonly checkedAt: number | null; readonly image: string | null },
+  image: string,
+  latestDeploymentStartedAt: string | null
+): boolean {
+  return (
+    checked.image === image &&
+    !(
+      latestDeploymentStartedAt !== null &&
+      checked.checkedAt !== null &&
+      Date.parse(latestDeploymentStartedAt) >= checked.checkedAt
+    )
+  )
 }
 
 /**

@@ -46,7 +46,9 @@ export async function saveAppImageUpdatePolicyHandler(
   else
     await runAppEffect(
       "apps.imageUpdates.policy.resolveNotifications",
-      resolveAppImageUpdateNotificationsEffect(app.appId, { unchecked: true })
+      resolveAppImageUpdateNotificationsEffect(relay.id, app.appId, {
+        unchecked: true,
+      })
     )
   publishAppDeploymentChange(relay.id)
 }
@@ -93,7 +95,7 @@ export async function skipAppImageUpdateHandler(
   if (!skipped) throw new Error("That update is no longer on offer")
   await runAppEffect(
     "apps.imageUpdates.skip.resolveNotifications",
-    resolveAppImageUpdateNotificationsEffect(app.appId)
+    resolveAppImageUpdateNotificationsEffect(relay.id, app.appId)
   )
   publishAppDeploymentChange(relay.id)
 }

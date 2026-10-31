@@ -8,6 +8,7 @@ import {
 
 import {
   autoUpdateAt,
+  currentImageUpdate,
   defaultAppImageUpdatePolicy,
   loadAppImageUpdateEffect,
   type AppImageUpdate,
@@ -192,7 +193,14 @@ export async function getAppDeploymentSummaryHandler(data: {
     // Nothing to check until it names an image.
     imageUpdates:
       app.config.sourceType === "image" && app.config.image !== ""
-        ? imageUpdatesView(app.config.image, imageUpdate)
+        ? imageUpdatesView(
+            app.config.image,
+            currentImageUpdate(
+              imageUpdate,
+              app.config.image,
+              latest.latest?.startedAt ?? null
+            )
+          )
         : null,
   }
 }
@@ -209,7 +217,8 @@ function imageUpdatesView(image: string, update: AppImageUpdate | null) {
   }
   // A digest never moves, so there's nothing to check.
   const pinned = image.includes("@")
-  const current = update && update.image === image ? update : null
+  // Already judged to describe the App (`currentImageUpdate`).
+  const current = update
   return {
     ...policy,
     autoUpdateAt: current && autoUpdateAt(current),
