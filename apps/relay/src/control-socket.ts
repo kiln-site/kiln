@@ -1799,6 +1799,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "app.create"
     case "app.provision.cancel":
     case "app.delete":
+    // Stopping its build is the first step of deleting it.
+    case "app.deployment.abort":
       return "app.delete"
     // Freezing a resource, or letting it go, is part of deleting it.
     case "resource.freeze":

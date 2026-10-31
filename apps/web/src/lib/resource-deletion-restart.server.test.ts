@@ -151,7 +151,9 @@ describeMysql("A deletion across a Hearth restart", () => {
               ["volume", `${appId}/data`, "final_delete"],
             ]
           )
+          // Its build stopped first, then frozen and deleted.
           assert.deepStrictEqual(relay.changes, [
+            "app.deployment.abort",
             "resource.freeze",
             "app.delete",
           ])

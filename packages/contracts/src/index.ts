@@ -1083,6 +1083,11 @@ export const relayAppDeploymentReadSchema = z
   .object({ appId: appIdSchema, deploymentId: z.string().min(1).max(64) })
   .strict()
 
+/** Stops an App's running deployment, as before it's deleted. */
+export const relayAppDeploymentAbortSchema = z
+  .object({ appId: appIdSchema })
+  .strict()
+
 export const relayAppLimitsSchema = z
   .object({
     appId: appIdSchema,

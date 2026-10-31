@@ -716,6 +716,10 @@ export function controlRequestLocks(
 
     case "app.create":
       return app(appReplaceLocks, "id")
+    // Stops the running build beside it, which holds the App's lifecycle,
+    // so a deletion needn't wait for the build it removes.
+    case "app.deployment.abort":
+      return app((id) => [shared(laneKeys.app(id))])
     // Clears its routes once the App is gone, in a nested step; it waits
     // for any restore of a volume it mounts or owns.
     case "app.delete":

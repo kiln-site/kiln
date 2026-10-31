@@ -173,8 +173,10 @@ describeMysql("Deleting a game server or database", () => {
 
           assert.strictEqual(app?.status, "failed")
           assert.strictEqual(volume?.status, "failed")
-          // Frozen, and nothing deleted, on the Relay or in Hearth.
+          // The App's build stopped, both frozen, and nothing deleted, on the
+          // Relay or in Hearth.
           assert.deepStrictEqual(relay.changes, [
+            "app.deployment.abort",
             "resource.freeze",
             "resource.freeze",
           ])
@@ -200,6 +202,20 @@ describeMysql("Deleting a game server or database", () => {
           assert.strictEqual(failed?.status, "failed")
           assert.deepStrictEqual(relay.changes, [])
           assert.deepStrictEqual(yield* serverRecords, [serverId])
+
+          // Nor an App's build stopped for them.
+          yield* seedApp([])
+          yield* requestResourceDeletionEffect({
+            finalBackup: false,
+            kind: "app",
+            relayId,
+            resourceId: appId,
+            storageId: null,
+            user: stranger,
+          }).pipe(Effect.ignore)
+          yield* until(appId, ["failed", "completed"])
+          assert.deepStrictEqual(relay.changes, [])
+          assert.deepStrictEqual(yield* appRecords, [appId])
         }).pipe(TestClock.withLive),
       60_000
     )

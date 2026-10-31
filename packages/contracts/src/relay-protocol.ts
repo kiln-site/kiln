@@ -221,6 +221,7 @@ export const relayControlOperations = [
   "app.volumes.write",
   "app.network.routes.read",
   "app.deployment.read",
+  "app.deployment.abort",
   "app.image.check",
   "app.network.routes.write",
   "app.terminal.attach",
@@ -520,6 +521,7 @@ export function relayControlOperationChanges(
     case "app.provision.cancel":
     case "app.delete":
     case "app.deploy":
+    case "app.deployment.abort":
     case "app.action":
     case "app.limits.write":
     case "app.volumes.write":
