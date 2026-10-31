@@ -64,7 +64,21 @@ import {
   claimPreparedProvisioning,
 } from "@/lib/provisioning.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
+import {
+  exclusive,
+  partKey,
+  relayKey,
+  resourceKey,
+  shared,
+} from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { memberPermission } from "@/server/database-connections.server"
+import { resourceOperation } from "@/server/resource-operation.server"
 import {
   authorizedDatabase,
   databaseForViewer,
@@ -251,10 +265,14 @@ export const getManagedDatabaseContainer = createServerFn({ method: "GET" })
 
 // Deletes all of the database's data and keeps the database, so it takes
 // the permission that deletes it.
-export const wipeManagedDatabase = createServerFn({ method: "POST" })
-  .validator(databaseInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedDatabase(data, "database.delete")
+const wipeDatabase = resourceOperation({
+  kind: "database",
+  id: (input: z.infer<typeof databaseInputSchema>) => input.databaseId,
+  name: "database.wipe",
+  doing: "Wiping this database",
+  permission: () => "database.delete",
+  run: async (user, data) => {
+    const relay = await requiredRelay(data.relayId)
     const credential = await requiredCredential(data.relayId, data.databaseId)
     const database = relayManagedDatabaseSchema.parse(
       await databaseRpc(
@@ -271,143 +289,207 @@ export const wipeManagedDatabase = createServerFn({ method: "POST" })
     )
     publishDatabaseChange(relay.id, false)
     return databaseForViewer(user, relay.id, database)
-  })
+  },
+})
+
+export const wipeManagedDatabase = createServerFn({ method: "POST" })
+  .validator(databaseInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(wipeDatabase, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 // Renaming is managing the database as a whole, so it takes the permission
 // that deletes it.
-export const renameManagedDatabase = createServerFn({ method: "POST" })
-  .validator(databaseRenameInputSchema)
-  .handler(async ({ data }) => {
-    const { relay } = await authorizedDatabase(data, "database.delete")
+const renameDatabase = resourceOperation({
+  kind: "database",
+  id: (input: z.infer<typeof databaseRenameInputSchema>) => input.databaseId,
+  name: "database.rename",
+  doing: "Renaming this database",
+  permission: () => "database.delete",
+  run: async (_user, data) => {
+    const relay = await requiredRelay(data.relayId)
     await runAppEffect(
       "managedDatabases.rename",
       renameManagedDatabaseRecordEffect(relay.id, data.databaseId, data.name)
     )
     publishDatabaseChange(relay.id, true)
     return { name: data.name }
-  })
+  },
+})
+
+export const renameManagedDatabase = createServerFn({ method: "POST" })
+  .validator(databaseRenameInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(renameDatabase, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+// Holds the database it creates, by the ID it settles first, and its Relay
+// shared, so the Relay isn't removed meanwhile. The Relay is read once
+// admitted, so one removed since can't gain the database.
+const createDatabase = operation<z.infer<typeof createDatabaseInputSchema>>()({
+  name: "database.create",
+  doing: "Creating this database",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) =>
+        promiseEffect(() =>
+          requireRelayPermission({
+            permission: "database.create",
+            relayId: input.relayId,
+            user: person,
+          })
+        )
+      ),
+      Effect.map((person) => ({
+        id: randomBytes(20).toString("hex"),
+        user: person,
+      }))
+    ),
+  locks: ({ context, input }) => [
+    exclusive(resourceKey("database", input.relayId, context.id)),
+    shared(relayKey(input.relayId)),
+  ],
+  run: ({ context, input }) =>
+    promiseEffect(() => createDatabaseHandler(context.user, input, context.id)),
+  audit: ({ context, input }) => ({
+    id: context.id,
+    kind: "database",
+    relayId: input.relayId,
+  }),
+})
 
 export const createManagedDatabase = createServerFn({ method: "POST" })
   .validator(createDatabaseInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const relay = await requiredRelay(data.relayId)
-    await requireRelayPermission({
-      permission: "database.create",
-      relayId: relay.id,
-      user,
+  .handler(async ({ data }) =>
+    runOperationPromise(createDatabase, data, {
+      user: await requireEligibleResourceUser(),
     })
-    const nameExists = await runAppEffect(
-      "managedDatabases.name.preflight",
-      managedDatabaseNameExistsEffect(relay.id, data.name)
+  )
+
+async function createDatabaseHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof createDatabaseInputSchema>,
+  id: string
+) {
+  const relay = await requiredRelay(data.relayId)
+  const nameExists = await runAppEffect(
+    "managedDatabases.name.preflight",
+    managedDatabaseNameExistsEffect(relay.id, data.name)
+  )
+  if (nameExists) {
+    throw new Error(
+      `A database named "${data.name}" already exists on ${relay.name}`
     )
-    if (nameExists) {
-      throw new Error(
-        `A database named "${data.name}" already exists on ${relay.name}`
-      )
-    }
-    const id = randomBytes(20).toString("hex")
-    const username = `kiln_${randomBytes(6).toString("hex")}`
-    const password = randomBytes(36).toString("base64url")
-    const databaseName = `kiln_${id.slice(0, 12)}`
-    const request = {
-      databaseName,
-      engine: data.engine,
-      id,
-      name: data.name,
-      password,
-      username,
-    }
-    const register = () =>
+  }
+  const username = `kiln_${randomBytes(6).toString("hex")}`
+  const password = randomBytes(36).toString("base64url")
+  const databaseName = `kiln_${id.slice(0, 12)}`
+  const request = {
+    databaseName,
+    engine: data.engine,
+    id,
+    name: data.name,
+    password,
+    username,
+  }
+  const register = () =>
+    runAppEffect(
+      "managedDatabases.record.create",
+      createManagedDatabaseRecordEffect({
+        createdBy: user.id,
+        databaseId: id,
+        databaseName,
+        engine: data.engine,
+        name: data.name,
+        password,
+        relayId: relay.id,
+        username,
+      })
+    )
+  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+  if (
+    relayConnectionFeatures(relay.id).has(relayDatabaseProvisioningV1Feature)
+  ) {
+    // The Relay creates it in the background; it opens on its
+    // provisioning page at once.
+    const cancel = () =>
+      databaseRpc(
+        relay,
+        "database.provision.cancel",
+        { databaseId: id },
+        30_000,
+        user.id
+      ).then((result) => cancelledSchema.parse(result).cancelled)
+    const unregister = () =>
       runAppEffect(
-        "managedDatabases.record.create",
-        createManagedDatabaseRecordEffect({
-          createdBy: user.id,
-          databaseId: id,
-          databaseName,
-          engine: data.engine,
-          name: data.name,
-          password,
-          relayId: relay.id,
-          username,
-        })
+        "managedDatabases.record.delete",
+        deleteManagedDatabaseRecordEffect(relay.id, id)
       )
-    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-    if (
-      relayConnectionFeatures(relay.id).has(relayDatabaseProvisioningV1Feature)
-    ) {
-      // The Relay creates it in the background; it opens on its
-      // provisioning page at once.
-      const cancel = () =>
+    // Recorded first, so a job the Relay holds always has a database in
+    // Hearth to show it and delete it from.
+    await register()
+    const placeholder = await Effect.runPromise(
+      promiseEffect(() =>
         databaseRpc(
           relay,
-          "database.provision.cancel",
+          "database.provision.prepare",
+          { ...request, idempotencyKey: randomUUID() },
+          30_000,
+          user.id
+        )
+      ).pipe(
+        Effect.map((value) => relayManagedDatabaseSchema.parse(value)),
+        Effect.tapError(() => abandonPreparedProvisioning(cancel, unregister))
+      )
+    )
+    await claimPreparedProvisioning({
+      cancel,
+      claim: () =>
+        databaseRpc(
+          relay,
+          "database.provision.claim",
           { databaseId: id },
           30_000,
           user.id
-        ).then((result) => cancelledSchema.parse(result).cancelled)
-      const unregister = () =>
-        runAppEffect(
-          "managedDatabases.record.delete",
-          deleteManagedDatabaseRecordEffect(relay.id, id)
-        )
-      // Recorded first, so a job the Relay holds always has a database in
-      // Hearth to show it and delete it from.
-      await register()
-      const placeholder = await Effect.runPromise(
-        promiseEffect(() =>
-          databaseRpc(
-            relay,
-            "database.provision.prepare",
-            { ...request, idempotencyKey: randomUUID() },
-            30_000,
-            user.id
-          )
-        ).pipe(
-          Effect.map((value) => relayManagedDatabaseSchema.parse(value)),
-          Effect.tapError(() => abandonPreparedProvisioning(cancel, unregister))
-        )
-      )
-      await claimPreparedProvisioning({
-        cancel,
-        claim: () =>
-          databaseRpc(
-            relay,
-            "database.provision.claim",
-            { databaseId: id },
-            30_000,
-            user.id
-          ),
-        unconfirmed: "If it stays waiting, delete it and create it again.",
-        unregister,
-      })
-      publishDatabaseChange(relay.id, true)
-      return { ...placeholder, relayId: relay.id, relayName: relay.name }
-    }
-    const created = relayManagedDatabaseSchema.parse(
-      await databaseRpc(relay, "database.create", request, 360_000, user.id)
-    )
-    const persisted = await promiseResult(register)
-    if (Result.isFailure(persisted)) {
-      await ignorePromise(() =>
-        databaseRpc(
-          relay,
-          "database.delete",
-          { databaseId: id, deleteData: true },
-          180_000,
-          user.id
-        )
-      )
-      throw persisted.failure
-    }
+        ),
+      unconfirmed: "If it stays waiting, delete it and create it again.",
+      unregister,
+    })
     publishDatabaseChange(relay.id, true)
-    return { ...created, relayId: relay.id, relayName: relay.name }
-  })
+    return { ...placeholder, relayId: relay.id, relayName: relay.name }
+  }
+  const created = relayManagedDatabaseSchema.parse(
+    await databaseRpc(relay, "database.create", request, 360_000, user.id)
+  )
+  const persisted = await promiseResult(register)
+  if (Result.isFailure(persisted)) {
+    await ignorePromise(() =>
+      databaseRpc(
+        relay,
+        "database.delete",
+        { databaseId: id, deleteData: true },
+        180_000,
+        user.id
+      )
+    )
+    throw persisted.failure
+  }
+  publishDatabaseChange(relay.id, true)
+  return { ...created, relayId: relay.id, relayName: relay.name }
+}
 
-export const runManagedDatabaseAction = createServerFn({ method: "POST" })
-  .validator(databaseActionInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedDatabase(data, "database.power")
+const powerDatabase = resourceOperation({
+  kind: "database",
+  id: (input: z.infer<typeof databaseActionInputSchema>) => input.databaseId,
+  name: "database.power",
+  doing: "Changing this database's power",
+  permission: () => "database.power",
+  run: async (user, data) => {
+    const relay = await requiredRelay(data.relayId)
     const database = relayManagedDatabaseSchema.parse(
       await databaseRpc(
         relay,
@@ -419,15 +501,25 @@ export const runManagedDatabaseAction = createServerFn({ method: "POST" })
     )
     publishDatabaseChange(relay.id, false)
     return databaseForViewer(user, relay.id, database)
-  })
+  },
+})
 
-export const updateManagedDatabaseLimits = createServerFn({ method: "POST" })
-  .validator(databaseLimitsInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedDatabase(
-      data,
-      "database.limits.write"
-    )
+export const runManagedDatabaseAction = createServerFn({ method: "POST" })
+  .validator(databaseActionInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(powerDatabase, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+const changeDatabaseLimits = resourceOperation({
+  kind: "database",
+  id: (input: z.infer<typeof databaseLimitsInputSchema>) => input.databaseId,
+  name: "database.limits.update",
+  doing: "Changing this database's limits",
+  permission: () => "database.limits.write",
+  run: async (user, data) => {
+    const relay = await requiredRelay(data.relayId)
     const { relayConnectionFeatures } = await import("@/lib/relay-connection")
     if (!relayConnectionFeatures(relay.id).has(relayDatabaseLimitsV1Feature)) {
       throw new Error("Update this Relay to set database limits")
@@ -443,15 +535,27 @@ export const updateManagedDatabaseLimits = createServerFn({ method: "POST" })
     )
     publishDatabaseChange(relay.id, false)
     return databaseForViewer(user, relay.id, database)
-  })
+  },
+})
 
-export const rotateManagedDatabasePassword = createServerFn({ method: "POST" })
-  .validator(databaseInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedDatabase(
-      data,
-      "database.credentials.rotate"
-    )
+export const updateManagedDatabaseLimits = createServerFn({ method: "POST" })
+  .validator(databaseLimitsInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(changeDatabaseLimits, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+// Reads the credentials it rotates once admitted, so a rotation never
+// starts from one another just replaced.
+const rotateDatabasePassword = resourceOperation({
+  kind: "database",
+  id: (input: z.infer<typeof databaseInputSchema>) => input.databaseId,
+  name: "database.credentials.rotate",
+  doing: "Changing this database's password",
+  permission: () => "database.credentials.rotate",
+  run: async (user, data) => {
+    const relay = await requiredRelay(data.relayId)
     const credential = await requiredCredential(data.relayId, data.databaseId)
     const nextPassword = randomBytes(36).toString("base64url")
     await databaseRpc(
@@ -495,18 +599,77 @@ export const rotateManagedDatabasePassword = createServerFn({ method: "POST" })
     }
     publishDatabaseCredentialChange(relay.id, data.databaseId)
     return { rotated: true }
-  })
+  },
+})
+
+export const rotateManagedDatabasePassword = createServerFn({ method: "POST" })
+  .validator(databaseInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(rotateDatabasePassword, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 // Connects a game server, an App, or another database to the database, or
-// disconnects it. Both ends need their network permissions.
+// disconnects it. It changes both, so it holds both and needs both ends'
+// network permissions; an App's also holds its Relay's handover of Apps'
+// database connections, which it may finish first.
+const connectDatabase = operation<z.infer<typeof databaseNetworkInputSchema>>()(
+  {
+    name: "database.network.update",
+    doing: "Changing this database's connections",
+    authorize: ({ input, user }) =>
+      signedIn(user).pipe(
+        Effect.tap((person) =>
+          promiseEffect(async () => {
+            await requireRelayPermission({
+              databaseId: input.databaseId,
+              permission: "database.network.write",
+              relayId: input.relayId,
+              user: person,
+            })
+            const { id, kind } = input.member
+            await requireRelayPermission({
+              ...(kind === "instance"
+                ? { instanceId: id }
+                : kind === "app"
+                  ? { appId: id }
+                  : { databaseId: id }),
+              permission: memberPermission[kind],
+              relayId: input.relayId,
+              user: person,
+            })
+          })
+        )
+      ),
+    locks: ({ input }) => [
+      exclusive(resourceKey("database", input.relayId, input.databaseId)),
+      exclusive(resourceKey(input.member.kind, input.relayId, input.member.id)),
+      ...(input.member.kind === "app"
+        ? [exclusive(partKey(relayKey(input.relayId), "database-connections"))]
+        : []),
+    ],
+    run: ({ context: user, input }) =>
+      promiseEffect(async () => {
+        const { writeDatabaseConnection } =
+          await import("@/server/database-connections.server")
+        return writeDatabaseConnection(user, input)
+      }),
+    audit: ({ input }) => ({
+      id: input.databaseId,
+      kind: "database",
+      relayId: input.relayId,
+    }),
+  }
+)
+
 export const updateManagedDatabaseNetwork = createServerFn({ method: "POST" })
   .validator(databaseNetworkInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const { writeDatabaseConnection } =
-      await import("@/server/database-connections.server")
-    return writeDatabaseConnection(user, data)
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(connectDatabase, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 // Dumps travel as files in the database's dump folder on its Relay, which
 // the browser downloads and uploads as it does other files: an export
@@ -718,10 +881,12 @@ export const restartDatabaseTerminal = createServerFn({ method: "POST" })
   })
 
 export const deleteManagedDatabase = createServerFn({ method: "POST" })
-  .validator(databaseInputSchema.extend(deleteConfirmationSchema.shape).extend({
-    createBackup: z.boolean().default(true),
-    storageId: z.uuid().nullable().optional(),
-  }))
+  .validator(
+    databaseInputSchema.extend(deleteConfirmationSchema.shape).extend({
+      createBackup: z.boolean().default(true),
+      storageId: z.uuid().nullable().optional(),
+    })
+  )
   .handler(async ({ data }) => {
     const { relay, user } = await authorizedDatabase(data, "database.delete")
     const database = (
