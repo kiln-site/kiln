@@ -8,9 +8,10 @@ import {
   listLegacyAppDatabaseIdsEffect,
 } from "@/effect/managed-apps"
 import { promiseEffect } from "@/effect/promise"
-import { runAppEffect } from "@/effect/runtime"
+import { forkAppWorker, runAppEffect } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import { loadPersistedRelay, type PersistedRelay } from "@/lib/relay-registry"
+import { outsideOperation } from "@/operations/current"
 import { exclusive } from "@/operations/lanes"
 import { inLanes } from "@/operations/operation"
 
@@ -149,6 +150,40 @@ export const ensureAppDatabaseConnectionsImportedEffect = (
         )
     )
   )
+
+/**
+ * Whether the Relay has its Apps' database connections, as a deployment
+ * there needs first. If it hasn't, the handover is started, as its own
+ * operation that nothing waits on, for the deployment to try again once
+ * it's done.
+ */
+export const appDatabaseConnectionsHandedOverEffect = Effect.fnUntraced(
+  function* (relay: PersistedRelay) {
+    if (finished.has(relay.id)) return true
+    const database = yield* Database
+    const [state] = yield* database.queryRows<
+      RowDataPacket & { acknowledged_at: number | string | null }
+    >(
+      "database_connection_import_handed",
+      `SELECT acknowledged_at FROM ${importTable()} WHERE relay_id = ?`,
+      [relay.id]
+    )
+    if (state?.acknowledged_at != null) return true
+    outsideOperation(() =>
+      forkAppWorker(
+        ensureAppDatabaseConnectionsImportedEffect(relay).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              "Handing Apps' database connections to the Relay failed",
+              cause
+            )
+          )
+        )
+      )
+    )
+    return false
+  }
+)
 
 export function ensureAppDatabaseConnectionsImported(
   relay: PersistedRelay

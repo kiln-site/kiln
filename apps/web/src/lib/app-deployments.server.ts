@@ -39,7 +39,6 @@ import {
   claimImageUpdateEffect,
   loadAppImageUpdateEffect,
 } from "@/effect/app-image-updates"
-import type { Database } from "@/effect/database"
 import { DatabaseError, ExternalServiceError } from "@/effect/errors"
 import {
   getGitHubCommitEffect,
@@ -59,7 +58,6 @@ import {
 } from "@/effect/resource-deletions"
 import { forkAppWorker } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
-import { outsideOperation } from "@/operations/current"
 import {
   durableOperation,
   queueDurableOperation,
@@ -67,14 +65,10 @@ import {
 } from "@/operations/durable"
 import { currentActingUser } from "@/operations/acting-user"
 import { developmentBypassUserId } from "@/lib/development-bypass"
-import {
-  activeOperations,
-  awaitOperationEnd,
-  loadOperation,
-} from "@/operations/records"
+import { loadOperation } from "@/operations/records"
 import { RelayCommandError, relayCommand } from "@/operations/relay-command"
 import { appDeploymentLocks } from "@/lib/app-lanes"
-import { ensureAppDatabaseConnectionsImported } from "@/lib/app-database-connections.server"
+import { appDatabaseConnectionsHandedOverEffect } from "@/lib/app-database-connections.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import {
@@ -738,21 +732,25 @@ export const deployAppOperation = durableOperation({
   input: DeployInput,
   kind: deployAppKind,
   locks: (input) => appDeploymentLocks(input.relayId, input.appId),
-  // Starts once its Relay is there to deploy it, and no deployment from
-  // before deployments queued, which nothing holds, still runs: the minute
-  // sweep settles that. Until then it waits, holding nothing, so what's
-  // asked meanwhile joins it, it can be cancelled, and a deletion of the
-  // app isn't kept waiting. One whose Relay is gone starts, to find nothing
-  // to deploy.
+  // Starts once its Relay is there to deploy it, has the databases it
+  // keeps for the app (handed over as its own operation, started here if
+  // it's not), and runs no deployment from before deployments queued,
+  // which nothing holds: the minute sweep settles that. Until then it
+  // waits, holding nothing, so what's asked meanwhile joins it, it can be
+  // cancelled, and a deletion of the app isn't kept waiting. One whose
+  // Relay is gone starts, to find nothing to deploy.
   ready: (input) =>
     Effect.gen(function* () {
-      const relay = yield* relayState(input.relayId)
-      if (relay !== "connected") return relay === "gone"
-      return yield* latestAppDeploymentsEffect(input.appId).pipe(
-        Effect.map(({ latest }) => latest?.status !== "running"),
-        Effect.catch(() => Effect.succeed(false))
-      )
-    }),
+      const relays = yield* listPersistedRelaysEffect()
+      const relay = relays.find((item) => item.id === input.relayId)
+      if (relay === undefined) return true
+      if (!relay.enabled || relayConnectionFeatures(relay.id).size === 0) {
+        return false
+      }
+      if (!(yield* appDatabaseConnectionsHandedOverEffect(relay))) return false
+      const { latest } = yield* latestAppDeploymentsEffect(input.appId)
+      return latest?.status !== "running"
+    }).pipe(Effect.catch(() => Effect.succeed(false))),
   // A failure ends it failed, so what it was for is asked again.
   run: (input, operation) =>
     deploySteps(input, operation.id).pipe(
@@ -821,20 +819,6 @@ const watchFor = <A, E, R>(
     }
   })
 
-// Whether the app's Relay is connected, away (paused or offline, so
-// waited for), or gone.
-const relayState = (relayId: string) =>
-  listPersistedRelaysEffect().pipe(
-    Effect.map((relays) => {
-      const relay = relays.find((item) => item.id === relayId)
-      if (relay === undefined) return "gone" as const
-      return relay.enabled && relayConnectionFeatures(relay.id).size > 0
-        ? ("connected" as const)
-        : ("away" as const)
-    }),
-    Effect.catch(() => Effect.succeed("away" as const))
-  )
-
 // Whether a new app is ready to deploy: provisioned, still provisioning,
 // or gone or failed, when there's nothing to deploy.
 const provisioningState = (input: DeployInput) =>
@@ -900,12 +884,6 @@ const takeTurn = (
       if (!decided) return null
       request = decided.request
       if (decided.refused) return yield* Effect.fail(decided.refused)
-      // Its Relay joins the deployment to the databases it keeps for the
-      // app, so it must have them first: Hearth's own step, in its lanes.
-      const relay = yield* enabledRelay(input.relayId)
-      yield* promiseEffect(() =>
-        outsideOperation(() => ensureAppDatabaseConnectionsImported(relay))
-      )
       const plan = yield* prepareAppDeploymentEffect(request, id)
       if (plan && request.trigger === "poll") {
         pollFailures.delete(`${input.relayId}:${input.appId}`)
@@ -1284,34 +1262,6 @@ export const askAppDeploymentEffect = Effect.fn("Apps.deploy.ask")(
     return id
   }
 )
-
-/**
- * Waits, up to half a minute, for the app's deployment that's running, if
- * one is, to end, as once its build was asked to stop: `stop` asks again
- * every few seconds, in case the build reached the Relay after it asked.
- * For a deletion, which is refused while a deployment holds the app.
- */
-export const awaitAppDeploymentEnd = (
-  relayId: string,
-  appId: string,
-  stop: Effect.Effect<void, unknown, Database>
-) =>
-  Effect.gen(function* () {
-    const running = (yield* activeOperations(deployAppKind)).find(
-      ({ input, state }) =>
-        state === "running" &&
-        (input as { appId?: string }).appId === appId &&
-        (input as { relayId?: string }).relayId === relayId
-    )
-    if (!running) return
-    yield* Effect.raceFirst(
-      awaitOperationEnd(running.id),
-      Effect.sleep("2 seconds").pipe(
-        Effect.andThen(stop.pipe(Effect.ignore)),
-        Effect.forever
-      )
-    ).pipe(Effect.timeoutOption("30 seconds"))
-  }).pipe(Effect.catchCause(() => Effect.void))
 
 /** What an app's deployments queue under, one waiting at a time. */
 export const appDeployKey = (relayId: string, appId: string) =>

@@ -224,7 +224,9 @@ The deployment holds the App's `#deploy` and
 `relay:<id>#database-connections` (`appDeploymentLocks`) from its start
 until its Relay says it ended, so the next waits its turn behind it and
 nothing else orders deployments. It starts only once its Relay is there
-to deploy it (`ready`): until then it waits holding nothing, so what's
+to deploy it, with the databases it keeps for the App (handed over as an
+operation of its own, started then if it's not) (`ready`): until then it
+waits holding nothing, so what's
 asked meanwhile joins it, it can be cancelled, and a deletion of the App
 isn't kept waiting. A wait, for a new App's provisioning or a build to
 end, checks in memory and stores one step every five minutes, so
@@ -233,10 +235,11 @@ secrets, is read as it's sent and the token that checks out a GitHub
 commit made then, neither kept in the operation's steps, which are stored
 in the clear; a reply lost to a restart is read back (`relayCommand`), not
 sent again. Deleting an App stops its build on the Relay first
-(`app.deployment.abort`), so the deletion doesn't wait for the build it
-removes: it waits a little for the deployment to see the build stop,
-asking again meanwhile, and a deployment won't send once the deletion
-began.
+(`app.deployment.abort`), for as long as whoever asked may delete it, then
+waits its turn as Hearth's own work rather than being refused by the
+deployment it stopped, which ends once it sees that, or by one queued
+behind it, which finds the App being deleted; it asks again for the build
+to stop meanwhile, and a deployment won't send once the deletion began.
 
 A GitHub sync's run holds the sync's `#files`, and shared its `#settings`,
 its target and its connection, from reading GitHub to recording what it

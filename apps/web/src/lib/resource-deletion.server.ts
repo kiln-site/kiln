@@ -45,7 +45,6 @@ import { durableOperation, startDurableOperation } from "@/operations/durable"
 import {
   exclusive,
   resourceKey,
-  shared,
   type Initiator,
 } from "@/operations/lanes"
 import { inLanes } from "@/operations/operation"
@@ -765,11 +764,13 @@ export const keepResource = durableOperation({
 // effort: an App with no build, a Relay that can't hear it now, or a turn
 // that doesn't come soon, as behind another deletion of it, leaves the
 // deletion to take its turn as before.
+// It changes nothing of Hearth's, and the Relay orders it in its own lanes,
+// so it takes none here, where the deletion asking it waits for the App.
 const abortAppDeployment = (deletion: ResourceDeletion) =>
   inLanes(
     "app.deployment.abort",
     "Stopping this App's deployment",
-    [shared(resourceKey("app", deletion.relayId, deletion.resourceId))],
+    [],
     promiseEffect(async () => {
       const relay = await activeRelay(deletion.relayId)
       await relayRpc(
@@ -805,48 +806,72 @@ const stopBuildFor = (deletion: ResourceDeletion) =>
 // Starts the operation that carries out a deletion's current attempt. One
 // already started under its key is the same operation. A person's attempt
 // is refused while something else changes the resource, and recorded as
-// failed with why, for them to try again; Hearth's own waits. Deleting an
-// App stops its build first, and waits a little for its deployment to see
-// it stop.
-const startAttempt = (deletion: ResourceDeletion, initiator: Initiator) =>
-  (deletion.kind === "app" && deletion.status !== "cancelling"
-    ? stopBuildFor(deletion)
-    : Effect.void
-  )
-    .pipe(
+// failed with why, for them to try again; Hearth's own waits.
+//
+// An App's deletion stops its build first, then waits its turn as Hearth's
+// own work, rather than being refused by the deployment it stopped, which
+// ends once it sees the build stop, or by one queued behind it, which
+// finds the App being deleted: whoever asked doesn't wait for it, and it
+// asks again for the build to stop meanwhile, in case one reached the
+// Relay after it first asked. Hearth started again takes it up
+// (`reconcileResourceDeletions`).
+const startAttempt = (deletion: ResourceDeletion, initiator: Initiator) => {
+  const attempt = (as: Initiator) =>
+    startDurableOperation(
+      deletion.status === "cancelling" ? keepResource : deleteResource,
+      {
+        attempt: deletion.attempt,
+        deletionId: deletion.id,
+        kind: deletion.kind,
+        relayId: deletion.relayId,
+        resourceId: deletion.resourceId,
+      },
+      {
+        actorId: deletion.requestedBy,
+        idempotencyKey: `${deletion.id}:${deletion.attempt}`,
+        initiator: as,
+      }
+    )
+  if (deletion.kind === "app" && deletion.status !== "cancelling") {
+    return stopBuildFor(deletion).pipe(
       Effect.andThen(
-        startDurableOperation(
-          deletion.status === "cancelling" ? keepResource : deleteResource,
-          {
-            attempt: deletion.attempt,
-            deletionId: deletion.id,
-            kind: deletion.kind,
-            relayId: deletion.relayId,
-            resourceId: deletion.resourceId,
-          },
-          {
-            actorId: deletion.requestedBy,
-            idempotencyKey: `${deletion.id}:${deletion.attempt}`,
-            initiator,
-          }
+        Effect.raceFirst(
+          attempt("system"),
+          Effect.sleep(abortAgainAfter).pipe(
+            Effect.andThen(stopBuildFor(deletion)),
+            Effect.forever
+          )
+        ).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("An App's deletion didn't start", cause)
+          ),
+          Effect.forkDetach
         )
-      )
+      ),
+      Effect.asVoid
     )
-    .pipe(
-      Effect.tapErrorTag("OperationBusyError", (busy) =>
-        recordResourceDeletionStatusEffect({
-          attempt: deletion.attempt,
-          error: busy.message,
-          from: [deletion.status],
-          id: deletion.id,
-          status: "failed",
-        }).pipe(
-          Effect.tap(() => Effect.sync(() => publishDeletionChange(deletion))),
-          Effect.tap(deliverSchedules),
-          Effect.ignore
-        )
+  }
+  return attempt(initiator).pipe(
+    Effect.tapErrorTag("OperationBusyError", (busy) =>
+      recordResourceDeletionStatusEffect({
+        attempt: deletion.attempt,
+        error: busy.message,
+        from: [deletion.status],
+        id: deletion.id,
+        status: "failed",
+      }).pipe(
+        Effect.tap(() => Effect.sync(() => publishDeletionChange(deletion))),
+        Effect.tap(deliverSchedules),
+        Effect.ignore
       )
-    )
+    ),
+    Effect.asVoid
+  )
+}
+
+// How often an App's deletion waiting for the App asks again for its build
+// to stop.
+const abortAgainAfter = "2 seconds"
 
 /**
  * Admits every running attempt whose operation is missing, as after Hearth
