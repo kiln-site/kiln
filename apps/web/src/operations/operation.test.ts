@@ -786,9 +786,22 @@ describeMysql("Hearth operations", () => {
               Effect.timeout("5 seconds")
             )
 
-          // While startup takes back what's running, it's recorded and waits.
+          // While startup takes back what's running, it's recorded and waits,
+          // once however often it's asked under its idempotency key.
           const open = closeLanes()
-          const early = yield* queueDurableOperation(queued, { name: "early" })
+          const early = yield* queueDurableOperation(
+            queued,
+            { name: "early" },
+            { idempotencyKey: "early" }
+          )
+          assert.strictEqual(
+            yield* queueDurableOperation(
+              queued,
+              { name: "early" },
+              { idempotencyKey: "early" }
+            ),
+            early
+          )
           yield* Effect.sleep("100 millis")
           assert.strictEqual((yield* loadOperation(early))?.state, "waiting")
           yield* open

@@ -340,7 +340,8 @@ export const startDurableOperation = <
  * running, however long its turn takes, then starts. With a `key`, what's
  * asked while one waits under it joins that one, by its definition's
  * `join`, so asks made while the same work runs ahead make one run behind
- * it. A key names one change's work: what joins it takes its locks.
+ * it. A key names one change's work: what joins it takes its locks. With
+ * an idempotency key instead, it's queued once however often it's asked.
  */
 export const queueDurableOperation = <
   Input extends Schema.Top,
@@ -350,7 +351,14 @@ export const queueDurableOperation = <
 >(
   operation: DurableOperation<Input, Success, Failure, R>,
   input: Input["Type"],
-  options: { readonly key?: string } = {}
+  options: {
+    /** Who asked, for those its locks turn away. */
+    readonly actorId?: string | null
+    /** What's asked while it waits under this joins it. */
+    readonly key?: string
+    /** Queues it once: an operation recorded under it is returned instead. */
+    readonly idempotencyKey?: string
+  } = {}
 ): Effect.Effect<string, DatabaseError, Database> =>
   Effect.gen(function* () {
     yield* Effect.annotateCurrentSpan("operation.name", operation.kind)
@@ -382,16 +390,20 @@ export const queueDurableOperation = <
       Effect.gen(function* () {
         const queued =
           options.key === undefined
-            ? {
-                id: (yield* recordOperation({
-                  input: encoded,
-                  kind: operation.kind,
-                  locks,
-                  state: "waiting",
-                  version: operation.version,
-                })).id,
-                joined: false,
-              }
+            ? yield* recordOperation({
+                actorId: options.actorId ?? null,
+                idempotencyKey: options.idempotencyKey,
+                input: encoded,
+                kind: operation.kind,
+                locks,
+                state: "waiting",
+                version: operation.version,
+              }).pipe(
+                Effect.map((recorded) => ({
+                  id: recorded.id,
+                  joined: recorded.existing,
+                }))
+              )
             : yield* queueOperation(
                 {
                   input: encoded,
@@ -407,7 +419,7 @@ export const queueDurableOperation = <
           yield* lanesOpen.pipe(
             Effect.andThen(
               takeTurn({
-                actorId: null,
+                actorId: options.actorId ?? null,
                 doing: operation.doing(input),
                 id: queued.id,
                 locks,
