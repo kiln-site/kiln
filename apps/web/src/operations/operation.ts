@@ -171,6 +171,35 @@ export const runOperation = <Input, Context, A, E, R>(
   input: Input,
   caller: OperationCaller
 ): Effect.Effect<A, E | OperationBusyError, R | Database> =>
+  attempt(definition, input, caller).pipe(
+    Effect.retry({
+      times: 2,
+      while: (error) => Schema.is(LocksMovedError)(error),
+    }),
+    Effect.catchIf(
+      (error) => Schema.is(LocksMovedError)(error),
+      () =>
+        Effect.fail(
+          new OperationBusyError({
+            message: "What this changes kept changing. Try again shortly.",
+            operation: definition.name,
+          })
+        )
+    )
+  ) as Effect.Effect<A, E | OperationBusyError, R | Database>
+
+// What a run that waited found, checked again, needs locks it doesn't hold:
+// it takes its turn again with them rather than run without.
+class LocksMovedError extends Schema.TaggedError<LocksMovedError>()(
+  "LocksMovedError",
+  {}
+) {}
+
+const attempt = <Input, Context, A, E, R>(
+  definition: Operation<Input, Context, A, E, R>,
+  input: Input,
+  caller: OperationCaller
+): Effect.Effect<A, E | OperationBusyError | LocksMovedError, R | Database> =>
   Effect.gen(function* () {
     const id = randomUUID()
     const parent = yield* CurrentOperation
@@ -224,17 +253,33 @@ export const runOperation = <Input, Context, A, E, R>(
       held: ReadonlyArray<LaneLock>,
       waited: boolean,
       label: string | null
-    ): Effect.Effect<A, E, R | Database> =>
+    ): Effect.Effect<A, E | LocksMovedError, R | Database> =>
       Effect.gen(function* () {
         const startedAt = yield* Clock.currentTimeMillis
         const occupant = label ? laneOccupants.get(label) : undefined
         if (occupant) occupant.startedAt = startedAt
+        // What it read may have changed while it waited, as which backup
+        // destination is preferred: checked again, and taken from the top
+        // if it now changes something its locks don't cover.
+        const rechecked =
+          waited && definition.authorize
+            ? yield* authorize.pipe(
+                Effect.withSpan("Operations.authorize"),
+                Effect.exit
+              )
+            : null
+        if (rechecked && Exit.isSuccess(rechecked)) {
+          const needed = withWholes(
+            definition.locks({ ...args, context: rechecked.value })
+          )
+          if (uncovered(needed, held).length > 0) {
+            return yield* new LocksMovedError()
+          }
+          context = rechecked.value
+        }
         const exit = yield* Effect.gen(function* () {
-          // What it read may have changed while it waited.
-          if (waited && definition.authorize) {
-            context = yield* authorize.pipe(
-              Effect.withSpan("Operations.authorize")
-            )
+          if (rechecked && Exit.isFailure(rechecked)) {
+            return yield* Effect.failCause(rechecked.cause)
           }
           return yield* definition.run({ ...args, context, operationId: id })
         }).pipe(
@@ -315,18 +360,21 @@ export const runOperation = <Input, Context, A, E, R>(
         ).pipe(Effect.onInterrupt(() => Effect.sync(ticket.cancel)))
       })
     ).pipe(
-      Effect.catch((error): Effect.Effect<never, E | OperationBusyError> =>
-        error instanceof LaneRejectedError
-          ? refusal(definition.name, error).pipe(
-              Effect.tapError(() =>
-                record(definition.name, "refused", {
-                  admittedAt,
-                  finishedAt: admittedAt,
-                  startedAt: admittedAt,
-                })
+      Effect.catch(
+        (
+          error
+        ): Effect.Effect<never, E | OperationBusyError | LocksMovedError> =>
+          error instanceof LaneRejectedError
+            ? refusal(definition.name, error).pipe(
+                Effect.tapError(() =>
+                  record(definition.name, "refused", {
+                    admittedAt,
+                    finishedAt: admittedAt,
+                    startedAt: admittedAt,
+                  })
+                )
               )
-            )
-          : Effect.fail(error)
+            : Effect.fail(error)
       ),
       // Withdrawn before it started: it leaves the view here. Once it
       // starts, the work's own fiber does.

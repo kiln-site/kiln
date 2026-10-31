@@ -56,7 +56,9 @@ Every run goes through the same steps, in one `Operations.<name>` span:
    - **Hearth's own** work, a schedule, worker or reconciler, waits its
      turn, and is authorized again once it has, since what it read may have
      changed. One that waits over 30 seconds logs what it waits behind. A
-     person's that waited is authorized again too.
+     person's that waited is authorized again too. If what it found then
+     needs locks it doesn't hold, as a backup whose preferred destination
+     changed, it takes its turn again with them rather than run without.
    - An operation run **inside another** runs under its parent's locks and
      takes none of its own. It may only need what its parent holds: the same
      keys, or parts of a whole its parent holds exclusively. Needing more is

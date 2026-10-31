@@ -208,6 +208,59 @@ describeMysql("Hearth operations", () => {
     )
 
     it.effect(
+      "takes its turn again when what it changes moved while it waited",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const settingsOf = (id: string) =>
+            partKey(`backup-storage:${id}`, "settings")
+          const releaseFirst = yield* Deferred.make<void>()
+          const releaseSecond = yield* Deferred.make<void>()
+          const savingFirst = yield* runOperation(
+            holding("test.storage.save", "Saving this destination", [
+              exclusive(settingsOf("first")),
+            ]),
+            releaseFirst,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          const savingSecond = yield* runOperation(
+            holding("test.storage.save", "Saving this destination", [
+              exclusive(settingsOf("second")),
+            ]),
+            releaseSecond,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+
+          // A backup to the preferred destination, which changes while it
+          // waits for the first one's save.
+          let preferred = "first"
+          const backingUp = yield* runOperation(
+            operation<void>()({
+              authorize: () => Effect.sync(() => preferred),
+              doing: "Backing up this game server",
+              locks: ({ context }) => [shared(settingsOf(context))],
+              name: "test.backup",
+              run: ({ context }) => Effect.succeed(context),
+            }),
+            undefined,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          preferred = "second"
+          yield* Deferred.succeed(releaseFirst, undefined)
+          yield* Fiber.join(savingFirst)
+          yield* Effect.yieldNow
+
+          // It doesn't run without the second's lock, which is still held.
+          assert.isUndefined(backingUp.pollUnsafe())
+          yield* Deferred.succeed(releaseSecond, undefined)
+          yield* Fiber.join(savingSecond)
+          assert.strictEqual(yield* Fiber.join(backingUp), "second")
+        })
+    )
+
+    it.effect(
       "turns a person away at once from a deletion still waiting its turn",
       () =>
         Effect.gen(function* () {
