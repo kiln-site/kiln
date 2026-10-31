@@ -4,7 +4,7 @@ import {
   relayAppImageUpdatesV1Feature,
 } from "@workspace/contracts"
 import { logException } from "@workspace/telemetry"
-import { Cause, Clock, Effect, Fiber, Schedule, Semaphore } from "effect"
+import { Cause, Clock, Effect, Fiber, Schedule } from "effect"
 
 import { latestAppDeploymentsEffect } from "@/effect/app-deployments"
 import {
@@ -27,6 +27,9 @@ import {
   resolveNotificationsEffect,
 } from "@/effect/notifications"
 import { forkAppWorker } from "@/effect/runtime"
+import { outsideOperation } from "@/operations/current"
+import { exclusive, resourceKey } from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
 import { databaseTable } from "@/lib/database-config"
 import {
   queueAppDeploymentEffect,
@@ -56,7 +59,6 @@ declare global {
   var kilnAppImageUpdateChecker: Fiber.Fiber<void> | undefined
   var kilnAppImageUpdateChecked: Map<string, number> | undefined
   var kilnAppImageUpdateFailures: Map<string, string> | undefined
-  var kilnAppImageUpdateLocks: Map<string, Semaphore.Semaphore> | undefined
 }
 
 // When each Relay's apps were last checked. A restart checks them again.
@@ -68,12 +70,6 @@ const checked = (globalThis.kilnAppImageUpdateChecked ??= new Map<
 const failures = (globalThis.kilnAppImageUpdateFailures ??= new Map<
   string,
   string
->())
-// One check per Relay at a time, so a check a person asks for and the
-// hourly one don't ask its registries twice over.
-const locks = (globalThis.kilnAppImageUpdateLocks ??= new Map<
-  string,
-  Semaphore.Semaphore
 >())
 
 // Whether a check's answer still says something: the app still names the
@@ -224,100 +220,109 @@ const checkAppImagesEffect = Effect.fnUntraced(function* (
   onlyAppId?: string,
   actorUserId: string | null = null
 ) {
-  const lock = locks.get(relay.id) ?? Semaphore.makeUnsafe(1)
-  locks.set(relay.id, lock)
-  yield* lock.withPermit(
-    Effect.gen(function* () {
-      const apps = (yield* listRelayAppConfigsEffect(relay.id)).filter(
-        (app) =>
-          (onlyAppId === undefined || app.appId === onlyAppId) &&
-          app.config.sourceType === "image" &&
-          app.config.image !== "" &&
-          !app.config.image.includes("@")
-      )
-      const updates = yield* loadAppImageUpdatesEffect(
-        apps.map((app) => app.appId)
-      )
-      const due = apps.filter(
-        (app) =>
-          (updates.get(app.appId)?.mode ?? defaultAppImageUpdatePolicy.mode) !==
-          "off"
-      )
-      // An app checked on its own that no longer checks, as one now pinned
-      // to a digest or deployed from elsewhere, has no update on offer.
-      if (
-        onlyAppId !== undefined &&
-        !due.some((app) => app.appId === onlyAppId)
-      )
-        yield* resolveAppImageUpdateNotificationsEffect(onlyAppId, {
-          unchecked: true,
-        })
-      let changed = false
-      for (let start = 0; start < due.length; start += batchSize) {
-        const batch = due.slice(start, start + batchSize)
-        const askedAt = yield* Clock.currentTimeMillis
-        const results = yield* Effect.tryPromise({
-          try: (signal) =>
-            relayRpc(
-              relay,
-              "app.image.check",
-              {
-                apps: batch.map((app) => ({
-                  appId: app.appId,
-                  image: app.config.image,
-                })),
-              },
-              checkTimeoutMs,
-              undefined,
-              signal
-            ),
-          catch: (cause) =>
-            ExternalServiceError.make({
-              cause,
-              message: "Could not check the Relay's apps for image updates",
-              service: "Relay",
-            }),
-        }).pipe(
-          Effect.map((response) =>
-            relayAppImageCheckResultsSchema.parse(response)
-          )
+  // Registries are asked with no lane held; each app's answer is recorded
+  // holding the app, so checks may overlap without one answer undoing
+  // another's.
+  yield* Effect.gen(function* () {
+    const apps = (yield* listRelayAppConfigsEffect(relay.id)).filter(
+      (app) =>
+        (onlyAppId === undefined || app.appId === onlyAppId) &&
+        app.config.sourceType === "image" &&
+        app.config.image !== "" &&
+        !app.config.image.includes("@")
+    )
+    const updates = yield* loadAppImageUpdatesEffect(
+      apps.map((app) => app.appId)
+    )
+    const due = apps.filter(
+      (app) =>
+        (updates.get(app.appId)?.mode ?? defaultAppImageUpdatePolicy.mode) !==
+        "off"
+    )
+    // An app checked on its own that no longer checks, as one now pinned
+    // to a digest or deployed from elsewhere, has no update on offer.
+    if (onlyAppId !== undefined && !due.some((app) => app.appId === onlyAppId))
+      yield* resolveAppImageUpdateNotificationsEffect(onlyAppId, {
+        unchecked: true,
+      })
+    let changed = false
+    for (let start = 0; start < due.length; start += batchSize) {
+      const batch = due.slice(start, start + batchSize)
+      const askedAt = yield* Clock.currentTimeMillis
+      const results = yield* Effect.tryPromise({
+        try: (signal) =>
+          relayRpc(
+            relay,
+            "app.image.check",
+            {
+              apps: batch.map((app) => ({
+                appId: app.appId,
+                image: app.config.image,
+              })),
+            },
+            checkTimeoutMs,
+            undefined,
+            signal
+          ),
+        catch: (cause) =>
+          ExternalServiceError.make({
+            cause,
+            message: "Could not check the Relay's apps for image updates",
+            service: "Relay",
+          }),
+      }).pipe(
+        Effect.map((response) =>
+          relayAppImageCheckResultsSchema.parse(response)
         )
-        for (const result of results) {
-          const app = batch.find((item) => item.appId === result.appId)
-          // Mid-deployment, its outcome decides what runs.
-          if (!app || result.status === "deploying") continue
-          if (
-            !(yield* stillChecked(
-              relay.id,
+      )
+      for (const result of results) {
+        const app = batch.find((item) => item.appId === result.appId)
+        // Mid-deployment, its outcome decides what runs.
+        if (!app || result.status === "deploying") continue
+        const recorded = yield* inLanes(
+          "app.image.check.record",
+          "Checking this App's image",
+          [exclusive(resourceKey("app", relay.id, app.appId))],
+          Effect.gen(function* () {
+            if (
+              !(yield* stillChecked(
+                relay.id,
+                app.appId,
+                app.config.image,
+                askedAt
+              ))
+            ) {
+              return null
+            }
+            // A check asked for after this one answered first.
+            const current = (yield* loadAppImageUpdatesEffect([app.appId])).get(
+              app.appId
+            )
+            if ((current?.checkedAt ?? 0) > askedAt) return null
+            const recorded = yield* recordAppImageCheckEffect(
               app.appId,
               app.config.image,
-              askedAt
-            ))
-          ) {
-            continue
-          }
-          const recorded = yield* recordAppImageCheckEffect(
-            app.appId,
-            app.config.image,
-            result
-          )
-          changed ||= recorded.changed
-          yield* reportFailure(relay.id, app.appId, recorded.update)
-          if (recorded.newlySeen) {
-            yield* announce(relay, app.name, recorded.update, actorUserId)
-          }
-          // An update that's gone, skipped, or replaced by a newer image no
-          // longer needs anyone's attention.
-          yield* resolveAppImageUpdateNotificationsEffect(app.appId)
-          const at = autoUpdateAt(recorded.update)
-          if (at !== null && at <= (yield* Clock.currentTimeMillis)) {
-            yield* queueAppDeploymentEffect(app.appId, relay.id, "update")
-          }
-        }
+              result
+            )
+            yield* reportFailure(relay.id, app.appId, recorded.update)
+            if (recorded.newlySeen) {
+              yield* announce(relay, app.name, recorded.update, actorUserId)
+            }
+            // An update that's gone, skipped, or replaced by a newer image
+            // no longer needs anyone's attention.
+            yield* resolveAppImageUpdateNotificationsEffect(app.appId)
+            const at = autoUpdateAt(recorded.update)
+            if (at !== null && at <= (yield* Clock.currentTimeMillis)) {
+              yield* queueAppDeploymentEffect(app.appId, relay.id, "update")
+            }
+            return recorded
+          })
+        )
+        changed ||= recorded?.changed ?? false
       }
-      if (changed) publishAppDeploymentChange(relay.id)
-    })
-  )
+    }
+    if (changed) publishAppDeploymentChange(relay.id)
+  })
 })
 
 export function startAppImageUpdateChecks(): void {
@@ -395,19 +400,22 @@ export function recheckAppImage(
   appId: string,
   actorUserId: string | null
 ): void {
-  forkAppWorker(
-    Effect.gen(function* () {
-      const relays = yield* listPersistedRelaysEffect()
-      const relay = relays.find((item) => item.id === relayId)
-      if (relay && checksImages(relay)) {
-        yield* checkAppImagesEffect(relay, appId, actorUserId)
-      }
-    }).pipe(
-      Effect.catchCause((cause) =>
-        logException(Cause.squash(cause), {
-          operation: "Apps.imageUpdates.recheck",
-          attributes: { "app.id": appId, "relay.id": relayId },
-        })
+  // Asked for by whatever changed the app, which doesn't wait for it.
+  outsideOperation(() =>
+    forkAppWorker(
+      Effect.gen(function* () {
+        const relays = yield* listPersistedRelaysEffect()
+        const relay = relays.find((item) => item.id === relayId)
+        if (relay && checksImages(relay)) {
+          yield* checkAppImagesEffect(relay, appId, actorUserId)
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          logException(Cause.squash(cause), {
+            operation: "Apps.imageUpdates.recheck",
+            attributes: { "app.id": appId, "relay.id": relayId },
+          })
+        )
       )
     )
   )

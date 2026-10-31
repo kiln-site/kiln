@@ -13,7 +13,8 @@ import {
   recheckAppImage,
   resolveAppImageUpdateNotificationsEffect,
 } from "@/lib/app-image-updates.server"
-import { authorizedApp } from "@/server/app-access"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { authorizedAppFor } from "@/server/app-access"
 
 // What people who can deploy an image app decide about its updates. Each
 // one changes what Kiln does next for everyone who sees the app.
@@ -28,9 +29,10 @@ interface AppInput {
  * Turned on, the app is checked now rather than within the hour.
  */
 export async function saveAppImageUpdatePolicyHandler(
+  user: AuthenticatedUser,
   data: AppInput & { delayHours: number; mode: AppImageUpdateMode }
 ) {
-  const { app, relay, user } = await imageApp(data)
+  const { app, relay } = await imageApp(user, data)
   await runAppEffect(
     "apps.imageUpdates.policy",
     saveAppImageUpdatePolicyEffect(app.appId, {
@@ -48,8 +50,11 @@ export async function saveAppImageUpdatePolicyHandler(
 }
 
 /** Checks the app's tag now. */
-export async function checkAppImageUpdateHandler(data: AppInput) {
-  const { app, relay, user } = await imageApp(data)
+export async function checkAppImageUpdateHandler(
+  user: AuthenticatedUser,
+  data: AppInput
+) {
+  const { app, relay } = await imageApp(user, data)
   await runAppEffect(
     "apps.imageUpdates.checkApp",
     checkAppImageEffect(relay, app.appId, user.id)
@@ -59,9 +64,10 @@ export async function checkAppImageUpdateHandler(data: AppInput) {
 
 /** Passes over the update on offer: it neither notifies nor deploys. */
 export async function skipAppImageUpdateHandler(
+  user: AuthenticatedUser,
   data: AppInput & { digest: string }
 ) {
-  const { app, relay } = await imageApp(data)
+  const { app, relay } = await imageApp(user, data)
   const skipped = await runAppEffect(
     "apps.imageUpdates.skip",
     skipAppImageUpdateEffect(app.appId, data.digest)
@@ -75,8 +81,11 @@ export async function skipAppImageUpdateHandler(
 }
 
 /** Deploys the update on offer now, skipped or not, whatever its wait. */
-export async function deployAppImageUpdateHandler(data: AppInput) {
-  const { app, relay, user } = await imageApp(data)
+export async function deployAppImageUpdateHandler(
+  user: AuthenticatedUser,
+  data: AppInput
+) {
+  const { app, relay } = await imageApp(user, data)
   const started = await runAppEffect(
     "apps.imageUpdates.deploy",
     startAppDeploymentEffect({
@@ -92,8 +101,8 @@ export async function deployAppImageUpdateHandler(data: AppInput) {
 
 // Deciding an app's updates is configuring it, so it takes what deploying
 // it does.
-async function imageApp(data: AppInput) {
-  const authorized = await authorizedApp(data, "app.manage")
+async function imageApp(user: AuthenticatedUser, data: AppInput) {
+  const authorized = await authorizedAppFor(user, data, "app.manage")
   if (authorized.app.config.sourceType !== "image") {
     throw new Error("Only apps deployed from an image check for updates")
   }
