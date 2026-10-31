@@ -1158,10 +1158,21 @@ const asSent = (plan: DeployPlan) =>
     if (
       app.config.sourceType !== plan.record.sourceType ||
       (plan.image !== null && app.config.image !== plan.image) ||
-      (plan.token !== null && source?.repositoryId !== plan.token.repositoryId)
+      (plan.token !== null &&
+        (source?.repositoryId !== plan.token.repositoryId ||
+          source.branch !== plan.record.branch))
     ) {
       return yield* sendError("app_config")(
         new Error("The app's source changed; deploy it again")
+      )
+    }
+    // A push's or poll's, only while the app still deploys them.
+    if (
+      (plan.record.trigger === "push" || plan.record.trigger === "poll") &&
+      source?.autoDeploy === false
+    ) {
+      return yield* sendError("app_config")(
+        new Error("Auto-deploy was turned off before this deployment was sent")
       )
     }
     const payload = { ...plan.payload, config: app.config }
