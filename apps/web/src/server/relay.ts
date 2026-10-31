@@ -84,9 +84,9 @@ import {
 import { forkAppEffect, runAppEffect, traceAppPromise } from "@/effect/runtime"
 import {
   applyManagedDomainAddressesEffect,
-  provisionInstanceDomainLater,
+  provisionInstanceDomainBestEffort,
 } from "@/server/domains.server"
-import { syncInstanceDomainAfterPortUpdate } from "@/server/relay-port-update.server"
+import { syncInstanceDomainAfterPortUpdateBestEffort } from "@/server/relay-port-update.server"
 import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
 import {
@@ -509,6 +509,15 @@ function warnRelayUnavailable(relayId: string, cause: unknown) {
   console.warn(`[Kiln Relay] Could not reach Relay ${relayId}:`, cause)
 }
 
+// What a change that provisions a game server's domains also holds, so
+// its DNS step runs inside it.
+const instanceDnsKey = (input: { instanceId: string; relayId: string }) =>
+  dnsKey({
+    relayId: input.relayId,
+    resourceId: input.instanceId,
+    resourceType: "instance",
+  })
+
 const renameInstance = resourceOperation({
   kind: "instance",
   id: (input: z.infer<typeof instanceNameInputSchema>) => input.instanceId,
@@ -822,6 +831,8 @@ const changeInstancePorts = resourceOperation({
   id: (input: z.infer<typeof portsInputSchema>) => input.instanceId,
   name: "instance.ports.update",
   lock: { part: "ports" },
+  // A new public port moves its domains' address.
+  alsoLocks: (input) => [exclusive(instanceDnsKey(input))],
   doing: "Changing this game server's ports",
   permission: (input) => instancePortsWritePermission(input.ports),
   run: updateInstancePortsHandler,
@@ -851,7 +862,11 @@ async function updateInstancePortsHandler(
     240_000
   )
   const instance = relayInstanceSchema.parse(value)
-  await syncInstanceDomainAfterPortUpdate(data.relayId, instance.id, data.ports)
+  await syncInstanceDomainAfterPortUpdateBestEffort(
+    instance,
+    data.relayId,
+    data.ports
+  )
   await runAppEffect(
     "relay.snapshot.invalidate",
     invalidateRelayCache(relayCachePolicy.snapshot(data.relayId))
@@ -1300,6 +1315,8 @@ const powerInstance = resourceOperation({
   id: (input: z.infer<typeof actionInputSchema>) => input.instanceId,
   name: "instance.power",
   lock: { part: "power" },
+  // Starting it provisions its domains.
+  alsoLocks: (input) => [exclusive(instanceDnsKey(input))],
   doing: "Changing this game server's power",
   permission: (input) => `instance.power.${input.action}`,
   run: performInstanceActionHandler,
@@ -1328,7 +1345,7 @@ async function performInstanceActionHandler(
   )
   const instance = relayInstanceSchema.parse(await response.json())
   if (action === "start" || action === "restart") {
-    await provisionInstanceDomainLater(relay.id, instance.id)
+    await provisionInstanceDomainBestEffort(instance, relay.id)
   }
   await runAppEffect(
     "relay.snapshot.invalidate",

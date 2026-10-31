@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 
 import type { RelayInstance } from "@workspace/contracts"
 import { relayInstanceSchema, relaySnapshotSchema } from "@workspace/contracts"
-import { Clock, Effect, Option, Result } from "effect"
+import { Effect, Option, Result } from "effect"
 import { z } from "zod"
 
 import {
@@ -17,20 +17,17 @@ import {
   updateCloudflareAddressRecordEffect,
   updateCloudflareSrvRecordEffect,
 } from "@/effect/cloudflare-api"
-import { forkPromise, promiseEffect } from "@/effect/promise"
+import { promiseEffect } from "@/effect/promise"
 import {
   activateInstanceDomainAssignmentEffect,
   anyDomainConnectionEffect,
   assignmentHostnames,
   beginInstanceDomainRenameEffect,
   clearInstanceDomainErrorEffect,
-  answerInstanceDomainAddressEffect,
   clearInstanceDomainRecordsEffect,
   deferInstanceDomainsEffect,
   finishInstanceDomainRenameEffect,
   listDueInstanceDomainsEffect,
-  instanceDomainAddressRequestedEffect,
-  requestInstanceDomainAddressEffect,
   deleteInstanceDomainAssignmentEffect,
   deleteRelayInstanceDomainAssignmentsEffect,
   insertInstanceDomainAssignmentEffect,
@@ -81,7 +78,6 @@ import type { FleetRelayInstance } from "@/lib/relay-fleet"
 import { relayConnectionSnapshot } from "@/lib/relay-connection"
 import { dnsKey, withDnsChange } from "@/lib/dns-operations"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { outsideOperation } from "@/operations/current"
 import { exclusive } from "@/operations/lanes"
 import {
   operation,
@@ -401,76 +397,6 @@ export async function provisionInstanceDomainBestEffort(
     )
   )
   if (changed) publishDomainChange({ instanceId: instance.id, relayId })
-}
-
-// What following an address reads of a Relay's snapshot.
-const reportedInstancesSchema = z.object({
-  instances: relaySnapshotSchema.shape.instances,
-})
-
-/**
- * Brings a game server's domains in line with the address its Relay reports
- * now, as one DNS change, then answers the address requests made before it
- * read that, leaving any made since for the next check.
- */
-const followInstanceAddressEffect = Effect.fnUntraced(function* (
-  relayId: string,
-  instanceId: string
-) {
-  return yield* withInstanceDomainLock(
-    "dns.domain.provision",
-    [{ instanceId, relayId }],
-    Effect.gen(function* () {
-      const readAt = yield* Clock.currentTimeMillis
-      const relay = yield* promiseEffect(() => activeRelay(relayId))
-      const { instances } = reportedInstancesSchema.parse(
-        yield* relayJsonEffect(relay, "/v1/snapshot", (input) => input)
-      )
-      const instance = instances.find((item) => item.id === instanceId)
-      const changed = instance
-        ? yield* provisionInstanceDomainEffect({ ...instance, relayId })
-        : false
-      yield* answerInstanceDomainAddressEffect(relayId, instanceId, readAt)
-      return changed
-    })
-  )
-})
-
-/**
- * Provisions a game server's domains after a change that may move its
- * address, such as a start or a port or startup change. It runs as its own
- * DNS change from what the Relay reports once it has its turn, so a change
- * that finishes late can't put back an address a newer one replaced. Not
- * awaited: nothing holding the game server waits on it. The request is
- * recorded first, so the DNS worker finishes one that never runs.
- */
-export async function provisionInstanceDomainLater(
-  relayId: string,
-  instanceId: string
-): Promise<void> {
-  await runAppEffect(
-    "domains.instance.requestAddress",
-    requestInstanceDomainAddressEffect(relayId, instanceId)
-  )
-  outsideOperation(() =>
-    forkPromise(async () => {
-      const changed = await runAppEffect(
-        "domains.instance.provision",
-        followInstanceAddressEffect(relayId, instanceId).pipe(
-          Effect.catch((cause) =>
-            Effect.sync(() => {
-              console.warn(
-                `[Kiln Domains] Server ${instanceId} changed, but its vanity address could not be updated yet:`,
-                cause
-              )
-              return false
-            })
-          )
-        )
-      )
-      if (changed) publishDomainChange({ instanceId, relayId })
-    })
-  )
 }
 
 export async function provisionInstanceDomain(
@@ -1600,18 +1526,7 @@ const reconcileInstanceDomainWorkEffect = Effect.fnUntraced(function* (server: {
       }
     })
   )
-  // A change that may have moved its address asked for this: follow what
-  // the Relay reports now, not what it last pushed.
-  if (
-    yield* instanceDomainAddressRequestedEffect(
-      server.relayId,
-      server.instanceId
-    )
-  ) {
-    yield* followInstanceAddressEffect(server.relayId, server.instanceId)
-  } else if (instance) {
-    yield* provisionInstanceDomainEffect(instance)
-  }
+  if (instance) yield* provisionInstanceDomainEffect(instance)
 })
 
 /**

@@ -1,6 +1,5 @@
 import { assert, layer } from "@effect/vitest"
-import { Deferred, Effect, Layer } from "effect"
-import { TestClock } from "effect/testing"
+import { Effect, Layer } from "effect"
 import { afterAll, afterEach, vi } from "vite-plus/test"
 import { relayInstanceSchema } from "@workspace/contracts"
 
@@ -8,30 +7,15 @@ import { AppCache } from "@/effect/cache"
 import type { InstanceDomainAssignment } from "@/effect/domains"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRelay, insertRows, selectRows } from "@/test/seed"
+import { insertRows, selectRows } from "@/test/seed"
 import { betterAuthSecrets } from "@/lib/environment"
 import { beginInstanceDomainRenameEffect } from "@/effect/domains"
 import { insertWebHostnameEffect } from "@/effect/web-hostnames"
 
 import { encryptWithKeyring } from "../../keyring.mjs"
 
-// What a Relay last pushed over its connection, which the DNS worker reads,
-// and how it answers a request for its snapshot: by default, it can't.
-const relay = vi.hoisted(() => ({
-  pushed: new Map<string, unknown>(),
-  snapshot: (async () => {
-    throw new Error("Relay is not connected")
-  }) as () => Promise<unknown>,
-}))
-vi.mock("@/lib/relay-connection", async (actual) => ({
-  ...(await actual<typeof import("@/lib/relay-connection")>()),
-  relayConnectionSnapshot: (id: string) => relay.pushed.get(id) ?? null,
-  relayRpc: () => relay.snapshot(),
-}))
-
 import {
   provisionInstanceDomain,
-  provisionInstanceDomainLater,
   reconcileDueInstanceDomainsEffect,
   removeInstanceDomainEffect,
   removeRelayManagedDomainsEffect,
@@ -263,10 +247,6 @@ function fakeCloudflare(options: { records?: Array<string> } = {}) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
-  relay.pushed.clear()
-  relay.snapshot = async () => {
-    throw new Error("Relay is not connected")
-  }
 })
 
 afterAll(() => disposeAppRuntime())
@@ -378,66 +358,6 @@ describeMysql("removing a game server's domain", () => {
           yield* removeRelayManagedDomainsEffect(relayId, true)
           assert.deepEqual(dns.names(), [])
           assert.deepEqual(yield* claimedNames, [])
-        }).pipe(Effect.provide(disabledCache))
-    )
-
-    it.effect(
-      "keeps a newer address request when an older check answers first",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          fakeCloudflare({ records: ["address-record", "srv-record"] })
-          yield* insertCredential()
-          yield* insertRelay(relayId)
-          yield* insertAssignment(testAssignment())
-          const atPort = (publicPort: number) => ({
-            instances: [{ ...testInstance(), publicPort }],
-          })
-
-          // The first change's check reads the Relay, and is held there.
-          const read = yield* Deferred.make<void>()
-          const answer = yield* Deferred.make<unknown>()
-          relay.snapshot = () =>
-            Effect.runPromise(
-              Deferred.succeed(read, undefined).pipe(
-                Effect.andThen(Deferred.await(answer))
-              )
-            )
-          yield* Effect.promise(() =>
-            provisionInstanceDomainLater(relayId, instanceId)
-          )
-          yield* Deferred.await(read)
-
-          // A second change asks again; its check can't reach the Relay.
-          let failed = false
-          relay.snapshot = async () => {
-            failed = true
-            throw new Error("Relay is not connected")
-          }
-          yield* Effect.promise(() =>
-            provisionInstanceDomainLater(relayId, instanceId)
-          )
-          // The first answers with the address it read, before the second.
-          yield* Deferred.succeed(answer, atPort(32_001))
-          yield* Effect.sync(() => failed).pipe(
-            Effect.filterOrFail((done) => done),
-            Effect.eventually,
-            Effect.timeout("5 seconds")
-          )
-
-          // The DNS worker finishes the second from what the Relay reports.
-          relay.snapshot = async () => atPort(32_002)
-          const later = Date.now() + 60_000
-          yield* TestClock.setTime(later)
-          yield* reconcileDueInstanceDomainsEffect(later)
-          const [domain] = yield* selectRows<{
-            address_requested_at: number | null
-            public_port: number
-          }>("instance_domain")
-          assert.deepInclude(domain, {
-            address_requested_at: null,
-            public_port: 32_002,
-          })
         }).pipe(Effect.provide(disabledCache))
     )
 

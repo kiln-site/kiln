@@ -125,14 +125,11 @@ the least that keeps it safe (`resourceOperation`'s `lock`):
 - **The whole, shared**, for everything the Relay or the database already
   keeps in order: file writes, port reservations, database connections.
 
-Work a change wakes that takes locks of its own, such as the DNS a start
-provisions, runs outside it (`outsideOperation`) and takes its own turn,
-unawaited: waiting on it while holding locks could wait on work queued
-behind them. It reads what it needs once it has its turn, so a change that
-finished late can't undo a newer one (`provisionInstanceDomainLater`). The
-change records its request first (`address_requested_at`), and a check
-answers only requests made before it read, so the DNS worker finishes any
-the follow-up never did.
+Work a change reaches that takes locks of its own is declared on the
+change, so it runs inside it: a start, a port change and a startup change
+each provision the game server's domains, so each also takes its `#dns`.
+Features declare what they change and leave ordering to the lanes; they
+don't keep queues, markers or timestamps of their own.
 
 Whole keys that aren't resources follow the same rule: a backup takes
 `#name` to rename it and `#task` to cancel it, a GitHub sync `#settings` to
