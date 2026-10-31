@@ -1,10 +1,13 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer, Schedule } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
 
 import { Database } from "@/effect/database"
 import { disposeAppRuntime } from "@/effect/runtime"
+import { exclusive, partKey, resourceKey } from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
+import { finishOperation, recordOperation } from "@/operations/records"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql } from "@/test/database"
@@ -188,6 +191,59 @@ describeMysql("Deleting a game server or database", () => {
           assert.deepStrictEqual(yield* appRecords, [appId])
         }).pipe(TestClock.withLive),
       90_000
+    )
+
+    it.effect(
+      "deletes an App whose build it stopped, once its deployment sees it stop",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* seedApp([])
+          // Its deployment runs, holding the App's #deploy until it sees
+          // the build end.
+          const deployment = yield* recordOperation({
+            input: { appId, relayId },
+            kind: "app.deploy",
+            version: 1,
+          })
+          const ended = yield* Deferred.make<void>()
+          const build = yield* inLanes(
+            "test.deploy",
+            "Deploying this App",
+            [exclusive(partKey(resourceKey("app", relayId, appId), "deploy"))],
+            Deferred.await(ended)
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          const deleting = yield* requestResourceDeletionEffect({
+            finalBackup: false,
+            kind: "app",
+            relayId,
+            resourceId: appId,
+            storageId: null,
+            user: owner,
+          }).pipe(Effect.forkChild({ startImmediately: true }))
+
+          // The build is asked to stop, and its deployment sees it end: the
+          // deletion goes ahead, rather than being refused.
+          yield* Effect.sync(() =>
+            relay.changes.includes("app.deployment.abort")
+          ).pipe(
+            Effect.repeat({
+              schedule: Schedule.spaced("100 millis"),
+              until: (asked) => asked,
+            }),
+            Effect.timeout("10 seconds")
+          )
+          yield* Deferred.succeed(ended, undefined)
+          yield* Fiber.join(build)
+          yield* finishOperation(deployment.id, "failed")
+          yield* Fiber.join(deleting)
+          assert.strictEqual(
+            (yield* until(appId, ["completed", "failed"]))?.status,
+            "completed"
+          )
+        }).pipe(TestClock.withLive),
+      60_000
     )
 
     it.effect(

@@ -806,7 +806,8 @@ const stopBuildFor = (deletion: ResourceDeletion) =>
 // already started under its key is the same operation. A person's attempt
 // is refused while something else changes the resource, and recorded as
 // failed with why, for them to try again; Hearth's own waits. Deleting an
-// App stops its build first.
+// App stops its build first, and waits a little for its deployment to see
+// it stop.
 const startAttempt = (deletion: ResourceDeletion, initiator: Initiator) =>
   (deletion.kind === "app" && deletion.status !== "cancelling"
     ? stopBuildFor(deletion)

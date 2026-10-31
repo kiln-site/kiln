@@ -234,7 +234,9 @@ commit made then, neither kept in the operation's steps, which are stored
 in the clear; a reply lost to a restart is read back (`relayCommand`), not
 sent again. Deleting an App stops its build on the Relay first
 (`app.deployment.abort`), so the deletion doesn't wait for the build it
-removes.
+removes: it waits a little for the deployment to see the build stop,
+asking again meanwhile, and a deployment won't send once the deletion
+began.
 
 A GitHub sync's run holds the sync's `#files`, and shared its `#settings`,
 its target and its connection, from reading GitHub to recording what it

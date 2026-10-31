@@ -39,6 +39,7 @@ import {
   claimImageUpdateEffect,
   loadAppImageUpdateEffect,
 } from "@/effect/app-image-updates"
+import type { Database } from "@/effect/database"
 import { DatabaseError, ExternalServiceError } from "@/effect/errors"
 import {
   getGitHubCommitEffect,
@@ -66,7 +67,11 @@ import {
 } from "@/operations/durable"
 import { currentActingUser } from "@/operations/acting-user"
 import { developmentBypassUserId } from "@/lib/development-bypass"
-import { loadOperation } from "@/operations/records"
+import {
+  activeOperations,
+  awaitOperationEnd,
+  loadOperation,
+} from "@/operations/records"
 import { RelayCommandError, relayCommand } from "@/operations/relay-command"
 import { appDeploymentLocks } from "@/lib/app-lanes"
 import { ensureAppDatabaseConnectionsImported } from "@/lib/app-database-connections.server"
@@ -1149,6 +1154,20 @@ const asSent = (plan: DeployPlan) =>
     if (!app) {
       return yield* sendError("app_config")(new Error("App not found"))
     }
+    // Nor once the app's deletion began, which stops what it finds running.
+    const deletion = yield* findResourceDeletionEffect(
+      plan.record.relayId,
+      "app",
+      plan.record.appId
+    ).pipe(Effect.mapError(sendError("app_config")))
+    if (
+      deletion &&
+      unfinishedDeletionStatuses.some((status) => status === deletion.status)
+    ) {
+      return yield* sendError("app_config")(
+        new Error("The app is being deleted")
+      )
+    }
     // What was decided for one source doesn't deploy another: another
     // kind, image, or repository than the plan was made for, as after an
     // edit while it waited to be sent.
@@ -1265,6 +1284,34 @@ export const askAppDeploymentEffect = Effect.fn("Apps.deploy.ask")(
     return id
   }
 )
+
+/**
+ * Waits, up to half a minute, for the app's deployment that's running, if
+ * one is, to end, as once its build was asked to stop: `stop` asks again
+ * every few seconds, in case the build reached the Relay after it asked.
+ * For a deletion, which is refused while a deployment holds the app.
+ */
+export const awaitAppDeploymentEnd = (
+  relayId: string,
+  appId: string,
+  stop: Effect.Effect<void, unknown, Database>
+) =>
+  Effect.gen(function* () {
+    const running = (yield* activeOperations(deployAppKind)).find(
+      ({ input, state }) =>
+        state === "running" &&
+        (input as { appId?: string }).appId === appId &&
+        (input as { relayId?: string }).relayId === relayId
+    )
+    if (!running) return
+    yield* Effect.raceFirst(
+      awaitOperationEnd(running.id),
+      Effect.sleep("2 seconds").pipe(
+        Effect.andThen(stop.pipe(Effect.ignore)),
+        Effect.forever
+      )
+    ).pipe(Effect.timeoutOption("30 seconds"))
+  }).pipe(Effect.catchCause(() => Effect.void))
 
 /** What an app's deployments queue under, one waiting at a time. */
 export const appDeployKey = (relayId: string, appId: string) =>
