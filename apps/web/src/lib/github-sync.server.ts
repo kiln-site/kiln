@@ -364,14 +364,14 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
 })
 
 declare global {
-  var kilnGitHubSyncDraining: Set<string> | undefined
+  var kilnGitHubSyncDraining: Map<string, object> | undefined
   var kilnGitHubSyncMarks: Map<string, Fiber.Fiber<void>> | undefined
   var kilnGitHubSyncQueued: Map<string, GitHubSyncTrigger> | undefined
   var kilnGitHubSyncPoller: Fiber.Fiber<void> | undefined
 }
 
 // The syncs whose runs are being drained now, by this process.
-const draining = (globalThis.kilnGitHubSyncDraining ??= new Set())
+const draining = (globalThis.kilnGitHubSyncDraining ??= new Map())
 // Each waiting run's status update, which its run waits for.
 const marks = (globalThis.kilnGitHubSyncMarks ??= new Map())
 // The trigger of each sync's waiting run.
@@ -414,11 +414,11 @@ export function enqueueGitHubSync(
 
 // Takes the waiting trigger, or, with none, stops draining in the same
 // step, so a trigger that arrives after always starts a drain of its own.
-const takeWaiting = (syncId: string) =>
+const takeWaiting = (syncId: string, token: object) =>
   Effect.sync(() => {
     const next = waiting.get(syncId)
     if (next === undefined) {
-      draining.delete(syncId)
+      if (draining.get(syncId) === token) draining.delete(syncId)
       return undefined
     }
     waiting.delete(syncId)
@@ -427,7 +427,9 @@ const takeWaiting = (syncId: string) =>
 
 function drainGitHubSync(syncId: string): void {
   if (draining.has(syncId)) return
-  draining.add(syncId)
+  // Its own, so one that ends never clears the marker of the next.
+  const token = {}
+  draining.set(syncId, token)
   // Woken by whatever asked, which doesn't wait: each file it writes takes
   // its own lanes.
   outsideOperation(() =>
@@ -439,11 +441,17 @@ function drainGitHubSync(syncId: string): void {
             yield* Fiber.await(mark)
             if (marks.get(syncId) === mark) marks.delete(syncId)
           }
-          const next = yield* takeWaiting(syncId)
+          const next = yield* takeWaiting(syncId, token)
           if (next === undefined) return
           yield* runQueuedSync(syncId, next)
         }
-      }).pipe(Effect.ensuring(Effect.sync(() => draining.delete(syncId))))
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (draining.get(syncId) === token) draining.delete(syncId)
+          })
+        )
+      )
     )
   )
 }

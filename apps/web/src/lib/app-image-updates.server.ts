@@ -59,10 +59,17 @@ declare global {
   var kilnAppImageUpdateChecker: Fiber.Fiber<void> | undefined
   var kilnAppImageUpdateChecked: Map<string, number> | undefined
   var kilnAppImageUpdateFailures: Map<string, string> | undefined
+  var kilnAppImageUpdateAnswered: Map<string, number> | undefined
 }
 
 // When each Relay's apps were last checked. A restart checks them again.
 const checked = (globalThis.kilnAppImageUpdateChecked ??= new Map<
+  string,
+  number
+>())
+// When each app's newest recorded check was asked, so an older check that
+// answers later doesn't replace it. Checks overlap only within a process.
+const answeredAsked = (globalThis.kilnAppImageUpdateAnswered ??= new Map<
   string,
   number
 >())
@@ -295,10 +302,9 @@ const checkAppImagesEffect = Effect.fnUntraced(function* (
               return null
             }
             // A check asked for after this one answered first.
-            const current = (yield* loadAppImageUpdatesEffect([app.appId])).get(
-              app.appId
-            )
-            if ((current?.checkedAt ?? 0) > askedAt) return null
+            const appKey = `${relay.id}:${app.appId}`
+            if ((answeredAsked.get(appKey) ?? 0) > askedAt) return null
+            answeredAsked.set(appKey, askedAt)
             const recorded = yield* recordAppImageCheckEffect(
               app.appId,
               app.config.image,
