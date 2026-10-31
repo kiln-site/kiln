@@ -74,6 +74,11 @@ export interface AppDeploymentRequest {
   appId: string
   /** A commit to build again; otherwise the head of the app's branch. */
   commit?: string
+  /**
+   * The commit a push pinned, deployed while the app still deploys from the
+   * repository and branch it came from (`<repository ID>/<branch>`).
+   */
+  pinned?: { commitSha: string; source: string }
   /** An image digest to deploy again, as a rollback of an image update. */
   imageDigest?: string
   relayId: string
@@ -459,7 +464,10 @@ const githubCommit = Effect.fnUntraced(function* (
   const commit = yield* getGitHubCommitEffect(
     yield* githubInstallationTokenEffect(credentials, installation.id),
     source.repository,
-    request.commit ?? source.branch
+    request.commit ??
+      (request.pinned?.source === `${source.repositoryId}/${source.branch}`
+        ? request.pinned.commitSha
+        : source.branch)
   )
   return {
     commit,
@@ -707,9 +715,15 @@ export const queueAppDeploymentEffect = Effect.fn("Apps.deploy.queue")(
   function* (
     appId: string,
     relayId: string,
-    trigger: "poll" | "push" | "update"
+    trigger: "poll" | "push" | "update",
+    pinned?: { commitSha: string; source: string }
   ) {
-    yield* requestAppDeploymentEffect({ appId, relayId, trigger })
+    yield* requestAppDeploymentEffect({
+      appId,
+      ...(pinned && { pinned }),
+      relayId,
+      trigger,
+    })
     drainAppDeployments(appId, relayId)
   }
 )
@@ -765,7 +779,15 @@ function drainAppDeployments(appId: string, relayId: string): void {
                     key,
                     appId,
                     request.relayId,
-                    request.push ? "push" : "poll"
+                    request.push ? "push" : "poll",
+                    request.push &&
+                      request.commitSha !== null &&
+                      request.commitSource !== null
+                      ? {
+                          commitSha: request.commitSha,
+                          source: request.commitSource,
+                        }
+                      : undefined
                   ),
                 ]
               : []),
@@ -797,11 +819,13 @@ const deployRequested = (
   key: string,
   appId: string,
   relayId: string,
-  trigger: "poll" | "push" | "update"
+  trigger: "poll" | "push" | "update",
+  pinned?: { commitSha: string; source: string }
 ) =>
   startAppDeploymentEffect({
     appId,
     deferUnlessReady: true,
+    ...(pinned && { pinned }),
     relayId,
     trigger,
     userId: null,
@@ -932,6 +956,8 @@ export const startAppDeploymentWhenReadyEffect = Effect.fn(
 export const deployPushedAppsEffect = Effect.fn("Apps.deploy.pushed")(
   function* (input: {
     branch: string
+    /** The commit the push made its branch's head. */
+    commitSha: string
     connectionId: string
     repositoryId: number
   }) {
@@ -941,7 +967,10 @@ export const deployPushedAppsEffect = Effect.fn("Apps.deploy.pushed")(
     })
     for (const source of sources) {
       if (source.branch === input.branch) {
-        yield* queueAppDeploymentEffect(source.appId, source.relayId, "push")
+        yield* queueAppDeploymentEffect(source.appId, source.relayId, "push", {
+          commitSha: input.commitSha,
+          source: `${input.repositoryId}/${input.branch}`,
+        })
       }
     }
   }

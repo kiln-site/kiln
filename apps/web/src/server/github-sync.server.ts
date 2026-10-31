@@ -883,6 +883,8 @@ function readSetupState(value: string, user: AuthenticatedUser) {
 }
 
 const PushEventSchema = Schema.Struct({
+  // The branch's head after the push.
+  after: Schema.String,
   // A push that deletes the branch.
   deleted: Schema.optionalKey(Schema.Boolean),
   ref: Schema.String,
@@ -964,6 +966,7 @@ export async function handleGitHubWebhook(request: Request): Promise<Response> {
           "github.webhook.deploy",
           deployPushedAppsEffect({
             branch,
+            commitSha: push.value.after,
             connectionId: app.id,
             repositoryId: push.value.repository.id,
           })

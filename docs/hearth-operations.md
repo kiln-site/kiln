@@ -190,7 +190,11 @@ no state of their own; when each App was last asked is what it recorded.
 Starting an App's deployment holds its `#deploy` and
 `relay:<id>#database-connections` (`appDeploymentLocks`), whoever starts
 it; Hearth's own deployments wait their turn, and the wait for a running
-deployment to end happens with no lane held.
+deployment to end happens with no lane held. What's asked for is kept on
+the app (`app_deployment_request`) until a deployment takes it: a push pins
+the commit from its webhook, with the repository and branch it came from,
+and the newest push's wins; a poll deploys its branch head. A deployment
+acknowledges only the revision it took, so one asked for since still waits.
 
 A GitHub sync's run holds the sync's `#files`, and shared its `#settings`,
 its target and its connection, from reading GitHub to recording what it

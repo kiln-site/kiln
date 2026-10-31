@@ -463,17 +463,23 @@ function toDeployment(row: DeploymentRow): AppDeploymentRecord {
 /** What an app's pending deployment request asks for. */
 export interface AppDeploymentRequestRow {
   readonly appId: string
+  /** The commit the newest push asked for; a poll deploys its branch head. */
+  readonly commitSha: string | null
+  /** Where that commit came from: `<repository ID>/<branch>`. */
+  readonly commitSource: string | null
   /** An image update Kiln found due. */
   readonly imageUpdate: boolean
   readonly poll: boolean
   readonly push: boolean
   readonly relayId: string
-  /** Counts every request, so its taker knows whether another came since. */
+  /** Counts every request, so its taker acknowledges only what it took. */
   readonly revision: number
 }
 
 interface RequestRow extends RowDataPacket {
   app_id: string
+  commit_sha: string | null
+  commit_source: string | null
   image_update: number
   poll: number
   push: number
@@ -481,11 +487,18 @@ interface RequestRow extends RowDataPacket {
   revision: number | string
 }
 
-const requestColumns = "app_id, relay_id, push, poll, image_update, revision"
+const requestColumns =
+  "app_id, relay_id, push, poll, image_update, commit_sha, commit_source, revision"
+
+// One taken is kept, with what it acknowledged, so a request is waiting
+// while its revision is ahead of that.
+const requestPending = "revision > acknowledged_revision"
 
 function toRequest(row: RequestRow): AppDeploymentRequestRow {
   return {
     appId: row.app_id,
+    commitSha: row.commit_sha,
+    commitSource: row.commit_source,
     imageUpdate: Boolean(row.image_update),
     poll: Boolean(row.poll),
     push: Boolean(row.push),
@@ -496,11 +509,15 @@ function toRequest(row: RequestRow): AppDeploymentRequestRow {
 
 /**
  * Records that an app should deploy, joining the request already waiting:
- * every kind asked for is kept, and the revision counts this one.
+ * every kind asked for is kept, a push pins its commit, the newest push's
+ * winning, and the revision counts this one. One already taken starts
+ * afresh.
  */
 export const requestAppDeploymentEffect = Effect.fn("apps.deployment.request")(
   function* (input: {
     appId: string
+    /** The commit a push deploys, from its webhook, and where it's from. */
+    pinned?: { commitSha: string; source: string }
     relayId: string
     trigger: "poll" | "push" | "update"
   }) {
@@ -511,16 +528,25 @@ export const requestAppDeploymentEffect = Effect.fn("apps.deployment.request")(
       poll: input.trigger === "poll" ? 1 : 0,
       push: input.trigger === "push" ? 1 : 0,
     }
+    // Assigned in order, so each reads whether the request was still
+    // waiting before its revision moves on.
     yield* database.execute(
       "apps.deployment.request",
       `INSERT INTO ${databaseTable("app_deployment_request")}
-         (app_id, relay_id, push, poll, image_update, revision, requested_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?)
+         (app_id, relay_id, push, poll, image_update, commit_sha,
+          commit_source, revision, requested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
        ON DUPLICATE KEY UPDATE
          relay_id = VALUES(relay_id),
-         push = push OR VALUES(push),
-         poll = poll OR VALUES(poll),
-         image_update = image_update OR VALUES(image_update),
+         push = IF(${requestPending}, push OR VALUES(push), VALUES(push)),
+         poll = IF(${requestPending}, poll OR VALUES(poll), VALUES(poll)),
+         image_update = IF(${requestPending},
+           image_update OR VALUES(image_update), VALUES(image_update)),
+         commit_source = IF(VALUES(commit_sha) IS NOT NULL,
+           VALUES(commit_source), IF(${requestPending}, commit_source, NULL)),
+         commit_sha = IF(VALUES(commit_sha) IS NOT NULL, VALUES(commit_sha),
+           IF(${requestPending}, commit_sha, NULL)),
+         requested_at = VALUES(requested_at),
          revision = revision + 1`,
       [
         input.appId,
@@ -528,6 +554,8 @@ export const requestAppDeploymentEffect = Effect.fn("apps.deployment.request")(
         kinds.push,
         kinds.poll,
         kinds.imageUpdate,
+        input.pinned?.commitSha ?? null,
+        input.pinned?.source ?? null,
         now,
       ]
     )
@@ -542,7 +570,7 @@ export const loadAppDeploymentRequestEffect = Effect.fn(
     "apps.deployment.request.load",
     `SELECT ${requestColumns}
        FROM ${databaseTable("app_deployment_request")}
-      WHERE app_id = ?`,
+      WHERE app_id = ? AND ${requestPending}`,
     [appId]
   )
   return row ? toRequest(row) : null
@@ -556,24 +584,26 @@ export const loadAppDeploymentRequestsEffect = Effect.fn(
   const rows = yield* database.queryRows<RequestRow>(
     "apps.deployment.requests",
     `SELECT ${requestColumns}
-       FROM ${databaseTable("app_deployment_request")}`
+       FROM ${databaseTable("app_deployment_request")}
+      WHERE ${requestPending}`
   )
   return rows.map(toRequest)
 })
 
 /**
- * Settles the request at the revision its deployment started from. One that
- * came since keeps it waiting; reports whether it was settled.
+ * Acknowledges the request up to the revision its deployment took. One
+ * asked for since stays waiting, and acknowledging the same revision again
+ * changes nothing, so a deployment that ran again can't clear a newer one.
  */
 export const settleAppDeploymentRequestEffect = Effect.fn(
   "apps.deployment.request.settle"
 )(function* (appId: string, revision: number) {
   const database = yield* Database
-  const result = yield* database.execute(
+  yield* database.execute(
     "apps.deployment.request.settle",
-    `DELETE FROM ${databaseTable("app_deployment_request")}
-      WHERE app_id = ? AND revision = ?`,
-    [appId, revision]
+    `UPDATE ${databaseTable("app_deployment_request")}
+        SET acknowledged_revision = GREATEST(acknowledged_revision, ?)
+      WHERE app_id = ? AND revision >= ?`,
+    [revision, appId, revision]
   )
-  return result.affectedRows === 1
 })

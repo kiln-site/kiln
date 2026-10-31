@@ -38,9 +38,21 @@ describeMysql("App deployment requests", () => {
       () =>
         Effect.gen(function* () {
           yield* seedApp
-          // Two merges in quick succession, and an image update found due.
-          yield* requestAppDeploymentEffect({ appId, relayId, trigger: "push" })
-          yield* requestAppDeploymentEffect({ appId, relayId, trigger: "push" })
+          // Two merges in quick succession, and an image update found due:
+          // the newest push's commit is the one pinned.
+          const source = "42/main"
+          yield* requestAppDeploymentEffect({
+            appId,
+            pinned: { commitSha: "a".repeat(40), source },
+            relayId,
+            trigger: "push",
+          })
+          yield* requestAppDeploymentEffect({
+            appId,
+            pinned: { commitSha: "b".repeat(40), source },
+            relayId,
+            trigger: "push",
+          })
           yield* requestAppDeploymentEffect({
             appId,
             relayId,
@@ -48,21 +60,26 @@ describeMysql("App deployment requests", () => {
           })
           const taken = yield* loadAppDeploymentRequestEffect(appId)
           assert.deepInclude(taken, {
+            commitSha: "b".repeat(40),
+            commitSource: source,
             imageUpdate: true,
             poll: false,
             push: true,
           })
 
-          // A push lands while that pass deploys: settling the pass leaves
-          // it waiting, every kind asked for still kept.
-          yield* requestAppDeploymentEffect({ appId, relayId, trigger: "poll" })
-          assert.isFalse(
-            yield* settleAppDeploymentRequestEffect(appId, taken!.revision)
-          )
+          // A push lands while that pass deploys: acknowledging the pass
+          // leaves it waiting, every kind asked for still kept.
+          yield* requestAppDeploymentEffect({
+            appId,
+            pinned: { commitSha: "c".repeat(40), source },
+            relayId,
+            trigger: "push",
+          })
+          yield* settleAppDeploymentRequestEffect(appId, taken!.revision)
           const next = yield* loadAppDeploymentRequestEffect(appId)
           assert.deepInclude(next, {
+            commitSha: "c".repeat(40),
             imageUpdate: true,
-            poll: true,
             push: true,
           })
           assert.isAbove(next!.revision, taken!.revision)
@@ -74,11 +91,20 @@ describeMysql("App deployment requests", () => {
             [appId]
           )
 
-          // The pass that starts from the latest settles it.
-          assert.isTrue(
-            yield* settleAppDeploymentRequestEffect(appId, next!.revision)
-          )
+          // The pass that starts from the latest acknowledges it; one that
+          // ran again, acknowledging what it took before, changes nothing.
+          yield* settleAppDeploymentRequestEffect(appId, next!.revision)
           assert.isNull(yield* loadAppDeploymentRequestEffect(appId))
+          yield* requestAppDeploymentEffect({ appId, relayId, trigger: "poll" })
+          yield* settleAppDeploymentRequestEffect(appId, taken!.revision)
+          // And a request after one taken starts afresh: just a poll, for
+          // the branch head.
+          assert.deepInclude(yield* loadAppDeploymentRequestEffect(appId), {
+            commitSha: null,
+            imageUpdate: false,
+            poll: true,
+            push: false,
+          })
         })
     )
 
