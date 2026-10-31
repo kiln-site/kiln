@@ -31,7 +31,10 @@ import {
   emptyGitHubSourceDraft,
   type GitHubSourceDraft,
 } from "@/components/app/app-github-source-fields"
-import { appDeploymentSummaryQueryOptions, queryKeys } from "@/lib/query-options"
+import {
+  appDeploymentSummaryQueryOptions,
+  queryKeys,
+} from "@/lib/query-options"
 import { saveAppGitHubSource } from "@/server/app-deployments"
 import { deployApp, updateAppConfig } from "@/server/apps"
 
@@ -99,6 +102,10 @@ export function useAppConfigSave(
           queryKey: queryKeys.appDeployments.summary(app.relayId, app.id),
         }),
       ])
+      if (next === "deploy") {
+        // It runs once any deployment running ends.
+        showToast({ message: "Saved, deploy queued", type: "success" })
+      }
       // Follow the deployment as it happens.
       if (next === "deploy" && app.permissions.includes("app.logs.read")) {
         await navigate({
@@ -108,10 +115,7 @@ export function useAppConfigSave(
         })
         return
       }
-      showToast({
-        message: next === "deploy" ? "Saved and deploying" : "Saved",
-        type: "success",
-      })
+      if (next !== "deploy") showToast({ message: "Saved", type: "success" })
     },
     onError: (error) => showAppOperationError("Could not save", error),
   })
@@ -271,10 +275,7 @@ const sourceTypeDetails: Record<AppSourceType, string> = {
   image: "Pulled from a registry",
 }
 
-type SourceDraft = Pick<
-  EditableAppConfig,
-  "command" | "image" | "sourceType"
->
+type SourceDraft = Pick<EditableAppConfig, "command" | "image" | "sourceType">
 
 // What the app deploys from, and how a single container starts. Every
 // source is kept, so switching between them loses nothing.

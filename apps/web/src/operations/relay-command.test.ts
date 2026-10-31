@@ -24,7 +24,7 @@ const relay = vi.hoisted(() => ({
     | { status: "succeeded"; result: unknown }
     | { code: string; message: string; retryable: boolean; status: "failed" }
   >(),
-  next: null as null | "loses-reply-and-rebuilds",
+  next: null as null | "loses-reply-and-rebuilds" | "withdraws",
 }))
 
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
@@ -59,6 +59,30 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       )
     }
     const id = operationId ?? "no-id"
+    // It keeps each command's outcome under its ID, so one sent again under
+    // the same ID is refused.
+    if (relay.journal.has(id)) {
+      throw RelayUnavailableError.make({
+        code: "operation_conflict",
+        message: "That command ID already has an outcome",
+        retryable: false,
+      })
+    }
+    // Taken in, then withdrawn before it ran, as when Hearth's connection
+    // dropped while it waited; the reply is lost with it.
+    if (relay.next === "withdraws") {
+      relay.next = null
+      relay.journal.set(id, {
+        code: "operation_withdrawn",
+        message: "Withdrawn before it ran",
+        retryable: true,
+        status: "failed",
+      })
+      throw RelayUnavailableError.make({
+        message: "The connection dropped before the Relay answered",
+        outcome: "unknown",
+      })
+    }
     const result = { started: payload.action }
     relay.applied.push(payload.instanceId ?? "")
     relay.journal.set(id, { result, status: "succeeded" })
@@ -135,6 +159,23 @@ describeMysql("Relay commands from durable operations", () => {
           assert.strictEqual(done?.state, "failed")
           assert.include(done?.error ?? "", "nobody can say")
           assert.deepStrictEqual(relay.applied, ["survival"])
+        }).pipe(TestClock.withLive),
+      30_000
+    )
+
+    it.effect(
+      "sends a change the Relay withdrew before it ran again, once",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay("relay-one")
+          resetRelay()
+          relay.next = "withdraws"
+
+          const done = yield* runToEnd("withdrawn")
+
+          assert.strictEqual(done?.state, "succeeded")
+          assert.deepStrictEqual(relay.applied, ["withdrawn"])
         }).pipe(TestClock.withLive),
       30_000
     )

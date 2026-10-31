@@ -117,6 +117,7 @@ import {
 import {
   getAppDeploymentLog,
   getAppDeployments,
+  getAppDeployStates,
   getAppDeploymentSummary,
   getAppGitHubSourceFile,
 } from "@/server/app-deployments"
@@ -217,6 +218,7 @@ export const queryKeys = {
       ["app-deployments", "log", deploymentId] as const,
     summary: (relayId: string, appId: string) =>
       ["app-deployments", "summary", relayId, appId] as const,
+    states: ["app-deployments", "states"] as const,
   },
   apps: {
     all: ["apps"] as const,
@@ -1125,6 +1127,14 @@ export function appDeploymentsQueryOptions(scope: {
       }),
     initialPageParam: null as { id: string; startedAt: string } | null,
     getNextPageParam: (page) => page.nextCursor,
+  })
+}
+
+// Which apps have a deploy waiting its turn or running, as Hearth has it.
+export function appDeployStatesQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.appDeployments.states,
+    queryFn: () => getAppDeployStates(),
   })
 }
 

@@ -333,23 +333,33 @@ export function autoUpdateAt(update: AppImageUpdate): number | null {
 }
 
 /**
- * Claims `digest` for an image update to deploy, before it's sent to the
- * Relay. False if an update already claimed it, however that went, so an
- * automatic update never deploys the same digest twice. Kept apart from
- * the deployment history, which is pruned.
+ * Claims `digest` for the image update `deploymentId` deploys, before it's
+ * sent to the Relay. False if another update already claimed it, however
+ * that went, so an automatic update never deploys the same digest twice;
+ * the same deployment claiming again, as when its step runs again after a
+ * restart, still has it. Kept apart from the deployment history, which is
+ * pruned.
  */
 export const claimImageUpdateEffect = Effect.fn("apps.imageUpdates.claim")(
-  function* (appId: string, digest: string) {
+  function* (appId: string, digest: string, deploymentId: string) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    const result = yield* database.execute(
+    yield* database.execute(
       "apps.imageUpdates.claim",
       `INSERT IGNORE INTO ${databaseTable("app_image_update_attempt")}
-         (app_id, digest, attempted_at)
-       VALUES (?, ?, ?)`,
-      [appId, digest, now]
+         (app_id, digest, attempted_at, deployment_id)
+       VALUES (?, ?, ?, ?)`,
+      [appId, digest, now, deploymentId]
     )
-    return result.affectedRows === 1
+    const [claim] = yield* database.queryRows<
+      RowDataPacket & { deployment_id: string | null }
+    >(
+      "apps.imageUpdates.claim",
+      `SELECT deployment_id FROM ${databaseTable("app_image_update_attempt")}
+        WHERE app_id = ? AND digest = ?`,
+      [appId, digest]
+    )
+    return claim?.deployment_id === deploymentId
   }
 )
 

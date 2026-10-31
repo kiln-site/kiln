@@ -13,6 +13,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
@@ -53,6 +54,7 @@ import {
 import type { AppGitHubSourceView } from "@/server/app-deployments.server"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import { deployApp, renameApp } from "@/server/apps"
+import { useAppDeployState } from "@/components/app/use-app-deploy-state"
 
 // The app's details on its Info page, one section per concern, each with
 // the actions that change it. What runs where is tagged with the service
@@ -526,11 +528,15 @@ function DeployToApplyButton({ app }: { app: App }) {
   const deploy = useMutation({
     mutationFn: () =>
       deployApp({ data: { appId: app.id, relayId: app.relayId } }),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.apps.all }),
+    onSuccess: () => {
+      showToast({ message: "Deploy queued", type: "success" })
+      return queryClient.invalidateQueries({ queryKey: queryKeys.apps.all })
+    },
     onError: (error) => showAppOperationError("Deploy failed", error),
   })
-  const deploying = deploy.isPending || app.deployment?.state === "running"
+  // Asked during a build, it applies once that ends; once asked, it waits.
+  const queued = useAppDeployState(app.id)?.queuedId != null
+  const deploying = deploy.isPending || queued
   return (
     <Button
       type="button"
@@ -539,7 +545,7 @@ function DeployToApplyButton({ app }: { app: App }) {
       onClick={() => deploy.mutate()}
     >
       {deploying ? <LoaderCircle className="animate-spin" /> : <Rocket />}
-      Deploy to apply
+      {queued ? "Deploy queued" : "Deploy to apply"}
     </Button>
   )
 }

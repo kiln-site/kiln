@@ -203,10 +203,36 @@ the App, judged where it's used (`currentImageUpdate`): it asked about the
 image the App names now, and no deployment has started since. Checks keep
 no state of their own; when each App was last asked is what it recorded.
 
-Starting an App's deployment holds its `#deploy` and
-`relay:<id>#database-connections` (`appDeploymentLocks`), whoever starts
-it; Hearth's own deployments wait their turn, and the wait for a running
-deployment to end happens with no lane held.
+An App deploys the same way whatever asked: a push, a poll that found a
+new commit, an image check, or a person's Deploy, save-and-deploy, update
+or redeploy. Each ask queues the App's deployment (`app.deploy`) under the
+App, or joins the one waiting there, so asks while a deployment runs make
+one deployment after it, of the newest ask: a push pins the commit from
+its webhook, with the repository and branch it came from; a redeploy pins
+its commit, or its digest and the image it was of, and is refused once
+the App deploys from another; anything else asks for the newest. A poll
+changes nothing that waits. A person's ask stays theirs while it waits: it
+builds even a commit already live and deploys an update whatever its
+wait, and they're checked again when it runs, so one who may no longer
+manage the App is refused, though a push that joined their ask deploys as
+Kiln's own. A person asks in an ordinary operation holding the App shared,
+beside its build and everyday changes, so it returns at once, and a
+deletion or restore turns it away. A deploy still waiting can be
+cancelled.
+
+The deployment holds the App's `#deploy` and
+`relay:<id>#database-connections` (`appDeploymentLocks`) from its start
+until its Relay says it ended, so the next waits its turn behind it and
+nothing else orders deployments. It starts deciding only once its Relay is
+there to deploy it. A wait, for a Relay, a new App's provisioning or a
+build to end, checks in memory and stores one step every five minutes, so
+a long one keeps few. The App's saved configuration, which holds its
+secrets, is read as it's sent and the token that checks out a GitHub
+commit made then, neither kept in the operation's steps, which are stored
+in the clear; a reply lost to a restart is read back (`relayCommand`), not
+sent again. Deleting an App stops its build on the Relay first
+(`app.deployment.abort`), so the deletion doesn't wait for the build it
+removes.
 
 A GitHub sync's run holds the sync's `#files`, and shared its `#settings`,
 its target and its connection, from reading GitHub to recording what it
