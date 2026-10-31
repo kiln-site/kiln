@@ -66,27 +66,55 @@ export async function switchBrowserAccount(
 }
 
 /**
- * Signs one account out of this browser. When it was the active account, the
- * browser moves to another signed-in account, if any.
+ * A session this browser holds, to sign out of it: one remembered for
+ * switching, or the active one when it isn't remembered.
  */
-export async function signOutBrowserAccount(
+export interface BrowserSignOutTarget {
+  readonly remembered: boolean
+  readonly sessionToken: string
+  readonly userId: string
+}
+
+export async function findBrowserSignOutTarget(
   headers: Headers,
   sessionId: string
-): Promise<void> {
+): Promise<BrowserSignOutTarget> {
   const sessions = await auth.api.listDeviceSessions({ headers })
   const target = sessions.find(({ session }) => session.id === sessionId)
   if (target) {
-    await auth.api.revokeDeviceSession({
-      headers,
-      body: { sessionToken: target.session.token },
-    })
-    return
+    return {
+      remembered: true,
+      sessionToken: target.session.token,
+      userId: target.user.id,
+    }
   }
   const current = await auth.api.getSession({ headers })
   if (current?.session.id !== sessionId) throw new BrowserAccountMissingError()
+  return {
+    remembered: false,
+    sessionToken: current.session.token,
+    userId: current.user.id,
+  }
+}
+
+/**
+ * Signs one account out of this browser. When it was the active account, the
+ * browser moves to another signed-in account, if any.
+ */
+export async function signOutBrowserSession(
+  headers: Headers,
+  target: BrowserSignOutTarget
+): Promise<void> {
+  if (target.remembered) {
+    await auth.api.revokeDeviceSession({
+      headers,
+      body: { sessionToken: target.sessionToken },
+    })
+    return
+  }
   await auth.api.revokeSession({
     headers,
-    body: { token: current.session.token },
+    body: { token: target.sessionToken },
   })
   await resumeBrowserAccount(headers)
 }
