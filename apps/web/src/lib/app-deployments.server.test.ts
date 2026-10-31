@@ -396,6 +396,22 @@ describeMysql("App deployments", () => {
       60_000
     )
 
+    it.effect("end a deploy queued for a Relay that's gone", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const { askAppDeploymentEffect } = yield* Effect.promise(
+          () => import("@/lib/app-deployments.server")
+        )
+        const id = yield* askAppDeploymentEffect({
+          appId: "8".repeat(40),
+          relayId: "z".repeat(43),
+          trigger: "manual",
+        })
+        yield* ended(id)
+        assert.strictEqual((yield* loadOperation(id))?.state, "succeeded")
+      }).pipe(TestClock.withLive)
+    )
+
     it.effect(
       "deploy nothing of an app being deleted, and what's asked after it as usual",
       () =>

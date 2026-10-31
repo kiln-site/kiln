@@ -737,15 +737,17 @@ export const deployAppOperation = durableOperation({
   // before deployments queued, which nothing holds, still runs: the minute
   // sweep settles that. Until then it waits, holding nothing, so what's
   // asked meanwhile joins it, it can be cancelled, and a deletion of the
-  // app isn't kept waiting.
+  // app isn't kept waiting. One whose Relay is gone starts, to find nothing
+  // to deploy.
   ready: (input) =>
-    Effect.all([
-      relayReachable(input.relayId),
-      latestAppDeploymentsEffect(input.appId).pipe(
+    Effect.gen(function* () {
+      const relay = yield* relayState(input.relayId)
+      if (relay !== "connected") return relay === "gone"
+      return yield* latestAppDeploymentsEffect(input.appId).pipe(
         Effect.map(({ latest }) => latest?.status !== "running"),
         Effect.catch(() => Effect.succeed(false))
-      ),
-    ]).pipe(Effect.map(([reachable, settled]) => reachable && settled)),
+      )
+    }),
   // A failure ends it failed, so what it was for is asked again.
   run: (input, operation) =>
     deploySteps(input, operation.id).pipe(
@@ -814,18 +816,18 @@ const watchFor = <A, E, R>(
     }
   })
 
-// Whether the app's Relay is enabled and connected.
-const relayReachable = (relayId: string) =>
+// Whether the app's Relay is connected, away (paused or offline, so
+// waited for), or gone.
+const relayState = (relayId: string) =>
   listPersistedRelaysEffect().pipe(
-    Effect.map((relays) =>
-      relays.some(
-        (relay) =>
-          relay.id === relayId &&
-          relay.enabled &&
-          relayConnectionFeatures(relay.id).size > 0
-      )
-    ),
-    Effect.catch(() => Effect.succeed(false))
+    Effect.map((relays) => {
+      const relay = relays.find((item) => item.id === relayId)
+      if (relay === undefined) return "gone" as const
+      return relay.enabled && relayConnectionFeatures(relay.id).size > 0
+        ? ("connected" as const)
+        : ("away" as const)
+    }),
+    Effect.catch(() => Effect.succeed("away" as const))
   )
 
 // Whether a new app is ready to deploy: provisioned, still provisioning,
