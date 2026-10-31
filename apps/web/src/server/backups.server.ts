@@ -675,6 +675,7 @@ export async function getBackupDownloadUrlHandler(
   }
   if (backup.artifactKind === "restic_snapshot") {
     return resticBackupDownload({
+      afterExport: data.afterExport,
       backup,
       expiresInSeconds: data.expiresInSeconds,
       preview: data.preview,
@@ -1122,6 +1123,7 @@ async function requireBackupPolicyTarget(
 }
 
 async function resticBackupDownload(input: {
+  afterExport: boolean
   backup: BackupCatalogRecord
   expiresInSeconds: number
   preview: boolean
@@ -1135,7 +1137,7 @@ async function resticBackupDownload(input: {
       backupId: input.backup.id,
       replaceFailed: true,
       requestedBy: input.user.id,
-      requireFullTtl: true,
+      requireFullTtl: !input.afterExport,
       taskId: randomUUID(),
       ttlMs: input.expiresInSeconds * 1_000,
     })

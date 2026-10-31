@@ -145,6 +145,9 @@ const copyBackupInputSchema = z.strictObject({
 })
 
 const backupDownloadInputSchema = z.strictObject({
+  // Asked again once a snapshot's export was seen ready: its link takes
+  // whatever time the export has left, rather than needing a fresh one.
+  afterExport: z.boolean().default(false),
   artifactId: z.uuid().optional(),
   backupId: z.uuid(),
   expiresInSeconds: z

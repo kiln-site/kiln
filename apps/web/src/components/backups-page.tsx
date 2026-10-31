@@ -1264,9 +1264,11 @@ function DownloadBackupDialog({
   )
   const signDownload = useMutation({
     mutationFn: async (mode: "download" | "link") => {
+      let afterExport = false
       for (;;) {
         const result = await getBackupDownloadUrl({
           data: {
+            afterExport,
             artifactId,
             backupId: backup.id,
             expiresInSeconds: mode === "download" ? 300 : expiresInSeconds,
@@ -1285,7 +1287,10 @@ function DownloadBackupDialog({
             data: { backupId: backup.id },
           })
           if (state === "failed") throw new Error("The snapshot export failed")
-          if (state !== "preparing") break
+          if (state !== "preparing") {
+            afterExport = state === "ready"
+            break
+          }
         }
       }
     },

@@ -23,7 +23,6 @@ import { resolveBackupStorageSelection } from "@/lib/backup-storage-selection.se
 import type { BackupCatalogRecord } from "@/effect/backups"
 import type { BackupTarget } from "@workspace/contracts"
 import type { BackupAction } from "@/lib/backup-target-permissions"
-import { kilnInstallationId } from "@/effect/installation"
 import { exclusive, partKey, shared, type LaneLock } from "@/operations/lanes"
 import { operation, signedIn } from "@/operations/operation"
 import {
