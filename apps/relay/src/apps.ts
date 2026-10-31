@@ -40,7 +40,7 @@ import {
   NO_RESOURCE_LIMITS,
   relayAppSchema,
 } from "@workspace/contracts"
-import { Effect, Predicate, Result } from "effect"
+import { Effect, Predicate, Result, Semaphore } from "effect"
 
 import { commandLines } from "./command.js"
 import {
@@ -248,6 +248,9 @@ export class AppDriver {
   // How many deployments began replacing each app's containers this run.
   readonly #replacements = new Map<string, number>()
   readonly #lanes: OperationLanes
+  // Registries asked at once, whatever asks: overlapping checks share these
+  // rather than each asking four.
+  readonly #registryLookups = Semaphore.makeUnsafe(4)
   readonly #limits: AppLimitStores
   readonly #connections: DatabaseConnections
   readonly #volumeIds: (
@@ -1327,11 +1330,13 @@ export class AppDriver {
         Effect.forEach(
           [...wanted],
           (name) =>
-            this.#engine.distributionDigest(name).pipe(
-              Effect.result,
-              Effect.map((result) => [name, result] as const)
-            ),
-          { concurrency: 4 }
+            this.#registryLookups
+              .withPermits(1)(this.#engine.distributionDigest(name))
+              .pipe(
+                Effect.result,
+                Effect.map((result) => [name, result] as const)
+              ),
+          { concurrency: "unbounded" }
         ),
         signal
       )

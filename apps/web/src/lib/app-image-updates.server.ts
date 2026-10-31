@@ -12,6 +12,7 @@ import { latestAppDeploymentsEffect } from "@/effect/app-deployments"
 import {
   autoUpdateAt,
   defaultAppImageUpdatePolicy,
+  describesApp,
   loadAppImageUpdatesEffect,
   recordAppImageCheckEffect,
   type AppImageUpdate,
@@ -59,48 +60,7 @@ const checkTimeoutMs = 120_000
 
 declare global {
   var kilnAppImageUpdateChecker: Fiber.Fiber<void> | undefined
-  var kilnAppImageUpdateChecked: Map<string, number> | undefined
-  var kilnAppImageUpdateFailures: Map<string, string> | undefined
-  var kilnAppImageUpdateAnswered: Map<string, number> | undefined
 }
-
-// When each Relay's apps were last checked. A restart checks them again.
-const checked = (globalThis.kilnAppImageUpdateChecked ??= new Map<
-  string,
-  number
->())
-// When each app's newest recorded check was asked, so an older check that
-// answers later doesn't replace it. Checks overlap only within a process.
-const answeredAsked = (globalThis.kilnAppImageUpdateAnswered ??= new Map<
-  string,
-  number
->())
-// Each app's last failed check, reported once.
-const failures = (globalThis.kilnAppImageUpdateFailures ??= new Map<
-  string,
-  string
->())
-
-// Whether a check's answer still says something: the app still names the
-// image it asked about, and hasn't started deploying since, which may
-// have changed what it runs.
-const stillChecked = Effect.fnUntraced(function* (
-  relayId: string,
-  appId: string,
-  image: string,
-  askedAt: number
-) {
-  const [app, { latest }] = yield* Effect.all([
-    loadAppConfigEffect(relayId, appId),
-    latestAppDeploymentsEffect(appId),
-  ])
-  return (
-    app?.config.sourceType === "image" &&
-    app.config.image === image &&
-    (latest === null ||
-      (latest.status !== "running" && Date.parse(latest.startedAt) < askedAt))
-  )
-})
 
 // Tells everyone who can deploy the app about an image they haven't heard
 // of, unless it was skipped. Whoever asked for the check sees what it found.
@@ -148,25 +108,33 @@ function imageUpdateSourceKeyPrefix(appId: string) {
 
 /**
  * Clears an app's update notifications that no longer offer anything: all
- * but the update Kiln has on offer now, read under the lock its checks take,
- * so a check that finished first can't clear a newer one another Hearth just
- * announced. `installedDigest` was just deployed, so it's no longer on offer;
- * `unchecked` means the app no longer checks for updates, so none is.
+ * but the update Kiln has on offer now, read with its row locked, so two
+ * clearing at once agree. What a check found offers an update only while
+ * it still describes the App (`currentImageUpdate`). `installedDigest` was
+ * just deployed, so it's no longer on offer; `unchecked` means the app no
+ * longer checks for updates, so none is.
  */
 export const resolveAppImageUpdateNotificationsEffect = Effect.fn(
   "Apps.imageUpdates.resolveNotifications"
 )(function* (
+  relayId: string,
   appId: string,
   settled: { installedDigest?: string; unchecked?: boolean } = {}
 ) {
   const database = yield* Database
   const prefix = imageUpdateSourceKeyPrefix(appId)
+  const [app, { latest }] = yield* Effect.all([
+    loadAppConfigEffect(relayId, appId),
+    latestAppDeploymentsEffect(appId),
+  ])
   const resolved = yield* database.transaction(
     "Apps.imageUpdates.resolveNotifications",
     () =>
       Effect.gen(function* () {
         const [offer] = yield* database.queryRows<
           RowDataPacket & {
+            checked_at: number | string | null
+            image: string | null
             latest_digest: string | null
             mode: string
             skipped_digest: string | null
@@ -174,14 +142,27 @@ export const resolveAppImageUpdateNotificationsEffect = Effect.fn(
           }
         >(
           "Apps.imageUpdates.offer",
-          `SELECT state, mode, latest_digest, skipped_digest
+          `SELECT state, mode, image, checked_at, latest_digest, skipped_digest
              FROM ${databaseTable("app_image_update")}
             WHERE app_id = ?
               FOR UPDATE`,
           [appId]
         )
+        const current =
+          app?.config.sourceType === "image" &&
+          offer !== undefined &&
+          describesApp(
+            {
+              checkedAt:
+                offer.checked_at === null ? null : Number(offer.checked_at),
+              image: offer.image,
+            },
+            app.config.image,
+            latest?.startedAt ?? null
+          )
         const offered =
           !settled.unchecked &&
+          current &&
           offer?.state === "available" &&
           offer.mode !== "off" &&
           offer.latest_digest !== offer.skipped_digest &&
@@ -197,29 +178,6 @@ export const resolveAppImageUpdateNotificationsEffect = Effect.fn(
   )
   publishNotificationChange(resolved)
 })
-
-// A registry that keeps failing fails every hour, so only a new failure
-// reaches telemetry, until a check gets through.
-const reportFailure = (
-  relayId: string,
-  appId: string,
-  update: AppImageUpdate
-) => {
-  const key = `${relayId}:${appId}`
-  if (update.checkError === null) {
-    failures.delete(key)
-    return Effect.void
-  }
-  if (failures.get(key) === update.checkError) return Effect.void
-  failures.set(key, update.checkError)
-  return Effect.logWarning("Could not check an app for image updates").pipe(
-    Effect.annotateLogs({
-      "app.id": appId,
-      "error.message": update.checkError,
-      "relay.id": relayId,
-    })
-  )
-}
 
 // What a Relay answered about one image app, and when it was asked.
 export interface AppImageAnswer {
@@ -244,6 +202,7 @@ const askAppImagesEffect = Effect.fnUntraced(function* <E, R>(
     answers: ReadonlyArray<AppImageAnswer>
   ) => Effect.Effect<void, E, R>
 ) {
+  const now = yield* Clock.currentTimeMillis
   const apps = (yield* listRelayAppConfigsEffect(relay.id)).filter(
     (app) =>
       (onlyAppId === undefined || app.appId === onlyAppId) &&
@@ -252,11 +211,20 @@ const askAppImagesEffect = Effect.fnUntraced(function* <E, R>(
       !app.config.image.includes("@")
   )
   const updates = yield* loadAppImageUpdatesEffect(apps.map((app) => app.appId))
-  const due = apps.filter(
-    (app) =>
-      (updates.get(app.appId)?.mode ?? defaultAppImageUpdatePolicy.mode) !==
-      "off"
-  )
+  // Kiln's own checks ask about each app once an hour, by when it was last
+  // asked; one someone asks for, at once.
+  const due = apps.filter((app) => {
+    const update = updates.get(app.appId)
+    if ((update?.mode ?? defaultAppImageUpdatePolicy.mode) === "off") {
+      return false
+    }
+    const checkedAt = update?.checkedAt ?? null
+    return (
+      onlyAppId !== undefined ||
+      checkedAt === null ||
+      now - checkedAt >= checkIntervalMs
+    )
+  })
   for (let start = 0; start < due.length; start += batchSize) {
     const batch = due.slice(start, start + batchSize)
     const askedAt = yield* Clock.currentTimeMillis
@@ -298,9 +266,11 @@ const askAppImagesEffect = Effect.fnUntraced(function* <E, R>(
 })
 
 /**
- * Records what a check found of an app, run holding the app: an answer
- * still about the image it names, newer than the last one recorded.
- * Reports whether it changed what Kiln knows.
+ * Records what a check found of an app, holding it shared so it isn't
+ * recorded for an app being deleted: one about an image it no longer names
+ * says nothing about it, so isn't. Checks may overlap; what one recorded is
+ * judged where it's used (`currentImageUpdate`). Reports whether it changed
+ * what Kiln knows.
  */
 const recordAppImageAnswersEffect = Effect.fnUntraced(function* (
   relay: PersistedRelay,
@@ -313,31 +283,42 @@ const recordAppImageAnswersEffect = Effect.fnUntraced(function* (
   // here, holding the app, since checks may have been turned on since and
   // a newer check announced an update.
   if (asked.unchecked && !(yield* checksForUpdates(relay.id, appId))) {
-    yield* resolveAppImageUpdateNotificationsEffect(appId, { unchecked: true })
+    yield* resolveAppImageUpdateNotificationsEffect(relay.id, appId, {
+      unchecked: true,
+    })
   }
   let changed = false
   for (const { app, askedAt, result } of asked.answers) {
     if (app.appId !== appId) continue
-    if (!(yield* stillChecked(relay.id, appId, app.config.image, askedAt))) {
+    const now = yield* loadAppConfigEffect(relay.id, appId)
+    if (
+      now?.config.sourceType !== "image" ||
+      now.config.image !== app.config.image
+    ) {
       continue
     }
-    // A check asked for after this one answered first.
-    const appKey = `${relay.id}:${appId}`
-    if ((answeredAsked.get(appKey) ?? 0) > askedAt) continue
-    answeredAsked.set(appKey, askedAt)
     const recorded = yield* recordAppImageCheckEffect(
       appId,
       app.config.image,
-      result
+      result,
+      askedAt
     )
     changed ||= recorded.changed
-    yield* reportFailure(relay.id, appId, recorded.update)
+    if (recorded.newFailure) {
+      yield* Effect.logWarning("Could not check an app for image updates").pipe(
+        Effect.annotateLogs({
+          "app.id": appId,
+          "error.message": recorded.update.checkError,
+          "relay.id": relay.id,
+        })
+      )
+    }
     if (recorded.newlySeen) {
       yield* announce(relay, app.name, recorded.update, actorUserId)
     }
     // An update that's gone, skipped, or replaced by a newer image no longer
     // needs anyone's attention.
-    yield* resolveAppImageUpdateNotificationsEffect(appId)
+    yield* resolveAppImageUpdateNotificationsEffect(relay.id, appId)
     const at = autoUpdateAt(recorded.update)
     if (at !== null && at <= (yield* Clock.currentTimeMillis)) {
       yield* queueAppDeploymentEffect(appId, relay.id, "update")
@@ -365,7 +346,7 @@ const checksForUpdates = Effect.fnUntraced(function* (
 })
 
 // Kiln's own checks: ask with no lane held, then record each app's answer
-// holding the app, so checks may overlap without one undoing another's.
+// holding the app shared.
 const checkAppImagesEffect = (
   relay: PersistedRelay,
   onlyAppId?: string,
@@ -413,11 +394,8 @@ const checkAppImagesEffect = (
 
 export function startAppImageUpdateChecks(): void {
   const sweep = Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis
     for (const relay of yield* listPersistedRelaysEffect()) {
       if (!checksImages(relay)) continue
-      if (now - (checked.get(relay.id) ?? 0) < checkIntervalMs) continue
-      checked.set(relay.id, now)
       yield* checkAppImagesEffect(relay).pipe(
         Effect.catchCause((cause) =>
           logException(Cause.squash(cause), {

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
-import { Effect } from "effect"
+import { Clock, Effect } from "effect"
 import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 
@@ -36,8 +36,16 @@ const seedApp = Effect.gen(function* () {
   })
 })
 
+// A check asked about the image now.
+const record = (result: Parameters<typeof recordAppImageCheckEffect>[2]) =>
+  Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) =>
+      recordAppImageCheckEffect(appId, image, result, now)
+    )
+  )
+
 const checked = (latest: number, running: Array<number>) =>
-  recordAppImageCheckEffect(appId, image, {
+  record({
     appId,
     latestDigest: digest(latest),
     runningDigests: running.map(digest),
@@ -67,7 +75,7 @@ describeMysql("App image updates", () => {
 
           // A failed check can't say the tag still names it, so it waits for
           // one that gets through, its wait kept.
-          const failed = yield* recordAppImageCheckEffect(appId, image, {
+          const failed = yield* record({
             appId,
             error: "ghcr.io answered 503",
             status: "error",

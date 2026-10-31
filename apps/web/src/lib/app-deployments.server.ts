@@ -29,6 +29,7 @@ import {
 } from "@/effect/app-deployments"
 import {
   autoUpdateAt,
+  currentImageUpdate,
   claimImageUpdateEffect,
   loadAppImageUpdateEffect,
 } from "@/effect/app-image-updates"
@@ -386,9 +387,13 @@ const announceDeploymentEffect = Effect.fnUntraced(
       // Imported here, since image updates deploy through this module.
       const { resolveAppImageUpdateNotificationsEffect } =
         yield* Effect.promise(() => import("@/lib/app-image-updates.server"))
-      yield* resolveAppImageUpdateNotificationsEffect(record.appId, {
-        installedDigest: record.imageDigest,
-      })
+      yield* resolveAppImageUpdateNotificationsEffect(
+        record.relayId,
+        record.appId,
+        {
+          installedDigest: record.imageDigest,
+        }
+      )
     }
   },
   // The deployment is recorded either way; its notification is best effort.
@@ -483,13 +488,16 @@ const imageUpdateDigest = Effect.fnUntraced(function* (
       new Error("Update this Relay to deploy image updates")
     )
   }
-  const update = yield* loadAppImageUpdateEffect(request.appId)
-  const digest =
-    config.sourceType === "image" &&
-    update?.state === "available" &&
-    update.image === config.image
-      ? update.latestDigest
+  // What a check found counts only while it still describes the App.
+  const [recorded, { latest }] = yield* Effect.all([
+    loadAppImageUpdateEffect(request.appId),
+    latestAppDeploymentsEffect(request.appId),
+  ])
+  const update =
+    config.sourceType === "image"
+      ? currentImageUpdate(recorded, config.image, latest?.startedAt ?? null)
       : null
+  const digest = update?.state === "available" ? update.latestDigest : null
   if (request.userId !== null) {
     if (digest === null) {
       return yield* Effect.fail(new Error("There's no update to deploy"))

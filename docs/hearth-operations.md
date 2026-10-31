@@ -178,7 +178,14 @@ the App takes them with it.
 
 An App's changes take its parts too: `#config` for its configuration and
 limits, `#name`, `#power`, and `#deploy` for starting a deployment. Its image
-update settings and what a check found hold it shared.
+update settings hold it shared.
+
+An image check is a read: it asks the registry with no lane held and
+records what it found holding the App shared, so it conflicts with nothing
+but the App's deletion. What it found counts only while it still describes
+the App, judged where it's used (`currentImageUpdate`): it asked about the
+image the App names now, and no deployment has started since. Checks keep
+no state of their own; when each App was last asked is what it recorded.
 
 Starting an App's deployment holds its `#deploy` and
 `relay:<id>#database-connections` (`appDeploymentLocks`), whoever starts
