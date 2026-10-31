@@ -1034,8 +1034,9 @@ function submitQueuedDeployment(appId: string, relayId: string): void {
 
 /**
  * Deploys an app for a person, who may manage it, as they asked: it takes
- * its turn behind a deployment running, and shows as queued until then.
- * A new app deploys once its Relay has provisioned it.
+ * its turn behind a deployment running, and shows as queued until then, so
+ * this returns at once rather than wait for it. A new app deploys once its
+ * Relay has provisioned it. Checked now, and again once it has its turn.
  */
 export const queuePersonDeploymentEffect = Effect.fn("Apps.deploy.person")(
   function* (
@@ -1047,29 +1048,39 @@ export const queuePersonDeploymentEffect = Effect.fn("Apps.deploy.person")(
       relayId: string
     }
   ) {
-    const operationId = yield* startDurableOperation(
-      deployAppOperation,
-      {
+    const authorize = promiseEffect(() =>
+      requireRelayPermission({
         appId: input.appId,
-        explicit: input.explicit,
+        permission: "app.manage",
         relayId: input.relayId,
-        ...(input.awaitProvisioning && { awaitProvisioning: true }),
-      },
-      {
-        actorId: user.id,
-        authorize: promiseEffect(() =>
-          requireRelayPermission({
+        user,
+      })
+    )
+    yield* authorize
+    outsideOperation(() =>
+      forkAppWorker(
+        startDurableOperation(
+          deployAppOperation,
+          {
             appId: input.appId,
-            permission: "app.manage",
+            explicit: input.explicit,
             relayId: input.relayId,
-            user,
-          })
-        ),
-        initiator: "person",
-      }
+            ...(input.awaitProvisioning && { awaitProvisioning: true }),
+          },
+          { actorId: user.id, authorize, initiator: "system" }
+        ).pipe(
+          Effect.asVoid,
+          Effect.catchCause((cause) =>
+            logException(Cause.squash(cause), {
+              operation: "Apps.deploy.person",
+              attributes: { "app.id": input.appId, "relay.id": input.relayId },
+            })
+          )
+        )
+      )
     )
     publishAppDeploymentChange(input.relayId)
-    return { operationId, queued: true as const }
+    return { queued: true as const }
   }
 )
 
