@@ -10,9 +10,9 @@ import {
   Clock,
   Effect,
   Fiber,
+  Option,
   Predicate,
   Schedule,
-  Semaphore,
 } from "effect"
 
 import {
@@ -31,8 +31,15 @@ import {
   type GitHubSyncTrigger,
   setGitHubSyncStatusEffect,
 } from "@/effect/github-sync"
-import type { Database } from "@/effect/database"
 import { forkAppWorker } from "@/effect/runtime"
+import {
+  githubConnectionKey,
+  githubSyncKey,
+  githubSyncTargetKey,
+} from "@/lib/github-lanes"
+import { outsideOperation } from "@/operations/current"
+import { exclusive, shared } from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
 import { githubSyncTargetAccess } from "@/lib/github-sync-targets"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
@@ -226,6 +233,17 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
         new Error(`Couldn't write ${target}: ${syncFailureMessage(cause)}`),
     }).pipe(Effect.map((result) => relayFilePutResultSchema.parse(result)))
 
+  const fileLocks = [
+    exclusive(githubSyncKey(sync.id)),
+    exclusive(
+      githubSyncTargetKey({
+        kind: sync.resourceKind,
+        relayId: sync.relayId,
+        resourceId: sync.resourceId,
+      })
+    ),
+    shared(githubConnectionKey(sync.connectionId)),
+  ]
   for (const file of toWrite) {
     const previous = recorded[file.target]
     // Recorded just before it's attempted, so a write that lands with its
@@ -238,34 +256,51 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
         -maxPendingWrites
       ),
     }
-    syncedFiles[file.target] = attempt
-    yield* recordGitHubSyncAttemptEffect(sync.id, file.target, attempt)
     const written = yield* getGitHubBlobEffect(
       token,
       sync.repository,
       file.sha
     ).pipe(
       Effect.flatMap((content) =>
-        // Without overwrite, only a file Kiln left as it was, or none, is
-        // written; anything else is someone's edit.
-        putFile(
-          file.target,
-          content,
-          sync.overwrite ? undefined : (previous?.modifiedAt ?? null)
-        ).pipe(
-          Effect.flatMap((result) => {
-            if (!result.conflict) return Effect.succeed(result)
-            const current = result.current?.blob
-            // Content Kiln wrote, or tried to write, is still Kiln's file,
-            // however its time changed: replace it as it now stands.
-            const ours =
-              current !== undefined &&
-              current !== null &&
-              current !== file.sha &&
-              (current === attempt.blob || attempt.pending.includes(current))
-            return ours
-              ? putFile(file.target, content, result.current!.modifiedAt)
-              : Effect.succeed(result)
+        // Fetched first; then written holding the sync, what it writes
+        // into, and its connection, so neither changes or goes meanwhile.
+        inLanes(
+          "github.sync.file",
+          "Syncing files from GitHub",
+          fileLocks,
+          Effect.gen(function* () {
+            // A sync deleted since, as with its connection, writes no more.
+            const current = yield* loadGitHubSyncEffect(sync.id).pipe(
+              Effect.option
+            )
+            if (Option.isNone(current)) {
+              return yield* Effect.fail(new Error("This sync was deleted"))
+            }
+            syncedFiles[file.target] = attempt
+            yield* recordGitHubSyncAttemptEffect(sync.id, file.target, attempt)
+            // Without overwrite, only a file Kiln left as it was, or none,
+            // is written; anything else is someone's edit.
+            return yield* putFile(
+              file.target,
+              content,
+              sync.overwrite ? undefined : (previous?.modifiedAt ?? null)
+            ).pipe(
+              Effect.flatMap((result) => {
+                if (!result.conflict) return Effect.succeed(result)
+                const current = result.current?.blob
+                // Content Kiln wrote, or tried to write, is still Kiln's file,
+                // however its time changed: replace it as it now stands.
+                const ours =
+                  current !== undefined &&
+                  current !== null &&
+                  current !== file.sha &&
+                  (current === attempt.blob ||
+                    attempt.pending.includes(current))
+                return ours
+                  ? putFile(file.target, content, result.current!.modifiedAt)
+                  : Effect.succeed(result)
+              })
+            )
           })
         )
       ),
@@ -329,20 +364,24 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
 })
 
 declare global {
-  var kilnGitHubSyncLocks: Map<string, Semaphore.Semaphore> | undefined
+  var kilnGitHubSyncDraining: Map<string, object> | undefined
+  var kilnGitHubSyncMarks: Map<string, Fiber.Fiber<void>> | undefined
   var kilnGitHubSyncQueued: Map<string, GitHubSyncTrigger> | undefined
   var kilnGitHubSyncPoller: Fiber.Fiber<void> | undefined
 }
 
-const syncLocks = (globalThis.kilnGitHubSyncLocks ??= new Map())
+// The syncs whose runs are being drained now, by this process.
+const draining = (globalThis.kilnGitHubSyncDraining ??= new Map())
+// Each waiting run's status update, which its run waits for.
+const marks = (globalThis.kilnGitHubSyncMarks ??= new Map())
 // The trigger of each sync's waiting run.
 const waiting = (globalThis.kilnGitHubSyncQueued ??= new Map())
 
 /**
- * Runs a sync in the background, one at a time per sync. A trigger arriving
- * while another waits joins it: the waiting run reads the newest commit and
- * settings, and takes the stronger trigger, so a poll can't swallow a manual
- * run or an edit.
+ * Runs a sync in the background, one run at a time per sync. A trigger
+ * arriving while another waits joins it: the waiting run reads the newest
+ * commit and settings, and takes the stronger trigger, so a poll can't
+ * swallow a manual run or an edit.
  */
 export function enqueueGitHubSync(
   syncId: string,
@@ -355,58 +394,98 @@ export function enqueueGitHubSync(
     return
   }
   waiting.set(syncId, trigger)
-  const lock = syncLocks.get(syncId) ?? Semaphore.makeUnsafe(1)
-  syncLocks.set(syncId, lock)
-  // Marked queued in the same fiber, before its run, so a slow update can't
-  // land after the run and leave the sync looking queued.
-  const markQueued: Effect.Effect<void, never, Database> =
-    trigger === "poll"
-      ? Effect.void
-      : setGitHubSyncStatusEffect(syncId, "queued").pipe(
-          Effect.andThen(Effect.sync(publishGitHubSyncChange)),
-          Effect.ignore
+  // Marked queued before its run takes it, which waits for the mark, so a
+  // slow update can't land after the run and leave the sync looking queued.
+  if (trigger !== "poll") {
+    marks.set(
+      syncId,
+      outsideOperation(() =>
+        forkAppWorker(
+          setGitHubSyncStatusEffect(syncId, "queued").pipe(
+            Effect.andThen(Effect.sync(publishGitHubSyncChange)),
+            Effect.ignore
+          )
         )
-  const run = lock.withPermit(
-    Effect.sync(() => {
-      const next = waiting.get(syncId) ?? trigger
-      waiting.delete(syncId)
-      return next
-    }).pipe(
-      Effect.flatMap((next) =>
-        runGitHubSyncEffect(syncId, next).pipe(
-          Effect.catchCause((cause) =>
-            // A failing poll fails again every minute; the sync's status
-            // shows it, so only the first report reaches telemetry.
-            (next === "poll"
-              ? Effect.void
-              : logException(Cause.squash(cause), {
-                  operation: "github.sync.run",
-                  attributes: { "github.sync.id": syncId },
-                })
-            ).pipe(
-              Effect.andThen(Clock.currentTimeMillis),
-              Effect.flatMap((now) =>
-                recordGitHubSyncResultEffect(
-                  syncId,
-                  { startedAt: now, trigger: next },
-                  { error: syncFailureMessage(Cause.squash(cause)) }
-                ).pipe(
-                  Effect.tap((changed) =>
-                    Effect.sync(() => {
-                      if (changed) publishGitHubSyncChange()
-                    })
-                  ),
-                  Effect.ignore
-                )
-              )
-            )
+      )
+    )
+  }
+  drainGitHubSync(syncId)
+}
+
+// Takes the waiting trigger, or, with none, stops draining in the same
+// step, so a trigger that arrives after always starts a drain of its own.
+const takeWaiting = (syncId: string, token: object) =>
+  Effect.sync(() => {
+    const next = waiting.get(syncId)
+    if (next === undefined) {
+      if (draining.get(syncId) === token) draining.delete(syncId)
+      return undefined
+    }
+    waiting.delete(syncId)
+    return next
+  })
+
+function drainGitHubSync(syncId: string): void {
+  if (draining.has(syncId)) return
+  // Its own, so one that ends never clears the marker of the next.
+  const token = {}
+  draining.set(syncId, token)
+  // Woken by whatever asked, which doesn't wait: each file it writes takes
+  // its own lanes.
+  outsideOperation(() =>
+    forkAppWorker(
+      Effect.gen(function* () {
+        for (;;) {
+          const mark = marks.get(syncId)
+          if (mark) {
+            yield* Fiber.await(mark)
+            if (marks.get(syncId) === mark) marks.delete(syncId)
+          }
+          const next = yield* takeWaiting(syncId, token)
+          if (next === undefined) return
+          yield* runQueuedSync(syncId, next)
+        }
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (draining.get(syncId) === token) draining.delete(syncId)
+          })
+        )
+      )
+    )
+  )
+}
+
+const runQueuedSync = (syncId: string, next: GitHubSyncTrigger) =>
+  runGitHubSyncEffect(syncId, next).pipe(
+    Effect.catchCause((cause) =>
+      // A failing poll fails again every minute; the sync's status shows
+      // it, so only the first report reaches telemetry.
+      (next === "poll"
+        ? Effect.void
+        : logException(Cause.squash(cause), {
+            operation: "github.sync.run",
+            attributes: { "github.sync.id": syncId },
+          })
+      ).pipe(
+        Effect.andThen(Clock.currentTimeMillis),
+        Effect.flatMap((now) =>
+          recordGitHubSyncResultEffect(
+            syncId,
+            { startedAt: now, trigger: next },
+            { error: syncFailureMessage(Cause.squash(cause)) }
+          ).pipe(
+            Effect.tap((changed) =>
+              Effect.sync(() => {
+                if (changed) publishGitHubSyncChange()
+              })
+            ),
+            Effect.ignore
           )
         )
       )
     )
   )
-  forkAppWorker(Effect.andThen(markQueued, run))
-}
 
 /**
  * Connections created where GitHub can't reach Hearth get no webhooks, so

@@ -8,7 +8,7 @@ import { exclusive, resourceKey, type LaneLock } from "@/operations/lanes"
 import { operation, signedIn } from "@/operations/operation"
 
 /**
- * A change to one game server or database, as an operation: it holds the
+ * A change to one game server, database or App, as an operation: it holds the
  * resource whole, which covers what its work reaches under it, such as its
  * DNS (`#dns`), and refuses or waits for its deletion. The person's
  * permission on it is checked before any lane is taken, so a refusal tells
@@ -18,7 +18,7 @@ export const resourceOperation = <
   Input extends { readonly relayId: string },
   A,
 >(definition: {
-  readonly kind: "database" | "instance"
+  readonly kind: "app" | "database" | "instance"
   readonly id: (input: Input) => string
   readonly name: string
   readonly doing: string | ((input: Input) => string)
@@ -34,8 +34,7 @@ export const resourceOperation = <
         Effect.tap((person) =>
           promiseEffect(() =>
             requireRelayPermission({
-              [definition.kind === "instance" ? "instanceId" : "databaseId"]:
-                definition.id(input),
+              [`${definition.kind}Id`]: definition.id(input),
               permission: definition.permission(input),
               relayId: input.relayId,
               user: person,

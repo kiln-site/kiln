@@ -30,7 +30,10 @@ import {
   loadGitHubConnectionCredentialEffect,
   loadGitHubConnectionsEffect,
 } from "@/effect/github-sync"
-import { listAppRecordsEffect, updateAppConfigEffect } from "@/effect/managed-apps"
+import {
+  listAppRecordsEffect,
+  updateAppConfigEffect,
+} from "@/effect/managed-apps"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
@@ -44,7 +47,11 @@ import { publishGitHubSyncChange } from "@/lib/github-sync.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
-import { authorizedApp, hasAppPermission } from "@/server/app-access"
+import {
+  authorizedApp,
+  authorizedAppFor,
+  hasAppPermission,
+} from "@/server/app-access"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { connectionToken } from "@/server/github-sync.server"
 import { databaseRpc } from "@/server/managed-database-access"
@@ -127,21 +134,19 @@ export async function getAppDeploymentsHandler(data: {
   )
   const last = page.at(-1)
   return {
-    items: page.map(
-      (record, index): AppDeploymentView => ({
-        ...record,
-        appName: appNames.get(record.appId) ?? record.appId.slice(0, 8),
-        canManage: hasAppPermission(user, grants, record, "app.manage"),
-        canReadLogs: hasAppPermission(user, grants, record, "app.logs.read"),
-        commitUrl: commitUrl(record),
-        relayName: relayNames.get(record.relayId) ?? "Relay",
-        triggeredByName: record.triggeredBy
-          ? record.triggeredBy === user.id
-            ? (user.name ?? user.email)
-            : (people[index]?.ownerName ?? "Deleted user")
-          : null,
-      })
-    ),
+    items: page.map((record, index): AppDeploymentView => ({
+      ...record,
+      appName: appNames.get(record.appId) ?? record.appId.slice(0, 8),
+      canManage: hasAppPermission(user, grants, record, "app.manage"),
+      canReadLogs: hasAppPermission(user, grants, record, "app.logs.read"),
+      commitUrl: commitUrl(record),
+      relayName: relayNames.get(record.relayId) ?? "Relay",
+      triggeredByName: record.triggeredBy
+        ? record.triggeredBy === user.id
+          ? (user.name ?? user.email)
+          : (people[index]?.ownerName ?? "Deleted user")
+        : null,
+    })),
     nextCursor:
       records.length > deploymentPageSize && last
         ? { id: last.id, startedAt: last.startedAt }
@@ -156,10 +161,7 @@ export async function getAppDeploymentSummaryHandler(data: {
 }) {
   const { app, user } = await authorizedApp(data, "app.read")
   const [source, latest, imageUpdate] = await Promise.all([
-    runAppEffect(
-      "apps.github.source",
-      loadAppGitHubSourceEffect(data.appId)
-    ),
+    runAppEffect("apps.github.source", loadAppGitHubSourceEffect(data.appId)),
     runAppEffect(
       "apps.deployments.latest",
       latestAppDeploymentsEffect(data.appId)
@@ -290,18 +292,21 @@ const appSourceFileMaxBytes: Record<AppGitHubBuild, number> = {
  * Points the app at a repository and makes it the app's source. Saving one
  * needs the source's owner, or an administrator, like a sync.
  */
-export async function saveAppGitHubSourceHandler(data: {
-  appId: string
-  autoDeploy: boolean
-  branch: string
-  build: AppGitHubBuild
-  connectionId: string
-  deploy: boolean
-  path: string
-  relayId: string
-  repository: string
-}) {
-  const { relay, user } = await authorizedApp(data, "app.manage")
+export async function saveAppGitHubSourceHandler(
+  user: AuthenticatedUser,
+  data: {
+    appId: string
+    autoDeploy: boolean
+    branch: string
+    build: AppGitHubBuild
+    connectionId: string
+    deploy: boolean
+    path: string
+    relayId: string
+    repository: string
+  }
+) {
+  const { relay } = await authorizedAppFor(user, data, "app.manage")
   if (!relayConnectionFeatures(relay.id).has(relayAppGitHubV1Feature)) {
     throw new Error(
       relayConnectionFeatures(relay.id).size === 0
@@ -359,11 +364,12 @@ export async function saveAppGitHubSourceHandler(data: {
 }
 
 /** Deploys a past deployment's commit again, or the app's config. */
-export async function redeployAppDeploymentHandler(data: {
-  deploymentId: string
-}) {
+export async function redeployAppDeploymentHandler(
+  user: AuthenticatedUser,
+  data: { deploymentId: string }
+) {
   const record = await recordFor(data.deploymentId)
-  const { relay, user } = await authorizedApp(record, "app.manage")
+  const { relay } = await authorizedAppFor(user, record, "app.manage")
   const started = await runAppEffect(
     "apps.redeploy",
     startAppDeploymentEffect({
@@ -413,7 +419,7 @@ export async function getAppDeploymentLogHandler(data: {
   }
 }
 
-async function recordFor(deploymentId: string) {
+export async function recordFor(deploymentId: string) {
   const record = await runAppEffect(
     "apps.deployment.load",
     loadAppDeploymentEffect(deploymentId)

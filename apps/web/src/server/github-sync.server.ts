@@ -40,6 +40,7 @@ import {
 import { countAppGitHubSourcesEffect } from "@/effect/app-deployments"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
+import { promiseEffect } from "@/effect/promise"
 import { reportAppError, runAppEffect } from "@/effect/runtime"
 import {
   grantsAllowPermission,
@@ -51,6 +52,9 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { resolveDisplayName } from "@/lib/display-name"
 import { betterAuthSecrets, kilnPublicUrl } from "@/lib/environment"
 import { deployPushedAppsEffect } from "@/lib/app-deployments.server"
+import { githubConnectionKey, githubSyncKey } from "@/lib/github-lanes"
+import { exclusive, shared } from "@/operations/lanes"
+import { inLanes, operation, signedIn } from "@/operations/operation"
 import {
   enqueueGitHubSync,
   publishGitHubSyncChange,
@@ -129,8 +133,7 @@ export interface GitHubSyncView extends Omit<
   target: GitHubSyncTarget
 }
 
-export async function getGitHubSyncOverviewHandler() {
-  const user = await requireEligibleResourceUser()
+export async function getGitHubSyncOverviewHandler(user: AuthenticatedUser) {
   const admin = isPlatformAdmin(user)
   const [connections, syncs, relays, directory, apps, grants, deployments] =
     await Promise.all([
@@ -227,7 +230,7 @@ export async function getGitHubSyncRunsHandler(): Promise<
   Array<GitHubSyncRunView>
 > {
   const [overview, runs] = await Promise.all([
-    getGitHubSyncOverviewHandler(),
+    getGitHubSyncOverviewHandler(await requireEligibleResourceUser()),
     runAppEffect("github.sync.runs", loadGitHubSyncRunsEffect()),
   ])
   const syncs = new Map(overview.syncs.map((sync) => [sync.id, sync]))
@@ -378,20 +381,25 @@ export async function completeGitHubManifest(input: {
   const connectionId = randomUUID()
   await runAppEffect(
     "github.connection.insert",
-    insertGitHubConnectionEffect({
-      appId: app.id,
-      appName: app.name,
-      appOwnerLogin: app.owner.login,
-      appSlug: app.slug,
-      appUrl: app.html_url,
-      clientId: app.client_id,
-      clientSecret: app.client_secret,
-      id: connectionId,
-      ownerUserId: input.user.id,
-      privateKey: app.pem,
-      webhookActive: state.webhooks,
-      webhookSecret: app.webhook_secret,
-    })
+    inLanes(
+      "github.connection.create",
+      "Connecting GitHub",
+      [exclusive(githubConnectionKey(connectionId))],
+      insertGitHubConnectionEffect({
+        appId: app.id,
+        appName: app.name,
+        appOwnerLogin: app.owner.login,
+        appSlug: app.slug,
+        appUrl: app.html_url,
+        clientId: app.client_id,
+        clientSecret: app.client_secret,
+        id: connectionId,
+        ownerUserId: input.user.id,
+        privateKey: app.pem,
+        webhookActive: state.webhooks,
+        webhookSecret: app.webhook_secret,
+      })
+    )
   )
   publishGitHubSyncChange()
   const nextState = encryptSetupState({
@@ -447,9 +455,26 @@ export async function completeGitHubInstallation(input: {
   )
 }
 
-export async function deleteGitHubConnectionHandler(data: { id: string }) {
-  const user = await requireEligibleResourceUser()
-  const connection = await usableConnection(user, data.id)
+// Deleting a connection takes its syncs with it, so it holds the connection
+// whole: no sync writes through it meanwhile.
+export const deleteConnection = operation<{ id: string }>()({
+  name: "github.connection.delete",
+  doing: "Removing this GitHub connection",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(() => usableConnection(person, input.id))
+      )
+    ),
+  locks: ({ input }) => [exclusive(githubConnectionKey(input.id))],
+  run: ({ context: connection }) =>
+    promiseEffect(() => deleteGitHubConnectionHandler(connection)),
+  audit: ({ input }) => ({ id: input.id, kind: "github-connection" }),
+})
+
+async function deleteGitHubConnectionHandler(
+  connection: Awaited<ReturnType<typeof usableConnection>>
+) {
   if (connection.installation) {
     // Best effort: the app may already be uninstalled on GitHub, and the
     // source goes either way once its credentials are forgotten.
@@ -535,8 +560,35 @@ export async function listGitHubFoldersHandler(data: GitHubFoldersInput) {
   }
 }
 
-export async function saveGitHubSyncHandler(data: SaveGitHubSyncInput) {
-  const user = await requireEligibleResourceUser()
+// Holds the sync, its new ID settled first, and its connection shared.
+export const saveSync = operation<SaveGitHubSyncInput>()({
+  name: "github.sync.save",
+  doing: "Changing this GitHub sync",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(async () => {
+          if (input.id) await manageableSync(person, input.id)
+          else await requireTargetWrite(person, input.target)
+          await usableConnection(person, input.connectionId)
+          return { id: input.id ?? randomUUID(), user: person }
+        })
+      )
+    ),
+  locks: ({ context, input }) => [
+    exclusive(githubSyncKey(context.id)),
+    shared(githubConnectionKey(input.connectionId)),
+  ],
+  run: ({ context, input }) =>
+    promiseEffect(() => saveGitHubSyncHandler(context.user, input, context.id)),
+  audit: ({ context }) => ({ id: context.id, kind: "github-sync" }),
+})
+
+async function saveGitHubSyncHandler(
+  user: AuthenticatedUser,
+  data: SaveGitHubSyncInput,
+  newId: string
+) {
   const existing = data.id
     ? await runAppEffect("github.sync.load", loadGitHubSyncEffect(data.id))
     : null
@@ -553,7 +605,7 @@ export async function saveGitHubSyncHandler(data: SaveGitHubSyncInput) {
   } else {
     // A new sync must name an instance that exists on its Relay and that
     // the person may write to, as the Sync page lists them.
-    const { targets } = await getGitHubSyncOverviewHandler()
+    const { targets } = await getGitHubSyncOverviewHandler(user)
     const key = targetKey(target)
     if (!targets.some((candidate) => targetKey(candidate) === key)) {
       throw new Error("Instance not found")
@@ -586,7 +638,7 @@ export async function saveGitHubSyncHandler(data: SaveGitHubSyncInput) {
     enqueueGitHubSync(existing.id, "manual")
     return { id: existing.id }
   }
-  const id = randomUUID()
+  const id = newId
   await runAppEffect(
     "github.sync.insert",
     insertGitHubSyncEffect({
@@ -603,20 +655,48 @@ export async function saveGitHubSyncHandler(data: SaveGitHubSyncInput) {
   return { id }
 }
 
-export async function runGitHubSyncHandler(data: { id: string }) {
-  const user = await requireEligibleResourceUser()
-  const sync = await manageableSync(user, data.id)
-  enqueueGitHubSync(sync.id, "manual")
-  return { queued: true }
-}
+// Asks for a run, which goes on in the background; it holds the sync shared,
+// so one being deleted isn't run.
+export const runSync = operation<{ id: string }>()({
+  name: "github.sync.run",
+  doing: "Running this GitHub sync",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(() => manageableSync(person, input.id))
+      )
+    ),
+  locks: ({ input }) => [shared(githubSyncKey(input.id))],
+  run: ({ context: sync }) =>
+    Effect.sync(() => {
+      enqueueGitHubSync(sync.id, "manual")
+      return { queued: true }
+    }),
+  audit: ({ input }) => ({ id: input.id, kind: "github-sync" }),
+})
 
-export async function deleteGitHubSyncHandler(data: { id: string }) {
-  const user = await requireEligibleResourceUser()
-  const sync = await manageableSync(user, data.id)
-  await runAppEffect("github.sync.delete", deleteGitHubSyncEffect(sync.id))
-  publishGitHubSyncChange()
-  return { deleted: true }
-}
+// Holds the sync, so no file is written for it after it goes.
+export const deleteSync = operation<{ id: string }>()({
+  name: "github.sync.delete",
+  doing: "Removing this GitHub sync",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(() => manageableSync(person, input.id))
+      )
+    ),
+  locks: ({ context: sync }) => [
+    exclusive(githubSyncKey(sync.id)),
+    shared(githubConnectionKey(sync.connectionId)),
+  ],
+  run: ({ context: sync }) =>
+    promiseEffect(async () => {
+      await runAppEffect("github.sync.delete", deleteGitHubSyncEffect(sync.id))
+      publishGitHubSyncChange()
+      return { deleted: true }
+    }),
+  audit: ({ input }) => ({ id: input.id, kind: "github-sync" }),
+})
 
 /**
  * Whether GitHub can deliver webhooks to Hearth: a public HTTPS address.
@@ -649,11 +729,17 @@ async function saveInstallation(
   connectionId: string,
   installation: GitHubInstallation | null
 ) {
+  // As GitHub reports it, after setup or from its webhook.
   await runAppEffect(
     "github.connection.saveInstallation",
-    saveGitHubInstallationEffect(
-      connectionId,
-      installation && installationRecord(installation)
+    inLanes(
+      "github.connection.installation",
+      "Changing this GitHub connection",
+      [exclusive(githubConnectionKey(connectionId))],
+      saveGitHubInstallationEffect(
+        connectionId,
+        installation && installationRecord(installation)
+      )
     )
   )
   publishGitHubSyncChange()

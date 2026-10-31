@@ -45,6 +45,9 @@ import {
   publishNotificationChange,
 } from "@/effect/notifications"
 import { forkAppWorker } from "@/effect/runtime"
+import { outsideOperation } from "@/operations/current"
+import { appDeploymentLocks } from "@/lib/app-lanes"
+import { inLanes } from "@/operations/operation"
 import { ensureAppDatabaseConnectionsImportedEffect } from "@/lib/app-database-connections.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
@@ -116,7 +119,15 @@ export function publishAppDeploymentChange(relayId: string): void {
  * tag naming; one Kiln starts on its own deploys nothing, either, unless
  * it's still due when its turn comes.
  */
-export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
+export const startAppDeploymentEffect = (request: AppDeploymentRequest) =>
+  inLanes(
+    "app.deployment.start",
+    "Deploying this App",
+    appDeploymentLocks(request.relayId, request.appId),
+    deployAppEffect(request)
+  )
+
+const deployAppEffect = Effect.fn("Apps.deploy")(function* (
   request: AppDeploymentRequest
 ) {
   yield* Effect.annotateCurrentSpan({
@@ -644,33 +655,36 @@ const pollFailures = (globalThis.kilnAppDeploymentPollFailures ??= new Map())
 export function followAppDeployment(record: AppDeploymentRecord): void {
   if (!record.relayDeploymentId || followed.has(record.id)) return
   followed.add(record.id)
-  forkAppWorker(
-    Effect.gen(function* () {
-      const deadline = (yield* Clock.currentTimeMillis) + followLimitMs
-      while ((yield* Clock.currentTimeMillis) < deadline) {
-        yield* Effect.sleep(followInterval)
-        const settled = yield* checkAppDeploymentEffect(record).pipe(
-          // An unreachable Relay is checked again next time.
-          Effect.catch(() => Effect.succeed(false))
-        )
-        if (!settled) continue
-        // An app's updates follow what it runs now, by its current config:
-        // one that deploys from elsewhere now has none on offer. Imported
-        // here, since image updates deploy through this module.
-        const { recheckAppImage } = yield* Effect.promise(
-          () => import("@/lib/app-image-updates.server")
-        )
-        recheckAppImage(record.relayId, record.appId, record.triggeredBy)
-        return
-      }
-    }).pipe(
-      Effect.catchCause((cause) =>
-        logException(Cause.squash(cause), {
-          operation: "Apps.deployment.follow",
-          attributes: { "app.deployment.id": record.id },
-        })
-      ),
-      Effect.ensuring(Effect.sync(() => followed.delete(record.id)))
+  // It outlives whatever started the deployment, which doesn't wait for it.
+  outsideOperation(() =>
+    forkAppWorker(
+      Effect.gen(function* () {
+        const deadline = (yield* Clock.currentTimeMillis) + followLimitMs
+        while ((yield* Clock.currentTimeMillis) < deadline) {
+          yield* Effect.sleep(followInterval)
+          const settled = yield* checkAppDeploymentEffect(record).pipe(
+            // An unreachable Relay is checked again next time.
+            Effect.catch(() => Effect.succeed(false))
+          )
+          if (!settled) continue
+          // An app's updates follow what it runs now, by its current config:
+          // one that deploys from elsewhere now has none on offer. Imported
+          // here, since image updates deploy through this module.
+          const { recheckAppImage } = yield* Effect.promise(
+            () => import("@/lib/app-image-updates.server")
+          )
+          recheckAppImage(record.relayId, record.appId, record.triggeredBy)
+          return
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          logException(Cause.squash(cause), {
+            operation: "Apps.deployment.follow",
+            attributes: { "app.deployment.id": record.id },
+          })
+        ),
+        Effect.ensuring(Effect.sync(() => followed.delete(record.id)))
+      )
     )
   )
 }
@@ -708,58 +722,62 @@ function drainAppDeployments(appId: string, relayId: string): void {
   const stop = () => {
     if (draining.get(key) === token) draining.delete(key)
   }
-  forkAppWorker(
-    Effect.gen(function* () {
-      for (;;) {
-        const request = yield* loadAppDeploymentRequestEffect(appId)
-        if (!request) {
-          // One asked for while this looked, finding this drain still
-          // going, is taken up now rather than by the next poll.
-          stop()
-          if (yield* loadAppDeploymentRequestEffect(appId)) {
-            drainAppDeployments(appId, relayId)
+  // Woken by whatever asked, which doesn't wait: each deployment it starts
+  // takes its own lanes.
+  outsideOperation(() =>
+    forkAppWorker(
+      Effect.gen(function* () {
+        for (;;) {
+          const request = yield* loadAppDeploymentRequestEffect(appId)
+          if (!request) {
+            // One asked for while this looked, finding this drain still
+            // going, is taken up now rather than by the next poll.
+            stop()
+            if (yield* loadAppDeploymentRequestEffect(appId)) {
+              drainAppDeployments(appId, relayId)
+            }
+            return
           }
-          return
+          // A request its Relay can't take now, paused, away or offline, or
+          // one behind a deployment still running after an hour, keeps
+          // waiting: the minute's poll drains it again.
+          const relay = yield* Effect.option(enabledRelay(request.relayId))
+          if (Option.isNone(relay)) return
+          if (relayConnectionFeatures(relay.value.id).size === 0) return
+          if (!(yield* awaitRunningDeployment(appId))) return
+          // An app deploys from GitHub or from an image, so at most one of
+          // these deploys; the other finds nothing to do.
+          const outcomes = [
+            ...(request.imageUpdate
+              ? [yield* deployRequested(key, appId, request.relayId, "update")]
+              : []),
+            ...(request.push || request.poll
+              ? [
+                  yield* deployRequested(
+                    key,
+                    appId,
+                    request.relayId,
+                    request.push ? "push" : "poll"
+                  ),
+                ]
+              : []),
+          ]
+          // Its Relay went away while it waited: kept for the minute's poll.
+          if (outcomes.includes("away")) return
+          // Another deployment started first, as a person's: wait for it and
+          // try again, the request kept.
+          if (outcomes.includes("waiting")) continue
+          yield* settleAppDeploymentRequestEffect(appId, request.revision)
         }
-        // A request its Relay can't take now, paused, away or offline, or
-        // one behind a deployment still running after an hour, keeps
-        // waiting: the minute's poll drains it again.
-        const relay = yield* Effect.option(enabledRelay(request.relayId))
-        if (Option.isNone(relay)) return
-        if (relayConnectionFeatures(relay.value.id).size === 0) return
-        if (!(yield* awaitRunningDeployment(appId))) return
-        // An app deploys from GitHub or from an image, so at most one of
-        // these deploys; the other finds nothing to do.
-        const outcomes = [
-          ...(request.imageUpdate
-            ? [yield* deployRequested(key, appId, request.relayId, "update")]
-            : []),
-          ...(request.push || request.poll
-            ? [
-                yield* deployRequested(
-                  key,
-                  appId,
-                  request.relayId,
-                  request.push ? "push" : "poll"
-                ),
-              ]
-            : []),
-        ]
-        // Its Relay went away while it waited: kept for the minute's poll.
-        if (outcomes.includes("away")) return
-        // Another deployment started first, as a person's: wait for it and
-        // try again, the request kept.
-        if (outcomes.includes("waiting")) continue
-        yield* settleAppDeploymentRequestEffect(appId, request.revision)
-      }
-    }).pipe(
-      Effect.catchCause((cause) =>
-        logException(Cause.squash(cause), {
-          operation: "Apps.deploy.drain",
-          attributes: { "app.id": appId, "relay.id": relayId },
-        })
-      ),
-      Effect.ensuring(Effect.sync(stop))
+      }).pipe(
+        Effect.catchCause((cause) =>
+          logException(Cause.squash(cause), {
+            operation: "Apps.deploy.drain",
+            attributes: { "app.id": appId, "relay.id": relayId },
+          })
+        ),
+        Effect.ensuring(Effect.sync(stop))
+      )
     )
   )
 }
@@ -870,29 +888,32 @@ export const startAppDeploymentWhenReadyEffect = Effect.fn(
   if (app && !app.provisioning) {
     return yield* startAppDeploymentEffect(request)
   }
-  forkAppWorker(
-    Effect.gen(function* () {
-      const deadline = (yield* Clock.currentTimeMillis) + provisionLimitMs
-      while ((yield* Clock.currentTimeMillis) < deadline) {
-        yield* Effect.sleep(followInterval)
-        const current = yield* readRelayApp(relay, request.appId).pipe(
-          Effect.catch(() => Effect.succeed(undefined))
+  // Waits on its own for the App to be ready, then deploys in its own lanes.
+  outsideOperation(() =>
+    forkAppWorker(
+      Effect.gen(function* () {
+        const deadline = (yield* Clock.currentTimeMillis) + provisionLimitMs
+        while ((yield* Clock.currentTimeMillis) < deadline) {
+          yield* Effect.sleep(followInterval)
+          const current = yield* readRelayApp(relay, request.appId).pipe(
+            Effect.catch(() => Effect.succeed(undefined))
+          )
+          // Gone, or its provisioning failed: nothing to deploy.
+          if (current === null || current?.provisioning?.phase === "failed") {
+            return
+          }
+          if (current && !current.provisioning) {
+            yield* startAppDeploymentEffect({ ...request, background: true })
+            return
+          }
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          logException(Cause.squash(cause), {
+            operation: "Apps.deploy.whenReady",
+            attributes: { "app.id": request.appId },
+          })
         )
-        // Gone, or its provisioning failed: nothing to deploy.
-        if (current === null || current?.provisioning?.phase === "failed") {
-          return
-        }
-        if (current && !current.provisioning) {
-          yield* startAppDeploymentEffect({ ...request, background: true })
-          return
-        }
-      }
-    }).pipe(
-      Effect.catchCause((cause) =>
-        logException(Cause.squash(cause), {
-          operation: "Apps.deploy.whenReady",
-          attributes: { "app.id": request.appId },
-        })
       )
     )
   )
