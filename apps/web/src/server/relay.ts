@@ -522,7 +522,7 @@ export const updateInstanceName = createServerFn({ method: "POST" })
   .validator(instanceNameInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(renameInstance, data, {
-      user: await requireEligibleResourceUser(),
+      user: await instanceSessionUser(),
     })
   )
 
@@ -661,7 +661,7 @@ export const removeInstanceDatabaseConnection = createServerFn({
   .validator(removeDatabaseConnectionInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(disconnectInstanceDatabase, data, {
-      user: await requireEligibleResourceUser(),
+      user: await instanceSessionUser(),
     })
   )
 
@@ -763,7 +763,7 @@ export const updateInstanceWebRoutes = createServerFn({ method: "POST" })
   .validator(instanceWebRoutesSchema)
   .handler(async ({ data }) =>
     runOperationPromise(saveInstanceWebRoutes, data, {
-      user: await requireEligibleResourceUser(),
+      user: await instanceSessionUser(),
     })
   )
 
@@ -828,7 +828,7 @@ export const updateInstancePorts = createServerFn({ method: "POST" })
   .validator(portsInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(changeInstancePorts, data, {
-      user: await requireEligibleResourceUser(),
+      user: await instanceSessionUser(),
     })
   )
 
@@ -881,7 +881,7 @@ export const reserveInstancePort = createServerFn({ method: "POST" })
   .validator(portLeaseInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(leaseInstancePort, data, {
-      user: await requireEligibleResourceUser(),
+      user: await instanceSessionUser(),
     })
   )
 
@@ -938,7 +938,7 @@ export const releaseInstancePort = createServerFn({ method: "POST" })
   .validator(portLeaseReleaseInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(releaseInstancePortLease, data, {
-      user: await requireEligibleResourceUser(),
+      user: await instanceSessionUser(),
     })
   )
 
@@ -1307,7 +1307,7 @@ export const performRelayAction = createServerFn({ method: "POST" })
   .validator(actionInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(powerInstance, data, {
-      user: await requireEligibleResourceUser(),
+      user: await instanceSessionUser(),
     })
   )
 
@@ -1720,7 +1720,14 @@ function instanceRelayAccess(relayId: string) {
 }
 
 async function findInstanceRelay(relayId: string) {
-  const user = await Effect.runPromise(
+  const user = await instanceSessionUser()
+  return { relay: await instanceRelay(relayId), user }
+}
+
+// The signed-in person, refused as expected rather than as a failure when
+// the session is gone.
+function instanceSessionUser() {
+  return Effect.runPromise(
     Effect.tryPromise({
       try: requireEligibleResourceUser,
       catch: (cause) =>
@@ -1730,7 +1737,6 @@ async function findInstanceRelay(relayId: string) {
         }),
     })
   )
-  return { relay: await instanceRelay(relayId), user }
 }
 
 function instanceRelay(relayId: string) {
