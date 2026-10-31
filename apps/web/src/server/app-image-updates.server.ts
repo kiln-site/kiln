@@ -9,9 +9,11 @@ import {
   startAppDeploymentEffect,
 } from "@/lib/app-deployments.server"
 import {
-  checkAppImageEffect,
+  askAppImageEffect,
   recheckAppImage,
+  recordCheckedAppImageEffect,
   resolveAppImageUpdateNotificationsEffect,
+  type AppImageAnswer,
 } from "@/lib/app-image-updates.server"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { authorizedAppFor } from "@/server/app-access"
@@ -49,15 +51,31 @@ export async function saveAppImageUpdatePolicyHandler(
   publishAppDeploymentChange(relay.id)
 }
 
-/** Checks the app's tag now. */
-export async function checkAppImageUpdateHandler(
+/**
+ * Asks about the app's tag now, holding no lane while registries answer;
+ * `recordAppImageCheckHandler` records the answer holding the app.
+ */
+export async function askAppImageUpdateHandler(
   user: AuthenticatedUser,
   data: AppInput
 ) {
   const { app, relay } = await imageApp(user, data)
+  return runAppEffect(
+    "apps.imageUpdates.askApp",
+    askAppImageEffect(relay, app.appId)
+  )
+}
+
+export async function recordAppImageCheckHandler(
+  user: AuthenticatedUser,
+  data: AppInput & {
+    asked: { answers: ReadonlyArray<AppImageAnswer>; unchecked: boolean }
+  }
+) {
+  const { app, relay } = await imageApp(user, data)
   await runAppEffect(
-    "apps.imageUpdates.checkApp",
-    checkAppImageEffect(relay, app.appId, user.id)
+    "apps.imageUpdates.recordApp",
+    recordCheckedAppImageEffect(relay, app.appId, data.asked, user.id)
   )
   publishAppDeploymentChange(relay.id)
 }

@@ -762,50 +762,22 @@ function drainAppDeployments(appId: string, relayId: string): void {
                 ]
               : []),
           ]
+          // Its Relay went away while it waited: kept for the minute's poll.
+          if (outcomes.includes("away")) return
           // Another deployment started first, as a person's: wait for it and
           // try again, the request kept.
           if (outcomes.includes("waiting")) continue
           yield* settleAppDeploymentRequestEffect(appId, request.revision)
         }
-        // A request its Relay can't take now, paused, away or offline, or
-        // one behind a deployment still running after an hour, keeps
-        // waiting: the minute's poll drains it again.
-        const relay = yield* Effect.option(enabledRelay(request.relayId))
-        if (Option.isNone(relay)) return
-        if (relayConnectionFeatures(relay.value.id).size === 0) return
-        if (!(yield* awaitRunningDeployment(appId))) return
-        // An app deploys from GitHub or from an image, so at most one of
-        // these deploys; the other finds nothing to do.
-        const outcomes = [
-          ...(request.imageUpdate
-            ? [yield* deployRequested(key, appId, request.relayId, "update")]
-            : []),
-          ...(request.push || request.poll
-            ? [
-                yield* deployRequested(
-                  key,
-                  appId,
-                  request.relayId,
-                  request.push ? "push" : "poll"
-                ),
-              ]
-            : []),
-        ]
-        // Its Relay went away while it waited: kept for the minute's poll.
-        if (outcomes.includes("away")) return
-        // Another deployment started first, as a person's: wait for it and
-        // try again, the request kept.
-        if (outcomes.includes("waiting")) continue
-        yield* settleAppDeploymentRequestEffect(appId, request.revision)
-      }
-    }).pipe(
-      Effect.catchCause((cause) =>
-        logException(Cause.squash(cause), {
-          operation: "Apps.deploy.drain",
-          attributes: { "app.id": appId, "relay.id": relayId },
-        })
-      ),
-      Effect.ensuring(Effect.sync(stop))
+      }).pipe(
+        Effect.catchCause((cause) =>
+          logException(Cause.squash(cause), {
+            operation: "Apps.deploy.drain",
+            attributes: { "app.id": appId, "relay.id": relayId },
+          })
+        ),
+        Effect.ensuring(Effect.sync(stop))
+      )
     )
   )
 }

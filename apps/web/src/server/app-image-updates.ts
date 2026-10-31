@@ -12,7 +12,8 @@ import { runOperationPromise } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceOperation } from "@/server/resource-operation.server"
 import {
-  checkAppImageUpdateHandler,
+  askAppImageUpdateHandler,
+  recordAppImageCheckHandler,
   deployAppImageUpdateHandler,
   saveAppImageUpdatePolicyHandler,
   skipAppImageUpdateHandler,
@@ -55,10 +56,12 @@ const savePolicy = imageOperation(
   (user, input: z.infer<typeof policyInputSchema>) =>
     saveAppImageUpdatePolicyHandler(user, input)
 )
-const checkNow = imageOperation(
+// Records a check asked for just before, so the App is held only while the
+// answer is recorded, not while registries answer.
+const recordCheck = imageOperation(
   "app.imageUpdates.check",
   "Checking this App's image",
-  checkAppImageUpdateHandler
+  recordAppImageCheckHandler
 )
 const skipUpdate = imageOperation(
   "app.imageUpdates.skip",
@@ -83,11 +86,11 @@ export const saveAppImageUpdatePolicy = createServerFn({ method: "POST" })
 
 export const checkAppImageUpdate = createServerFn({ method: "POST" })
   .validator(appInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(checkNow, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    const asked = await askAppImageUpdateHandler(user, data)
+    return runOperationPromise(recordCheck, { ...data, asked }, { user })
+  })
 
 export const skipAppImageUpdate = createServerFn({ method: "POST" })
   .validator(skipInputSchema)
