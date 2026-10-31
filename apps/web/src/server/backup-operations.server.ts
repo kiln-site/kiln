@@ -3,7 +3,9 @@ import { Effect } from "effect"
 import {
   getBackupCatalogRecordEffect,
   getBackupForTaskEffect,
+  getBackupPolicyEffect,
 } from "@/effect/backups"
+import { kilnInstallationId } from "@/effect/installation"
 import { promiseEffect } from "@/effect/promise"
 import {
   isPlatformAdmin,
@@ -201,8 +203,8 @@ export const backUpResource = operation<ResourceBackupInput>()({
   }),
 })
 
-// An App's folder and the volumes it owns, together. Each settles its own
-// destination unless one was chosen for all.
+// An App's folder and the volumes it owns, together, to the destinations
+// chosen for them or the App's preferred one.
 export const backUpApp = operation<{
   appId: string
   consistency: "live" | "stopped"
@@ -220,13 +222,30 @@ export const backUpApp = operation<{
         { id: input.appId, kind: "app" },
         "backup.create"
       )
+    ).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(async () => ({
+          storageIds: await resolveBackupStorageSelection({
+            relayId: input.relayId,
+            storageIds: input.storageIds,
+            targetId: input.appId,
+            targetKind: "app",
+          }),
+          user: person,
+        }))
+      )
     ),
-  locks: ({ input }) => [
+  locks: ({ context, input }) => [
     shared(backupTargetKey(input.relayId, { id: input.appId, kind: "app" })),
-    ...destinations(input.storageIds),
+    ...destinations(context.storageIds),
   ],
-  run: ({ context: user, input }) =>
-    promiseEffect(() => createAppBackupsHandler(user, input)),
+  run: ({ context, input }) =>
+    promiseEffect(() =>
+      createAppBackupsHandler(context.user, {
+        ...input,
+        storageIds: context.storageIds,
+      })
+    ),
   audit: ({ input }) => ({
     id: input.appId,
     kind: "app",
@@ -237,22 +256,41 @@ export const backUpApp = operation<{
 export const backUpPlatform = operation<PlatformBackupInput>()({
   name: "backup.platform.create",
   doing: "Backing up Kiln",
-  authorize: ({ user }) =>
+  authorize: ({ input, user }) =>
     signedIn(user).pipe(
       Effect.filterOrFail(
         isPlatformAdmin,
         () => new Error("Platform backups require administrator access")
+      ),
+      Effect.flatMap((person) =>
+        Effect.gen(function* () {
+          const storageIds =
+            input.storageIds ??
+            (input.storageId === undefined
+              ? [
+                  (yield* getBackupPolicyEffect(
+                    input.relayId,
+                    "platform",
+                    kilnInstallationId()
+                  )).storageId,
+                ]
+              : [input.storageId])
+          return { storageIds, user: person }
+        })
       )
     ),
-  locks: ({ input }) => [
+  locks: ({ context, input }) => [
     shared(backupTargetKey(input.relayId, { id: "", kind: "platform" })),
-    ...destinations(
-      input.storageIds ??
-        (input.storageId === undefined ? undefined : [input.storageId])
-    ),
+    ...destinations(context.storageIds),
   ],
-  run: ({ context: user, input }) =>
-    promiseEffect(() => createPlatformBackupHandler(user, input)),
+  run: ({ context, input }) =>
+    promiseEffect(() =>
+      createPlatformBackupHandler(context.user, {
+        ...input,
+        storageId: undefined,
+        storageIds: context.storageIds,
+      })
+    ),
   audit: ({ input }) => ({
     id: "platform",
     kind: "platform",
@@ -266,7 +304,11 @@ export const backUpPlatform = operation<PlatformBackupInput>()({
 const restoreOperation = <A>(
   name: string,
   doing: string,
-  handler: (user: AuthenticatedUser, data: BackupRestoreInput) => Promise<A>
+  handler: (
+    user: AuthenticatedUser,
+    data: BackupRestoreInput,
+    settledSafetyStorageIds?: ReadonlyArray<string | null>
+  ) => Promise<A>
 ) =>
   operation<BackupRestoreInput>()({
     name,
@@ -298,8 +340,15 @@ const restoreOperation = <A>(
       ),
     locks: ({ context: { backup, storageIds } }) =>
       backup ? [...restoreLocks(backup), ...destinations(storageIds)] : [],
+    // Its safety backup goes to the destinations it holds.
     run: ({ context, input }) =>
-      promiseEffect(() => handler(context.user, input)),
+      promiseEffect(() =>
+        handler(
+          context.user,
+          input,
+          input.safetyBackup ? context.storageIds : undefined
+        )
+      ),
     audit: ({ context: { backup } }) =>
       backup
         ? {

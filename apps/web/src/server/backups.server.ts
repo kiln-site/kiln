@@ -739,7 +739,10 @@ export async function getBackupDownloadUrlHandler(
 
 export async function restoreInstanceBackupHandler(
   user: AuthenticatedUser,
-  data: BackupRestoreInput
+  data: BackupRestoreInput,
+  // Where its safety backup goes, when settled before; the target's
+  // preferred destination otherwise.
+  settledSafetyStorageIds?: ReadonlyArray<string | null>
 ) {
   const backup = await runAppEffect(
     "backups.getForRestore",
@@ -783,6 +786,7 @@ export async function restoreInstanceBackupHandler(
   const safetyStorageIds = data.safetyBackup
     ? await resolveAuthorizedBackupStorageSelection({
         relayId: relay.id,
+        storageIds: settledSafetyStorageIds,
         targetId: backup.targetId,
         targetKind: "instance",
         user,
@@ -842,7 +846,10 @@ export async function restoreInstanceBackupHandler(
 
 export async function restoreDatabaseBackupHandler(
   user: AuthenticatedUser,
-  data: BackupRestoreInput
+  data: BackupRestoreInput,
+  // Where its safety backup goes, when settled before; the target's
+  // preferred destination otherwise.
+  settledSafetyStorageIds?: ReadonlyArray<string | null>
 ) {
   const backup = await runAppEffect(
     "backups.getForDatabaseRestore",
@@ -883,6 +890,7 @@ export async function restoreDatabaseBackupHandler(
   const safetyStorageIds = data.safetyBackup
     ? await resolveAuthorizedBackupStorageSelection({
         relayId: relay.id,
+        storageIds: settledSafetyStorageIds,
         targetId: backup.targetId,
         targetKind: "database",
         user,
@@ -944,7 +952,10 @@ export async function restoreDatabaseBackupHandler(
  */
 export async function restoreResourceBackupHandler(
   user: AuthenticatedUser,
-  data: BackupRestoreInput
+  data: BackupRestoreInput,
+  // Where its safety backup goes, when settled before; the target's
+  // preferred destination otherwise.
+  settledSafetyStorageIds?: ReadonlyArray<string | null>
 ) {
   const backup = await runAppEffect(
     "backups.getForResourceRestore",
@@ -968,6 +979,7 @@ export async function restoreResourceBackupHandler(
   const safetyStorageIds = data.safetyBackup
     ? await resolveAuthorizedBackupStorageSelection({
         relayId: relay.id,
+        storageIds: settledSafetyStorageIds,
         targetId: target.id,
         targetKind: target.kind,
         user,
