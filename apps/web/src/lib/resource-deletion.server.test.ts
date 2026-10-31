@@ -1,5 +1,5 @@
 import { assert, layer } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Schedule } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
 
@@ -10,6 +10,7 @@ import { inLanes } from "@/operations/operation"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql } from "@/test/database"
+import { selectRows } from "@/test/seed"
 import {
   appId,
   appRecords,
@@ -30,6 +31,7 @@ import {
 import {
   deleteResource,
   keepResource,
+  reconcileResourceDeletions,
   requestResourceDeletionEffect,
 } from "./resource-deletion.server"
 
@@ -227,19 +229,17 @@ describeMysql("Deleting a game server or database", () => {
             user: owner,
           })
 
-          // It waits, asking again for the build to stop, rather than being
-          // refused; once both are done, it deletes the App.
-          yield* Effect.sync(
-            () =>
-              relay.changes.filter(
-                (change) => change === "app.deployment.abort"
-              ).length
-          ).pipe(
-            Effect.repeat({
-              schedule: Schedule.spaced("100 millis"),
-              until: (asked) => asked >= 2,
-            }),
-            Effect.timeout("10 seconds")
+          // It asked for the build to stop, and waits its turn rather than
+          // being refused: queued once, however often it's taken up again.
+          assert.deepStrictEqual(relay.changes, ["app.deployment.abort"])
+          yield* reconcileResourceDeletions()
+          yield* reconcileResourceDeletions()
+          const queued = (yield* selectRows<{ kind: string; state: string }>(
+            "operation"
+          )).filter((row) => row.kind === "resource.delete")
+          assert.deepStrictEqual(
+            queued.map((row) => row.state),
+            ["waiting"]
           )
           yield* Deferred.succeed(ended, undefined)
           yield* Fiber.join(running)

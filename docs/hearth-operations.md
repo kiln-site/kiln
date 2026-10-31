@@ -236,10 +236,11 @@ commit made then, neither kept in the operation's steps, which are stored
 in the clear; a reply lost to a restart is read back (`relayCommand`), not
 sent again. Deleting an App stops its build on the Relay first
 (`app.deployment.abort`), for as long as whoever asked may delete it, then
-waits its turn as Hearth's own work rather than being refused by the
-deployment it stopped, which ends once it sees that, or by one queued
-behind it, which finds the App being deleted; it asks again for the build
-to stop meanwhile, and a deployment won't send once the deletion began.
+is queued (`queueDurableOperation`, once under its attempt) to take its
+turn as Hearth's own work, rather than be refused by the deployment it
+stopped, which ends once it sees that, or by one queued behind it, which
+finds the App being deleted; a deployment won't send once the deletion
+began.
 
 A GitHub sync's run holds the sync's `#files`, and shared its `#settings`,
 its target and its connection, from reading GitHub to recording what it
