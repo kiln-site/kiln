@@ -140,7 +140,9 @@ the least that keeps it safe (`resourceOperation`'s `lock`):
   wiping, restoring, importing.
 - **A part, exclusive**, for one kind of change applied on the Relay and
   saved in Hearth in turn, which another of its kind mustn't interleave
-  with: `#power`, `#config`, `#name`, `#ports`.
+  with: `#power`, `#config`, `#name`, `#ports`, and a database's
+  `#credentials` and `#connections`. Wiping a database replaces it, so it
+  holds the whole.
 - **The whole, shared**, for everything the Relay or the database already
   keeps in order: file writes, port reservations, database connections.
 

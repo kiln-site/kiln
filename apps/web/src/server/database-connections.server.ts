@@ -102,9 +102,10 @@ interface DatabaseConnectionInput {
 }
 
 // Connects a game server, an App, or another database to the database, or
-// disconnects it, from either end. It changes both, so it holds both and needs both ends'
-// network permissions; an App's also holds its Relay's handover of Apps'
-// database connections, which it may finish first.
+// disconnects it, from either end. It changes both ends' connections, so it
+// holds the database's `#connections` (and a database member's) and needs
+// both ends' network permissions; an App's also holds its Relay's handover
+// of Apps' database connections, which it may finish first.
 export const connectDatabase = operation<DatabaseConnectionInput>()({
   name: "database.network.update",
   doing: "Changing this database's connections",
@@ -133,11 +134,23 @@ export const connectDatabase = operation<DatabaseConnectionInput>()({
       )
     ),
   locks: ({ input }) => [
-    exclusive(resourceKey("database", input.relayId, input.databaseId)),
+    // Its connections, one change at a time, beside the database's other
+    // everyday changes; its Relay keeps the network in order.
+    exclusive(
+      partKey(
+        resourceKey("database", input.relayId, input.databaseId),
+        "connections"
+      )
+    ),
     // A game server or App joining it is everyday work its Relay keeps in
-    // order; a database member holds itself whole until its own change.
+    // order; a database member's connections change too.
     input.member.kind === "database"
-      ? exclusive(resourceKey("database", input.relayId, input.member.id))
+      ? exclusive(
+          partKey(
+            resourceKey("database", input.relayId, input.member.id),
+            "connections"
+          )
+        )
       : shared(resourceKey(input.member.kind, input.relayId, input.member.id)),
     ...(input.member.kind === "app"
       ? [exclusive(partKey(relayKey(input.relayId), "database-connections"))]
