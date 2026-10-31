@@ -79,15 +79,24 @@ export interface AppDeploymentRequest {
   /** Started where nobody sees its failure, which is recorded instead. */
   background?: boolean
   /**
-   * Fails with `DeploymentStillRunning`, deploying nothing, when another
-   * deployment of the app runs, as one a person started since: the queue's
-   * request then waits for it rather than being refused.
+   * From the deployment queue: fails with `DeploymentDeferred`, deploying
+   * nothing, when it can't deploy now, so its request is kept rather than
+   * spent: its Relay is paused or offline, or another deployment of the app
+   * runs, as one a person started since.
    */
-  deferIfRunning?: boolean
+  deferUnlessReady?: boolean
 }
 
-/** Another deployment of the app runs; the request waits for it. */
-export class DeploymentStillRunning extends Error {}
+/** A queued request that can't deploy now, and why. */
+export class DeploymentDeferred extends Error {
+  constructor(readonly reason: "relay" | "running") {
+    super(
+      reason === "relay"
+        ? "The Relay can't take a deployment now"
+        : "Another deployment is running"
+    )
+  }
+}
 
 export function publishAppDeploymentChange(relayId: string): void {
   publishRealtimeChange({
@@ -115,13 +124,20 @@ export const startAppDeploymentEffect = Effect.fn("Apps.deploy")(function* (
     "app.deployment.trigger": request.trigger,
     "relay.id": request.relayId,
   })
-  const relay = yield* enabledRelay(request.relayId)
-  if (request.deferIfRunning) {
+  if (request.deferUnlessReady) {
+    const available = yield* Effect.option(enabledRelay(request.relayId))
+    if (
+      Option.isNone(available) ||
+      relayConnectionFeatures(available.value.id).size === 0
+    ) {
+      return yield* Effect.fail(new DeploymentDeferred("relay"))
+    }
     const { latest } = yield* latestAppDeploymentsEffect(request.appId)
     if (latest?.status === "running") {
-      return yield* Effect.fail(new DeploymentStillRunning())
+      return yield* Effect.fail(new DeploymentDeferred("running"))
     }
   }
+  const relay = yield* enabledRelay(request.relayId)
   const automatic = request.trigger === "push" || request.trigger === "poll"
   const autoUpdate = request.trigger === "update" && request.userId === null
   // Nobody watches these, so a refusal is recorded instead.
@@ -729,6 +745,8 @@ function drainAppDeployments(appId: string, relayId: string): void {
               ]
             : []),
         ]
+        // Its Relay went away while it waited: kept for the minute's poll.
+        if (outcomes.includes("away")) return
         // Another deployment started first, as a person's: wait for it and
         // try again, the request kept.
         if (outcomes.includes("waiting")) continue
@@ -747,8 +765,8 @@ function drainAppDeployments(appId: string, relayId: string): void {
 }
 
 // Starts what a request asks for: it's settled once the deployment started,
-// had nothing to do, or failed where its history shows it, and waits when
-// another deployment runs.
+// had nothing to do, or failed where its history shows it; it waits when
+// another deployment runs, and for the next poll when its Relay is away.
 const deployRequested = (
   key: string,
   appId: string,
@@ -757,7 +775,7 @@ const deployRequested = (
 ) =>
   startAppDeploymentEffect({
     appId,
-    deferIfRunning: true,
+    deferUnlessReady: true,
     relayId,
     trigger,
     userId: null,
@@ -767,8 +785,10 @@ const deployRequested = (
     Effect.as("settled" as const),
     Effect.catchCause((cause) => {
       const failure = Cause.squash(cause)
-      if (failure instanceof DeploymentStillRunning) {
-        return Effect.succeed("waiting" as const)
+      if (failure instanceof DeploymentDeferred) {
+        return Effect.succeed(
+          failure.reason === "relay" ? ("away" as const) : ("waiting" as const)
+        )
       }
       // A failing poll fails again every minute, so only a new failure
       // reaches telemetry, until a poll gets through.
