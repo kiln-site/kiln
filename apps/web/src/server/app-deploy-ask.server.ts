@@ -5,7 +5,7 @@ import { resourceOperation } from "@/server/resource-operation.server"
 
 export interface AppDeployAsk {
   appId: string
-  /** A redeploy's commit, and the repository and branch it's from. */
+  /** A redeploy's commit, and the repository it was of. */
   commit?: { sha: string; source: string }
   /** A redeploy's digest, and the image it was of. */
   image?: { digest: string; source: string }

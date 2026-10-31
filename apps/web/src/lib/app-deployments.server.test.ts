@@ -26,6 +26,8 @@ const relay = vi.hoisted(() => ({
   configs: [] as Array<{ environment?: string } | undefined>,
   deployments: new Map<string, { id: string; state: string }>(),
   journal: new Map<string, { result: unknown; status: "succeeded" }>(),
+  // Apps it doesn't have, as one whose provisioning failed.
+  missing: new Set<string>(),
   sent: [] as Array<string>,
 }))
 
@@ -69,6 +71,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     }
     if (operation === "app.list") {
       const id = payload.requests![0]!.id
+      if (relay.missing.has(id)) return []
       return [{ app: relayApp(id), id, view: "detail" }]
     }
     return {}
@@ -86,6 +89,7 @@ const second = "b".repeat(40)
 const third = "c".repeat(40)
 const fourth = "d".repeat(40)
 const fifth = "e".repeat(40)
+const sixth = "f".repeat(40)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -142,11 +146,18 @@ const seedApp = (appId: string) =>
 const ask = (
   appId: string,
   trigger: "manual" | "update" = "manual",
-  userId: string | null = null
+  userId: string | null = null,
+  awaitProvisioning = false
 ) =>
   Effect.promise(() => import("@/lib/app-deployments.server")).pipe(
     Effect.flatMap(({ askAppDeploymentEffect }) =>
-      askAppDeploymentEffect({ appId, relayId, trigger, userId })
+      askAppDeploymentEffect({
+        appId,
+        awaitProvisioning,
+        relayId,
+        trigger,
+        userId,
+      })
     )
   )
 const deploy = (appId: string) => ask(appId)
@@ -279,6 +290,43 @@ describeMysql("App deployments", () => {
           assert.strictEqual(refused?.status, "failed")
           assert.strictEqual(refused?.triggeredBy, "removed-person")
           assert.strictEqual(sentTo(fifth), 0)
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "take a new app's first ask though it never provisioned, so the next deploys",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.sent.length = 0
+          relay.missing.add(sixth)
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* seedApp(sixth)
+
+          // Its Relay doesn't have it: its first deploy gives up, taking
+          // the ask with it.
+          yield* ask(sixth, "manual", null, true)
+          yield* Effect.suspend(() =>
+            loadAppDeploymentRequestEffect(sixth)
+          ).pipe(
+            Effect.repeat({
+              schedule: Schedule.spaced("100 millis"),
+              until: (pending) => pending === null,
+            }),
+            Effect.timeout("20 seconds")
+          )
+
+          // Asked again once it's there, it deploys.
+          relay.missing.delete(sixth)
+          yield* ask(sixth)
+          yield* until(() => sentTo(sixth) === 1)
         }).pipe(TestClock.withLive),
       60_000
     )

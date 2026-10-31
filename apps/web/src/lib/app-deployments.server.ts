@@ -44,7 +44,7 @@ import {
   loadAppImageUpdateEffect,
 } from "@/effect/app-image-updates"
 import type { Database } from "@/effect/database"
-import { ExternalServiceError } from "@/effect/errors"
+import { DatabaseError, ExternalServiceError } from "@/effect/errors"
 import {
   getGitHubCommitEffect,
   githubInstallationTokenEffect,
@@ -64,7 +64,11 @@ import {
 import { forkAppWorker } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
 import { outsideOperation } from "@/operations/current"
-import { durableOperation, queueDurableOperation } from "@/operations/durable"
+import {
+  durableOperation,
+  queueDurableOperation,
+  whileMySqlIsAway,
+} from "@/operations/durable"
 import { currentActingUser } from "@/operations/acting-user"
 import { developmentBypassUserId } from "@/lib/development-bypass"
 import { loadOperation } from "@/operations/records"
@@ -309,7 +313,11 @@ const recordRefusal = (
           triggeredBy: request.userId,
         }) satisfies AppDeploymentRecord
     ),
-    Effect.tap(insertAppDeploymentEffect),
+    Effect.tap((record) =>
+      insertAppDeploymentEffect(record).pipe(
+        Effect.retry({ schedule: whileMySqlIsAway })
+      )
+    ),
     Effect.tap(() => Effect.sync(() => publishAppDeploymentChange(relayId))),
     Effect.flatMap((record) => announceDeploymentEffect(record, "failed")),
     Effect.ignore
@@ -696,6 +704,9 @@ export const deployAppOperation = durableOperation({
 
 const deploySteps = (input: DeployInput, id: string) =>
   Effect.gen(function* () {
+    // A new app that never finished provisioning still takes its ask, so
+    // none waits on it: refused, or nothing for one that's gone.
+    let unready: "gone" | "waiting" | null = null
     if (input.awaitProvisioning) {
       for (let window = 0; ; window++) {
         const state = yield* Activity.make({
@@ -707,9 +718,11 @@ const deploySteps = (input: DeployInput, id: string) =>
             () => followInterval
           ),
         })
-        if (state === "gone") return
         if (state === "ready") break
-        if (window + 1 >= provisionWindows) return
+        if (state === "gone" || window + 1 >= provisionWindows) {
+          unready = state
+          break
+        }
       }
     }
     // Taken only once its Relay is there to deploy it, so an ask made while
@@ -729,7 +742,7 @@ const deploySteps = (input: DeployInput, id: string) =>
     const plan = yield* Activity.make({
       name: "plan",
       success: Schema.NullOr(DeployPlan),
-      execute: takeTurn(input, id),
+      execute: takeTurn(input, id, unready),
     })
     if (plan) yield* deployPlanned(input, plan)
   })
@@ -783,57 +796,89 @@ const provisioningState = (input: DeployInput) =>
 
 // Takes what the app's request asks and decides what that deploys, as one
 // step: nothing for an app being deleted, which settles what was asked, so
-// an ask after a deletion that failed or was kept starts afresh. A failure
-// is recorded as a deployment, for whoever looks; a poll's, every minute,
-// isn't.
-const takeTurn = (input: DeployInput, id: string) =>
+// an ask after a deletion that failed or was kept starts afresh. Once it's
+// taken, MySQL going away is waited out, and any other failure is recorded
+// as a deployment, for whoever looks, so no ask taken is lost unseen; a
+// poll's, every minute, is only logged.
+const takeTurn = (
+  input: DeployInput,
+  id: string,
+  unready: "gone" | "waiting" | null
+) =>
   Effect.gen(function* () {
-    const taken = yield* takeAppDeploymentRequestEffect(input.appId, id)
-    if (!taken) return null
-    const deletion = yield* findResourceDeletionEffect(
-      input.relayId,
-      "app",
-      input.appId
+    const taken = yield* takeAppDeploymentRequestEffect(input.appId, id).pipe(
+      Effect.retry({ schedule: whileMySqlIsAway })
     )
-    if (
-      deletion &&
-      unfinishedDeletionStatuses.some((status) => status === deletion.status)
-    ) {
-      return null
+    if (!taken) return null
+    const asked: AppDeploymentRequest = {
+      appId: input.appId,
+      relayId: input.relayId,
+      trigger:
+        taken.trigger === "push" || taken.trigger === "poll"
+          ? taken.requestedBy
+            ? "manual"
+            : taken.trigger
+          : taken.trigger,
+      userId: taken.requestedBy,
     }
-    const asked = yield* askedDeployment(input, taken)
-    if (!asked) return null
-    const { request } = asked
-    const plan = yield* Effect.gen(function* () {
-      if (asked.refused) return yield* Effect.fail(asked.refused)
+    let request = asked
+    return yield* Effect.gen(function* () {
+      const deletion = yield* findResourceDeletionEffect(
+        input.relayId,
+        "app",
+        input.appId
+      )
+      if (
+        unready === "gone" ||
+        (deletion &&
+          unfinishedDeletionStatuses.some(
+            (status) => status === deletion.status
+          ))
+      ) {
+        return null
+      }
+      if (unready === "waiting") {
+        return yield* Effect.fail(
+          new Error("The app was still being set up; deploy it once it's ready")
+        )
+      }
+      const decided = yield* askedDeployment(input, taken)
+      if (!decided) return null
+      request = decided.request
+      if (decided.refused) return yield* Effect.fail(decided.refused)
       // Its Relay joins the deployment to the databases it keeps for the
       // app, so it must have them first: Hearth's own step, in its lanes.
       const relay = yield* enabledRelay(input.relayId)
       yield* promiseEffect(() =>
         outsideOperation(() => ensureAppDatabaseConnectionsImported(relay))
       )
-      return yield* prepareAppDeploymentEffect(request, id)
+      const plan = yield* prepareAppDeploymentEffect(request, id)
+      if (plan && request.trigger === "poll") {
+        pollFailures.delete(`${input.relayId}:${input.appId}`)
+      }
+      return plan
     }).pipe(
-      Effect.catch((cause) => {
+      Effect.retry({
+        schedule: whileMySqlIsAway,
+        while: (cause) => cause instanceof DatabaseError,
+      }),
+      Effect.catchCause((cause) => {
+        const failure = Cause.squash(cause)
         if (request.trigger !== "poll") {
-          return recordRefusal(request, input.relayId, cause).pipe(
+          return recordRefusal(request, input.relayId, failure).pipe(
             Effect.as(null)
           )
         }
         const key = `${input.relayId}:${input.appId}`
-        const message = errorMessage(cause)
+        const message = errorMessage(failure)
         if (pollFailures.get(key) === message) return Effect.succeed(null)
         pollFailures.set(key, message)
-        return logException(cause, {
+        return logException(failure, {
           operation: "Apps.deploy.poll",
           attributes: { "app.id": input.appId, "relay.id": input.relayId },
         }).pipe(Effect.as(null))
       })
     )
-    if (plan && request.trigger === "poll") {
-      pollFailures.delete(`${input.relayId}:${input.appId}`)
-    }
-    return plan
   }).pipe(Effect.orDie)
 
 /**
@@ -923,7 +968,12 @@ const mayDeploy = (input: DeployInput, userId: string) =>
       )
   ).pipe(
     Effect.as(true),
-    Effect.catch(() => Effect.succeed(false))
+    // MySQL going away isn't a refusal; the turn waits it out.
+    Effect.catch((cause) =>
+      cause instanceof DatabaseError
+        ? Effect.fail(cause)
+        : Effect.succeed(false)
+    )
   )
 
 // Why a redeploy no longer applies: the app deploys from another
@@ -940,11 +990,11 @@ const redeployGone = (
         : new Error("The app deploys another image now; redeploy one of it")
     }
     if (taken.commitSha === null) return undefined
+    // Its source names the repository of the deployment it redeploys.
     const source = yield* loadAppGitHubSourceEffect(input.appId)
-    const repository = taken.commitSource?.split("/")[0]
     return config.sourceType === "github" &&
       source !== null &&
-      String(source.repositoryId) === repository
+      source.repository === taken.commitSource
       ? undefined
       : new Error(
           "The app deploys from another repository now; redeploy one of its commits"
@@ -958,6 +1008,7 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
     yield* Activity.make({
       name: "record",
       execute: insertAppDeploymentEffect(runningRecord(plan, null)).pipe(
+        Effect.retry({ schedule: whileMySqlIsAway }),
         Effect.tap(() =>
           Effect.sync(() => publishAppDeploymentChange(input.relayId))
         ),
@@ -1000,6 +1051,7 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
           return null
         }
         yield* recordRelayDeploymentEffect(plan.record.id, deploymentId).pipe(
+          Effect.retry({ schedule: whileMySqlIsAway }),
           Effect.orDie
         )
         publishAppDeploymentChange(input.relayId)
@@ -1105,11 +1157,12 @@ const finishPlanned = (
   outcome: { error: string; status: "failed" | "unknown" }
 ) =>
   Effect.gen(function* () {
+    const finishedAt = new Date(yield* Clock.currentTimeMillis).toISOString()
     const finished = yield* finishAppDeploymentEffect(plan.record.id, {
       ...outcome,
-      finishedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+      finishedAt,
       rolling: null,
-    })
+    }).pipe(Effect.retry({ schedule: whileMySqlIsAway }))
     if (!finished) return
     publishAppDeploymentChange(plan.record.relayId)
     yield* announceDeploymentEffect(runningRecord(plan, null), outcome.status)

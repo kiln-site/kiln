@@ -158,6 +158,25 @@ describeMysql("App deployment requests", () => {
             .revision
           yield* takeAppDeploymentRequestEffect(appId, "two")
           assert.isFalse(yield* cancelAppDeploymentRequestEffect(appId, taking))
+
+          // A newer ask, cancelled, leaves what was taken as it was: the
+          // deployment's step run again gets it back.
+          yield* requestAppDeploymentEffect({
+            appId,
+            commit: { sha: "d".repeat(40), source: "42/main" },
+            relayId,
+            trigger: "push",
+          })
+          const newer = (yield* loadAppDeploymentRequestEffect(appId))!.revision
+          assert.isTrue(yield* cancelAppDeploymentRequestEffect(appId, newer))
+          assert.deepInclude(
+            yield* takeAppDeploymentRequestEffect(appId, "two"),
+            {
+              commitSha: null,
+              requestedBy: "sam",
+              trigger: "manual",
+            }
+          )
         })
     )
 

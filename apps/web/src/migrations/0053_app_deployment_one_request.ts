@@ -8,8 +8,9 @@ import { databaseTableName } from "@/lib/database-config"
 // trigger and target winning: a push's or a redeploy's commit, a redeploy's
 // digest and the image it was of. A person's ask is kept, by who made it,
 // until a deployment takes it, and a deployment takes it as it plans, so
-// what's left is waiting. The kinds asked for, each a flag, become the
-// trigger of the newest.
+// what's left is waiting; what it took is kept apart (`taken_*`), so its
+// step run again gets it back whatever was asked since. The kinds asked
+// for, each a flag, become the trigger of the newest.
 export const appDeploymentOneRequest: Migration = {
   id: 53,
   name: "app_deployment_one_request",
@@ -44,6 +45,15 @@ export const appDeploymentOneRequest: Migration = {
     if (!(yield* has("taken_by"))) {
       yield* sql.unsafe(`ALTER TABLE \`${request}\`
   ADD COLUMN \`taken_by\` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL`)
+    }
+    if (!(yield* has("taken_trigger"))) {
+      yield* sql.unsafe(`ALTER TABLE \`${request}\`
+  ADD COLUMN \`taken_trigger\` enum('manual','poll','push','redeploy','update') DEFAULT NULL,
+  ADD COLUMN \`taken_commit_sha\` char(40) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+  ADD COLUMN \`taken_commit_source\` varchar(300) DEFAULT NULL,
+  ADD COLUMN \`taken_image_digest\` varchar(100) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+  ADD COLUMN \`taken_image_source\` varchar(512) DEFAULT NULL,
+  ADD COLUMN \`taken_requested_by\` varchar(36) DEFAULT NULL`)
     }
   }),
 }

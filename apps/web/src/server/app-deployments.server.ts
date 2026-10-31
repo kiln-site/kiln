@@ -445,23 +445,28 @@ export async function redeployAppDeploymentHandler(
 ) {
   const record = await recordFor(data.deploymentId)
   const { app, relay } = await authorizedAppFor(user, record, "app.manage")
-  // What it came from, so it isn't deployed once the app deploys from
-  // another repository or image.
-  const source = record.commitSha
-    ? await runAppEffect(
-        "apps.github.source",
-        loadAppGitHubSourceEffect(record.appId)
+  // A commit only of the repository the app deploys from now, which its
+  // deployment names, and again once its turn comes.
+  if (record.commitSha) {
+    const source = await runAppEffect(
+      "apps.github.source",
+      loadAppGitHubSourceEffect(record.appId)
+    )
+    if (
+      app.config.sourceType !== "github" ||
+      source?.repository !== record.repository
+    ) {
+      throw new Error(
+        "This deployment was of another repository; redeploy one of the app's own"
       )
-    : null
+    }
+  }
   return runOperationPromise(
     askAppDeploy,
     {
       appId: record.appId,
       ...(record.commitSha && {
-        commit: {
-          sha: record.commitSha,
-          source: `${source?.repositoryId ?? ""}/${source?.branch ?? ""}`,
-        },
+        commit: { sha: record.commitSha, source: record.repository ?? "" },
       }),
       ...(record.imageDigest && {
         image: { digest: record.imageDigest, source: app.config.image },

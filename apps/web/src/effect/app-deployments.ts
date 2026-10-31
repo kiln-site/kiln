@@ -492,9 +492,9 @@ export interface AppDeploymentRequestRow {
   readonly acknowledgedRevision: number
   readonly appId: string
   /**
-   * The commit a push named, or a redeploy redeploys, and where it's from:
-   * `<repository ID>/<branch>`. Without one, a GitHub app deploys its
-   * branch's head.
+   * The commit a push named, and where it's from, `<repository ID>/<branch>`,
+   * or the commit a redeploy redeploys, and the repository it was of.
+   * Without one, a GitHub app deploys its branch's newest.
    */
   readonly commitSha: string | null
   readonly commitSource: string | null
@@ -512,6 +512,16 @@ export interface AppDeploymentRequestRow {
   readonly trigger: AppDeploymentAsk
 }
 
+interface TakenRow extends RowDataPacket {
+  taken_by: string | null
+  taken_commit_sha: string | null
+  taken_commit_source: string | null
+  taken_image_digest: string | null
+  taken_image_source: string | null
+  taken_requested_by: string | null
+  taken_trigger: AppDeploymentAsk | null
+}
+
 interface RequestRow extends RowDataPacket {
   acknowledged_revision: number | string
   app_id: string
@@ -522,12 +532,11 @@ interface RequestRow extends RowDataPacket {
   relay_id: string
   requested_by: string | null
   revision: number | string
-  taken_by: string | null
   trigger: AppDeploymentAsk
 }
 
 const requestColumns =
-  "app_id, relay_id, `trigger`, commit_sha, commit_source, image_digest, image_source, requested_by, revision, acknowledged_revision, taken_by"
+  "app_id, relay_id, `trigger`, commit_sha, commit_source, image_digest, image_source, requested_by, revision, acknowledged_revision"
 
 // Kept once taken, with what was taken, so an ask is waiting while its
 // revision is ahead of that.
@@ -649,9 +658,11 @@ export const loadAppDeploymentRequestsEffect = Effect.fn(
 })
 
 /**
- * Takes what the app's request asks, as a deployment plans, in one step:
- * what's asked since waits for the next. The same deployment taking it
- * again, its step run again, gets what it took, or what's waiting now.
+ * Takes what the app's request asks, as a deployment plans, in one step,
+ * keeping what it took apart: what's asked since waits for the next. The
+ * same deployment taking it again, its step run again, takes what's
+ * waiting now, the newest, or gets back what it took, whatever was asked
+ * or cancelled since.
  */
 export const takeAppDeploymentRequestEffect = Effect.fn(
   "apps.deployment.request.take"
@@ -661,8 +672,10 @@ export const takeAppDeploymentRequestEffect = Effect.fn(
     "apps.deployment.request.take",
     (transaction) =>
       Effect.gen(function* () {
-        const [row] = yield* transaction.queryRows<RequestRow>(
-          `SELECT ${requestColumns}
+        const [row] = yield* transaction.queryRows<RequestRow & TakenRow>(
+          `SELECT ${requestColumns}, taken_by, taken_trigger, taken_commit_sha,
+                  taken_commit_source, taken_image_digest, taken_image_source,
+                  taken_requested_by
              FROM ${databaseTable("app_deployment_request")}
             WHERE app_id = ?
             FOR UPDATE`,
@@ -673,13 +686,29 @@ export const takeAppDeploymentRequestEffect = Effect.fn(
         if (request.revision > request.acknowledgedRevision) {
           yield* transaction.execute(
             `UPDATE ${databaseTable("app_deployment_request")}
-                SET acknowledged_revision = revision, taken_by = ?
+                SET acknowledged_revision = revision, taken_by = ?,
+                    taken_trigger = \`trigger\`, taken_commit_sha = commit_sha,
+                    taken_commit_source = commit_source,
+                    taken_image_digest = image_digest,
+                    taken_image_source = image_source,
+                    taken_requested_by = requested_by
               WHERE app_id = ?`,
             [deploymentId, appId]
           )
           return request
         }
-        return row.taken_by === deploymentId ? request : null
+        if (row.taken_by !== deploymentId || row.taken_trigger === null) {
+          return null
+        }
+        return {
+          ...request,
+          commitSha: row.taken_commit_sha,
+          commitSource: row.taken_commit_source,
+          imageDigest: row.taken_image_digest,
+          imageSource: row.taken_image_source,
+          requestedBy: row.taken_requested_by,
+          trigger: row.taken_trigger,
+        }
       })
   )
 })
@@ -696,7 +725,7 @@ export const cancelAppDeploymentRequestEffect = Effect.fn(
   const result = yield* database.execute(
     "apps.deployment.request.cancel",
     `UPDATE ${databaseTable("app_deployment_request")}
-        SET acknowledged_revision = revision, taken_by = NULL
+        SET acknowledged_revision = revision
       WHERE app_id = ? AND revision = ? AND ${requestPending}`,
     [appId, revision]
   )
