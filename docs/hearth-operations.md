@@ -128,10 +128,19 @@ away every part.
 | `backup:<id>`                     | A backup: changing it, or restoring from it            |
 | `backup-storage:<id>`             | A backup destination, and backups reserved to it       |
 | `<resource>#backup-policy`        | What its backups keep, leave out, and where they go    |
+| `github-sync:<id>`                | A GitHub sync: changing it, or writing a file for it   |
+| `github-connection:<id>`          | A GitHub connection; what reads through it, shared     |
 
 A backup or restore holds what its data belongs to: the game server or
 database, or the App for its folder and the volumes it owns, since deleting
 the App takes them with it.
+
+Starting an App's deployment holds the App and
+`relay:<id>#database-connections` (`appDeploymentLocks`), whoever starts
+it; Hearth's own deployments wait their turn, and the wait for a running
+deployment to end happens with no lane held. A GitHub sync fetches with
+none held, and writes each file holding the sync, its target and its
+connection.
 
 ## Tracing and metrics
 

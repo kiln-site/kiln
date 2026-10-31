@@ -2,9 +2,11 @@ import { createServerFn } from "@tanstack/react-start"
 import { relayIdSchema } from "@workspace/contracts"
 import { z } from "zod"
 
+import { runOperationPromise } from "@/operations/operation"
+import { requireEligibleResourceUser } from "@/server/auth"
 import {
-  deleteGitHubConnectionHandler,
-  deleteGitHubSyncHandler,
+  deleteConnection,
+  deleteSync,
   getGitHubSourceRepositoryCountHandler,
   getGitHubSourcesHandler,
   getGitHubSyncOverviewHandler,
@@ -12,8 +14,8 @@ import {
   listGitHubBranchesHandler,
   listGitHubFoldersHandler,
   listGitHubRepositoriesHandler,
-  runGitHubSyncHandler,
-  saveGitHubSyncHandler,
+  runSync,
+  saveSync,
   startGitHubConnectionHandler,
 } from "@/server/github-sync.server"
 
@@ -99,7 +101,7 @@ export type GitHubFoldersInput = z.infer<typeof foldersInputSchema>
 export type SaveGitHubSyncInput = z.infer<typeof saveSyncInputSchema>
 
 export const getGitHubSyncOverview = createServerFn({ method: "GET" }).handler(
-  () => getGitHubSyncOverviewHandler()
+  async () => getGitHubSyncOverviewHandler(await requireEligibleResourceUser())
 )
 
 export const getGitHubSyncRuns = createServerFn({ method: "GET" }).handler(() =>
@@ -121,7 +123,11 @@ export const startGitHubConnection = createServerFn({ method: "POST" })
 
 export const deleteGitHubConnection = createServerFn({ method: "POST" })
   .validator(connectionInputSchema)
-  .handler(({ data }) => deleteGitHubConnectionHandler(data))
+  .handler(async ({ data }) =>
+    runOperationPromise(deleteConnection, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 export const listGitHubRepositories = createServerFn({ method: "GET" })
   .validator(repositoriesInputSchema)
@@ -137,12 +143,24 @@ export const listGitHubFolders = createServerFn({ method: "GET" })
 
 export const saveGitHubSync = createServerFn({ method: "POST" })
   .validator(saveSyncInputSchema)
-  .handler(({ data }) => saveGitHubSyncHandler(data))
+  .handler(async ({ data }) =>
+    runOperationPromise(saveSync, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 export const runGitHubSync = createServerFn({ method: "POST" })
   .validator(syncInputSchema)
-  .handler(({ data }) => runGitHubSyncHandler(data))
+  .handler(async ({ data }) =>
+    runOperationPromise(runSync, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 export const deleteGitHubSync = createServerFn({ method: "POST" })
   .validator(syncInputSchema)
-  .handler(({ data }) => deleteGitHubSyncHandler(data))
+  .handler(async ({ data }) =>
+    runOperationPromise(deleteSync, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
