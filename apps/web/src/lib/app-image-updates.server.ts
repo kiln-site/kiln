@@ -29,7 +29,7 @@ import {
 import { forkAppWorker } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import {
-  enqueueAppDeployment,
+  queueAppDeploymentEffect,
   publishAppDeploymentChange,
 } from "@/lib/app-deployments.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
@@ -311,7 +311,7 @@ const checkAppImagesEffect = Effect.fnUntraced(function* (
           yield* resolveAppImageUpdateNotificationsEffect(app.appId)
           const at = autoUpdateAt(recorded.update)
           if (at !== null && at <= (yield* Clock.currentTimeMillis)) {
-            enqueueAppDeployment(app.appId, relay.id, "update")
+            yield* queueAppDeploymentEffect(app.appId, relay.id, "update")
           }
         }
       }
