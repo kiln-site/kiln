@@ -719,6 +719,10 @@ export const deployAppOperation = durableOperation({
   input: DeployInput,
   kind: deployAppKind,
   locks: (input) => appDeploymentLocks(input.relayId, input.appId),
+  // Starts once its Relay is there to deploy it: until then it waits,
+  // holding nothing, so what's asked meanwhile joins it, it can be
+  // cancelled, and a deletion of the app isn't kept waiting.
+  ready: (input) => relayReachable(input.relayId),
   // A failure ends it failed, so what it was for is asked again.
   run: (input, operation) =>
     deploySteps(input, operation.id).pipe(
@@ -757,20 +761,6 @@ const deploySteps = (input: DeployInput, id: string) =>
           break
         }
       }
-    }
-    // Taken only once its Relay is there to deploy it, so an ask made while
-    // it's away waits for it, rather than failing.
-    for (let window = 0; ; window++) {
-      const reachable = yield* Activity.make({
-        name: `relay/${window}`,
-        success: Schema.Boolean,
-        execute: watchFor(
-          relayReachable(input.relayId),
-          (reachable) => reachable,
-          () => followIntervalLater
-        ),
-      })
-      if (reachable) break
     }
     const plan = yield* Activity.make({
       name: "plan",

@@ -223,9 +223,11 @@ cancelled.
 The deployment holds the App's `#deploy` and
 `relay:<id>#database-connections` (`appDeploymentLocks`) from its start
 until its Relay says it ended, so the next waits its turn behind it and
-nothing else orders deployments. It starts deciding only once its Relay is
-there to deploy it. A wait, for a Relay, a new App's provisioning or a
-build to end, checks in memory and stores one step every five minutes, so
+nothing else orders deployments. It starts only once its Relay is there
+to deploy it (`ready`): until then it waits holding nothing, so what's
+asked meanwhile joins it, it can be cancelled, and a deletion of the App
+isn't kept waiting. A wait, for a new App's provisioning or a build to
+end, checks in memory and stores one step every five minutes, so
 a long one keeps few. The App's saved configuration, which holds its
 secrets, is read as it's sent and the token that checks out a GitHub
 commit made then, neither kept in the operation's steps, which are stored
