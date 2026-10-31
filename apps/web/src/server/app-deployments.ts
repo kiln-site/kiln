@@ -1,5 +1,4 @@
 import { createServerFn } from "@tanstack/react-start"
-import { Effect } from "effect"
 import {
   appGitHubBuildSchema,
   appIdSchema,
@@ -9,20 +8,12 @@ import {
 } from "@workspace/contracts"
 import { z } from "zod"
 
-import { promiseEffect } from "@/effect/promise"
-import { requireRelayPermission } from "@/lib/access-control"
-import { appDeploymentLocks } from "@/lib/app-lanes"
-import {
-  operation,
-  runOperationPromise,
-  signedIn,
-} from "@/operations/operation"
+import { runOperationPromise } from "@/operations/operation"
 import {
   getAppDeploymentLogHandler,
   getAppDeploymentsHandler,
   getAppDeploymentSummaryHandler,
   getAppGitHubSourceFileHandler,
-  recordFor,
   redeployAppDeploymentHandler,
   saveAppGitHubSourceHandler,
 } from "@/server/app-deployments.server"
@@ -75,7 +66,7 @@ export const getAppGitHubSourceFile = createServerFn({ method: "GET" })
   .validator(appInputSchema)
   .handler(({ data }) => getAppGitHubSourceFileHandler(data))
 
-// Deploying it at once also holds what a deployment does.
+// Deploying it at once queues a deployment, which takes its own turn.
 const saveGitHubSource = resourceOperation({
   kind: "app",
   id: (input: z.infer<typeof saveSourceInputSchema>) => input.appId,
@@ -83,8 +74,6 @@ const saveGitHubSource = resourceOperation({
   doing: "Changing this App's source",
   permission: () => "app.manage",
   lock: { part: "config" },
-  alsoLocks: (input) =>
-    input.deploy ? appDeploymentLocks(input.relayId, input.appId) : [],
   run: saveAppGitHubSourceHandler,
 })
 
@@ -96,42 +85,12 @@ export const saveAppGitHubSource = createServerFn({ method: "POST" })
     })
   )
 
-// Holds what deploying the deployment's App does; the App is read from the
-// deployment before any lane is taken.
-const redeploy = operation<z.infer<typeof deploymentInputSchema>>()({
-  name: "app.redeploy",
-  doing: "Deploying this App",
-  authorize: ({ input, user }) =>
-    signedIn(user).pipe(
-      Effect.flatMap((person) =>
-        promiseEffect(async () => {
-          const record = await recordFor(input.deploymentId)
-          await requireRelayPermission({
-            appId: record.appId,
-            permission: "app.manage",
-            relayId: record.relayId,
-            user: person,
-          })
-          return { appId: record.appId, relayId: record.relayId, user: person }
-        })
-      )
-    ),
-  locks: ({ context }) => appDeploymentLocks(context.relayId, context.appId),
-  run: ({ context, input }) =>
-    promiseEffect(() => redeployAppDeploymentHandler(context.user, input)),
-  audit: ({ context }) => ({
-    id: context.appId,
-    kind: "app",
-    relayId: context.relayId,
-  }),
-})
-
+// Deploys a past deployment's commit or digest again, queued behind any
+// deployment running; the deployment it asks for checks the person may.
 export const redeployAppDeployment = createServerFn({ method: "POST" })
   .validator(deploymentInputSchema)
   .handler(async ({ data }) =>
-    runOperationPromise(redeploy, data, {
-      user: await requireEligibleResourceUser(),
-    })
+    redeployAppDeploymentHandler(await requireEligibleResourceUser(), data)
   )
 
 export const getAppDeploymentLog = createServerFn({ method: "GET" })

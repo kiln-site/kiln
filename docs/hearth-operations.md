@@ -187,14 +187,19 @@ the App, judged where it's used (`currentImageUpdate`): it asked about the
 image the App names now, and no deployment has started since. Checks keep
 no state of their own; when each App was last asked is what it recorded.
 
-Starting an App's deployment holds its `#deploy` and
-`relay:<id>#database-connections` (`appDeploymentLocks`), whoever starts
-it; Hearth's own deployments wait their turn, and the wait for a running
-deployment to end happens with no lane held. What's asked for is kept on
-the app (`app_deployment_request`) until a deployment takes it: a push pins
-the commit from its webhook, with the repository and branch it came from,
-and the newest push's wins; a poll deploys its branch head. A deployment
-acknowledges only the revision it took, so one asked for since still waits.
+An App's deployment is one durable operation (`app.deploy`) holding its
+`#deploy` from sending it until its Relay says it ended, so the next waits
+its turn behind it and nothing else orders deployments. What a push, poll
+or image check asks for is kept on the app (`app_deployment_request`) and
+read when its turn comes: a push pins the commit from its webhook, with the
+repository and branch it came from, the newest push's winning; a poll
+deploys its branch head. A deployment acknowledges only the revision it
+took, so one asked for since still waits. A person's deploy, rollback or
+update is deployed as they asked, and shows as queued until its turn. The
+token that checks out a GitHub commit is made as it's sent and never kept,
+and a reply lost to a restart is read back (`relayCommand`), not sent again.
+Deleting an App stops its build on the Relay first (`app.deployment.abort`),
+so the deletion doesn't wait for the build it removes.
 
 A GitHub sync's run holds the sync's `#files`, and shared its `#settings`,
 its target and its connection, from reading GitHub to recording what it

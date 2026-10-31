@@ -6,7 +6,7 @@ import {
 import { runAppEffect } from "@/effect/runtime"
 import {
   publishAppDeploymentChange,
-  startAppDeploymentEffect,
+  queuePersonDeploymentEffect,
 } from "@/lib/app-deployments.server"
 import {
   askAppImageEffect,
@@ -106,17 +106,16 @@ export async function deployAppImageUpdateHandler(
   data: AppInput
 ) {
   const { app, relay } = await imageApp(user, data)
-  const started = await runAppEffect(
+  // Queued behind any deployment running; it deploys the update on offer
+  // when its turn comes.
+  return runAppEffect(
     "apps.imageUpdates.deploy",
-    startAppDeploymentEffect({
+    queuePersonDeploymentEffect(user, {
       appId: app.appId,
+      explicit: { trigger: "update", userId: user.id },
       relayId: relay.id,
-      trigger: "update",
-      userId: user.id,
     })
   )
-  publishAppDeploymentChange(relay.id)
-  return { deployment: started?.deployment ?? null }
 }
 
 // Deciding an app's updates is configuring it, so it takes what deploying

@@ -69,6 +69,12 @@ export const relayCommand = <A = unknown, R = never>(options: {
   readonly relayId: string
   readonly operation: RelayControlOperation
   readonly payload: unknown
+  /**
+   * The payload as it's sent, for one carrying something short-lived, such
+   * as a token, that's made each time it's sent and never stored. It's sent
+   * again only to a Relay that never saw it.
+   */
+  readonly sendPayload?: Effect.Effect<unknown, RelayCommandError, R>
   readonly timeoutMs?: number
   readonly success?: Schema.Codec<A, unknown>
   /** What the reply said, when the Relay no longer has it. */
@@ -163,6 +169,7 @@ const settle = <A, R>(
     readonly relayId: string
     readonly operation: RelayControlOperation
     readonly payload: unknown
+    readonly sendPayload?: Effect.Effect<unknown, RelayCommandError, R>
     readonly timeoutMs?: number
     readonly success?: Schema.Codec<A, unknown>
     readonly recover?: Effect.Effect<A, RelayCommandError, R>
@@ -175,15 +182,19 @@ const settle = <A, R>(
     const parent = operation
       ? { operationId: operation.id, step: options.name }
       : undefined
-    const send = promiseEffect(() =>
-      relayRpc(
-        relay,
-        options.operation,
-        options.payload,
-        options.timeoutMs,
-        undefined,
-        undefined,
-        { journal: command.journal, operationId: command.id, parent }
+    const send = (options.sendPayload ?? Effect.succeed(options.payload)).pipe(
+      Effect.flatMap((payload) =>
+        promiseEffect(() =>
+          relayRpc(
+            relay,
+            options.operation,
+            payload,
+            options.timeoutMs,
+            undefined,
+            undefined,
+            { journal: command.journal, operationId: command.id, parent }
+          )
+        )
       )
     )
     const lookup = promiseEffect(() =>

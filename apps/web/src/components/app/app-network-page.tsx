@@ -254,8 +254,10 @@ function AppDeployButton({ app }: { app: App }) {
   const deploy = useMutation({
     mutationFn: () =>
       deployApp({ data: { appId: app.id, relayId: app.relayId } }),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.apps.all }),
+    onSuccess: () => {
+      showToast({ message: "Deploy queued", type: "success" })
+      return queryClient.invalidateQueries({ queryKey: queryKeys.apps.all })
+    },
     onError: (error) => showAppOperationError("Deploy failed", error),
   })
   const deploying = deploy.isPending || app.deployment?.state === "running"

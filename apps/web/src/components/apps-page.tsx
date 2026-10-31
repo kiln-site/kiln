@@ -479,7 +479,11 @@ const AppActions = React.memo(function AppActions({
   const deploy = useMutation({
     mutationFn: () =>
       deployApp({ data: { appId: app.id, relayId: app.relayId } }),
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      // It runs once any deployment running ends.
+      showToast({ message: "Deploy queued", type: "success" })
+      await invalidate()
+    },
     onError: (error) => showAppOperationError("Deploy failed", error),
   })
   const action = useMutation({

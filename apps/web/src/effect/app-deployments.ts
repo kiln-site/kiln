@@ -209,7 +209,10 @@ export const saveAppGitHubSourceEffect = Effect.fn("apps.github.source.save")(
   }
 )
 
-/** Records a deployment the Relay accepted, or one it refused. */
+/**
+ * Records a deployment, once: recording one again, as a durable step run
+ * again does, changes nothing.
+ */
 export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
   function* (record: AppDeploymentRecord) {
     const database = yield* Database
@@ -220,7 +223,8 @@ export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
           triggered_by, repository, branch, commit_sha, commit_message,
           commit_author, image_digest, status, rolling, error, started_at,
           finished_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE id = id`,
       [
         record.id,
         record.appId,
@@ -256,6 +260,20 @@ export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
             ) kept
           )`,
       [record.appId, record.appId]
+    )
+  }
+)
+
+/** Records the ID a deployment's Relay gave it, which names its log there. */
+export const recordRelayDeploymentEffect = Effect.fn("apps.deployment.relayId")(
+  function* (id: string, relayDeploymentId: string) {
+    const database = yield* Database
+    yield* database.execute(
+      "apps.deployment.relayId",
+      `UPDATE ${databaseTable("app_deployment")}
+        SET relay_deployment_id = ?
+      WHERE id = ?`,
+      [relayDeploymentId, id]
     )
   }
 )

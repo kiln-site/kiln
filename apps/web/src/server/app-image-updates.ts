@@ -7,7 +7,6 @@ import {
 import { z } from "zod"
 
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { appDeploymentLocks } from "@/lib/app-lanes"
 import { runOperationPromise } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceOperation } from "@/server/resource-operation.server"
@@ -33,12 +32,12 @@ const policyInputSchema = appInputSchema.extend({
 const skipInputSchema = appInputSchema.extend({ digest: imageDigestSchema })
 
 // Each holds the App shared: its image updates are its own settings and
-// what a check found. Deploying an update holds what a deployment does.
+// what a check found. Deploying an update queues a deployment, which takes
+// its own turn.
 const imageOperation = <Input extends z.infer<typeof appInputSchema>, A>(
   name: string,
   doing: string,
-  run: (user: AuthenticatedUser, input: Input) => Promise<A>,
-  deploys = false
+  run: (user: AuthenticatedUser, input: Input) => Promise<A>
 ) =>
   resourceOperation({
     kind: "app",
@@ -46,9 +45,7 @@ const imageOperation = <Input extends z.infer<typeof appInputSchema>, A>(
     name,
     doing,
     permission: () => "app.manage",
-    lock: deploys ? { part: "deploy" } : "shared",
-    alsoLocks: (input) =>
-      deploys ? appDeploymentLocks(input.relayId, input.appId) : [],
+    lock: "shared",
     run,
   })
 
@@ -74,8 +71,7 @@ const skipUpdate = imageOperation(
 const deployUpdate = imageOperation(
   "app.imageUpdates.deploy",
   "Deploying this App",
-  deployAppImageUpdateHandler,
-  true
+  deployAppImageUpdateHandler
 )
 
 export const saveAppImageUpdatePolicy = createServerFn({ method: "POST" })

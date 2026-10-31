@@ -39,11 +39,7 @@ import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import {
-  publishAppDeploymentChange,
-  startAppDeploymentEffect,
-  startAppDeploymentWhenReadyEffect,
-} from "@/lib/app-deployments.server"
+import { queuePersonDeploymentEffect } from "@/lib/app-deployments.server"
 import { publishGitHubSyncChange } from "@/lib/github-sync.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures } from "@/lib/relay-connection"
@@ -362,41 +358,45 @@ export async function saveAppGitHubSourceHandler(
   })
   // Sources count the apps that deploy from them.
   publishGitHubSyncChange()
-  // A new app may still be provisioning; it deploys once it's ready.
-  const deployed = data.deploy
+  // Queued, behind any deployment running; a new app may still be
+  // provisioning, and deploys once it's ready.
+  const queued = data.deploy
     ? await runAppEffect(
         "apps.deploy",
-        startAppDeploymentWhenReadyEffect({
+        queuePersonDeploymentEffect(user, {
           appId: data.appId,
+          awaitProvisioning: true,
+          explicit: { trigger: "manual", userId: user.id },
           relayId: relay.id,
-          trigger: "manual",
-          userId: user.id,
         })
       )
     : null
-  return { config, deployment: deployed?.deployment ?? null }
+  return { config, queued: queued !== null }
 }
 
-/** Deploys a past deployment's commit again, or the app's config. */
+/**
+ * Deploys a past deployment's commit or digest again, or the app's config,
+ * queued behind any deployment running.
+ */
 export async function redeployAppDeploymentHandler(
   user: AuthenticatedUser,
   data: { deploymentId: string }
 ) {
   const record = await recordFor(data.deploymentId)
   const { relay } = await authorizedAppFor(user, record, "app.manage")
-  const started = await runAppEffect(
+  return runAppEffect(
     "apps.redeploy",
-    startAppDeploymentEffect({
+    queuePersonDeploymentEffect(user, {
       appId: record.appId,
-      commit: record.commitSha ?? undefined,
-      imageDigest: record.imageDigest ?? undefined,
+      explicit: {
+        ...(record.commitSha && { commit: record.commitSha }),
+        ...(record.imageDigest && { imageDigest: record.imageDigest }),
+        trigger: "redeploy",
+        userId: user.id,
+      },
       relayId: relay.id,
-      trigger: "redeploy",
-      userId: user.id,
     })
   )
-  publishAppDeploymentChange(relay.id)
-  return { deployment: started?.deployment ?? null }
 }
 
 /** A deployment's log, from its Relay while it keeps it. */

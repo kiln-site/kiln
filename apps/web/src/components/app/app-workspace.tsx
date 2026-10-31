@@ -12,6 +12,7 @@ import type { RelayInstanceWebRoute } from "@workspace/contracts"
 import { Rocket, Trash2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { showToast } from "@workspace/ui/components/sonner"
 
 import { DeleteAppDialog } from "@/components/app/app-dialogs"
 import {
@@ -276,7 +277,9 @@ function AppResourceMeters({ app }: { app: App }) {
   const running = app.containers.filter((container) => container.running)
   const startedAt =
     running
-      .flatMap((container) => (container.startedAt ? [container.startedAt] : []))
+      .flatMap((container) =>
+        container.startedAt ? [container.startedAt] : []
+      )
       .sort()[0] ?? null
   return (
     <WorkloadResourceMeters
@@ -322,11 +325,13 @@ function AppPowerControls({
   const { app, routeId } = workspace
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const { data: deletion } = useQuery(resourceDeletionQueryOptions({
-    kind: "app",
-    relayId: app.relayId,
-    resourceId: app.id,
-  }))
+  const { data: deletion } = useQuery(
+    resourceDeletionQueryOptions({
+      kind: "app",
+      relayId: app.relayId,
+      resourceId: app.id,
+    })
+  )
   const canManage = !deletion && app.permissions.includes("app.manage")
   const deployed = app.containers.length > 0
   const powerPermissions = React.useMemo(
@@ -363,6 +368,8 @@ function AppPowerControls({
       deployApp({ data: { appId: app.id, relayId: app.relayId } }),
     onMutate: () => onError(null),
     onSuccess: async () => {
+      // It runs once any deployment running ends.
+      showToast({ message: "Deploy queued", type: "success" })
       await invalidate()
       // Follow the deployment as it happens.
       if (app.permissions.includes("app.logs.read")) {

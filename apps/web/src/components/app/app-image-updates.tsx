@@ -200,6 +200,8 @@ function AppImageUpdatesDialog({
   const deploy = useMutation({
     mutationFn: () => deployAppImageUpdate({ data: input }),
     onSuccess: async () => {
+      // It runs once any deployment running ends.
+      showToast({ message: "Update deploy queued", type: "success" })
       await refresh()
       onOpenChange(false)
       // Follow the deployment as it happens.
@@ -211,7 +213,6 @@ function AppImageUpdatesDialog({
         })
         return
       }
-      showToast({ message: "Deploying the update", type: "success" })
     },
     onError: (error) => showAppOperationError("Could not deploy", error),
   })
