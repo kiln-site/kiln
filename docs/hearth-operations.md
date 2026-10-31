@@ -115,6 +115,12 @@ away every part.
 | `instance:<relay>/<id>#dns`       | Its DNS records and web routes                         |
 | `user:<id>`                       | An account and its access                              |
 | `email:<hash>`                    | Access for an address, before or without an account    |
+| `relay:<id>`                      | A Relay; removing or pairing it takes it whole         |
+| `relay:<id>#settings`             | Its name, pausing and connection settings              |
+| `relay:<id>#proxy`, `#tailscale`  | Its proxy, its Tailscale                               |
+| `relay:<id>#connections`          | Its pairing invitations and connected clients          |
+| `relay:<id>#host-files`           | Its host files mount                                   |
+| `relay:<id>#process`              | Restarting it or its host                              |
 | `relay:<id>#authorization`        | What a Relay holds of who may do what                  |
 | `relay:<id>#database-connections` | Apps' database connections handover                    |
 | `cloudflare-connection:<id>`      | A Cloudflare connection                                |
