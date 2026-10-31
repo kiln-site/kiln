@@ -16,7 +16,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { hasBackupPermission } from "@/lib/backup-access"
 import {
   backupKey,
-  backupStorageKey,
+  backupStorageSettingsKey,
   backupTargetKey,
 } from "@/lib/backup-lanes"
 import { resolveBackupStorageSelection } from "@/lib/backup-storage-selection.server"
@@ -82,7 +82,7 @@ const destinations = (
   storageIds: ReadonlyArray<string | null> | undefined
 ): Array<LaneLock> =>
   [...new Set(storageIds ?? [])].flatMap((id) =>
-    id ? [shared(backupStorageKey(id))] : []
+    id ? [shared(backupStorageSettingsKey(id))] : []
   )
 
 const permitted = (

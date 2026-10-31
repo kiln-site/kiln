@@ -339,7 +339,8 @@ const changeInstanceStartup = resourceOperation({
   id: (input: z.infer<typeof hearthUpdateInstanceStartupInputSchema>) =>
     input.instanceId,
   name: "instance.startup.update",
-  lock: { part: "config" },
+  // A reinstall replaces it.
+  lock: (input) => (input.reinstall ? "whole" : { part: "config" }),
   doing: "Changing this game server's startup",
   permission: () => "instance.configuration.read",
   run: updateInstanceStartupHandler,

@@ -132,7 +132,10 @@ finished late can't undo a newer one (`provisionInstanceDomainLater`).
 Whole keys that aren't resources follow the same rule: a backup takes
 `#name` to rename it and `#task` to cancel it, a GitHub sync `#settings` to
 change it and `#files` to write them, a GitHub connection `#installation`
-for what GitHub reports. Deleting any of them takes it whole. An account
+for what GitHub reports, a Cloudflare connection `#settings` to save it.
+A backup destination's save takes `#settings`, which reserving a backup to
+it takes shared, so each waits for the other. Deleting any of them takes it
+whole, as reinstalling a game server does. An account
 (`user:<id>`) and a CLI request (`cli-device:<id>`) stay whole on purpose:
 sign-ins wait for nothing while an administrator changes the account, and a
 request is answered once.
@@ -159,7 +162,7 @@ request is answered once.
 | `cloudflare-connection:<id>`      | A Cloudflare connection                                |
 | `hearth`                          | Hearth itself: its update, and platform backups        |
 | `backup:<id>`                     | A backup: changing it, or restoring from it            |
-| `backup-storage:<id>`             | A backup destination, and backups reserved to it       |
+| `backup-storage:<id>`             | A backup destination; `#settings` saving it            |
 | `<resource>#backup-policy`        | What its backups keep, leave out, and where they go    |
 | `github-sync:<id>`                | A GitHub sync: changing it, or writing a file for it   |
 | `github-connection:<id>`          | A GitHub connection; what reads through it, shared     |

@@ -27,7 +27,7 @@ export const resourceOperation = <
   readonly name: string
   readonly doing: string | ((input: Input) => string)
   readonly permission: (input: Input) => AccessPermission
-  readonly lock: LockPolicy
+  readonly lock: LockPolicy | ((input: Input) => LockPolicy)
   readonly alsoLocks?: (input: Input) => ReadonlyArray<LaneLock>
   readonly run: (user: AuthenticatedUser, input: Input) => Promise<A>
 }) =>
@@ -50,7 +50,9 @@ export const resourceOperation = <
     locks: ({ input }) => [
       lockAs(
         resourceKey(definition.kind, input.relayId, definition.id(input)),
-        definition.lock
+        typeof definition.lock === "function"
+          ? definition.lock(input)
+          : definition.lock
       ),
       ...(definition.alsoLocks?.(input) ?? []),
     ],
