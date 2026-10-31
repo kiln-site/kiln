@@ -347,8 +347,10 @@ const attempt = <Input, Context, A, E, R>(
       Effect.onError(endedBeforeRun)
     )
     const label = `${definition.name}#${id}`
-    // Its place in line, once admitted, for the wait cap to withdraw.
+    // Its place in line, once admitted, for the wait cap to withdraw, and
+    // why it did.
     let admitted: LaneTicket | undefined
+    let timedOut: LaneRejectedError | undefined
     const services = yield* Effect.context<R | Database>()
     // Admitted and set to be withdrawn in one step that can't be cut off,
     // so a caller that gives up can never leave it holding a place in line.
@@ -383,7 +385,7 @@ const attempt = <Input, Context, A, E, R>(
           error
         ): Effect.Effect<never, E | OperationBusyError | LocksMovedError> =>
           error instanceof LaneRejectedError
-            ? refusal(definition.name, error).pipe(
+            ? refusal(definition.name, timedOut ?? error).pipe(
                 Effect.tapError(() =>
                   record(definition.name, "refused", {
                     admittedAt,
@@ -418,46 +420,31 @@ const attempt = <Input, Context, A, E, R>(
           ).pipe(
             Effect.andThen(
               Effect.suspend(() => {
-                // Withdrawn in the same step as finding it hasn't started:
-                // one that has runs to the end, and the caller gets its
-                // result.
-                if (initiator === "person") {
-                  if (admitted && !admitted.withdraw()) return Effect.void
-                } else if (laneOccupants.get(label)?.startedAt !== null) {
-                  return Effect.void
-                }
                 const waitingOn =
                   hearthLanes
                     .describe()
                     .waiting.find((entry) => entry.label === label)
                     ?.waitingOn ?? []
                 if (initiator === "system") {
-                  return Effect.logWarning(
-                    `${definition.name} has waited ${SLOW_WAIT} for its lanes`,
-                    waitingOn
-                  )
-                }
-                const blockedBy = [...new Set(waitingOn.map(({ id }) => id))]
-                return refusal(
-                  definition.name,
-                  new LaneRejectedError({
-                    blockedBy,
-                    message: `${label} waited as long as a person does on ${blockedBy.join(", ")}`,
-                    reason: "busy",
-                  })
-                ).pipe(
-                  Effect.tapError(() =>
-                    Clock.currentTimeMillis.pipe(
-                      Effect.flatMap((finishedAt) =>
-                        record(definition.name, "refused", {
-                          admittedAt,
-                          finishedAt,
-                          startedAt: finishedAt,
-                        })
+                  return laneOccupants.get(label)?.startedAt === null
+                    ? Effect.logWarning(
+                        `${definition.name} has waited ${SLOW_WAIT} for its lanes`,
+                        waitingOn
                       )
-                    )
-                  )
-                )
+                    : Effect.void
+                }
+                // What's in the way, noted before it's withdrawn, in the
+                // same step as finding it hasn't started; the wait then
+                // ends refused, naming it. One that has started runs to
+                // the end, and the caller gets its result.
+                const blockedBy = [...new Set(waitingOn.map(({ id }) => id))]
+                timedOut = new LaneRejectedError({
+                  blockedBy,
+                  message: `${label} waited as long as a person does on ${blockedBy.join(", ")}`,
+                  reason: "busy",
+                })
+                admitted?.withdraw()
+                return Effect.void
               })
             ),
             Effect.andThen(Effect.never)
