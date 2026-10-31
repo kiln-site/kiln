@@ -1,7 +1,7 @@
 import type { BackupTargetKind } from "@workspace/contracts"
 
 import { backupTargetApp } from "@/lib/backup-target-permissions"
-import { hearthKey, resourceKey } from "@/operations/lanes"
+import { hearthKey, partKey, resourceKey } from "@/operations/lanes"
 
 /**
  * The lane keys backups and restores take (docs/hearth-operations.md). Each
@@ -12,8 +12,15 @@ import { hearthKey, resourceKey } from "@/operations/lanes"
 /** One backup: changing or restoring from it. */
 export const backupKey = (id: string) => `backup:${id}`
 
-/** A backup destination: changing it, or reserving a backup to it. */
+/** A backup destination: deleting it takes it whole. */
 export const backupStorageKey = (id: string) => `backup-storage:${id}`
+
+/**
+ * Its settings: saving them takes this exclusive, and reserving a backup to
+ * the destination shared, so each waits for the other.
+ */
+export const backupStorageSettingsKey = (id: string) =>
+  partKey(backupStorageKey(id), "settings")
 
 /**
  * What a backup target's data belongs to: its resource, or the App that owns

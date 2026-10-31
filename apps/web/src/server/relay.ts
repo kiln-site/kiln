@@ -509,10 +509,20 @@ function warnRelayUnavailable(relayId: string, cause: unknown) {
   console.warn(`[Kiln Relay] Could not reach Relay ${relayId}:`, cause)
 }
 
+// What a change that provisions a game server's domains also holds, so
+// its DNS step runs inside it.
+const instanceDnsKey = (input: { instanceId: string; relayId: string }) =>
+  dnsKey({
+    relayId: input.relayId,
+    resourceId: input.instanceId,
+    resourceType: "instance",
+  })
+
 const renameInstance = resourceOperation({
   kind: "instance",
   id: (input: z.infer<typeof instanceNameInputSchema>) => input.instanceId,
   name: "instance.rename",
+  lock: { part: "name" },
   doing: "Renaming this game server",
   permission: () => "instance.configuration.write",
   run: renameInstanceHandler,
@@ -647,6 +657,7 @@ const disconnectInstanceDatabase = resourceOperation({
   id: (input: z.infer<typeof removeDatabaseConnectionInputSchema>) =>
     input.instanceId,
   name: "instance.database.disconnect",
+  lock: "shared",
   doing: "Changing this game server's database connections",
   permission: () => "instance.network.write",
   alsoLocks: (input) => [
@@ -819,6 +830,9 @@ const changeInstancePorts = resourceOperation({
   kind: "instance",
   id: (input: z.infer<typeof portsInputSchema>) => input.instanceId,
   name: "instance.ports.update",
+  lock: { part: "ports" },
+  // A new public port moves its domains' address.
+  alsoLocks: (input) => [exclusive(instanceDnsKey(input))],
   doing: "Changing this game server's ports",
   permission: (input) => instancePortsWritePermission(input.ports),
   run: updateInstancePortsHandler,
@@ -869,6 +883,7 @@ const leaseInstancePort = resourceOperation({
   kind: "instance",
   id: (input: z.infer<typeof portLeaseInputSchema>) => input.instanceId,
   name: "instance.port.reserve",
+  lock: "shared",
   doing: "Changing this game server's ports",
   permission: (input) =>
     input.externalPort === undefined
@@ -917,6 +932,7 @@ const releaseInstancePortLease = resourceOperation({
   kind: "instance",
   id: (input: z.infer<typeof portLeaseReleaseInputSchema>) => input.instanceId,
   name: "instance.port.release",
+  lock: "shared",
   doing: "Changing this game server's ports",
   permission: () => "instance.network.write",
   run: async (user, data) => {
@@ -1298,6 +1314,9 @@ const powerInstance = resourceOperation({
   kind: "instance",
   id: (input: z.infer<typeof actionInputSchema>) => input.instanceId,
   name: "instance.power",
+  lock: { part: "power" },
+  // Starting it provisions its domains.
+  alsoLocks: (input) => [exclusive(instanceDnsKey(input))],
   doing: "Changing this game server's power",
   permission: (input) => `instance.power.${input.action}`,
   run: performInstanceActionHandler,

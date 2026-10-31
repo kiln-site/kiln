@@ -34,6 +34,47 @@ const start = Effect.fnUntraced(function* (
 })
 
 describe("operation lanes", () => {
+  it.effect("withdraws only what hasn't started, and says which", () =>
+    Effect.gen(function* () {
+      const lanes = new OperationLanes()
+      const log: Array<string> = []
+      const holder = yield* start(lanes, log, "holder", [exclusive("a")])
+      const record = (label: string) => Effect.sync(() => log.push(label))
+
+      // Waiting its turn: withdrawn, and never runs.
+      const waiting = lanes.admit({ label: "waiting", locks: [exclusive("a")] })
+      const waitingRun = yield* waiting
+        .run(record("waiting"))
+        .pipe(Effect.flip, Effect.forkChild({ startImmediately: true }))
+      assert.isTrue(waiting.withdraw())
+      assert.strictEqual((yield* Fiber.join(waitingRun)).reason, "cancelled")
+
+      // Given its turn but not yet started: withdrawn all the same.
+      const granted = lanes.admit({ label: "granted", locks: [exclusive("a")] })
+      yield* holder.finish
+      assert.isTrue(granted.withdraw())
+      const grantedRun = yield* granted.run(record("granted")).pipe(Effect.flip)
+      assert.strictEqual(grantedRun._tag, "LaneRejectedError")
+
+      // Started: not withdrawn, and it runs to the end.
+      const release = yield* Deferred.make<void>()
+      const running = lanes.admit({ label: "running", locks: [exclusive("a")] })
+      const runningRun = yield* running
+        .run(
+          record("running").pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as("finished")
+          )
+        )
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Effect.yieldNow
+      assert.isFalse(running.withdraw())
+      yield* Deferred.succeed(release, undefined)
+      assert.strictEqual(yield* Fiber.join(runningRun), "finished")
+      assert.deepStrictEqual(log, ["holder", "running"])
+    })
+  )
+
   it.effect(
     "refuses at once, naming what's in the way, an operation that would wait",
     () =>

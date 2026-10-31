@@ -36,7 +36,7 @@ import {
   verifyS3BackupCredential,
   type S3BackupCredential,
 } from "@/backups/destinations/s3"
-import { backupStorageKey } from "@/lib/backup-lanes"
+import { backupStorageKey, backupStorageSettingsKey } from "@/lib/backup-lanes"
 import { exclusive, shared } from "@/operations/lanes"
 import {
   operation,
@@ -126,7 +126,7 @@ const saveDestination = operation<z.infer<typeof backupStorageInputSchema>>()({
         })
       )
     ),
-  locks: ({ context }) => [exclusive(backupStorageKey(context.id))],
+  locks: ({ context }) => [exclusive(backupStorageSettingsKey(context.id))],
   run: ({ context: { existing, id, ownerUserId }, input: data }) =>
     promiseEffect(async () => {
       if (
@@ -256,7 +256,9 @@ const preferDestination = operation<
     ),
   locks: ({ input }) => [
     backupPolicyLock(input.relayId, input.target),
-    ...(input.storageId ? [shared(backupStorageKey(input.storageId))] : []),
+    ...(input.storageId
+      ? [shared(backupStorageSettingsKey(input.storageId))]
+      : []),
   ],
   run: ({ context: { target, user }, input: data }) =>
     promiseEffect(async () => {

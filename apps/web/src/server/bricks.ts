@@ -48,6 +48,7 @@ import {
 } from "@/lib/relay-client"
 import { promiseEffect } from "@/effect/promise"
 import { provisioningInstanceId } from "@/lib/provisioning.server"
+import { dnsKey } from "@/lib/dns-operations"
 import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
@@ -339,6 +340,18 @@ const changeInstanceStartup = resourceOperation({
   id: (input: z.infer<typeof hearthUpdateInstanceStartupInputSchema>) =>
     input.instanceId,
   name: "instance.startup.update",
+  // A reinstall replaces it.
+  lock: (input) => (input.reinstall ? "whole" : { part: "config" }),
+  // It provisions its domains afterwards.
+  alsoLocks: (input) => [
+    exclusive(
+      dnsKey({
+        relayId: input.relayId,
+        resourceId: input.instanceId,
+        resourceType: "instance",
+      })
+    ),
+  ],
   doing: "Changing this game server's startup",
   permission: () => "instance.configuration.read",
   run: updateInstanceStartupHandler,

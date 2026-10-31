@@ -53,7 +53,7 @@ import { resolveDisplayName } from "@/lib/display-name"
 import { betterAuthSecrets, kilnPublicUrl } from "@/lib/environment"
 import { deployPushedAppsEffect } from "@/lib/app-deployments.server"
 import { githubConnectionKey, githubSyncKey } from "@/lib/github-lanes"
-import { exclusive, shared } from "@/operations/lanes"
+import { exclusive, partKey, shared } from "@/operations/lanes"
 import { inLanes, operation, signedIn } from "@/operations/operation"
 import {
   enqueueGitHubSync,
@@ -575,8 +575,9 @@ export const saveSync = operation<SaveGitHubSyncInput>()({
         })
       )
     ),
+  // Its settings: a run writing its files meanwhile reads them afresh.
   locks: ({ context, input }) => [
-    exclusive(githubSyncKey(context.id)),
+    exclusive(partKey(githubSyncKey(context.id), "settings")),
     shared(githubConnectionKey(input.connectionId)),
   ],
   run: ({ context, input }) =>
@@ -735,7 +736,7 @@ async function saveInstallation(
     inLanes(
       "github.connection.installation",
       "Changing this GitHub connection",
-      [exclusive(githubConnectionKey(connectionId))],
+      [exclusive(partKey(githubConnectionKey(connectionId), "installation"))],
       saveGitHubInstallationEffect(
         connectionId,
         installation && installationRecord(installation)

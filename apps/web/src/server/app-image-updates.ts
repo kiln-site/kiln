@@ -45,6 +45,7 @@ const imageOperation = <Input extends z.infer<typeof appInputSchema>, A>(
     name,
     doing,
     permission: () => "app.manage",
+    lock: "whole",
     alsoLocks: (input) =>
       deploys ? appDeploymentLocks(input.relayId, input.appId) : [],
     run,

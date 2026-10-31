@@ -98,6 +98,266 @@ describeMysql("Hearth operations", () => {
     )
 
     it.effect(
+      "keeps a person waiting behind the same kind of change only, then checks them again",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const power = partKey(server, "power")
+          const release = yield* Deferred.make<void>()
+          const starting = yield* runOperation(
+            holding("test.power", "Starting this game server", [
+              exclusive(power),
+            ]),
+            release,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+
+          // Other everyday work on the server runs beside it.
+          const saved = yield* runOperation(
+            operation<void>()({
+              doing: "Saving a file",
+              locks: () => [shared(server)],
+              name: "test.save",
+              run: () => Effect.succeed("saved"),
+            }),
+            undefined,
+            { user: person }
+          )
+          assert.strictEqual(saved, "saved")
+
+          // Another power action waits its turn, and is checked again once
+          // it has: one no longer allowed by then doesn't run.
+          let allowed = true
+          let ran = false
+          const stopping = yield* runOperation(
+            operation<void>()({
+              authorize: () =>
+                Effect.suspend(() =>
+                  allowed
+                    ? Effect.void
+                    : Effect.fail(new Error("No longer allowed"))
+                ),
+              doing: "Stopping this game server",
+              locks: () => [exclusive(power)],
+              name: "test.power.stop",
+              run: () => Effect.sync(() => (ran = true)),
+            }),
+            undefined,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          assert.isUndefined(stopping.pollUnsafe())
+          allowed = false
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(starting)
+          const refused = yield* Fiber.join(stopping).pipe(Effect.flip)
+          assert.strictEqual((refused as Error).message, "No longer allowed")
+          assert.isFalse(ran)
+        })
+    )
+
+    it.effect("tells a person what's in the way once they've waited long", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const power = partKey(server, "power")
+        const release = yield* Deferred.make<void>()
+        const starting = yield* runOperation(
+          holding("test.power", "Starting this game server", [
+            exclusive(power),
+          ]),
+          release,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.yieldNow
+
+        const waiting = yield* runOperation(
+          holding("test.power.stop", "Stopping this game server", [
+            exclusive(power),
+          ]),
+          release,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.yieldNow
+        yield* TestClock.adjust("30 seconds")
+        const refused = yield* Fiber.join(waiting).pipe(Effect.flip)
+        assert.strictEqual(refused._tag, "OperationBusyError")
+        assert.strictEqual(
+          refused.message,
+          "Starting this game server is in progress. Try again once it's done."
+        )
+
+        // It gave up its place: the next power action runs once the first
+        // ends.
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(starting)
+        assert.strictEqual(
+          yield* runOperation(
+            operation<void>()({
+              doing: "Restarting this game server",
+              locks: () => [exclusive(power)],
+              name: "test.power.restart",
+              run: () => Effect.succeed("restarted"),
+            }),
+            undefined,
+            { user: person }
+          ),
+          "restarted"
+        )
+      })
+    )
+
+    it.effect(
+      "takes its turn again when what it changes moved while it waited",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const settingsOf = (id: string) =>
+            partKey(`backup-storage:${id}`, "settings")
+          const releaseFirst = yield* Deferred.make<void>()
+          const releaseSecond = yield* Deferred.make<void>()
+          const savingFirst = yield* runOperation(
+            holding("test.storage.save", "Saving this destination", [
+              exclusive(settingsOf("first")),
+            ]),
+            releaseFirst,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          const savingSecond = yield* runOperation(
+            holding("test.storage.save", "Saving this destination", [
+              exclusive(settingsOf("second")),
+            ]),
+            releaseSecond,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+
+          // A backup to the preferred destination, which changes while it
+          // waits for the first one's save.
+          let preferred = "first"
+          const backingUp = yield* runOperation(
+            operation<void>()({
+              authorize: () => Effect.sync(() => preferred),
+              doing: "Backing up this game server",
+              locks: ({ context }) => [shared(settingsOf(context))],
+              name: "test.backup",
+              run: ({ context }) => Effect.succeed(context),
+            }),
+            undefined,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          preferred = "second"
+          yield* Deferred.succeed(releaseFirst, undefined)
+          yield* Fiber.join(savingFirst)
+          yield* Effect.yieldNow
+
+          // It doesn't run without the second's lock, which is still held.
+          assert.isUndefined(backingUp.pollUnsafe())
+          yield* Deferred.succeed(releaseSecond, undefined)
+          yield* Fiber.join(savingSecond)
+          assert.strictEqual(yield* Fiber.join(backingUp), "second")
+        })
+    )
+
+    it.effect("keeps a person waiting 30 seconds in all, however often", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const settingsOf = (id: string) =>
+          partKey(`backup-storage:${id}`, "settings")
+        const releaseFirst = yield* Deferred.make<void>()
+        const releaseSecond = yield* Deferred.make<void>()
+        const savingFirst = yield* runOperation(
+          holding("test.storage.save", "Saving the first destination", [
+            exclusive(settingsOf("first")),
+          ]),
+          releaseFirst,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        const savingSecond = yield* runOperation(
+          holding("test.storage.save", "Saving the second destination", [
+            exclusive(settingsOf("second")),
+          ]),
+          releaseSecond,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.yieldNow
+
+        let preferred = "first"
+        const backingUp = yield* runOperation(
+          operation<void>()({
+            authorize: () => Effect.sync(() => preferred),
+            doing: "Backing up this game server",
+            locks: ({ context }) => [shared(settingsOf(context))],
+            name: "test.backup",
+            run: ({ context }) => Effect.succeed(context),
+          }),
+          undefined,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.yieldNow
+        // 20 seconds behind the first, then its turn again behind the second.
+        yield* TestClock.adjust("20 seconds")
+        preferred = "second"
+        yield* Deferred.succeed(releaseFirst, undefined)
+        yield* Fiber.join(savingFirst)
+        yield* Effect.yieldNow
+        assert.isUndefined(backingUp.pollUnsafe())
+
+        yield* TestClock.adjust("10 seconds")
+        const refused = yield* Fiber.join(backingUp).pipe(Effect.flip)
+        assert.strictEqual(refused._tag, "OperationBusyError")
+        assert.strictEqual(
+          refused.message,
+          "Saving the second destination is in progress. Try again once it's done."
+        )
+        yield* Deferred.succeed(releaseSecond, undefined)
+        yield* Fiber.join(savingSecond)
+      })
+    )
+
+    it.effect(
+      "turns a person away at once from a deletion still waiting its turn",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const release = yield* Deferred.make<void>()
+          const saving = yield* runOperation(
+            holding("test.save", "Saving a file", [shared(server)]),
+            release,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          // Hearth's own deletion waits for the save.
+          const deleting = yield* runOperation(
+            holding("test.delete", "Deleting this game server", [
+              exclusive(server),
+            ]),
+            release,
+            { user: null }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+
+          // A power action would only run after the deletion: it's told so.
+          const refused = yield* runOperation(
+            holding("test.power", "Starting this game server", [
+              exclusive(partKey(server, "power")),
+            ]),
+            release,
+            { user: person }
+          ).pipe(Effect.flip)
+          assert.strictEqual(refused._tag, "OperationBusyError")
+          assert.strictEqual(
+            refused.message,
+            "Deleting this game server is in progress. Try again once it's done."
+          )
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(saving)
+          yield* Fiber.join(deleting)
+        })
+    )
+
+    it.effect(
       "runs an operation inside one that holds its locks, and refuses one needing more",
       () =>
         Effect.gen(function* () {

@@ -263,6 +263,7 @@ const wipeDatabase = resourceOperation({
   kind: "database",
   id: (input: z.infer<typeof databaseInputSchema>) => input.databaseId,
   name: "database.wipe",
+  lock: "whole",
   doing: "Wiping this database",
   permission: () => "database.delete",
   run: async (user, data) => {
@@ -300,6 +301,7 @@ const renameDatabase = resourceOperation({
   kind: "database",
   id: (input: z.infer<typeof databaseRenameInputSchema>) => input.databaseId,
   name: "database.rename",
+  lock: "whole",
   doing: "Renaming this database",
   permission: () => "database.delete",
   run: async (_user, data) => {
@@ -480,6 +482,7 @@ const powerDatabase = resourceOperation({
   kind: "database",
   id: (input: z.infer<typeof databaseActionInputSchema>) => input.databaseId,
   name: "database.power",
+  lock: "whole",
   doing: "Changing this database's power",
   permission: () => "database.power",
   run: async (user, data) => {
@@ -510,6 +513,7 @@ const changeDatabaseLimits = resourceOperation({
   kind: "database",
   id: (input: z.infer<typeof databaseLimitsInputSchema>) => input.databaseId,
   name: "database.limits.update",
+  lock: "whole",
   doing: "Changing this database's limits",
   permission: () => "database.limits.write",
   run: async (user, data) => {
@@ -546,6 +550,7 @@ const rotateDatabasePassword = resourceOperation({
   kind: "database",
   id: (input: z.infer<typeof databaseInputSchema>) => input.databaseId,
   name: "database.credentials.rotate",
+  lock: "whole",
   doing: "Changing this database's password",
   permission: () => "database.credentials.rotate",
   run: async (user, data) => {

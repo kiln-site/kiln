@@ -4,15 +4,19 @@ import { promiseEffect } from "@/effect/promise"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
-import { exclusive, resourceKey, type LaneLock } from "@/operations/lanes"
+import {
+  lockAs,
+  resourceKey,
+  type LaneLock,
+  type LockPolicy,
+} from "@/operations/lanes"
 import { operation, signedIn } from "@/operations/operation"
 
 /**
- * A change to one game server, database or App, as an operation: it holds the
- * resource whole, which covers what its work reaches under it, such as its
- * DNS (`#dns`), and refuses or waits for its deletion. The person's
- * permission on it is checked before any lane is taken, so a refusal tells
- * nothing to one who may not change it; the run keeps any further checks.
+ * A change to one game server, database or App, as an operation, holding
+ * the resource as `lock` says. The person's permission on it is checked
+ * before any lane is taken, so a refusal tells nothing to one who may not
+ * change it; the run keeps any further checks.
  */
 export const resourceOperation = <
   Input extends { readonly relayId: string },
@@ -23,6 +27,7 @@ export const resourceOperation = <
   readonly name: string
   readonly doing: string | ((input: Input) => string)
   readonly permission: (input: Input) => AccessPermission
+  readonly lock: LockPolicy | ((input: Input) => LockPolicy)
   readonly alsoLocks?: (input: Input) => ReadonlyArray<LaneLock>
   readonly run: (user: AuthenticatedUser, input: Input) => Promise<A>
 }) =>
@@ -43,8 +48,11 @@ export const resourceOperation = <
         )
       ),
     locks: ({ input }) => [
-      exclusive(
-        resourceKey(definition.kind, input.relayId, definition.id(input))
+      lockAs(
+        resourceKey(definition.kind, input.relayId, definition.id(input)),
+        typeof definition.lock === "function"
+          ? definition.lock(input)
+          : definition.lock
       ),
       ...(definition.alsoLocks?.(input) ?? []),
     ],
