@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto"
 
 import { LaneRejectedError, type LaneLock } from "@workspace/operations"
-import { Cause, Clock, Effect, Exit, Metric, Schema } from "effect"
+import { Cause, Clock, Duration, Effect, Exit, Metric, Schema } from "effect"
 
 import { Database } from "@/effect/database"
 import { runAppEffect } from "@/effect/runtime"
@@ -171,11 +171,22 @@ export const runOperation = <Input, Context, A, E, R>(
   input: Input,
   caller: OperationCaller
 ): Effect.Effect<A, E | OperationBusyError, R | Database> =>
-  attempt(definition, input, caller).pipe(
-    Effect.retry({
-      times: 2,
-      while: (error) => Schema.is(LocksMovedError)(error),
-    }),
+  // A person waits up to PERSON_WAIT in all, however often they take their
+  // turn again.
+  Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) =>
+      attempt(
+        definition,
+        input,
+        caller,
+        now + Duration.toMillis(PERSON_WAIT)
+      ).pipe(
+        Effect.retry({
+          times: 2,
+          while: (error) => Schema.is(LocksMovedError)(error),
+        })
+      )
+    ),
     Effect.catchIf(
       (error) => Schema.is(LocksMovedError)(error),
       () =>
@@ -198,7 +209,8 @@ class LocksMovedError extends Schema.TaggedError<LocksMovedError>()(
 const attempt = <Input, Context, A, E, R>(
   definition: Operation<Input, Context, A, E, R>,
   input: Input,
-  caller: OperationCaller
+  caller: OperationCaller,
+  waitUntil: number
 ): Effect.Effect<A, E | OperationBusyError | LocksMovedError, R | Database> =>
   Effect.gen(function* () {
     const id = randomUUID()
@@ -389,7 +401,15 @@ const attempt = <Input, Context, A, E, R>(
       (waiting) =>
         Effect.raceFirst(
           waiting,
-          Effect.sleep(initiator === "person" ? PERSON_WAIT : SLOW_WAIT).pipe(
+          Effect.suspend(() =>
+            initiator === "person"
+              ? Clock.currentTimeMillis.pipe(
+                  Effect.flatMap((now) =>
+                    Effect.sleep(Duration.millis(Math.max(0, waitUntil - now)))
+                  )
+                )
+              : Effect.sleep(SLOW_WAIT)
+          ).pipe(
             Effect.andThen(
               Effect.suspend(() => {
                 if (laneOccupants.get(label)?.startedAt !== null)
@@ -410,7 +430,7 @@ const attempt = <Input, Context, A, E, R>(
                   definition.name,
                   new LaneRejectedError({
                     blockedBy,
-                    message: `${label} waited ${PERSON_WAIT} on ${blockedBy.join(", ")}`,
+                    message: `${label} waited as long as a person does on ${blockedBy.join(", ")}`,
                     reason: "busy",
                   })
                 ).pipe(
@@ -453,7 +473,7 @@ const SLOW_WAIT = "30 seconds"
 
 // How long a person waits behind everyday work before being told what's in
 // the way.
-const PERSON_WAIT = "30 seconds"
+const PERSON_WAIT = Duration.seconds(30)
 
 /**
  * A person waits behind everyday work on a part of what they change, as

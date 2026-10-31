@@ -260,6 +260,62 @@ describeMysql("Hearth operations", () => {
         })
     )
 
+    it.effect("keeps a person waiting 30 seconds in all, however often", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const settingsOf = (id: string) =>
+          partKey(`backup-storage:${id}`, "settings")
+        const releaseFirst = yield* Deferred.make<void>()
+        const releaseSecond = yield* Deferred.make<void>()
+        const savingFirst = yield* runOperation(
+          holding("test.storage.save", "Saving the first destination", [
+            exclusive(settingsOf("first")),
+          ]),
+          releaseFirst,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        const savingSecond = yield* runOperation(
+          holding("test.storage.save", "Saving the second destination", [
+            exclusive(settingsOf("second")),
+          ]),
+          releaseSecond,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.yieldNow
+
+        let preferred = "first"
+        const backingUp = yield* runOperation(
+          operation<void>()({
+            authorize: () => Effect.sync(() => preferred),
+            doing: "Backing up this game server",
+            locks: ({ context }) => [shared(settingsOf(context))],
+            name: "test.backup",
+            run: ({ context }) => Effect.succeed(context),
+          }),
+          undefined,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.yieldNow
+        // 20 seconds behind the first, then its turn again behind the second.
+        yield* TestClock.adjust("20 seconds")
+        preferred = "second"
+        yield* Deferred.succeed(releaseFirst, undefined)
+        yield* Fiber.join(savingFirst)
+        yield* Effect.yieldNow
+        assert.isUndefined(backingUp.pollUnsafe())
+
+        yield* TestClock.adjust("10 seconds")
+        const refused = yield* Fiber.join(backingUp).pipe(Effect.flip)
+        assert.strictEqual(refused._tag, "OperationBusyError")
+        assert.strictEqual(
+          refused.message,
+          "Saving the second destination is in progress. Try again once it's done."
+        )
+        yield* Deferred.succeed(releaseSecond, undefined)
+        yield* Fiber.join(savingSecond)
+      })
+    )
+
     it.effect(
       "turns a person away at once from a deletion still waiting its turn",
       () =>
