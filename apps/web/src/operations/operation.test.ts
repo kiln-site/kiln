@@ -10,6 +10,7 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 // Registers resource deletion, whose locks a restart takes back.
 import "@/lib/resource-deletion.server"
 import {
+  cancelQueuedOperation,
   durableOperation,
   queueDurableOperation,
   readmitWaitingOperations,
@@ -26,7 +27,6 @@ import {
 } from "./lanes"
 import { operation, runOperation } from "./operation"
 import {
-  cancelWaitingOperation,
   findOperation,
   finishOperation,
   loadOperation,
@@ -622,13 +622,20 @@ describeMysql("Hearth operations", () => {
           assert.notStrictEqual(next, first)
           assert.strictEqual(yield* record(next), "waiting")
 
-          // Cancelled while it waits, it never starts, and the key is free.
-          assert.isTrue(yield* cancelWaitingOperation(next))
+          // Cancelled while it waits, it never starts, leaves the line at
+          // once, and the key is free.
+          assert.isTrue(yield* cancelQueuedOperation(next))
           assert.isNull(yield* waitingOperation("test.durable.queued", "alpha"))
+          yield* Effect.sync(() =>
+            [...laneOccupants.values()].some((held) => held.id === next)
+          ).pipe(
+            Effect.repeat({ until: (inLine) => !inLine }),
+            Effect.timeout("5 seconds")
+          )
           yield* finishOperation(first, "succeeded")
           yield* Effect.sleep("200 millis")
           assert.strictEqual(yield* record(next), "cancelled")
-          assert.isFalse(yield* cancelWaitingOperation(first))
+          assert.isFalse(yield* cancelQueuedOperation(first))
         }).pipe(TestClock.withLive)
     )
 

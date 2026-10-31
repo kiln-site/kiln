@@ -44,6 +44,7 @@ import {
   loadOperation,
   runningOperations,
   recordExecution,
+  cancelWaitingOperation,
   queueOperation,
   startWaitingOperation,
   waitingOperations,
@@ -453,17 +454,40 @@ const takeTurn = (waiting: {
       yield* start().pipe(Effect.forkDetach)
       return
     }
-    yield* holdLanes({
+    const holder = yield* holdLanes({
       actorId: waiting.actorId,
       doing: waiting.doing,
       id: waiting.id,
       initiator: "system",
       locks: waiting.locks,
       name: waiting.name,
-      run: start,
+      run: () =>
+        Effect.suspend(() => {
+          // Its turn came: past withdrawing.
+          queuedHolders.delete(waiting.id)
+          return start()
+        }),
       waitUntil: Number.MAX_SAFE_INTEGER,
     })
+    queuedHolders.set(waiting.id, holder.withdraw)
   })
+
+// The places in line of operations queued and not yet started, by ID, so
+// one cancelled leaves the line at once rather than at its turn.
+const queuedHolders = new Map<string, () => void>()
+
+/**
+ * Cancels a queued operation that hasn't started, so it never does, and
+ * takes it out of its lanes' line. False once it has started.
+ */
+export const cancelQueuedOperation = Effect.fnUntraced(function* (id: string) {
+  const cancelled = yield* cancelWaitingOperation(id)
+  if (cancelled) {
+    queuedHolders.get(id)?.()
+    queuedHolders.delete(id)
+  }
+  return cancelled
+})
 
 /**
  * Sets every waiting operation not already in its lanes taking its turn,
