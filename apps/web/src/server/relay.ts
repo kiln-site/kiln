@@ -851,7 +851,7 @@ async function updateInstancePortsHandler(
     240_000
   )
   const instance = relayInstanceSchema.parse(value)
-  syncInstanceDomainAfterPortUpdate(data.relayId, instance.id, data.ports)
+  await syncInstanceDomainAfterPortUpdate(data.relayId, instance.id, data.ports)
   await runAppEffect(
     "relay.snapshot.invalidate",
     invalidateRelayCache(relayCachePolicy.snapshot(data.relayId))
@@ -1328,7 +1328,7 @@ async function performInstanceActionHandler(
   )
   const instance = relayInstanceSchema.parse(await response.json())
   if (action === "start" || action === "restart") {
-    provisionInstanceDomainLater(relay.id, instance.id)
+    await provisionInstanceDomainLater(relay.id, instance.id)
   }
   await runAppEffect(
     "relay.snapshot.invalidate",

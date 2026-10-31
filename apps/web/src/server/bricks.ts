@@ -445,7 +445,7 @@ async function updateInstanceStartupHandler(
       user.id
     )
   )
-  provisionInstanceDomainLater(relay.id, instance.id)
+  await provisionInstanceDomainLater(relay.id, instance.id)
   await runAppEffect(
     "relay.snapshot.invalidate",
     invalidateRelayCache(relayCachePolicy.snapshot(relay.id))

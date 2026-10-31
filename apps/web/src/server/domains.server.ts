@@ -24,10 +24,12 @@ import {
   assignmentHostnames,
   beginInstanceDomainRenameEffect,
   clearInstanceDomainErrorEffect,
+  clearInstanceDomainsPendingEffect,
   clearInstanceDomainRecordsEffect,
   deferInstanceDomainsEffect,
   finishInstanceDomainRenameEffect,
   listDueInstanceDomainsEffect,
+  markInstanceDomainsPendingEffect,
   deleteInstanceDomainAssignmentEffect,
   deleteRelayInstanceDomainAssignmentsEffect,
   insertInstanceDomainAssignmentEffect,
@@ -405,12 +407,17 @@ export async function provisionInstanceDomainBestEffort(
  * address, such as a start or a port or startup change. It runs as its own
  * DNS change from what the Relay reports once it has its turn, so a change
  * that finishes late can't put back an address a newer one replaced. Not
- * awaited: nothing holding the game server waits on it.
+ * awaited: nothing holding the game server waits on it. Its domains are
+ * marked first, so the DNS worker finishes one that never runs.
  */
-export function provisionInstanceDomainLater(
+export async function provisionInstanceDomainLater(
   relayId: string,
   instanceId: string
-): void {
+): Promise<void> {
+  await runAppEffect(
+    "domains.instance.markPending",
+    markInstanceDomainsPendingEffect(relayId, instanceId)
+  )
   outsideOperation(() =>
     forkPromise(async () => {
       const changed = await runAppEffect(
@@ -427,10 +434,12 @@ export function provisionInstanceDomainLater(
               (item) => item.id === instanceId
             )
             if (!instance) return false
-            return yield* provisionInstanceDomainEffect({
+            const changed = yield* provisionInstanceDomainEffect({
               ...relayInstanceSchema.parse(instance),
               relayId,
             })
+            yield* clearInstanceDomainsPendingEffect(relayId, instanceId)
+            return changed
           })
         ).pipe(
           Effect.catch((cause) =>

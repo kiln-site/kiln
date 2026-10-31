@@ -14,8 +14,17 @@ import { insertWebHostnameEffect } from "@/effect/web-hostnames"
 
 import { encryptWithKeyring } from "../../keyring.mjs"
 
+// What a Relay last reported over its connection, which the DNS worker
+// reads; none unless a test says.
+const reported = vi.hoisted(() => new Map<string, unknown>())
+vi.mock("@/lib/relay-connection", async (actual) => ({
+  ...(await actual<typeof import("@/lib/relay-connection")>()),
+  relayConnectionSnapshot: (id: string) => reported.get(id) ?? null,
+}))
+
 import {
   provisionInstanceDomain,
+  provisionInstanceDomainLater,
   reconcileDueInstanceDomainsEffect,
   removeInstanceDomainEffect,
   removeRelayManagedDomainsEffect,
@@ -247,6 +256,7 @@ function fakeCloudflare(options: { records?: Array<string> } = {}) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  reported.clear()
 })
 
 afterAll(() => disposeAppRuntime())
@@ -358,6 +368,36 @@ describeMysql("removing a game server's domain", () => {
           yield* removeRelayManagedDomainsEffect(relayId, true)
           assert.deepEqual(dns.names(), [])
           assert.deepEqual(yield* claimedNames, [])
+        }).pipe(Effect.provide(disabledCache))
+    )
+
+    it.effect(
+      "brings a moved address in line later when its follow-up can't run",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          fakeCloudflare({ records: ["address-record", "srv-record"] })
+          yield* insertCredential()
+          yield* insertAssignment(testAssignment())
+
+          // A port change hands off its DNS, which can't reach the Relay.
+          yield* Effect.promise(() =>
+            provisionInstanceDomainLater(relayId, instanceId)
+          )
+
+          // The DNS worker finishes it from what the Relay reports.
+          reported.set(relayId, { instances: [testInstance()] })
+          yield* reconcileDueInstanceDomainsEffect(Date.now() + 60_000)
+          const [domain] = yield* selectRows<{
+            last_error: string | null
+            public_host: string
+            public_port: number
+          }>("instance_domain")
+          assert.deepInclude(domain, {
+            last_error: null,
+            public_host: "new-relay.example.com",
+            public_port: 32_002,
+          })
         }).pipe(Effect.provide(disabledCache))
     )
 

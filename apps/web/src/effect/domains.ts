@@ -1323,6 +1323,45 @@ export const recordInstanceDomainSyncErrorEffect = Effect.fn(
   )
 })
 
+// What a game server's domains say while their address is being brought in
+// line after a change; the DNS worker picks up any left saying so.
+const addressUpdatePending = "Waiting to update its address"
+
+/**
+ * Marks a game server's domains as needing their address checked, before a
+ * change that may move it hands that check off, so the DNS worker finishes
+ * it if the check never does.
+ */
+export const markInstanceDomainsPendingEffect = Effect.fn(
+  "domains.assignments.markPending"
+)(function* (relayId: string, instanceId: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "domains.assignments.markPending",
+    `UPDATE ${databaseTable("instance_domain")}
+        SET last_error = ?, updated_at = ?
+      WHERE relay_id = ? AND instance_id = ?
+        AND status = 'active' AND last_error IS NULL`,
+    [addressUpdatePending, now, relayId, instanceId]
+  )
+})
+
+/** Clears that mark once the check has run, whatever it found to do. */
+export const clearInstanceDomainsPendingEffect = Effect.fn(
+  "domains.assignments.clearPending"
+)(function* (relayId: string, instanceId: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "domains.assignments.clearPending",
+    `UPDATE ${databaseTable("instance_domain")}
+        SET last_error = NULL, updated_at = ?
+      WHERE relay_id = ? AND instance_id = ? AND last_error = ?`,
+    [now, relayId, instanceId, addressUpdatePending]
+  )
+})
+
 /** Clears the error of a domain found in step again. */
 export const clearInstanceDomainErrorEffect = Effect.fn(
   "domains.assignment.clearError"
