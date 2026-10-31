@@ -478,22 +478,38 @@ function toDeployment(row: DeploymentRow): AppDeploymentRecord {
   }
 }
 
-/** What an app's pending deployment request asks for. */
+/** What asked an app to deploy, the newest ask's. */
+export type AppDeploymentAsk =
+  | "manual"
+  | "poll"
+  | "push"
+  | "redeploy"
+  | "update"
+
+/** What an app's waiting deployment request asks for. */
 export interface AppDeploymentRequestRow {
   /** The revision its deployments have taken up to. */
   readonly acknowledgedRevision: number
   readonly appId: string
-  /** The commit the newest push asked for; a poll deploys its branch head. */
+  /**
+   * The commit a push named, or a redeploy redeploys, and where it's from:
+   * `<repository ID>/<branch>`. Without one, a GitHub app deploys its
+   * branch's head.
+   */
   readonly commitSha: string | null
-  /** Where that commit came from: `<repository ID>/<branch>`. */
   readonly commitSource: string | null
-  /** An image update Kiln found due. */
-  readonly imageUpdate: boolean
-  readonly poll: boolean
-  readonly push: boolean
+  /** The digest a redeploy redeploys, and the image it was of. */
+  readonly imageDigest: string | null
+  readonly imageSource: string | null
   readonly relayId: string
-  /** Counts every request, so its taker acknowledges only what it took. */
+  /**
+   * Who asked, while a person's ask waits: it builds even what's already
+   * live, and deploys an update whatever its wait.
+   */
+  readonly requestedBy: string | null
+  /** Counts every ask, so one taken leaves those since waiting. */
   readonly revision: number
+  readonly trigger: AppDeploymentAsk
 }
 
 interface RequestRow extends RowDataPacket {
@@ -501,18 +517,20 @@ interface RequestRow extends RowDataPacket {
   app_id: string
   commit_sha: string | null
   commit_source: string | null
-  image_update: number
-  poll: number
-  push: number
+  image_digest: string | null
+  image_source: string | null
   relay_id: string
+  requested_by: string | null
   revision: number | string
+  taken_by: string | null
+  trigger: AppDeploymentAsk
 }
 
 const requestColumns =
-  "app_id, relay_id, push, poll, image_update, commit_sha, commit_source, revision, acknowledged_revision"
+  "app_id, relay_id, `trigger`, commit_sha, commit_source, image_digest, image_source, requested_by, revision, acknowledged_revision, taken_by"
 
-// One taken is kept, with what it acknowledged, so a request is waiting
-// while its revision is ahead of that.
+// Kept once taken, with what was taken, so an ask is waiting while its
+// revision is ahead of that.
 const requestPending = "revision > acknowledged_revision"
 
 function toRequest(row: RequestRow): AppDeploymentRequestRow {
@@ -521,35 +539,38 @@ function toRequest(row: RequestRow): AppDeploymentRequestRow {
     appId: row.app_id,
     commitSha: row.commit_sha,
     commitSource: row.commit_source,
-    imageUpdate: Boolean(row.image_update),
-    poll: Boolean(row.poll),
-    push: Boolean(row.push),
+    imageDigest: row.image_digest,
+    imageSource: row.image_source,
     relayId: row.relay_id,
+    requestedBy: row.requested_by,
     revision: Number(row.revision),
+    trigger: row.trigger,
   }
 }
 
 /**
- * Records that an app should deploy, joining the request already waiting:
- * every kind asked for is kept, a push pins its commit, the newest push's
- * winning, and the revision counts this one. One already taken starts
- * afresh. Returns the revision its deployments have taken up to.
+ * Asks an app to deploy, joining what already waits: the newest ask's
+ * trigger and target win, a push's or a redeploy's commit, a redeploy's
+ * digest, the newest code for anything else. A poll, which only notes the
+ * branch may have moved, leaves an ask waiting as it is. A person's ask is
+ * kept, by who made it, until a deployment takes it. Returns the revision
+ * its deployments have taken up to, which names the one that takes it.
  */
 export const requestAppDeploymentEffect = Effect.fn("apps.deployment.request")(
   function* (input: {
     appId: string
-    /** The commit a push deploys, from its webhook, and where it's from. */
-    pinned?: { commitSha: string; source: string }
+    /** The commit a push names, or a redeploy redeploys, and its source. */
+    commit?: { sha: string; source: string }
+    /** The digest a redeploy redeploys, and the image it was of. */
+    image?: { digest: string; source: string }
     relayId: string
-    trigger: "poll" | "push" | "update"
+    trigger: AppDeploymentAsk
+    /** The person who asked; null for Kiln's own. */
+    userId?: string | null
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    const kinds = {
-      imageUpdate: input.trigger === "update" ? 1 : 0,
-      poll: input.trigger === "poll" ? 1 : 0,
-      push: input.trigger === "push" ? 1 : 0,
-    }
+    const keep = `(${requestPending} AND VALUES(\`trigger\`) = 'poll')`
     // Assigned in order, so each reads whether the request was still
     // waiting before its revision moves on.
     return yield* database.transaction(
@@ -558,34 +579,32 @@ export const requestAppDeploymentEffect = Effect.fn("apps.deployment.request")(
         Effect.gen(function* () {
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("app_deployment_request")}
-         (app_id, relay_id, push, poll, image_update, commit_sha,
-          commit_source, revision, requested_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+         (app_id, relay_id, \`trigger\`, commit_sha, commit_source,
+          image_digest, image_source, requested_by, revision, requested_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
        ON DUPLICATE KEY UPDATE
          relay_id = VALUES(relay_id),
-         push = IF(${requestPending}, push OR VALUES(push), VALUES(push)),
-         poll = IF(${requestPending}, poll OR VALUES(poll), VALUES(poll)),
-         image_update = IF(${requestPending},
-           image_update OR VALUES(image_update), VALUES(image_update)),
-         commit_source = IF(VALUES(commit_sha) IS NOT NULL,
-           VALUES(commit_source), IF(${requestPending}, commit_source, NULL)),
-         commit_sha = IF(VALUES(commit_sha) IS NOT NULL, VALUES(commit_sha),
-           IF(${requestPending}, commit_sha, NULL)),
+         commit_sha = IF(${keep}, commit_sha, VALUES(commit_sha)),
+         commit_source = IF(${keep}, commit_source, VALUES(commit_source)),
+         image_digest = IF(${keep}, image_digest, VALUES(image_digest)),
+         image_source = IF(${keep}, image_source, VALUES(image_source)),
+         requested_by = IF(VALUES(requested_by) IS NOT NULL,
+           VALUES(requested_by), IF(${requestPending}, requested_by, NULL)),
+         \`trigger\` = IF(${keep}, \`trigger\`, VALUES(\`trigger\`)),
          requested_at = VALUES(requested_at),
          revision = revision + 1`,
             [
               input.appId,
               input.relayId,
-              kinds.push,
-              kinds.poll,
-              kinds.imageUpdate,
-              input.pinned?.commitSha ?? null,
-              input.pinned?.source ?? null,
+              input.trigger,
+              input.commit?.sha ?? null,
+              input.commit?.source ?? null,
+              input.image?.digest ?? null,
+              input.image?.source ?? null,
+              input.userId ?? null,
               now,
             ]
           )
-          // What its deployments have taken up to, which names the one that
-          // takes it up.
           const [row] = yield* transaction.queryRows<
             RowDataPacket & { acknowledged_revision: number | string }
           >(
@@ -600,6 +619,7 @@ export const requestAppDeploymentEffect = Effect.fn("apps.deployment.request")(
   }
 )
 
+/** The app's waiting ask, if any. */
 export const loadAppDeploymentRequestEffect = Effect.fn(
   "apps.deployment.request.load"
 )(function* (appId: string) {
@@ -614,7 +634,7 @@ export const loadAppDeploymentRequestEffect = Effect.fn(
   return row ? toRequest(row) : null
 })
 
-/** Every pending request, for a Hearth that just started to take up. */
+/** Every waiting ask, for a Hearth that just started to take up. */
 export const loadAppDeploymentRequestsEffect = Effect.fn(
   "apps.deployment.requests"
 )(function* () {
@@ -629,19 +649,56 @@ export const loadAppDeploymentRequestsEffect = Effect.fn(
 })
 
 /**
- * Acknowledges the request up to the revision its deployment took. One
- * asked for since stays waiting, and acknowledging the same revision again
- * changes nothing, so a deployment that ran again can't clear a newer one.
+ * Takes what the app's request asks, as a deployment plans, in one step:
+ * what's asked since waits for the next. The same deployment taking it
+ * again, its step run again, gets what it took, or what's waiting now.
  */
-export const settleAppDeploymentRequestEffect = Effect.fn(
-  "apps.deployment.request.settle"
+export const takeAppDeploymentRequestEffect = Effect.fn(
+  "apps.deployment.request.take"
+)(function* (appId: string, deploymentId: string) {
+  const database = yield* Database
+  return yield* database.transaction(
+    "apps.deployment.request.take",
+    (transaction) =>
+      Effect.gen(function* () {
+        const [row] = yield* transaction.queryRows<RequestRow>(
+          `SELECT ${requestColumns}
+             FROM ${databaseTable("app_deployment_request")}
+            WHERE app_id = ?
+            FOR UPDATE`,
+          [appId]
+        )
+        if (!row) return null
+        const request = toRequest(row)
+        if (request.revision > request.acknowledgedRevision) {
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("app_deployment_request")}
+                SET acknowledged_revision = revision, taken_by = ?
+              WHERE app_id = ?`,
+            [deploymentId, appId]
+          )
+          return request
+        }
+        return row.taken_by === deploymentId ? request : null
+      })
+  )
+})
+
+/**
+ * Withdraws the app's waiting ask at `revision`, as one taken would be, so
+ * no deployment takes it. False once a deployment has taken it, or another
+ * ask has joined it since.
+ */
+export const cancelAppDeploymentRequestEffect = Effect.fn(
+  "apps.deployment.request.cancel"
 )(function* (appId: string, revision: number) {
   const database = yield* Database
-  yield* database.execute(
-    "apps.deployment.request.settle",
+  const result = yield* database.execute(
+    "apps.deployment.request.cancel",
     `UPDATE ${databaseTable("app_deployment_request")}
-        SET acknowledged_revision = GREATEST(acknowledged_revision, ?)
-      WHERE app_id = ? AND revision >= ?`,
-    [revision, appId, revision]
+        SET acknowledged_revision = revision, taken_by = NULL
+      WHERE app_id = ? AND revision = ? AND ${requestPending}`,
+    [appId, revision]
   )
+  return result.affectedRows === 1
 })

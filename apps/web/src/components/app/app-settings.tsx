@@ -54,6 +54,7 @@ import {
 import type { AppGitHubSourceView } from "@/server/app-deployments.server"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import { deployApp, renameApp } from "@/server/apps"
+import { useAppDeployState } from "@/components/app/use-app-deploy-state"
 
 // The app's details on its Info page, one section per concern, each with
 // the actions that change it. What runs where is tagged with the service
@@ -533,7 +534,9 @@ function DeployToApplyButton({ app }: { app: App }) {
     },
     onError: (error) => showAppOperationError("Deploy failed", error),
   })
-  const deploying = deploy.isPending || app.deployment?.state === "running"
+  // Asked during a build, it applies once that ends; once asked, it waits.
+  const queued = useAppDeployState(app.id)?.queuedRevision != null
+  const deploying = deploy.isPending || queued
   return (
     <Button
       type="button"
@@ -542,7 +545,7 @@ function DeployToApplyButton({ app }: { app: App }) {
       onClick={() => deploy.mutate()}
     >
       {deploying ? <LoaderCircle className="animate-spin" /> : <Rocket />}
-      Deploy to apply
+      {queued ? "Deploy queued" : "Deploy to apply"}
     </Button>
   )
 }

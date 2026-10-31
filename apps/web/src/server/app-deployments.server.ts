@@ -14,9 +14,12 @@ import {
   type AppImageUpdate,
 } from "@/effect/app-image-updates"
 import {
+  cancelAppDeploymentRequestEffect,
   latestAppDeploymentsEffect,
   listAppDeploymentsEffect,
   loadAppDeploymentEffect,
+  loadAppDeploymentRequestsEffect,
+  loadRunningAppDeploymentsEffect,
   loadAppGitHubSourceEffect,
   saveAppGitHubSourceEffect,
   type AppDeploymentRecord,
@@ -39,7 +42,12 @@ import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { queuePersonDeploymentEffect } from "@/lib/app-deployments.server"
+import {
+  askAppDeploymentEffect,
+  publishAppDeploymentChange,
+} from "@/lib/app-deployments.server"
+import { runOperationPromise } from "@/operations/operation"
+import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { publishGitHubSyncChange } from "@/lib/github-sync.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures } from "@/lib/relay-connection"
@@ -149,6 +157,58 @@ export async function getAppDeploymentsHandler(data: {
         ? { id: last.id, startedAt: last.startedAt }
         : null,
   }
+}
+
+/**
+ * Each app the person can read that has a deploy waiting its turn, or one
+ * Hearth is running, so its Deploy button says so from the moment it's
+ * asked. A waiting one names its revision, to cancel just that ask.
+ */
+export async function getAppDeployStatesHandler(user: AuthenticatedUser) {
+  const [waiting, running] = await Promise.all([
+    runAppEffect("apps.deployment.requests", loadAppDeploymentRequestsEffect()),
+    runAppEffect("apps.deployments.running", loadRunningAppDeploymentsEffect()),
+  ])
+  if (waiting.length === 0 && running.length === 0) return {}
+  const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
+  const states: Record<
+    string,
+    { deploying: boolean; queuedRevision: number | null }
+  > = {}
+  const readable = (app: { appId: string; relayId: string }) =>
+    hasAppPermission(user, grants, app, "app.read")
+  for (const record of running) {
+    if (!readable(record)) continue
+    states[record.appId] = { deploying: true, queuedRevision: null }
+  }
+  for (const request of waiting) {
+    if (!readable(request)) continue
+    states[request.appId] = {
+      deploying: states[request.appId]?.deploying ?? false,
+      queuedRevision: request.revision,
+    }
+  }
+  return states
+}
+
+/**
+ * Withdraws the deploy waiting its turn that the person saw, unless a
+ * deployment took it or another ask joined it since.
+ */
+export async function cancelQueuedAppDeployHandler(
+  user: AuthenticatedUser,
+  data: { appId: string; relayId: string; revision: number }
+) {
+  const { relay } = await authorizedAppFor(user, data, "app.manage")
+  const cancelled = await runAppEffect(
+    "apps.deployment.request.cancel",
+    cancelAppDeploymentRequestEffect(data.appId, data.revision)
+  )
+  publishAppDeploymentChange(relay.id)
+  if (!cancelled) {
+    throw new Error("That deploy has started, or another was asked for since")
+  }
+  return { cancelled: true as const }
 }
 
 /** What the app's rail shows: where it deploys from and what it runs. */
@@ -360,18 +420,19 @@ export async function saveAppGitHubSourceHandler(
   publishGitHubSyncChange()
   // Queued, behind any deployment running; a new app may still be
   // provisioning, and deploys once it's ready.
-  const queued = data.deploy
-    ? await runAppEffect(
-        "apps.deploy",
-        queuePersonDeploymentEffect(user, {
-          appId: data.appId,
-          awaitProvisioning: true,
-          explicit: { trigger: "manual", userId: user.id },
-          relayId: relay.id,
-        })
-      )
-    : null
-  return { config, queued: queued !== null }
+  if (data.deploy) {
+    await runAppEffect(
+      "apps.deploy",
+      askAppDeploymentEffect({
+        appId: data.appId,
+        awaitProvisioning: true,
+        relayId: relay.id,
+        trigger: "manual",
+        userId: user.id,
+      })
+    )
+  }
+  return { config, queued: data.deploy === true }
 }
 
 /**
@@ -383,19 +444,32 @@ export async function redeployAppDeploymentHandler(
   data: { deploymentId: string }
 ) {
   const record = await recordFor(data.deploymentId)
-  const { relay } = await authorizedAppFor(user, record, "app.manage")
-  return runAppEffect(
-    "apps.redeploy",
-    queuePersonDeploymentEffect(user, {
+  const { app, relay } = await authorizedAppFor(user, record, "app.manage")
+  // What it came from, so it isn't deployed once the app deploys from
+  // another repository or image.
+  const source = record.commitSha
+    ? await runAppEffect(
+        "apps.github.source",
+        loadAppGitHubSourceEffect(record.appId)
+      )
+    : null
+  return runOperationPromise(
+    askAppDeploy,
+    {
       appId: record.appId,
-      explicit: {
-        ...(record.commitSha && { commit: record.commitSha }),
-        ...(record.imageDigest && { imageDigest: record.imageDigest }),
-        trigger: "redeploy",
-        userId: user.id,
-      },
+      ...(record.commitSha && {
+        commit: {
+          sha: record.commitSha,
+          source: `${source?.repositoryId ?? ""}/${source?.branch ?? ""}`,
+        },
+      }),
+      ...(record.imageDigest && {
+        image: { digest: record.imageDigest, source: app.config.image },
+      }),
       relayId: relay.id,
-    })
+      trigger: "redeploy",
+    },
+    { user }
   )
 }
 

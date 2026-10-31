@@ -84,11 +84,6 @@ export interface LaneTicket {
    * whatever it read before may have changed.
    */
   readonly grantedAtOnce: boolean
-  /**
-   * Whether it was turned away as it was admitted: while paused, with too
-   * many waiting, or refused as busy. Its run fails with why.
-   */
-  readonly refusedAtOnce: boolean
 }
 
 /** What the lanes hold and what waits on what, for diagnostics. */
@@ -340,7 +335,6 @@ export class OperationLanes {
       },
       withdraw: () => this.#cancel(waiter),
       grantedAtOnce: waiter.state === "granted",
-      refusedAtOnce: waiter.state === "done",
       run: (effect) => this.#run(waiter, effect),
     }
   }

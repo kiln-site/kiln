@@ -9,9 +9,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useHydrated, useNavigate } from "@tanstack/react-router"
 import { primaryWebRoute, webRouteUrl } from "@workspace/contracts"
 import type { RelayInstanceWebRoute } from "@workspace/contracts"
-import { Rocket, Trash2 } from "lucide-react"
+import { Rocket, Trash2, X } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { DeleteAppDialog } from "@/components/app/app-dialogs"
@@ -53,6 +58,8 @@ import {
   appDirectoryQueryOptions,
   appWebRoutesQueryOptions,
 } from "@/lib/query-options"
+import { useAppDeployState } from "@/components/app/use-app-deploy-state"
+import { cancelQueuedAppDeploy } from "@/server/app-deployments"
 import { deployApp, runAppAction } from "@/server/apps"
 
 export const AppWorkspaceShell = React.memo(function AppWorkspaceShell({
@@ -398,29 +405,69 @@ function AppPowerControls({
     [runAction]
   )
   const relayConnected = appRelayAvailable(app)
-  const deploying = relayConnected && app.deployment?.state === "running"
+  const hearth = useAppDeployState(app.id)
+  const deploying =
+    (relayConnected && app.deployment?.state === "running") ||
+    hearth?.deploying === true
+  const queued = hearth?.queuedRevision ?? null
 
   if (!canManage) return null
   return (
-    <WorkspacePowerControls
-      action={action.isPending ? action.variables : null}
-      noun="app"
-      powerPermissions={powerPermissions}
-      primaryAction={{
-        disabled: !relayConnected || action.isPending,
-        icon: <Rocket />,
-        label: "Deploy",
-        pending: deploy.isPending || deploying,
-        pendingLabel: "Deploying",
-        onClick: () => deploy.mutate(),
-      }}
-      target={{
-        name: app.name,
-        observedState: app.observedState,
-        provisioning: app.provisioning ?? null,
-      }}
-      relayConnected={relayConnected}
-      onAction={handleAction}
-    />
+    <div className="flex items-center gap-1.5">
+      {queued !== null ? (
+        <CancelQueuedDeploy app={app} revision={queued} />
+      ) : null}
+      <WorkspacePowerControls
+        action={action.isPending ? action.variables : null}
+        noun="app"
+        powerPermissions={powerPermissions}
+        primaryAction={{
+          disabled: !relayConnected || action.isPending,
+          icon: <Rocket />,
+          label: "Deploy",
+          pending: deploy.isPending || deploying || queued !== null,
+          pendingLabel: deploying || deploy.isPending ? "Deploying" : "Queued",
+          onClick: () => deploy.mutate(),
+        }}
+        target={{
+          name: app.name,
+          observedState: app.observedState,
+          provisioning: app.provisioning ?? null,
+        }}
+        relayConnected={relayConnected}
+        onAction={handleAction}
+      />
+    </div>
+  )
+}
+
+// Withdraws the deploy waiting its turn, the one shown.
+function CancelQueuedDeploy({ app, revision }: { app: App; revision: number }) {
+  const cancel = useMutation({
+    mutationFn: () =>
+      cancelQueuedAppDeploy({
+        data: { appId: app.id, relayId: app.relayId, revision },
+      }),
+    onSuccess: () =>
+      showToast({ message: "Queued deploy cancelled", type: "success" }),
+    onError: (cause) => showAppOperationError("Couldn't cancel", cause),
+  })
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          aria-label="Cancel queued deploy"
+          className="text-muted-foreground"
+          disabled={cancel.isPending}
+          size="icon-sm"
+          type="button"
+          variant="ghost"
+          onClick={() => cancel.mutate()}
+        >
+          <X />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">Cancel queued deploy</TooltipContent>
+    </Tooltip>
   )
 }

@@ -15,7 +15,6 @@ import {
 import { disposeAppRuntime } from "@/effect/runtime"
 import { databaseTableName } from "@/lib/database-config"
 import { operationsTablePrefix } from "@/operations/engine"
-import { queueDurableOperation } from "@/operations/durable"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertRows, insertUser } from "@/test/seed"
@@ -86,6 +85,7 @@ const second = "b".repeat(40)
 // Apart from the others, whose deployments a test may leave running.
 const third = "c".repeat(40)
 const fourth = "d".repeat(40)
+const fifth = "e".repeat(40)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -139,16 +139,17 @@ const seedApp = (appId: string) =>
     }))
   })
 
-const deploy = (appId: string) =>
+const ask = (
+  appId: string,
+  trigger: "manual" | "update" = "manual",
+  userId: string | null = null
+) =>
   Effect.promise(() => import("@/lib/app-deployments.server")).pipe(
-    Effect.flatMap(({ deployAppOperation }) =>
-      queueDurableOperation(deployAppOperation, {
-        appId,
-        explicit: { trigger: "manual", userId: null },
-        relayId,
-      })
+    Effect.flatMap(({ askAppDeploymentEffect }) =>
+      askAppDeploymentEffect({ appId, relayId, trigger, userId })
     )
   )
+const deploy = (appId: string) => ask(appId)
 
 const sentTo = (appId: string) =>
   relay.sent.filter((sent) => sent === appId).length
@@ -187,8 +188,9 @@ describeMysql("App deployments", () => {
           yield* deploy(first)
           yield* until(() => sentTo(first) === 1)
 
-          // Another deploy of the same app waits its turn; another app's
-          // goes ahead meanwhile.
+          // Two more asks of the same app wait their turn as one; another
+          // app's goes ahead meanwhile.
+          yield* deploy(first)
           yield* deploy(first)
           yield* deploy(second)
           yield* until(() => sentTo(second) === 1)
@@ -201,6 +203,8 @@ describeMysql("App deployments", () => {
             state: "succeeded",
           })
           yield* until(() => sentTo(first) === 2)
+          yield* Effect.sleep("3 seconds")
+          assert.strictEqual(sentTo(first), 2)
           const history = yield* latestAppDeploymentsEffect(first)
           assert.strictEqual(
             history.succeeded?.relayDeploymentId,
@@ -246,6 +250,40 @@ describeMysql("App deployments", () => {
     )
 
     it.effect(
+      "refuse a person's ask once they may no longer manage the app",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.sent.length = 0
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* seedApp(fifth)
+
+          // Asked by someone whose account is gone when its turn comes.
+          yield* ask(fifth, "manual", "removed-person")
+          const refused = yield* Effect.suspend(() =>
+            latestAppDeploymentsEffect(fifth)
+          ).pipe(
+            Effect.map(({ latest }) => latest),
+            Effect.repeat({
+              schedule: Schedule.spaced("100 millis"),
+              until: (latest) => latest !== null,
+            }),
+            Effect.timeout("20 seconds")
+          )
+          assert.strictEqual(refused?.status, "failed")
+          assert.strictEqual(refused?.triggeredBy, "removed-person")
+          assert.strictEqual(sentTo(fifth), 0)
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
       "settle what a deletion skipped, so a request after it fails queues anew",
       () =>
         Effect.gen(function* () {
@@ -274,9 +312,6 @@ describeMysql("App deployments", () => {
             status: "pending",
             updated_at: 0,
           })
-          const { queueAppDeploymentEffect } = yield* Effect.promise(
-            () => import("@/lib/app-deployments.server")
-          )
           const settled = Effect.suspend(() =>
             loadAppDeploymentRequestEffect(third)
           ).pipe(
@@ -288,7 +323,7 @@ describeMysql("App deployments", () => {
           )
 
           // Being deleted: nothing deploys, and the update it asked is settled.
-          yield* queueAppDeploymentEffect(third, relayId, "update")
+          yield* ask(third, "update")
           yield* settled
           assert.isNull((yield* latestAppDeploymentsEffect(third)).latest)
 
@@ -296,7 +331,7 @@ describeMysql("App deployments", () => {
           // as far as this Relay can, which can't deploy updates.
           const sql = yield* SqlClient.SqlClient
           yield* sql`UPDATE ${sql(databaseTableName("resource_deletion"))} SET status = 'cancelled'`
-          yield* queueAppDeploymentEffect(third, relayId, "update")
+          yield* ask(third, "update")
           yield* settled
           assert.strictEqual(
             (yield* latestAppDeploymentsEffect(third)).latest?.status,

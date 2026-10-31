@@ -10,6 +10,8 @@ import { z } from "zod"
 
 import { runOperationPromise } from "@/operations/operation"
 import {
+  cancelQueuedAppDeployHandler,
+  getAppDeployStatesHandler,
   getAppDeploymentLogHandler,
   getAppDeploymentsHandler,
   getAppDeploymentSummaryHandler,
@@ -26,6 +28,10 @@ const appInputSchema = z.strictObject({
 })
 
 const deploymentInputSchema = z.strictObject({ deploymentId: z.uuid() })
+
+const cancelDeployInputSchema = appInputSchema.extend({
+  revision: z.number().int().positive(),
+})
 
 const branchSchema = z
   .string()
@@ -57,6 +63,29 @@ const saveSourceInputSchema = appInputSchema.extend({
 export const getAppDeployments = createServerFn({ method: "GET" })
   .validator(deploymentsInputSchema)
   .handler(({ data }) => getAppDeploymentsHandler(data))
+
+// Which apps have a deploy waiting its turn or running, for their buttons.
+export const getAppDeployStates = createServerFn({ method: "GET" }).handler(
+  async () => getAppDeployStatesHandler(await requireEligibleResourceUser())
+)
+
+const cancelQueuedDeploy = resourceOperation({
+  kind: "app",
+  id: (input: z.infer<typeof cancelDeployInputSchema>) => input.appId,
+  name: "app.deploy.cancel",
+  doing: "Cancelling this App's queued deploy",
+  permission: () => "app.manage",
+  lock: "shared",
+  run: cancelQueuedAppDeployHandler,
+})
+
+export const cancelQueuedAppDeploy = createServerFn({ method: "POST" })
+  .validator(cancelDeployInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(cancelQueuedDeploy, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 export const getAppDeploymentSummary = createServerFn({ method: "GET" })
   .validator(appInputSchema)

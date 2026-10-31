@@ -35,7 +35,7 @@ import { resourceKey, shared } from "@/operations/lanes"
 import { inLanes } from "@/operations/operation"
 import { databaseTable } from "@/lib/database-config"
 import {
-  queueAppDeploymentEffect,
+  askAppDeploymentEffect,
   publishAppDeploymentChange,
 } from "@/lib/app-deployments.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
@@ -321,7 +321,11 @@ const recordAppImageAnswersEffect = Effect.fnUntraced(function* (
     yield* resolveAppImageUpdateNotificationsEffect(relay.id, appId)
     const at = autoUpdateAt(recorded.update)
     if (at !== null && at <= (yield* Clock.currentTimeMillis)) {
-      yield* queueAppDeploymentEffect(appId, relay.id, "update")
+      yield* askAppDeploymentEffect({
+        appId,
+        relayId: relay.id,
+        trigger: "update",
+      })
     }
   }
   return changed

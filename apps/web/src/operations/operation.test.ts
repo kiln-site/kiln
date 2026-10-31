@@ -619,82 +619,11 @@ describeMysql("Hearth operations", () => {
     )
 
     it.effect(
-      "refuses a person's queued change while their resource is replaced, and queues it behind a part",
+      "queues durable changes past startup, takes up one left waiting, and retries a failed one",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
-          const deploy = partKey(server, "deploy")
           const queued = durableOperation({
-            input: Schema.Struct({}),
-            kind: "test.durable.person",
-            locks: () => [exclusive(deploy)],
-            run: () => Effect.void,
-            version: 1,
-          })
-          const queue = (key: string) =>
-            queueDurableOperation(
-              queued,
-              {},
-              { actorId: person.id, idempotencyKey: key }
-            )
-
-          // Being deleted, it's turned away as they ask, and never recorded.
-          const deleted = yield* Deferred.make<void>()
-          const deleting = yield* runOperation(
-            holding("test.delete", "Deleting this game server", [
-              exclusive(server),
-            ]),
-            deleted,
-            { user: person }
-          ).pipe(Effect.forkChild({ startImmediately: true }))
-          yield* Effect.yieldNow
-          const refused = yield* queue("deleting").pipe(Effect.flip)
-          assert.strictEqual(
-            (refused as { _tag?: string })._tag,
-            "OperationBusyError"
-          )
-          assert.isNull(yield* findOperation("test.durable.person", "deleting"))
-          yield* Deferred.succeed(deleted, undefined)
-          yield* Fiber.join(deleting)
-
-          // Behind another deploy, it's queued, then runs.
-          const deployed = yield* Deferred.make<void>()
-          const deploying = yield* runOperation(
-            holding("test.deploy", "Deploying this game server", [
-              exclusive(deploy),
-            ]),
-            deployed,
-            { user: person }
-          ).pipe(Effect.forkChild({ startImmediately: true }))
-          yield* Effect.yieldNow
-          const id = yield* queue("behind")
-          const state = findOperation("test.durable.person", "behind").pipe(
-            Effect.map((found) => found?.state)
-          )
-          assert.strictEqual(yield* state, "waiting")
-          yield* Deferred.succeed(deployed, undefined)
-          yield* Fiber.join(deploying)
-          yield* state.pipe(
-            Effect.repeat({ until: (now) => now === "running" }),
-            Effect.timeout("5 seconds")
-          )
-          yield* finishOperation(id, "succeeded")
-        }).pipe(TestClock.withLive)
-    )
-
-    it.effect(
-      "queues durable changes past startup, checks who asked when their turn comes, and retries a failed one",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          let allowed = true
-          const queued = durableOperation({
-            authorize: () =>
-              Effect.suspend(() =>
-                allowed
-                  ? Effect.void
-                  : Effect.fail(new Error("No longer allowed"))
-              ),
             input: Schema.Struct({ name: Schema.String }),
             kind: "test.durable.checked",
             locks: ({ name }) => [exclusive(partKey(server, name))],
@@ -724,9 +653,8 @@ describeMysql("Hearth operations", () => {
           yield* until("early", "running")
 
           // One waiting with nothing taking its turn, as a restart finds it,
-          // is checked first: whoever asked may no longer.
+          // takes its turn.
           yield* recordOperation({
-            actorId: person.id,
             idempotencyKey: "restored",
             input: { name: "restored" },
             kind: "test.durable.checked",
@@ -734,22 +662,26 @@ describeMysql("Hearth operations", () => {
             state: "waiting",
             version: 1,
           })
-          allowed = false
           yield* readmitWaitingOperations
-          yield* until("restored", "failed")
+          yield* until("restored", "running")
 
           // A key whose operation failed queues another.
-          allowed = true
+          const failed = yield* findOperation(
+            "test.durable.checked",
+            "restored"
+          )
+          yield* finishOperation(failed!.id, "failed")
           const again = yield* queueDurableOperation(
             queued,
             { name: "restored" },
-            { actorId: person.id, again: true, idempotencyKey: "restored" }
+            { again: true, idempotencyKey: "restored" }
           )
           yield* until("restored", "running")
           assert.strictEqual(
             (yield* findOperation("test.durable.checked", "restored"))?.id,
             again
           )
+          assert.notStrictEqual(again, failed!.id)
           for (const key of ["early", "restored"]) {
             const found = yield* findOperation("test.durable.checked", key)
             yield* finishOperation(found!.id, "succeeded")

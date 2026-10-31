@@ -63,6 +63,7 @@ import {
   updateAppConfigHandler,
 } from "@/server/app-access"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { resourceOperation } from "@/server/resource-operation.server"
 import { connectDatabase } from "@/server/database-connections.server"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
@@ -385,25 +386,19 @@ export const renameApp = createServerFn({ method: "POST" })
     })
   )
 
-// Deploys the saved configuration, a GitHub app its branch's head, once
-// any deployment running ends: queued until then. Its log and the app's
-// state follow it from there, and Hearth records how it ends.
+// Deploys the saved configuration, a GitHub app its branch's newest, once
+// any deployment running ends: queued until then, joining any deploy
+// already asked for. Its log and the app's state follow it from there, and
+// Hearth records how it ends.
 export const deployApp = createServerFn({ method: "POST" })
   .validator(appInputSchema)
   .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const { relay } = await authorizedAppFor(user, data, "app.manage")
-    const { queuePersonDeploymentEffect } =
-      await import("@/lib/app-deployments.server")
-    const queued = await runAppEffect(
-      "apps.deploy",
-      queuePersonDeploymentEffect(user, {
-        appId: data.appId,
-        explicit: { trigger: "manual", userId: user.id },
-        relayId: relay.id,
-      })
+    const queued = await runOperationPromise(
+      askAppDeploy,
+      { appId: data.appId, relayId: data.relayId, trigger: "manual" },
+      { user: await requireEligibleResourceUser() }
     )
-    publishAppChange(relay.id, false)
+    publishAppChange(data.relayId, false)
     return queued
   })
 

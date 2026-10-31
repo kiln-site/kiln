@@ -187,23 +187,37 @@ the App, judged where it's used (`currentImageUpdate`): it asked about the
 image the App names now, and no deployment has started since. Checks keep
 no state of their own; when each App was last asked is what it recorded.
 
-An App's deployment is one durable operation (`app.deploy`) holding its
-`#deploy` from sending it until its Relay says it ended, so the next waits
-its turn behind it and nothing else orders deployments. What a push, poll
-or image check asks for is kept on the app (`app_deployment_request`) and
-read when its turn comes: a push pins the commit from its webhook, with the
-repository and branch it came from, the newest push's winning; a poll
-deploys its branch head. A deployment acknowledges only the revision it
-took, so one asked for since still waits. A person's deploy, rollback or
-update is deployed as they asked, and shows as queued until its turn
-(`queueDurableOperation`): it takes its place in line as they ask, so a
-deletion or restore of the App turns it away at once as it would any
-change of theirs, and only behind other work does it wait. The
-App's saved configuration, which holds its secrets, is read as it's sent
-and the token that checks out a GitHub commit made then, neither kept in
-the operation's steps, which are stored in the clear; a reply lost to a restart is read back (`relayCommand`), not sent again.
-Deleting an App stops its build on the Relay first (`app.deployment.abort`),
-so the deletion doesn't wait for the build it removes.
+An App deploys the same way whatever asked: a push, a poll, an image
+check, or a person's Deploy, save-and-deploy, update or redeploy. Each ask
+joins the App's one request (`app_deployment_request`), the newest winning:
+a push pins the commit from its webhook, with the repository and branch it
+came from; a redeploy pins its commit, or its digest and the image it was
+of, and is refused once the App deploys from another; anything else asks
+for the newest. A poll, which only notes the branch may have moved, leaves
+an ask waiting as it is. A person's ask is kept, by who made it, until a
+deployment takes it: it builds even a commit already live and deploys an
+update whatever its wait, and is checked again when its turn comes, so one
+who may no longer manage the App is refused, though a push that joined
+their ask deploys as Kiln's own. A person asks in an ordinary operation
+holding the App shared, beside its build and everyday changes, so it
+returns at once, and a deletion or restore turns it away.
+
+One durable operation (`app.deploy`) per ask that's waiting takes it up:
+queued by the ask, it holds the App's `#deploy` from taking the request
+until its Relay says the deployment ended, so the next waits its turn
+behind it and nothing else orders deployments. It takes the request only
+once its Relay is there to deploy it, and as it plans, in one step, so
+what's asked since waits for the next, two asks during a build make one
+build after it, and an ask still waiting can be cancelled, but never once
+taken. A wait, for a Relay, a new App's provisioning or a build to end,
+checks in memory and stores one step every five minutes, so a long one
+keeps few; one cut off, as Hearth stops, checks again. The App's saved
+configuration, which holds its secrets, is read as it's sent and the token
+that checks out a GitHub commit made then, neither kept in the operation's
+steps, which are stored in the clear; a reply lost to a restart is read
+back (`relayCommand`), not sent again. Deleting an App stops its build on
+the Relay first (`app.deployment.abort`), so the deletion doesn't wait for
+the build it removes.
 
 A GitHub sync's run holds the sync's `#files`, and shared its `#settings`,
 its target and its connection, from reading GitHub to recording what it

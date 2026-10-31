@@ -3,10 +3,11 @@ import { Effect } from "effect"
 import { vi } from "vite-plus/test"
 
 import {
+  cancelAppDeploymentRequestEffect,
   loadAppDeploymentRequestEffect,
   loadAppDeploymentRequestsEffect,
   requestAppDeploymentEffect,
-  settleAppDeploymentRequestEffect,
+  takeAppDeploymentRequestEffect,
 } from "@/effect/app-deployments"
 import {
   createAppRecordEffect,
@@ -34,55 +35,68 @@ const seedApp = Effect.gen(function* () {
 describeMysql("App deployment requests", () => {
   layer(TestDatabase)((it) => {
     it.effect(
-      "keep every request that comes while one deploys, until a pass starts from it",
+      "deploy the newest ask, keeping a person's until a deployment takes it",
       () =>
         Effect.gen(function* () {
           yield* seedApp
-          // Two merges in quick succession, and an image update found due:
-          // the newest push's commit is the one pinned.
           const source = "42/main"
-          yield* requestAppDeploymentEffect({
-            appId,
-            pinned: { commitSha: "a".repeat(40), source },
-            relayId,
-            trigger: "push",
-          })
-          yield* requestAppDeploymentEffect({
-            appId,
-            pinned: { commitSha: "b".repeat(40), source },
-            relayId,
-            trigger: "push",
-          })
-          yield* requestAppDeploymentEffect({
-            appId,
-            relayId,
-            trigger: "update",
-          })
-          const taken = yield* loadAppDeploymentRequestEffect(appId)
-          assert.deepInclude(taken, {
+          const push = (sha: string) =>
+            requestAppDeploymentEffect({
+              appId,
+              commit: { sha: sha.repeat(40), source },
+              relayId,
+              trigger: "push",
+            })
+
+          // Two merges in quick succession: the newest's commit wins.
+          yield* push("a")
+          yield* push("b")
+          assert.deepInclude(yield* loadAppDeploymentRequestEffect(appId), {
             commitSha: "b".repeat(40),
-            commitSource: source,
-            imageUpdate: true,
-            poll: false,
-            push: true,
+            requestedBy: null,
+            trigger: "push",
           })
 
-          // A push lands while that pass deploys: acknowledging the pass
-          // leaves it waiting, every kind asked for still kept.
+          // A person's deploy asks for the newest, and is kept as theirs
+          // when a push and a poll join it, the push's commit the newest.
           yield* requestAppDeploymentEffect({
             appId,
-            pinned: { commitSha: "c".repeat(40), source },
             relayId,
+            trigger: "manual",
+            userId: "sam",
+          })
+          yield* push("c")
+          yield* requestAppDeploymentEffect({ appId, relayId, trigger: "poll" })
+          assert.deepInclude(yield* loadAppDeploymentRequestEffect(appId), {
+            commitSha: "c".repeat(40),
+            requestedBy: "sam",
             trigger: "push",
           })
-          yield* settleAppDeploymentRequestEffect(appId, taken!.revision)
-          const next = yield* loadAppDeploymentRequestEffect(appId)
-          assert.deepInclude(next, {
-            commitSha: "c".repeat(40),
-            imageUpdate: true,
-            push: true,
+
+          // A redeploy pins its digest, and a later deploy replaces it.
+          yield* requestAppDeploymentEffect({
+            appId,
+            image: { digest: "sha256:old", source: "web:latest" },
+            relayId,
+            trigger: "redeploy",
+            userId: "sam",
           })
-          assert.isAbove(next!.revision, taken!.revision)
+          assert.deepInclude(yield* loadAppDeploymentRequestEffect(appId), {
+            commitSha: null,
+            imageDigest: "sha256:old",
+            trigger: "redeploy",
+          })
+          yield* requestAppDeploymentEffect({
+            appId,
+            relayId,
+            trigger: "manual",
+            userId: "alex",
+          })
+          assert.deepInclude(yield* loadAppDeploymentRequestEffect(appId), {
+            imageDigest: null,
+            requestedBy: "alex",
+            trigger: "manual",
+          })
           // Kept for a Hearth that restarts before taking it.
           assert.deepStrictEqual(
             (yield* loadAppDeploymentRequestsEffect()).map(
@@ -91,20 +105,59 @@ describeMysql("App deployment requests", () => {
             [appId]
           )
 
-          // The pass that starts from the latest acknowledges it; one that
-          // ran again, acknowledging what it took before, changes nothing.
-          yield* settleAppDeploymentRequestEffect(appId, next!.revision)
+          // Taken as a deployment plans: nothing waits, and the same
+          // deployment's step run again gets what it took.
+          const taken = yield* takeAppDeploymentRequestEffect(appId, "one")
+          assert.strictEqual(taken?.requestedBy, "alex")
           assert.isNull(yield* loadAppDeploymentRequestEffect(appId))
+          assert.deepInclude(
+            yield* takeAppDeploymentRequestEffect(appId, "one"),
+            { requestedBy: "alex", trigger: "manual" }
+          )
+          assert.isNull(yield* takeAppDeploymentRequestEffect(appId, "two"))
+
+          // An ask after one taken starts afresh: just a poll, for the
+          // branch head, nobody's.
           yield* requestAppDeploymentEffect({ appId, relayId, trigger: "poll" })
-          yield* settleAppDeploymentRequestEffect(appId, taken!.revision)
-          // And a request after one taken starts afresh: just a poll, for
-          // the branch head.
-          assert.deepInclude(yield* loadAppDeploymentRequestEffect(appId), {
-            commitSha: null,
-            imageUpdate: false,
-            poll: true,
-            push: false,
+          assert.deepInclude(
+            yield* takeAppDeploymentRequestEffect(appId, "two"),
+            {
+              commitSha: null,
+              requestedBy: null,
+              trigger: "poll",
+            }
+          )
+        })
+    )
+
+    it.effect(
+      "cancel only the ask shown, while no deployment has taken it",
+      () =>
+        Effect.gen(function* () {
+          yield* seedApp
+          const ask = requestAppDeploymentEffect({
+            appId,
+            relayId,
+            trigger: "manual",
+            userId: "sam",
           })
+          yield* ask
+          const shown = (yield* loadAppDeploymentRequestEffect(appId))!.revision
+
+          // Another ask joined it since: the one shown isn't all that waits.
+          yield* ask
+          assert.isFalse(yield* cancelAppDeploymentRequestEffect(appId, shown))
+          const now = (yield* loadAppDeploymentRequestEffect(appId))!.revision
+          assert.isTrue(yield* cancelAppDeploymentRequestEffect(appId, now))
+          assert.isNull(yield* loadAppDeploymentRequestEffect(appId))
+          assert.isNull(yield* takeAppDeploymentRequestEffect(appId, "one"))
+
+          // Taken already: it has started.
+          yield* ask
+          const taking = (yield* loadAppDeploymentRequestEffect(appId))!
+            .revision
+          yield* takeAppDeploymentRequestEffect(appId, "two")
+          assert.isFalse(yield* cancelAppDeploymentRequestEffect(appId, taking))
         })
     )
 

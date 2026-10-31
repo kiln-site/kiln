@@ -75,30 +75,6 @@ describe("operation lanes", () => {
     })
   )
 
-  it.effect("says when it turned one away as it was admitted", () =>
-    Effect.gen(function* () {
-      const lanes = new OperationLanes({ maxWaiting: 1 })
-      const log: Array<string> = []
-      const holder = yield* start(lanes, log, "holder", [exclusive("a")])
-      const admit = (label: string, whenBusy?: "refuse") =>
-        lanes.admit({ label, locks: [exclusive("a")], whenBusy })
-
-      // Refused as busy, or with too many waiting: said at once.
-      assert.isTrue(admit("busy", "refuse").refusedAtOnce)
-      const waiting = admit("waiting")
-      assert.isFalse(waiting.refusedAtOnce)
-      const full = admit("full")
-      assert.isTrue(full.refusedAtOnce)
-      assert.strictEqual(
-        (yield* full.run(Effect.void).pipe(Effect.flip)).reason,
-        "busy"
-      )
-      waiting.cancel()
-      yield* holder.finish
-      assert.isFalse(admit("free").refusedAtOnce)
-    })
-  )
-
   it.effect(
     "refuses at once, naming what's in the way, an operation that would wait",
     () =>

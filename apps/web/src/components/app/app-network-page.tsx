@@ -58,6 +58,7 @@ import {
   updateAppNetwork,
   updateAppWebRoutes,
 } from "@/server/apps"
+import { useAppDeployState } from "@/components/app/use-app-deploy-state"
 
 export function AppNetworkPage() {
   const { app } = useAppWorkspace()
@@ -260,7 +261,9 @@ function AppDeployButton({ app }: { app: App }) {
     },
     onError: (error) => showAppOperationError("Deploy failed", error),
   })
-  const deploying = deploy.isPending || app.deployment?.state === "running"
+  // Asked during a build, it applies once that ends; once asked, it waits.
+  const queued = useAppDeployState(app.id)?.queuedRevision != null
+  const deploying = deploy.isPending || queued
   return (
     <Button
       disabled={deploying}
@@ -270,7 +273,7 @@ function AppDeployButton({ app }: { app: App }) {
       onClick={() => deploy.mutate()}
     >
       {deploying ? <LoaderCircle className="animate-spin" /> : <Rocket />}
-      Deploy to apply
+      {queued ? "Deploy queued" : "Deploy to apply"}
     </Button>
   )
 }
