@@ -470,6 +470,15 @@ const takeTurn = (waiting: {
       waitUntil: Number.MAX_SAFE_INTEGER,
     })
     queuedHolders.set(waiting.id, holder.withdraw)
+    // Cancelled as it took its place, as by a sweep that read it waiting
+    // just before: it leaves at once, since the cancel may have missed it.
+    const now = yield* loadOperation(waiting.id).pipe(
+      Effect.catch(() => Effect.succeed(null))
+    )
+    if (now !== null && now.state !== "waiting") {
+      queuedHolders.get(waiting.id)?.()
+      queuedHolders.delete(waiting.id)
+    }
   })
 
 // The places in line of operations queued and not yet started, by ID, so
