@@ -10,15 +10,19 @@ import {
   type RelayAppGitHubCheckout,
 } from "@workspace/contracts"
 import { logException } from "@workspace/telemetry"
-import { Cause, Clock, Effect, Fiber, Schedule, Semaphore } from "effect"
+import { Cause, Clock, Effect, Fiber, Option, Schedule } from "effect"
 
 import {
   finishAppDeploymentEffect,
   insertAppDeploymentEffect,
   latestAppDeploymentsEffect,
   loadAppGitHubSourceEffect,
+  loadAppDeploymentRequestEffect,
+  loadAppDeploymentRequestsEffect,
   loadAutoDeployGitHubSourcesEffect,
   loadRunningAppDeploymentsEffect,
+  requestAppDeploymentEffect,
+  settleAppDeploymentRequestEffect,
   type AppDeploymentRecord,
   type AppDeploymentStatus,
   type AppDeploymentTrigger,
@@ -593,15 +597,14 @@ const readRelayApp = Effect.fnUntraced(function* (
 
 declare global {
   var kilnAppDeploymentFollowed: Set<string> | undefined
-  var kilnAppDeploymentLocks: Map<string, Semaphore.Semaphore> | undefined
-  var kilnAppDeploymentQueued: Set<string> | undefined
+  var kilnAppDeploymentDraining: Set<string> | undefined
   var kilnAppDeploymentPollFailures: Map<string, string> | undefined
   var kilnAppDeploymentPoller: Fiber.Fiber<void> | undefined
 }
 
 const followed = (globalThis.kilnAppDeploymentFollowed ??= new Set())
-const deployLocks = (globalThis.kilnAppDeploymentLocks ??= new Map())
-const queued = (globalThis.kilnAppDeploymentQueued ??= new Set())
+// The apps whose requests are being drained now, by this process.
+const draining = (globalThis.kilnAppDeploymentDraining ??= new Set())
 // Each polled app's last failure, reported once.
 const pollFailures = (globalThis.kilnAppDeploymentPollFailures ??= new Map())
 
@@ -641,51 +644,99 @@ export function followAppDeployment(record: AppDeploymentRecord): void {
 }
 
 /**
- * Deploys an app's branch head after a push or poll, or its image update,
- * one deployment at a time per app. A trigger arriving while one waits
- * joins it: the waiting one deploys whatever is newest when it runs.
+ * Asks for an app's deployment after a push, a poll, or an image update
+ * found due. The request is recorded before this returns, joining the one
+ * already waiting, so none is lost while a deployment runs or across a
+ * restart; then the app's deployments are drained, one at a time.
  */
-export function enqueueAppDeployment(
-  appId: string,
-  relayId: string,
-  trigger: "poll" | "push" | "update"
-): void {
+export const queueAppDeploymentEffect = Effect.fn("Apps.deploy.queue")(
+  function* (
+    appId: string,
+    relayId: string,
+    trigger: "poll" | "push" | "update"
+  ) {
+    yield* requestAppDeploymentEffect({ appId, relayId, trigger })
+    drainAppDeployments(appId, relayId)
+  }
+)
+
+/**
+ * Deploys what an app's request asks for until none waits, one deployment
+ * at a time. Each pass waits for a running deployment to end, then deploys
+ * by the app's source now: its branch head for a push or poll, the image
+ * Kiln found for an update. The request is settled at the revision the
+ * pass started from, so one that came meanwhile gets a pass of its own.
+ */
+function drainAppDeployments(appId: string, relayId: string): void {
   const key = `${relayId}:${appId}`
-  if (queued.has(key)) return
-  queued.add(key)
-  const lock = deployLocks.get(key) ?? Semaphore.makeUnsafe(1)
-  deployLocks.set(key, lock)
+  if (draining.has(key)) return
+  draining.add(key)
   forkAppWorker(
-    lock.withPermit(
-      Effect.sync(() => queued.delete(key)).pipe(
-        Effect.andThen(awaitRunningDeployment(appId)),
-        Effect.andThen(
-          startAppDeploymentEffect({ appId, relayId, trigger, userId: null })
-        ),
-        Effect.asVoid,
-        // A poll that succeeds clears its app's last failure.
-        Effect.tap(() => Effect.sync(() => pollFailures.delete(key))),
-        Effect.catchCause((cause) => {
-          const failure = Cause.squash(cause)
-          // A failing poll fails again every minute, so only a new failure
-          // reaches telemetry, until a poll gets through.
-          if (trigger === "poll") {
-            const message = errorMessage(failure)
-            if (pollFailures.get(key) === message) return Effect.void
-            pollFailures.set(key, message)
-          }
-          return logException(failure, {
-            operation: `Apps.deploy.${trigger}`,
-            attributes: { "app.id": appId, "relay.id": relayId },
-          })
+    Effect.gen(function* () {
+      for (;;) {
+        const request = yield* loadAppDeploymentRequestEffect(appId)
+        if (!request) return
+        // A request its Relay can't take now, paused or away, or one behind
+        // a deployment still running after an hour, keeps waiting: the
+        // minute's poll drains it again.
+        const relay = yield* Effect.option(enabledRelay(request.relayId))
+        if (Option.isNone(relay)) return
+        if (!(yield* awaitRunningDeployment(appId))) return
+        // An app deploys from GitHub or from an image, so at most one of
+        // these deploys; the other finds nothing to do.
+        if (request.imageUpdate) {
+          yield* deployRequested(key, appId, request.relayId, "update")
+        }
+        if (request.push || request.poll) {
+          yield* deployRequested(
+            key,
+            appId,
+            request.relayId,
+            request.push ? "push" : "poll"
+          )
+        }
+        yield* settleAppDeploymentRequestEffect(appId, request.revision)
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        logException(Cause.squash(cause), {
+          operation: "Apps.deploy.drain",
+          attributes: { "app.id": appId, "relay.id": relayId },
         })
-      )
+      ),
+      Effect.ensuring(Effect.sync(() => draining.delete(key)))
     )
   )
 }
 
+const deployRequested = (
+  key: string,
+  appId: string,
+  relayId: string,
+  trigger: "poll" | "push" | "update"
+) =>
+  startAppDeploymentEffect({ appId, relayId, trigger, userId: null }).pipe(
+    Effect.asVoid,
+    // A poll that succeeds clears its app's last failure.
+    Effect.tap(() => Effect.sync(() => pollFailures.delete(key))),
+    Effect.catchCause((cause) => {
+      const failure = Cause.squash(cause)
+      // A failing poll fails again every minute, so only a new failure
+      // reaches telemetry, until a poll gets through.
+      if (trigger === "poll") {
+        const message = errorMessage(failure)
+        if (pollFailures.get(key) === message) return Effect.void
+        pollFailures.set(key, message)
+      }
+      return logException(failure, {
+        operation: `Apps.deploy.${trigger}`,
+        attributes: { "app.id": appId, "relay.id": relayId },
+      })
+    })
+  )
+
 // Waits, up to an hour, for the app's running deployment to end, so a push
-// doesn't fail because one is already running.
+// doesn't fail because one is already running. Reports whether it ended.
 const awaitRunningDeployment = (appId: string) =>
   latestAppDeploymentsEffect(appId).pipe(
     Effect.map(({ latest }) => latest?.status === "running"),
@@ -694,12 +745,13 @@ const awaitRunningDeployment = (appId: string) =>
       times: 1_200,
       while: (running) => running,
     }),
-    Effect.asVoid
+    Effect.map((running) => !running)
   )
 
 /**
- * Every minute: resumes following deployments a restart left running, and
- * checks the branches of apps whose source GitHub can't push to.
+ * Every minute: resumes following deployments a restart left running and
+ * draining requests it left waiting, and checks the branches of apps whose
+ * source GitHub can't push to.
  */
 export function startAppDeploymentPolling(): void {
   globalThis.kilnAppDeploymentPoller ??= forkAppWorker(
@@ -707,11 +759,15 @@ export function startAppDeploymentPolling(): void {
       for (const record of yield* loadRunningAppDeploymentsEffect()) {
         followAppDeployment(record)
       }
+      // Requests a restart, or a drain that stopped, left waiting.
+      for (const request of yield* loadAppDeploymentRequestsEffect()) {
+        drainAppDeployments(request.appId, request.relayId)
+      }
       const sources = yield* loadAutoDeployGitHubSourcesEffect({
         polled: true,
       })
       for (const source of sources) {
-        enqueueAppDeployment(source.appId, source.relayId, "poll")
+        yield* queueAppDeploymentEffect(source.appId, source.relayId, "poll")
       }
     }).pipe(
       Effect.catchCause((cause) =>
@@ -785,7 +841,7 @@ export const deployPushedAppsEffect = Effect.fn("Apps.deploy.pushed")(
     })
     for (const source of sources) {
       if (source.branch === input.branch) {
-        enqueueAppDeployment(source.appId, source.relayId, "push")
+        yield* queueAppDeploymentEffect(source.appId, source.relayId, "push")
       }
     }
   }
