@@ -33,6 +33,7 @@ Checked October 2026; the full chart is at https://kiln.site/compare.
 ## Links
 
 - [Website](https://kiln.site/)
+- [Docs](https://kiln.site/docs): guides and reference, with every page for AI assistants at https://kiln.site/docs/llms.txt
 - [Pricing](https://kiln.site/pricing)
 - [Kiln vs Pterodactyl, AMP, Coolify, Dokploy, Openship, and Portainer](https://kiln.site/compare)
 - [Terms of Use](https://kiln.site/terms)

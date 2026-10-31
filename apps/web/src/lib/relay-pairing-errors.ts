@@ -1,25 +1,28 @@
-export const RELAY_PAIRING_DOCS_HREF = "https://docs.kiln.site/"
+// Each pairing error has a section in the docs saying how to fix it.
+const RELAY_PAIRING_DOCS_HREF = "https://kiln.site/docs/relays"
 
 export const PAIRING_EDGE_MESSAGES = {
   untrustedTls:
     "Hostname TLS is untrusted. Check that DNS points at your Relay.",
   tlsHandshake: "TLS handshake failed for this hostname.",
-  cloudflareOriginCert:
-    "Cloudflare rejected the origin certificate (526).",
+  cloudflareOriginCert: "Cloudflare rejected the origin certificate (526).",
   cloudflareHandshake:
     "Cloudflare could not complete the TLS handshake with the origin (525).",
   redirect:
     "Relay URL redirected instead of pairing. Check reverse-proxy SSL settings.",
 } as const
 
-const pairingEdgeMessageSet = new Set<string>(
-  Object.values(PAIRING_EDGE_MESSAGES)
-)
+const pairingEdgeDocsAnchors: Record<string, string> = {
+  [PAIRING_EDGE_MESSAGES.untrustedTls]: "hostname-tls-is-untrusted",
+  [PAIRING_EDGE_MESSAGES.tlsHandshake]: "tls-handshake-failed",
+  [PAIRING_EDGE_MESSAGES.cloudflareOriginCert]: "cloudflare-errors-525-and-526",
+  [PAIRING_EDGE_MESSAGES.cloudflareHandshake]: "cloudflare-errors-525-and-526",
+  [PAIRING_EDGE_MESSAGES.redirect]: "relay-url-redirected",
+}
 
 export function pairingEdgeDocsHref(message: string): string | undefined {
-  return pairingEdgeMessageSet.has(message)
-    ? RELAY_PAIRING_DOCS_HREF
-    : undefined
+  const anchor = pairingEdgeDocsAnchors[message]
+  return anchor ? `${RELAY_PAIRING_DOCS_HREF}#${anchor}` : undefined
 }
 
 export function pairingFeedbackFrom(

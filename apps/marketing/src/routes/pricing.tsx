@@ -12,7 +12,6 @@ import {
   plans,
 } from "~/lib/plans"
 import { comingSoon } from "~/lib/coming-soon"
-import { newTab } from "~/lib/new-tab"
 import { pageHead } from "~/lib/seo"
 import { useSiteConfig } from "~/lib/use-site-config"
 
@@ -167,7 +166,7 @@ function PlanColumn({
 
       <div className="mt-6">
         <ComingSoon
-          soon={free ? comingSoon.docs : comingSoon.paidPlans}
+          soon={!free && comingSoon.paidPlans}
           label={free ? "Read the install guide" : `Choose ${plan.name}`}
           className="flex"
         >
@@ -177,10 +176,7 @@ function PlanColumn({
             className="h-11 w-full text-[0.9375rem]"
           >
             {free ? (
-              <a
-                href={new URL("/self-hosting", docsUrl).toString()}
-                {...newTab}
-              >
+              <a href={`${docsUrl}/get-started/install`}>
                 Read the install guide
               </a>
             ) : (
