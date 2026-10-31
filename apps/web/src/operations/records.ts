@@ -21,8 +21,10 @@ export type OperationState =
   | "interrupted"
   | "running"
   | "succeeded"
+  /** Recorded, and waiting its turn in its lanes. */
+  | "waiting"
 
-export type OperationOutcome = Exclude<OperationState, "running">
+export type OperationOutcome = Exclude<OperationState, "running" | "waiting">
 
 const operationTable = databaseTable("operation")
 
@@ -42,8 +44,9 @@ const runDuration = Metric.histogram("hearth.operations.duration", {
 })
 
 /**
- * Records a durable operation as running. With an idempotency key, one
- * already recorded under it is returned instead, however it went.
+ * Records a durable operation as running, or waiting its turn. With an
+ * idempotency key, one already recorded under it is returned instead,
+ * however it went.
  */
 export const recordOperation = Effect.fn("Operations.record")(
   function* (record: {
@@ -57,6 +60,8 @@ export const recordOperation = Effect.fn("Operations.record")(
     readonly id?: string | undefined
     /** The locks it holds until it ends. */
     readonly locks?: ReadonlyArray<LaneLock> | undefined
+    /** Waiting, for one recorded before its turn comes. */
+    readonly state?: "running" | "waiting"
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
@@ -68,7 +73,7 @@ export const recordOperation = Effect.fn("Operations.record")(
        INTO ${operationTable}
        (id, kind, version, idempotency_key, input, locks, state, actor_id,
         trace_id, span_id, trace_sampled, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         record.kind,
@@ -76,6 +81,7 @@ export const recordOperation = Effect.fn("Operations.record")(
         record.idempotencyKey ?? null,
         JSON.stringify(record.input ?? null),
         record.locks?.length ? JSON.stringify(record.locks) : null,
+        record.state ?? "running",
         record.actorId ?? null,
         Option.isSome(span) ? span.value.traceId : null,
         Option.isSome(span) ? span.value.spanId : null,
@@ -131,15 +137,16 @@ export const finishOperation = Effect.fn("Operations.finish")(function* (
   >(
     "operations.finish",
     `SELECT kind, created_at FROM ${operationTable}
-      WHERE id = ? AND state = 'running'`,
+      WHERE id = ? AND state IN ('running', 'waiting')`,
     [id]
   )
   if (!row) return
   const ended = yield* database.execute(
     "operations.finish",
     `UPDATE ${operationTable}
-        SET state = ?, error = ?, finished_at = ?, updated_at = ?
-      WHERE id = ? AND state = 'running'`,
+        SET state = ?, error = ?, finished_at = ?, updated_at = ?,
+            queue_key = NULL
+      WHERE id = ? AND state IN ('running', 'waiting')`,
     [outcome, error?.slice(0, 1024) ?? null, now, now, id]
   )
   if (ended.affectedRows === 0) return
@@ -214,6 +221,179 @@ export const awaitOperationEnd = (
     })
     yield* Effect.raceFirst(Deferred.await(ending), watch)
   })
+
+/**
+ * Starts an operation recorded waiting, now its turn has come, giving up
+ * its queue key, so what's asked after it queues behind it. False if it
+ * isn't waiting any more, as one cancelled meanwhile.
+ */
+export const startWaitingOperation = Effect.fnUntraced(function* (id: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const started = yield* database.execute(
+    "operations.start",
+    `UPDATE ${operationTable}
+        SET state = 'running', updated_at = ?, queue_key = NULL
+      WHERE id = ? AND state = 'waiting'`,
+    [now, id]
+  )
+  if (started.affectedRows === 1) publishOperationsChange()
+  return started.affectedRows === 1
+})
+
+/**
+ * Records an operation waiting its turn under `key`, or joins the one
+ * already waiting under it, its input made `join` of what it asked and
+ * what's asked now. Joining locks the one waiting, as starting it does, so
+ * an ask either joins it before it starts, and it runs what was joined, or
+ * finds it started and queues another.
+ */
+export const queueOperation = Effect.fn("Operations.queue.record")(function* (
+  record: {
+    readonly kind: string
+    readonly version: number
+    readonly key: string
+    /** The encoded input its workflow reads. */
+    readonly input: unknown
+    readonly locks: ReadonlyArray<LaneLock>
+  },
+  join: (waiting: unknown) => Effect.Effect<unknown>
+) {
+  const database = yield* Database
+  // Each pass either records one, joins one, or finds the one it would
+  // have joined just started; a few in a row means something else
+  // refused the insert.
+  for (let attempt = 0; ; attempt++) {
+    if (attempt >= 5) {
+      return yield* Effect.die(
+        new Error(`Couldn't queue ${record.kind} under ${record.key}`)
+      )
+    }
+    const now = yield* Clock.currentTimeMillis
+    const span = yield* Effect.option(Effect.currentSpan)
+    const id = randomUUID()
+    const inserted = yield* database.execute(
+      "operations.queue",
+      `INSERT IGNORE INTO ${operationTable}
+         (id, kind, version, queue_key, input, locks, state, trace_id,
+          span_id, trace_sampled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'waiting', ?, ?, ?, ?, ?)`,
+      [
+        id,
+        record.kind,
+        record.version,
+        record.key,
+        JSON.stringify(record.input ?? null),
+        record.locks.length ? JSON.stringify(record.locks) : null,
+        Option.isSome(span) ? span.value.traceId : null,
+        Option.isSome(span) ? span.value.spanId : null,
+        Option.isSome(span) ? span.value.sampled : false,
+        now,
+        now,
+      ]
+    )
+    if (inserted.affectedRows === 1) {
+      publishOperationsChange()
+      return { id, joined: false }
+    }
+    const joined = yield* database.transaction(
+      "operations.queue.join",
+      (transaction) =>
+        Effect.gen(function* () {
+          const [waiting] = yield* transaction.queryRows<
+            RowDataPacket & { id: string; input: unknown }
+          >(
+            `SELECT id, input FROM ${operationTable}
+                WHERE kind = ? AND queue_key = ?
+                FOR UPDATE`,
+            [record.kind, record.key]
+          )
+          if (!waiting) return null
+          const input = yield* join(
+            typeof waiting.input === "string"
+              ? JSON.parse(waiting.input)
+              : waiting.input
+          )
+          yield* transaction.execute(
+            `UPDATE ${operationTable} SET input = ?, updated_at = ?
+                WHERE id = ?`,
+            [JSON.stringify(input ?? null), now, waiting.id]
+          )
+          return waiting.id
+        })
+    )
+    // Started as it was asked: this one queues behind it.
+    if (joined !== null) return { id: joined, joined: true }
+  }
+})
+
+/**
+ * Cancels an operation still waiting its turn, so it never starts. False
+ * once it has.
+ */
+export const cancelWaitingOperation = Effect.fnUntraced(function* (id: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const cancelled = yield* database.execute(
+    "operations.cancelWaiting",
+    `UPDATE ${operationTable}
+        SET state = 'cancelled', finished_at = ?, updated_at = ?,
+            queue_key = NULL
+      WHERE id = ? AND state = 'waiting'`,
+    [now, now, id]
+  )
+  if (cancelled.affectedRows === 1) publishOperationsChange()
+  return cancelled.affectedRows === 1
+})
+
+/** The operation of `kind` waiting under `key`, if one is. */
+export const waitingOperation = Effect.fnUntraced(function* (
+  kind: string,
+  key: string
+) {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<
+    RowDataPacket & { id: string; input: unknown }
+  >(
+    "operations.waitingByKey",
+    `SELECT id, input FROM ${operationTable}
+      WHERE kind = ? AND queue_key = ?`,
+    [kind, key]
+  )
+  return row
+    ? {
+        id: row.id,
+        input:
+          typeof row.input === "string" ? JSON.parse(row.input) : row.input,
+      }
+    : null
+})
+
+/** Durable operations waiting their turn, oldest first, as for a restart. */
+export const waitingOperations = Effect.fnUntraced(function* () {
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & {
+      actor_id: string | null
+      id: string
+      input: unknown
+      kind: string
+      locks: unknown
+    }
+  >(
+    "operations.waiting",
+    `SELECT id, kind, actor_id, input, locks FROM ${operationTable}
+      WHERE state = 'waiting'
+      ORDER BY created_at`
+  )
+  return rows.map((row) => ({
+    actorId: row.actor_id,
+    id: row.id,
+    input: typeof row.input === "string" ? JSON.parse(row.input) : row.input,
+    kind: row.kind,
+    locks: row.locks === null ? [] : parseLocks(row.locks),
+  }))
+})
 
 /** Durable operations still running, oldest first, with what they hold. */
 export const runningOperations = Effect.fnUntraced(function* () {

@@ -10,13 +10,30 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 // Registers resource deletion, whose locks a restart takes back.
 import "@/lib/resource-deletion.server"
 import {
+  cancelQueuedOperation,
   durableOperation,
+  queueDurableOperation,
+  readmitWaitingOperations,
   restoreLockingOperations,
   startDurableOperation,
 } from "./durable"
-import { exclusive, laneOccupants, partKey, resourceKey, shared } from "./lanes"
-import { operation, runOperation } from "./operation"
-import { findOperation, finishOperation, recordOperation } from "./records"
+import {
+  closeLanes,
+  exclusive,
+  hearthLanes,
+  laneOccupants,
+  partKey,
+  resourceKey,
+  shared,
+} from "./lanes"
+import { inLanes, operation, runOperation } from "./operation"
+import {
+  findOperation,
+  finishOperation,
+  loadOperation,
+  recordOperation,
+  waitingOperation,
+} from "./records"
 
 afterAll(() => disposeAppRuntime())
 
@@ -553,6 +570,257 @@ describeMysql("Hearth operations", () => {
           ).pipe(Effect.flip)
           assert.strictEqual((again as Error).message, "No longer allowed")
           yield* finishOperation(kept, "succeeded")
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "joins what's asked while one waits under its key, and queues another once it starts",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const deploy = partKey(server, "deploy")
+          const release = yield* Deferred.make<void>()
+          const holder = yield* runOperation(
+            holding("test.deploy", "Deploying this game server", [
+              exclusive(deploy),
+            ]),
+            release,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          const queued = durableOperation({
+            input: Schema.Struct({ asks: Schema.Array(Schema.String) }),
+            join: (waiting, asked) => ({
+              asks: [...waiting.asks, ...asked.asks],
+            }),
+            kind: "test.durable.queued",
+            locks: () => [exclusive(deploy)],
+            run: () => Effect.void,
+            version: 1,
+          })
+          const queue = (ask: string) =>
+            queueDurableOperation(queued, { asks: [ask] }, { key: "alpha" })
+          const record = (id: string) =>
+            loadOperation(id).pipe(Effect.map((found) => found?.state))
+
+          // Asked twice behind the deploy: one waits, and runs both asks.
+          const first = yield* queue("one")
+          assert.strictEqual(yield* queue("two"), first)
+          assert.strictEqual(yield* record(first), "waiting")
+          assert.deepStrictEqual(
+            (yield* waitingOperation("test.durable.queued", "alpha"))?.input,
+            { asks: ["one", "two"] }
+          )
+
+          // Its turn comes: it starts, and what's asked now queues behind it.
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(holder)
+          yield* record(first).pipe(
+            Effect.repeat({ until: (now) => now === "running" }),
+            Effect.timeout("5 seconds")
+          )
+          const next = yield* queue("three")
+          assert.notStrictEqual(next, first)
+          assert.strictEqual(yield* record(next), "waiting")
+
+          // Cancelled while it waits, it never starts, leaves the line at
+          // once, and the key is free.
+          assert.isTrue(yield* cancelQueuedOperation(next))
+          assert.isNull(yield* waitingOperation("test.durable.queued", "alpha"))
+          yield* Effect.sync(() =>
+            [...laneOccupants.values()].some((held) => held.id === next)
+          ).pipe(
+            Effect.repeat({ until: (inLine) => !inLine }),
+            Effect.timeout("5 seconds")
+          )
+          yield* finishOperation(first, "succeeded")
+          yield* Effect.sleep("200 millis")
+          assert.strictEqual(yield* record(next), "cancelled")
+          assert.isFalse(yield* cancelQueuedOperation(first))
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect("turns away Hearth's own work that's only worth doing now", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const release = yield* Deferred.make<void>()
+        const holder = yield* runOperation(
+          holding("test.deploy", "Deploying this game server", [
+            exclusive(serverDns),
+          ]),
+          release,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.yieldNow
+        const poll = inLanes(
+          "test.poll",
+          "Polling",
+          [exclusive(serverDns)],
+          Effect.succeed("polled"),
+          { onlyIfFree: true }
+        )
+
+        // Busy: turned away at once, rather than waiting behind it.
+        const refused = yield* poll.pipe(Effect.flip)
+        assert.strictEqual(
+          (refused as { _tag?: string })._tag,
+          "OperationBusyError"
+        )
+
+        // Free: it runs.
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(holder)
+        assert.strictEqual(yield* poll, "polled")
+      }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "holds one place in line for an operation, however many take it up",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const deploy = partKey(server, "deploy")
+          const release = yield* Deferred.make<void>()
+          const holder = yield* runOperation(
+            holding("test.deploy", "Deploying this game server", [
+              exclusive(deploy),
+            ]),
+            release,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          const queued = durableOperation({
+            input: Schema.Struct({}),
+            kind: "test.durable.once",
+            locks: () => [exclusive(deploy)],
+            run: () => Effect.void,
+            version: 1,
+          })
+          // Its places in its lanes' line, as the lanes have them.
+          const places = (id: string) =>
+            hearthLanes
+              .describe()
+              .waiting.filter(
+                (waiting) => waiting.label === `test.durable.once#${id}`
+              ).length
+
+          // Queued as startup takes back what's running, and taken up by
+          // startup's sweep too: one place in line.
+          const open = closeLanes()
+          const id = yield* queueDurableOperation(queued, {})
+          yield* readmitWaitingOperations
+          yield* open
+          yield* Effect.sleep("100 millis")
+          assert.strictEqual(places(id), 1)
+
+          // Cancelled, it leaves the line.
+          assert.isTrue(yield* cancelQueuedOperation(id))
+          yield* Effect.sync(() => places(id)).pipe(
+            Effect.repeat({ until: (count) => count === 0 }),
+            Effect.timeout("5 seconds")
+          )
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(holder)
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "keeps one not ready waiting, still joined and cancellable, until it is",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          let ready = false
+          const queued = durableOperation({
+            input: Schema.Struct({ asks: Schema.Array(Schema.String) }),
+            join: (waiting, asked) => ({
+              asks: [...waiting.asks, ...asked.asks],
+            }),
+            kind: "test.durable.ready",
+            locks: () => [exclusive(partKey(server, "deploy"))],
+            ready: () => Effect.sync(() => ready),
+            run: () => Effect.void,
+            version: 1,
+          })
+          const queue = (ask: string) =>
+            queueDurableOperation(queued, { asks: [ask] }, { key: "alpha" })
+          const state = (id: string) =>
+            loadOperation(id).pipe(Effect.map((found) => found?.state))
+
+          // Its turn comes while what it needs isn't there: it gives its
+          // turn back, and what's asked meanwhile still joins it.
+          const id = yield* queue("one")
+          yield* Effect.sleep("200 millis")
+          assert.strictEqual(yield* state(id), "waiting")
+          assert.strictEqual(yield* queue("two"), id)
+
+          // Ready by the sweep after: it starts, with both asks.
+          ready = true
+          yield* readmitWaitingOperations
+          yield* state(id).pipe(
+            Effect.repeat({ until: (now) => now === "running" }),
+            Effect.timeout("5 seconds")
+          )
+          assert.deepStrictEqual((yield* loadOperation(id))?.input, {
+            asks: ["one", "two"],
+          })
+          yield* finishOperation(id, "succeeded")
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "queues durable changes past startup, and takes up one left waiting",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const queued = durableOperation({
+            input: Schema.Struct({ name: Schema.String }),
+            kind: "test.durable.checked",
+            locks: ({ name }) => [exclusive(partKey(server, name))],
+            run: () => Effect.void,
+            version: 1,
+          })
+          const until = (id: string, wanted: string) =>
+            loadOperation(id).pipe(
+              Effect.map((found) => found?.state),
+              Effect.repeat({ until: (now) => now === wanted }),
+              Effect.timeout("5 seconds")
+            )
+
+          // While startup takes back what's running, it's recorded and waits,
+          // once however often it's asked under its idempotency key.
+          const open = closeLanes()
+          const early = yield* queueDurableOperation(
+            queued,
+            { name: "early" },
+            { idempotencyKey: "early" }
+          )
+          assert.strictEqual(
+            yield* queueDurableOperation(
+              queued,
+              { name: "early" },
+              { idempotencyKey: "early" }
+            ),
+            early
+          )
+          yield* Effect.sleep("100 millis")
+          assert.strictEqual((yield* loadOperation(early))?.state, "waiting")
+          yield* open
+          yield* until(early, "running")
+
+          // One waiting with nothing taking its turn, as a restart finds it,
+          // takes its turn.
+          const restored = yield* recordOperation({
+            input: { name: "restored" },
+            kind: "test.durable.checked",
+            locks: [exclusive(partKey(server, "restored"))],
+            state: "waiting",
+            version: 1,
+          })
+          yield* readmitWaitingOperations
+          yield* until(restored.id, "running")
+          for (const id of [early, restored.id]) {
+            yield* finishOperation(id, "succeeded")
+          }
         }).pipe(TestClock.withLive)
     )
 

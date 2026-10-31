@@ -81,6 +81,12 @@ export interface Operation<Input, Context, A, E, R> {
   readonly locks: (
     args: OperationArgs<Input> & { readonly context: Context }
   ) => ReadonlyArray<LaneLock>
+  /**
+   * Hearth's own work that's only worth doing now, such as a poll that
+   * asks again every minute: turned away, rather than waiting, when
+   * anything is in its way.
+   */
+  readonly onlyIfFree?: boolean
   readonly run: (
     args: OperationArgs<Input> & {
       readonly context: Context
@@ -357,7 +363,12 @@ const attempt = <Input, Context, A, E, R>(
         const ticket = (admitted = hearthLanes.admit({
           label,
           locks,
-          whenBusy: initiator === "person" ? personWhenBusy : "wait",
+          whenBusy:
+            initiator === "person"
+              ? personWhenBusy
+              : definition.onlyIfFree
+                ? "refuse"
+                : "wait",
         }))
         occupy(label, {
           actorId: caller.user?.id ?? null,
@@ -673,13 +684,15 @@ export const inLanes = <A, E, R>(
   name: string,
   doing: string,
   locks: ReadonlyArray<LaneLock>,
-  effect: Effect.Effect<A, E, R>
+  effect: Effect.Effect<A, E, R>,
+  options: { readonly onlyIfFree?: boolean } = {}
 ) =>
   runOperation(
     operation<void>()<A, E, R>({
       doing,
       locks: () => locks,
       name,
+      ...(options.onlyIfFree && { onlyIfFree: true }),
       run: () => effect,
     }),
     undefined,

@@ -2,7 +2,11 @@ import { Cause, Duration, Effect, Schedule } from "effect"
 
 import { forkAppWorker } from "@/effect/runtime"
 
-import { dispatchDurableOperations, restoreLockingOperations } from "./durable"
+import {
+  dispatchDurableOperations,
+  readmitWaitingOperations,
+  restoreLockingOperations,
+} from "./durable"
 import { OperationsEngineService } from "./engine-service"
 import { closeLanes } from "./lanes"
 import { forgetFinishedOperations, undispatchedOperations } from "./records"
@@ -80,6 +84,13 @@ export function startOperationsEngine(): void {
                 yield* dispatchDurableOperations(undispatched)
               }
             })
+          ),
+          // One whose turn was cut off, as when MySQL failed as it was
+          // taken, takes it again.
+          every(
+            SWEEP,
+            "Waiting operations not set taking their turn",
+            readmitWaitingOperations
           ),
           every(
             "1 hour",
