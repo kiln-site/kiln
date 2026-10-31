@@ -31,6 +31,7 @@ import {
   restoreGitHubSyncEffect,
   recordGitHubSyncAttemptEffect,
   takeQueuedGitHubSyncEffect,
+  finishQueuedGitHubSyncEffect,
   type GitHubSyncResourceKind,
   type GitHubSyncTrigger,
   setGitHubSyncStatusEffect,
@@ -404,8 +405,14 @@ function wakeGitHubSync(syncId: string, trigger: GitHubSyncTrigger): void {
           syncRunLocks(sync.value),
           Effect.gen(function* () {
             const queued = yield* takeQueuedGitHubSyncEffect(syncId)
-            const next = queued ?? (trigger === "poll" ? "poll" : null)
-            if (next !== null) yield* runQueuedSync(syncId, next)
+            const next = queued?.trigger ?? (trigger === "poll" ? "poll" : null)
+            if (next === null) return
+            yield* runQueuedSync(syncId, next)
+            // Finished, however it went: what it took is done.
+            if (queued) {
+              yield* finishQueuedGitHubSyncEffect(syncId, queued.revision)
+              publishGitHubSyncChange()
+            }
           })
         )
       }).pipe(

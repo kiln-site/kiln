@@ -171,6 +171,8 @@ interface SyncRow extends RowDataPacket {
   source_path: string
   status: GitHubSyncStatus
   queued_trigger: GitHubSyncTrigger | null
+  queued_revision: number | string
+  taken_revision: number | string
   target_path: string
 }
 
@@ -181,7 +183,8 @@ const connectionColumns = `id, owner_user_id, app_id, app_slug, app_name, app_ur
 
 const syncColumns = `id, connection_id, relay_id, resource_kind, resource_id,
   repository_id, repository, branch, source_path, target_path,
-  include_patterns, auto_sync, overwrite, status, queued_trigger, last_error,
+  include_patterns, auto_sync, overwrite, status, queued_trigger,
+  queued_revision, taken_revision, last_error,
   last_commit_sha, last_commit_message, last_synced_at, last_changed_count,
   created_by, created_at`
 
@@ -539,12 +542,18 @@ export const queueGitHubSyncEffect = Effect.fn("github.sync.queue")(function* (
   const database = yield* Database
   yield* database.execute(
     "github.sync.queue",
-    `UPDATE ${databaseTable("github_sync")} SET queued_trigger = ? WHERE id = ?`,
+    `UPDATE ${databaseTable("github_sync")}
+        SET queued_trigger = ?, queued_revision = queued_revision + 1
+      WHERE id = ?`,
     [trigger, id]
   )
 })
 
-/** Takes the run asked for of a sync, if one still waits. */
+/**
+ * Takes the run asked for of a sync, if one is, noting which: one a run
+ * took and didn't finish, as Hearth stopped, is taken again, since only one
+ * run holds the sync at a time.
+ */
 export const takeQueuedGitHubSyncEffect = Effect.fn("github.sync.takeQueued")(
   function* (id: string) {
     const database = yield* Database
@@ -553,25 +562,45 @@ export const takeQueuedGitHubSyncEffect = Effect.fn("github.sync.takeQueued")(
       (transaction) =>
         Effect.gen(function* () {
           const [row] = yield* transaction.queryRows<
-            RowDataPacket & { queued_trigger: GitHubSyncTrigger | null }
+            RowDataPacket & {
+              queued_revision: number | string
+              queued_trigger: GitHubSyncTrigger | null
+            }
           >(
-            `SELECT queued_trigger FROM ${databaseTable("github_sync")}
+            `SELECT queued_trigger, queued_revision
+             FROM ${databaseTable("github_sync")}
             WHERE id = ? FOR UPDATE`,
             [id]
           )
-          const trigger = row?.queued_trigger ?? null
-          if (trigger !== null) {
-            yield* transaction.execute(
-              `UPDATE ${databaseTable("github_sync")}
-                SET queued_trigger = NULL WHERE id = ?`,
-              [id]
-            )
-          }
-          return trigger
+          if (!row?.queued_trigger) return null
+          const revision = Number(row.queued_revision)
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("github_sync")}
+              SET taken_revision = ? WHERE id = ?`,
+            [revision, id]
+          )
+          return { revision, trigger: row.queued_trigger }
         })
     )
   }
 )
+
+/**
+ * Clears what a finished run took; one asked for since it took it stays,
+ * for the next run.
+ */
+export const finishQueuedGitHubSyncEffect = Effect.fn(
+  "github.sync.finishQueued"
+)(function* (id: string, revision: number) {
+  const database = yield* Database
+  yield* database.execute(
+    "github.sync.finishQueued",
+    `UPDATE ${databaseTable("github_sync")}
+        SET queued_trigger = NULL
+      WHERE id = ? AND queued_revision = ?`,
+    [id, revision]
+  )
+})
 
 /** The syncs with a run asked for and not yet taken, as after a restart. */
 export const loadQueuedGitHubSyncIdsEffect = Effect.fn("github.syncs.queued")(
@@ -853,8 +882,12 @@ function publicSync(row: SyncRow): GitHubSync {
     resourceId: row.resource_id,
     resourceKind: row.resource_kind,
     sourcePath: row.source_path,
-    // One with a run asked for and not yet taken shows as queued.
-    status: row.queued_trigger === null ? row.status : "queued",
+    // One with a run asked for since the last a run took shows as queued.
+    status:
+      row.queued_trigger !== null &&
+      Number(row.queued_revision) > Number(row.taken_revision)
+        ? "queued"
+        : row.status,
     targetPath: row.target_path,
   }
 }

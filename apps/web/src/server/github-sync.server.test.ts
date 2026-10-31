@@ -15,6 +15,7 @@ import { encryptWithKeyring } from "../../keyring.mjs"
 import {
   loadGitHubSyncEffect,
   loadQueuedGitHubSyncIdsEffect,
+  finishQueuedGitHubSyncEffect,
   queueGitHubSyncEffect,
   takeQueuedGitHubSyncEffect,
 } from "@/effect/github-sync"
@@ -157,14 +158,30 @@ describeMysql("GitHub sync runs asked for", () => {
             syncId,
           ])
 
-          // The run that takes its turn first takes it; the next finds none.
-          assert.strictEqual(yield* takeQueuedGitHubSyncEffect(syncId), "push")
-          assert.isNull(yield* takeQueuedGitHubSyncEffect(syncId))
+          // A run takes it, and it no longer shows as queued; a Hearth that
+          // stops before it finishes takes it again.
+          const taken = yield* takeQueuedGitHubSyncEffect(syncId)
+          assert.deepInclude(taken, { trigger: "push" })
           assert.strictEqual(
             (yield* loadGitHubSyncEffect(syncId)).status,
             "success"
           )
+          assert.deepStrictEqual(yield* loadQueuedGitHubSyncIdsEffect(), [
+            syncId,
+          ])
+
+          // A push while it runs is kept past its finishing; the next run
+          // takes it, and finishing that one leaves none.
+          yield* queueGitHubSyncEffect(syncId, "push")
+          yield* finishQueuedGitHubSyncEffect(syncId, taken!.revision)
+          assert.strictEqual(
+            (yield* loadGitHubSyncEffect(syncId)).status,
+            "queued"
+          )
+          const next = yield* takeQueuedGitHubSyncEffect(syncId)
+          yield* finishQueuedGitHubSyncEffect(syncId, next!.revision)
           assert.deepStrictEqual(yield* loadQueuedGitHubSyncIdsEffect(), [])
+          assert.isNull(yield* takeQueuedGitHubSyncEffect(syncId))
         })
     )
   })
