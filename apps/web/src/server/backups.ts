@@ -13,14 +13,22 @@ import {
   type BackupRun,
   type BackupRunsPage,
 } from "@/lib/backup-runs"
+import { runOperationPromise } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
+import {
+  backUpApp,
+  backUpDatabase,
+  backUpInstance,
+  backUpPlatform,
+  backUpResource,
+  resolveRestore,
+  restoreDatabase,
+  restoreInstance,
+  restoreResource,
+} from "@/server/backup-operations.server"
 import {
   cancelBackupHandler,
   copyBackupToDestinationHandler,
-  createDatabaseBackupHandler,
-  createInstanceBackupHandler,
-  createPlatformBackupHandler,
-  createResourceBackupHandler,
   deleteBackupHandler,
   getBackupDownloadUrlHandler,
   getBackupPolicyHandler,
@@ -28,9 +36,6 @@ import {
   getBackupRunForQueryHandler,
   getBackupRunsPageHandler,
   renameBackupHandler,
-  restoreDatabaseBackupHandler,
-  restoreInstanceBackupHandler,
-  restoreResourceBackupHandler,
   syncBackupRunsHandler,
   updateBackupExcludesHandler,
   updateBackupLimitsHandler,
@@ -211,25 +216,33 @@ export type BackupPolicyInput = z.infer<typeof backupPolicyInputSchema>
 export const createInstanceBackup = createServerFn({ method: "POST" })
   .validator(instanceBackupInputSchema)
   .handler(async ({ data }) =>
-    createInstanceBackupHandler(await requireEligibleResourceUser(), data)
+    runOperationPromise(backUpInstance, data, {
+      user: await requireEligibleResourceUser(),
+    })
   )
 
 export const createDatabaseBackup = createServerFn({ method: "POST" })
   .validator(databaseBackupInputSchema)
   .handler(async ({ data }) =>
-    createDatabaseBackupHandler(await requireEligibleResourceUser(), data)
+    runOperationPromise(backUpDatabase, data, {
+      user: await requireEligibleResourceUser(),
+    })
   )
 
 export const createPlatformBackup = createServerFn({ method: "POST" })
   .validator(platformBackupInputSchema)
   .handler(async ({ data }) =>
-    createPlatformBackupHandler(await requireEligibleResourceUser(), data)
+    runOperationPromise(backUpPlatform, data, {
+      user: await requireEligibleResourceUser(),
+    })
   )
 
 export const createResourceBackup = createServerFn({ method: "POST" })
   .validator(resourceBackupInputSchema)
   .handler(async ({ data }) =>
-    createResourceBackupHandler(await requireEligibleResourceUser(), data)
+    runOperationPromise(backUpResource, data, {
+      user: await requireEligibleResourceUser(),
+    })
   )
 
 // An App's backup settings: its folder and the volumes its Compose project
@@ -245,12 +258,11 @@ export const getAppBackups = createServerFn({ method: "GET" })
 // Backs up an App's folder and owned volumes together.
 export const createAppBackups = createServerFn({ method: "POST" })
   .validator(createAppBackupsInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const { createAppBackupsHandler } =
-      await import("@/server/app-backups.server")
-    return createAppBackupsHandler(user, data)
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(backUpApp, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 // Restores whose swap didn't finish, which fence their targets.
 export const getUnfinishedRestores = createServerFn({ method: "GET" }).handler(
@@ -264,12 +276,11 @@ export const getUnfinishedRestores = createServerFn({ method: "GET" }).handler(
 
 export const resolveUnfinishedRestore = createServerFn({ method: "POST" })
   .validator(resolveRestoreInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const { resolveUnfinishedRestoreHandler } =
-      await import("@/server/app-backups.server")
-    return resolveUnfinishedRestoreHandler(user, data)
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(resolveRestore, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 export const getBackupRunsPage = createServerFn({ method: "GET" })
   .validator(backupRunsQuerySchema)
@@ -339,19 +350,25 @@ export const getBackupDownloadUrl = createServerFn({ method: "POST" })
 export const restoreInstanceBackup = createServerFn({ method: "POST" })
   .validator(backupRestoreInputSchema)
   .handler(async ({ data }) =>
-    restoreInstanceBackupHandler(await requireEligibleResourceUser(), data)
+    runOperationPromise(restoreInstance, data, {
+      user: await requireEligibleResourceUser(),
+    })
   )
 
 export const restoreDatabaseBackup = createServerFn({ method: "POST" })
   .validator(backupRestoreInputSchema)
   .handler(async ({ data }) =>
-    restoreDatabaseBackupHandler(await requireEligibleResourceUser(), data)
+    runOperationPromise(restoreDatabase, data, {
+      user: await requireEligibleResourceUser(),
+    })
   )
 
 export const restoreResourceBackup = createServerFn({ method: "POST" })
   .validator(backupRestoreInputSchema)
   .handler(async ({ data }) =>
-    restoreResourceBackupHandler(await requireEligibleResourceUser(), data)
+    runOperationPromise(restoreResource, data, {
+      user: await requireEligibleResourceUser(),
+    })
   )
 
 export const updateBackupLimits = createServerFn({ method: "POST" })
