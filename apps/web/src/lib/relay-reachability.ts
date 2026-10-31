@@ -2,6 +2,13 @@ import type { QueryClient, QueryFunctionContext } from "@tanstack/react-query"
 
 type ReachabilityStatus = "connected" | "unreachable"
 
+// What a push says of a Relay: whether it's reachable, and whether Hearth
+// sees it updating.
+interface PushedRelayState {
+  status: ReachabilityStatus
+  updating: boolean
+}
+
 // Pushed Relay states and stream gaps, ordered against reachability reads.
 // A read cannot tell whether Hearth sampled a Relay before or after a push
 // that arrived while it was in flight, so the push wins. After a gap, pushes
@@ -10,7 +17,7 @@ type ReachabilityStatus = "connected" | "unreachable"
 interface ReachabilityJournal {
   sequence: number
   gap: number
-  pushes: Map<string, { sequence: number; status: ReachabilityStatus }>
+  pushes: Map<string, { sequence: number } & PushedRelayState>
 }
 
 const journals = new WeakMap<QueryClient, ReachabilityJournal>()
@@ -27,11 +34,11 @@ function journalFor(client: QueryClient): ReachabilityJournal {
 export function recordReachabilityPush(
   client: QueryClient,
   relayId: string,
-  status: ReachabilityStatus
+  state: PushedRelayState
 ): void {
   const journal = journalFor(client)
   journal.sequence += 1
-  journal.pushes.set(relayId, { sequence: journal.sequence, status })
+  journal.pushes.set(relayId, { sequence: journal.sequence, ...state })
 }
 
 /** The stream was down or reset, so pushes may have been missed. */
@@ -47,7 +54,7 @@ export function recordReachabilityGap(client: QueryClient): void {
  * query is invalidated and read again.
  */
 export async function readRelayReachability<
-  TRelay extends { id: string; status: ReachabilityStatus },
+  TRelay extends { id: string } & PushedRelayState,
 >(
   {
     client,
@@ -65,8 +72,10 @@ export async function readRelayReachability<
     })
   return relays.map((relay) => {
     const push = journal.pushes.get(relay.id)
-    return push && push.sequence > startedAt && push.status !== relay.status
-      ? { ...relay, status: push.status }
+    return push &&
+      push.sequence > startedAt &&
+      (push.status !== relay.status || push.updating !== relay.updating)
+      ? { ...relay, status: push.status, updating: push.updating }
       : relay
   })
 }

@@ -2,6 +2,8 @@ export type SystemUpdateBatchState<Failure, HearthCompletion> = {
   active: boolean
   failures: ReadonlyArray<Failure>
   hearthCompletion: HearthCompletion | null
+  // Updates whose Relay has no record of how they ended.
+  unconfirmed: ReadonlyArray<Failure>
   versionName: string | null
 }
 
@@ -13,6 +15,7 @@ export function inactiveSystemUpdateBatch<
     active: false,
     failures: [],
     hearthCompletion: null,
+    unconfirmed: [],
     versionName: null,
   }
 }
@@ -26,6 +29,7 @@ export function beginSystemUpdateBatch<Failure, HearthCompletion>(
     active: true,
     failures: [],
     hearthCompletion: null,
+    unconfirmed: [],
     versionName,
   }
 }
@@ -35,6 +39,13 @@ export function recordSystemUpdateFailure<Failure, HearthCompletion>(
   failure: Failure
 ): SystemUpdateBatchState<Failure, HearthCompletion> {
   return { ...state, failures: [...state.failures, failure] }
+}
+
+export function recordSystemUpdateUnconfirmed<Failure, HearthCompletion>(
+  state: SystemUpdateBatchState<Failure, HearthCompletion>,
+  update: Failure
+): SystemUpdateBatchState<Failure, HearthCompletion> {
+  return { ...state, unconfirmed: [...state.unconfirmed, update] }
 }
 
 export function recordHearthUpdateCompletion<Failure, HearthCompletion>(

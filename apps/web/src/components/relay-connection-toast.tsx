@@ -15,7 +15,6 @@ import {
   applicationConnectionToastId,
   applicationReconnectedToastId,
   consumeRelayUpdateReconnect,
-  hydrateSystemUpdatePresence,
   isHearthSystemUpdateActive,
   isRelaySystemUpdateActive,
   noteRelayDisconnectedDuringUpdate,
@@ -34,7 +33,6 @@ type ApplicationConnectionState =
 
 export const RelayConnectionToastMonitor = React.memo(
   function RelayConnectionToastMonitor() {
-    hydrateSystemUpdatePresence()
     const router = useRouter()
     // Reachability only: the toasts never need any Relay's workloads.
     const connectionQuery = useQuery(relayReachabilityQueryOptions())
@@ -76,7 +74,8 @@ export const RelayConnectionToastMonitor = React.memo(
         const disconnectToastId = relayDisconnectToastId(relay.id)
         const reconnectToastId = relayReconnectToastId(relay.id)
         const previousStatus = previousStatuses.current.get(relay.id)
-        const updating = isRelaySystemUpdateActive(relay.id)
+        // Hearth sees it updating, or this tab started or follows its update.
+        const updating = relay.updating || isRelaySystemUpdateActive(relay.id)
         nextStatuses.set(relay.id, relay.status)
 
         if (updating) {

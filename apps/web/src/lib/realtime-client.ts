@@ -134,12 +134,21 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
       queryKeys.relay.reachability,
       (relays) =>
         relays?.map((relay) =>
-          relay.id === event.relayId && relay.status !== event.status
-            ? { ...relay, status: event.status }
+          relay.id === event.relayId &&
+          (relay.status !== event.status ||
+            relay.updating !== (event.updating ?? false))
+            ? {
+                ...relay,
+                status: event.status,
+                updating: event.updating ?? false,
+              }
             : relay
         )
     )
-    recordReachabilityPush(queryClient, event.relayId, event.status)
+    recordReachabilityPush(queryClient, event.relayId, {
+      status: event.status,
+      updating: event.updating ?? false,
+    })
     // Every observation on this Relay depends on its reachability.
     void recheckInstanceObservations(queryClient, {
       predicate: ({ queryKey }) =>

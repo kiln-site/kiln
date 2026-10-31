@@ -484,6 +484,7 @@ export const getRelayReachability = createServerFn({ method: "GET" }).handler(
           relayConnectionState(relay.id).status === "authenticated"
             ? ("connected" as const)
             : ("unreachable" as const),
+        updating: isRelayUpdating(relay.id),
       }))
   }
 )

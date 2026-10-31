@@ -92,6 +92,7 @@ import {
   isHearthUpdateLocked,
   recordHearthUpdateCompletion,
   recordSystemUpdateFailure,
+  recordSystemUpdateUnconfirmed,
   systemUpdateCompletionDisposition,
   type SystemUpdateBatchState,
 } from "@/lib/system-update-batch"
@@ -107,7 +108,6 @@ import type { ReleaseChangeGroup } from "@/lib/release-notes"
 import {
   applicationConnectionToastId,
   applicationReconnectedToastId,
-  activeSystemUpdateStorageKey,
   canRefetchSystemUpdateOverview,
   clearSystemUpdateActive,
   markSystemUpdateActive,
@@ -314,7 +314,6 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
     (next: ReadonlyArray<ActiveUpdate>) => {
       const stored = [...next]
       activeRef.current = stored
-      storeActiveUpdates(stored)
       publishDisplayedActive()
       setActive(stored)
     },
@@ -360,8 +359,9 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
     else viewStore.showOverview()
   }, [requestId, view, viewStore])
 
-  // Follows updates this browser didn't start just now: ones it followed
-  // before a reload, and ones the Relays report running.
+  // Follows updates this browser didn't start just now, which the Relays
+  // report running. Only Hearth's reports say an update runs: nothing the
+  // browser kept from before is shown.
   const followUpdates = React.useCallback(
     (updates: ReadonlyArray<ActiveUpdate>) => {
       const unfollowed = updates.filter(
@@ -397,18 +397,6 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
     },
     [activityStore, queryClient, replaceActive]
   )
-
-  React.useEffect(() => {
-    const restored = Result.try(() => {
-      const stored = window.localStorage.getItem(activeSystemUpdateStorageKey)
-      return stored ? parseActiveUpdates(JSON.parse(stored) as unknown) : []
-    })
-    if (Result.isSuccess(restored) && restored.success.length > 0) {
-      followUpdates(restored.success)
-    } else {
-      window.localStorage.removeItem(activeSystemUpdateStorageKey)
-    }
-  }, [followUpdates])
 
   // Opening the updater finds the updates running that this browser doesn't
   // follow, so they're shown updating instead of offered again.
@@ -552,17 +540,13 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
       const remainingActive = activeRef.current.filter(
         (item) => item.operationId !== completed.operationId
       )
+      // Its Relay has no record of it, so how it ended isn't known: it's
+      // neither failed nor succeeded, and the overview shows its version.
       if (operation === null || operation === undefined) {
         replaceActive(remainingActive)
-        const disposition = systemUpdateCompletionDisposition(
-          completed.component,
-          "failed"
-        )
-        if (disposition.clearPresence) clearSystemUpdateActive(completed)
-        const message = `${completed.name}'s saved update operation could not be found. Check the target container before trying again.`
-        activityStore.setTargetFailure(completed.targetKey, message)
-        batch.current = recordSystemUpdateFailure(batch.current, {
-          message,
+        clearSystemUpdateActive(completed)
+        batch.current = recordSystemUpdateUnconfirmed(batch.current, {
+          message: "Its Relay has no record of how the update ended.",
           target: completed,
         })
         return
@@ -693,6 +677,11 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
 
     if (failures.length > 0) {
       showSystemUpdateFailureToast(failures, onRetryTarget, githubIssuesUrl)
+    } else if (completedBatch.unconfirmed.length > 0) {
+      showSystemUpdateUnconfirmedToast(
+        completedBatch.unconfirmed,
+        onRetryTarget
+      )
     } else if (hearth === null) {
       showSystemUpdateSuccessToast(
         completedBatch.versionName ?? "the latest version"
@@ -3985,6 +3974,31 @@ function showSystemUpdateFailureToast(
   })
 }
 
+function showSystemUpdateUnconfirmedToast(
+  updates: ReadonlyArray<UpdateFailure>,
+  onRetryTarget: (relayId: string | null) => void
+): void {
+  const first = updates[0]
+  if (!first) return
+  showToast({
+    type: "warning",
+    message: "Kiln couldn't confirm the update",
+    id: systemUpdateToastId,
+    description:
+      updates.length === 1
+        ? `${first.target.name}: ${first.message} Check its version in the updater.`
+        : `${updates.map(({ target }) => target.name).join(", ")}: their Relays have no record of how the updates ended. Check their versions in the updater.`,
+    duration: Infinity,
+    action: {
+      label: "Open updater",
+      onClick: () =>
+        onRetryTarget(
+          first.target.component === "hearth" ? null : first.target.relayId
+        ),
+    },
+  })
+}
+
 function dismissConnectionToasts(
   update: Pick<ActiveUpdate, "component" | "relayId">
 ): void {
@@ -4144,81 +4158,6 @@ function compactReleaseName(name: string): string {
   return name.replace(/^v\d+\.\d+\.\d+\s+(?=Nightly\b)/u, "")
 }
 
-function parseActiveUpdates(value: unknown): Array<ActiveUpdate> {
-  const values = Array.isArray(value) ? value : [value]
-  const active: Array<ActiveUpdate> = []
-
-  for (const item of values) {
-    const parsed = parseActiveUpdate(item)
-    if (parsed) active.push(parsed)
-  }
-
-  return active
-}
-
-function parseActiveUpdate(value: unknown): ActiveUpdate | null {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "component" in value &&
-    (value.component === "hearth" || value.component === "relay") &&
-    "operationId" in value &&
-    typeof value.operationId === "string" &&
-    "relayId" in value &&
-    typeof value.relayId === "string"
-  ) {
-    const component = value.component
-    const relayId = value.relayId
-    return {
-      component,
-      name:
-        "name" in value && typeof value.name === "string"
-          ? value.name
-          : displayComponent(component),
-      operationId: value.operationId,
-      phase:
-        "phase" in value && typeof value.phase === "string"
-          ? value.phase
-          : undefined,
-      previousVersion:
-        "previousVersion" in value &&
-        (typeof value.previousVersion === "string" ||
-          value.previousVersion === null)
-          ? value.previousVersion
-          : null,
-      relayId,
-      targetVersion:
-        "targetVersion" in value &&
-        (typeof value.targetVersion === "string" ||
-          value.targetVersion === null)
-          ? value.targetVersion
-          : null,
-      targetKey:
-        "targetKey" in value && typeof value.targetKey === "string"
-          ? value.targetKey
-          : component === "hearth"
-            ? "hearth"
-            : relayTargetKey(relayId),
-      versionName:
-        "versionName" in value && typeof value.versionName === "string"
-          ? value.versionName
-          : undefined,
-    }
-  }
-  return null
-}
-
-function storeActiveUpdates(active: ReadonlyArray<ActiveUpdate>): void {
-  if (active.length === 0) {
-    window.localStorage.removeItem(activeSystemUpdateStorageKey)
-    return
-  }
-  window.localStorage.setItem(
-    activeSystemUpdateStorageKey,
-    JSON.stringify(active)
-  )
-}
-
 function incrementUpdateFailureCount(targetKey: string): number {
   const failures = readStorageRecord<number>(updateFailureStorageKey)
   const previousCount = failures[targetKey]
@@ -4256,10 +4195,6 @@ function readStorageRecord<Value>(key: string): Record<string, Value> {
     }),
     () => ({})
   )
-}
-
-function displayComponent(component: "hearth" | "relay"): string {
-  return component === "hearth" ? "Panel" : "Relay"
 }
 
 function relayTargetKey(relayId: string): string {
