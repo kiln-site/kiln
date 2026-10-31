@@ -309,8 +309,10 @@ const recordAppImageAnswersEffect = Effect.fnUntraced(function* (
   actorUserId: string | null
 ) {
   // An app checked on its own that no longer checks, as one now pinned to a
-  // digest or deployed from elsewhere, has no update on offer.
-  if (asked.unchecked) {
+  // digest or deployed from elsewhere, has no update on offer: read again
+  // here, holding the app, since checks may have been turned on since and
+  // a newer check announced an update.
+  if (asked.unchecked && !(yield* checksForUpdates(relay.id, appId))) {
     yield* resolveAppImageUpdateNotificationsEffect(appId, { unchecked: true })
   }
   let changed = false
@@ -342,6 +344,24 @@ const recordAppImageAnswersEffect = Effect.fnUntraced(function* (
     }
   }
   return changed
+})
+
+// Whether an app checks for image updates now: it deploys a tag, not a
+// digest, and hasn't turned checks off.
+const checksForUpdates = Effect.fnUntraced(function* (
+  relayId: string,
+  appId: string
+) {
+  const app = yield* loadAppConfigEffect(relayId, appId)
+  if (
+    app?.config.sourceType !== "image" ||
+    app.config.image === "" ||
+    app.config.image.includes("@")
+  ) {
+    return false
+  }
+  const update = (yield* loadAppImageUpdatesEffect([appId])).get(appId)
+  return (update?.mode ?? defaultAppImageUpdatePolicy.mode) !== "off"
 })
 
 // Kiln's own checks: ask with no lane held, then record each app's answer
