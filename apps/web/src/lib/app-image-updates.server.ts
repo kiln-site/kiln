@@ -232,12 +232,17 @@ export interface AppImageAnswer {
 /**
  * Asks the Relay about its image apps, or just `onlyAppId`, that check for
  * updates: those whose config names a tag, not a digest, and haven't
- * turned checks off. No lane is held: registries may take a while.
- * `unchecked` is an app asked about on its own that no longer checks.
+ * turned checks off. No lane is held: registries may take a while. Each
+ * batch's answers go to `answered` before the next is asked, so a batch
+ * that fails later doesn't lose them. Reports whether `onlyAppId`, asked
+ * about on its own, no longer checks.
  */
-const askAppImagesEffect = Effect.fnUntraced(function* (
+const askAppImagesEffect = Effect.fnUntraced(function* <E, R>(
   relay: PersistedRelay,
-  onlyAppId?: string
+  onlyAppId: string | undefined,
+  answered: (
+    answers: ReadonlyArray<AppImageAnswer>
+  ) => Effect.Effect<void, E, R>
 ) {
   const apps = (yield* listRelayAppConfigsEffect(relay.id)).filter(
     (app) =>
@@ -252,7 +257,6 @@ const askAppImagesEffect = Effect.fnUntraced(function* (
       (updates.get(app.appId)?.mode ?? defaultAppImageUpdatePolicy.mode) !==
       "off"
   )
-  const answers: Array<AppImageAnswer> = []
   for (let start = 0; start < due.length; start += batchSize) {
     const batch = due.slice(start, start + batchSize)
     const askedAt = yield* Clock.currentTimeMillis
@@ -280,6 +284,7 @@ const askAppImagesEffect = Effect.fnUntraced(function* (
     }).pipe(
       Effect.map((response) => relayAppImageCheckResultsSchema.parse(response))
     )
+    const answers: Array<AppImageAnswer> = []
     for (const result of results) {
       const app = batch.find((item) => item.appId === result.appId)
       // Mid-deployment, its outcome decides what runs.
@@ -287,12 +292,9 @@ const askAppImagesEffect = Effect.fnUntraced(function* (
         answers.push({ app, askedAt, result })
       }
     }
+    yield* answered(answers)
   }
-  return {
-    answers,
-    unchecked:
-      onlyAppId !== undefined && !due.some((app) => app.appId === onlyAppId),
-  }
+  return onlyAppId !== undefined && !due.some((app) => app.appId === onlyAppId)
 })
 
 /**
@@ -344,27 +346,50 @@ const recordAppImageAnswersEffect = Effect.fnUntraced(function* (
 
 // Kiln's own checks: ask with no lane held, then record each app's answer
 // holding the app, so checks may overlap without one undoing another's.
-const checkAppImagesEffect = Effect.fnUntraced(function* (
+const checkAppImagesEffect = (
   relay: PersistedRelay,
   onlyAppId?: string,
   actorUserId: string | null = null
-) {
-  const asked = yield* askAppImagesEffect(relay, onlyAppId)
-  const appIds = new Set([
-    ...asked.answers.map(({ app }) => app.appId),
-    ...(asked.unchecked && onlyAppId ? [onlyAppId] : []),
-  ])
+) => {
   let changed = false
-  for (const appId of appIds) {
-    changed ||= yield* inLanes(
+  const record = (
+    appId: string,
+    asked: { answers: ReadonlyArray<AppImageAnswer>; unchecked: boolean }
+  ) =>
+    inLanes(
       "app.image.check.record",
       "Checking this App's image",
       [exclusive(resourceKey("app", relay.id, appId))],
       recordAppImageAnswersEffect(relay, appId, asked, actorUserId)
+    ).pipe(
+      Effect.tap((appChanged) =>
+        Effect.sync(() => {
+          changed ||= appChanged
+        })
+      )
     )
-  }
-  if (changed) publishAppDeploymentChange(relay.id)
-})
+  return Effect.gen(function* () {
+    // Each batch is recorded before the next is asked for.
+    const unchecked = yield* askAppImagesEffect(relay, onlyAppId, (answers) =>
+      Effect.forEach(
+        answers,
+        (answer) =>
+          record(answer.app.appId, { answers: [answer], unchecked: false }),
+        { discard: true }
+      )
+    )
+    if (unchecked && onlyAppId) {
+      yield* record(onlyAppId, { answers: [], unchecked: true })
+    }
+  }).pipe(
+    // What was recorded shows, even when a later batch failed.
+    Effect.ensuring(
+      Effect.sync(() => {
+        if (changed) publishAppDeploymentChange(relay.id)
+      })
+    )
+  )
+}
 
 export function startAppImageUpdateChecks(): void {
   const sweep = Effect.gen(function* () {
@@ -426,7 +451,13 @@ export const askAppImageEffect = Effect.fn("Apps.imageUpdates.askApp")(
         new Error("Update this Relay to check apps for image updates")
       )
     }
-    return yield* askAppImagesEffect(relay, appId)
+    const answers: Array<AppImageAnswer> = []
+    const unchecked = yield* askAppImagesEffect(relay, appId, (batch) =>
+      Effect.sync(() => {
+        answers.push(...batch)
+      })
+    )
+    return { answers, unchecked }
   }
 )
 
