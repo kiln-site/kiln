@@ -170,6 +170,7 @@ interface SyncRow extends RowDataPacket {
   resource_kind: GitHubSyncResourceKind
   source_path: string
   status: GitHubSyncStatus
+  queued?: number | string
   target_path: string
 }
 
@@ -183,6 +184,17 @@ const syncColumns = `id, connection_id, relay_id, resource_kind, resource_id,
   include_patterns, auto_sync, overwrite, status, last_error,
   last_commit_sha, last_commit_message, last_synced_at, last_changed_count,
   created_by, created_at`
+
+/** The durable operation a sync's run is, queued under the sync's ID. */
+export const githubSyncRunKind = "github.sync"
+
+// Whether a run of the sync waits its turn, as its queued operation says.
+const queuedColumn = () => {
+  const sync = databaseTable("github_sync")
+  return `EXISTS (SELECT 1 FROM ${databaseTable("operation")} queued
+     WHERE queued.kind = '${githubSyncRunKind}'
+       AND queued.queue_key = ${sync}.id) AS queued`
+}
 
 export const insertGitHubConnectionEffect = Effect.fn(
   "github.connection.insert"
@@ -356,7 +368,7 @@ export const loadGitHubSyncsEffect = Effect.fn("github.syncs.load")(function* (
   }
   const rows = yield* database.queryRows<SyncRow>(
     "github.syncs.load",
-    `SELECT ${syncColumns}
+    `SELECT ${syncColumns}, ${queuedColumn()}
          FROM ${databaseTable("github_sync")}
         ${clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : ""}
         ORDER BY created_at`,
@@ -393,7 +405,7 @@ export const loadGitHubSyncEffect = Effect.fn("github.sync.load")(function* (
   const database = yield* Database
   const [row] = yield* database.queryRows<SyncRow & { synced_files: unknown }>(
     "github.sync.load",
-    `SELECT ${syncColumns}, synced_files
+    `SELECT ${syncColumns}, ${queuedColumn()}, synced_files
        FROM ${databaseTable("github_sync")}
       WHERE id = ?
       LIMIT 1`,
@@ -793,7 +805,11 @@ function publicSync(row: SyncRow): GitHubSync {
     resourceId: row.resource_id,
     resourceKind: row.resource_kind,
     sourcePath: row.source_path,
-    status: row.status,
+    // A run asked for shows as queued, unless one runs now.
+    status:
+      row.status !== "running" && Number(row.queued ?? 0) === 1
+        ? "queued"
+        : row.status,
     targetPath: row.target_path,
   }
 }
