@@ -54,9 +54,13 @@ export interface LaneAdmission {
    * Whether to wait for the locks (the default) or be refused at once with
    * what's in the way, when an operation holds a conflicting lock or one
    * admitted before is waiting for one. For a person's change, which says
-   * so rather than queue. Needs its locks up front.
+   * so rather than queue. Needs its locks up front. Or decided by what's in
+   * the way: waiting behind some work, refused by other.
    */
-  readonly whenBusy?: "refuse" | "wait"
+  readonly whenBusy?:
+    | "refuse"
+    | "wait"
+    | ((inTheWay: ReadonlyArray<WaitReason<string>>) => "refuse" | "wait")
 }
 
 export interface LaneTicket {
@@ -311,8 +315,13 @@ export class OperationLanes {
         )
       }
       this.#grant()
-      if (admission.whenBusy === "refuse" && waiter.state === "waiting") {
-        this.#refuseBusy(waiter, queue)
+      if (admission.whenBusy !== undefined && waiter.state === "waiting") {
+        const inTheWay = this.#inTheWay(waiter, queue)
+        const whenBusy =
+          typeof admission.whenBusy === "function"
+            ? admission.whenBusy(inTheWay)
+            : admission.whenBusy
+        if (whenBusy === "refuse") this.#refuseBusy(waiter, inTheWay)
       }
     }
     return {
@@ -322,23 +331,24 @@ export class OperationLanes {
     }
   }
 
-  // Turns away an operation that wasn't granted as it arrived, naming what
-  // holds or waits ahead for its locks.
-  #refuseBusy(waiter: Waiter, queue: Array<Waiter>) {
+  // What holds or waits ahead for the locks of an operation that wasn't
+  // granted as it arrived.
+  #inTheWay(waiter: Waiter, queue: Array<Waiter>) {
     const index = queue.indexOf(waiter)
     const occupant = (other: Waiter) => ({
       id: other.label,
       locks: other.locks ?? [],
     })
-    const blockedBy = [
-      ...new Set(
-        explainWait(
-          waiter.locks ?? [],
-          [...this.#active].map(occupant),
-          queue.slice(0, Math.max(index, 0)).map(occupant)
-        ).map((reason) => reason.id)
-      ),
-    ]
+    return explainWait(
+      waiter.locks ?? [],
+      [...this.#active].map(occupant),
+      queue.slice(0, Math.max(index, 0)).map(occupant)
+    )
+  }
+
+  // Turns it away, naming what's in its way.
+  #refuseBusy(waiter: Waiter, inTheWay: ReadonlyArray<WaitReason<string>>) {
+    const blockedBy = [...new Set(inTheWay.map((reason) => reason.id))]
     this.#remove(waiter)
     this.#reject(
       waiter,

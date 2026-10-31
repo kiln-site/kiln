@@ -277,7 +277,9 @@ export const runOperation = <Input, Context, A, E, R>(
     yield* awaitLanesOpen(initiator, definition.name).pipe(
       Effect.tapError(() =>
         Metric.update(
-          Metric.withAttributes(refusals, { "operation.name": definition.name }),
+          Metric.withAttributes(refusals, {
+            "operation.name": definition.name,
+          }),
           1
         )
       ),
@@ -292,7 +294,7 @@ export const runOperation = <Input, Context, A, E, R>(
         const ticket = hearthLanes.admit({
           label,
           locks,
-          whenBusy: initiator === "person" ? "refuse" : "wait",
+          whenBusy: initiator === "person" ? personWhenBusy : "wait",
         })
         occupy(label, {
           actorId: caller.user?.id ?? null,
@@ -333,24 +335,50 @@ export const runOperation = <Input, Context, A, E, R>(
           ? vacate(label)
           : Effect.void
       ),
-      // Waiting this long is likely work that can't start until
+      // A person waits so long, then is told what's in the way. Hearth's
+      // own work waiting this long is likely work that can't start until
       // something it waits behind ends: say what.
       (waiting) =>
         Effect.raceFirst(
           waiting,
-          Effect.sleep(SLOW_WAIT).pipe(
+          Effect.sleep(initiator === "person" ? PERSON_WAIT : SLOW_WAIT).pipe(
             Effect.andThen(
-              Effect.suspend(() =>
-                laneOccupants.get(label)?.startedAt === null
-                  ? Effect.logWarning(
-                      `${definition.name} has waited ${SLOW_WAIT} for its lanes`,
-                      hearthLanes
-                        .describe()
-                        .waiting.find((entry) => entry.label === label)
-                        ?.waitingOn ?? []
+              Effect.suspend(() => {
+                if (laneOccupants.get(label)?.startedAt !== null)
+                  return Effect.void
+                const waitingOn =
+                  hearthLanes
+                    .describe()
+                    .waiting.find((entry) => entry.label === label)
+                    ?.waitingOn ?? []
+                if (initiator === "system") {
+                  return Effect.logWarning(
+                    `${definition.name} has waited ${SLOW_WAIT} for its lanes`,
+                    waitingOn
+                  )
+                }
+                const blockedBy = [...new Set(waitingOn.map(({ id }) => id))]
+                return refusal(
+                  definition.name,
+                  new LaneRejectedError({
+                    blockedBy,
+                    message: `${label} waited ${PERSON_WAIT} on ${blockedBy.join(", ")}`,
+                    reason: "busy",
+                  })
+                ).pipe(
+                  Effect.tapError(() =>
+                    Clock.currentTimeMillis.pipe(
+                      Effect.flatMap((finishedAt) =>
+                        record(definition.name, "refused", {
+                          admittedAt,
+                          finishedAt,
+                          startedAt: finishedAt,
+                        })
+                      )
                     )
-                  : Effect.void
-              )
+                  )
+                )
+              })
             ),
             Effect.andThen(Effect.never)
           )
@@ -374,6 +402,20 @@ export function runOperationPromise<Input, Context, A, E, R>(
 }
 
 const SLOW_WAIT = "30 seconds"
+
+// How long a person waits behind everyday work before being told what's in
+// the way.
+const PERSON_WAIT = "30 seconds"
+
+/**
+ * A person waits behind everyday work on a part of what they change, as
+ * another power action or config save, and is turned away at once by work
+ * on a whole: replacing or removing it, or something it belongs to.
+ */
+const personWhenBusy = (
+  inTheWay: ReadonlyArray<{ readonly key: string }>
+): "refuse" | "wait" =>
+  inTheWay.some(({ key }) => !key.includes("#")) ? "refuse" : "wait"
 
 // Notes how a run went on its span and in the metrics.
 const record = (

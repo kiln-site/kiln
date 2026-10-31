@@ -98,6 +98,106 @@ describeMysql("Hearth operations", () => {
     )
 
     it.effect(
+      "keeps a person waiting behind the same kind of change only, then checks them again",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const power = partKey(server, "power")
+          const release = yield* Deferred.make<void>()
+          const starting = yield* runOperation(
+            holding("test.power", "Starting this game server", [
+              exclusive(power),
+            ]),
+            release,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+
+          // Other everyday work on the server runs beside it.
+          const saved = yield* runOperation(
+            operation<void>()({
+              doing: "Saving a file",
+              locks: () => [shared(server)],
+              name: "test.save",
+              run: () => Effect.succeed("saved"),
+            }),
+            undefined,
+            { user: person }
+          )
+          assert.strictEqual(saved, "saved")
+
+          // Another power action waits its turn, and is checked again once
+          // it has: one no longer allowed by then doesn't run.
+          let allowed = true
+          let ran = false
+          const stopping = yield* runOperation(
+            operation<void>()({
+              authorize: () =>
+                Effect.suspend(() =>
+                  allowed
+                    ? Effect.void
+                    : Effect.fail(new Error("No longer allowed"))
+                ),
+              doing: "Stopping this game server",
+              locks: () => [exclusive(power)],
+              name: "test.power.stop",
+              run: () => Effect.sync(() => (ran = true)),
+            }),
+            undefined,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          assert.isUndefined(stopping.pollUnsafe())
+          allowed = false
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(starting)
+          const refused = yield* Fiber.join(stopping).pipe(Effect.flip)
+          assert.strictEqual((refused as Error).message, "No longer allowed")
+          assert.isFalse(ran)
+        })
+    )
+
+    it.effect("tells a person what's in the way once they've waited long", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const power = partKey(server, "power")
+        const release = yield* Deferred.make<void>()
+        const starting = yield* runOperation(
+          holding("test.power", "Starting this game server", [
+            exclusive(power),
+          ]),
+          release,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.yieldNow
+
+        const waiting = yield* runOperation(
+          holding("test.power.stop", "Stopping this game server", [
+            exclusive(power),
+          ]),
+          release,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.yieldNow
+        yield* TestClock.adjust("30 seconds")
+        const refused = yield* Fiber.join(waiting).pipe(Effect.flip)
+        assert.strictEqual(refused._tag, "OperationBusyError")
+        assert.strictEqual(
+          refused.message,
+          "Starting this game server is in progress. Try again once it's done."
+        )
+
+        // It gave up its place: the next one runs once the first ends.
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(starting)
+        assert.strictEqual(
+          yield* runOperation(changeDns, undefined, { user: person }),
+          "changed"
+        )
+      })
+    )
+
+    it.effect(
       "runs an operation inside one that holds its locks, and refuses one needing more",
       () =>
         Effect.gen(function* () {

@@ -132,6 +132,7 @@ import {
 } from "@/lib/relay-selectors"
 import { updateInstanceSourceName } from "@/lib/instance-registry"
 import { dnsKey } from "@/lib/dns-operations"
+import { outsideOperation } from "@/operations/current"
 import { exclusive, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
@@ -513,6 +514,7 @@ const renameInstance = resourceOperation({
   kind: "instance",
   id: (input: z.infer<typeof instanceNameInputSchema>) => input.instanceId,
   name: "instance.rename",
+  lock: { part: "name" },
   doing: "Renaming this game server",
   permission: () => "instance.configuration.write",
   run: renameInstanceHandler,
@@ -647,6 +649,7 @@ const disconnectInstanceDatabase = resourceOperation({
   id: (input: z.infer<typeof removeDatabaseConnectionInputSchema>) =>
     input.instanceId,
   name: "instance.database.disconnect",
+  lock: "shared",
   doing: "Changing this game server's database connections",
   permission: () => "instance.network.write",
   alsoLocks: (input) => [
@@ -819,6 +822,7 @@ const changeInstancePorts = resourceOperation({
   kind: "instance",
   id: (input: z.infer<typeof portsInputSchema>) => input.instanceId,
   name: "instance.ports.update",
+  lock: { part: "ports" },
   doing: "Changing this game server's ports",
   permission: (input) => instancePortsWritePermission(input.ports),
   run: updateInstancePortsHandler,
@@ -848,10 +852,13 @@ async function updateInstancePortsHandler(
     240_000
   )
   const instance = relayInstanceSchema.parse(value)
-  await syncInstanceDomainAfterPortUpdateBestEffort(
-    instance,
-    data.relayId,
-    data.ports
+  // Its DNS takes its own turn, after any DNS change already under way.
+  await outsideOperation(() =>
+    syncInstanceDomainAfterPortUpdateBestEffort(
+      instance,
+      data.relayId,
+      data.ports
+    )
   )
   await runAppEffect(
     "relay.snapshot.invalidate",
@@ -869,6 +876,7 @@ const leaseInstancePort = resourceOperation({
   kind: "instance",
   id: (input: z.infer<typeof portLeaseInputSchema>) => input.instanceId,
   name: "instance.port.reserve",
+  lock: "shared",
   doing: "Changing this game server's ports",
   permission: (input) =>
     input.externalPort === undefined
@@ -917,6 +925,7 @@ const releaseInstancePortLease = resourceOperation({
   kind: "instance",
   id: (input: z.infer<typeof portLeaseReleaseInputSchema>) => input.instanceId,
   name: "instance.port.release",
+  lock: "shared",
   doing: "Changing this game server's ports",
   permission: () => "instance.network.write",
   run: async (user, data) => {
@@ -1298,6 +1307,7 @@ const powerInstance = resourceOperation({
   kind: "instance",
   id: (input: z.infer<typeof actionInputSchema>) => input.instanceId,
   name: "instance.power",
+  lock: { part: "power" },
   doing: "Changing this game server's power",
   permission: (input) => `instance.power.${input.action}`,
   run: performInstanceActionHandler,
@@ -1326,7 +1336,10 @@ async function performInstanceActionHandler(
   )
   const instance = relayInstanceSchema.parse(await response.json())
   if (action === "start" || action === "restart") {
-    await provisionInstanceDomainBestEffort(instance, relay.id)
+    // Its DNS takes its own turn, after any DNS change already under way.
+    await outsideOperation(() =>
+      provisionInstanceDomainBestEffort(instance, relay.id)
+    )
   }
   await runAppEffect(
     "relay.snapshot.invalidate",

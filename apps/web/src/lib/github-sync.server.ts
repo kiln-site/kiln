@@ -235,7 +235,9 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
 
   const fileLocks = [
     exclusive(githubSyncKey(sync.id)),
-    exclusive(
+    // The Relay keeps file writes in order; this keeps what's written into
+    // from being replaced or removed meanwhile.
+    shared(
       githubSyncTargetKey({
         kind: sync.resourceKind,
         relayId: sync.relayId,

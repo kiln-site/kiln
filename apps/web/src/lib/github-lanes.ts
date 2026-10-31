@@ -4,7 +4,7 @@ import { partKey, relayKey, resourceKey } from "@/operations/lanes"
 /**
  * The lane keys GitHub syncs take (docs/hearth-operations.md). A sync's run
  * fetches from GitHub with none held; each file it writes holds the sync,
- * what it writes into, and its connection shared.
+ * and what it writes into and its connection shared.
  */
 
 /** A GitHub sync: changing it, or writing a file for it. */

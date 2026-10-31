@@ -48,6 +48,7 @@ import {
 } from "@/lib/relay-client"
 import { promiseEffect } from "@/effect/promise"
 import { provisioningInstanceId } from "@/lib/provisioning.server"
+import { outsideOperation } from "@/operations/current"
 import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
@@ -339,6 +340,7 @@ const changeInstanceStartup = resourceOperation({
   id: (input: z.infer<typeof hearthUpdateInstanceStartupInputSchema>) =>
     input.instanceId,
   name: "instance.startup.update",
+  lock: { part: "config" },
   doing: "Changing this game server's startup",
   permission: () => "instance.configuration.read",
   run: updateInstanceStartupHandler,
@@ -443,7 +445,10 @@ async function updateInstanceStartupHandler(
       user.id
     )
   )
-  await provisionInstanceDomainBestEffort(instance, relay.id)
+  // Its DNS takes its own turn, after any DNS change already under way.
+  await outsideOperation(() =>
+    provisionInstanceDomainBestEffort(instance, relay.id)
+  )
   await runAppEffect(
     "relay.snapshot.invalidate",
     invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
