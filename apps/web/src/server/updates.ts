@@ -361,8 +361,8 @@ export const getReleaseHistory = createServerFn({ method: "GET" })
 
 const releaseHistoryPageSize = 60
 
-// Hands one Relay its updates, holding what they replace: its process, as
-// restarting it does, or Hearth itself. The Relay runs them from there and
+// Hands one Relay its updates, holding its process, as restarting it does,
+// and Hearth itself when it's among them. The Relay runs them from there and
 // refuses another meanwhile, so the next Relay's needn't wait on this one.
 const handOverUpdates = operation<{
   readonly components: ReadonlyArray<"hearth" | "relay">
@@ -388,14 +388,12 @@ const handOverUpdates = operation<{
         )
       )
     ),
-  locks: ({ input }) =>
-    input.components.map((component) =>
-      exclusive(
-        component === "hearth"
-          ? hearthKey
-          : partKey(relayKey(input.relay.id), "process")
-      )
-    ),
+  // The Relay's process even for Hearth's update alone: the Relay runs
+  // it, so it mustn't restart or go meanwhile.
+  locks: ({ input }) => [
+    exclusive(partKey(relayKey(input.relay.id), "process")),
+    ...(input.components.includes("hearth") ? [exclusive(hearthKey)] : []),
+  ],
   run: ({ context: user, input }) =>
     Effect.gen(function* () {
       // The Hearth that starts next shouldn't tell this admin about the
