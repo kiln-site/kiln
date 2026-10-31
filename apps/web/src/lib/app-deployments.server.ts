@@ -1,28 +1,34 @@
-import { randomUUID } from "node:crypto"
-
 import {
   relayAppGitHubV1Feature,
   relayAppDeploymentLogSchema,
   relayAppImageUpdatesV1Feature,
   relayAppSchema,
   type AppConfig,
-  type RelayApp,
-  type RelayAppGitHubCheckout,
 } from "@workspace/contracts"
 import { logException } from "@workspace/telemetry"
-import { Cause, Clock, Effect, Fiber, Option, Schedule } from "effect"
+import {
+  Cause,
+  Clock,
+  Duration,
+  Effect,
+  Fiber,
+  Result,
+  Schedule,
+  Schema,
+} from "effect"
+import { Activity } from "effect/workflow"
 
 import {
   finishAppDeploymentEffect,
   insertAppDeploymentEffect,
   latestAppDeploymentsEffect,
+  loadAppDeploymentEffect,
   loadAppGitHubSourceEffect,
-  loadAppDeploymentRequestEffect,
-  loadAppDeploymentRequestsEffect,
   loadAutoDeployGitHubSourcesEffect,
   loadRunningAppDeploymentsEffect,
-  requestAppDeploymentEffect,
-  settleAppDeploymentRequestEffect,
+  recordRelayDeploymentEffect,
+  type AppDeploymentAsk,
+  type AppGitHubSource,
   type AppDeploymentRecord,
   type AppDeploymentStatus,
   type AppDeploymentTrigger,
@@ -33,7 +39,7 @@ import {
   claimImageUpdateEffect,
   loadAppImageUpdateEffect,
 } from "@/effect/app-image-updates"
-import { ExternalServiceError } from "@/effect/errors"
+import { DatabaseError, ExternalServiceError } from "@/effect/errors"
 import {
   getGitHubCommitEffect,
   githubInstallationTokenEffect,
@@ -45,11 +51,24 @@ import {
   notifyUsersEffect,
   publishNotificationChange,
 } from "@/effect/notifications"
+import { promiseEffect } from "@/effect/promise"
+import {
+  findResourceDeletionEffect,
+  unfinishedDeletionStatuses,
+} from "@/effect/resource-deletions"
 import { forkAppWorker } from "@/effect/runtime"
-import { outsideOperation } from "@/operations/current"
+import { requireRelayPermission } from "@/lib/access-control"
+import {
+  durableOperation,
+  queueDurableOperation,
+  whileMySqlIsAway,
+} from "@/operations/durable"
+import { currentActingUser } from "@/operations/acting-user"
+import { developmentBypassUserId } from "@/lib/development-bypass"
+import { loadOperation } from "@/operations/records"
+import { RelayCommandError, relayCommand } from "@/operations/relay-command"
 import { appDeploymentLocks } from "@/lib/app-lanes"
-import { inLanes } from "@/operations/operation"
-import { ensureAppDatabaseConnectionsImportedEffect } from "@/lib/app-database-connections.server"
+import { appDatabaseConnectionsHandedOverEffect } from "@/lib/app-database-connections.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import {
@@ -58,48 +77,40 @@ import {
 } from "@/lib/relay-registry"
 import { resourceAudienceEffect } from "@/lib/resource-audience.server"
 
-// Deploys apps and records each deployment: Hearth resolves what a GitHub
-// app builds, sends it to the app's Relay, and follows the deployment there
-// until it ends. Pushes and polls queue deployments per app, so a burst of
-// commits deploys the newest once the running one finishes.
+// Deploys apps and records each deployment. Every ask, whatever asked,
+// joins the app's one request, and one durable operation takes it up,
+// holding the app's #deploy from taking it until the Relay says the
+// deployment ended, so deployments of an app go one at a time in its
+// lanes, each deploying the newest ask as it stands then, with a token
+// made as it's sent.
 
 const pollInterval = "1 minute"
-// How often a running deployment is checked on its Relay, and for how long.
-const followInterval = "2 seconds"
-const followLimitMs = 2 * 60 * 60_000
+// A wait, as for a build to end, checks this often in memory and stores a
+// step a window, so a long one keeps few. A window cut off, as Hearth
+// stops, checks again from its start.
+const watchWindow = Duration.minutes(5)
+// A running deployment is checked often at first, then less.
+const followQuickly = Duration.minutes(2)
+const followInterval = Duration.seconds(2)
+const followIntervalLater = Duration.seconds(10)
 // How long a new app may take to provision before its first deployment.
-const provisionLimitMs = 10 * 60_000
+const provisionWindows = 2
 
 export interface AppDeploymentRequest {
   appId: string
   /** A commit to build again; otherwise the head of the app's branch. */
   commit?: string
+  /**
+   * The commit a push pinned, deployed while the app still deploys from the
+   * repository and branch it came from (`<repository ID>/<branch>`).
+   */
+  pinned?: { commitSha: string; source: string }
   /** An image digest to deploy again, as a rollback of an image update. */
   imageDigest?: string
   relayId: string
   trigger: AppDeploymentTrigger
   /** Who asked, for the record and the Relay's audit; null for automation. */
   userId: string | null
-  /** Started where nobody sees its failure, which is recorded instead. */
-  background?: boolean
-  /**
-   * From the deployment queue: fails with `DeploymentDeferred`, deploying
-   * nothing, when it can't deploy now, so its request is kept rather than
-   * spent: its Relay is paused or offline, or another deployment of the app
-   * runs, as one a person started since.
-   */
-  deferUnlessReady?: boolean
-}
-
-/** A queued request that can't deploy now, and why. */
-export class DeploymentDeferred extends Error {
-  constructor(readonly reason: "relay" | "running") {
-    super(
-      reason === "relay"
-        ? "The Relay can't take a deployment now"
-        : "Another deployment is running"
-    )
-  }
 }
 
 export function publishAppDeploymentChange(relayId: string): void {
@@ -112,48 +123,69 @@ export function publishAppDeploymentChange(relayId: string): void {
 }
 
 /**
- * Starts a deployment of the app's saved configuration and records it.
- * A push or poll for the branch head the app last tried deploys nothing,
- * and returns null, so a failing commit or a rollback isn't redeployed
- * every minute; nor does a poll while the Relay is offline, which checks
- * again once it's back. An image update deploys the digest Kiln found its
- * tag naming; one Kiln starts on its own deploys nothing, either, unless
- * it's still due when its turn comes.
+ * What a deployment sends its Relay, decided when its turn comes: for a
+ * GitHub app the commit asked for, or its branch's head, with what makes
+ * the token that checks it out. The app's saved configuration, which holds
+ * its secrets, and the token are read and made as it's sent and never kept,
+ * as a workflow's steps are, in the clear. Null when there's nothing to deploy: a
+ * push or poll for the commit the app last tried, so a failing commit or a
+ * rollback isn't redeployed every minute; a poll while the Relay is
+ * offline, which checks again once it's back; an image update no longer
+ * due when its turn came.
  */
-export const startAppDeploymentEffect = (request: AppDeploymentRequest) =>
-  inLanes(
-    "app.deployment.start",
-    "Deploying this App",
-    appDeploymentLocks(request.relayId, request.appId),
-    deployAppEffect(request)
-  )
+const DeployPlan = Schema.Struct({
+  payload: Schema.Struct({
+    appId: Schema.String,
+    github: Schema.optionalKey(
+      Schema.Struct({
+        build: Schema.Unknown,
+        commit: Schema.String,
+        path: Schema.String,
+        repository: Schema.String,
+      })
+    ),
+    imageDigest: Schema.optionalKey(Schema.String),
+    name: Schema.String,
+  }),
+  record: Schema.Struct({
+    appId: Schema.String,
+    branch: Schema.NullOr(Schema.String),
+    commitAuthor: Schema.NullOr(Schema.String),
+    commitMessage: Schema.NullOr(Schema.String),
+    commitSha: Schema.NullOr(Schema.String),
+    id: Schema.String,
+    imageDigest: Schema.NullOr(Schema.String),
+    relayId: Schema.String,
+    repository: Schema.NullOr(Schema.String),
+    sourceType: Schema.String,
+    startedAt: Schema.String,
+    trigger: Schema.String,
+    triggeredBy: Schema.NullOr(Schema.String),
+  }),
+  token: Schema.NullOr(
+    Schema.Struct({
+      connectionId: Schema.String,
+      installationId: Schema.Number,
+      repositoryId: Schema.Number,
+    })
+  ),
+  /** The image an image app's plan was made for. */
+  image: Schema.NullOr(Schema.String),
+})
+type DeployPlan = typeof DeployPlan.Type
 
-const deployAppEffect = Effect.fn("Apps.deploy")(function* (
-  request: AppDeploymentRequest
+const prepareAppDeploymentEffect = Effect.fn("Apps.deploy.prepare")(function* (
+  request: AppDeploymentRequest,
+  id: string
 ) {
   yield* Effect.annotateCurrentSpan({
     "app.id": request.appId,
     "app.deployment.trigger": request.trigger,
     "relay.id": request.relayId,
   })
-  if (request.deferUnlessReady) {
-    const available = yield* Effect.option(enabledRelay(request.relayId))
-    if (
-      Option.isNone(available) ||
-      relayConnectionFeatures(available.value.id).size === 0
-    ) {
-      return yield* Effect.fail(new DeploymentDeferred("relay"))
-    }
-    const { latest } = yield* latestAppDeploymentsEffect(request.appId)
-    if (latest?.status === "running") {
-      return yield* Effect.fail(new DeploymentDeferred("running"))
-    }
-  }
   const relay = yield* enabledRelay(request.relayId)
   const automatic = request.trigger === "push" || request.trigger === "poll"
   const autoUpdate = request.trigger === "update" && request.userId === null
-  // Nobody watches these, so a refusal is recorded instead.
-  const unattended = automatic || autoUpdate || request.background === true
   if (
     (request.trigger === "poll" || autoUpdate) &&
     relayConnectionFeatures(relay.id).size === 0
@@ -185,119 +217,74 @@ const deployAppEffect = Effect.fn("Apps.deploy")(function* (
   }
   const imageDigest =
     request.trigger === "update"
-      ? yield* imageUpdateDigest(relay, app.config, request)
+      ? yield* imageUpdateDigest(relay, app.config, request, id)
       : request.imageDigest
   if (imageDigest === null) return null
-  const prepared =
+  const github =
     app.config.sourceType === "github"
-      ? yield* githubCommit(relay, request).pipe(
-          // A push or a deploy waiting on provisioning that fails before it
-          // knows its commit, as when the branch is gone, is recorded; a
-          // poll would record it every minute, so it isn't.
-          Effect.tapError((cause) =>
-            request.trigger === "push" || request.background
-              ? recordRefusal(request, relay.id, cause)
-              : Effect.void
-          )
-        )
+      ? yield* githubCommit(relay, request)
       : undefined
-  if (prepared === null) return null
-  const github = prepared ?? null
+  if (github === null) return null
   // A commit deployed again, as a rollback, holds until a new one lands.
   if (github && automatic) {
     const { head } = yield* latestAppDeploymentsEffect(request.appId)
     if (head?.commitSha === github.commit.sha) return null
   }
-  const startedAt = new Date(yield* Clock.currentTimeMillis).toISOString()
-  const base = {
-    appId: request.appId,
-    branch: github?.source.branch ?? null,
-    commitAuthor: github?.commit.author ?? null,
-    commitMessage: github?.commit.message ?? null,
-    commitSha: github?.commit.sha ?? null,
-    id: randomUUID(),
-    imageDigest: imageDigest ?? null,
-    relayId: relay.id,
-    repository: github?.source.repository ?? null,
-    sourceType: app.config.sourceType,
-    startedAt,
-    trigger: request.trigger,
-    triggeredBy: request.userId,
-  }
-  const deploy = Effect.gen(function* () {
-    // Minted only once there's something to deploy.
-    const checkout: RelayAppGitHubCheckout | null = github
-      ? {
+  const plan: DeployPlan = {
+    payload: {
+      appId: request.appId,
+      ...(github && {
+        github: {
           build: github.source.build,
           commit: github.commit.sha,
           path: github.source.path,
           repository: github.source.repository,
-          token: yield* github.token,
-        }
-      : null
-    // The Relay joins the deployment to the databases it keeps for the
-    // App, so it must have them first.
-    yield* ensureAppDatabaseConnectionsImportedEffect(relay)
-    const response = yield* Effect.tryPromise({
-      try: () =>
-        relayRpc(
-          relay,
-          "app.deploy",
-          {
-            appId: request.appId,
-            config: app.config,
-            ...(checkout && { github: checkout }),
-            ...(imageDigest && { imageDigest }),
-            name: app.name,
-          },
-          30_000,
-          request.userId ?? undefined
-        ),
-      catch: (cause) =>
-        cause instanceof Error ? cause : new Error("The Relay refused it"),
-    })
-    return relayAppSchema.parse(response)
-  })
-  const deployed: RelayApp = yield* deploy.pipe(
-    // Nobody watches a push, poll, update Kiln started, or deploy waiting
-    // on provisioning, so its refusal is recorded instead.
-    Effect.tapError((cause) =>
-      unattended
-        ? insertAppDeploymentEffect({
-            ...base,
-            error: cause instanceof Error ? cause.message : String(cause),
-            finishedAt: startedAt,
-            relayDeploymentId: null,
-            rolling: null,
-            status: "failed",
-          }).pipe(
-            Effect.andThen(
-              Effect.sync(() => publishAppDeploymentChange(relay.id))
-            ),
-            Effect.andThen(announceDeploymentEffect(base, "failed")),
-            Effect.ignore
-          )
-        : Effect.void
-    )
-  )
-  const relayDeploymentId = deployed.deployment?.id ?? null
-  const record: AppDeploymentRecord = {
-    ...base,
-    // A Relay that answers without its deployment can't be followed.
-    error: relayDeploymentId ? null : "The Relay didn't report this deployment",
-    finishedAt: relayDeploymentId ? null : startedAt,
-    relayDeploymentId,
-    rolling: null,
-    status: relayDeploymentId ? "running" : "unknown",
+        },
+      }),
+      ...(imageDigest && { imageDigest }),
+      name: app.name,
+    },
+    record: {
+      appId: request.appId,
+      branch: github?.source.branch ?? null,
+      commitAuthor: github?.commit.author ?? null,
+      commitMessage: github?.commit.message ?? null,
+      commitSha: github?.commit.sha ?? null,
+      id,
+      imageDigest: imageDigest ?? null,
+      relayId: relay.id,
+      repository: github?.source.repository ?? null,
+      sourceType: app.config.sourceType,
+      startedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+      trigger: request.trigger,
+      triggeredBy: request.userId,
+    },
+    token: github?.token ?? null,
+    image: app.config.sourceType === "image" ? app.config.image : null,
   }
-  yield* insertAppDeploymentEffect(record)
-  publishAppDeploymentChange(relay.id)
-  followAppDeployment(record)
-  return { app: deployed, deployment: record }
+  return plan
 })
 
-// A GitHub deployment that failed before it knew what it deploys.
+// The record of a planned deployment, as it runs.
+const runningRecord = (
+  plan: DeployPlan,
+  relayDeploymentId: string | null
+): AppDeploymentRecord => ({
+  ...plan.record,
+  error: null,
+  finishedAt: null,
+  relayDeploymentId,
+  rolling: null,
+  sourceType: plan.record.sourceType as AppDeploymentRecord["sourceType"],
+  status: "running",
+  trigger: plan.record.trigger as AppDeploymentTrigger,
+})
+
+// A deployment that failed before it knew what it deploys, recorded by the
+// operation's ID, as the one it would have been, so recording it again
+// changes nothing.
 const recordRefusal = (
+  id: string,
   request: AppDeploymentRequest,
   relayId: string,
   cause: unknown
@@ -313,7 +300,7 @@ const recordRefusal = (
           commitSha: null,
           error: cause instanceof Error ? cause.message : String(cause),
           finishedAt: new Date(now).toISOString(),
-          id: randomUUID(),
+          id,
           imageDigest: null,
           relayDeploymentId: null,
           relayId,
@@ -326,7 +313,11 @@ const recordRefusal = (
           triggeredBy: request.userId,
         }) satisfies AppDeploymentRecord
     ),
-    Effect.tap(insertAppDeploymentEffect),
+    Effect.tap((record) =>
+      insertAppDeploymentEffect(record).pipe(
+        Effect.retry({ schedule: whileMySqlIsAway })
+      )
+    ),
     Effect.tap(() => Effect.sync(() => publishAppDeploymentChange(relayId))),
     Effect.flatMap((record) => announceDeploymentEffect(record, "failed")),
     Effect.ignore
@@ -409,7 +400,7 @@ const announceDeploymentEffect = Effect.fnUntraced(
 )
 
 // What a GitHub app deploys: its branch's head, or the commit asked for,
-// and how to get a token that reads only its repository.
+// and what makes a token that reads only its repository.
 const githubCommit = Effect.fnUntraced(function* (
   relay: PersistedRelay,
   request: AppDeploymentRequest
@@ -456,20 +447,48 @@ const githubCommit = Effect.fnUntraced(function* (
     appId: connection.appId,
     privateKey: connection.privateKey,
   }
+  // A push's or poll's commit only while the app deploys from where it
+  // came: one from a branch the app no longer deploys deploys nothing. A
+  // person's ask that joined it deploys the newest.
+  const pinned =
+    request.pinned?.source === `${source.repositoryId}/${source.branch}`
+      ? request.pinned.commitSha
+      : undefined
+  if (
+    request.pinned &&
+    pinned === undefined &&
+    (request.trigger === "push" || request.trigger === "poll")
+  ) {
+    return null
+  }
   const commit = yield* getGitHubCommitEffect(
     yield* githubInstallationTokenEffect(credentials, installation.id),
     source.repository,
-    request.commit ?? source.branch
+    request.commit ?? pinned ?? source.branch
   )
   return {
     commit,
     source,
-    token: githubRepositoryReadTokenEffect(
-      credentials,
-      installation.id,
-      source.repositoryId
-    ),
+    token: {
+      connectionId: source.connectionId,
+      installationId: installation.id,
+      repositoryId: source.repositoryId,
+    },
   }
+})
+
+// A token that checks out only the app's repository, made as it's sent.
+const checkoutToken = Effect.fnUntraced(function* (
+  token: NonNullable<DeployPlan["token"]>
+) {
+  const connection = yield* loadGitHubConnectionCredentialEffect({
+    id: token.connectionId,
+  })
+  return yield* githubRepositoryReadTokenEffect(
+    { appId: connection.appId, privateKey: connection.privateKey },
+    token.installationId,
+    token.repositoryId
+  )
 })
 
 /**
@@ -481,7 +500,8 @@ const githubCommit = Effect.fnUntraced(function* (
 const imageUpdateDigest = Effect.fnUntraced(function* (
   relay: PersistedRelay,
   config: AppConfig,
-  request: AppDeploymentRequest
+  request: AppDeploymentRequest,
+  deploymentId: string
 ) {
   if (!relayConnectionFeatures(relay.id).has(relayAppImageUpdatesV1Feature)) {
     return yield* Effect.fail(
@@ -504,7 +524,7 @@ const imageUpdateDigest = Effect.fnUntraced(function* (
     }
     // Someone asked: it deploys whatever came of it before, and an
     // automatic update won't try it again.
-    yield* claimImageUpdateEffect(request.appId, digest)
+    yield* claimImageUpdateEffect(request.appId, digest, deploymentId)
     return digest
   }
   const due = update && autoUpdateAt(update)
@@ -518,7 +538,9 @@ const imageUpdateDigest = Effect.fnUntraced(function* (
   }
   // Claimed before the Relay hears of it, so no failure after can deploy
   // it twice.
-  return (yield* claimImageUpdateEffect(request.appId, digest)) ? digest : null
+  return (yield* claimImageUpdateEffect(request.appId, digest, deploymentId))
+    ? digest
+    : null
 })
 
 const enabledRelay = Effect.fnUntraced(function* (relayId: string) {
@@ -646,226 +668,637 @@ const readRelayApp = Effect.fnUntraced(function* (
 })
 
 declare global {
-  var kilnAppDeploymentFollowed: Set<string> | undefined
-  var kilnAppDeploymentDraining: Map<string, object> | undefined
   var kilnAppDeploymentPollFailures: Map<string, string> | undefined
   var kilnAppDeploymentPoller: Fiber.Fiber<void> | undefined
 }
 
-const followed = (globalThis.kilnAppDeploymentFollowed ??= new Set())
-// The apps whose requests are being drained now, by this process, each
-// with its drain's token.
-const draining = (globalThis.kilnAppDeploymentDraining ??= new Map())
 // Each polled app's last failure, reported once.
 const pollFailures = (globalThis.kilnAppDeploymentPollFailures ??= new Map())
 
-/** Checks a running deployment until it ends, once per process. */
-export function followAppDeployment(record: AppDeploymentRecord): void {
-  if (!record.relayDeploymentId || followed.has(record.id)) return
-  followed.add(record.id)
-  // It outlives whatever started the deployment, which doesn't wait for it.
-  outsideOperation(() =>
-    forkAppWorker(
-      Effect.gen(function* () {
-        const deadline = (yield* Clock.currentTimeMillis) + followLimitMs
-        while ((yield* Clock.currentTimeMillis) < deadline) {
-          yield* Effect.sleep(followInterval)
-          const settled = yield* checkAppDeploymentEffect(record).pipe(
-            // An unreachable Relay is checked again next time.
-            Effect.catch(() => Effect.succeed(false))
-          )
-          if (!settled) continue
-          // An app's updates follow what it runs now, by its current config:
-          // one that deploys from elsewhere now has none on offer. Imported
-          // here, since image updates deploy through this module.
-          const { recheckAppImage } = yield* Effect.promise(
-            () => import("@/lib/app-image-updates.server")
-          )
-          recheckAppImage(record.relayId, record.appId, record.triggeredBy)
-          return
-        }
-      }).pipe(
-        Effect.catchCause((cause) =>
-          logException(Cause.squash(cause), {
-            operation: "Apps.deployment.follow",
-            attributes: { "app.deployment.id": record.id },
-          })
-        ),
-        Effect.ensuring(Effect.sync(() => followed.delete(record.id)))
-      )
-    )
-  )
-}
+const Pin = Schema.Struct({ source: Schema.String, value: Schema.String })
+
+// What's asked of an app: the newest ask's, once several join.
+const DeployInput = Schema.Struct({
+  appId: Schema.String,
+  relayId: Schema.String,
+  trigger: Schema.Literals(["manual", "poll", "push", "redeploy", "update"]),
+  /**
+   * The commit a push or poll found, and where from, `<repository
+   * ID>/<branch>`, or a redeploy's, and the repository it was of. Without
+   * one, a GitHub app deploys its branch's newest.
+   */
+  commit: Schema.optionalKey(Pin),
+  /** A redeploy's digest, and the image it was of. */
+  image: Schema.optionalKey(Pin),
+  /**
+   * Who asked, while a person's ask waits: it builds even what's already
+   * live, and deploys an update whatever its wait.
+   */
+  requestedBy: Schema.NullOr(Schema.String),
+  /** A new app's first deploy, once its Relay has provisioned it. */
+  awaitProvisioning: Schema.optionalKey(Schema.Boolean),
+})
+type DeployInput = typeof DeployInput.Type
 
 /**
- * Asks for an app's deployment after a push, a poll, or an image update
- * found due. The request is recorded before this returns, joining the one
- * already waiting, so none is lost while a deployment runs or across a
- * restart; then the app's deployments are drained, one at a time.
+ * Deploys what's asked of an app when its turn comes, holding its #deploy
+ * from then until its Relay says the deployment ended, so the next waits
+ * its turn behind it. Every ask, whatever made it, queues one under the
+ * app, and what's asked while one waits joins it: the newest ask's trigger
+ * and target win, a poll changing nothing, and a person's ask stays theirs.
+ * The token that checks out a GitHub app's commit is made as it's sent,
+ * and a reply lost to a restart is read back rather than sent again: the
+ * Relay's current deployment of the app is this one, since only this
+ * holds it.
  */
-export const queueAppDeploymentEffect = Effect.fn("Apps.deploy.queue")(
-  function* (
-    appId: string,
-    relayId: string,
-    trigger: "poll" | "push" | "update"
-  ) {
-    yield* requestAppDeploymentEffect({ appId, relayId, trigger })
-    drainAppDeployments(appId, relayId)
+export const deployAppKind = "app.deploy"
+
+export const deployAppOperation = durableOperation({
+  join: (waiting, asked): DeployInput =>
+    asked.trigger === "poll"
+      ? waiting
+      : {
+          appId: asked.appId,
+          relayId: asked.relayId,
+          trigger: asked.trigger,
+          ...(asked.commit && { commit: asked.commit }),
+          ...(asked.image && { image: asked.image }),
+          requestedBy: asked.requestedBy ?? waiting.requestedBy,
+          ...((waiting.awaitProvisioning || asked.awaitProvisioning) && {
+            awaitProvisioning: true,
+          }),
+        },
+  doing: () => "Deploying this App",
+  input: DeployInput,
+  kind: deployAppKind,
+  locks: (input) => appDeploymentLocks(input.relayId, input.appId),
+  // Starts once its Relay is there to deploy it, has the databases it
+  // keeps for the app (handed over as its own operation, started here if
+  // it's not), and runs no deployment from before deployments queued,
+  // which nothing holds: the minute sweep settles that. Until then it
+  // waits, holding nothing, so what's asked meanwhile joins it, it can be
+  // cancelled, and a deletion of the app isn't kept waiting. One whose
+  // Relay is gone starts, to find nothing to deploy.
+  ready: (input) =>
+    Effect.gen(function* () {
+      const relays = yield* listPersistedRelaysEffect()
+      const relay = relays.find((item) => item.id === input.relayId)
+      if (relay === undefined) return true
+      if (!relay.enabled || relayConnectionFeatures(relay.id).size === 0) {
+        return false
+      }
+      if (!(yield* appDatabaseConnectionsHandedOverEffect(relay))) return false
+      const { latest } = yield* latestAppDeploymentsEffect(input.appId)
+      return latest?.status !== "running"
+    }).pipe(Effect.catch(() => Effect.succeed(false))),
+  // A failure ends it failed, so what it was for is asked again.
+  run: (input, operation) =>
+    deploySteps(input, operation.id).pipe(
+      Effect.tapCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.void
+          : logException(Cause.squash(cause), {
+              operation: "Apps.deploy",
+              attributes: { "app.id": input.appId, "relay.id": input.relayId },
+            })
+      ),
+      Effect.orDie
+    ),
+  version: 1,
+})
+
+const deploySteps = (input: DeployInput, id: string) =>
+  Effect.gen(function* () {
+    // A new app that never finished provisioning still takes its ask, so
+    // none waits on it: refused, or nothing for one that's gone.
+    let unready: "gone" | "waiting" | null = null
+    if (input.awaitProvisioning) {
+      for (let window = 0; ; window++) {
+        const state = yield* Activity.make({
+          name: `ready/${window}`,
+          success: Schema.Literals(["ready", "waiting", "gone"]),
+          execute: watchFor(
+            provisioningState(input),
+            (state) => state !== "waiting",
+            () => followInterval
+          ),
+        })
+        if (state === "ready") break
+        if (state === "gone" || window + 1 >= provisionWindows) {
+          unready = state
+          break
+        }
+      }
+    }
+    const plan = yield* Activity.make({
+      name: "plan",
+      success: Schema.NullOr(DeployPlan),
+      execute: takeTurn(input, id, unready),
+    })
+    if (plan) yield* deployPlanned(input, plan)
+  })
+
+/**
+ * Checks `check` every `every` until `done` says so, for up to a window,
+ * returning what it last found.
+ */
+const watchFor = <A, E, R>(
+  check: Effect.Effect<A, E, R>,
+  done: (found: A) => boolean,
+  every: () => Duration.Duration
+) =>
+  Effect.gen(function* () {
+    const until =
+      (yield* Clock.currentTimeMillis) + Duration.toMillis(watchWindow)
+    while (true) {
+      const found = yield* check
+      if (done(found) || (yield* Clock.currentTimeMillis) >= until) {
+        return found
+      }
+      yield* Effect.sleep(every())
+    }
+  })
+
+// Whether a new app is ready to deploy: provisioned, still provisioning,
+// or gone or failed, when there's nothing to deploy.
+const provisioningState = (input: DeployInput) =>
+  Effect.gen(function* () {
+    const relay = yield* enabledRelay(input.relayId)
+    const app = yield* readRelayApp(relay, input.appId)
+    if (app === null || app.provisioning?.phase === "failed") {
+      return "gone" as const
+    }
+    return app.provisioning ? ("waiting" as const) : ("ready" as const)
+  }).pipe(Effect.catch(() => Effect.succeed("waiting" as const)))
+
+// Takes what the app's request asks and decides what that deploys, as one
+// step: nothing for an app being deleted, which settles what was asked, so
+// an ask after a deletion that failed or was kept starts afresh. Once it's
+// taken, MySQL going away is waited out, and any other failure is recorded
+// as a deployment, for whoever looks, so no ask taken is lost unseen; a
+// poll's, every minute, is only logged.
+const takeTurn = (
+  input: DeployInput,
+  id: string,
+  unready: "gone" | "waiting" | null
+) =>
+  Effect.gen(function* () {
+    // Its step run again, after it refused what was asked: refused still.
+    const recorded = yield* loadAppDeploymentEffect(id).pipe(
+      Effect.retry({ schedule: whileMySqlIsAway })
+    )
+    if (recorded) return null
+    const asked: AppDeploymentRequest = {
+      appId: input.appId,
+      relayId: input.relayId,
+      trigger:
+        input.trigger === "push" || input.trigger === "poll"
+          ? input.requestedBy
+            ? "manual"
+            : input.trigger
+          : input.trigger,
+      userId: input.requestedBy,
+    }
+    let request = asked
+    return yield* Effect.gen(function* () {
+      const deletion = yield* findResourceDeletionEffect(
+        input.relayId,
+        "app",
+        input.appId
+      )
+      if (
+        unready === "gone" ||
+        (deletion &&
+          unfinishedDeletionStatuses.some(
+            (status) => status === deletion.status
+          ))
+      ) {
+        return null
+      }
+      if (unready === "waiting") {
+        return yield* Effect.fail(
+          new Error("The app was still being set up; deploy it once it's ready")
+        )
+      }
+      const decided = yield* askedDeployment(input)
+      if (!decided) return null
+      request = decided.request
+      if (decided.refused) return yield* Effect.fail(decided.refused)
+      const plan = yield* prepareAppDeploymentEffect(request, id)
+      if (plan && request.trigger === "poll") {
+        pollFailures.delete(`${input.relayId}:${input.appId}`)
+      }
+      return plan
+    }).pipe(
+      Effect.retry({
+        schedule: whileMySqlIsAway,
+        while: (cause) => cause instanceof DatabaseError,
+      }),
+      Effect.catchCause((cause) => {
+        const failure = Cause.squash(cause)
+        if (request.trigger !== "poll") {
+          return recordRefusal(id, request, input.relayId, failure).pipe(
+            Effect.as(null)
+          )
+        }
+        const key = `${input.relayId}:${input.appId}`
+        const message = errorMessage(failure)
+        if (pollFailures.get(key) === message) return Effect.succeed(null)
+        pollFailures.set(key, message)
+        return logException(failure, {
+          operation: "Apps.deploy.poll",
+          attributes: { "app.id": input.appId, "relay.id": input.relayId },
+        }).pipe(Effect.as(null))
+      })
+    )
+  }).pipe(Effect.orDie)
+
+/**
+ * What's asked deploys. A person's builds even what's already live, and
+ * deploys an update whatever its wait, while they may still manage the
+ * app: one who no longer may is refused, though a push or poll that joined
+ * their ask deploys as Kiln's own. A redeploy deploys its commit or digest
+ * only while the app still deploys from what it came from. Nothing for an
+ * app that no longer deploys from what Kiln asked of it.
+ */
+const askedDeployment = (input: DeployInput) =>
+  Effect.gen(function* () {
+    const app = yield* loadAppConfigEffect(input.relayId, input.appId)
+    if (!app) return null
+    const sourceType = app.config.sourceType
+    const allowed =
+      input.requestedBy !== null && (yield* mayDeploy(input, input.requestedBy))
+    const automatic = input.trigger === "push" || input.trigger === "poll"
+    // One who may no longer is refused, as who asked; a push or poll that
+    // joined their ask is Kiln's own.
+    const userId = allowed || !automatic ? input.requestedBy : null
+    const base = { appId: input.appId, relayId: input.relayId, userId }
+    const request: AppDeploymentRequest = automatic
+      ? {
+          ...base,
+          ...(input.commit && {
+            pinned: {
+              commitSha: input.commit.value,
+              source: input.commit.source,
+            },
+          }),
+          // Built even if live, for the person who asked.
+          trigger: userId ? "manual" : input.trigger,
+        }
+      : input.trigger === "redeploy"
+        ? {
+            ...base,
+            ...(input.commit && { commit: input.commit.value }),
+            ...(input.image && { imageDigest: input.image.value }),
+            trigger: "redeploy",
+          }
+        : { ...base, trigger: input.trigger }
+    // Kiln's own asks of an app that deploys from elsewhere now.
+    if (userId === null && automatic && sourceType !== "github") return null
+    if (
+      userId === null &&
+      input.trigger === "update" &&
+      sourceType !== "image"
+    ) {
+      return null
+    }
+    const refused =
+      userId !== null && !allowed
+        ? new Error(
+            "Whoever asked for this deployment may no longer manage the app"
+          )
+        : input.trigger === "redeploy"
+          ? yield* redeployGone(input, app.config)
+          : undefined
+    return { refused, request }
+  })
+
+// Whether whoever asked may still manage the app, as their account stands.
+const mayDeploy = (input: DeployInput, userId: string) =>
+  (userId === developmentBypassUserId
+    ? Effect.void
+    : currentActingUser(userId, {
+        email: "",
+        emailVerified: false,
+        id: userId,
+        isDevelopmentBypass: false,
+        name: "",
+        role: "user",
+        twoFactorEnabled: false,
+      }).pipe(
+        Effect.flatMap((user) =>
+          promiseEffect(() =>
+            requireRelayPermission({
+              appId: input.appId,
+              permission: "app.manage",
+              relayId: input.relayId,
+              user,
+            })
+          )
+        )
+      )
+  ).pipe(
+    Effect.as(true),
+    // MySQL going away isn't a refusal; the turn waits it out.
+    Effect.catch((cause) =>
+      cause instanceof DatabaseError
+        ? Effect.fail(cause)
+        : Effect.succeed(false)
+    )
+  )
+
+// Why a redeploy no longer applies: the app deploys from another
+// repository or image than the deployment it redeploys.
+const redeployGone = (input: DeployInput, config: AppConfig) =>
+  Effect.gen(function* () {
+    if (input.image) {
+      return config.sourceType === "image" &&
+        config.image === input.image.source
+        ? undefined
+        : new Error("The app deploys another image now; redeploy one of it")
+    }
+    if (!input.commit) return undefined
+    // Its source names the repository of the deployment it redeploys.
+    const source = yield* loadAppGitHubSourceEffect(input.appId)
+    return config.sourceType === "github" &&
+      source !== null &&
+      source.repository === input.commit.source
+      ? undefined
+      : new Error(
+          "The app deploys from another repository now; redeploy one of its commits"
+        )
+  })
+
+// Records the deployment, sends it, and follows it until its Relay says it
+// ended, every step stored so a restart carries on where it was.
+const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
+  Effect.gen(function* () {
+    yield* Activity.make({
+      name: "record",
+      execute: insertAppDeploymentEffect(runningRecord(plan, null)).pipe(
+        Effect.retry({ schedule: whileMySqlIsAway }),
+        Effect.tap(() =>
+          Effect.sync(() => publishAppDeploymentChange(input.relayId))
+        ),
+        Effect.orDie
+      ),
+    })
+    const sent = yield* relayCommand({
+      name: "send",
+      operation: "app.deploy",
+      payload: plan.payload,
+      recover: currentDeployment(input),
+      relayId: input.relayId,
+      sendPayload: asSent(plan),
+      timeoutMs: 30_000,
+    }).pipe(Effect.result)
+    if (Result.isFailure(sent)) {
+      yield* Activity.make({
+        name: "refused",
+        execute: finishPlanned(plan, {
+          error: sent.failure.message,
+          status: "failed",
+        }),
+      })
+      return
+    }
+    const relayDeploymentId = yield* Activity.make({
+      name: "accepted",
+      success: Schema.NullOr(Schema.String),
+      execute: Effect.gen(function* () {
+        const parsed = relayAppSchema.safeParse(sent.success)
+        const deploymentId = parsed.success
+          ? (parsed.data.deployment?.id ?? null)
+          : null
+        if (deploymentId === null) {
+          // A Relay that answers without its deployment can't be followed.
+          yield* finishPlanned(plan, {
+            error: "The Relay didn't report this deployment",
+            status: "unknown",
+          })
+          return null
+        }
+        yield* recordRelayDeploymentEffect(plan.record.id, deploymentId).pipe(
+          Effect.retry({ schedule: whileMySqlIsAway }),
+          Effect.orDie
+        )
+        publishAppDeploymentChange(input.relayId)
+        return deploymentId
+      }),
+    })
+    if (relayDeploymentId === null) return
+    const record = runningRecord(plan, relayDeploymentId)
+    const started = Date.parse(record.startedAt)
+    for (let window = 0; ; window++) {
+      const ended = yield* Activity.make({
+        name: `follow/${window}`,
+        success: Schema.Boolean,
+        // An unreachable Relay is asked again next time.
+        execute: watchFor(
+          checkAppDeploymentEffect(record).pipe(
+            Effect.catch(() => Effect.succeed(false))
+          ),
+          (ended) => ended,
+          () =>
+            Date.now() - started < Duration.toMillis(followQuickly)
+              ? followInterval
+              : followIntervalLater
+        ),
+      })
+      if (ended) break
+    }
+    // An app's updates follow what it runs now, by its current config.
+    // Imported here, since image updates deploy through this module.
+    yield* Activity.make({
+      name: "recheck",
+      execute: Effect.promise(
+        () => import("@/lib/app-image-updates.server")
+      ).pipe(
+        Effect.map(({ recheckAppImage }) =>
+          recheckAppImage(record.relayId, record.appId, record.triggeredBy)
+        )
+      ),
+    })
+  })
+
+// The payload as it's sent: the app's saved configuration, read now, and a
+// token made now to check out its commit.
+const asSent = (plan: DeployPlan) =>
+  Effect.gen(function* () {
+    const app = yield* loadAppConfigEffect(
+      plan.record.relayId,
+      plan.record.appId
+    ).pipe(Effect.mapError(sendError("app_config")))
+    if (!app) {
+      return yield* sendError("app_config")(new Error("App not found"))
+    }
+    // Nor once the app's deletion began, which stops what it finds running.
+    const deletion = yield* findResourceDeletionEffect(
+      plan.record.relayId,
+      "app",
+      plan.record.appId
+    ).pipe(Effect.mapError(sendError("app_config")))
+    if (
+      deletion &&
+      unfinishedDeletionStatuses.some((status) => status === deletion.status)
+    ) {
+      return yield* sendError("app_config")(
+        new Error("The app is being deleted")
+      )
+    }
+    // What was decided for one source doesn't deploy another: another
+    // kind, image, or repository than the plan was made for, as after an
+    // edit while it waited to be sent.
+    const source =
+      plan.token === null
+        ? null
+        : yield* loadAppGitHubSourceEffect(plan.record.appId).pipe(
+            Effect.mapError(sendError("app_config"))
+          )
+    if (
+      app.config.sourceType !== plan.record.sourceType ||
+      (plan.image !== null && app.config.image !== plan.image) ||
+      (plan.token !== null &&
+        (source?.repositoryId !== plan.token.repositoryId ||
+          source.branch !== plan.record.branch))
+    ) {
+      return yield* sendError("app_config")(
+        new Error("The app's source changed; deploy it again")
+      )
+    }
+    // A push's or poll's, only while the app still deploys them.
+    if (
+      (plan.record.trigger === "push" || plan.record.trigger === "poll") &&
+      source?.autoDeploy === false
+    ) {
+      return yield* sendError("app_config")(
+        new Error("Auto-deploy was turned off before this deployment was sent")
+      )
+    }
+    const payload = { ...plan.payload, config: app.config }
+    if (plan.token === null || payload.github === undefined) return payload
+    const token = yield* checkoutToken(plan.token).pipe(
+      Effect.mapError(sendError("github_token"))
+    )
+    return { ...payload, github: { ...payload.github, token } }
+  })
+
+const sendError = (code: string) => (cause: unknown) =>
+  new RelayCommandError({
+    code,
+    message: errorMessage(cause),
+    retryable: false,
+  })
+
+// What the reply to a send whose answer was lost would have said: the app
+// as its Relay has it now, whose deployment is this one.
+const currentDeployment = (input: DeployInput) =>
+  Effect.gen(function* () {
+    const relay = yield* enabledRelay(input.relayId)
+    const app = yield* readRelayApp(relay, input.appId)
+    if (!app?.deployment) {
+      return yield* new RelayCommandError({
+        code: "result_unavailable",
+        message: "The Relay no longer has this deployment",
+        retryable: false,
+      })
+    }
+    return app as unknown
+  }).pipe(
+    Effect.mapError((cause) =>
+      cause instanceof RelayCommandError
+        ? cause
+        : new RelayCommandError({
+            code: "unexpected",
+            message: errorMessage(cause),
+            retryable: false,
+          })
+    )
+  )
+
+// Records how a deployment that never ran on its Relay ended.
+const finishPlanned = (
+  plan: DeployPlan,
+  outcome: { error: string; status: "failed" | "unknown" }
+) =>
+  Effect.gen(function* () {
+    const finishedAt = new Date(yield* Clock.currentTimeMillis).toISOString()
+    const finished = yield* finishAppDeploymentEffect(plan.record.id, {
+      ...outcome,
+      finishedAt,
+      rolling: null,
+    }).pipe(Effect.retry({ schedule: whileMySqlIsAway }))
+    if (!finished) return
+    publishAppDeploymentChange(plan.record.relayId)
+    yield* announceDeploymentEffect(runningRecord(plan, null), outcome.status)
+  }).pipe(Effect.orDie)
+
+/**
+ * Asks an app to deploy, whatever asked: a push, a poll that found a new
+ * commit, an image update found due, or a person's deploy, redeploy or
+ * update. It queues the app's deployment, or joins the one waiting, so
+ * every ask while the same deployment runs ahead makes one deployment
+ * behind it, of the newest ask. A person's ask runs in their operation,
+ * which refuses it while the app is replaced or removed.
+ */
+export const askAppDeploymentEffect = Effect.fn("Apps.deploy.ask")(
+  function* (ask: {
+    appId: string
+    /** A new app's first deploy waits for its Relay to provision it. */
+    awaitProvisioning?: boolean
+    commit?: { sha: string; source: string }
+    image?: { digest: string; source: string }
+    relayId: string
+    trigger: AppDeploymentAsk
+    userId?: string | null
+  }) {
+    const id = yield* queueDurableOperation(
+      deployAppOperation,
+      {
+        appId: ask.appId,
+        relayId: ask.relayId,
+        trigger: ask.trigger,
+        ...(ask.commit && {
+          commit: { source: ask.commit.source, value: ask.commit.sha },
+        }),
+        ...(ask.image && {
+          image: { source: ask.image.source, value: ask.image.digest },
+        }),
+        requestedBy: ask.userId ?? null,
+        ...(ask.awaitProvisioning && { awaitProvisioning: true }),
+      },
+      { key: appDeployKey(ask.relayId, ask.appId) }
+    )
+    publishAppDeploymentChange(ask.relayId)
+    return id
   }
 )
 
-/**
- * Deploys what an app's request asks for until none waits, one deployment
- * at a time. Each pass waits for a running deployment to end, then deploys
- * by the app's source now: its branch head for a push or poll, the image
- * Kiln found for an update. The request is settled at the revision the
- * pass started from, so one that came meanwhile gets a pass of its own.
- */
-function drainAppDeployments(appId: string, relayId: string): void {
-  const key = `${relayId}:${appId}`
-  if (draining.has(key)) return
-  // Its own, so one that ends never clears the marker of the next.
-  const token = {}
-  draining.set(key, token)
-  const stop = () => {
-    if (draining.get(key) === token) draining.delete(key)
-  }
-  // Woken by whatever asked, which doesn't wait: each deployment it starts
-  // takes its own lanes.
-  outsideOperation(() =>
-    forkAppWorker(
-      Effect.gen(function* () {
-        for (;;) {
-          const request = yield* loadAppDeploymentRequestEffect(appId)
-          if (!request) {
-            // One asked for while this looked, finding this drain still
-            // going, is taken up now rather than by the next poll.
-            stop()
-            if (yield* loadAppDeploymentRequestEffect(appId)) {
-              drainAppDeployments(appId, relayId)
-            }
-            return
-          }
-          // A request its Relay can't take now, paused, away or offline, or
-          // one behind a deployment still running after an hour, keeps
-          // waiting: the minute's poll drains it again.
-          const relay = yield* Effect.option(enabledRelay(request.relayId))
-          if (Option.isNone(relay)) return
-          if (relayConnectionFeatures(relay.value.id).size === 0) return
-          if (!(yield* awaitRunningDeployment(appId))) return
-          // An app deploys from GitHub or from an image, so at most one of
-          // these deploys; the other finds nothing to do.
-          const outcomes = [
-            ...(request.imageUpdate
-              ? [yield* deployRequested(key, appId, request.relayId, "update")]
-              : []),
-            ...(request.push || request.poll
-              ? [
-                  yield* deployRequested(
-                    key,
-                    appId,
-                    request.relayId,
-                    request.push ? "push" : "poll"
-                  ),
-                ]
-              : []),
-          ]
-          // Its Relay went away while it waited: kept for the minute's poll.
-          if (outcomes.includes("away")) return
-          // Another deployment started first, as a person's: wait for it and
-          // try again, the request kept.
-          if (outcomes.includes("waiting")) continue
-          yield* settleAppDeploymentRequestEffect(appId, request.revision)
-        }
-      }).pipe(
-        Effect.catchCause((cause) =>
-          logException(Cause.squash(cause), {
-            operation: "Apps.deploy.drain",
-            attributes: { "app.id": appId, "relay.id": relayId },
-          })
-        ),
-        Effect.ensuring(Effect.sync(stop))
-      )
-    )
-  )
-}
-
-// Starts what a request asks for: it's settled once the deployment started,
-// had nothing to do, or failed where its history shows it; it waits when
-// another deployment runs, and for the next poll when its Relay is away.
-const deployRequested = (
-  key: string,
-  appId: string,
-  relayId: string,
-  trigger: "poll" | "push" | "update"
-) =>
-  startAppDeploymentEffect({
-    appId,
-    deferUnlessReady: true,
-    relayId,
-    trigger,
-    userId: null,
-  }).pipe(
-    // A poll that succeeds clears its app's last failure.
-    Effect.tap(() => Effect.sync(() => pollFailures.delete(key))),
-    Effect.as("settled" as const),
-    Effect.catchCause((cause) => {
-      const failure = Cause.squash(cause)
-      if (failure instanceof DeploymentDeferred) {
-        return Effect.succeed(
-          failure.reason === "relay" ? ("away" as const) : ("waiting" as const)
-        )
-      }
-      // A failing poll fails again every minute, so only a new failure
-      // reaches telemetry, until a poll gets through.
-      if (trigger === "poll") {
-        const message = errorMessage(failure)
-        if (pollFailures.get(key) === message) {
-          return Effect.succeed("settled" as const)
-        }
-        pollFailures.set(key, message)
-      }
-      return logException(failure, {
-        operation: `Apps.deploy.${trigger}`,
-        attributes: { "app.id": appId, "relay.id": relayId },
-      }).pipe(Effect.as("settled" as const))
-    })
-  )
-
-// Waits, up to an hour, for the app's running deployment to end, so a push
-// doesn't fail because one is already running. Reports whether it ended.
-const awaitRunningDeployment = (appId: string) =>
-  latestAppDeploymentsEffect(appId).pipe(
-    Effect.map(({ latest }) => latest?.status === "running"),
-    Effect.repeat({
-      schedule: Schedule.spaced("3 seconds"),
-      times: 1_200,
-      while: (running) => running,
-    }),
-    Effect.map((running) => !running)
-  )
+/** What an app's deployments queue under, one waiting at a time. */
+export const appDeployKey = (relayId: string, appId: string) =>
+  `${relayId}/${appId}`
 
 /**
- * Every minute: resumes following deployments a restart left running and
- * draining requests it left waiting, and checks the branches of apps whose
- * source GitHub can't push to.
+ * Every minute: settles a deployment recorded as running that nothing
+ * follows, as one from before deployments ran in lanes, and checks the
+ * branches of apps whose source GitHub can't push to, asking those whose
+ * branch moved past what they last deployed.
  */
 export function startAppDeploymentPolling(): void {
   globalThis.kilnAppDeploymentPoller ??= forkAppWorker(
     Effect.gen(function* () {
       for (const record of yield* loadRunningAppDeploymentsEffect()) {
-        followAppDeployment(record)
-      }
-      // Requests a restart, or a drain that stopped, left waiting.
-      for (const request of yield* loadAppDeploymentRequestsEffect()) {
-        drainAppDeployments(request.appId, request.relayId)
+        // Its own operation follows it, while it runs.
+        const operation = yield* loadOperation(record.id)
+        if (operation?.state === "running" || operation?.state === "waiting") {
+          continue
+        }
+        yield* checkAppDeploymentEffect(record).pipe(Effect.ignore)
       }
       const sources = yield* loadAutoDeployGitHubSourcesEffect({
         polled: true,
       })
-      for (const source of sources) {
-        yield* queueAppDeploymentEffect(source.appId, source.relayId, "poll")
-      }
+      for (const source of sources) yield* pollApp(source)
     }).pipe(
       Effect.catchCause((cause) =>
         logException(Cause.squash(cause), { operation: "Apps.deploy.poll" })
@@ -876,6 +1309,56 @@ export function startAppDeploymentPolling(): void {
   )
 }
 
+// Asks a polled app to deploy its branch's head once it's past what the
+// app last deployed, as a push would. A failure is reported once.
+const pollApp = (source: AppGitHubSource) =>
+  Effect.gen(function* () {
+    const key = `${source.relayId}:${source.appId}`
+    const head = yield* branchHead(source).pipe(
+      Effect.tap(() => Effect.sync(() => pollFailures.delete(key))),
+      Effect.catch((cause) => {
+        const message = errorMessage(cause)
+        if (pollFailures.get(key) === message) return Effect.succeed(null)
+        pollFailures.set(key, message)
+        return logException(cause, {
+          operation: "Apps.deploy.poll",
+          attributes: { "app.id": source.appId, "relay.id": source.relayId },
+        }).pipe(Effect.as(null))
+      })
+    )
+    if (head === null) return
+    const { head: last } = yield* latestAppDeploymentsEffect(source.appId)
+    if (last?.commitSha === head) return
+    yield* askAppDeploymentEffect({
+      appId: source.appId,
+      commit: {
+        sha: head,
+        source: `${source.repositoryId}/${source.branch}`,
+      },
+      relayId: source.relayId,
+      trigger: "poll",
+    })
+  })
+
+// The commit a GitHub app's branch names now.
+const branchHead = Effect.fnUntraced(function* (source: AppGitHubSource) {
+  if (!source.connectionId) return null
+  const connection = yield* loadGitHubConnectionCredentialEffect({
+    id: source.connectionId,
+  })
+  const installation = connection.installation
+  if (!installation || installation.suspended) return null
+  const commit = yield* getGitHubCommitEffect(
+    yield* githubInstallationTokenEffect(
+      { appId: connection.appId, privateKey: connection.privateKey },
+      installation.id
+    ),
+    source.repository,
+    source.branch
+  )
+  return commit.sha
+})
+
 export function stopAppDeploymentPolling(): Promise<void> {
   const poller = globalThis.kilnAppDeploymentPoller
   globalThis.kilnAppDeploymentPoller = undefined
@@ -884,54 +1367,12 @@ export function stopAppDeploymentPolling(): Promise<void> {
 
 if (import.meta.hot) import.meta.hot.dispose(() => stopAppDeploymentPolling())
 
-/**
- * Deploys now, or, for an app its Relay is still provisioning, once it's
- * ready, as when an app is created from GitHub. Null when it waits.
- */
-export const startAppDeploymentWhenReadyEffect = Effect.fn(
-  "Apps.deploy.whenReady"
-)(function* (request: AppDeploymentRequest) {
-  const relay = yield* enabledRelay(request.relayId)
-  const app = yield* readRelayApp(relay, request.appId)
-  if (app && !app.provisioning) {
-    return yield* startAppDeploymentEffect(request)
-  }
-  // Waits on its own for the App to be ready, then deploys in its own lanes.
-  outsideOperation(() =>
-    forkAppWorker(
-      Effect.gen(function* () {
-        const deadline = (yield* Clock.currentTimeMillis) + provisionLimitMs
-        while ((yield* Clock.currentTimeMillis) < deadline) {
-          yield* Effect.sleep(followInterval)
-          const current = yield* readRelayApp(relay, request.appId).pipe(
-            Effect.catch(() => Effect.succeed(undefined))
-          )
-          // Gone, or its provisioning failed: nothing to deploy.
-          if (current === null || current?.provisioning?.phase === "failed") {
-            return
-          }
-          if (current && !current.provisioning) {
-            yield* startAppDeploymentEffect({ ...request, background: true })
-            return
-          }
-        }
-      }).pipe(
-        Effect.catchCause((cause) =>
-          logException(Cause.squash(cause), {
-            operation: "Apps.deploy.whenReady",
-            attributes: { "app.id": request.appId },
-          })
-        )
-      )
-    )
-  )
-  return null
-})
-
 /** Queues deployments of the apps a push to this branch reaches. */
 export const deployPushedAppsEffect = Effect.fn("Apps.deploy.pushed")(
   function* (input: {
     branch: string
+    /** The commit the push made its branch's head. */
+    commitSha: string
     connectionId: string
     repositoryId: number
   }) {
@@ -941,7 +1382,15 @@ export const deployPushedAppsEffect = Effect.fn("Apps.deploy.pushed")(
     })
     for (const source of sources) {
       if (source.branch === input.branch) {
-        yield* queueAppDeploymentEffect(source.appId, source.relayId, "push")
+        yield* askAppDeploymentEffect({
+          appId: source.appId,
+          commit: {
+            sha: input.commitSha,
+            source: `${input.repositoryId}/${input.branch}`,
+          },
+          relayId: source.relayId,
+          trigger: "push",
+        })
       }
     }
   }

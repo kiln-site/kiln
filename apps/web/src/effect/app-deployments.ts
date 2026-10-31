@@ -209,7 +209,10 @@ export const saveAppGitHubSourceEffect = Effect.fn("apps.github.source.save")(
   }
 )
 
-/** Records a deployment the Relay accepted, or one it refused. */
+/**
+ * Records a deployment, once: recording one again, as a durable step run
+ * again does, changes nothing.
+ */
 export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
   function* (record: AppDeploymentRecord) {
     const database = yield* Database
@@ -220,7 +223,8 @@ export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
           triggered_by, repository, branch, commit_sha, commit_message,
           commit_author, image_digest, status, rolling, error, started_at,
           finished_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE id = id`,
       [
         record.id,
         record.appId,
@@ -256,6 +260,20 @@ export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
             ) kept
           )`,
       [record.appId, record.appId]
+    )
+  }
+)
+
+/** Records the ID a deployment's Relay gave it, which names its log there. */
+export const recordRelayDeploymentEffect = Effect.fn("apps.deployment.relayId")(
+  function* (id: string, relayDeploymentId: string) {
+    const database = yield* Database
+    yield* database.execute(
+      "apps.deployment.relayId",
+      `UPDATE ${databaseTable("app_deployment")}
+        SET relay_deployment_id = ?
+      WHERE id = ?`,
+      [relayDeploymentId, id]
     )
   }
 )
@@ -460,120 +478,10 @@ function toDeployment(row: DeploymentRow): AppDeploymentRecord {
   }
 }
 
-/** What an app's pending deployment request asks for. */
-export interface AppDeploymentRequestRow {
-  readonly appId: string
-  /** An image update Kiln found due. */
-  readonly imageUpdate: boolean
-  readonly poll: boolean
-  readonly push: boolean
-  readonly relayId: string
-  /** Counts every request, so its taker knows whether another came since. */
-  readonly revision: number
-}
-
-interface RequestRow extends RowDataPacket {
-  app_id: string
-  image_update: number
-  poll: number
-  push: number
-  relay_id: string
-  revision: number | string
-}
-
-const requestColumns = "app_id, relay_id, push, poll, image_update, revision"
-
-function toRequest(row: RequestRow): AppDeploymentRequestRow {
-  return {
-    appId: row.app_id,
-    imageUpdate: Boolean(row.image_update),
-    poll: Boolean(row.poll),
-    push: Boolean(row.push),
-    relayId: row.relay_id,
-    revision: Number(row.revision),
-  }
-}
-
-/**
- * Records that an app should deploy, joining the request already waiting:
- * every kind asked for is kept, and the revision counts this one.
- */
-export const requestAppDeploymentEffect = Effect.fn("apps.deployment.request")(
-  function* (input: {
-    appId: string
-    relayId: string
-    trigger: "poll" | "push" | "update"
-  }) {
-    const database = yield* Database
-    const now = yield* Clock.currentTimeMillis
-    const kinds = {
-      imageUpdate: input.trigger === "update" ? 1 : 0,
-      poll: input.trigger === "poll" ? 1 : 0,
-      push: input.trigger === "push" ? 1 : 0,
-    }
-    yield* database.execute(
-      "apps.deployment.request",
-      `INSERT INTO ${databaseTable("app_deployment_request")}
-         (app_id, relay_id, push, poll, image_update, revision, requested_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?)
-       ON DUPLICATE KEY UPDATE
-         relay_id = VALUES(relay_id),
-         push = push OR VALUES(push),
-         poll = poll OR VALUES(poll),
-         image_update = image_update OR VALUES(image_update),
-         revision = revision + 1`,
-      [
-        input.appId,
-        input.relayId,
-        kinds.push,
-        kinds.poll,
-        kinds.imageUpdate,
-        now,
-      ]
-    )
-  }
-)
-
-export const loadAppDeploymentRequestEffect = Effect.fn(
-  "apps.deployment.request.load"
-)(function* (appId: string) {
-  const database = yield* Database
-  const [row] = yield* database.queryRows<RequestRow>(
-    "apps.deployment.request.load",
-    `SELECT ${requestColumns}
-       FROM ${databaseTable("app_deployment_request")}
-      WHERE app_id = ?`,
-    [appId]
-  )
-  return row ? toRequest(row) : null
-})
-
-/** Every pending request, for a Hearth that just started to take up. */
-export const loadAppDeploymentRequestsEffect = Effect.fn(
-  "apps.deployment.requests"
-)(function* () {
-  const database = yield* Database
-  const rows = yield* database.queryRows<RequestRow>(
-    "apps.deployment.requests",
-    `SELECT ${requestColumns}
-       FROM ${databaseTable("app_deployment_request")}`
-  )
-  return rows.map(toRequest)
-})
-
-/**
- * Settles the request at the revision its deployment started from. One that
- * came since keeps it waiting; reports whether it was settled.
- */
-export const settleAppDeploymentRequestEffect = Effect.fn(
-  "apps.deployment.request.settle"
-)(function* (appId: string, revision: number) {
-  const database = yield* Database
-  const result = yield* database.execute(
-    "apps.deployment.request.settle",
-    `DELETE FROM ${databaseTable("app_deployment_request")}
-      WHERE app_id = ? AND revision = ?`,
-    [appId, revision]
-  )
-  return result.affectedRows === 1
-})
+/** What asked an app to deploy. */
+export type AppDeploymentAsk =
+  | "manual"
+  | "poll"
+  | "push"
+  | "redeploy"
+  | "update"

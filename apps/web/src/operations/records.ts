@@ -346,6 +346,24 @@ export const cancelWaitingOperation = Effect.fnUntraced(function* (id: string) {
   return cancelled.affectedRows === 1
 })
 
+/** The operations of `kind` waiting or running, with what they were asked. */
+export const activeOperations = Effect.fnUntraced(function* (kind: string) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & { id: string; input: unknown; state: "running" | "waiting" }
+  >(
+    "operations.active",
+    `SELECT id, state, input FROM ${operationTable}
+      WHERE kind = ? AND state IN ('waiting', 'running')`,
+    [kind]
+  )
+  return rows.map((row) => ({
+    id: row.id,
+    input: typeof row.input === "string" ? JSON.parse(row.input) : row.input,
+    state: row.state,
+  }))
+})
+
 /** The operation of `kind` waiting under `key`, if one is. */
 export const waitingOperation = Effect.fnUntraced(function* (
   kind: string,

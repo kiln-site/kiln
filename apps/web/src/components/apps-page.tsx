@@ -54,6 +54,7 @@ import {
   showAppOperationError,
   type App,
 } from "@/components/app/app-presentation"
+import { useAppDeployState } from "@/components/app/use-app-deploy-state"
 import { DeleteAppDialog } from "@/components/app/app-dialogs"
 import {
   GitHubSourceFields,
@@ -479,7 +480,11 @@ const AppActions = React.memo(function AppActions({
   const deploy = useMutation({
     mutationFn: () =>
       deployApp({ data: { appId: app.id, relayId: app.relayId } }),
-    onSuccess: invalidate,
+    onSuccess: async () => {
+      // It runs once any deployment running ends.
+      showToast({ message: "Deploy queued", type: "success" })
+      await invalidate()
+    },
     onError: (error) => showAppOperationError("Deploy failed", error),
   })
   const action = useMutation({
@@ -495,13 +500,18 @@ const AppActions = React.memo(function AppActions({
     state.observation.reachability === "connected" &&
     state.observation.inventory === "available"
   const canManage = app.permissions.includes("app.manage")
-  const deploying = app.detail?.deploying === true
+  const hearth = useAppDeployState(app.id)
+  const deploying = app.detail?.deploying === true || hearth?.deploying === true
+  // Waiting its turn: asking again would only join it.
+  const queued = !deploying && hearth?.queuedId != null
+  const deployLabel = deploying ? "Deploying" : queued ? "Queued" : "Deploy"
   const running =
     state.phase === "ready" && state.observation.runtime === "running"
   const busy = deploy.isPending || action.isPending
   const menu = useRowMenuDialogs()
   const canDelete = app.permissions.includes("app.delete")
-  const deployDisabled = !available || !app.detail || busy || deploying
+  const deployDisabled =
+    !available || !app.detail || busy || deploying || queued
 
   return (
     <DataTableActionGroup>
@@ -518,16 +528,14 @@ const AppActions = React.memo(function AppActions({
                 variant="ghost"
                 onClick={() => deploy.mutate()}
               >
-                {deploying || deploy.isPending ? (
+                {deploying || queued || deploy.isPending ? (
                   <LoaderCircle className="animate-spin" />
                 ) : (
                   <Rocket />
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {deploying ? "Deploying" : "Deploy"}
-            </TooltipContent>
+            <TooltipContent side="bottom">{deployLabel}</TooltipContent>
           </Tooltip>
         ) : null}
         {canDelete ? (
@@ -582,7 +590,7 @@ const AppActions = React.memo(function AppActions({
                 disabled={deployDisabled}
                 onSelect={() => deploy.mutate()}
               >
-                <Rocket /> {deploying ? "Deploying" : "Deploy"}
+                <Rocket /> {deployLabel}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
             </DataTablePhoneMenuItems>

@@ -502,10 +502,10 @@ const DeploymentActions = React.memo(function DeploymentActions({
       await queryClient.invalidateQueries({ queryKey: ["app-deployments"] })
       showToast({
         message: deployment.commitSha
-          ? `Deploying ${shortCommit(deployment.commitSha)} again`
+          ? `Deploy of ${shortCommit(deployment.commitSha)} queued`
           : deployment.imageDigest
-            ? `Deploying ${shortDigest(deployment.imageDigest)} again`
-            : "Deploying again",
+            ? `Deploy of ${shortDigest(deployment.imageDigest)} queued`
+            : "Deploy queued",
         type: "success",
       })
     },
