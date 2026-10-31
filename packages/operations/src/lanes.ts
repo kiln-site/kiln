@@ -75,6 +75,11 @@ export interface LaneTicket {
   /** Withdraws an operation that hasn't started. Running ones are unaffected. */
   readonly cancel: () => void
   /**
+   * Withdraws it if it hasn't started, in the same step as finding so, and
+   * says whether it did: one that has started runs to the end.
+   */
+  readonly withdraw: () => boolean
+  /**
    * Whether it was granted as it was admitted. One that wasn't waited, and
    * whatever it read before may have changed.
    */
@@ -325,7 +330,10 @@ export class OperationLanes {
       }
     }
     return {
-      cancel: () => this.#cancel(waiter),
+      cancel: () => {
+        this.#cancel(waiter)
+      },
+      withdraw: () => this.#cancel(waiter),
       grantedAtOnce: waiter.state === "granted",
       run: (effect) => this.#run(waiter, effect),
     }
@@ -418,7 +426,8 @@ export class OperationLanes {
     )
   }
 
-  #cancel(waiter: Waiter) {
+  // Withdraws one that hasn't started; reports whether it did.
+  #cancel(waiter: Waiter): boolean {
     if (waiter.state === "waiting") {
       this.#remove(waiter)
       this.#reject(
@@ -429,9 +438,13 @@ export class OperationLanes {
         })
       )
       this.#grant()
-    } else if (waiter.state === "granted") {
-      this.#release(waiter)
+      return true
     }
+    if (waiter.state === "granted") {
+      this.#release(waiter)
+      return true
+    }
+    return false
   }
 
   #reject(waiter: Waiter, error: LaneRejectedError) {

@@ -6,7 +6,11 @@
  */
 import { randomUUID } from "node:crypto"
 
-import { LaneRejectedError, type LaneLock } from "@workspace/operations"
+import {
+  LaneRejectedError,
+  type LaneLock,
+  type LaneTicket,
+} from "@workspace/operations"
 import { Cause, Clock, Duration, Effect, Exit, Metric, Schema } from "effect"
 
 import { Database } from "@/effect/database"
@@ -343,16 +347,18 @@ const attempt = <Input, Context, A, E, R>(
       Effect.onError(endedBeforeRun)
     )
     const label = `${definition.name}#${id}`
+    // Its place in line, once admitted, for the wait cap to withdraw.
+    let admitted: LaneTicket | undefined
     const services = yield* Effect.context<R | Database>()
     // Admitted and set to be withdrawn in one step that can't be cut off,
     // so a caller that gives up can never leave it holding a place in line.
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.suspend(() => {
-        const ticket = hearthLanes.admit({
+        const ticket = (admitted = hearthLanes.admit({
           label,
           locks,
           whenBusy: initiator === "person" ? personWhenBusy : "wait",
-        })
+        }))
         occupy(label, {
           actorId: caller.user?.id ?? null,
           admittedAt,
@@ -412,8 +418,14 @@ const attempt = <Input, Context, A, E, R>(
           ).pipe(
             Effect.andThen(
               Effect.suspend(() => {
-                if (laneOccupants.get(label)?.startedAt !== null)
+                // Withdrawn in the same step as finding it hasn't started:
+                // one that has runs to the end, and the caller gets its
+                // result.
+                if (initiator === "person") {
+                  if (admitted && !admitted.withdraw()) return Effect.void
+                } else if (laneOccupants.get(label)?.startedAt !== null) {
                   return Effect.void
+                }
                 const waitingOn =
                   hearthLanes
                     .describe()
