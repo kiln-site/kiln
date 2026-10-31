@@ -301,7 +301,8 @@ const renameDatabase = resourceOperation({
   kind: "database",
   id: (input: z.infer<typeof databaseRenameInputSchema>) => input.databaseId,
   name: "database.rename",
-  lock: "whole",
+  // Only its record changes.
+  lock: { part: "name" },
   doing: "Renaming this database",
   permission: () => "database.delete",
   run: async (_user, data) => {
@@ -482,7 +483,8 @@ const powerDatabase = resourceOperation({
   kind: "database",
   id: (input: z.infer<typeof databaseActionInputSchema>) => input.databaseId,
   name: "database.power",
-  lock: "whole",
+  // Its Relay orders power by the database's process.
+  lock: { part: "power" },
   doing: "Changing this database's power",
   permission: () => "database.power",
   run: async (user, data) => {
@@ -513,7 +515,8 @@ const changeDatabaseLimits = resourceOperation({
   kind: "database",
   id: (input: z.infer<typeof databaseLimitsInputSchema>) => input.databaseId,
   name: "database.limits.update",
-  lock: "whole",
+  // Its Relay holds the database and the node's allocations to apply them.
+  lock: { part: "config" },
   doing: "Changing this database's limits",
   permission: () => "database.limits.write",
   run: async (user, data) => {
@@ -545,12 +548,14 @@ export const updateManagedDatabaseLimits = createServerFn({ method: "POST" })
   )
 
 // Reads the credentials it rotates once admitted, so a rotation never
-// starts from one another just replaced.
+// starts from one another just replaced. It holds the database's
+// credentials, so another rotation, or anything that sends the password,
+// waits for it; a wipe holds the whole database.
 const rotateDatabasePassword = resourceOperation({
   kind: "database",
   id: (input: z.infer<typeof databaseInputSchema>) => input.databaseId,
   name: "database.credentials.rotate",
-  lock: "whole",
+  lock: { part: "credentials" },
   doing: "Changing this database's password",
   permission: () => "database.credentials.rotate",
   run: async (user, data) => {
