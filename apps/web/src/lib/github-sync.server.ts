@@ -38,7 +38,7 @@ import {
   githubSyncTargetKey,
 } from "@/lib/github-lanes"
 import { outsideOperation } from "@/operations/current"
-import { exclusive, shared } from "@/operations/lanes"
+import { exclusive, partKey, shared } from "@/operations/lanes"
 import { inLanes } from "@/operations/operation"
 import { githubSyncTargetAccess } from "@/lib/github-sync-targets"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
@@ -234,7 +234,7 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
     }).pipe(Effect.map((result) => relayFilePutResultSchema.parse(result)))
 
   const fileLocks = [
-    exclusive(githubSyncKey(sync.id)),
+    exclusive(partKey(githubSyncKey(sync.id), "files")),
     // The Relay keeps file writes in order; this keeps what's written into
     // from being replaced or removed meanwhile.
     shared(

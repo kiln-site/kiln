@@ -187,14 +187,65 @@ describeMysql("Hearth operations", () => {
           "Starting this game server is in progress. Try again once it's done."
         )
 
-        // It gave up its place: the next one runs once the first ends.
+        // It gave up its place: the next power action runs once the first
+        // ends.
         yield* Deferred.succeed(release, undefined)
         yield* Fiber.join(starting)
         assert.strictEqual(
-          yield* runOperation(changeDns, undefined, { user: person }),
-          "changed"
+          yield* runOperation(
+            operation<void>()({
+              doing: "Restarting this game server",
+              locks: () => [exclusive(power)],
+              name: "test.power.restart",
+              run: () => Effect.succeed("restarted"),
+            }),
+            undefined,
+            { user: person }
+          ),
+          "restarted"
         )
       })
+    )
+
+    it.effect(
+      "turns a person away at once from a deletion still waiting its turn",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const release = yield* Deferred.make<void>()
+          const saving = yield* runOperation(
+            holding("test.save", "Saving a file", [shared(server)]),
+            release,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          // Hearth's own deletion waits for the save.
+          const deleting = yield* runOperation(
+            holding("test.delete", "Deleting this game server", [
+              exclusive(server),
+            ]),
+            release,
+            { user: null }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+
+          // A power action would only run after the deletion: it's told so.
+          const refused = yield* runOperation(
+            holding("test.power", "Starting this game server", [
+              exclusive(partKey(server, "power")),
+            ]),
+            release,
+            { user: person }
+          ).pipe(Effect.flip)
+          assert.strictEqual(refused._tag, "OperationBusyError")
+          assert.strictEqual(
+            refused.message,
+            "Deleting this game server is in progress. Try again once it's done."
+          )
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(saving)
+          yield* Fiber.join(deleting)
+        })
     )
 
     it.effect(

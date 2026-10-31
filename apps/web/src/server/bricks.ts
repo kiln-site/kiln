@@ -48,7 +48,6 @@ import {
 } from "@/lib/relay-client"
 import { promiseEffect } from "@/effect/promise"
 import { provisioningInstanceId } from "@/lib/provisioning.server"
-import { outsideOperation } from "@/operations/current"
 import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
@@ -64,7 +63,7 @@ import {
   requestRelay,
   requiredRelay,
 } from "@/server/bricks.server"
-import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
+import { provisionInstanceDomainLater } from "@/server/domains.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayResourceLimitsRequest } from "@/lib/resource-limits.server"
 import {
@@ -445,10 +444,7 @@ async function updateInstanceStartupHandler(
       user.id
     )
   )
-  // Its DNS takes its own turn, after any DNS change already under way.
-  await outsideOperation(() =>
-    provisionInstanceDomainBestEffort(instance, relay.id)
-  )
+  provisionInstanceDomainLater(relay.id, instance.id)
   await runAppEffect(
     "relay.snapshot.invalidate",
     invalidateRelayCache(relayCachePolicy.snapshot(relay.id))

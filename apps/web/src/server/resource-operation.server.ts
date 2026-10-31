@@ -5,34 +5,12 @@ import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
 import {
-  exclusive,
-  partKey,
+  lockAs,
   resourceKey,
-  shared,
   type LaneLock,
+  type LockPolicy,
 } from "@/operations/lanes"
 import { operation, signedIn } from "@/operations/operation"
-
-/**
- * How a change holds its resource (docs/hearth-operations.md):
- * - `"whole"`: replacing or removing it. Everything else on it is turned
- *   away until it ends.
- * - `{ part }`: one kind of everyday change, such as `"power"`, applied on
- *   the Relay and saved in Hearth in turn. Another of the same kind waits
- *   for it; other work on the resource doesn't.
- * - `"shared"`: everyday work the Relay or the database already keeps in
- *   order. Only replacing or removing the resource stops it.
- */
-export type ResourceLockPolicy = "shared" | "whole" | { readonly part: string }
-
-export function resourceLock(
-  key: string,
-  policy: ResourceLockPolicy
-): LaneLock {
-  if (policy === "whole") return exclusive(key)
-  if (policy === "shared") return shared(key)
-  return exclusive(partKey(key, policy.part))
-}
 
 /**
  * A change to one game server, database or App, as an operation, holding
@@ -49,7 +27,7 @@ export const resourceOperation = <
   readonly name: string
   readonly doing: string | ((input: Input) => string)
   readonly permission: (input: Input) => AccessPermission
-  readonly lock: ResourceLockPolicy
+  readonly lock: LockPolicy
   readonly alsoLocks?: (input: Input) => ReadonlyArray<LaneLock>
   readonly run: (user: AuthenticatedUser, input: Input) => Promise<A>
 }) =>
@@ -70,7 +48,7 @@ export const resourceOperation = <
         )
       ),
     locks: ({ input }) => [
-      resourceLock(
+      lockAs(
         resourceKey(definition.kind, input.relayId, definition.id(input)),
         definition.lock
       ),

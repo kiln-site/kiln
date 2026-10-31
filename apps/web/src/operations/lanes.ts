@@ -141,6 +141,24 @@ export const emailKey = (email: string) =>
  */
 export const partKey = (whole: string, part: string) => `${whole}#${part}`
 
+/**
+ * How a change holds what it changes (docs/hearth-operations.md):
+ * - `"whole"`: replacing or removing it. Everything else on it is turned
+ *   away until it ends.
+ * - `{ part }`: one kind of everyday change that another of its kind
+ *   mustn't interleave with, such as `"power"`. Another of the same kind
+ *   waits for it; other work on it doesn't.
+ * - `"shared"`: everyday work the Relay or the database already keeps in
+ *   order. Only replacing or removing it stops it.
+ */
+export type LockPolicy = "shared" | "whole" | { readonly part: string }
+
+export function lockAs(key: string, policy: LockPolicy): LaneLock {
+  if (policy === "whole") return exclusive(key)
+  if (policy === "shared") return shared(key)
+  return exclusive(partKey(key, policy.part))
+}
+
 /** `locks`, with the whole shared for each part, normalized. */
 export function withWholes(
   locks: ReadonlyArray<LaneLock>

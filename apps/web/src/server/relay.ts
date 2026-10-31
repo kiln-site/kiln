@@ -84,9 +84,9 @@ import {
 import { forkAppEffect, runAppEffect, traceAppPromise } from "@/effect/runtime"
 import {
   applyManagedDomainAddressesEffect,
-  provisionInstanceDomainBestEffort,
+  provisionInstanceDomainLater,
 } from "@/server/domains.server"
-import { syncInstanceDomainAfterPortUpdateBestEffort } from "@/server/relay-port-update.server"
+import { syncInstanceDomainAfterPortUpdate } from "@/server/relay-port-update.server"
 import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
 import {
@@ -132,7 +132,6 @@ import {
 } from "@/lib/relay-selectors"
 import { updateInstanceSourceName } from "@/lib/instance-registry"
 import { dnsKey } from "@/lib/dns-operations"
-import { outsideOperation } from "@/operations/current"
 import { exclusive, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
@@ -852,14 +851,7 @@ async function updateInstancePortsHandler(
     240_000
   )
   const instance = relayInstanceSchema.parse(value)
-  // Its DNS takes its own turn, after any DNS change already under way.
-  await outsideOperation(() =>
-    syncInstanceDomainAfterPortUpdateBestEffort(
-      instance,
-      data.relayId,
-      data.ports
-    )
-  )
+  syncInstanceDomainAfterPortUpdate(data.relayId, instance.id, data.ports)
   await runAppEffect(
     "relay.snapshot.invalidate",
     invalidateRelayCache(relayCachePolicy.snapshot(data.relayId))
@@ -1336,10 +1328,7 @@ async function performInstanceActionHandler(
   )
   const instance = relayInstanceSchema.parse(await response.json())
   if (action === "start" || action === "restart") {
-    // Its DNS takes its own turn, after any DNS change already under way.
-    await outsideOperation(() =>
-      provisionInstanceDomainBestEffort(instance, relay.id)
-    )
+    provisionInstanceDomainLater(relay.id, instance.id)
   }
   await runAppEffect(
     "relay.snapshot.invalidate",

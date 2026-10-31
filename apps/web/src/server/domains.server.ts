@@ -17,7 +17,7 @@ import {
   updateCloudflareAddressRecordEffect,
   updateCloudflareSrvRecordEffect,
 } from "@/effect/cloudflare-api"
-import { promiseEffect } from "@/effect/promise"
+import { forkPromise, promiseEffect } from "@/effect/promise"
 import {
   activateInstanceDomainAssignmentEffect,
   anyDomainConnectionEffect,
@@ -78,6 +78,7 @@ import type { FleetRelayInstance } from "@/lib/relay-fleet"
 import { relayConnectionSnapshot } from "@/lib/relay-connection"
 import { dnsKey, withDnsChange } from "@/lib/dns-operations"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { outsideOperation } from "@/operations/current"
 import { exclusive } from "@/operations/lanes"
 import {
   operation,
@@ -397,6 +398,55 @@ export async function provisionInstanceDomainBestEffort(
     )
   )
   if (changed) publishDomainChange({ instanceId: instance.id, relayId })
+}
+
+/**
+ * Provisions a game server's domains after a change that may move its
+ * address, such as a start or a port or startup change. It runs as its own
+ * DNS change from what the Relay reports once it has its turn, so a change
+ * that finishes late can't put back an address a newer one replaced. Not
+ * awaited: nothing holding the game server waits on it.
+ */
+export function provisionInstanceDomainLater(
+  relayId: string,
+  instanceId: string
+): void {
+  outsideOperation(() =>
+    forkPromise(async () => {
+      const changed = await runAppEffect(
+        "domains.instance.provision",
+        withInstanceDomainLock(
+          "dns.domain.provision",
+          [{ instanceId, relayId }],
+          Effect.gen(function* () {
+            const relay = yield* promiseEffect(() => activeRelay(relayId))
+            const snapshot = relaySnapshotSchema.parse(
+              yield* relayJsonEffect(relay, "/v1/snapshot", (input) => input)
+            )
+            const instance = snapshot.instances.find(
+              (item) => item.id === instanceId
+            )
+            if (!instance) return false
+            return yield* provisionInstanceDomainEffect({
+              ...relayInstanceSchema.parse(instance),
+              relayId,
+            })
+          })
+        ).pipe(
+          Effect.catch((cause) =>
+            Effect.sync(() => {
+              console.warn(
+                `[Kiln Domains] Server ${instanceId} changed, but its vanity address could not be updated:`,
+                cause
+              )
+              return false
+            })
+          )
+        )
+      )
+      if (changed) publishDomainChange({ instanceId, relayId })
+    })
+  )
 }
 
 export async function provisionInstanceDomain(
