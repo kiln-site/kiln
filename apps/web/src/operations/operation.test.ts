@@ -26,7 +26,7 @@ import {
   resourceKey,
   shared,
 } from "./lanes"
-import { operation, runOperation } from "./operation"
+import { inLanes, operation, runOperation } from "./operation"
 import {
   findOperation,
   finishOperation,
@@ -638,6 +638,40 @@ describeMysql("Hearth operations", () => {
           assert.strictEqual(yield* record(next), "cancelled")
           assert.isFalse(yield* cancelQueuedOperation(first))
         }).pipe(TestClock.withLive)
+    )
+
+    it.effect("turns away Hearth's own work that's only worth doing now", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        const release = yield* Deferred.make<void>()
+        const holder = yield* runOperation(
+          holding("test.deploy", "Deploying this game server", [
+            exclusive(serverDns),
+          ]),
+          release,
+          { user: person }
+        ).pipe(Effect.forkChild({ startImmediately: true }))
+        yield* Effect.yieldNow
+        const poll = inLanes(
+          "test.poll",
+          "Polling",
+          [exclusive(serverDns)],
+          Effect.succeed("polled"),
+          { onlyIfFree: true }
+        )
+
+        // Busy: turned away at once, rather than waiting behind it.
+        const refused = yield* poll.pipe(Effect.flip)
+        assert.strictEqual(
+          (refused as { _tag?: string })._tag,
+          "OperationBusyError"
+        )
+
+        // Free: it runs.
+        yield* Deferred.succeed(release, undefined)
+        yield* Fiber.join(holder)
+        assert.strictEqual(yield* poll, "polled")
+      }).pipe(TestClock.withLive)
     )
 
     it.effect(
