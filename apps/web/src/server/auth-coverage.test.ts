@@ -207,7 +207,6 @@ const notYetOperations = new Set<string>([
   "tailscale.ts:syncTailscaleIntegration",
   "updates.ts:checkForKilnReleases",
   "updates.ts:getSystemUpdateStatus",
-  "updates.ts:startSystemUpdates",
 ])
 
 // The session checks every handler must reach.
