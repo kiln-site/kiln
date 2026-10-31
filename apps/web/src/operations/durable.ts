@@ -369,32 +369,66 @@ export const queueDurableOperation = <
     )(input).pipe(Effect.orDie) as Effect.Effect<unknown>
     const locks = withWholes(operation.locks(input))
     const services = yield* Effect.context<Database>()
+    const id = randomUUID()
+    const record = recordOperation({
+      actorId,
+      id,
+      idempotencyKey: options.idempotencyKey,
+      input: encoded,
+      kind: operation.kind,
+      locks,
+      state: "waiting",
+      version: operation.version,
+    }).pipe(
+      Effect.tap((recorded) =>
+        Effect.annotateCurrentSpan("operation.id", recorded.id)
+      )
+    )
+    const turn = {
+      actorId,
+      doing: operation.doing(input),
+      id,
+      locks,
+      name: operation.kind,
+      recheck,
+    }
+    if (actorId !== null && locks.length > 0) {
+      // A person's takes its place in line as they ask, refused at once as
+      // any change of theirs is by a whole change in its way, then is
+      // recorded. Behind any other, it waits as long as its turn takes.
+      yield* awaitLanesOpen("person", operation.kind)
+      return yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const recorded = yield* Deferred.make<boolean>()
+          const holder = yield* takeTurn({
+            ...turn,
+            recorded: Deferred.await(recorded),
+            whenBusy: personWhenBusy,
+          })
+          if (holder.refused) {
+            return yield* Fiber.join(holder.fiber).pipe(
+              Effect.andThen(Effect.die("A refused operation ran"))
+            )
+          }
+          return (yield* record.pipe(
+            Effect.onExit((exit) =>
+              Deferred.succeed(
+                recorded,
+                Exit.isSuccess(exit) && !exit.value.existing
+              )
+            )
+          )).id
+        })
+      )
+    }
     // Recorded and set to take its turn in one step that can't be cut off,
     // so none is left recorded with nothing to start it.
     return yield* Effect.uninterruptible(
       Effect.gen(function* () {
-        const recorded = yield* recordOperation({
-          actorId,
-          idempotencyKey: options.idempotencyKey,
-          input: encoded,
-          kind: operation.kind,
-          locks,
-          state: "waiting",
-          version: operation.version,
-        })
-        yield* Effect.annotateCurrentSpan("operation.id", recorded.id)
+        const recorded = yield* record
         if (!recorded.existing) {
           yield* lanesOpen.pipe(
-            Effect.andThen(
-              takeTurn({
-                actorId,
-                doing: operation.doing(input),
-                id: recorded.id,
-                locks,
-                name: operation.kind,
-                recheck,
-              })
-            ),
+            Effect.andThen(takeTurn(turn)),
             Effect.provideContext(services),
             Effect.forkDetach
           )
@@ -409,8 +443,10 @@ const endedBadly = (state: string) =>
   state === "failed" || state === "interrupted" || state === "cancelled"
 
 // A waiting operation taking its turn: held in its lanes as Hearth's own
-// work, then started, its workflow run once its locks are its. Who asked is
-// checked again just before it starts, however it got its turn.
+// work, however long its turn takes, then started, its workflow run once
+// its locks are its. Who asked is checked again just before it starts,
+// however it got its turn. One admitted before it's recorded starts only
+// once `recorded` says it was.
 const takeTurn = (waiting: {
   readonly actorId: string | null
   readonly doing: string
@@ -418,11 +454,14 @@ const takeTurn = (waiting: {
   readonly locks: ReadonlyArray<LaneLock>
   readonly name: string
   readonly recheck: Effect.Effect<void, unknown, Database> | undefined
+  readonly recorded?: Effect.Effect<boolean>
+  readonly whenBusy?: typeof personWhenBusy
 }) =>
   Effect.gen(function* () {
     const services = yield* Effect.context<Database>()
     const start = () =>
       Effect.gen(function* () {
+        if (waiting.recorded && !(yield* waiting.recorded)) return
         if (waiting.recheck) {
           const allowed = yield* Effect.exit(waiting.recheck)
           if (allowed._tag === "Failure") {
@@ -443,10 +482,10 @@ const takeTurn = (waiting: {
         yield* awaitOperationEnd(waiting.id)
       }).pipe(Effect.provideContext(services))
     if (waiting.locks.length === 0) {
-      yield* start().pipe(Effect.forkDetach)
-      return
+      const fiber = yield* start().pipe(Effect.forkDetach)
+      return { fiber, refused: false }
     }
-    yield* holdLanes({
+    return yield* holdLanes({
       actorId: waiting.actorId,
       doing: waiting.doing,
       id: waiting.id,
@@ -455,6 +494,7 @@ const takeTurn = (waiting: {
       name: waiting.name,
       run: start,
       waitUntil: Number.MAX_SAFE_INTEGER,
+      whenBusy: waiting.whenBusy,
     })
   })
 
@@ -509,7 +549,9 @@ const dispatchSoon = (id: string) =>
   })
 
 // Takes a durable operation's lanes and holds them in a fiber of its own
-// while `run` does, returning that fiber; a refusal fails it.
+// while `run` does, returning that fiber; a refusal fails it, and one as
+// it was admitted says so. A person's is refused as theirs are, or as
+// `whenBusy` says.
 const holdLanes = <E>(hold: {
   readonly actorId: string | null
   readonly doing: string
@@ -519,16 +561,29 @@ const holdLanes = <E>(hold: {
   readonly name: string
   readonly run: (waited: boolean) => Effect.Effect<unknown, E>
   readonly waitUntil: number
+  readonly whenBusy?: typeof personWhenBusy | undefined
 }): Effect.Effect<{
   readonly fiber: Fiber.Fiber<unknown, E | OperationBusyError>
+  readonly refused: boolean
   readonly withdraw: () => void
 }> =>
   Effect.gen(function* () {
     const label = `${hold.name}#${hold.id}`
+    const whenBusy =
+      hold.whenBusy ??
+      (hold.initiator === "person" ? personWhenBusy : undefined)
+    // The lanes decide as they admit it; noted, so a caller can tell.
+    let refused = false
     const ticket = hearthLanes.admit({
       label,
       locks: hold.locks,
-      whenBusy: hold.initiator === "person" ? personWhenBusy : "wait",
+      whenBusy: whenBusy
+        ? (inTheWay) => {
+            const decision = whenBusy(inTheWay)
+            refused = decision === "refuse"
+            return decision
+          }
+        : "wait",
     })
     occupy(label, {
       actorId: hold.actorId,
@@ -551,7 +606,7 @@ const holdLanes = <E>(hold: {
         waitUntil: hold.waitUntil,
       }
     ).pipe(Effect.ensuring(vacate(label)), Effect.forkDetach)
-    return { fiber, withdraw: ticket.cancel }
+    return { fiber, refused, withdraw: ticket.cancel }
   }).pipe(
     // Admitted, noted, and its holder forked, in one step that can't be cut
     // off: none can be left holding a place in line with nothing to end it.

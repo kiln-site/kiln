@@ -619,6 +619,70 @@ describeMysql("Hearth operations", () => {
     )
 
     it.effect(
+      "refuses a person's queued change while their resource is replaced, and queues it behind a part",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const deploy = partKey(server, "deploy")
+          const queued = durableOperation({
+            input: Schema.Struct({}),
+            kind: "test.durable.person",
+            locks: () => [exclusive(deploy)],
+            run: () => Effect.void,
+            version: 1,
+          })
+          const queue = (key: string) =>
+            queueDurableOperation(
+              queued,
+              {},
+              { actorId: person.id, idempotencyKey: key }
+            )
+
+          // Being deleted, it's turned away as they ask, and never recorded.
+          const deleted = yield* Deferred.make<void>()
+          const deleting = yield* runOperation(
+            holding("test.delete", "Deleting this game server", [
+              exclusive(server),
+            ]),
+            deleted,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          const refused = yield* queue("deleting").pipe(Effect.flip)
+          assert.strictEqual(
+            (refused as { _tag?: string })._tag,
+            "OperationBusyError"
+          )
+          assert.isNull(yield* findOperation("test.durable.person", "deleting"))
+          yield* Deferred.succeed(deleted, undefined)
+          yield* Fiber.join(deleting)
+
+          // Behind another deploy, it's queued, then runs.
+          const deployed = yield* Deferred.make<void>()
+          const deploying = yield* runOperation(
+            holding("test.deploy", "Deploying this game server", [
+              exclusive(deploy),
+            ]),
+            deployed,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          const id = yield* queue("behind")
+          const state = findOperation("test.durable.person", "behind").pipe(
+            Effect.map((found) => found?.state)
+          )
+          assert.strictEqual(yield* state, "waiting")
+          yield* Deferred.succeed(deployed, undefined)
+          yield* Fiber.join(deploying)
+          yield* state.pipe(
+            Effect.repeat({ until: (now) => now === "running" }),
+            Effect.timeout("5 seconds")
+          )
+          yield* finishOperation(id, "succeeded")
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
       "queues durable changes past startup, checks who asked when their turn comes, and retries a failed one",
       () =>
         Effect.gen(function* () {

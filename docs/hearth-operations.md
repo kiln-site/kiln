@@ -195,7 +195,10 @@ read when its turn comes: a push pins the commit from its webhook, with the
 repository and branch it came from, the newest push's winning; a poll
 deploys its branch head. A deployment acknowledges only the revision it
 took, so one asked for since still waits. A person's deploy, rollback or
-update is deployed as they asked, and shows as queued until its turn. The
+update is deployed as they asked, and shows as queued until its turn
+(`queueDurableOperation`): it takes its place in line as they ask, so a
+deletion or restore of the App turns it away at once as it would any
+change of theirs, and only behind other work does it wait. The
 token that checks out a GitHub commit is made as it's sent and never kept,
 and a reply lost to a restart is read back (`relayCommand`), not sent again.
 Deleting an App stops its build on the Relay first (`app.deployment.abort`),
