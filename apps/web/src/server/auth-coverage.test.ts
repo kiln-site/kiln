@@ -57,13 +57,7 @@ const confirmedCliDeletions = ["deleteCliServerEffect"]
 // area by area; never add one.
 const notYetOperations = new Set<string>([
   "apps.ts:claimAppTerminal",
-  "apps.ts:createApp",
-  "apps.ts:renameApp",
   "apps.ts:restartAppTerminal",
-  "apps.ts:runAppAction",
-  "apps.ts:updateAppConfig",
-  "apps.ts:updateAppLimits",
-  "apps.ts:updateAppNetwork",
   "apps.ts:writeAppTerminal",
   "brick-catalogs.ts:addBrickCatalog",
   "brick-catalogs.ts:deleteBrickCatalog",

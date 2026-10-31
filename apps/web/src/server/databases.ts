@@ -64,20 +64,14 @@ import {
   claimPreparedProvisioning,
 } from "@/lib/provisioning.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
-import {
-  exclusive,
-  partKey,
-  relayKey,
-  resourceKey,
-  shared,
-} from "@/operations/lanes"
+import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
   signedIn,
 } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
-import { memberPermission } from "@/server/database-connections.server"
+import { connectDatabase } from "@/server/database-connections.server"
 import { resourceOperation } from "@/server/resource-operation.server"
 import {
   authorizedDatabase,
@@ -609,59 +603,6 @@ export const rotateManagedDatabasePassword = createServerFn({ method: "POST" })
       user: await requireEligibleResourceUser(),
     })
   )
-
-// Connects a game server, an App, or another database to the database, or
-// disconnects it. It changes both, so it holds both and needs both ends'
-// network permissions; an App's also holds its Relay's handover of Apps'
-// database connections, which it may finish first.
-const connectDatabase = operation<z.infer<typeof databaseNetworkInputSchema>>()(
-  {
-    name: "database.network.update",
-    doing: "Changing this database's connections",
-    authorize: ({ input, user }) =>
-      signedIn(user).pipe(
-        Effect.tap((person) =>
-          promiseEffect(async () => {
-            await requireRelayPermission({
-              databaseId: input.databaseId,
-              permission: "database.network.write",
-              relayId: input.relayId,
-              user: person,
-            })
-            const { id, kind } = input.member
-            await requireRelayPermission({
-              ...(kind === "instance"
-                ? { instanceId: id }
-                : kind === "app"
-                  ? { appId: id }
-                  : { databaseId: id }),
-              permission: memberPermission[kind],
-              relayId: input.relayId,
-              user: person,
-            })
-          })
-        )
-      ),
-    locks: ({ input }) => [
-      exclusive(resourceKey("database", input.relayId, input.databaseId)),
-      exclusive(resourceKey(input.member.kind, input.relayId, input.member.id)),
-      ...(input.member.kind === "app"
-        ? [exclusive(partKey(relayKey(input.relayId), "database-connections"))]
-        : []),
-    ],
-    run: ({ context: user, input }) =>
-      promiseEffect(async () => {
-        const { writeDatabaseConnection } =
-          await import("@/server/database-connections.server")
-        return writeDatabaseConnection(user, input)
-      }),
-    audit: ({ input }) => ({
-      id: input.databaseId,
-      kind: "database",
-      relayId: input.relayId,
-    }),
-  }
-)
 
 export const updateManagedDatabaseNetwork = createServerFn({ method: "POST" })
   .validator(databaseNetworkInputSchema)

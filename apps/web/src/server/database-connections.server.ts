@@ -4,10 +4,15 @@ import {
   type RelayManagedDatabase,
 } from "@workspace/contracts"
 
+import { Effect } from "effect"
+
+import { promiseEffect } from "@/effect/promise"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { exclusive, partKey, relayKey, resourceKey } from "@/operations/lanes"
+import { operation, signedIn } from "@/operations/operation"
 import {
   databaseForViewer,
   databaseRpc,
@@ -82,3 +87,57 @@ export async function writeDatabaseConnection(
   })
   return databaseForViewer(user, relay.id, database)
 }
+
+interface DatabaseConnectionInput {
+  connected: boolean
+  databaseId: string
+  member: DatabaseConnectionMember
+  relayId: string
+}
+
+// Connects a game server, an App, or another database to the database, or
+// disconnects it, from either end. It changes both, so it holds both and needs both ends'
+// network permissions; an App's also holds its Relay's handover of Apps'
+// database connections, which it may finish first.
+export const connectDatabase = operation<DatabaseConnectionInput>()({
+  name: "database.network.update",
+  doing: "Changing this database's connections",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) =>
+        promiseEffect(async () => {
+          await requireRelayPermission({
+            databaseId: input.databaseId,
+            permission: "database.network.write",
+            relayId: input.relayId,
+            user: person,
+          })
+          const { id, kind } = input.member
+          await requireRelayPermission({
+            ...(kind === "instance"
+              ? { instanceId: id }
+              : kind === "app"
+                ? { appId: id }
+                : { databaseId: id }),
+            permission: memberPermission[kind],
+            relayId: input.relayId,
+            user: person,
+          })
+        })
+      )
+    ),
+  locks: ({ input }) => [
+    exclusive(resourceKey("database", input.relayId, input.databaseId)),
+    exclusive(resourceKey(input.member.kind, input.relayId, input.member.id)),
+    ...(input.member.kind === "app"
+      ? [exclusive(partKey(relayKey(input.relayId), "database-connections"))]
+      : []),
+  ],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => writeDatabaseConnection(user, input)),
+  audit: ({ input }) => ({
+    id: input.databaseId,
+    kind: "database",
+    relayId: input.relayId,
+  }),
+})

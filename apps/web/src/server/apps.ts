@@ -64,12 +64,14 @@ import {
 } from "@/server/app-access"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceOperation } from "@/server/resource-operation.server"
+import { connectDatabase } from "@/server/database-connections.server"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { dnsKey } from "@/lib/dns-operations"
 import { appDeploymentLocks } from "@/lib/app-lanes"
-import { exclusive } from "@/operations/lanes"
+import { outsideOperation } from "@/operations/current"
+import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -166,154 +168,221 @@ export const getAppOwner = createServerFn({ method: "GET" })
 
 const cancelledSchema = z.object({ cancelled: z.boolean() })
 
+// Holds the App it creates, by the ID it settles first, and its Relay
+// shared, so the Relay isn't removed meanwhile. The Relay is read once
+// admitted, so one removed since can't gain the App.
+const createAppNow = operation<z.infer<typeof createAppInputSchema>>()({
+  name: "app.create",
+  doing: "Creating this App",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) =>
+        promiseEffect(() =>
+          requireRelayPermission({
+            permission: "app.create",
+            relayId: input.relayId,
+            user: person,
+          })
+        )
+      ),
+      Effect.map((person) => ({
+        id: randomBytes(20).toString("hex"),
+        user: person,
+      }))
+    ),
+  locks: ({ context, input }) => [
+    exclusive(resourceKey("app", input.relayId, context.id)),
+    shared(relayKey(input.relayId)),
+  ],
+  run: ({ context, input }) =>
+    promiseEffect(() => createAppHandler(context.user, input, context.id)),
+  audit: ({ context, input }) => ({
+    id: context.id,
+    kind: "app",
+    relayId: input.relayId,
+  }),
+})
+
 export const createApp = createServerFn({ method: "POST" })
   .validator(createAppInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const relay = await requiredRelay(data.relayId)
-    await requireRelayPermission({
-      permission: "app.create",
-      relayId: relay.id,
-      user,
+  .handler(async ({ data }) =>
+    runOperationPromise(createAppNow, data, {
+      user: await requireEligibleResourceUser(),
     })
-    const nameExists = await runAppEffect(
-      "apps.name.preflight",
-      appNameExistsEffect(relay.id, data.name)
+  )
+
+async function createAppHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof createAppInputSchema>,
+  id: string
+) {
+  const relay = await requiredRelay(data.relayId)
+  const nameExists = await runAppEffect(
+    "apps.name.preflight",
+    appNameExistsEffect(relay.id, data.name)
+  )
+  if (nameExists) {
+    throw new Error(
+      `An app named "${data.name}" already exists on ${relay.name}`
     )
-    if (nameExists) {
-      throw new Error(
-        `An app named "${data.name}" already exists on ${relay.name}`
-      )
-    }
-    const id = randomBytes(20).toString("hex")
-    const register = () =>
-      runAppEffect(
-        "apps.record.create",
-        createAppRecordEffect({
-          appId: id,
-          createdBy: user.id,
-          name: data.name,
-          relayId: relay.id,
-        })
-      )
-    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-    if (relayConnectionFeatures(relay.id).has(relayAppProvisioningV1Feature)) {
-      // The Relay creates it in the background; it opens on its
-      // provisioning page at once.
-      const cancel = () =>
+  }
+  const register = () =>
+    runAppEffect(
+      "apps.record.create",
+      createAppRecordEffect({
+        appId: id,
+        createdBy: user.id,
+        name: data.name,
+        relayId: relay.id,
+      })
+    )
+  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
+  if (relayConnectionFeatures(relay.id).has(relayAppProvisioningV1Feature)) {
+    // The Relay creates it in the background; it opens on its
+    // provisioning page at once.
+    const cancel = () =>
+      databaseRpc(
+        relay,
+        "app.provision.cancel",
+        { appId: id },
+        30_000,
+        user.id
+      ).then((result) => cancelledSchema.parse(result).cancelled)
+    const unregister = () =>
+      runAppEffect("apps.record.delete", deleteAppRecordEffect(relay.id, id))
+    // Recorded first, so a job the Relay holds always has an app in
+    // Hearth to show it and delete it from.
+    await register()
+    const placeholder = await Effect.runPromise(
+      promiseEffect(() =>
         databaseRpc(
           relay,
-          "app.provision.cancel",
+          "app.provision.prepare",
+          { id, idempotencyKey: randomUUID(), name: data.name },
+          30_000,
+          user.id
+        )
+      ).pipe(
+        Effect.map((value) => relayAppSchema.parse(value)),
+        Effect.tapError(() => abandonPreparedProvisioning(cancel, unregister))
+      )
+    )
+    await claimPreparedProvisioning({
+      cancel,
+      claim: () =>
+        databaseRpc(
+          relay,
+          "app.provision.claim",
           { appId: id },
           30_000,
           user.id
-        ).then((result) => cancelledSchema.parse(result).cancelled)
-      const unregister = () =>
-        runAppEffect("apps.record.delete", deleteAppRecordEffect(relay.id, id))
-      // Recorded first, so a job the Relay holds always has an app in
-      // Hearth to show it and delete it from.
-      await register()
-      const placeholder = await Effect.runPromise(
-        promiseEffect(() =>
-          databaseRpc(
-            relay,
-            "app.provision.prepare",
-            { id, idempotencyKey: randomUUID(), name: data.name },
-            30_000,
-            user.id
-          )
-        ).pipe(
-          Effect.map((value) => relayAppSchema.parse(value)),
-          Effect.tapError(() => abandonPreparedProvisioning(cancel, unregister))
-        )
-      )
-      await claimPreparedProvisioning({
-        cancel,
-        claim: () =>
-          databaseRpc(
-            relay,
-            "app.provision.claim",
-            { appId: id },
-            30_000,
-            user.id
-          ),
-        unconfirmed: "If it stays waiting, delete it and create it again.",
-        unregister,
-      })
-      publishAppChange(relay.id, true)
-      generateAppHostname(relay.id, id)
-      return {
-        id: placeholder.id,
-        relayId: relay.id,
-        shortId: placeholder.shortId,
-      }
+        ),
+      unconfirmed: "If it stays waiting, delete it and create it again.",
+      unregister,
+    })
+    publishAppChange(relay.id, true)
+    generateAppHostname(relay.id, id)
+    return {
+      id: placeholder.id,
+      relayId: relay.id,
+      shortId: placeholder.shortId,
     }
-    const created = relayAppSchema.parse(
-      await databaseRpc(
+  }
+  const created = relayAppSchema.parse(
+    await databaseRpc(
+      relay,
+      "app.create",
+      { id, name: data.name },
+      60_000,
+      user.id
+    )
+  )
+  const persisted = await promiseResult(register)
+  if (Result.isFailure(persisted)) {
+    await ignorePromise(() =>
+      databaseRpc(
         relay,
-        "app.create",
-        { id, name: data.name },
-        60_000,
+        "app.delete",
+        { appId: id, deleteData: true },
+        180_000,
         user.id
       )
     )
-    const persisted = await promiseResult(register)
-    if (Result.isFailure(persisted)) {
-      await ignorePromise(() =>
-        databaseRpc(
-          relay,
-          "app.delete",
-          { appId: id, deleteData: true },
-          180_000,
-          user.id
-        )
-      )
-      throw persisted.failure
-    }
-    publishAppChange(relay.id, true)
-    generateAppHostname(relay.id, id)
-    return { id: created.id, relayId: relay.id, shortId: created.shortId }
-  })
+    throw persisted.failure
+  }
+  publishAppChange(relay.id, true)
+  generateAppHostname(relay.id, id)
+  return { id: created.id, relayId: relay.id, shortId: created.shortId }
+}
 
 // A new app gets an address under a vanity domain, as game servers do. In
 // the background: it calls Cloudflare, and the app opens without it.
 function generateAppHostname(relayId: string, appId: string) {
-  void import("@/server/web-hostname-access.server").then(
-    ({ generateAppHostnameBestEffort }) =>
-      generateAppHostnameBestEffort({
-        relayId,
-        resourceId: appId,
-        resourceType: "app",
-      })
+  // Creating the App doesn't wait for it: it takes the App's DNS lane on
+  // its own, once creating it is done.
+  outsideOperation(
+    () =>
+      void import("@/server/web-hostname-access.server").then(
+        ({ generateAppHostnameBestEffort }) =>
+          generateAppHostnameBestEffort({
+            relayId,
+            resourceId: appId,
+            resourceType: "app",
+          })
+      )
   )
 }
 
-export const updateAppConfig = createServerFn({ method: "POST" })
-  .validator(appConfigInputSchema)
-  .handler(async ({ data }) => {
-    const config = await updateAppConfigHandler(
-      await requireEligibleResourceUser(),
-      data
-    )
+// A host mount it adds also needs relay.files.write, which the run checks.
+const changeAppConfig = resourceOperation({
+  kind: "app",
+  id: (input: z.infer<typeof appConfigInputSchema>) => input.appId,
+  name: "app.config.update",
+  doing: "Changing this App's configuration",
+  permission: () => "app.manage",
+  run: async (user, data) => {
+    const config = await updateAppConfigHandler(user, data)
     publishAppChange(data.relayId, false)
     // Which volumes the app uses shows on the Relay's Volumes page.
     if (data.config.mounts) publishRelayVolumesChange(data.relayId)
     return { config }
-  })
+  },
+})
+
+export const updateAppConfig = createServerFn({ method: "POST" })
+  .validator(appConfigInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(changeAppConfig, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 // Hearth keeps the name, so renaming doesn't need the Relay. It's
 // configuring the app, so it takes the permission that does.
-export const renameApp = createServerFn({ method: "POST" })
-  .validator(appRenameInputSchema)
-  .handler(async ({ data }) => {
-    const { relay } = await authorizedApp(data, "app.manage")
+const renameAppNow = resourceOperation({
+  kind: "app",
+  id: (input: z.infer<typeof appRenameInputSchema>) => input.appId,
+  name: "app.rename",
+  doing: "Renaming this App",
+  permission: () => "app.manage",
+  run: async (user, data) => {
+    const { relay } = await authorizedAppFor(user, data, "app.manage")
     await runAppEffect(
       "apps.rename",
       renameAppRecordEffect(relay.id, data.appId, data.name)
     )
     publishAppChange(relay.id, true)
     return { name: data.name }
-  })
+  },
+})
+
+export const renameApp = createServerFn({ method: "POST" })
+  .validator(appRenameInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(renameAppNow, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 // Deploys the saved configuration, a GitHub app its branch's head. The
 // Relay answers once the deployment starts; its log and the app's state
@@ -353,10 +422,14 @@ export const deployApp = createServerFn({ method: "POST" })
 
 // Saves the app's limits and applies them to its running containers. A
 // removed memory or CPU limit applies when the app next deploys.
-export const updateAppLimits = createServerFn({ method: "POST" })
-  .validator(appLimitsInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedApp(data, "app.manage")
+const changeAppLimits = resourceOperation({
+  kind: "app",
+  id: (input: z.infer<typeof appLimitsInputSchema>) => input.appId,
+  name: "app.limits.update",
+  doing: "Changing this App's limits",
+  permission: () => "app.manage",
+  run: async (user, data) => {
+    const { relay } = await authorizedAppFor(user, data, "app.manage")
     if (!(await relayAppLimitsSupported(relay.id))) {
       throw new Error("Update this Relay to set app limits")
     }
@@ -382,12 +455,25 @@ export const updateAppLimits = createServerFn({ method: "POST" })
     )
     publishAppChange(relay.id, false)
     return updated
-  })
+  },
+})
 
-export const runAppAction = createServerFn({ method: "POST" })
-  .validator(appActionInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedApp(data, "app.manage")
+export const updateAppLimits = createServerFn({ method: "POST" })
+  .validator(appLimitsInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(changeAppLimits, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+const runAppActionNow = resourceOperation({
+  kind: "app",
+  id: (input: z.infer<typeof appActionInputSchema>) => input.appId,
+  name: "app.power",
+  doing: "Changing this App's power",
+  permission: () => "app.manage",
+  run: async (user, data) => {
+    const { relay } = await authorizedAppFor(user, data, "app.manage")
     const app = relayAppSchema.parse(
       await databaseRpc(
         relay,
@@ -399,24 +485,35 @@ export const runAppAction = createServerFn({ method: "POST" })
     )
     publishAppChange(relay.id, false)
     return app
-  })
+  },
+})
+
+export const runAppAction = createServerFn({ method: "POST" })
+  .validator(appActionInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(runAppActionNow, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 // Connects the app to a database or disconnects it, now and on later
 // deployments. The Relay keeps the connection; connecting or disconnecting
-// a database also needs that database's network permission.
+// a database also needs that database's network permission. It's the same
+// change as from the database's end.
 export const updateAppNetwork = createServerFn({ method: "POST" })
   .validator(appNetworkInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedApp(data, "app.manage")
-    const { writeDatabaseConnection } =
-      await import("@/server/database-connections.server")
-    return writeDatabaseConnection(user, {
-      connected: data.connected,
-      databaseId: data.databaseId,
-      member: { id: data.appId, kind: "app" },
-      relayId: relay.id,
-    })
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(
+      connectDatabase,
+      {
+        connected: data.connected,
+        databaseId: data.databaseId,
+        member: { id: data.appId, kind: "app" },
+        relayId: data.relayId,
+      },
+      { user: await requireEligibleResourceUser() }
+    )
+  )
 
 export const getAppWebRoutes = createServerFn({ method: "GET" })
   .validator(appInputSchema)
