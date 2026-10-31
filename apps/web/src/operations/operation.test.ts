@@ -20,6 +20,7 @@ import {
 import {
   closeLanes,
   exclusive,
+  hearthLanes,
   laneOccupants,
   partKey,
   resourceKey,
@@ -636,6 +637,56 @@ describeMysql("Hearth operations", () => {
           yield* Effect.sleep("200 millis")
           assert.strictEqual(yield* record(next), "cancelled")
           assert.isFalse(yield* cancelQueuedOperation(first))
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "holds one place in line for an operation, however many take it up",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const deploy = partKey(server, "deploy")
+          const release = yield* Deferred.make<void>()
+          const holder = yield* runOperation(
+            holding("test.deploy", "Deploying this game server", [
+              exclusive(deploy),
+            ]),
+            release,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          const queued = durableOperation({
+            input: Schema.Struct({}),
+            kind: "test.durable.once",
+            locks: () => [exclusive(deploy)],
+            run: () => Effect.void,
+            version: 1,
+          })
+          // Its places in its lanes' line, as the lanes have them.
+          const places = (id: string) =>
+            hearthLanes
+              .describe()
+              .waiting.filter(
+                (waiting) => waiting.label === `test.durable.once#${id}`
+              ).length
+
+          // Queued as startup takes back what's running, and taken up by
+          // startup's sweep too: one place in line.
+          const open = closeLanes()
+          const id = yield* queueDurableOperation(queued, {})
+          yield* readmitWaitingOperations
+          yield* open
+          yield* Effect.sleep("100 millis")
+          assert.strictEqual(places(id), 1)
+
+          // Cancelled, it leaves the line.
+          assert.isTrue(yield* cancelQueuedOperation(id))
+          yield* Effect.sync(() => places(id)).pipe(
+            Effect.repeat({ until: (count) => count === 0 }),
+            Effect.timeout("5 seconds")
+          )
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(holder)
         }).pipe(TestClock.withLive)
     )
 

@@ -118,6 +118,9 @@ Relay changes sent at most once (`relayCommand`).
   minute. One still waiting can be cancelled (`cancelQueuedOperation`),
   leaving its place in line at once.
 - It finishes or fails with a message; there's no paused state.
+- Hearth's own work that's only worth doing now, such as a poll that asks
+  again every minute, can be `onlyIfFree`: turned away, rather than
+  waiting, when anything is in its way, so such work never piles up.
 
 Hearth runs as one process, and a deploy stops the old one before the new
 one starts. The Relays order their own work, such as a backup, in their own

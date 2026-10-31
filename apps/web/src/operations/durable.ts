@@ -22,7 +22,6 @@ import type { DatabaseError } from "@/effect/errors"
 import { OperationsEngineService, withOperationsEngine } from "./engine-service"
 import {
   hearthLanes,
-  laneOccupants,
   lanesOpen,
   occupy,
   vacate,
@@ -450,8 +449,23 @@ const takeTurn = (waiting: {
         yield* dispatchSoon(waiting.id)
         yield* awaitOperationEnd(waiting.id)
       }).pipe(Effect.provideContext(services))
+    // One place in line an operation, however many ask it to take one: the
+    // request that queued it and a sweep, as at startup. Reserved in the
+    // same step as finding none, and given up once it's done with.
+    const place = { withdraw: () => {} }
+    const reserved = yield* Effect.sync(() => {
+      if (queuedHolders.has(waiting.id)) return false
+      queuedHolders.set(waiting.id, place)
+      return true
+    })
+    if (!reserved) return
+    const release = Effect.sync(() => {
+      if (queuedHolders.get(waiting.id) === place) {
+        queuedHolders.delete(waiting.id)
+      }
+    })
     if (waiting.locks.length === 0) {
-      yield* start().pipe(Effect.forkDetach)
+      yield* start().pipe(Effect.ensuring(release), Effect.forkDetach)
       return
     }
     const holder = yield* holdLanes({
@@ -461,29 +475,27 @@ const takeTurn = (waiting: {
       initiator: "system",
       locks: waiting.locks,
       name: waiting.name,
-      run: () =>
-        Effect.suspend(() => {
-          // Its turn came: past withdrawing.
-          queuedHolders.delete(waiting.id)
-          return start()
-        }),
+      run: start,
       waitUntil: Number.MAX_SAFE_INTEGER,
     })
-    queuedHolders.set(waiting.id, holder.withdraw)
+    place.withdraw = holder.withdraw
+    yield* Fiber.await(holder.fiber).pipe(
+      Effect.ensuring(release),
+      Effect.forkDetach
+    )
     // Cancelled as it took its place, as by a sweep that read it waiting
     // just before: it leaves at once, since the cancel may have missed it.
     const now = yield* loadOperation(waiting.id).pipe(
       Effect.catch(() => Effect.succeed(null))
     )
-    if (now !== null && now.state !== "waiting") {
-      queuedHolders.get(waiting.id)?.()
-      queuedHolders.delete(waiting.id)
-    }
+    if (now !== null && now.state !== "waiting") place.withdraw()
   })
 
-// The places in line of operations queued and not yet started, by ID, so
-// one cancelled leaves the line at once rather than at its turn.
-const queuedHolders = new Map<string, () => void>()
+// The place in line of each queued operation this Hearth holds, by ID, from
+// taking it until it's done with: one a second asker finds isn't taken
+// again, and one cancelled leaves the line at once rather than at its turn.
+// Withdrawing one that started changes nothing.
+const queuedHolders = new Map<string, { withdraw: () => void }>()
 
 /**
  * Cancels a queued operation that hasn't started, so it never does, and
@@ -491,10 +503,7 @@ const queuedHolders = new Map<string, () => void>()
  */
 export const cancelQueuedOperation = Effect.fnUntraced(function* (id: string) {
   const cancelled = yield* cancelWaitingOperation(id)
-  if (cancelled) {
-    queuedHolders.get(id)?.()
-    queuedHolders.delete(id)
-  }
+  if (cancelled) queuedHolders.get(id)?.withdraw()
   return cancelled
 })
 
@@ -506,9 +515,6 @@ export const cancelQueuedOperation = Effect.fnUntraced(function* (id: string) {
  */
 export const readmitWaitingOperations = Effect.gen(function* () {
   for (const operation of yield* waitingOperations()) {
-    if ([...laneOccupants.values()].some((held) => held.id === operation.id)) {
-      continue
-    }
     const definition = [...durableKinds.values()].find(
       (kind) => kind.kind === operation.kind
     )
