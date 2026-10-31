@@ -53,6 +53,7 @@ import {
   relayAppWebRouteStateSchema,
   relayAppWebRoutesWriteSchema,
   relayDeleteAppSchema,
+  relayAppDeploymentAbortSchema,
   relayAppDeploymentReadSchema,
   relayAppImageCheckSchema,
   relaySecurityInventoryRequestSchema,
@@ -924,8 +925,7 @@ const power = new ResourcePower({
       await notePowerChange(appId)
       return apps.action({ action, appId })
     },
-    database: (databaseId, action) =>
-      databases.action({ action, databaseId }),
+    database: (databaseId, action) => databases.action({ action, databaseId }),
     instance: runInstancePower,
   },
   lanes,
@@ -2527,7 +2527,11 @@ async function executeControlRequest(
       )
     case "database.resources.read": {
       const input = relayDatabaseUsageReadSchema.parse(request.payload)
-      return workloadResources.usage("database", input.databaseId, input.history)
+      return workloadResources.usage(
+        "database",
+        input.databaseId,
+        input.history
+      )
     }
     case "database.create":
       return databases.create(relayCreateDatabaseSchema.parse(request.payload))
@@ -2835,6 +2839,11 @@ async function executeControlRequest(
       return apps.readDeployment(
         relayAppDeploymentReadSchema.parse(request.payload)
       )
+    case "app.deployment.abort": {
+      const { appId } = relayAppDeploymentAbortSchema.parse(request.payload)
+      apps.abortDeployment(appId)
+      return { aborted: true }
+    }
     case "app.image.check":
       return apps.checkImages(
         relayAppImageCheckSchema.parse(request.payload),
