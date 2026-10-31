@@ -34,7 +34,8 @@ import {
   claimImageUpdateEffect,
   loadAppImageUpdateEffect,
 } from "@/effect/app-image-updates"
-import { ExternalServiceError } from "@/effect/errors"
+import type { Database } from "@/effect/database"
+import { ExternalServiceError, type DatabaseError } from "@/effect/errors"
 import {
   getGitHubCommitEffect,
   githubInstallationTokenEffect,
@@ -55,8 +56,8 @@ import { forkAppWorker } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { outsideOperation } from "@/operations/current"
-import { durableOperation, startDurableOperation } from "@/operations/durable"
-import { hearthLanes } from "@/operations/lanes"
+import { durableOperation, queueDurableOperation } from "@/operations/durable"
+import { loadOperation } from "@/operations/records"
 import { RelayCommandError, relayCommand } from "@/operations/relay-command"
 import { appDeploymentLocks } from "@/lib/app-lanes"
 import { ensureAppDatabaseConnectionsImported } from "@/lib/app-database-connections.server"
@@ -202,7 +203,7 @@ const prepareAppDeploymentEffect = Effect.fn("Apps.deploy.prepare")(function* (
   }
   const imageDigest =
     request.trigger === "update"
-      ? yield* imageUpdateDigest(relay, app.config, request)
+      ? yield* imageUpdateDigest(relay, app.config, request, id)
       : request.imageDigest
   if (imageDigest === null) return null
   const github =
@@ -467,7 +468,8 @@ const checkoutToken = Effect.fnUntraced(function* (
 const imageUpdateDigest = Effect.fnUntraced(function* (
   relay: PersistedRelay,
   config: AppConfig,
-  request: AppDeploymentRequest
+  request: AppDeploymentRequest,
+  deploymentId: string
 ) {
   if (!relayConnectionFeatures(relay.id).has(relayAppImageUpdatesV1Feature)) {
     return yield* Effect.fail(
@@ -490,7 +492,7 @@ const imageUpdateDigest = Effect.fnUntraced(function* (
     }
     // Someone asked: it deploys whatever came of it before, and an
     // automatic update won't try it again.
-    yield* claimImageUpdateEffect(request.appId, digest)
+    yield* claimImageUpdateEffect(request.appId, digest, deploymentId)
     return digest
   }
   const due = update && autoUpdateAt(update)
@@ -504,7 +506,9 @@ const imageUpdateDigest = Effect.fnUntraced(function* (
   }
   // Claimed before the Relay hears of it, so no failure after can deploy
   // it twice.
-  return (yield* claimImageUpdateEffect(request.appId, digest)) ? digest : null
+  return (yield* claimImageUpdateEffect(request.appId, digest, deploymentId))
+    ? digest
+    : null
 })
 
 const enabledRelay = Effect.fnUntraced(function* (relayId: string) {
@@ -717,13 +721,27 @@ const deploySteps = (input: DeployInput, id: string) =>
     })
     if (taken.plan) yield* deployPlanned(input, taken.plan)
     if (taken.revision !== null) {
-      // Only what it took: one asked for since still waits.
+      // Only what it took: one asked for since still waits, and the next
+      // deployment takes its turn for it.
       yield* Activity.make({
         name: "acknowledge",
         execute: settleAppDeploymentRequestEffect(
           input.appId,
           taken.revision
-        ).pipe(Effect.orDie),
+        ).pipe(
+          Effect.andThen(loadAppDeploymentRequestEffect(input.appId)),
+          Effect.flatMap((pending) =>
+            pending
+              ? queueRequestedDeployment(
+                  input.appId,
+                  input.relayId,
+                  pending.acknowledgedRevision
+                )
+              : Effect.void
+          ),
+          Effect.asVoid,
+          Effect.orDie
+        ),
       })
     }
   })
@@ -969,29 +987,13 @@ const finishPlanned = (
     yield* announceDeploymentEffect(runningRecord(plan, null), outcome.status)
   }).pipe(Effect.orDie)
 
-// Whether something holds or waits for an app's #deploy: a deployment
-// running, or one waiting its turn.
-function deploymentQueued(
-  relayId: string,
-  appId: string,
-  waitingOnly: boolean
-): boolean {
-  const key = appDeploymentLocks(relayId, appId)[0]!.key
-  const lanes = hearthLanes.describe()
-  const holds = (locks: ReadonlyArray<{ key: string }> | null) =>
-    locks?.some((lock) => lock.key === key) ?? false
-  return (
-    lanes.waiting.some((entry) => holds(entry.locks)) ||
-    (!waitingOnly && lanes.active.some((entry) => holds(entry.locks)))
-  )
-}
-
 /**
  * Asks for an app's deployment after a push, a poll, or an image update
- * found due. The request is recorded before this returns, joining the one
- * already waiting, so none is lost behind a deployment or across a
- * restart; then a deployment takes its turn for it, unless one already
- * waits, which reads the newest request when its turn comes.
+ * found due. The request is recorded, joining the one already waiting,
+ * and a deployment queued for it, recorded too, so none is lost behind a
+ * deployment or across a restart: every request asked while the same
+ * deployments are behind it joins the one deployment, which reads the
+ * newest request when its turn comes.
  */
 export const queueAppDeploymentEffect = Effect.fn("Apps.deploy.queue")(
   function* (
@@ -1000,43 +1002,33 @@ export const queueAppDeploymentEffect = Effect.fn("Apps.deploy.queue")(
     trigger: "poll" | "push" | "update",
     pinned?: { commitSha: string; source: string }
   ) {
-    yield* requestAppDeploymentEffect({
+    const acknowledged = yield* requestAppDeploymentEffect({
       appId,
       ...(pinned && { pinned }),
       relayId,
       trigger,
     })
-    submitQueuedDeployment(appId, relayId)
+    yield* queueRequestedDeployment(appId, relayId, acknowledged)
   }
 )
 
-// Started on its own: it waits its turn, which whatever asked doesn't.
-function submitQueuedDeployment(appId: string, relayId: string): void {
-  if (deploymentQueued(relayId, appId, true)) return
-  outsideOperation(() =>
-    forkAppWorker(
-      startDurableOperation(
-        deployAppOperation,
-        { appId, relayId },
-        { initiator: "system" }
-      ).pipe(
-        Effect.asVoid,
-        Effect.catchCause((cause) =>
-          logException(Cause.squash(cause), {
-            operation: "Apps.deploy.queue",
-            attributes: { "app.id": appId, "relay.id": relayId },
-          })
-        )
-      )
-    )
+// The deployment that takes up an app's request past `acknowledged`.
+const queueRequestedDeployment = (
+  appId: string,
+  relayId: string,
+  acknowledged: number
+): Effect.Effect<string, DatabaseError, Database> =>
+  queueDurableOperation(
+    deployAppOperation,
+    { appId, relayId },
+    { idempotencyKey: `request:${relayId}/${appId}:${acknowledged}` }
   )
-}
 
 /**
- * Deploys an app for a person, who may manage it, as they asked: it takes
- * its turn behind a deployment running, and shows as queued until then, so
- * this returns at once rather than wait for it. A new app deploys once its
- * Relay has provisioned it. Checked now, and again once it has its turn.
+ * Deploys an app for a person, who may manage it, as they asked: recorded
+ * now, it takes its turn behind a deployment running and shows as queued
+ * until then, so this returns at once. A new app deploys once its Relay
+ * has provisioned it. Checked now, and again once it has its turn.
  */
 export const queuePersonDeploymentEffect = Effect.fn("Apps.deploy.person")(
   function* (
@@ -1048,39 +1040,28 @@ export const queuePersonDeploymentEffect = Effect.fn("Apps.deploy.person")(
       relayId: string
     }
   ) {
-    const authorize = promiseEffect(() =>
-      requireRelayPermission({
+    const operationId = yield* queueDurableOperation(
+      deployAppOperation,
+      {
         appId: input.appId,
-        permission: "app.manage",
+        explicit: input.explicit,
         relayId: input.relayId,
-        user,
-      })
-    )
-    yield* authorize
-    outsideOperation(() =>
-      forkAppWorker(
-        startDurableOperation(
-          deployAppOperation,
-          {
+        ...(input.awaitProvisioning && { awaitProvisioning: true }),
+      },
+      {
+        actorId: user.id,
+        authorize: promiseEffect(() =>
+          requireRelayPermission({
             appId: input.appId,
-            explicit: input.explicit,
+            permission: "app.manage",
             relayId: input.relayId,
-            ...(input.awaitProvisioning && { awaitProvisioning: true }),
-          },
-          { actorId: user.id, authorize, initiator: "system" }
-        ).pipe(
-          Effect.asVoid,
-          Effect.catchCause((cause) =>
-            logException(Cause.squash(cause), {
-              operation: "Apps.deploy.person",
-              attributes: { "app.id": input.appId, "relay.id": input.relayId },
-            })
-          )
-        )
-      )
+            user,
+          })
+        ),
+      }
     )
     publishAppDeploymentChange(input.relayId)
-    return { queued: true as const }
+    return { operationId, queued: true as const }
   }
 )
 
@@ -1094,11 +1075,19 @@ export function startAppDeploymentPolling(): void {
   globalThis.kilnAppDeploymentPoller ??= forkAppWorker(
     Effect.gen(function* () {
       for (const record of yield* loadRunningAppDeploymentsEffect()) {
-        if (deploymentQueued(record.relayId, record.appId, false)) continue
+        // Its own operation follows it, while it runs.
+        const operation = yield* loadOperation(record.id)
+        if (operation?.state === "running" || operation?.state === "waiting") {
+          continue
+        }
         yield* checkAppDeploymentEffect(record).pipe(Effect.ignore)
       }
       for (const request of yield* loadAppDeploymentRequestsEffect()) {
-        submitQueuedDeployment(request.appId, request.relayId)
+        yield* queueRequestedDeployment(
+          request.appId,
+          request.relayId,
+          request.acknowledgedRevision
+        )
       }
       const sources = yield* loadAutoDeployGitHubSourcesEffect({
         polled: true,

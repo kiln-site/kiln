@@ -93,9 +93,17 @@ describeMysql("App image updates", () => {
           // Skipping what's no longer on offer does nothing.
           assert.isFalse(yield* skipAppImageUpdateEffect(appId, digest(2)))
 
-          // One update claims each digest, before the Relay hears of it.
-          assert.isTrue(yield* claimImageUpdateEffect(appId, digest(3)))
-          assert.isFalse(yield* claimImageUpdateEffect(appId, digest(3)))
+          // One update claims each digest, before the Relay hears of it; the
+          // same deployment, run again after a restart, still has it.
+          assert.isTrue(
+            yield* claimImageUpdateEffect(appId, digest(3), "deployment-one")
+          )
+          assert.isTrue(
+            yield* claimImageUpdateEffect(appId, digest(3), "deployment-one")
+          )
+          assert.isFalse(
+            yield* claimImageUpdateEffect(appId, digest(3), "deployment-two")
+          )
 
           // Still, once the app's history has pruned every record of it.
           for (let index = 1; index <= 200; index += 1) {
@@ -121,7 +129,9 @@ describeMysql("App image updates", () => {
               triggeredBy: null,
             })
           }
-          assert.isFalse(yield* claimImageUpdateEffect(appId, digest(3)))
+          assert.isFalse(
+            yield* claimImageUpdateEffect(appId, digest(3), "deployment-two")
+          )
         })
     )
   })

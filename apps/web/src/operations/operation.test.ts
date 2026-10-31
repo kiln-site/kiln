@@ -11,6 +11,7 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import "@/lib/resource-deletion.server"
 import {
   durableOperation,
+  queueDurableOperation,
   restoreLockingOperations,
   startDurableOperation,
 } from "./durable"
@@ -553,6 +554,59 @@ describeMysql("Hearth operations", () => {
           ).pipe(Effect.flip)
           assert.strictEqual((again as Error).message, "No longer allowed")
           yield* finishOperation(kept, "succeeded")
+        }).pipe(TestClock.withLive)
+    )
+
+    it.effect(
+      "records a queued durable change before its turn, then runs it",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const release = yield* Deferred.make<void>()
+          const holder = yield* runOperation(
+            holding("test.deploy", "Deploying this game server", [
+              exclusive(partKey(server, "deploy")),
+            ]),
+            release,
+            { user: person }
+          ).pipe(Effect.forkChild({ startImmediately: true }))
+          yield* Effect.yieldNow
+          const queued = durableOperation({
+            input: Schema.Struct({}),
+            kind: "test.durable.queued",
+            locks: () => [exclusive(partKey(server, "deploy"))],
+            run: () => Effect.void,
+            version: 1,
+          })
+          const state = findOperation("test.durable.queued", "queued").pipe(
+            Effect.map((found) => found?.state)
+          )
+
+          // Recorded at once, waiting behind the deploy, and kept to one
+          // by its key.
+          const id = yield* queueDurableOperation(
+            queued,
+            {},
+            { idempotencyKey: "queued" }
+          )
+          assert.strictEqual(
+            yield* queueDurableOperation(
+              queued,
+              {},
+              { idempotencyKey: "queued" }
+            ),
+            id
+          )
+          assert.strictEqual(yield* state, "waiting")
+
+          // Its turn comes: it starts, holding its lanes.
+          yield* Deferred.succeed(release, undefined)
+          yield* Fiber.join(holder)
+          yield* state.pipe(
+            Effect.repeat({ until: (now) => now === "running" }),
+            Effect.timeout("5 seconds")
+          )
+          yield* finishOperation(id, "succeeded")
         }).pipe(TestClock.withLive)
     )
 

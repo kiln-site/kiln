@@ -227,6 +227,7 @@ const stateLabels: Record<OperationView["state"], string> = {
   interrupted: "Cut off",
   running: "Running",
   succeeded: "Done",
+  waiting: "Queued",
 }
 
 function StateBadge({ state }: { state: OperationView["state"] }) {

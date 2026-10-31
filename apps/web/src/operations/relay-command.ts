@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 
 import type { RelayControlOperation } from "@workspace/contracts"
 import { RelayOperationLookupSchema } from "@workspace/contracts"
-import { Clock, Duration, Effect, Schedule, Schema } from "effect"
+import { Clock, Duration, Effect, Result, Schedule, Schema } from "effect"
 import { Activity } from "effect/workflow"
 
 import { RelayUnavailableError } from "@/effect/errors"
@@ -31,6 +31,11 @@ export class RelayCommandError extends Schema.TaggedError<RelayCommandError>()(
 // under its ID if the Relay never saw it.
 const RESEND_WITHIN = Duration.days(6)
 
+// A change the Relay withdrew before it ran, and how many times one is sent
+// again under a new ID before its step gives up.
+const WITHDRAWN = "operation_withdrawn"
+const MAX_WITHDRAWN = 5
+
 /**
  * Whether a Relay error means trying again later: the connection failed,
  * the Relay is paused, or it said to. Its refusals, which arrive as the same
@@ -56,7 +61,8 @@ export function relayIsAway(error: unknown): boolean {
  * - still running: waited on;
  * - done: its reply, while the Relay still has it, else `recover`, which
  *   reads back what the reply would have said;
- * - withdrawn before it ran: sent again, under the same ID;
+ * - withdrawn before it ran: sent again, under a new ID, since the Relay
+ *   keeps the withdrawn one's outcome under its own;
  * - failed or interrupted: the step fails with why;
  * - the journal is another, because the Relay was paired again or its state
  *   rebuilt: nobody can say whether it ran, so the step fails.
@@ -81,34 +87,45 @@ export const relayCommand = <A = unknown, R = never>(options: {
   readonly recover?: Effect.Effect<A, RelayCommandError, R>
 }) =>
   Effect.gen(function* () {
-    const command = yield* Activity.make({
-      name: `${options.name}/command`,
-      success: CommandSchema,
-      error: RelayCommandError,
-      execute: Effect.gen(function* () {
-        const relay = yield* promiseEffect(() => activeRelay(options.relayId))
-        const journal = yield* promiseEffect(() => relayJournal(relay))
-        // Without one, a lost reply couldn't be told from a forgotten change.
-        if (!journal) {
-          return yield* new RelayCommandError({
-            code: "journal_unnamed",
-            message: "The Relay didn't name its journal of changes",
-            retryable: false,
-          })
-        }
-        return {
-          id: randomUUID(),
-          journal,
-          sentAt: yield* Clock.currentTimeMillis,
-        }
-      }).pipe(retryWhileAway, asCommandError),
-    })
-    return yield* Activity.make({
-      name: options.name,
-      success: options.success ?? (Schema.Unknown as Schema.Codec<A, unknown>),
-      error: RelayCommandError,
-      execute: settle(options, command),
-    })
+    // Each attempt under a command ID of its own: one the Relay withdrew
+    // before it ran is sent again under a new one, since the Relay keeps
+    // the withdrawn one's outcome under its ID.
+    for (let attempt = 0; ; attempt++) {
+      const step = attempt === 0 ? options.name : `${options.name}/${attempt}`
+      const command = yield* Activity.make({
+        name: `${step}/command`,
+        success: CommandSchema,
+        error: RelayCommandError,
+        execute: Effect.gen(function* () {
+          const relay = yield* promiseEffect(() => activeRelay(options.relayId))
+          const journal = yield* promiseEffect(() => relayJournal(relay))
+          // Without one, a lost reply couldn't be told from a forgotten change.
+          if (!journal) {
+            return yield* new RelayCommandError({
+              code: "journal_unnamed",
+              message: "The Relay didn't name its journal of changes",
+              retryable: false,
+            })
+          }
+          return {
+            id: randomUUID(),
+            journal,
+            sentAt: yield* Clock.currentTimeMillis,
+          }
+        }).pipe(retryWhileAway, asCommandError),
+      })
+      const outcome = yield* Activity.make({
+        name: step,
+        success:
+          options.success ?? (Schema.Unknown as Schema.Codec<A, unknown>),
+        error: RelayCommandError,
+        execute: settle(options, command),
+      }).pipe(Effect.result)
+      if (Result.isSuccess(outcome)) return outcome.success
+      if (outcome.failure.code !== WITHDRAWN || attempt >= MAX_WITHDRAWN) {
+        return yield* outcome.failure
+      }
+    }
   }).pipe(
     Effect.withSpan("Operations.relayCommand", {
       attributes: {
@@ -244,8 +261,13 @@ const settle = <A, R>(
             retryable: false,
           })
         case "failed":
+          // Withdrawn before it ran: sent again under a new ID.
           if (outcome.code === "operation_withdrawn") {
-            return yield* decode(yield* send)
+            return yield* new RelayCommandError({
+              code: WITHDRAWN,
+              message: outcome.message,
+              retryable: true,
+            })
           }
           return yield* new RelayCommandError({
             code: outcome.code,

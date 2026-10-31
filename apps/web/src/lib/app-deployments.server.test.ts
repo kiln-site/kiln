@@ -9,7 +9,7 @@ import {
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
-import { startDurableOperation } from "@/operations/durable"
+import { queueDurableOperation } from "@/operations/durable"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertRows, insertUser } from "@/test/seed"
@@ -130,11 +130,11 @@ const seedApp = (appId: string) =>
 const deploy = (appId: string) =>
   Effect.promise(() => import("@/lib/app-deployments.server")).pipe(
     Effect.flatMap(({ deployAppOperation }) =>
-      startDurableOperation(
-        deployAppOperation,
-        { appId, explicit: { trigger: "manual", userId: null }, relayId },
-        { initiator: "system" }
-      )
+      queueDurableOperation(deployAppOperation, {
+        appId,
+        explicit: { trigger: "manual", userId: null },
+        relayId,
+      })
     )
   )
 
@@ -177,9 +177,7 @@ describeMysql("App deployments", () => {
 
           // Another deploy of the same app waits its turn; another app's
           // goes ahead meanwhile.
-          yield* deploy(first).pipe(
-            Effect.forkChild({ startImmediately: true })
-          )
+          yield* deploy(first)
           yield* deploy(second)
           yield* until(() => sentTo(second) === 1)
           yield* Effect.sleep("3 seconds")

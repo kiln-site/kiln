@@ -480,6 +480,8 @@ function toDeployment(row: DeploymentRow): AppDeploymentRecord {
 
 /** What an app's pending deployment request asks for. */
 export interface AppDeploymentRequestRow {
+  /** The revision its deployments have taken up to. */
+  readonly acknowledgedRevision: number
   readonly appId: string
   /** The commit the newest push asked for; a poll deploys its branch head. */
   readonly commitSha: string | null
@@ -495,6 +497,7 @@ export interface AppDeploymentRequestRow {
 }
 
 interface RequestRow extends RowDataPacket {
+  acknowledged_revision: number | string
   app_id: string
   commit_sha: string | null
   commit_source: string | null
@@ -506,7 +509,7 @@ interface RequestRow extends RowDataPacket {
 }
 
 const requestColumns =
-  "app_id, relay_id, push, poll, image_update, commit_sha, commit_source, revision"
+  "app_id, relay_id, push, poll, image_update, commit_sha, commit_source, revision, acknowledged_revision"
 
 // One taken is kept, with what it acknowledged, so a request is waiting
 // while its revision is ahead of that.
@@ -514,6 +517,7 @@ const requestPending = "revision > acknowledged_revision"
 
 function toRequest(row: RequestRow): AppDeploymentRequestRow {
   return {
+    acknowledgedRevision: Number(row.acknowledged_revision),
     appId: row.app_id,
     commitSha: row.commit_sha,
     commitSource: row.commit_source,
@@ -529,7 +533,7 @@ function toRequest(row: RequestRow): AppDeploymentRequestRow {
  * Records that an app should deploy, joining the request already waiting:
  * every kind asked for is kept, a push pins its commit, the newest push's
  * winning, and the revision counts this one. One already taken starts
- * afresh.
+ * afresh. Returns the revision its deployments have taken up to.
  */
 export const requestAppDeploymentEffect = Effect.fn("apps.deployment.request")(
   function* (input: {
@@ -548,9 +552,12 @@ export const requestAppDeploymentEffect = Effect.fn("apps.deployment.request")(
     }
     // Assigned in order, so each reads whether the request was still
     // waiting before its revision moves on.
-    yield* database.execute(
+    return yield* database.transaction(
       "apps.deployment.request",
-      `INSERT INTO ${databaseTable("app_deployment_request")}
+      (transaction) =>
+        Effect.gen(function* () {
+          yield* transaction.execute(
+            `INSERT INTO ${databaseTable("app_deployment_request")}
          (app_id, relay_id, push, poll, image_update, commit_sha,
           commit_source, revision, requested_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
@@ -566,16 +573,29 @@ export const requestAppDeploymentEffect = Effect.fn("apps.deployment.request")(
            IF(${requestPending}, commit_sha, NULL)),
          requested_at = VALUES(requested_at),
          revision = revision + 1`,
-      [
-        input.appId,
-        input.relayId,
-        kinds.push,
-        kinds.poll,
-        kinds.imageUpdate,
-        input.pinned?.commitSha ?? null,
-        input.pinned?.source ?? null,
-        now,
-      ]
+            [
+              input.appId,
+              input.relayId,
+              kinds.push,
+              kinds.poll,
+              kinds.imageUpdate,
+              input.pinned?.commitSha ?? null,
+              input.pinned?.source ?? null,
+              now,
+            ]
+          )
+          // What its deployments have taken up to, which names the one that
+          // takes it up.
+          const [row] = yield* transaction.queryRows<
+            RowDataPacket & { acknowledged_revision: number | string }
+          >(
+            `SELECT acknowledged_revision
+             FROM ${databaseTable("app_deployment_request")}
+            WHERE app_id = ?`,
+            [input.appId]
+          )
+          return Number(row?.acknowledged_revision ?? 0)
+        })
     )
   }
 )
