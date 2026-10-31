@@ -2,6 +2,7 @@ import { layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect, vi } from "vite-plus/test"
 
+import type { AuthenticatedUser } from "@/lib/auth-session"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, insertUser, selectRows } from "@/test/seed"
 
@@ -152,6 +153,55 @@ describeMysql("browser accounts", () => {
             attacker.request("/get-session").then((response) => response.json())
           )
           expect(session.user.id).toBe("mallory")
+        }),
+      { timeout: 30_000 }
+    )
+
+    it.effect(
+      "signs out only the chosen account, and only on its own browser",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* seedAccount("alice")
+          yield* seedAccount("bob")
+          yield* seedAccount("mallory")
+          const browser = new Browser()
+          const attacker = new Browser()
+          yield* Effect.promise(() => browser.signIn("alice@example.test"))
+          yield* Effect.promise(() => browser.signIn("bob@example.test"))
+          yield* Effect.promise(() => attacker.signIn("mallory@example.test"))
+
+          const { listBrowserAccounts } = yield* Effect.promise(
+            () => import("@/lib/browser-accounts.server")
+          )
+          const { signOutBrowserAccountOperation } = yield* Effect.promise(
+            () => import("@/server/account-access.server")
+          )
+          const { runOperation } = yield* Effect.promise(
+            () => import("@/operations/operation")
+          )
+          const [alice] = yield* Effect.promise(() =>
+            listBrowserAccounts(browser.headers())
+          )
+          const signOut = (from: Browser, userId: string) =>
+            runOperation(
+              signOutBrowserAccountOperation,
+              { headers: from.headers(), sessionId: alice.sessionId },
+              { user: { id: userId } as AuthenticatedUser }
+            )
+
+          // Another browser can't end a session by its ID.
+          const refused = yield* signOut(attacker, "mallory").pipe(Effect.flip)
+          expect(refused).toBeInstanceOf(Error)
+          const sessions = () =>
+            selectRows<{ userId: string }>("session").pipe(
+              Effect.map((rows) => rows.map(({ userId }) => userId).sort())
+            )
+          expect(yield* sessions()).toEqual(["alice", "bob", "mallory"])
+
+          // Bob, active, signs Alice out of the browser they share.
+          yield* signOut(browser, "bob")
+          expect(yield* sessions()).toEqual(["bob", "mallory"])
         }),
       { timeout: 30_000 }
     )

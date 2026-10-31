@@ -323,6 +323,26 @@ export const approveCliAuthorizationEffect = Effect.fn("cli.device.approve")(
   }
 )
 
+/**
+ * The authorization request a code names, by its ID, if there is one. Its
+ * code and the code's hash stay out of lane keys, which reach the logs.
+ */
+export const cliDeviceRequestIdEffect = Effect.fnUntraced(function* (
+  userCode: string
+) {
+  const normalized = normalizeUserCode(userCode)
+  if (!isUserCode(normalized)) return null
+  const database = yield* Database
+  const rows = yield* database.queryRows<RowDataPacket & { id: string }>(
+    "cli.device.find",
+    `SELECT id FROM ${databaseTable("cli_device")}
+      WHERE user_code_hash = ?
+      LIMIT 1`,
+    [digest(normalized)]
+  )
+  return rows[0]?.id ?? null
+})
+
 export const denyCliAuthorizationEffect = Effect.fn("cli.device.deny")(
   function* (input: { user: AuthenticatedUser; userCode: string }) {
     if (input.user.isDevelopmentBypass) {

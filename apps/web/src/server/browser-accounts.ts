@@ -6,11 +6,12 @@ import {
   listBrowserAccounts,
   rememberActiveBrowserAccount,
   resumeBrowserAccount,
-  signOutBrowserAccount,
   switchBrowserAccount,
 } from "@/lib/browser-accounts.server"
 import type { BrowserAccount } from "@/lib/browser-accounts"
 import { getAuthenticatedUserFromHeaders } from "@/lib/auth-session"
+import { runOperationPromise } from "@/operations/operation"
+import { signOutBrowserAccountOperation } from "@/server/account-access.server"
 import { requireAuthenticatedUser } from "@/server/auth"
 
 const browserSessionInput = z.object({
@@ -31,8 +32,11 @@ export const switchBrowserAccountSession = createServerFn({ method: "POST" })
 export const signOutBrowserAccountSession = createServerFn({ method: "POST" })
   .validator(browserSessionInput)
   .handler(async ({ data }) => {
-    await requireAuthenticatedUser()
-    await signOutBrowserAccount(getRequestHeaders(), data.sessionId)
+    await runOperationPromise(
+      signOutBrowserAccountOperation,
+      { headers: getRequestHeaders(), sessionId: data.sessionId },
+      { user: await requireAuthenticatedUser() }
+    )
   })
 
 export const resumeBrowserAccountSession = createServerFn({

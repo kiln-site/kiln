@@ -114,6 +114,9 @@ away every part.
 | `instance:<relay>/<id>`           | A game server; `app:`, `database:`, `volume:` likewise |
 | `instance:<relay>/<id>#dns`       | Its DNS records and web routes                         |
 | `user:<id>`                       | An account and its access                              |
+| `user:<id>#session:<id>`          | One of its browser sessions, signing it out            |
+| `user:<id>#cli-credential:<id>`   | One of its linked CLIs, unlinking it                   |
+| `cli-device:<id>`                 | A CLI's request to be linked, by its ID, not its code  |
 | `email:<hash>`                    | Access for an address, before or without an account    |
 | `relay:<id>`                      | A Relay; removing or pairing it takes it whole         |
 | `relay:<id>#settings`             | Its name, pausing and connection settings              |
