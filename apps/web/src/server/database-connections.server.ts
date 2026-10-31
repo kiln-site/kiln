@@ -15,7 +15,7 @@ import {
 } from "@/server/managed-database-access"
 
 // What changing a member's connections takes of the member itself.
-const memberPermission = {
+export const memberPermission = {
   app: "app.manage",
   database: "database.network.write",
   instance: "instance.network.write",

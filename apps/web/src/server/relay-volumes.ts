@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { createServerFn } from "@tanstack/react-start"
+import { Effect } from "effect"
 import {
   RELAY_VOLUME_REFERENCES_PENDING,
   relayIdSchema,
@@ -12,6 +13,10 @@ import {
 import { z } from "zod"
 
 import { importRelayAppVolumeReferencesEffect } from "@/effect/managed-apps"
+import { promiseEffect } from "@/effect/promise"
+import { requireRelayPermission } from "@/lib/access-control"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import { backupTargetKey } from "@/lib/backup-lanes"
 import { runAppEffect } from "@/effect/runtime"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
 import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
@@ -21,7 +26,14 @@ import {
 } from "@/lib/resource-deletion.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
-import { databaseRpc } from "@/server/managed-database-access"
+import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
+import { requireEligibleResourceUser } from "@/server/auth"
+import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
 import { authorizedRelay } from "@/server/relay-access"
 
 const targetSchema = z.object({ relayId: relayIdSchema })
@@ -63,45 +75,114 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
     }
   })
 
-export const createRelayVolume = createServerFn({ method: "POST" })
-  .validator(targetSchema.extend({ name: relayVolumeNameSchema }))
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedRelay(
-      data.relayId,
-      "relay.configure"
-    )
-    await requireRelayVolumes(relay.id)
-    const volume = relayVolumeSchema.parse(
-      await databaseRpc(
-        relay,
-        "relay.volumes.create",
-        { id: randomBytes(20).toString("hex"), name: data.name },
-        30_000,
-        user.id
+const createVolumeSchema = targetSchema.extend({ name: relayVolumeNameSchema })
+const renameVolumeSchema = volumeSchema.extend({ name: relayVolumeNameSchema })
+
+// The person an operation runs for, who may configure the Relay.
+const relayConfigurator = (user: AuthenticatedUser | null, relayId: string) =>
+  signedIn(user).pipe(
+    Effect.tap((person) =>
+      promiseEffect(() =>
+        requireRelayPermission({
+          permission: "relay.configure",
+          relayId,
+          user: person,
+        })
       )
     )
-    publishRelayVolumesChange(relay.id)
-    return volume
-  })
+  )
+
+// Holds the volume it creates, by the ID it settles first, and its Relay
+// shared, so the Relay isn't removed meanwhile.
+const createVolume = operation<z.infer<typeof createVolumeSchema>>()({
+  name: "volume.create",
+  doing: "Creating this volume",
+  authorize: ({ input, user }) =>
+    relayConfigurator(user, input.relayId).pipe(
+      Effect.map((person) => ({
+        id: randomBytes(20).toString("hex"),
+        user: person,
+      }))
+    ),
+  locks: ({ context, input }) => [
+    exclusive(resourceKey("volume", input.relayId, context.id)),
+    shared(relayKey(input.relayId)),
+  ],
+  run: ({ context: { id, user }, input: data }) =>
+    promiseEffect(async () => {
+      const relay = await requiredRelay(data.relayId)
+      await requireRelayVolumes(relay.id)
+      const volume = relayVolumeSchema.parse(
+        await databaseRpc(
+          relay,
+          "relay.volumes.create",
+          { id, name: data.name },
+          30_000,
+          user.id
+        )
+      )
+      publishRelayVolumesChange(relay.id)
+      return volume
+    }),
+  audit: ({ context, input }) => ({
+    id: context.id,
+    kind: "volume",
+    relayId: input.relayId,
+  }),
+})
+
+export const createRelayVolume = createServerFn({ method: "POST" })
+  .validator(createVolumeSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(createVolume, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+// Holds what the volume belongs to: itself, or the App that owns it, whose
+// deletion takes it.
+const renameVolume = operation<z.infer<typeof renameVolumeSchema>>()({
+  name: "volume.rename",
+  doing: "Renaming this volume",
+  authorize: ({ input, user }) => relayConfigurator(user, input.relayId),
+  locks: ({ input }) => [
+    exclusive(
+      backupTargetKey(input.relayId, { id: input.volumeId, kind: "volume" })
+    ),
+  ],
+  run: ({ context: user, input: data }) =>
+    promiseEffect(() => renameVolumeHandler(user, data)),
+  audit: ({ input }) => ({
+    id: input.volumeId,
+    kind: "volume",
+    relayId: input.relayId,
+  }),
+})
 
 export const renameRelayVolume = createServerFn({ method: "POST" })
-  .validator(volumeSchema.extend({ name: relayVolumeNameSchema }))
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedRelay(
-      data.relayId,
-      "relay.configure"
-    )
-    await requireRelayVolumes(relay.id)
-    await databaseRpc(
-      relay,
-      "relay.volumes.rename",
-      { id: data.volumeId, name: data.name },
-      30_000,
-      user.id
-    )
-    publishRelayVolumesChange(relay.id)
-    return { renamed: true }
-  })
+  .validator(renameVolumeSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(renameVolume, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+async function renameVolumeHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof renameVolumeSchema>
+) {
+  const relay = await requiredRelay(data.relayId)
+  await requireRelayVolumes(relay.id)
+  await databaseRpc(
+    relay,
+    "relay.volumes.rename",
+    { id: data.volumeId, name: data.name },
+    30_000,
+    user.id
+  )
+  publishRelayVolumesChange(relay.id)
+  return { renamed: true }
+}
 
 export const deleteRelayVolume = createServerFn({ method: "POST" })
   .validator(
