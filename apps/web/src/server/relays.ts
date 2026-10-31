@@ -39,7 +39,6 @@ import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { outsideOperation } from "@/operations/current"
 import { exclusive, partKey, relayKey } from "@/operations/lanes"
 import {
   operation,
@@ -334,47 +333,43 @@ export const setRelayEnabled = createServerFn({ method: "POST" })
     })
   )
 
-// Holds the whole Relay, so nothing else changes it while it goes; its
-// domains and backups are let go of after.
+// Deletes the Relay holding it whole, so nothing else changes it
+// meanwhile. Its domains and backups are let go of once it's gone.
 const deleteRelay = operation<z.infer<typeof removeRelaySchema>>()({
   name: "relay.remove",
   doing: "Removing this Relay",
   authorize: ({ input, user }) =>
     relayAdministration(user, input.id, "relay.delete"),
   locks: ({ input }) => [exclusive(relayKey(input.id))],
-  run: ({ input }) => promiseEffect(() => removeRelayAndCleanUp(input)),
+  run: ({ input }) =>
+    promiseEffect(async () => {
+      const { deletePersistedRelay } = await import("@/lib/relay-registry")
+      await deletePersistedRelay(input.id)
+    }),
   audit: ({ input }) => relayAudit(input.id),
 })
 
 export const removeRelay = createServerFn({ method: "POST" })
   .validator(removeRelaySchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(deleteRelay, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
-
-async function removeRelayAndCleanUp(data: z.infer<typeof removeRelaySchema>) {
-  const { deletePersistedRelay } = await import("@/lib/relay-registry")
-  return removeRelayThenCleanup(
-    {
-      forgetBackups: data.forgetBackups,
-      relayId: data.id,
-      removeVanityDomains: data.removeVanityDomains,
-    },
-    {
-      deleteRelay: () => deletePersistedRelay(data.id),
-      forgetBackups: async () => {
-        const { forgetRelayBackupsEffect } = await import("@/effect/backups")
-        return runAppEffect(
-          "backups.forgetRelay",
-          forgetRelayBackupsEffect(data.id)
-        )
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    return removeRelayThenCleanup(
+      {
+        forgetBackups: data.forgetBackups,
+        relayId: data.id,
+        removeVanityDomains: data.removeVanityDomains,
       },
-      // Each name goes under its resource's DNS lock, which removing the
-      // Relay doesn't hold, so it takes those itself, as Hearth's own work.
-      removeManagedDomains: () =>
-        outsideOperation(async () => {
+      {
+        deleteRelay: () => runOperationPromise(deleteRelay, data, { user }),
+        forgetBackups: async () => {
+          const { forgetRelayBackupsEffect } = await import("@/effect/backups")
+          return runAppEffect(
+            "backups.forgetRelay",
+            forgetRelayBackupsEffect(data.id)
+          )
+        },
+        // Each name goes under its resource's DNS lock.
+        removeManagedDomains: async () => {
           const [
             { removeRelayManagedDomainsEffect },
             { removeRelayWebHostnamesEffect },
@@ -393,10 +388,10 @@ async function removeRelayAndCleanUp(data: z.infer<typeof removeRelaySchema>) {
             removeRelayWebHostnamesEffect(data.id, data.removeVanityDomains)
           )
           return domains + hostnames
-        }),
-    }
-  )
-}
+        },
+      }
+    )
+  })
 
 const relayJoinIdSchema = z.object({
   joinId: z.string().regex(relayJoinIdPattern),
