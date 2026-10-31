@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto"
-
 import {
   relayAppGitHubV1Feature,
   relayAppDeploymentLogSchema,
@@ -24,6 +22,7 @@ import {
   finishAppDeploymentEffect,
   insertAppDeploymentEffect,
   latestAppDeploymentsEffect,
+  loadAppDeploymentEffect,
   loadAppGitHubSourceEffect,
   loadAppDeploymentRequestsEffect,
   loadAutoDeployGitHubSourcesEffect,
@@ -283,8 +282,11 @@ const runningRecord = (
   trigger: plan.record.trigger as AppDeploymentTrigger,
 })
 
-// A GitHub deployment that failed before it knew what it deploys.
+// A deployment that failed before it knew what it deploys, recorded by the
+// operation's ID, as the one it would have been, so recording it again
+// changes nothing.
 const recordRefusal = (
+  id: string,
   request: AppDeploymentRequest,
   relayId: string,
   cause: unknown
@@ -300,7 +302,7 @@ const recordRefusal = (
           commitSha: null,
           error: cause instanceof Error ? cause.message : String(cause),
           finishedAt: new Date(now).toISOString(),
-          id: randomUUID(),
+          id,
           imageDigest: null,
           relayDeploymentId: null,
           relayId,
@@ -810,6 +812,11 @@ const takeTurn = (
       Effect.retry({ schedule: whileMySqlIsAway })
     )
     if (!taken) return null
+    // Its step run again, after it refused what it took: refused still.
+    const recorded = yield* loadAppDeploymentEffect(id).pipe(
+      Effect.retry({ schedule: whileMySqlIsAway })
+    )
+    if (recorded) return null
     const asked: AppDeploymentRequest = {
       appId: input.appId,
       relayId: input.relayId,
@@ -865,7 +872,7 @@ const takeTurn = (
       Effect.catchCause((cause) => {
         const failure = Cause.squash(cause)
         if (request.trigger !== "poll") {
-          return recordRefusal(request, input.relayId, failure).pipe(
+          return recordRefusal(id, request, input.relayId, failure).pipe(
             Effect.as(null)
           )
         }
