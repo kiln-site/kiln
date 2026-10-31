@@ -47,6 +47,7 @@ import { scheduleAppTargets } from "./0046_schedule_app_targets"
 import { simpleOperations } from "./0047_simple_operations"
 import { operationLocks } from "./0048_operation_locks"
 import { appDeploymentRequests } from "./0049_app_deployment_requests"
+import { githubSyncQueuedTrigger } from "./0050_github_sync_queued_trigger"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -97,4 +98,5 @@ export const migrations: ReadonlyArray<Migration> = [
   simpleOperations,
   operationLocks,
   appDeploymentRequests,
+  githubSyncQueuedTrigger,
 ]

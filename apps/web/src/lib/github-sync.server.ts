@@ -25,13 +25,17 @@ import {
   loadGitHubConnectionCredentialEffect,
   loadGitHubSyncEffect,
   loadPolledGitHubSyncsEffect,
+  loadQueuedGitHubSyncIdsEffect,
+  queueGitHubSyncEffect,
   recordGitHubSyncResultEffect,
   restoreGitHubSyncEffect,
   recordGitHubSyncAttemptEffect,
+  takeQueuedGitHubSyncEffect,
+  type GitHubSyncResourceKind,
   type GitHubSyncTrigger,
   setGitHubSyncStatusEffect,
 } from "@/effect/github-sync"
-import { forkAppWorker } from "@/effect/runtime"
+import { forkAppWorker, runAppEffect } from "@/effect/runtime"
 import {
   githubConnectionKey,
   githubSyncKey,
@@ -233,19 +237,6 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
         new Error(`Couldn't write ${target}: ${syncFailureMessage(cause)}`),
     }).pipe(Effect.map((result) => relayFilePutResultSchema.parse(result)))
 
-  const fileLocks = [
-    exclusive(partKey(githubSyncKey(sync.id), "files")),
-    // The Relay keeps file writes in order; this keeps what's written into
-    // from being replaced or removed meanwhile.
-    shared(
-      githubSyncTargetKey({
-        kind: sync.resourceKind,
-        relayId: sync.relayId,
-        resourceId: sync.resourceId,
-      })
-    ),
-    shared(githubConnectionKey(sync.connectionId)),
-  ]
   for (const file of toWrite) {
     const previous = recorded[file.target]
     // Recorded just before it's attempted, so a write that lands with its
@@ -264,47 +255,32 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
       file.sha
     ).pipe(
       Effect.flatMap((content) =>
-        // Fetched first; then written holding the sync, what it writes
-        // into, and its connection, so neither changes or goes meanwhile.
-        inLanes(
-          "github.sync.file",
-          "Syncing files from GitHub",
-          fileLocks,
-          Effect.gen(function* () {
-            // A sync deleted since, as with its connection, writes no more.
-            const current = yield* loadGitHubSyncEffect(sync.id).pipe(
-              Effect.option
-            )
-            if (Option.isNone(current)) {
-              return yield* Effect.fail(new Error("This sync was deleted"))
-            }
-            syncedFiles[file.target] = attempt
-            yield* recordGitHubSyncAttemptEffect(sync.id, file.target, attempt)
-            // Without overwrite, only a file Kiln left as it was, or none,
-            // is written; anything else is someone's edit.
-            return yield* putFile(
-              file.target,
-              content,
-              sync.overwrite ? undefined : (previous?.modifiedAt ?? null)
-            ).pipe(
-              Effect.flatMap((result) => {
-                if (!result.conflict) return Effect.succeed(result)
-                const current = result.current?.blob
-                // Content Kiln wrote, or tried to write, is still Kiln's file,
-                // however its time changed: replace it as it now stands.
-                const ours =
-                  current !== undefined &&
-                  current !== null &&
-                  current !== file.sha &&
-                  (current === attempt.blob ||
-                    attempt.pending.includes(current))
-                return ours
-                  ? putFile(file.target, content, result.current!.modifiedAt)
-                  : Effect.succeed(result)
-              })
-            )
-          })
-        )
+        Effect.gen(function* () {
+          syncedFiles[file.target] = attempt
+          yield* recordGitHubSyncAttemptEffect(sync.id, file.target, attempt)
+          // Without overwrite, only a file Kiln left as it was, or none,
+          // is written; anything else is someone's edit.
+          return yield* putFile(
+            file.target,
+            content,
+            sync.overwrite ? undefined : (previous?.modifiedAt ?? null)
+          ).pipe(
+            Effect.flatMap((result) => {
+              if (!result.conflict) return Effect.succeed(result)
+              const current = result.current?.blob
+              // Content Kiln wrote, or tried to write, is still Kiln's file,
+              // however its time changed: replace it as it now stands.
+              const ours =
+                current !== undefined &&
+                current !== null &&
+                current !== file.sha &&
+                (current === attempt.blob || attempt.pending.includes(current))
+              return ours
+                ? putFile(file.target, content, result.current!.modifiedAt)
+                : Effect.succeed(result)
+            })
+          )
+        })
       ),
       Effect.result
     )
@@ -366,91 +342,77 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
 })
 
 declare global {
-  var kilnGitHubSyncDraining: Map<string, object> | undefined
-  var kilnGitHubSyncMarks: Map<string, Fiber.Fiber<void>> | undefined
-  var kilnGitHubSyncQueued: Map<string, GitHubSyncTrigger> | undefined
   var kilnGitHubSyncPoller: Fiber.Fiber<void> | undefined
 }
 
-// The syncs whose runs are being drained now, by this process.
-const draining = (globalThis.kilnGitHubSyncDraining ??= new Map())
-// Each waiting run's status update, which its run waits for.
-const marks = (globalThis.kilnGitHubSyncMarks ??= new Map())
-// The trigger of each sync's waiting run.
-const waiting = (globalThis.kilnGitHubSyncQueued ??= new Map())
+/**
+ * What a sync's run holds, from reading GitHub to recording what it wrote:
+ * its files, its settings shared, so an edit waits for it and it uses the
+ * settings it read, and what it writes into and its connection shared, so
+ * neither is replaced or removed meanwhile.
+ */
+const syncRunLocks = (sync: {
+  connectionId: string
+  id: string
+  relayId: string
+  resourceId: string
+  resourceKind: GitHubSyncResourceKind
+}) => [
+  exclusive(partKey(githubSyncKey(sync.id), "files")),
+  shared(partKey(githubSyncKey(sync.id), "settings")),
+  shared(
+    githubSyncTargetKey({
+      kind: sync.resourceKind,
+      relayId: sync.relayId,
+      resourceId: sync.resourceId,
+    })
+  ),
+  shared(githubConnectionKey(sync.connectionId)),
+]
 
 /**
- * Runs a sync in the background, one run at a time per sync. A trigger
- * arriving while another waits joins it: the waiting run reads the newest
- * commit and settings, and takes the stronger trigger, so a poll can't
- * swallow a manual run or an edit.
+ * Asks for a sync's run. A manual run, edit or push is kept on the sync
+ * until a run takes it, so it shows as queued and survives a restart; a
+ * poll isn't kept. Then a run takes its turn in the sync's lanes, one at a
+ * time: the one that takes what was asked runs it, and one that finds it
+ * taken has nothing to do.
  */
-export function enqueueGitHubSync(
+export async function enqueueGitHubSync(
   syncId: string,
   trigger: GitHubSyncTrigger
-): void {
-  const queued = waiting.get(syncId)
-  if (queued !== undefined) {
-    // The waiting run shows its own status once it starts.
-    if (queued === "poll" && trigger !== "poll") waiting.set(syncId, trigger)
-    return
-  }
-  waiting.set(syncId, trigger)
-  // Marked queued before its run takes it, which waits for the mark, so a
-  // slow update can't land after the run and leave the sync looking queued.
+): Promise<void> {
   if (trigger !== "poll") {
-    marks.set(
-      syncId,
-      outsideOperation(() =>
-        forkAppWorker(
-          setGitHubSyncStatusEffect(syncId, "queued").pipe(
-            Effect.andThen(Effect.sync(publishGitHubSyncChange)),
-            Effect.ignore
-          )
-        )
-      )
+    await runAppEffect(
+      "github.sync.queue",
+      queueGitHubSyncEffect(syncId, trigger)
     )
+    publishGitHubSyncChange()
   }
-  drainGitHubSync(syncId)
+  wakeGitHubSync(syncId, trigger)
 }
 
-// Takes the waiting trigger, or, with none, stops draining in the same
-// step, so a trigger that arrives after always starts a drain of its own.
-const takeWaiting = (syncId: string, token: object) =>
-  Effect.sync(() => {
-    const next = waiting.get(syncId)
-    if (next === undefined) {
-      if (draining.get(syncId) === token) draining.delete(syncId)
-      return undefined
-    }
-    waiting.delete(syncId)
-    return next
-  })
-
-function drainGitHubSync(syncId: string): void {
-  if (draining.has(syncId)) return
-  // Its own, so one that ends never clears the marker of the next.
-  const token = {}
-  draining.set(syncId, token)
-  // Woken by whatever asked, which doesn't wait: each file it writes takes
-  // its own lanes.
+// Woken by whatever asked, which doesn't wait for it.
+function wakeGitHubSync(syncId: string, trigger: GitHubSyncTrigger): void {
   outsideOperation(() =>
     forkAppWorker(
       Effect.gen(function* () {
-        for (;;) {
-          const mark = marks.get(syncId)
-          if (mark) {
-            yield* Fiber.await(mark)
-            if (marks.get(syncId) === mark) marks.delete(syncId)
-          }
-          const next = yield* takeWaiting(syncId, token)
-          if (next === undefined) return
-          yield* runQueuedSync(syncId, next)
-        }
+        const sync = yield* loadGitHubSyncEffect(syncId).pipe(Effect.option)
+        if (Option.isNone(sync)) return
+        yield* inLanes(
+          "github.sync.run",
+          "Syncing files from GitHub",
+          syncRunLocks(sync.value),
+          Effect.gen(function* () {
+            const queued = yield* takeQueuedGitHubSyncEffect(syncId)
+            const next = queued ?? (trigger === "poll" ? "poll" : null)
+            if (next !== null) yield* runQueuedSync(syncId, next)
+          })
+        )
       }).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (draining.get(syncId) === token) draining.delete(syncId)
+        Effect.catchCause((cause) =>
+          logException(Cause.squash(cause), {
+            operation: "github.sync.run",
+            attributes: { "github.sync.id": syncId },
           })
         )
       )
@@ -495,10 +457,15 @@ const runQueuedSync = (syncId: string, next: GitHubSyncTrigger) =>
  */
 export function startGitHubSyncPolling(): void {
   globalThis.kilnGitHubSyncPoller ??= forkAppWorker(
-    loadPolledGitHubSyncsEffect().pipe(
-      Effect.tap((syncs) =>
+    Effect.all([
+      loadPolledGitHubSyncsEffect(),
+      loadQueuedGitHubSyncIdsEffect(),
+    ]).pipe(
+      Effect.tap(([polled, queued]) =>
         Effect.sync(() => {
-          for (const sync of syncs) enqueueGitHubSync(sync.id, "poll")
+          for (const sync of polled) wakeGitHubSync(sync.id, "poll")
+          // Asked for and not yet run, as before a restart.
+          for (const id of queued) wakeGitHubSync(id, "manual")
         })
       ),
       Effect.catchCause((cause) =>

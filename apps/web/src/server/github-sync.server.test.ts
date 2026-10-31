@@ -8,9 +8,16 @@ import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { betterAuthSecrets } from "@/lib/environment"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRows, selectRows } from "@/test/seed"
+import { insertRelay, insertRows, selectRows } from "@/test/seed"
 
 import { encryptWithKeyring } from "../../keyring.mjs"
+
+import {
+  loadGitHubSyncEffect,
+  loadQueuedGitHubSyncIdsEffect,
+  queueGitHubSyncEffect,
+  takeQueuedGitHubSyncEffect,
+} from "@/effect/github-sync"
 
 import {
   completeGitHubInstallation,
@@ -108,6 +115,59 @@ beforeAll(() => {
 afterAll(async () => {
   vi.unstubAllGlobals()
   await disposeAppRuntime()
+})
+
+const syncId = "22222222-2222-4222-8222-222222222222"
+
+describeMysql("GitHub sync runs asked for", () => {
+  layer(TestDatabase)((it) => {
+    it.effect(
+      "keeps a run asked for until one run takes it, across a restart",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertConnection
+          yield* insertRelay("r".repeat(43))
+          yield* insertRows("github_sync", {
+            id: syncId,
+            connection_id: connectionId,
+            relay_id: "r".repeat(43),
+            resource_kind: "app",
+            resource_id: "a".repeat(40),
+            repository_id: 1,
+            repository: "octo/site",
+            branch: "main",
+            include_patterns: "[]",
+            status: "success",
+            synced_files: "{}",
+            created_by: owner.id,
+            created_at: 0,
+            updated_at: 0,
+          })
+
+          // A manual run, then a push while it waits: one run, still asked.
+          yield* queueGitHubSyncEffect(syncId, "manual")
+          yield* queueGitHubSyncEffect(syncId, "push")
+          assert.strictEqual(
+            (yield* loadGitHubSyncEffect(syncId)).status,
+            "queued"
+          )
+          // What a Hearth that restarts finds to run.
+          assert.deepStrictEqual(yield* loadQueuedGitHubSyncIdsEffect(), [
+            syncId,
+          ])
+
+          // The run that takes its turn first takes it; the next finds none.
+          assert.strictEqual(yield* takeQueuedGitHubSyncEffect(syncId), "push")
+          assert.isNull(yield* takeQueuedGitHubSyncEffect(syncId))
+          assert.strictEqual(
+            (yield* loadGitHubSyncEffect(syncId)).status,
+            "success"
+          )
+          assert.deepStrictEqual(yield* loadQueuedGitHubSyncIdsEffect(), [])
+        })
+    )
+  })
 })
 
 describeMysql("GitHub webhooks", () => {

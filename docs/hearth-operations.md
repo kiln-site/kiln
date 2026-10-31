@@ -190,9 +190,14 @@ no state of their own; when each App was last asked is what it recorded.
 Starting an App's deployment holds its `#deploy` and
 `relay:<id>#database-connections` (`appDeploymentLocks`), whoever starts
 it; Hearth's own deployments wait their turn, and the wait for a running
-deployment to end happens with no lane held. A GitHub sync fetches with
-none held, and writes each file holding the sync, its target and its
-connection.
+deployment to end happens with no lane held.
+
+A GitHub sync's run holds the sync's `#files`, and shared its `#settings`,
+its target and its connection, from reading GitHub to recording what it
+wrote, so runs go one at a time and an edit waits for the one running. A
+manual run, edit or push is kept on the sync (`queued_trigger`) until a run
+takes it, so it shows as queued and survives a restart; a run that finds it
+taken has nothing to do.
 
 ## Tracing and metrics
 

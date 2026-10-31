@@ -170,6 +170,7 @@ interface SyncRow extends RowDataPacket {
   resource_kind: GitHubSyncResourceKind
   source_path: string
   status: GitHubSyncStatus
+  queued_trigger: GitHubSyncTrigger | null
   target_path: string
 }
 
@@ -180,7 +181,7 @@ const connectionColumns = `id, owner_user_id, app_id, app_slug, app_name, app_ur
 
 const syncColumns = `id, connection_id, relay_id, resource_kind, resource_id,
   repository_id, repository, branch, source_path, target_path,
-  include_patterns, auto_sync, overwrite, status, last_error,
+  include_patterns, auto_sync, overwrite, status, queued_trigger, last_error,
   last_commit_sha, last_commit_message, last_synced_at, last_changed_count,
   created_by, created_at`
 
@@ -526,6 +527,65 @@ export const setGitHubSyncStatusEffect = Effect.fn("github.sync.status")(
 
 export type GitHubSyncTrigger = "created" | "manual" | "poll" | "push"
 
+/**
+ * Asks for a sync's run, joining one already asked for: the run that takes
+ * it reads the newest commit and settings. Polls aren't kept; each minute
+ * asks again.
+ */
+export const queueGitHubSyncEffect = Effect.fn("github.sync.queue")(function* (
+  id: string,
+  trigger: Exclude<GitHubSyncTrigger, "poll">
+) {
+  const database = yield* Database
+  yield* database.execute(
+    "github.sync.queue",
+    `UPDATE ${databaseTable("github_sync")} SET queued_trigger = ? WHERE id = ?`,
+    [trigger, id]
+  )
+})
+
+/** Takes the run asked for of a sync, if one still waits. */
+export const takeQueuedGitHubSyncEffect = Effect.fn("github.sync.takeQueued")(
+  function* (id: string) {
+    const database = yield* Database
+    return yield* database.transaction(
+      "github.sync.takeQueued",
+      (transaction) =>
+        Effect.gen(function* () {
+          const [row] = yield* transaction.queryRows<
+            RowDataPacket & { queued_trigger: GitHubSyncTrigger | null }
+          >(
+            `SELECT queued_trigger FROM ${databaseTable("github_sync")}
+            WHERE id = ? FOR UPDATE`,
+            [id]
+          )
+          const trigger = row?.queued_trigger ?? null
+          if (trigger !== null) {
+            yield* transaction.execute(
+              `UPDATE ${databaseTable("github_sync")}
+                SET queued_trigger = NULL WHERE id = ?`,
+              [id]
+            )
+          }
+          return trigger
+        })
+    )
+  }
+)
+
+/** The syncs with a run asked for and not yet taken, as after a restart. */
+export const loadQueuedGitHubSyncIdsEffect = Effect.fn("github.syncs.queued")(
+  function* () {
+    const database = yield* Database
+    const rows = yield* database.queryRows<RowDataPacket & { id: string }>(
+      "github.syncs.queued",
+      `SELECT id FROM ${databaseTable("github_sync")}
+        WHERE queued_trigger IS NOT NULL`
+    )
+    return rows.map((row) => row.id)
+  }
+)
+
 /** A finished run, as Automations → History lists it. */
 export interface GitHubSyncRun {
   changedCount: number
@@ -793,7 +853,8 @@ function publicSync(row: SyncRow): GitHubSync {
     resourceId: row.resource_id,
     resourceKind: row.resource_kind,
     sourcePath: row.source_path,
-    status: row.status,
+    // One with a run asked for and not yet taken shows as queued.
+    status: row.queued_trigger === null ? row.status : "queued",
     targetPath: row.target_path,
   }
 }

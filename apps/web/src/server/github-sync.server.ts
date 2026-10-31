@@ -636,7 +636,7 @@ async function saveGitHubSyncHandler(
       "github.sync.update",
       updateGitHubSyncEffect(existing.id, settings)
     )
-    enqueueGitHubSync(existing.id, "manual")
+    await enqueueGitHubSync(existing.id, "manual")
     return { id: existing.id }
   }
   const id = newId
@@ -652,7 +652,7 @@ async function saveGitHubSyncHandler(
       resourceKind: target.kind === "server" ? "instance" : target.kind,
     })
   )
-  enqueueGitHubSync(id, "created")
+  await enqueueGitHubSync(id, "created")
   return { id }
 }
 
@@ -669,10 +669,9 @@ export const runSync = operation<{ id: string }>()({
     ),
   locks: ({ input }) => [shared(githubSyncKey(input.id))],
   run: ({ context: sync }) =>
-    Effect.sync(() => {
-      enqueueGitHubSync(sync.id, "manual")
-      return { queued: true }
-    }),
+    promiseEffect(() => enqueueGitHubSync(sync.id, "manual")).pipe(
+      Effect.as({ queued: true })
+    ),
   audit: ({ input }) => ({ id: input.id, kind: "github-sync" }),
 })
 
@@ -957,7 +956,7 @@ export async function handleGitHubWebhook(request: Request): Promise<Response> {
       const branch = push.value.ref.slice("refs/heads/".length)
       for (const sync of syncs) {
         if (sync.autoSync && sync.branch === branch)
-          enqueueGitHubSync(sync.id, "push")
+          await enqueueGitHubSync(sync.id, "push")
       }
       // A deleted branch has nothing to deploy.
       if (!push.value.deleted) {
