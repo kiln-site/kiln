@@ -104,6 +104,15 @@ Relay changes sent at most once (`relayCommand`).
   resource holds it whole, so nothing else changes it until the deletion
   ends.
 - An idempotency key makes starting it again return the same operation.
+- `queueDurableOperation` queues one for Hearth to run when its turn
+  comes, for work no one waits on: it's recorded `waiting` and returns its
+  ID at once, takes its turn in its lanes as Hearth's own work however long
+  that takes, and is taken up again after a restart. Queued with a `key`,
+  what's asked while it waits joins it, by its definition's `join`, rather
+  than queueing another; it gives up the key as it starts, so what's asked
+  then queues one behind it. Asks during the same work make one run after
+  it, and the pipeline, not the feature, keeps what was asked. One still
+  waiting can be cancelled (`cancelWaitingOperation`).
 - It finishes or fails with a message; there's no paused state.
 
 Hearth runs as one process, and a deploy stops the old one before the new

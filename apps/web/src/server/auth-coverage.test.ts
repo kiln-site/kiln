@@ -555,7 +555,8 @@ function isOperationRun(declaration: ts.Node) {
       : null
   return (
     (file === operationFile && name === "runOperationPromise") ||
-    (file === durableOperationFile && name === "startDurableOperation")
+    (file === durableOperationFile &&
+      (name === "startDurableOperation" || name === "queueDurableOperation"))
   )
 }
 
