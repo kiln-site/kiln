@@ -73,16 +73,19 @@ serve Traefik's default certificate until some other route changed. So:
 - Once Traefik has asked, the Relay doesn't ask again on its own. If Let's
   Encrypt doesn't issue it, as when the name points elsewhere or port 80 is
   closed, someone fixing that clicks the hostname's status to have Traefik
-  ask again, at most four times an hour, within Let's Encrypt's limit of
-  five failed validations per hostname an hour. Retrying on its own is
-  left for later.
+  ask again. That changes Traefik's configuration, so Traefik asks again for
+  every certificate it lacks, not just that one; the Relay does this at most
+  four times an hour in all. Other route changes, and restarts, also have
+  Traefik ask again, so this keeps Kiln's own asks down without promising
+  to stay within Let's Encrypt's limits. Retrying on its own is left for
+  later.
 
 The Relay reports the hostnames still waiting in its snapshot. Hearth shows
 them on the Domains page and beside each web route: **Verifying** while it
 checks and asks, **Waiting for DNS** while the name doesn't resolve, and
-**Unverified** when Traefik asked over two minutes ago and has no
-certificate. Whoever may change the route can click the status to have the
-Relay check again now.
+**Unverified** when Traefik asked over two minutes ago and still has no
+certificate, which most likely means Let's Encrypt refused. Whoever may
+change the route can click the status to have the Relay check again now.
 
 ## Vanity domains
 

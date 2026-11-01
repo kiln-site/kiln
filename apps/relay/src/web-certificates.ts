@@ -13,7 +13,10 @@
  * answer, unlike a resolver. Until then the Relay checks the name now and
  * then, which costs nothing at Let's Encrypt. Once Traefik has asked, the
  * Relay doesn't ask again on its own: someone checking a hostname by hand
- * has Traefik ask again, a few times an hour at most.
+ * has Traefik ask again. That changes Traefik's configuration, which has it
+ * ask again for every certificate it lacks, so the Relay as a whole does so
+ * a few times an hour at most. Other changes to its routes, and restarts,
+ * have Traefik ask again too; this only keeps Kiln's own asks down.
  */
 import { promises as dns } from "node:dns"
 import { readFile, stat } from "node:fs/promises"
@@ -56,8 +59,6 @@ export interface CertificateCheck {
 interface Pending {
   /** Checks of its name that found it missing. */
   attempts: number
-  /** When it was last asked for by hand, within the last hour. */
-  asks: Array<number>
   /** Traefik asked a while ago and has no certificate yet. */
   failed: boolean
   /** When its name is next checked, while it doesn't resolve. */
@@ -78,7 +79,8 @@ const dnsDelayCap = 10 * minute
 // Issuance takes seconds; one still missing after this has most likely failed.
 const issueTime = 2 * minute
 // Let's Encrypt allows five failed validations per hostname an hour; Traefik
-// asking when the route appeared was one.
+// asking when the route appeared was one. Each ask by hand reaches every
+// hostname without a certificate, so the limit is the Relay's.
 const asksPerHour = 4
 
 // Traefik's acme.json: each resolver's certificates. Only their names matter.
@@ -107,6 +109,8 @@ export class WebCertificates {
   // Names Traefik holds a certificate for; null until its store first reads,
   // and while it can't be read, every hostname counts as having one.
   #issued: ReadonlySet<string> | null = null
+  // When Traefik was set asking again by hand, within the last hour.
+  #asks: Array<number> = []
   #retry = 0
   #storeVersion: string | null = null
   #wake: (() => void) | null = null
@@ -150,7 +154,6 @@ export class WebCertificates {
         pending.owner = owner
       } else if (!this.#hasCertificate(hostname)) {
         this.#pending.set(hostname, {
-          asks: [],
           attempts: 0,
           failed: false,
           nextCheckAt: now,
@@ -247,12 +250,16 @@ export class WebCertificates {
         result.rewrite = true
         continue
       }
-      // Asked again by hand, within Let's Encrypt's limit.
-      pending.asks = pending.asks.filter((ask) => ask > resolvedAt - hour)
-      if (pending.asks.length >= asksPerHour) continue
-      pending.asks.push(resolvedAt)
-      pending.failed = false
-      pending.since = resolvedAt
+      // Asked again by hand. Traefik asks again for every certificate it
+      // lacks, so each of them starts over.
+      this.#asks = this.#asks.filter((ask) => ask > resolvedAt - hour)
+      if (this.#asks.length >= asksPerHour) continue
+      this.#asks.push(resolvedAt)
+      for (const other of this.#pending.values()) {
+        if (other.waitingFor !== "certificate") continue
+        other.failed = false
+        other.since = resolvedAt
+      }
       this.#retry += 1
       result.asked = true
       result.changed = true
@@ -398,14 +405,6 @@ async function zoneNameservers(hostname: string): Promise<Array<string>> {
     return [...new Set(addresses.flat())]
   }
   return []
-}
-
-function delay(
-  delays: ReadonlyArray<number>,
-  cap: number,
-  index: number
-): number {
-  return delays[index] ?? cap
 }
 
 function hasCode(cause: unknown, code: string): boolean {

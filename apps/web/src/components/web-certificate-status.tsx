@@ -37,7 +37,7 @@ export function certificatePresentation(
   }
   if (certificate.waitingFor === "certificate" && certificate.failed) {
     return {
-      detail: `Couldn't get a certificate.${canCheck ? "\nClick to retry." : ""}`,
+      detail: `No certificate yet.${canCheck ? "\nClick to retry." : ""}`,
       label: "Unverified",
       tone: "danger",
     }

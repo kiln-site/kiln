@@ -126,26 +126,36 @@ describe("bundled Traefik certificates", () => {
     expect(routerTls()).toEqual({ certResolver: "kiln" })
   })
 
-  it("asks again when someone checks, a few times an hour at most", async () => {
+  it("asks again when someone checks, a few times an hour for the whole Relay", async () => {
+    const other: RelayStoredWebRoute = {
+      ...route,
+      hostname: "blog.example.com",
+      id: "c00d4423",
+    }
     answers.set("shop.example.com", "found")
-    await certificates.track([route])
+    answers.set("blog.example.com", "found")
+    await certificates.track([route, other])
     await certificates.check()
-    // Let's Encrypt didn't issue it, and Traefik doesn't ask again on its own.
+    // Let's Encrypt didn't issue them, and Traefik doesn't ask again on its own.
     vi.setSystemTime(Date.now() + 2 * minute)
     await certificates.check()
     expect(certificates.pending()).toMatchObject([
       { failed: true, waitingFor: "certificate" },
+      { failed: true, waitingFor: "certificate" },
     ])
 
-    const configurations = new Set([traefik()])
+    // Each ask reaches every certificate Traefik lacks, so asks for either
+    // hostname share one limit.
+    const configurations = new Set([traefik([route, other])])
     let asks = 0
     for (let click = 0; click < 10; click += 1) {
-      const { asked } = await certificates.check("shop.example.com")
+      const hostname = click % 2 === 0 ? "shop.example.com" : "blog.example.com"
+      const { asked } = await certificates.check(hostname)
       if (asked) {
         asks += 1
         // A changed configuration is what has Traefik ask again.
-        expect(configurations.has(traefik())).toBe(false)
-        configurations.add(traefik())
+        expect(configurations.has(traefik([route, other]))).toBe(false)
+        configurations.add(traefik([route, other]))
       }
       vi.setSystemTime(Date.now() + minute)
     }
