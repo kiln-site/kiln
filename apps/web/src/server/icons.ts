@@ -14,6 +14,7 @@ import { resolveMinecraftProfileEffect } from "@/effect/minecraft-profile"
 import { runAppEffect } from "@/effect/runtime"
 import {
   detectInstanceIconEffect,
+  iconLaneKey,
   readRelayIconEffect,
   removeCustomIconEffect,
   saveCustomIconEffect,
@@ -38,7 +39,7 @@ import {
   requireIconFileAccess,
 } from "@/server/icons.server"
 import { promiseEffect } from "@/effect/promise"
-import { exclusive, partKey, resourceKey } from "@/operations/lanes"
+import { exclusive } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -50,23 +51,6 @@ import {
 // it again, keeps it, and serves it from /api/icons.
 
 const subjectInput = z.strictObject({ subject: iconSubjectSchema })
-
-// The lane an icon change takes (docs/hearth-operations.md): its game
-// server's, App's or database's `#icon`, which a deletion of it waits for or
-// turns away; a person's own picture its own key, apart from their account.
-// Both are parts, so two changes to one icon wait for each other.
-function iconKey(subject: IconSubject): string {
-  if (subject.kind === "user")
-    return partKey(`user-icon:${subject.id}`, "picture")
-  return partKey(
-    resourceKey(
-      subject.kind === "server" ? "instance" : subject.kind,
-      subject.relayId,
-      subject.id
-    ),
-    "icon"
-  )
-}
 
 // A change to one subject's icon, as an operation: the person may edit it,
 // and with `files`, read the files it's taken from.
@@ -101,7 +85,7 @@ const iconOperation = <
           })
         )
       ),
-    locks: ({ input }) => [exclusive(iconKey(input.subject))],
+    locks: ({ input }) => [exclusive(iconLaneKey(input.subject))],
     run: ({ context, input }) =>
       promiseEffect(() => definition.run(context, input)),
     audit: ({ input }) =>
