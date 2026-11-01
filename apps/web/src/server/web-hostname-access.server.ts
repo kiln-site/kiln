@@ -11,6 +11,13 @@ import {
 } from "@/effect/web-hostnames"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { dnsKey } from "@/lib/dns-operations"
+import { exclusive } from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { domainActor } from "@/server/domain-access.server"
 import { explainHostnameInUseEffect } from "@/server/domain-resource-access.server"
@@ -81,18 +88,47 @@ export async function getResourceWebHostnamesHandler(
   }))
 }
 
+// Releasing a hostname changes its game server's or App's DNS, so it holds
+// that `#dns`; one already gone changes nothing.
+const releaseHostname = operation<ReleaseWebHostnameInput>()({
+  name: "webHostname.release",
+  doing: "Changing its DNS records",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(async () => {
+          const row = await runAppEffect(
+            "webHostnames.load",
+            loadWebHostnameEffect(input.id)
+          )
+          if (row) await requireResourcePermission(person, row, true)
+          return row
+        })
+      )
+    ),
+  locks: ({ context: row }) => (row ? [exclusive(dnsKey(row))] : []),
+  run: ({ context: row }) =>
+    promiseEffect(async () => {
+      if (!row) return
+      await runAppEffect("webHostnames.release", releaseWebHostnameEffect(row))
+      publishWebHostnameChange([row.relayId])
+    }),
+  audit: ({ context: row }) =>
+    row
+      ? {
+          id: row.resourceId,
+          kind: row.resourceType,
+          relayId: row.relayId,
+        }
+      : null,
+})
+
 /** Deletes a hostname's record, such as an app's generated address. */
 export async function releaseWebHostnameHandler(data: ReleaseWebHostnameInput) {
   // Signed in before the lookup, so an ID's existence isn't revealed.
-  const user = await requireEligibleResourceUser()
-  const row = await runAppEffect(
-    "webHostnames.load",
-    loadWebHostnameEffect(data.id)
-  )
-  if (!row) return
-  await requireResourcePermission(user, row, true)
-  await runAppEffect("webHostnames.release", releaseWebHostnameEffect(row))
-  publishWebHostnameChange([row.relayId])
+  return runOperationPromise(releaseHostname, data, {
+    user: await requireEligibleResourceUser(),
+  })
 }
 
 /**

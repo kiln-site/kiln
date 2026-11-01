@@ -116,12 +116,6 @@ const notOperations: Record<string, string> = {
 // Mutating server functions that don't run as operations yet. Move them
 // area by area; never add one.
 const notYetOperations = new Set<string>([
-  "domains.ts:releaseWebHostname",
-  "domains.ts:resyncDomainAssignments",
-  "icons.ts:detectIcon",
-  "icons.ts:linkIconFile",
-  "icons.ts:removeCustomIcon",
-  "icons.ts:saveCustomIcon",
   "instance-favorites.ts:setInstanceFavorite",
   "notifications.ts:acknowledgeNotificationsSeen",
   "notifications.ts:clearNotifications",

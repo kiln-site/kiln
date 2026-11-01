@@ -9,11 +9,7 @@ import {
   requireRelayPermission,
 } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import type {
-  IconIndex,
-  IconSubject,
-  InstanceIconSubject,
-} from "@/lib/icons"
+import type { IconIndex, IconSubject, InstanceIconSubject } from "@/lib/icons"
 import type { AccessPermission } from "@/lib/permissions"
 import { activeRelay } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
@@ -60,7 +56,15 @@ export async function authorizedIconSubject(
   subject: IconSubject,
   access: "edit" | "read"
 ) {
-  const user = await requireEligibleResourceUser()
+  return iconSubjectFor(await requireEligibleResourceUser(), subject, access)
+}
+
+/** What `authorizedIconSubject` checks, for a person already signed in. */
+export async function iconSubjectFor(
+  user: AuthenticatedUser,
+  subject: IconSubject,
+  access: "edit" | "read"
+) {
   if (subject.kind === "user") {
     if (access === "edit" && subject.id !== user.id) {
       throw new Error("You can only change your own picture")

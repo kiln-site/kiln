@@ -22,6 +22,7 @@ import {
   ICON_SOURCE_MAX_BYTES,
   iconOriginSchema,
   iconSubjectSchema,
+  type IconSubject,
 } from "@/lib/icons"
 import { validateUploadedIcon } from "@/lib/icon-validation"
 import { isMinecraftUsername } from "@/lib/minecraft-profile"
@@ -32,15 +33,87 @@ import { requireEligibleResourceUser } from "@/server/auth"
 import {
   authorizedIconSubject,
   iconIndexFor,
+  iconSubjectFor,
   requireFileRootRead,
   requireIconFileAccess,
 } from "@/server/icons.server"
+import { promiseEffect } from "@/effect/promise"
+import { exclusive, partKey, resourceKey } from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 
 // Icons for game servers, apps, databases, and accounts. Browsers prepare
 // what people choose (square, small, WebP) and save it here; Hearth checks
 // it again, keeps it, and serves it from /api/icons.
 
 const subjectInput = z.strictObject({ subject: iconSubjectSchema })
+
+// The lane an icon change takes (docs/hearth-operations.md): its game
+// server's, App's or database's `#icon`, which a deletion of it waits for or
+// turns away; a person's own picture its own key, apart from their account.
+// Both are parts, so two changes to one icon wait for each other.
+function iconKey(subject: IconSubject): string {
+  if (subject.kind === "user")
+    return partKey(`user-icon:${subject.id}`, "picture")
+  return partKey(
+    resourceKey(
+      subject.kind === "server" ? "instance" : subject.kind,
+      subject.relayId,
+      subject.id
+    ),
+    "icon"
+  )
+}
+
+// A change to one subject's icon, as an operation: the person may edit it,
+// and with `files`, read the files it's taken from.
+const iconOperation = <
+  Input extends { readonly subject: IconSubject },
+  A,
+>(definition: {
+  readonly name: string
+  readonly doing: string
+  readonly files?: boolean
+  readonly run: (
+    context: Awaited<ReturnType<typeof iconSubjectFor>>,
+    input: Input
+  ) => Promise<A>
+}) =>
+  operation<Input>()({
+    name: definition.name,
+    doing: definition.doing,
+    authorize: ({ input, user }) =>
+      signedIn(user).pipe(
+        Effect.flatMap((person) =>
+          promiseEffect(async () => {
+            const context = await iconSubjectFor(person, input.subject, "edit")
+            const subject = input.subject
+            if (
+              definition.files &&
+              (subject.kind === "server" || subject.kind === "app")
+            ) {
+              await requireIconFileAccess(person, subject)
+            }
+            return context
+          })
+        )
+      ),
+    locks: ({ input }) => [exclusive(iconKey(input.subject))],
+    run: ({ context, input }) =>
+      promiseEffect(() => definition.run(context, input)),
+    audit: ({ input }) =>
+      input.subject.kind === "user"
+        ? { id: input.subject.id, kind: "user" }
+        : {
+            id: input.subject.id,
+            kind:
+              input.subject.kind === "server" ? "instance" : input.subject.kind,
+            relayId: input.subject.relayId,
+          },
+  })
 
 /** The shown icon of everything the user may see, as digests by subject. */
 export const getIconIndex = createServerFn({ method: "GET" }).handler(
@@ -55,20 +128,20 @@ export const getIconDetails = createServerFn({ method: "GET" })
     return runAppEffect("icons.details", getIconDetailsEffect(data.subject))
   })
 
-export const saveCustomIcon = createServerFn({ method: "POST" })
-  .validator(
-    subjectInput.extend({
-      // A prepared icon is at most 256 KiB.
-      contentBase64: z.base64().max(Math.ceil((256 * 1024) / 3) * 4),
-      // Files are linked with linkIconFile instead; sites are only found.
-      origin: iconOriginSchema.refine(
-        (origin) => origin.type !== "site" && origin.type !== "file",
-        { message: "Choose where the icon came from" }
-      ),
-    })
-  )
-  .handler(async ({ data }) => {
-    await authorizedIconSubject(data.subject, "edit")
+const saveCustomInputSchema = subjectInput.extend({
+  // A prepared icon is at most 256 KiB.
+  contentBase64: z.base64().max(Math.ceil((256 * 1024) / 3) * 4),
+  // Files are linked with linkIconFile instead; sites are only found.
+  origin: iconOriginSchema.refine(
+    (origin) => origin.type !== "site" && origin.type !== "file",
+    { message: "Choose where the icon came from" }
+  ),
+})
+
+const saveCustom = iconOperation({
+  name: "icon.save",
+  doing: "Changing this icon",
+  run: async (_context, data: z.infer<typeof saveCustomInputSchema>) => {
     const image = Buffer.from(data.contentBase64, "base64")
     const contentType = validateUploadedIcon(image)
     const digest = await runAppEffect(
@@ -80,24 +153,42 @@ export const saveCustomIcon = createServerFn({ method: "POST" })
       })
     )
     return { digest }
-  })
+  },
+})
 
-export const removeCustomIcon = createServerFn({ method: "POST" })
-  .validator(subjectInput)
-  .handler(async ({ data }) => {
-    const { relay } = await authorizedIconSubject(data.subject, "edit")
+export const saveCustomIcon = createServerFn({ method: "POST" })
+  .validator(saveCustomInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(saveCustom, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+const removeCustom = iconOperation({
+  name: "icon.remove",
+  doing: "Changing this icon",
+  run: async ({ relay }, data: z.infer<typeof subjectInput>) => {
     const digest = await runAppEffect(
       "icons.removeCustom",
       removeCustomIconEffect(relay, data.subject)
     )
     return { digest }
-  })
+  },
+})
+
+export const removeCustomIcon = createServerFn({ method: "POST" })
+  .validator(subjectInput)
+  .handler(async ({ data }) =>
+    runOperationPromise(removeCustom, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 /** Looks for a game server's or app's icon again, now. */
-export const detectIcon = createServerFn({ method: "POST" })
-  .validator(subjectInput)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedIconSubject(data.subject, "edit")
+const detect = iconOperation({
+  name: "icon.detect",
+  doing: "Looking for this icon",
+  run: async ({ relay, user }, data: z.infer<typeof subjectInput>) => {
     if (data.subject.kind !== "server" && data.subject.kind !== "app") {
       throw new Error("Kiln finds icons only for game servers and apps")
     }
@@ -106,7 +197,16 @@ export const detectIcon = createServerFn({ method: "POST" })
     const subject = data.subject
     await runAppEffect("icons.detect", detectInstanceIconEffect(relay, subject))
     return runAppEffect("icons.details", getIconDetailsEffect(subject))
-  })
+  },
+})
+
+export const detectIcon = createServerFn({ method: "POST" })
+  .validator(subjectInput)
+  .handler(async ({ data }) =>
+    runOperationPromise(detect, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 /**
  * An image from the web, for the browser to shrink into an icon, since it
@@ -184,22 +284,22 @@ export const readIconSourceFile = createServerFn({ method: "POST" })
  * inside one of an app's containers: Hearth copies it now and again
  * whenever it changes. It's read with the person's own access.
  */
-export const linkIconFile = createServerFn({ method: "POST" })
-  .validator(
-    z.strictObject({
-      path: z.string().min(1).max(1_024),
-      service: appServiceNameSchema.optional(),
-      subject: iconSubjectSchema,
-    })
-  )
-  .handler(async ({ data }) => {
+const linkFileInputSchema = z.strictObject({
+  path: z.string().min(1).max(1_024),
+  service: appServiceNameSchema.optional(),
+  subject: iconSubjectSchema,
+})
+
+const linkFile = iconOperation({
+  name: "icon.link",
+  doing: "Changing this icon",
+  files: true,
+  run: async ({ relay, user }, data: z.infer<typeof linkFileInputSchema>) => {
     const subject = data.subject
     if (subject.kind !== "server" && subject.kind !== "app") {
       throw new Error("Only game servers and apps have files to link")
     }
-    const { relay, user } = await authorizedIconSubject(subject, "edit")
     if (!relay) throw new Error("Relay not found")
-    await requireIconFileAccess(user, subject)
     const path = data.path.trim()
     const service = subject.kind === "app" ? data.service : undefined
     const origin = service
@@ -234,7 +334,16 @@ export const linkIconFile = createServerFn({ method: "POST" })
       })
     )
     return { digest }
-  })
+  },
+})
+
+export const linkIconFile = createServerFn({ method: "POST" })
+  .validator(linkFileInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(linkFile, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 /**
  * A Minecraft player's head, for the browser to make a picture of. Mojang
@@ -252,7 +361,8 @@ export const fetchMinecraftHead = createServerFn({ method: "GET" })
       "icons.minecraftProfile",
       resolveMinecraftProfileEffect(data.username)
     )
-    if (!profile) throw new Error(`No Minecraft player is named ${data.username}`)
+    if (!profile)
+      throw new Error(`No Minecraft player is named ${data.username}`)
     const head = await fetchPublicHttps(
       `https://mc-heads.net/avatar/${encodeURIComponent(profile.id)}/256.png`,
       { accept: "image/png", maxBytes: ICON_SOURCE_MAX_BYTES }
@@ -286,7 +396,11 @@ export const readPictureSourceFile = createServerFn({ method: "POST" })
     const path = data.path.replace(/^\/+/u, "")
     const icon = await runAppEffect(
       "icons.readPictureSource",
-      readRelayIconEffect(relay, { instanceId: data.rootId, path }, user.id).pipe(
+      readRelayIconEffect(
+        relay,
+        { instanceId: data.rootId, path },
+        user.id
+      ).pipe(
         Effect.mapError((cause) =>
           cause instanceof Error ? cause : new Error(String(cause))
         )
