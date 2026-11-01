@@ -1458,34 +1458,89 @@ async function performInstanceActionHandler(
   return { ...projectRelayInstanceOverview(instance), relayId: relay.id }
 }
 
+// Publishing a game server's logs to mclo.gs changes nothing of Kiln's, but
+// is worth its audit: who made what public. The person may share the
+// server's logs, and its Relay is active.
+const mayShareLogs = (
+  input: { readonly instanceId: string; readonly relayId: string },
+  user: AuthenticatedUser | null
+) =>
+  signedIn(user).pipe(
+    Effect.flatMap((person) =>
+      promiseEffect(async () => {
+        const relay = await instanceRelay(input.relayId)
+        await requireRelayPermission({
+          instanceId: input.instanceId,
+          permission: "instance.logs.share",
+          relayId: relay.id,
+          user: person,
+        })
+        return { person, relay }
+      })
+    )
+  )
+
+const shareAudit = (input: {
+  readonly instanceId: string
+  readonly relayId: string
+}) => ({
+  id: input.instanceId,
+  kind: "instance" as const,
+  relayId: input.relayId,
+})
+
+// The log is the person's own upload, so it holds nothing of the server's.
+const shareLog = operation<z.infer<typeof mclogsUploadInputSchema>>()({
+  name: "instance.logs.share",
+  doing: "Sharing this game server's logs",
+  authorize: ({ input, user }) => mayShareLogs(input, user),
+  locks: () => [],
+  run: ({ input }) => promiseEffect(() => uploadLog(input)),
+  audit: ({ input }) => shareAudit(input),
+})
+
 export const uploadToMclogs = createServerFn({ method: "POST" })
   .validator(mclogsUploadInputSchema)
-  .handler(async ({ data }) => {
-    await authorize("instance.logs.share", data.instanceId, data.relayId)
-    return uploadLog(data)
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(shareLog, data, { user: await instanceSessionUser() })
+  )
 
-export const uploadConsoleLogToMclogs = createServerFn({ method: "POST" })
-  .validator(consoleShareInputSchema)
-  .handler(async ({ data }) => {
-    return relayMclogsUploadResultSchema.parse(
-      await relayRequest(
-        `/v1/instances/${encodeURIComponent(data.instanceId)}/console-share`,
+// The Relay reads the server's console, so it holds the server shared.
+const shareConsoleLog = operation<z.infer<typeof consoleShareInputSchema>>()({
+  name: "instance.console.share",
+  doing: "Sharing this game server's console",
+  authorize: ({ input, user }) => mayShareLogs(input, user),
+  locks: ({ input }) => [
+    shared(resourceKey("instance", input.relayId, input.instanceId)),
+  ],
+  run: ({ context: { person, relay }, input }) =>
+    promiseEffect(async () => {
+      const response = await relayFetch(
+        relay,
+        `/v1/instances/${encodeURIComponent(input.instanceId)}/console-share`,
         {
           method: "POST",
           body: JSON.stringify({
-            implementation: data.implementation,
-            redactSensitive: data.redactSensitive,
-            version: data.version,
+            implementation: input.implementation,
+            redactSensitive: input.redactSensitive,
+            version: input.version,
           }),
         },
-        "instance.logs.share",
-        data.instanceId,
-        data.relayId,
-        60_000
+        60_000,
+        person.id
       )
-    )
-  })
+      return relayMclogsUploadResultSchema.parse(await response.json())
+    }),
+  audit: ({ input }) => shareAudit(input),
+})
+
+export const uploadConsoleLogToMclogs = createServerFn({ method: "POST" })
+  .validator(consoleShareInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(shareConsoleLog, data, {
+      user: await instanceSessionUser(),
+    })
+  )
 
 function uploadLog(data: z.infer<typeof mclogsUploadInputSchema>) {
   return runAppEffect("mclogs.upload", uploadLogEffect(data))
@@ -1763,20 +1818,6 @@ async function relayFetch(
     "relay.fetch",
     relayFetchEffect(relay, path, init, timeoutMs, subject)
   )
-}
-
-async function authorize(
-  permission: AccessPermission,
-  instanceId: string,
-  relayId: string
-) {
-  const { relay, user } = await instanceRelayAccess(relayId)
-  await requireRelayPermission({
-    user,
-    relayId: relay.id,
-    permission,
-    instanceId,
-  })
 }
 
 // App data directories (`app:<appId>`) are served like a server's files and
