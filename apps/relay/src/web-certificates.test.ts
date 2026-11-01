@@ -3,16 +3,11 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 
 import type { RelayProxySettings } from "@workspace/contracts"
-import { ManagedRuntime } from "effect"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { parse } from "yaml"
 
 import type { RelayConfig } from "./config.js"
-import {
-  makeRelayStateLayer,
-  RelayStateStore,
-  type RelayStoredWebRoute,
-} from "./effect/state.js"
+import type { RelayStoredWebRoute } from "./effect/state.js"
 import { testRelayConfig } from "./test/fixtures.js"
 import { traefikDynamicConfiguration } from "./traefik.js"
 import {
@@ -42,19 +37,15 @@ const route: RelayStoredWebRoute = {
 }
 
 const routerName = "kiln-route-b00d4423"
-const second = 1_000
-const minute = 60 * second
-const hour = 60 * minute
+const minute = 60_000
 
 describe("bundled Traefik certificates", () => {
   let directory: string
   let config: RelayConfig
   let answers: Map<string, NameAnswer>
-  let runtime: ManagedRuntime.ManagedRuntime<RelayStateStore, unknown>
   let certificates: WebCertificates
 
   beforeEach(async () => {
-    // Only the clock: the state store's own scheduling keeps running.
     vi.useFakeTimers({ toFake: ["Date"] })
     directory = await mkdtemp(join(tmpdir(), "kiln-certificates-"))
     config = testRelayConfig(directory, { KILN_RELAY_PROXY: "traefik" })
@@ -62,40 +53,30 @@ describe("bundled Traefik certificates", () => {
     await mkdir(dirname(webCertificateStorePath(config)), { recursive: true })
     await writeFile(webCertificateStorePath(config), "")
     answers = new Map()
-    runtime = ManagedRuntime.make(
-      makeRelayStateLayer(join(directory, "relay.sqlite"))
-    )
-    certificates = await relayCertificates()
+    certificates = new WebCertificates({
+      resolve: async (hostname) => answers.get(hostname) ?? "missing",
+      storePath: webCertificateStorePath(config),
+    })
   })
 
   afterEach(async () => {
     vi.useRealTimers()
-    await runtime.dispose()
     await rm(directory, { force: true, recursive: true })
   })
 
-  // The certificates as a Relay starting on this state would have them.
-  async function relayCertificates() {
-    return new WebCertificates({
-      resolve: async (hostname) => answers.get(hostname) ?? "missing",
-      state: await runtime.runPromise(RelayStateStore),
-      storePath: webCertificateStorePath(config),
-    })
+  // What Traefik reads.
+  function traefik(routes: ReadonlyArray<RelayStoredWebRoute> = [route]) {
+    return traefikDynamicConfiguration(
+      config,
+      routes,
+      settings,
+      certificates.gate()
+    )
   }
 
-  // What Traefik reads: the HTTPS router's TLS settings for the route.
+  // The HTTPS router's TLS settings for the route.
   function routerTls(routes: ReadonlyArray<RelayStoredWebRoute> = [route]) {
-    return parse(
-      traefikDynamicConfiguration(config, routes, settings, certificates.gate())
-    ).http.routers[routerName].tls
-  }
-
-  function asking() {
-    return routerTls().certResolver === "kiln"
-  }
-
-  function advance(ms: number) {
-    vi.setSystemTime(Date.now() + ms)
+    return parse(traefik(routes)).http.routers[routerName].tls
   }
 
   async function issue(...hostnames: Array<string>) {
@@ -115,13 +96,13 @@ describe("bundled Traefik certificates", () => {
     )
   }
 
-  it("asks for a new hostname's certificate once its name resolves, and again until it's issued", async () => {
+  it("asks for a new hostname's certificate only once its name resolves", async () => {
     await certificates.track([route])
     // Before its record exists, Traefik serves its default certificate and
     // doesn't ask Let's Encrypt, which would answer NXDOMAIN.
     expect(routerTls()).toEqual({})
     await certificates.check()
-    expect(asking()).toBe(false)
+    expect(routerTls()).toEqual({})
     expect(certificates.pending()).toEqual([
       {
         failed: true,
@@ -132,83 +113,44 @@ describe("bundled Traefik certificates", () => {
     ])
 
     answers.set("shop.example.com", "found")
-    advance(15 * second)
+    vi.setSystemTime(Date.now() + 15_000)
     await certificates.check()
     expect(routerTls()).toEqual({ certResolver: "kiln" })
-
-    // Let's Encrypt didn't issue it, as when it remembered the name missing.
-    // Traefik stops asking, so no other change to its routes asks for it.
-    advance(90 * second)
-    await certificates.check()
-    expect(routerTls()).toEqual({})
     expect(certificates.pending()).toMatchObject([
-      { failed: true, waitingFor: "certificate" },
+      { failed: false, waitingFor: "certificate" },
     ])
-
-    // Its retry has Traefik ask again.
-    advance(2 * minute)
-    await certificates.check()
-    expect(asking()).toBe(true)
 
     await issue("shop.example.com")
     await certificates.check()
     expect(certificates.pending()).toEqual([])
-    expect(asking()).toBe(true)
+    expect(routerTls()).toEqual({ certResolver: "kiln" })
   })
 
-  it("keeps a hostname's retries across a restart", async () => {
+  it("asks again when someone checks, a few times an hour at most", async () => {
     answers.set("shop.example.com", "found")
     await certificates.track([route])
     await certificates.check()
-    advance(90 * second)
+    // Let's Encrypt didn't issue it, and Traefik doesn't ask again on its own.
+    vi.setSystemTime(Date.now() + 2 * minute)
     await certificates.check()
-    expect(asking()).toBe(false)
-
-    certificates = await relayCertificates()
-    await certificates.track([route])
-    await certificates.check()
-    expect(asking()).toBe(false)
     expect(certificates.pending()).toMatchObject([
       { failed: true, waitingFor: "certificate" },
     ])
 
-    advance(2 * minute)
-    await certificates.check()
-    expect(asking()).toBe(true)
-  })
-
-  it("asks within Let's Encrypt's hourly limit, however often someone checks", async () => {
-    answers.set("shop.example.com", "found")
-    await certificates.track([route])
+    const configurations = new Set([traefik()])
     let asks = 0
-    const start = Date.now()
-    while (Date.now() - start < hour - minute) {
+    for (let click = 0; click < 10; click += 1) {
       const { asked } = await certificates.check("shop.example.com")
-      if (asked) asks += 1
-      advance(90 * second)
-      await certificates.check()
-      advance(30 * second)
+      if (asked) {
+        asks += 1
+        // A changed configuration is what has Traefik ask again.
+        expect(configurations.has(traefik())).toBe(false)
+        configurations.add(traefik())
+      }
+      vi.setSystemTime(Date.now() + minute)
     }
 
     expect(asks).toBe(4)
-  })
-
-  it("retries daily once a hostname has failed for a day", async () => {
-    answers.set("shop.example.com", "found")
-    await certificates.track([route])
-    const start = Date.now()
-    let lastAsk = start
-    let gap = 0
-    while (Date.now() - start < 3 * 24 * hour) {
-      await certificates.check()
-      if (asking()) {
-        gap = Date.now() - lastAsk
-        lastAsk = Date.now()
-      }
-      advance(5 * minute)
-    }
-
-    expect(gap).toBeGreaterThanOrEqual(24 * hour)
   })
 
   it("asks for a route's other names while one still waits for DNS", async () => {

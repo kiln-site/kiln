@@ -8,16 +8,12 @@
  * its own, so the route serves Traefik's default certificate until some
  * other route changes.
  *
- * So the Relay decides when Traefik asks. A hostname without a certificate
- * has Traefik ask only once its name resolves at its domain's own
- * nameservers, which have a new record first and remember no answer, unlike
- * a resolver. Traefik then asks for a short window; if no certificate comes,
- * it stops asking until the hostname's next retry, so other changes to its
- * configuration never ask for it in between. Retries spread from minutes to
- * hourly, then daily once it has failed for a day, and every ask stays
- * within Let's Encrypt's limits: five failed validations per hostname an
- * hour, and 300 orders per account in three hours. What each hostname waits
- * for is kept in the Relay's state, so a restart doesn't start it over.
+ * So Traefik asks for a hostname only once its name resolves at its
+ * domain's own nameservers, which have a new record first and remember no
+ * answer, unlike a resolver. Until then the Relay checks the name now and
+ * then, which costs nothing at Let's Encrypt. Once Traefik has asked, the
+ * Relay doesn't ask again on its own: someone checking a hostname by hand
+ * has Traefik ask again, a few times an hour at most.
  */
 import { promises as dns } from "node:dns"
 import { readFile, stat } from "node:fs/promises"
@@ -28,12 +24,12 @@ import {
   webRouteHostnames,
   type RelayPendingCertificate,
 } from "@workspace/contracts"
-import { Effect, Predicate, Result } from "effect"
+import { Predicate, Result } from "effect"
 import { z } from "zod"
 
 import type { RelayConfig } from "./config.js"
 import { recoverPromise } from "./effect/promise.js"
-import type { RelayStateStore, RelayStoredWebRoute } from "./effect/state.js"
+import type { RelayStoredWebRoute } from "./effect/state.js"
 import { appIdFromRouteOwner } from "./relay-resources.js"
 
 /** Whether a name resolves: `unknown` when its nameservers didn't say. */
@@ -43,11 +39,13 @@ export type NameAnswer = "found" | "missing" | "unknown"
 export interface TraefikCertificateGate {
   /** Whether Traefik should ask for a certificate naming `hostname`. */
   readonly requests: (hostname: string) => boolean
+  /** Raised to have Traefik ask again for every certificate it lacks. */
+  readonly retry: number
 }
 
 /** What checking hostnames found, for whoever writes Traefik's routes. */
 export interface CertificateCheck {
-  /** Whether Traefik was set asking for the hostname checked by hand. */
+  /** Whether Traefik was set asking again for the hostname checked by hand. */
   readonly asked: boolean
   /** Whether what's pending changed, for the Relay's snapshot. */
   readonly changed: boolean
@@ -56,16 +54,16 @@ export interface CertificateCheck {
 }
 
 interface Pending {
-  /** Checks or requests that failed since it last changed what it waits for. */
+  /** Checks of its name that found it missing. */
   attempts: number
+  /** When it was last asked for by hand, within the last hour. */
+  asks: Array<number>
+  /** Traefik asked a while ago and has no certificate yet. */
+  failed: boolean
+  /** When its name is next checked, while it doesn't resolve. */
   nextCheckAt: number
-  /** Whether Traefik is asking for its certificate now. */
-  open: boolean
-  /** When Traefik was set asking for it, within the last hour. */
-  opens: Array<number>
-  /** The game server or App whose route serves it; null until one does. */
-  owner: RelayPendingCertificate["owner"] | null
-  /** When it first resolved and Traefik first asked; 0 while it doesn't. */
+  owner: RelayPendingCertificate["owner"]
+  /** When Traefik last started asking for it. */
   since: number
   waitingFor: RelayPendingCertificate["waitingFor"]
 }
@@ -73,22 +71,15 @@ interface Pending {
 const second = 1_000
 const minute = 60 * second
 const hour = 60 * minute
-const day = 24 * hour
 // Asking a name's nameservers costs nothing, so these start soon after its
 // record is likely made.
 const dnsDelays = [15 * second, 30 * second, minute, 2 * minute, 5 * minute]
 const dnsDelayCap = 10 * minute
-// How long Traefik asks once set asking; issuance takes seconds.
-const askWindow = 90 * second
-// Between asks: at most four an hour, then hourly, then daily once a
-// hostname has failed for a day.
-const certificateDelays = [2 * minute, 10 * minute, 30 * minute]
-// Let's Encrypt allows five failed validations per hostname an hour. One is
-// left for Traefik asking again within a window, as when a route saves.
-const asksPerHostnameHour = 4
-// Let's Encrypt allows 300 orders per account in three hours. Some are left
-// for renewals and the Relay's own address.
-const asksPerRelayHour = 60
+// Issuance takes seconds; one still missing after this has most likely failed.
+const issueTime = 2 * minute
+// Let's Encrypt allows five failed validations per hostname an hour; Traefik
+// asking when the route appeared was one.
+const asksPerHour = 4
 
 // Traefik's acme.json: each resolver's certificates. Only their names matter.
 const acmeStoreSchema = z.record(
@@ -112,27 +103,21 @@ const acmeStoreSchema = z.record(
 export class WebCertificates {
   readonly #pending = new Map<string, Pending>()
   readonly #resolve: (hostname: string) => Promise<NameAnswer>
-  readonly #state: RelayStateStore["Service"]
   readonly #storePath: string
-  // When Traefik was set asking for any hostname, within the last hour.
-  #asks: Array<number> = []
   // Names Traefik holds a certificate for; null until its store first reads,
   // and while it can't be read, every hostname counts as having one.
   #issued: ReadonlySet<string> | null = null
-  #loaded: Promise<void> | null = null
+  #retry = 0
   #storeVersion: string | null = null
   #wake: (() => void) | null = null
 
   constructor(options: {
     /** Asks a name's own nameservers whether it resolves. */
     readonly resolve: (hostname: string) => Promise<NameAnswer>
-    /** Where what each hostname waits for is kept. */
-    readonly state: RelayStateStore["Service"]
     /** Traefik's acme.json. */
     readonly storePath: string
   }) {
     this.#resolve = options.resolve
-    this.#state = options.state
     this.#storePath = options.storePath
   }
 
@@ -142,8 +127,7 @@ export class WebCertificates {
    * until its name resolves; the next check looks at once.
    */
   async track(routes: ReadonlyArray<RelayStoredWebRoute>): Promise<void> {
-    await this.#load()
-    const served = new Map<string, NonNullable<Pending["owner"]>>()
+    const served = new Map<string, Pending["owner"]>()
     for (const route of routes) {
       const appId = appIdFromRouteOwner(route.instanceId)
       const owner = appId
@@ -153,74 +137,64 @@ export class WebCertificates {
         served.set(hostname.toLowerCase(), owner)
       }
     }
-    const gone = [...this.#pending.keys()].filter(
-      (hostname) => !served.has(hostname)
-    )
-    for (const hostname of gone) this.#pending.delete(hostname)
-    await this.#forget(gone)
+    for (const hostname of this.#pending.keys()) {
+      if (!served.has(hostname)) this.#pending.delete(hostname)
+    }
     if (served.size === 0) return
     await this.#readStore()
     let added = false
+    const now = Date.now()
     for (const [hostname, owner] of served) {
       const pending = this.#pending.get(hostname)
       if (pending) {
         pending.owner = owner
       } else if (!this.#hasCertificate(hostname)) {
-        const fresh: Pending = {
+        this.#pending.set(hostname, {
+          asks: [],
           attempts: 0,
-          nextCheckAt: Date.now(),
-          open: false,
-          opens: [],
+          failed: false,
+          nextCheckAt: now,
           owner,
           since: 0,
           waitingFor: "dns",
-        }
-        this.#pending.set(hostname, fresh)
-        await this.#save(hostname, fresh)
+        })
         added = true
       }
     }
     if (added) this.#wake?.()
   }
 
-  /**
-   * For writing Traefik's configuration as things stand now: it asks for a
-   * hostname that has a certificate, so it renews it, and for one waiting
-   * only while it's set asking.
-   */
+  /** For writing Traefik's configuration as things stand now. */
   gate(): TraefikCertificateGate {
-    const closed = new Set(
+    const unresolved = new Set(
       [...this.#pending]
-        .filter(([, pending]) => !pending.open)
+        .filter(([, pending]) => pending.waitingFor === "dns")
         .map(([hostname]) => hostname)
     )
-    return { requests: (hostname) => !closed.has(hostname.toLowerCase()) }
+    return {
+      requests: (hostname) => !unresolved.has(hostname.toLowerCase()),
+      retry: this.#retry,
+    }
   }
 
   /** The hostnames still waiting, for the Relay's snapshot. */
   pending(): Array<RelayPendingCertificate> {
     return [...this.#pending]
-      .flatMap(([hostname, pending]) =>
-        pending.owner
-          ? [
-              {
-                failed: pending.attempts > 0,
-                hostname,
-                owner: pending.owner,
-                waitingFor: pending.waitingFor,
-              },
-            ]
-          : []
-      )
-      .sort((left, right) => left.hostname.localeCompare(right.hostname))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([hostname, pending]) => ({
+        failed: pending.failed,
+        hostname,
+        owner: pending.owner,
+        waitingFor: pending.waitingFor,
+      }))
   }
 
   /**
-   * Checks the hostnames that are due, or only `hostname` now, as when
-   * someone asks. One checked by hand skips its wait, not its limits.
+   * Checks the names of hostnames waiting for DNS that are due, or only
+   * `hostname` now, as when someone asks. One checked by hand that already
+   * resolves has Traefik ask again.
    */
   async check(hostname?: string): Promise<CertificateCheck> {
-    await this.#load()
     const result = { asked: false, changed: false, rewrite: false }
     if (this.#pending.size === 0) return result
     await this.#readStore()
@@ -228,67 +202,61 @@ export class WebCertificates {
     for (const [name, pending] of this.#pending) {
       if (this.#hasCertificate(name)) {
         this.#pending.delete(name)
-        await this.#forget([name])
         result.changed = true
-        // Traefik asks for one it holds, so it renews it.
-        if (!pending.open) result.rewrite = true
+        // Traefik holds one it wasn't asking for, such as from before.
+        if (pending.waitingFor === "dns") result.rewrite = true
         continue
       }
       const now = Date.now()
-      if (
-        hostname === undefined ? pending.nextCheckAt > now : name !== hostname
-      ) {
-        continue
-      }
-      if (pending.open) {
-        // Asked by hand while Traefik is asking: it's already trying.
-        if (hostname !== undefined) continue
-        // Its window passed without a certificate: stop asking until its
-        // next retry.
-        pending.open = false
-        pending.attempts += 1
-        pending.nextCheckAt = now + this.#retryDelay(pending, now)
-        await this.#save(name, pending)
-        result.changed = true
-        result.rewrite = true
+      const byHand = name === hostname
+      if (pending.waitingFor === "certificate") {
+        if (!pending.failed && now - pending.since >= issueTime) {
+          pending.failed = true
+          result.changed = true
+        }
+        if (!byHand) continue
+      } else if (hostname === undefined ? pending.nextCheckAt > now : !byHand) {
         continue
       }
       const answer = await this.#resolve(name)
       // Its route went while its name was looked up.
       if (this.#pending.get(name) !== pending) continue
-      result.changed = true
       const resolvedAt = Date.now()
       if (answer === "missing") {
         if (pending.waitingFor === "certificate") {
+          // Traefik stops asking until it resolves again.
           pending.waitingFor = "dns"
+          pending.failed = false
           pending.attempts = 0
-          pending.since = 0
+          result.changed = true
+          result.rewrite = true
         }
         pending.attempts += 1
+        pending.failed = true
         pending.nextCheckAt =
-          resolvedAt + delay(dnsDelays, dnsDelayCap, pending.attempts - 1)
-        await this.#save(name, pending)
+          resolvedAt + (dnsDelays[pending.attempts - 1] ?? dnsDelayCap)
+        result.changed = true
         continue
       }
       if (pending.waitingFor === "dns") {
+        // Asking for it at all changes Traefik's configuration.
         pending.waitingFor = "certificate"
-        pending.attempts = 0
+        pending.failed = false
         pending.since = resolvedAt
-      }
-      const free = this.#askableAt(pending, resolvedAt)
-      if (free > resolvedAt) {
-        // Its limits are spent: it resolves, and waits its turn.
-        pending.nextCheckAt = free
-        await this.#save(name, pending)
+        result.changed = true
+        result.rewrite = true
         continue
       }
-      pending.open = true
-      pending.opens = [...recent(pending.opens, resolvedAt), resolvedAt]
-      pending.nextCheckAt = resolvedAt + askWindow
-      this.#asks = [...recent(this.#asks, resolvedAt), resolvedAt]
-      await this.#save(name, pending)
+      // Asked again by hand, within Let's Encrypt's limit.
+      pending.asks = pending.asks.filter((ask) => ask > resolvedAt - hour)
+      if (pending.asks.length >= asksPerHour) continue
+      pending.asks.push(resolvedAt)
+      pending.failed = false
+      pending.since = resolvedAt
+      this.#retry += 1
+      result.asked = true
+      result.changed = true
       result.rewrite = true
-      if (name === hostname) result.asked = true
     }
     return result
   }
@@ -301,66 +269,6 @@ export class WebCertificates {
         resolve()
       }
     })
-  }
-
-  // When Traefik may next ask for a hostname within Let's Encrypt's limits:
-  // its own, and the Relay's as a whole.
-  #askableAt(pending: Pending, now: number): number {
-    const own = recent(pending.opens, now)
-    const relay = recent(this.#asks, now)
-    return Math.max(
-      now,
-      own.length >= asksPerHostnameHour ? own[0]! + hour : now,
-      relay.length >= asksPerRelayHour ? relay[0]! + hour : now
-    )
-  }
-
-  #retryDelay(pending: Pending, now: number): number {
-    if (now - pending.since >= day) return day
-    return certificateDelays[pending.attempts - 1] ?? hour
-  }
-
-  // What each hostname waited for before a restart. Kept best effort: one
-  // the Relay can't read or write starts over, rather than fail a route.
-  #load(): Promise<void> {
-    this.#loaded ??= this.#run(this.#state.listWebCertificates(), []).then(
-      (records) => {
-        for (const { hostname, ...record } of records) {
-          if (this.#pending.has(hostname)) continue
-          this.#pending.set(hostname, {
-            ...record,
-            opens: [...record.opens],
-            owner: null,
-          })
-        }
-      }
-    )
-    return this.#loaded
-  }
-
-  #save(hostname: string, pending: Pending): Promise<void> {
-    const { owner: _owner, ...record } = pending
-    return this.#run(
-      this.#state.saveWebCertificate({ ...record, hostname }, Date.now()),
-      undefined
-    )
-  }
-
-  #forget(hostnames: ReadonlyArray<string>): Promise<void> {
-    return this.#run(this.#state.deleteWebCertificates(hostnames), undefined)
-  }
-
-  #run<A, E>(effect: Effect.Effect<A, E>, fallback: A): Promise<A> {
-    return Effect.runPromise(
-      effect.pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning(
-            "Keeping web route certificates failed",
-            cause
-          ).pipe(Effect.as(fallback))
-        )
-      )
-    )
   }
 
   #hasCertificate(hostname: string): boolean {
@@ -502,9 +410,4 @@ function delay(
 
 function hasCode(cause: unknown, code: string): boolean {
   return Predicate.hasProperty(cause, "code") && cause.code === code
-}
-
-// The times within the hour before `now`, oldest first.
-function recent(times: ReadonlyArray<number>, now: number): Array<number> {
-  return times.filter((time) => time > now - hour)
 }

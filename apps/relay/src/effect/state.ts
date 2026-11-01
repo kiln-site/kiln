@@ -148,25 +148,6 @@ export interface RelayStoredDatabaseConnection {
 
 export const DATABASE_CONNECTION_RECOVERY_KEY = "database_connections_recovered"
 
-/**
- * A web route hostname the bundled Traefik has no certificate for yet, and
- * when it's next checked (web-certificates.ts). Kept so a restart doesn't
- * start its retries over.
- */
-export interface RelayWebCertificateRecord {
-  /** Checks or requests that failed since it last changed what it waits for. */
-  readonly attempts: number
-  readonly hostname: string
-  readonly nextCheckAt: number
-  /** Whether Traefik is asking for its certificate now. */
-  readonly open: boolean
-  /** When Traefik was set asking for it, within the last hour. */
-  readonly opens: ReadonlyArray<number>
-  /** When it first resolved and Traefik first asked; 0 while it doesn't. */
-  readonly since: number
-  readonly waitingFor: "certificate" | "dns"
-}
-
 /** A resource frozen for its deletion, and the deletion that froze it. */
 export interface RelayResourceFreezeRecord {
   readonly deletionId: string
@@ -948,17 +929,6 @@ export class RelayStateStore extends Context.Service<
       appId: string,
       now: number
     ) => Effect.Effect<void, RelayStateError>
-    readonly listWebCertificates: () => Effect.Effect<
-      ReadonlyArray<RelayWebCertificateRecord>,
-      RelayStateError
-    >
-    readonly saveWebCertificate: (
-      record: RelayWebCertificateRecord,
-      now: number
-    ) => Effect.Effect<void, RelayStateError>
-    readonly deleteWebCertificates: (
-      hostnames: ReadonlyArray<string>
-    ) => Effect.Effect<void, RelayStateError>
     /** Each App's power revision; one never changed is 0, and left out. */
     readonly listAppPowerRevisions: (
       appIds: ReadonlyArray<string>
@@ -1697,21 +1667,6 @@ const migrations = SqliteMigrator.fromRecord({
       RENAME TO relay_resource_freezes
     `
   }),
-  // Web route hostnames still waiting on a certificate, so a restart keeps
-  // each one's retry schedule rather than asking Let's Encrypt anew.
-  "33_web_certificates": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient
-    yield* sql`CREATE TABLE IF NOT EXISTS relay_web_certificates (
-      hostname TEXT PRIMARY KEY NOT NULL,
-      waiting_for TEXT NOT NULL CHECK (waiting_for IN ('certificate', 'dns')),
-      attempts INTEGER NOT NULL,
-      since INTEGER NOT NULL,
-      next_check_at INTEGER NOT NULL,
-      open INTEGER NOT NULL,
-      opens_json TEXT NOT NULL DEFAULT '[]',
-      updated_at INTEGER NOT NULL
-    ) STRICT`
-  }),
 })
 
 // The App IDs a Hearth still owes, as stored; anything unreadable owes
@@ -1721,17 +1676,6 @@ function decodeUnresolved(json: string): Array<string> {
     Result.try(() => {
       const parsed = JSON.parse(json) as unknown
       return Array.isArray(parsed) ? parsed.filter(Predicate.isString) : []
-    }),
-    () => []
-  )
-}
-
-// Times as stored; anything unreadable counts as none.
-function decodeNumbers(json: string): Array<number> {
-  return Result.getOrElse(
-    Result.try(() => {
-      const parsed = JSON.parse(json) as unknown
-      return Array.isArray(parsed) ? parsed.filter(Predicate.isNumber) : []
     }),
     () => []
   )
@@ -4210,63 +4154,6 @@ const makeRelayStateStore = Effect.gen(function* () {
           })
         )
       ),
-    listWebCertificates: () =>
-      run(
-        "list_web_certificates",
-        sql<{
-          attempts: number
-          hostname: string
-          nextCheckAt: number
-          open: number
-          opensJson: string
-          since: number
-          waitingFor: "certificate" | "dns"
-        }>`
-          SELECT hostname, waiting_for AS waitingFor, attempts, since,
-            next_check_at AS nextCheckAt, open, opens_json AS opensJson
-          FROM relay_web_certificates
-        `.pipe(
-          Effect.map((rows) =>
-            rows.map(
-              ({ open, opensJson, ...row }): RelayWebCertificateRecord => ({
-                ...row,
-                open: open === 1,
-                opens: decodeNumbers(opensJson),
-              })
-            )
-          )
-        )
-      ),
-    saveWebCertificate: (record, now) =>
-      run(
-        "save_web_certificate",
-        sql`
-          INSERT INTO relay_web_certificates
-            (hostname, waiting_for, attempts, since, next_check_at, open,
-             opens_json, updated_at)
-          VALUES (${record.hostname}, ${record.waitingFor}, ${record.attempts},
-            ${record.since}, ${record.nextCheckAt}, ${record.open ? 1 : 0},
-            ${JSON.stringify(record.opens)}, ${now})
-          ON CONFLICT (hostname) DO UPDATE SET
-            waiting_for = excluded.waiting_for,
-            attempts = excluded.attempts,
-            since = excluded.since,
-            next_check_at = excluded.next_check_at,
-            open = excluded.open,
-            opens_json = excluded.opens_json,
-            updated_at = excluded.updated_at
-        `.pipe(Effect.asVoid)
-      ),
-    deleteWebCertificates: (hostnames) =>
-      hostnames.length === 0
-        ? Effect.void
-        : run(
-            "delete_web_certificates",
-            sql`
-              DELETE FROM relay_web_certificates
-              WHERE hostname IN ${sql.in(hostnames)}
-            `.pipe(Effect.asVoid)
-          ),
     bumpAppPowerRevision: (appId, now) =>
       run(
         "bump_app_power_revision",

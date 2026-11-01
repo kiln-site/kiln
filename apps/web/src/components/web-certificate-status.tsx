@@ -29,6 +29,7 @@ export function certificatePresentation(
   canCheck: boolean
 ): IdentityStatusPresentation {
   const action = canCheck ? " Click to check now." : ""
+  const retry = canCheck ? " Click to ask again." : ""
   if (certificate.waitingFor === "dns" && certificate.failed) {
     return {
       detail: `Its name doesn't resolve yet, so Kiln hasn't asked Let's Encrypt for its certificate. Kiln keeps checking.${action}`,
@@ -38,7 +39,7 @@ export function certificatePresentation(
   }
   if (certificate.waitingFor === "certificate" && certificate.failed) {
     return {
-      detail: `Let's Encrypt hasn't issued its certificate, so visitors see a warning. Kiln asks again, less often over time, down to daily.${action}`,
+      detail: `Let's Encrypt hasn't issued its certificate, so visitors see a warning. Check that its DNS points at this Relay and port 80 is open.${retry}`,
       label: "Unverified",
       tone: "danger",
     }
@@ -92,7 +93,7 @@ export function useCheckWebCertificate(
                 }
               : {
                   description:
-                    "Kiln asked recently, and asks again on its own within Let's Encrypt's limits.",
+                    "Let's Encrypt allows only a few attempts an hour. Try again later.",
                   message: `${hostname} has no certificate yet`,
                   type: "info",
                 }

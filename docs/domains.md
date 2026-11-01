@@ -67,23 +67,22 @@ serve Traefik's default certificate until some other route changed. So:
   itself remember the name as missing. A route's other names don't wait for
   it. When the nameservers can't be reached or don't answer, Traefik asks
   anyway.
-- Traefik then asks for 90 seconds. If no certificate comes, it stops asking
-  for that hostname until its next retry, so another route's save or
-  another hostname's retry never asks for it in between. Retries come 2,
-  10 and 30 minutes apart, then hourly, then daily once it has failed for a
-  day. A name that stops resolving stops being asked for.
-- Every ask stays within Let's Encrypt's limits: at most four an hour per
-  hostname (it allows five failed validations), and 60 an hour per Relay
-  (it allows 300 orders per account in three hours). Checking by hand skips
-  a hostname's wait, not these limits.
-- What each hostname waits for is kept in the Relay's state
-  (`relay_web_certificates`), so a restart doesn't start its retries over.
+- Until the name resolves, the Relay checks it again: after 15 and 30
+  seconds, 1, 2 and 5 minutes, then every 10 minutes. That costs nothing at
+  Let's Encrypt.
+- Once Traefik has asked, the Relay doesn't ask again on its own. If Let's
+  Encrypt doesn't issue it, as when the name points elsewhere or port 80 is
+  closed, someone fixing that clicks the hostname's status to have Traefik
+  ask again, at most four times an hour, within Let's Encrypt's limit of
+  five failed validations per hostname an hour. Retrying on its own is
+  left for later.
 
 The Relay reports the hostnames still waiting in its snapshot. Hearth shows
 them on the Domains page and beside each web route: **Verifying** while it
 checks and asks, **Waiting for DNS** while the name doesn't resolve, and
-**Unverified** once Let's Encrypt has failed to issue one. Whoever may change
-the route can click the status to have the Relay check again now.
+**Unverified** when Traefik asked over two minutes ago and has no
+certificate. Whoever may change the route can click the status to have the
+Relay check again now.
 
 ## Vanity domains
 

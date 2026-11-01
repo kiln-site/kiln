@@ -135,7 +135,6 @@ export async function relayHarness(
       new WebCertificates({
         // Tests reach no nameservers; Traefik asks as it would without them.
         resolve: async () => "unknown",
-        state,
         storePath: webCertificateStorePath(config),
       })
     )

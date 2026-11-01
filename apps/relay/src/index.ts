@@ -508,7 +508,6 @@ const lifecycle = new LifecycleDriver(
   lanes,
   new WebCertificates({
     resolve: authoritativeNameAnswer,
-    state: startupCore.state,
     storePath: webCertificateStorePath(config),
   })
 )
