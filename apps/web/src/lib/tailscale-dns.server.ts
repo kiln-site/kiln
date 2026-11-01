@@ -1,0 +1,214 @@
+import {
+  appTailscaleMember,
+  databaseTailscaleMember,
+  instanceTailscaleMember,
+  relayTailscaleStackStatesSchema,
+  type RelayTailscaleStackState,
+} from "@workspace/contracts"
+import { Effect, Schema } from "effect"
+import { Activity } from "effect/workflow"
+
+import { tailscaleNetworkRelaysEffect } from "@/effect/tailscale-networks"
+import { relayRpc } from "@/lib/relay-connection"
+import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
+import { tailscaleNetworkSettingsKey } from "@/lib/tailscale-lanes"
+import { durableOperation, startDurableOperation } from "@/operations/durable"
+import { exclusive } from "@/operations/lanes"
+
+/**
+ * Tailscale networks' DNS (docs/relay-operations.md). Hearth writes every
+ * node's records, each time from what the Relays hold now: the enabled
+ * members of the nodes not being removed, leaving out those frozen for
+ * their deletion. What writes them holds each network's `#settings`, so a
+ * save and a rewrite go one after the other, and the last one read the
+ * latest state.
+ */
+
+export class TailscaleDnsError extends Schema.TaggedError<TailscaleDnsError>()(
+  "TailscaleDnsError",
+  { message: Schema.String }
+) {}
+
+/**
+ * Rewrites a network's DNS on every node of it from what those nodes hold
+ * now. It asks only the Relays it names, the ones the network is on, and
+ * each of them must answer, a paused one included: one left out would drop
+ * its members' records. A Relay that's been removed took its node with it.
+ * Run it holding the network's `#settings`; it returns only once every
+ * write it sent has ended, so none outlives the lane.
+ */
+export async function writeTailscaleNetworkDns(
+  network: { readonly id: string; readonly relayIds: ReadonlyArray<string> },
+  subject?: string
+): Promise<void> {
+  const relayIds = new Set(network.relayIds)
+  const relays = (await listPersistedRelays()).filter((relay) =>
+    relayIds.has(relay.id)
+  )
+  const paused = relays.find((relay) => !relay.enabled)
+  if (paused) throw new Error(`${paused.name} is paused`)
+  const nodes = (
+    await Promise.all(
+      relays.map(async (relay) =>
+        relayTailscaleStackStatesSchema
+          .parse(
+            await relayRpc(relay, "relay.tailscale.stack.state", {}, 15_000)
+          )
+          .filter((stack) => stack.id === network.id && !stack.removalPending)
+          .map((stack) => ({ relay, stack }))
+      )
+    )
+  ).flat()
+  const records = nodes.flatMap(({ stack }) =>
+    stack.bindings.flatMap(({ address, enabled, frozen, hostname }) =>
+      enabled && !frozen ? [{ address, hostname }] : []
+    )
+  )
+  const written = await Promise.allSettled(
+    nodes.map(({ relay }) =>
+      relayRpc(
+        relay,
+        "relay.tailscale.stack.dns",
+        { id: network.id, records },
+        60_000,
+        subject
+      )
+    )
+  )
+  const failures = written.flatMap((result, index) =>
+    result.status === "rejected"
+      ? [
+          `${nodes[index]?.relay.name}: ${
+            result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason)
+          }`,
+        ]
+      : []
+  )
+  if (failures.length > 0) throw new Error(failures.join("; "))
+}
+
+/** The networks a resource is a member of, as its Relay holds them. */
+export async function tailscaleNetworksOf(resource: {
+  readonly id: string
+  readonly kind: "app" | "database" | "instance" | "volume"
+  readonly relayId: string
+}): Promise<Array<string>> {
+  if (resource.kind === "volume") return []
+  const stacks = relayTailscaleStackStatesSchema.parse(
+    await relayRpc(
+      await activeRelay(resource.relayId),
+      "relay.tailscale.stack.state",
+      {},
+      15_000
+    )
+  )
+  return stacks
+    .filter((stack) =>
+      stack.bindings.some(({ memberId }) => isMemberOf(resource, memberId))
+    )
+    .map(({ id }) => id)
+    .sort()
+}
+
+function isMemberOf(
+  resource: { readonly id: string; readonly kind: string },
+  memberId: RelayTailscaleStackState["bindings"][number]["memberId"]
+): boolean {
+  switch (resource.kind) {
+    case "app":
+      return appTailscaleMember(memberId)?.appId === resource.id
+    case "database":
+      return databaseTailscaleMember(memberId) === resource.id
+    case "instance":
+      return instanceTailscaleMember(memberId) === resource.id
+    default:
+      return false
+  }
+}
+
+/**
+ * Rewrites the DNS of the networks it names, as Hearth's own work in their
+ * `#settings`: queued behind a save of any of them, then run from what the
+ * Relays hold once its turn comes. A resource's deletion and its keeping
+ * wait for it, after the freeze and after letting it go.
+ */
+export const rewriteTailscaleDns = durableOperation({
+  doing: () => "Updating Tailscale DNS",
+  error: TailscaleDnsError,
+  input: Schema.Struct({
+    networkIds: Schema.Array(Schema.String),
+    // Relays known to be on the networks besides those Hearth recorded,
+    // such as the one a deleted resource's member is on.
+    alsoOn: Schema.Array(Schema.String),
+  }),
+  kind: "tailscale.network.dns",
+  locks: ({ networkIds }) =>
+    networkIds.map((id) => exclusive(tailscaleNetworkSettingsKey(id))),
+  run: ({ alsoOn, networkIds }) =>
+    Activity.make({
+      name: "rewrite",
+      error: TailscaleDnsError,
+      execute: Effect.gen(function* () {
+        // The Relays each network is on, as Hearth recorded them when it
+        // last saved it, read once its turn has come.
+        const deployed = yield* tailscaleNetworkRelaysEffect(networkIds)
+        yield* Effect.tryPromise({
+          try: async () => {
+            for (const id of networkIds) {
+              await writeTailscaleNetworkDns({
+                id,
+                relayIds: [...(deployed.get(id) ?? []), ...alsoOn],
+              })
+            }
+          },
+          catch: (cause) =>
+            new TailscaleDnsError({
+              message: cause instanceof Error ? cause.message : String(cause),
+            }),
+        })
+      }).pipe(
+        Effect.catchTag("DatabaseError", (cause) =>
+          Effect.fail(new TailscaleDnsError({ message: cause.message }))
+        )
+      ),
+    }),
+  version: 1,
+})
+
+/**
+ * Inside a durable operation: rewrites the DNS of the networks a resource
+ * is a member of now, and waits for it to succeed. The rewrite takes its own
+ * lanes, which its caller doesn't hold; its ID is kept in the caller's
+ * journal under `name`, so a run that resumes waits on the same one.
+ */
+export const rewriteTailscaleDnsOf = (
+  resource: Parameters<typeof tailscaleNetworksOf>[0],
+  options: { readonly idempotencyKey: string; readonly name: string }
+) =>
+  Effect.gen(function* () {
+    const networkIds = yield* Activity.make({
+      name: `${options.name}/networks`,
+      success: Schema.Array(Schema.String),
+      error: TailscaleDnsError,
+      execute: Effect.tryPromise({
+        try: () => tailscaleNetworksOf(resource),
+        catch: (cause) =>
+          new TailscaleDnsError({
+            message: cause instanceof Error ? cause.message : String(cause),
+          }),
+      }),
+    })
+    if (networkIds.length === 0) return
+    const operationId = yield* Activity.make({
+      name: `${options.name}/start`,
+      success: Schema.String,
+      execute: startDurableOperation(
+        rewriteTailscaleDns,
+        { alsoOn: [resource.relayId], networkIds },
+        { idempotencyKey: options.idempotencyKey, initiator: "system" }
+      ).pipe(Effect.orDie),
+    })
+    yield* rewriteTailscaleDns.workflow.execute({ operationId })
+  })

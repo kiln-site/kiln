@@ -162,7 +162,7 @@ Whole keys that aren't resources follow the same rule: a backup takes
 `#name` to rename it and `#task` to cancel it, a GitHub sync `#settings` to
 change it and `#files` to write them, a schedule `#settings` to save it,
 which running it now takes shared, a Tailscale network `#settings` to save
-its members, connect it to Tailscale or sync it, a GitHub connection `#installation`
+its members, connect it to Tailscale, sync it or rewrite its DNS, a GitHub connection `#installation`
 for what GitHub reports, a Cloudflare connection `#settings` to save it.
 A backup destination's save takes `#settings`, which reserving a backup to
 it takes shared, so each waits for the other. An edit to Hearth's own database holds
@@ -200,7 +200,7 @@ request is answered once.
 | `github-sync:<id>`                | A GitHub sync: changing it, or writing a file for it   |
 | `github-connection:<id>`          | A GitHub connection; what reads through it, shared     |
 | `schedule:<id>`                   | A schedule: deleting it; `#settings` saving or running |
-| `tailscale-network:<id>`          | A Tailscale network; `#settings` its members and setup |
+| `tailscale-network:<id>`          | A Tailscale network; `#settings` its members and DNS   |
 
 A backup or restore holds what its data belongs to: the game server or
 database, or the App for its folder and the volumes it owns, since deleting

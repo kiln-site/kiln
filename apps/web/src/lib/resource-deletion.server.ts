@@ -40,6 +40,10 @@ import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-se
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay } from "@/lib/relay-registry"
+import {
+  rewriteTailscaleDnsOf,
+  tailscaleNetworksOf,
+} from "@/lib/tailscale-dns.server"
 import { currentActingUser } from "@/operations/acting-user"
 import {
   durableOperation,
@@ -267,6 +271,23 @@ const prepare = (input: DeletionInput, takeFinalBackup: boolean) =>
       recover: Effect.succeed({ frozen: true }),
       timeoutMs: relayControlDeadlineMs("resource.freeze"),
     }).pipe(Effect.mapError(asDeletionError))
+    // Frozen, it has no DNS: its networks' DNS is written without it before
+    // anything of it is backed up or deleted, so its Relay deletes it with
+    // nothing left to ask.
+    yield* rewriteTailscaleDnsOf(
+      { id: input.resourceId, kind: input.kind, relayId: input.relayId },
+      {
+        idempotencyKey: `${input.deletionId}:${input.attempt}:dns`,
+        name: "tailscale-dns",
+      }
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ResourceDeletionError({
+            message: `Nothing was deleted: its Tailscale DNS couldn't be updated: ${cause.message}`,
+          })
+      )
+    )
     const plan = yield* Activity.make({
       name: "plan",
       success: DeletionPlan,
@@ -518,7 +539,7 @@ const deleteOnRelay = (input: DeletionInput, plan: DeletionPlan) =>
         error: ResourceDeletionError,
         execute: resourceOnRelay(input).pipe(Effect.mapError(asDeletionError)),
       }))
-    const gone = resourceOnRelay(input).pipe(
+    const gone = leftOnRelay(input).pipe(
       Effect.flatMap((present) =>
         present
           ? Effect.fail(
@@ -558,9 +579,7 @@ const deleteOnRelay = (input: DeletionInput, plan: DeletionPlan) =>
           name: "delete/verify",
           success: Schema.Boolean,
           error: ResourceDeletionError,
-          execute: resourceOnRelay(input).pipe(
-            Effect.mapError(asDeletionError)
-          ),
+          execute: leftOnRelay(input).pipe(Effect.mapError(asDeletionError)),
         }).pipe(
           Effect.flatMap((present) =>
             present ? Effect.fail(asDeletionError(refused)) : Effect.void
@@ -639,6 +658,34 @@ const resourceOnRelay = (input: DeletionInput) =>
           message: messageOf(cause),
           retryable: false,
         })
+    )
+  )
+
+// Whether the Relay has anything of the resource left to delete: the
+// resource, or its place on a Tailscale network, which its Relay takes off
+// once it has deleted the resource.
+const leftOnRelay = (input: DeletionInput) =>
+  resourceOnRelay(input).pipe(
+    Effect.flatMap((present) =>
+      present
+        ? Effect.succeed(true)
+        : promiseEffect(() =>
+            tailscaleNetworksOf({
+              id: input.resourceId,
+              kind: input.kind,
+              relayId: input.relayId,
+            })
+          ).pipe(
+            Effect.map((networks) => networks.length > 0),
+            Effect.mapError(
+              (cause) =>
+                new RelayCommandError({
+                  code: "unreadable",
+                  message: messageOf(cause),
+                  retryable: false,
+                })
+            )
+          )
     )
   )
 
@@ -734,6 +781,21 @@ export const keepResource = durableOperation({
         recover: Effect.succeed({ frozen: false }),
         timeoutMs: relayControlDeadlineMs("resource.unfreeze"),
       }).pipe(Effect.mapError(asDeletionError))
+      // Let go, it has DNS again.
+      yield* rewriteTailscaleDnsOf(
+        { id: input.resourceId, kind: input.kind, relayId: input.relayId },
+        {
+          idempotencyKey: `${input.deletionId}:${input.attempt}:keep-dns`,
+          name: "tailscale-dns",
+        }
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ResourceDeletionError({
+              message: `It was let go, but its Tailscale DNS couldn't be updated: ${cause.message}`,
+            })
+        )
+      )
       yield* Activity.make({
         name: "kept",
         execute: recordStatus(input, "cancelled", null, ["cancelling"]),

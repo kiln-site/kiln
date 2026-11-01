@@ -351,26 +351,6 @@ function requestedTailscaleBindings(
 }
 
 /**
- * Whether a request waits only for what holds its locks, not for what waits
- * in line. A game server's, App's, or database's deletion holds it while it
- * waits for Hearth to rewrite its Tailscale networks' DNS
- * (`hearth.tailscale.member.detach`), and Hearth does that with
- * `relay.tailscale.stack.dns`. A change to the network queued behind the
- * deletion waits for it in turn, so while the deletion waits on that
- * network's DNS, its DNS goes ahead of the line; at any other time it takes
- * its turn like any change.
- */
-export function controlRequestContinues(
-  operation: RelayControlOperation,
-  payload: Readonly<Record<string, unknown>>,
-  awaitedDns: (stackId: string) => boolean
-): boolean {
-  if (operation !== "relay.tailscale.stack.dns") return false
-  const stackId = stringField(payload, "id")
-  return stackId !== null && awaitedDns(stackId)
-}
-
-/**
  * Resolves a game server reference to its full ID. Requests normally carry
  * the full ID, which needs no lookup; a short ID or name is looked up.
  */
@@ -447,6 +427,7 @@ export function controlRequestLocks(
     case "relay.networking.read":
     case "relay.tailscale.read":
     case "relay.tailscale.stack.list":
+    case "relay.tailscale.stack.state":
     case "relay.host.read":
     case "relay.database.read":
     case "relay.proxy.read":
@@ -588,7 +569,6 @@ export function controlRequestLocks(
       return null
 
     // Requests the Relay sends Hearth, never the other way.
-    case "hearth.tailscale.member.detach":
     case "hearth.database.terminal.output":
     case "sftp.authorization.resolve":
       return null

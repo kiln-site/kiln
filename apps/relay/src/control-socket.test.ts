@@ -49,10 +49,7 @@ import type { RelayClientRole } from "./effect/state.js"
 import type { RelayAction } from "./permissions.js"
 import { sendRawRequest } from "./test/raw-http.js"
 import { OperationLanes } from "./operation-lanes.js"
-import {
-  controlRequestContinues,
-  controlRequestLocks,
-} from "./operation-plans.js"
+import { controlRequestLocks } from "./operation-plans.js"
 import { DatabaseSync } from "node:sqlite"
 
 describe("Relay control socket", () => {
@@ -316,7 +313,6 @@ describe("Relay dialing Hearth", () => {
     })
   })
 
-
   it("dials only Hearth's control path over HTTP(S)", () => {
     expect(relayDialUrl("https://kiln.example/api/relays/control")?.href).toBe(
       "wss://kiln.example/api/relays/control"
@@ -422,12 +418,6 @@ async function startRelay(
   const control = attachControlSocket({
     execute: options.execute ?? (async () => ({ ok: true })),
     lanes,
-    requestContinues: (request) =>
-      controlRequestContinues(
-        request.operation,
-        request.payload as Record<string, unknown>,
-        () => false
-      ),
     requestLocks: (request) =>
       controlRequestLocks(
         request.operation,

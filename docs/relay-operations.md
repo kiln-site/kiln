@@ -81,10 +81,9 @@ recovery included, and all of them do when the Relay starts, so one its
 container lost, as when the Relay stopped between replacing a container and
 reattaching it, comes back. A start can attach a member at the same time as
 an apply that keeps it, since that apply holds the member only shared; each
-accepts the endpoint the other put there. Deleting any of them
-asks Hearth to rewrite its networks' DNS on every node first
-(`hearth.tailscale.member.detach`), then takes it off them, and puts the DNS
-back if that fails. Applying a network (`relay.tailscale.stack.apply`) holds
+accepts the endpoint the other put there. Deleting any of them takes it
+off its networks once the resource itself is deleted; Hearth has already
+written their DNS without it. Applying a network (`relay.tailscale.stack.apply`) holds
 the network's own stack exclusively and
 takes the lifecycle lock of each game server or App it joins or takes off
 (a database it holds whole), so it waits
@@ -92,28 +91,29 @@ for that member's power changes as they wait for it; a member it leaves as it
 is is held shared, so it isn't deleted or replaced meanwhile. Removing a
 network does the same for all its members. The locks are planned from the
 members the network has when the change is admitted, and the change refuses
-to run if they've changed by its turn. A game server's, App's, or
-database's deletion holds it while Hearth rewrites its networks' DNS for it,
-and a change to the network queued behind the deletion waits for it in turn.
-So while a deletion
-waits on a network's DNS, rewriting that DNS (`relay.tailscale.stack.dns`)
-waits only for what holds its locks, not for what waits in line, and counts
-toward the lanes' waiting limit and is refused, as by an unfinished
-restore's fence, like any request; at any other time it takes
-its turn like any change.
+to run if they've changed by its turn. Taking a deleted resource's members
+off its networks rereads each network's configuration inside the network's
+own exclusive lane, so deletions at the same time can't overwrite each
+other's bindings.
 
-A deletion asks Hearth for DNS before taking the stack's own exclusive
-lane, so that its DNS continuation can finish. The local detach then
-rereads the configuration inside that lane, shared with apply and removal,
-so concurrent deletions cannot overwrite each other's bindings. A rollback
-takes the same lane and restores only the members its detach removed into
-the current configuration, preserving other deletions and applies.
-
-In Hearth, saving a network, connecting it to Tailscale and syncing it take
-its `tailscale-network:<id>#settings`, and creating or removing it takes it
-whole. Rewriting its DNS for a member's deletion takes neither: Hearth's
-save sends an apply that waits on the Relay behind that deletion, so the
-deletion's request for DNS must not wait on the save in Hearth.
+Hearth alone writes a network's DNS records (`relay.tailscale.stack.dns`),
+each time from what the network's Relays hold then
+(`relay.tailscale.stack.state`). It asks only those: the ones a save is
+applying it to, or, for a deletion, the ones Hearth recorded when it last
+saved it. Records are the enabled members of nodes not being removed,
+leaving out members whose resource is frozen for its deletion. Each node keeps the records Hearth
+last sent and serves them again whenever it recreates its DNS container;
+it never makes up records of its own. In Hearth, saving a network,
+connecting it to Tailscale, syncing it and rewriting its DNS all take its
+`tailscale-network:<id>#settings`, so they go one after the other and the
+last one read the latest state; creating or removing it takes it whole. A
+resource's deletion rewrites its networks' DNS as its own durable operation
+(`tailscale.network.dns`) right after freezing it, and waits for that to
+succeed before backing it up or asking its Relay to delete it; keeping it
+rewrites them again once it's let go. A member's DNS is gone from the
+moment its resource is frozen: a database stays running for its final
+backup, but its hostname no longer resolves. A failure leaves it frozen
+and nothing deleted.
 Relays rewrite bindings saved with a
 game server's bare ID when they start, and Hearth its copies of them in a
 migration.

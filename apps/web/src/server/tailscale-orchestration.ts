@@ -1,9 +1,6 @@
 import { Effect } from "effect"
 
-import type {
-  RelayTailscaleStackApply,
-  RelayTailscaleStackDns,
-} from "@workspace/contracts"
+import type { RelayTailscaleStackApply } from "@workspace/contracts"
 
 import { TailscaleOrchestrationError } from "@/effect/errors"
 
@@ -46,178 +43,12 @@ export interface TailscaleDeploymentOperations<
     input: RelayTailscaleStackApply
   ) => Promise<TDeployment>
   remove: (deployment: TDeployment, mode: TailscaleRemovalMode) => Promise<void>
-  syncDns: (
-    deployment: TDeployment,
-    records: RelayTailscaleStackDns["records"]
-  ) => Promise<TDeployment>
+  /**
+   * Rewrites the network's DNS on every node of it from what the Relays
+   * hold now (`writeTailscaleNetworkDns`), never from what a step returned.
+   */
+  rewriteDns: () => Promise<void>
 }
-
-export const synchronizeInstanceDeletionDnsEffect = Effect.fn(
-  "tailscale.instanceDeletion.synchronizeDns"
-)(function* <TDeployment extends TailscaleDeploymentState>({
-  current,
-  memberId,
-  mode,
-  operations,
-  relayId,
-  signal,
-  stackIds,
-}: {
-  current: ReadonlyArray<TDeployment>
-  memberId: string
-  mode: "prepare" | "rollback"
-  operations: Pick<TailscaleDeploymentOperations<TDeployment>, "syncDns">
-  relayId: string
-  signal?: AbortSignal
-  stackIds: ReadonlyArray<string>
-}) {
-  yield* ensurePrepareActive(mode, signal)
-  const requestedStackIds = new Set(stackIds)
-  const deploymentsByStack = new Map<string, Array<TDeployment>>()
-  for (const deployment of current) {
-    if (!requestedStackIds.has(deployment.id)) continue
-    const deployments = deploymentsByStack.get(deployment.id) ?? []
-    deployments.push(deployment)
-    deploymentsByStack.set(deployment.id, deployments)
-  }
-
-  const plans: Array<{
-    previousRecords: RelayTailscaleStackDns["records"]
-    records: RelayTailscaleStackDns["records"]
-    targets: Array<TDeployment>
-  }> = []
-  for (const stackId of requestedStackIds) {
-    yield* ensurePrepareActive(mode, signal)
-    const deployments = deploymentsByStack.get(stackId)
-    if (!deployments?.length) {
-      return yield* orchestrationFailure(
-        "validation",
-        `Tailscale network ${stackId.slice(0, 8)} is unavailable`
-      )
-    }
-    if (
-      mode === "prepare" &&
-      !deployments.some(
-        (deployment) =>
-          deployment.relayId === relayId &&
-          deployment.bindings.some((binding) => binding.memberId === memberId)
-      )
-    ) {
-      return yield* orchestrationFailure(
-        "validation",
-        `Tailscale network ${deploymentLabel(deployments)} no longer contains it`
-      )
-    }
-
-    const previousRecordsWithSource = deploymentRecords(deployments)
-    const nextRecords =
-      mode === "prepare"
-        ? previousRecordsWithSource.filter(
-            ({ memberId: recordMemberId, relayId: recordRelayId }) =>
-              recordMemberId !== memberId || recordRelayId !== relayId
-          )
-        : previousRecordsWithSource
-    plans.push({
-      previousRecords: previousRecordsWithSource.map(
-        ({ address, hostname }) => ({ address, hostname })
-      ),
-      records: nextRecords.map(({ address, hostname }) => ({
-        address,
-        hostname,
-      })),
-      targets:
-        mode === "prepare"
-          ? deployments.filter((deployment) => deployment.relayId !== relayId)
-          : deployments,
-    })
-  }
-
-  if (mode === "rollback") {
-    const tasks = plans.flatMap((plan) =>
-      plan.targets.map((deployment) => ({ deployment, records: plan.records }))
-    )
-    const [, failures] = yield* Effect.partition(
-      tasks,
-      ({ deployment, records }) =>
-        syncDnsEffect(operations, deployment, records, "rollback").pipe(
-          Effect.mapError((error) =>
-            rollbackFailure(deployment.relayName, error)
-          )
-        ),
-      { concurrency: "unbounded" }
-    )
-    if (failures.length > 0) {
-      return yield* orchestrationFailure(
-        "rollback",
-        `Could not restore Tailscale DNS after server deletion failed: ${failures.join("; ")}`
-      )
-    }
-    return
-  }
-
-  const synchronized: Array<{
-    deployment: TDeployment
-    previousRecords: RelayTailscaleStackDns["records"]
-  }> = []
-
-  yield* Effect.forEach(
-    plans,
-    (plan) =>
-      Effect.forEach(
-        plan.targets,
-        (deployment) =>
-          Effect.gen(function* () {
-            yield* ensurePrepareActive(mode, signal)
-            const updated = yield* syncDnsEffect(
-              operations,
-              deployment,
-              plan.records,
-              "prepare"
-            )
-            synchronized.push({
-              deployment: updated,
-              previousRecords: plan.previousRecords,
-            })
-            yield* ensurePrepareActive(mode, signal)
-          }),
-        { discard: true }
-      ),
-    { discard: true }
-  ).pipe(
-    Effect.catch((cause) => {
-      const rollbackTargets = [...synchronized].reverse()
-      return Effect.partition(
-        rollbackTargets,
-        ({ deployment, previousRecords }) =>
-          syncDnsEffect(
-            operations,
-            deployment,
-            previousRecords,
-            "rollback"
-          ).pipe(
-            Effect.mapError((error) =>
-              rollbackFailure(deployment.relayName, error)
-            )
-          ),
-        { concurrency: "unbounded" }
-      ).pipe(
-        Effect.flatMap(([, rollbackFailures]) =>
-          orchestrationFailure(
-            "prepare",
-            `Could not prepare Tailscale DNS for server deletion: ${errorMessage(
-              cause
-            )}${
-              rollbackFailures.length
-                ? `. DNS rollback also failed: ${rollbackFailures.join("; ")}`
-                : ""
-            }`,
-            cause
-          )
-        )
-      )
-    })
-  )
-})
 
 export const applyTailscaleDeploymentPlanEffect = Effect.fn(
   "tailscale.deployment.applyPlan"
@@ -300,21 +131,6 @@ export const applyTailscaleDeploymentPlanEffect = Effect.fn(
       { discard: true }
     )
 
-    const records = applied.flatMap((deployment) =>
-      deployment.bindings.flatMap(({ address, enabled, hostname }) =>
-        enabled ? [{ address, hostname }] : []
-      )
-    )
-    const [synchronizedDeployments, dnsFailures] = yield* Effect.partition(
-      applied,
-      (deployment) => syncDnsEffect(operations, deployment, records, "dns"),
-      { concurrency: "unbounded" }
-    )
-    const firstDnsFailure = dnsFailures[0]
-    if (firstDnsFailure !== undefined) {
-      return yield* Effect.fail(firstDnsFailure)
-    }
-
     // Preparing a removal keeps its identity on disk, so every prepared node
     // can be restored if a later node or control-plane update fails.
     yield* Effect.forEach(
@@ -328,12 +144,13 @@ export const applyTailscaleDeploymentPlanEffect = Effect.fn(
         }),
       { discard: true }
     )
+    // From what the Relays hold now, members frozen for deletion left out,
+    // and nodes being removed serving none.
+    yield* promiseOperation("dns", () => operations.rewriteDns())
     if (beforeFinalize) {
-      yield* promiseOperation("finalize", () =>
-        beforeFinalize(synchronizedDeployments)
-      )
+      yield* promiseOperation("finalize", () => beforeFinalize(applied))
     }
-    return synchronizedDeployments
+    return applied
   }).pipe(
     Effect.catch((cause) =>
       rollbackTailscaleDeploymentPlanEffect(
@@ -440,30 +257,15 @@ const rollbackTailscaleDeploymentPlanEffect = Effect.fn(
     { concurrency: "unbounded" }
   )
 
-  const records = current.flatMap((deployment) =>
-    deployment.bindings.flatMap(({ address, enabled, hostname }) =>
-      enabled ? [{ address, hostname }] : []
-    )
+  // What the Relays hold once put back, not what they held before.
+  const dnsFailure = yield* promiseOperation("rollback", () =>
+    operations.rewriteDns()
+  ).pipe(
+    Effect.as([] as Array<string>),
+    Effect.catch((error) => Effect.succeed([`DNS: ${errorMessage(error)}`]))
   )
-  const [, dnsFailures] = yield* Effect.partition(
-    current,
-    (deployment) =>
-      syncDnsEffect(operations, deployment, records, "rollback").pipe(
-        Effect.mapError((error) => rollbackFailure(deployment.relayName, error))
-      ),
-    { concurrency: "unbounded" }
-  )
-  return [...removalFailures, ...deploymentFailures, ...dnsFailures]
+  return [...removalFailures, ...deploymentFailures, ...dnsFailure]
 })
-
-function syncDnsEffect<TDeployment extends TailscaleDeploymentState>(
-  operations: Pick<TailscaleDeploymentOperations<TDeployment>, "syncDns">,
-  deployment: TDeployment,
-  records: RelayTailscaleStackDns["records"],
-  phase: "dns" | "prepare" | "rollback"
-) {
-  return promiseOperation(phase, () => operations.syncDns(deployment, records))
-}
 
 function promiseOperation<TResult>(
   phase: TailscaleOrchestrationError["phase"],
@@ -478,15 +280,6 @@ function promiseOperation<TResult>(
         cause,
       }),
   })
-}
-
-function ensurePrepareActive(
-  mode: "prepare" | "rollback",
-  signal?: AbortSignal
-) {
-  return mode === "prepare" && signal?.aborted
-    ? orchestrationFailure("prepare", "Tailscale DNS preparation was cancelled")
-    : Effect.void
 }
 
 function orchestrationFailure(
@@ -524,25 +317,4 @@ function rollbackFailure(relayName: string, cause: unknown): string {
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "unknown error"
-}
-
-function deploymentLabel(
-  deployments: ReadonlyArray<TailscaleDeploymentState>
-): string {
-  return deployments[0]?.name ?? "network"
-}
-
-function deploymentRecords(
-  deployments: ReadonlyArray<TailscaleDeploymentState>
-): Array<{
-  address: string
-  hostname: string
-  memberId: string
-  relayId: string
-}> {
-  return deployments.flatMap((deployment) =>
-    deployment.bindings.flatMap((binding) =>
-      binding.enabled ? [{ ...binding, relayId: deployment.relayId }] : []
-    )
-  )
 }

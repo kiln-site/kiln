@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test"
 
 import {
   applyTailscaleDeploymentPlanEffect,
-  synchronizeInstanceDeletionDnsEffect,
   type DesiredTailscaleDeployment,
   type TailscaleDeploymentState,
 } from "./tailscale-orchestration"
@@ -17,12 +16,6 @@ const applyTailscaleDeploymentPlan = <
 >(
   input: Parameters<typeof applyTailscaleDeploymentPlanEffect<TDeployment>>[0]
 ) => Effect.runPromise(applyTailscaleDeploymentPlanEffect(input))
-
-const synchronizeInstanceDeletionDns = <
-  TDeployment extends TailscaleDeploymentState,
->(
-  input: Parameters<typeof synchronizeInstanceDeletionDnsEffect<TDeployment>>[0]
-) => Effect.runPromise(synchronizeInstanceDeletionDnsEffect(input))
 
 describe("Tailscale deployment orchestration", () => {
   it("rolls back a new node whose allocated subnet is already reserved", async () => {
@@ -42,7 +35,7 @@ describe("Tailscale deployment orchestration", () => {
           remove: async (value, mode) => {
             if (mode === "commit") removed.push(value.relayId)
           },
-          syncDns: async (value) => value,
+          rewriteDns: async () => undefined,
         },
         reservedSubnets: new Set([colliding.subnet]),
       })
@@ -51,8 +44,12 @@ describe("Tailscale deployment orchestration", () => {
     expect(removed).toEqual(["relay-a"])
   })
 
-  it("restores every node after a DNS synchronization failure", async () => {
+  it("restores every node after a DNS rewrite failure, then rewrites DNS from what they hold", async () => {
     const restored: Array<string> = []
+    // What each node holds, and the DNS last written from it.
+    const held = new Map<string, string>()
+    let dns: Record<string, string> | null = null
+    let failed = false
     const current = [deployment("relay-a", "old"), deployment("relay-b", "old")]
 
     await expect(
@@ -64,6 +61,7 @@ describe("Tailscale deployment orchestration", () => {
         name: "Test network",
         operations: {
           apply: async (desired, input) => {
+            held.set(desired.relayId, input.bindings[0]?.hostname ?? "")
             if (input.bindings[0]?.hostname === "old") {
               restored.push(desired.relayId)
               return deployment(desired.relayId, "old")
@@ -71,59 +69,19 @@ describe("Tailscale deployment orchestration", () => {
             return deployment(desired.relayId, "changed")
           },
           remove: async () => undefined,
-          syncDns: async (value) => {
-            if (value.revision === "changed" && value.relayId === "relay-b") {
+          rewriteDns: async () => {
+            if (!failed) {
+              failed = true
               throw new Error("DNS failed")
             }
-            return value
+            dns = Object.fromEntries(held)
           },
         },
       })
     ).rejects.toThrow("DNS failed")
 
     expect(restored.sort()).toEqual(["relay-a", "relay-b"])
-  })
-
-  it("restores peer DNS when a server deletion prepare is cancelled", async () => {
-    const controller = new AbortController()
-    const calls: Array<{ addresses: Array<string>; relayId: string }> = []
-    const current = [
-      deployment("relay-a", "old", "10.165.55.10"),
-      deployment("relay-b", "old", "10.165.55.11"),
-      deployment("relay-c", "old", "10.165.55.12"),
-    ]
-
-    await expect(
-      synchronizeInstanceDeletionDns({
-        current,
-        memberId: "relay-a",
-        mode: "prepare",
-        operations: {
-          syncDns: async (value, records) => {
-            calls.push({
-              addresses: records.map(({ address }) => address),
-              relayId: value.relayId,
-            })
-            if (calls.length === 1) controller.abort()
-            return value
-          },
-        },
-        relayId: "relay-a",
-        signal: controller.signal,
-        stackIds: ["a".repeat(40)],
-      })
-    ).rejects.toThrow("cancelled")
-
-    expect(calls).toEqual([
-      {
-        addresses: ["10.165.55.11", "10.165.55.12"],
-        relayId: "relay-b",
-      },
-      {
-        addresses: ["10.165.55.10", "10.165.55.11", "10.165.55.12"],
-        relayId: "relay-b",
-      },
-    ])
+    expect(dns).toEqual({ "relay-a": "old", "relay-b": "old" })
   })
 })
 

@@ -180,28 +180,16 @@ export function activeTailscaleStackBindings<
   return bindings.filter((binding) => binding.enabled)
 }
 
-export function tailscaleStackWithoutMember(
+// The stack without the members that match. Their DNS records are Hearth's
+// to drop, with every node's.
+export function tailscaleStackWithoutMembers(
   config: RelayTailscaleStackConfig,
-  records: ReadonlyArray<{ address: string; hostname: string }>,
-  memberId: string
-): {
-  config: RelayTailscaleStackConfig
-  records: Array<{ address: string; hostname: string }>
-} {
-  const removedAddresses = new Set(
-    config.bindings
-      .filter((binding) => binding.memberId === memberId)
-      .map(({ address }) => address)
-  )
-  return {
-    config: relayTailscaleStackConfigSchema.parse({
-      ...config,
-      bindings: config.bindings.filter(
-        (binding) => binding.memberId !== memberId
-      ),
-    }),
-    records: records.filter((record) => !removedAddresses.has(record.address)),
-  }
+  matches: (memberId: string) => boolean
+): RelayTailscaleStackConfig {
+  return relayTailscaleStackConfigSchema.parse({
+    ...config,
+    bindings: config.bindings.filter((binding) => !matches(binding.memberId)),
+  })
 }
 
 export function tailscaleStackCoreDnsConfiguration(

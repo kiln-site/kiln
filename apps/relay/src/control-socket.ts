@@ -183,11 +183,6 @@ export interface ControlSocketOptions {
   readonly requestLocks: (
     request: RelayControlRequest
   ) => ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> | null
-  /**
-   * Whether a request waits only for what holds its locks, not for what
-   * waits in line, as work something running waits on does.
-   */
-  readonly requestContinues?: (request: RelayControlRequest) => boolean
   readonly subscribeSnapshots: (
     listener: (snapshot: unknown) => void
   ) => () => void
@@ -646,7 +641,6 @@ function authenticateSocket(
       locks === null
         ? null
         : options.lanes.admit({
-            continuation: options.requestContinues?.(message) ?? false,
             label: message.operation,
             locks,
           })
@@ -1395,9 +1389,7 @@ function authenticateSocket(
           v: 1,
         })
         return yield* Deferred.await(response).pipe(
-          Effect.timeout(
-            reverseRequestCancellationGraceMs(operation, duration)
-          ),
+          Effect.timeout(1_000),
           Effect.catchTag("TimeoutError", () =>
             controlFailure(
               `Hearth request timed out after ${duration}ms and did not confirm cancellation`
@@ -1422,18 +1414,6 @@ function runInLane<A, E>(
   execution: EffectType.Effect<A, E>
 ): EffectType.Effect<A, E | LaneRejectedError> {
   return ticket ? ticket.run(execution) : execution
-}
-
-function reverseRequestCancellationGraceMs(
-  operation: RelayControlOperation,
-  duration: number
-): number {
-  if (operation === "hearth.tailscale.member.detach") {
-    // A cancelled prepare may be inside one 60s peer RPC, then needs one
-    // additional peer-RPC window to restore every node already changed.
-    return Math.min(130_000, duration * 2 + 1_000)
-  }
-  return 1_000
 }
 
 function auditDetailsForRequest(
@@ -1662,6 +1642,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "relay.configure"
     case "relay.tailscale.read":
     case "relay.tailscale.stack.list":
+    case "relay.tailscale.stack.state":
       return "instance.network.read"
     case "relay.tailscale.install":
     case "relay.tailscale.write":
@@ -1954,8 +1935,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "instance.network.databases.remove":
     case "instance.network.routes.write":
       return "instance.network.write"
-    case "hearth.tailscale.member.detach":
-      return null
     case "sftp.authorization.resolve":
       return "instance.sftp.connect"
   }

@@ -69,6 +69,34 @@ interface TailscaleNetworkRow extends RowDataPacket {
   oauth_tags: unknown
 }
 
+/**
+ * The Relays each network is on, by network: what Hearth recorded when it
+ * last saved it.
+ */
+export const tailscaleNetworkRelaysEffect = Effect.fn(
+  "tailscaleNetworks.relays"
+)(function* (networkIds: ReadonlyArray<string>) {
+  const relays = new Map<string, Array<string>>()
+  if (networkIds.length === 0) return relays
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & { network_id: string; relay_id: string }
+  >(
+    "tailscale_network_relays",
+    `SELECT network_id, relay_id
+       FROM ${databaseTable("tailscale_network_deployment")}
+      WHERE network_id IN (${networkIds.map(() => "?").join(", ")})`,
+    [...networkIds]
+  )
+  for (const row of rows) {
+    relays.set(row.network_id, [
+      ...(relays.get(row.network_id) ?? []),
+      row.relay_id,
+    ])
+  }
+  return relays
+})
+
 export const loadTailscaleNetworkDefinitionsEffect = Effect.fn(
   "tailscaleNetworks.load"
 )(function* () {

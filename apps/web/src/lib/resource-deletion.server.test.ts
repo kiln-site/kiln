@@ -10,7 +10,7 @@ import { inLanes } from "@/operations/operation"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql } from "@/test/database"
-import { selectRows } from "@/test/seed"
+import { insertRelay, selectRows } from "@/test/seed"
 import {
   appId,
   appRecords,
@@ -22,6 +22,7 @@ import {
   relayId,
   seedApp,
   seedDeletion as seed,
+  seedNetwork,
   serverId,
   serverRecords,
   stranger,
@@ -29,11 +30,13 @@ import {
 } from "@/test/resource-deletion"
 
 import {
+  cancelResourceDeletionEffect,
   deleteResource,
   keepResource,
   reconcileResourceDeletions,
   requestResourceDeletionEffect,
 } from "./resource-deletion.server"
+import { rewriteTailscaleDns } from "./tailscale-dns.server"
 
 // The Relay is the only fake (test/resource-deletion.ts).
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
@@ -53,7 +56,11 @@ afterAll(async () => {
 })
 
 const Lanes = testOperationsEngine(
-  Layer.mergeAll(deleteResource.layer, keepResource.layer)
+  Layer.mergeAll(
+    deleteResource.layer,
+    keepResource.layer,
+    rewriteTailscaleDns.layer
+  )
 ).pipe(Layer.provideMerge(TestDatabase))
 
 const deleteServer = (user = owner) =>
@@ -85,6 +92,95 @@ const failBackup = (backupId: string) =>
 
 describeMysql("Deleting a game server or database", () => {
   layer(Lanes, { timeout: 120_000 })((it) => {
+    const network = "e".repeat(40)
+    const peer = `instance:${"f".repeat(40)}`
+
+    it.effect(
+      "writes its Tailscale network's DNS without it, then deletes it and takes it off the network",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* seedNetwork(network, [`instance:${serverId}`, peer])
+          // A Relay the network isn't on doesn't answer, and needn't.
+          yield* insertRelay("u".repeat(43))
+          relay.unreachable.add("u".repeat(43))
+
+          yield* deleteServer()
+          const done = yield* until(serverId, ["completed", "failed"])
+
+          assert.strictEqual(done?.status, "completed")
+          // Written once, while it was frozen and still a member.
+          assert.deepStrictEqual(relay.stackDns.get(network), [
+            peer.replaceAll(":", "-"),
+          ])
+          assert.deepStrictEqual(relay.stacks.get(network), [peer])
+        }).pipe(TestClock.withLive),
+      90_000
+    )
+
+    it.effect(
+      "deletes nothing while a Relay its Tailscale network is on is paused",
+      () =>
+        Effect.gen(function* () {
+          const paused = "p".repeat(43)
+          yield* seed
+          yield* insertRelay(paused, { enabled: false })
+          yield* seedNetwork(network, [`instance:${serverId}`, peer], [paused])
+
+          yield* deleteServer()
+          const done = yield* until(serverId, ["completed", "failed"])
+
+          assert.strictEqual(done?.status, "failed")
+          assert.match(done?.error ?? "", /paused/)
+          assert.isTrue(relay.servers.has(serverId))
+          assert.isUndefined(relay.stackDns.get(network))
+        }).pipe(TestClock.withLive),
+      90_000
+    )
+
+    it.effect(
+      "gives a game server it keeps its Tailscale DNS back",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* seedNetwork(network, [`instance:${serverId}`, peer])
+
+          yield* requestResourceDeletionEffect({
+            finalBackup: true,
+            kind: "instance",
+            relayId,
+            resourceId: serverId,
+            storageId: null,
+            user: owner,
+          })
+          yield* failBackup(yield* nextBackup(serverId, null))
+          yield* until(serverId, ["failed"])
+          // Frozen and not deleted, it has no DNS.
+          assert.deepStrictEqual(relay.stackDns.get(network), [
+            peer.replaceAll(":", "-"),
+          ])
+
+          yield* cancelResourceDeletionEffect({
+            kind: "instance",
+            relayId,
+            resourceId: serverId,
+            user: owner,
+          })
+          const kept = yield* until(serverId, ["cancelled", "failed"])
+
+          assert.strictEqual(kept?.status, "cancelled")
+          assert.deepStrictEqual(relay.stackDns.get(network), [
+            `instance-${serverId}`,
+            peer.replaceAll(":", "-"),
+          ])
+          assert.deepStrictEqual(relay.stacks.get(network), [
+            `instance:${serverId}`,
+            peer,
+          ])
+        }).pipe(TestClock.withLive),
+      90_000
+    )
+
     it.effect(
       "keeps an App's volume its deletion didn't plan to take, though nothing else uses it any more",
       () =>

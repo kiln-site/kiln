@@ -53,12 +53,7 @@ import type {
   RelaySnapshotDelta,
   RelaySystemUpdate,
 } from "@workspace/contracts"
-import {
-  hearthDatabaseTerminalOutputSchema,
-  relayTailscaleStackIdSchema,
-  tailscaleMemberIdSchema,
-} from "@workspace/contracts"
-import { z } from "zod"
+import { hearthDatabaseTerminalOutputSchema } from "@workspace/contracts"
 
 import {
   hearthDialUrl,
@@ -92,13 +87,6 @@ export { relayControlEndpoint }
 export type { RelayEndpoint }
 
 const MAX_BACKOFF_MS = 30_000
-const tailscaleMemberDetachSchema = z.strictObject({
-  // The game server, App service, or database being deleted.
-  memberId: tailscaleMemberIdSchema,
-  mode: z.enum(["prepare", "rollback"]),
-  stackIds: z.array(relayTailscaleStackIdSchema).min(1).max(4_096),
-})
-
 class RelayRequestTimeoutError extends Error {
   override readonly name = "RelayRequestTimeoutError"
 }
@@ -1855,7 +1843,7 @@ class RelayConnection {
     const operation =
       duration === null
         ? reverseRequestFailure("Relay request timeout is invalid")
-        : this.#executeRelayRequestEffect(request, controller, socket).pipe(
+        : this.#executeRelayRequestEffect(request, socket).pipe(
             Effect.onInterrupt(() =>
               Effect.sync(() => {
                 controller.abort()
@@ -1910,43 +1898,8 @@ class RelayConnection {
 
   #executeRelayRequestEffect(
     request: RelayControlRequest,
-    controller: AbortController,
     socket: WebSocket
   ): Effect.Effect<void, Error> {
-    if (request.operation === "hearth.tailscale.member.detach") {
-      return Effect.gen({ self: this }, function* () {
-        const input = yield* Effect.try({
-          try: () => tailscaleMemberDetachSchema.parse(request.payload),
-          catch: asError,
-        })
-        const { synchronizeTailscaleInstanceDeletion } =
-          yield* Effect.tryPromise({
-            try: () => import("@/server/tailscale-instance-deletion"),
-            catch: asError,
-          })
-        yield* Effect.tryPromise({
-          try: () =>
-            synchronizeTailscaleInstanceDeletion(
-              {
-                ...input,
-                relayId: this.#relay.id,
-              },
-              (relay, operation, payload, timeoutMs) =>
-                relayRpc(relay, operation, payload, timeoutMs, request.subject),
-              controller.signal
-            ),
-          catch: asError,
-        })
-        yield* ensureRelayRequestActive(controller.signal)
-        yield* sendSocketEffect(socket, {
-          id: randomUUID(),
-          payload: { synchronized: true },
-          replyTo: request.id,
-          type: "response",
-          v: 1,
-        })
-      })
-    }
     if (request.operation === "hearth.database.terminal.output") {
       return Effect.gen({ self: this }, function* () {
         const output = yield* Effect.try({
@@ -2412,14 +2365,6 @@ function asError(cause: unknown): Error {
 
 function reverseRequestFailure(message: string): Effect.Effect<never, Error> {
   return Effect.fail(new Error(message))
-}
-
-function ensureRelayRequestActive(
-  signal: AbortSignal
-): Effect.Effect<void, RelayRequestTimeoutError> {
-  return signal.aborted
-    ? Effect.fail(new RelayRequestTimeoutError("Relay request was cancelled"))
-    : Effect.void
 }
 
 function sendSocketEffect(
