@@ -258,6 +258,10 @@ async function configureTailscaleIntegrationHandler(
   const definitions = await loadTailscaleNetworkDefinitions()
   const definition = definitions.find(({ id }) => id === data.id)
   if (!definition) throw new Error("Tailscale network not found")
+  // Its removal still needs the credentials it was set up with.
+  if (definition.cleanup) {
+    throw new Error("This Tailscale network is being removed")
+  }
   const clientSecret =
     data.clientSecret ??
     (await loadTailscaleNetworkCredential(data.id)).clientSecret
@@ -378,6 +382,8 @@ async function syncTailscaleIntegrationHandler(
   requireCompleteTailscaleDeploymentList(result.unavailableRelays)
   const stack = result.stacks.find(({ id }) => id === data.id)
   if (!stack) throw new Error("Tailscale network not found")
+  // Its removal takes its nodes away; a sync would point DNS back at them.
+  if (stack.cleanup) throw new Error("This Tailscale network is being removed")
   const synchronized = await Effect.runPromise(
     promiseEffect(async () => {
       await synchronizeTailscaleControlPlane(credential, stack)
