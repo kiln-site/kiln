@@ -69,7 +69,7 @@ const allow = (
 // Waits a while for every operation an earlier test started to end, its
 // workflow's last writes included, so emptying the tables doesn't wait on
 // them. One a stopped test run left running never ends; it's emptied anyway.
-const operationsEnded = selectRows<{ state: string }>("operation").pipe(
+export const operationsEnded = selectRows<{ state: string }>("operation").pipe(
   Effect.repeat({
     schedule: Schedule.spaced("100 millis"),
     until: (rows) =>
