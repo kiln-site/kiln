@@ -132,7 +132,7 @@ import {
 } from "@/lib/relay-selectors"
 import { updateInstanceSourceName } from "@/lib/instance-registry"
 import { dnsKey } from "@/lib/dns-operations"
-import { fileRootKey } from "@/lib/file-lanes"
+import { filePinsKey, fileRootKey } from "@/lib/file-lanes"
 import { exclusive, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
@@ -1091,24 +1091,54 @@ export const getRelayFile = createServerFn({ method: "GET" })
     })
   })
 
+// Who may use a file root's files, on its active Relay, as the person.
+const fileRootAccess = (
+  input: { readonly instanceId: string; readonly relayId: string },
+  user: AuthenticatedUser | null,
+  permission: FilePermission
+) =>
+  signedIn(user).pipe(
+    Effect.flatMap((person) =>
+      promiseEffect(async () => {
+        const relay = await instanceRelay(input.relayId)
+        await requireFilePermission(
+          person,
+          relay.id,
+          input.instanceId,
+          permission
+        )
+        return { person, relay }
+      })
+    )
+  )
+
+// A view only feeds the root's recent files, so it isn't audited. It holds
+// the root shared, so it can't record a view of one being deleted.
+const recordFileView = operation<z.infer<typeof fileInputSchema>>()({
+  name: "files.view",
+  doing: "Opening a file here",
+  authorize: ({ input, user }) =>
+    fileRootAccess(input, user, "instance.files.read"),
+  locks: ({ input }) => [shared(fileRootKey(input.relayId, input.instanceId))],
+  run: ({ context: { relay }, input }) =>
+    promiseEffect(async () => {
+      await recordFileActivityBestEffort(
+        "view",
+        recordFileViewed(relay.id, input.instanceId, input.path),
+        relay.id,
+        input.instanceId
+      )
+      return { recorded: true }
+    }),
+})
+
 export const recordRelayFileView = createServerFn({ method: "POST" })
   .validator(fileInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireFilePermission(
-      user,
-      relay.id,
-      data.instanceId,
-      "instance.files.read"
-    )
-    await recordFileActivityBestEffort(
-      "view",
-      recordFileViewed(relay.id, data.instanceId, data.path),
-      relay.id,
-      data.instanceId
-    )
-    return { recorded: true }
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(recordFileView, data, {
+      user: await instanceSessionUser(),
+    })
+  )
 
 type FilePermission =
   | "instance.files.delete"
@@ -1349,65 +1379,75 @@ export const getRelayFileActivity = createServerFn({ method: "GET" })
     )
   })
 
+// Pins are the root's, shown to everyone who opens its files; holding its
+// pins puts one pin after another, so the limit holds.
+const pinFile = operation<z.infer<typeof filePinInputSchema>>()({
+  name: "files.pin",
+  doing: "Changing the pinned files here",
+  authorize: ({ input, user }) =>
+    fileRootAccess(input, user, "instance.files.write"),
+  locks: ({ input }) => [
+    shared(fileRootKey(input.relayId, input.instanceId)),
+    exclusive(filePinsKey(input.relayId, input.instanceId)),
+  ],
+  run: ({ context: { relay }, input }) =>
+    promiseEffect(async () => {
+      const search = new URLSearchParams({ path: input.path })
+      const entry = await runAppEffect(
+        "relay.fileStat.pinValidation",
+        relayJsonEffect(
+          relay,
+          `/v1/instances/${encodeURIComponent(input.instanceId)}/file-stat?${search.toString()}`,
+          relayFileEntrySchema.parse
+        )
+      )
+      // Directories are pinned by their "/"-suffixed path.
+      if (entry.path !== input.path) throw new Error("File not found")
+      const activity = await listFileActivity(relay.id, input.instanceId)
+      const validPinnedPaths = await runAppEffect(
+        "relay.fileStat.pinnedValidation",
+        Effect.forEach(
+          activity.files.filter((file) => file.pinned),
+          (file) => {
+            const pinnedSearch = new URLSearchParams({ path: file.path })
+            return relayJsonEffect(
+              relay,
+              `/v1/instances/${encodeURIComponent(input.instanceId)}/file-stat?${pinnedSearch.toString()}`,
+              relayFileEntrySchema.parse
+            ).pipe(
+              Effect.match({
+                onFailure: () => null,
+                onSuccess: (pinnedEntry) =>
+                  pinnedEntry.path === file.path ? pinnedEntry.path : null,
+              })
+            )
+          },
+          { concurrency: 8 }
+        )
+      )
+      const validPaths = new Set(
+        validPinnedPaths.filter((path): path is string => path !== null)
+      )
+      validPaths.add(input.path)
+      const nextActivity = relayFileActivitySchema.parse(
+        await setFilePinned(
+          relay.id,
+          input.instanceId,
+          input.path,
+          input.pinned,
+          validPaths
+        )
+      )
+      publishFileActivityChange(relay.id, input.instanceId)
+      return nextActivity
+    }),
+})
+
 export const updateRelayFilePin = createServerFn({ method: "POST" })
   .validator(filePinInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireFilePermission(
-      user,
-      relay.id,
-      data.instanceId,
-      "instance.files.write"
-    )
-    const search = new URLSearchParams({ path: data.path })
-    const entry = await runAppEffect(
-      "relay.fileStat.pinValidation",
-      relayJsonEffect(
-        relay,
-        `/v1/instances/${encodeURIComponent(data.instanceId)}/file-stat?${search.toString()}`,
-        relayFileEntrySchema.parse
-      )
-    )
-    // Directories are pinned by their "/"-suffixed path.
-    if (entry.path !== data.path) throw new Error("File not found")
-    const activity = await listFileActivity(relay.id, data.instanceId)
-    const validPinnedPaths = await runAppEffect(
-      "relay.fileStat.pinnedValidation",
-      Effect.forEach(
-        activity.files.filter((file) => file.pinned),
-        (file) => {
-          const pinnedSearch = new URLSearchParams({ path: file.path })
-          return relayJsonEffect(
-            relay,
-            `/v1/instances/${encodeURIComponent(data.instanceId)}/file-stat?${pinnedSearch.toString()}`,
-            relayFileEntrySchema.parse
-          ).pipe(
-            Effect.match({
-              onFailure: () => null,
-              onSuccess: (pinnedEntry) =>
-                pinnedEntry.path === file.path ? pinnedEntry.path : null,
-            })
-          )
-        },
-        { concurrency: 8 }
-      )
-    )
-    const validPaths = new Set(
-      validPinnedPaths.filter((path): path is string => path !== null)
-    )
-    validPaths.add(data.path)
-    const nextActivity = relayFileActivitySchema.parse(
-      await setFilePinned(
-        relay.id,
-        data.instanceId,
-        data.path,
-        data.pinned,
-        validPaths
-      )
-    )
-    publishFileActivityChange(relay.id, data.instanceId)
-    return nextActivity
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(pinFile, data, { user: await instanceSessionUser() })
+  )
 
 const powerInstance = resourceOperation({
   kind: "instance",

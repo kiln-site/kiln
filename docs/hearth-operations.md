@@ -173,39 +173,42 @@ whole, as reinstalling a game server does. An account
 sign-ins wait for nothing while an administrator changes the account, and a
 request is answered once.
 
-| Key                               | Changes                                                |
-| --------------------------------- | ------------------------------------------------------ |
-| `instance:<relay>/<id>`           | A game server; `app:`, `database:`, `volume:` likewise |
-| `instance:<relay>/<id>#dns`       | Its DNS records and web routes                         |
-| `instance:<relay>/<id>#icon`      | Its icon; `user-icon:<id>#picture` a person's picture  |
-| `instance:<relay>/<id>#power`     | Starting, stopping or restarting it                    |
-| `#config`, `#name`, `#ports`      | Its startup, its name, its ports                       |
-| `user:<id>`                       | An account and its access                              |
-| `user:<id>#session:<id>`          | One of its browser sessions, signing it out            |
-| `user:<id>#cli-credential:<id>`   | One of its linked CLIs, unlinking it                   |
-| `cli-device:<id>`                 | A CLI's request to be linked, by its ID, not its code  |
-| `email:<hash>`                    | Access for an address, before or without an account    |
-| `relay:<id>`                      | A Relay; removing or pairing it takes it whole         |
-| `relay:<id>#settings`             | Its name, pausing and connection settings              |
-| `relay:<id>#proxy`, `#tailscale`  | Its proxy, its Tailscale                               |
-| `relay:<id>#connections`          | Its pairing invitations and connected clients          |
-| `relay:<id>#host-files`           | Its host files mount                                   |
-| `relay:<id>#process`              | Restarting it or its host, and starting updates on it  |
-| `relay:<id>#authorization`        | What a Relay holds of who may do what                  |
-| `relay:<id>#database-connections` | Apps' database connections handover                    |
-| `cloudflare-connection:<id>`      | A Cloudflare connection                                |
-| `hearth`                          | Hearth: its update, backups, services and database     |
-| `backup:<id>`                     | A backup: changing it, or restoring from it            |
-| `backup-storage:<id>`             | A backup destination; `#settings` saving it            |
-| `<resource>#backup-policy`        | What its backups keep, leave out, and where they go    |
-| `github-sync:<id>`                | A GitHub sync: changing it, or writing a file for it   |
-| `github-connection:<id>`          | A GitHub connection; what reads through it, shared     |
-| `schedule:<id>`                   | A schedule: deleting it; `#settings` saving or running |
-| `tailscale-network:<id>`          | A Tailscale network; `#settings` its members and DNS   |
-| `brick-catalog:<id>`              | A Brick catalog: deleting it; `#visibility` publishing |
-| `brick-library:<user>#contents`   | A person's catalogs and custom Bricks: adding them     |
-| `server-migration:<id>`           | A game server's copy; `#task` cancelling it            |
-| `instance:<relay>/<id>#migration` | Copying it, one copy at a time                         |
+| Key                                 | Changes                                                |
+| ----------------------------------- | ------------------------------------------------------ |
+| `instance:<relay>/<id>`             | A game server; `app:`, `database:`, `volume:` likewise |
+| `instance:<relay>/<id>#dns`         | Its DNS records and web routes                         |
+| `instance:<relay>/<id>#icon`        | Its icon; `user-icon:<id>#picture` a person's picture  |
+| `instance:<relay>/<id>#power`       | Starting, stopping or restarting it                    |
+| `#config`, `#name`, `#ports`        | Its startup, its name, its ports                       |
+| `user:<id>`                         | An account and its access                              |
+| `user:<id>#session:<id>`            | One of its browser sessions, signing it out            |
+| `user:<id>#cli-credential:<id>`     | One of its linked CLIs, unlinking it                   |
+| `cli-device:<id>`                   | A CLI's request to be linked, by its ID, not its code  |
+| `email:<hash>`                      | Access for an address, before or without an account    |
+| `relay:<id>`                        | A Relay; removing or pairing it takes it whole         |
+| `relay:<id>#settings`               | Its name, pausing and connection settings              |
+| `relay:<id>#proxy`, `#tailscale`    | Its proxy, its Tailscale                               |
+| `relay:<id>#connections`            | Its pairing invitations and connected clients          |
+| `relay:<id>#host-files`             | Its host files mount                                   |
+| `relay:<id>#process`                | Restarting it or its host, and starting updates on it  |
+| `relay:<id>#authorization`          | What a Relay holds of who may do what                  |
+| `relay:<id>#database-connections`   | Apps' database connections handover                    |
+| `cloudflare-connection:<id>`        | A Cloudflare connection                                |
+| `hearth`                            | Hearth: its update, backups, services and database     |
+| `backup:<id>`                       | A backup: changing it, or restoring from it            |
+| `backup-storage:<id>`               | A backup destination; `#settings` saving it            |
+| `<resource>#backup-policy`          | What its backups keep, leave out, and where they go    |
+| `github-sync:<id>`                  | A GitHub sync: changing it, or writing a file for it   |
+| `github-connection:<id>`            | A GitHub connection; what reads through it, shared     |
+| `schedule:<id>`                     | A schedule: deleting it; `#settings` saving or running |
+| `tailscale-network:<id>`            | A Tailscale network; `#settings` its members and DNS   |
+| `brick-catalog:<id>`                | A Brick catalog: deleting it; `#visibility` publishing |
+| `brick-library:<user>#contents`     | A person's catalogs and custom Bricks: adding them     |
+| `file-activity:<relay>/<root>#pins` | A file root's pinned files, under their limit          |
+| `user-settings:<id>#notifications`  | A person's notification settings                       |
+| `platform-appearance#default`       | The appearance new people start with                   |
+| `server-migration:<id>`             | A game server's copy; `#task` cancelling it            |
+| `instance:<relay>/<id>#migration`   | Copying it, one copy at a time                         |
 
 A game server's move holds it whole until the move ends; a duplicate
 holds it shared and its `#migration`, and its `#power` and `#dns` when it
@@ -282,8 +285,7 @@ ended. Ended ones are kept for 30 days.
    A read is `GET`, unless its input is too large or too secret for a URL
    (`readsOverPost`); sessions, keystrokes and capability signing change
    nothing an operation orders (`notOperations`). Each exception gives its
-   reason. Those not moved yet are listed there too, and that list only
-   shrinks.
+   reason.
 
 For a step several features share that must not interleave with itself,
 such as a DNS update, `inLanes(name, doing, locks, effect)` runs it as an

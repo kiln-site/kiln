@@ -39,8 +39,9 @@ import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { exclusive, partKey, relayKey } from "@/operations/lanes"
+import { exclusive, partKey, relayKey, shared } from "@/operations/lanes"
 import {
+  inLanes,
   operation,
   runOperationPromise,
   signedIn,
@@ -717,11 +718,32 @@ export const getRelayHostFiles = createServerFn({ method: "GET" })
           ? `${root}/infrastructure/traefik/traefik.yaml`
           : null,
     }
-    const { pinFilesByDefault } = await import("@/lib/file-activity")
-    const pinned = await pinFilesByDefault(
-      relay.id,
-      relay.id,
-      [files.database, files.traefikConfig].filter((path) => path !== null)
+    const [{ pinFilesByDefault }, { filePinsKey, fileRootKey }] =
+      await Promise.all([
+        import("@/lib/file-activity"),
+        import("@/lib/file-lanes"),
+      ])
+    // Hearth pins these as its own work, in turn with people's pins, so the
+    // limit holds.
+    const pinned = await runAppEffect(
+      "relay.hostFiles.pin",
+      inLanes(
+        "files.pinByDefault",
+        "Pinning this Relay's files",
+        [
+          shared(fileRootKey(relay.id, relay.id)),
+          exclusive(filePinsKey(relay.id, relay.id)),
+        ],
+        promiseEffect(() =>
+          pinFilesByDefault(
+            relay.id,
+            relay.id,
+            [files.database, files.traefikConfig].filter(
+              (path) => path !== null
+            )
+          )
+        )
+      )
     )
     if (pinned) {
       publishRealtimeChange({
