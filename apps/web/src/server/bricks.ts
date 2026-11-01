@@ -10,7 +10,6 @@ import {
   relayInstanceNameSchema,
   relayInstanceSchema,
   relayIdSchema,
-  relayNetworkingSchema,
   relaySnapshotSchema,
   relayUpdateInstanceStartupSchema,
   resolveResourceLimits,
@@ -41,15 +40,18 @@ import { listPersistedRelays } from "@/lib/relay-registry"
 import { listMcJarVersionsEffect } from "@/effect/mcjarfiles"
 import { provisionServer } from "@/lib/server-provisioning.server"
 import { runAppEffect } from "@/effect/runtime"
-import {
-  invalidateRelayCache,
-  relayCachePolicy,
-  writeRelayCache,
-} from "@/lib/relay-client"
+import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { promiseEffect } from "@/effect/promise"
 import { provisioningInstanceId } from "@/lib/provisioning.server"
 import { dnsKey } from "@/lib/dns-operations"
-import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
+import {
+  exclusive,
+  partKey,
+  relayKey,
+  resourceKey,
+  shared,
+  userKey,
+} from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -92,9 +94,6 @@ export const hearthCreateInstanceInputSchema = relayCreateInstanceSchema
     name: relayInstanceNameSchema,
   })
   .strict()
-const networkingInputSchema = relayNetworkingSchema.extend(
-  relayInputSchema.shape
-)
 const recipeInputSchema = relayInputSchema.extend({ source: brickSourceSchema })
 const instanceInputSchema = relayInputSchema.extend({
   instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
@@ -513,27 +512,57 @@ export const loadBrickRecipe = createServerFn({ method: "POST" })
     return hydrateBrickIcon(brick)
   })
 
+// A person's own custom Bricks take their account's `#bricks`, as their
+// catalog adds do; the database keeps one per source.
+const saveCustom = operation<z.infer<typeof recipeInputSchema>>()({
+  name: "customBrick.save",
+  doing: "Saving a custom Brick",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) =>
+        promiseEffect(async () => {
+          requireBrickSourcePermission(person, "platform.bricks.add-custom")
+          await requireRelayProvisionAccess(
+            person,
+            await requiredRelay(input.relayId)
+          )
+        })
+      )
+    ),
+  locks: ({ context: person }) => [
+    exclusive(partKey(userKey(person.id), "bricks")),
+  ],
+  run: ({ context: person, input }) =>
+    promiseEffect(() => saveCustomBrickHandler(person, input)),
+  audit: ({ context: person }) => ({ id: person.id, kind: "user" }),
+})
+
 export const saveCustomBrick = createServerFn({ method: "POST" })
   .validator(recipeInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    requireBrickSourcePermission(user, "platform.bricks.add-custom")
-    const relay = await requiredRelay(data.relayId)
-    await requireRelayProvisionAccess(user, relay)
+  .handler(async ({ data }) =>
+    runOperationPromise(saveCustom, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
-    const imported = await requestRelay(
-      relay,
-      `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}`
-    )
-    const { brick: parsedBrick, brickIdExceedsRecommendation } =
-      parseImportedBrickFromRelay(imported)
-    const brick = await hydrateBrickIcon(parsedBrick)
-    const saved = await runAppEffect(
-      "customBricks.save",
-      saveCustomBrickEffect(user.id, brick)
-    )
-    return { brick: saved, brickIdExceedsRecommendation }
-  })
+async function saveCustomBrickHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof recipeInputSchema>
+) {
+  const relay = await requiredRelay(data.relayId)
+  const imported = await requestRelay(
+    relay,
+    `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}`
+  )
+  const { brick: parsedBrick, brickIdExceedsRecommendation } =
+    parseImportedBrickFromRelay(imported)
+  const brick = await hydrateBrickIcon(parsedBrick)
+  const saved = await runAppEffect(
+    "customBricks.save",
+    saveCustomBrickEffect(user.id, brick)
+  )
+  return { brick: saved, brickIdExceedsRecommendation }
+}
 
 export function parseImportedBrickFromRelay(value: unknown): {
   brick: Brick
@@ -547,36 +576,6 @@ export function parseImportedBrickFromRelay(value: unknown): {
     ),
   }
 }
-
-export const configureBrickNetworking = createServerFn({ method: "POST" })
-  .validator(networkingInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const relay = await requiredRelay(data.relayId)
-    await requireRelayPermission({
-      user,
-      relayId: relay.id,
-      permission: "relay.configure",
-    })
-    const input = relayNetworkingSchema.parse(data)
-    const networking = relayNetworkingSchema.parse(
-      await requestRelay(
-        relay,
-        "/v1/networking",
-        {
-          method: "PUT",
-          body: JSON.stringify(input),
-        },
-        240_000,
-        user.id
-      )
-    )
-    await runAppEffect(
-      "relay.networking.cache",
-      writeRelayCache(relayCachePolicy.networking(relay.id), networking)
-    )
-    return networking
-  })
 
 function canProvisionOnRelay(
   user: AuthenticatedUser,
