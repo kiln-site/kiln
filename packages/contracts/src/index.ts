@@ -1899,6 +1899,8 @@ export type RelayPendingCertificate = z.infer<
 
 export const relayCertificateCheckInputSchema = z.object({
   hostname: z.string().min(1).max(253),
+  /** The game server or App whose route it should be. */
+  owner: relayPendingCertificateSchema.shape.owner,
 })
 
 /**

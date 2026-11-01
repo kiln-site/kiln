@@ -44,6 +44,8 @@ export interface TraefikCertificateGate {
   readonly requests: (hostname: string) => boolean
   /** Raised to have Traefik ask again for every certificate it lacks. */
   readonly retry: number
+  /** Which state this is, for `wrote`. */
+  readonly version: number
 }
 
 /** What checking hostnames found, for whoever writes Traefik's routes. */
@@ -112,7 +114,14 @@ export class WebCertificates {
   // When Traefik was set asking again by hand, within the last hour.
   #asks: Array<number> = []
   #retry = 0
+  // Who serves each hostname the bundled Traefik serves.
+  #served: ReadonlyMap<string, Pending["owner"]> = new Map()
   #storeVersion: string | null = null
+  // Raised when Traefik's routes need writing again; `#written` is the one
+  // last written, so a write that didn't happen, as while the Relay is
+  // paused, is still owed.
+  #version = 0
+  #written = 0
   #wake: (() => void) | null = null
 
   constructor(options: {
@@ -141,6 +150,7 @@ export class WebCertificates {
         served.set(hostname.toLowerCase(), owner)
       }
     }
+    this.#served = served
     for (const hostname of this.#pending.keys()) {
       if (!served.has(hostname)) this.#pending.delete(hostname)
     }
@@ -177,7 +187,13 @@ export class WebCertificates {
     return {
       requests: (hostname) => !unresolved.has(hostname.toLowerCase()),
       retry: this.#retry,
+      version: this.#version,
     }
+  }
+
+  /** Notes that Traefik's routes were written as `gate` had them. */
+  wrote(gate: TraefikCertificateGate): void {
+    this.#written = Math.max(this.#written, gate.version)
   }
 
   /** The hostnames still waiting, for the Relay's snapshot. */
@@ -194,12 +210,32 @@ export class WebCertificates {
 
   /**
    * Checks the names of hostnames waiting for DNS that are due, or only
-   * `hostname` now, as when someone asks. One checked by hand that already
-   * resolves has Traefik ask again.
+   * one now, as when someone who may change its route asks. One checked by
+   * hand that already resolves has Traefik ask again. Refuses a hostname
+   * `owner`'s routes don't serve.
    */
-  async check(hostname?: string): Promise<CertificateCheck> {
-    const result = { asked: false, changed: false, rewrite: false }
-    if (this.#pending.size === 0) return result
+  async check(byHand?: {
+    readonly hostname: string
+    readonly owner: Pending["owner"]
+  }): Promise<CertificateCheck> {
+    const hostname = byHand?.hostname.toLowerCase()
+    if (byHand && hostname !== undefined) {
+      const owner = this.#served.get(hostname)
+      if (owner?.kind !== byHand.owner.kind || owner.id !== byHand.owner.id) {
+        throw new Error(
+          `No route of this ${byHand.owner.kind === "app" ? "App" : "game server"} serves ${hostname}`
+        )
+      }
+    }
+    const result = { asked: false, changed: false }
+    if (this.#pending.size > 0) await this.#checkPending(result, hostname)
+    return { ...result, rewrite: this.#version !== this.#written }
+  }
+
+  async #checkPending(
+    result: { asked: boolean; changed: boolean },
+    hostname: string | undefined
+  ): Promise<void> {
     await this.#readStore()
     // Deleting from a Map while iterating it is safe.
     for (const [name, pending] of this.#pending) {
@@ -207,7 +243,7 @@ export class WebCertificates {
         this.#pending.delete(name)
         result.changed = true
         // Traefik holds one it wasn't asking for, such as from before.
-        if (pending.waitingFor === "dns") result.rewrite = true
+        if (pending.waitingFor === "dns") this.#version += 1
         continue
       }
       const now = Date.now()
@@ -232,7 +268,7 @@ export class WebCertificates {
           pending.failed = false
           pending.attempts = 0
           result.changed = true
-          result.rewrite = true
+          this.#version += 1
         }
         pending.attempts += 1
         pending.failed = true
@@ -247,7 +283,7 @@ export class WebCertificates {
         pending.failed = false
         pending.since = resolvedAt
         result.changed = true
-        result.rewrite = true
+        this.#version += 1
         continue
       }
       // Asked again by hand. Traefik asks again for every certificate it
@@ -263,9 +299,8 @@ export class WebCertificates {
       this.#retry += 1
       result.asked = true
       result.changed = true
-      result.rewrite = true
+      this.#version += 1
     }
-    return result
   }
 
   /** Resolves once a hostname newly waits, for the loop that checks them. */
@@ -342,69 +377,117 @@ export function webCertificateStorePath(
   )
 }
 
-/**
- * Whether `hostname` resolves, asked of its zone's own nameservers rather
- * than a resolver: they have a new record first, and a resolver asked too
- * early would remember the name as missing, for whoever uses it next.
- * `unknown` when they can't be reached or don't give an answer.
- */
-export async function authoritativeNameAnswer(
-  hostname: string
-): Promise<NameAnswer> {
-  const servers = await zoneNameservers(hostname)
-  if (servers.length === 0) return "unknown"
-  const resolver = new dns.Resolver({ timeout: 2_000, tries: 2 })
-  resolver.setServers(servers)
-  for (const lookup of [
-    () => resolver.resolve4(hostname),
-    () => resolver.resolve6(hostname),
-    () => resolver.resolveCname(hostname),
-  ]) {
-    const answer = await recoverPromise(
-      async (): Promise<NameAnswer | null> =>
-        (await lookup()).length > 0 ? "found" : null,
-      (cause): NameAnswer | null =>
-        hasCode(cause, dns.NOTFOUND)
-          ? "missing"
-          : hasCode(cause, dns.NODATA)
-            ? null
-            : "unknown"
-    )
-    if (answer) return answer
-  }
-  // It exists without an address, or is delegated elsewhere.
-  return "unknown"
+/** The DNS queries a name check makes. */
+export interface DnsQueries {
+  /** A name's own NS records, asked of the Relay's resolver. */
+  readonly nameservers: (name: string) => Promise<ReadonlyArray<string>>
+  /** A nameserver's addresses, asked of the Relay's resolver. */
+  readonly addresses: (host: string) => Promise<ReadonlyArray<string>>
+  /** A name's records of one type, asked of `servers` directly. */
+  readonly records: (
+    servers: ReadonlyArray<string>,
+    name: string,
+    type: "A" | "AAAA" | "CNAME"
+  ) => Promise<ReadonlyArray<unknown>>
 }
 
-// The addresses of the nameservers of the zone holding `hostname`. The
-// search starts at its parent, so the name itself never reaches a resolver
-// before it exists; a domain's own name starts with itself.
-async function zoneNameservers(hostname: string): Promise<Array<string>> {
-  const labels = hostname.split(".")
-  for (
-    let index = labels.length > 2 ? 1 : 0;
-    index < labels.length - 1;
-    index++
-  ) {
+const lookupTimeout = { timeout: 2_000, tries: 2 }
+const relayResolver = new dns.Resolver(lookupTimeout)
+
+/** The queries over the network, each giving up within a few seconds. */
+export const networkDnsQueries: DnsQueries = {
+  addresses: (host) => relayResolver.resolve4(host),
+  nameservers: (name) => relayResolver.resolveNs(name),
+  records: (servers, name, type) => {
+    const resolver = new dns.Resolver(lookupTimeout)
+    resolver.setServers([...servers])
+    return type === "A"
+      ? resolver.resolve4(name)
+      : type === "AAAA"
+        ? resolver.resolve6(name)
+        : resolver.resolveCname(name)
+  },
+}
+
+/**
+ * Checks whether a hostname resolves, asked of its zone's own nameservers
+ * rather than a resolver: they have a new record first, and a resolver
+ * asked too early would remember the name as missing, for whoever uses it
+ * next. `unknown` when they can't be reached or don't say.
+ */
+export function nameResolver(
+  queries: DnsQueries
+): (hostname: string) => Promise<NameAnswer> {
+  // The addresses of a name's own nameservers: none when it has none, null
+  // when they can't be found.
+  const serversOf = async (
+    name: string
+  ): Promise<ReadonlyArray<string> | null> => {
     const names = await recoverPromise(
-      () => dns.resolveNs(labels.slice(index).join(".")),
-      // A name with no nameservers of its own is in its parent's zone.
-      (cause) =>
+      () => queries.nameservers(name),
+      (cause): ReadonlyArray<string> | null =>
         hasCode(cause, dns.NODATA) || hasCode(cause, dns.NOTFOUND) ? [] : null
     )
-    if (names === null) return []
-    if (names.length === 0) continue
+    if (names === null || names.length === 0) return names
     const addresses = await Promise.all(
-      names.map((name) =>
+      names.map((host) =>
         recoverPromise(
-          () => dns.resolve4(name),
-          (): Array<string> => []
+          () => queries.addresses(host),
+          (): ReadonlyArray<string> => []
         )
       )
     )
-    return [...new Set(addresses.flat())]
+    const unique = [...new Set(addresses.flat())]
+    return unique.length > 0 ? unique : null
   }
-  return []
+  // What `servers` say of a name's addresses: `nodata` when it exists
+  // without one, or they only refer to nameservers of its own.
+  const addressAnswer = async (
+    servers: ReadonlyArray<string>,
+    name: string
+  ): Promise<NameAnswer | "nodata"> => {
+    for (const type of ["A", "AAAA", "CNAME"] as const) {
+      const answer = await recoverPromise(
+        async (): Promise<NameAnswer | null> =>
+          (await queries.records(servers, name, type)).length > 0
+            ? "found"
+            : null,
+        (cause): NameAnswer | null =>
+          hasCode(cause, dns.NOTFOUND)
+            ? "missing"
+            : hasCode(cause, dns.NODATA)
+              ? null
+              : "unknown"
+      )
+      if (answer) return answer
+    }
+    return "nodata"
+  }
+  return async (hostname) => {
+    // The zone holding it, searched from its parent so the name itself
+    // never reaches a resolver before it exists; a domain's own name starts
+    // with itself.
+    const labels = hostname.split(".")
+    let servers: ReadonlyArray<string> | null = []
+    for (
+      let index = labels.length > 2 ? 1 : 0;
+      index < labels.length - 1 && servers?.length === 0;
+      index++
+    ) {
+      servers = await serversOf(labels.slice(index).join("."))
+    }
+    if (!servers || servers.length === 0) return "unknown"
+    const answer = await addressAnswer(servers, hostname)
+    if (answer !== "nodata") return answer
+    // It exists, so asking for its own nameservers remembers nothing
+    // missing. With none, it has no address yet; with some, it's a zone of
+    // its own, as a domain under a two-label suffix is, and they answer.
+    const own = await serversOf(hostname)
+    if (own === null) return "unknown"
+    if (own.length === 0) return "missing"
+    const delegated = await addressAnswer(own, hostname)
+    return delegated === "nodata" ? "missing" : delegated
+  }
 }
 
 function hasCode(cause: unknown, code: string): boolean {

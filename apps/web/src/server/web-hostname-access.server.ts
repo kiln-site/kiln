@@ -134,7 +134,15 @@ const checkCertificate = operation<CheckWebCertificateInput>()({
         await relayRpc(
           await activeRelay(input.relayId),
           "relay.certificates.check",
-          { hostname: input.hostname },
+          {
+            hostname: input.hostname,
+            // The resource the person may change; the Relay refuses a
+            // hostname its routes don't serve.
+            owner: {
+              id: input.resourceId,
+              kind: input.resourceType === "app" ? "app" : "server",
+            },
+          },
           30_000,
           user?.id
         )

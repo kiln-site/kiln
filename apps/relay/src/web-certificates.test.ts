@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
+import { promises as dnsCodes } from "node:dns"
 import { dirname, join } from "node:path"
 
 import type { RelayProxySettings } from "@workspace/contracts"
@@ -11,6 +12,7 @@ import type { RelayStoredWebRoute } from "./effect/state.js"
 import { testRelayConfig } from "./test/fixtures.js"
 import { traefikDynamicConfiguration } from "./traefik.js"
 import {
+  nameResolver,
   WebCertificates,
   webCertificateStorePath,
   type NameAnswer,
@@ -37,6 +39,7 @@ const route: RelayStoredWebRoute = {
 }
 
 const routerName = "kiln-route-b00d4423"
+const owner = { id: "a".repeat(40), kind: "server" as const }
 const minute = 60_000
 
 describe("bundled Traefik certificates", () => {
@@ -150,7 +153,7 @@ describe("bundled Traefik certificates", () => {
     let asks = 0
     for (let click = 0; click < 10; click += 1) {
       const hostname = click % 2 === 0 ? "shop.example.com" : "blog.example.com"
-      const { asked } = await certificates.check(hostname)
+      const { asked } = await certificates.check({ hostname, owner })
       if (asked) {
         asks += 1
         // A changed configuration is what has Traefik ask again.
@@ -161,6 +164,32 @@ describe("bundled Traefik certificates", () => {
     }
 
     expect(asks).toBe(4)
+  })
+
+  it("refuses a check of a hostname another resource's route serves", async () => {
+    answers.set("shop.example.com", "found")
+    await certificates.track([route])
+    await certificates.check()
+    const before = traefik()
+
+    await expect(
+      certificates.check({
+        hostname: "shop.example.com",
+        owner: { id: "b".repeat(40), kind: "server" },
+      })
+    ).rejects.toThrow("No route of this game server serves shop.example.com")
+    expect(traefik()).toBe(before)
+  })
+
+  it("still owes a write Traefik's routes didn't get, as while the Relay is paused", async () => {
+    await certificates.track([route])
+    answers.set("shop.example.com", "found")
+    expect((await certificates.check()).rewrite).toBe(true)
+    // The write was turned away: the next check still asks for it.
+    expect((await certificates.check()).rewrite).toBe(true)
+
+    certificates.wrote(certificates.gate())
+    expect((await certificates.check()).rewrite).toBe(false)
   })
 
   it("asks for a route's other names while one still waits for DNS", async () => {
@@ -181,5 +210,81 @@ describe("bundled Traefik certificates", () => {
 
     expect(routerTls()).toEqual({ certResolver: "kiln" })
     expect(certificates.pending()).toEqual([])
+  })
+})
+
+describe("checking a name at its own nameservers", () => {
+  const fail = (code: string) => Object.assign(new Error(code), { code })
+  // A zone's nameservers by name, and what each set of servers answers.
+  function resolverFor(options: {
+    readonly zones: Record<string, ReadonlyArray<string>>
+    readonly answers: Record<
+      string,
+      Record<string, ReadonlyArray<string> | string>
+    >
+  }) {
+    return nameResolver({
+      addresses: async (host) => [`ip-of-${host}`],
+      nameservers: async (name) => {
+        const servers = options.zones[name]
+        if (!servers) throw fail(dnsCodes.NOTFOUND)
+        return servers
+      },
+      records: async (servers, name, type) => {
+        const answer = options.answers[servers.join(",")]?.[`${name} ${type}`]
+        if (answer === undefined) throw fail(dnsCodes.NODATA)
+        if (typeof answer === "string") throw fail(answer)
+        return answer
+      },
+    })
+  }
+
+  it("finds a name its zone answers for", async () => {
+    const resolve = resolverFor({
+      answers: {
+        "ip-of-ns.example.com": { "shop.example.com A": ["192.0.2.1"] },
+      },
+      zones: { "example.com": ["ns.example.com"] },
+    })
+    expect(await resolve("shop.example.com")).toBe("found")
+  })
+
+  it("waits for a name its zone doesn't have yet", async () => {
+    const resolve = resolverFor({
+      answers: {
+        "ip-of-ns.example.com": { "shop.example.com A": dnsCodes.NOTFOUND },
+      },
+      zones: { "example.com": ["ns.example.com"] },
+    })
+    expect(await resolve("shop.example.com")).toBe("missing")
+  })
+
+  it("waits for a domain that exists without an address yet", async () => {
+    const resolve = resolverFor({
+      answers: {},
+      zones: { "example.com": ["ns.example.com"] },
+    })
+    expect(await resolve("example.com")).toBe("missing")
+  })
+
+  it("asks a zone of its own when its parent only refers to it", async () => {
+    const resolve = resolverFor({
+      answers: {
+        "ip-of-ns.example.co.uk": { "example.co.uk A": ["192.0.2.1"] },
+      },
+      zones: {
+        "co.uk": ["ns.registry.uk"],
+        "example.co.uk": ["ns.example.co.uk"],
+      },
+    })
+    expect(await resolve("example.co.uk")).toBe("found")
+  })
+
+  it("asks Traefik to try when the nameservers don't answer", async () => {
+    const resolve = resolverFor({
+      answers: { "ip-of-ns.example.com": { "shop.example.com A": "ETIMEOUT" } },
+      zones: { "example.com": ["ns.example.com"] },
+    })
+    expect(await resolve("shop.example.com")).toBe("unknown")
   })
 })

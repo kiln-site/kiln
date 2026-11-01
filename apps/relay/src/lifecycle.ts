@@ -1495,7 +1495,11 @@ export class LifecycleDriver {
    * which certificates it should ask for. The caller holds the routes lock.
    */
   async refreshTraefikCertificates(): Promise<void> {
-    if (this.#config.proxyMode !== "traefik") return
+    if (this.#config.proxyMode !== "traefik") {
+      // No bundled Traefik reads them; nothing is owed.
+      this.certificates.wrote(this.certificates.gate())
+      return
+    }
     await this.#writeTraefikRoutes(this.#webRoutes, await this.proxySettings())
   }
 
@@ -1510,16 +1514,13 @@ export class LifecycleDriver {
       "dynamic"
     )
     await mkdir(directory, { recursive: true, mode: 0o700 })
+    const gate = this.certificates.gate()
     await writeFile(
       join(directory, "kiln.yaml"),
-      traefikDynamicConfiguration(
-        this.#config,
-        routes,
-        settings,
-        this.certificates.gate()
-      ),
+      traefikDynamicConfiguration(this.#config, routes, settings, gate),
       { mode: 0o600 }
     )
+    this.certificates.wrote(gate)
   }
 
   // Bundled Traefik reaches routed apps on their own networks.
@@ -3347,22 +3348,19 @@ export class LifecycleDriver {
         staticConfiguration,
       () => true
     )
+    const gate = this.certificates.gate()
     await Promise.all([
       writeFile(join(infrastructure, "traefik.yaml"), staticConfiguration, {
         mode: 0o600,
       }),
       writeFile(
         join(infrastructure, "dynamic", "kiln.yaml"),
-        traefikDynamicConfiguration(
-          this.#config,
-          routes,
-          settings,
-          this.certificates.gate()
-        ),
+        traefikDynamicConfiguration(this.#config, routes, settings, gate),
         { mode: 0o600 }
       ),
       ensureProtectedFile(join(infrastructure, "state", "acme.json")),
     ])
+    this.certificates.wrote(gate)
 
     const traefik: InfrastructureContainer = {
       binds: [

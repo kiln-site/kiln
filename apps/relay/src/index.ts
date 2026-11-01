@@ -202,8 +202,9 @@ import {
   traefikStaticConfiguration,
 } from "./traefik.js"
 import {
-  authoritativeNameAnswer,
   type CertificateCheck,
+  nameResolver,
+  networkDnsQueries,
   WebCertificates,
   webCertificateStorePath,
 } from "./web-certificates.js"
@@ -507,7 +508,7 @@ const lifecycle = new LifecycleDriver(
   databaseConnections,
   lanes,
   new WebCertificates({
-    resolve: authoritativeNameAnswer,
+    resolve: nameResolver(networkDnsQueries),
     storePath: webCertificateStorePath(config),
   })
 )
@@ -2278,11 +2279,16 @@ async function executeControlRequest(
       return proxy
     }
     case "relay.certificates.check": {
-      const { hostname } = relayCertificateCheckInputSchema.parse(
+      const { hostname, owner } = relayCertificateCheckInputSchema.parse(
         request.payload
       )
       const name = hostname.toLowerCase()
-      const checked = await lifecycle.certificates.check(name)
+      // Hearth checks the person may change `owner`'s routes; the Relay
+      // refuses a hostname those routes don't serve.
+      const checked = await lifecycle.certificates.check({
+        hostname: name,
+        owner,
+      })
       await applyCertificateCheck(checked)
       return relayCertificateCheckResultSchema.parse({
         asked: checked.asked,
