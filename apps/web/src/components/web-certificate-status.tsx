@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
-import { CircleAlert, LoaderCircle } from "lucide-react"
+import { CircleAlert, Clock3 } from "lucide-react"
 
 import { showToast } from "@workspace/ui/components/sonner"
 import {
@@ -21,36 +21,30 @@ import {
 
 /**
  * How a web route hostname's certificate shows while it waits: checking
- * its name first, waiting for its name to resolve, or waiting on Let's
- * Encrypt, which failed once already when it's unverified.
+ * its name and asking for it, waiting for its name to resolve, or without
+ * one after Let's Encrypt was asked.
  */
 export function certificatePresentation(
   certificate: WebHostnameCertificate,
   canCheck: boolean
 ): IdentityStatusPresentation {
-  const action = canCheck ? " Click to check now." : ""
-  const retry = canCheck ? " Click to ask again." : ""
   if (certificate.waitingFor === "dns" && certificate.failed) {
     return {
-      detail: `Its name doesn't resolve yet, so Kiln hasn't asked Let's Encrypt for its certificate. Kiln keeps checking.${action}`,
+      detail: `Its DNS doesn't point here yet.${canCheck ? " Click to check again." : ""}`,
       label: "Waiting for DNS",
-      tone: "warning",
+      tone: "info",
     }
   }
   if (certificate.waitingFor === "certificate" && certificate.failed) {
     return {
-      detail: `Let's Encrypt hasn't issued its certificate, so visitors see a warning. Check that its DNS points at this Relay and port 80 is open.${retry}`,
+      detail: `Couldn't get a certificate.${canCheck ? " Click to retry." : ""}`,
       label: "Unverified",
       tone: "danger",
     }
   }
   return {
-    detail:
-      certificate.waitingFor === "dns"
-        ? "Checking its name resolves before asking Let's Encrypt for its certificate."
-        : "Asking Let's Encrypt for its certificate.",
+    detail: "Getting its certificate.",
     label: "Verifying",
-    pulse: true,
     tone: "warning",
   }
 }
@@ -167,23 +161,16 @@ const CertificateBadge = React.memo(function CertificateBadge({
 }) {
   const { check, checking } = useCheckWebCertificate(resource, hostname)
   const presentation = certificatePresentation(certificate, canCheck)
-  const Icon = presentation.pulse || checking ? LoaderCircle : CircleAlert
+  const Icon = presentation.tone === "danger" ? CircleAlert : Clock3
   const content = (
     <span
       className={cn(
         "type-meta inline-flex shrink-0 items-center gap-1 whitespace-nowrap",
-        presentation.tone === "danger"
-          ? "text-destructive"
-          : "text-amber-700 dark:text-amber-300"
+        badgeTone[presentation.tone],
+        checking && "opacity-60"
       )}
     >
-      <Icon
-        aria-hidden
-        className={cn(
-          "size-3",
-          (presentation.pulse || checking) && "animate-spin"
-        )}
-      />
+      <Icon aria-hidden className="size-3" />
       {presentation.label}
     </span>
   )
@@ -210,6 +197,14 @@ const CertificateBadge = React.memo(function CertificateBadge({
     </Tooltip>
   )
 })
+
+const badgeTone: Record<IdentityStatusPresentation["tone"], string> = {
+  danger: "text-destructive",
+  info: "text-sky-700 dark:text-sky-300",
+  neutral: "text-muted-foreground",
+  success: "text-emerald-700 dark:text-emerald-300",
+  warning: "text-amber-700 dark:text-amber-300",
+}
 
 // Which of a route's names to show: the one furthest from a certificate.
 function severity(certificate: WebHostnameCertificate): number {
