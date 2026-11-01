@@ -1508,7 +1508,6 @@ function CreateBackupDialog({
       )
       if (!target) throw new Error("Choose a backup target")
       const data = {
-        maxBytes: null,
         name: configuration.name,
         relayId: target.relayId,
         ...(configuration.destinationKeys.includes("default")
