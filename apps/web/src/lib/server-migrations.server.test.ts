@@ -764,18 +764,25 @@ describeMysql("Server migrations", () => {
           // stopped for it: it ends cancelled, never handing the old server
           // over, and what it packed and pulled is deleted.
           relay.copyHeld = true
+          const pull = hold("transfer.pull.start")
           const cancelled = yield* start(service, {
             chosen: deleting,
             mode: "migrate",
             name: "Cancelled",
           })
+          // Its files packed, and the new Relay asked to pull them.
+          yield* reached(pull)
           const { destination_instance_id: removed } = yield* migrationUntil(
             cancelled,
-            (row) => row.step === "copy"
+            () => true
           )
           yield* cancelServerMigrationEffect(mover.id, cancelled)
+          yield* Deferred.succeed(pull.release, undefined)
           relay.copyHeld = false
           const cancelledRow = yield* migrationUntil(cancelled, ended)
+          const packedAfterCancel = relay.artifacts.has(
+            cancelled.replaceAll("-", "")
+          )
           yield* deletionUntil(removed, ["completed"])
           yield* operationsEnded
           const handedEarly = (yield* deletions).some(
@@ -832,6 +839,7 @@ describeMysql("Server migrations", () => {
           assert.isFalse(handedEarly)
           assert.strictEqual(runningAfterCancel, "running")
           assert.include([...relay.pulls.values()], "cancelled")
+          assert.isFalse(packedAfterCancel)
           assert.match(refused.message, /can't be cancelled/)
           assert.strictEqual(whileRefused.state, "running")
           assert.strictEqual(movedRow.state, "completed")
