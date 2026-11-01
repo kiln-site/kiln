@@ -144,7 +144,13 @@ the least that keeps it safe (`resourceOperation`'s `lock`):
   holds the whole.
 - **The whole, shared**, for everything the Relay or the database already
   keeps in order: file writes, port reservations, an App or game server
-  joining a database.
+  joining a database, a database's data requests and exports.
+
+A database's export, import or data request reads its password once
+admitted and holds its `#credentials` shared while it sends it, so a
+rotation waits for it. File changes hold what the files belong to
+(`fileRootKey`): a game server, the App whose folder they are, or the
+Relay's `#host-files`.
 
 Work a change reaches that takes locks of its own is declared on the
 change, so it runs inside it: a start, a port change and a startup change
@@ -157,7 +163,9 @@ Whole keys that aren't resources follow the same rule: a backup takes
 change it and `#files` to write them, a GitHub connection `#installation`
 for what GitHub reports, a Cloudflare connection `#settings` to save it.
 A backup destination's save takes `#settings`, which reserving a backup to
-it takes shared, so each waits for the other. Deleting any of them takes it
+it takes shared, so each waits for the other. An edit to Hearth's own database holds
+`hearth` shared; importing into it, or restarting or repairing Kiln's
+services, holds it whole. Deleting any of them takes it
 whole, as reinstalling a game server does. An account
 (`user:<id>`) and a CLI request (`cli-device:<id>`) stay whole on purpose:
 sign-ins wait for nothing while an administrator changes the account, and a
@@ -183,7 +191,7 @@ request is answered once.
 | `relay:<id>#authorization`        | What a Relay holds of who may do what                  |
 | `relay:<id>#database-connections` | Apps' database connections handover                    |
 | `cloudflare-connection:<id>`      | A Cloudflare connection                                |
-| `hearth`                          | Hearth itself: its update, and platform backups        |
+| `hearth`                          | Hearth: its update, backups, services and database     |
 | `backup:<id>`                     | A backup: changing it, or restoring from it            |
 | `backup-storage:<id>`             | A backup destination; `#settings` saving it            |
 | `<resource>#backup-policy`        | What its backups keep, leave out, and where they go    |

@@ -63,17 +63,10 @@ export const runKilnPlatformAction = createServerFn({ method: "POST" })
   .validator(
     relayPlatformActionInputSchema.and(z.object({ relayId: relayIdSchema }))
   )
-  .handler(async ({ data: { relayId, ...input } }) => {
-    const { platformRelay, requirePlatformAdministrator } =
-      await import("@/server/platform-access.server")
-    const user = await requirePlatformAdministrator()
-    const [relay, { relayRpc }] = await Promise.all([
-      platformRelay(relayId),
-      import("@/lib/relay-connection"),
-    ])
-    return relayPlatformStatusSchema.parse(
-      await relayRpc(relay, "relay.platform.action", input, 240_000, user.id)
-    )
+  .handler(async ({ data }) => {
+    const { runKilnServiceAction } =
+      await import("@/server/kiln-platform-operations.server")
+    return relayPlatformStatusSchema.parse(await runKilnServiceAction(data))
   })
 
 const terminalSchema = z.object({
@@ -82,7 +75,9 @@ const terminalSchema = z.object({
 })
 
 export const writeKilnTerminal = createServerFn({ method: "POST" })
-  .validator(relayPlatformTerminalWriteSchema.extend({ relayId: relayIdSchema }))
+  .validator(
+    relayPlatformTerminalWriteSchema.extend({ relayId: relayIdSchema })
+  )
   .handler(async ({ data: { relayId, ...input } }) => {
     const { databaseRpc, platformV2Relay, requirePlatformAdministrator } =
       await import("@/server/platform-access.server")
@@ -99,7 +94,9 @@ export const writeKilnTerminal = createServerFn({ method: "POST" })
   })
 
 export const claimKilnTerminal = createServerFn({ method: "POST" })
-  .validator(relayPlatformTerminalClaimSchema.extend({ relayId: relayIdSchema }))
+  .validator(
+    relayPlatformTerminalClaimSchema.extend({ relayId: relayIdSchema })
+  )
   .handler(async ({ data: { relayId, ...input } }) => {
     const { databaseRpc, platformV2Relay, requirePlatformAdministrator } =
       await import("@/server/platform-access.server")

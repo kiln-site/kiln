@@ -20,7 +20,6 @@ import {
   relayDatabaseTerminalRestartSchema,
   relayDatabaseTerminalWriteSchema,
   relayDatabaseContainerSchema,
-  relayDatabaseDumpFilesV1Feature,
   relayDatabaseImportFileSchema,
   relayDatabaseLimitsV1Feature,
   relayDatabaseProvisioningV1Feature,
@@ -64,7 +63,13 @@ import {
   claimPreparedProvisioning,
 } from "@/lib/provisioning.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
-import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
+import {
+  exclusive,
+  partKey,
+  relayKey,
+  resourceKey,
+  shared,
+} from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -627,13 +632,29 @@ export const updateManagedDatabaseNetwork = createServerFn({ method: "POST" })
 // writes one there, and an import runs the one the browser uploaded.
 const DUMP_TIMEOUT_MS = 60 * 60_000
 
-export const exportManagedDatabase = createServerFn({ method: "POST" })
-  .validator(databaseInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user, credential } = await dumpableDatabase(
-      data,
-      "database.dump.export"
+// An export, an import or a data request sends the database's password,
+// which it reads once admitted. It holds the database's credentials shared,
+// so a rotation waits for it and it never sends one a rotation replaced.
+const sendsCredentials = (input: { databaseId: string; relayId: string }) => [
+  shared(
+    partKey(
+      resourceKey("database", input.relayId, input.databaseId),
+      "credentials"
     )
+  ),
+]
+
+const exportDatabase = resourceOperation({
+  kind: "database",
+  id: (input: z.infer<typeof databaseInputSchema>) => input.databaseId,
+  name: "database.dump.export",
+  lock: "shared",
+  alsoLocks: sendsCredentials,
+  doing: "Exporting this database",
+  permission: () => "database.dump.export",
+  run: async (user, data) => {
+    const relay = await requiredRelay(data.relayId)
+    const credential = await dumpCredential(data)
     return z
       .object({
         fileName: z.string().min(1).max(180),
@@ -653,17 +674,33 @@ export const exportManagedDatabase = createServerFn({ method: "POST" })
           user.id
         )
       )
-  })
+  },
+})
 
-export const importManagedDatabase = createServerFn({ method: "POST" })
-  .validator(
-    databaseInputSchema.extend({ fileName: relayDatabaseImportFileSchema })
+export const exportManagedDatabase = createServerFn({ method: "POST" })
+  .validator(databaseInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(exportDatabase, data, {
+      user: await requireEligibleResourceUser(),
+    })
   )
-  .handler(async ({ data }) => {
-    const { relay, user, credential } = await dumpableDatabase(
-      data,
-      "database.dump.import"
-    )
+
+const importDatabaseInputSchema = databaseInputSchema.extend({
+  fileName: relayDatabaseImportFileSchema,
+})
+
+// An import replaces the database's data, so it holds the whole database.
+// One turned away leaves the uploaded dump in place to try again.
+const importDatabase = resourceOperation({
+  kind: "database",
+  id: (input: z.infer<typeof importDatabaseInputSchema>) => input.databaseId,
+  name: "database.dump.import",
+  lock: "whole",
+  doing: "Importing into this database",
+  permission: () => "database.dump.import",
+  run: async (user, data) => {
+    const relay = await requiredRelay(data.relayId)
+    const credential = await dumpCredential(data)
     await databaseRpc(
       relay,
       "database.dump.import",
@@ -677,33 +714,32 @@ export const importManagedDatabase = createServerFn({ method: "POST" })
       user.id
     )
     return { imported: true }
-  })
+  },
+})
 
-async function dumpableDatabase(
-  data: z.infer<typeof databaseInputSchema>,
-  permission: "database.dump.export" | "database.dump.import"
-) {
-  const { relay, user } = await authorizedDatabase(data, permission)
-  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-  if (!relayConnectionFeatures(relay.id).has(relayDatabaseDumpFilesV1Feature)) {
-    throw new Error("Update this Relay to import or export data")
-  }
+export const importManagedDatabase = createServerFn({ method: "POST" })
+  .validator(importDatabaseInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(importDatabase, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+async function dumpCredential(data: z.infer<typeof databaseInputSchema>) {
   const credential = await requiredCredential(data.relayId, data.databaseId)
   if (!databaseEngineSupportsLogicalBackups(credential.engine)) {
     throw new Error(
       "This database engine does not support data import or export"
     )
   }
-  return { credential, relay, user }
+  return credential
 }
 
 export const getManagedDatabaseOverview = createServerFn({ method: "GET" })
   .validator(databaseInputSchema)
   .handler(async ({ data }) =>
     databaseOverviewSchema.parse(
-      await managedDatabaseDataRequest(data, "database.data.read", {
-        request: { action: "overview" },
-      })
+      await readDatabaseData(data, { request: { action: "overview" } })
     )
   )
 
@@ -711,11 +747,29 @@ export const getManagedDatabaseRows = createServerFn({ method: "POST" })
   .validator(databaseRowsRequestSchema)
   .handler(async ({ data }) =>
     databaseRowsSchema.parse(
-      await managedDatabaseDataRequest(data, "database.data.read", {
-        request: data.request,
-      })
+      await readDatabaseData(data, { request: data.request })
     )
   )
+
+const changeDatabaseData = resourceOperation({
+  kind: "database",
+  id: (input: {
+    databaseId: string
+    readOnly?: boolean
+    relayId: string
+    request: unknown
+  }) => input.databaseId,
+  name: "database.data.write",
+  lock: "shared",
+  alsoLocks: sendsCredentials,
+  doing: "Changing this database's data",
+  permission: () => "database.data.write",
+  run: (user, data) =>
+    managedDatabaseDataRequest(user, data, "database.data.write", {
+      ...(data.readOnly !== undefined && { readOnly: data.readOnly }),
+      request: data.request,
+    }),
+})
 
 // Running SQL needs write access even with `readOnly`: arbitrary SQL can
 // leave a read-only transaction, so that flag only guards against mistakes.
@@ -723,9 +777,8 @@ export const runManagedDatabaseQuery = createServerFn({ method: "POST" })
   .validator(databaseQueryRequestSchema)
   .handler(async ({ data }) =>
     databaseQueryResultSchema.parse(
-      await managedDatabaseDataRequest(data, "database.data.write", {
-        readOnly: data.readOnly,
-        request: data.request,
+      await runOperationPromise(changeDatabaseData, data, {
+        user: await requireEligibleResourceUser(),
       })
     )
   )
@@ -734,18 +787,27 @@ export const mutateManagedDatabase = createServerFn({ method: "POST" })
   .validator(databaseMutateRequestSchema)
   .handler(async ({ data }) =>
     databaseMutateResultSchema.parse(
-      await managedDatabaseDataRequest(data, "database.data.write", {
-        request: data.request,
+      await runOperationPromise(changeDatabaseData, data, {
+        user: await requireEligibleResourceUser(),
       })
     )
   )
 
+async function readDatabaseData(
+  data: { databaseId: string; relayId: string },
+  payload: { request: unknown }
+): Promise<unknown> {
+  const { user } = await authorizedDatabase(data, "database.data.read")
+  return managedDatabaseDataRequest(user, data, "database.data.read", payload)
+}
+
 async function managedDatabaseDataRequest(
+  user: AuthenticatedUser,
   data: { databaseId: string; relayId: string },
   permission: "database.data.read" | "database.data.write",
   payload: { readOnly?: boolean; request: unknown }
 ): Promise<unknown> {
-  const { relay, user } = await authorizedDatabase(data, permission)
+  const relay = await requiredRelay(data.relayId)
   const credential = await requiredCredential(data.relayId, data.databaseId)
   if (!databaseEngineSupportsBrowsing(credential.engine)) {
     throw new Error("This database engine can't be browsed as tables")
