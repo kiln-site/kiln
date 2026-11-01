@@ -18,6 +18,7 @@ import {
   deletionUntil as until,
   finishBackup,
   nextBackup,
+  operationsEnded,
   owner,
   relayId,
   seedApp,
@@ -155,6 +156,9 @@ describeMysql("Deleting a game server or database", () => {
           })
           yield* failBackup(yield* nextBackup(serverId, null))
           yield* until(serverId, ["failed"])
+          // Its deletion is recorded failed before its operation lets the
+          // game server go; keeping it waits for that.
+          yield* operationsEnded
           // Frozen and not deleted, it has no DNS.
           assert.deepStrictEqual(relay.stackDns.get(network), [
             peer.replaceAll(":", "-"),
