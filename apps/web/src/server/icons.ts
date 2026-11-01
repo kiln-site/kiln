@@ -112,7 +112,7 @@ export const detectIcon = createServerFn({ method: "POST" })
  * An image from the web, for the browser to shrink into an icon, since it
  * can't read most sites' images itself. Only public HTTPS addresses.
  */
-export const fetchIconSource = createServerFn({ method: "GET" })
+export const fetchIconSource = createServerFn({ method: "POST" })
   .validator(
     z.strictObject({
       url: z
@@ -139,7 +139,7 @@ export const fetchIconSource = createServerFn({ method: "GET" })
  * An image from a game server's or app's files, or from inside one of an
  * app's containers, for the browser to shrink into an icon.
  */
-export const readIconSourceFile = createServerFn({ method: "GET" })
+export const readIconSourceFile = createServerFn({ method: "POST" })
   .validator(
     z.strictObject({
       path: z.string().min(1).max(1_024),
@@ -271,7 +271,7 @@ export const fetchMinecraftHead = createServerFn({ method: "GET" })
  * An image from any files the user can read, for the browser to make their
  * picture of, when it can't read the file from the Relay directly.
  */
-export const readPictureSourceFile = createServerFn({ method: "GET" })
+export const readPictureSourceFile = createServerFn({ method: "POST" })
   .validator(
     z.strictObject({
       path: z.string().min(1).max(1_024),

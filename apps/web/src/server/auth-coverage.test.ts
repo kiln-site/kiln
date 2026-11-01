@@ -53,11 +53,18 @@ const confirmedDeletions = [
 ]
 const confirmedCliDeletions = ["deleteCliServerEffect"]
 
-// Reads that stay POST, for an input too large or too secret for a URL.
+// Reads that stay POST, for an input too large or too secret for a URL,
+// where it would land in proxy logs and request-line limits.
 const readsOverPost: Record<string, string> = {
+  "bricks.ts:loadBrickRecipe": "Its source URL may be signed, kept out of URLs",
   "databases.ts:getManagedDatabaseRows":
     "Its filters carry row values, kept out of URLs",
   "domains.ts:discoverCloudflareDomains": "Carries the pasted API token",
+  "icons.ts:fetchIconSource": "Its image URL may be signed, kept out of URLs",
+  "icons.ts:readIconSourceFile":
+    "A file path of up to 1,024 characters, too long for a URL",
+  "icons.ts:readPictureSourceFile":
+    "A file path of up to 1,024 characters, too long for a URL",
   "instance-inventory.ts:getInstanceInventory":
     "Up to 128 resources, too many for a URL",
   "kiln-database.ts:getKilnDatabaseRows":

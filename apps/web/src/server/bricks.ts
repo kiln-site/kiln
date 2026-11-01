@@ -497,7 +497,7 @@ function externalRecipeUrl(source: string) {
   return protocol === "http:" || protocol === "https:" ? source : null
 }
 
-export const loadBrickRecipe = createServerFn({ method: "GET" })
+export const loadBrickRecipe = createServerFn({ method: "POST" })
   .validator(recipeInputSchema)
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
