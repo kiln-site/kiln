@@ -192,6 +192,21 @@ describe("bundled Traefik certificates", () => {
     expect((await certificates.check()).rewrite).toBe(false)
   })
 
+  it("asks again only for someone checking, not a background check that overlapped them", async () => {
+    await certificates.track([route])
+    answers.set("shop.example.com", "found")
+    // The background check looks the name up outside the routes lane…
+    const background = await certificates.lookUp()
+    // …while someone checks it by hand, which has Traefik ask for it.
+    await certificates.check({ hostname: "shop.example.com", owner })
+    const asked = traefik()
+
+    // Applied in its turn, the background check asks again for nothing.
+    const result = await certificates.apply(background)
+    expect(result.asked).toBe(false)
+    expect(traefik()).toBe(asked)
+  })
+
   it("asks for a route's other names while one still waits for DNS", async () => {
     const both = { ...route, www: "serve" as const }
     answers.set("shop.example.com", "found")

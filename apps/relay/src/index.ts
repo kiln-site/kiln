@@ -4025,19 +4025,21 @@ function platformLoop() {
 // route newly waits on one. The checks themselves look up only names that
 // are due, and most passes find none.
 function certificateLoop() {
-  return Effect.tryPromise(() => lifecycle.certificates.check()).pipe(
-    Effect.flatMap((result) =>
-      result.rewrite
+  return Effect.tryPromise(() => lifecycle.certificates.lookUp()).pipe(
+    // What it found changes things in the routes lane, in turn with route
+    // writes and checks by hand.
+    Effect.flatMap((lookups) =>
+      lookups.due
         ? lanes.run(
             {
               label: "web.certificates.refresh",
               locks: [exclusive(laneKeys.routes)],
             },
-            Effect.tryPromise(() => applyCertificateCheck(result))
+            Effect.tryPromise(async () =>
+              applyCertificateCheck(await lifecycle.certificates.apply(lookups))
+            )
           )
-        : result.changed
-          ? Effect.tryPromise(() => snapshotHub.refresh())
-          : Effect.void
+        : Effect.void
     ),
     Effect.catch((cause) =>
       cause instanceof LaneRejectedError

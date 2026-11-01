@@ -48,6 +48,19 @@ export interface TraefikCertificateGate {
   readonly version: number
 }
 
+/** Someone asking about a hostname, and the resource Hearth let them ask for. */
+export interface ByHand {
+  readonly hostname: string
+  readonly owner: RelayPendingCertificate["owner"]
+}
+
+/** What looking up names found, for `apply`. */
+export interface NameLookups {
+  readonly answers: ReadonlyMap<string, NameAnswer>
+  /** Whether `apply` has anything to do. */
+  readonly due: boolean
+}
+
 /** What checking hostnames found, for whoever writes Traefik's routes. */
 export interface CertificateCheck {
   /** Whether Traefik was set asking again for the hostname checked by hand. */
@@ -210,33 +223,84 @@ export class WebCertificates {
 
   /**
    * Checks the names of hostnames waiting for DNS that are due, or only
-   * one now, as when someone who may change its route asks. One checked by
-   * hand that already resolves has Traefik ask again. Refuses a hostname
-   * `owner`'s routes don't serve.
+   * one now, as when someone who may change its route asks: `lookUp`,
+   * then `apply`. The caller holds the routes lock.
    */
-  async check(byHand?: {
-    readonly hostname: string
-    readonly owner: Pending["owner"]
-  }): Promise<CertificateCheck> {
+  async check(byHand?: ByHand): Promise<CertificateCheck> {
+    if (byHand) this.#ownedHostname(byHand)
+    return this.apply(await this.lookUp(byHand), byHand)
+  }
+
+  /**
+   * Looks up the names of hostnames waiting for DNS that are due, or the
+   * one asked about. Changes nothing, so it needs no lock; `due` says
+   * whether `apply` has anything to do.
+   */
+  async lookUp(byHand?: ByHand): Promise<NameLookups> {
     const hostname = byHand?.hostname.toLowerCase()
-    if (byHand && hostname !== undefined) {
-      const owner = this.#served.get(hostname)
-      if (owner?.kind !== byHand.owner.kind || owner.id !== byHand.owner.id) {
-        throw new Error(
-          `No route of this ${byHand.owner.kind === "app" ? "App" : "game server"} serves ${hostname}`
-        )
-      }
+    const answers = new Map<string, NameAnswer>()
+    if (this.#pending.size === 0) {
+      return { answers, due: this.#version !== this.#written }
     }
+    await this.#readStore()
+    const now = Date.now()
+    let due = this.#version !== this.#written
+    for (const [name, pending] of [...this.#pending]) {
+      if (this.#hasCertificate(name)) {
+        due = true
+        continue
+      }
+      if (
+        pending.waitingFor === "certificate" &&
+        !pending.failed &&
+        now - pending.since >= issueTime
+      ) {
+        due = true
+      }
+      const wanted =
+        hostname === undefined
+          ? pending.waitingFor === "dns" && pending.nextCheckAt <= now
+          : name === hostname
+      if (wanted) answers.set(name, await this.#resolve(name))
+    }
+    return { answers, due: due || answers.size > 0 }
+  }
+
+  /**
+   * Applies what `lookUp` found, with the routes lock held, so checks and
+   * route writes change things in turn. Only one asked about by hand has
+   * Traefik ask again, and it's refused unless `owner`'s routes serve it.
+   */
+  async apply(
+    lookups: NameLookups,
+    byHand?: ByHand
+  ): Promise<CertificateCheck> {
+    const hostname = byHand ? this.#ownedHostname(byHand) : undefined
     const result = { asked: false, changed: false }
-    if (this.#pending.size > 0) await this.#checkPending(result, hostname)
+    if (this.#pending.size > 0) {
+      await this.#readStore()
+      this.#applyLookups(result, lookups.answers, hostname)
+    }
     return { ...result, rewrite: this.#version !== this.#written }
   }
 
-  async #checkPending(
+  #ownedHostname(byHand: ByHand): string {
+    const hostname = byHand.hostname.toLowerCase()
+    const owner = this.#served.get(hostname)
+    if (owner?.kind !== byHand.owner.kind || owner.id !== byHand.owner.id) {
+      throw new Error(
+        `No route of this ${byHand.owner.kind === "app" ? "App" : "game server"} serves ${hostname}`
+      )
+    }
+    return hostname
+  }
+
+  #applyLookups(
     result: { asked: boolean; changed: boolean },
+    answers: ReadonlyMap<string, NameAnswer>,
     hostname: string | undefined
-  ): Promise<void> {
-    await this.#readStore()
+  ): void {
+    const now = Date.now()
     // Deleting from a Map while iterating it is safe.
     for (const [name, pending] of this.#pending) {
       if (this.#hasCertificate(name)) {
@@ -246,34 +310,27 @@ export class WebCertificates {
         if (pending.waitingFor === "dns") this.#version += 1
         continue
       }
-      const now = Date.now()
-      const byHand = name === hostname
-      if (pending.waitingFor === "certificate") {
-        if (!pending.failed && now - pending.since >= issueTime) {
-          pending.failed = true
-          result.changed = true
-        }
-        if (!byHand) continue
-      } else if (hostname === undefined ? pending.nextCheckAt > now : !byHand) {
-        continue
+      if (
+        pending.waitingFor === "certificate" &&
+        !pending.failed &&
+        now - pending.since >= issueTime
+      ) {
+        pending.failed = true
+        result.changed = true
       }
-      const answer = await this.#resolve(name)
-      // Its route went while its name was looked up.
-      if (this.#pending.get(name) !== pending) continue
-      const resolvedAt = Date.now()
+      const answer = answers.get(name)
+      if (answer === undefined) continue
       if (answer === "missing") {
         if (pending.waitingFor === "certificate") {
           // Traefik stops asking until it resolves again.
           pending.waitingFor = "dns"
-          pending.failed = false
           pending.attempts = 0
-          result.changed = true
           this.#version += 1
         }
         pending.attempts += 1
         pending.failed = true
         pending.nextCheckAt =
-          resolvedAt + (dnsDelays[pending.attempts - 1] ?? dnsDelayCap)
+          now + (dnsDelays[pending.attempts - 1] ?? dnsDelayCap)
         result.changed = true
         continue
       }
@@ -281,20 +338,23 @@ export class WebCertificates {
         // Asking for it at all changes Traefik's configuration.
         pending.waitingFor = "certificate"
         pending.failed = false
-        pending.since = resolvedAt
+        pending.since = now
         result.changed = true
         this.#version += 1
         continue
       }
-      // Asked again by hand. Traefik asks again for every certificate it
-      // lacks, so each of them starts over.
-      this.#asks = this.#asks.filter((ask) => ask > resolvedAt - hour)
+      // It resolves and Traefik has asked: only someone asking by hand has
+      // it ask again.
+      if (name !== hostname) continue
+      // Traefik asks again for every certificate it lacks, so each of them
+      // starts over.
+      this.#asks = this.#asks.filter((ask) => ask > now - hour)
       if (this.#asks.length >= asksPerHour) continue
-      this.#asks.push(resolvedAt)
+      this.#asks.push(now)
       for (const other of this.#pending.values()) {
         if (other.waitingFor !== "certificate") continue
         other.failed = false
-        other.since = resolvedAt
+        other.since = now
       }
       this.#retry += 1
       result.asked = true
