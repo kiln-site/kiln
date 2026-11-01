@@ -304,7 +304,17 @@ export const advanceRelayTransferEffect = Effect.fn("RelayTransfers.advance")(
           "relay.transfer.discard",
           transferDoing,
           transferLocks(request),
-          rpc(source, "transfer.source.discard", user, sourceReference)
+          // Checked again once its turn has come, which may be a while.
+          authorizeTransferEffect(user, request).pipe(
+            Effect.flatMap((admitted) =>
+              rpc(
+                admitted.source,
+                "transfer.source.discard",
+                user,
+                sourceReference
+              )
+            )
+          )
         )
       }
       return transferStatus(transferId, pull, null, null)
@@ -329,9 +339,15 @@ export const advanceRelayTransferEffect = Effect.fn("RelayTransfers.advance")(
       transferDoing,
       transferLocks(request),
       Effect.gen(function* () {
-        const grant = yield* signGrant(source, destination, ready)
-        return yield* rpc(destination, "transfer.pull.start", user, {
-          endpoints: yield* sourceEndpoints(source),
+        // Checked again once its turn has come, which may be a while.
+        const admitted = yield* authorizeTransferEffect(user, request)
+        const grant = yield* signGrant(
+          admitted.source,
+          admitted.destination,
+          ready
+        )
+        return yield* rpc(admitted.destination, "transfer.pull.start", user, {
+          endpoints: yield* sourceEndpoints(admitted.source),
           grant,
           target: {
             path: request.destination.path,
