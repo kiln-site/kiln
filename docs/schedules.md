@@ -69,6 +69,11 @@ those are, unless the schedule already had that step.
 
 ## Where it runs
 
+Saving, deleting and running a schedule are operations on its
+`schedule:<id>` lane ([Hearth operations](hearth-operations.md)): saves
+wait for each other and for a **Run now** being sent, and a deletion turns
+away either while it runs.
+
 Saving a schedule raises its revision and sends each Relay with a target
 the schedule's steps and that Relay's targets, with each backup step already
 admitted per target. Relays it no longer reaches, and every Relay when it's
