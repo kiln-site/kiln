@@ -400,14 +400,9 @@ const removeSchedule = operation<ScheduleId>()({
   locks: ({ input }) => [exclusive(scheduleKey(input.id))],
   run: ({ context: { person, schedule } }) =>
     promiseEffect(async () => {
-      const revision = schedule.revision + 1
-      const now = Date.now()
-      await databasePool.execute(
-        `UPDATE ${databaseTable("schedule")}
-            SET enabled = FALSE, revision = ?, deleted_at = ?, updated_at = ?
-          WHERE id = ? AND deleted_at IS NULL`,
-        [revision, now, now, schedule.id]
-      )
+      const revision = await markScheduleDeleted(schedule.id)
+      // Deleting a resource deleted the schedule it was all that was left of.
+      if (revision === null) return { deleted: true, id: schedule.id }
       publishScheduleCollectionChange(
         schedule.targets.map((target) => target.relayId)
       )
@@ -421,6 +416,41 @@ const removeSchedule = operation<ScheduleId>()({
     }),
   audit: scheduleAudit,
 })
+
+// Deleting a resource rewrites the schedules that target it outside this
+// lane, so the deletion's revision comes from the row as it's deleted, and
+// its removal outranks what that sent the Relays.
+function markScheduleDeleted(id: string): Promise<number | null> {
+  return runAppEffect(
+    "schedules.delete",
+    Effect.gen(function* () {
+      const database = yield* Database
+      const now = yield* Clock.currentTimeMillis
+      return yield* database.transaction("schedules.delete", (transaction) =>
+        Effect.gen(function* () {
+          const [row] = yield* transaction.queryRows<
+            RowDataPacket & { revision: number }
+          >(
+            `SELECT revision FROM ${databaseTable("schedule")}
+              WHERE id = ? AND deleted_at IS NULL
+              FOR UPDATE`,
+            [id]
+          )
+          if (!row) return null
+          const revision = row.revision + 1
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("schedule")}
+                SET enabled = FALSE, revision = ?, deleted_at = ?,
+                    updated_at = ?
+              WHERE id = ?`,
+            [revision, now, now, id]
+          )
+          return revision
+        })
+      )
+    })
+  )
+}
 
 export const deleteSchedule = createServerFn({ method: "POST" })
   .validator(scheduleIdSchema)
