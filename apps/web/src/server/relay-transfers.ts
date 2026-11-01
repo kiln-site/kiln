@@ -54,12 +54,9 @@ export const startRelayTransfer = createServerFn({ method: "POST" })
   .validator(transferRequestSchema)
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
-    const { startRelayTransferEffect } =
+    const { startRelayTransfer } =
       await import("@/server/relay-transfers.server")
-    return runAppEffect(
-      "relayTransfers.start",
-      startRelayTransferEffect(user, data)
-    )
+    return startRelayTransfer(user, data)
   })
 
 /** How a copy between Relays is going. */
@@ -80,11 +77,8 @@ export const cancelRelayTransfer = createServerFn({ method: "POST" })
   .validator(transferHandleSchema)
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
-    const { cancelRelayTransferEffect } =
+    const { cancelRelayTransfer } =
       await import("@/server/relay-transfers.server")
-    await runAppEffect(
-      "relayTransfers.cancel",
-      cancelRelayTransferEffect(user, data)
-    )
+    await cancelRelayTransfer(user, data)
     return { cancelled: true }
   })

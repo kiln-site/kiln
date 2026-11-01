@@ -136,8 +136,6 @@ const notYetOperations = new Set<string>([
   "preferences.ts:updateAppearancePreferences",
   "push-notifications.ts:subscribePushNotifications",
   "push-notifications.ts:unsubscribePushNotifications",
-  "relay-transfers.ts:cancelRelayTransfer",
-  "relay-transfers.ts:startRelayTransfer",
   "relay.ts:recordRelayFileView",
   "relay.ts:updateRelayFilePin",
   "relay.ts:uploadConsoleLogToMclogs",

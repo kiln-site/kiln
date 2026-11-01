@@ -24,6 +24,15 @@ import {
 import { Duration, Effect, Schedule, Schema } from "effect"
 
 import { forkAppEffect } from "@/effect/runtime"
+import { fileRootKey } from "@/lib/file-lanes"
+import { outsideOperation } from "@/operations/current"
+import { shared } from "@/operations/lanes"
+import {
+  inLanes,
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import { requireRelayPermissionEffect } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { PersistedRelay } from "@/lib/relay-registry"
@@ -195,22 +204,26 @@ export const startRelayTransferEffect = Effect.fn("RelayTransfers.start")(
   function* (user: AuthenticatedUser, request: RelayTransferRequest) {
     const transferId = randomUUID().replaceAll("-", "")
     const handle = yield* beginRelayTransferEffect(user, request, transferId)
-    forkAppEffect(
-      "RelayTransfers.drive",
-      advanceRelayTransferEffect(user, request, transferId).pipe(
-        Effect.repeat({
-          schedule: PULL_POLL,
-          until: (status) => finishedPhases.has(status.phase),
-        }),
-        Effect.catch((cause) =>
-          Effect.sync(() => {
-            orchestrationFailures.set(transferId, {
-              error: errorMessage(cause),
-              expiresAt: Date.now() + 24 * 60 * 60_000,
+    // Driven on its own, past the operation that started it: each step that
+    // changes something takes the transfer's lanes again.
+    outsideOperation(() =>
+      forkAppEffect(
+        "RelayTransfers.drive",
+        advanceRelayTransferEffect(user, request, transferId).pipe(
+          Effect.repeat({
+            schedule: PULL_POLL,
+            until: (status) => finishedPhases.has(status.phase),
+          }),
+          Effect.catch((cause) =>
+            Effect.sync(() => {
+              orchestrationFailures.set(transferId, {
+                error: errorMessage(cause),
+                expiresAt: Date.now() + 24 * 60 * 60_000,
+              })
             })
-          })
-        ),
-        Effect.annotateLogs({ "kiln.transfer.id": transferId })
+          ),
+          Effect.annotateLogs({ "kiln.transfer.id": transferId })
+        )
       )
     )
     return handle
@@ -287,7 +300,12 @@ export const advanceRelayTransferEffect = Effect.fn("RelayTransfers.advance")(
     ).pipe(Effect.flatMap(decodeOptional(RelayTransferPullSchema)))
     if (pull) {
       if (finishedPhases.has(pull.state)) {
-        yield* rpc(source, "transfer.source.discard", user, sourceReference)
+        yield* inLanes(
+          "relay.transfer.discard",
+          transferDoing,
+          transferLocks(request),
+          rpc(source, "transfer.source.discard", user, sourceReference)
+        )
       }
       return transferStatus(transferId, pull, null, null)
     }
@@ -305,20 +323,24 @@ export const advanceRelayTransferEffect = Effect.fn("RelayTransfers.advance")(
     ) {
       return transferStatus(transferId, null, packed, null)
     }
-    const grant = yield* signGrant(source, destination, {
-      sha256: packed.sha256,
-      size: packed.size,
-      transferId,
-    })
-    const started = yield* rpc(destination, "transfer.pull.start", user, {
-      endpoints: yield* sourceEndpoints(source),
-      grant,
-      target: {
-        path: request.destination.path,
-        rootId: request.destination.rootId,
-      },
-      transferId,
-    }).pipe(Effect.flatMap(decodeOptional(RelayTransferPullSchema)))
+    const ready = { sha256: packed.sha256, size: packed.size, transferId }
+    const started = yield* inLanes(
+      "relay.transfer.pull",
+      transferDoing,
+      transferLocks(request),
+      Effect.gen(function* () {
+        const grant = yield* signGrant(source, destination, ready)
+        return yield* rpc(destination, "transfer.pull.start", user, {
+          endpoints: yield* sourceEndpoints(source),
+          grant,
+          target: {
+            path: request.destination.path,
+            rootId: request.destination.rootId,
+          },
+          transferId,
+        }).pipe(Effect.flatMap(decodeOptional(RelayTransferPullSchema)))
+      })
+    )
     return transferStatus(transferId, started, packed, null)
   }
 )
@@ -365,6 +387,73 @@ export const relayTransferStatusEffect = Effect.fn("RelayTransfers.status")(
     )
   }
 )
+
+const transferDoing = "Copying files between Relays"
+
+// What a transfer reads and writes, shared, as file writes take them: a
+// deletion or restore of either waits for it (lib/file-lanes.ts).
+const transferLocks = (sides: {
+  readonly destination: { readonly relayId: string; readonly rootId: string }
+  readonly source: { readonly relayId: string; readonly rootId: string }
+}) => [
+  shared(fileRootKey(sides.source.relayId, sides.source.rootId)),
+  shared(fileRootKey(sides.destination.relayId, sides.destination.rootId)),
+]
+
+const transferAudit = ({
+  input,
+}: {
+  input: { readonly destination: { readonly relayId: string } }
+}) => ({
+  id: input.destination.relayId,
+  kind: "relay",
+  relayId: input.destination.relayId,
+})
+
+const startTransfer = operation<RelayTransferRequest>()({
+  name: "relay.transfer.start",
+  doing: transferDoing,
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) => authorizeTransferEffect(person, input))
+    ),
+  locks: ({ input }) => transferLocks(input),
+  run: ({ context: user, input }) => startRelayTransferEffect(user, input),
+  audit: transferAudit,
+})
+
+/** Starts copying files to another Relay, as an operation in their lanes. */
+export async function startRelayTransfer(
+  user: AuthenticatedUser,
+  request: RelayTransferRequest
+) {
+  return runOperationPromise(startTransfer, request, { user })
+}
+
+const cancelTransfer = operation<RelayTransferHandle>()({
+  name: "relay.transfer.cancel",
+  doing: "Cancelling a copy between Relays",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) =>
+        authorizeTransferEffect(person, {
+          destination: { ...input.destination, path: "" },
+          source: { ...input.source, paths: [] },
+        })
+      )
+    ),
+  locks: ({ input }) => transferLocks(input),
+  run: ({ context: user, input }) => cancelRelayTransferEffect(user, input),
+  audit: transferAudit,
+})
+
+/** Stops a copy between Relays, as an operation in their lanes. */
+export async function cancelRelayTransfer(
+  user: AuthenticatedUser,
+  handle: RelayTransferHandle
+) {
+  return runOperationPromise(cancelTransfer, handle, { user })
+}
 
 /** Stops a transfer and deletes what either Relay holds for it. */
 export const cancelRelayTransferEffect = Effect.fn("RelayTransfers.cancel")(
