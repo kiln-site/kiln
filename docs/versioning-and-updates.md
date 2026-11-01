@@ -1,7 +1,8 @@
 # Versioning and updates
 
-Kiln publishes Hearth and Relay together from the public
-[`kiln-site/kiln`](https://github.com/kiln-site/kiln) repository. GitHub
+Kiln publishes Hearth and Relay together. Upstream releases come from the
+public [`kiln-site/kiln`](https://github.com/kiln-site/kiln) repository; a
+distribution looks for updates in its own configured repository. GitHub
 Releases is the release index and GHCR is the only image source.
 
 ## Versions and channels
@@ -10,9 +11,10 @@ Releases is the release index and GHCR is the only image source.
   release manifest. Before the first stable, it defaults to `0.1.0`, optionally
   overridden once with `INITIAL_RELEASE_LINE`. `release.json` is only a
   local-development fallback; any major version is supported.
-- Every successful push to `main` reserves a
-  `<major>.<minor>.<patch>-nightly.<YYYYMMDD>.<HHMMSS>` version from the source commit's UTC
-  timestamp.
+- Each push to `main`, or a run started by hand, takes a
+  `<major>.<minor>.<patch>-nightly.<YYYYMMDD>.<HHMMSS>` version from the source
+  commit's UTC timestamp, and publishes it once the code checks and images
+  pass.
 - GitHub release titles keep a shorter display alias such as
   `v0.1.0 Nightly #12`. The alias is presentation-only; tags, manifests,
   images, update comparisons, and links use the timestamp version.
@@ -21,7 +23,7 @@ Releases is the release index and GHCR is the only image source.
 - Stable promotion asks for `next_release` and records it in the published
   manifest. Future nightlies advance automatically without editing repository
   settings or committing release bookkeeping. Display aliases use the workflow
-  run number and no longer reset.
+  run number.
 
 Published image tags:
 
@@ -42,14 +44,17 @@ version and source commit to immutable Hearth and Relay image digests. Runtime
 release discovery and image pulls are anonymous. CI verifies that both GHCR
 images are publicly readable before it publishes a GitHub release.
 
-Migrated releases may also include `imageVersion`, which records the legacy
-version baked into an existing image. Hearth and Relay use that alias only to
-match the unchanged image to its canonical timestamp release.
+Every manifest records `imageVersion`, the version baked into its images,
+which is the release's own version except for an existing image published
+under an older alias. Hearth and Relay use it to match an image to its
+release.
 
 ## Update eligibility
 
-The Updates page is available to platform administrators at `/infra/updates`.
-The normal Servers page is at `/infra/servers`; `/servers` remains a redirect.
+`/infra/updates` opens the Updates dialog over the Relays page. Anyone with
+`relay.update` on a Relay can update it; updating Hearth is for platform
+administrators. The Game servers page is at `/infra/servers`; `/servers`
+redirects there.
 
 One-click updates are enabled only when all of these are true:
 
@@ -113,9 +118,8 @@ undone. See [Self-hosting](self-hosting.md).
 Coolify remains free to manage the same containers. Kiln does not call the
 Coolify API and does not modify its project configuration. A later Coolify
 deployment is authoritative and may reapply the tag configured there.
-Pushes to `main` publish a nightly but no longer trigger provider deployment
-webhooks. Existing installations that relied on push-to-deploy must update
-through `/infra/updates` or redeploy through their provider.
+Pushes to `main` don't trigger provider deployment webhooks: update through
+`/infra/updates` or redeploy through the provider.
 
 ## Relay provisioning policy
 
@@ -145,7 +149,7 @@ version, or a higher `INITIAL_RELEASE_LINE` if configured. Once a stable release
 records the next line, that metadata takes precedence over the bootstrap setting.
 
 See [forking and publishing](forking.md) for repository settings, package identity,
-GHCR visibility, npm trust, and the changes from the previous release workflow.
+GHCR visibility and npm trust.
 
 When a release changes the Relay control protocol, update Hearth first. The
 transitional Hearth release must continue speaking the previous Relay protocol

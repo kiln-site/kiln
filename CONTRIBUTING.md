@@ -47,23 +47,12 @@ stack, and worktree cleanup.
 4. Name branches `<type>/<short-kebab-case-task>` (for example,
    `fix/panel-disconnect` or `chore/repo-cleanup`), without personal or agent prefixes.
    Use a short, human PR title in `<type>(<scope>): <title>` format. Scopes are
-   `hearth`, `bricks`, `relay`, `marketing` for the kiln.site marketing site,
-   and `repo` for repo-wide changes.
-5. Use this description format:
-
-   ```md
-   # Why
-
-   What it fixes or implements. Link an issue when one exists.
-
-   # Summary
-
-   Brief summary.
-
-   # Notes
-
-   Breaking changes, compatibility notes, migration steps, or anything else reviewers need to know.
-   ```
+   `hearth`, `bricks`, `relay`, `cli`, `marketing` for the kiln.site marketing
+   site, and `repo` for repo-wide changes. For example,
+   `fix(relay): prevent player disconnects when updating relays`.
+5. Fill in the description from the
+   [pull request template](.github/pull_request_template.md): why, summary,
+   and notes.
 
 6. Keep the description unchanged during review unless the overall PR changes.
 

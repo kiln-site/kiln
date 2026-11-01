@@ -4,8 +4,8 @@ People keep config files in a GitHub repository and Kiln copies them into a
 game server or app. Accounts are added as **sources** under
 **Infrastructure → Sources**, and syncs that read from them live under
 **Automations → Sync**. Apps deploy from them too; see
-[App deployments](app-deployments.md). Other providers may come later; the
-code still calls them GitHub connections.
+[App deployments](app-deployments.md). The code calls sources GitHub
+connections.
 
 ## Adding a GitHub source
 
@@ -30,8 +30,7 @@ connection belongs to the person who created it. Platform administrators see
 and can use every connection.
 
 The app asks for repository contents (read and write) and metadata (read).
-Kiln only reads today; write access is there so saving an edit can later
-commit it back without asking everyone to approve new permissions.
+Kiln only reads.
 
 ### Webhooks or polling
 
@@ -74,18 +73,13 @@ Each run:
 
 Files deleted from the repository stay on the instance. Files larger than
 512 KB are skipped with a warning, since each write is one Relay control
-frame. A sync stops at 2,000 files.
+frame. A run that would include more than 2,000 files fails before writing
+anything, asking for a narrower folder or patterns.
 
 Each finished run is recorded (`github_sync_run`, the latest 50 per sync)
 and listed with schedule runs in Automations → History. A poll that finds no
 new commit isn't a run, and a failure the sync already shows isn't recorded
 again.
-
-Runs are serialized per sync. A trigger arriving while another waits joins
-it, upgrading a waiting poll to the stronger trigger, so an edit or **Sync
-now** is never swallowed. Polls don't mark a sync as running; a poll that
-finds the branch still at the synced commit clears a failure that has
-passed, such as an offline Relay.
 
 A sync's target is checked against its kind: game servers and apps are
 addressed by their 40-character IDs, and a Relay's host files only by that
@@ -94,17 +88,22 @@ Relay's own ID, because the Relay picks a file root by the ID's shape.
 A poll that fails the same way again leaves the row alone and records no
 run, so a broken sync doesn't notify every browser each minute.
 
-## Not done yet
+### When a sync runs
 
-- **Saving back to GitHub.** When a synced file is saved in the editor, offer
-  to commit it to the branch (Contents API, with the blob SHA Kiln last wrote
-  as the expected base so a newer commit isn't overwritten).
-- **Drift.** A file edited on the instance after it synced is only looked at
-  again when GitHub's copy changes. A "Restore from GitHub" action could
-  rewrite every file.
-- **Restarting.** Restarting a running game server after its files change
-  was cut for now.
-- **Mirroring.** Optionally delete files that were removed from the
-  repository.
-- Polling issues one request per automatic sync each minute. Syncs that share
-  a repository and branch could share that request.
+A run holds the sync's `#files`, and its `#settings`, target and connection
+shared, from reading GitHub to recording what it wrote, so runs go one at a
+time and a settings edit waits for the one running. Creating a sync,
+**Sync now** and a push each queue a durable `github.sync` operation under
+the sync's ID, so it shows as queued and survives a restart, and a trigger
+arriving while it waits joins it. Polls aren't queued: a poll runs only when
+the sync's lanes are free and otherwise tries again the next minute. Polls
+don't mark a sync as running; a poll that finds the branch still at the
+synced commit clears a failure that has passed, such as an offline Relay.
+
+## Limits
+
+- Saving a synced file in the editor doesn't commit it back to GitHub.
+- A file edited on the instance after it synced is looked at again only when
+  GitHub's copy changes.
+- A sync doesn't restart a running game server after its files change.
+- Polling issues one request per automatic sync each minute.

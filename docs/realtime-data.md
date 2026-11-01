@@ -14,32 +14,34 @@ replace MySQL, Relay state, or high-frequency Relay streams.
 - Each field has one authority. Copies identify their source revision or
   observation time and are treated as projections.
 
-| Domain                                                             | Authority | Browser delivery                                           |
-| ------------------------------------------------------------------ | --------- | ---------------------------------------------------------- |
-| Users, memberships, roles, and access grants                       | Hearth    | `access` query-scope invalidation                          |
-| Relay registration, display name, and enabled state                | Hearth    | Policy refresh, `relays` invalidation, and fleet recovery  |
-| Relay reachability and observed host facts                         | Hearth    | Exact `relay-health` invalidation                          |
-| Relay proxy configuration                                          | Relay     | Exact Relay-scoped `relay-proxy` invalidation              |
-| Relay volumes                                                      | Relay     | Exact Relay-scoped `relay-volumes` invalidation            |
-| User appearance preferences and platform appearance defaults       | Hearth    | User or authenticated `preferences` invalidation           |
-| Domain integration and instance vanity assignments                 | Hearth    | `domains` query-scope invalidation                         |
-| Schedules and their desired revisions                              | Hearth    | `schedules` collection invalidation                        |
-| Managed database records and encrypted credentials                 | Hearth    | Relay-scoped database invalidations                        |
-| Database containers and observed database state                    | Relay     | Projected through the `databases` query                    |
-| Backup catalog, policies, and storage destinations                 | Hearth    | Separate catalog, policy, and storage invalidations        |
-| Backup execution and progress                                      | Relay     | Active-task polling after immediate catalog invalidation   |
-| Tailscale network definitions and integration credentials          | Hearth    | `tailscale` query-scope invalidation                       |
-| Tailscale deployments and observed node state                      | Relay     | Projected through the `tailscale` query                    |
-| Relay audit history                                                | Relay     | `activity` invalidation after audited control mutations    |
-| Pinned and recently viewed file records                            | Hearth    | Relay-reader `file-activity` invalidation                  |
-| Server definitions, names, startup, ports, routes, and power state | Relay     | Instance deltas plus exact route-query invalidation        |
-| Relay health, host facts, and resource observations                | Relay     | Incremental Relay snapshot deltas                          |
-| Containers, processes, console output, and host-local execution    | Relay     | Purpose-built Relay streams and commands                   |
+| Domain                                                             | Authority | Browser delivery                                               |
+| ------------------------------------------------------------------ | --------- | -------------------------------------------------------------- |
+| Users, memberships, roles, and access grants                       | Hearth    | `access` query-scope invalidation                              |
+| Relay registration, display name, and enabled state                | Hearth    | Policy refresh, `relays` invalidation, and fleet recovery      |
+| Relay reachability and observed host facts                         | Hearth    | Exact `relay-health` invalidation                              |
+| Relay proxy configuration                                          | Relay     | Exact Relay-scoped `relay-proxy` invalidation                  |
+| Relay volumes                                                      | Relay     | Exact Relay-scoped `relay-volumes` invalidation                |
+| User appearance preferences and platform appearance defaults       | Hearth    | User or authenticated `preferences` invalidation               |
+| Domain integration and instance vanity assignments                 | Hearth    | `domains` query-scope invalidation                             |
+| Schedules and their desired revisions                              | Hearth    | `schedules` collection invalidation                            |
+| Managed database records and encrypted credentials                 | Hearth    | Relay-scoped database invalidations                            |
+| Database containers and observed database state                    | Relay     | Projected through the `databases` query                        |
+| Backup catalog, policies, and storage destinations                 | Hearth    | Separate catalog, policy, and storage invalidations            |
+| Backup execution and progress                                      | Relay     | Scoped backup invalidation from Hearth's reconciliation        |
+| Tailscale network definitions and integration credentials          | Hearth    | `tailscale` query-scope invalidation                           |
+| Tailscale deployments and observed node state                      | Relay     | Projected through the `tailscale` query                        |
+| Relay audit history                                                | Relay     | `activity` invalidation after audited control mutations        |
+| Pinned and recently viewed file records                            | Hearth    | Relay-reader `file-activity` invalidation                      |
+| Server definitions, names, startup, ports, routes, and power state | Relay     | Instance deltas plus exact route-query invalidation            |
+| Relay health, host facts, and resource observations                | Relay     | Incremental Relay snapshot deltas                              |
+| Containers, processes, console output, and host-local execution    | Relay     | Purpose-built Relay streams and commands                       |
 | Game servers', Apps', and databases' live usage and its history    | Relay     | One resource stream per resource, sampled on the snapshot loop |
-| Files, directory entries, file metadata, and file contents         | Relay     | Outside this rollout; never copied into Hearth collections |
-| Unsaved forms and open file editor buffers                         | Browser   | Local state until explicitly persisted                     |
+| Files, directory entries, file metadata, and file contents         | Relay     | Read from the Relay; never copied into Hearth collections      |
+| Unsaved forms and open file editor buffers                         | Browser   | Local state until explicitly persisted                         |
 
-Relay registration and schedules use TanStack DB collections. Access,
+Relay registration, schedules, notifications, and the infrastructure
+directories of game servers, Apps, and databases use TanStack DB
+collections; detailed, credential-bearing records stay in queries. Access,
 preferences, domains, databases, backups, Tailscale, activity, and file
 activity retain their existing Query shapes and use the same topic-scoped
 transport. This avoids duplicating nested, secret-bearing, historical, or
@@ -102,8 +104,10 @@ offline, but it does not become the authority for that intent.
 - Invalidation refetches only mounted queries. A database change does not load
   backups, Tailscale, or Activity in a browser that is not displaying them.
 - Every backup reservation path, including CLI and final-delete backups, pushes
-  the catalog change immediately. Its existing 1.5-second poll runs only while
-  a visible task is queued, running, or deleting, then stops.
+  the catalog change immediately. Hearth reconciles active Relay tasks every
+  second, whether or not a browser shows them, and each change patches the one
+  backup or resets the list's first page; backup lists don't poll. An App's
+  backup summary polls every 3 seconds while one of its backups runs.
 - Relay identity changes intentionally refresh Relay-derived labels across
   mounted domains, refresh stream policy, and recover the fleet snapshot.
   Health checks refresh only the Relay list; proxy writes use an exact Relay
@@ -114,9 +118,8 @@ offline, but it does not become the authority for that intent.
 - The server list projects only fields it displays, so resource-only Relay
   samples do not trigger collection writes, rebuilds, or row repaints.
 - Relay snapshot delta v1 compares control fields without resources. A rare
-  control change still carries one complete v1 row, including its current
-  resource sample, so old and new Relays reconstruct the same snapshot without
-  a protocol break.
+  control change carries one complete row, including its current resource
+  sample.
 - Schedule views retain a visible-only 15-second reconciliation poll because
   Relay-originated executions and acknowledged next-run times are imported into
   Hearth by that read path. User mutations still invalidate every active tab
@@ -152,7 +155,8 @@ offline, but it does not become the authority for that intent.
 
 ## Desired and observed state
 
-Hearth-to-Relay resources follow the schedule deployment model: Hearth stores
-the desired revision, Relay persists the applied projection, and Relay reports
-the acknowledged revision and observed result. Immediate actions such as a
+Schedules follow a deployment model: Hearth stores the desired revision, the
+Relay persists the applied projection, and the Relay reports the acknowledged
+revision and observed result. App deployments are durable operations instead
+(see [App deployments](app-deployments.md#how-deployments-queue)). Immediate actions such as a
 restart remain commands whose execution and recovery state belong to Relay.

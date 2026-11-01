@@ -9,10 +9,8 @@
    `pnpm --filter @kiln-site/bricks test` from the monorepo root.
 
 Optional Brick icons belong in `icons/` and are linked from the recipe through
-`metadata.icon`; do not paste SVG markup into YAML. Use a transparent square
-SVG with a single-color mark, no text, and no background. Keep the artwork at or
-below 64 KiB and pair it with an optional `metadata.color` in `#rrggbb` form.
-Kiln applies that color at render time, so SVG paths should use `currentColor`.
+`metadata.icon`; do not paste SVG markup into YAML. See
+[`icons/README.md`](icons/README.md) for the artwork rules.
 
 Official recipes must use images with a public source, retain Relay's default
 container hardening, and document unusual architecture or port requirements.

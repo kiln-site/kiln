@@ -4,7 +4,7 @@ import { SqlClient } from "effect/sql"
 import type { Migration } from "@/effect/migrations"
 import { databaseTableName } from "@/lib/database-config"
 
-// Hearth's operation lanes (docs/hearth-operations-plan.md). An operation is
+// Hearth's operation lanes (docs/hearth-operations.md). An operation is
 // one change from its admission to its end: its place in line (`sequence`),
 // the locks it wants or holds, which Hearth drives it (`driver`), and when it
 // waited, started, and ended. A durable operation runs as a workflow that

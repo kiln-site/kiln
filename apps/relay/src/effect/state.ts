@@ -673,15 +673,6 @@ export class RelayStateStore extends Context.Service<
       errorCode?: BackupFailureCode | null
     ) => Effect.Effect<boolean, RelayStateError>
     /**
-     * Records a task's result. A `prune` is queued with it, in the same
-     * transaction, unless one for the same repository is already waiting.
-     */
-    /**
-     * Marks a restore that startup recovery finished as succeeded: one a
-     * stop cut off while running, or one that failed while swapping its
-     * files in, which recovery finished, saying so.
-     */
-    /**
      * Claims the queued backups of a stopped batch, which run in the stopped
      * window its first claimed backup opened, oldest first.
      */
@@ -689,12 +680,22 @@ export class RelayStateStore extends Context.Service<
       batchId: string,
       now: number
     ) => Effect.Effect<ReadonlyArray<RelayBackupTask>, RelayStateError>
+    /**
+     * Marks a restore that startup recovery finished as succeeded: one a
+     * stop cut off while running, or one that failed while swapping its
+     * files in, which recovery finished, saying so.
+     */
     readonly completeRecoveredRestore: (
       taskId: string,
       now: number,
       /** Its warning, when it's not the one for finishing at startup. */
       warning?: string | null
     ) => Effect.Effect<boolean, RelayStateError>
+    /**
+     * Records a task's result. An optional `prune` is queued with it, in the
+     * same transaction, unless one for the same repository is already
+     * waiting.
+     */
     readonly completeBackupTask: (
       taskId: string,
       result: BackupTaskResult,

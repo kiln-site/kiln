@@ -74,13 +74,16 @@ Before editing files for a substantial task:
 - Every change Hearth makes is an operation: define it with `operation()`,
   naming the lane keys it changes, and run it from the server function's
   handler, rather than taking locks, tracing or auditing by hand. One that
-  must survive a restart is a durable operation. See
-  [Hearth operations](docs/hearth-operations.md).
+  must survive a restart is a durable operation. Server functions not
+  moved yet are listed in `apps/web/src/server/auth-coverage.test.ts`;
+  never add to that list. See [Hearth operations](docs/hearth-operations.md).
 - Hearth and every Relay run the same Kiln version. Don't build for mixed
   versions: no capability negotiation, feature flags for older peers,
   optional protocol fields kept for compatibility, or fallbacks for a peer
   that lacks something. The one exception is updating: an outdated Relay
-  must still be able to connect far enough for Hearth to update it.
+  must still be able to connect far enough for Hearth to update it. Some
+  older compatibility code remains; don't add to it, and remove it when you
+  touch it.
 - The Relay drives Docker through its Engine API client
   (`apps/relay/src/docker-engine.ts`). Use the API for what the daemon does,
   run Docker's standalone binaries only for client-side work like Compose and

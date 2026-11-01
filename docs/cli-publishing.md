@@ -59,8 +59,9 @@ bootstrap version. A cached `npx` install keeps its downloaded binary until
 1. Update `apps/cli/npm/version.json` when changing the launcher or its bundled
    README/skill. Use a new semver version greater than previously published
    bootstrap versions. Normal CLI changes do not need a bootstrap version bump.
-2. Run `vp run -F kiln-cli build:npm` to prepare `dist/npm`, without compiling a
-   binary or installing workspace dependencies in the publishing job.
+2. Run `vp run -F kiln-cli build:npm` to prepare `dist/npm` (the publishing job
+   runs `node apps/cli/scripts/package.mjs` directly, without compiling a binary
+   or installing workspace dependencies).
 3. Review `npm pack --dry-run ./apps/cli/dist/npm`.
 4. Run **Publish npm CLI bootstrap** (`publish-cli-bootstrap.yml`) from `main`.
    It uses the `NPM_PACKAGE` repository variable and npm trusted publishing.
@@ -73,20 +74,14 @@ HTTPS URL or `owner/repository`. Workflows set it from `github.repository`.
 package homepage and binary's default Hearth URL. `KILN_VERSION` applies only to
 binary builds; it does not change the bootstrap version.
 
-### One-time migration
+### First publish
 
-After merging, configure the existing launcher package's npm trusted publisher
-for **`publish-cli-bootstrap.yml`**, then run **Publish npm CLI bootstrap** once.
-The initial bootstrap version `0.1.0` supersedes the existing `0.1.0-nightly.*`
-npm versions. For a fork with newer published versions, choose a higher bootstrap
-version first. Existing packages and historical npm versions remain available;
-no platform packages are published going forward. Their trusted publishers can
-be removed, as can the launcher's old release-workflow publishers.
-
-Existing installations can continue using `kiln update` without reinstalling.
-`npm install --global kiln-cli@latest` migrates to the bootstrap. No package is
-published merely by merging this change; perform the one-time publish before
-expecting new npm installs to use the bootstrap.
+Configure the launcher package's npm trusted publisher for
+**`publish-cli-bootstrap.yml`**, then run **Publish npm CLI bootstrap** once.
+Merging alone publishes nothing. A fork whose package already has newer
+versions picks a higher bootstrap version first. Installed CLIs keep updating
+with `kiln update`; `npm install --global <package>@latest` installs the
+bootstrap.
 
 See [forking and publishing](forking.md#publish-the-cli) for first-time npm setup.
 Native CI checks exercise packed npm installation with disabled lifecycle scripts,
