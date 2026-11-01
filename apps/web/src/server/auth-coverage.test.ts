@@ -127,10 +127,6 @@ const notYetOperations = new Set<string>([
   "push-notifications.ts:unsubscribePushNotifications",
   "relay.ts:recordRelayFileView",
   "relay.ts:updateRelayFilePin",
-  "relay.ts:uploadConsoleLogToMclogs",
-  "relay.ts:uploadToMclogs",
-  "security.ts:scanSecurityNow",
-  "updates.ts:checkForKilnReleases",
 ])
 
 // The session checks every handler must reach.

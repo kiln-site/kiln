@@ -195,6 +195,7 @@ request is answered once.
 | `relay:<id>#database-connections` | Apps' database connections handover                    |
 | `cloudflare-connection:<id>`      | A Cloudflare connection                                |
 | `hearth`                          | Hearth: its update, backups, services and database     |
+| `kiln-releases#check`             | Checking GitHub for Kiln releases                      |
 | `backup:<id>`                     | A backup: changing it, or restoring from it            |
 | `backup-storage:<id>`             | A backup destination; `#settings` saving it            |
 | `<resource>#backup-policy`        | What its backups keep, leave out, and where they go    |

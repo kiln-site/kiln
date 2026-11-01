@@ -283,41 +283,61 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
  * rather than waiting for Hearth's next check. `failed` says GitHub couldn't
  * be asked and the releases Hearth had are still shown.
  */
-export const checkForKilnReleases = createServerFn({ method: "POST" }).handler(
-  async () => {
-    const user = await requireUpdateAccess()
-    // Checks spend Hearth's GitHub requests, so only those who can update
-    // something may ask for one.
-    if (
-      !isPlatformAdmin(user) &&
-      (await updateRelaysForUser(user)).length === 0
-    ) {
-      throw PermissionDeniedError.make({
-        message: "You don't have permission to update Kiln",
-      })
-    }
-    const checked = await runAppEffect(
-      "updates.check-releases",
-      checkKilnReleasesEffect()
-    )
-    // The admin who checked sees what it found; the others hear of it now.
-    if (!checked.failed && isPlatformAdmin(user)) {
-      const { notifyLatestKilnReleaseEffect } =
-        await import("@/lib/kiln-update-notifications")
-      await runAppEffect(
-        "updates.check-releases.notify",
-        notifyLatestKilnReleaseEffect(
-          import.meta.env.VITE_KILN_VERSION,
-          user.id
-        ).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("Could not announce Kiln releases", cause)
+// Checking for releases spends Hearth's GitHub requests and announces what
+// it finds, so two checks at once wait for each other rather than both
+// asking and announcing.
+const checkReleases = operation<void>()({
+  name: "updates.checkReleases",
+  doing: "Checking for Kiln releases",
+  authorize: ({ user }) =>
+    signedIn(user).pipe(
+      Effect.tap((person) =>
+        promiseEffect(async () => {
+          // Checks spend Hearth's GitHub requests, so only those who can
+          // update something may ask for one.
+          if (
+            !isPlatformAdmin(person) &&
+            (await updateRelaysForUser(person)).length === 0
+          ) {
+            throw PermissionDeniedError.make({
+              message: "You don't have permission to update Kiln",
+            })
+          }
+        })
+      )
+    ),
+  locks: () => [exclusive(partKey("kiln-releases", "check"))],
+  run: ({ context: user }) =>
+    promiseEffect(async () => {
+      const checked = await runAppEffect(
+        "updates.check-releases",
+        checkKilnReleasesEffect()
+      )
+      // The admin who checked sees what it found; the others hear of it now.
+      if (!checked.failed && isPlatformAdmin(user)) {
+        const { notifyLatestKilnReleaseEffect } =
+          await import("@/lib/kiln-update-notifications")
+        await runAppEffect(
+          "updates.check-releases.notify",
+          notifyLatestKilnReleaseEffect(
+            import.meta.env.VITE_KILN_VERSION,
+            user.id
+          ).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Could not announce Kiln releases", cause)
+            )
           )
         )
-      )
-    }
-    return checked
-  }
+      }
+      return checked
+    }),
+})
+
+export const checkForKilnReleases = createServerFn({ method: "POST" }).handler(
+  async () =>
+    runOperationPromise(checkReleases, undefined, {
+      user: await requireUpdateAccess(),
+    })
 )
 
 // The release this Relay runs, by name, and for those who can update it the

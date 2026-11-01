@@ -1458,34 +1458,58 @@ async function performInstanceActionHandler(
   return { ...projectRelayInstanceOverview(instance), relayId: relay.id }
 }
 
+// Publishing a game server's logs to mclo.gs changes nothing of Kiln's, but
+// is worth its audit: who made what public. It holds the server shared.
+const shareLog = resourceOperation({
+  kind: "instance",
+  id: (input: z.infer<typeof mclogsUploadInputSchema>) => input.instanceId,
+  name: "instance.logs.share",
+  lock: "shared",
+  doing: "Sharing this game server's logs",
+  permission: () => "instance.logs.share",
+  run: (_user, data) => uploadLog(data),
+})
+
 export const uploadToMclogs = createServerFn({ method: "POST" })
   .validator(mclogsUploadInputSchema)
-  .handler(async ({ data }) => {
-    await authorize("instance.logs.share", data.instanceId, data.relayId)
-    return uploadLog(data)
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(shareLog, data, { user: await instanceSessionUser() })
+  )
+
+const shareConsoleLog = resourceOperation({
+  kind: "instance",
+  id: (input: z.infer<typeof consoleShareInputSchema>) => input.instanceId,
+  name: "instance.console.share",
+  lock: "shared",
+  doing: "Sharing this game server's console",
+  permission: () => "instance.logs.share",
+  run: async (user, data) => {
+    const relay = await instanceRelay(data.relayId)
+    const response = await relayFetch(
+      relay,
+      `/v1/instances/${encodeURIComponent(data.instanceId)}/console-share`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          implementation: data.implementation,
+          redactSensitive: data.redactSensitive,
+          version: data.version,
+        }),
+      },
+      60_000,
+      user.id
+    )
+    return relayMclogsUploadResultSchema.parse(await response.json())
+  },
+})
 
 export const uploadConsoleLogToMclogs = createServerFn({ method: "POST" })
   .validator(consoleShareInputSchema)
-  .handler(async ({ data }) => {
-    return relayMclogsUploadResultSchema.parse(
-      await relayRequest(
-        `/v1/instances/${encodeURIComponent(data.instanceId)}/console-share`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            implementation: data.implementation,
-            redactSensitive: data.redactSensitive,
-            version: data.version,
-          }),
-        },
-        "instance.logs.share",
-        data.instanceId,
-        data.relayId,
-        60_000
-      )
-    )
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(shareConsoleLog, data, {
+      user: await instanceSessionUser(),
+    })
+  )
 
 function uploadLog(data: z.infer<typeof mclogsUploadInputSchema>) {
   return runAppEffect("mclogs.upload", uploadLogEffect(data))
@@ -1763,20 +1787,6 @@ async function relayFetch(
     "relay.fetch",
     relayFetchEffect(relay, path, init, timeoutMs, subject)
   )
-}
-
-async function authorize(
-  permission: AccessPermission,
-  instanceId: string,
-  relayId: string
-) {
-  const { relay, user } = await instanceRelayAccess(relayId)
-  await requireRelayPermission({
-    user,
-    relayId: relay.id,
-    permission,
-    instanceId,
-  })
 }
 
 // App data directories (`app:<appId>`) are served like a server's files and

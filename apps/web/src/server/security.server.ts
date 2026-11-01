@@ -25,6 +25,12 @@ import {
   type SecurityTarget,
 } from "@/lib/security"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { promiseEffect } from "@/effect/promise"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 
 // Who sees what Kiln found in a resource: anyone who can see the resource.
@@ -200,8 +206,28 @@ export async function getResourceSecurityHandler(input: {
  * now, collecting the host's again for a Relay, or everything the user may
  * scan without a scope.
  */
+// Scanning now only records what's due and wakes the scanner, which does
+// the scans in its own time; it holds nothing, and is an operation for its
+// trace and audit.
+const scanNow = operation<{ readonly scope: string | null }>()({
+  name: "security.scanNow",
+  doing: "Asking for a security scan",
+  authorize: ({ user }) => signedIn(user),
+  locks: () => [],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => scanSecurityNowFor(user, input)),
+})
+
 export async function scanSecurityNowHandler(input: { scope: string | null }) {
-  const user = await requireEligibleResourceUser()
+  return runOperationPromise(scanNow, input, {
+    user: await requireEligibleResourceUser(),
+  })
+}
+
+async function scanSecurityNowFor(
+  user: AuthenticatedUser,
+  input: { scope: string | null }
+) {
   const access = await securityAccess(user)
   const parsed = input.scope === null ? null : parseSecurityScope(input.scope)
   if (input.scope !== null && !parsed) throw new Error("Unknown scope")
