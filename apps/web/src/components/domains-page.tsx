@@ -1359,7 +1359,7 @@ function hostnameStatusPresentation(
   }
   if (hostname.status === "manual") {
     return {
-      detail: "Not on a domain Kiln manages. Point it at the Relay yourself.",
+      detail: "Not on a domain Kiln manages.\nPoint it at the Relay yourself.",
       label: "Manual DNS",
       tone: "neutral",
     }
