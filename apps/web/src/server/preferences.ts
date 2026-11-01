@@ -4,7 +4,6 @@ import { z } from "zod"
 import {
   appearanceCacheCookieName,
   defaultAppearance,
-  normalizeAppearanceOverride,
   resolveAppearance,
 } from "@/lib/appearance"
 import { selectedInstanceCookieName } from "@/lib/ui-preference-cookies"
@@ -112,57 +111,19 @@ export const updateAppearancePreferences = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const [
-      {
-        loadPlatformAppearanceDefaultEffect,
-        saveAppearanceOverrideEffect,
-        savePlatformAppearanceDefaultEffect,
-      },
-      { runAppEffect },
+      { saveAppearance },
+      { runOperationPromise },
       { requireVerifiedUser },
-      { hasPlatformPermission },
       { setCookie, setResponseHeader },
     ] = await Promise.all([
-      import("@/effect/appearance-preferences"),
-      import("@/effect/runtime"),
+      import("@/server/appearance-preferences.server"),
+      import("@/operations/operation"),
       import("@/server/auth"),
-      import("@/lib/access-control"),
       import("@tanstack/react-start/server"),
     ])
     const user = await requireVerifiedUser()
-    const canManageAppearanceDefault = hasPlatformPermission(
-      user,
-      "platform.appearance.manage-default"
-    )
-    if (data.defaultForNewUsers !== undefined && !canManageAppearanceDefault) {
-      throw new Error(
-        "The platform.appearance.manage-default permission is required"
-      )
-    }
-    const appearanceOverride = normalizeAppearanceOverride(data)
-    const platformDefault = await runAppEffect(
-      "appearancePreferences.loadPlatformDefault",
-      loadPlatformAppearanceDefaultEffect()
-    )
-    const appearance = resolveAppearance(
-      appearanceOverride,
-      data.defaultForNewUsers === false ? null : platformDefault
-    )
-    await runAppEffect(
-      "appearancePreferences.save",
-      saveAppearanceOverrideEffect(
-        crypto.randomUUID(),
-        user.id,
-        appearanceOverride
-      )
-    )
-    if (data.defaultForNewUsers !== undefined) {
-      await runAppEffect(
-        "appearancePreferences.savePlatformDefault",
-        savePlatformAppearanceDefaultEffect(
-          data.defaultForNewUsers ? appearance : null
-        )
-      )
-    }
+    const { appearance, appearanceOverride, defaultForNewUsers } =
+      await runOperationPromise(saveAppearance, data, { user })
     setCookie(appearanceCacheCookieName, JSON.stringify(appearance), {
       maxAge: 60 * 60 * 24 * 365,
       path: "/",
@@ -181,6 +142,6 @@ export const updateAppearancePreferences = createServerFn({ method: "POST" })
       appearance,
       customAccentColor: appearanceOverride.accentColor,
       customColors: appearanceOverride.customColors,
-      defaultForNewUsers: data.defaultForNewUsers ?? platformDefault !== null,
+      defaultForNewUsers,
     }
   })

@@ -113,22 +113,6 @@ const notOperations: Record<string, string> = {
     "Console input, which the Relay orders in the game server's lifecycle lane",
 }
 
-// Mutating server functions that don't run as operations yet. Move them
-// area by area; never add one.
-const notYetOperations = new Set<string>([
-  "instance-favorites.ts:setInstanceFavorite",
-  "notifications.ts:acknowledgeNotificationsSeen",
-  "notifications.ts:clearNotifications",
-  "notifications.ts:dismissNotification",
-  "notifications.ts:markNotificationsRead",
-  "notifications.ts:saveNotificationPreferences",
-  "preferences.ts:updateAppearancePreferences",
-  "push-notifications.ts:subscribePushNotifications",
-  "push-notifications.ts:unsubscribePushNotifications",
-  "relay.ts:recordRelayFileView",
-  "relay.ts:updateRelayFilePin",
-])
-
 // The session checks every handler must reach.
 const sessionChecks = new Set([
   "getCurrentUser",
@@ -172,8 +156,7 @@ describe("API authentication", () => {
   })
 
   // Every change runs as an operation (docs/hearth-operations.md), so it
-  // takes its lanes, and is traced and audited, like every other. Those
-  // still to move are listed below, and the list only shrinks.
+  // takes its lanes, and is traced and audited, like every other.
   it("runs every change as an operation", { timeout: 60_000 }, () => {
     const reaches = reachabilityChecker(checker, isOperationRun)
     const handlers = serverFunctionHandlers(program).filter(
@@ -186,18 +169,9 @@ describe("API authentication", () => {
       handlers
         .filter(
           ({ id }) =>
-            !runs.has(id) &&
-            !notYetOperations.has(id) &&
-            !(id in readsOverPost) &&
-            !(id in notOperations)
+            !runs.has(id) && !(id in readsOverPost) && !(id in notOperations)
         )
         .map(({ id }) => id)
-    ).toEqual([])
-    // One that moved, or went, comes off the list.
-    expect(
-      [...notYetOperations].filter(
-        (id) => runs.has(id) || !handlers.some((handler) => handler.id === id)
-      )
     ).toEqual([])
     // An exception that moved, went, or stopped being POST comes off its list.
     expect(

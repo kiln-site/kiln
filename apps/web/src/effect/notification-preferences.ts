@@ -61,7 +61,10 @@ export const loadUserNotificationPreferencesEffect = Effect.fn(
   return preferences.get(userId) ?? normalizeNotificationPreferences(null)
 })
 
-/** Saves the given choices over the user's stored ones. */
+/**
+ * Saves the given choices over the user's stored ones. Run it holding their
+ * `user-settings:<id>#notifications`, so saves merge one after another.
+ */
 export const saveNotificationPreferencesEffect = Effect.fn(
   "notificationPreferences.save"
 )(function* (userId: string, update: NotificationPreferencesUpdate) {
@@ -74,8 +77,7 @@ export const saveNotificationPreferencesEffect = Effect.fn(
       >(
         `SELECT setting_value FROM ${table}
           WHERE user_id = ? AND setting_key = ?
-          LIMIT 1
-          FOR UPDATE`,
+          LIMIT 1`,
         [userId, notificationsSettingKey]
       )
       const merged = mergeNotificationPreferences(

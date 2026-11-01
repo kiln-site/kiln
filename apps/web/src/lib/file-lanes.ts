@@ -14,3 +14,11 @@ export function fileRootKey(relayId: string, rootId: string): string {
     ? resourceKey("app", relayId, appId)
     : resourceKey("instance", relayId, rootId)
 }
+
+/**
+ * A file root's pins: pinning or unpinning a file, so two at once can't
+ * both find room under the limit. It takes the root shared too.
+ */
+export function filePinsKey(relayId: string, rootId: string): string {
+  return partKey(`file-activity:${relayId}/${rootId}`, "pins")
+}

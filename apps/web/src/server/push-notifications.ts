@@ -12,6 +12,11 @@ import {
 } from "@/effect/push-notifications"
 import { runAppEffect } from "@/effect/runtime"
 import { isPushServiceEndpoint } from "@/lib/push-endpoint"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import { requireEligibleResourceIdentity } from "@/server/auth"
 
 // Subscriptions are keyed by the signed-in user and session, never by input.
@@ -46,31 +51,52 @@ export const getPushNotificationState = createServerFn({ method: "GET" })
     )
   })
 
+const subscriptionSchema = z.strictObject({
+  endpoint: endpointSchema,
+  keys: z.strictObject({ auth: keySchema, p256dh: keySchema }),
+})
+
+// A browser's subscription is the person's own, one row by its endpoint, so
+// subscribing and unsubscribing hold nothing; neither is audited.
+const subscribe = operation<{
+  readonly sessionId: string
+  readonly subscription: z.infer<typeof subscriptionSchema>
+}>()({
+  name: "notifications.push.subscribe",
+  doing: "Sending this browser your notifications",
+  authorize: ({ user }) => signedIn(user),
+  locks: () => [],
+  run: ({ context: user, input: { sessionId, subscription } }) =>
+    savePushSubscriptionEffect(user.id, sessionId, subscription).pipe(
+      Effect.andThen(sendPushConfirmationEffect(user.id, subscription)),
+      Effect.provide(WebPush.layer)
+    ),
+})
+
 /** Sends this browser the signed-in user's notifications. */
 export const subscribePushNotifications = createServerFn({ method: "POST" })
-  .validator(
-    z.strictObject({
-      endpoint: endpointSchema,
-      keys: z.strictObject({ auth: keySchema, p256dh: keySchema }),
-    })
-  )
+  .validator(subscriptionSchema)
   .handler(async ({ data }) => {
     const { sessionId, user } = await requireEligibleResourceIdentity()
-    await runAppEffect(
-      "notifications.push.subscribe",
-      savePushSubscriptionEffect(user.id, sessionId, data).pipe(
-        Effect.andThen(sendPushConfirmationEffect(user.id, data)),
-        Effect.provide(WebPush.layer)
-      )
+    await runOperationPromise(
+      subscribe,
+      { sessionId, subscription: data },
+      { user }
     )
   })
+
+const unsubscribe = operation<{ readonly endpoint: string }>()({
+  name: "notifications.push.unsubscribe",
+  doing: "Stopping this browser's notifications",
+  authorize: ({ user }) => signedIn(user),
+  locks: () => [],
+  run: ({ context: user, input }) =>
+    removePushSubscriptionEffect(user.id, input.endpoint),
+})
 
 export const unsubscribePushNotifications = createServerFn({ method: "POST" })
   .validator(z.strictObject({ endpoint: endpointSchema }))
   .handler(async ({ data }) => {
     const { user } = await requireEligibleResourceIdentity()
-    await runAppEffect(
-      "notifications.push.unsubscribe",
-      removePushSubscriptionEffect(user.id, data.endpoint)
-    )
+    await runOperationPromise(unsubscribe, data, { user })
   })

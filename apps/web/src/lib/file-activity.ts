@@ -186,11 +186,6 @@ const setFilePinnedEffect = Effect.fn("files.activity.setPinned")(function* (
     "file_activity_set_pinned",
     (transaction) =>
       Effect.gen(function* () {
-        // Serializes the pin limit check across every root on the Relay.
-        yield* transaction.queryRows(
-          `SELECT id FROM ${databaseTable("relay")} WHERE id = ? FOR UPDATE`,
-          [relayId]
-        )
         if (pinned) {
           const pinnedFiles = yield* transaction.queryRows<PinnedFilePathRow>(
             `SELECT path_hash, path
@@ -257,9 +252,9 @@ const setFilePinnedEffect = Effect.fn("files.activity.setPinned")(function* (
 })
 
 // Pins files that have no activity yet, so one someone unpinned stays
-// unpinned, as long as the root has room. Holds the Relay row's lock, like
-// setting a pin, so concurrent pins can't pass the limit. Whether it pinned
-// any.
+// unpinned, as long as the root has room. Run it holding the root's pins
+// (`filePinsKey`), as setting a pin does, so concurrent pins can't pass the
+// limit. Whether it pinned any.
 const pinFilesByDefaultEffect = Effect.fn("files.activity.pinByDefault")(
   function* (
     relayId: string,
@@ -275,10 +270,6 @@ const pinFilesByDefaultEffect = Effect.fn("files.activity.pinByDefault")(
       "file_activity_pin_by_default",
       (transaction) =>
         Effect.gen(function* () {
-          yield* transaction.queryRows(
-            `SELECT id FROM ${databaseTable("relay")} WHERE id = ? FOR UPDATE`,
-            [relayId]
-          )
           const [pins] = yield* transaction.queryRows<
             RowDataPacket & { count: number }
           >(
@@ -361,6 +352,8 @@ export function recordFileEdited(
   )
 }
 
+// Run it holding the root's pins (`filePinsKey`), so concurrent pins can't
+// pass the limit.
 export async function setFilePinned(
   relayId: string,
   instanceId: string,
