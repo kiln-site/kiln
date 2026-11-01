@@ -15,6 +15,12 @@ import {
 import { kilnBrickCatalogUrl, kilnGitRepository } from "@/lib/environment"
 import { runAppEffect } from "@/effect/runtime"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
+import { exclusive, partKey, shared } from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { Effect } from "effect"
 
@@ -93,67 +99,151 @@ export async function getBrickCatalogDetailsHandler(data: {
   }
 }
 
+// The lane keys catalogs take (docs/hearth-operations.md). A person's Brick
+// library: adding to it, which can replace one of their catalogs, takes it
+// exclusive; deleting or publishing one of their catalogs takes it shared,
+// with the catalog whole to delete it or its `#visibility` to publish it.
+const brickCatalogKey = (id: string) => `brick-catalog:${id}`
+// A part, so everyday changes to one library wait for each other.
+export const brickLibraryKey = (userId: string) =>
+  partKey(`brick-library:${userId}`, "contents")
+const libraryOf = (catalog: { ownerUserId: string | null }) =>
+  catalog.ownerUserId ? [shared(brickLibraryKey(catalog.ownerUserId))] : []
+
+// The catalog, and that this person may delete it: its owner, while it isn't
+// published, or an administrator.
+const deletableCatalog = (person: AuthenticatedUser, catalogId: string) =>
+  promiseEffect(async () => {
+    const catalog = await requiredCatalog(catalogId)
+    if (!isPlatformAdmin(person) && catalog.ownerUserId !== person.id) {
+      throw new Error("You do not have access to this catalog")
+    }
+    if (!isPlatformAdmin(person) && catalog.visibility === "community") {
+      throw new Error("A platform admin must unpublish this catalog first")
+    }
+    return catalog
+  })
+
+const addCatalog = operation<{ readonly source: string }>()({
+  name: "brickCatalog.add",
+  doing: "Adding a Brick catalog",
+  authorize: ({ user }) =>
+    signedIn(user).pipe(
+      Effect.filterOrFail(
+        (person) =>
+          hasPlatformPermission(person, "platform.bricks.add-catalog"),
+        () => new Error("Adding catalogs requires Bring your own Relay access")
+      )
+    ),
+  locks: ({ context: person }) => [exclusive(brickLibraryKey(person.id))],
+  run: ({ context: person, input }) =>
+    promiseEffect(async () => {
+      const loaded = await loadBrickCatalogSource(input.source)
+      const catalogId = await runAppEffect(
+        "brickCatalogs.save",
+        saveBrickCatalogEffect({
+          ownerUserId: person.id,
+          revisionSha: loaded.revisionSha,
+          revisionUrl: loaded.revisionUrl,
+          snapshot: loaded.snapshot,
+          snapshotSha256: loaded.snapshotSha256,
+          source: loaded.source,
+        })
+      )
+      return {
+        ...catalogSummary(
+          await requiredCatalog(catalogId),
+          isPlatformAdmin(person)
+        ),
+        overlongBrickIds: loaded.overlongBrickIds,
+      }
+    }),
+  audit: ({ context: person }) => ({ id: person.id, kind: "user" }),
+})
+
 export async function addBrickCatalogHandler(data: { source: string }) {
-  const user = await requireEligibleResourceUser()
-  if (!hasPlatformPermission(user, "platform.bricks.add-catalog")) {
-    throw new Error("Adding catalogs requires Bring your own Relay access")
-  }
-  const loaded = await loadBrickCatalogSource(data.source)
-  const catalogId = await runAppEffect(
-    "brickCatalogs.save",
-    saveBrickCatalogEffect({
-      ownerUserId: user.id,
-      revisionSha: loaded.revisionSha,
-      revisionUrl: loaded.revisionUrl,
-      snapshot: loaded.snapshot,
-      snapshotSha256: loaded.snapshotSha256,
-      source: loaded.source,
-    })
-  )
-  return {
-    ...catalogSummary(await requiredCatalog(catalogId), isPlatformAdmin(user)),
-    overlongBrickIds: loaded.overlongBrickIds,
-  }
+  return runOperationPromise(addCatalog, data, {
+    user: await requireEligibleResourceUser(),
+  })
 }
 
+const deleteCatalog = operation<{ readonly catalogId: string }>()({
+  name: "brickCatalog.delete",
+  doing: "Deleting this Brick catalog",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) => deletableCatalog(person, input.catalogId))
+    ),
+  locks: ({ context: catalog, input }) => [
+    exclusive(brickCatalogKey(input.catalogId)),
+    ...libraryOf(catalog),
+  ],
+  run: ({ input }) =>
+    promiseEffect(async () => {
+      await runAppEffect(
+        "brickCatalogs.delete",
+        deleteBrickCatalogEffect(input.catalogId)
+      )
+      return { deleted: true }
+    }),
+  audit: ({ input }) => ({ id: input.catalogId, kind: "brick-catalog" }),
+})
+
 export async function deleteBrickCatalogHandler(data: { catalogId: string }) {
-  const user = await requireEligibleResourceUser()
-  const catalog = await requiredCatalog(data.catalogId)
-  if (!isPlatformAdmin(user) && catalog.ownerUserId !== user.id) {
-    throw new Error("You do not have access to this catalog")
-  }
-  if (!isPlatformAdmin(user) && catalog.visibility === "community") {
-    throw new Error("A platform admin must unpublish this catalog first")
-  }
-  await runAppEffect(
-    "brickCatalogs.delete",
-    deleteBrickCatalogEffect(catalog.id)
-  )
-  return { deleted: true }
+  return runOperationPromise(deleteCatalog, data, {
+    user: await requireEligibleResourceUser(),
+  })
 }
+
+const publishCatalog = operation<{
+  readonly catalogId: string
+  readonly community: boolean
+}>()({
+  name: "brickCatalog.visibility",
+  doing: "Publishing this Brick catalog",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.filterOrFail(
+        isPlatformAdmin,
+        () => new Error("Only platform admins can publish catalogs")
+      ),
+      Effect.flatMap((person) =>
+        promiseEffect(() => requiredCatalog(input.catalogId)).pipe(
+          Effect.map((catalog) => ({ catalog, person }))
+        )
+      )
+    ),
+  locks: ({ context: { catalog }, input }) => [
+    exclusive(partKey(brickCatalogKey(input.catalogId), "visibility")),
+    ...libraryOf(catalog),
+  ],
+  run: ({ context: { person }, input }) =>
+    promiseEffect(async () => {
+      const catalog = await requiredCatalog(input.catalogId)
+      if (input.community && !catalog.snapshot) {
+        throw new Error("Invalid catalog snapshots cannot be published")
+      }
+      const updated = await runAppEffect(
+        "brickCatalogs.setVisibility",
+        setBrickCatalogVisibilityEffect({
+          catalogId: input.catalogId,
+          community: input.community,
+          publishedBy: person.id,
+        })
+      )
+      if (!updated) throw new Error("Catalog not found")
+      return catalogSummary(await requiredCatalog(input.catalogId), true)
+    }),
+  audit: ({ input }) => ({ id: input.catalogId, kind: "brick-catalog" }),
+})
 
 export async function setBrickCatalogCommunityHandler(data: {
   catalogId: string
   community: boolean
 }) {
-  const user = await requireEligibleResourceUser()
-  if (!isPlatformAdmin(user)) {
-    throw new Error("Only platform admins can publish catalogs")
-  }
-  const catalog = await requiredCatalog(data.catalogId)
-  if (data.community && !catalog.snapshot) {
-    throw new Error("Invalid catalog snapshots cannot be published")
-  }
-  const updated = await runAppEffect(
-    "brickCatalogs.setVisibility",
-    setBrickCatalogVisibilityEffect({
-      catalogId: data.catalogId,
-      community: data.community,
-      publishedBy: user.id,
-    })
-  )
-  if (!updated) throw new Error("Catalog not found")
-  return catalogSummary(await requiredCatalog(data.catalogId), true)
+  return runOperationPromise(publishCatalog, data, {
+    user: await requireEligibleResourceUser(),
+  })
 }
 
 export async function visibleBrickCatalogs(user: AuthenticatedUser) {

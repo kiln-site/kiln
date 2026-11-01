@@ -116,11 +116,6 @@ const notOperations: Record<string, string> = {
 // Mutating server functions that don't run as operations yet. Move them
 // area by area; never add one.
 const notYetOperations = new Set<string>([
-  "brick-catalogs.ts:addBrickCatalog",
-  "brick-catalogs.ts:deleteBrickCatalog",
-  "brick-catalogs.ts:setBrickCatalogCommunity",
-  "bricks.ts:configureBrickNetworking",
-  "bricks.ts:saveCustomBrick",
   "domains.ts:releaseWebHostname",
   "domains.ts:resyncDomainAssignments",
   "icons.ts:detectIcon",
