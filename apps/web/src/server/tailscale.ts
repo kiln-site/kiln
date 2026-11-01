@@ -954,11 +954,18 @@ function tailscaleDeploymentOperations(
           subject
         )
       )
-      return {
+      const deployment = {
         ...stack,
         relayId: target.relayId,
         relayName: target.relayName,
       }
+      // Recorded as soon as it's there, so a save cut off before it ends
+      // still leaves the node where a deletion's DNS rewrite finds it.
+      await runAppEffect(
+        "tailscale.cleanup.deployments.observe",
+        observeTailscaleDeploymentsEffect([deployment])
+      )
+      return deployment
     },
     remove: async (deployment, mode) => {
       const controlPlaneDeviceRemoved =

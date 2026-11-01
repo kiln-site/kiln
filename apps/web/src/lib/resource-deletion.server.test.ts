@@ -119,6 +119,26 @@ describeMysql("Deleting a game server or database", () => {
     )
 
     it.effect(
+      "deletes nothing while a Relay its Tailscale network is on is paused",
+      () =>
+        Effect.gen(function* () {
+          const paused = "p".repeat(43)
+          yield* seed
+          yield* insertRelay(paused, { enabled: false })
+          yield* seedNetwork(network, [`instance:${serverId}`, peer], [paused])
+
+          yield* deleteServer()
+          const done = yield* until(serverId, ["completed", "failed"])
+
+          assert.strictEqual(done?.status, "failed")
+          assert.match(done?.error ?? "", /paused/)
+          assert.isTrue(relay.servers.has(serverId))
+          assert.isUndefined(relay.stackDns.get(network))
+        }).pipe(TestClock.withLive),
+      90_000
+    )
+
+    it.effect(
       "gives a game server it keeps its Tailscale DNS back",
       () =>
         Effect.gen(function* () {

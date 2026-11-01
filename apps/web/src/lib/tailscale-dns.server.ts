@@ -32,17 +32,21 @@ export class TailscaleDnsError extends Schema.TaggedError<TailscaleDnsError>()(
 /**
  * Rewrites a network's DNS on every node of it from what those nodes hold
  * now. It asks only the Relays it names, the ones the network is on, and
- * each of them must answer: one left out would drop its members' records.
- * Run it holding the network's `#settings`.
+ * each of them must answer, a paused one included: one left out would drop
+ * its members' records. A Relay that's been removed took its node with it.
+ * Run it holding the network's `#settings`; it returns only once every
+ * write it sent has ended, so none outlives the lane.
  */
 export async function writeTailscaleNetworkDns(
   network: { readonly id: string; readonly relayIds: ReadonlyArray<string> },
   subject?: string
 ): Promise<void> {
   const relayIds = new Set(network.relayIds)
-  const relays = (await listPersistedRelays()).filter(
-    (relay) => relay.enabled && relayIds.has(relay.id)
+  const relays = (await listPersistedRelays()).filter((relay) =>
+    relayIds.has(relay.id)
   )
+  const paused = relays.find((relay) => !relay.enabled)
+  if (paused) throw new Error(`${paused.name} is paused`)
   const nodes = (
     await Promise.all(
       relays.map(async (relay) =>
@@ -60,7 +64,7 @@ export async function writeTailscaleNetworkDns(
       enabled && !frozen ? [{ address, hostname }] : []
     )
   )
-  await Promise.all(
+  const written = await Promise.allSettled(
     nodes.map(({ relay }) =>
       relayRpc(
         relay,
@@ -71,6 +75,18 @@ export async function writeTailscaleNetworkDns(
       )
     )
   )
+  const failures = written.flatMap((result, index) =>
+    result.status === "rejected"
+      ? [
+          `${nodes[index]?.relay.name}: ${
+            result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason)
+          }`,
+        ]
+      : []
+  )
+  if (failures.length > 0) throw new Error(failures.join("; "))
 }
 
 /** The networks a resource is a member of, as its Relay holds them. */
@@ -121,11 +137,16 @@ function isMemberOf(
 export const rewriteTailscaleDns = durableOperation({
   doing: () => "Updating Tailscale DNS",
   error: TailscaleDnsError,
-  input: Schema.Struct({ networkIds: Schema.Array(Schema.String) }),
+  input: Schema.Struct({
+    networkIds: Schema.Array(Schema.String),
+    // Relays known to be on the networks besides those Hearth recorded,
+    // such as the one a deleted resource's member is on.
+    alsoOn: Schema.Array(Schema.String),
+  }),
   kind: "tailscale.network.dns",
   locks: ({ networkIds }) =>
     networkIds.map((id) => exclusive(tailscaleNetworkSettingsKey(id))),
-  run: ({ networkIds }) =>
+  run: ({ alsoOn, networkIds }) =>
     Activity.make({
       name: "rewrite",
       error: TailscaleDnsError,
@@ -138,7 +159,7 @@ export const rewriteTailscaleDns = durableOperation({
             for (const id of networkIds) {
               await writeTailscaleNetworkDns({
                 id,
-                relayIds: deployed.get(id) ?? [],
+                relayIds: [...(deployed.get(id) ?? []), ...alsoOn],
               })
             }
           },
@@ -185,7 +206,7 @@ export const rewriteTailscaleDnsOf = (
       success: Schema.String,
       execute: startDurableOperation(
         rewriteTailscaleDns,
-        { networkIds },
+        { alsoOn: [resource.relayId], networkIds },
         { idempotencyKey: options.idempotencyKey, initiator: "system" }
       ).pipe(Effect.orDie),
     })

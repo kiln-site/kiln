@@ -111,7 +111,12 @@ const deletionOf = (resourceId: string) =>
  * A Tailscale network on the seeded Relay with these members, as Hearth
  * records it and the Relay holds it.
  */
-export const seedNetwork = (id: string, members: ReadonlyArray<string>) =>
+export const seedNetwork = (
+  id: string,
+  members: ReadonlyArray<string>,
+  // Other Relays Hearth recorded the network on.
+  alsoOn: ReadonlyArray<string> = []
+) =>
   Effect.gen(function* () {
     yield* insertRows("tailscale_network", {
       created_at: at,
@@ -120,14 +125,17 @@ export const seedNetwork = (id: string, members: ReadonlyArray<string>) =>
       name: "Test network",
       updated_at: at,
     })
-    yield* insertRows("tailscale_network_deployment", {
-      cleanup_next_attempt_at: at,
-      deployment: JSON.stringify({ id, relayId }),
-      network_id: id,
-      observed_at: at,
-      relay_id: relayId,
-      updated_at: at,
-    })
+    yield* insertRows(
+      "tailscale_network_deployment",
+      [relayId, ...alsoOn].map((relay) => ({
+        cleanup_next_attempt_at: at,
+        deployment: JSON.stringify({ id, relayId: relay }),
+        network_id: id,
+        observed_at: at,
+        relay_id: relay,
+        updated_at: at,
+      }))
+    )
     deletionRelay.stacks.set(id, [...members])
   })
 
