@@ -44,14 +44,7 @@ import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { promiseEffect } from "@/effect/promise"
 import { provisioningInstanceId } from "@/lib/provisioning.server"
 import { dnsKey } from "@/lib/dns-operations"
-import {
-  exclusive,
-  partKey,
-  relayKey,
-  resourceKey,
-  shared,
-  userKey,
-} from "@/operations/lanes"
+import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -59,7 +52,10 @@ import {
 } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceOperation } from "@/server/resource-operation.server"
-import { visibleBrickCatalogs } from "@/server/brick-catalogs.server"
+import {
+  brickLibraryKey,
+  visibleBrickCatalogs,
+} from "@/server/brick-catalogs.server"
 import {
   getInstanceStartupHandler,
   loadInstanceRecipe,
@@ -512,8 +508,8 @@ export const loadBrickRecipe = createServerFn({ method: "POST" })
     return hydrateBrickIcon(brick)
   })
 
-// A person's own custom Bricks take their account's `#bricks`, as their
-// catalog adds do; the database keeps one per source.
+// A person's own custom Bricks take their Brick library, as their catalog
+// adds do; the database keeps one per source.
 const saveCustom = operation<z.infer<typeof recipeInputSchema>>()({
   name: "customBrick.save",
   doing: "Saving a custom Brick",
@@ -529,9 +525,7 @@ const saveCustom = operation<z.infer<typeof recipeInputSchema>>()({
         })
       )
     ),
-  locks: ({ context: person }) => [
-    exclusive(partKey(userKey(person.id), "bricks")),
-  ],
+  locks: ({ context: person }) => [exclusive(brickLibraryKey(person.id))],
   run: ({ context: person, input }) =>
     promiseEffect(() => saveCustomBrickHandler(person, input)),
   audit: ({ context: person }) => ({ id: person.id, kind: "user" }),

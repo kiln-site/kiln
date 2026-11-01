@@ -15,7 +15,7 @@ import {
 import { kilnBrickCatalogUrl, kilnGitRepository } from "@/lib/environment"
 import { runAppEffect } from "@/effect/runtime"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
-import { exclusive, partKey, userKey } from "@/operations/lanes"
+import { exclusive, partKey, shared } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -99,12 +99,14 @@ export async function getBrickCatalogDetailsHandler(data: {
   }
 }
 
-// The lane keys catalogs take (docs/hearth-operations.md): deleting one
-// takes it whole, publishing or unpublishing it its `#visibility`, so an
-// owner's delete and an administrator's publish go one after the other. A
-// person's own adds take their account's `#bricks`.
+// The lane keys catalogs take (docs/hearth-operations.md). A person's Brick
+// library: adding to it, which can replace one of their catalogs, takes it
+// exclusive; deleting or publishing one of their catalogs takes it shared,
+// with the catalog whole to delete it or its `#visibility` to publish it.
 const brickCatalogKey = (id: string) => `brick-catalog:${id}`
-const personalBricksKey = (userId: string) => partKey(userKey(userId), "bricks")
+export const brickLibraryKey = (userId: string) => `brick-library:${userId}`
+const libraryOf = (catalog: { ownerUserId: string | null }) =>
+  catalog.ownerUserId ? [shared(brickLibraryKey(catalog.ownerUserId))] : []
 
 // The catalog, and that this person may delete it: its owner, while it isn't
 // published, or an administrator.
@@ -131,7 +133,7 @@ const addCatalog = operation<{ readonly source: string }>()({
         () => new Error("Adding catalogs requires Bring your own Relay access")
       )
     ),
-  locks: ({ context: person }) => [exclusive(personalBricksKey(person.id))],
+  locks: ({ context: person }) => [exclusive(brickLibraryKey(person.id))],
   run: ({ context: person, input }) =>
     promiseEffect(async () => {
       const loaded = await loadBrickCatalogSource(input.source)
@@ -168,9 +170,12 @@ const deleteCatalog = operation<{ readonly catalogId: string }>()({
   doing: "Deleting this Brick catalog",
   authorize: ({ input, user }) =>
     signedIn(user).pipe(
-      Effect.tap((person) => deletableCatalog(person, input.catalogId))
+      Effect.flatMap((person) => deletableCatalog(person, input.catalogId))
     ),
-  locks: ({ input }) => [exclusive(brickCatalogKey(input.catalogId))],
+  locks: ({ context: catalog, input }) => [
+    exclusive(brickCatalogKey(input.catalogId)),
+    ...libraryOf(catalog),
+  ],
   run: ({ input }) =>
     promiseEffect(async () => {
       await runAppEffect(
@@ -194,17 +199,23 @@ const publishCatalog = operation<{
 }>()({
   name: "brickCatalog.visibility",
   doing: "Publishing this Brick catalog",
-  authorize: ({ user }) =>
+  authorize: ({ input, user }) =>
     signedIn(user).pipe(
       Effect.filterOrFail(
         isPlatformAdmin,
         () => new Error("Only platform admins can publish catalogs")
+      ),
+      Effect.flatMap((person) =>
+        promiseEffect(() => requiredCatalog(input.catalogId)).pipe(
+          Effect.map((catalog) => ({ catalog, person }))
+        )
       )
     ),
-  locks: ({ input }) => [
+  locks: ({ context: { catalog }, input }) => [
     exclusive(partKey(brickCatalogKey(input.catalogId), "visibility")),
+    ...libraryOf(catalog),
   ],
-  run: ({ context: person, input }) =>
+  run: ({ context: { person }, input }) =>
     promiseEffect(async () => {
       const catalog = await requiredCatalog(input.catalogId)
       if (input.community && !catalog.snapshot) {
