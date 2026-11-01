@@ -1238,7 +1238,10 @@ export function hearthEdgeQueryOptions() {
   })
 }
 
-/** The DNS records Kiln keeps for a game server's or app's web routes. */
+/**
+ * The DNS records Kiln keeps for a game server's or app's web routes, and
+ * which of them still wait on a certificate.
+ */
 export function resourceWebHostnamesQueryOptions(
   relayId: string,
   resourceType: "app" | "instance",

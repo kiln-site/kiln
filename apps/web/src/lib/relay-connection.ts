@@ -896,6 +896,21 @@ class RelayConnection {
     publishRealtimeChange({ relayId: this.#relay.id, type: "relay.metadata" })
   }
 
+  // Pages showing web hostnames refresh what their certificates wait for.
+  #noticeCertificates(
+    previous: RelaySnapshot | null,
+    next: RelaySnapshot | null
+  ): void {
+    const was = JSON.stringify(previous?.relay?.certificates ?? [])
+    const is = JSON.stringify(next?.relay?.certificates ?? [])
+    if (was === is) return
+    publishRealtimeChange({
+      audience: { kind: "relays", relayIds: [this.#relay.id] },
+      topics: ["web-certificates"],
+      type: "hearth.invalidate",
+    })
+  }
+
   get pushedInstances(): ReadonlyArray<
     RelaySnapshot["instances"][number]
   > | null {
@@ -1567,6 +1582,7 @@ class RelayConnection {
               return
             }
             const previousSnapshot = this.#pushedSnapshot
+            this.#noticeCertificates(previousSnapshot, snapshot.data)
             rememberRelayUpdates(this.#relay.id, snapshot.data.node)
             const pushed = {
               ...snapshot.data,
@@ -1615,6 +1631,11 @@ class RelayConnection {
               previousSnapshot,
               delta
             )
+            // Most deltas are node samples; only the Relay's own part
+            // carries certificates.
+            if (delta.relay) {
+              this.#noticeCertificates(previousSnapshot, this.#pushedSnapshot)
+            }
             this.#hasPushedSnapshot = true
             this.#noticePause(previousSnapshot)
             // Resource-only node samples refresh the cached snapshot without

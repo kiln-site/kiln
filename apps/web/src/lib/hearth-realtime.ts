@@ -130,6 +130,8 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.tailscaleStacks),
     prefix(["tailscale", "relays"]),
   ],
+  // What web route hostnames' certificates wait for, read with their DNS.
+  "web-certificates": [prefix(["domains"])],
 } satisfies Record<HearthRealtimeTopic, ReadonlyArray<HearthRealtimeQueryScope>>
 
 function queryScopes(

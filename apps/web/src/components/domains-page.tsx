@@ -66,6 +66,10 @@ import {
   type DomainConnectionOverview,
   type DomainSettings,
 } from "@/components/domains-shared"
+import {
+  CertificateStatus,
+  certificatePresentation,
+} from "@/components/web-certificate-status"
 import { WorkspacePage } from "@/components/workspace-page"
 import { ensuringPromise, forkPromise, tapPromiseError } from "@/effect/promise"
 import {
@@ -875,7 +879,7 @@ const DomainsTable = React.memo(function DomainsTable({
         id: "status",
         header: () => <span className="sr-only sm:not-sr-only">Status</span>,
         sortFn: "text",
-        cell: ({ row }) => <StatusIndicator status={rowStatus(row.original)} />,
+        cell: ({ row }) => <DomainStatusCell row={row.original} />,
         meta: dataTableColumnMeta(
           { width: { base: "2.5rem", sm: statusColumnWidth } },
           {
@@ -981,6 +985,39 @@ function rowHostname(row: DomainRow): string {
 
 function portOf(row: DomainRow): number {
   return row.kind === "server" ? row.domain.port : -1
+}
+
+// A web hostname still waiting on its certificate checks again when clicked,
+// for whoever may change its route.
+const DomainStatusCell = React.memo(function DomainStatusCell({
+  row,
+}: {
+  row: DomainRow
+}) {
+  const certificate =
+    row.kind === "web" ? awaitedCertificate(row.hostname) : null
+  if (row.kind === "web" && certificate) {
+    return (
+      <CertificateStatus
+        canChange={row.hostname.canManage}
+        certificate={certificate}
+        hostname={row.hostname.hostname}
+        resource={webResourceRef(row.hostname)}
+      />
+    )
+  }
+  return <StatusIndicator status={rowStatus(row)} />
+})
+
+function webResourceRef(hostname: WebHostnameOverview) {
+  return {
+    relayId: hostname.relayId,
+    resourceId: hostname.resource.id,
+    resourceType:
+      hostname.resource.kind === "app"
+        ? ("app" as const)
+        : ("instance" as const),
+  }
 }
 
 function rowStatus(row: DomainRow): IdentityStatusPresentation {
@@ -1289,16 +1326,27 @@ function renderEmptyDomains({ searchActive }: { searchActive: boolean }) {
   )
 }
 
+// Its certificate, once its DNS is in place or its owner keeps it.
+function awaitedCertificate(hostname: WebHostnameOverview) {
+  return hostname.status === "active" || hostname.status === "manual"
+    ? hostname.certificate
+    : null
+}
+
 function hostnameStatusPresentation(
   hostname: WebHostnameOverview
 ): IdentityStatusPresentation {
+  const certificate = awaitedCertificate(hostname)
+  if (certificate) {
+    return certificatePresentation(certificate, hostname.canManage)
+  }
   if (hostname.status === "active") return { label: "Active", tone: "success" }
   if (hostname.status === "pending") {
     return { label: "Pending", pulse: true, tone: "warning" }
   }
   if (hostname.status === "manual") {
     return {
-      detail: "Not on a domain Kiln manages. Point it at the Relay yourself.",
+      detail: "Not on a domain Kiln manages.\nPoint it at the Relay yourself.",
       label: "Manual DNS",
       tone: "neutral",
     }

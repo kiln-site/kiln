@@ -97,6 +97,8 @@ import {
   relayNetworkingSchema,
   relayProxyBrowserMetadataSchema,
   relayProxyReadInputSchema,
+  relayCertificateCheckInputSchema,
+  relayCertificateCheckResultSchema,
   relayProxyConfigurationSchema,
   relayProxySettingsSchema,
   relayVolumeCreateSchema,
@@ -199,6 +201,13 @@ import {
   traefikRouteUpstream,
   traefikStaticConfiguration,
 } from "./traefik.js"
+import {
+  type CertificateCheck,
+  nameResolver,
+  networkDnsQueries,
+  WebCertificates,
+  webCertificateStorePath,
+} from "./web-certificates.js"
 import { forkPromise, promiseEffect, recoverPromise } from "./effect/promise.js"
 import { DockerEngine } from "./docker-engine.js"
 import { RelayVolumes } from "./volumes.js"
@@ -497,7 +506,11 @@ const lifecycle = new LifecycleDriver(
   docker,
   bricks,
   databaseConnections,
-  lanes
+  lanes,
+  new WebCertificates({
+    resolve: nameResolver(networkDnsQueries),
+    storePath: webCertificateStorePath(config),
+  })
 )
 // Before anything reads a Tailscale stack.
 await lifecycle.migrateTailscaleStackMembers()
@@ -1593,6 +1606,11 @@ const platformContext: PlatformContext = {
   engine: relayEngine,
 }
 const platformFiber = forkRelayEffect("relay.platform", platformLoop())
+// See web-certificates.ts.
+const certificateFiber = forkRelayEffect(
+  "relay.certificates",
+  certificateLoop()
+)
 
 let shutdownStarted = false
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -1785,6 +1803,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         tlsRefreshFiber.interruptUnsafe()
         joinFiber?.interruptUnsafe()
         platformFiber.interruptUnsafe()
+        certificateFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         transferSweepFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()
@@ -1880,6 +1899,7 @@ async function relaySnapshot() {
     ),
     relay: {
       browserOrigin: config.browserOrigin,
+      certificates: lifecycle.certificates.pending(),
       id: relayIdentity.fingerprint,
       name: relayIdentity.name,
       paused: lanes.paused,
@@ -2209,7 +2229,12 @@ async function executeControlRequest(
       const bundled = settings.mode === "traefik"
       return relayProxyConfigurationSchema.parse({
         dynamicConfiguration: bundled
-          ? traefikDynamicConfiguration(config, routes, settings)
+          ? traefikDynamicConfiguration(
+              config,
+              routes,
+              settings,
+              lifecycle.certificates.gate()
+            )
           : null,
         // An older Hearth reads only routes with a port.
         routes: (hearthFeatures.has(relayWebRouteOptionsV1Feature)
@@ -2251,6 +2276,26 @@ async function executeControlRequest(
       const proxy = await lifecycle.configureProxy(settings, routes)
       await snapshotHub.refresh()
       return proxy
+    }
+    case "relay.certificates.check": {
+      const { hostname, owner } = relayCertificateCheckInputSchema.parse(
+        request.payload
+      )
+      const name = hostname.toLowerCase()
+      // Hearth checks the person may change `owner`'s routes; the Relay
+      // refuses a hostname those routes don't serve.
+      const checked = await lifecycle.certificates.check({
+        hostname: name,
+        owner,
+      })
+      await applyCertificateCheck(checked)
+      return relayCertificateCheckResultSchema.parse({
+        asked: checked.asked,
+        pending:
+          lifecycle.certificates
+            .pending()
+            .find((pending) => pending.hostname === name) ?? null,
+      })
     }
     case "relay.volumes.read":
       return runRelayEffect("relay.volumes.read", volumes.list())
@@ -3973,6 +4018,49 @@ function platformLoop() {
       Effect.andThen(Effect.sleep("30 seconds")),
       Effect.forever
     )
+}
+
+// Every 15 seconds, or when a route newly waits: lookups outside the lane,
+// changes inside it.
+function certificateLoop() {
+  return Effect.tryPromise(() => lifecycle.certificates.lookUp()).pipe(
+    Effect.flatMap((lookups) =>
+      lookups.due
+        ? lanes.run(
+            {
+              label: "web.certificates.refresh",
+              locks: [exclusive(laneKeys.routes)],
+            },
+            Effect.tryPromise(async () =>
+              applyCertificateCheck(await lifecycle.certificates.apply(lookups))
+            )
+          )
+        : Effect.void
+    ),
+    Effect.catch((cause) =>
+      cause instanceof LaneRejectedError
+        ? Effect.void
+        : Effect.logWarning("Checking web route certificates failed", cause)
+    ),
+    Effect.andThen(
+      Effect.raceFirst(
+        Effect.sleep("15 seconds"),
+        Effect.promise(() => lifecycle.certificates.woken())
+      )
+    ),
+    Effect.forever
+  )
+}
+
+// Rewrites Traefik's routes when owed and refreshes the snapshot. The caller
+// holds the routes lock.
+async function applyCertificateCheck(result: CertificateCheck): Promise<void> {
+  if (result.rewrite) {
+    await traceRelayPromise("relay.certificates.refresh", () =>
+      lifecycle.refreshTraefikCertificates()
+    )
+  }
+  if (result.changed || result.rewrite) await snapshotHub.refresh()
 }
 
 /**

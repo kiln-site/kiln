@@ -53,6 +53,40 @@ snapshot, the same address game servers advertise (`KILN_RELAY_GAME_HOST`).
 If the Relay reports none, Hearth uses a game server's reported public host,
 then the address Hearth reaches the Relay at.
 
+## Certificates
+
+A Relay running bundled Traefik gets each web route hostname's certificate
+from Let's Encrypt (`apps/relay/src/web-certificates.ts`). Traefik asks for
+one when a route naming it first appears, and again only when its
+configuration next changes. Asked before the hostname's record exists, Let's
+Encrypt answers NXDOMAIN and may remember that answer, and the route would
+serve Traefik's default certificate until some other route changed. So:
+
+- Traefik asks for a hostname's certificate only once its name resolves,
+  asked of its zone's own nameservers rather than a resolver, which could
+  itself remember the name as missing. A route's other names don't wait for
+  it. When the nameservers can't be reached or don't answer, Traefik asks
+  anyway.
+- Until the name resolves, the Relay checks it again: after 15 and 30
+  seconds, 1, 2 and 5 minutes, then every 10 minutes. That costs nothing at
+  Let's Encrypt.
+- Once Traefik has asked, the Relay doesn't ask again on its own. If Let's
+  Encrypt doesn't issue it, as when the name points elsewhere or port 80 is
+  closed, someone fixing that clicks the hostname's status to have Traefik
+  ask again. That changes Traefik's configuration, so Traefik asks again for
+  every certificate it lacks, not just that one; the Relay does this at most
+  four times an hour in all. Other route changes, and restarts, also have
+  Traefik ask again, so this keeps Kiln's own asks down without promising
+  to stay within Let's Encrypt's limits. Retrying on its own is left for
+  later.
+
+The Relay reports the hostnames still waiting in its snapshot. Hearth shows
+them on the Domains page and beside each web route: **Verifying** while it
+checks and asks, **Waiting for DNS** while the name doesn't resolve, and
+**Unverified** when Traefik asked over two minutes ago and still has no
+certificate, which most likely means Let's Encrypt refused. Whoever may
+change the route can click the status to have the Relay check again now.
+
 ## Vanity domains
 
 In a connection, any of its zones can be marked **vanity**, and one marked

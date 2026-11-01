@@ -1,3 +1,4 @@
+import { relayCertificateCheckResultSchema } from "@workspace/contracts"
 import { Effect } from "effect"
 
 import { HostnameInUseError } from "@/effect/errors"
@@ -12,7 +13,9 @@ import {
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { dnsKey } from "@/lib/dns-operations"
-import { exclusive } from "@/operations/lanes"
+import { relayRpc } from "@/lib/relay-connection"
+import { activeRelay } from "@/lib/relay-registry"
+import { exclusive, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -22,10 +25,16 @@ import { requireEligibleResourceUser } from "@/server/auth"
 import { domainActor } from "@/server/domain-access.server"
 import { explainHostnameInUseEffect } from "@/server/domain-resource-access.server"
 import type {
+  CheckWebCertificateInput,
   ReleaseWebHostnameInput,
-  ResourceWebHostname,
+  ResourceWebHostnames,
   ResourceWebHostnamesInput,
+  WebCertificateCheck,
 } from "@/server/domains"
+import {
+  certificateState,
+  pendingWebCertificates,
+} from "@/server/web-certificates.server"
 import {
   deleteResourceWebHostnamesEffect,
   generateAppHostnameEffect,
@@ -66,10 +75,10 @@ function requireResourcePermission(
 /** A game server's or app's web hostnames, for its network page. */
 export async function getResourceWebHostnamesHandler(
   data: ResourceWebHostnamesInput
-): Promise<Array<ResourceWebHostname>> {
+): Promise<ResourceWebHostnames> {
   const user = await requireEligibleResourceUser()
   await requireResourcePermission(user, data, false)
-  const canRelease = await recoverPromise(
+  const canChange = await recoverPromise(
     () => requireResourcePermission(user, data, true).then(() => true),
     () => false
   )
@@ -77,15 +86,63 @@ export async function getResourceWebHostnamesHandler(
     "webHostnames.resource",
     listResourceWebHostnamesEffect(data)
   )
-  return rows.map((row) => ({
-    // Only an app's generated address no route uses.
-    canRelease: canRelease && row.generated && !row.routed,
-    generated: row.generated,
-    hostname: row.hostname,
-    id: row.id,
-    lastError: row.lastError,
-    status: row.status,
-  }))
+  return {
+    canChange,
+    certificates: pendingWebCertificates(data),
+    hostnames: rows.map((row) => ({
+      // Only an app's generated address no route uses.
+      canRelease: canChange && row.generated && !row.routed,
+      generated: row.generated,
+      hostname: row.hostname,
+      id: row.id,
+      lastError: row.lastError,
+      status: row.status,
+    })),
+  }
+}
+
+// The Relay orders it; holding the resource shared lets a deletion turn it away.
+const checkCertificate = operation<CheckWebCertificateInput>()({
+  name: "webHostname.certificate.check",
+  doing: "Checking its certificate",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(() => requireResourcePermission(person, input, true))
+      )
+    ),
+  locks: ({ input }) => [
+    shared(resourceKey(input.resourceType, input.relayId, input.resourceId)),
+  ],
+  run: ({ input, user }) =>
+    promiseEffect(async (): Promise<WebCertificateCheck> => {
+      const { asked, pending } = relayCertificateCheckResultSchema.parse(
+        await relayRpc(
+          await activeRelay(input.relayId),
+          "relay.certificates.check",
+          {
+            hostname: input.hostname,
+            // The Relay refuses a hostname this resource's routes don't serve.
+            owner: {
+              id: input.resourceId,
+              kind: input.resourceType === "app" ? "app" : "server",
+            },
+          },
+          30_000,
+          user?.id
+        )
+      )
+      return { asked, certificate: pending ? certificateState(pending) : null }
+    }),
+})
+
+/** Has the hostname's Relay check it now and ask for its certificate again. */
+export async function checkWebCertificateHandler(
+  data: CheckWebCertificateInput
+): Promise<WebCertificateCheck> {
+  return runOperationPromise(checkCertificate, data, {
+    user: await requireEligibleResourceUser(),
+  })
 }
 
 // Releasing a hostname changes its game server's or App's DNS, so it holds

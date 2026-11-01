@@ -575,6 +575,8 @@ export function controlRequestLocks(
 
     case "relay.networking.write":
     case "relay.proxy.write":
+    // May write the bundled Traefik's routes again.
+    case "relay.certificates.check":
       return [exclusive(laneKeys.routes)]
     case "relay.volumes.create":
     case "relay.volumes.rename":

@@ -103,6 +103,7 @@ import {
   type RelayResourceNames,
 } from "./relay-resources.js"
 import type { RelayStoredWebRoute } from "./effect/state.js"
+import type { WebCertificates } from "./web-certificates.js"
 import { RelayPortAllocationError } from "./effect/errors.js"
 import {
   activeTailscaleStackBindings,
@@ -398,13 +399,16 @@ export class LifecycleDriver {
   #tailscaleConfigsDiscovered = false
   readonly #tailscaleFirewallGenerations = new Map<string, string>()
   #webRoutes: ReadonlyArray<RelayStoredWebRoute> = []
+  /** Certificates for the routes the bundled Traefik serves. */
+  readonly certificates: WebCertificates
 
   constructor(
     config: RelayConfig,
     docker: DockerDriver,
     bricks: BrickCatalog,
     readonly databaseConnections: DatabaseConnections,
-    lanes: OperationLanes
+    lanes: OperationLanes,
+    certificates: WebCertificates
   ) {
     this.#lanes = lanes
     this.#bricks = bricks
@@ -412,6 +416,7 @@ export class LifecycleDriver {
     this.#docker = docker
     this.#engine = new DockerEngine(config.dockerSocket)
     this.#resources = relayResourceNames(config)
+    this.certificates = certificates
   }
 
   async networking(): Promise<RelayNetworking | null> {
@@ -1466,18 +1471,10 @@ export class LifecycleDriver {
   ): Promise<void> {
     const settings = configuredSettings ?? (await this.proxySettings())
     this.#webRoutes = routes
-    const directory = join(
-      this.#config.dataDirectory,
-      "infrastructure",
-      "traefik",
-      "dynamic"
+    await this.certificates.track(
+      this.#config.proxyMode === "traefik" ? routes : []
     )
-    await mkdir(directory, { recursive: true, mode: 0o700 })
-    await writeFile(
-      join(directory, "kiln.yaml"),
-      traefikDynamicConfiguration(this.#config, routes, settings),
-      { mode: 0o600 }
-    )
+    await this.#writeTraefikRoutes(routes, settings)
     if (settings.mode === "none" || settings.mode === "coolify") {
       await this.#serializeEdgeMutation(() =>
         this.#reconcileExternalTraefikRoutes(routes, settings)
@@ -1491,6 +1488,36 @@ export class LifecycleDriver {
         await this.#connectTraefikToApps(routes)
       }
     }
+  }
+
+  /** Rewrites the bundled Traefik's routes. The caller holds the routes lock. */
+  async refreshTraefikCertificates(): Promise<void> {
+    if (this.#config.proxyMode !== "traefik") {
+      // No bundled Traefik reads them; nothing is owed.
+      this.certificates.wrote(this.certificates.gate())
+      return
+    }
+    await this.#writeTraefikRoutes(this.#webRoutes, await this.proxySettings())
+  }
+
+  async #writeTraefikRoutes(
+    routes: ReadonlyArray<RelayStoredWebRoute>,
+    settings: RelayProxySettings
+  ): Promise<void> {
+    const directory = join(
+      this.#config.dataDirectory,
+      "infrastructure",
+      "traefik",
+      "dynamic"
+    )
+    await mkdir(directory, { recursive: true, mode: 0o700 })
+    const gate = this.certificates.gate()
+    await writeFile(
+      join(directory, "kiln.yaml"),
+      traefikDynamicConfiguration(this.#config, routes, settings, gate),
+      { mode: 0o600 }
+    )
+    this.certificates.wrote(gate)
   }
 
   // Bundled Traefik reaches routed apps on their own networks.
@@ -3318,17 +3345,19 @@ export class LifecycleDriver {
         staticConfiguration,
       () => true
     )
+    const gate = this.certificates.gate()
     await Promise.all([
       writeFile(join(infrastructure, "traefik.yaml"), staticConfiguration, {
         mode: 0o600,
       }),
       writeFile(
         join(infrastructure, "dynamic", "kiln.yaml"),
-        traefikDynamicConfiguration(this.#config, routes, settings),
+        traefikDynamicConfiguration(this.#config, routes, settings, gate),
         { mode: 0o600 }
       ),
       ensureProtectedFile(join(infrastructure, "state", "acme.json")),
     ])
+    this.certificates.wrote(gate)
 
     const traefik: InfrastructureContainer = {
       binds: [

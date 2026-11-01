@@ -22,6 +22,7 @@ import {
   saveDomainConnectionHandler,
 } from "@/server/domain-settings.server"
 import {
+  checkWebCertificateHandler,
   getResourceWebHostnamesHandler,
   releaseWebHostnameHandler,
 } from "@/server/web-hostname-access.server"
@@ -92,6 +93,10 @@ const resourceWebHostnamesInputSchema = z.discriminatedUnion("resourceType", [
 
 const releaseWebHostnameInputSchema = z.object({ id: domainIdSchema })
 
+const checkWebCertificateInputSchema = resourceWebHostnamesInputSchema.and(
+  z.object({ hostname: z.string().trim().toLowerCase().min(1).max(253) })
+)
+
 export type SaveDomainConnectionInput = z.infer<
   typeof saveDomainConnectionInputSchema
 >
@@ -114,6 +119,9 @@ export type ResourceWebHostnamesInput = z.infer<
 >
 export type ReleaseWebHostnameInput = z.infer<
   typeof releaseWebHostnameInputSchema
+>
+export type CheckWebCertificateInput = z.infer<
+  typeof checkWebCertificateInputSchema
 >
 
 export interface InstanceDomainOverview {
@@ -190,6 +198,8 @@ export interface WebHostnameOverview {
         /** The `/server/$serverId` param. */
         routeId: string
       }
+  /** What its certificate waits for; null once it has one. */
+  certificate: WebHostnameCertificate | null
   /** `manual`: on no connected domain, so its owner points it by hand. */
   status: "active" | "error" | "external" | "manual" | "pending" | "removing"
   /** The Relay address its record points at. */
@@ -198,6 +208,36 @@ export interface WebHostnameOverview {
   vanity: boolean
   /** The Cloudflare zone, for its dashboard link. */
   zoneName: string | null
+}
+
+/**
+ * What a web route hostname's certificate waits for, as its Relay's bundled
+ * Traefik last said. None waits on a Relay behind another proxy, which
+ * keeps its own certificates.
+ */
+export interface WebHostnameCertificate {
+  /** A check or a request already failed, so the Relay is retrying. */
+  failed: boolean
+  /** `dns`: its name doesn't resolve yet. */
+  waitingFor: "certificate" | "dns"
+}
+
+/** What checking a hostname's certificate now found. */
+export interface WebCertificateCheck {
+  /** Whether its Relay had Traefik ask Let's Encrypt; its limits may not allow. */
+  asked: boolean
+  /** What it still waits for; null once it has a certificate. */
+  certificate: WebHostnameCertificate | null
+}
+
+/** A game server's or app's web hostnames, for its network page. */
+export interface ResourceWebHostnames {
+  /** Whether the person may change its routes. */
+  canChange: boolean
+  /** Its web route hostnames still waiting on a certificate. */
+  certificates: Array<WebHostnameCertificate & { hostname: string }>
+  /** The DNS records Kiln keeps for them. */
+  hostnames: Array<ResourceWebHostname>
 }
 
 /** A web hostname as a game server's or app's network page shows it. */
@@ -259,6 +299,11 @@ export const removeInstanceDomain = createServerFn({ method: "POST" })
 export const getResourceWebHostnames = createServerFn({ method: "GET" })
   .validator(resourceWebHostnamesInputSchema)
   .handler(({ data }) => getResourceWebHostnamesHandler(data))
+
+/** Has the hostname's Relay check its name and certificate again now. */
+export const checkWebCertificate = createServerFn({ method: "POST" })
+  .validator(checkWebCertificateInputSchema)
+  .handler(({ data }) => checkWebCertificateHandler(data))
 
 export const releaseWebHostname = createServerFn({ method: "POST" })
   .validator(releaseWebHostnameInputSchema)

@@ -1872,6 +1872,36 @@ export type RelayProxyConfiguration = z.infer<
   typeof relayProxyConfigurationSchema
 >
 
+/** A web route hostname the bundled Traefik has no certificate for yet. */
+export const relayPendingCertificateSchema = z.object({
+  /** Its name didn't resolve, or Traefik asked over two minutes ago. */
+  failed: z.boolean(),
+  hostname: z.string().min(1).max(253),
+  /** The game server or App whose route serves it. */
+  owner: z.object({
+    id: z.string().min(1),
+    kind: z.enum(["app", "server"]),
+  }),
+  /** `dns`: its name doesn't resolve yet, so Traefik doesn't ask. */
+  waitingFor: z.enum(["certificate", "dns"]),
+})
+
+export type RelayPendingCertificate = z.infer<
+  typeof relayPendingCertificateSchema
+>
+
+export const relayCertificateCheckInputSchema = z.object({
+  hostname: z.string().min(1).max(253),
+  /** The game server or App whose route it should be. */
+  owner: relayPendingCertificateSchema.shape.owner,
+})
+
+/** What a hostname still waits for (null once it has one), and whether Traefik asked. */
+export const relayCertificateCheckResultSchema = z.object({
+  asked: z.boolean(),
+  pending: relayPendingCertificateSchema.nullable(),
+})
+
 export const relayInstanceResourcesSchema = z.object({
   sampledAt: z.string().datetime(),
   cpu: z.object({
@@ -2569,6 +2599,8 @@ export type RelayPlatformDatabaseWrite = z.infer<
 
 const relaySnapshotRelaySchema = z.object({
   browserOrigin: relayProxyBrowserMetadataSchema.shape.browserOrigin.optional(),
+  /** Optional only so an outdated Relay's snapshot parses while it updates. */
+  certificates: z.array(relayPendingCertificateSchema).optional(),
   id: relayIdSchema,
   name: z.string().min(1).max(120),
   // Held paused by a Hearth, so it runs no changes. See
