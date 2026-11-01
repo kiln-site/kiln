@@ -277,7 +277,7 @@ const mclogsResponseSchema = z.object({
 const relayWarningIntervalMs = 60_000
 const relayWarningAt = new Map<string, number>()
 
-export const getRelaySnapshot = createServerFn({ method: "POST" }).handler(
+export const getRelaySnapshot = createServerFn({ method: "GET" }).handler(
   async () => {
     const user = await requireEligibleResourceUser()
     return authorizedFleetSnapshot(user, true)
@@ -339,7 +339,7 @@ export const getRelayProxyModes = createServerFn({ method: "GET" }).handler(
 )
 
 export const getFreshRelayConnectionState = createServerFn({
-  method: "POST",
+  method: "GET",
 }).handler(async () => {
   const user = await requireEligibleResourceUser()
   return authorizedRelayConnectionState(user, {
@@ -349,7 +349,7 @@ export const getFreshRelayConnectionState = createServerFn({
   })
 })
 
-export const getFreshRelayInstance = createServerFn({ method: "POST" })
+export const getFreshRelayInstance = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await instanceRelayAccess(data.relayId)
@@ -460,7 +460,7 @@ async function readServerWorkspace(user: AuthenticatedUser, serverId: string) {
   }
 }
 
-export const getRelayInstances = createServerFn({ method: "POST" }).handler(
+export const getRelayInstances = createServerFn({ method: "GET" }).handler(
   async () => {
     const user = await requireEligibleResourceUser()
     return (await authorizedFleetSnapshot(user, true)).instances

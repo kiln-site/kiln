@@ -253,9 +253,13 @@ ended. Ended ones are kept for 30 days.
    what it starts stays inside the operation. Pass it the person the
    operation runs for: it mustn't read the request's session itself.
 5. Every mutating server function runs an operation.
-   `server/auth-coverage.test.ts` checks each reaches `runOperationPromise`,
-   `startDurableOperation` or `queueDurableOperation`. Those not moved yet are listed there, and the
-   list only shrinks.
+   `server/auth-coverage.test.ts` checks each `POST` server function reaches
+   `runOperationPromise`, `startDurableOperation` or `queueDurableOperation`.
+   A read is `GET`, unless its input is too large or too secret for a URL
+   (`readsOverPost`); sessions, keystrokes and capability signing change
+   nothing an operation orders (`notOperations`). Each exception gives its
+   reason. Those not moved yet are listed there too, and that list only
+   shrinks.
 
 For a step several features share that must not interleave with itself,
 such as a DNS update, `inLanes(name, doing, locks, effect)` runs it as an

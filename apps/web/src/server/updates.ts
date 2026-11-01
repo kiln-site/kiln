@@ -643,7 +643,7 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
     }
   })
 
-export const getSystemUpdateStatus = createServerFn({ method: "POST" })
+export const getSystemUpdateStatus = createServerFn({ method: "GET" })
   .validator(updateStatusSchema)
   .handler(async ({ data }) => {
     const user = await requireUpdateAccess()

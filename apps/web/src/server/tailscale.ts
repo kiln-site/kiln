@@ -277,7 +277,7 @@ export const previewTailscaleIntegration = createServerFn({ method: "POST" })
     }
   })
 
-export const getTailscaleIntegrationStatus = createServerFn({ method: "POST" })
+export const getTailscaleIntegrationStatus = createServerFn({ method: "GET" })
   .validator(syncTailscaleIntegrationSchema)
   .handler(async ({ data }) => {
     await requireTailscaleAdministrator()

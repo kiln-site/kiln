@@ -81,43 +81,6 @@ export const issueBrowserCapabilities = createServerFn({ method: "POST" })
     })
   })
 
-export const issueConsoleCapability = createServerFn({ method: "POST" })
-  .validator(browserCapabilityInputSchema)
-  .handler(async ({ data }) => {
-    const [
-      { requireEligibleResourceUser },
-      { issueConsoleCapabilityForRequest },
-    ] = await Promise.all([
-      import("@/server/auth"),
-      import("@/server/relay-capability-service"),
-    ])
-    return issueConsoleCapabilityForRequest({
-      authenticate: requireEligibleResourceUser,
-      instanceId: data.instanceId,
-      publicKeyJwk: data.publicKeyJwk,
-      relayId: data.relayId,
-      write: data.write,
-    })
-  })
-
-export const issueResourceCapability = createServerFn({ method: "POST" })
-  .validator(browserCapabilityInputSchema)
-  .handler(async ({ data }) => {
-    const [
-      { requireEligibleResourceUser },
-      { issueResourceCapabilityForRequest },
-    ] = await Promise.all([
-      import("@/server/auth"),
-      import("@/server/relay-capability-service"),
-    ])
-    return issueResourceCapabilityForRequest({
-      authenticate: requireEligibleResourceUser,
-      instanceId: data.instanceId,
-      publicKeyJwk: data.publicKeyJwk,
-      relayId: data.relayId,
-    })
-  })
-
 export const issueFileCapability = createServerFn({ method: "POST" })
   .validator(fileCapabilityInputSchema)
   .handler(async ({ data }) => {

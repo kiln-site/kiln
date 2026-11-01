@@ -112,7 +112,7 @@ export const detectIcon = createServerFn({ method: "POST" })
  * An image from the web, for the browser to shrink into an icon, since it
  * can't read most sites' images itself. Only public HTTPS addresses.
  */
-export const fetchIconSource = createServerFn({ method: "POST" })
+export const fetchIconSource = createServerFn({ method: "GET" })
   .validator(
     z.strictObject({
       url: z
@@ -139,7 +139,7 @@ export const fetchIconSource = createServerFn({ method: "POST" })
  * An image from a game server's or app's files, or from inside one of an
  * app's containers, for the browser to shrink into an icon.
  */
-export const readIconSourceFile = createServerFn({ method: "POST" })
+export const readIconSourceFile = createServerFn({ method: "GET" })
   .validator(
     z.strictObject({
       path: z.string().min(1).max(1_024),
@@ -240,7 +240,7 @@ export const linkIconFile = createServerFn({ method: "POST" })
  * A Minecraft player's head, for the browser to make a picture of. Mojang
  * says whose the name is; the head is drawn from that account's skin.
  */
-export const fetchMinecraftHead = createServerFn({ method: "POST" })
+export const fetchMinecraftHead = createServerFn({ method: "GET" })
   .validator(z.strictObject({ username: z.string().trim().min(1).max(32) }))
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
@@ -271,7 +271,7 @@ export const fetchMinecraftHead = createServerFn({ method: "POST" })
  * An image from any files the user can read, for the browser to make their
  * picture of, when it can't read the file from the Relay directly.
  */
-export const readPictureSourceFile = createServerFn({ method: "POST" })
+export const readPictureSourceFile = createServerFn({ method: "GET" })
   .validator(
     z.strictObject({
       path: z.string().min(1).max(1_024),
