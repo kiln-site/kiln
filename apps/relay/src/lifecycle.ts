@@ -103,7 +103,7 @@ import {
   type RelayResourceNames,
 } from "./relay-resources.js"
 import type { RelayStoredWebRoute } from "./effect/state.js"
-import { authoritativeNameAnswer, WebCertificates } from "./web-certificates.js"
+import type { WebCertificates } from "./web-certificates.js"
 import { RelayPortAllocationError } from "./effect/errors.js"
 import {
   activeTailscaleStackBindings,
@@ -407,7 +407,8 @@ export class LifecycleDriver {
     docker: DockerDriver,
     bricks: BrickCatalog,
     readonly databaseConnections: DatabaseConnections,
-    lanes: OperationLanes
+    lanes: OperationLanes,
+    certificates: WebCertificates
   ) {
     this.#lanes = lanes
     this.#bricks = bricks
@@ -415,16 +416,7 @@ export class LifecycleDriver {
     this.#docker = docker
     this.#engine = new DockerEngine(config.dockerSocket)
     this.#resources = relayResourceNames(config)
-    this.certificates = new WebCertificates({
-      resolve: authoritativeNameAnswer,
-      storePath: join(
-        config.dataDirectory,
-        "infrastructure",
-        "traefik",
-        "state",
-        "acme.json"
-      ),
-    })
+    this.certificates = certificates
   }
 
   async networking(): Promise<RelayNetworking | null> {

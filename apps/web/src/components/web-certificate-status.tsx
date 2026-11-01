@@ -38,7 +38,7 @@ export function certificatePresentation(
   }
   if (certificate.waitingFor === "certificate" && certificate.failed) {
     return {
-      detail: `Let's Encrypt hasn't issued its certificate, so visitors see a warning. Kiln asks again, less often over time.${action}`,
+      detail: `Let's Encrypt hasn't issued its certificate, so visitors see a warning. Kiln asks again, less often over time, down to daily.${action}`,
       label: "Unverified",
       tone: "danger",
     }
@@ -73,7 +73,7 @@ export function useCheckWebCertificate(
         message: `Couldn't check ${hostname}`,
         type: "error",
       }),
-    onSuccess: (certificate) =>
+    onSuccess: ({ asked, certificate }) =>
       showToast(
         certificate === null
           ? { message: `${hostname} has its certificate`, type: "success" }
@@ -84,12 +84,18 @@ export function useCheckWebCertificate(
                 message: `${hostname} doesn't resolve yet`,
                 type: "warning",
               }
-            : {
-                description:
-                  "Kiln has asked Let's Encrypt again, and keeps asking until it's issued.",
-                message: `${hostname} has no certificate yet`,
-                type: "info",
-              }
+            : asked
+              ? {
+                  description: "Its status updates once it's issued.",
+                  message: `Asked Let's Encrypt again for ${hostname}`,
+                  type: "info",
+                }
+              : {
+                  description:
+                    "Kiln asked recently, and asks again on its own within Let's Encrypt's limits.",
+                  message: `${hostname} has no certificate yet`,
+                  type: "info",
+                }
       ),
   })
   const { isPending, mutate } = check

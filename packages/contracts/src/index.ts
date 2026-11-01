@@ -1901,8 +1901,13 @@ export const relayCertificateCheckInputSchema = z.object({
   hostname: z.string().min(1).max(253),
 })
 
-/** What a hostname waits for after checking it now; null once it has one. */
+/**
+ * What checking a hostname now found: what it still waits for, null once it
+ * has a certificate, and whether Traefik was set asking for it. Within
+ * Let's Encrypt's limits it may not be, until its next retry.
+ */
 export const relayCertificateCheckResultSchema = z.object({
+  asked: z.boolean(),
   pending: relayPendingCertificateSchema.nullable(),
 })
 

@@ -41,6 +41,10 @@ import { appRouteOwner, relayResourceNames } from "../relay-resources.js"
 import { ResourcePower } from "../resource-power.js"
 import { RuntimeRecoveryManager } from "../runtime-recovery.js"
 import { ScheduleManager } from "../schedules.js"
+import {
+  WebCertificates,
+  webCertificateStorePath,
+} from "../web-certificates.js"
 import { type ContainerSeed, type FakeContainer, fakeDocker } from "./docker.js"
 
 export const TEST_NAMESPACE = "kiln-test"
@@ -127,7 +131,13 @@ export async function relayHarness(
       docker,
       bricks,
       databaseConnections,
-      lanes
+      lanes,
+      new WebCertificates({
+        // Tests reach no nameservers; Traefik asks as it would without them.
+        resolve: async () => "unknown",
+        state,
+        storePath: webCertificateStorePath(config),
+      })
     )
     lifecycles.push(lifecycle)
     // What a deployment's external volumes are, as the Relay's own finds.

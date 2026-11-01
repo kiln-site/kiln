@@ -420,16 +420,6 @@ export function traefikDynamicConfiguration(
     )
   }
   lines.push(...routeConfiguration.middlewares)
-  // Used by no router: a new value only changes the configuration, which
-  // has Traefik ask again for every certificate it lacks.
-  if (certificates.retry > 0) {
-    lines.push(
-      "    kiln-certificate-retry:",
-      "      headers:",
-      "        customResponseHeaders:",
-      `          X-Kiln-Certificate-Retry: ${JSON.stringify(String(certificates.retry))}`
-    )
-  }
   // Clients send no server name for an address, so its certificate has to
   // be the one Traefik answers with by default.
   if (ipHost) {

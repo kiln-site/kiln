@@ -30,7 +30,7 @@ import type {
   ResourceWebCertificates,
   ResourceWebHostname,
   ResourceWebHostnamesInput,
-  WebHostnameCertificate,
+  WebCertificateCheck,
 } from "@/server/domains"
 import {
   certificateState,
@@ -129,8 +129,8 @@ const checkCertificate = operation<CheckWebCertificateInput>()({
     shared(resourceKey(input.resourceType, input.relayId, input.resourceId)),
   ],
   run: ({ input, user }) =>
-    promiseEffect(async (): Promise<WebHostnameCertificate | null> => {
-      const { pending } = relayCertificateCheckResultSchema.parse(
+    promiseEffect(async (): Promise<WebCertificateCheck> => {
+      const { asked, pending } = relayCertificateCheckResultSchema.parse(
         await relayRpc(
           await activeRelay(input.relayId),
           "relay.certificates.check",
@@ -139,17 +139,18 @@ const checkCertificate = operation<CheckWebCertificateInput>()({
           user?.id
         )
       )
-      return pending ? certificateState(pending) : null
+      return { asked, certificate: pending ? certificateState(pending) : null }
     }),
 })
 
 /**
  * Has a web route hostname's Relay check its name, and ask for its
- * certificate again if it resolves. Reports what it still waits for.
+ * certificate again if it resolves and Let's Encrypt's limits allow.
+ * Reports what it still waits for.
  */
 export async function checkWebCertificateHandler(
   data: CheckWebCertificateInput
-): Promise<WebHostnameCertificate | null> {
+): Promise<WebCertificateCheck> {
   return runOperationPromise(checkCertificate, data, {
     user: await requireEligibleResourceUser(),
   })

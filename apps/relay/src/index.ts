@@ -201,6 +201,12 @@ import {
   traefikRouteUpstream,
   traefikStaticConfiguration,
 } from "./traefik.js"
+import {
+  authoritativeNameAnswer,
+  type CertificateCheck,
+  WebCertificates,
+  webCertificateStorePath,
+} from "./web-certificates.js"
 import { forkPromise, promiseEffect, recoverPromise } from "./effect/promise.js"
 import { DockerEngine } from "./docker-engine.js"
 import { RelayVolumes } from "./volumes.js"
@@ -499,7 +505,12 @@ const lifecycle = new LifecycleDriver(
   docker,
   bricks,
   databaseConnections,
-  lanes
+  lanes,
+  new WebCertificates({
+    resolve: authoritativeNameAnswer,
+    state: startupCore.state,
+    storePath: webCertificateStorePath(config),
+  })
 )
 // Before anything reads a Tailscale stack.
 await lifecycle.migrateTailscaleStackMembers()
@@ -2272,8 +2283,10 @@ async function executeControlRequest(
         request.payload
       )
       const name = hostname.toLowerCase()
-      await applyCertificateCheck(await lifecycle.certificates.check(name))
+      const checked = await lifecycle.certificates.check(name)
+      await applyCertificateCheck(checked)
       return relayCertificateCheckResultSchema.parse({
+        asked: checked.asked,
         pending:
           lifecycle.certificates
             .pending()
@@ -4039,10 +4052,7 @@ function certificateLoop() {
 // Writes Traefik's routes again when which certificates it asks for
 // changed, and tells Hearth what's still waiting. A rewrite needs the
 // routes lock, which the caller holds.
-async function applyCertificateCheck(result: {
-  changed: boolean
-  rewrite: boolean
-}): Promise<void> {
+async function applyCertificateCheck(result: CertificateCheck): Promise<void> {
   if (result.rewrite) {
     await traceRelayPromise("relay.certificates.refresh", () =>
       lifecycle.refreshTraefikCertificates()

@@ -223,6 +223,14 @@ export interface WebHostnameCertificate {
   waitingFor: "certificate" | "dns"
 }
 
+/** What checking a hostname's certificate now found. */
+export interface WebCertificateCheck {
+  /** Whether its Relay asked Let's Encrypt again; its limits may not allow. */
+  asked: boolean
+  /** What it still waits for; null once it has a certificate. */
+  certificate: WebHostnameCertificate | null
+}
+
 /** A game server's or app's web route hostnames still waiting on one. */
 export interface ResourceWebCertificates {
   /** Whether the person may have its Relay check again. */
