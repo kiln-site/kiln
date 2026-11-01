@@ -240,7 +240,7 @@ export const linkIconFile = createServerFn({ method: "POST" })
  * A Minecraft player's head, for the browser to make a picture of. Mojang
  * says whose the name is; the head is drawn from that account's skin.
  */
-export const fetchMinecraftHead = createServerFn({ method: "POST" })
+export const fetchMinecraftHead = createServerFn({ method: "GET" })
   .validator(z.strictObject({ username: z.string().trim().min(1).max(32) }))
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()

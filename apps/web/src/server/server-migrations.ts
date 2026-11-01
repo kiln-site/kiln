@@ -8,7 +8,7 @@ import {
 } from "@/lib/server-migration-input"
 
 /** What the Move or duplicate dialog offers for a game server. */
-export const previewServerMigration = createServerFn({ method: "POST" })
+export const previewServerMigration = createServerFn({ method: "GET" })
   .validator(serverReferenceSchema)
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()

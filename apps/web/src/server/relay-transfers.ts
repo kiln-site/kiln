@@ -63,7 +63,7 @@ export const startRelayTransfer = createServerFn({ method: "POST" })
   })
 
 /** How a copy between Relays is going. */
-export const getRelayTransfer = createServerFn({ method: "POST" })
+export const getRelayTransfer = createServerFn({ method: "GET" })
   .validator(transferHandleSchema)
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()

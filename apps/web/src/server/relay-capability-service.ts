@@ -221,29 +221,6 @@ interface PreparedBrowserCapability {
   relayCaCertificatePem: string | null
 }
 
-export function issueConsoleCapabilityForRequest(input: {
-  authenticate: () => Promise<AuthenticatedUser>
-  instanceId: string
-  publicKeyJwk: BrowserPublicKey
-  relayId: string
-  write: boolean
-}): Promise<IssuedBrowserCapability> {
-  return runAppEffect(
-    "console.capability.issue",
-    prepareBrowserCapabilityEffect({
-      actions: input.write
-        ? ["instance.console.read", "instance.console.write"]
-        : ["instance.console.read"],
-      path: null,
-      publicKeyJwk: input.publicKeyJwk,
-      relayId: input.relayId,
-      resolveBrowserMetadata: true,
-      user: authenticatedUserEffect(input.authenticate),
-      resource: { id: input.instanceId, kind: "instance" },
-    }).pipe(Effect.map((prepared) => prepared.capability))
-  )
-}
-
 export function prepareConsoleCapabilityForUser(input: {
   credentialId: string
   instanceId: string
@@ -293,26 +270,6 @@ export function prepareConsoleCapabilityForIdentity(input: {
       resolveBrowserMetadata: false,
       resource: input.resource,
     })
-  )
-}
-
-export function issueResourceCapabilityForRequest(input: {
-  authenticate: () => Promise<AuthenticatedUser>
-  instanceId: string
-  publicKeyJwk: BrowserPublicKey
-  relayId: string
-}): Promise<IssuedBrowserCapability> {
-  return runAppEffect(
-    "resource.capability.issue",
-    prepareBrowserCapabilityEffect({
-      actions: ["instance.read"],
-      path: null,
-      publicKeyJwk: input.publicKeyJwk,
-      relayId: input.relayId,
-      resolveBrowserMetadata: true,
-      user: authenticatedUserEffect(input.authenticate),
-      resource: { id: input.instanceId, kind: "instance" },
-    }).pipe(Effect.map((prepared) => prepared.capability))
   )
 }
 
@@ -375,18 +332,12 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
     relayId: string
     resolveBrowserMetadata: boolean
     resource: RelayConsoleResource
-    identity?: Effect.Effect<AuthenticatedRealtimeIdentity, unknown>
+    identity: Effect.Effect<AuthenticatedRealtimeIdentity, unknown>
     optInV2?: boolean
-    user?: Effect.Effect<AuthenticatedUser, unknown>
   }) {
-    const identityEffect = input.identity
-      ? input.identity
-      : (input.user ?? Effect.fail(new Error("Authentication required"))).pipe(
-          Effect.map((user) => ({ sessionId: "", user }))
-        )
     const [userResult, materialResult] = yield* Effect.all(
       [
-        Effect.result(identityEffect),
+        Effect.result(input.identity),
         Effect.result(loadEnabledRelayForIssuanceEffect(input.relayId)),
       ] as const,
       { concurrency: 2 }
@@ -811,12 +762,6 @@ function requiredV2Field<T>(value: T | undefined, name: string): T {
     throw new Error(`Capability v2 ${name} is required`)
   }
   return value
-}
-
-function authenticatedUserEffect(
-  authenticate: () => Promise<AuthenticatedUser>
-): Effect.Effect<AuthenticatedUser, unknown> {
-  return Effect.tryPromise({ try: authenticate, catch: (cause) => cause })
 }
 
 function authenticatedIdentityEffect(
