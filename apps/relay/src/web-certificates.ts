@@ -245,7 +245,9 @@ export class WebCertificates {
     await this.#readStore()
     const now = Date.now()
     let due = this.#version !== this.#written
-    for (const [name, pending] of [...this.#pending]) {
+    // Routes can change while names are looked up; iterating the Map as it
+    // changes is safe.
+    for (const [name, pending] of this.#pending) {
       if (this.#hasCertificate(name)) {
         due = true
         continue
