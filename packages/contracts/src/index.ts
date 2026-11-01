@@ -1872,6 +1872,40 @@ export type RelayProxyConfiguration = z.infer<
   typeof relayProxyConfigurationSchema
 >
 
+/**
+ * A web route hostname the bundled Traefik has no certificate for yet. The
+ * Relay has Traefik ask Let's Encrypt only once the name resolves, and has
+ * it ask again, further apart each time, until one is issued.
+ */
+export const relayPendingCertificateSchema = z.object({
+  /** Whether a check or a request already failed, so it's retrying. */
+  failed: z.boolean(),
+  hostname: z.string().min(1).max(253),
+  /** The game server or App whose route serves it. */
+  owner: z.object({
+    id: z.string().min(1),
+    kind: z.enum(["app", "server"]),
+  }),
+  /**
+   * `dns`: its name doesn't resolve yet, so Traefik doesn't ask.
+   * `certificate`: it resolves, and Let's Encrypt hasn't issued one yet.
+   */
+  waitingFor: z.enum(["certificate", "dns"]),
+})
+
+export type RelayPendingCertificate = z.infer<
+  typeof relayPendingCertificateSchema
+>
+
+export const relayCertificateCheckInputSchema = z.object({
+  hostname: z.string().min(1).max(253),
+})
+
+/** What a hostname waits for after checking it now; null once it has one. */
+export const relayCertificateCheckResultSchema = z.object({
+  pending: relayPendingCertificateSchema.nullable(),
+})
+
 export const relayInstanceResourcesSchema = z.object({
   sampledAt: z.string().datetime(),
   cpu: z.object({
@@ -2569,6 +2603,12 @@ export type RelayPlatformDatabaseWrite = z.infer<
 
 const relaySnapshotRelaySchema = z.object({
   browserOrigin: relayProxyBrowserMetadataSchema.shape.browserOrigin.optional(),
+  /**
+   * Web route hostnames the bundled Traefik is still waiting on a
+   * certificate for. Optional only so an outdated Relay's snapshot still
+   * parses, and it connects far enough to be updated.
+   */
+  certificates: z.array(relayPendingCertificateSchema).optional(),
   id: relayIdSchema,
   name: z.string().min(1).max(120),
   // Held paused by a Hearth, so it runs no changes. See

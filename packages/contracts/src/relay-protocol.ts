@@ -161,6 +161,7 @@ export const relayControlOperations = [
   "relay.proxy.read",
   "relay.proxy.config.read",
   "relay.proxy.write",
+  "relay.certificates.check",
   "relay.volumes.read",
   "relay.volumes.create",
   "relay.volumes.rename",
@@ -489,6 +490,7 @@ export function relayControlOperationChanges(
     case "relay.host.files.mount":
     case "relay.host.restart":
     case "relay.proxy.write":
+    case "relay.certificates.check":
     case "relay.volumes.create":
     case "relay.volumes.rename":
     case "relay.volumes.delete":

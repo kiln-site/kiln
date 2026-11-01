@@ -18,6 +18,7 @@ import {
   appIdFromRouteOwner,
   relayResourceNames,
 } from "./relay-resources.js"
+import type { TraefikCertificateGate } from "./web-certificates.js"
 import {
   WEB_ROUTE_LABEL_PREFIX,
   WEB_ROUTE_REVISION_LABEL,
@@ -326,7 +327,8 @@ function traefikRoutePriority(route: { readonly path: string | null }): number {
 export function traefikDynamicConfiguration(
   config: RelayConfig,
   routes: ReadonlyArray<RelayStoredWebRoute>,
-  settings: RelayProxySettings
+  settings: RelayProxySettings,
+  certificates: TraefikCertificateGate
 ): string {
   const resources = relayResourceNames(config)
   // Only a Relay in Traefik mode is itself reached through Traefik, and only
@@ -382,7 +384,7 @@ export function traefikDynamicConfiguration(
         : [])
     )
   }
-  const routeConfiguration = traefikFileRoutes(resources, served)
+  const routeConfiguration = traefikFileRoutes(resources, served, certificates)
   lines.push(...routeConfiguration.routers)
 
   lines.push("  services:")
@@ -418,6 +420,16 @@ export function traefikDynamicConfiguration(
     )
   }
   lines.push(...routeConfiguration.middlewares)
+  // Used by no router: a new value only changes the configuration, which
+  // has Traefik ask again for every certificate it lacks.
+  if (certificates.retry > 0) {
+    lines.push(
+      "    kiln-certificate-retry:",
+      "      headers:",
+      "        customResponseHeaders:",
+      `          X-Kiln-Certificate-Retry: ${JSON.stringify(String(certificates.retry))}`
+    )
+  }
   // Clients send no server name for an address, so its certificate has to
   // be the one Traefik answers with by default.
   if (ipHost) {
@@ -440,7 +452,8 @@ export function traefikDynamicConfiguration(
 // route serves it, redirects it in one hop, or sends it elsewhere.
 function traefikFileRoutes(
   resources: ReturnType<typeof relayResourceNames>,
-  routes: ReadonlyArray<RelayStoredWebRoute>
+  routes: ReadonlyArray<RelayStoredWebRoute>,
+  certificates: TraefikCertificateGate
 ): {
   readonly middlewares: ReadonlyArray<string>
   readonly routers: ReadonlyArray<string>
@@ -449,6 +462,24 @@ function traefikFileRoutes(
   const routers: Array<string> = []
   const services: Array<string> = []
   const middlewares: Array<string> = []
+  // Traefik asks for a certificate naming a router's hosts, or only the
+  // ones `domains` lists. A host whose name doesn't resolve yet is left out,
+  // and a router with none serves Traefik's default certificate meanwhile.
+  const routerTls = (hosts: ReadonlyArray<string>): Array<string> => {
+    const requested = hosts.filter(certificates.requests)
+    if (requested.length === 0) return ["      tls: {}"]
+    const lines = ["      tls:", "        certResolver: kiln"]
+    if (requested.length === hosts.length) return lines
+    const [main, ...sans] = requested
+    lines.push("        domains:", `          - main: ${JSON.stringify(main)}`)
+    if (sans.length > 0) {
+      lines.push(
+        "            sans:",
+        ...sans.map((san) => `              - ${JSON.stringify(san)}`)
+      )
+    }
+    return lines
+  }
   for (const route of routes) {
     const name = traefikRouteName(route.id)
     const router = (
@@ -466,9 +497,7 @@ function traefikFileRoutes(
         `        - ${entryPoint}`,
         `      service: ${service}`
       )
-      if (entryPoint === "websecure") {
-        routers.push("      tls:", "        certResolver: kiln")
-      }
+      if (entryPoint === "websecure") routers.push(...routerTls(hosts))
       if (routeMiddlewares.length > 0) {
         routers.push(
           "      middlewares:",

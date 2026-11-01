@@ -1,3 +1,4 @@
+import { relayCertificateCheckResultSchema } from "@workspace/contracts"
 import { Effect } from "effect"
 
 import { HostnameInUseError } from "@/effect/errors"
@@ -12,7 +13,9 @@ import {
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { dnsKey } from "@/lib/dns-operations"
-import { exclusive } from "@/operations/lanes"
+import { relayRpc } from "@/lib/relay-connection"
+import { activeRelay } from "@/lib/relay-registry"
+import { exclusive, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
@@ -22,10 +25,17 @@ import { requireEligibleResourceUser } from "@/server/auth"
 import { domainActor } from "@/server/domain-access.server"
 import { explainHostnameInUseEffect } from "@/server/domain-resource-access.server"
 import type {
+  CheckWebCertificateInput,
   ReleaseWebHostnameInput,
+  ResourceWebCertificates,
   ResourceWebHostname,
   ResourceWebHostnamesInput,
+  WebHostnameCertificate,
 } from "@/server/domains"
+import {
+  certificateState,
+  pendingWebCertificates,
+} from "@/server/web-certificates.server"
 import {
   deleteResourceWebHostnamesEffect,
   generateAppHostnameEffect,
@@ -86,6 +96,63 @@ export async function getResourceWebHostnamesHandler(
     lastError: row.lastError,
     status: row.status,
   }))
+}
+
+/**
+ * A game server's or app's web route hostnames still waiting on a
+ * certificate, for its network page.
+ */
+export async function getResourceWebCertificatesHandler(
+  data: ResourceWebHostnamesInput
+): Promise<ResourceWebCertificates> {
+  const user = await requireEligibleResourceUser()
+  await requireResourcePermission(user, data, false)
+  const canCheck = await recoverPromise(
+    () => requireResourcePermission(user, data, true).then(() => true),
+    () => false
+  )
+  return { canCheck, pending: pendingWebCertificates(data) }
+}
+
+// The Relay orders the check in its own lanes; Hearth holds the resource
+// shared, so deleting it turns the check away.
+const checkCertificate = operation<CheckWebCertificateInput>()({
+  name: "webHostname.certificate.check",
+  doing: "Checking its certificate",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(() => requireResourcePermission(person, input, true))
+      )
+    ),
+  locks: ({ input }) => [
+    shared(resourceKey(input.resourceType, input.relayId, input.resourceId)),
+  ],
+  run: ({ input, user }) =>
+    promiseEffect(async (): Promise<WebHostnameCertificate | null> => {
+      const { pending } = relayCertificateCheckResultSchema.parse(
+        await relayRpc(
+          await activeRelay(input.relayId),
+          "relay.certificates.check",
+          { hostname: input.hostname },
+          30_000,
+          user?.id
+        )
+      )
+      return pending ? certificateState(pending) : null
+    }),
+})
+
+/**
+ * Has a web route hostname's Relay check its name, and ask for its
+ * certificate again if it resolves. Reports what it still waits for.
+ */
+export async function checkWebCertificateHandler(
+  data: CheckWebCertificateInput
+): Promise<WebHostnameCertificate | null> {
+  return runOperationPromise(checkCertificate, data, {
+    user: await requireEligibleResourceUser(),
+  })
 }
 
 // Releasing a hostname changes its game server's or App's DNS, so it holds

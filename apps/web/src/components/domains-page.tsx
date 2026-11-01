@@ -66,6 +66,10 @@ import {
   type DomainConnectionOverview,
   type DomainSettings,
 } from "@/components/domains-shared"
+import {
+  certificatePresentation,
+  useCheckWebCertificate,
+} from "@/components/web-certificate-status"
 import { WorkspacePage } from "@/components/workspace-page"
 import { ensuringPromise, forkPromise, tapPromiseError } from "@/effect/promise"
 import {
@@ -875,7 +879,7 @@ const DomainsTable = React.memo(function DomainsTable({
         id: "status",
         header: () => <span className="sr-only sm:not-sr-only">Status</span>,
         sortFn: "text",
-        cell: ({ row }) => <StatusIndicator status={rowStatus(row.original)} />,
+        cell: ({ row }) => <DomainStatusCell row={row.original} />,
         meta: dataTableColumnMeta(
           { width: { base: "2.5rem", sm: statusColumnWidth } },
           {
@@ -982,6 +986,52 @@ function rowHostname(row: DomainRow): string {
 function portOf(row: DomainRow): number {
   return row.kind === "server" ? row.domain.port : -1
 }
+
+// A web hostname still waiting on its certificate checks again when clicked,
+// for whoever may change its route.
+const DomainStatusCell = React.memo(function DomainStatusCell({
+  row,
+}: {
+  row: DomainRow
+}) {
+  if (
+    row.kind === "web" &&
+    row.hostname.canManage &&
+    awaitedCertificate(row.hostname)
+  ) {
+    return <CertificateStatusCell hostname={row.hostname} />
+  }
+  return <StatusIndicator status={rowStatus(row)} />
+})
+
+const CertificateStatusCell = React.memo(function CertificateStatusCell({
+  hostname,
+}: {
+  hostname: WebHostnameOverview
+}) {
+  const resource = React.useMemo(
+    () => ({
+      relayId: hostname.relayId,
+      resourceId: hostname.resource.id,
+      resourceType:
+        hostname.resource.kind === "app"
+          ? ("app" as const)
+          : ("instance" as const),
+    }),
+    [hostname.relayId, hostname.resource.id, hostname.resource.kind]
+  )
+  const { check, checking } = useCheckWebCertificate(
+    resource,
+    hostname.hostname
+  )
+  return (
+    <StatusIndicator
+      busy={checking}
+      status={hostnameStatusPresentation(hostname)}
+      onActivate={check}
+    />
+  )
+})
 
 function rowStatus(row: DomainRow): IdentityStatusPresentation {
   return row.kind === "server"
@@ -1289,9 +1339,20 @@ function renderEmptyDomains({ searchActive }: { searchActive: boolean }) {
   )
 }
 
+// Its certificate, once its DNS is in place or its owner keeps it.
+function awaitedCertificate(hostname: WebHostnameOverview) {
+  return hostname.status === "active" || hostname.status === "manual"
+    ? hostname.certificate
+    : null
+}
+
 function hostnameStatusPresentation(
   hostname: WebHostnameOverview
 ): IdentityStatusPresentation {
+  const certificate = awaitedCertificate(hostname)
+  if (certificate) {
+    return certificatePresentation(certificate, hostname.canManage)
+  }
   if (hostname.status === "active") return { label: "Active", tone: "success" }
   if (hostname.status === "pending") {
     return { label: "Pending", pulse: true, tone: "warning" }

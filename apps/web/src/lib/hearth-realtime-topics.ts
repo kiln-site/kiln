@@ -31,6 +31,7 @@ export const hearthRealtimeTopics = [
   "security",
   "server-migrations",
   "tailscale",
+  "web-certificates",
 ] as const
 
 export const hearthRealtimeTopicSchema = z.enum(hearthRealtimeTopics)

@@ -53,6 +53,32 @@ snapshot, the same address game servers advertise (`KILN_RELAY_GAME_HOST`).
 If the Relay reports none, Hearth uses a game server's reported public host,
 then the address Hearth reaches the Relay at.
 
+## Certificates
+
+A Relay running bundled Traefik gets each web route hostname's certificate
+from Let's Encrypt (`apps/relay/src/web-certificates.ts`). Traefik asks for
+one when a route naming it first appears, and again only when its
+configuration next changes. Asked before the hostname's record exists, Let's
+Encrypt answers NXDOMAIN and may remember that answer, and the route would
+serve Traefik's default certificate until some other route changed. So:
+
+- Traefik asks for a hostname's certificate only once its name resolves,
+  asked of its zone's own nameservers rather than a resolver, which could
+  itself remember the name as missing. A route's other names don't wait for
+  it. When the nameservers can't be reached or don't answer, Traefik asks
+  anyway.
+- While a certificate is still missing, the Relay changes Traefik's
+  configuration so it asks again: a minute after the first request, then
+  five, fifteen and thirty minutes, then hourly. Let's Encrypt allows five
+  failed validations per hostname an hour, so asks stay apart, and a name
+  that stops resolving stops being asked for.
+
+The Relay reports the hostnames still waiting in its snapshot. Hearth shows
+them on the Domains page and beside each web route: **Verifying** while it
+checks and asks, **Waiting for DNS** while the name doesn't resolve, and
+**Unverified** once Let's Encrypt has failed to issue one. Whoever may change
+the route can click the status to have the Relay check again now.
+
 ## Vanity domains
 
 In a connection, any of its zones can be marked **vanity**, and one marked

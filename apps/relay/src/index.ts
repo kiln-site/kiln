@@ -97,6 +97,8 @@ import {
   relayNetworkingSchema,
   relayProxyBrowserMetadataSchema,
   relayProxyReadInputSchema,
+  relayCertificateCheckInputSchema,
+  relayCertificateCheckResultSchema,
   relayProxyConfigurationSchema,
   relayProxySettingsSchema,
   relayVolumeCreateSchema,
@@ -1593,6 +1595,12 @@ const platformContext: PlatformContext = {
   engine: relayEngine,
 }
 const platformFiber = forkRelayEffect("relay.platform", platformLoop())
+// Has the bundled Traefik ask for web routes' certificates once their names
+// resolve, and again while one is missing (web-certificates.ts).
+const certificateFiber = forkRelayEffect(
+  "relay.certificates",
+  certificateLoop()
+)
 
 let shutdownStarted = false
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -1785,6 +1793,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         tlsRefreshFiber.interruptUnsafe()
         joinFiber?.interruptUnsafe()
         platformFiber.interruptUnsafe()
+        certificateFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         transferSweepFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()
@@ -1880,6 +1889,7 @@ async function relaySnapshot() {
     ),
     relay: {
       browserOrigin: config.browserOrigin,
+      certificates: lifecycle.certificates.pending(),
       id: relayIdentity.fingerprint,
       name: relayIdentity.name,
       paused: lanes.paused,
@@ -2209,7 +2219,12 @@ async function executeControlRequest(
       const bundled = settings.mode === "traefik"
       return relayProxyConfigurationSchema.parse({
         dynamicConfiguration: bundled
-          ? traefikDynamicConfiguration(config, routes, settings)
+          ? traefikDynamicConfiguration(
+              config,
+              routes,
+              settings,
+              lifecycle.certificates.gate()
+            )
           : null,
         // An older Hearth reads only routes with a port.
         routes: (hearthFeatures.has(relayWebRouteOptionsV1Feature)
@@ -2251,6 +2266,19 @@ async function executeControlRequest(
       const proxy = await lifecycle.configureProxy(settings, routes)
       await snapshotHub.refresh()
       return proxy
+    }
+    case "relay.certificates.check": {
+      const { hostname } = relayCertificateCheckInputSchema.parse(
+        request.payload
+      )
+      const name = hostname.toLowerCase()
+      await applyCertificateCheck(await lifecycle.certificates.check(name))
+      return relayCertificateCheckResultSchema.parse({
+        pending:
+          lifecycle.certificates
+            .pending()
+            .find((pending) => pending.hostname === name) ?? null,
+      })
     }
     case "relay.volumes.read":
       return runRelayEffect("relay.volumes.read", volumes.list())
@@ -3973,6 +4001,54 @@ function platformLoop() {
       Effect.andThen(Effect.sleep("30 seconds")),
       Effect.forever
     )
+}
+
+// Checks the hostnames that are due every 15 seconds, or at once when a
+// route newly waits on one. The checks themselves look up only names that
+// are due, and most passes find none.
+function certificateLoop() {
+  return Effect.tryPromise(() => lifecycle.certificates.check()).pipe(
+    Effect.flatMap((result) =>
+      result.rewrite
+        ? lanes.run(
+            {
+              label: "web.certificates.refresh",
+              locks: [exclusive(laneKeys.routes)],
+            },
+            Effect.tryPromise(() => applyCertificateCheck(result))
+          )
+        : result.changed
+          ? Effect.tryPromise(() => snapshotHub.refresh())
+          : Effect.void
+    ),
+    Effect.catch((cause) =>
+      cause instanceof LaneRejectedError
+        ? Effect.void
+        : Effect.logWarning("Checking web route certificates failed", cause)
+    ),
+    Effect.andThen(
+      Effect.raceFirst(
+        Effect.sleep("15 seconds"),
+        Effect.promise(() => lifecycle.certificates.woken())
+      )
+    ),
+    Effect.forever
+  )
+}
+
+// Writes Traefik's routes again when which certificates it asks for
+// changed, and tells Hearth what's still waiting. A rewrite needs the
+// routes lock, which the caller holds.
+async function applyCertificateCheck(result: {
+  changed: boolean
+  rewrite: boolean
+}): Promise<void> {
+  if (result.rewrite) {
+    await traceRelayPromise("relay.certificates.refresh", () =>
+      lifecycle.refreshTraefikCertificates()
+    )
+  }
+  if (result.changed || result.rewrite) await snapshotHub.refresh()
 }
 
 /**

@@ -1684,6 +1684,10 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "instance.network.read"
     case "relay.proxy.write":
       return "relay.configure"
+    // Has Traefik ask again for a route's certificate; Hearth checks the
+    // person may change that route.
+    case "relay.certificates.check":
+      return "instance.network.write"
     case "relay.volumes.read":
       return "relay.read"
     case "relay.volumes.create":

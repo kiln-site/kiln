@@ -40,6 +40,7 @@ import {
   WebRouteDialog,
   type WebRouteServiceOption,
 } from "@/components/web-route-dialog"
+import { WebCertificateStatus } from "@/components/web-certificate-status"
 import {
   WebHostnameDnsStatus,
   type WebHostnameResourceRef,
@@ -551,6 +552,9 @@ const RouteDomainCell = React.memo(function RouteDomainCell({
   services: ReadonlyArray<WebRouteServiceOption> | undefined
 }) {
   const { aliases, served } = webRouteHosts(route)
+  // Kept while the route's names stay the same.
+  const hostnameKey = [...served, ...aliases].join(" ")
+  const hostnames = React.useMemo(() => hostnameKey.split(" "), [hostnameKey])
   const details = [
     route.name,
     // A redirect sends its counterpart along with it.
@@ -575,7 +579,11 @@ const RouteDomainCell = React.memo(function RouteDomainCell({
           {route.hostname}
           {route.path ?? ""}
         </a>
-        <WebHostnameDnsStatus hostname={route.hostname} resource={dnsResource} />
+        <WebHostnameDnsStatus
+          hostname={route.hostname}
+          resource={dnsResource}
+        />
+        <WebCertificateStatus hostnames={hostnames} resource={dnsResource} />
       </span>
       <span className="type-meta block truncate text-muted-foreground">
         {/* Phones hide the destination column; it leads the details. */}

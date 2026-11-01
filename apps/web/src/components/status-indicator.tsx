@@ -10,8 +10,14 @@ import { cn } from "@workspace/ui/lib/utils"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 
 export const StatusIndicator = React.memo(function StatusIndicator({
+  busy = false,
+  onActivate,
   status,
 }: {
+  /** While what clicking it started runs. */
+  busy?: boolean
+  /** Makes it a button, such as one that checks again. */
+  onActivate?: () => void
   status: IdentityStatusPresentation
 }) {
   const tone = statusToneClasses[status.tone]
@@ -34,13 +40,28 @@ export const StatusIndicator = React.memo(function StatusIndicator({
       <span className="hidden sm:inline">{status.label}</span>
     </span>
   )
-  if (!status.detail) return indicator
+  if (!status.detail && !onActivate) return indicator
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span tabIndex={0} className="inline-flex cursor-default outline-none">
-          {indicator}
-        </span>
+        {onActivate ? (
+          <button
+            aria-busy={busy}
+            className="inline-flex cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-progress"
+            disabled={busy}
+            type="button"
+            onClick={onActivate}
+          >
+            {indicator}
+          </button>
+        ) : (
+          <span
+            tabIndex={0}
+            className="inline-flex cursor-default outline-none"
+          >
+            {indicator}
+          </span>
+        )}
       </TooltipTrigger>
       <TooltipContent side="bottom" sideOffset={6}>
         <span className="max-w-64 text-muted-foreground">{status.detail}</span>

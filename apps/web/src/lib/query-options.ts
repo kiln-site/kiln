@@ -47,6 +47,7 @@ import {
   getDomainSettings,
   getInstanceDomain,
   getManualWebHostnames,
+  getResourceWebCertificates,
   getResourceWebHostnames,
 } from "@/server/domains"
 import { getHearthEdge } from "@/server/hearth-edge"
@@ -181,6 +182,12 @@ export const queryKeys = {
       resourceType: "app" | "instance",
       resourceId: string
     ) => ["domains", "hostnames", relayId, resourceType, resourceId] as const,
+    certificates: (
+      relayId: string,
+      resourceType: "app" | "instance",
+      resourceId: string
+    ) =>
+      ["domains", "certificates", relayId, resourceType, resourceId] as const,
     instance: (relayId: string, instanceId: string) =>
       ["domains", "instances", relayId, instanceId] as const,
     settings: ["domains", "settings"] as const,
@@ -1255,6 +1262,29 @@ export function resourceWebHostnamesQueryOptions(
       }),
     retry: false,
     staleTime: 10_000,
+  })
+}
+
+/**
+ * A game server's or app's web route hostnames still waiting on a
+ * certificate, as its Relay says. Its Relay's changes refresh it.
+ */
+export function resourceWebCertificatesQueryOptions(
+  relayId: string,
+  resourceType: "app" | "instance",
+  resourceId: string
+) {
+  return queryOptions({
+    queryKey: queryKeys.domains.certificates(relayId, resourceType, resourceId),
+    queryFn: () =>
+      getResourceWebCertificates({
+        data:
+          resourceType === "app"
+            ? { relayId, resourceId, resourceType }
+            : { relayId, resourceId, resourceType },
+      }),
+    retry: false,
+    staleTime: 30_000,
   })
 }
 

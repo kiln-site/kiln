@@ -57,6 +57,7 @@ import {
   invalidateManagedDomainAddressesEffect,
   provisionInstanceDomainEffect,
 } from "@/server/domains.server"
+import { pendingWebCertificate } from "@/server/web-certificates.server"
 import { resyncWebHostnamesEffect } from "@/server/web-hostnames.server"
 import type {
   DeleteDomainConnectionInput,
@@ -181,6 +182,7 @@ export async function getDomainSettingsHandler() {
         canManage: isApp
           ? access.app(row.relayId, row.resourceId, true)
           : access.instance(row.relayId, row.resourceId, true),
+        certificate: pendingWebCertificate(row, row.hostname),
         connectionName: connectionNames.get(row.connectionId) ?? null,
         generated: row.generated,
         hostname: row.hostname,
@@ -279,6 +281,14 @@ export async function getManualWebHostnamesHandler(): Promise<
         canManage: isApp
           ? access.app(route.relayId, id, true)
           : access.instance(route.relayId, id, true),
+        certificate: pendingWebCertificate(
+          {
+            relayId: route.relayId,
+            resourceId: id,
+            resourceType: isApp ? "app" : "instance",
+          },
+          hostname
+        ),
         connectionName: null,
         generated: false,
         hostname,
