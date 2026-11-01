@@ -198,7 +198,9 @@ describe("bundled Traefik certificates", () => {
     // The background check looks the name up outside the routes lane…
     const background = await certificates.lookUp()
     // …while someone checks it by hand, which has Traefik ask for it.
-    await certificates.check({ hostname: "shop.example.com", owner })
+    expect(
+      (await certificates.check({ hostname: "shop.example.com", owner })).asked
+    ).toBe(true)
     const asked = traefik()
 
     // Applied in its turn, the background check asks again for nothing.

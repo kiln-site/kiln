@@ -63,7 +63,7 @@ export interface NameLookups {
 
 /** What checking hostnames found, for whoever writes Traefik's routes. */
 export interface CertificateCheck {
-  /** Whether Traefik was set asking again for the hostname checked by hand. */
+  /** Whether Traefik was set asking for the hostname checked by hand. */
   readonly asked: boolean
   /** Whether what's pending changed, for the Relay's snapshot. */
   readonly changed: boolean
@@ -342,6 +342,7 @@ export class WebCertificates {
         pending.failed = false
         pending.since = now
         result.changed = true
+        if (name === hostname) result.asked = true
         this.#version += 1
         continue
       }

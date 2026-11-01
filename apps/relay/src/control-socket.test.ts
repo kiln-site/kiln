@@ -179,6 +179,31 @@ describe("Relay control socket", () => {
     })
   })
 
+  it("checks a certificate with what changing its route takes", async () => {
+    const relay = await startRelay({
+      execute: async () => ({ asked: false, pending: null }),
+    })
+    const hearth = await relay.pair({ role: "custom", actions: ["app.manage"] })
+    const { inbox, socket } = await relay.connect(hearth)
+    const app = sendRequest(socket, "relay.certificates.check", {
+      hostname: "shop.example.com",
+      owner: { id: "a".repeat(12), kind: "app" },
+    })
+    expect(await inbox.next()).toMatchObject({
+      replyTo: app,
+      type: "response",
+    })
+    const server = sendRequest(socket, "relay.certificates.check", {
+      hostname: "play.example.com",
+      owner: { id: "a".repeat(40), kind: "server" },
+    })
+    expect(await inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: server,
+      type: "error",
+    })
+  })
+
   describe("operation IDs", () => {
     const features = [relaySnapshotDeltaFeature]
     const instanceId = "d".repeat(40)

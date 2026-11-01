@@ -225,7 +225,7 @@ export interface WebHostnameCertificate {
 
 /** What checking a hostname's certificate now found. */
 export interface WebCertificateCheck {
-  /** Whether its Relay asked Let's Encrypt again; its limits may not allow. */
+  /** Whether its Relay had Traefik ask Let's Encrypt; its limits may not allow. */
   asked: boolean
   /** What it still waits for; null once it has a certificate. */
   certificate: WebHostnameCertificate | null

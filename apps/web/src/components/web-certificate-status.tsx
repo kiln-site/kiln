@@ -82,7 +82,7 @@ export function useCheckWebCertificate(
             : asked
               ? {
                   description: "Its status updates once it's issued.",
-                  message: `Asked Let's Encrypt again for ${hostname}`,
+                  message: `Asked Let's Encrypt for ${hostname}'s certificate`,
                   type: "info",
                 }
               : {
