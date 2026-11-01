@@ -45,6 +45,7 @@ import { relayJsonEffect } from "@/lib/relay-client"
 import { shortIdRouteIdentifier } from "@/lib/short-id-route"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceAccess } from "@/server/domain-resource-access.server"
+import { outsideOperation } from "@/operations/current"
 import { exclusive, partKey } from "@/operations/lanes"
 import {
   operation,
@@ -593,8 +594,25 @@ export async function deleteDomainConnectionHandler(
  * with their Relays, retrying failed ones: every one for administrators,
  * otherwise those on what the person can change.
  */
+// The person's request, for its trace and audit. It spans every game server
+// they can change, so it holds none itself: each server's domains and web
+// hostnames change in their own `#dns`, as they do whenever they're synced.
+const resyncDomains = operation<void>()({
+  name: "domains.resync",
+  doing: "Syncing domains",
+  authorize: ({ user }) => signedIn(user),
+  locks: () => [],
+  run: ({ context: person }) =>
+    promiseEffect(() => outsideOperation(() => resyncDomainsFor(person))),
+})
+
 export async function resyncDomainAssignmentsHandler() {
-  const user = await requireEligibleResourceUser()
+  return runOperationPromise(resyncDomains, undefined, {
+    user: await requireEligibleResourceUser(),
+  })
+}
+
+async function resyncDomainsFor(user: AuthenticatedUser) {
   const access = await resourceAccess(user)
   const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
   // A Relay that can't be reached skips its game servers, not the rest.

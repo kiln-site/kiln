@@ -177,6 +177,7 @@ request is answered once.
 | --------------------------------- | ------------------------------------------------------ |
 | `instance:<relay>/<id>`           | A game server; `app:`, `database:`, `volume:` likewise |
 | `instance:<relay>/<id>#dns`       | Its DNS records and web routes                         |
+| `instance:<relay>/<id>#icon`      | Its icon; `user-icon:<id>#picture` a person's picture  |
 | `instance:<relay>/<id>#power`     | Starting, stopping or restarting it                    |
 | `#config`, `#name`, `#ports`      | Its startup, its name, its ports                       |
 | `user:<id>`                       | An account and its access                              |

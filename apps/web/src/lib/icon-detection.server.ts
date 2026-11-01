@@ -22,6 +22,8 @@ import {
 import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { promiseEffect } from "@/effect/promise"
 import { forkAppWorker } from "@/effect/runtime"
+import { exclusive, partKey, resourceKey } from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
 import { fetchPublicHttps } from "@/lib/public-https.server"
 import {
   SERVER_ICON_PATH,
@@ -185,7 +187,9 @@ const findSiteIconEffect = Effect.fn("Icons.findSiteIcon")(function* (
         })
       ).pipe(
         Effect.flatMap((response) =>
-          Effect.try(() => JSON.parse(response.body.toString("utf8")) as unknown)
+          Effect.try(
+            () => JSON.parse(response.body.toString("utf8")) as unknown
+          )
         ),
         Effect.map((json) => readManifestIcons(json, named.manifestUrl ?? "")),
         Effect.orElseSucceed(() => [])
@@ -194,7 +198,9 @@ const findSiteIconEffect = Effect.fn("Icons.findSiteIcon")(function* (
   const candidates = rankSiteIcons([
     ...named.icons,
     ...manifest,
-    ...conventionalIcons(page._tag === "Some" ? page.value.url.href : pageUrl.href),
+    ...conventionalIcons(
+      page._tag === "Some" ? page.value.url.href : pageUrl.href
+    ),
   ])
   // A few at a time, largest first; most guessed spots don't exist, so the
   // first batch with an image settles it.
@@ -266,11 +272,46 @@ const detectAppIconEffect = Effect.fn("Icons.detectApp")(function* (
     contentType: icon?.contentType ?? null,
     image: icon?.bytes ?? null,
     origin: icon ? { type: "site", url: icon.url } : null,
-    originVersion: sites[0] ? (sites[0].host + sites[0].pathname).slice(0, 64) : null,
+    originVersion: sites[0]
+      ? (sites[0].host + sites[0].pathname).slice(0, 64)
+      : null,
   })
 })
 
 type LinkedFile = Extract<IconOrigin, { type: "file" }>
+
+/**
+ * The lane an icon change takes (docs/hearth-operations.md): its game
+ * server's, App's or database's `#icon`, which a deletion of it waits for or
+ * turns away; a person's own picture its own key, apart from their account.
+ * Both are parts, so two changes to one icon wait for each other.
+ */
+export function iconLaneKey(subject: IconSubject): string {
+  if (subject.kind === "user") {
+    return partKey(`user-icon:${subject.id}`, "picture")
+  }
+  return partKey(
+    resourceKey(
+      subject.kind === "server" ? "instance" : subject.kind,
+      subject.relayId,
+      subject.id
+    ),
+    "icon"
+  )
+}
+
+// Hearth's own icon work, in the icon's lane. Inside a person's icon change,
+// which already holds it, it runs as part of that.
+const inIconLane = <A, E, R>(
+  subject: InstanceIconSubject,
+  effect: Effect.Effect<A, E, R>
+) =>
+  inLanes(
+    "icons.update",
+    "Updating this icon",
+    [exclusive(iconLaneKey(subject))],
+    effect
+  )
 
 /**
  * Copies the file a custom icon follows, unless it's unchanged. A file
@@ -313,19 +354,39 @@ const refreshLinkedIconsEffect = Effect.fn("Icons.refreshLinkedRelay")(
     const linked = yield* listLinkedIconsEffect(relay.id, subjectId)
     return yield* Effect.forEach(
       linked,
-      (icon) =>
-        refreshLinkedIconEffect(
-          relay,
-          { kind: icon.kind, relayId: relay.id, id: icon.id },
-          icon.origin,
-          icon.originVersion
+      (icon) => {
+        const subject = { kind: icon.kind, relayId: relay.id, id: icon.id }
+        // Read again once its turn comes: an icon removed or linked to
+        // another file meanwhile isn't brought back.
+        return inIconLane(
+          subject,
+          listLinkedIconsEffect(relay.id, icon.id).pipe(
+            Effect.flatMap((current) => {
+              const now = current.find(
+                (candidate) =>
+                  candidate.kind === icon.kind &&
+                  candidate.origin.path === icon.origin.path &&
+                  candidate.origin.service === icon.origin.service
+              )
+              return now
+                ? refreshLinkedIconEffect(
+                    relay,
+                    subject,
+                    now.origin,
+                    now.originVersion
+                  )
+                : Effect.succeed(false)
+            })
+          )
         ).pipe(
           Effect.catchCause((cause) =>
-            Effect.logDebug("Linked icon refresh failed", Cause.pretty(cause)).pipe(
-              Effect.as(false)
-            )
+            Effect.logDebug(
+              "Linked icon refresh failed",
+              Cause.pretty(cause)
+            ).pipe(Effect.as(false))
           )
-        ),
+        )
+      },
       { concurrency: 4 }
     )
   }
@@ -403,16 +464,38 @@ const detectRelayIconsEffect = Effect.fn("Icons.detectRelay")(function* (
       now - (appDetections.get(app.appId)?.checkedAt ?? 0) >=
         siteCheckIntervalMs
   )
+  // Each in its icon's lane, and only if what it's for is still there once
+  // its turn comes, so a sweep that waited behind a deletion leaves nothing.
   const changes = yield* Effect.forEach(
     [
       ...servers.map((server) =>
-        detectServerIconEffect(
-          relay,
-          server.id,
-          serverDetections.get(server.id)?.originVersion ?? null
+        inIconLane(
+          { kind: "server", relayId: relay.id, id: server.id },
+          Effect.suspend(() =>
+            (relayConnectionInstances(relay.id) ?? []).some(
+              (instance) => instance.id === server.id
+            )
+              ? detectServerIconEffect(
+                  relay,
+                  server.id,
+                  serverDetections.get(server.id)?.originVersion ?? null
+                )
+              : Effect.succeed(false)
+          )
         )
       ),
-      ...apps.map((app) => detectAppIconEffect(relay, app.appId)),
+      ...apps.map((app) =>
+        inIconLane(
+          { kind: "app", relayId: relay.id, id: app.appId },
+          listAppRecordsEffect().pipe(
+            Effect.flatMap((records) =>
+              records.some((record) => record.appId === app.appId)
+                ? detectAppIconEffect(relay, app.appId)
+                : Effect.succeed(false)
+            )
+          )
+        )
+      ),
     ].map((detection) =>
       detection.pipe(
         // One that fails is looked at again next time.
