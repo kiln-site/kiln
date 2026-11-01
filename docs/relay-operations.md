@@ -108,6 +108,12 @@ rereads the configuration inside that lane, shared with apply and removal,
 so concurrent deletions cannot overwrite each other's bindings. A rollback
 takes the same lane and restores only the members its detach removed into
 the current configuration, preserving other deletions and applies.
+
+In Hearth, saving a network, connecting it to Tailscale and syncing it take
+its `tailscale-network:<id>#settings`, and creating or removing it takes it
+whole. Rewriting its DNS for a member's deletion takes neither: Hearth's
+save sends an apply that waits on the Relay behind that deletion, so the
+deletion's request for DNS must not wait on the save in Hearth.
 Relays rewrite bindings saved with a
 game server's bare ID when they start, and Hearth its copies of them in a
 migration.

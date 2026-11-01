@@ -53,6 +53,17 @@ import { startTailscaleNetworkDeletion } from "@/lib/tailscale-cleanup.server"
 import { tailscaleMemberProblem } from "@/lib/tailscale-members"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
+import type { AuthenticatedUser } from "@/lib/auth-session"
+import {
+  tailscaleNetworkKey,
+  tailscaleNetworkSettingsKey,
+} from "@/lib/tailscale-lanes"
+import { exclusive } from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import {
   applyTailscaleDeploymentPlanEffect,
@@ -161,93 +172,140 @@ export const getTailscaleStacks = createServerFn({ method: "GET" }).handler(
   }
 )
 
+const createTailscaleNetworkOperation = operation<
+  z.infer<typeof createTailscaleNetworkSchema> & { id: string }
+>()({
+  name: "tailscale.network.create",
+  doing: "Creating this Tailscale network",
+  authorize: ({ user }) => tailscaleAdministrator(user),
+  locks: ({ input }) => [exclusive(tailscaleNetworkKey(input.id))],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => createTailscaleNetworkHandler(user, input)),
+  audit: ({ input }) => ({ id: input.id, kind: "tailscale-network" }),
+})
+
 export const createTailscaleNetwork = createServerFn({ method: "POST" })
   .validator(createTailscaleNetworkSchema)
-  .handler(async ({ data }) => {
-    const user = await requireTailscaleAdministrator()
-    const definitions = await loadTailscaleNetworkDefinitions()
-    const domainOwner = definitions.find(
-      (definition) => definition.domain === data.domain
+  .handler(async ({ data }) =>
+    runOperationPromise(
+      createTailscaleNetworkOperation,
+      { ...data, id: randomBytes(32).toString("hex").slice(0, 40) },
+      {
+        user: await requireEligibleResourceUser(),
+      }
     )
-    if (domainOwner) {
-      throw new Error(
-        `Network TLD .${data.domain} is already used by ${domainOwner.name}`
-      )
-    }
-    const verified = await runAppEffect(
-      "tailscale.oauth.verify",
-      verifyTailscaleOAuthCredentialEffect(data.clientId, data.clientSecret, [
-        data.tag,
-      ])
+  )
+
+async function createTailscaleNetworkHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof createTailscaleNetworkSchema> & { id: string }
+) {
+  const definitions = await loadTailscaleNetworkDefinitions()
+  const domainOwner = definitions.find(
+    (definition) => definition.domain === data.domain
+  )
+  if (domainOwner) {
+    throw new Error(
+      `Network TLD .${data.domain} is already used by ${domainOwner.name}`
     )
-    await runAppEffect(
-      "tailscale.networks.create",
-      createTailscaleNetworkDefinitionEffect(
-        {
-          domain: data.domain,
-          id: randomBytes(32).toString("hex").slice(0, 40),
-          name: data.name,
-        },
-        verified,
-        data.clientSecret,
-        user.id
-      )
+  }
+  const verified = await runAppEffect(
+    "tailscale.oauth.verify",
+    verifyTailscaleOAuthCredentialEffect(data.clientId, data.clientSecret, [
+      data.tag,
+    ])
+  )
+  await runAppEffect(
+    "tailscale.networks.create",
+    createTailscaleNetworkDefinitionEffect(
+      {
+        domain: data.domain,
+        id: data.id,
+        name: data.name,
+      },
+      verified,
+      data.clientSecret,
+      user.id
     )
-    publishTailscaleChange()
-    return loadTailscaleStacks()
-  })
+  )
+  publishTailscaleChange()
+  return loadTailscaleStacks()
+}
+
+const configureTailscaleIntegrationOperation = operation<
+  z.infer<typeof configureTailscaleIntegrationSchema>
+>()({
+  name: "tailscale.network.connect",
+  doing: "Connecting this network to Tailscale",
+  authorize: ({ user }) => tailscaleAdministrator(user),
+  locks: ({ input }) => [exclusive(tailscaleNetworkSettingsKey(input.id))],
+  run: ({ input }) =>
+    promiseEffect(() => configureTailscaleIntegrationHandler(input)),
+  audit: ({ input }) => ({ id: input.id, kind: "tailscale-network" }),
+})
 
 export const configureTailscaleIntegration = createServerFn({ method: "POST" })
   .validator(configureTailscaleIntegrationSchema)
-  .handler(async ({ data }) => {
-    await requireTailscaleAdministrator()
-    const definitions = await loadTailscaleNetworkDefinitions()
-    const definition = definitions.find(({ id }) => id === data.id)
-    if (!definition) throw new Error("Tailscale network not found")
-    const clientSecret =
-      data.clientSecret ??
-      (await loadTailscaleNetworkCredential(data.id)).clientSecret
-    const verified = await runAppEffect(
-      "tailscale.oauth.verify",
-      verifyTailscaleOAuthCredentialEffect(data.clientId, clientSecret, [
-        data.tag,
-      ])
-    )
-    await runAppEffect(
-      "tailscale.networks.integration.save",
-      saveTailscaleNetworkIntegrationEffect(data.id, verified, clientSecret)
-    )
-    const credential = {
-      ...verified,
-      clientSecret,
-    } satisfies TailscaleOAuthCredential
-    const configured = await Effect.runPromise(
-      promiseEffect(async () => {
-        const result = await loadTailscaleStacks()
-        requireCompleteTailscaleDeploymentList(result.unavailableRelays)
-        const stack = result.stacks.find(({ id }) => id === data.id)
-        if (!stack) throw new Error("Tailscale network not found")
-        if (stack.domain !== data.domain) {
-          throw new Error("The network domain changed before setup completed")
-        }
-        await synchronizeTailscaleControlPlane(credential, {
-          ...stack,
-          previousDomain: data.previousDomain,
-        })
-        const inspection = await inspectTailscaleControlPlane(
-          credential,
-          stack,
-          data.previousDomain
-        )
-        return {
-          inspection,
-          stacks: await loadTailscaleStacks(),
-        }
-      }).pipe(Effect.tapError(recordTailscaleSyncFailure(data.id)))
-    )
-    publishTailscaleChange()
-    return configured
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(configureTailscaleIntegrationOperation, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+async function configureTailscaleIntegrationHandler(
+  data: z.infer<typeof configureTailscaleIntegrationSchema>
+) {
+  const definitions = await loadTailscaleNetworkDefinitions()
+  const definition = definitions.find(({ id }) => id === data.id)
+  if (!definition) throw new Error("Tailscale network not found")
+  // Its removal still needs the credentials it was set up with.
+  if (definition.cleanup) {
+    throw new Error("This Tailscale network is being removed")
+  }
+  const clientSecret =
+    data.clientSecret ??
+    (await loadTailscaleNetworkCredential(data.id)).clientSecret
+  const verified = await runAppEffect(
+    "tailscale.oauth.verify",
+    verifyTailscaleOAuthCredentialEffect(data.clientId, clientSecret, [
+      data.tag,
+    ])
+  )
+  await runAppEffect(
+    "tailscale.networks.integration.save",
+    saveTailscaleNetworkIntegrationEffect(data.id, verified, clientSecret)
+  )
+  const credential = {
+    ...verified,
+    clientSecret,
+  } satisfies TailscaleOAuthCredential
+  const configured = await Effect.runPromise(
+    promiseEffect(async () => {
+      const result = await loadTailscaleStacks()
+      requireCompleteTailscaleDeploymentList(result.unavailableRelays)
+      const stack = result.stacks.find(({ id }) => id === data.id)
+      if (!stack) throw new Error("Tailscale network not found")
+      if (stack.domain !== data.domain) {
+        throw new Error("The network domain changed before setup completed")
+      }
+      await synchronizeTailscaleControlPlane(credential, {
+        ...stack,
+        previousDomain: data.previousDomain,
+      })
+      const inspection = await inspectTailscaleControlPlane(
+        credential,
+        stack,
+        data.previousDomain
+      )
+      return {
+        inspection,
+        stacks: await loadTailscaleStacks(),
+      }
+    }).pipe(Effect.tapError(recordTailscaleSyncFailure(data.id)))
+  )
+  publishTailscaleChange()
+  return configured
+}
 
 export const previewTailscaleIntegration = createServerFn({ method: "POST" })
   .validator(previewTailscaleIntegrationSchema)
@@ -294,345 +352,398 @@ export const getTailscaleIntegrationStatus = createServerFn({ method: "GET" })
     }
   })
 
+const syncTailscaleIntegrationOperation = operation<
+  z.infer<typeof syncTailscaleIntegrationSchema>
+>()({
+  name: "tailscale.network.sync",
+  doing: "Syncing this network with Tailscale",
+  authorize: ({ user }) => tailscaleAdministrator(user),
+  locks: ({ input }) => [exclusive(tailscaleNetworkSettingsKey(input.id))],
+  run: ({ input }) =>
+    promiseEffect(() => syncTailscaleIntegrationHandler(input)),
+  audit: ({ input }) => ({ id: input.id, kind: "tailscale-network" }),
+})
+
 export const syncTailscaleIntegration = createServerFn({ method: "POST" })
   .validator(syncTailscaleIntegrationSchema)
-  .handler(async ({ data }) => {
-    await requireTailscaleAdministrator()
-    const [credential, result] = await Promise.all([
-      loadTailscaleNetworkCredential(data.id),
-      loadTailscaleStacks(),
-    ])
-    requireCompleteTailscaleDeploymentList(result.unavailableRelays)
-    const stack = result.stacks.find(({ id }) => id === data.id)
-    if (!stack) throw new Error("Tailscale network not found")
-    const synchronized = await Effect.runPromise(
-      promiseEffect(async () => {
-        await synchronizeTailscaleControlPlane(credential, stack)
-        return loadTailscaleStacks()
-      }).pipe(Effect.tapError(recordTailscaleSyncFailure(data.id)))
-    )
-    publishTailscaleChange()
-    return synchronized
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(syncTailscaleIntegrationOperation, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+async function syncTailscaleIntegrationHandler(
+  data: z.infer<typeof syncTailscaleIntegrationSchema>
+) {
+  const [credential, result] = await Promise.all([
+    loadTailscaleNetworkCredential(data.id),
+    loadTailscaleStacks(),
+  ])
+  requireCompleteTailscaleDeploymentList(result.unavailableRelays)
+  const stack = result.stacks.find(({ id }) => id === data.id)
+  if (!stack) throw new Error("Tailscale network not found")
+  // Its removal takes its nodes away; a sync would point DNS back at them.
+  if (stack.cleanup) throw new Error("This Tailscale network is being removed")
+  const synchronized = await Effect.runPromise(
+    promiseEffect(async () => {
+      await synchronizeTailscaleControlPlane(credential, stack)
+      return loadTailscaleStacks()
+    }).pipe(Effect.tapError(recordTailscaleSyncFailure(data.id)))
+  )
+  publishTailscaleChange()
+  return synchronized
+}
+
+const saveTailscaleStackOperation = operation<
+  z.infer<typeof saveTailscaleStackSchema>
+>()({
+  name: "tailscale.network.save",
+  doing: "Saving this Tailscale network",
+  authorize: ({ user }) => tailscaleAdministrator(user),
+  locks: ({ input }) => [exclusive(tailscaleNetworkSettingsKey(input.id))],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => saveTailscaleStackHandler(user, input)),
+  audit: ({ input }) => ({ id: input.id, kind: "tailscale-network" }),
+})
 
 export const saveTailscaleStack = createServerFn({ method: "POST" })
   .validator(saveTailscaleStackSchema)
-  .handler(async ({ data }) => {
-    const user = await requireTailscaleAdministrator()
-    const relays = (await listPersistedRelays()).filter(
-      (relay) => relay.enabled
-    )
-    const relayById = new Map(relays.map((relay) => [relay.id, relay]))
-    const id = data.id
-    const duplicateHostname = data.bindings.find(
-      (binding, index, bindings) =>
-        bindings.findIndex(
-          (candidate) => candidate.hostname === binding.hostname
-        ) !== index
-    )
-    if (duplicateHostname) {
-      throw new Error(
-        `Hostname ${duplicateHostname.hostname}.${data.domain} is selected more than once`
-      )
-    }
+  .handler(async ({ data }) =>
+    runOperationPromise(saveTailscaleStackOperation, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
-    const grouped = new Map<string, typeof data.bindings>()
-    for (const binding of data.bindings) {
+async function saveTailscaleStackHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof saveTailscaleStackSchema>
+) {
+  const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
+  const relayById = new Map(relays.map((relay) => [relay.id, relay]))
+  const id = data.id
+  const duplicateHostname = data.bindings.find(
+    (binding, index, bindings) =>
+      bindings.findIndex(
+        (candidate) => candidate.hostname === binding.hostname
+      ) !== index
+  )
+  if (duplicateHostname) {
+    throw new Error(
+      `Hostname ${duplicateHostname.hostname}.${data.domain} is selected more than once`
+    )
+  }
+
+  const grouped = new Map<string, typeof data.bindings>()
+  for (const binding of data.bindings) {
+    const relay = relayById.get(binding.relayId)
+    if (!relay) throw new Error("A selected server's node is unavailable")
+    const relayBindings = grouped.get(binding.relayId) ?? []
+    relayBindings.push(binding)
+    grouped.set(binding.relayId, relayBindings)
+  }
+
+  const [currentResult, definitions] = await Promise.all([
+    loadTailscaleDeployments(relays),
+    loadTailscaleNetworkDefinitions(),
+  ])
+  const current = currentResult.deployments
+  const currentForStack = current.filter((deployment) => deployment.id === id)
+  const definition = definitions.find((candidate) => candidate.id === id)
+  if (!definition) throw new Error("Tailscale network not found")
+  if (
+    !definition.integration &&
+    !sameTailscaleBindings(data.bindings, currentForStack)
+  ) {
+    throw new Error(
+      "Connect this network to Tailscale before assigning servers"
+    )
+  }
+  if (definition.cleanup) {
+    throw new Error("This Tailscale network is being removed")
+  }
+  const currentRelayIds = new Set(currentForStack.map(({ relayId }) => relayId))
+  const domainOwner = definitions.find(
+    (candidate) => candidate.id !== id && candidate.domain === data.domain
+  )
+  if (domainOwner) {
+    throw new Error(
+      `Network TLD .${data.domain} is already used by ${domainOwner.name}`
+    )
+  }
+  requireCompleteTailscaleDeploymentList(currentResult.unavailableRelays)
+  const [appRecords, databaseRecords] = await Promise.all([
+    data.bindings.some((binding) => appTailscaleMember(binding.memberId))
+      ? runAppEffect("tailscale.appMembers", listAppRecordsEffect())
+      : [],
+    data.bindings.some((binding) => databaseTailscaleMember(binding.memberId))
+      ? runAppEffect(
+          "tailscale.databaseMembers",
+          listManagedDatabaseRecordsEffect()
+        )
+      : [],
+  ])
+  for (const binding of data.bindings) {
+    const snapshot = currentResult.snapshots.get(binding.relayId)
+    if (!snapshot) {
+      throw new Error("A selected server's node is unavailable")
+    }
+    if (!relaySupportsTailscaleStacks(snapshot)) {
       const relay = relayById.get(binding.relayId)
-      if (!relay) throw new Error("A selected server's node is unavailable")
-      const relayBindings = grouped.get(binding.relayId) ?? []
-      relayBindings.push(binding)
-      grouped.set(binding.relayId, relayBindings)
+      throw new Error(
+        `${relay?.name ?? "This Relay"} must be updated before its servers can join a Tailscale network`
+      )
     }
-
-    const [currentResult, definitions] = await Promise.all([
-      loadTailscaleDeployments(relays),
-      loadTailscaleNetworkDefinitions(),
-    ])
-    const current = currentResult.deployments
-    const currentForStack = current.filter((deployment) => deployment.id === id)
-    const definition = definitions.find((candidate) => candidate.id === id)
-    if (!definition) throw new Error("Tailscale network not found")
     if (
-      !definition.integration &&
-      !sameTailscaleBindings(data.bindings, currentForStack)
+      !currentRelayIds.has(binding.relayId) &&
+      !relaySupportsTailscaleStagedRemoval(snapshot)
     ) {
+      const relay = relayById.get(binding.relayId)
       throw new Error(
-        "Connect this network to Tailscale before assigning servers"
+        `${relay?.name ?? "This Relay"} must be updated before its servers can join a Tailscale network`
       )
     }
-    if (definition.cleanup) {
-      throw new Error("This Tailscale network is being removed")
-    }
-    const currentRelayIds = new Set(
-      currentForStack.map(({ relayId }) => relayId)
-    )
-    const domainOwner = definitions.find(
-      (candidate) => candidate.id !== id && candidate.domain === data.domain
-    )
-    if (domainOwner) {
-      throw new Error(
-        `Network TLD .${data.domain} is already used by ${domainOwner.name}`
-      )
-    }
-    requireCompleteTailscaleDeploymentList(currentResult.unavailableRelays)
-    const [appRecords, databaseRecords] = await Promise.all([
-      data.bindings.some((binding) => appTailscaleMember(binding.memberId))
-        ? runAppEffect("tailscale.appMembers", listAppRecordsEffect())
-        : [],
-      data.bindings.some((binding) =>
-        databaseTailscaleMember(binding.memberId)
-      )
-        ? runAppEffect(
-            "tailscale.databaseMembers",
-            listManagedDatabaseRecordsEffect()
-          )
-        : [],
-    ])
-    for (const binding of data.bindings) {
-      const snapshot = currentResult.snapshots.get(binding.relayId)
-      if (!snapshot) {
-        throw new Error("A selected server's node is unavailable")
-      }
-      if (!relaySupportsTailscaleStacks(snapshot)) {
-        const relay = relayById.get(binding.relayId)
-        throw new Error(
-          `${relay?.name ?? "This Relay"} must be updated before its servers can join a Tailscale network`
-        )
-      }
-      if (
-        !currentRelayIds.has(binding.relayId) &&
-        !relaySupportsTailscaleStagedRemoval(snapshot)
-      ) {
-        const relay = relayById.get(binding.relayId)
-        throw new Error(
-          `${relay?.name ?? "This Relay"} must be updated before its servers can join a Tailscale network`
-        )
-      }
-      const problem = tailscaleMemberProblem(binding, {
-        apps: appRecords,
-        databases: databaseRecords,
-        instances: snapshot.instances,
-      })
-      if (problem) throw new Error(problem)
-    }
+    const problem = tailscaleMemberProblem(binding, {
+      apps: appRecords,
+      databases: databaseRecords,
+      instances: snapshot.instances,
+    })
+    if (problem) throw new Error(problem)
+  }
 
-    const nextDefinition = {
-      cleanup: definition.cleanup,
+  const nextDefinition = {
+    cleanup: definition.cleanup,
+    domain: data.domain,
+    id,
+    integration: definition.integration,
+    name: data.name,
+  }
+  const desired = [...grouped.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map<DesiredTailscaleDeployment>(([relayId, bindings]) => {
+      const relay = relayById.get(relayId)
+      if (!relay) throw new Error("A selected server's node is unavailable")
+      return {
+        bindings: bindings.map(({ enabled, hostname, memberId }) => ({
+          enabled,
+          hostname,
+          memberId,
+        })),
+        hostname: deploymentHostname(data.name, relay.name, relay.id),
+        relayId,
+        relayName: relay.name,
+      }
+    })
+  const integrationCredential = definition?.integration
+    ? await loadTailscaleNetworkCredential(id)
+    : null
+  const newTargets = desired.filter(
+    ({ relayId }) => !currentRelayIds.has(relayId)
+  )
+  if (newTargets.length > 1 && !integrationCredential) {
+    throw new Error(
+      "A manual auth key can add one new Relay at a time. Install the first Relay, connect Kiln to Tailscale, then add the remaining Relays."
+    )
+  }
+  const desiredRelayIds = new Set(grouped.keys())
+  const removed = currentForStack.filter(
+    ({ relayId }) => !desiredRelayIds.has(relayId)
+  )
+  const reservedSubnets = new Set<string>()
+  for (const deployment of current) {
+    if (deployment.id !== id) reservedSubnets.add(deployment.subnet)
+  }
+  requireStagedRemovalSupport(removed, currentResult.snapshots, relayById)
+  const synchronized = await runAppEffect(
+    "tailscale.deployment.save",
+    applyTailscaleDeploymentPlanEffect({
+      authKey: data.authKey,
+      authKeyForTarget: integrationCredential
+        ? async (target) =>
+            createTailscaleNodeAuthKey(integrationCredential, target.hostname)
+        : undefined,
+      current: currentForStack,
+      desired,
       domain: data.domain,
       id,
-      integration: definition.integration,
       name: data.name,
-    }
-    const desired = [...grouped.entries()]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map<DesiredTailscaleDeployment>(([relayId, bindings]) => {
-        const relay = relayById.get(relayId)
-        if (!relay) throw new Error("A selected server's node is unavailable")
-        return {
-          bindings: bindings.map(({ enabled, hostname, memberId }) => ({
-            enabled,
-            hostname,
-            memberId,
-          })),
-          hostname: deploymentHostname(data.name, relay.name, relay.id),
-          relayId,
-          relayName: relay.name,
+      operations: tailscaleDeploymentOperations(
+        relayById,
+        user.id,
+        integrationCredential
+          ? (deployment) =>
+              removeTailscaleControlPlaneDevice(
+                integrationCredential,
+                deployment
+              )
+          : undefined
+      ),
+      reservedSubnets,
+      beforeFinalize: async (deployments) => {
+        if (integrationCredential && definition?.integration) {
+          const integration = definition.integration
+          await Effect.runPromise(
+            promiseEffect(() =>
+              synchronizeTailscaleControlPlane(
+                integrationCredential,
+                tailscaleOverviewForDeployments(
+                  nextDefinition,
+                  deployments,
+                  definition.domain
+                )
+              )
+            ).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  nextDefinition.integration = {
+                    ...integration,
+                    lastError: null,
+                    lastSyncedAt: new Date().toISOString(),
+                  }
+                })
+              ),
+              Effect.catch((cause) =>
+                promiseEffect(() =>
+                  recordTailscaleSync(id, errorMessage(cause))
+                ).pipe(
+                  Effect.andThen(
+                    promiseEffect(() =>
+                      restoreTailscaleControlPlane(
+                        integrationCredential,
+                        definition,
+                        currentForStack
+                      )
+                    )
+                  ),
+                  Effect.andThen(Effect.fail(cause))
+                )
+              )
+            )
+          )
         }
-      })
-    const integrationCredential = definition?.integration
-      ? await loadTailscaleNetworkCredential(id)
-      : null
-    const newTargets = desired.filter(
-      ({ relayId }) => !currentRelayIds.has(relayId)
-    )
-    if (newTargets.length > 1 && !integrationCredential) {
-      throw new Error(
-        "A manual auth key can add one new Relay at a time. Install the first Relay, connect Kiln to Tailscale, then add the remaining Relays."
-      )
-    }
-    const desiredRelayIds = new Set(grouped.keys())
-    const removed = currentForStack.filter(
-      ({ relayId }) => !desiredRelayIds.has(relayId)
-    )
-    const reservedSubnets = new Set<string>()
-    for (const deployment of current) {
-      if (deployment.id !== id) reservedSubnets.add(deployment.subnet)
-    }
-    requireStagedRemovalSupport(removed, currentResult.snapshots, relayById)
-    const synchronized = await runAppEffect(
-      "tailscale.deployment.save",
-      applyTailscaleDeploymentPlanEffect({
-        authKey: data.authKey,
-        authKeyForTarget: integrationCredential
-          ? async (target) =>
-              createTailscaleNodeAuthKey(integrationCredential, target.hostname)
-          : undefined,
-        current: currentForStack,
-        desired,
-        domain: data.domain,
-        id,
-        name: data.name,
-        operations: tailscaleDeploymentOperations(
-          relayById,
-          user.id,
-          integrationCredential
-            ? (deployment) =>
-                removeTailscaleControlPlaneDevice(
-                  integrationCredential,
-                  deployment
-                )
-            : undefined
-        ),
-        reservedSubnets,
-        beforeFinalize: async (deployments) => {
-          if (integrationCredential && definition?.integration) {
-            const integration = definition.integration
-            await Effect.runPromise(
-              promiseEffect(() =>
-                synchronizeTailscaleControlPlane(
-                  integrationCredential,
-                  tailscaleOverviewForDeployments(
-                    nextDefinition,
-                    deployments,
-                    definition.domain
-                  )
-                )
-              ).pipe(
-                Effect.tap(() =>
-                  Effect.sync(() => {
-                    nextDefinition.integration = {
-                      ...integration,
-                      lastError: null,
-                      lastSyncedAt: new Date().toISOString(),
-                    }
-                  })
-                ),
-                Effect.catch((cause) =>
-                  promiseEffect(() =>
-                    recordTailscaleSync(id, errorMessage(cause))
-                  ).pipe(
-                    Effect.andThen(
-                      promiseEffect(() =>
+        await Effect.runPromise(
+          promiseEffect(() =>
+            saveTailscaleNetworkDefinition(nextDefinition, user.id)
+          ).pipe(
+            Effect.catch((cause) =>
+              Effect.gen(function* () {
+                const domainOwnerAfterConflict = yield* Effect.gen(
+                  function* () {
+                    if (integrationCredential && definition) {
+                      yield* promiseEffect(() =>
                         restoreTailscaleControlPlane(
                           integrationCredential,
                           definition,
                           currentForStack
                         )
                       )
-                    ),
-                    Effect.andThen(Effect.fail(cause))
+                    }
+                    return integrationCredential &&
+                      definition?.domain !== nextDefinition.domain
+                      ? yield* promiseEffect(() =>
+                          reconcileTailscaleDomainAfterDefinitionFailure(
+                            integrationCredential,
+                            nextDefinition,
+                            relays
+                          )
+                        )
+                      : null
+                  }
+                ).pipe(
+                  Effect.mapError(
+                    (recoveryCause) =>
+                      new Error(
+                        `${errorMessage(cause)}. Tailscale DNS recovery also failed: ${errorMessage(recoveryCause)}`,
+                        { cause: recoveryCause }
+                      )
                   )
                 )
-              )
-            )
-          }
-          await Effect.runPromise(
-            promiseEffect(() =>
-              saveTailscaleNetworkDefinition(nextDefinition, user.id)
-            ).pipe(
-              Effect.catch((cause) =>
-                Effect.gen(function* () {
-                  const domainOwnerAfterConflict = yield* Effect.gen(
-                    function* () {
-                      if (integrationCredential && definition) {
-                        yield* promiseEffect(() =>
-                          restoreTailscaleControlPlane(
-                            integrationCredential,
-                            definition,
-                            currentForStack
-                          )
-                        )
-                      }
-                      return integrationCredential &&
-                        definition?.domain !== nextDefinition.domain
-                        ? yield* promiseEffect(() =>
-                            reconcileTailscaleDomainAfterDefinitionFailure(
-                              integrationCredential,
-                              nextDefinition,
-                              relays
-                            )
-                          )
-                        : null
-                    }
-                  ).pipe(
-                    Effect.mapError(
-                      (recoveryCause) =>
-                        new Error(
-                          `${errorMessage(cause)}. Tailscale DNS recovery also failed: ${errorMessage(recoveryCause)}`,
-                          { cause: recoveryCause }
-                        )
+                if (domainOwnerAfterConflict) {
+                  return yield* Effect.fail(
+                    new Error(
+                      `Network TLD .${nextDefinition.domain} is already used by ${domainOwnerAfterConflict.name}`,
+                      { cause }
                     )
                   )
-                  if (domainOwnerAfterConflict) {
-                    return yield* Effect.fail(
-                      new Error(
-                        `Network TLD .${nextDefinition.domain} is already used by ${domainOwnerAfterConflict.name}`,
-                        { cause }
-                      )
-                    )
-                  }
-                  return yield* Effect.fail(cause)
-                })
-              )
+                }
+                return yield* Effect.fail(cause)
+              })
             )
           )
-        },
-      })
-    )
+        )
+      },
+    })
+  )
 
-    const affectedRelayIds = [
-      ...desiredRelayIds,
-      ...removed.map(({ relayId }) => relayId),
-    ]
-    await invalidateRelaySnapshots(affectedRelayIds)
-    await runAppEffect(
-      "tailscale.cleanup.deployments.reconcile",
-      reconcileTailscaleDeploymentsEffect(
-        id,
-        synchronized,
-        removed.map(({ relayId }) => relayId)
-      )
+  const affectedRelayIds = [
+    ...desiredRelayIds,
+    ...removed.map(({ relayId }) => relayId),
+  ]
+  await invalidateRelaySnapshots(affectedRelayIds)
+  await runAppEffect(
+    "tailscale.cleanup.deployments.reconcile",
+    reconcileTailscaleDeploymentsEffect(
+      id,
+      synchronized,
+      removed.map(({ relayId }) => relayId)
     )
-    publishTailscaleChange()
-    return {
-      stacks: groupTailscaleDeployments(
-        [
-          ...current.filter((deployment) => deployment.id !== id),
-          ...synchronized,
-        ],
-        replaceTailscaleNetworkDefinition(definitions, nextDefinition)
-      ),
-      unavailableRelays: currentResult.unavailableRelays,
-      unsupportedRelays: currentResult.unsupportedRelays,
-    }
-  })
+  )
+  publishTailscaleChange()
+  return {
+    stacks: groupTailscaleDeployments(
+      [
+        ...current.filter((deployment) => deployment.id !== id),
+        ...synchronized,
+      ],
+      replaceTailscaleNetworkDefinition(definitions, nextDefinition)
+    ),
+    unavailableRelays: currentResult.unavailableRelays,
+    unsupportedRelays: currentResult.unsupportedRelays,
+  }
+}
+
+const removeTailscaleStackOperation = operation<
+  z.infer<typeof removeTailscaleStackSchema>
+>()({
+  name: "tailscale.network.remove",
+  doing: "Removing this Tailscale network",
+  authorize: ({ user }) => tailscaleAdministrator(user),
+  locks: ({ input }) => [exclusive(tailscaleNetworkKey(input.id))],
+  run: ({ context: user, input }) =>
+    promiseEffect(() => removeTailscaleStackHandler(user, input)),
+  audit: ({ input }) => ({ id: input.id, kind: "tailscale-network" }),
+})
 
 export const removeTailscaleStack = createServerFn({ method: "POST" })
   .validator(removeTailscaleStackSchema)
-  .handler(async ({ data }) => {
-    const user = await requireTailscaleAdministrator()
-    const relays = (await listPersistedRelays()).filter(
-      (relay) => relay.enabled
+  .handler(async ({ data }) =>
+    runOperationPromise(removeTailscaleStackOperation, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+async function removeTailscaleStackHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof removeTailscaleStackSchema>
+) {
+  const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
+  const [current, definitions] = await Promise.all([
+    loadTailscaleDeployments(relays),
+    loadTailscaleNetworkDefinitions(),
+  ])
+  const deployments = current.deployments.filter(
+    (deployment) => deployment.id === data.id
+  )
+  const definition = definitions.find(({ id }) => id === data.id)
+  if (!definition) throw new Error("Tailscale network not found")
+  await runAppEffect(
+    "tailscale.cleanup.request",
+    requestTailscaleNetworkCleanupEffect(data.id, user.id, deployments).pipe(
+      Effect.andThen(startTailscaleNetworkDeletion(data.id, user.id))
     )
-    const [current, definitions] = await Promise.all([
-      loadTailscaleDeployments(relays),
-      loadTailscaleNetworkDefinitions(),
-    ])
-    const deployments = current.deployments.filter(
-      (deployment) => deployment.id === data.id
-    )
-    const definition = definitions.find(({ id }) => id === data.id)
-    if (!definition) throw new Error("Tailscale network not found")
-    await runAppEffect(
-      "tailscale.cleanup.request",
-      requestTailscaleNetworkCleanupEffect(data.id, user.id, deployments).pipe(
-        Effect.andThen(startTailscaleNetworkDeletion(data.id, user.id))
-      )
-    )
-    publishTailscaleChange()
-    return loadTailscaleStacks()
-  })
+  )
+  publishTailscaleChange()
+  return loadTailscaleStacks()
+}
 
 function publishTailscaleChange(): void {
   publishRealtimeChange({
@@ -641,6 +752,15 @@ function publishTailscaleChange(): void {
     type: "hearth.invalidate",
   })
 }
+
+// For an operation's authorize: the signed-in platform administrator.
+const tailscaleAdministrator = (user: AuthenticatedUser | null) =>
+  signedIn(user).pipe(
+    Effect.filterOrFail(
+      isPlatformAdmin,
+      () => new Error("Platform administrator access required")
+    )
+  )
 
 async function requireTailscaleAdministrator() {
   const user = await requireEligibleResourceUser()
