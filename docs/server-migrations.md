@@ -68,36 +68,71 @@ old server stops.
 
 ## How it runs
 
-The copy runs in Hearth's background as a row in `server_migration`
-(`apps/web/src/lib/server-migrations.server.ts`), through these steps:
+A copy is a durable operation, `server.migration`
+([Hearth operations](hearth-operations.md#durable-operations),
+`apps/web/src/lib/server-migrations.server.ts`), started once the start
+request's checks pass. Its row in `server_migration` keeps how far it got
+and how it ended, for the person and for activity history. It holds, until
+it ends:
+
+- **Move**: the old server whole, so nothing else changes it until its
+  place is handed over.
+- **Duplicate**: the old server shared, so it keeps running and can be
+  changed meanwhile (a change made during the copy may be missed), and its
+  `#migration`, so one copy of a server runs at a time; one that stops the
+  old server also holds its `#power` and `#dns`.
+- Either: the copy whole, both Relays shared, and each backup destination a
+  backup first goes to, settled when the copy starts.
+
+Its steps:
 
 1. **create**: checks the copy fits, then provisions the new server,
    stopped, from the old one's Brick snapshot, variables, and limits
-   (`lib/server-provisioning.server.ts`). Its limits are reserved from here.
-2. **provision**: waits for the new server to be created. The old server
-   keeps running meanwhile.
-3. **backup**: optional full backup, waited on until it's available.
+   (`lib/server-provisioning.server.ts`), under a provisioning key chosen
+   before it starts. Its limits are reserved from here.
+2. **provision**: waits up to 30 minutes for the new server to be created.
+   The old server keeps running meanwhile.
+3. **backup**: optional full backup, under an ID recorded before it's
+   reserved, waited on until it's available.
 4. **stop**: checks the disk again, then stops the old server, noting
    whether it ran.
 5. **copy**: copies the old server's folder into the new one's, Relay to
-   Relay ([Relay transfers](relay-transfers.md#between-relays)). Once the
-   new Relay has unpacked it, both archives are deleted.
+   Relay ([Relay transfers](relay-transfers.md#between-relays)), under a
+   transfer ID recorded before it's asked. Once the new Relay has unpacked
+   it, both archives are deleted.
 6. **finish**: hands over ownership, access, domains, routes, and backups
-   as chosen, each once, starts a duplicated server's original again, and
-   last asks for a moved server's final backup and deletion if chosen.
+   as chosen, each its own step, starts a duplicated server's original
+   again, and last asks for a moved server's final backup and deletion if
+   chosen, queued to run once the move ends.
 
-Every step is safe to repeat. A worker holds a migration under a two-minute
-lease it renews while it works; one whose worker stopped, such as when
-Hearth restarted, is taken over by the `ServerMigrations` polling worker
-once its lease lapses, and carries on from its step.
+Each step's result is stored as it finishes, and a step cut off, as when
+Hearth restarts, runs again, so each is safe to repeat. Waits check every
+two seconds and store a step every five minutes. Each step that changes
+something reads the person's account again and checks they may still do
+what they asked.
 
 The person who started it sees a progress toast (`ServerMigrationToasts`)
-they can close or cancel from. However it ends, they get a
-`server.migration` notification, so a closed toast or tab misses nothing.
-A copy that fails or is cancelled before its last step is deleted and the
-old server started again if the copy stopped it; one that fails while
-handing things over keeps the new server, which may hold what moved.
-Either way, what either Relay fetched or packed for it is deleted. A move
-that deletes its old server can't be cancelled once it's handing things
-over, and one whose old server's final backup was already asked for ends as
-finished, however it ended, with the old server stopped for deletion.
+they can close or cancel from. Cancelling is an operation of its own that
+marks the copy cancelled; the copy sees it between steps and while it
+waits. However it ends, they get a `server.migration` notification, so a
+closed toast or tab misses nothing.
+
+A copy that fails or is cancelled before its last step is deleted, by a
+deletion queued behind it, and the old server started again if the copy
+stopped it. One that fails while handing things over keeps the new server,
+which may hold what moved. Either way, what either Relay fetched or packed
+for it is deleted. Undoing a copy is Hearth's own work: it only takes back
+what the copy did, so it goes on whatever the person may do by then, and
+its Relay requests go as Hearth's. Removing the partial copy is a deletion
+for the person, its owner; if their account can no longer act, that
+deletion stops and says so on the copy's page.
+
+A move that deletes its old server can't be cancelled once it's handing
+things over: entering that step and accepting a cancel are each one
+conditional write, so exactly one wins. One whose old server's final backup
+was already asked for ends as finished, however it ended, with the old
+server stopped for deletion.
+
+Copies a Hearth from before copies were operations left running aren't
+carried on: at startup each is undone as a failed one is, by a
+`server.migration.rollback-legacy` operation holding both servers whole.

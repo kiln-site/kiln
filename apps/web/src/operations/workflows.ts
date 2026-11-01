@@ -4,6 +4,10 @@ import { deliverInvitation } from "@/lib/access-invitation-delivery"
 import { deployAppOperation } from "@/lib/app-deployments.server"
 import { githubSyncRunOperation } from "@/lib/github-sync.server"
 import { deleteResource, keepResource } from "@/lib/resource-deletion.server"
+import {
+  rollBackLegacyServerMigration,
+  serverMigration,
+} from "@/lib/server-migrations.server"
 import { deleteTailscaleNetwork } from "@/lib/tailscale-cleanup.server"
 import { rewriteTailscaleDns } from "@/lib/tailscale-dns.server"
 
@@ -18,6 +22,8 @@ export const HearthWorkflows = Layer.mergeAll(
   githubSyncRunOperation.layer,
   deleteResource.layer,
   keepResource.layer,
+  serverMigration.layer,
+  rollBackLegacyServerMigration.layer,
   deleteTailscaleNetwork.layer,
   rewriteTailscaleDns.layer
 )

@@ -62,12 +62,12 @@ describe("polling worker", () => {
       })
     )
     jobs.queue("first")
-    startPollingWorker("ServerMigrations", jobs.pass)
+    startPollingWorker("Notifications.push", jobs.pass)
     await vi.advanceTimersByTimeAsync(10)
 
     // Queued after the running pass looked for due jobs.
     jobs.queue("second")
-    wakePollingWorker("ServerMigrations")
+    wakePollingWorker("Notifications.push")
     finishPass()
     await vi.advanceTimersByTimeAsync(10)
 
@@ -94,13 +94,13 @@ describe("polling worker", () => {
       })
     )
     jobs.queue("first")
-    startPollingWorker("ServerMigrations", pass)
+    startPollingWorker("Notifications.push", pass)
     await vi.advanceTimersByTimeAsync(10)
 
     // As dev reloads do, twice before the running pass ends.
-    startPollingWorker("ServerMigrations", pass)
+    startPollingWorker("Notifications.push", pass)
     await vi.advanceTimersByTimeAsync(10)
-    startPollingWorker("ServerMigrations", pass)
+    startPollingWorker("Notifications.push", pass)
     jobs.queue("second")
     await vi.advanceTimersByTimeAsync(10)
     finishPass()
@@ -113,7 +113,7 @@ describe("polling worker", () => {
   it("keeps working after a pass fails", async () => {
     const jobs = jobQueue()
     let failing = true
-    startPollingWorker("ServerMigrations", () =>
+    startPollingWorker("Notifications.push", () =>
       failing ? Promise.reject(new Error("MySQL is down")) : jobs.pass()
     )
     await vi.advanceTimersByTimeAsync(10)

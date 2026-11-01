@@ -37,8 +37,9 @@ import {
   resolveScopeAuthorization,
 } from "@/lib/scope-authorization.server"
 import {
-  cancelServerMigrationEffect,
+  cancelServerMigration,
   listServerMigrationsEffect,
+  requireMigrationPermissions,
   startServerMigrationEffect,
 } from "@/lib/server-migrations.server"
 import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
@@ -247,7 +248,7 @@ export async function startServerMigrationHandler(
   user: AuthenticatedUser,
   data: z.infer<typeof startServerMigrationInputSchema>
 ): Promise<{ id: string }> {
-  const { authorization, instance, relay } = await authorizeSource(user, data)
+  const { instance, relay } = await authorizeSource(user, data)
   if (instance.provisioning) {
     throw new Error("Wait for this server to finish being created first")
   }
@@ -258,9 +259,6 @@ export async function startServerMigrationHandler(
   if (data.mode === "migrate" && destination.id === relay.id) {
     throw new Error("Choose another Relay to move this server to")
   }
-  ;(
-    await resolveScopeAuthorization({ scope: relayScope(destination.id), user })
-  ).require("instance.create")
   // A move always stops the server: the copy must be the last of it.
   const options = {
     ...data.options,
@@ -269,17 +267,15 @@ export async function startServerMigrationHandler(
     stopSource: data.mode === "migrate" || data.options.stopSource,
     deleteSource: data.mode === "migrate" ? data.options.deleteSource : null,
   }
-  // Checked whether or not it runs now: it may be started before the copy
-  // reaches the step that stops it, and starts again after a duplicate.
-  if (options.stopSource) {
-    authorization.require("instance.power.stop")
-    if (data.mode === "duplicate") authorization.require("instance.power.start")
+  const asked = {
+    destination: { relayId: destination.id },
+    mode: data.mode,
+    options,
+    source: { instanceId: instance.id, relayId: relay.id },
   }
-  if (options.copyAccess) authorization.require("access.read")
-  // A linked backup is the copy's to download and restore, so linking needs
-  // what downloading this server's backups does.
+  // Each option needs its own permission, checked again as the copy goes.
+  await requireMigrationPermissions(user, asked)
   if (options.linkBackups) {
-    authorization.require("backup.download")
     const { relayConnectionFeatures } = await import("@/lib/relay-connection")
     if (
       !relayConnectionFeatures(destination.id).has(relayLinkedBackupsV1Feature)
@@ -289,11 +285,21 @@ export async function startServerMigrationHandler(
       )
     }
   }
-  if (options.backup) authorization.require("backup.create")
+  // A backup first goes where they chose, or its usual destinations, settled
+  // now: the copy holds them while it runs.
+  const backupStorageIds = options.backup
+    ? await resolveAuthorizedBackupStorageSelection({
+        relayId: relay.id,
+        targetId: instance.id,
+        targetKind: "instance",
+        user,
+        ...(options.backup.storageId === undefined
+          ? {}
+          : { storageId: options.backup.storageId }),
+      })
+    : []
   // Deleting the old server backs it up first, to a destination they may use.
   if (options.deleteSource) {
-    authorization.require("instance.delete")
-    authorization.require("backup.create")
     await requireDeleteConfirmation({
       confirmation: data.confirmation?.confirmation ?? "",
       name: instance.name,
@@ -309,9 +315,6 @@ export async function startServerMigrationHandler(
         ? {}
         : { storageId: options.deleteSource.storageId }),
     })
-  }
-  if (options.moveDomain || options.moveWebRoutes) {
-    authorization.require("instance.network.write")
   }
   const problems = await runAppEffect(
     "serverMigrations.start.problems",
@@ -356,6 +359,7 @@ export async function startServerMigrationHandler(
     "serverMigrations.start",
     startServerMigrationEffect({
       actor: user,
+      backupStorageIds,
       destinationName: data.name,
       destinationRelayId: destination.id,
       mode: data.mode,
@@ -381,10 +385,7 @@ export async function cancelServerMigrationHandler(
   user: AuthenticatedUser,
   id: string
 ) {
-  await runAppEffect(
-    "serverMigrations.cancel",
-    cancelServerMigrationEffect(user.id, id)
-  )
+  await cancelServerMigration(user, id)
 }
 
 // Copying a server needs its files and settings.
