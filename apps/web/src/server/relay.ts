@@ -132,6 +132,7 @@ import {
 } from "@/lib/relay-selectors"
 import { updateInstanceSourceName } from "@/lib/instance-registry"
 import { dnsKey } from "@/lib/dns-operations"
+import { fileRootKey } from "@/lib/file-lanes"
 import { exclusive, resourceKey, shared } from "@/operations/lanes"
 import {
   operation,
@@ -1109,40 +1110,101 @@ export const recordRelayFileView = createServerFn({ method: "POST" })
     return { recorded: true }
   })
 
-export const saveRelayFile = createServerFn({ method: "POST" })
-  .validator(saveFileInputSchema)
-  .handler(async ({ data }) => {
-    const { instanceId, path, relayId, ...input } = data
-    const { relay, user } = await instanceRelayAccess(relayId)
-    await requireFilePermission(
-      user,
-      relay.id,
-      instanceId,
-      "instance.files.write"
-    )
-    const response = await relayFetch(
-      relay,
-      `/v1/instances/${encodeURIComponent(instanceId)}/file?path=${encodeURIComponent(path)}`,
-      { method: "PUT", body: JSON.stringify(input) },
-      undefined,
-      user.id
-    )
-    const file = relayFileContentSchema.parse(await response.json())
-    await recordFileActivityBestEffort(
-      "edit",
-      recordFileEdited(relay.id, instanceId, path),
-      relay.id,
-      instanceId
-    )
-    return file
+type FilePermission =
+  | "instance.files.delete"
+  | "instance.files.read"
+  | "instance.files.write"
+
+/**
+ * A change to the files of a game server, an App's folder or a Relay's host
+ * files, holding what they belong to shared (`fileRootKey`): the Relay
+ * orders the writes, and a deletion or restore of it waits for them.
+ */
+const fileOperation = <
+  Input extends { readonly instanceId: string; readonly relayId: string },
+  A,
+>(definition: {
+  readonly name: string
+  readonly doing: string
+  readonly permission: (input: Input) => FilePermission
+  readonly run: (user: AuthenticatedUser, input: Input) => Promise<A>
+}) =>
+  operation<Input>()({
+    name: definition.name,
+    doing: definition.doing,
+    authorize: ({ input, user }) =>
+      signedIn(user).pipe(
+        Effect.tap((person) =>
+          promiseEffect(() =>
+            requireFilePermission(
+              person,
+              input.relayId,
+              input.instanceId,
+              definition.permission(input)
+            )
+          )
+        )
+      ),
+    locks: ({ input }) => [
+      shared(fileRootKey(input.relayId, input.instanceId)),
+    ],
+    run: ({ context: user, input }) =>
+      promiseEffect(() => definition.run(user, input)),
+    audit: ({ input }) => {
+      const appId = appIdFromFileRoot(input.instanceId)
+      return isRelayFileRoot(input.instanceId)
+        ? { id: input.relayId, kind: "relay", relayId: input.relayId }
+        : appId
+          ? { id: appId, kind: "app", relayId: input.relayId }
+          : { id: input.instanceId, kind: "instance", relayId: input.relayId }
+    },
   })
 
+const saveFile = fileOperation({
+  name: "files.save",
+  doing: "Saving a file here",
+  permission: () => "instance.files.write",
+  run: saveFileHandler,
+})
+
+export const saveRelayFile = createServerFn({ method: "POST" })
+  .validator(saveFileInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(saveFile, data, { user: await instanceSessionUser() })
+  )
+
+async function saveFileHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof saveFileInputSchema>
+) {
+  const { instanceId, path, relayId, ...input } = data
+  const relay = await instanceRelay(relayId)
+  const response = await relayFetch(
+    relay,
+    `/v1/instances/${encodeURIComponent(instanceId)}/file?path=${encodeURIComponent(path)}`,
+    { method: "PUT", body: JSON.stringify(input) },
+    undefined,
+    user.id
+  )
+  const file = relayFileContentSchema.parse(await response.json())
+  await recordFileActivityBestEffort(
+    "edit",
+    recordFileEdited(relay.id, instanceId, path),
+    relay.id,
+    instanceId
+  )
+  return file
+}
+
+// A SQLite file in a file root: reads, and the writes `changeSqliteFile`
+// makes.
 async function relayDatabaseRequest(
+  user: AuthenticatedUser,
   data: z.infer<typeof fileInputSchema>,
   request: DatabaseReadRequest | DatabaseWriteRequest,
   write: boolean
 ) {
-  const { relay, user } = await instanceRelayAccess(data.relayId)
+  const relay = await instanceRelay(data.relayId)
   await requireFilePermission(
     user,
     relay.id,
@@ -1176,7 +1238,12 @@ export const getRelayDatabaseOverview = createServerFn({ method: "GET" })
   .validator(fileInputSchema)
   .handler(async ({ data }) =>
     databaseOverviewSchema.parse(
-      await relayDatabaseRequest(data, { action: "overview" }, false)
+      await relayDatabaseRequest(
+        await instanceSessionUser(),
+        data,
+        { action: "overview" },
+        false
+      )
     )
   )
 
@@ -1184,56 +1251,88 @@ export const getRelayDatabaseRows = createServerFn({ method: "POST" })
   .validator(databaseRowsRequestSchema)
   .handler(async ({ data }) =>
     databaseRowsSchema.parse(
-      await relayDatabaseRequest(data, data.request, false)
+      await relayDatabaseRequest(
+        await instanceSessionUser(),
+        data,
+        data.request,
+        false
+      )
     )
   )
 
+const changeSqliteFile = fileOperation({
+  name: "files.sqlite.write",
+  doing: "Changing a database file here",
+  permission: () => "instance.files.write",
+  run: (
+    user,
+    data: z.infer<typeof fileInputSchema> & { request: DatabaseWriteRequest }
+  ) => relayDatabaseRequest(user, data, data.request, true),
+})
+
+// A query that may write runs as a change; one that only reads doesn't.
 export const runRelayDatabaseQuery = createServerFn({ method: "POST" })
   .validator(databaseQueryRequestSchema)
-  .handler(async ({ data }) =>
-    databaseQueryResultSchema.parse(
-      await relayDatabaseRequest(data, data.request, data.write)
+  .handler(async ({ data }) => {
+    const user = await instanceSessionUser()
+    return databaseQueryResultSchema.parse(
+      data.write
+        ? await runOperationPromise(changeSqliteFile, data, { user })
+        : await relayDatabaseRequest(user, data, data.request, false)
     )
-  )
+  })
 
 export const mutateRelayDatabase = createServerFn({ method: "POST" })
   .validator(databaseMutateRequestSchema)
   .handler(async ({ data }) =>
     databaseMutateResultSchema.parse(
-      await relayDatabaseRequest(data, data.request, true)
+      await runOperationPromise(changeSqliteFile, data, {
+        user: await instanceSessionUser(),
+      })
     )
   )
 
+const changeFiles = fileOperation({
+  name: "files.change",
+  doing: "Changing files here",
+  permission: (input: z.infer<typeof fileMutationInputSchema>) =>
+    input.operation === "delete"
+      ? "instance.files.delete"
+      : "instance.files.write",
+  run: changeFilesHandler,
+})
+
 export const mutateRelayFiles = createServerFn({ method: "POST" })
   .validator(fileMutationInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireFilePermission(
-      user,
-      relay.id,
-      data.instanceId,
-      data.operation === "delete"
-        ? "instance.files.delete"
-        : "instance.files.write"
-    )
-    const input = relayFileMutationInputSchema.parse(data)
-    const response = await relayFetch(
-      relay,
-      `/v1/instances/${encodeURIComponent(data.instanceId)}/file-mutations`,
-      {
-        method: "POST",
-        body: JSON.stringify(input),
-      },
-      undefined,
-      user.id
-    )
-    const result = relayFileMutationResultSchema.parse(await response.json())
-    await runAppEffect(
-      "relay.tree.invalidate",
-      invalidateRelayCache(relayCachePolicy.tree(relay.id, data.instanceId))
-    )
-    return result
-  })
+  .handler(async ({ data }) =>
+    runOperationPromise(changeFiles, data, {
+      user: await instanceSessionUser(),
+    })
+  )
+
+async function changeFilesHandler(
+  user: AuthenticatedUser,
+  data: z.infer<typeof fileMutationInputSchema>
+) {
+  const relay = await instanceRelay(data.relayId)
+  const input = relayFileMutationInputSchema.parse(data)
+  const response = await relayFetch(
+    relay,
+    `/v1/instances/${encodeURIComponent(data.instanceId)}/file-mutations`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+    undefined,
+    user.id
+  )
+  const result = relayFileMutationResultSchema.parse(await response.json())
+  await runAppEffect(
+    "relay.tree.invalidate",
+    invalidateRelayCache(relayCachePolicy.tree(relay.id, data.instanceId))
+  )
+  return result
+}
 
 export const getRelayFileActivity = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)
@@ -1686,10 +1785,7 @@ function requireFilePermission(
   user: AuthenticatedUser,
   relayId: string,
   instanceId: string,
-  permission:
-    | "instance.files.delete"
-    | "instance.files.read"
-    | "instance.files.write"
+  permission: FilePermission
 ) {
   return traceAppPromise("files.permission", () =>
     checkFilePermission(user, relayId, instanceId, permission)
@@ -1700,10 +1796,7 @@ async function checkFilePermission(
   user: AuthenticatedUser,
   relayId: string,
   instanceId: string,
-  permission:
-    | "instance.files.delete"
-    | "instance.files.read"
-    | "instance.files.write"
+  permission: FilePermission
 ) {
   if (isRelayFileRoot(instanceId)) {
     if (instanceId !== relayId) throw new Error("Relay not found")
