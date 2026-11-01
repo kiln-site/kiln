@@ -1459,15 +1459,44 @@ async function performInstanceActionHandler(
 }
 
 // Publishing a game server's logs to mclo.gs changes nothing of Kiln's, but
-// is worth its audit: who made what public. It holds the server shared.
-const shareLog = resourceOperation({
-  kind: "instance",
-  id: (input: z.infer<typeof mclogsUploadInputSchema>) => input.instanceId,
+// is worth its audit: who made what public. The person may share the
+// server's logs, and its Relay is active.
+const mayShareLogs = (
+  input: { readonly instanceId: string; readonly relayId: string },
+  user: AuthenticatedUser | null
+) =>
+  signedIn(user).pipe(
+    Effect.flatMap((person) =>
+      promiseEffect(async () => {
+        const relay = await instanceRelay(input.relayId)
+        await requireRelayPermission({
+          instanceId: input.instanceId,
+          permission: "instance.logs.share",
+          relayId: relay.id,
+          user: person,
+        })
+        return { person, relay }
+      })
+    )
+  )
+
+const shareAudit = (input: {
+  readonly instanceId: string
+  readonly relayId: string
+}) => ({
+  id: input.instanceId,
+  kind: "instance" as const,
+  relayId: input.relayId,
+})
+
+// The log is the person's own upload, so it holds nothing of the server's.
+const shareLog = operation<z.infer<typeof mclogsUploadInputSchema>>()({
   name: "instance.logs.share",
-  lock: "shared",
   doing: "Sharing this game server's logs",
-  permission: () => "instance.logs.share",
-  run: (_user, data) => uploadLog(data),
+  authorize: ({ input, user }) => mayShareLogs(input, user),
+  locks: () => [],
+  run: ({ input }) => promiseEffect(() => uploadLog(input)),
+  audit: ({ input }) => shareAudit(input),
 })
 
 export const uploadToMclogs = createServerFn({ method: "POST" })
@@ -1476,31 +1505,33 @@ export const uploadToMclogs = createServerFn({ method: "POST" })
     runOperationPromise(shareLog, data, { user: await instanceSessionUser() })
   )
 
-const shareConsoleLog = resourceOperation({
-  kind: "instance",
-  id: (input: z.infer<typeof consoleShareInputSchema>) => input.instanceId,
+// The Relay reads the server's console, so it holds the server shared.
+const shareConsoleLog = operation<z.infer<typeof consoleShareInputSchema>>()({
   name: "instance.console.share",
-  lock: "shared",
   doing: "Sharing this game server's console",
-  permission: () => "instance.logs.share",
-  run: async (user, data) => {
-    const relay = await instanceRelay(data.relayId)
-    const response = await relayFetch(
-      relay,
-      `/v1/instances/${encodeURIComponent(data.instanceId)}/console-share`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          implementation: data.implementation,
-          redactSensitive: data.redactSensitive,
-          version: data.version,
-        }),
-      },
-      60_000,
-      user.id
-    )
-    return relayMclogsUploadResultSchema.parse(await response.json())
-  },
+  authorize: ({ input, user }) => mayShareLogs(input, user),
+  locks: ({ input }) => [
+    shared(resourceKey("instance", input.relayId, input.instanceId)),
+  ],
+  run: ({ context: { person, relay }, input }) =>
+    promiseEffect(async () => {
+      const response = await relayFetch(
+        relay,
+        `/v1/instances/${encodeURIComponent(input.instanceId)}/console-share`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            implementation: input.implementation,
+            redactSensitive: input.redactSensitive,
+            version: input.version,
+          }),
+        },
+        60_000,
+        person.id
+      )
+      return relayMclogsUploadResultSchema.parse(await response.json())
+    }),
+  audit: ({ input }) => shareAudit(input),
 })
 
 export const uploadConsoleLogToMclogs = createServerFn({ method: "POST" })

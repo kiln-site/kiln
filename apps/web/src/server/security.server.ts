@@ -216,6 +216,17 @@ const scanNow = operation<{ readonly scope: string | null }>()({
   locks: () => [],
   run: ({ context: user, input }) =>
     promiseEffect(() => scanSecurityNowFor(user, input)),
+  // What was asked to be scanned: the scope's resource, or everything.
+  audit: ({ input }) => {
+    const scope = input.scope === null ? null : parseSecurityScope(input.scope)
+    return scope
+      ? {
+          id: scope.resourceId,
+          kind: scope.resourceType,
+          relayId: scope.relayId,
+        }
+      : { id: "all", kind: "security" }
+  },
 })
 
 export async function scanSecurityNowHandler(input: { scope: string | null }) {

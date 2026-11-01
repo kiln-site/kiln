@@ -283,9 +283,9 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
  * rather than waiting for Hearth's next check. `failed` says GitHub couldn't
  * be asked and the releases Hearth had are still shown.
  */
-// Checking for releases spends Hearth's GitHub requests and announces what
-// it finds, so two checks at once wait for each other rather than both
-// asking and announcing.
+// It changes nothing a lane orders: the release feed is a cache Hearth's
+// pages read too, and shares one GitHub request among those asking at once,
+// and each release is announced once however many checks find it.
 const checkReleases = operation<void>()({
   name: "updates.checkReleases",
   doing: "Checking for Kiln releases",
@@ -306,7 +306,7 @@ const checkReleases = operation<void>()({
         })
       )
     ),
-  locks: () => [exclusive(partKey("kiln-releases", "check"))],
+  locks: () => [],
   run: ({ context: user }) =>
     promiseEffect(async () => {
       const checked = await runAppEffect(
@@ -331,6 +331,7 @@ const checkReleases = operation<void>()({
       }
       return checked
     }),
+  audit: () => ({ id: "releases", kind: "platform" }),
 })
 
 export const checkForKilnReleases = createServerFn({ method: "POST" }).handler(
