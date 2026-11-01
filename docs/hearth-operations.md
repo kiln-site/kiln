@@ -202,7 +202,7 @@ request is answered once.
 | `schedule:<id>`                   | A schedule: deleting it; `#settings` saving or running |
 | `tailscale-network:<id>`          | A Tailscale network; `#settings` its members and DNS   |
 | `brick-catalog:<id>`              | A Brick catalog: deleting it; `#visibility` publishing |
-| `brick-library:<user>`            | A person's catalogs and custom Bricks: adding them     |
+| `brick-library:<user>#contents`   | A person's catalogs and custom Bricks: adding them     |
 
 A backup or restore holds what its data belongs to: the game server or
 database, or the App for its folder and the volumes it owns, since deleting

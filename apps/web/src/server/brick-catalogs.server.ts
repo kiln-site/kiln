@@ -104,7 +104,9 @@ export async function getBrickCatalogDetailsHandler(data: {
 // exclusive; deleting or publishing one of their catalogs takes it shared,
 // with the catalog whole to delete it or its `#visibility` to publish it.
 const brickCatalogKey = (id: string) => `brick-catalog:${id}`
-export const brickLibraryKey = (userId: string) => `brick-library:${userId}`
+// A part, so everyday changes to one library wait for each other.
+export const brickLibraryKey = (userId: string) =>
+  partKey(`brick-library:${userId}`, "contents")
 const libraryOf = (catalog: { ownerUserId: string | null }) =>
   catalog.ownerUserId ? [shared(brickLibraryKey(catalog.ownerUserId))] : []
 
