@@ -97,9 +97,11 @@ own exclusive lane, so deletions at the same time can't overwrite each
 other's bindings.
 
 Hearth alone writes a network's DNS records (`relay.tailscale.stack.dns`),
-each time from what the Relays hold then (`relay.tailscale.stack.state`):
-the enabled members of nodes not being removed, leaving out members whose
-resource is frozen for its deletion. Each node keeps the records Hearth
+each time from what the network's Relays hold then
+(`relay.tailscale.stack.state`). It asks only those: the ones a save is
+applying it to, or, for a deletion, the ones Hearth recorded when it last
+saved it. Records are the enabled members of nodes not being removed,
+leaving out members whose resource is frozen for its deletion. Each node keeps the records Hearth
 last sent and serves them again whenever it recreates its DNS container;
 it never makes up records of its own. In Hearth, saving a network,
 connecting it to Tailscale, syncing it and rewriting its DNS all take its

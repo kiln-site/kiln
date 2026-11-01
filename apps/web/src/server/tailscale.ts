@@ -568,7 +568,8 @@ async function saveTailscaleStackHandler(
       id,
       name: data.name,
       operations: tailscaleDeploymentOperations(
-        id,
+        // Where it's going and where it was, for DNS after a rollback too.
+        { id, relayIds: [...desiredRelayIds, ...currentRelayIds] },
         relayById,
         user.id,
         integrationCredential
@@ -935,7 +936,7 @@ async function loadTailscaleDeployments(
 }
 
 function tailscaleDeploymentOperations(
-  networkId: string,
+  network: { readonly id: string; readonly relayIds: ReadonlyArray<string> },
   relayById: ReadonlyMap<string, PersistedRelay>,
   subject: string,
   removeFromControlPlane?: (deployment: TailscaleDeployment) => Promise<void>
@@ -974,7 +975,7 @@ function tailscaleDeploymentOperations(
       )
     },
     // The save holds the network's `#settings`, as every DNS rewrite does.
-    rewriteDns: () => writeTailscaleNetworkDns([networkId], subject),
+    rewriteDns: () => writeTailscaleNetworkDns(network, subject),
   }
 }
 

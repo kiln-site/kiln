@@ -8,6 +8,7 @@ import {
 import { Effect, Schema } from "effect"
 import { Activity } from "effect/workflow"
 
+import { tailscaleNetworkRelaysEffect } from "@/effect/tailscale-networks"
 import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
 import { tailscaleNetworkSettingsKey } from "@/lib/tailscale-lanes"
@@ -29,48 +30,47 @@ export class TailscaleDnsError extends Schema.TaggedError<TailscaleDnsError>()(
 ) {}
 
 /**
- * Rewrites the DNS of each network on every node of it from what each
- * Relay holds now. Every enabled Relay must answer, since one left out
- * would drop its members' records. Run it holding the networks'
- * `#settings`.
+ * Rewrites a network's DNS on every node of it from what those nodes hold
+ * now. It asks only the Relays it names, the ones the network is on, and
+ * each of them must answer: one left out would drop its members' records.
+ * Run it holding the network's `#settings`.
  */
 export async function writeTailscaleNetworkDns(
-  networkIds: ReadonlyArray<string>,
+  network: { readonly id: string; readonly relayIds: ReadonlyArray<string> },
   subject?: string
 ): Promise<void> {
-  if (networkIds.length === 0) return
-  const relays = (await listPersistedRelays()).filter((relay) => relay.enabled)
-  const held = await Promise.all(
-    relays.map(async (relay) => ({
-      relay,
-      stacks: relayTailscaleStackStatesSchema.parse(
-        await relayRpc(relay, "relay.tailscale.stack.state", {}, 15_000)
-      ),
-    }))
+  const relayIds = new Set(network.relayIds)
+  const relays = (await listPersistedRelays()).filter(
+    (relay) => relay.enabled && relayIds.has(relay.id)
   )
-  for (const id of networkIds) {
-    const nodes = held.flatMap(({ relay, stacks }) =>
-      stacks
-        .filter((stack) => stack.id === id && !stack.removalPending)
-        .map((stack) => ({ relay, stack }))
-    )
-    const records = nodes.flatMap(({ stack }) =>
-      stack.bindings.flatMap(({ address, enabled, frozen, hostname }) =>
-        enabled && !frozen ? [{ address, hostname }] : []
-      )
-    )
+  const nodes = (
     await Promise.all(
-      nodes.map(({ relay }) =>
-        relayRpc(
-          relay,
-          "relay.tailscale.stack.dns",
-          { id, records },
-          60_000,
-          subject
-        )
+      relays.map(async (relay) =>
+        relayTailscaleStackStatesSchema
+          .parse(
+            await relayRpc(relay, "relay.tailscale.stack.state", {}, 15_000)
+          )
+          .filter((stack) => stack.id === network.id && !stack.removalPending)
+          .map((stack) => ({ relay, stack }))
       )
     )
-  }
+  ).flat()
+  const records = nodes.flatMap(({ stack }) =>
+    stack.bindings.flatMap(({ address, enabled, frozen, hostname }) =>
+      enabled && !frozen ? [{ address, hostname }] : []
+    )
+  )
+  await Promise.all(
+    nodes.map(({ relay }) =>
+      relayRpc(
+        relay,
+        "relay.tailscale.stack.dns",
+        { id: network.id, records },
+        60_000,
+        subject
+      )
+    )
+  )
 }
 
 /** The networks a resource is a member of, as its Relay holds them. */
@@ -129,13 +129,29 @@ export const rewriteTailscaleDns = durableOperation({
     Activity.make({
       name: "rewrite",
       error: TailscaleDnsError,
-      execute: Effect.tryPromise({
-        try: () => writeTailscaleNetworkDns(networkIds),
-        catch: (cause) =>
-          new TailscaleDnsError({
-            message: cause instanceof Error ? cause.message : String(cause),
-          }),
-      }),
+      execute: Effect.gen(function* () {
+        // The Relays each network is on, as Hearth recorded them when it
+        // last saved it, read once its turn has come.
+        const deployed = yield* tailscaleNetworkRelaysEffect(networkIds)
+        yield* Effect.tryPromise({
+          try: async () => {
+            for (const id of networkIds) {
+              await writeTailscaleNetworkDns({
+                id,
+                relayIds: deployed.get(id) ?? [],
+              })
+            }
+          },
+          catch: (cause) =>
+            new TailscaleDnsError({
+              message: cause instanceof Error ? cause.message : String(cause),
+            }),
+        })
+      }).pipe(
+        Effect.catchTag("DatabaseError", (cause) =>
+          Effect.fail(new TailscaleDnsError({ message: cause.message }))
+        )
+      ),
     }),
   version: 1,
 })

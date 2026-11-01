@@ -10,7 +10,7 @@ import { inLanes } from "@/operations/operation"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql } from "@/test/database"
-import { selectRows } from "@/test/seed"
+import { insertRelay, selectRows } from "@/test/seed"
 import {
   appId,
   appRecords,
@@ -22,6 +22,7 @@ import {
   relayId,
   seedApp,
   seedDeletion as seed,
+  seedNetwork,
   serverId,
   serverRecords,
   stranger,
@@ -99,7 +100,10 @@ describeMysql("Deleting a game server or database", () => {
       () =>
         Effect.gen(function* () {
           yield* seed
-          relay.stacks.set(network, [`instance:${serverId}`, peer])
+          yield* seedNetwork(network, [`instance:${serverId}`, peer])
+          // A Relay the network isn't on doesn't answer, and needn't.
+          yield* insertRelay("u".repeat(43))
+          relay.unreachable.add("u".repeat(43))
 
           yield* deleteServer()
           const done = yield* until(serverId, ["completed", "failed"])
@@ -119,7 +123,7 @@ describeMysql("Deleting a game server or database", () => {
       () =>
         Effect.gen(function* () {
           yield* seed
-          relay.stacks.set(network, [`instance:${serverId}`, peer])
+          yield* seedNetwork(network, [`instance:${serverId}`, peer])
 
           yield* requestResourceDeletionEffect({
             finalBackup: true,

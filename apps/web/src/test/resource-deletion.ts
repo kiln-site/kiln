@@ -107,6 +107,30 @@ const deletionOf = (resourceId: string) =>
     Effect.map((rows) => rows.find((row) => row.resource_id === resourceId))
   )
 
+/**
+ * A Tailscale network on the seeded Relay with these members, as Hearth
+ * records it and the Relay holds it.
+ */
+export const seedNetwork = (id: string, members: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    yield* insertRows("tailscale_network", {
+      created_at: at,
+      domain: "test",
+      id,
+      name: "Test network",
+      updated_at: at,
+    })
+    yield* insertRows("tailscale_network_deployment", {
+      cleanup_next_attempt_at: at,
+      deployment: JSON.stringify({ id, relayId }),
+      network_id: id,
+      observed_at: at,
+      relay_id: relayId,
+      updated_at: at,
+    })
+    deletionRelay.stacks.set(id, [...members])
+  })
+
 /** Waits, on the live clock, for a deletion to reach one of `statuses`. */
 export const deletionUntil = (
   resourceId: string,
@@ -165,6 +189,8 @@ export const deletionRelay = {
   // last wrote to each network's DNS.
   stacks: new Map<string, Array<string>>(),
   stackDns: new Map<string, Array<string>>(),
+  // Relays that don't answer.
+  unreachable: new Set<string>(),
   volumes: [] as Array<FakeVolume>,
 }
 
@@ -217,6 +243,7 @@ function resetDeletionRelay(servers: ReadonlyArray<string>): void {
   deletionRelay.servers.clear()
   deletionRelay.stacks.clear()
   deletionRelay.stackDns.clear()
+  deletionRelay.unreachable.clear()
   deletionRelay.volumes.length = 0
   for (const id of servers) deletionRelay.servers.add(id)
 }
@@ -237,6 +264,9 @@ export const deletionRelayConnection = {
     frame: { operationId?: string } = {}
   ): Promise<unknown> => {
     const state = deletionRelay
+    if (state.unreachable.has(relay.id)) {
+      throw new Error("The Relay isn't connected")
+    }
     if (operation === "operation.get") {
       return (
         state.journal.get(String(payload.operationId)) ?? { status: "unknown" }
