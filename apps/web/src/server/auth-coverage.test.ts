@@ -144,10 +144,6 @@ const notYetOperations = new Set<string>([
   "relay.ts:uploadToMclogs",
   "security.ts:scanSecurityNow",
   "server-migrations.ts:cancelServerMigration",
-  "tailscale.ts:configureTailscaleIntegration",
-  "tailscale.ts:createTailscaleNetwork",
-  "tailscale.ts:saveTailscaleStack",
-  "tailscale.ts:syncTailscaleIntegration",
   "updates.ts:checkForKilnReleases",
 ])
 
