@@ -92,14 +92,14 @@ Its steps:
    before it starts. Its limits are reserved from here.
 2. **provision**: waits up to 30 minutes for the new server to be created.
    The old server keeps running meanwhile.
-3. **backup**: optional full backup, under an ID recorded before it's
-   reserved, waited on until it's available.
+3. **backup**: optional full backup, under an ID named after the copy,
+   waited on until it's available.
 4. **stop**: checks the disk again, then stops the old server, noting
    whether it ran.
 5. **copy**: copies the old server's folder into the new one's, Relay to
    Relay ([Relay transfers](relay-transfers.md#between-relays)), under a
-   transfer ID recorded before it's asked. Once the new Relay has unpacked
-   it, both archives are deleted.
+   transfer ID named after the copy. Once the new Relay has unpacked it,
+   both archives are deleted.
 6. **finish**: hands over ownership, access, domains, routes, and backups
    as chosen, each its own step, starts a duplicated server's original
    again, and last asks for a moved server's final backup and deletion if
@@ -113,14 +113,14 @@ what they asked.
 
 The person who started it sees a progress toast (`ServerMigrationToasts`)
 they can close or cancel from. Cancelling is an operation of its own that
-marks the copy cancelled; the copy sees it between steps and while it
-waits. However it ends, they get a `server.migration` notification, so a
+marks the copy cancelled; the copy sees it before each step and while it
+waits, and finishes only if no cancel came first. However it ends, they get a `server.migration` notification, so a
 closed toast or tab misses nothing.
 
 A copy that fails or is cancelled before its last step is deleted, by a
 deletion queued behind it, and the old server started again if the copy
-stopped it. One that fails while handing things over keeps the new server,
-which may hold what moved. Either way, what either Relay fetched or packed
+stopped it. One that fails or is cancelled while handing things over keeps
+the new server, which may hold what moved. Either way, what either Relay fetched or packed
 for it is deleted. Undoing a copy is Hearth's own work: it only takes back
 what the copy did, so it goes on whatever the person may do by then, and
 its Relay requests go as Hearth's. Removing the partial copy is a deletion

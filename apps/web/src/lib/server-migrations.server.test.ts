@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { generateKeyPairSync, randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
 import {
@@ -6,7 +6,7 @@ import {
   builtinTailscaleBrickSource,
   relayPeerTransfersV1Feature,
 } from "@workspace/contracts"
-import { Effect, Exit, Fiber, Layer, Ref, Schedule, Scope } from "effect"
+import { Deferred, Effect, Exit, Fiber, Layer, Ref, Scope } from "effect"
 import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
@@ -15,6 +15,7 @@ import { AppCache } from "@/effect/cache"
 import { Database } from "@/effect/database"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { encryptPrivateKey } from "@/lib/relay-registry"
 import { deleteResource, keepResource } from "@/lib/resource-deletion.server"
 import type { ServerMigrationOptions } from "@/lib/server-migration-input"
 import {
@@ -42,8 +43,9 @@ import {
 } from "@/test/seed"
 
 // The Relays are the only fake (`relay` below): the game servers each has,
-// what it was asked to change, and the copies between them. Each test runs
-// Hearth's engine, one Hearth after another for a restart.
+// what the old one packed and the new one pulled for a copy, and requests
+// held as they arrive. Each test runs Hearth's engine, on the test clock,
+// one Hearth after another for a restart.
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
   relayConnectionFeatures: () => new Set([relayPeerTransfersV1Feature]),
@@ -66,6 +68,13 @@ vi.mock("@/lib/authorization-delivery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/authorization-delivery")>()),
   wakeAuthorizationDelivery: () => undefined,
 }))
+
+// Hearth signs each pull's grant with the key it's paired to the old Relay
+// under.
+vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
+const oldRelayKey = generateKeyPairSync("ed25519")
+  .privateKey.export({ format: "pem", type: "pkcs8" })
+  .toString()
 
 afterAll(async () => {
   await stopScheduleDeliveries()
@@ -99,26 +108,39 @@ interface FakeServer {
 }
 
 const relay = {
-  // What each was asked to change, as `<relay> <operation> <id>`.
-  changes: [] as Array<string>,
+  // What the old Relay packed, by transfer: packed once it's looked at.
+  artifacts: new Map<string, "packing" | "ready">(),
+  // Pulls that keep pulling until released.
+  copyHeld: false,
+  // The next request of each operation, answered once released.
+  held: new Map<string, ReturnType<typeof hold>>(),
   journal: new Map<string, unknown>(),
   // New servers by name that stay provisioning until released.
   provisioningHeld: new Set<string>(),
-  // Copies that keep pulling until released.
-  copyHeld: false,
+  // What the new Relay pulled, by transfer.
+  pulls: new Map<string, "pulling" | "cancelled">(),
   servers: new Map<string, FakeServer>(),
-  transfers: new Map<string, "pulling" | "cancelled" | "discarded">(),
 }
 
 const serverKey = (relayId: string, id: string) => `${relayId}/${id}`
 
 function resetRelay() {
-  relay.changes.length = 0
+  relay.artifacts.clear()
+  relay.copyHeld = false
+  relay.held.clear()
   relay.journal.clear()
   relay.provisioningHeld.clear()
-  relay.copyHeld = false
+  relay.pulls.clear()
   relay.servers.clear()
-  relay.transfers.clear()
+}
+
+function hold(operation: string) {
+  const held = {
+    reached: Deferred.makeUnsafe<void>(),
+    release: Deferred.makeUnsafe<void>(),
+  }
+  relay.held.set(operation, held)
+  return held
 }
 
 function releaseProvisioning(name: string) {
@@ -158,13 +180,31 @@ function instanceOf(relayId: string, id: string) {
   }
 }
 
+// Answered once acted on, after the request is released if it's held.
 async function fakeRelayRpc(
   relayId: string,
   operation: string,
   payload: Record<string, unknown>,
   frame: { operationId?: string }
 ): Promise<unknown> {
+  const result = answer(relayId, operation, payload, frame)
+  const held = relay.held.get(operation)
+  if (held) {
+    relay.held.delete(operation)
+    Deferred.doneUnsafe(held.reached, Exit.void)
+    await Effect.runPromise(Deferred.await(held.release))
+  }
+  return result
+}
+
+function answer(
+  relayId: string,
+  operation: string,
+  payload: Record<string, unknown>,
+  frame: { operationId?: string }
+): unknown {
   const id = String(payload.instanceId ?? payload.id ?? payload.rootId ?? "")
+  const transferId = String(payload.transferId)
   switch (operation) {
     case "operation.get":
       return (
@@ -206,7 +246,7 @@ async function fakeRelayRpc(
         status: "ready",
       }
     case "transfer.pull.get": {
-      const state = relay.transfers.get(String(payload.transferId))
+      const state = relay.pulls.get(transferId)
       if (!state) return null
       return {
         createdAt: at,
@@ -214,21 +254,29 @@ async function fakeRelayRpc(
         error: null,
         receivedBytes: 10,
         size: 100,
-        state:
-          state === "pulling"
-            ? relay.copyHeld
-              ? "pulling"
-              : "completed"
-            : "cancelled",
+        state: state === "pulling" && !relay.copyHeld ? "completed" : state,
         target: { path: "", rootId: id },
-        transferId: payload.transferId,
+        transferId,
         updatedAt: at,
       }
     }
-    case "transfer.source.get":
-      return null
+    case "transfer.source.get": {
+      const state = relay.artifacts.get(transferId)
+      if (!state) return null
+      relay.artifacts.set(transferId, "ready")
+      return {
+        createdAt: at,
+        entries: state === "ready" ? 1 : null,
+        error: null,
+        expiresAt: at,
+        rootId: id,
+        sha256: state === "ready" ? "a".repeat(64) : null,
+        size: state === "ready" ? 100 : null,
+        state,
+        transferId,
+      }
+    }
   }
-  relay.changes.push(`${relayId} ${operation} ${id}`)
   const key = serverKey(relayId, id)
   let result: unknown = {}
   switch (operation) {
@@ -258,17 +306,24 @@ async function fakeRelayRpc(
       break
     }
     case "transfer.source.prepare":
-      if (!relay.transfers.has(String(payload.transferId))) {
-        relay.transfers.set(String(payload.transferId), "pulling")
+      if (!relay.artifacts.has(transferId)) {
+        relay.artifacts.set(transferId, "packing")
       }
+      break
+    case "transfer.pull.start":
+      // Only what the old Relay packed, under a grant Hearth signed.
+      if (relay.artifacts.get(transferId) !== "ready" || !payload.grant) {
+        throw new Error("Nothing is packed for this grant")
+      }
+      if (!relay.pulls.has(transferId)) relay.pulls.set(transferId, "pulling")
+      // Its record is read on the next look.
+      result = null
       break
     case "transfer.pull.cancel":
-      relay.transfers.set(String(payload.transferId), "cancelled")
+      relay.pulls.set(transferId, "cancelled")
       break
     case "transfer.source.discard":
-      if (relay.transfers.get(String(payload.transferId)) === "pulling") {
-        relay.transfers.set(String(payload.transferId), "discarded")
-      }
+      relay.artifacts.delete(transferId)
       break
     case "resource.freeze":
       result = { frozen: true }
@@ -320,7 +375,7 @@ const hearths = Effect.gen(function* () {
     )
     yield* Ref.set(current, engine)
     return scope
-  })
+  }).pipe(driven)
   return { service, startHearth }
 })
 
@@ -332,33 +387,64 @@ const disabledCache = Layer.succeed(AppCache)({
   set: () => Effect.void,
 })
 
+// Moves the test clock on a little each time MySQL answers, so the steps'
+// waits and the engine's own run about as they would beside the database,
+// until `read` finds what it waits for.
+const until = <A, E, R>(
+  read: Effect.Effect<A, E, R>,
+  done: (value: A) => boolean
+) =>
+  Effect.gen(function* () {
+    const database = yield* Database
+    for (let elapsed = 0; elapsed < 10 * 60_000; elapsed += 2) {
+      const value = yield* read
+      if (done(value)) return value
+      yield* database.queryRows("test.tick", "SELECT 1")
+      yield* TestClock.adjust("2 millis")
+    }
+    return yield* Effect.die("It never came")
+  })
+
+const reached = (held: ReturnType<typeof hold>) =>
+  until(Deferred.isDone(held.reached), Boolean)
+
+// Runs `effect` as the test clock moves on beside it.
+const driven = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(effect)
+    yield* until(
+      Effect.sync(() => fiber.pollUnsafe()),
+      (exit) => exit !== undefined
+    )
+    return yield* Fiber.join(fiber)
+  })
+
 // Closed in full, so the next Hearth takes over the engine's shards at once:
 // a step waiting in a window is cut off after the engine's grace.
 const stopHearth = (scope: Scope.Closeable) =>
-  Scope.close(scope, Exit.void).pipe(Effect.timeoutOption("30 seconds"))
+  driven(Scope.close(scope, Exit.void))
 
-const operationsEnded = selectRows<{ state: string }>("operation").pipe(
-  Effect.repeat({
-    schedule: Schedule.spaced("100 millis"),
-    until: (rows) =>
-      rows.every((row) =>
-        ["cancelled", "failed", "interrupted", "succeeded"].includes(row.state)
-      ),
-  }),
-  Effect.timeoutOption("30 seconds")
+const operationsEnded = until(
+  selectRows<{ state: string }>("operation"),
+  (rows) =>
+    rows.every((row) =>
+      ["cancelled", "failed", "interrupted", "succeeded"].includes(row.state)
+    )
 )
 
 // A fresh database with the mover, both Relays, and two game servers on the
 // old Relay, both running.
 const seed = Effect.gen(function* () {
-  yield* operationsEnded
   yield* resetDatabase
   resetRelay()
   yield* insertUser(mover.id, {
     emailVerifiedAt: new Date(at),
     role: "admin",
   })
-  yield* insertRelay(oldRelay, { name: "Old" })
+  yield* insertRelay(oldRelay, {
+    client_private_key_ciphertext: encryptPrivateKey(oldRelayKey),
+    name: "Old",
+  })
   yield* insertRelay(newRelay, { name: "New" })
   for (const [id, name] of [
     [survival, "Survival"],
@@ -411,11 +497,10 @@ const start = (
       name: "Survival",
       relayId: oldRelay,
     },
-  }).pipe(Effect.provideService(OperationsEngineService, service))
+  }).pipe(Effect.provideService(OperationsEngineService, service), driven)
 }
 
 interface MigrationRecord {
-  backup_id: string | null
   destination_instance_id: string
   error: string | null
   id: string
@@ -424,15 +509,6 @@ interface MigrationRecord {
 }
 
 const migrations = selectRows<MigrationRecord>("server_migration")
-
-const until = <A, E, R>(
-  read: Effect.Effect<A, E, R>,
-  done: (value: A) => boolean
-) =>
-  read.pipe(
-    Effect.repeat({ schedule: Schedule.spaced("100 millis"), until: done }),
-    Effect.timeout("60 seconds")
-  )
 
 const migrationUntil = (id: string, done: (row: MigrationRecord) => boolean) =>
   until(
@@ -459,6 +535,7 @@ const deletionUntil = (resourceId: string, statuses: Array<string>) =>
     (row) => row !== undefined && statuses.includes(row.status)
   ).pipe(Effect.map((row) => row!))
 
+// A copy's backup first is named after it.
 const finishBackup = (backupId: string) =>
   Effect.gen(function* () {
     const database = yield* Database
@@ -521,7 +598,7 @@ describeMysql("Server migrations", () => {
           assert.strictEqual(serversOn(newRelay).length, 3)
           // A duplicate leaves the old server as it was.
           assert.strictEqual(serverState(oldRelay, survival), "running")
-        }).pipe(TestClock.withLive),
+        }),
       180_000
     )
 
@@ -574,7 +651,7 @@ describeMysql("Server migrations", () => {
 
           assert.match(duringMove, /Moving this game server is in progress/)
           assert.strictEqual(duringCopy, "written")
-        }).pipe(TestClock.withLive),
+        }),
       180_000
     )
 
@@ -605,21 +682,18 @@ describeMysql("Server migrations", () => {
           yield* restart
           releaseProvisioning("Moved")
           // Again once the backup first is reserved.
-          const { backup_id: backupId } = yield* migrationUntil(
-            id,
-            (row) => row.backup_id !== null
-          )
           yield* until(
             selectRows<{ id: string }>("backup"),
             (rows) => rows.length === 1
           )
           yield* restart
-          yield* finishBackup(backupId!)
-          // And once the old server has stopped, as its files copy.
-          relay.copyHeld = true
-          yield* migrationUntil(id, (row) => row.step === "copy")
+          yield* finishBackup(id)
+          // And once the old Relay packed the files, as the new one is asked
+          // to pull them, before it answers.
+          const pull = hold("transfer.pull.start")
+          yield* reached(pull)
           yield* restart
-          relay.copyHeld = false
+          yield* Deferred.succeed(pull.release, undefined)
           const row = yield* migrationUntil(id, ended)
           yield* operationsEnded
           yield* stopHearth(hearth)
@@ -633,8 +707,11 @@ describeMysql("Server migrations", () => {
             1
           )
           assert.strictEqual((yield* selectRows("backup")).length, 1)
+          // Pulled once, and what was packed for it deleted.
+          assert.deepStrictEqual([...relay.pulls.values()], ["pulling"])
+          assert.deepStrictEqual([...relay.artifacts], [])
           assert.strictEqual(serverState(oldRelay, survival), "stopped")
-        }).pipe(TestClock.withLive),
+        }),
       180_000
     )
 
@@ -665,38 +742,17 @@ describeMysql("Server migrations", () => {
           yield* deletionUntil(earlyCopy, ["completed"])
           yield* operationsEnded
 
-          // Cancelled while its files copy, the old server stopped for it.
-          relay.copyHeld = true
-          const late = yield* start(service, {
-            mode: "migrate",
-            name: "Late",
-          })
-          const { destination_instance_id: lateCopy } = yield* migrationUntil(
-            late,
-            (row) => row.step === "copy"
-          )
-          yield* until(
-            Effect.sync(() => serverState(oldRelay, survival)),
-            (state) => state === "stopped"
-          )
-          yield* cancelServerMigrationEffect(mover.id, late)
-          const lateRow = yield* migrationUntil(late, ended)
-          yield* deletionUntil(lateCopy, ["completed"])
-          yield* operationsEnded
           yield* stopHearth(hearth)
 
           assert.strictEqual(earlyRow.state, "cancelled")
-          assert.strictEqual(lateRow.state, "cancelled")
           assert.deepStrictEqual(serversOn(newRelay), [])
           assert.strictEqual(serverState(oldRelay, survival), "running")
-          // What the copy packed or fetched is gone.
-          assert.include([...relay.transfers.values()], "cancelled")
-        }).pipe(TestClock.withLive),
+        }),
       180_000
     )
 
     it.effect(
-      "hands a finished move's old server to deletion, unless a cancel came first",
+      "hands a finished move's old server to deletion, unless a cancel came first, and lets any other handover be cancelled",
       () =>
         Effect.gen(function* () {
           const { service, startHearth } = yield* hearths
@@ -704,8 +760,9 @@ describeMysql("Server migrations", () => {
           const hearth = yield* startHearth
           const deleting = { deleteSource: {} }
 
-          // Cancelled just before its files finish copying: it ends
-          // cancelled, never handing the old server over.
+          // Cancelled just before its files finish copying, the old server
+          // stopped for it: it ends cancelled, never handing the old server
+          // over, and what it packed and pulled is deleted.
           relay.copyHeld = true
           const cancelled = yield* start(service, {
             chosen: deleting,
@@ -726,21 +783,22 @@ describeMysql("Server migrations", () => {
           )
           const runningAfterCancel = serverState(oldRelay, survival)
 
-          // Left to finish, it asks for the old server's final backup and
-          // deletion last, which runs once the move ends.
+          // Left to finish, it can't be cancelled while it hands over, and
+          // asks for the old server's final backup and deletion last, which
+          // runs once the move ends.
+          const handingOver = hold("instance.network.routes.read")
           const moved = yield* start(service, {
-            chosen: deleting,
+            chosen: { ...deleting, moveWebRoutes: true },
             mode: "migrate",
             name: "Moved",
           })
-          const { destination_instance_id: copy } = yield* migrationUntil(
-            moved,
-            (row) => row.step === "finish"
-          )
+          yield* reached(handingOver)
           const refused = yield* cancelServerMigrationEffect(
             mover.id,
             moved
           ).pipe(Effect.flip)
+          const whileRefused = yield* migrationUntil(moved, () => true)
+          yield* Deferred.succeed(handingOver.release, undefined)
           const movedRow = yield* migrationUntil(moved, ended)
           const { backup_id: finalBackup } = yield* until(
             deletions.pipe(
@@ -753,20 +811,40 @@ describeMysql("Server migrations", () => {
           yield* finishBackup(finalBackup!)
           const deletion = yield* deletionUntil(survival, ["completed"])
           yield* operationsEnded
+
+          // A move that keeps its old server is cancelled as it hands over:
+          // it keeps the new server, and starts the old one again.
+          const keepingSource = hold("instance.network.routes.read")
+          const kept = yield* start(service, {
+            chosen: { moveWebRoutes: true },
+            mode: "migrate",
+            name: "Kept",
+            source: creative,
+          })
+          yield* reached(keepingSource)
+          yield* cancelServerMigrationEffect(mover.id, kept)
+          yield* Deferred.succeed(keepingSource.release, undefined)
+          const keptRow = yield* migrationUntil(kept, ended)
+          yield* operationsEnded
           yield* stopHearth(hearth)
 
           assert.strictEqual(cancelledRow.state, "cancelled")
           assert.isFalse(handedEarly)
           assert.strictEqual(runningAfterCancel, "running")
+          assert.include([...relay.pulls.values()], "cancelled")
+          assert.match(refused.message, /can't be cancelled/)
+          assert.strictEqual(whileRefused.state, "running")
           assert.strictEqual(movedRow.state, "completed")
-          assert.match(refused.message, /can't be cancelled|no longer running/)
           assert.strictEqual(deletion.final_backup, 1)
           assert.strictEqual(deletion.requested_by, mover.id)
-          assert.deepStrictEqual(serversOn(newRelay), [
-            serverKey(newRelay, copy),
-          ])
           assert.strictEqual(serverState(oldRelay, survival), "gone")
-        }).pipe(TestClock.withLive),
+          assert.strictEqual(keptRow.state, "cancelled")
+          assert.sameMembers(serversOn(newRelay), [
+            serverKey(newRelay, movedRow.destination_instance_id),
+            serverKey(newRelay, keptRow.destination_instance_id),
+          ])
+          assert.strictEqual(serverState(oldRelay, creative), "running")
+        }),
       180_000
     )
 
@@ -790,7 +868,7 @@ describeMysql("Server migrations", () => {
             provisioning: false,
             state: "stopped",
           })
-          relay.transfers.set("legacytransfer", "pulling")
+          relay.pulls.set("legacytransfer", "pulling")
           yield* insertInstance(newRelay, copy, { owner_id: mover.id })
           yield* insertLegacy({
             destination: copy,
@@ -838,71 +916,29 @@ describeMysql("Server migrations", () => {
           const undone = yield* migrationUntil(copying, ended)
           const kept = yield* migrationUntil(handedOver, ended)
           yield* deletionUntil(copy, ["completed"])
+          yield* operationsEnded
           yield* stopHearth(hearth)
 
           assert.strictEqual(undone.state, "failed")
           assert.match(undone.error ?? "", /Hearth was updated/)
           assert.deepStrictEqual(serversOn(newRelay), [])
           assert.strictEqual(serverState(oldRelay, survival), "running")
-          assert.strictEqual(relay.transfers.get("legacytransfer"), "cancelled")
+          assert.strictEqual(relay.pulls.get("legacytransfer"), "cancelled")
           assert.strictEqual(kept.state, "completed")
           assert.strictEqual(serverState(oldRelay, creative), "stopped")
-        }).pipe(TestClock.withLive),
+        }),
       180_000
-    )
-
-    it.effect(
-      "won't cancel a move handing over to deleting its old server",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          const deleting = randomUUID()
-          yield* insertLegacy({
-            deleteSource: true,
-            destination: "d4".repeat(20),
-            id: deleting,
-            operation: randomUUID(),
-            source: survival,
-            step: "finish",
-          })
-          const keeping = randomUUID()
-          yield* insertLegacy({
-            destination: "e5".repeat(20),
-            id: keeping,
-            operation: randomUUID(),
-            source: creative,
-            step: "finish",
-          })
-
-          const refused = yield* cancelServerMigrationEffect(
-            mover.id,
-            deleting
-          ).pipe(Effect.flip)
-          yield* cancelServerMigrationEffect(mover.id, keeping)
-
-          assert.match(refused.message, /can't be cancelled/)
-          const rows = yield* migrations
-          assert.strictEqual(
-            rows.find((row) => row.id === deleting)?.state,
-            "running"
-          )
-          assert.strictEqual(
-            rows.find((row) => row.id === keeping)?.state,
-            "cancelling"
-          )
-        })
     )
   })
 })
 
 // A migration as a Hearth from before migrations were operations recorded
-// it, with no operation; or, given one, as this Hearth does.
+// it, with no operation.
 function insertLegacy(row: {
   deleteSource?: boolean
   destination: string
   error?: string
   id: string
-  operation?: string
   source: string
   state?: "running" | "cancelling"
   step: string
@@ -918,7 +954,6 @@ function insertLegacy(row: {
     error: row.error ?? null,
     id: row.id,
     mode: "migrate",
-    operation_id: row.operation ?? null,
     options: JSON.stringify(
       options("migrate", { deleteSource: row.deleteSource ? {} : null })
     ),

@@ -444,26 +444,12 @@ export const cancelServerMigrationEffect = Effect.fn("serverMigrations.cancel")(
   }
 )
 
-// Cancelling one migration's task: only who started it may.
+// Cancelling one migration's task: only who started it may, as its write
+// requires.
 const cancelMigration = operation<{ readonly id: string }>()({
   name: "server.migration.cancel",
   doing: "Cancelling this copy",
-  authorize: ({ input, user }) =>
-    signedIn(user).pipe(
-      Effect.tap((person) =>
-        loadMigration(input.id).pipe(
-          Effect.flatMap((row) =>
-            row?.requested_by === person.id
-              ? Effect.void
-              : Effect.fail(
-                  new ServerMigrationError({
-                    message: "This copy is no longer running",
-                  })
-                )
-          )
-        )
-      )
-    ),
+  authorize: ({ user }) => signedIn(user),
   locks: ({ input }) => [exclusive(partKey(migrationKey(input.id), "task"))],
   run: ({ context: person, input }) =>
     cancelServerMigrationEffect(person.id, input.id),
@@ -485,7 +471,9 @@ const migrationSteps = (input: ServerMigrationInput, operationId: string) =>
       execute: recordMigration(input, operationId),
     })
     yield* checkpoint(input, "create")
-    yield* step("create", createDestination(input, options))
+    yield* step(input, "create", (actor) =>
+      createDestination(input, actor, options)
+    )
     yield* checkpoint(input, "provision")
     yield* watch(
       input,
@@ -496,77 +484,140 @@ const migrationSteps = (input: ServerMigrationInput, operationId: string) =>
     )
     if (options.backup) {
       yield* checkpoint(input, "backup")
-      const backupId = yield* Activity.make({
-        name: "backup",
-        success: Schema.String,
-        error: ServerMigrationError,
-        execute: reserveBackup(input).pipe(Effect.mapError(asMigrationError)),
-      })
+      yield* step(input, "backup", (actor) => reserveBackup(input, actor))
       yield* watch(input, "backup", PROVISION_WINDOWS, "the backup", () =>
-        backupAvailable(input, backupId)
+        backupAvailable(input)
       )
     }
     if (options.stopSource) {
       yield* checkpoint(input, "stop")
-      yield* step("stop", stopSource(input))
+      yield* step(input, "stop", (actor) => stopSource(input, actor))
       yield* watch(input, "stop", STOP_WINDOWS, "the server to stop", () =>
         sourceStopped(input)
       )
     }
     yield* checkpoint(input, "copy")
-    const transferId = yield* Activity.make({
-      name: "copy",
-      success: Schema.String,
-      error: ServerMigrationError,
-      execute: beginCopy(input).pipe(Effect.mapError(asMigrationError)),
-    })
-    yield* watch(input, "copy", null, "the files to copy", () =>
-      copied(input, transferId)
+    // The old server's Relay packs its whole folder, under the copy's
+    // transfer ID, so asking again asks under the same one.
+    yield* step(input, "copy", (actor) =>
+      beginRelayTransferEffect(
+        actor,
+        transferRequest(input),
+        transferIdOf(input)
+      )
     )
-    // From here what's handed over stays handed over.
-    const finishing = yield* Activity.make({
-      name: "finish",
-      success: Schema.Boolean,
-      execute: enterFinish(input.migrationId),
-    })
-    if (!finishing) return yield* new MigrationCancelled()
+    yield* watch(input, "copy", null, "the files to copy", () => copied(input))
+    // From here what's handed over stays handed over. A cancel accepted
+    // meanwhile stops it before its next part.
+    yield* checkpoint(input, "finish")
     // Before access is copied, so whoever moved it is given the access they
     // had to the old server rather than skipped as the copy's owner.
     if (input.mode === "migrate") {
-      yield* step("finish/owner", handOverOwner(input))
+      yield* step(input, "finish/owner", (actor) => handOverOwner(input, actor))
     }
-    if (options.copyAccess) yield* step("finish/access", copyAccess(input))
-    if (options.linkBackups) yield* step("finish/backups", linkBackups(input))
+    if (options.copyAccess) {
+      yield* step(input, "finish/access", (actor) =>
+        copyInstanceAccessEffect({
+          actorId: actor.id,
+          from: sideOf(input.source),
+          to: sideOf(input.destination),
+        }).pipe(
+          Effect.flatMap((userIds) =>
+            promiseEffect(() =>
+              publishResourceAccessChange(userIds, [input.destination.relayId])
+            )
+          )
+        )
+      )
+    }
+    if (options.linkBackups) {
+      yield* step(input, "finish/backups", (actor) =>
+        linkInstanceBackupsEffect({
+          from: sideOf(input.source),
+          linkedBy: actor.id,
+          to: sideOf(input.destination),
+        }).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              publishBackupChange(input.source.relayId)
+              publishBackupChange(input.destination.relayId)
+            })
+          )
+        )
+      )
+    }
     if (input.mode === "migrate" && options.moveDomain) {
-      yield* step("finish/domains", moveDomains(input))
+      yield* step(input, "finish/domains", (actor) =>
+        Effect.gen(function* () {
+          const destination = yield* relay(input.destination.relayId)
+          const instance = yield* snapshotInstance(
+            destination,
+            input.destination.instanceId,
+            actor.id
+          )
+          if (!instance) return yield* fail("The new server is gone")
+          yield* moveInstanceDomainsEffect(sideOf(input.source), {
+            ...instance,
+            relayId: destination.id,
+          })
+        })
+      )
     }
     if (input.mode === "migrate" && options.moveWebRoutes) {
-      yield* step("finish/routes", moveWebRoutes(input))
+      yield* step(input, "finish/routes", (actor) =>
+        moveWebRoutes(input, actor)
+      )
     }
     if (input.mode === "duplicate") {
-      yield* step(
-        "finish/restart",
-        actingUser(input).pipe(
-          Effect.andThen((actor) => restartSource(input.migrationId, actor))
-        )
+      yield* step(input, "finish/restart", (actor) =>
+        restartSource(input.migrationId, actor)
       )
     }
     // Last, once everything it held belongs to the copy: the old server is
     // backed up in full and then deleted, as deleting it with a final backup
-    // does, queued behind this move, which holds it until it ends.
-    if (input.mode === "migrate" && options.deleteSource) {
-      yield* step("finish/delete", deleteSource(input, options.deleteSource))
+    // does, queued behind this move, which holds it until it ends. Asking
+    // again finds the same deletion.
+    const deletion = options.deleteSource
+    if (input.mode === "migrate" && deletion) {
+      yield* step(input, "finish/delete", (actor) =>
+        requestResourceDeletionEffect({
+          finalBackup: true,
+          kind: "instance",
+          queued: true,
+          relayId: input.source.relayId,
+          resourceId: input.source.instanceId,
+          user: actor,
+          ...(deletion.storageId === undefined
+            ? {}
+            : { storageId: deletion.storageId }),
+        })
+      )
     }
     yield* endStep(input.migrationId, "completed", null)
   })
 
 // One step that changes something, run once, its failure kept for the
-// person.
-const step = <R>(name: string, effect: Effect.Effect<unknown, unknown, R>) =>
+// person. Unless the migration was cancelled meanwhile, it runs as the
+// person as their account is now, while they may still do what they asked.
+const step = <R>(
+  input: ServerMigrationInput,
+  name: string,
+  run: (actor: AuthenticatedUser) => Effect.Effect<unknown, unknown, R>
+) =>
   Activity.make({
     name,
-    error: ServerMigrationError,
-    execute: effect.pipe(Effect.asVoid, Effect.mapError(asMigrationError)),
+    error: Schema.Union([ServerMigrationError, MigrationCancelled]),
+    execute: Effect.gen(function* () {
+      const row = yield* loadMigration(input.migrationId)
+      if (row?.state !== "running") return yield* new MigrationCancelled()
+      const actor = yield* currentActingUser(input.requestedBy, input.actor)
+      yield* promiseEffect(() => requireMigrationPermissions(actor, input))
+      yield* run(actor)
+    }).pipe(
+      Effect.mapError((cause) =>
+        Schema.is(MigrationCancelled)(cause) ? cause : asMigrationError(cause)
+      )
+    ),
   })
 
 const Ending = Schema.Struct({
@@ -597,7 +648,9 @@ const endStep = (
     )
   )
 
-// Records the migration for its person, once, under its operation.
+// Records the migration for its person, once, under its operation, with the
+// IDs its backup first and its files' transfer take, so asking again asks
+// under the same ones.
 const recordMigration = (input: ServerMigrationInput, operationId: string) =>
   Effect.gen(function* () {
     const database = yield* Database
@@ -608,8 +661,9 @@ const recordMigration = (input: ServerMigrationInput, operationId: string) =>
          (id, operation_id, requested_by, actor, mode, source_relay_id,
           source_instance_id, source_name, destination_relay_id,
           destination_instance_id, destination_name, create_key, options,
-          state, step, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'create', ?, ?)
+          backup_id, transfer_id, state, step, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 'create',
+               ?, ?)
        ON DUPLICATE KEY UPDATE id = id`,
       [
         input.migrationId,
@@ -625,6 +679,8 @@ const recordMigration = (input: ServerMigrationInput, operationId: string) =>
         input.destination.name,
         input.createKey,
         JSON.stringify(input.options),
+        optionsOf(input).backup ? backupIdOf(input) : null,
+        transferIdOf(input),
         now,
         now,
       ]
@@ -657,25 +713,6 @@ const checkpoint = (input: ServerMigrationInput, next: MigrationStep) =>
     )
   )
 
-// Enters the last step, in one write that holds only while the migration
-// still runs: a cancel accepted first wins, and once it's in, a move that
-// deletes its old server can't be cancelled.
-const enterFinish = (id: string) =>
-  Effect.gen(function* () {
-    const database = yield* Database
-    const now = yield* Clock.currentTimeMillis
-    const entered = yield* database.execute(
-      "serverMigrations.finish",
-      `UPDATE ${databaseTable("server_migration")}
-          SET step = 'finish', updated_at = ?
-        WHERE id = ? AND state = 'running'`,
-      [now, id]
-    )
-    return entered.affectedRows > 0
-  }).pipe(untilMySqlAnswers)
-
-type Watched = "done" | "waiting" | "cancelled"
-
 // Waits for `check` to be done, a window a step, failing after `windows` of
 // them, unless it's null, and stopping once the migration is cancelled.
 const watch = <R>(
@@ -691,7 +728,20 @@ const watch = <R>(
         name: `${name}/${window}`,
         success: Schema.Literals(["done", "waiting", "cancelled"]),
         error: ServerMigrationError,
-        execute: Effect.suspend(() => watchWindow(input.migrationId, check())),
+        execute: Effect.gen(function* () {
+          const checking = check()
+          const until =
+            (yield* Clock.currentTimeMillis) + Duration.toMillis(WATCH_WINDOW)
+          while (true) {
+            if (yield* checking) return "done" as const
+            const row = yield* loadMigration(input.migrationId)
+            if (row?.state !== "running") return "cancelled" as const
+            if ((yield* Clock.currentTimeMillis) >= until) {
+              return "waiting" as const
+            }
+            yield* Effect.sleep(POLL)
+          }
+        }).pipe(Effect.mapError(asMigrationError)),
       })
       if (found === "done") return
       if (found === "cancelled") return yield* new MigrationCancelled()
@@ -703,31 +753,15 @@ const watch = <R>(
     }
   })
 
-const watchWindow = <R>(
-  id: string,
-  check: Effect.Effect<boolean, unknown, R>
-): Effect.Effect<Watched, ServerMigrationError, R | Database> =>
-  Effect.gen(function* () {
-    const until =
-      (yield* Clock.currentTimeMillis) + Duration.toMillis(WATCH_WINDOW)
-    while (true) {
-      if (yield* check) return "done" as const
-      const row = yield* loadMigration(id)
-      if (row?.state !== "running") return "cancelled" as const
-      if ((yield* Clock.currentTimeMillis) >= until) return "waiting" as const
-      yield* Effect.sleep(POLL)
-    }
-  }).pipe(Effect.mapError(asMigrationError))
-
 // Creates the copy, stopped, from the exact Brick the old server was built
 // from, with its settings, and its limits unless it was given its own.
 // Repeating it resumes the same server, under the same provisioning key.
 const createDestination = (
   input: ServerMigrationInput,
+  actor: AuthenticatedUser,
   options: ServerMigrationOptions
 ) =>
   Effect.gen(function* () {
-    const actor = yield* actingUser(input)
     const [source, destination] = yield* relays(input)
     const instance = yield* snapshotInstance(
       source,
@@ -819,12 +853,10 @@ const provisioned = (input: ServerMigrationInput) =>
   })
 
 // A full archive of the old server, to the destinations settled when it was
-// asked for, finished before the old server stops. Its ID is recorded before
-// it's reserved, so a step cut off between the two reserves it under that ID,
-// once.
-const reserveBackup = (input: ServerMigrationInput) =>
+// asked for, finished before the old server stops. Under the copy's backup
+// ID, a step cut off once it's reserved finds it, so it's reserved once.
+const reserveBackup = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
   Effect.gen(function* () {
-    const actor = yield* actingUser(input)
     for (const storageId of new Set(input.backupStorageIds)) {
       if (storageId === null) continue
       yield* promiseEffect(() =>
@@ -837,16 +869,8 @@ const reserveBackup = (input: ServerMigrationInput) =>
         })
       )
     }
-    const database = yield* Database
-    yield* database.execute(
-      "serverMigrations.backupId",
-      `UPDATE ${databaseTable("server_migration")}
-          SET backup_id = ? WHERE id = ? AND backup_id IS NULL`,
-      [randomUUID(), input.migrationId]
-    )
-    const backupId = (yield* loadMigration(input.migrationId))?.backup_id
-    if (!backupId) return yield* fail("The copy is gone")
-    if (yield* getBackupCatalogRecordEffect(backupId)) return backupId
+    const backupId = backupIdOf(input)
+    if (yield* getBackupCatalogRecordEffect(backupId)) return
     const [source, destination] = yield* relays(input)
     const dispatch = yield* reserveInstanceBackupEffect({
       backupId,
@@ -869,10 +893,9 @@ const reserveBackup = (input: ServerMigrationInput) =>
       const { dispatchBackupTask } = await import("@/lib/backup-reconciliation")
       await dispatchBackupTask(source, dispatch, actor.id)
     }).pipe(Effect.ignore)
-    return backupId
   })
 
-const backupAvailable = (input: ServerMigrationInput, backupId: string) =>
+const backupAvailable = (input: ServerMigrationInput) =>
   Effect.gen(function* () {
     // The Relay's tasks are read in, and a backup not yet queued there is;
     // one that can't be now is looked at again on the next check.
@@ -882,7 +905,7 @@ const backupAvailable = (input: ServerMigrationInput, backupId: string) =>
         await import("@/lib/backup-reconciliation")
       await reconcileRelayBackups(source)
     }).pipe(Effect.ignore)
-    const backup = yield* getBackupCatalogRecordEffect(backupId)
+    const backup = yield* getBackupCatalogRecordEffect(backupIdOf(input))
     if (!backup || backup.status === "failed" || backup.status === "deleted") {
       return yield* fail(
         `The backup before copying failed${backup?.taskError ? `: ${backup.taskError}` : ""}`
@@ -893,9 +916,8 @@ const backupAvailable = (input: ServerMigrationInput, backupId: string) =>
 
 // Stops the old server, remembering whether it ran, so a copy taken while
 // nothing writes to it is consistent.
-const stopSource = (input: ServerMigrationInput) =>
+const stopSource = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
   Effect.gen(function* () {
-    const actor = yield* actingUser(input)
     const source = yield* relay(input.source.relayId)
     const row = yield* loadMigration(input.migrationId)
     // Asked again before the server stops, since other work may have filled
@@ -938,34 +960,16 @@ const sourceStopped = (input: ServerMigrationInput) =>
     return !current || current.observedState === "stopped"
   })
 
-// Has the old server's Relay start packing its whole folder, under a
-// transfer ID recorded first, so asking again asks under the same one.
-const beginCopy = (input: ServerMigrationInput) =>
-  Effect.gen(function* () {
-    const actor = yield* actingUser(input)
-    const database = yield* Database
-    yield* database.execute(
-      "serverMigrations.transferId",
-      `UPDATE ${databaseTable("server_migration")}
-          SET transfer_id = ? WHERE id = ? AND transfer_id IS NULL`,
-      [randomUUID().replaceAll("-", ""), input.migrationId]
-    )
-    const transferId = (yield* loadMigration(input.migrationId))?.transfer_id
-    if (!transferId) return yield* fail("The copy is gone")
-    yield* beginRelayTransferEffect(actor, transferRequest(input), transferId)
-    return transferId
-  })
-
 // Copies the folder into the new server's, Relay to Relay, publishing
 // progress as it goes.
-const copied = (input: ServerMigrationInput, transferId: string) => {
+const copied = (input: ServerMigrationInput) => {
   let publishedAt = 0
   return Effect.gen(function* () {
     const actor = yield* currentActingUser(input.requestedBy, input.actor)
     const status = yield* advanceRelayTransferEffect(
       actor,
       transferRequest(input),
-      transferId
+      transferIdOf(input)
     )
     if (status.phase === "failed" || status.phase === "cancelled") {
       return yield* fail(
@@ -991,15 +995,19 @@ const copied = (input: ServerMigrationInput, transferId: string) => {
 
 // A moved server keeps its owner: the copy passes from whoever moved it to
 // the old server's owner, and both see their authority change.
-const handOverOwner = (input: ServerMigrationInput) =>
+const handOverOwner = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
   Effect.gen(function* () {
-    const actor = yield* actingUser(input)
-    const ownerId = yield* instanceOwner(
-      input.source.relayId,
-      input.source.instanceId
-    )
-    if (!ownerId || ownerId === actor.id) return
     const database = yield* Database
+    const [owner] = yield* database.queryRows<
+      RowDataPacket & { owner_id: string | null }
+    >(
+      "serverMigrations.owner",
+      `SELECT owner_id FROM ${databaseTable("instance")}
+        WHERE relay_id = ? AND instance_id = ? LIMIT 1`,
+      [input.source.relayId, input.source.instanceId]
+    )
+    const ownerId = owner?.owner_id
+    if (!ownerId || ownerId === actor.id) return
     yield* database.transaction(
       "serverMigrations.handOverOwner",
       (transaction) =>
@@ -1034,50 +1042,8 @@ const handOverOwner = (input: ServerMigrationInput) =>
     )
   })
 
-const copyAccess = (input: ServerMigrationInput) =>
+const moveWebRoutes = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
   Effect.gen(function* () {
-    const actor = yield* actingUser(input)
-    const userIds = yield* copyInstanceAccessEffect({
-      actorId: actor.id,
-      from: sideOf(input.source),
-      to: sideOf(input.destination),
-    })
-    yield* promiseEffect(() =>
-      publishResourceAccessChange(userIds, [input.destination.relayId])
-    )
-  })
-
-const linkBackups = (input: ServerMigrationInput) =>
-  Effect.gen(function* () {
-    const actor = yield* actingUser(input)
-    yield* linkInstanceBackupsEffect({
-      from: sideOf(input.source),
-      linkedBy: actor.id,
-      to: sideOf(input.destination),
-    })
-    publishBackupChange(input.source.relayId)
-    publishBackupChange(input.destination.relayId)
-  })
-
-const moveDomains = (input: ServerMigrationInput) =>
-  Effect.gen(function* () {
-    const actor = yield* actingUser(input)
-    const destination = yield* relay(input.destination.relayId)
-    const instance = yield* snapshotInstance(
-      destination,
-      input.destination.instanceId,
-      actor.id
-    )
-    if (!instance) return yield* fail("The new server is gone")
-    yield* moveInstanceDomainsEffect(sideOf(input.source), {
-      ...instance,
-      relayId: destination.id,
-    })
-  })
-
-const moveWebRoutes = (input: ServerMigrationInput) =>
-  Effect.gen(function* () {
-    const actor = yield* actingUser(input)
     const [source, destination] = yield* relays(input)
     const state = relayInstanceWebRouteStateSchema.parse(
       yield* rpc(source, "instance.network.routes.read", actor.id, {
@@ -1118,27 +1084,6 @@ const moveWebRoutes = (input: ServerMigrationInput) =>
     )
   })
 
-// Asks for the old server's final backup and deletion, queued behind this
-// move. Asking again finds the same deletion.
-const deleteSource = (
-  input: ServerMigrationInput,
-  deletion: { readonly storageId?: string | null | undefined }
-) =>
-  Effect.gen(function* () {
-    const actor = yield* actingUser(input)
-    yield* requestResourceDeletionEffect({
-      finalBackup: true,
-      kind: "instance",
-      queued: true,
-      relayId: input.source.relayId,
-      resourceId: input.source.instanceId,
-      user: actor,
-      ...(deletion.storageId === undefined
-        ? {}
-        : { storageId: deletion.storageId }),
-    })
-  })
-
 // The old server goes back to running if it ran before the copy stopped it:
 // as the person, as a duplicate's last part, or as Hearth, undoing the copy.
 const restartSource = (id: string, actor: AuthenticatedUser | null) =>
@@ -1164,8 +1109,8 @@ const restartSource = (id: string, actor: AuthenticatedUser | null) =>
 /**
  * Ends a migration and tells its person. A copy that didn't finish is
  * removed, and the old server is started again if the copy stopped it. One
- * that failed while handing things over keeps its new server, since it may
- * hold what was already moved to it.
+ * that failed or was cancelled while handing things over keeps its new
+ * server, since it may hold what was already moved to it.
  *
  * Undoing it is Hearth's own work, whoever asked: it only takes back what
  * the copy itself did, so it goes on even once the person can't act, and
@@ -1184,6 +1129,7 @@ const endMigrationEffect = (
     if (!row) return yield* Effect.die(`Server migration ${id} is gone`)
     // Ended already, by this same step cut short after it wrote.
     if (row.state !== "running" && row.state !== "cancelling") {
+      yield* notifyEnded(row, row.state, row.error)
       return {
         error: row.error,
         state: row.state as "completed" | "failed" | "cancelled",
@@ -1205,9 +1151,26 @@ const endMigrationEffect = (
           row.source_instance_id
         )
       )
-    const state = sourceDeleting ? "completed" : ending
-    const error = sourceDeleting ? null : endingError
     const database = yield* Database
+    let state = sourceDeleting ? "completed" : ending
+    const error = sourceDeleting ? null : endingError
+    if (state === "completed" && !sourceDeleting) {
+      // Finished only while no cancel was accepted, in one write: a cancel
+      // accepted first wins, and it's undone as any cancelled copy is.
+      const finished = yield* database.execute(
+        "serverMigrations.complete",
+        `UPDATE ${databaseTable("server_migration")}
+            SET state = 'completed', error = NULL, finished_at = ?,
+                updated_at = ?
+          WHERE id = ? AND state = 'running'`,
+        [yield* Clock.currentTimeMillis, yield* Clock.currentTimeMillis, id]
+      )
+      if (finished.affectedRows > 0) {
+        yield* notifyEnded(row, "completed", null)
+        return { error: null, state: "completed" as const }
+      }
+      state = "cancelled"
+    }
     const cleanup: Array<string> = []
     if (state !== "completed") {
       // Shown as ending, and no longer cancellable, while it's undone.
@@ -1219,12 +1182,16 @@ const endMigrationEffect = (
         [error?.slice(0, 512) ?? null, yield* Clock.currentTimeMillis, id]
       )
       publishMigrationChange(row.requested_by)
-      if (row.transfer_id) yield* discardTransfer(row, row.transfer_id)
+      if (row.transfer_id && (row.step === "copy" || row.step === "finish")) {
+        yield* discardTransfer(row, row.transfer_id)
+      }
       if (row.step !== "finish" && (yield* destinationRecorded(row))) {
         const person = yield* currentActingUser(
           row.requested_by,
           row.actor
-        ).pipe(Effect.orElseSucceed(() => savedActor(row.actor)))
+        ).pipe(
+          Effect.orElseSucceed(() => parsed(row.actor) as AuthenticatedUser)
+        )
         yield* requestResourceDeletionEffect({
           finalBackup: false,
           kind: "instance",
@@ -1253,30 +1220,6 @@ const endMigrationEffect = (
       )
     }
     const message = [error, ...cleanup].filter(Boolean).join(". ") || null
-    yield* notifyUsersEffect([row.requested_by], `server.migration:${row.id}`, {
-      destination: {
-        id: row.destination_instance_id,
-        name: row.destination_name,
-        relayId: row.destination_relay_id,
-        type: "instance",
-      },
-      ...(message ? { error: message } : {}),
-      ...(state === "completed" &&
-      row.mode === "migrate" &&
-      options.deleteSource
-        ? { sourceDeleting: true }
-        : {}),
-      kind: "server.migration",
-      migrationId: row.id,
-      mode: row.mode,
-      outcome: state,
-      source: {
-        id: row.source_instance_id,
-        name: row.source_name,
-        relayId: row.source_relay_id,
-        type: "instance",
-      },
-    })
     yield* database.execute(
       "serverMigrations.end",
       `UPDATE ${databaseTable("server_migration")}
@@ -1290,38 +1233,68 @@ const endMigrationEffect = (
         id,
       ]
     )
-    publishNotificationChange([row.requested_by])
-    publishMigrationChange(row.requested_by)
+    yield* notifyEnded(row, state, message)
     return { error: message, state }
   })
 
+// Tells the migration's person how it ended, once however often it's told.
+const notifyEnded = (
+  row: MigrationRow,
+  state: "completed" | "failed" | "cancelled",
+  message: string | null
+) =>
+  notifyUsersEffect([row.requested_by], `server.migration:${row.id}`, {
+    destination: {
+      id: row.destination_instance_id,
+      name: row.destination_name,
+      relayId: row.destination_relay_id,
+      type: "instance",
+    },
+    ...(message ? { error: message } : {}),
+    ...(state === "completed" &&
+    row.mode === "migrate" &&
+    rowOptions(row).deleteSource
+      ? { sourceDeleting: true }
+      : {}),
+    kind: "server.migration",
+    migrationId: row.id,
+    mode: row.mode,
+    outcome: state,
+    source: {
+      id: row.source_instance_id,
+      name: row.source_name,
+      relayId: row.source_relay_id,
+      type: "instance",
+    },
+  }).pipe(
+    Effect.tap(() =>
+      Effect.sync(() => {
+        publishNotificationChange([row.requested_by])
+        publishMigrationChange(row.requested_by)
+      })
+    )
+  )
+
 // Deletes what either Relay packed or fetched for the copy, as Hearth's.
 const discardTransfer = (row: MigrationRow, transferId: string) =>
-  Effect.gen(function* () {
-    const reference = (rootId: string) => ({ rootId, transferId })
-    yield* relay(row.destination_relay_id).pipe(
-      Effect.flatMap((destination) =>
-        rpc(
-          destination,
-          "transfer.pull.cancel",
-          undefined,
-          reference(row.destination_instance_id)
-        )
+  Effect.forEach(
+    [
+      [
+        "transfer.pull.cancel",
+        row.destination_relay_id,
+        row.destination_instance_id,
+      ],
+      ["transfer.source.discard", row.source_relay_id, row.source_instance_id],
+    ] as const,
+    ([operation, relayId, rootId]) =>
+      relay(relayId).pipe(
+        Effect.flatMap((found) =>
+          rpc(found, operation, undefined, { rootId, transferId })
+        ),
+        Effect.ignore
       ),
-      Effect.ignore
-    )
-    yield* relay(row.source_relay_id).pipe(
-      Effect.flatMap((source) =>
-        rpc(
-          source,
-          "transfer.source.discard",
-          undefined,
-          reference(row.source_instance_id)
-        )
-      ),
-      Effect.ignore
-    )
-  })
+    { discard: true }
+  )
 
 // Whether Hearth recorded the copy, as provisioning does before it asks the
 // Relay, and keeps when it can't tell whether the Relay made it.
@@ -1437,15 +1410,6 @@ export function startLegacyServerMigrationRollback(): void {
 
 // ---------------------------------------------------------- helpers
 
-// The person as their account is now, while they may still do what they
-// asked.
-const actingUser = (input: ServerMigrationInput) =>
-  currentActingUser(input.requestedBy, input.actor).pipe(
-    Effect.tap((actor) =>
-      promiseEffect(() => requireMigrationPermissions(actor, input))
-    )
-  )
-
 // Fails unless the copy still fits: its limits, before it's created, and
 // the disk the move needs on both Relays.
 const requireRoom = (
@@ -1482,20 +1446,6 @@ const loadMigration = (id: string) =>
       [id]
     )
     return rows[0] ?? null
-  })
-
-const instanceOwner = (relayId: string, instanceId: string) =>
-  Effect.gen(function* () {
-    const database = yield* Database
-    const rows = yield* database.queryRows<
-      RowDataPacket & { owner_id: string | null }
-    >(
-      "serverMigrations.owner",
-      `SELECT owner_id FROM ${databaseTable("instance")}
-        WHERE relay_id = ? AND instance_id = ? LIMIT 1`,
-      [relayId, instanceId]
-    )
-    return rows[0]?.owner_id ?? null
   })
 
 function relay(id: string) {
@@ -1552,6 +1502,15 @@ function rpc(
   })
 }
 
+// A copy's backup first and its files' transfer are named after it.
+function backupIdOf(input: ServerMigrationInput) {
+  return input.migrationId
+}
+
+function transferIdOf(input: ServerMigrationInput) {
+  return input.migrationId.replaceAll("-", "")
+}
+
 function transferRequest(input: ServerMigrationInput): RelayTransferRequest {
   return {
     destination: {
@@ -1581,15 +1540,12 @@ function optionsOf(
 }
 
 function rowOptions(row: MigrationRow): ServerMigrationOptions {
-  return serverMigrationOptionsSchema.parse(
-    typeof row.options === "string" ? JSON.parse(row.options) : row.options
-  )
+  return optionsOf({ options: parsed(row.options) })
 }
 
-function savedActor(saved: unknown): AuthenticatedUser {
-  return (
-    typeof saved === "string" ? JSON.parse(saved) : saved
-  ) as AuthenticatedUser
+// A JSON column, as mysql2 reads it: parsed, or still its text.
+function parsed(saved: unknown): unknown {
+  return typeof saved === "string" ? JSON.parse(saved) : saved
 }
 
 function migrationView(row: MigrationRow): ServerMigrationView {
