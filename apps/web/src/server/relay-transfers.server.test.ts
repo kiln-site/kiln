@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
-import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
 
 import { Database } from "@/effect/database"
@@ -27,11 +26,14 @@ import { advanceRelayTransferEffect } from "./relay-transfers.server"
 // destination hasn't started pulling it, and every change asked of them is
 // recorded.
 const relayChanges = vi.hoisted(() => [] as Array<string>)
+// Called as the source's packed transfer is read, after the first check.
+const onSourceRead = vi.hoisted(() => ({ current: () => {} }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
   relayRpc: async (_relay: unknown, operation: string, payload: unknown) => {
     if (operation === "transfer.pull.get") return null
     if (operation === "transfer.source.get") {
+      onSourceRead.current()
       return {
         createdAt: 0,
         entries: 1,
@@ -112,21 +114,29 @@ describeMysql("Copying files between Relays", () => {
           yield* allow(destinationId, ["instance.files.write"])
 
           // Something holds the destination whole, as a restore does.
+          const held = yield* Deferred.make<void>()
           const released = yield* Deferred.make<void>()
           const holder = yield* inLanes(
             "test.restore",
             "Restoring this game server",
             [exclusive(fileRootKey(relayId, destinationId))],
-            Deferred.await(released)
+            Deferred.succeed(held, undefined).pipe(
+              Effect.andThen(Deferred.await(released))
+            )
           ).pipe(Effect.forkChild({ startImmediately: true }))
-          yield* Effect.yieldNow
+          yield* Deferred.await(held)
 
+          // It checks access, reads the packed transfer, then waits its turn.
+          const read = yield* Deferred.make<void>()
+          onSourceRead.current = () => {
+            Effect.runSync(Deferred.succeed(read, undefined))
+          }
           const advancing = yield* advanceRelayTransferEffect(
             user,
             request,
             "transfer-one"
           ).pipe(Effect.forkChild({ startImmediately: true }))
-          yield* Effect.sleep("200 millis")
+          yield* Deferred.await(read)
 
           // Its access to the source goes while it waits.
           const database = yield* Database
@@ -148,7 +158,7 @@ describeMysql("Copying files between Relays", () => {
             )
           }
           assert.deepStrictEqual(relayChanges, [])
-        }).pipe(TestClock.withLive),
+        }),
       30_000
     )
   })
