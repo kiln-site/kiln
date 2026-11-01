@@ -49,6 +49,7 @@ import { operationLocks } from "./0048_operation_locks"
 import { appDeploymentRequests } from "./0049_app_deployment_requests"
 import { queuedDurableOperations } from "./0050_queued_durable_operations"
 import { appDeploymentsQueued } from "./0051_app_deployments_queued"
+import { serverMigrationOperations } from "./0052_server_migration_operations"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -101,4 +102,5 @@ export const migrations: ReadonlyArray<Migration> = [
   appDeploymentRequests,
   queuedDurableOperations,
   appDeploymentsQueued,
+  serverMigrationOperations,
 ]

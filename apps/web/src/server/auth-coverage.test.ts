@@ -136,7 +136,6 @@ const notYetOperations = new Set<string>([
   "relay.ts:uploadConsoleLogToMclogs",
   "relay.ts:uploadToMclogs",
   "security.ts:scanSecurityNow",
-  "server-migrations.ts:cancelServerMigration",
   "updates.ts:checkForKilnReleases",
 ])
 

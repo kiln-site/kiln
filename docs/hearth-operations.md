@@ -203,6 +203,15 @@ request is answered once.
 | `tailscale-network:<id>`          | A Tailscale network; `#settings` its members and DNS   |
 | `brick-catalog:<id>`              | A Brick catalog: deleting it; `#visibility` publishing |
 | `brick-library:<user>#contents`   | A person's catalogs and custom Bricks: adding them     |
+| `server-migration:<id>`           | A game server's copy; `#task` cancelling it            |
+| `instance:<relay>/<id>#migration` | Copying it, one copy at a time                         |
+
+A game server's move holds it whole until the move ends; a duplicate
+holds it shared and its `#migration`, and its `#power` and `#dns` when it
+stops it. Either holds the copy whole and both Relays shared. Asking for
+the old server's deletion, or removing a copy that didn't finish, queues a
+deletion that runs once the copy ends. See
+[Moving and duplicating game servers](server-migrations.md#how-it-runs).
 
 A backup or restore holds what its data belongs to: the game server or
 database, or the App for its folder and the volumes it owns, since deleting

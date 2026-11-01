@@ -15,7 +15,6 @@ export type PollingWorkerName =
   | "Domains.dns"
   | "Instances.postProvision"
   | "Notifications.push"
-  | "ServerMigrations"
 
 /**
  * What a pass found: due jobs it worked through, or none, with when the next

@@ -872,8 +872,14 @@ const stopBuildFor = (deletion: ResourceDeletion) =>
 // stopped, which ends once it sees that, or by one queued behind it, which
 // finds the App being deleted and sends nothing. Queued under its attempt,
 // it's recorded once, however often it's asked, and taken up again after a
-// restart; whoever asked doesn't wait for it.
-const startAttempt = (deletion: ResourceDeletion, initiator: Initiator) => {
+// restart; whoever asked doesn't wait for it. One asked for `queued`, by
+// work that holds the resource until it ends, as a server migration does,
+// is queued the same way, to run once that work ends.
+const startAttempt = (
+  deletion: ResourceDeletion,
+  initiator: Initiator,
+  queued = false
+) => {
   const input = {
     attempt: deletion.attempt,
     deletionId: deletion.id,
@@ -882,16 +888,16 @@ const startAttempt = (deletion: ResourceDeletion, initiator: Initiator) => {
     resourceId: deletion.resourceId,
   }
   const key = `${deletion.id}:${deletion.attempt}`
-  if (deletion.kind === "app" && deletion.status !== "cancelling") {
-    return stopBuildFor(deletion).pipe(
-      Effect.andThen(
-        queueDurableOperation(deleteResource, input, {
-          actorId: deletion.requestedBy,
-          idempotencyKey: key,
-        })
-      ),
-      Effect.asVoid
-    )
+  if ((queued || deletion.kind === "app") && deletion.status !== "cancelling") {
+    const queue = queueDurableOperation(deleteResource, input, {
+      actorId: deletion.requestedBy,
+      idempotencyKey: key,
+    })
+    return (
+      deletion.kind === "app"
+        ? stopBuildFor(deletion).pipe(Effect.andThen(queue))
+        : queue
+    ).pipe(Effect.asVoid)
   }
   return startDurableOperation(
     deletion.status === "cancelling" ? keepResource : deleteResource,
@@ -963,6 +969,12 @@ export const requestResourceDeletionEffect = Effect.fn(
 )(function* (input: {
   finalBackup: boolean
   kind: ResourceDeletionKind
+  /**
+   * Queued to run once whatever holds the resource ends, rather than
+   * refused meanwhile: asked by work that holds it, as a server migration
+   * handing over its old server or undoing its copy does.
+   */
+  queued?: boolean
   relayId: string
   resourceId: string
   /** The failed attempt a retry read: it goes ahead only from that one. */
@@ -994,7 +1006,7 @@ export const requestResourceDeletionEffect = Effect.fn(
   })
   yield* deliverSchedules
   if (unfinishedDeletionStatuses.some((status) => status === deletion.status)) {
-    yield* startAttempt(deletion, "person")
+    yield* startAttempt(deletion, "person", input.queued)
   }
   publishDeletionChange(deletion)
   return deletion
