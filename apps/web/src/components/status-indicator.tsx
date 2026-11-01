@@ -64,7 +64,9 @@ export const StatusIndicator = React.memo(function StatusIndicator({
         )}
       </TooltipTrigger>
       <TooltipContent side="bottom" sideOffset={6}>
-        <span className="max-w-64 text-muted-foreground">{status.detail}</span>
+        <span className="max-w-64 whitespace-pre-line text-muted-foreground">
+          {status.detail}
+        </span>
       </TooltipContent>
     </Tooltip>
   )

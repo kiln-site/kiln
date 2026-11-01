@@ -30,14 +30,14 @@ export function certificatePresentation(
 ): IdentityStatusPresentation {
   if (certificate.waitingFor === "dns" && certificate.failed) {
     return {
-      detail: `Its DNS doesn't point here yet.${canCheck ? " Click to check again." : ""}`,
+      detail: `Its DNS doesn't point here yet.${canCheck ? "\nClick to check again." : ""}`,
       label: "Waiting for DNS",
       tone: "info",
     }
   }
   if (certificate.waitingFor === "certificate" && certificate.failed) {
     return {
-      detail: `Couldn't get a certificate.${canCheck ? " Click to retry." : ""}`,
+      detail: `Couldn't get a certificate.${canCheck ? "\nClick to retry." : ""}`,
       label: "Unverified",
       tone: "danger",
     }
@@ -191,7 +191,7 @@ const CertificateBadge = React.memo(function CertificateBadge({
           <span tabIndex={0}>{content}</span>
         )}
       </TooltipTrigger>
-      <TooltipContent className="max-w-xs">
+      <TooltipContent className="max-w-xs whitespace-pre-line">
         {presentation.detail}
       </TooltipContent>
     </Tooltip>
