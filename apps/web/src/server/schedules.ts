@@ -5,7 +5,6 @@ import { Clock, Data, Effect, Result } from "effect"
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise"
 import { z } from "zod"
 
-import { relaySnapshotSchema } from "@workspace/contracts"
 import {
   normalizeScheduleCron,
   scheduleActionSchema,
@@ -46,6 +45,13 @@ import { requireScheduleAppServices } from "@/lib/schedule-app-services.server"
 import { scheduleTargetsWithAvailability } from "@/lib/schedule-target-options"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { requireEligibleResourceUser } from "@/server/auth"
+import { scheduleKey, scheduleSettingsKey } from "@/lib/schedule-lanes"
+import { exclusive, shared } from "@/operations/lanes"
+import {
+  operation,
+  runOperationPromise,
+  signedIn,
+} from "@/operations/operation"
 import {
   deploySchedule,
   deployScheduleToRelay,
@@ -191,160 +197,268 @@ export const getSchedules = createServerFn({ method: "GET" }).handler(
   }
 )
 
+type ScheduleWrite = z.infer<typeof scheduleWriteSchema>
+type ScheduleUpdate = z.infer<typeof scheduleUpdateSchema>
+type ScheduleId = z.infer<typeof scheduleIdSchema>
+
+const scheduleAudit = ({ input }: { input: { id: string } }) => ({
+  id: input.id,
+  kind: "schedule",
+})
+
+// The person, their grants, and the saved schedule, once admitted.
+const scheduleFor = (user: AuthenticatedUser | null, id: string) =>
+  signedIn(user).pipe(
+    Effect.flatMap((person) =>
+      promiseEffect(async () => {
+        const [grants, schedules] = await Promise.all([
+          isPlatformAdmin(person) ? [] : listUserGrants(person.id),
+          loadSchedules(),
+        ])
+        const schedule = schedules.find((candidate) => candidate.id === id)
+        if (!schedule) throw new Error("Schedule not found")
+        return { grants, person, schedule }
+      })
+    )
+  )
+
+const createNewSchedule = operation<ScheduleWrite & { readonly id: string }>()({
+  name: "schedule.create",
+  doing: "Creating this schedule",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        promiseEffect(async () => {
+          const grants = isPlatformAdmin(person)
+            ? []
+            : await listUserGrants(person.id)
+          const definition = scheduleDefinitionSchema.parse({
+            ...input,
+            // Checked below, for every target they reach.
+            actions: scheduleActionsForSave(input.actions),
+            cron: normalizeScheduleCron(input.cron),
+            revision: 1,
+            targets: await canonicalTargets(input.targets),
+          })
+          requireScheduleAuthorization({
+            actions: definition.actions,
+            grants,
+            schedulePermission: "schedule.create",
+            targets: definition.targets,
+            user: person,
+          })
+          await requireScheduleBackupDestinations({
+            actions: definition.actions,
+            owner: person.id,
+            targets: definition.targets,
+            grants,
+            user: person,
+          })
+          await requireScheduleAppServices(definition)
+          await requireScheduleAppBackups({ ...definition, user: person })
+          return { definition, person }
+        })
+      )
+    ),
+  locks: ({ input }) => [exclusive(scheduleKey(input.id))],
+  run: ({ context: { definition, person } }) =>
+    promiseEffect(async () => {
+      await saveNewSchedule(definition, person.id)
+      await deploySchedule(definition, person.id)
+      const created = (await loadSchedules()).find(
+        (schedule) => schedule.id === definition.id
+      )
+      publishScheduleCollectionChange(
+        definition.targets.map((target) => target.relayId)
+      )
+      return created
+    }),
+  audit: scheduleAudit,
+})
+
 export const createSchedule = createServerFn({ method: "POST" })
   .validator(scheduleWriteSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-    const definition = scheduleDefinitionSchema.parse({
-      ...data,
-      // Checked below, for every target they reach.
-      actions: scheduleActionsForSave(data.actions),
-      cron: normalizeScheduleCron(data.cron),
-      id: randomUUID(),
-      revision: 1,
-      targets: await canonicalTargets(data.targets),
-    })
-    requireScheduleAuthorization({
-      actions: definition.actions,
-      grants,
-      schedulePermission: "schedule.create",
-      targets: definition.targets,
-      user,
-    })
-    await requireScheduleBackupDestinations({
-      actions: definition.actions,
-      owner: user.id,
-      targets: definition.targets,
-      grants,
-      user,
-    })
-    await requireContinueOnFailureSupport(definition)
-    await requireScheduleAppServices(definition)
-    await requireScheduleAppBackups({ ...definition, user })
-    await saveNewSchedule(definition, user.id)
-    await deploySchedule(definition, user.id)
-    const created = (await loadSchedules()).find(
-      (schedule) => schedule.id === definition.id
+  .handler(async ({ data }) =>
+    runOperationPromise(
+      createNewSchedule,
+      { ...data, id: randomUUID() },
+      { user: await requireEligibleResourceUser() }
     )
-    publishScheduleCollectionChange(
-      definition.targets.map((target) => target.relayId)
-    )
-    return created
-  })
+  )
+
+const saveSchedule = operation<ScheduleUpdate>()({
+  name: "schedule.update",
+  doing: "Saving this schedule",
+  authorize: ({ input, user }) =>
+    scheduleFor(user, input.id).pipe(
+      Effect.flatMap(({ grants, person, schedule: existing }) =>
+        promiseEffect(async () => {
+          if (existing.revision !== input.revision) {
+            throw new ScheduleRevisionConflictError({
+              message:
+                "This schedule changed after you opened it. Refresh and try again.",
+            })
+          }
+          // Editing is all-or-nothing. The user must still be authorized for
+          // every stored action, even when the proposed change removes it.
+          requireScheduleAuthorization({
+            actions: existing.actions,
+            grants,
+            schedulePermission: "schedule.update",
+            targets: existing.targets,
+            user: person,
+          })
+          await requireScheduleBackupDestinations({
+            actions: existing.actions,
+            targets: existing.targets,
+            grants,
+            user: person,
+          })
+          const definition = scheduleDefinitionSchema.parse({
+            ...input,
+            // Checked below, for every target they reach.
+            actions: scheduleActionsForSave(input.actions),
+            cron: normalizeScheduleCron(input.cron),
+            revision: input.revision + 1,
+            targets: await canonicalTargets(input.targets),
+          })
+          requireScheduleAuthorization({
+            actions: definition.actions,
+            grants,
+            schedulePermission: "schedule.update",
+            targets: definition.targets,
+            user: person,
+          })
+          await requireScheduleBackupDestinations({
+            actions: definition.actions,
+            owner: existing.createdBy,
+            targets: definition.targets,
+            grants,
+            user: person,
+          })
+          await requireScheduleAppServices({ ...definition, existing })
+          await requireScheduleAppBackups({
+            ...definition,
+            existing,
+            user: person,
+          })
+          return { definition, existing, person }
+        })
+      )
+    ),
+  locks: ({ input }) => [exclusive(scheduleSettingsKey(input.id))],
+  run: ({ context: { definition, existing, person }, input }) =>
+    promiseEffect(async () => {
+      const previousRelayIds = new Set(
+        existing.targets.map((target) => target.relayId)
+      )
+      await replaceSchedule(definition, input.revision)
+      await deploySchedule(definition, person.id)
+      const nextRelayIds = new Set(
+        definition.targets.map((target) => target.relayId)
+      )
+      await removeRelayProjections(
+        definition.id,
+        definition.revision,
+        [...previousRelayIds].filter((relayId) => !nextRelayIds.has(relayId)),
+        person.id
+      )
+      const updated = (await loadSchedules()).find(
+        (schedule) => schedule.id === definition.id
+      )
+      publishScheduleCollectionChange([...previousRelayIds, ...nextRelayIds])
+      return updated
+    }),
+  audit: scheduleAudit,
+})
 
 export const updateSchedule = createServerFn({ method: "POST" })
   .validator(scheduleUpdateSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-    const existing = (await loadSchedules()).find(
-      (schedule) => schedule.id === data.id
-    )
-    if (!existing) throw new Error("Schedule not found")
-    if (existing.revision !== data.revision) {
-      throw new ScheduleRevisionConflictError({
-        message:
-          "This schedule changed after you opened it. Refresh and try again.",
-      })
-    }
+  .handler(async ({ data }) =>
+    runOperationPromise(saveSchedule, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
-    // Editing is all-or-nothing. The user must still be authorized for every
-    // stored action, even when the proposed change removes that action.
-    requireScheduleAuthorization({
-      actions: existing.actions,
-      grants,
-      schedulePermission: "schedule.update",
-      targets: existing.targets,
-      user,
+const removeSchedule = operation<ScheduleId>()({
+  name: "schedule.delete",
+  doing: "Deleting this schedule",
+  authorize: ({ input, user }) =>
+    scheduleFor(user, input.id).pipe(
+      Effect.tap(({ grants, person, schedule }) =>
+        Effect.sync(() =>
+          requireScheduleAuthorization({
+            actions: [],
+            grants,
+            schedulePermission: "schedule.delete",
+            targets: schedule.targets,
+            user: person,
+          })
+        )
+      )
+    ),
+  locks: ({ input }) => [exclusive(scheduleKey(input.id))],
+  run: ({ context: { person, schedule } }) =>
+    promiseEffect(async () => {
+      const revision = await markScheduleDeleted(schedule.id)
+      // Deleting a resource deleted the schedule it was all that was left of.
+      if (revision === null) return { deleted: true, id: schedule.id }
+      publishScheduleCollectionChange(
+        schedule.targets.map((target) => target.relayId)
+      )
+      await removeRelayProjections(
+        schedule.id,
+        revision,
+        [...new Set(schedule.targets.map((target) => target.relayId))],
+        person.id
+      )
+      return { deleted: true, id: schedule.id }
+    }),
+  audit: scheduleAudit,
+})
+
+// Deleting a resource rewrites the schedules that target it outside this
+// lane, so the deletion's revision comes from the row as it's deleted, and
+// its removal outranks what that sent the Relays.
+function markScheduleDeleted(id: string): Promise<number | null> {
+  return runAppEffect(
+    "schedules.delete",
+    Effect.gen(function* () {
+      const database = yield* Database
+      const now = yield* Clock.currentTimeMillis
+      return yield* database.transaction("schedules.delete", (transaction) =>
+        Effect.gen(function* () {
+          const [row] = yield* transaction.queryRows<
+            RowDataPacket & { revision: number }
+          >(
+            `SELECT revision FROM ${databaseTable("schedule")}
+              WHERE id = ? AND deleted_at IS NULL
+              FOR UPDATE`,
+            [id]
+          )
+          if (!row) return null
+          const revision = row.revision + 1
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("schedule")}
+                SET enabled = FALSE, revision = ?, deleted_at = ?,
+                    updated_at = ?
+              WHERE id = ?`,
+            [revision, now, now, id]
+          )
+          return revision
+        })
+      )
     })
-    await requireScheduleBackupDestinations({
-      actions: existing.actions,
-      targets: existing.targets,
-      grants,
-      user,
-    })
-    const definition = scheduleDefinitionSchema.parse({
-      ...data,
-      // Checked below, for every target they reach.
-      actions: scheduleActionsForSave(data.actions),
-      cron: normalizeScheduleCron(data.cron),
-      revision: data.revision + 1,
-      targets: await canonicalTargets(data.targets),
-    })
-    requireScheduleAuthorization({
-      actions: definition.actions,
-      grants,
-      schedulePermission: "schedule.update",
-      targets: definition.targets,
-      user,
-    })
-    await requireScheduleBackupDestinations({
-      actions: definition.actions,
-      owner: existing.createdBy,
-      targets: definition.targets,
-      grants,
-      user,
-    })
-    await requireContinueOnFailureSupport(definition, existing)
-    await requireScheduleAppServices({ ...definition, existing })
-    await requireScheduleAppBackups({ ...definition, existing, user })
-    const previousRelayIds = new Set(
-      existing.targets.map((target) => target.relayId)
-    )
-    await replaceSchedule(definition, data.revision)
-    await deploySchedule(definition, user.id)
-    const nextRelayIds = new Set(
-      definition.targets.map((target) => target.relayId)
-    )
-    await removeRelayProjections(
-      definition.id,
-      definition.revision,
-      [...previousRelayIds].filter((relayId) => !nextRelayIds.has(relayId)),
-      user.id
-    )
-    const updated = (await loadSchedules()).find(
-      (schedule) => schedule.id === definition.id
-    )
-    publishScheduleCollectionChange([...previousRelayIds, ...nextRelayIds])
-    return updated
-  })
+  )
+}
 
 export const deleteSchedule = createServerFn({ method: "POST" })
   .validator(scheduleIdSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-    const schedule = (await loadSchedules()).find(
-      (candidate) => candidate.id === data.id
-    )
-    if (!schedule) throw new Error("Schedule not found")
-    requireScheduleAuthorization({
-      actions: [],
-      grants,
-      schedulePermission: "schedule.delete",
-      targets: schedule.targets,
-      user,
+  .handler(async ({ data }) =>
+    runOperationPromise(removeSchedule, data, {
+      user: await requireEligibleResourceUser(),
     })
-    const revision = schedule.revision + 1
-    const now = Date.now()
-    await databasePool.execute(
-      `UPDATE ${databaseTable("schedule")}
-          SET enabled = FALSE, revision = ?, deleted_at = ?, updated_at = ?
-        WHERE id = ? AND deleted_at IS NULL`,
-      [revision, now, now, schedule.id]
-    )
-    publishScheduleCollectionChange(
-      schedule.targets.map((target) => target.relayId)
-    )
-    await removeRelayProjections(
-      schedule.id,
-      revision,
-      [...new Set(schedule.targets.map((target) => target.relayId))],
-      user.id
-    )
-    return { deleted: true, id: schedule.id }
-  })
+  )
 
 /**
  * Takes a deleted resource out of every schedule that targets it, as system
@@ -355,153 +469,156 @@ export const deleteSchedule = createServerFn({ method: "POST" })
  * to the Relays; one that doesn't take it is sent again by
  * `redeployUnacknowledgedSchedules`.
  */
-export const removeDeletedResourceFromSchedules = createServerOnlyFn(async (
-  resource: Pick<ScheduleTarget, "id" | "kind" | "relayId">,
-  subject: string
-) => {
-  const deletedKey = targetKey({ ...resource, name: "" })
-  const changed = await runAppEffect(
-    "schedules.removeDeletedTarget",
-    Effect.gen(function* () {
-      const database = yield* Database
-      const now = yield* Clock.currentTimeMillis
-      return yield* database.transaction(
-        "schedules.removeDeletedTarget",
-        (transaction) =>
-          Effect.gen(function* () {
-            const affected = yield* transaction.queryRows<
-              { schedule_id: string } & RowDataPacket
-            >(
-              `SELECT DISTINCT target.schedule_id
+export const removeDeletedResourceFromSchedules = createServerOnlyFn(
+  async (
+    resource: Pick<ScheduleTarget, "id" | "kind" | "relayId">,
+    subject: string
+  ) => {
+    const deletedKey = targetKey({ ...resource, name: "" })
+    const changed = await runAppEffect(
+      "schedules.removeDeletedTarget",
+      Effect.gen(function* () {
+        const database = yield* Database
+        const now = yield* Clock.currentTimeMillis
+        return yield* database.transaction(
+          "schedules.removeDeletedTarget",
+          (transaction) =>
+            Effect.gen(function* () {
+              const affected = yield* transaction.queryRows<
+                { schedule_id: string } & RowDataPacket
+              >(
+                `SELECT DISTINCT target.schedule_id
                  FROM ${databaseTable("schedule_target")} target
                 WHERE target.relay_id = ? AND target.target_kind = ?
                   AND target.target_id = ?
                 ORDER BY target.schedule_id`,
-              [resource.relayId, resource.kind, resource.id]
-            )
-            const changes: Array<{
-              relayIds: ReadonlyArray<string>
-              schedule: ScheduleDefinition | null
-              scheduleId: string
-              revision: number
-            }> = []
-            for (const { schedule_id: scheduleId } of affected) {
-              const [row] = yield* transaction.queryRows<ScheduleRow>(
-                `SELECT id, name, cron_expression, timezone, enabled,
+                [resource.relayId, resource.kind, resource.id]
+              )
+              const changes: Array<{
+                relayIds: ReadonlyArray<string>
+                schedule: ScheduleDefinition | null
+                scheduleId: string
+                revision: number
+              }> = []
+              for (const { schedule_id: scheduleId } of affected) {
+                const [row] = yield* transaction.queryRows<ScheduleRow>(
+                  `SELECT id, name, cron_expression, timezone, enabled,
                         continue_on_failure, revision, created_by, created_at,
                         updated_at
                    FROM ${databaseTable("schedule")}
                   WHERE id = ? AND deleted_at IS NULL
                   FOR UPDATE`,
-                [scheduleId]
-              )
-              if (!row) continue
-              // Locking reads, like the row above: they see what's committed
-              // now, not the snapshot the first read of this transaction took.
-              const actions = yield* transaction.queryRows<ScheduleActionRow>(
-                `SELECT id, schedule_id, position, action_type, action_config
+                  [scheduleId]
+                )
+                if (!row) continue
+                // Locking reads, like the row above: they see what's committed
+                // now, not the snapshot the first read of this transaction took.
+                const actions = yield* transaction.queryRows<ScheduleActionRow>(
+                  `SELECT id, schedule_id, position, action_type, action_config
                    FROM ${databaseTable("schedule_action")}
                   WHERE schedule_id = ?
                   ORDER BY position
                   FOR UPDATE`,
-                [scheduleId]
-              )
-              const targets = (
-                yield* transaction.queryRows<ScheduleTargetRow>(
-                  `SELECT schedule_id, relay_id, target_kind, target_id,
+                  [scheduleId]
+                )
+                const targets =
+                  (yield* transaction.queryRows<ScheduleTargetRow>(
+                    `SELECT schedule_id, relay_id, target_kind, target_id,
                           target_name
                      FROM ${databaseTable("schedule_target")}
                     WHERE schedule_id = ?
                     ORDER BY relay_id, target_kind, target_name
                     FOR UPDATE`,
-                  [scheduleId]
+                    [scheduleId]
+                  )).map((target): ScheduleTarget => ({
+                    id: target.target_id,
+                    kind: target.target_kind,
+                    name: target.target_name,
+                    relayId: target.relay_id,
+                  }))
+                const relayIds = [
+                  ...new Set(targets.map((target) => target.relayId)),
+                ]
+                const remaining = targets.filter(
+                  (target) => targetKey(target) !== deletedKey
                 )
-              ).map(
-                (target): ScheduleTarget => ({
-                  id: target.target_id,
-                  kind: target.target_kind,
-                  name: target.target_name,
-                  relayId: target.relay_id,
-                })
-              )
-              const relayIds = [
-                ...new Set(targets.map((target) => target.relayId)),
-              ]
-              const remaining = targets.filter(
-                (target) => targetKey(target) !== deletedKey
-              )
-              const revision = row.revision + 1
-              if (remaining.length === 0) {
-                yield* transaction.execute(
-                  `UPDATE ${databaseTable("schedule")}
+                const revision = row.revision + 1
+                if (remaining.length === 0) {
+                  yield* transaction.execute(
+                    `UPDATE ${databaseTable("schedule")}
                       SET enabled = FALSE, revision = ?, deleted_at = ?,
                           updated_at = ?
                     WHERE id = ?`,
-                  [revision, now, now, scheduleId]
-                )
-                changes.push({ relayIds, revision, schedule: null, scheduleId })
-                continue
-              }
-              const schedule = scheduleDefinitionSchema.parse({
-                // An action that named it names the rest; one that named
-                // only it keeps an empty list rather than running on all. A
-                // command forgets the service it ran in on a deleted App.
-                actions: actions.map((action) => {
-                  const parsed = scheduleActionSchema.parse(
-                    jsonValue(action.action_config)
+                    [revision, now, now, scheduleId]
                   )
-                  const scoped =
-                    parsed.type === "wait" || parsed.targetKeys === undefined
-                      ? parsed
-                      : {
-                          ...parsed,
-                          targetKeys: parsed.targetKeys.filter(
-                            (key) => key !== deletedKey
-                          ),
-                        }
-                  if (scoped.type !== "console_command" || !scoped.services)
-                    return scoped
-                  const { [deletedKey]: _deleted, ...services } =
-                    scoped.services
-                  const { services: _all, ...rest } = scoped
-                  return Object.keys(services).length > 0
-                    ? { ...rest, services }
-                    : rest
-                }),
-                continueOnFailure: Boolean(row.continue_on_failure),
-                cron: row.cron_expression,
-                enabled: Boolean(row.enabled),
-                id: row.id,
-                name: row.name,
-                revision,
-                targets: remaining,
-                timezone: row.timezone,
-              })
-              yield* transaction.execute(
-                `UPDATE ${databaseTable("schedule")}
+                  changes.push({
+                    relayIds,
+                    revision,
+                    schedule: null,
+                    scheduleId,
+                  })
+                  continue
+                }
+                const schedule = scheduleDefinitionSchema.parse({
+                  // An action that named it names the rest; one that named
+                  // only it keeps an empty list rather than running on all. A
+                  // command forgets the service it ran in on a deleted App.
+                  actions: actions.map((action) => {
+                    const parsed = scheduleActionSchema.parse(
+                      jsonValue(action.action_config)
+                    )
+                    const scoped =
+                      parsed.type === "wait" || parsed.targetKeys === undefined
+                        ? parsed
+                        : {
+                            ...parsed,
+                            targetKeys: parsed.targetKeys.filter(
+                              (key) => key !== deletedKey
+                            ),
+                          }
+                    if (scoped.type !== "console_command" || !scoped.services)
+                      return scoped
+                    const { [deletedKey]: _deleted, ...services } =
+                      scoped.services
+                    const { services: _all, ...rest } = scoped
+                    return Object.keys(services).length > 0
+                      ? { ...rest, services }
+                      : rest
+                  }),
+                  continueOnFailure: Boolean(row.continue_on_failure),
+                  cron: row.cron_expression,
+                  enabled: Boolean(row.enabled),
+                  id: row.id,
+                  name: row.name,
+                  revision,
+                  targets: remaining,
+                  timezone: row.timezone,
+                })
+                yield* transaction.execute(
+                  `UPDATE ${databaseTable("schedule")}
                     SET revision = ?, updated_at = ?
                   WHERE id = ?`,
-                [revision, now, scheduleId]
-              )
-              yield* transaction.execute(
-                `DELETE FROM ${databaseTable("schedule_action")} WHERE schedule_id = ?`,
-                [scheduleId]
-              )
-              yield* transaction.execute(
-                `DELETE FROM ${databaseTable("schedule_target")} WHERE schedule_id = ?`,
-                [scheduleId]
-              )
-              yield* insertScheduleParts(transaction, schedule, now, {
-                keepTargetsBeingDeleted: true,
-              })
-              changes.push({ relayIds, revision, schedule, scheduleId })
-            }
-            // Owed to every Relay it was on, so a Hearth that stops before
-            // sending leaves the sweep something to resend.
-            for (const change of changes) {
-              for (const relayId of change.relayIds) {
+                  [revision, now, scheduleId]
+                )
                 yield* transaction.execute(
-                  `INSERT INTO ${databaseTable("schedule_deployment")}
+                  `DELETE FROM ${databaseTable("schedule_action")} WHERE schedule_id = ?`,
+                  [scheduleId]
+                )
+                yield* transaction.execute(
+                  `DELETE FROM ${databaseTable("schedule_target")} WHERE schedule_id = ?`,
+                  [scheduleId]
+                )
+                yield* insertScheduleParts(transaction, schedule, now, {
+                  keepTargetsBeingDeleted: true,
+                })
+                changes.push({ relayIds, revision, schedule, scheduleId })
+              }
+              // Owed to every Relay it was on, so a Hearth that stops before
+              // sending leaves the sweep something to resend.
+              for (const change of changes) {
+                for (const relayId of change.relayIds) {
+                  yield* transaction.execute(
+                    `INSERT INTO ${databaseTable("schedule_deployment")}
                      (schedule_id, relay_id, desired_revision, status,
                       created_at, updated_at)
                    VALUES (?, ?, ?, 'pending', ?, ?)
@@ -513,21 +630,21 @@ export const removeDeletedResourceFromSchedules = createServerOnlyFn(async (
                      desired_revision = GREATEST(desired_revision,
                        VALUES(desired_revision)),
                      updated_at = VALUES(updated_at)`,
-                  [change.scheduleId, relayId, change.revision, now, now]
-                )
+                    [change.scheduleId, relayId, change.revision, now, now]
+                  )
+                }
               }
-            }
-            return changes
-          })
-      )
-    })
-  )
-  // Delivery only: what each Relay should run is already saved.
-  for (const change of changed) {
-    const remaining = new Set(
-      change.schedule?.targets.map((target) => target.relayId) ?? []
+              return changes
+            })
+        )
+      })
     )
-    await recoverPromise(
+    // Delivery only: what each Relay should run is already saved.
+    for (const change of changed) {
+      const remaining = new Set(
+        change.schedule?.targets.map((target) => target.relayId) ?? []
+      )
+      await recoverPromise(
         async () => {
           if (change.schedule) await deploySchedule(change.schedule, subject)
           await removeRelayProjections(
@@ -537,100 +654,114 @@ export const removeDeletedResourceFromSchedules = createServerOnlyFn(async (
             subject
           )
         },
-      (cause) => {
-        console.warn(
-          `[Kiln Schedules] Couldn't send schedule ${change.scheduleId} after a deletion:`,
-          cause
-        )
-      }
-    )
-    publishScheduleCollectionChange(change.relayIds)
+        (cause) => {
+          console.warn(
+            `[Kiln Schedules] Couldn't send schedule ${change.scheduleId} after a deletion:`,
+            cause
+          )
+        }
+      )
+      publishScheduleCollectionChange(change.relayIds)
+    }
   }
+)
+
+const runSchedule = operation<ScheduleId>()({
+  name: "schedule.run",
+  doing: "Running this schedule",
+  authorize: ({ input, user }) =>
+    scheduleFor(user, input.id).pipe(
+      Effect.tap(({ grants, person, schedule }) =>
+        promiseEffect(async () => {
+          requireScheduleAuthorization({
+            actions: schedule.actions,
+            grants,
+            schedulePermission: "schedule.execute",
+            targets: schedule.targets,
+            user: person,
+          })
+          await requireScheduleBackupDestinations({
+            actions: schedule.actions,
+            checkStorageOwnership: false,
+            grants,
+            targets: schedule.targets,
+            user: person,
+          })
+        })
+      )
+    ),
+  locks: ({ input }) => [shared(scheduleSettingsKey(input.id))],
+  run: ({ context: { person: user, schedule } }) =>
+    promiseEffect(async () => {
+      const relays = new Map(
+        (await listPersistedRelays()).map((relay) => [relay.id, relay])
+      )
+      const relayIds = [
+        ...new Set(schedule.targets.map((target) => target.relayId)),
+      ]
+      const results = await Promise.all(
+        relayIds.map(async (relayId) => {
+          const relay = relays.get(relayId)
+          if (!relay?.enabled) {
+            return { error: "Relay is unavailable", relayId, started: false }
+          }
+          const started = await Effect.runPromise(
+            Effect.result(
+              promiseEffect(() =>
+                Promise.resolve(
+                  relayRpc(
+                    relay,
+                    "schedule.run",
+                    { revision: schedule.revision, scheduleId: schedule.id },
+                    15_000,
+                    user.id
+                  )
+                ).then((value) => scheduleRunSchema.parse(value))
+              )
+            )
+          )
+          if (Result.isFailure(started)) {
+            return {
+              error: errorMessage(started.failure),
+              relayId,
+              started: false,
+            }
+          }
+          const imported = await Effect.runPromise(
+            Effect.result(
+              promiseEffect(() =>
+                importScheduleRun(relayId, started.success, Date.now())
+              )
+            )
+          )
+          if (Result.isFailure(imported)) {
+            console.warn(
+              "[Kiln schedules] A started run could not be imported immediately",
+              imported.failure
+            )
+          }
+          return { error: null, relayId, started: true }
+        })
+      )
+      publishScheduleCollectionChange(
+        results.flatMap((result) => (result.started ? [result.relayId] : []))
+      )
+      return {
+        relays: results,
+        started: results.filter((result) => result.started).length,
+        total: results.length,
+      }
+    }),
+  audit: scheduleAudit,
 })
 
 export const runScheduleNow = createServerFn({ method: "POST" })
   .validator(scheduleIdSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-    const schedule = (await loadSchedules()).find(
-      (candidate) => candidate.id === data.id
-    )
-    if (!schedule) throw new Error("Schedule not found")
-    requireScheduleAuthorization({
-      actions: schedule.actions,
-      grants,
-      schedulePermission: "schedule.execute",
-      targets: schedule.targets,
-      user,
+  .handler(async ({ data }) =>
+    runOperationPromise(runSchedule, data, {
+      user: await requireEligibleResourceUser(),
     })
-    await requireScheduleBackupDestinations({
-      actions: schedule.actions,
-      checkStorageOwnership: false,
-      grants,
-      targets: schedule.targets,
-      user,
-    })
-
-    const relays = new Map(
-      (await listPersistedRelays()).map((relay) => [relay.id, relay])
-    )
-    const relayIds = [
-      ...new Set(schedule.targets.map((target) => target.relayId)),
-    ]
-    const results = await Promise.all(
-      relayIds.map(async (relayId) => {
-        const relay = relays.get(relayId)
-        if (!relay?.enabled) {
-          return { error: "Relay is unavailable", relayId, started: false }
-        }
-        const started = await Effect.runPromise(
-          Effect.result(
-            promiseEffect(() =>
-              Promise.resolve(
-                relayRpc(
-                  relay,
-                  "schedule.run",
-                  { revision: schedule.revision, scheduleId: schedule.id },
-                  15_000,
-                  user.id
-                )
-              ).then((value) => scheduleRunSchema.parse(value))
-            )
-          )
-        )
-        if (Result.isFailure(started)) {
-          return {
-            error: errorMessage(started.failure),
-            relayId,
-            started: false,
-          }
-        }
-        const imported = await Effect.runPromise(
-          Effect.result(
-            promiseEffect(() =>
-              importScheduleRun(relayId, started.success, Date.now())
-            )
-          )
-        )
-        if (Result.isFailure(imported)) {
-          console.warn(
-            "[Kiln schedules] A started run could not be imported immediately",
-            imported.failure
-          )
-        }
-        return { error: null, relayId, started: true }
-      })
-    )
-    publishScheduleCollectionChange(
-      results.flatMap((result) => (result.started ? [result.relayId] : []))
-    )
-    return {
-      relays: results,
-      started: results.filter((result) => result.started).length,
-      total: results.length,
-    }
-  })
+  )
 
 function requireScheduleAuthorization(input: {
   actions: ReadonlyArray<ScheduleAction>
@@ -716,54 +847,6 @@ async function canonicalTargets(
     if (!canonical) throw new Error(`${target.name} is no longer available`)
     return canonical
   })
-}
-
-// An older Relay rejects the whole projection and keeps running the revision
-// it has, so a Relay must advertise support before a schedule turns this on
-// for it. Relays that already run it with the option keep it, which lets a
-// schedule be disabled or edited while its Relay is offline.
-async function requireContinueOnFailureSupport(
-  definition: ScheduleDefinition,
-  existing?: Pick<ScheduleDefinition, "continueOnFailure" | "targets">
-) {
-  if (!definition.continueOnFailure) return
-  const supported = new Set(
-    existing?.continueOnFailure
-      ? existing.targets.map((target) => target.relayId)
-      : []
-  )
-  const relayIds = new Set(
-    definition.targets
-      .map((target) => target.relayId)
-      .filter((relayId) => !supported.has(relayId))
-  )
-  if (relayIds.size === 0) return
-  const relays = new Map(
-    (await listPersistedRelays()).map((relay) => [relay.id, relay])
-  )
-  const unsupported = await Promise.all(
-    [...relayIds].map(async (relayId) => {
-      const relay = relays.get(relayId)
-      if (!relay?.enabled) return relay?.name ?? relayId
-      const snapshot = await recoverPromise(
-        async () =>
-          relaySnapshotSchema.parse(
-            await relayRpc(relay, "relay.snapshot", {}, 5_000)
-          ),
-        () => null
-      )
-      return snapshot?.node.capabilities.includes(
-        "schedule-continue-on-failure"
-      )
-        ? null
-        : relay.name
-    })
-  )
-  const names = unsupported.filter((name) => name !== null)
-  if (names.length === 0) return
-  throw new Error(
-    `Continue on failure needs these Relays online and updated: ${names.join(", ")}`
-  )
 }
 
 function targetKey(target: ScheduleTarget) {
