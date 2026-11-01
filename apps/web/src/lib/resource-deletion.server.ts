@@ -54,7 +54,7 @@ import { cleanUpDeletedResourceEffect } from "@/server/resource-deletion-cleanup
 import { deliverPendingSchedules } from "@/server/schedule-deployment.server"
 
 // Deleting a game server, database, App, or Kiln volume, as one durable
-// operation per attempt (docs/resource-unification.md, Deletion): check the
+// operation per attempt: check the
 // person who asked may still delete it, freeze it on its Relay, take its
 // final backup if one was asked for, delete it on the Relay, then clean up
 // after it in Hearth. Each
@@ -758,14 +758,11 @@ export const keepResource = durableOperation({
   version: 1,
 })
 
-// Asks the Relay to stop an App's running build before its deletion waits
-// for the whole App, which the build's deployment holds a part of until it
-// ends. Holding the App shared, it runs beside that deployment. Best
-// effort: an App with no build, a Relay that can't hear it now, or a turn
-// that doesn't come soon, as behind another deletion of it, leaves the
-// deletion to take its turn as before.
-// It changes nothing of Hearth's, and the Relay orders it in its own lanes,
-// so it takes none here.
+// Asks the Relay to stop an App's running build before its deletion is
+// queued behind the deployment that holds the App's `#deploy` until the
+// build ends. Best effort: an App with no build, or a Relay that can't hear
+// it now, leaves the deletion to wait its turn. It changes nothing of
+// Hearth's, and the Relay orders it in its own lanes, so it takes none here.
 const abortAppDeployment = (deletion: ResourceDeletion) =>
   inLanes(
     "app.deployment.abort",

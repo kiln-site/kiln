@@ -7,7 +7,7 @@ logic, and conflicts, durability, audit, realtime updates and tracing come
 with it. The code is in `apps/web/src/operations`.
 
 Hearth runs as one process (see
-[Relay browser sessions](relay-browser-sessions-plan.md)), so its lanes live
+[Relay browser sessions](relay-browser-sessions.md)), so its lanes live
 in memory, like each Relay's (see [Relay operations](relay-operations.md)).
 
 ## Defining one
@@ -92,8 +92,7 @@ Relay changes sent at most once (`relayCommand`).
   once it has waited. Then it's recorded (its input, locks and who asked),
   its workflow starts, and it returns its ID.
 - Its locks are held until the workflow ends, however long that is, across
-  restarts. They're the ones its definition declares, also for one
-  recorded before it kept them. When Hearth starts, it takes back the locks
+  restarts. They're the ones its definition declares. When Hearth starts, it takes back the locks
   of every durable operation still running before it admits anything else
   or resumes their workflows, retrying until MySQL answers. Meanwhile a
   person is told after 15 seconds that Hearth is still starting.
@@ -102,7 +101,7 @@ Relay changes sent at most once (`relayCommand`).
   is kept to one run by its idempotency key, and holding a lock while it
   waits days between retries would only get in the way. Deleting a
   resource holds it whole, so nothing else changes it until the deletion
-  ends.
+  ends (see [Restore and deletion safety](backups.md#restore-and-deletion-safety)).
 - An idempotency key makes starting it again return the same operation.
 - `queueDurableOperation` queues one for Hearth to run when its turn
   comes, for work no one waits on: it's recorded `waiting` and returns its
@@ -144,7 +143,8 @@ the least that keeps it safe (`resourceOperation`'s `lock`):
   `#credentials` and `#connections`. Wiping a database replaces it, so it
   holds the whole.
 - **The whole, shared**, for everything the Relay or the database already
-  keeps in order: file writes, port reservations, database connections.
+  keeps in order: file writes, port reservations, an App or game server
+  joining a database.
 
 Work a change reaches that takes locks of its own is declared on the
 change, so it runs inside it: a start, a port change and a startup change
@@ -200,56 +200,18 @@ update settings hold it shared.
 
 An image check is a read: it asks the registry with no lane held and
 records what it found holding the App shared, so it conflicts with nothing
-but the App's deletion. What it found counts only while it still describes
+but replacing or removing the whole App. What it found counts only while it still describes
 the App, judged where it's used (`currentImageUpdate`): it asked about the
 image the App names now, and no deployment has started since. Checks keep
 no state of their own; when each App was last asked is what it recorded.
 
-An App deploys the same way whatever asked: a push, a poll that found a
-new commit, an image check, or a person's Deploy, save-and-deploy, update
-or redeploy. Each ask queues the App's deployment (`app.deploy`) under the
-App, or joins the one waiting there, so asks while a deployment runs make
-one deployment after it, of the newest ask: a push pins the commit from
-its webhook, with the repository and branch it came from; a redeploy pins
-its commit, or its digest and the image it was of, and is refused once
-the App deploys from another; anything else asks for the newest. A poll
-changes nothing that waits. A person's ask stays theirs while it waits: it
-builds even a commit already live and deploys an update whatever its
-wait, and they're checked again when it runs, so one who may no longer
-manage the App is refused, though a push that joined their ask deploys as
-Kiln's own. A person asks in an ordinary operation holding the App shared,
-beside its build and everyday changes, so it returns at once, and a
-deletion or restore turns it away. A deploy still waiting can be
-cancelled.
+An App deploys the same way whatever asked: each ask queues the App's
+deployment (`app.deploy`) under the App, or joins the one waiting there, and
+the deployment holds the App's `#deploy` until its Relay says the build
+ended. See [App deployments](app-deployments.md#how-deployments-queue).
 
-The deployment holds the App's `#deploy` and
-`relay:<id>#database-connections` (`appDeploymentLocks`) from its start
-until its Relay says it ended, so the next waits its turn behind it and
-nothing else orders deployments. It starts only once its Relay is there
-to deploy it, with the databases it keeps for the App (handed over as an
-operation of its own, started then if it's not) (`ready`): until then it
-waits holding nothing, so what's
-asked meanwhile joins it, it can be cancelled, and a deletion of the App
-isn't kept waiting. A wait, for a new App's provisioning or a build to
-end, checks in memory and stores one step every five minutes, so
-a long one keeps few. The App's saved configuration, which holds its
-secrets, is read as it's sent and the token that checks out a GitHub
-commit made then, neither kept in the operation's steps, which are stored
-in the clear; a reply lost to a restart is read back (`relayCommand`), not
-sent again. Deleting an App stops its build on the Relay first
-(`app.deployment.abort`), for as long as whoever asked may delete it, then
-is queued (`queueDurableOperation`, once under its attempt) to take its
-turn as Hearth's own work, rather than be refused by the deployment it
-stopped, which ends once it sees that, or by one queued behind it, which
-finds the App being deleted; a deployment won't send once the deletion
-began.
-
-A GitHub sync's run holds the sync's `#files`, and shared its `#settings`,
-its target and its connection, from reading GitHub to recording what it
-wrote, so runs go one at a time and an edit waits for the one running. A
-manual run, a new sync or a push queues one (`github.sync`) under the
-sync's ID, so it shows as queued and survives a restart, and what's asked
-while it waits joins it; a poll runs in the same lanes and isn't kept.
+A GitHub sync's run holds the sync's `#files`, and its `#settings`, target
+and connection shared. See [GitHub sync](github-sync.md#when-a-sync-runs).
 
 ## Tracing and metrics
 
@@ -274,8 +236,8 @@ while it waits joins it; a poll runs in the same lanes and isn't kept.
 ## What operators see
 
 The Operations page shows what runs now and what each waiting operation
-waits on, live from the lanes, and durable operations that ended in the
-last 30 days.
+waits on, live from the lanes, and the latest 50 durable operations that
+ended. Ended ones are kept for 30 days.
 
 ## Adding an operation
 
@@ -291,8 +253,8 @@ last 30 days.
    what it starts stays inside the operation. Pass it the person the
    operation runs for: it mustn't read the request's session itself.
 5. Every mutating server function runs an operation.
-   `server/auth-coverage.test.ts` checks each reaches `runOperationPromise`
-   or `startDurableOperation`. Those not moved yet are listed there, and the
+   `server/auth-coverage.test.ts` checks each reaches `runOperationPromise`,
+   `startDurableOperation` or `queueDurableOperation`. Those not moved yet are listed there, and the
    list only shrinks.
 
 For a step several features share that must not interleave with itself,

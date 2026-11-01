@@ -45,15 +45,15 @@ to be unique across running stacks.
 
 ## Commands
 
-| Command | Purpose |
-| --- | --- |
-| `pnpm dev:docker` | Start and follow Hearth logs |
-| `pnpm dev:docker:up` | Start in the background and wait until healthy |
-| `pnpm dev:docker:logs` | Follow Hearth and Relay logs |
-| `pnpm dev:docker:refresh` | Restart Relay and Hearth |
-| `pnpm dev:docker:down` | Stop, preserving data |
+| Command                   | Purpose                                              |
+| ------------------------- | ---------------------------------------------------- |
+| `pnpm dev:docker`         | Start and follow Hearth logs                         |
+| `pnpm dev:docker:up`      | Start in the background and wait until healthy       |
+| `pnpm dev:docker:logs`    | Follow Hearth and Relay logs                         |
+| `pnpm dev:docker:refresh` | Restart Relay and Hearth                             |
+| `pnpm dev:docker:down`    | Stop, preserving data                                |
 | `pnpm dev:docker:destroy` | Delete a worktree's stack, data, and Relay resources |
-| `pnpm dev:docker:test` | Run web tests against the stack's MySQL |
+| `pnpm dev:docker:test`    | Run web tests against the stack's MySQL              |
 
 ## Verification
 
@@ -163,9 +163,9 @@ Its console and editor demos render Hearth's own components from
 
 The **Marketing image** workflow builds `ghcr.io/kiln-site/marketing` on PRs
 that touch the site or the Hearth code it renders, and publishes `latest` and
-`sha-<commit>` from `main`. It isn't part of a Kiln release, so self-hosted
-installs never pull it. The image listens on port 3000 and takes the same two
-URLs:
+`sha-<commit>` from `main` when the `PUBLISH_IMAGES` variable is `true`. It
+isn't part of a Kiln release, so self-hosted installs never pull it. The image
+listens on port 3000 and takes the same three URLs:
 
 ```sh
 docker run -p 3000:3000 -e KILN_HEARTH_URL=https://panel.kiln.site \
@@ -176,21 +176,12 @@ The first publish creates the GHCR package as private. Make it public in the
 package's settings, as with the other images (see [Forking](forking.md)). Run
 the workflow by hand to publish without a change.
 
-## PR titles
+## Pull requests
 
-Use `<type>(<scope>): <short human title>`. Examples:
+See [Contributing](../CONTRIBUTING.md) for branch names, PR titles and
+descriptions.
 
-- fix(relay): prevent player disconnects when updating relays
-- ci(repo): update agent skills
-- ui(cli): improve help menu visual
-
-See [Contributing](../CONTRIBUTING.md) for the other PR conventions.
-
-## Existing stacks and cleanup
-
-The new `kiln-*` names create fresh stacks; old `hearth*` data is preserved.
-Before updating an existing checkout, stop its stack with the old script's
-`dev:docker:down`, or use `dev:docker:destroy` for a disposable worktree.
+## Cleanup
 
 After merge, run `pnpm dev:docker:destroy` before removing the worktree and
 merged branches, then update `main` with `git pull --ff-only`. Destroy refuses

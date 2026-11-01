@@ -6,7 +6,8 @@ built on the lane rules in `packages/operations` that Hearth shares).
 Hearth's requests, the browser's direct console and uploads, SFTP, schedules,
 crash recovery, and the Relay's own workers all go through them, so a feature
 gets ordering and exclusion by naming the resources it touches instead of
-adding a lock of its own.
+adding a lock of its own. Port reservations are the one exception: they take
+a reservation lock of their own rather than a lane.
 
 ## Lanes
 
@@ -25,22 +26,22 @@ A resource and its parts are separate keys. Work on a part takes the whole
 resource shared and the part exclusive; work that replaces the resource takes
 it exclusive, which waits for every part.
 
-| Key                                                | Taken by                                                                                                                                                                                                                                         |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `instance:<id>`                                    | Shared by every change to a game server; exclusive to replace it (restore, reinstall, delete)                                                                                                                                                    |
-| `instance:<id>/lifecycle`                          | Exclusive to power actions, console input, crash recovery, the disk-quota stop, and container recreation for ports, routes, and database connections                                                                                             |
-| `instance:<id>/files`                              | Exclusive to Hearth file writes                                                                                                                                                                                                                  |
-| `instance:<id>/metadata`                           | Exclusive to renames                                                                                                                                                                                                                             |
-| `app:<id>`, `app:<id>/lifecycle`, `app:<id>/files` | The same shape for Apps; a deployment's build, connecting the App to a database, and a scheduled command hold the lifecycle lock                                                                                                                  |
-| `app:<id>/volumes`                                 | Exclusive to recording which Kiln volumes an App's configuration mounts, apart from its lifecycle so saving a configuration never waits behind a deployment                                                                                      |
-| `database:<id>`                                    | Exclusive to database changes, connecting a member to it, and connecting it to another; shared by power, commands, dumps, backups, and Hearth's handover of Apps' connections                                                                    |
-| `database:<id>/lifecycle`                          | Exclusive to power actions and scheduled commands; shared by dumps and backups, so neither stops or runs in a database mid-dump                                                                                                                 |
-| `relay:routes`                                     | Shared by starts; exclusive to route, port, proxy, and networking writes                                                                                                                                                                         |
-| `relay:tailscale`                                  | Exclusive to the Relay's Tailscale settings; shared by stack changes                                                                                                                                                                             |
-| `relay:allocations`                                | Exclusive to anything that reserves the node's memory, CPU, or disk: limit changes, a deployment's container start, and a game server's check before it's created or replaced, whose reservation stands in for it until its new container exists |
-| `relay:host-files`                                 | The host file root                                                                                                                                                                                                                               |
-| `volume:<id>`                                      | Exclusive to creating, renaming, and deleting one of the Relay's named volumes; shared by deployments that mount it and by recording that configurations mount it, so a deletion sees both                                                       |
-| `relay:platform`                                   | Exclusive to each pass over Kiln's own services and to restarting or repairing them, when the Relay hosts them ([Self-hosting](self-hosting.md))                                                                                                 |
+| Key                                                | Taken by                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `instance:<id>`                                    | Shared by every change to a game server; exclusive to replace it (restore, reinstall, delete)                                                                                                                                                                                                            |
+| `instance:<id>/lifecycle`                          | Exclusive to power actions, console input, crash recovery, the disk-quota stop, and container recreation for ports, routes, and database connections                                                                                                                                                     |
+| `instance:<id>/files`                              | Exclusive to Hearth file writes                                                                                                                                                                                                                                                                          |
+| `instance:<id>/metadata`                           | Exclusive to renames                                                                                                                                                                                                                                                                                     |
+| `app:<id>`, `app:<id>/lifecycle`, `app:<id>/files` | The same shape for Apps; a deployment's build, connecting the App to a database, and a scheduled command hold the lifecycle lock                                                                                                                                                                         |
+| `app:<id>/volumes`                                 | Exclusive to recording which Kiln volumes an App's configuration mounts, apart from its lifecycle so saving a configuration never waits behind a deployment                                                                                                                                              |
+| `database:<id>`                                    | Exclusive to database changes, connecting a member to it, and connecting it to another; shared by power, commands, dumps, backups, and Hearth's handover of Apps' connections                                                                                                                            |
+| `database:<id>/lifecycle`                          | Exclusive to power actions and scheduled commands; shared by dumps and backups, so neither stops or runs in a database mid-dump                                                                                                                                                                          |
+| `relay:routes`                                     | Shared by starts; exclusive to route, port, proxy, and networking writes                                                                                                                                                                                                                                 |
+| `relay:tailscale`                                  | Exclusive to the Relay's Tailscale settings; shared by stack changes                                                                                                                                                                                                                                     |
+| `relay:allocations`                                | Exclusive to checking limits and reserving the node's memory and disk (CPU is shared, so each limit need only fit the node): limit changes, a deployment's container start, and a game server's check before it's created or replaced, whose reservation stands in for it until its new container exists |
+| `relay:host-files`                                 | The host file root                                                                                                                                                                                                                                                                                       |
+| `volume:<id>`                                      | Exclusive to creating, renaming, and deleting one of the Relay's named volumes; shared by deployments that mount it and by recording that configurations mount it, so a deletion sees both                                                                                                               |
+| `relay:platform`                                   | Exclusive to each pass over Kiln's own services, to restarting or repairing them, and to replacing the installation; shared by writes to Kiln's own database, when the Relay hosts them ([Self-hosting](self-hosting.md))                                                                                |
 
 A database connection (`database.network.write`) names its member by kind:
 a game server, an App (every service of it), or another database. It locks
@@ -85,7 +86,8 @@ asks Hearth to rewrite its networks' DNS on every node first
 (`hearth.tailscale.member.detach`), then takes it off them, and puts the DNS
 back if that fails. Applying a network (`relay.tailscale.stack.apply`) holds
 the network's own stack exclusively and
-takes the lifecycle lock of each member it joins or takes off, so it waits
+takes the lifecycle lock of each game server or App it joins or takes off
+(a database it holds whole), so it waits
 for that member's power changes as they wait for it; a member it leaves as it
 is is held shared, so it isn't deleted or replaced meanwhile. Removing a
 network does the same for all its members. The locks are planned from the
@@ -114,7 +116,9 @@ migration.
 Its switch is exhaustive, so a new operation can't compile until it declares
 what it locks, or that it locks nothing.
 
-Reads take no locks. They never wait, and they may see a resource mid-change.
+Most reads take no locks: they never wait, and they may see a resource
+mid-change. Reads that must see it whole, such as a database dump or completing
+a console command, take its locks shared.
 
 ### Arrival order
 
@@ -136,8 +140,10 @@ locks early would let conflicting work run against a half-changed resource.
 
 ### Work that runs in the background
 
-Requests that hand work to a background worker take no locks themselves; the
-worker locks the work when it runs it:
+Requests that hand work to a background worker, such as queueing a backup,
+provisioning or a transfer, take no locks themselves; the worker locks the
+work when it runs it. A deployment is checked and recorded under the App's
+lifecycle lock, which its build takes again when it runs:
 
 - **Backups** run alongside other work on their target (shared lock). A
   **restore** runs alone (exclusive), so it waits for file writes and power
@@ -194,7 +200,8 @@ kills its containers with the same Docker calls, and keeps what's its own
 around them: a game server's stop command and container recreation, a
 database's wait until its engine answers, and an App's every container (a
 kill reaches those still running). A power action takes the resource shared
-and its lifecycle exclusive, and a game server's start the routes shared too
+and its lifecycle exclusive, and a game server's start or restart the routes
+shared too
 (`resourcePowerLocks`).
 
 ### Schedules
@@ -344,11 +351,10 @@ stays `unknown` rather than `not_run`.
 
 Console commands and file transfers go from the browser straight to the
 Relay, so Hearth never sees them; the Relay records them in its own audit,
-which Hearth's activity reads with `relay.audit.list`. An audit page would
-show both. Changes Hearth makes on its own, such as backup reconciliation,
-aren't audited here; the Relay's journal and audit still record them. There's
-no page for the audit yet: `listAuditEvents` reads it, newest first,
-optionally for one resource.
+which Hearth's activity reads with `relay.audit.list`. Changes Hearth makes
+on its own, such as backup reconciliation, aren't audited here; the Relay's
+journal and audit still record them. `listAuditEvents` reads the audit,
+newest first, optionally for one resource.
 
 ## Paused Relays
 
@@ -474,32 +480,9 @@ request that claimed it:
 
 ## Transfers through Hearth
 
-A Relay browsers can't reach, such as one that dials Hearth from behind a
-home router, has its file transfers and backup downloads passed through
-Hearth (`/api/relays/<id>/browser/...`), as are copies another Relay pulls
-from it when it can't reach it (`/api/relays/<id>/peer/...`). Hearth
-reaches the Relay through a tunnel when the Relay dialed it, and directly
-otherwise.
-
-- **Tickets.** Before it spends anything on a request, Hearth checks that
-  the credential it carries is one Hearth signed for that Relay: a browser
-  capability, in the `Authorization` header or a native download's form, a
-  backup link's token, or a copy's grant. It must name this Relay and this
-  file root, backup or copy, and not have expired. Anything else gets 401 before a tunnel is
-  opened. The Relay still checks all it does for a direct request, such as
-  the browser's proof, nonces, revocation and paths.
-- **Slots.** Hearth carries at most 8 transfers to one Relay at once, and
-  64 for all Relays together (`KILN_RELAY_PASSTHROUGH_MAX`). Past that, a
-  request waits up to 5 seconds for a slot, then gets 503 with
-  `Retry-After`. Control connections don't count against these.
-- **Stalls.** A transfer through Hearth that moves no bytes either way for
-  60 seconds is ended, freeing its slot.
-- **Rate.** `KILN_RELAY_PASSTHROUGH_BYTES_PER_SECOND` caps all transfers
-  through Hearth together, for a Hearth on a metered or small server. It's
-  off unless set.
-- **Meters.** Hearth counts what it carries for each Relay: transfers open,
-  bytes each way, and those turned away. The Relay's page shows them, and
-  they're recorded as `hearth.relay.passthrough.*` metrics.
+When Hearth carries a transfer for a Relay browsers or other Relays can't
+reach, its tickets, slots and limits are in
+[Relay transfers](relay-transfers.md#through-hearth).
 
 ## Limits
 

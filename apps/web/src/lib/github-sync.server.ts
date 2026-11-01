@@ -471,7 +471,7 @@ const runQueuedSync = (syncId: string, next: GitHubSyncTrigger) =>
   runGitHubSyncEffect(syncId, next).pipe(
     Effect.catchCause((cause) =>
       // A failing poll fails again every minute; the sync's status shows
-      // it, so only the first report reaches telemetry.
+      // it, so a poll's failure isn't logged.
       (next === "poll"
         ? Effect.void
         : logException(Cause.squash(cause), {

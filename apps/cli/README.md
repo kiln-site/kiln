@@ -125,8 +125,8 @@ kiln login
 kiln login https://hearth.example.com --name workstation --no-open
 ```
 
-Login honors `KILN_URL` and the selected saved profile before the build's default URL. Official builds default to `https://kiln.site`; fork builds can set their own default. The command opens a browser and
-waits while you approve the sign-in. Self-hosted Hearth installations are
+Login honors `KILN_URL` and the selected saved profile before the build's default URL. Official builds default to `https://kiln.site`; fork builds can set their own default. In a terminal the command opens a
+browser (unless `--no-open`) and waits while you approve the sign-in. Self-hosted Hearth installations are
 selected with the positional URL or `--url`. Named profiles are available
 through `--profile`.
 
@@ -143,8 +143,9 @@ When a supported system credential manager is unavailable, such as on a
 headless Linux host, the CLI falls back to storing the credential in the
 owner-only config file and prints a warning during login. If a manager exists
 but cannot store the credential, the warning identifies that failure instead.
-`kiln logout` revokes the active credential, removes its profile, and deletes
-its system credential.
+`kiln logout` tries to revoke the active credential, then removes its profile
+and deletes its system credential, even if Hearth couldn't be reached to
+revoke it.
 
 ## Discover and operate
 
@@ -171,8 +172,11 @@ kiln backups create server <relay-id>:<instance-id> --name "Before update"
 kiln backups create server <relay-id>:<instance-id> --storage <destination-uuid>
 kiln backups create server <relay-id>:<instance-id> --mode full
 kiln backup download <backup-id>
-kiln server delete <relay-id>:<instance-id> --confirm <relay-id>:<instance-id>
+kiln server delete <relay-id>:<instance-id> --confirm "<server name>"
 ```
+
+Deleting a server asks for its exact name with `--confirm` and your account
+password, prompted for in a terminal or piped with `--password-stdin`.
 
 Disk quotas must be at least `0.1GiB`, matching the Relay allocation minimum.
 Server backups default to incremental restic snapshots and accept exactly one

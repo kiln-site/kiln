@@ -1,7 +1,7 @@
 # Kiln Bricks
 
 Bricks are versioned, declarative packages that tell a Kiln Relay how to run a
-server. This Hearth monorepo app contains the official catalog, reusable Ember
+server. This Kiln monorepo app contains the official catalog, reusable Ember
 container runtimes, and the public recipe specification.
 
 ```text
@@ -24,7 +24,7 @@ pnpm --filter @kiln-site/bricks test
 ```
 
 The official catalog is published directly from
-`apps/bricks/catalog.yml` on Hearth's `main` branch.
+`apps/bricks/catalog.yml` on this repository's `main` branch.
 
 ## Official Ember images
 

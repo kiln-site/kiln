@@ -42,8 +42,8 @@ larger screens.
 - Accent text, links, and icons use `text-primary-ink`, which light mode
   darkens to stay readable. Fills, borders, and rings keep `primary`, the same
   accent in both modes.
-- Light mode maps the 200–400 shades of Tailwind's chromatic colors to deep
-  ones, so a `text-sky-400` written for dark surfaces needs no light variant.
+- A chromatic text color written for dark surfaces, such as `text-sky-400`,
+  needs an explicit `light:` variant to stay readable in light mode.
 - Do not add alpha to readable muted text. `text-muted-foreground/70`, nested
   opacity, and similar combinations lose contrast in the light theme.
 - Opacity communicates state only: disabled, unavailable, transitioning, or
@@ -53,8 +53,9 @@ larger screens.
 
 ## Composition rules
 
-- The ordinary product floor is 12px. Anything smaller must be nonessential
-  data-plane content in an explicitly documented specialist surface.
+- The product floor is 12px: new text below it must be nonessential
+  data-plane content in an explicitly documented specialist surface. Some older
+  labels are still smaller.
 - Prefer sentence case. `type-technical-label` owns the tracked uppercase
   treatment; do not recreate it with arbitrary mono, size, and tracking values.
 - Use approximately 1.5 line height for body and supporting copy and 1.2–1.35
@@ -69,11 +70,11 @@ larger screens.
 Specialist surfaces use the product roles for their surrounding chrome and keep
 smaller sizes only where density is intrinsic to the data plane:
 
-| Surface               | Exception                                        |
-| --------------------- | ------------------------------------------------ |
-| Console output        | 11px log rows and 9px nonessential timestamps    |
-| Chart plotting region | 10px axis ticks and reference labels             |
-| Code editor           | User-controlled content size with a 16px default |
+| Surface               | Exception                                                             |
+| --------------------- | --------------------------------------------------------------------- |
+| Console output        | 11px log rows on phones, `text-xs` above; 9px nonessential timestamps |
+| Chart plotting region | 10px axis ticks and reference labels                                  |
+| Code editor           | User-controlled content size with a 16px default                      |
 
 Console filters, warnings and actions; file-tree metadata and menus; file-viewer
 toolbars; and chart legends and tooltips use the product roles. These exceptions

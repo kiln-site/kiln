@@ -13,17 +13,24 @@ This prevents a misspelling from silently producing a less secure container.
 - `runtime` selects any OCI image and maps resolved values to its environment,
   process, storage, and resource configuration.
 - `console.stopCommands` optionally lists exact commands that intentionally stop
-  the server when a user sends them through Hearth's console. Relay uses this
-  only to suppress automatic crash recovery for that panel action; it does not
-  interpret container signals, external console clients, or server log lines.
+  the server when a user sends them through Kiln's console controls, including
+  the CLI. Relay uses this only to suppress automatic crash recovery for that
+  action; it does not interpret container signals, external console clients,
+  or server log lines.
 - `readiness.logs` optionally lists literal log fragments that indicate the
   server has completed startup. Relay searches the current container session
   for these fragments before marking the server running; Docker health checks
   take precedence when present.
-- `network` declares ports and one of two stable Relay routing modes.
+- `network` declares ports (protocol `tcp`, `udp` or `both`), one of two
+  stable Relay routing modes, and `supportsSrv` (default `false`) for SRV
+  records.
 - `constraints` can limit CPU architectures.
 
-The normative schema is [`schema/recipe-v1.schema.json`](../schema/recipe-v1.schema.json).
+Relay validates recipes against the contract in
+[`packages/contracts/src/index.ts`](../../../packages/contracts/src/index.ts)
+(`brickRecipeSchema`). [`schema/recipe-v1.schema.json`](../schema/recipe-v1.schema.json)
+is the authoring schema for editors; it doesn't yet describe `supportsSrv` or
+the `both` protocol.
 
 ## Icons and colors
 
@@ -47,8 +54,10 @@ metadata:
   color: "#4b98b0"
 ```
 
-`runtime.resources.memory` is the exact Docker hard limit. The optional
-`memoryReservation` is the soft reservation and defaults to the hard limit.
+`runtime.resources.memory` is the default memory limit when the server is given
+none of its own; a server's resource limits can override it, or remove it. The
+optional `memoryReservation` is accepted, but doesn't yet set the container's
+soft reservation.
 Runtime-specific overhead must fit inside that limit; Relay does not silently
 increase it. The official Java Ember uses a container-aware heap percentage so
 native JVM memory remains within the declared allocation. Extra JVM flags belong
@@ -78,7 +87,8 @@ resolved value.
 
 ## Networking modes
 
-- `minecraft-backend` applies Minecraft-aware readiness and SRV behavior.
+- `minecraft-backend` applies Minecraft-aware readiness. SRV records follow
+  `network.supportsSrv`.
 - `direct` publishes every declared port for games that expose themselves
   directly.
 
@@ -99,6 +109,4 @@ a local `file:` catalog for development or air-gapped installations.
 
 ## Compatibility
 
-Relay dispatches on `format`. It should retain a decoder/executor for every safe
-older format. A format may be disabled only when continuing to execute it would
-be unsafe or when an explicitly documented migration is unavoidable.
+Relay accepts only `format: kiln.brick/v1`.

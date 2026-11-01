@@ -70,8 +70,9 @@ them gets a vulnerability report, in the inbox and on devices with push
 notifications on. A person has one report at a time: a newer one replaces it,
 adding in what it said while it's unread, so the inbox never fills with one
 notification per resource. It says how many new vulnerabilities there are, the
-most severe, how many are known to be exploited, and where. Its **Review**
-button opens the Security page, narrowed to the resource when there's one. It
+most severe, how many are known to be exploited, and where. For administrators
+its **Review** button opens the Security page, narrowed to the resource when
+there's one; others go to the resource (see below). It
 goes to people who can act on it:
 
 | Resource                           | Permission                     |

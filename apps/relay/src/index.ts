@@ -3988,8 +3988,9 @@ function notePlatformPass(result: PlatformPassResult): void {
 
 /**
  * Passes over Kiln's services every 30 seconds in platform mode. Otherwise
- * looks once a minute for a Hearth beside this Relay, to report it. Each pass
- * waits its turn in the lanes, so a paused Relay leaves them alone.
+ * looks once a minute for a Hearth beside this Relay, to report it. A
+ * platform-mode pass waits its turn in the lanes, so a paused Relay leaves
+ * Kiln's services alone.
  */
 function platformLoop() {
   if (!platformStartup.state) {
@@ -4432,7 +4433,7 @@ function withRoutesLock<T>(
 }
 
 // Pauses or resumes the lanes to match the Hearths holding the Relay paused.
-// Work that waited out a pause starts again once none does.
+// Resuming also restarts the backup and provisioning work a pause deferred.
 async function applyPauseHolds(): Promise<void> {
   const holds = await runRelayEffect(
     "relay.pauseHolds",

@@ -1,8 +1,8 @@
 # Backups
 
-This document defines Kiln's backup architecture and the delivery order for the
-first implementation. Scheduling is intentionally outside the first release;
-manual tasks use the same durable task model that schedules can enqueue later.
+This document describes how Kiln backs up game servers, databases, Apps,
+volumes, and Kiln itself. Manual and scheduled backups use the same durable
+task model.
 
 ## Goals
 
@@ -34,8 +34,8 @@ The managed server or database process never owns the backup job.
    the control socket.
 4. Relay atomically persists progress and the terminal result. Events are an
    optimization, not the source of truth.
-5. Hearth consumes events while connected and lists tasks changed since its
-   last cursor whenever a Relay reconnects.
+5. Hearth consumes events while connected and reconciles its catalog with the
+   Relay's task list whenever the Relay reconnects.
 
 Submitting an existing task ID returns its current task rather than starting a
 second operation. A Relay restart changes an interrupted `running` create or
@@ -49,13 +49,11 @@ must use the flag rather than infer this handshake from an error message. A task
 that reached a non-repeatable restore step is marked failed for explicit review
 instead of guessed at.
 
-Effect's `Queue` is the in-process wake-up mechanism and a one-permit
-`Semaphore` protects the worker. The SQLite task journal supplies durability;
-an in-memory Effect queue by itself cannot meet the disconnect or restart
-requirements. Effect's experimental persisted/workflow queues are not used in
-the first release because Relay already has a small, proven SQLite state layer
-and adopting the experimental persistence stack would add a second storage
-abstraction for one consumer.
+An Effect `Queue` wakes the worker, which drains queued tasks one at a time;
+the stopped backups of one batch run together inside their shared stopped
+window (see [Formats and live consistency](#formats-and-live-consistency)).
+The SQLite task journal supplies durability across disconnects and
+restarts.
 
 Create tasks have a bounded runtime. Relay cancels and aborts a backup after
 `KILN_BACKUP_TIMEOUT` minutes; the default is `60`. The timeout starts when the
@@ -112,8 +110,8 @@ the authority reading or writing that data does
 Reasons are `manual`, `pre_restore`, `final_delete`, and `scheduled`.
 Artifact kinds are `archive`, `database_dump`, `platform_bundle`,
 `restic_snapshot`, and `tar_archive`.
-A `full`/`incremental` mode is recorded independently so a future Restic
-artifact does not require a catalog migration.
+A backup's `full`/`incremental` mode is recorded separately from its artifact
+kind; incremental game-server backups are `restic_snapshot`s.
 
 Each resource can set a preferred destination, exclude patterns, and its
 retention (see [Retention](#retention)): the most backups it keeps, the most
@@ -133,6 +131,10 @@ paths. Hearth stores S3-compatible destinations with encrypted credentials.
 An owner ID of `null` makes a destination platform-wide; otherwise only that
 user can select it. Destination removal is blocked while cataloged artifacts
 still depend on it.
+
+A full backup can go to several destinations at once: its task writes the
+primary and copies it to each replica, and the catalog keeps every copy. An
+incremental backup goes to exactly one.
 
 Destination implementations are isolated by kind:
 
@@ -154,8 +156,7 @@ arguments, and credentials. Adding a destination means adding its directory
 and registering its typed definition. Shared orchestration should not grow a
 new destination-specific branch. Wire-contract and persistence migrations are
 still required when a new kind introduces a new task shape or stored
-configuration; Local and S3 retain their existing shapes in this refactor.
-Today, `storageId === null` is also the persisted discriminator for Relay-local
+configuration. `storageId === null` is also the persisted discriminator for Relay-local
 storage. A third configured kind therefore needs a persistence discriminator
 and updates to the shared selectors that translate stored artifacts into the
 registry kind. The registries centralize destination behavior, but they are not
@@ -165,13 +166,11 @@ S3 credentials never go to a game container and are not returned to the
 browser. Full archives still use Hearth-signed, narrowly scoped object
 requests. Incremental restic repositories cannot be driven with presigned
 URLs, so Relay receives the destination's static keys inside the durable task
-input (see Incremental snapshots). The first full-archive implementation
-stages one artifact locally, validates its size and digest, then uploads it.
-The single queue plus free-space preflight prevents the unbounded concurrent
-staging failure seen in other panels. Multipart streaming can replace this
-adapter later without changing task or catalog contracts. The initial
-single-request full-archive adapter has a 5 GiB artifact ceiling; restic S3
-pack writes are not subject to that ceiling.
+input (see [Incremental snapshots](#incremental-snapshots)). A full archive is
+staged locally, its size and digest validated, then uploaded in a single
+request, so it has a 5 GiB ceiling; the single queue plus a free-space
+preflight keeps staging bounded. Restic S3 pack writes aren't subject to that
+ceiling.
 
 User-owned endpoints must resolve exclusively to public network addresses on
 every connection. Platform administrators may explicitly allow private
@@ -192,8 +191,7 @@ installation ID.
 
 S3 downloads use a short-lived presigned GET. Local downloads use a
 single-purpose Relay token bound to backup ID, user, expiry, and disposition.
-Neither form is a permanent public URL. The default lifetime is five minutes
-and can later be exposed as an admin maximum.
+Neither form is a permanent public URL. Both last five minutes.
 
 ## Formats and live consistency
 
@@ -204,11 +202,9 @@ vanish or change size/mtime while read. A changed file is retried once; a
 second change becomes a visible warning instead of being silently presented as
 an application-consistent snapshot.
 
-Running servers do not need to stop for backup. Brick-defined consistency hooks
-can improve a live backup. Minecraft Bricks should run `save-off`, then
-`save-all flush`, archive, and always run `save-on` in finalization. Without a
-hook, Kiln promises a crash-consistent best effort, not transactional
-consistency. Filesystem snapshot adapters (ZFS/Btrfs/LVM) can be added later.
+Running game servers don't need to stop for a backup. A live backup is a
+crash-consistent best effort, not a transactional snapshot: Kiln doesn't run
+Brick consistency hooks such as Minecraft's `save-off`.
 
 Managed MySQL, MariaDB, and PostgreSQL databases stay running. Relay executes
 the engine's logical dump tool into a `.dmp` stream and compresses it as
@@ -266,7 +262,7 @@ and the backups rerun), takes every archive, and only then starts again those
 that ran, so the copies agree. A backup of the batch that arrives later runs
 in a window of its own. Live batches are independent backups. A final backup is always
 stopped, and nothing starts again. Game servers, databases, and Kiln are
-backed up live only for now.
+always backed up live.
 
 A volume an App's Compose project made without an ID, as a file that
 changed the volume's Docker name leaves behind, isn't backed up: the App
@@ -276,10 +272,10 @@ A platform bundle contains a logical Hearth database dump plus a versioned
 manifest describing the installation. Relay gzip-compresses the dump and
 encrypts it with AES-256-GCM using a key derived from the separately recoverable
 `KILN_PLATFORM_BACKUP_KEY`; using only a live Hearth secret would make disaster
-recovery circular. The first adapter targets the colocated Compose MySQL
-database identified by installation-scoped Docker labels. External Hearth
-databases will require an explicit platform-backup adapter rather than sending
-connection credentials through Relay's task journal.
+recovery circular. It backs up the colocated Compose MySQL database identified
+by installation-scoped Docker labels; a Hearth database outside the Relay's
+Docker isn't backed up, so no connection credentials pass through the Relay's
+task journal.
 
 The bundle is a backup of Kiln's Hearth catalog, not its deployment
 configuration. Operators must retain the Compose environment, TLS material,
@@ -289,9 +285,10 @@ A Relay in platform mode keeps that configuration itself and exports it as a
 recovery kit (`kiln-relay platform export-kit`); see
 [Self-hosting](self-hosting.md#recovery).
 
-Every artifact gets a manifest containing format version, target identity,
-created time, engine/Brick metadata, exclusions, consistency warnings, logical
-bytes, stored bytes, and SHA-256 digest.
+Game-server archives, tar archives, and platform bundles each carry a
+versioned manifest of their own shape; database dumps are bare compressed
+streams. Sizes, SHA-256 digests, and consistency warnings are kept in the
+catalog with each backup's task result.
 
 ## Kiln's own backups
 
@@ -302,7 +299,7 @@ ID). Only platform administrators back Kiln up, by hand or on a schedule. Its ba
 Hearth stores a schedule target of kind `relay` for it, and the Relay turns it
 into a `platform` backup of its installation.
 
-A fresh installation backs Kiln up once a day, at 03:00 UTC, to the Relay,
+A fresh installation backs Kiln up once a day, at 03:00 on the Relay's clock, to the Relay,
 and keeps 30 days of them, in at most 20 GiB. Migration 24 marks a database migrated before
 anyone signed up; once an administrator and a Relay reporting this
 installation exist, Hearth creates the **Kiln backups** schedule, owned by
@@ -332,8 +329,8 @@ why, and the Relay records it as not run instead of running it. A
 destination Hearth can't use no longer fails the schedule's deploy, which
 left the Relay running what it had before.
 
-A step that backs up an App backs up its folder and each volume only it
-uses, as a manual App backup does, each admitted on its own. It's taken live,
+A step that backs up an App backs up its folder and each volume its Compose
+project owns that has a Kiln ID, as a manual App backup does, each admitted on its own. It's taken live,
 or stopped once for all of them as a batch; saving a stopped one takes
 `app.manage` on the App and every App using those volumes, and while their
 Relay can't say which those are, only a stopped step the schedule already had
@@ -548,20 +545,10 @@ the target).
 
 ## CLI
 
-The CLI mirrors the same authorization and task APIs:
-
-```text
-kiln backups list [--server <ref>] [--database <ref>]
-kiln backup create <resource> [--storage <id|local>] [--exclude <pattern>]
-kiln backup status <backup-id>
-kiln backup download <backup-id> [destination]
-kiln backup restore <backup-id> [--safety-backup] [--confirm <resource>]
-kiln backup delete <backup-id> --confirm <backup-id>
-kiln backup storage list
-```
-
-`apps/cli/README.md` and `.agents/skills/kiln-cli/SKILL.md` must be updated in
-the CLI layer of the stack.
+The CLI uses the same authorization and task APIs: `kiln backups list`,
+`targets`, `create`, `download`, `restore` and `delete`. See
+[the CLI's README](../apps/cli/README.md) and
+[its agent skill](../.agents/skills/kiln-cli/SKILL.md#backups) for usage.
 
 ## Incremental snapshots
 
@@ -664,52 +651,4 @@ access key `kiln`, and secret `kilnminiodevpassword`. Hearth and the Relay's
 full-archive uploads trust the generated certificate through
 `NODE_EXTRA_CA_CERTS`; Relay restic uses `RESTIC_CACERT`.
 
-Ceph RGW is already covered by the S3-compatible adapter. CephFS/RBD snapshots
-are infrastructure-specific consistency sources, not a portable backup format,
-and should be an optional Relay snapshot adapter rather than the default.
-
-## Stacked delivery
-
-1. `feat/backup-foundation`: this design, shared contracts, permissions,
-   Hearth catalog/policy schema, and Relay durable task persistence.
-2. `feat/backup-engine`: Relay's single worker, portable instance archives,
-   local storage, task protocol, Hearth orchestration, reconciliation, and
-   limit reservation.
-3. `feat/backup-s3`: encrypted platform/user destinations, S3-compatible
-   signing and validation, Backblaze integration, upload/delete, and signed
-   downloads.
-4. `feat/backup-restore`: safe instance restore, optional pre-restore backup,
-   final-backup-before-delete, and local download tokens.
-5. `feat/backup-databases`: compressed logical MySQL, MariaDB, and PostgreSQL
-   dumps, database restore, and final-backup-before-delete.
-6. `feat/backup-platform`: encrypted Kiln bundles and offline disaster-recovery
-   restore tooling. Redis/Valkey snapshots follow once their consistency hook
-   and ACL-safe snapshot path are defined.
-7. `ui/backups`: Operations table, server Backups tab, filters, dialogs,
-   progress/reconciliation, storage settings, accessibility, and responsive
-   browser validation.
-8. `feat/backup-cli`: list/create/status/download/restore/delete/storage CLI,
-   help, README, and synchronized CLI skill documentation.
-9. `feat/backup-restic`: incremental restic snapshots as the instance default,
-   export-for-download, forget/prune split, and the full-archive escape hatch.
-10. `feat/backup-restic-s3`: incremental restic repositories on S3-compatible
-    destinations, Relay CONNECT proxy, and destination lifecycle purge.
-
-Each layer receives targeted deterministic tests, full typecheck/lint, and a
-T3 Preview end-to-end pass before its ready-for-review PR is opened. Runtime
-layers additionally test Relay disconnect/reconnect, Relay restart recovery,
-live-server creation, quantity and size rejection, restore, and final deletion.
-
-## Reference decisions
-
-Pterodactyl/Wings validates the value of separate Panel intent and Wings
-execution, gitignore-style exclusions, portable archives, presigned S3 work,
-and explicit restore status. Kiln avoids its fire-and-forget-only status model,
-SHA-1 checksum, unrestricted parallel staging, and mandatory full local S3
-staging as a permanent design constraint.
-
-Coolify validates durable queued execution, execution logs, overlap guards,
-per-destination retention, database-native dump tools, and treating local
-success separately from S3 upload failure. Kiln uses one artifact destination
-per task for an unambiguous success state, makes Relay reconciliation explicit,
-and keeps schedule configuration out of the artifact/execution model.
+Ceph RGW works through the S3-compatible destination.

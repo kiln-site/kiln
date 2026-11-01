@@ -1801,11 +1801,6 @@ export const checkHearthRestart = Effect.fn("Relay.platform.checkRestart")(
   }
 )
 
-/**
- * Restarts one of Kiln's services, holding the installation lock and the
- * container's update lock. Hearth isn't restarted while maintenance holds
- * it stopped, which an operator may have started since it was asked for.
- */
 /** Restarts the Traefik this Relay runs in front of Hearth. */
 const restartPlatformProxy = Effect.fnUntraced(function* (
   context: PlatformContext
@@ -1824,6 +1819,11 @@ const restartPlatformProxy = Effect.fnUntraced(function* (
   return passed(yield* readPlatformState(config.dataDirectory))
 })
 
+/**
+ * Restarts one of Kiln's services, holding the installation lock and the
+ * container's update lock. Hearth isn't restarted while maintenance holds
+ * it stopped, which an operator may have started since it was asked for.
+ */
 export const restartPlatformService = Effect.fn("Relay.platform.restart")(
   function* (context: PlatformContext, role: RelayPlatformServiceRole) {
     const { config, engine } = context

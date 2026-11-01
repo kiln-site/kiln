@@ -75,16 +75,21 @@ kiln login https://hearth.example.com --profile staging --name workstation
 ```
 
 `kiln login` uses an explicit URL, `KILN_URL`, the selected saved profile, then
-the distribution's default URL, and normally opens a browser. Official builds
+the distribution's default URL, and opens a browser when run in a terminal. Official builds
 default to `https://kiln.site`; forks without a default require a panel URL. Add `--no-open` when the environment cannot launch one. Do not start a
 new login when an authenticated profile already targets the requested Hearth.
-`kiln logout` revokes the credential before removing both the saved profile and
-its system credential. If native credential deletion fails, the CLI reports a
-warning after removing the profile.
+`kiln logout` tries to revoke the credential, then removes both the saved
+profile and its system credential even if revoking failed. If native credential
+deletion fails, the CLI reports a warning after removing the profile.
 
-Use `--profile <name>` on any command to select a saved profile. `KILN_URL`,
-`KILN_TOKEN`, and `KILN_CONFIG` support isolated automation, but prefer the
-user's existing authenticated profile for interactive work.
+Use `--profile <name>` on any command to select a saved profile, or `--url` and
+`--token` to target a Hearth directly. `KILN_URL`, `KILN_TOKEN`, and
+`KILN_CONFIG` support isolated automation, but prefer the user's existing
+authenticated profile for interactive work.
+
+Other options any command takes: `help`, `--help` or `-h`; `--version` or
+`-v`; `-f` for `--follow`. `--limit` (default 2000, 1–10000) caps the rows of
+logs, activity and backups.
 
 ## Account and resource permissions
 
@@ -199,6 +204,9 @@ kiln servers create <relay-id> https://example.com/custom-brick.yml \
   --name custom --variable version=1.0.0
 ```
 
+`--brick <id|url>` can name the Brick instead of the positional argument, here
+and in `server startup`, where it replaces the server's Brick.
+
 Server creation requires a full-access CLI credential. Platform administrators
 can create on any Relay; Bring Your Own Relays users can create only on Relays
 they paired. Omitting `--disk` provisions `5GiB` of storage, and omitting
@@ -252,7 +260,7 @@ restore them yet.
 The `DEST` column consolidates the logical backup's destinations, such as
 `local+s3`; it does not repeat a backup once per destination. The `MODE`
 column is `incremental` (restic snapshots, the server default) or `full`
-(portable zip archives, or gzipped tar archives for Apps and volumes). Below the table, each backup whose latest task failed
+(portable zip archives, or gzipped tar archives for Apps and volumes). Below the table, each backup whose latest finished task reports an error
 gets a line with the reason. When the cause is known, such as a storage
 provider's cap being reached, the line says what happened and where to fix it,
 followed by the Relay's own message.
@@ -260,7 +268,10 @@ followed by the Relay's own message.
 Create a manual backup with a reference from `backups targets`. Server backups
 default to incremental restic snapshots stored on the Relay or an S3
 destination. Pass `--mode full` for a portable zip, which can also use local or
-S3 storage. Incremental mode accepts exactly one destination.
+S3 storage; `--mode` applies only to server backups. Incremental mode accepts
+exactly one destination. `--storage default` uses the backup policy's usual
+destinations; pass one `--storage` value at most. A backup without `--name` is
+named `CLI backup`.
 
 ```sh
 kiln backups create server <relay-id>:<instance-id> --name "Before update"
@@ -343,10 +354,14 @@ preserved. Pass `--memory`, `--cpu`, or `--disk` only when that limit should
 change. `kiln server info` shows `No limit` for an unlimited memory or disk
 limit.
 
-Use `--variable name=value` for string variables. Prefix the value with
-`json:` for numbers or booleans, such as `slots=json:20` or
-`debug=json:true`. `--no-start` leaves the reconfigured server stopped.
-Startup changes require full CLI access and `instance.settings` permission.
+Use `--variable name=value`, repeatable, for string variables. Prefix the value
+with `json:` for numbers or booleans, such as `slots=json:20` or
+`debug=json:true`. `--game-version` sets `version` and `--java-version` sets
+`java_version`, overriding a `--variable` for the same name. `--no-start`
+leaves the reconfigured server stopped. Startup changes require full CLI
+access, read access to the configuration and `instance.configuration.write`,
+plus `instance.limits.write` to change limits and power permission to start
+it.
 
 ## Remote path rules
 
@@ -357,7 +372,7 @@ Treat all remote paths as relative to the selected server root.
 - Do not include the host/container prefix `/data`; the CLI already scopes the
   operation to the server root.
 - Do not use `.` or `..` as a file path. `.` is valid only as the directory
-  argument to `files list`.
+  argument to `files list`, which lists `.` when it's left out.
 
 For example, read the root-level Bukkit configuration with:
 
@@ -383,7 +398,8 @@ kiln files read <server> bukkit.yml
 Use `files read` for text inspection. Use `files download` for binary files or
 when preserving exact bytes matters.
 
-Write text from a local file or standard input:
+Write text from a local file, or from standard input when the source is `-`
+or left out:
 
 ```sh
 kiln files write <server> server.properties ./server.properties

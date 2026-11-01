@@ -172,13 +172,13 @@ scoped to the existing URL/profile system.
 - Nightly versions use the next line recorded in the latest stable release plus
   the commit's UTC timestamp. Before the first stable, `INITIAL_RELEASE_LINE`
   optionally overrides the `0.1.0` default. Display
-  numbers use the workflow run number; they no longer reset at each release line.
-- CLI publication follows the exact app release tag. It no longer publishes
-  independently while the corresponding app build might still fail. Both
-  nightly and stable CLI binaries are attached to GitHub releases. npm
+  numbers use the workflow run number.
+- CLI publication follows the exact app release tag, so an app build that fails
+  publishes no CLI. Both nightly and stable CLI binaries are attached to GitHub
+  releases. npm
   bootstrap publication runs separately only when its installer needs an update.
 - Stable promotion accepts the newest nightly in the chosen release line and a
-  `next_release` version, just like the previous promotion form.
+  `next_release` version.
   It reuses image digests, verifies provenance metadata in the release manifest,
   and does not rebuild app images or write commits to `main`.
 - Nightly and stable runs share a queue (up to 100 pending runs), so later
@@ -186,13 +186,13 @@ scoped to the existing URL/profile system.
 - Promotion records `nextReleaseLine` in the stable release manifest. Subsequent
   nightlies automatically use that line; no repository-settings change or extra
   token is required. Retry a promotion with the same `next_release` value.
-- When migrating a repository whose latest stable manifest lacks this field,
-  the next line defaults to its next patch version. `INITIAL_RELEASE_LINE` can
+- When the latest stable manifest lacks this field, the next line defaults to
+  its next patch version. `INITIAL_RELEASE_LINE` can
   select a higher starting version once; after promotion, release metadata takes
   precedence over that bootstrap setting.
 - Retrying a release preserves published image digests. A retry can finish
   rolling-tag updates after a partial failure. Use **Publish CLI release assets**
-  with the exact release tag to retry CLI downloads. **Publish npm CLI bootstrap** retries npm
+  with the exact release tag to retry publishing the CLI's release assets. **Publish npm CLI bootstrap** retries npm
   independently, without holding the app release queue.
 - Nightly configuration resolves the version only on the initial attempt. For
   downstream failures, use **Re-run failed jobs** to reuse the successful
@@ -200,13 +200,8 @@ scoped to the existing URL/profile system.
   itself, stop with **Start a new Nightly release from main.** Start a fresh
   workflow run from `main` in those cases. No run metadata or permanent run tags
   are stored.
-- Required PR check names are now `Static checks`, `Tests`, and `Build`, rather
-  than the nested code-check job names under Container images. Update rulesets
-  referencing the old names. Image-check job names remain separate.
-
-For Kiln, the inspected **Protect Main** ruleset currently requires PRs but has
-no required-status-check rule, so no check-name migration is currently necessary.
-Review this again if rules change before merge.
+- **Code checks** runs four jobs: `Static checks`, `Tests`, `Hearth tests`
+  and `Build`. Repository rulesets decide which are required.
 
 ## Merging upstream
 

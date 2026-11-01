@@ -575,7 +575,8 @@ export const saveSync = operation<SaveGitHubSyncInput>()({
         })
       )
     ),
-  // Its settings: a run writing its files meanwhile reads them afresh.
+  // Its settings, which a run holds shared: a save waits for the run going,
+  // and the next reads what was saved.
   locks: ({ context, input }) => [
     exclusive(partKey(githubSyncKey(context.id), "settings")),
     shared(githubConnectionKey(input.connectionId)),
@@ -991,8 +992,6 @@ export async function handleGitHubWebhook(request: Request): Promise<Response> {
 
 // GitHub caps deliveries at 25 MB.
 const maxDeliveryBytes = 25 * 1024 * 1024
-
-/** The body as text, or null once it passes `limit` bytes. */
 
 function validGitHubSignature(secret: string, body: string, signature: string) {
   const expected = Buffer.from(

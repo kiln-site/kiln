@@ -50,8 +50,8 @@ case-insensitively.
 
 The Relay reports where web traffic reaches it as `publicHost` in its
 snapshot, the same address game servers advertise (`KILN_RELAY_GAME_HOST`).
-Relays that predate it fall back to their game servers' address, then the
-address Hearth reaches them at.
+If the Relay reports none, Hearth uses a game server's reported public host,
+then the address Hearth reaches the Relay at.
 
 ## Vanity domains
 

@@ -16,8 +16,8 @@ in `app_github_source`, outside the app's encrypted config, so a push can
 find the apps it deploys. Choosing it needs `app.manage` on the app and the
 source's owner, or an administrator, as for a sync.
 
-For each deployment Hearth reads the branch head (or the commit a redeploy
-names) and mints an installation token limited to that repository's contents,
+For each deployment Hearth resolves the commit to build: the branch head, a
+push's pinned commit, or the commit a redeploy names. It mints an installation token limited to that repository's contents,
 read-only. It travels in `app.deploy`'s `github` field and is never cached,
 written to disk, or logged; the Relay's operation journal keeps only a hash
 of the request. It expires within the hour.
@@ -39,14 +39,12 @@ Containers carry the commit they were built from in `kiln.app.commit`.
 
 With **Deploy on push**, each new commit on the branch deploys. GitHub
 delivers pushes to Hearth when `KILN_URL` is public; otherwise Hearth checks
-the branch every minute. Deployments queue per app: a push while one runs
-waits for it, and pushes that arrive while one waits join it, so the newest
-commit deploys once. A push or poll for the branch head the app last tried
+the branch every minute. Pushes queue like any other ask (see
+[How deployments queue](#how-deployments-queue)), so the newest commit
+deploys once. A push or poll for the branch head the app last tried
 deploys nothing, so a failing commit isn't retried every minute, and a
 commit deployed again from the Deployments list, as a rollback, stays until
-a new commit lands. Polls skip a Relay that's offline and check again once
-it's back; a pushed commit the Relay couldn't take is recorded as failed,
-and deploys from the app or with the next commit.
+a new commit lands.
 
 Deploying on push hands the branch the app's trust: whoever can push to it
 can run what a pasted Compose file could, host binds included. Turn it off,
@@ -61,12 +59,11 @@ reads the manifest without pulling it), pulls `repository@digest`, and runs
 that. The container keeps the image as its config names it in
 `kiln.app.image`, and the digest in `kiln.app.image.digest`. Another app
 pulling the same tag meanwhile can't change what this one starts. A
-registry that can't name the digest leaves the deployment to pull the tag,
-as before.
+registry that can't name the digest leaves the deployment to pull the tag.
 
-Registries have no way to subscribe to a tag, so Hearth asks. Every hour,
-each Relay checks all of its image apps in one `app.image.check` request,
-16 apps at a time. Apps naming the same image share one registry lookup,
+Registries have no way to subscribe to a tag, so Hearth asks. About every
+hour it checks the image apps that are due, sending each Relay
+`app.image.check` requests of up to 16 apps. Apps naming the same image share one registry lookup,
 four at a time. The Relay compares the digest the tag names with the one
 the app's container runs. Docker Hub doesn't count these lookups against
 its pull limits. A Relay skips an app that is deploying, runs another image
@@ -129,8 +126,7 @@ data lives only in its containers loses it on every deployment. A Relay
 that restarts mid-way leaves both copies running until the next deployment
 replaces them.
 
-A Compose project replaced this way deploys as before, under the app's own
-project name, so Compose keeps its volumes. While both copies run, the node
+A Compose project replaced this way deploys under the app's own project name, so Compose keeps its volumes. While both copies run, the node
 reserves both copies' memory.
 
 ## Volumes
@@ -201,11 +197,53 @@ named volumes Kiln doesn't manage, and paths on the node outside the app's
 folder. Files an app's configuration mounts and a repository checkout don't
 count; each deployment writes them again.
 
+## How deployments queue
+
+An app deploys the same way whatever asked: a push, a poll that found a new
+commit, an image check, or a person's Deploy, save-and-deploy, update or
+redeploy. Each ask queues the app's deployment, a durable `app.deploy`
+operation (see [Hearth operations](hearth-operations.md#durable-operations))
+whose input is the ask, or joins the one waiting there. Asks while a
+deployment runs make one deployment after it, of the newest ask:
+
+- a push pins the commit from its webhook, with the repository and branch it
+  came from;
+- a redeploy pins its commit, or its digest and the image it was of, and is
+  refused once the app deploys from another;
+- anything else asks for the newest.
+
+A poll never replaces an ask that waits. A person's ask stays theirs while it
+waits: it builds even a commit already live and deploys an update whatever
+its wait, and they're checked again when it runs, so one who may no longer
+manage the app is refused, though a push that joined their ask deploys as
+Kiln's own. A person asks in an ordinary operation holding the app shared,
+so it returns at once, and a deletion or restore turns it away. A deploy
+still waiting can be cancelled.
+
+The deployment holds the app's `#deploy` from its start until its Relay
+says the build ended, so the next waits its turn behind it. It starts only
+when its turn comes and its Relay is connected and not paused, with the
+databases it keeps for the app handed over (an operation of its own,
+started then if it hasn't run). Until then it waits holding nothing, so
+what's asked meanwhile joins it, it can be cancelled, and a deletion of the
+app isn't kept waiting. The app's saved configuration, which holds its
+secrets, is read as it's sent, and the token that checks out a GitHub commit
+is made then; neither is kept in the operation's steps, which are stored in
+the clear.
+
+Deleting an app first asks its Relay to stop a running build
+(`app.deployment.abort`), then queues the deletion behind the deployment,
+which ends once its Relay sees the build stopped. A deployment won't send
+once the deletion began.
+
 ## Recording
 
-Hearth records a deployment once its Relay accepts it, and follows it there
-until it ends. A Relay that is offline or paused is checked again when it's
-back; a deployment the Relay lost track of, because it restarted mid-way,
-ends as **Unknown**. Deployments a Hearth restart left running are followed
-again within a minute. A push or poll the Relay refused is recorded as
-failed, since nobody was watching. Each app keeps its 200 latest records.
+Hearth records a deployment as running before sending it to the Relay, and
+records the Relay's deployment ID once the Relay accepts it. A send that
+fails marks the record failed. Hearth follows the deployment there until it
+ends: a Relay that is offline or paused is checked again when it's back,
+and a deployment the Relay lost track of, because it restarted mid-way,
+ends as **Unknown**. A Hearth restart resumes a deployment's operation where
+it left off; every minute Hearth also settles a running record that no
+operation follows. A poll that fails to prepare its ask is logged, not
+recorded. Each app keeps its 200 latest records.

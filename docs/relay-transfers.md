@@ -1,7 +1,8 @@
 # Relay transfers
 
-A Relay streams files directly to and from whoever asked for them, so
-Hearth stays out of the data path. Every direct transfer runs through the
+A Relay streams files directly to and from whoever asked for them when they
+can reach it; when they can't, Hearth passes the transfer through without
+changing what the Relay authorizes (see [Through Hearth](#through-hearth)). Every direct transfer runs through the
 same code in `apps/relay/src/transfers/`, whichever route it came in on.
 
 | Route                             | Used for                                                                                      | Authorized by                                                                                               |
@@ -47,7 +48,7 @@ transfer is an effect with its own span (`RelayTransfer.upload`,
 export with the page's other browser traces. The request URL carries the
 span's `traceparent`, marked sampled only when Hearth keeps that browser
 trace, so the browser's and the Relay's halves are kept or dropped
-together. Relays that predate this ignore the parameter.
+together.
 
 - Uploads go over XHR for its progress events and abort when the effect is
   interrupted. Folder uploads send three files at a time and keep each
@@ -58,7 +59,10 @@ together. Relays that predate this ignore the parameter.
   capability still names one path and method.
 - Failures are `RelayTransferError`s whose `reason` says whether the Relay
   was unreachable, refused, cancelled, or answered with something invalid.
-  An unreachable Relay still takes a small text file through Hearth.
+  When Hearth issues the capability with `proxyMode: "hearth"`, requests go
+  through Hearth's `/api/relays/<id>/browser/files/<root>` instead. An
+  upload that can't reach the Relay either way still saves a UTF-8 text file
+  of up to 2 MiB through Hearth.
 
 ## Between Relays
 
@@ -83,8 +87,7 @@ Hearth (`apps/relay/src/transfers/peer/`, `apps/web/src/server/relay-transfers.s
    Relay reaches Hearth, so a copy works even when the destination can't
    reach the source, such as one behind a home router; its bytes then cross
    Hearth, which passes only pulls carrying the grant it signed and keeps
-   to its limits on what it carries (relay-operations.md, "Transfers
-   through Hearth"). The destination tries each address in turn whatever
+   to its limits on what it carries ([Through Hearth](#through-hearth)). The destination tries each address in turn whatever
    one answers, since an address can reach something other than the source.
 4. The destination fetches the artifact into `<data>/transfers/incoming/`
    with Range requests, each signed with its identity key. A dropped
@@ -118,6 +121,35 @@ if it stops, the transfer stays where it was until it's started again.
 an offline or outdated Relay, a database root, or a pairing that can't
 move files in or out. A pull that can't reach its source reports why in
 its `error` while it waits to try again.
+
+## Through Hearth
+
+A Relay browsers can't reach, such as one that dials Hearth from behind a
+home router, has its file transfers and backup downloads passed through
+Hearth (`/api/relays/<id>/browser/...`), as are copies another Relay pulls
+from it when it can't reach it (`/api/relays/<id>/peer/...`). Hearth
+reaches the Relay through a tunnel when the Relay dialed it, and directly
+otherwise.
+
+- **Tickets.** Before it spends anything on a request, Hearth checks that
+  the credential it carries is one Hearth signed for that Relay: a browser
+  capability, in the `Authorization` header or a native download's form, a
+  backup link's token, or a copy's grant. It must name this Relay and this
+  file root, backup or copy, and not have expired. Anything else gets 401 before a tunnel is
+  opened. The Relay still checks all it does for a direct request, such as
+  the browser's proof, nonces, revocation and paths.
+- **Slots.** Hearth carries at most 8 transfers to one Relay at once, and
+  64 for all Relays together (`KILN_RELAY_PASSTHROUGH_MAX`). Past that, a
+  request waits up to 5 seconds for a slot, then gets 503 with
+  `Retry-After`. Control connections don't count against these.
+- **Stalls.** A transfer through Hearth that moves no bytes either way for
+  60 seconds is ended, freeing its slot.
+- **Rate.** `KILN_RELAY_PASSTHROUGH_BYTES_PER_SECOND` caps all transfers
+  through Hearth together, for a Hearth on a metered or small server. It's
+  off unless set.
+- **Meters.** Hearth counts what it carries for each Relay: transfers open,
+  bytes each way, and those turned away. The Relay's page shows them, and
+  they're recorded as `hearth.relay.passthrough.*` metrics.
 
 ## Limits
 
