@@ -9,11 +9,7 @@ interface CertificateOwner {
   readonly resourceType: "app" | "instance"
 }
 
-/**
- * The web route hostnames of a game server or App still waiting on a
- * certificate, as its Relay's last snapshot says. Empty while the Relay is
- * away: Hearth shows nothing it doesn't know.
- */
+/** A resource's hostnames still waiting on a certificate, from its Relay's snapshot. */
 export function pendingWebCertificates(
   owner: CertificateOwner
 ): Array<WebHostnameCertificate & { hostname: string }> {

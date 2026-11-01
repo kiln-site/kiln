@@ -232,76 +232,49 @@ describe("bundled Traefik certificates", () => {
 
 describe("checking a name at its own nameservers", () => {
   const fail = (code: string) => Object.assign(new Error(code), { code })
-  // A zone's nameservers by name, and what each set of servers answers.
-  function resolverFor(options: {
-    readonly zones: Record<string, ReadonlyArray<string>>
-    readonly answers: Record<
-      string,
-      Record<string, ReadonlyArray<string> | string>
-    >
-  }) {
-    return nameResolver({
-      addresses: async (host) => [`ip-of-${host}`],
-      nameservers: async (name) => {
-        const servers = options.zones[name]
-        if (!servers) throw fail(dnsCodes.NOTFOUND)
-        return servers
-      },
-      records: async (servers, name, type) => {
-        const answer = options.answers[servers.join(",")]?.[`${name} ${type}`]
-        if (answer === undefined) throw fail(dnsCodes.NODATA)
-        if (typeof answer === "string") throw fail(answer)
-        return answer
-      },
-    })
+  // Each zone's nameservers, and what each nameserver answers.
+  const zones: Record<string, ReadonlyArray<string>> = {
+    "co.uk": ["ns.registry.uk"],
+    "example.co.uk": ["ns.example.co.uk"],
+    "example.com": ["ns.example.com"],
   }
-
-  it("finds a name its zone answers for", async () => {
-    const resolve = resolverFor({
-      answers: {
-        "ip-of-ns.example.com": { "shop.example.com A": ["192.0.2.1"] },
-      },
-      zones: { "example.com": ["ns.example.com"] },
-    })
-    expect(await resolve("shop.example.com")).toBe("found")
+  const answers: Record<string, ReadonlyArray<string> | string> = {
+    "ns.example.co.uk example.co.uk A": ["192.0.2.2"],
+    "ns.example.com new.example.com A": dnsCodes.NOTFOUND,
+    "ns.example.com shop.example.com A": ["192.0.2.1"],
+    "ns.example.com slow.example.com A": "ETIMEOUT",
+  }
+  const resolve = nameResolver({
+    addresses: async (host) => [host],
+    nameservers: async (name) => {
+      const servers = zones[name]
+      if (!servers) throw fail(dnsCodes.NOTFOUND)
+      return servers
+    },
+    records: async (servers, name, type) => {
+      const answer = answers[`${servers.join(",")} ${name} ${type}`]
+      // Anything else exists without such a record, or is only referred on.
+      if (answer === undefined) throw fail(dnsCodes.NODATA)
+      if (typeof answer === "string") throw fail(answer)
+      return answer
+    },
   })
 
-  it("waits for a name its zone doesn't have yet", async () => {
-    const resolve = resolverFor({
-      answers: {
-        "ip-of-ns.example.com": { "shop.example.com A": dnsCodes.NOTFOUND },
-      },
-      zones: { "example.com": ["ns.example.com"] },
-    })
-    expect(await resolve("shop.example.com")).toBe("missing")
-  })
-
-  it("waits for a domain that exists without an address yet", async () => {
-    const resolve = resolverFor({
-      answers: {},
-      zones: { "example.com": ["ns.example.com"] },
-    })
-    expect(await resolve("example.com")).toBe("missing")
-  })
-
-  it("asks a zone of its own when its parent only refers to it", async () => {
-    const resolve = resolverFor({
-      answers: {
-        "ip-of-ns.example.co.uk": { "example.co.uk A": ["192.0.2.1"] },
-      },
-      zones: {
-        "co.uk": ["ns.registry.uk"],
-        "example.co.uk": ["ns.example.co.uk"],
-      },
-    })
-    expect(await resolve("example.co.uk")).toBe("found")
-  })
-
-  it("asks Traefik to try when the nameservers don't answer", async () => {
-    const resolve = resolverFor({
-      answers: { "ip-of-ns.example.com": { "shop.example.com A": "ETIMEOUT" } },
-      zones: { "example.com": ["ns.example.com"] },
-    })
-    expect(await resolve("shop.example.com")).toBe("unknown")
+  it.each([
+    ["finds a name its zone answers for", "shop.example.com", "found"],
+    [
+      "waits for a name its zone doesn't have yet",
+      "new.example.com",
+      "missing",
+    ],
+    ["waits for a domain without an address yet", "example.com", "missing"],
+    ["asks a zone its parent only refers to", "example.co.uk", "found"],
+    [
+      "lets Traefik try when nameservers don't answer",
+      "slow.example.com",
+      "unknown",
+    ],
+  ] as const)("%s", async (_, hostname, expected) => {
+    expect(await resolve(hostname)).toBe(expected)
   })
 })

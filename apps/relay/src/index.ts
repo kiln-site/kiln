@@ -1606,8 +1606,7 @@ const platformContext: PlatformContext = {
   engine: relayEngine,
 }
 const platformFiber = forkRelayEffect("relay.platform", platformLoop())
-// Has the bundled Traefik ask for web routes' certificates once their names
-// resolve, and again while one is missing (web-certificates.ts).
+// See web-certificates.ts.
 const certificateFiber = forkRelayEffect(
   "relay.certificates",
   certificateLoop()
@@ -4021,13 +4020,10 @@ function platformLoop() {
     )
 }
 
-// Checks the hostnames that are due every 15 seconds, or at once when a
-// route newly waits on one. The checks themselves look up only names that
-// are due, and most passes find none.
+// Every 15 seconds, or when a route newly waits: lookups outside the lane,
+// changes inside it.
 function certificateLoop() {
   return Effect.tryPromise(() => lifecycle.certificates.lookUp()).pipe(
-    // What it found changes things in the routes lane, in turn with route
-    // writes and checks by hand.
     Effect.flatMap((lookups) =>
       lookups.due
         ? lanes.run(
@@ -4056,9 +4052,8 @@ function certificateLoop() {
   )
 }
 
-// Writes Traefik's routes again when which certificates it asks for
-// changed, and tells Hearth what's still waiting. A rewrite needs the
-// routes lock, which the caller holds.
+// Rewrites Traefik's routes when owed and refreshes the snapshot. The caller
+// holds the routes lock.
 async function applyCertificateCheck(result: CertificateCheck): Promise<void> {
   if (result.rewrite) {
     await traceRelayPromise("relay.certificates.refresh", () =>

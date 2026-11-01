@@ -9,7 +9,10 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { resourceWebHostnamesQueryOptions } from "@/lib/query-options"
-import type { ResourceWebHostname } from "@/server/domains"
+import type {
+  ResourceWebHostname,
+  ResourceWebHostnames,
+} from "@/server/domains"
 
 export interface WebHostnameResourceRef {
   relayId: string
@@ -30,8 +33,8 @@ export const WebHostnameDnsStatus = React.memo(function WebHostnameDnsStatus({
   resource: WebHostnameResourceRef
 }) {
   const selectHostname = React.useCallback(
-    (rows: Array<ResourceWebHostname>) =>
-      rows.find((row) => row.hostname === hostname) ?? null,
+    ({ hostnames }: ResourceWebHostnames) =>
+      hostnames.find((row) => row.hostname === hostname) ?? null,
     [hostname]
   )
   const { data: row } = useQuery({
@@ -116,6 +119,6 @@ export function useGeneratedHostname(resource: WebHostnameResourceRef) {
   return data ?? null
 }
 
-function selectGenerated(rows: Array<ResourceWebHostname>) {
-  return rows.find((row) => row.generated) ?? null
+function selectGenerated({ hostnames }: ResourceWebHostnames) {
+  return hostnames.find((row) => row.generated) ?? null
 }

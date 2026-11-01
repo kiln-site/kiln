@@ -1,22 +1,12 @@
 /**
  * Certificates for the web routes the bundled Traefik serves.
  *
- * Traefik asks Let's Encrypt for a hostname's certificate when a route
- * naming it first appears, and again only when its configuration next
- * changes. Asked before the name resolves, Let's Encrypt answers NXDOMAIN,
- * its resolvers may remember that answer, and Traefik never asks again on
- * its own, so the route serves Traefik's default certificate until some
- * other route changes.
- *
- * So Traefik asks for a hostname only once its name resolves at its
- * domain's own nameservers, which have a new record first and remember no
- * answer, unlike a resolver. Until then the Relay checks the name now and
- * then, which costs nothing at Let's Encrypt. Once Traefik has asked, the
- * Relay doesn't ask again on its own: someone checking a hostname by hand
- * has Traefik ask again. That changes Traefik's configuration, which has it
- * ask again for every certificate it lacks, so the Relay as a whole does so
- * a few times an hour at most. Other changes to its routes, and restarts,
- * have Traefik ask again too; this only keeps Kiln's own asks down.
+ * Traefik asks Let's Encrypt for a missing certificate only when its
+ * configuration changes. Asked before a new name resolves, it gets NXDOMAIN
+ * and doesn't ask again. So Traefik asks for a hostname only once its name
+ * resolves at its zone's own nameservers, and someone can have it ask again
+ * by hand; that reaches every certificate it lacks, so it's limited per
+ * Relay.
  */
 import { promises as dns } from "node:dns"
 import { readFile, stat } from "node:fs/promises"
@@ -48,7 +38,7 @@ export interface TraefikCertificateGate {
   readonly version: number
 }
 
-/** Someone asking about a hostname, and the resource Hearth let them ask for. */
+/** A hostname checked by hand, and the resource Hearth authorized. */
 export interface ByHand {
   readonly hostname: string
   readonly owner: RelayPendingCertificate["owner"]
@@ -61,22 +51,19 @@ export interface NameLookups {
   readonly due: boolean
 }
 
-/** What checking hostnames found, for whoever writes Traefik's routes. */
 export interface CertificateCheck {
-  /** Whether Traefik was set asking for the hostname checked by hand. */
+  /** Traefik was set asking for the hostname checked by hand. */
   readonly asked: boolean
-  /** Whether what's pending changed, for the Relay's snapshot. */
+  /** What's pending changed, for the snapshot. */
   readonly changed: boolean
-  /** Whether Traefik's routes must be written again. */
+  /** Traefik's routes must be written again. */
   readonly rewrite: boolean
 }
 
 interface Pending {
-  /** Checks of its name that found it missing. */
+  /** DNS checks that found it missing, for their backoff. */
   attempts: number
-  /** Traefik asked a while ago and has no certificate yet. */
   failed: boolean
-  /** When its name is next checked, while it doesn't resolve. */
   nextCheckAt: number
   owner: RelayPendingCertificate["owner"]
   /** When Traefik last started asking for it. */
@@ -87,18 +74,16 @@ interface Pending {
 const second = 1_000
 const minute = 60 * second
 const hour = 60 * minute
-// Asking a name's nameservers costs nothing, so these start soon after its
-// record is likely made.
+// DNS checks cost nothing at Let's Encrypt.
 const dnsDelays = [15 * second, 30 * second, minute, 2 * minute, 5 * minute]
 const dnsDelayCap = 10 * minute
-// Issuance takes seconds; one still missing after this has most likely failed.
+// Issuance takes seconds; still missing after this, it most likely failed.
 const issueTime = 2 * minute
-// Let's Encrypt allows five failed validations per hostname an hour; Traefik
-// asking when the route appeared was one. Each ask by hand reaches every
-// hostname without a certificate, so the limit is the Relay's.
+// Let's Encrypt allows five failed validations per hostname an hour, and the
+// first ask was one. Asks by hand reach every hostname, so this is per Relay.
 const asksPerHour = 4
 
-// Traefik's acme.json: each resolver's certificates. Only their names matter.
+// Traefik's acme.json; only the certificates' names matter.
 const acmeStoreSchema = z.record(
   z.string(),
   z
@@ -121,24 +106,20 @@ export class WebCertificates {
   readonly #pending = new Map<string, Pending>()
   readonly #resolve: (hostname: string) => Promise<NameAnswer>
   readonly #storePath: string
-  // Names Traefik holds a certificate for; null until its store first reads,
-  // and while it can't be read, every hostname counts as having one.
+  // Names with a certificate; null (all count) until acme.json reads.
   #issued: ReadonlySet<string> | null = null
-  // When Traefik was set asking again by hand, within the last hour.
+  // Asks by hand within the last hour.
   #asks: Array<number> = []
   #retry = 0
-  // Who serves each hostname the bundled Traefik serves.
   #served: ReadonlyMap<string, Pending["owner"]> = new Map()
   #storeVersion: string | null = null
-  // Raised when Traefik's routes need writing again; `#written` is the one
-  // last written, so a write that didn't happen, as while the Relay is
-  // paused, is still owed.
+  // A rewrite stays owed until one is written, as when a paused Relay turns
+  // it away.
   #version = 0
   #written = 0
   #wake: (() => void) | null = null
 
   constructor(options: {
-    /** Asks a name's own nameservers whether it resolves. */
     readonly resolve: (hostname: string) => Promise<NameAnswer>
     /** Traefik's acme.json. */
     readonly storePath: string
@@ -147,11 +128,7 @@ export class WebCertificates {
     this.#storePath = options.storePath
   }
 
-  /**
-   * Follows the hostnames the bundled Traefik serves: `routes`, or none
-   * when no bundled Traefik serves them. One without a certificate waits
-   * until its name resolves; the next check looks at once.
-   */
+  /** Follows the routes the bundled Traefik serves; none without it. */
   async track(routes: ReadonlyArray<RelayStoredWebRoute>): Promise<void> {
     const served = new Map<string, Pending["owner"]>()
     for (const route of routes) {
@@ -190,7 +167,7 @@ export class WebCertificates {
     if (added) this.#wake?.()
   }
 
-  /** For writing Traefik's configuration as things stand now. */
+  /** For writing Traefik's routes as things stand now. */
   gate(): TraefikCertificateGate {
     const unresolved = new Set(
       [...this.#pending]
@@ -221,57 +198,45 @@ export class WebCertificates {
       }))
   }
 
-  /**
-   * Checks the names of hostnames waiting for DNS that are due, or only
-   * one now, as when someone who may change its route asks: `lookUp`,
-   * then `apply`. The caller holds the routes lock.
-   */
+  /** `lookUp` then `apply`, for a check by hand under the routes lock. */
   async check(byHand?: ByHand): Promise<CertificateCheck> {
     if (byHand) this.#ownedHostname(byHand)
     return this.apply(await this.lookUp(byHand), byHand)
   }
 
   /**
-   * Looks up the names of hostnames waiting for DNS that are due, or the
-   * one asked about. Changes nothing, so it needs no lock; `due` says
-   * whether `apply` has anything to do.
+   * Looks up the due names, or the one checked by hand. Changes nothing,
+   * so it needs no lock.
    */
   async lookUp(byHand?: ByHand): Promise<NameLookups> {
     const hostname = byHand?.hostname.toLowerCase()
     const answers = new Map<string, NameAnswer>()
-    if (this.#pending.size === 0) {
-      return { answers, due: this.#version !== this.#written }
-    }
-    await this.#readStore()
     const now = Date.now()
-    let due = this.#version !== this.#written
-    // Routes can change while names are looked up; iterating the Map as it
-    // changes is safe.
     for (const [name, pending] of this.#pending) {
-      if (this.#hasCertificate(name)) {
-        due = true
-        continue
-      }
-      if (
-        pending.waitingFor === "certificate" &&
-        !pending.failed &&
-        now - pending.since >= issueTime
-      ) {
-        due = true
-      }
       const wanted =
         hostname === undefined
           ? pending.waitingFor === "dns" && pending.nextCheckAt <= now
           : name === hostname
       if (wanted) answers.set(name, await this.#resolve(name))
     }
-    return { answers, due: due || answers.size > 0 }
+    // Waiting hostnames may also have their certificate now, or be due to
+    // show as failed; applying finds out.
+    const due =
+      answers.size > 0 ||
+      this.#version !== this.#written ||
+      [...this.#pending.values()].some(
+        (pending) =>
+          pending.waitingFor === "certificate" &&
+          !pending.failed &&
+          now - pending.since >= issueTime
+      ) ||
+      (this.#pending.size > 0 && (await this.#storeChanged()))
+    return { answers, due }
   }
 
   /**
-   * Applies what `lookUp` found, with the routes lock held, so checks and
-   * route writes change things in turn. Only one asked about by hand has
-   * Traefik ask again, and it's refused unless `owner`'s routes serve it.
+   * Applies what `lookUp` found, under the routes lock. Only a hostname
+   * checked by hand, and served by its owner's routes, has Traefik ask again.
    */
   async apply(
     lookups: NameLookups,
@@ -303,12 +268,10 @@ export class WebCertificates {
     hostname: string | undefined
   ): void {
     const now = Date.now()
-    // Deleting from a Map while iterating it is safe.
     for (const [name, pending] of this.#pending) {
       if (this.#hasCertificate(name)) {
         this.#pending.delete(name)
         result.changed = true
-        // Traefik holds one it wasn't asking for, such as from before.
         if (pending.waitingFor === "dns") this.#version += 1
         continue
       }
@@ -324,7 +287,6 @@ export class WebCertificates {
       if (answer === undefined) continue
       if (answer === "missing") {
         if (pending.waitingFor === "certificate") {
-          // Traefik stops asking until it resolves again.
           pending.waitingFor = "dns"
           pending.attempts = 0
           this.#version += 1
@@ -337,7 +299,6 @@ export class WebCertificates {
         continue
       }
       if (pending.waitingFor === "dns") {
-        // Asking for it at all changes Traefik's configuration.
         pending.waitingFor = "certificate"
         pending.failed = false
         pending.since = now
@@ -346,11 +307,9 @@ export class WebCertificates {
         this.#version += 1
         continue
       }
-      // It resolves and Traefik has asked: only someone asking by hand has
-      // it ask again.
+      // Asked again by hand: Traefik asks for every certificate it lacks, so
+      // each starts over.
       if (name !== hostname) continue
-      // Traefik asks again for every certificate it lacks, so each of them
-      // starts over.
       this.#asks = this.#asks.filter((ask) => ask > now - hour)
       if (this.#asks.length >= asksPerHour) continue
       this.#asks.push(now)
@@ -366,7 +325,7 @@ export class WebCertificates {
     }
   }
 
-  /** Resolves once a hostname newly waits, for the loop that checks them. */
+  /** Resolves once a hostname newly waits. */
   woken(): Promise<void> {
     return new Promise((resolve) => {
       this.#wake = () => {
@@ -383,8 +342,14 @@ export class WebCertificates {
     return dot > 0 && this.#issued.has(`*${hostname.slice(dot)}`)
   }
 
-  // Reads Traefik's store when it has changed. One that can't be read keeps
-  // what was read before, as Traefik may be partway through writing it.
+  async #storeChanged(): Promise<boolean> {
+    const before = this.#storeVersion
+    await this.#readStore()
+    return this.#storeVersion !== before
+  }
+
+  // Rereads acme.json when it changes, keeping what it had while Traefik is
+  // partway through writing it.
   async #readStore(): Promise<void> {
     const version = await recoverPromise(
       async () => {
@@ -394,16 +359,15 @@ export class WebCertificates {
       (cause) => (hasCode(cause, "ENOENT") ? "missing" : null)
     )
     if (version === null || version === this.#storeVersion) return
-    if (version === "missing") {
-      this.#issued = new Set()
-      this.#storeVersion = version
-      return
-    }
-    const text = await recoverPromise(
-      () => readFile(this.#storePath, "utf8"),
-      () => null
-    )
+    const text =
+      version === "missing"
+        ? ""
+        : await recoverPromise(
+            () => readFile(this.#storePath, "utf8"),
+            () => null
+          )
     if (text === null) return
+    // Missing or empty before Traefik first writes it: no certificates.
     if (text.trim() === "") {
       this.#issued = new Set()
       this.#storeVersion = version
@@ -442,11 +406,11 @@ export function webCertificateStorePath(
 
 /** The DNS queries a name check makes. */
 export interface DnsQueries {
-  /** A name's own NS records, asked of the Relay's resolver. */
+  /** NS records, from the Relay's resolver. */
   readonly nameservers: (name: string) => Promise<ReadonlyArray<string>>
-  /** A nameserver's addresses, asked of the Relay's resolver. */
+  /** A nameserver's addresses, from the Relay's resolver. */
   readonly addresses: (host: string) => Promise<ReadonlyArray<string>>
-  /** A name's records of one type, asked of `servers` directly. */
+  /** Records asked of `servers` directly. */
   readonly records: (
     servers: ReadonlyArray<string>,
     name: string,
@@ -457,7 +421,7 @@ export interface DnsQueries {
 const lookupTimeout = { timeout: 2_000, tries: 2 }
 const relayResolver = new dns.Resolver(lookupTimeout)
 
-/** The queries over the network, each giving up within a few seconds. */
+/** Over the network, each giving up within a few seconds. */
 export const networkDnsQueries: DnsQueries = {
   addresses: (host) => relayResolver.resolve4(host),
   nameservers: (name) => relayResolver.resolveNs(name),
@@ -473,16 +437,14 @@ export const networkDnsQueries: DnsQueries = {
 }
 
 /**
- * Checks whether a hostname resolves, asked of its zone's own nameservers
- * rather than a resolver: they have a new record first, and a resolver
- * asked too early would remember the name as missing, for whoever uses it
- * next. `unknown` when they can't be reached or don't say.
+ * Whether a hostname resolves, asked of its zone's own nameservers: a
+ * resolver asked too early would remember it as missing. `unknown` when
+ * they can't be reached.
  */
 export function nameResolver(
   queries: DnsQueries
 ): (hostname: string) => Promise<NameAnswer> {
-  // The addresses of a name's own nameservers: none when it has none, null
-  // when they can't be found.
+  // Its own nameservers' addresses; null when they can't be found.
   const serversOf = async (
     name: string
   ): Promise<ReadonlyArray<string> | null> => {
@@ -503,8 +465,8 @@ export function nameResolver(
     const unique = [...new Set(addresses.flat())]
     return unique.length > 0 ? unique : null
   }
-  // What `servers` say of a name's addresses: `nodata` when it exists
-  // without one, or they only refer to nameservers of its own.
+  // `nodata`: it exists without an address, or `servers` only refer to its
+  // own nameservers.
   const addressAnswer = async (
     servers: ReadonlyArray<string>,
     name: string
@@ -527,9 +489,8 @@ export function nameResolver(
     return "nodata"
   }
   return async (hostname) => {
-    // The zone holding it, searched from its parent so the name itself
-    // never reaches a resolver before it exists; a domain's own name starts
-    // with itself.
+    // Its zone, searched from its parent so the name never reaches a
+    // resolver before it exists.
     const labels = hostname.split(".")
     let servers: ReadonlyArray<string> | null = []
     for (
@@ -542,9 +503,9 @@ export function nameResolver(
     if (!servers || servers.length === 0) return "unknown"
     const answer = await addressAnswer(servers, hostname)
     if (answer !== "nodata") return answer
-    // It exists, so asking for its own nameservers remembers nothing
-    // missing. With none, it has no address yet; with some, it's a zone of
-    // its own, as a domain under a two-label suffix is, and they answer.
+    // It exists, so asking a resolver for its own nameservers is safe. With
+    // none it has no address yet; with some, it's its own zone (as under a
+    // two-label suffix) and they answer.
     const own = await serversOf(hostname)
     if (own === null) return "unknown"
     if (own.length === 0) return "missing"

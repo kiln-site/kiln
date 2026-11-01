@@ -23,7 +23,6 @@ import {
 } from "@/server/domain-settings.server"
 import {
   checkWebCertificateHandler,
-  getResourceWebCertificatesHandler,
   getResourceWebHostnamesHandler,
   releaseWebHostnameHandler,
 } from "@/server/web-hostname-access.server"
@@ -231,11 +230,14 @@ export interface WebCertificateCheck {
   certificate: WebHostnameCertificate | null
 }
 
-/** A game server's or app's web route hostnames still waiting on one. */
-export interface ResourceWebCertificates {
-  /** Whether the person may have its Relay check again. */
-  canCheck: boolean
-  pending: Array<WebHostnameCertificate & { hostname: string }>
+/** A game server's or app's web hostnames, for its network page. */
+export interface ResourceWebHostnames {
+  /** Whether the person may change its routes. */
+  canChange: boolean
+  /** Its web route hostnames still waiting on a certificate. */
+  certificates: Array<WebHostnameCertificate & { hostname: string }>
+  /** The DNS records Kiln keeps for them. */
+  hostnames: Array<ResourceWebHostname>
 }
 
 /** A web hostname as a game server's or app's network page shows it. */
@@ -297,10 +299,6 @@ export const removeInstanceDomain = createServerFn({ method: "POST" })
 export const getResourceWebHostnames = createServerFn({ method: "GET" })
   .validator(resourceWebHostnamesInputSchema)
   .handler(({ data }) => getResourceWebHostnamesHandler(data))
-
-export const getResourceWebCertificates = createServerFn({ method: "GET" })
-  .validator(resourceWebHostnamesInputSchema)
-  .handler(({ data }) => getResourceWebCertificatesHandler(data))
 
 /** Has the hostname's Relay check its name and certificate again now. */
 export const checkWebCertificate = createServerFn({ method: "POST" })

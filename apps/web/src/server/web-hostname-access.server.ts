@@ -27,8 +27,7 @@ import { explainHostnameInUseEffect } from "@/server/domain-resource-access.serv
 import type {
   CheckWebCertificateInput,
   ReleaseWebHostnameInput,
-  ResourceWebCertificates,
-  ResourceWebHostname,
+  ResourceWebHostnames,
   ResourceWebHostnamesInput,
   WebCertificateCheck,
 } from "@/server/domains"
@@ -76,10 +75,10 @@ function requireResourcePermission(
 /** A game server's or app's web hostnames, for its network page. */
 export async function getResourceWebHostnamesHandler(
   data: ResourceWebHostnamesInput
-): Promise<Array<ResourceWebHostname>> {
+): Promise<ResourceWebHostnames> {
   const user = await requireEligibleResourceUser()
   await requireResourcePermission(user, data, false)
-  const canRelease = await recoverPromise(
+  const canChange = await recoverPromise(
     () => requireResourcePermission(user, data, true).then(() => true),
     () => false
   )
@@ -87,35 +86,22 @@ export async function getResourceWebHostnamesHandler(
     "webHostnames.resource",
     listResourceWebHostnamesEffect(data)
   )
-  return rows.map((row) => ({
-    // Only an app's generated address no route uses.
-    canRelease: canRelease && row.generated && !row.routed,
-    generated: row.generated,
-    hostname: row.hostname,
-    id: row.id,
-    lastError: row.lastError,
-    status: row.status,
-  }))
+  return {
+    canChange,
+    certificates: pendingWebCertificates(data),
+    hostnames: rows.map((row) => ({
+      // Only an app's generated address no route uses.
+      canRelease: canChange && row.generated && !row.routed,
+      generated: row.generated,
+      hostname: row.hostname,
+      id: row.id,
+      lastError: row.lastError,
+      status: row.status,
+    })),
+  }
 }
 
-/**
- * A game server's or app's web route hostnames still waiting on a
- * certificate, for its network page.
- */
-export async function getResourceWebCertificatesHandler(
-  data: ResourceWebHostnamesInput
-): Promise<ResourceWebCertificates> {
-  const user = await requireEligibleResourceUser()
-  await requireResourcePermission(user, data, false)
-  const canCheck = await recoverPromise(
-    () => requireResourcePermission(user, data, true).then(() => true),
-    () => false
-  )
-  return { canCheck, pending: pendingWebCertificates(data) }
-}
-
-// The Relay orders the check in its own lanes; Hearth holds the resource
-// shared, so deleting it turns the check away.
+// The Relay orders it; holding the resource shared lets a deletion turn it away.
 const checkCertificate = operation<CheckWebCertificateInput>()({
   name: "webHostname.certificate.check",
   doing: "Checking its certificate",
@@ -136,8 +122,7 @@ const checkCertificate = operation<CheckWebCertificateInput>()({
           "relay.certificates.check",
           {
             hostname: input.hostname,
-            // The resource the person may change; the Relay refuses a
-            // hostname its routes don't serve.
+            // The Relay refuses a hostname this resource's routes don't serve.
             owner: {
               id: input.resourceId,
               kind: input.resourceType === "app" ? "app" : "server",
@@ -151,11 +136,7 @@ const checkCertificate = operation<CheckWebCertificateInput>()({
     }),
 })
 
-/**
- * Has a web route hostname's Relay check its name, and ask for its
- * certificate again if it resolves and Let's Encrypt's limits allow.
- * Reports what it still waits for.
- */
+/** Has the hostname's Relay check it now and ask for its certificate again. */
 export async function checkWebCertificateHandler(
   data: CheckWebCertificateInput
 ): Promise<WebCertificateCheck> {

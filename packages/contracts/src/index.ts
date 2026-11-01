@@ -1872,13 +1872,9 @@ export type RelayProxyConfiguration = z.infer<
   typeof relayProxyConfigurationSchema
 >
 
-/**
- * A web route hostname the bundled Traefik has no certificate for yet. The
- * Relay has Traefik ask Let's Encrypt only once the name resolves, and has
- * it ask again, further apart each time, until one is issued.
- */
+/** A web route hostname the bundled Traefik has no certificate for yet. */
 export const relayPendingCertificateSchema = z.object({
-  /** Whether a check or a request already failed, so it's retrying. */
+  /** Its name didn't resolve, or Traefik asked over two minutes ago. */
   failed: z.boolean(),
   hostname: z.string().min(1).max(253),
   /** The game server or App whose route serves it. */
@@ -1886,10 +1882,7 @@ export const relayPendingCertificateSchema = z.object({
     id: z.string().min(1),
     kind: z.enum(["app", "server"]),
   }),
-  /**
-   * `dns`: its name doesn't resolve yet, so Traefik doesn't ask.
-   * `certificate`: it resolves, and Let's Encrypt hasn't issued one yet.
-   */
+  /** `dns`: its name doesn't resolve yet, so Traefik doesn't ask. */
   waitingFor: z.enum(["certificate", "dns"]),
 })
 
@@ -1903,11 +1896,7 @@ export const relayCertificateCheckInputSchema = z.object({
   owner: relayPendingCertificateSchema.shape.owner,
 })
 
-/**
- * What checking a hostname now found: what it still waits for, null once it
- * has a certificate, and whether Traefik was set asking for it. Within
- * Let's Encrypt's limits it may not be, until its next retry.
- */
+/** What a hostname still waits for (null once it has one), and whether Traefik asked. */
 export const relayCertificateCheckResultSchema = z.object({
   asked: z.boolean(),
   pending: relayPendingCertificateSchema.nullable(),
@@ -2610,11 +2599,7 @@ export type RelayPlatformDatabaseWrite = z.infer<
 
 const relaySnapshotRelaySchema = z.object({
   browserOrigin: relayProxyBrowserMetadataSchema.shape.browserOrigin.optional(),
-  /**
-   * Web route hostnames the bundled Traefik is still waiting on a
-   * certificate for. Optional only so an outdated Relay's snapshot still
-   * parses, and it connects far enough to be updated.
-   */
+  /** Optional only so an outdated Relay's snapshot parses while it updates. */
   certificates: z.array(relayPendingCertificateSchema).optional(),
   id: relayIdSchema,
   name: z.string().min(1).max(120),

@@ -67,8 +67,8 @@ import {
   type DomainSettings,
 } from "@/components/domains-shared"
 import {
+  CertificateStatus,
   certificatePresentation,
-  useCheckWebCertificate,
 } from "@/components/web-certificate-status"
 import { WorkspacePage } from "@/components/workspace-page"
 import { ensuringPromise, forkPromise, tapPromiseError } from "@/effect/promise"
@@ -994,44 +994,31 @@ const DomainStatusCell = React.memo(function DomainStatusCell({
 }: {
   row: DomainRow
 }) {
-  if (
-    row.kind === "web" &&
-    row.hostname.canManage &&
-    awaitedCertificate(row.hostname)
-  ) {
-    return <CertificateStatusCell hostname={row.hostname} />
+  const certificate =
+    row.kind === "web" ? awaitedCertificate(row.hostname) : null
+  if (row.kind === "web" && certificate) {
+    return (
+      <CertificateStatus
+        canChange={row.hostname.canManage}
+        certificate={certificate}
+        hostname={row.hostname.hostname}
+        resource={webResourceRef(row.hostname)}
+      />
+    )
   }
   return <StatusIndicator status={rowStatus(row)} />
 })
 
-const CertificateStatusCell = React.memo(function CertificateStatusCell({
-  hostname,
-}: {
-  hostname: WebHostnameOverview
-}) {
-  const resource = React.useMemo(
-    () => ({
-      relayId: hostname.relayId,
-      resourceId: hostname.resource.id,
-      resourceType:
-        hostname.resource.kind === "app"
-          ? ("app" as const)
-          : ("instance" as const),
-    }),
-    [hostname.relayId, hostname.resource.id, hostname.resource.kind]
-  )
-  const { check, checking } = useCheckWebCertificate(
-    resource,
-    hostname.hostname
-  )
-  return (
-    <StatusIndicator
-      busy={checking}
-      status={hostnameStatusPresentation(hostname)}
-      onActivate={check}
-    />
-  )
-})
+function webResourceRef(hostname: WebHostnameOverview) {
+  return {
+    relayId: hostname.relayId,
+    resourceId: hostname.resource.id,
+    resourceType:
+      hostname.resource.kind === "app"
+        ? ("app" as const)
+        : ("instance" as const),
+  }
+}
 
 function rowStatus(row: DomainRow): IdentityStatusPresentation {
   return row.kind === "server"

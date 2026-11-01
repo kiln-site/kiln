@@ -1490,10 +1490,7 @@ export class LifecycleDriver {
     }
   }
 
-  /**
-   * Writes the bundled Traefik's routes again as they stand, for a change to
-   * which certificates it should ask for. The caller holds the routes lock.
-   */
+  /** Rewrites the bundled Traefik's routes. The caller holds the routes lock. */
   async refreshTraefikCertificates(): Promise<void> {
     if (this.#config.proxyMode !== "traefik") {
       // No bundled Traefik reads them; nothing is owed.
