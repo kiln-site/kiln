@@ -155,6 +155,11 @@ Relay finds; it doesn't separate anything else, since every Hearth paired
 with full access can manage the Relay. `KILN_INSTALLATION_ID`, or a Relay
 that installed Kiln itself, fixes the ID.
 
+Several Hearths can manage the same Relay, but this isn't recommended: each
+Hearth orders only its own changes, so two changing the same thing at once,
+such as a Tailscale network both reach, can leave it wrong until the next
+change.
+
 ### The CLI
 
 To manage Kiln from a terminal, install the `kiln` command on your own

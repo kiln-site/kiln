@@ -160,6 +160,11 @@ export const deletionRelay = {
   frozen: new Map<string, string>(),
   journal: new Map<string, unknown>(),
   servers: new Set<string>(),
+  // Tailscale networks by ID, with their members' IDs, as
+  // `relay.tailscale.stack.state` reports them; and the hostnames Hearth
+  // last wrote to each network's DNS.
+  stacks: new Map<string, Array<string>>(),
+  stackDns: new Map<string, Array<string>>(),
   volumes: [] as Array<FakeVolume>,
 }
 
@@ -210,6 +215,8 @@ function resetDeletionRelay(servers: ReadonlyArray<string>): void {
   deletionRelay.frozen.clear()
   deletionRelay.journal.clear()
   deletionRelay.servers.clear()
+  deletionRelay.stacks.clear()
+  deletionRelay.stackDns.clear()
   deletionRelay.volumes.length = 0
   for (const id of servers) deletionRelay.servers.add(id)
 }
@@ -243,6 +250,16 @@ export const deletionRelayConnection = {
       return operation === "app.list" && state.apps.has(id) ? [{ id }] : []
     }
     if (operation === "relay.volumes.read") return listedVolumes()
+    if (operation === "relay.tailscale.stack.state") return stackStates()
+    if (operation === "relay.tailscale.stack.dns") {
+      state.stackDns.set(
+        String(payload.id),
+        (payload.records as Array<{ hostname: string }>).map(
+          ({ hostname }) => hostname
+        )
+      )
+      return {}
+    }
     // Backups are queued and followed by Hearth's own records here.
     if (operation === "backup.task.list") return []
     if (operation === "backup.task.enqueue") {
@@ -268,6 +285,7 @@ export const deletionRelayConnection = {
           const allowed = payload.volumeIds as ReadonlyArray<string> | undefined
           state.appDeletes.push(allowed)
           state.apps.delete(id)
+          leaveNetworks(id)
           // It takes the volumes only it uses that its deletion names.
           state.volumes = state.volumes.filter(
             (volume) =>
@@ -287,6 +305,7 @@ export const deletionRelayConnection = {
       case "instance.delete":
       case "database.delete":
         state.servers.delete(id)
+        leaveNetworks(id)
         state.frozen.delete(id)
         result =
           operation === "instance.delete"
@@ -301,6 +320,34 @@ export const deletionRelayConnection = {
     }
     return result
   },
+}
+
+// The fake's networks as its Relay reports them. A member's ID names its
+// resource second (`instance:<id>`, `app:<id>:<service>`), and its hostname
+// is its ID; it's frozen while its resource is.
+function stackStates() {
+  return [...deletionRelay.stacks].map(([id, members]) => ({
+    bindings: members.map((memberId, index) => ({
+      address: `10.1.1.${index + 10}`,
+      enabled: true,
+      frozen: deletionRelay.frozen.has(memberId.split(":")[1] ?? ""),
+      hostname: memberId.replaceAll(":", "-"),
+      memberId,
+    })),
+    id,
+    removalPending: false,
+  }))
+}
+
+// A deleted resource's members leave their networks, as its Relay takes
+// them off once it has deleted it.
+function leaveNetworks(resourceId: string) {
+  for (const [id, members] of deletionRelay.stacks) {
+    deletionRelay.stacks.set(
+      id,
+      members.filter((member) => member.split(":")[1] !== resourceId)
+    )
+  }
 }
 
 function onlyUsedBy(volume: FakeVolume, appId: string): boolean {

@@ -2208,6 +2208,31 @@ export const relayTailscaleStackSchema = z
 
 export const relayTailscaleStacksSchema = z.array(relayTailscaleStackSchema)
 
+/**
+ * What a Tailscale network's DNS is made from on one node
+ * (`relay.tailscale.stack.state`): its members, each marked frozen while its
+ * resource is frozen for deletion, and whether the node is being removed
+ * from the network. Hearth builds every node's records from these: the
+ * enabled members that aren't frozen, of nodes not being removed.
+ */
+export const relayTailscaleStackStateSchema = z
+  .object({
+    bindings: z.array(
+      relayTailscaleStackBindingSchema.extend({ frozen: z.boolean() })
+    ),
+    id: relayTailscaleStackIdSchema,
+    removalPending: z.boolean(),
+  })
+  .strict()
+
+export const relayTailscaleStackStatesSchema = z.array(
+  relayTailscaleStackStateSchema
+)
+
+export type RelayTailscaleStackState = z.infer<
+  typeof relayTailscaleStackStateSchema
+>
+
 export const relayNodeCapabilitySchema = z.enum([
   "schedule-continue-on-failure",
   "tailscale-stacks",

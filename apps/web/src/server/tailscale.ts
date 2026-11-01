@@ -50,6 +50,7 @@ import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { startTailscaleNetworkDeletion } from "@/lib/tailscale-cleanup.server"
+import { writeTailscaleNetworkDns } from "@/lib/tailscale-dns.server"
 import { tailscaleMemberProblem } from "@/lib/tailscale-members"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
@@ -567,6 +568,7 @@ async function saveTailscaleStackHandler(
       id,
       name: data.name,
       operations: tailscaleDeploymentOperations(
+        id,
         relayById,
         user.id,
         integrationCredential
@@ -933,6 +935,7 @@ async function loadTailscaleDeployments(
 }
 
 function tailscaleDeploymentOperations(
+  networkId: string,
   relayById: ReadonlyMap<string, PersistedRelay>,
   subject: string,
   removeFromControlPlane?: (deployment: TailscaleDeployment) => Promise<void>
@@ -970,24 +973,8 @@ function tailscaleDeploymentOperations(
         controlPlaneDeviceRemoved
       )
     },
-    syncDns: async (deployment, records) => {
-      const relay = relayById.get(deployment.relayId)
-      if (!relay) throw new Error("The network's node is unavailable")
-      const stack = relayTailscaleStackSchema.parse(
-        await relayRpc(
-          relay,
-          "relay.tailscale.stack.dns",
-          { id: deployment.id, records },
-          60_000,
-          subject
-        )
-      )
-      return {
-        ...stack,
-        relayId: deployment.relayId,
-        relayName: deployment.relayName,
-      }
-    },
+    // The save holds the network's `#settings`, as every DNS rewrite does.
+    rewriteDns: () => writeTailscaleNetworkDns([networkId], subject),
   }
 }
 

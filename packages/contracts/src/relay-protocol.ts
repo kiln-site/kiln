@@ -140,6 +140,7 @@ export const relayControlOperations = [
   "relay.tailscale.stack.apply",
   "relay.tailscale.stack.dns",
   "relay.tailscale.stack.list",
+  "relay.tailscale.stack.state",
   "relay.tailscale.stack.remove",
   "relay.host.read",
   "relay.host.files.mount",
@@ -281,7 +282,6 @@ export const relayControlOperations = [
   "instance.network.routes.read",
   "instance.network.routes.write",
   "instance.network.databases.remove",
-  "hearth.tailscale.member.detach",
   "hearth.database.terminal.output",
   "sftp.authorization.resolve",
   "operation.get",
@@ -403,6 +403,7 @@ export function relayControlOperationChanges(
     case "relay.networking.read":
     case "relay.tailscale.read":
     case "relay.tailscale.stack.list":
+    case "relay.tailscale.stack.state":
     case "relay.host.read":
     case "relay.database.read":
     case "relay.proxy.read":
@@ -471,7 +472,6 @@ export function relayControlOperationChanges(
     case "app.terminal.write":
     case "app.terminal.claim":
     case "app.terminal.restart":
-    case "hearth.tailscale.member.detach":
     case "hearth.database.terminal.output":
     case "sftp.authorization.resolve":
     case "operation.get":
@@ -631,7 +631,6 @@ export function relayControlDeadlineMs(
   // An inventory may first wait for the host to be less busy, then reads a
   // whole image through Docker at the lowest priority.
   if (operation === "relay.security.inventory") return 15 * 60_000
-  if (operation === "hearth.tailscale.member.detach") return 60_000
   if (operation === "instance.delete") return 360_000
   // Freezing stops the resource first, as a stop does.
   if (operation === "resource.freeze") return 240_000

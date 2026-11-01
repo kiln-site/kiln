@@ -199,12 +199,7 @@ import {
   traefikRouteUpstream,
   traefikStaticConfiguration,
 } from "./traefik.js"
-import {
-  ensuringPromise,
-  forkPromise,
-  promiseEffect,
-  recoverPromise,
-} from "./effect/promise.js"
+import { forkPromise, promiseEffect, recoverPromise } from "./effect/promise.js"
 import { DockerEngine } from "./docker-engine.js"
 import { RelayVolumes } from "./volumes.js"
 import {
@@ -271,7 +266,6 @@ import {
   type LaneAdmission,
 } from "./operation-lanes.js"
 import {
-  controlRequestContinues,
   controlRequestLocks,
   databaseReadLocks,
   instanceLifecycleLocks,
@@ -525,23 +519,6 @@ await databases.recoverReplacements()
 // What each queued change to a Tailscale stack planned its locks from, so it
 // can tell, once it runs, whether the stack changed meanwhile.
 const tailscaleStackPlans = new WeakMap<object, string>()
-// The Tailscale networks whose DNS a deletion is waiting on Hearth to
-// rewrite, by how many deletions wait on each (`controlRequestContinues`).
-const awaitedTailscaleDns = new Map<string, number>()
-async function awaitingTailscaleDns<A>(
-  stackIds: ReadonlyArray<string>,
-  run: () => Promise<A>
-): Promise<A> {
-  for (const id of stackIds)
-    awaitedTailscaleDns.set(id, (awaitedTailscaleDns.get(id) ?? 0) + 1)
-  return ensuringPromise(run, () => {
-    for (const id of stackIds) {
-      const waiting = (awaitedTailscaleDns.get(id) ?? 1) - 1
-      if (waiting > 0) awaitedTailscaleDns.set(id, waiting)
-      else awaitedTailscaleDns.delete(id)
-    }
-  })
-}
 const volumes = new RelayVolumes(
   config,
   new DockerEngine(config.dockerSocket),
@@ -1381,12 +1358,6 @@ const controlSocket = attachControlSocket({
   journalId: startup.journalId,
   initialSnapshot: () => snapshotHub.read(),
   lanes,
-  requestContinues: (request) =>
-    controlRequestContinues(
-      request.operation,
-      lockFields(request.payload),
-      (stackId) => awaitedTailscaleDns.has(stackId)
-    ),
   requestLocks: (request) =>
     controlRequestLocks(
       request.operation,
@@ -2109,6 +2080,8 @@ async function executeControlRequest(
       )
     case "relay.tailscale.stack.list":
       return lifecycle.tailscaleStacks()
+    case "relay.tailscale.stack.state":
+      return lifecycle.tailscaleStackStates()
     case "relay.tailscale.stack.apply": {
       const input = relayTailscaleStackApplySchema.parse(request.payload)
       const stack = await lifecycle.applyTailscaleStack(
@@ -2590,21 +2563,24 @@ async function executeControlRequest(
         await resourceFreezes.forget("database", input.databaseId)
         return { databaseId: input.databaseId, deleted: true }
       }
-      // Hearth removes its DNS records from every node first.
+      // Hearth removed its DNS records from every node first. One already
+      // gone still leaves its networks, so a deletion sent again finishes.
       const member = databaseTailscaleMemberId(input.databaseId)
-      await lifecycle.detachFromTailscale(
-        (memberId) => memberId === member,
-        async ({ memberId, mode, stackIds }) => {
-          await awaitingTailscaleDns(stackIds, () =>
-            requestHearth(
-              "hearth.tailscale.member.detach",
-              { memberId, mode, stackIds },
-              60_000
-            )
-          )
+      const leaveTailscale = () =>
+        lifecycle.removeFromTailscale((memberId) => memberId === member)
+      const deleted = await recoverPromise(
+        () => databases.delete(input),
+        async (cause) => {
+          if (
+            cause instanceof Error &&
+            cause.message === "Database not found"
+          ) {
+            await leaveTailscale()
+          }
+          throw cause
         }
       )
-      const deleted = await databases.delete(input)
+      await leaveTailscale()
       await resourceFreezes.forget("database", input.databaseId)
       return deleted
     }
@@ -2795,20 +2771,11 @@ async function executeControlRequest(
         await resourceFreezes.forget("app", input.appId)
         return { appId: input.appId, deleted: true }
       }
-      // Hearth removes its services' DNS records from every node first.
-      await lifecycle.detachFromTailscale(
-        (memberId) => appTailscaleMember(memberId)?.appId === input.appId,
-        async ({ memberId, mode, stackIds }) => {
-          await awaitingTailscaleDns(stackIds, () =>
-            requestHearth(
-              "hearth.tailscale.member.detach",
-              { memberId, mode, stackIds },
-              60_000
-            )
-          )
-        }
-      )
       const deleted = await apps.delete(input)
+      // Hearth removed its services' DNS records from every node first.
+      await lifecycle.removeFromTailscale(
+        (memberId) => appTailscaleMember(memberId)?.appId === input.appId
+      )
       // What its configuration mounted no longer keeps those volumes.
       await runRelayEffect(
         "relay.apps.volumes.forget",
@@ -3262,23 +3229,7 @@ async function executeControlRequest(
         await resourceFreezes.forget("instance", instanceId)
         return { deleted: true, instanceId }
       }
-      await lifecycle.deleteInstance(
-        instanceId,
-        payload.deleteData === true,
-        async ({ mode, stackIds }) => {
-          await awaitingTailscaleDns(stackIds, () =>
-            requestHearth(
-              "hearth.tailscale.member.detach",
-              {
-                memberId: instanceTailscaleMemberId(instanceId),
-                mode,
-                stackIds,
-              },
-              60_000
-            )
-          )
-        }
-      )
+      await lifecycle.deleteInstance(instanceId, payload.deleteData === true)
       await runRelayEffect(
         "relay.instance.deleteName",
         startup.state.deleteInstanceName(instanceId)
