@@ -819,11 +819,6 @@ function authenticateSocket(
             })
             return
           }
-          const action = actionForRequest(request)
-          const actions = actionsForRole(
-            currentClient.role,
-            currentClient.actions
-          )
           if (request.operation === "operation.get") {
             const lookup = yield* lookupOperation(
               currentClient.id,
@@ -832,17 +827,7 @@ function authenticateSocket(
             yield* Effect.sync(() => sendResponse(request, lookup))
             return
           }
-          const issuerInternal = anyClientOperations.has(request.operation)
-          const memberActions = memberActionsForRequest(request)
-          if (
-            !issuerInternal &&
-            (!action ||
-              !isActionAllowed(actions, action) ||
-              memberActions === null ||
-              !memberActions.every((member) =>
-                isActionAllowed(actions, member)
-              ))
-          ) {
+          if (!requestAllowed(request, currentClient)) {
             yield* Effect.sync(() => {
               sendError(
                 socket,
@@ -853,29 +838,53 @@ function authenticateSocket(
             })
             return
           }
-          const execution = promiseOperation(() => {
-            const running = traceRelayPromise(
-              "relay.control.execute",
-              () =>
-                options.execute(
-                  request,
-                  currentClient,
-                  controller.signal,
-                  (operation, requestPayload, timeoutMs) =>
-                    requestClient(
-                      operation,
-                      requestPayload,
-                      timeoutMs,
-                      request.subject
-                    ),
-                  hearthFeatures,
-                  connectionId
-                ),
-              { "relay.operation": request.operation }
-            )
-            onWork(running)
-            return running
-          })
+          const execute = (client: RelayClientGrant) =>
+            promiseOperation(() => {
+              const running = traceRelayPromise(
+                "relay.control.execute",
+                () =>
+                  options.execute(
+                    request,
+                    client,
+                    controller.signal,
+                    (operation, requestPayload, timeoutMs) =>
+                      requestClient(
+                        operation,
+                        requestPayload,
+                        timeoutMs,
+                        request.subject
+                      ),
+                    hearthFeatures,
+                    connectionId
+                  ),
+                { "relay.operation": request.operation }
+              )
+              onWork(running)
+              return running
+            })
+          // One that waited its turn is checked again as it starts, so a
+          // client revoked, or stripped of the action, while it waited
+          // changes nothing.
+          const execution =
+            ticket?.grantedAtOnce === false
+              ? promiseOperation(() =>
+                  options.runEffect(
+                    options.state.findClientById(sessionClient.id)
+                  )
+                ).pipe(
+                  Effect.flatMap((client) =>
+                    client && requestAllowed(request, client)
+                      ? execute(client)
+                      : Effect.fail(
+                          new RecordedFailure(
+                            "forbidden",
+                            "Relay permission denied",
+                            false
+                          )
+                        )
+                  )
+                )
+              : execute(currentClient)
           if (
             options.lanes.paused &&
             relayControlOperationRefusedWhilePaused(request.operation)
@@ -1405,6 +1414,24 @@ function authenticateSocket(
       )
     )
   }
+}
+
+// Whether the client's grant lets it send the request: checked as the
+// request arrives, and again once it has waited its turn.
+function requestAllowed(
+  request: RelayControlRequest,
+  client: RelayClientGrant
+): boolean {
+  if (anyClientOperations.has(request.operation)) return true
+  const action = actionForRequest(request)
+  const actions = actionsForRole(client.role, client.actions)
+  const memberActions = memberActionsForRequest(request)
+  return (
+    action !== null &&
+    isActionAllowed(actions, action) &&
+    memberActions !== null &&
+    memberActions.every((member) => isActionAllowed(actions, member))
+  )
 }
 
 // Runs a request in its lane; the lane notes on the request's span how long

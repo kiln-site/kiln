@@ -12,7 +12,7 @@ import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Duplex } from "node:stream"
-import { Effect, ManagedRuntime } from "effect"
+import { Deferred, Effect, Exit, Fiber, ManagedRuntime } from "effect"
 import { WebSocket, WebSocketServer } from "ws"
 import {
   afterEach,
@@ -28,6 +28,8 @@ import {
   relayAuthChallengeTranscript,
   relayAuthResponseTranscript,
   relayControlProtocol,
+  relayCreateDatabaseSchema,
+  relayDatabaseActionSchema,
   relaySnapshotDeltaFeature,
 } from "@workspace/contracts"
 import type {
@@ -35,6 +37,8 @@ import type {
   RelayControlOperation,
   RelayControlServerMessage,
 } from "@workspace/contracts"
+
+vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { attachControlSocket } from "./control-socket.js"
 import {
@@ -49,7 +53,12 @@ import type { RelayClientRole } from "./effect/state.js"
 import type { RelayAction } from "./permissions.js"
 import { sendRawRequest } from "./test/raw-http.js"
 import { OperationLanes } from "./operation-lanes.js"
-import { controlRequestLocks } from "./operation-plans.js"
+import {
+  controlRequestLocks,
+  databaseLifecycleLocks,
+} from "./operation-plans.js"
+import { fakeDocker } from "./test/docker.js"
+import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 import { DatabaseSync } from "node:sqlite"
 
 describe("Relay control socket", () => {
@@ -265,6 +274,134 @@ describe("Relay control socket", () => {
     const [code] = await closed
     expect(code).toBe(4403)
   })
+
+  describe("a request that waited its turn", () => {
+    const databaseId = "d".repeat(40)
+
+    it("changes nothing for a client revoked, or stripped of the action, while it waited", async () => {
+      const { container, hold, relay } = await relayWithDatabase()
+      const grant = { actions: ["database.power"], role: "custom" } as const
+      const revoked = await relay.pair(grant)
+      const demoted = await relay.pair(grant)
+      const revokedConnection = await relay.connect(revoked)
+      const demotedConnection = await relay.connect(demoted)
+
+      const release = hold()
+      const revokedStop = await waitingStop(relay, revokedConnection, revoked)
+      const demotedStop = await waitingStop(relay, demotedConnection, demoted)
+      // As `kiln-relay hearth revoke` and a changed grant leave them: the
+      // sessions stay open.
+      await relay.run(relay.state.revokeClient(revoked.id, Date.now()))
+      await relay.run(
+        relay.state.updateClient({
+          actions: ["database.read"],
+          clientId: demoted.id,
+          name: "Test Hearth",
+          role: "custom",
+          sourceCidrs: [],
+        })
+      )
+      await release()
+
+      expect(await revokedConnection.inbox.next()).toMatchObject({
+        code: "forbidden",
+        replyTo: revokedStop,
+        type: "error",
+      })
+      expect(await demotedConnection.inbox.next()).toMatchObject({
+        code: "forbidden",
+        replyTo: demotedStop,
+        type: "error",
+      })
+      expect(container.state.running).toBe(true)
+    })
+
+    it("runs for a client still allowed to send it", async () => {
+      const { container, hold, relay } = await relayWithDatabase()
+      const hearth = await relay.pair({
+        actions: ["database.power"],
+        role: "custom",
+      })
+      const connection = await relay.connect(hearth)
+
+      const release = hold()
+      const stop = await waitingStop(relay, connection, hearth)
+      await release()
+
+      expect(await connection.inbox.next()).toMatchObject({
+        replyTo: stop,
+        type: "response",
+      })
+      expect(container.state.running).toBe(false)
+    })
+
+    // A Relay with a running database whose power requests run as on a real
+    // one, and a way to hold the database's lifecycle so they wait.
+    async function relayWithDatabase() {
+      const harness = await relayHarness()
+      await harness.databases.create(
+        relayCreateDatabaseSchema.parse({
+          databaseName: "kiln_app",
+          engine: "postgres",
+          id: databaseId,
+          name: "Main database",
+          password: "correct-horse-battery-staple-1",
+          username: "kiln_user",
+        })
+      )
+      const container = fakeDocker.container(
+        `${TEST_NAMESPACE}-kiln-db-${databaseId}-database`
+      )!
+      const relay = await startRelay({
+        execute: async (request) => {
+          const input = relayDatabaseActionSchema.parse(request.payload)
+          return harness.power.requested(
+            "database",
+            input.databaseId,
+            input.action
+          )
+        },
+        lanes: harness.lanes,
+      })
+      const hold = () => {
+        const released = Deferred.makeUnsafe<void>()
+        const holding = Effect.runFork(
+          harness.lanes.run(
+            { label: "test.hold", locks: databaseLifecycleLocks(databaseId) },
+            Deferred.await(released)
+          )
+        )
+        return async () => {
+          Deferred.doneUnsafe(released, Exit.void)
+          await Effect.runPromise(Fiber.join(holding))
+        }
+      }
+      return { container, hold, relay }
+    }
+
+    // Sends a stop and waits until it's past its client check, journaled
+    // as accepted, and waiting its turn.
+    async function waitingStop(
+      relay: Awaited<ReturnType<typeof startRelay>>,
+      connection: { readonly socket: WebSocket },
+      hearth: TestHearth
+    ) {
+      const operationId = randomUUID()
+      const id = sendRequest(
+        connection.socket,
+        "database.action",
+        { action: "stop", databaseId },
+        { operationId }
+      )
+      await until(
+        async () =>
+          (await relay.run(
+            relay.state.getOperation(hearth.id, operationId)
+          )) !== null
+      )
+      return id
+    }
+  })
 })
 
 const initialSnapshot = { instances: [], node: {} }
@@ -427,6 +564,7 @@ async function startRelay(
     readonly execute?: ControlSocketOptions["execute"]
     /** Dials the Hearths that ask it to, as the Relay does. */
     readonly dials?: boolean
+    readonly lanes?: OperationLanes
   } = {}
 ) {
   const directory = mkdtempSync(join(tmpdir(), "kiln-relay-control-"))
@@ -438,7 +576,7 @@ async function startRelay(
   const relayKeys = hearthKeys()
   const sockets = new Set<WebSocket>()
   const server = createServer()
-  const lanes = new OperationLanes()
+  const lanes = options.lanes ?? new OperationLanes()
   let dials: ControlDials | null = null
   const control = attachControlSocket({
     execute: options.execute ?? (async () => ({ ok: true })),
@@ -630,6 +768,15 @@ function sendRequest(
     })
   )
   return id
+}
+
+// Lets real I/O run, without letting any time pass, until `condition` holds.
+async function until(condition: () => boolean | Promise<boolean>) {
+  for (let turn = 0; turn < 10_000; turn += 1) {
+    if (await condition()) return
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  throw new Error("The condition never held")
 }
 
 function messageInbox(socket: WebSocket) {
