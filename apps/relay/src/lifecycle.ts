@@ -3731,19 +3731,29 @@ export class LifecycleDriver {
     })
   }
 
-  async #refreshTailscaleDns(): Promise<void> {
-    const overview = await this.tailscaleOverview()
-    if (
-      !overview.settings ||
-      !overview.status.connected ||
-      !overview.status.dnsAddress
-    ) {
-      return
-    }
-    await this.#ensureTailscaleDns(
-      overview.settings,
-      overview.status.dnsAddress,
-      true
+  // Reads the settings once it holds the permit, so a save of new ones that
+  // got in first is never overwritten with those it replaced.
+  #refreshTailscaleDns(): Promise<void> {
+    return Effect.runPromise(
+      this.#tailscaleDnsSemaphore
+        .withPermit(
+          lifecycleOperation(async () => {
+            const overview = await this.tailscaleOverview()
+            if (
+              !overview.settings ||
+              !overview.status.connected ||
+              !overview.status.dnsAddress
+            ) {
+              return
+            }
+            await this.#ensureTailscaleDnsNow(
+              overview.settings,
+              overview.status.dnsAddress,
+              true
+            )
+          })
+        )
+        .pipe(Effect.withSpan("relay.tailscale.refreshDns"))
     )
   }
 
