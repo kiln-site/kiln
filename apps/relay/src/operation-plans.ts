@@ -211,7 +211,9 @@ export function backupTaskLocks(
   if (kind === "database") {
     return restore ? databaseLocks(id) : databaseReadLocks(id)
   }
-  return []
+  // Kiln's own database is dumped beside writes to it, as they are beside
+  // each other, but never while a pass restarts or repairs it.
+  return [restore ? exclusive(laneKeys.platform) : shared(laneKeys.platform)]
 }
 
 /**
