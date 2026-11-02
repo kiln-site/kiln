@@ -225,7 +225,7 @@ import {
   loadInstallationId,
   replaceInstallationId,
 } from "./installation.js"
-import { LifecycleDriver } from "./lifecycle.js"
+import { LifecycleDriver, newInstanceId } from "./lifecycle.js"
 import { nodeSnapshot } from "./node.js"
 import { reportRelayMemoryMetrics } from "./relay-memory.js"
 import { sampleRelayCapacity } from "./relay-capacity.js"
@@ -534,6 +534,9 @@ await databases.recoverReplacements()
 // What each queued change to a Tailscale stack planned its locks from, so it
 // can tell, once it runs, whether the stack changed meanwhile.
 const tailscaleStackPlans = new WeakMap<object, string>()
+// The ID each queued game server create will make, chosen as it arrives so
+// it waits in the new server's lane.
+const newInstanceIds = new WeakMap<object, string>()
 const volumes = new RelayVolumes(
   config,
   new DockerEngine(config.dockerSocket),
@@ -1376,7 +1379,9 @@ const controlSocket = attachControlSocket({
   requestLocks: (request) =>
     controlRequestLocks(
       request.operation,
-      lockFields(request.payload),
+      request.operation === "instance.create"
+        ? { instanceId: plannedInstanceId(request) }
+        : lockFields(request.payload),
       resolveInstanceReference,
       (appId) =>
         runRelayEffect("relay.apps.volumes", volumes.appVolumeIds(appId)),
@@ -3139,7 +3144,10 @@ async function executeControlRequest(
         throw new Error("New server provisioning is disabled on this Relay")
       }
       const input = relayCreateInstanceSchema.parse(request.payload)
-      const instance = await lifecycle.createInstance(input)
+      const instance = await lifecycle.createInstanceWithId(
+        plannedInstanceId(request),
+        input
+      )
       const name = input.name ?? instance.name
       await Effect.runPromise(
         relayOperation(() =>
@@ -3276,18 +3284,17 @@ async function executeControlRequest(
         "relay.instance.deletePendingPrimaryPort",
         startup.state.deletePendingPrimaryPort(instanceId)
       )
-      await withRoutesLock("instance.delete.routes", async () => {
+      // Its routes go with it, under the routes its deletion holds.
+      await runRelayEffect(
+        "relay.network.routes.deleteInstance",
+        startup.state.replaceInstanceRoutes(instanceId, [])
+      )
+      await lifecycle.configureWebRoutes(
         await runRelayEffect(
-          "relay.network.routes.deleteInstance",
-          startup.state.replaceInstanceRoutes(instanceId, [])
+          "relay.network.routes.afterDelete",
+          startup.state.listWebRoutes()
         )
-        await lifecycle.configureWebRoutes(
-          await runRelayEffect(
-            "relay.network.routes.afterDelete",
-            startup.state.listWebRoutes()
-          )
-        )
-      })
+      )
       await resourceFreezes.forget("instance", instanceId)
       return { deleted: true, instanceId }
     }
@@ -4183,6 +4190,16 @@ function scheduleClientRevocation(clientId: string): void {
   )
 }
 
+// The ID a game server create planned its locks for, chosen once.
+function plannedInstanceId(request: RelayControlRequest): string {
+  let id = newInstanceIds.get(request)
+  if (id === undefined) {
+    id = newInstanceId()
+    newInstanceIds.set(request, id)
+  }
+  return id
+}
+
 // The fields a request's locks come from. A malformed payload takes no
 // locks; its handler rejects it.
 function lockFields(value: unknown): Readonly<Record<string, unknown>> {
@@ -4470,7 +4487,9 @@ function retainingInstance<T>(
 }
 
 // Clears or rewrites web routes from inside an operation that already holds
-// its resource's locks, such as a delete.
+// its resource's locks, such as an App's delete. Never from one that holds
+// the routes itself, as a game server's delete does: the lanes don't know
+// it's the same operation, so it would wait for itself.
 function withRoutesLock<T>(
   label: string,
   mutate: () => Promise<T>

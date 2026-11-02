@@ -65,6 +65,16 @@ export function instanceReplaceLocks(instanceId: string): Array<LaneLock> {
   return [exclusive(laneKeys.instance(instanceId))]
 }
 
+/**
+ * Creating, reconfiguring, or deleting a game server, which also rewrites
+ * the Relay's CoreDNS from every game server's hostname. It holds the routes
+ * alone, as networking changes do, so no other writer's older list or
+ * settings land after its own.
+ */
+export function instanceDnsReplaceLocks(instanceId: string): Array<LaneLock> {
+  return [...instanceReplaceLocks(instanceId), exclusive(laneKeys.routes)]
+}
+
 export function appLifecycleLocks(appId: string): Array<LaneLock> {
   return [shared(laneKeys.app(appId)), exclusive(laneKeys.appLifecycle(appId))]
 }
@@ -574,9 +584,9 @@ export function controlRequestLocks(
     case "app.provision.cancel":
       return null
 
-    // A new game server gets an ID only the create itself knows.
+    // A new game server's ID is chosen as its request arrives (index.ts).
     case "instance.create":
-      return null
+      return instance(instanceDnsReplaceLocks)
 
     // Looks up how an earlier change went.
     case "operation.get":
@@ -618,9 +628,10 @@ export function controlRequestLocks(
         )
       )
     }
+    // Both rewrite the Relay's CoreDNS, as networking changes do.
     case "relay.tailscale.install":
     case "relay.tailscale.write":
-      return [exclusive(laneKeys.tailscale)]
+      return [exclusive(laneKeys.tailscale), exclusive(laneKeys.routes)]
     // DNS records change nothing of a stack's members.
     case "relay.tailscale.stack.dns":
       return instance(
@@ -748,10 +759,10 @@ export function controlRequestLocks(
       ])
 
     // These replace the server's container or files, so they wait for
-    // everything else on it, live backups included.
+    // everything else on it, live backups included, and rewrite CoreDNS.
     case "instance.startup.write":
     case "instance.delete":
-      return instance(instanceReplaceLocks)
+      return instance(instanceDnsReplaceLocks)
     // These recreate the container with new labels, as a start does.
     case "instance.network.databases.remove":
       return instance(instanceLifecycleLocks)

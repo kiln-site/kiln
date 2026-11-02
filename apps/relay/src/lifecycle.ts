@@ -381,6 +381,11 @@ interface AllocationRequest {
   holds?: ResourceLimits
 }
 
+/** A new game server's ID, chosen before its create is admitted. */
+export function newInstanceId(): string {
+  return randomBytes(20).toString("hex")
+}
+
 export class LifecycleDriver {
   readonly #bricks: BrickCatalog
   readonly #lanes: OperationLanes
@@ -2281,11 +2286,6 @@ export class LifecycleDriver {
         )
       )
       .pipe(Effect.withSpan("relay.ports.release"))
-  }
-
-  async createInstance(input: RelayCreateInstance): Promise<RelayInstance> {
-    const id = randomBytes(32).toString("hex").slice(0, 40)
-    return this.createInstanceWithId(id, input)
   }
 
   async prepareInstance(
