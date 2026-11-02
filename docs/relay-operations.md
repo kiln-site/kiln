@@ -152,6 +152,9 @@ whatever its entry point says: a skipped pass for upkeep. The edge upkeep
 behind Coolify's Traefik, the repair of bundled Traefik for Hearth, and the
 repair of Tailscale forwarding rules run this way; control requests, the browser, SFTP and the workers move here
 area by area, and until then admit themselves as below.
+`apps/relay/src/operations/coverage.test.ts` lists each place that still
+admits itself, and each semaphore the Relay keeps and why; a new one fails
+it, and so does a listed one that's gone, so the list only shrinks.
 
 `apps/relay/src/operation-plans.ts` maps each control operation to its keys.
 Its switch is exhaustive, so a new operation can't compile until it declares
