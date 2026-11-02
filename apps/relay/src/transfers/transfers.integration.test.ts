@@ -6,13 +6,17 @@ import {
   sign,
 } from "node:crypto"
 import type { KeyObject } from "node:crypto"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { createServer, request as httpRequest } from "node:http"
 import type { IncomingMessage, Server } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Effect, ManagedRuntime } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
+
+vi.mock("node:fs/promises", async (importOriginal) =>
+  (await import("../test/held-commit.js")).withHeldCommits(importOriginal)
+)
 
 import {
   relayBrowserRequestProofTranscript,
@@ -27,7 +31,9 @@ import type { RelayIdentity } from "../effect/identity.js"
 import { makeRelayStateLayer, RelayStateStore } from "../effect/state.js"
 import { FilesystemDriver } from "../files.js"
 import { OperationLanes } from "../operation-lanes.js"
+import { controlRequestLocks } from "../operation-plans.js"
 import { testInstance, testRelayConfig } from "../test/fixtures.js"
+import { holdNextCommit } from "../test/held-commit.js"
 import { backupLinks } from "./backup-links.js"
 import { TransferGate } from "./gate.js"
 
@@ -79,6 +85,72 @@ describe("browser file transfers", () => {
     expect((await send(relay.port, request)).status).toBe(404)
     expect((await send(relay.port, request)).status).toBe(401)
   })
+
+  it.runIf(process.platform === "linux")(
+    "never lets a save that checks the file is unchanged replace an upload",
+    async () => {
+      const relay = await startRelay()
+      const path = join(relay.instanceRoot, "server.properties")
+      await writeFile(path, "motd=old")
+      // Someone saves the file they opened, as Hearth's editor does.
+      const opened = Math.floor((await stat(path)).mtimeMs)
+      const commit = holdNextCommit()
+      const instance = testInstance({ id: instanceId, directory: instanceId })
+      const saved = Effect.runPromise(
+        relay.lanes.run(
+          {
+            label: "instance.files.put",
+            locks:
+              controlRequestLocks(
+                "instance.files.put",
+                { instanceId },
+                (id) => id,
+                () => []
+              ) ?? [],
+          },
+          relay.filesystem
+            .upload(
+              instance,
+              "server.properties",
+              (async function* () {
+                yield Buffer.from("motd=saved")
+              })(),
+              () => true,
+              opened
+            )
+            .pipe(
+              // Reporting a conflict is a right answer too.
+              Effect.catchIf(
+                (error) => error.code === "file_changed",
+                () => Effect.void
+              )
+            )
+        )
+      )
+      await commit.reached
+
+      // A browser uploads the file as the save commits. Once the upload has
+      // landed or waits its turn, the save goes on.
+      let uploaded = false
+      const upload = relay
+        .signedRequest({ method: "PUT", path: "server.properties" })
+        .then((request) => send(relay.port, { ...request, body: "motd=up" }))
+        .then((response) => {
+          uploaded = true
+          return response
+        })
+      await vi.waitFor(() =>
+        expect(uploaded || relay.lanes.pending.waiting > 0).toBe(true)
+      )
+      commit.release()
+      const [, response] = await Promise.all([saved, upload])
+
+      expect(response.status).toBe(200)
+      // The save either saw the upload and reported a conflict, or landed
+      // before it. It never replaces an upload it didn't see.
+      expect(await readFile(path, "utf8")).toBe("motd=up")
+    }
+  )
 })
 
 describe("backup download links", () => {
@@ -156,6 +228,8 @@ async function startRelay(options: { instanceExists?: boolean } = {}) {
   const identity = { fingerprint: relayId } as RelayIdentity
   const gate = new TransferGate()
   const backups = backupLinks({ config, gate, identity, state })
+  const filesystem = new FilesystemDriver(config)
+  const lanes = new OperationLanes()
   let browser: BrowserSocketServer | null = null
   const server: Server = createServer((request, response) => {
     void (async () => {
@@ -182,10 +256,10 @@ async function startRelay(options: { instanceExists?: boolean } = {}) {
             : null
         ),
     } as unknown as DockerDriver,
-    filesystem: new FilesystemDriver(config),
+    filesystem,
     gate,
     identity,
-    lanes: new OperationLanes(),
+    lanes,
     onConsoleStop: () => undefined,
     runEffect: (effect) => Effect.runPromise(effect),
     server,
@@ -218,7 +292,9 @@ async function startRelay(options: { instanceExists?: boolean } = {}) {
   return {
     browser: attached,
     dataDirectory,
+    filesystem,
     instanceRoot,
+    lanes,
     port: address.port,
     backupToken: (backupId: string) =>
       signToken(issuerKeys.privateKey, {

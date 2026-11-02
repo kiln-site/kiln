@@ -30,7 +30,7 @@ it exclusive, which waits for every part.
 | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `instance:<id>`                                    | Shared by every change to a game server; exclusive to replace it (restore, reinstall, delete)                                                                                                                                                                                                                                      |
 | `instance:<id>/lifecycle`                          | Exclusive to power actions, console input, crash recovery, the disk-quota stop, and container recreation for ports, routes, and database connections                                                                                                                                                                               |
-| `instance:<id>/files`                              | Exclusive to Hearth file writes                                                                                                                                                                                                                                                                                                    |
+| `instance:<id>/files`                              | Exclusive to Hearth file writes, SFTP changes, and putting a browser upload in place                                                                                                                                                                                                                                               |
 | `instance:<id>/metadata`                           | Exclusive to renames                                                                                                                                                                                                                                                                                                               |
 | `app:<id>`, `app:<id>/lifecycle`, `app:<id>/files` | The same shape for Apps; a deployment's build, connecting the App to a database, and a scheduled command hold the lifecycle lock                                                                                                                                                                                                   |
 | `app:<id>/volumes`                                 | Exclusive to recording which Kiln volumes an App's configuration mounts, apart from its lifecycle so saving a configuration never waits behind a deployment                                                                                                                                                                        |
@@ -266,12 +266,22 @@ was sent is backed up from the next time Hearth sends it.
 
 ### Files over SFTP and uploads
 
-SFTP changes and browser uploads run alongside other file work on their
-server, and wait for anything replacing it. An SFTP file handle notes how many
-times its server had been replaced when it opened; once a restore, reinstall,
-or delete has replaced it since, further writes through that handle fail and
-the client must reopen the file. Nothing holds a lock between SFTP calls, so
-an idle SFTP session never blocks a restore.
+Every Kiln writer to a game server's or an App's files takes its files lock
+for the moment it changes them, so a save that checks the file is unchanged
+(`instance.files.put`) either sees another writer's change and reports a
+conflict, or lands before it. Each SFTP change (opening a file to write,
+writing, renaming, removing, making or removing a folder, or changing a
+mode) takes the lock for that one request, and a session's changes take
+their turns one at a time. A browser upload streams beside other file work
+and takes the lock only to put the file in place (`fileRootCommitLocks`).
+Both wait for anything replacing the server. Host uploads already wait for
+the host's file writes, and nothing saves into a database's dumps.
+
+An SFTP file handle notes how many times its server had been replaced when
+it opened; once a restore, reinstall, or delete has replaced it since,
+further writes through that handle fail and the client must reopen the
+file. Nothing holds a lock between SFTP calls, so an idle SFTP session never
+blocks a restore or a save.
 
 ## Operation IDs
 
