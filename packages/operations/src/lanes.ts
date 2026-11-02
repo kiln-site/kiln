@@ -61,6 +61,12 @@ export interface LaneAdmission {
     | "refuse"
     | "wait"
     | ((inTheWay: ReadonlyArray<WaitReason<string>>) => "refuse" | "wait")
+  /**
+   * Admitted and kept in line while paused, for upkeep a pause doesn't stop,
+   * such as restoring a network's forwarding rules. It still waits its turn
+   * and is refused, withdrawn, or cancelled like any other.
+   */
+  readonly carriesOnWhilePaused?: boolean
 }
 
 export interface LaneTicket {
@@ -110,6 +116,8 @@ interface Waiter {
   readonly nested: boolean
   // Arrived on its own, so a pause withdraws it while it waits.
   readonly continuation: boolean
+  // Upkeep a pause neither refuses nor withdraws.
+  readonly carriesOnWhilePaused: boolean
   locks: ReadonlyArray<LaneLock> | null
   readonly precondition: (() => boolean) | undefined
   readonly granted: Deferred.Deferred<void, LaneRejectedError>
@@ -207,19 +215,27 @@ export class OperationLanes {
   /**
    * While paused, nothing new starts: work admitted now is refused, and work
    * still waiting, or granted but not yet started, is withdrawn. Work already
-   * running finishes, and can take the nested locks it needs to.
+   * running finishes, and can take the nested locks it needs to. Upkeep
+   * that carries on while paused is admitted and runs as before.
    */
   setPaused(paused: boolean): void {
     this.#paused = paused
     if (!paused) return
-    const continuations = this.#nested.filter((waiter) => waiter.continuation)
-    for (const waiter of continuations) this.#remove(waiter)
-    for (const waiter of [...this.#waiting.splice(0), ...continuations]) {
+    const withdrawn = [
+      ...this.#waiting,
+      ...this.#nested.filter((waiter) => waiter.continuation),
+    ].filter((waiter) => !waiter.carriesOnWhilePaused)
+    for (const waiter of withdrawn) {
+      this.#remove(waiter)
       waiter.state = "done"
       Deferred.doneUnsafe(waiter.granted, Exit.fail(this.#pausedError(waiter)))
     }
     for (const waiter of this.#active) {
-      if ((waiter.nested && !waiter.continuation) || waiter.state !== "granted")
+      if (
+        (waiter.nested && !waiter.continuation) ||
+        waiter.carriesOnWhilePaused ||
+        waiter.state !== "granted"
+      )
         continue
       waiter.refusal = this.#pausedError(waiter)
       this.#release(waiter)
@@ -278,6 +294,7 @@ export class OperationLanes {
     const continuation = !inside && admission.continuation === true
     const nested = inside || continuation
     const waiter: Waiter = {
+      carriesOnWhilePaused: admission.carriesOnWhilePaused === true,
       continuation,
       granted: Deferred.makeUnsafe<void, LaneRejectedError>(),
       label: admission.label,
@@ -287,7 +304,7 @@ export class OperationLanes {
       state: "waiting",
     }
     const queue = nested ? this.#nested : this.#waiting
-    if (!inside && this.#paused) {
+    if (!inside && this.#paused && !waiter.carriesOnWhilePaused) {
       this.#reject(waiter, this.#pausedError(waiter))
     } else if (!inside && this.#waitingOnTheirOwn() >= this.#maxWaiting) {
       this.#reject(

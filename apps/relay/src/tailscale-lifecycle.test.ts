@@ -8,10 +8,12 @@ import {
   relayTailscaleStackConfigSchema,
   type RelayTailscaleStackConfig,
 } from "@workspace/contracts"
+import { Effect } from "effect"
 import { describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
+import { exclusive, laneKeys, shared } from "./operation-lanes.js"
 import { fakeDocker } from "./test/docker.js"
 import {
   relayHarness,
@@ -206,6 +208,40 @@ describe("Tailscale stack forwarding", () => {
 
     expect(container.firewall.get("KILN-TAILSCALE")).toEqual(allowlist)
   })
+
+  it("restores the allowlist while the Relay is paused, after what holds the stack", async () => {
+    const harness = await relayHarness()
+    const container = await runningStack(harness)
+    // A change to the stack, already running as the Relay is paused.
+    let started!: () => void
+    let release!: () => void
+    const running = new Promise<void>((resolve) => (started = resolve))
+    const released = new Promise<void>((resolve) => (release = resolve))
+    const holder = Effect.runPromise(
+      harness.lanes
+        .admit({
+          label: "relay.tailscale.stack.apply",
+          locks: [exclusive(laneKeys.instance("c".repeat(40)))],
+        })
+        .run(
+          Effect.promise(() => {
+            started()
+            return released
+          })
+        )
+    )
+    await running
+    harness.lanes.setPaused(true)
+
+    await harness.lifecycle.reconcileTailscaleStackFirewalls()
+    expect(container.firewall.get("KILN-TAILSCALE")).toBeUndefined()
+
+    release()
+    await holder
+    await harness.lifecycle.reconcileTailscaleStackFirewalls()
+    expect(harness.lanes.paused).toBe(true)
+    expect(container.firewall.get("KILN-TAILSCALE")).toEqual(allowlist)
+  })
 })
 
 const deletion = "11111111-1111-4111-8111-111111111111"
@@ -380,6 +416,99 @@ describe("Tailscale network members", () => {
     expect(state?.removalPending).toBe(false)
     expect(states.find(({ id }) => id === removing.id)?.removalPending).toBe(
       true
+    )
+  })
+})
+
+describe("Tailscale forwarding repair", () => {
+  const stackId = "9".repeat(40)
+  const serverId = "a".repeat(40)
+  const otherServerId = "1".repeat(40)
+  const binding = (
+    memberId: string,
+    hostname: string,
+    host: number,
+    enabled: boolean
+  ) => ({ address: `10.165.63.${host}`, enabled, hostname, memberId })
+  const before = stackConfig(stackId, {
+    bindings: [
+      binding(instanceTailscaleMemberId(serverId), "paper", 10, true),
+      binding(instanceTailscaleMemberId(otherServerId), "other", 14, false),
+    ],
+    subnet: "10.165.63.0/24",
+  })
+
+  it("leaves the rules an apply installs when it races a repair", async () => {
+    const harness = await relayHarness()
+    await savedStack(harness, before, [])
+    for (const id of [serverId, otherServerId]) await harness.seedServer({ id })
+    const stack = harness.resources.tailscaleStackContainer(stackId)
+    fakeDocker.tailscale.machines.set(stack, {
+      ipv4: "100.64.0.9",
+      loggedIn: true,
+    })
+    await harness.seedServer({
+      id: stackId,
+      image: "tailscale/tailscale:stable",
+      labels: { "kiln.brick.id": "tailscale" },
+      name: stack,
+      running: true,
+    })
+    fakeDocker.addNetwork({
+      labels: { ...owner, "kiln.relay.network": `tailscale:${stackId}` },
+      name: harness.resources.tailscaleStackNetwork(stackId),
+    })
+
+    // The repair stops as it first looks at the stack's rules.
+    const looking = fakeDocker.hold({ command: "exec", target: stack })
+    const repair = harness.lifecycle.reconcileTailscaleStackFirewalls()
+    await looking.reached
+    const applying = harness.lanes.admit({
+      label: "relay.tailscale.stack.apply",
+      locks: [
+        exclusive(laneKeys.instance(stackId)),
+        shared(laneKeys.tailscale),
+      ],
+    })
+    const applied = Effect.runPromise(
+      applying.run(
+        Effect.promise(() =>
+          harness.lifecycle.applyTailscaleStack({
+            bindings: before.bindings.map(({ hostname, memberId }) => ({
+              enabled: true,
+              hostname,
+              memberId,
+            })),
+            domain: before.domain,
+            hostname: before.hostname,
+            id: stackId,
+            name: before.name,
+          })
+        )
+      )
+    )
+    // Whatever the lanes let run beside the repair finishes before it goes on.
+    if (applying.grantedAtOnce) await applied
+    looking.release()
+    await Promise.all([repair, applied])
+    await harness.lifecycle.reconcileTailscaleStackFirewalls()
+
+    const saved = relayTailscaleStackConfigSchema.parse(
+      JSON.parse(
+        await readFile(
+          join(harness.config.rootDirectory, stackId, "stack.json"),
+          "utf8"
+        )
+      )
+    )
+    expect(saved.bindings.every((member) => member.enabled)).toBe(true)
+    expect(fakeDocker.container(stack)?.firewall.get("KILN-TAILSCALE")).toEqual(
+      [
+        ...saved.bindings.map(
+          ({ address }) => `-A KILN-TAILSCALE -d ${address}/32 -j RETURN`
+        ),
+        "-A KILN-TAILSCALE -j DROP",
+      ]
     )
   })
 })

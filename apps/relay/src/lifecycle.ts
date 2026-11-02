@@ -18,6 +18,7 @@ import { resolveBrick, resolveBrickForProvisioning } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { recoverPromise, tapPromiseError } from "./effect/promise.js"
+import { traceRelayEffect } from "./effect/runtime.js"
 import type {
   BrickRecipe,
   RelayCreateInstance,
@@ -695,6 +696,12 @@ export class LifecycleDriver {
     )
   }
 
+  /**
+   * Restores each stack's forwarding rules once its container has started
+   * again, as its own operation holding the stack, so it never writes rules
+   * an apply or removal has since replaced. It carries on while the Relay is
+   * paused, and skips a stack something else holds until the next pass.
+   */
   async reconcileTailscaleStackFirewalls(): Promise<void> {
     const configs = await this.#knownTailscaleStackConfigs()
     const stackIds = new Set(configs.map(({ id }) => id))
@@ -702,21 +709,30 @@ export class LifecycleDriver {
       if (!stackIds.has(id)) this.#tailscaleFirewallGenerations.delete(id)
     }
     const results = await Promise.allSettled(
-      configs.map(async (config) => {
-        if (await this.#tailscaleStackRemovalPending(config.id)) return
-        const generation = await this.#tailscaleStackContainerGeneration(
-          config.id
+      configs.map(({ id }) =>
+        Effect.runPromise(
+          traceRelayEffect(
+            "relay.tailscale.repairFirewall",
+            this.#lanes
+              .run(
+                {
+                  carriesOnWhilePaused: true,
+                  label: "relay.tailscale.stack.firewall",
+                  locks: [exclusive(laneKeys.instance(id))],
+                  whenBusy: "refuse",
+                },
+                lifecycleOperation(() => this.#repairTailscaleStackFirewall(id))
+              )
+              .pipe(
+                Effect.catchIf(
+                  (cause) => cause instanceof LaneRejectedError,
+                  () => Effect.void
+                )
+              ),
+            { "kiln.instance_id": id }
+          )
         )
-        if (!generation) {
-          this.#tailscaleFirewallGenerations.delete(config.id)
-          return
-        }
-        if (this.#tailscaleFirewallGenerations.get(config.id) === generation) {
-          return
-        }
-        await this.#ensureTailscaleStackFirewall(config)
-        this.#tailscaleFirewallGenerations.set(config.id, generation)
-      })
+      )
     )
     const failures = results.flatMap((result, index) =>
       result.status === "rejected"
@@ -4141,6 +4157,23 @@ export class LifecycleDriver {
         { timeout: 30_000 }
       )
     )
+  }
+
+  // Reads the stack again holding it, so the rules match what an apply or
+  // removal that ran before left.
+  async #repairTailscaleStackFirewall(id: string): Promise<void> {
+    const config = await this.#readTailscaleStackConfig(id)
+    const generation =
+      config && !(await this.#tailscaleStackRemovalPending(id))
+        ? await this.#tailscaleStackContainerGeneration(id)
+        : null
+    if (!config || !generation) {
+      this.#tailscaleFirewallGenerations.delete(id)
+      return
+    }
+    if (this.#tailscaleFirewallGenerations.get(id) === generation) return
+    await this.#ensureTailscaleStackFirewall(config)
+    this.#tailscaleFirewallGenerations.set(id, generation)
   }
 
   async #ensureTailscaleStackFirewall(

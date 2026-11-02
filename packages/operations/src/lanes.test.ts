@@ -1,7 +1,11 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Deferred, Effect, Fiber } from "effect"
 
-import { LaneRejectedError, OperationLanes } from "./lanes.js"
+import {
+  LaneRejectedError,
+  OperationLanes,
+  type LaneAdmission,
+} from "./lanes.js"
 import { exclusive, shared, type LaneLock } from "./locks.js"
 
 /**
@@ -12,12 +16,13 @@ const start = Effect.fnUntraced(function* (
   lanes: OperationLanes,
   log: Array<string>,
   label: string,
-  locks: ReadonlyArray<LaneLock>
+  locks: ReadonlyArray<LaneLock>,
+  admission: Omit<LaneAdmission, "label" | "locks"> = {}
 ) {
   const release = yield* Deferred.make<void>()
   const fiber = yield* lanes
     .run(
-      { label, locks },
+      { ...admission, label, locks },
       Effect.sync(() => log.push(label)).pipe(
         Effect.andThen(Deferred.await(release)),
         Effect.as(label)
@@ -179,6 +184,60 @@ describe("operation lanes", () => {
           Effect.void
         )
         assert.deepStrictEqual(log, ["freeze"])
+      })
+  )
+
+  it.effect(
+    "carries upkeep on through a pause, still in its turn and still refused",
+    () =>
+      Effect.gen(function* () {
+        const lanes = new OperationLanes({
+          refuse: (label) => (label === "fenced" ? "It's fenced" : null),
+        })
+        const log: Array<string> = []
+        const upkeep = { carriesOnWhilePaused: true }
+        const holder = yield* start(lanes, log, "holder", [exclusive("a")])
+        const queued = yield* start(lanes, log, "queued", [exclusive("a")])
+        const before = yield* start(
+          lanes,
+          log,
+          "upkeep-before",
+          [exclusive("a")],
+          upkeep
+        )
+        lanes.setPaused(true)
+
+        // Ordinary work is withdrawn and refused; upkeep keeps its place,
+        // and more joins the line behind it.
+        const withdrawn = yield* Effect.flip(Fiber.join(queued.fiber))
+        assert.strictEqual((withdrawn as LaneRejectedError).reason, "paused")
+        const refused = yield* lanes
+          .run({ label: "change", locks: [exclusive("b")] }, Effect.void)
+          .pipe(Effect.flip)
+        assert.strictEqual(refused.reason, "paused")
+        const after = yield* start(
+          lanes,
+          log,
+          "upkeep-after",
+          [exclusive("a")],
+          upkeep
+        )
+        const fenced = yield* lanes
+          .run(
+            { ...upkeep, label: "fenced", locks: [exclusive("c")] },
+            Effect.void
+          )
+          .pipe(Effect.flip)
+        assert.strictEqual(fenced.reason, "refused")
+
+        // Neither overtakes the holder, nor each other.
+        assert.deepStrictEqual(log, ["holder"])
+        yield* holder.finish
+        assert.deepStrictEqual(log, ["holder", "upkeep-before"])
+        yield* before.finish
+        assert.deepStrictEqual(log, ["holder", "upkeep-before", "upkeep-after"])
+        yield* after.finish
+        assert.strictEqual(yield* Fiber.join(after.fiber), "upkeep-after")
       })
   )
 })
