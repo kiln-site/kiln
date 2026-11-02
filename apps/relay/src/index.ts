@@ -273,6 +273,7 @@ import {
   laneKeys,
   LaneRejectedError,
   OperationLanes,
+  shared,
   type LaneAdmission,
 } from "./operation-lanes.js"
 import {
@@ -3995,13 +3996,22 @@ function platformLoop() {
     )
     .pipe(
       Effect.tap((result) => Effect.sync(() => notePlatformPass(result))),
-      // Kiln's network exists once a pass has run; Traefik retries here.
-      Effect.tap(() =>
-        Effect.tryPromise(() => lifecycle.reconcilePlatformEdge()).pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("Traefik couldn't serve Hearth", cause)
+      // Kiln's network exists once a pass has run; Traefik retries here, in
+      // its own turn, since it changes the routes and reads Kiln's services.
+      Effect.andThen(
+        lanes
+          .run(
+            {
+              label: "platform.edge",
+              locks: [exclusive(laneKeys.routes), shared(laneKeys.platform)],
+            },
+            Effect.tryPromise(() => lifecycle.reconcilePlatformEdge()).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("Traefik couldn't serve Hearth", cause)
+              )
+            )
           )
-        )
+          .pipe(Effect.withSpan("relay.platform.edge"))
       ),
       Effect.catchIf(
         (cause) => cause instanceof LaneRejectedError,

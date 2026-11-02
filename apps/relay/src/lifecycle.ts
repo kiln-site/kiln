@@ -93,7 +93,12 @@ import {
   resourceLimitLabels,
   widestResourceLimits,
 } from "./resource-limits.js"
-import { exclusive, laneKeys, type OperationLanes } from "./operation-lanes.js"
+import {
+  exclusive,
+  laneKeys,
+  LaneRejectedError,
+  type OperationLanes,
+} from "./operation-lanes.js"
 import {
   APP_SERVICE,
   appIdFromRouteOwner,
@@ -3523,22 +3528,37 @@ export class LifecycleDriver {
     this.#edgeReconciliationFiber?.interruptUnsafe()
     this.#edgeReconciliationFiber = null
     if (settings.mode !== "coolify") return
-    const reconcile = Effect.tryPromise({
-      try: () =>
-        this.#serializeEdgeMutation(() =>
-          this.#reconcileExternalTraefikRoutes(this.#webRoutes, settings)
-        ),
-      catch: (cause) => cause,
-    }).pipe(
-      Effect.catch((cause) =>
-        Effect.sync(() => {
-          console.error(
-            "Relay could not reconcile the Coolify Traefik edge",
-            cause
-          )
+    // Each pass takes its turn with route and proxy changes and reads them
+    // once it has it. One that would wait, or a paused Relay's, is skipped.
+    const reconcile = this.#lanes
+      .run(
+        {
+          label: "relay.edge.reconcile",
+          locks: [exclusive(laneKeys.routes)],
+          whenBusy: "refuse",
+        },
+        Effect.tryPromise({
+          try: async () => {
+            const current = await this.proxySettings()
+            if (current.mode !== "coolify") return
+            await this.#serializeEdgeMutation(() =>
+              this.#reconcileExternalTraefikRoutes(this.#webRoutes, current)
+            )
+          },
+          catch: (cause) => cause,
         })
       )
-    )
+      .pipe(
+        Effect.withSpan("relay.edge.reconcile"),
+        Effect.catch((cause) =>
+          cause instanceof LaneRejectedError
+            ? Effect.void
+            : Effect.logError(
+                "Relay could not reconcile the Coolify Traefik edge",
+                cause
+              )
+        )
+      )
     this.#edgeReconciliationFiber = Effect.runFork(
       Effect.sleep("30 seconds").pipe(Effect.andThen(reconcile), Effect.forever)
     )
