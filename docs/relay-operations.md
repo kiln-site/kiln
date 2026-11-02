@@ -174,6 +174,18 @@ admitted after it is granted until the lookup settles.
 
 Browser console input is admitted the same way when its frame arrives.
 
+### Checking the client again
+
+A Hearth client can lose a request's grant while the request waits its
+turn: `kiln-relay hearth revoke` and re-pairing with a new invitation leave
+its session open, and changing or revoking it from Hearth closes the session
+only a moment later. So a request that wasn't granted as it arrived reads
+the client again as its turn comes, before it does anything, and applies the
+same check it passed on arrival. One whose client is gone, or no longer has
+the action, answers `forbidden` and changes nothing; with an operation ID,
+its journal records it as failed. A request granted as it arrived was
+checked after its turn came, so it isn't checked twice.
+
 ### Disconnects and timeouts
 
 A request still waiting when its Hearth disconnects, cancels, or times out
@@ -519,7 +531,8 @@ A change is one trace from Hearth to the Relay, sampled once at its start:
 - `hearth.relay.request` on Hearth, with `relay.audit.wait` before it sends
   and `relay.audit.start` and `relay.audit.finish` for the audit row.
 - `relay.control.request` on the Relay covers the whole request: the client
-  check, the journal (`relay.state.get_operation`,
+  check (`relay.state.find_client_by_id`, read again at the start of its turn
+  if it waited), the journal (`relay.state.get_operation`,
   `relay.state.start_operation`, `relay.state.finish_operation`), the turn in
   the lanes, and the reply.
 - `relay.control.execute` is the work itself.
