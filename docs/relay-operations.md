@@ -185,6 +185,12 @@ lifecycle lock, which its build takes again when it runs:
   does (`transferInstallLocks`), so no upload or SFTP write changes the
   folder while it's written. Serving and fetching the artifact take no
   lock. See [Relay transfers](relay-transfers.md#between-relays).
+- **Tailscale forwarding rules** are checked every 10 seconds and restored
+  once a network's stack container has started again. Each network's
+  repair (`relay.tailscale.stack.firewall`) holds its stack exclusively, as
+  applying or removing it does, and reads its configuration again once it
+  holds it, so it never puts back rules a change has since replaced. A
+  network something else holds is skipped until the next check.
 
 Exports, prunes, and backup deletes touch only stored artifacts and take no
 lock.
@@ -411,7 +417,9 @@ While paused:
 It still takes pausing and resuming, and access revocations, which must reach
 it whatever its state, and terminal heartbeats and detaching. Reads, the
 snapshot loop, and network upkeep such as Tailscale forwarding rules carry
-on.
+on. That upkeep is admitted with `carriesOnWhilePaused`, so the pause neither
+refuses nor withdraws it, but it still waits its turn behind work holding its
+locks and is refused for a frozen or fenced resource like any other.
 
 Hearth also sends a paused Relay no changes: `relayRpc` refuses them with the
 same `relay_paused` error, and `activeRelay` in `lib/relay-registry.ts` is
