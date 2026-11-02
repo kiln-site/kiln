@@ -20,7 +20,6 @@ const directAdmissions: Record<string, string> = {
   "transfers/peer/sources.ts:transfer.source.pack": "Until transfers move",
   "transfers/peer/pulls.ts:transfer.pull.install": "Until transfers move",
   "container-commands.ts:run": "Scheduled commands, until schedules move",
-  "resource-power.ts:scheduled": "Scheduled power, until schedules move",
   "runtime-recovery.ts:recovery.start": "Until crash recovery moves",
   "runtime-recovery.ts:recovery.stop": "Until crash recovery moves",
   "docker.ts:quota.stop": "Disk-quota stops, until the workers move",

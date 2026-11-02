@@ -27,7 +27,6 @@ import {
   relayCreateDatabaseSchema,
   relayPrepareDatabaseSchema,
   relayProvisionDatabaseSchema,
-  relayAppActionSchema,
   relayAppLimitsSchema,
   relayStateDatabaseReadSchema,
   relayHostTerminalAttachSchema,
@@ -59,7 +58,6 @@ import {
   relayAppImageCheckSchema,
   relaySecurityInventoryRequestSchema,
   relayDeployAppSchema,
-  relayDatabaseActionSchema,
   relayDatabaseLimitsSchema,
   relayDatabaseDataReadSchema,
   relayDatabaseDataWriteSchema,
@@ -86,7 +84,6 @@ import {
   relayCreateInstanceSchema,
   relayPrepareInstanceSchema,
   relayProvisionInstanceSchema,
-  relayInstanceActionSchema,
   relayInstanceNameSchema,
   relayInstanceSchema,
   relayRemoveDatabaseConnectionSchema,
@@ -278,15 +275,21 @@ import {
 } from "./operation-lanes.js"
 import { operation, runOperation } from "./operations/operation.js"
 import {
+  appStartLocks,
   controlRequestLocks,
   databaseReadLocks,
   instanceLifecycleLocks,
+  resourcePowerLocks,
   transferInstallLocks,
   transferPackLocks,
 } from "./operation-plans.js"
 import { actionsForRole, relayActions } from "./permissions.js"
 import { ContainerCommands } from "./container-commands.js"
-import { ResourcePower, type PowerAction } from "./resource-power.js"
+import {
+  powerControlOperations,
+  ResourcePower,
+  type PowerAction,
+} from "./resource-power.js"
 import type { RelayAction } from "./permissions.js"
 import { normalizeSourceCidrs } from "./source-policy.js"
 import { withRemoteFileSource } from "./remote-file-source.js"
@@ -925,26 +928,16 @@ const power = new ResourcePower({
     instance: runInstancePower,
   },
   lanes,
-  // A schedule's power step takes what the same request from Hearth would:
-  // an App's start also holds the volumes it mounts.
-  locks: async (kind, id, action) =>
-    (await controlRequestLocks(
-      kind === "instance" ? "instance.action" : `${kind}.action`,
-      {
-        action,
-        ...(kind === "app"
-          ? { appId: id }
-          : kind === "database"
-            ? { databaseId: id }
-            : { instanceId: id }),
-      },
-      resolveInstanceReference,
-      (appId) =>
-        runRelayEffect("relay.apps.volumes", volumes.appVolumeIds(appId)),
-      undefined,
-      (frozenKind, frozenId) => lanes.isFrozen(frozenKind, frozenId)
-    )) ?? [],
+  // An App's power also holds the volumes it mounts, which starting it
+  // reads (see appStartLocks).
+  locks: (kind, id, action) =>
+    kind === "app"
+      ? runRelayEffect("relay.apps.volumes", volumes.appVolumeIds(id)).then(
+          (volumeIds) => appStartLocks(id, volumeIds)
+        )
+      : resourcePowerLocks(kind, id, action),
   replacements: { app: (appId) => apps.replacements(appId) },
+  resolveInstance: resolveInstanceReference,
 })
 // One-off commands in an App's service or a database's container.
 const containerCommands = new ContainerCommands({
@@ -1377,6 +1370,7 @@ const controlSocket = attachControlSocket({
   journalId: startup.journalId,
   initialSnapshot: () => snapshotHub.read(),
   lanes,
+  operations: powerControlOperations(power),
   requestLocks: (request) =>
     controlRequestLocks(
       request.operation,
@@ -2630,10 +2624,6 @@ async function executeControlRequest(
     }
     case "database.wipe":
       return databases.wipe(relayDatabaseWipeSchema.parse(request.payload))
-    case "database.action": {
-      const input = relayDatabaseActionSchema.parse(request.payload)
-      return power.requested("database", input.databaseId, input.action)
-    }
     case "database.limits.write":
       return databases.setLimits(
         relayDatabaseLimitsSchema.parse(request.payload)
@@ -2860,10 +2850,6 @@ async function executeControlRequest(
         relayAppImageCheckSchema.parse(request.payload),
         signal
       )
-    case "app.action": {
-      const input = relayAppActionSchema.parse(request.payload)
-      return power.requested("app", input.appId, input.action)
-    }
     case "app.limits.write":
       return apps.setLimits(relayAppLimitsSchema.parse(request.payload))
     case "app.volumes.write": {
@@ -3298,14 +3284,6 @@ async function executeControlRequest(
       )
       await resourceFreezes.forget("instance", instanceId)
       return { deleted: true, instanceId }
-    }
-    case "instance.action": {
-      const input = relayInstanceActionSchema.parse(payload)
-      return power.requested(
-        "instance",
-        await resolveInstanceReference(requiredString(payload, "instanceId")),
-        input.action
-      )
     }
     case "instance.resources.read": {
       const instanceId = requiredString(payload, "instanceId")

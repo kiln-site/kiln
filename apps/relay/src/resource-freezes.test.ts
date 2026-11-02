@@ -5,8 +5,10 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { LaneRejectedError, type LaneLock } from "./operation-lanes.js"
 import {
+  appStartLocks,
   backupTaskLocks,
   controlRequestLocks,
+  resourcePowerLocks,
   resourceReplaceLocks,
 } from "./operation-plans.js"
 import { relayHarness, type RelayHarness } from "./test/relay.js"
@@ -83,7 +85,7 @@ describe("resources frozen for deletion", () => {
     const start = attempt(
       harness,
       "instance.action",
-      control("instance.action", { action: "start", instanceId: serverId })
+      resourcePowerLocks("instance", serverId, "start")
     )
     await Effect.runPromise(Deferred.succeed(backupDone, undefined))
     await Effect.runPromise(Fiber.join(backup))
@@ -117,10 +119,7 @@ describe("resources frozen for deletion", () => {
       await attempt(
         harness,
         "instance.action",
-        control("instance.action", {
-          action: "start",
-          instanceId: otherServerId,
-        })
+        resourcePowerLocks("instance", otherServerId, "start")
       )
     ).toBe("ran")
     expect(
@@ -174,10 +173,7 @@ describe("resources frozen for deletion", () => {
         restarted.lanes.run(
           {
             label: "instance.action",
-            locks: control("instance.action", {
-              action: "start",
-              instanceId: serverId,
-            }),
+            locks: resourcePowerLocks("instance", serverId, "start"),
           },
           Effect.void
         )
@@ -197,18 +193,8 @@ describe("resources frozen for deletion", () => {
       quiet
     )
     // The App's configuration names the volume, so starting it reads it.
-    const usesVolume = () => [volumeId]
     const startApp = () =>
-      attempt(
-        harness,
-        "app.action",
-        controlRequestLocks(
-          "app.action",
-          { action: "start", appId },
-          resolve,
-          usesVolume
-        )!
-      )
+      attempt(harness, "app.action", appStartLocks(appId, [volumeId]))
     const volumeBackup = backupTaskLocks(
       {
         kind: "create",

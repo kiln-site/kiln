@@ -12,7 +12,7 @@ import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Duplex } from "node:stream"
-import { Effect, ManagedRuntime } from "effect"
+import { Deferred, Effect, Exit, Fiber, ManagedRuntime } from "effect"
 import { WebSocket, WebSocketServer } from "ws"
 import {
   afterEach,
@@ -28,6 +28,7 @@ import {
   relayAuthChallengeTranscript,
   relayAuthResponseTranscript,
   relayControlProtocol,
+  relayCreateDatabaseSchema,
   relaySnapshotDeltaFeature,
 } from "@workspace/contracts"
 import type {
@@ -36,6 +37,8 @@ import type {
   RelayControlServerMessage,
 } from "@workspace/contracts"
 
+vi.mock("./command.js", () => import("./test/docker.js"))
+
 import { attachControlSocket } from "./control-socket.js"
 import {
   relayDialUrl,
@@ -43,13 +46,20 @@ import {
   type ControlDials,
 } from "./control-dial.js"
 import type { ControlSocketOptions } from "./control-socket.js"
+import type { ControlOperations } from "./operations/control.js"
 import { fingerprint } from "./effect/identity.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 import type { RelayClientRole } from "./effect/state.js"
 import type { RelayAction } from "./permissions.js"
 import { sendRawRequest } from "./test/raw-http.js"
 import { OperationLanes } from "./operation-lanes.js"
-import { controlRequestLocks } from "./operation-plans.js"
+import {
+  controlRequestLocks,
+  databaseLifecycleLocks,
+} from "./operation-plans.js"
+import { powerControlOperations } from "./resource-power.js"
+import { fakeDocker } from "./test/docker.js"
+import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 import { DatabaseSync } from "node:sqlite"
 
 describe("Relay control socket", () => {
@@ -242,15 +252,155 @@ describe("Relay control socket", () => {
       const operationId = randomUUID()
       sendRequest(
         socket,
-        "instance.action",
-        { action: "start", instanceId },
+        "instance.rename",
+        { instanceId, name: "Lobby" },
         { operationId }
       )
-      await inbox.next()
+      expect(await inbox.next()).toMatchObject({ type: "response" })
       expect(await lookup(relay, other, operationId)).toEqual({
         status: "unknown",
       })
     })
+  })
+
+  describe("power requests", () => {
+    const databaseId = "d".repeat(40)
+
+    it("changes nothing for a client revoked, or stripped of the action, while its request waited", async () => {
+      const { container, hold, relay } = await relayWithDatabase()
+      const grant = { actions: ["database.power"], role: "custom" } as const
+      const revoked = await relay.pair(grant)
+      const demoted = await relay.pair(grant)
+      const kept = await relay.pair(grant)
+      const revokedConnection = await relay.connect(revoked)
+      const demotedConnection = await relay.connect(demoted)
+      const keptConnection = await relay.connect(kept)
+
+      const release = hold()
+      const revokedStop = await waitingStop(relay, revokedConnection, revoked)
+      const demotedStop = await waitingStop(relay, demotedConnection, demoted)
+      await relay.run(relay.state.revokeClient(revoked.id, Date.now()))
+      await relay.run(
+        relay.state.updateClient({
+          actions: ["database.read"],
+          clientId: demoted.id,
+          name: "Test Hearth",
+          role: "custom",
+          sourceCidrs: [],
+        })
+      )
+      await release()
+
+      expect(await revokedConnection.inbox.next()).toMatchObject({
+        code: "forbidden",
+        replyTo: revokedStop,
+        type: "error",
+      })
+      expect(await demotedConnection.inbox.next()).toMatchObject({
+        code: "forbidden",
+        replyTo: demotedStop,
+        type: "error",
+      })
+      expect(container.state.running).toBe(true)
+
+      // One whose client may still send it runs once it has waited.
+      const releaseAgain = hold()
+      const keptStop = await waitingStop(relay, keptConnection, kept)
+      await releaseAgain()
+      expect(await keptConnection.inbox.next()).toMatchObject({
+        replyTo: keptStop,
+        type: "response",
+      })
+      expect(container.state.running).toBe(false)
+    })
+
+    it("runs conflicting power requests in the order they arrived", async () => {
+      const { container, harness, hold, relay } = await relayWithDatabase()
+      const hearth = await relay.pair()
+      const { inbox, socket } = await relay.connect(hearth)
+
+      const release = hold()
+      const stop = sendRequest(
+        socket,
+        "database.action",
+        { action: "stop", databaseId },
+        { operationId: randomUUID() }
+      )
+      const start = sendRequest(
+        socket,
+        "database.action",
+        { action: "start", databaseId },
+        { operationId: randomUUID() }
+      )
+      await until(() => harness.lanes.pending.waiting === 2)
+      await release()
+
+      expect([await inbox.next(), await inbox.next()]).toMatchObject([
+        { replyTo: stop, type: "response" },
+        { replyTo: start, type: "response" },
+      ])
+      expect(container.state.running).toBe(true)
+    })
+
+    // A Relay with a running database, whose power requests run as on a
+    // real one, and a way to hold the database's lifecycle so they wait.
+    async function relayWithDatabase() {
+      const harness = await relayHarness()
+      await harness.databases.create(
+        relayCreateDatabaseSchema.parse({
+          databaseName: "kiln_app",
+          engine: "postgres",
+          id: databaseId,
+          name: "Main database",
+          password: "correct-horse-battery-staple-1",
+          username: "kiln_user",
+        })
+      )
+      const container = fakeDocker.container(
+        `${TEST_NAMESPACE}-kiln-db-${databaseId}-database`
+      )!
+      const relay = await startRelay({
+        lanes: harness.lanes,
+        operations: powerControlOperations(harness.power),
+      })
+      const hold = () => {
+        const released = Deferred.makeUnsafe<void>()
+        const holding = Effect.runFork(
+          harness.lanes.run(
+            { label: "test.hold", locks: databaseLifecycleLocks(databaseId) },
+            Deferred.await(released)
+          )
+        )
+        return async () => {
+          Deferred.doneUnsafe(released, Exit.void)
+          await Effect.runPromise(Fiber.join(holding))
+        }
+      }
+      return { container, harness, hold, relay }
+    }
+
+    // Sends a stop and waits until it's past its client check, journaled
+    // as accepted, and waiting its turn.
+    async function waitingStop(
+      relay: Awaited<ReturnType<typeof startRelay>>,
+      connection: { readonly socket: WebSocket },
+      hearth: TestHearth
+    ) {
+      const operationId = randomUUID()
+      const id = sendRequest(
+        connection.socket,
+        "database.action",
+        { action: "stop", databaseId },
+        { operationId }
+      )
+      await until(
+        async () =>
+          (await relay.run(
+            relay.state.getOperation(hearth.id, operationId)
+          )) !== null
+      )
+      return id
+    }
   })
 
   it("closes a session on its next request once the client is revoked in state", async () => {
@@ -427,6 +577,8 @@ async function startRelay(
     readonly execute?: ControlSocketOptions["execute"]
     /** Dials the Hearths that ask it to, as the Relay does. */
     readonly dials?: boolean
+    readonly lanes?: OperationLanes
+    readonly operations?: ControlOperations
   } = {}
 ) {
   const directory = mkdtempSync(join(tmpdir(), "kiln-relay-control-"))
@@ -438,11 +590,12 @@ async function startRelay(
   const relayKeys = hearthKeys()
   const sockets = new Set<WebSocket>()
   const server = createServer()
-  const lanes = new OperationLanes()
+  const lanes = options.lanes ?? new OperationLanes()
   let dials: ControlDials | null = null
   const control = attachControlSocket({
     execute: options.execute ?? (async () => ({ ok: true })),
     lanes,
+    ...(options.operations && { operations: options.operations }),
     requestLocks: (request) =>
       controlRequestLocks(
         request.operation,
@@ -630,6 +783,15 @@ function sendRequest(
     })
   )
   return id
+}
+
+// Lets real I/O run, without letting any time pass, until `condition` holds.
+async function until(condition: () => boolean | Promise<boolean>) {
+  for (let turn = 0; turn < 10_000; turn += 1) {
+    if (await condition()) return
+    await new Promise((resolve) => setImmediate(resolve))
+  }
+  throw new Error("The condition never held")
 }
 
 function messageInbox(socket: WebSocket) {

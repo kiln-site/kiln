@@ -139,26 +139,43 @@ and game server starts wait for it.
 
 New Relay work is defined once with `operation()` in
 `apps/relay/src/operations/operation.ts`, as Hearth's is: its stable name,
-the keys it changes, whether it still applies (`precondition`, checked as
-it's granted), whether it's only worth doing now (`onlyIfFree`, turned away
+whether its caller may make it (`authorize`), the keys it changes (or a
+lookup of them), whether it still applies (`precondition`, checked as it's
+granted), whether it's only worth doing now (`onlyIfFree`, turned away
 rather than waiting), whether a pause leaves it running
-(`carriesOnWhilePaused`), and its work. `runOperation` admits it to the lanes,
+(`carriesOnWhilePaused`), and its work. `runOperation` authorizes it, admits
+it to the lanes, authorizes it again once it's granted if it had to wait,
 gives it a span (`RelayOperations.<name>`) and its duration and refusal
 metrics, and runs it to the end once started. Work it reaches runs inside
 it, under the locks it holds, and must need nothing more: one that would
 take another lock there dies naming it, so the outer operation declares it.
 A refusal fails with `LaneRejectedError`, which its caller turns into
 whatever its entry point says: a skipped pass for upkeep. The edge upkeep
-behind Coolify's Traefik, the repair of bundled Traefik for Hearth, and the
-repair of Tailscale forwarding rules run this way; control requests, the browser, SFTP and the workers move here
-area by area, and until then admit themselves as below.
+behind Coolify's Traefik, the repair of bundled Traefik for Hearth, the
+repair of Tailscale forwarding rules, and power (below) run this way; the
+rest of Hearth's requests, the browser, SFTP and the workers move here area
+by area, and until then admit themselves as below.
 `apps/relay/src/operations/coverage.test.ts` lists each place that still
 admits itself, and each semaphore the Relay keeps and why; a new one fails
 it, and so does a listed one that's gone, so the list only shrinks.
 
-`apps/relay/src/operation-plans.ts` maps each control operation to its keys.
-Its switch is exhaustive, so a new operation can't compile until it declares
-what it locks, or that it locks nothing.
+A Hearth request that runs as an operation is one of the control socket's
+`operations`, each a definition and how its input comes from the request's
+payload (`controlOperation` in `apps/relay/src/operations/control.ts`), kept
+beside the code that owns it. Its place in line is reserved from the definition's locks as it
+arrives (`reserveOperation`), so it keeps its order with every other
+request. It's checked as every request is, against the client's grant,
+then journaled, and then run from that reservation, which only it can use,
+once. If it had to wait, the client is read again once its turn comes:
+one revoked, or no longer granted what the request needs, meanwhile gets
+`forbidden` and changes nothing. The journal, a repeat's answer, the pause
+refusal, its audit, its timeout and its reply stay around it as for any
+request.
+
+`apps/relay/src/operation-plans.ts` maps every other control operation to
+its keys. Its switch is exhaustive, so a new operation can't compile until
+it declares what it locks, that it locks nothing, or that it runs as an
+operation.
 
 Most reads take no locks: they never wait, and they may see a resource
 mid-change. Reads that must see it whole, such as a database dump or completing
@@ -168,7 +185,7 @@ a console command, take its locks shared.
 
 The control socket admits a request as its frame arrives, before checking
 the client's grant or looking anything up, so requests keep the order Hearth
-sent them. A request names its game server by full ID, which needs no lookup.
+sent them; one that runs as an operation reserves its place the same way. A request names its game server by full ID, which needs no lookup.
 One that names a server by short ID or name is looked up first, and nothing
 admitted after it is granted until the lookup settles.
 
@@ -246,14 +263,17 @@ server can't deadlock against recovery.
 ### Power
 
 Game servers, Apps, and databases change power through one path
-(`apps/relay/src/resource-power.ts`). Each starts, stops, restarts, and
-kills its containers with the same Docker calls, and keeps what's its own
-around them: a game server's stop command and container recreation, a
+(`apps/relay/src/resource-power.ts`): one operation per kind,
+`instance.action`, `app.action`, and `database.action`, which Hearth's
+requests and schedules' power steps both run. Each starts, stops, restarts,
+and kills its containers with the same Docker calls, and keeps what's its
+own around them: a game server's stop command and container recreation, a
 database's wait until its engine answers, and an App's every container (a
 kill reaches those still running). A power action takes the resource shared
-and its lifecycle exclusive, and a game server's start or restart the routes
-shared too
-(`resourcePowerLocks`).
+and its lifecycle exclusive, a game server's start or restart the routes
+shared too (`resourcePowerLocks`), and an App's every volume it mounts
+shared. Those volumes are looked up as the action is admitted; one the App
+starts using while it waits isn't held.
 
 ### Schedules
 
@@ -266,10 +286,10 @@ began replacing its containers. A later power step runs only
 if neither has moved, checked at the moment the step's turn comes. So a
 person who stops a game server, App, or database during a schedule's Wait
 isn't overruled by the schedule's Start, and the step is recorded as not
-run. A schedule's own steps don't move the intent. A power step takes the
-locks the same request from Hearth would, an App's start the volumes it
-mounts too, and moves the App's power revision as a person's change does,
-so a stopped backup's restart gives way to it. A step on a resource being
+run. A schedule's own steps don't move the intent. A power step runs the
+same operation as the request from Hearth, with its locks, and moves the
+App's power revision as a person's change does, so a stopped backup's
+restart gives way to it. A step on a resource being
 deleted is refused as every change to it is, and recorded as not run.
 
 A Command step sends a game server's command to its console. For a
@@ -522,7 +542,10 @@ A change is one trace from Hearth to the Relay, sampled once at its start:
   check, the journal (`relay.state.get_operation`,
   `relay.state.start_operation`, `relay.state.finish_operation`), the turn in
   the lanes, and the reply.
-- `relay.control.execute` is the work itself.
+- `relay.control.execute` is the work itself, or, for a request that runs as
+  an operation, `RelayOperations.<name>`, its turn and its work, with
+  `RelayOperations.authorize` when the client is checked again after
+  waiting.
 
 Every span that runs work in a lane notes how long it waited for its turn
 as `relay.lanes.wait_ms`, whether it's a request's or a worker's.

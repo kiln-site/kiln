@@ -444,6 +444,13 @@ export function controlRequestLocks(
   }
 
   switch (operation) {
+    // Operations, whose definitions name their own locks: the control
+    // socket takes their place in line from those (resource-power.ts).
+    case "app.action":
+    case "database.action":
+    case "instance.action":
+      throw new Error(`${operation} runs as an operation`)
+
     // Reads, session bookkeeping, and Relay-wide settings that no lane guards.
     case "relay.snapshot":
     case "relay.tunnel.open":
@@ -668,10 +675,6 @@ export function controlRequestLocks(
         ...databaseLocks(id),
         exclusive(laneKeys.allocations),
       ])
-    case "database.action":
-      return database((id) =>
-        resourcePowerLocks("database", id, stringField(payload, "action") ?? "")
-      )
     case "database.wipe":
     case "database.delete":
     case "database.credentials.rotate":
@@ -743,10 +746,6 @@ export function controlRequestLocks(
     case "app.limits.write":
     case "app.deploy":
       return app(appLifecycleLocks)
-    // Starting it reads what it mounts (see appStartLocks), as scheduled
-    // App power does.
-    case "app.action":
-      return appWithVolumes(appLifecycleLocks)
     case "app.network.routes.write":
       return app((id) => [...appLifecycleLocks(id), exclusive(laneKeys.routes)])
     // Apart from the App's lifecycle, so saving its configuration never
@@ -771,10 +770,6 @@ export function controlRequestLocks(
         shared(laneKeys.instance(id)),
         exclusive(laneKeys.instanceMetadata(id)),
       ])
-    case "instance.action": {
-      const action = stringField(payload, "action") ?? ""
-      return instance((id) => resourcePowerLocks("instance", id, action))
-    }
     case "instance.console.write":
     case "instance.console.complete":
       return instance(instanceLifecycleLocks)

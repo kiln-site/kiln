@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
-import { controlRequestLocks } from "./operation-plans.js"
+import { runOperation } from "./operations/operation.js"
 import type { ScheduleManager } from "./schedules.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, scheduleWorker, TEST_NAMESPACE } from "./test/relay.js"
@@ -92,17 +92,32 @@ describe("schedules and power", () => {
     await schedules.runNow({ revision: 1, scheduleId })
     await until(() => !container.state.running)
 
-    // Someone stops it during the wait, as a Hearth request does.
-    const locks = await controlRequestLocks(
-      "database.action",
-      { action: "stop", databaseId: id },
-      (reference) => reference,
-      () => []
-    )
+    // Someone stops it during the wait, with a Hearth request.
     await Effect.runPromise(
-      harness.lanes.run(
-        { label: "database.action", locks: locks ?? [] },
-        Effect.promise(() => harness.power.requested("database", id, "stop"))
+      runOperation(
+        harness.lanes,
+        harness.power.operations.database,
+        { action: "stop", id },
+        {
+          client: {
+            actions: ["*"],
+            id: "hearth",
+            name: "Hearth",
+            origins: [],
+            publicKey: "",
+            role: "full_access",
+            sourceCidrs: [],
+          },
+          kind: "control",
+          request: {
+            deadline: Date.now() + 15_000,
+            id: "request",
+            operation: "database.action",
+            payload: { action: "stop", databaseId: id },
+            type: "request",
+            v: 1,
+          },
+        }
       )
     )
 

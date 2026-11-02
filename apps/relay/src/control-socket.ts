@@ -111,6 +111,16 @@ import {
 } from "./operation-lanes.js"
 import type { RelayIdentity } from "./effect/identity.js"
 import { countRelayRefusal, type ControlCapacity } from "./relay-capacity.js"
+import type {
+  ControlOperation,
+  ControlOperations,
+} from "./operations/control.js"
+import {
+  reserveOperation,
+  runOperation,
+  type RelayCaller,
+  type RelayReservation,
+} from "./operations/operation.js"
 import { InstallationReplaceError } from "./installation.js"
 import type {
   RelayClientGrant,
@@ -177,6 +187,12 @@ export interface ControlSocketOptions {
   /** The lanes every Relay mutation waits in. */
   readonly lanes: OperationLanes
   /**
+   * The requests that run as operations, by operation. Each takes its place
+   * in line from its definition's locks as it arrives, and is checked again
+   * once it has waited; `execute` and `requestLocks` serve the rest.
+   */
+  readonly operations?: ControlOperations
+  /**
    * The locks a request holds while it runs, or null for one that needs
    * none. Requests take their place in line as they arrive.
    */
@@ -195,6 +211,12 @@ export interface ControlSocketOptions {
   readonly server: Server
   readonly state: RelayStateStore["Service"]
 }
+
+/** A client that may no longer send a request, checked once it waited. */
+class ControlRefusedError extends Schema.TaggedError<ControlRefusedError>()(
+  "ControlRefusedError",
+  { message: Schema.String }
+) {}
 
 export interface ControlSocketServer {
   /**
@@ -418,7 +440,7 @@ interface InFlightRequest {
   readonly controller: AbortController
   fiber: Fiber.Fiber<void, unknown> | null
   readonly receivedAt: number
-  readonly ticket: LaneTicket | null
+  ticket: LaneTicket | null
   /** The request's work while it runs, so it's seen if it outlives it. */
   work: RunningWork | null
 }
@@ -623,9 +645,38 @@ function authenticateSocket(
     const client = authenticatedClient
     const receivedAt = Date.now()
     const controller = new AbortController()
+    const request: InFlightRequest = {
+      controller,
+      fiber: null,
+      receivedAt,
+      ticket: null,
+      work: null,
+    }
+    // Notes the request's work as it starts; what it returns notes it done.
+    const startWork = () => {
+      const work = { startedAt: Date.now() }
+      request.work = work
+      // A change can start after its session closed; nothing waits for it.
+      if (inFlight.get(message.id) !== request) capacity.orphanedWork.add(work)
+      return () => {
+        if (request.work === work) request.work = null
+        capacity.orphanedWork.delete(work)
+      }
+    }
+    const onWork = (running: Promise<unknown>) => {
+      const settled = startWork()
+      Effect.runFork(
+        promiseEffect(() => running).pipe(
+          Effect.ensuring(Effect.sync(settled)),
+          Effect.ignore
+        )
+      )
+    }
     // Take the request's place in line before any asynchronous work, so
     // requests that conflict run in the order they arrived.
-    const planned = Result.try(() => options.requestLocks(message))
+    const planned = Result.try(() =>
+      planRequest(options, message, client, startWork)
+    )
     if (Result.isFailure(planned)) {
       reportRelayError(planned.failure, relayControlErrorContext(message))
       sendError(
@@ -636,37 +687,8 @@ function authenticateSocket(
       )
       return
     }
-    const locks = planned.success
-    const ticket =
-      locks === null
-        ? null
-        : options.lanes.admit({
-            label: message.operation,
-            locks,
-          })
-    const request: InFlightRequest = {
-      controller,
-      fiber: null,
-      receivedAt,
-      ticket,
-      work: null,
-    }
-    const onWork = (running: Promise<unknown>) => {
-      const work = { startedAt: Date.now() }
-      request.work = work
-      // A change can start after its session closed; nothing waits for it.
-      if (inFlight.get(message.id) !== request) capacity.orphanedWork.add(work)
-      const settled = () => {
-        if (request.work === work) request.work = null
-        capacity.orphanedWork.delete(work)
-      }
-      Effect.runFork(
-        promiseEffect(() => running).pipe(
-          Effect.ensuring(Effect.sync(settled)),
-          Effect.ignore
-        )
-      )
-    }
+    const { reserved, ticket } = planned.success
+    request.ticket = ticket
     controller.signal.addEventListener("abort", () => ticket?.cancel(), {
       once: true,
     })
@@ -683,6 +705,7 @@ function authenticateSocket(
               client,
               controller,
               ticket,
+              reserved,
               receivedAt,
               onWork
             )
@@ -779,6 +802,7 @@ function authenticateSocket(
     sessionClient: RelayClientGrant,
     controller: AbortController,
     ticket: LaneTicket | null,
+    reserved: PlannedOperation | null,
     receivedAt: number,
     onWork: (running: Promise<unknown>) => void
   ): EffectType.Effect<void> {
@@ -819,11 +843,6 @@ function authenticateSocket(
             })
             return
           }
-          const action = actionForRequest(request)
-          const actions = actionsForRole(
-            currentClient.role,
-            currentClient.actions
-          )
           if (request.operation === "operation.get") {
             const lookup = yield* lookupOperation(
               currentClient.id,
@@ -832,17 +851,7 @@ function authenticateSocket(
             yield* Effect.sync(() => sendResponse(request, lookup))
             return
           }
-          const issuerInternal = anyClientOperations.has(request.operation)
-          const memberActions = memberActionsForRequest(request)
-          if (
-            !issuerInternal &&
-            (!action ||
-              !isActionAllowed(actions, action) ||
-              memberActions === null ||
-              !memberActions.every((member) =>
-                isActionAllowed(actions, member)
-              ))
-          ) {
+          if (!requestAllowed(request, currentClient)) {
             yield* Effect.sync(() => {
               sendError(
                 socket,
@@ -876,6 +885,17 @@ function authenticateSocket(
             onWork(running)
             return running
           })
+          // An operation runs from the place it reserved, and is checked
+          // again once it has waited; the rest run their turn here.
+          const inLane = reserved
+            ? runOperation(
+                options.lanes,
+                reserved.definition,
+                reserved.input,
+                reserved.caller,
+                { reservation: reserved.reservation }
+              )
+            : runInLane(ticket, execution)
           if (
             options.lanes.paused &&
             relayControlOperationRefusedWhilePaused(request.operation)
@@ -899,7 +919,7 @@ function authenticateSocket(
           const { payload, ran } =
             operationId === undefined
               ? {
-                  payload: yield* runInLane(ticket, execution),
+                  payload: yield* inLane,
                   ran: true,
                 }
               : yield* journaled(
@@ -907,7 +927,7 @@ function authenticateSocket(
                   operationId,
                   request,
                   ticket,
-                  execution
+                  inLane
                 )
           if (ran && isAuditedRelayControlOperation(request.operation)) {
             Effect.runFork(
@@ -1021,19 +1041,19 @@ function authenticateSocket(
   }
 
   /**
-   * Runs a change under its operation ID. It's claimed at once, so a repeat
-   * from any session waits for it; and recorded as accepted before anything
-   * it does, including `beforeRun`. Its outcome is kept in memory as soon as
-   * it finishes, and written to the journal without holding up the reply. A
-   * repeat of a change this Relay already took gets that change's answer
-   * instead, and `ran: false`.
+   * Runs a change, `inLane`, under its operation ID. It's claimed at once,
+   * so a repeat from any session waits for it; and recorded as accepted
+   * before anything it does, including `beforeRun`. Its outcome is kept in
+   * memory as soon as it finishes, and written to the journal without
+   * holding up the reply. A repeat of a change this Relay already took gets
+   * that change's answer instead, and `ran: false`, giving up `ticket`.
    */
   function journaled(
     clientId: string,
     operationId: string,
     request: RelayControlRequest,
     ticket: LaneTicket | null,
-    execution: EffectType.Effect<unknown, unknown>
+    inLane: EffectType.Effect<unknown, unknown>
   ): EffectType.Effect<{ payload: unknown; ran: boolean }, unknown> {
     const key = operationKey(clientId, operationId)
     const digest = payloadDigest(request)
@@ -1109,7 +1129,7 @@ function authenticateSocket(
         )
       )
       options.beforeRun?.(request)
-      const exit = yield* Effect.exit(runInLane(ticket, execution))
+      const exit = yield* Effect.exit(inLane)
       const outcome: RecordedOutcome = Exit.isSuccess(exit)
         ? { kept: true, payload: exit.value, status: "succeeded" }
         : {
@@ -1405,6 +1425,100 @@ function authenticateSocket(
       )
     )
   }
+}
+
+// A request that runs as an operation, from the place it reserved.
+interface PlannedOperation {
+  readonly caller: RelayCaller
+  readonly definition: ControlOperation["definition"]
+  readonly input: unknown
+  readonly reservation: RelayReservation
+}
+
+/**
+ * Takes a request's place in line: an operation's from its definition's
+ * locks, and any other's from `requestLocks`. It throws for a request that
+ * isn't valid, having taken none.
+ */
+function planRequest(
+  options: ControlSocketOptions,
+  request: RelayControlRequest,
+  client: RelayClientGrant,
+  startWork: () => () => void
+): {
+  readonly reserved: PlannedOperation | null
+  readonly ticket: LaneTicket | null
+} {
+  const registered = options.operations?.[request.operation]
+  if (!registered) {
+    const locks = options.requestLocks(request)
+    const ticket =
+      locks === null
+        ? null
+        : options.lanes.admit({ label: request.operation, locks })
+    return { reserved: null, ticket }
+  }
+  const input = registered.input(request)
+  const caller: RelayCaller = { client, kind: "control", request }
+  const { authorize, run } = registered.definition
+  const definition: ControlOperation["definition"] = {
+    ...registered.definition,
+    // The client as it is now, as the request was checked when it came.
+    authorize: (args) =>
+      clientMayStill(options, request, client.id).pipe(
+        Effect.andThen(authorize ? authorize(args) : Effect.void)
+      ),
+    run: (args) =>
+      Effect.suspend(() => {
+        const settled = startWork()
+        return run(args).pipe(Effect.ensuring(Effect.sync(settled)))
+      }),
+  }
+  const reservation = reserveOperation(options.lanes, definition, input, caller)
+  return {
+    reserved: { caller, definition, input, reservation },
+    ticket: reservation.ticket,
+  }
+}
+
+// Whether a client, read again, may still send a request.
+function clientMayStill(
+  options: ControlSocketOptions,
+  request: RelayControlRequest,
+  clientId: string
+): EffectType.Effect<void, Error> {
+  return promiseOperation(() =>
+    options.runEffect(options.state.findClientById(clientId))
+  ).pipe(
+    Effect.flatMap((client) =>
+      client === null
+        ? Effect.fail(
+            new ControlRefusedError({ message: "Hearth client was revoked" })
+          )
+        : requestAllowed(request, client)
+          ? Effect.void
+          : Effect.fail(
+              new ControlRefusedError({ message: "Relay permission denied" })
+            )
+    )
+  )
+}
+
+// Whether a client's grant, as it stands, lets it send a request.
+function requestAllowed(
+  request: RelayControlRequest,
+  client: RelayClientGrant
+): boolean {
+  if (anyClientOperations.has(request.operation)) return true
+  const action = actionForRequest(request)
+  const actions = actionsForRole(client.role, client.actions)
+  const memberActions = memberActionsForRequest(request)
+  return (
+    action !== null &&
+    isActionAllowed(actions, action) &&
+    memberActions !== null &&
+    memberActions.every((member) => isActionAllowed(actions, member))
+  )
 }
 
 // Runs a request in its lane; the lane notes on the request's span how long
@@ -2242,6 +2356,10 @@ function controlFailureFor(
   }
   if (cause instanceof LaneRejectedError && cause.reason === "paused") {
     return { code: "relay_paused", message: cause.message, retryable: false }
+  }
+  // Its client was revoked, or lost what the request needs, while it waited.
+  if (cause instanceof ControlRefusedError) {
+    return { code: "forbidden", message: cause.message, retryable: false }
   }
   // Refused while something the Relay keeps says it mustn't run, such as an
   // unfinished restore or the resource's deletion: expected, not an error to
