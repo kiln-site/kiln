@@ -5,13 +5,17 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { gzipSync } from "node:zlib"
 import { afterAll, assert, describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { Deferred, Effect, Exit, Fiber } from "effect"
 import { onTestFinished, vi } from "vite-plus/test"
 
 import type { BackupCreateTaskInput } from "@workspace/contracts"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
+import { BackupManager } from "./backups.js"
+import { TarRestoreFences } from "./backups/tar-restore-journal.js"
+import { RelayStateStore } from "./effect/state.js"
+import { controlRequestLocks } from "./operation-plans.js"
 import {
   createEncryptedPlatformBackup,
   inspectEncryptedPlatformBackup,
@@ -189,6 +193,73 @@ describe("Kiln platform backups deployed by Coolify", () => {
     expect(kiln.database.executedSql.join("\n")).toContain(
       "CREATE TABLE kept (id int);"
     )
+  })
+
+  it("waits for a restart of Kiln's services before dumping Hearth's database", async () => {
+    const kiln = await coolifyKiln()
+    kiln.database.sqlDump = "CREATE TABLE kept (id int);"
+    const { harness } = kiln
+    const manager = await Effect.runPromise(
+      BackupManager.make({
+        apps: {
+          hostFolder: async () => null,
+          isRunning: async () => false,
+          start: async () => {},
+          stop: async () => {},
+          volumes: async () => [],
+        },
+        config: harness.config,
+        fences: await TarRestoreFences.load(harness.config),
+        findInstance: async () => null,
+        isInstanceStopped: async () => true,
+        lanes: harness.lanes,
+        volumes: harness.volumes,
+      }).pipe(Effect.provideService(RelayStateStore, harness.state))
+    )
+    const restarted = Deferred.makeUnsafe<void>()
+    const restart = Effect.runFork(
+      harness.lanes.run(
+        {
+          label: "relay.platform.action",
+          locks: controlRequestLocks(
+            "relay.platform.action",
+            { action: "restart" },
+            (id) => id,
+            () => []
+          )!,
+        },
+        Deferred.await(restarted)
+      )
+    )
+    const taskId = randomUUID()
+    const backup = Effect.runPromise(
+      Effect.gen(function* () {
+        yield* manager.enqueue({
+          artifactKind: "platform_bundle",
+          backupId: randomUUID(),
+          destination: { kind: "local" },
+          exclude: [],
+          kind: "create",
+          maxBytes: null,
+          mode: "full",
+          reason: "manual",
+          target: { id: "kiln-test", kind: "platform" },
+          taskId,
+        })
+        yield* manager.runPending()
+        return (yield* manager.get(taskId))!
+      })
+    )
+
+    // It waits its turn rather than dump a database being restarted.
+    await vi.waitFor(() => expect(harness.lanes.pending.waiting).toBe(1))
+    expect(await Effect.runPromise(manager.get(taskId))).not.toMatchObject({
+      status: "succeeded",
+    })
+    Deferred.doneUnsafe(restarted, Exit.void)
+    await Effect.runPromise(Fiber.join(restart))
+
+    expect(await backup).toMatchObject({ status: "succeeded" })
   })
 
   it("won't restore into a container under the database's name that keeps other data where Hearth's was", async () => {
