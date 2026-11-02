@@ -2,7 +2,7 @@ import { Effect } from "effect"
 
 import type { RelayStateStore } from "./effect/state.js"
 import type { LifecycleDriver } from "./lifecycle.js"
-import { instanceDnsReplaceLocks } from "./operation-plans.js"
+import { instanceReplaceLocks } from "./operation-plans.js"
 import { type ProvisioningAdapter, provisioningStatus } from "./provisioning.js"
 
 /** How a game server provisions: its container, from its Brick. */
@@ -16,12 +16,10 @@ export function serverProvisioning(options: {
     kind: "server",
     announce: options.refreshSnapshot,
     label: "instance.provision",
-    // It rewrites the Relay's CoreDNS from every game server's hostname, so
-    // it holds the routes for the whole create, image pull included.
-    locks: instanceDnsReplaceLocks,
-    // Creating a game server changes what they all share: the game network,
-    // the Relay's DNS records, and their private hostnames.
-    oneAtATime: true,
+    // The create takes the routes itself, once its image is downloaded, for
+    // what every game server shares: the game network, the Relay's CoreDNS,
+    // and their private hostnames.
+    locks: instanceReplaceLocks,
     withState: (placeholder, state) => ({
       ...placeholder,
       observedState: state.phase === "failed" ? "failed" : "provisioning",
