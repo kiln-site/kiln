@@ -276,6 +276,7 @@ import {
   shared,
   type LaneAdmission,
 } from "./operation-lanes.js"
+import { operation, runOperation } from "./operations/operation.js"
 import {
   controlRequestLocks,
   databaseReadLocks,
@@ -3982,6 +3983,19 @@ function notePlatformPass(result: PlatformPassResult): void {
   }
 }
 
+// Starts bundled Traefik for Hearth, or joins it to Kiln's network, after a
+// platform pass. It changes the routes and reads Kiln's services.
+const repairPlatformEdge = operation<void>()({
+  name: "relay.platform.edge",
+  locks: () => [exclusive(laneKeys.routes), shared(laneKeys.platform)],
+  run: () =>
+    Effect.tryPromise(() => lifecycle.reconcilePlatformEdge()).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Traefik couldn't serve Hearth", cause)
+      )
+    ),
+})
+
 /**
  * Passes over Kiln's services every 30 seconds in platform mode. Otherwise
  * looks once a minute for a Hearth beside this Relay, to report it. A
@@ -4006,19 +4020,9 @@ function platformLoop() {
       // Kiln's network exists once a pass has run; Traefik retries here, in
       // its own turn, since it changes the routes and reads Kiln's services.
       Effect.andThen(
-        lanes
-          .run(
-            {
-              label: "platform.edge",
-              locks: [exclusive(laneKeys.routes), shared(laneKeys.platform)],
-            },
-            Effect.tryPromise(() => lifecycle.reconcilePlatformEdge()).pipe(
-              Effect.catch((cause) =>
-                Effect.logWarning("Traefik couldn't serve Hearth", cause)
-              )
-            )
-          )
-          .pipe(Effect.withSpan("relay.platform.edge"))
+        runOperation(lanes, repairPlatformEdge, undefined, {
+          kind: "timer",
+        })
       ),
       Effect.catchIf(
         (cause) => cause instanceof LaneRejectedError,
