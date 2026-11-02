@@ -10,7 +10,8 @@ import { createHmac, randomBytes, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { hostname } from "node:os"
 import { join } from "node:path"
-import { Effect, Predicate, Schema } from "effect"
+import { Cause, Effect, Predicate, Schema } from "effect"
+import { logException } from "@workspace/telemetry"
 
 import {
   RelayInventoryLookupSchema,
@@ -2022,9 +2023,7 @@ async function executeControlRequest(
           AbortSignal.timeout(relayControlDeadlineMs("relay.update.apply"))
         )
       )
-      // The updates are running now, so failing to audit them must not
-      // tell Hearth they didn't start.
-      const audits = await Promise.allSettled(
+      await Promise.all(
         operations.map((operation) =>
           appendRelayAudit("system.update_started", client.id, request.id, {
             batchId: operation.batchId,
@@ -2035,13 +2034,6 @@ async function executeControlRequest(
           })
         )
       )
-      for (const audit of audits) {
-        if (audit.status === "rejected") {
-          reportRelayError(audit.reason, {
-            operation: "relay.update.apply.audit",
-          })
-        }
-      }
       return batched ? operations : operations[0]
     }
     case "relay.update.status":
@@ -4136,6 +4128,8 @@ function relayActionSelection(value: unknown): ReadonlyArray<RelayAction> {
   return relayActions.filter((action) => selected.has(action))
 }
 
+// Recorded once a change is made, so failing to record it is logged rather
+// than telling Hearth the change failed.
 async function appendRelayAudit(
   event: string,
   clientId: string | null,
@@ -4144,14 +4138,22 @@ async function appendRelayAudit(
 ): Promise<void> {
   await runRelayEffect(
     `relay.audit.${event}`,
-    startup.state.appendAudit({
-      clientId,
-      details,
-      event,
-      id: randomUUID(),
-      occurredAt: Date.now(),
-      requestId,
-    })
+    startup.state
+      .appendAudit({
+        clientId,
+        details,
+        event,
+        id: randomUUID(),
+        occurredAt: Date.now(),
+        requestId,
+      })
+      .pipe(
+        Effect.catchCause((cause) =>
+          logException(Cause.squash(cause), {
+            operation: `relay.audit.${event}`,
+          })
+        )
+      )
   )
 }
 
