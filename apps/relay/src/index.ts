@@ -3285,17 +3285,19 @@ async function executeControlRequest(
         "relay.instance.deletePendingPrimaryPort",
         startup.state.deletePendingPrimaryPort(instanceId)
       )
-      // Its routes go with it, under the routes its deletion holds.
-      await runRelayEffect(
-        "relay.network.routes.deleteInstance",
-        startup.state.replaceInstanceRoutes(instanceId, [])
-      )
-      await lifecycle.configureWebRoutes(
+      // Its routes go with it, so their hostnames are free again.
+      await withRoutesLock("instance.delete.routes", async () => {
         await runRelayEffect(
-          "relay.network.routes.afterDelete",
-          startup.state.listWebRoutes()
+          "relay.network.routes.deleteInstance",
+          startup.state.replaceInstanceRoutes(instanceId, [])
         )
-      )
+        await lifecycle.configureWebRoutes(
+          await runRelayEffect(
+            "relay.network.routes.afterDelete",
+            startup.state.listWebRoutes()
+          )
+        )
+      })
       await resourceFreezes.forget("instance", instanceId)
       return { deleted: true, instanceId }
     }
@@ -4491,9 +4493,9 @@ function retainingInstance<T>(
 }
 
 // Clears or rewrites web routes from inside an operation that already holds
-// its resource's locks, such as an App's delete. Never from one that holds
-// the routes itself, as a game server's delete does: the lanes don't know
-// it's the same operation, so it would wait for itself.
+// its resource's locks, such as a delete. Never from one that holds the
+// routes itself: the lanes don't know it's the same operation, so it would
+// wait for itself.
 function withRoutesLock<T>(
   label: string,
   mutate: () => Promise<T>

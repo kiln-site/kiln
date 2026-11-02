@@ -1,3 +1,9 @@
+import {
+  brickRecipeSchema,
+  MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
+  relayCreateInstanceSchema,
+  type RelayInstancePortProtocol,
+} from "@workspace/contracts"
 import { Effect, Exit } from "effect"
 import { describe, expect, it, vi } from "vite-plus/test"
 
@@ -73,5 +79,65 @@ describe("instance port lifecycle", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("never gives a stopped game server's port to another adding a protocol", async () => {
+    const harness = await relayHarness({
+      KILN_RELAY_GAME_PORT_RANGE: "30000-30000",
+    })
+    const recipe = (protocol: "tcp" | "udp") =>
+      brickRecipeSchema.parse({
+        format: "kiln.brick/v1",
+        metadata: {
+          author: "Kiln",
+          description: "Test recipe",
+          game: "Test",
+          id: `game-${protocol}`,
+          name: "Game",
+        },
+        variables: {},
+        runtime: {
+          environment: {},
+          image: `example.test/game-${protocol}:latest`,
+          name: "Game",
+          resources: { memory: "512M", pids: 128 },
+          storage: { mount: "/server" },
+        },
+        network: {
+          mode: "direct",
+          ports: [{ container: 7777, name: "game", protocol }],
+          primaryPort: "game",
+        },
+      })
+    const create = (id: string, protocol: "tcp" | "udp", start: boolean) =>
+      harness.lifecycle.createInstanceWithId(
+        id,
+        relayCreateInstanceSchema.parse({
+          diskLimitBytes: MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
+          name: `Game ${protocol}`,
+          recipe: `https://bricks.test/game-${protocol}.yml`,
+          recipeDefinition: recipe(protocol),
+          start,
+          variables: {},
+        })
+      )
+    // One running on 30000/tcp, and one stopped on 30000/udp.
+    const running = await create(first, "tcp", true)
+    const stopped = await create(second, "udp", false)
+    expect(running.ports[0]?.externalPort).toBe(30_000)
+    expect(stopped.ports[0]?.externalPort).toBe(30_000)
+
+    const widened = (protocol: RelayInstancePortProtocol) =>
+      harness.lifecycle.updateInstancePorts(
+        first,
+        running.ports.map((allocation) => ({
+          id: allocation.id,
+          internalPort: allocation.internalPort,
+          name: allocation.name,
+          protocol,
+        })),
+        []
+      )
+    await expect(widened("both")).rejects.toThrow(/already in use/u)
   })
 })

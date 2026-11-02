@@ -65,16 +65,6 @@ export function instanceReplaceLocks(instanceId: string): Array<LaneLock> {
   return [exclusive(laneKeys.instance(instanceId))]
 }
 
-/**
- * Creating, reconfiguring, or deleting a game server, which also rewrites
- * the Relay's CoreDNS from every game server's hostname. It holds the routes
- * alone, as networking changes do, so no other writer's older list or
- * settings land after its own.
- */
-export function instanceDnsReplaceLocks(instanceId: string): Array<LaneLock> {
-  return [...instanceReplaceLocks(instanceId), exclusive(laneKeys.routes)]
-}
-
 export function appLifecycleLocks(appId: string): Array<LaneLock> {
   return [shared(laneKeys.app(appId)), exclusive(laneKeys.appLifecycle(appId))]
 }
@@ -585,8 +575,10 @@ export function controlRequestLocks(
       return null
 
     // A new game server's ID is chosen as its request arrives (index.ts).
+    // Its create takes the routes itself, once its image is downloaded, to
+    // rewrite the Relay's CoreDNS.
     case "instance.create":
-      return instance(instanceDnsReplaceLocks)
+      return instance(instanceReplaceLocks)
 
     // Looks up how an earlier change went.
     case "operation.get":
@@ -759,10 +751,11 @@ export function controlRequestLocks(
       ])
 
     // These replace the server's container or files, so they wait for
-    // everything else on it, live backups included, and rewrite CoreDNS.
+    // everything else on it, live backups included. Each takes the routes
+    // itself for the step that rewrites the Relay's CoreDNS.
     case "instance.startup.write":
     case "instance.delete":
-      return instance(instanceDnsReplaceLocks)
+      return instance(instanceReplaceLocks)
     // These recreate the container with new labels, as a start does.
     case "instance.network.databases.remove":
       return instance(instanceLifecycleLocks)

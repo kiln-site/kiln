@@ -30,6 +30,8 @@ const directAdmissions: Record<string, string> = {
   "apps.ts:app.deployment.volumes": "Nested; declared up front with deploys",
   "lifecycle.ts:instance.allocations":
     "Nested; declared up front with game server changes",
+  "lifecycle.ts:instance.dns":
+    "Nested; the CoreDNS step of a game server's create, startup change, or deletion",
   "lifecycle.ts:tailscale.member.remove":
     "Nested; declared up front with deletion",
   "backups.ts:outcome": "Backup tasks, until backups move",

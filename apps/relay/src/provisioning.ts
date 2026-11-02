@@ -63,11 +63,6 @@ export interface ProvisioningAdapter<Kind extends RelayProvisioningKind> {
   readonly label: string
   /** What a job holds for the whole create. */
   readonly locks: (instanceId: string) => ReadonlyArray<LaneLock>
-  /**
-   * Runs one job of this kind at a time, for a kind whose create changes
-   * something its instances share beyond what its locks cover.
-   */
-  readonly oneAtATime?: boolean
   /** The placeholder showing where provisioning is. */
   readonly withState: (
     placeholder: RelayProvisioningJob<Kind>["placeholder"],
@@ -325,16 +320,8 @@ export class ProvisioningManager {
           yield* this.#recheckLater()
           return
         }
-        const passedOver = [...this.#running]
-          .map((taken) => taken.kind)
-          .filter((kind) => this.#adapters[kind].oneAtATime)
-        const job = yield* this.#state.claimNextProvisioningJob(
-          Date.now(),
-          passedOver
-        )
+        const job = yield* this.#state.claimNextProvisioningJob(Date.now())
         if (!job) {
-          // Jobs of a kind passed over may still wait, with their spans.
-          if (passedOver.length > 0) return
           // Nothing waits, so only a job being claimed this moment, or one
           // being put back, can still want its noted span.
           const running = new Set(

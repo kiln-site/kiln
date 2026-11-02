@@ -2065,7 +2065,8 @@ export class LifecycleDriver {
             ) {
               await this.#reservePublishedPortProtocols(
                 existing.externalPort,
-                addedProtocols
+                addedProtocols,
+                inspected.filter((other) => other.id !== instance.id)
               )
               for (const protocol of addedProtocols) {
                 pending.push({ port: existing.externalPort, protocol })
@@ -2464,13 +2465,6 @@ export class LifecycleDriver {
             })
             .pipe(Effect.ignore)
         )
-        await runLifecycle(
-          this.#engine.removeContainer(existing.service, {
-            force: true,
-            timeout: 90_000,
-          })
-        )
-
         return runLifecycle(
           lifecycleOperation(async () => {
             const reconfigured = await this.#provisionManagedInstance({
@@ -2481,6 +2475,15 @@ export class LifecycleDriver {
               ports: existing.ports,
               recipe,
               recipeDefinition: definition,
+              // The stopped container keeps its ports and Tailscale address
+              // claimed until the new one takes them, under the routes.
+              replacing: () =>
+                runLifecycle(
+                  this.#engine.removeContainer(existing.service, {
+                    force: true,
+                    timeout: 90_000,
+                  })
+                ),
               skipImagePull: forcePull,
               start,
               tailscale,
@@ -2518,6 +2521,11 @@ export class LifecycleDriver {
     ports?: ReadonlyArray<RelayInstancePortAllocation>
     recipe: string
     recipeDefinition?: BrickRecipe
+    /**
+     * Removes the container this one replaces, first once it holds the
+     * routes, so nothing claims its ports or address in between.
+     */
+    replacing?: () => Promise<void>
     snapshotSha256?: string
     skipImagePull?: boolean
     start: boolean
@@ -2542,24 +2550,17 @@ export class LifecycleDriver {
         `${INSTALLATION_MARKER_ENV} must be a .kiln-* filename containing only letters, numbers, dots, underscores, or hyphens`
       )
     }
-    const existing = await this.#docker.inspectInstances()
     const limits =
       "diskLimitBytes" in input.limits
         ? gameServerLimits(input.limits, resolved.memory)
         : input.limits
-    if (
-      input.tailscale.enabled &&
-      existing.some(
-        (instance) =>
-          instance.managedByRelay &&
-          instance.tailscale.enabled &&
-          instance.tailscale.subdomain === input.tailscale.subdomain
-      )
-    ) {
-      throw new Error(
-        `The Tailscale address ${input.tailscale.subdomain} is already assigned to another server`
-      )
-    }
+    // Checked before the image download too, so a server that can't join
+    // Tailscale fails before it, not after.
+    await this.#tailscaleHostname(
+      await this.#docker.inspectInstances(),
+      input.tailscale,
+      input.id
+    )
     // Held until the container exists, so its capacity stays claimed.
     return this.#holdingAllocation(
       {
@@ -2599,31 +2600,6 @@ export class LifecycleDriver {
           "instances",
           id
         )
-        if (installationMarker) {
-          await rm(join(directory, installationMarker), { force: true })
-        }
-        const networking = await this.networking()
-        const tailscaleSettings = input.tailscale.enabled
-          ? await this.tailscaleSettings()
-          : null
-        if (input.tailscale.enabled && !tailscaleSettings) {
-          throw new Error(
-            "Configure Tailscale infrastructure before connecting this server"
-          )
-        }
-        const hostnamePrefix = input.tailscale.enabled
-          ? input.tailscale.subdomain
-          : undefined
-        if (input.tailscale.enabled && !hostnamePrefix) {
-          throw new Error("Enter a Tailscale subdomain for this server")
-        }
-        const hostname = hostnamePrefix
-          ? `${hostnamePrefix.replace(/\.$/u, "")}.${
-              tailscaleSettings?.domain ??
-              networking?.domain ??
-              this.#config.connectDomain
-            }`
-          : null
         const primaryPort = definition.network.ports.find(
           (port) => port.name === definition.network.primaryPort
         )
@@ -2632,32 +2608,11 @@ export class LifecycleDriver {
             "Brick primary network port disappeared after validation"
           )
         }
-        const webRoutes = this.#webRoutes.filter(
-          (route) => route.instanceId === input.id
-        )
-        const proxySettings = await this.proxySettings()
-        const routeLabels = this.#containerWebRouteLabels(
-          webRoutes,
-          proxySettings
-        )
-        const usesExternalEdge =
-          proxySettings.mode === "none" || proxySettings.mode === "coolify"
-
-        if (input.prepareDirectory) {
-          await mkdir(directory, { recursive: true })
-          if (definition.runtime.user) {
-            const identity = definition.runtime.user.split(":")
-            const user = Number(identity[0])
-            const group = identity.length === 2 ? Number(identity[1]) : user
-            await chown(directory, user, group)
-          }
+        if (installationMarker) {
+          await rm(join(directory, installationMarker), { force: true })
         }
-        await this.#ensureNetwork()
-        if (usesExternalEdge && webRoutes.length > 0) {
-          await this.#ensureEdgeNetwork()
-        }
-        if (networking?.enabled)
-          await this.#ensureInfrastructure(networking, false)
+        // Downloading the image reads nothing the routes guard, so it runs
+        // before them, as the checks above do.
         let managedInstallationMarker: string | null = null
         const pullImage = () =>
           this.#engine.pullImage(image, { timeout: 300_000 })
@@ -2697,213 +2652,255 @@ export class LifecycleDriver {
           }
         }
 
-        const reservedPorts: Array<{
-          port: number
-          protocol: RelayInstancePortAllocation["protocol"]
-        }> = []
-        const portAllocations: Array<RelayInstancePortAllocation> = input.ports
-          ? [...input.ports]
-          : []
-        if (portAllocations.length === 0) {
-          const publishedPorts =
-            definition.network.mode === "direct"
-              ? definition.network.ports
-              : [primaryPort]
-          for (const port of publishedPorts) {
-            const externalPort =
-              port.host ??
-              (await this.#reserveGamePort(id, port.protocol, existing))
-            if (port.host === undefined) {
-              reservedPorts.push({
-                port: externalPort,
+        // The rest reads the game servers, their routes and ports, and the
+        // networking, proxy, and Tailscale settings, and rewrites CoreDNS
+        // from them, so it holds the routes alone and reads them now.
+        await input.onPhase?.("creating_container")
+        await this.#holdingRoutes(id, async () => {
+          await input.replacing?.()
+          const existing = await this.#docker.inspectInstances()
+          const { hostname, networking } = await this.#tailscaleHostname(
+            existing,
+            input.tailscale,
+            input.id
+          )
+          const webRoutes = this.#webRoutes.filter(
+            (route) => route.instanceId === input.id
+          )
+          const proxySettings = await this.proxySettings()
+          const routeLabels = this.#containerWebRouteLabels(
+            webRoutes,
+            proxySettings
+          )
+          const usesExternalEdge =
+            proxySettings.mode === "none" || proxySettings.mode === "coolify"
+
+          if (input.prepareDirectory) {
+            await mkdir(directory, { recursive: true })
+            if (definition.runtime.user) {
+              const identity = definition.runtime.user.split(":")
+              const user = Number(identity[0])
+              const group = identity.length === 2 ? Number(identity[1]) : user
+              await chown(directory, user, group)
+            }
+          }
+          await this.#ensureNetwork()
+          if (usesExternalEdge && webRoutes.length > 0) {
+            await this.#ensureEdgeNetwork()
+          }
+          if (networking?.enabled)
+            await this.#ensureInfrastructure(networking, false)
+
+          const reservedPorts: Array<{
+            port: number
+            protocol: RelayInstancePortAllocation["protocol"]
+          }> = []
+          const portAllocations: Array<RelayInstancePortAllocation> =
+            input.ports ? [...input.ports] : []
+          if (portAllocations.length === 0) {
+            const publishedPorts =
+              definition.network.mode === "direct"
+                ? definition.network.ports
+                : [primaryPort]
+            for (const port of publishedPorts) {
+              const externalPort =
+                port.host ??
+                (await this.#reserveGamePort(id, port.protocol, existing))
+              if (port.host === undefined) {
+                reservedPorts.push({
+                  port: externalPort,
+                  protocol: port.protocol,
+                })
+              }
+              const primary = port.name === definition.network.primaryPort
+              portAllocations.push({
+                externalPort,
+                id: primary ? "primary" : `brick-${port.name}`,
+                internalPort: port.container,
+                kind: primary ? "primary" : "brick",
+                name: port.name.replaceAll("-", " "),
                 protocol: port.protocol,
               })
             }
-            const primary = port.name === definition.network.primaryPort
-            portAllocations.push({
-              externalPort,
-              id: primary ? "primary" : `brick-${port.name}`,
-              internalPort: port.container,
-              kind: primary ? "primary" : "brick",
-              name: port.name.replaceAll("-", " "),
-              protocol: port.protocol,
-            })
           }
-        }
-        const primaryAllocation = portAllocations.find(
-          (allocation) => allocation.kind === "primary"
-        )
-        if (!primaryAllocation) {
-          throw new Error(
-            "Managed server port allocations require a primary port"
+          const primaryAllocation = portAllocations.find(
+            (allocation) => allocation.kind === "primary"
           )
-        }
-        const portLabels = portAllocationContainerLabels(portAllocations)
-        const variablesLabel = JSON.stringify(resolved.values)
-        const labels: Record<string, string> = {
-          "kiln.relay.managed": "true",
-          "kiln.relay.owned": "true",
-          "kiln.server.id": id,
-          "kiln.brick.id": definition.metadata.id,
-          "kiln.brick.format": definition.format,
-          "kiln.brick.source": input.recipe,
-          "kiln.brick.snapshot-sha256": snapshotSha256,
-          "kiln.brick.variables": variablesLabel,
-          "kiln.brick.network-mode": definition.network.mode,
-          "kiln.brick.supports-srv": String(definition.network.supportsSrv),
-          "kiln.traefik.managed": "true",
-          "kiln.traefik.service.port": String(primaryAllocation.internalPort),
-          "kiln.instance.name": defaultInstanceName,
-          "kiln.instance.version": version,
-          "kiln.instance.java": resolved.runtimeName,
-          "kiln.instance.game": definition.metadata.game,
-          "kiln.instance.public-host": this.#config.gameHost,
-          "kiln.instance.directory": id,
-          // Older Relays read these, with 0 for no limit.
-          "kiln.instance.memory-bytes": String(limits.memoryBytes ?? 0),
-          "kiln.instance.disk-bytes": String(limits.diskBytes ?? 0),
-          "kiln.instance.mount": definition.runtime.storage.mount,
-          ...resourceLimitLabels(limits),
-        }
-        if (managedInstallationMarker) {
-          labels[INSTALLATION_MARKER_LABEL] = managedInstallationMarker
-        }
-        Object.assign(labels, portLabels)
-        if (definition.readiness) {
-          labels["kiln.brick.readiness"] = JSON.stringify(definition.readiness)
-        }
-        if (definition.console) {
-          labels["kiln.brick.console-stop-commands"] = JSON.stringify(
-            definition.console.stopCommands
+          if (!primaryAllocation) {
+            throw new Error(
+              "Managed server port allocations require a primary port"
+            )
+          }
+          const portLabels = portAllocationContainerLabels(portAllocations)
+          const variablesLabel = JSON.stringify(resolved.values)
+          const labels: Record<string, string> = {
+            "kiln.relay.managed": "true",
+            "kiln.relay.owned": "true",
+            "kiln.server.id": id,
+            "kiln.brick.id": definition.metadata.id,
+            "kiln.brick.format": definition.format,
+            "kiln.brick.source": input.recipe,
+            "kiln.brick.snapshot-sha256": snapshotSha256,
+            "kiln.brick.variables": variablesLabel,
+            "kiln.brick.network-mode": definition.network.mode,
+            "kiln.brick.supports-srv": String(definition.network.supportsSrv),
+            "kiln.traefik.managed": "true",
+            "kiln.traefik.service.port": String(primaryAllocation.internalPort),
+            "kiln.instance.name": defaultInstanceName,
+            "kiln.instance.version": version,
+            "kiln.instance.java": resolved.runtimeName,
+            "kiln.instance.game": definition.metadata.game,
+            "kiln.instance.public-host": this.#config.gameHost,
+            "kiln.instance.directory": id,
+            // Older Relays read these, with 0 for no limit.
+            "kiln.instance.memory-bytes": String(limits.memoryBytes ?? 0),
+            "kiln.instance.disk-bytes": String(limits.diskBytes ?? 0),
+            "kiln.instance.mount": definition.runtime.storage.mount,
+            ...resourceLimitLabels(limits),
+          }
+          if (managedInstallationMarker) {
+            labels[INSTALLATION_MARKER_LABEL] = managedInstallationMarker
+          }
+          Object.assign(labels, portLabels)
+          if (definition.readiness) {
+            labels["kiln.brick.readiness"] = JSON.stringify(
+              definition.readiness
+            )
+          }
+          if (definition.console) {
+            labels["kiln.brick.console-stop-commands"] = JSON.stringify(
+              definition.console.stopCommands
+            )
+          }
+          if (hostname) {
+            const privatePort =
+              definition.network.mode === "direct"
+                ? primaryAllocation.internalPort
+                : this.#config.connectPort
+            labels["kiln.instance.hostname"] =
+              privatePort === 25_565 ? hostname : `${hostname}:${privatePort}`
+          }
+          labels["kiln.instance.tailscale-enabled"] = String(
+            input.tailscale.enabled
           )
-        }
-        if (hostname) {
-          const privatePort =
-            definition.network.mode === "direct"
-              ? primaryAllocation.internalPort
-              : this.#config.connectPort
-          labels["kiln.instance.hostname"] =
-            privatePort === 25_565 ? hostname : `${hostname}:${privatePort}`
-        }
-        labels["kiln.instance.tailscale-enabled"] = String(
-          input.tailscale.enabled
-        )
-        if (input.tailscale.subdomain) {
-          labels["kiln.instance.tailscale-subdomain"] =
-            input.tailscale.subdomain
-        }
-        Object.assign(labels, relayOwnerLabels(this.#config), routeLabels)
-        Object.assign(labels, await this.databaseConnections.labels(id))
-        const ports = Object.entries(
-          dockerPortBindingsForAllocations(portAllocations)
-        ).flatMap(([binding, candidates]) => {
-          const hostPort = candidates[0]?.HostPort
-          const [containerPort, protocol] = binding.split("/")
-          return hostPort
-            ? [
-                {
-                  containerPort: Number(containerPort),
-                  hostPort,
-                  protocol:
-                    protocol === "udp" ? ("udp" as const) : ("tcp" as const),
-                },
-              ]
-            : []
-        })
-        const spec: ContainerSpec = {
-          binds: [`${hostDirectory}:${definition.runtime.storage.mount}`],
-          capDrop: ["ALL"],
-          command: [
-            ...(definition.runtime.entrypoint?.slice(1) ?? []),
-            ...(definition.runtime.command ?? []),
-          ],
-          ...(definition.runtime.entrypoint?.[0] && {
-            entrypoint: definition.runtime.entrypoint[0],
-          }),
-          env: resolved.environment,
-          hostname: containerName,
-          image,
-          interactive: true,
-          labels,
-          ...containerLimitSpec(limits),
-          name: containerName,
-          network: {
-            aliases: [containerName],
-            name: this.#resources.gameNetwork,
-          },
-          pidsLimit: definition.runtime.resources.pids,
-          ports,
-          readOnly: true,
-          restart: "no",
-          securityOpt: ["no-new-privileges:true"],
-          ...(definition.runtime.stopSignal && {
-            stopSignal: definition.runtime.stopSignal,
-          }),
-          tmpfs: { "/tmp": "rw,exec,nosuid,nodev,size=128m" },
-          tty: true,
-          ...(definition.runtime.user && { user: definition.runtime.user }),
-          ...(definition.runtime.workingDirectory && {
-            workdir: definition.runtime.workingDirectory,
-          }),
-        }
+          if (input.tailscale.subdomain) {
+            labels["kiln.instance.tailscale-subdomain"] =
+              input.tailscale.subdomain
+          }
+          Object.assign(labels, relayOwnerLabels(this.#config), routeLabels)
+          Object.assign(labels, await this.databaseConnections.labels(id))
+          const ports = Object.entries(
+            dockerPortBindingsForAllocations(portAllocations)
+          ).flatMap(([binding, candidates]) => {
+            const hostPort = candidates[0]?.HostPort
+            const [containerPort, protocol] = binding.split("/")
+            return hostPort
+              ? [
+                  {
+                    containerPort: Number(containerPort),
+                    hostPort,
+                    protocol:
+                      protocol === "udp" ? ("udp" as const) : ("tcp" as const),
+                  },
+                ]
+              : []
+          })
+          const spec: ContainerSpec = {
+            binds: [`${hostDirectory}:${definition.runtime.storage.mount}`],
+            capDrop: ["ALL"],
+            command: [
+              ...(definition.runtime.entrypoint?.slice(1) ?? []),
+              ...(definition.runtime.command ?? []),
+            ],
+            ...(definition.runtime.entrypoint?.[0] && {
+              entrypoint: definition.runtime.entrypoint[0],
+            }),
+            env: resolved.environment,
+            hostname: containerName,
+            image,
+            interactive: true,
+            labels,
+            ...containerLimitSpec(limits),
+            name: containerName,
+            network: {
+              aliases: [containerName],
+              name: this.#resources.gameNetwork,
+            },
+            pidsLimit: definition.runtime.resources.pids,
+            ports,
+            readOnly: true,
+            restart: "no",
+            securityOpt: ["no-new-privileges:true"],
+            ...(definition.runtime.stopSignal && {
+              stopSignal: definition.runtime.stopSignal,
+            }),
+            tmpfs: { "/tmp": "rw,exec,nosuid,nodev,size=128m" },
+            tty: true,
+            ...(definition.runtime.user && { user: definition.runtime.user }),
+            ...(definition.runtime.workingDirectory && {
+              workdir: definition.runtime.workingDirectory,
+            }),
+          }
 
-        await input.onPhase?.("creating_container")
-        await runLifecycle(
-          lifecycleOperation(async () => {
-            await runLifecycle(createContainer(this.#engine, spec))
-            await input.onPhase?.("finalizing")
-            if (usesExternalEdge && webRoutes.length > 0) {
-              await runLifecycle(
-                this.#engine.connectNetwork(
-                  this.#resources.edgeNetwork,
-                  containerName,
-                  { aliases: [containerName] }
+          await runLifecycle(
+            lifecycleOperation(async () => {
+              await runLifecycle(createContainer(this.#engine, spec))
+              await input.onPhase?.("finalizing")
+              if (usesExternalEdge && webRoutes.length > 0) {
+                await runLifecycle(
+                  this.#engine.connectNetwork(
+                    this.#resources.edgeNetwork,
+                    containerName,
+                    { aliases: [containerName] }
+                  )
                 )
+              }
+              await this.databaseConnections.reconcile(
+                { id, kind: "instance" },
+                [{ container: containerName }]
               )
-            }
-            await this.databaseConnections.reconcile({ id, kind: "instance" }, [
-              { container: containerName },
-            ])
-            if (input.start) {
-              await runLifecycle(
-                this.#engine.startContainer(containerName, { timeout: 120_000 })
+              if (input.start) {
+                await runLifecycle(
+                  this.#engine.startContainer(containerName, {
+                    timeout: 120_000,
+                  })
+                )
+              }
+              await this.#docker.recordProvisionedState(
+                id,
+                input.start ? "running" : "stopped"
               )
-            }
-            await this.#docker.recordProvisionedState(
-              id,
-              input.start ? "running" : "stopped"
-            )
-            if (networking?.enabled) {
-              await this.#refreshCoreDnsConfiguration(networking)
-            }
-            await this.#refreshTailscaleDns()
-          }).pipe(
-            Effect.catch((error) =>
-              this.#engine.removeContainer(containerName, { force: true }).pipe(
-                Effect.ignore,
-                Effect.flatMap(() =>
-                  input.prepareDirectory
-                    ? lifecycleOperation(() =>
-                        rm(directory, { recursive: true, force: true })
+              await this.#refreshDns()
+            }).pipe(
+              Effect.catch((error) =>
+                this.#engine
+                  .removeContainer(containerName, { force: true })
+                  .pipe(
+                    Effect.ignore,
+                    Effect.flatMap(() =>
+                      input.prepareDirectory
+                        ? lifecycleOperation(() =>
+                            rm(directory, { recursive: true, force: true })
+                          )
+                        : Effect.void
+                    ),
+                    Effect.flatMap(() => Effect.fail(error))
+                  )
+              ),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  for (const allocation of reservedPorts) {
+                    for (const protocol of portProtocols(allocation.protocol)) {
+                      this.#pendingGamePorts.delete(
+                        `${protocol}:${allocation.port}`
                       )
-                    : Effect.void
-                ),
-                Effect.flatMap(() => Effect.fail(error))
-              )
-            ),
-            Effect.ensuring(
-              Effect.sync(() => {
-                for (const allocation of reservedPorts) {
-                  for (const protocol of portProtocols(allocation.protocol)) {
-                    this.#pendingGamePorts.delete(
-                      `${protocol}:${allocation.port}`
-                    )
+                    }
                   }
-                }
-              })
+                })
+              )
             )
           )
-        )
+        })
 
         const created = (await this.#docker.inspectInstances()).find(
           (instance) => instance.id === id
@@ -2915,6 +2912,82 @@ export class LifecycleDriver {
         return created
       }
     )
+  }
+
+  // The private hostname a new container gets, checked against the game
+  // servers already using its Tailscale address, and the networking
+  // settings it's named under.
+  async #tailscaleHostname(
+    existing: ReadonlyArray<RelayInstance>,
+    tailscale: RelayInstanceTailscale,
+    // The server taking the address, which may still hold it.
+    instanceId: string
+  ): Promise<{ hostname: string | null; networking: RelayNetworking | null }> {
+    if (
+      tailscale.enabled &&
+      existing.some(
+        (instance) =>
+          instance.id !== instanceId &&
+          instance.managedByRelay &&
+          instance.tailscale.enabled &&
+          instance.tailscale.subdomain === tailscale.subdomain
+      )
+    ) {
+      throw new Error(
+        `The Tailscale address ${tailscale.subdomain} is already assigned to another server`
+      )
+    }
+    const networking = await this.networking()
+    const tailscaleSettings = tailscale.enabled
+      ? await this.tailscaleSettings()
+      : null
+    if (tailscale.enabled && !tailscaleSettings) {
+      throw new Error(
+        "Configure Tailscale infrastructure before connecting this server"
+      )
+    }
+    const hostnamePrefix = tailscale.enabled ? tailscale.subdomain : undefined
+    if (tailscale.enabled && !hostnamePrefix) {
+      throw new Error("Enter a Tailscale subdomain for this server")
+    }
+    const hostname = hostnamePrefix
+      ? `${hostnamePrefix.replace(/\.$/u, "")}.${
+          tailscaleSettings?.domain ??
+          networking?.domain ??
+          this.#config.connectDomain
+        }`
+      : null
+    return { hostname, networking }
+  }
+
+  /**
+   * Runs the part of a game server's create, startup change, or deletion
+   * that reads the game servers and the networking, proxy, or Tailscale
+   * settings and rewrites CoreDNS from them, holding the routes alone. The
+   * operation it runs in holds the server, never the routes: the lanes
+   * don't know it's the same operation, so it would wait for itself.
+   */
+  #holdingRoutes<A>(instanceId: string, run: () => Promise<A>): Promise<A> {
+    return runLifecycle(
+      this.#lanes
+        .runNested(
+          { label: "instance.dns", locks: [exclusive(laneKeys.routes)] },
+          lifecycleOperation(run)
+        )
+        .pipe(
+          Effect.withSpan("relay.instance.dns", {
+            attributes: { "kiln.instance_id": instanceId },
+          })
+        )
+    )
+  }
+
+  // Rewrites the Relay's CoreDNS from the game servers and settings as they
+  // are now.
+  async #refreshDns(): Promise<void> {
+    const networking = await this.networking()
+    if (networking?.enabled) await this.#refreshCoreDnsConfiguration(networking)
+    await this.#refreshTailscaleDns()
   }
 
   async #reserveGamePort(
@@ -2930,13 +3003,16 @@ export class LifecycleDriver {
 
   async #reservePublishedPortProtocols(
     port: number,
-    protocols: ReadonlyArray<"tcp" | "udp">
+    protocols: ReadonlyArray<"tcp" | "udp">,
+    // The other game servers, whose ports stay theirs while they're stopped.
+    others: ReadonlyArray<RelayInstance>
   ): Promise<void> {
     await this.#withGamePortLock(async () => {
       for (const protocol of protocols) {
         const key = `${protocol}:${port}`
         if (
           this.#pendingGamePorts.has(key) ||
+          others.some((other) => allocatesPort(other, port, protocol)) ||
           (
             await this.#docker.publishedHostPorts(protocol, {
               end: port,
@@ -3015,16 +3091,13 @@ export class LifecycleDriver {
         unavailable.add(Number(key.slice(pendingPrefix.length)))
       }
     }
+    // Every port a game server is allocated stays its own while it's
+    // stopped, when Docker publishes none of them.
     for (const instance of existing) {
-      const instanceProtocol = instance.brickPrimaryPortProtocol
-      if (
-        instance.publicPort &&
-        instanceProtocol &&
-        protocols.some((candidate) =>
-          portProtocols(instanceProtocol).includes(candidate)
-        )
-      ) {
-        unavailable.add(instance.publicPort)
+      for (const candidate of protocols) {
+        for (const port of allocatedPorts(instance, candidate)) {
+          unavailable.add(port)
+        }
       }
     }
     if (
@@ -3220,9 +3293,9 @@ export class LifecycleDriver {
       })
       await removeResticRepository(this.#config, instance.id)
     }
-    const networking = await this.networking()
-    if (networking?.enabled) await this.#refreshCoreDnsConfiguration(networking)
-    await this.#refreshTailscaleDns()
+    // The server is gone; only rewriting CoreDNS without it waits for the
+    // routes.
+    await this.#holdingRoutes(id, () => this.#refreshDns())
   }
 
   async deletePreparedInstance(id: string, deleteData: boolean): Promise<void> {
@@ -5065,4 +5138,34 @@ function appServiceRoutes<
   return routes.filter(
     (route) => route.redirect || (route.service ?? APP_SERVICE) === service
   )
+}
+
+// The public ports a game server is allocated for `protocol`, whether or not
+// it's running: its primary one and every other allocation.
+function allocatedPorts(
+  instance: RelayInstance,
+  protocol: "tcp" | "udp"
+): Array<number> {
+  const ports = instance.ports
+    .filter((allocation) =>
+      portProtocols(allocation.protocol).includes(protocol)
+    )
+    .map((allocation) => allocation.externalPort)
+  const primaryProtocol = instance.brickPrimaryPortProtocol
+  if (
+    instance.publicPort &&
+    primaryProtocol &&
+    portProtocols(primaryProtocol).includes(protocol)
+  ) {
+    ports.push(instance.publicPort)
+  }
+  return ports
+}
+
+function allocatesPort(
+  instance: RelayInstance,
+  port: number,
+  protocol: "tcp" | "udp"
+): boolean {
+  return allocatedPorts(instance, protocol).includes(port)
 }
