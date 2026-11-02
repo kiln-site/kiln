@@ -1,15 +1,21 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { resolve } from "node:path"
 import { Effect } from "effect"
 import ssh2 from "ssh2"
-import { describe, expect, it, onTestFinished } from "vite-plus/test"
+import { describe, expect, it, onTestFinished, vi } from "vite-plus/test"
+
+vi.mock("node:fs/promises", async (importOriginal) =>
+  (await import("./test/held-commit.js")).withHeldCommits(importOriginal)
+)
 
 import type { RelayConfig } from "./config.js"
+import { FilesystemDriver } from "./files.js"
 import { attachSftpServer } from "./sftp-server.js"
 import { testInstance, testRelayConfig } from "./test/fixtures.js"
+import { holdNextCommit } from "./test/held-commit.js"
 import { OperationLanes } from "./operation-lanes.js"
-import { instanceReplaceLocks } from "./operation-plans.js"
+import { controlRequestLocks, instanceReplaceLocks } from "./operation-plans.js"
 
 const describeLinux = process.platform === "linux" ? describe : describe.skip
 const allowFileAccess = async () => [
@@ -91,6 +97,98 @@ describeLinux("Relay SFTP server", () => {
       expect(
         await readFile(resolve(instanceDirectory, "world.dat"), "utf8")
       ).toBe("after")
+    } finally {
+      client.end()
+      await server.close()
+    }
+  })
+
+  it("never lets a save that checks the file is unchanged replace an SFTP write", async () => {
+    const dataDirectory = await temporaryDirectory()
+    const instanceId = "d".repeat(40)
+    const instanceDirectory = resolve(dataDirectory, "instances", instanceId)
+    const path = resolve(instanceDirectory, "server.properties")
+    await mkdir(instanceDirectory, { recursive: true })
+    await writeFile(path, "motd=old")
+    const instance = testInstance({ id: instanceId })
+    const config = testConfig(dataDirectory)
+    const lanes = new OperationLanes()
+    const server = await attachSftpServer({
+      lanes,
+      clientActions: allowFileAccess,
+      config,
+      control: {
+        requestClients: async () => [
+          {
+            clientId: "hearth-test",
+            payload: {
+              instances: [{ actions: await allowFileAccess(), id: instanceId }],
+              userId: "user-test",
+              username: "user@example.test",
+            },
+          },
+        ],
+      },
+      docker: {
+        findInstance: async (id) => (id === instanceId ? instance : null),
+      },
+    })
+    const client = await connect(server.port, "dev123")
+    try {
+      const stream = await sftp(client)
+      // Someone saves the file they opened, as Hearth's editor does.
+      const opened = Math.floor((await stat(path)).mtimeMs)
+      const commit = holdNextCommit()
+      const locks = controlRequestLocks(
+        "instance.files.put",
+        { instanceId },
+        (id) => id,
+        () => []
+      )
+      const saved = Effect.runPromise(
+        lanes.run(
+          { label: "instance.files.put", locks: locks ?? [] },
+          new FilesystemDriver(config)
+            .upload(
+              instance,
+              "server.properties",
+              (async function* () {
+                yield Buffer.from("motd=saved")
+              })(),
+              () => true,
+              opened
+            )
+            .pipe(
+              // Reporting a conflict is a right answer too.
+              Effect.catchIf(
+                (error) => error.code === "file_changed",
+                () => Effect.void
+              )
+            )
+        )
+      )
+      await commit.reached
+
+      // An SFTP client writes the file as the save commits. Once the write
+      // has landed or waits its turn, the save goes on.
+      let written = false
+      const write = sftpCall(
+        stream,
+        "writeFile",
+        `/${instanceId}/server.properties`,
+        Buffer.from("motd=sftp")
+      ).then(() => {
+        written = true
+      })
+      await vi.waitFor(() =>
+        expect(written || lanes.pending.waiting > 0).toBe(true)
+      )
+      commit.release()
+      await Promise.all([saved, write])
+
+      // The save either saw the write and reported a conflict, or landed
+      // before it. It never replaces a write it didn't see.
+      expect(await readFile(path, "utf8")).toBe("motd=sftp")
     } finally {
       client.end()
       await server.close()

@@ -16,7 +16,7 @@ import { constants as fsConstants } from "node:fs"
 import type { Stats } from "node:fs"
 import type { AddressInfo } from "node:net"
 import { dirname, posix, resolve, sep } from "node:path"
-import { Effect, Fiber } from "effect"
+import { Effect, Fiber, Semaphore } from "effect"
 import ssh2 from "ssh2"
 import type { Attributes, Connection, FileEntry, SFTPWrapper } from "ssh2"
 import type { FileHandle } from "node:fs/promises"
@@ -26,7 +26,7 @@ import type { RelayConfig } from "./config.js"
 import type { ControlSocketServer } from "./control-socket.js"
 import type { DockerDriver } from "./docker.js"
 import { laneKeys, type OperationLanes } from "./operation-lanes.js"
-import { fileRootTransferLocks } from "./operation-plans.js"
+import { instanceFileLocks } from "./operation-plans.js"
 
 const DEVELOPMENT_PASSWORD = "dev123"
 const MAX_OPEN_HANDLES = 128
@@ -504,17 +504,23 @@ function serveSftp(
   const operations = new Set<Fiber.Fiber<void, never>>()
   let nextHandle = 1
 
-  // Each change runs in the server's file lane, alongside its other file
-  // work, so a restore or delete waits for it and it waits for them.
+  // Each change takes the server's file lane, as Hearth's file changes do,
+  // so a save that checks a file is unchanged can't miss one, and a restore
+  // or delete waits for it. The lane is held for one request, never across
+  // an open handle. A client sends many requests at once, so its changes
+  // wait their turn here rather than fill the Relay's lanes.
+  const changes = Semaphore.makeUnsafe(1)
   const inLane = <T>(
     grantId: string,
     label: string,
     run: () => Promise<T>
   ): Promise<T> =>
     Effect.runPromise(
-      lanes.run(
-        { label, locks: fileRootTransferLocks(grantId) },
-        sftpOperation(run)
+      changes.withPermit(
+        lanes.run(
+          { label, locks: instanceFileLocks(grantId) },
+          sftpOperation(run)
+        )
       )
     )
   const generation = (grantId: string) =>

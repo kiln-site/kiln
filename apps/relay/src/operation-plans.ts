@@ -232,9 +232,10 @@ export function backupCoverageLocks(input: BackupTaskInput): Array<LaneLock> {
 }
 
 /**
- * Streaming a file into a root, as a browser upload or SFTP write does. It
- * runs alongside other file work and waits only for work that replaces the
- * whole root, such as a restore or delete. `rootId` is the full ID.
+ * Streaming a file into a root, as a browser upload does. It runs alongside
+ * other file work and waits only for work that replaces the whole root, such
+ * as a restore or delete; putting the file in place then takes
+ * `fileRootCommitLocks`. `rootId` is the full ID.
  */
 export function fileRootTransferLocks(rootId: string): Array<LaneLock> {
   if (isRelayFileRoot(rootId)) return [shared(laneKeys.hostFiles)]
@@ -244,6 +245,22 @@ export function fileRootTransferLocks(rootId: string): Array<LaneLock> {
   if (databaseId) return databaseReadLocks(databaseId)
   const appId = appIdFromFileRoot(rootId)
   return [shared(appId ? laneKeys.app(appId) : laneKeys.instance(rootId))]
+}
+
+/**
+ * Putting a streamed upload in place, from inside its transfer. It waits for
+ * the root's other writers, so a save that checks the file is unchanged
+ * either sees the upload or is replaced by it, never loses it. A host upload
+ * already waits for them, and nothing saves into a database's dumps.
+ */
+export function fileRootCommitLocks(rootId: string): Array<LaneLock> {
+  if (isRelayFileRoot(rootId) || databaseIdFromFileRoot(rootId)) return []
+  const appId = appIdFromFileRoot(rootId)
+  return [
+    exclusive(
+      appId ? laneKeys.appFiles(appId) : laneKeys.instanceFiles(rootId)
+    ),
+  ]
 }
 
 /**

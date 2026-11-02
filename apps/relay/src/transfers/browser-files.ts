@@ -42,7 +42,10 @@ import {
   type FilesystemDriver,
 } from "../files.js"
 import type { OperationLanes } from "../operation-lanes.js"
-import { fileRootTransferLocks } from "../operation-plans.js"
+import {
+  fileRootCommitLocks,
+  fileRootTransferLocks,
+} from "../operation-plans.js"
 import { fileTransferAction } from "../permissions.js"
 import {
   archiveBody,
@@ -464,16 +467,32 @@ export function browserFileTransfers(
 
       if (method === "PUT") {
         yield* Effect.annotateCurrentSpan("kiln.transfer.operation", "upload")
+        // An App, database, or host root is addressed by its root ID; a game
+        // server by the full ID it was found under.
+        const laneRootId =
+          fileRootKind(rootId) === "instance" ? root.id : rootId
         const uploaded = yield* options.lanes.run(
           {
             label: "browser.file.upload",
-            // An App, database, or host root is addressed by its root ID; a
-            // game server by the full ID it was found under.
-            locks: fileRootTransferLocks(
-              fileRootKind(rootId) === "instance" ? root.id : rootId
-            ),
+            locks: fileRootTransferLocks(laneRootId),
           },
-          filesystem.upload(root, path, request, transfer.active)
+          filesystem.upload(
+            root,
+            path,
+            request,
+            transfer.active,
+            undefined,
+            // The file streams beside other writers and waits for them only
+            // to be put in place.
+            (commit) =>
+              options.lanes.runNested(
+                {
+                  label: "browser.file.upload.commit",
+                  locks: fileRootCommitLocks(laneRootId),
+                },
+                commit
+              )
+          )
         )
         // The answer goes first; the audit record doesn't hold it up.
         sendJson(response, 200, uploaded, cors())
