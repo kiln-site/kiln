@@ -18,7 +18,7 @@ import { resolveBrick, resolveBrickForProvisioning } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { recoverPromise, tapPromiseError } from "./effect/promise.js"
-import { traceRelayEffect } from "./effect/runtime.js"
+import { reportRelayError } from "./effect/runtime.js"
 import type {
   BrickRecipe,
   RelayCreateInstance,
@@ -100,6 +100,7 @@ import {
   LaneRejectedError,
   type OperationLanes,
 } from "./operation-lanes.js"
+import { operation, runOperation } from "./operations/operation.js"
 import {
   APP_SERVICE,
   appIdFromRouteOwner,
@@ -716,25 +717,13 @@ export class LifecycleDriver {
     const results = await Promise.allSettled(
       configs.map(({ id }) =>
         Effect.runPromise(
-          traceRelayEffect(
-            "relay.tailscale.repairFirewall",
-            this.#lanes
-              .run(
-                {
-                  carriesOnWhilePaused: true,
-                  label: "relay.tailscale.stack.firewall",
-                  locks: [exclusive(laneKeys.instance(id))],
-                  whenBusy: "refuse",
-                },
-                lifecycleOperation(() => this.#repairTailscaleStackFirewall(id))
-              )
-              .pipe(
-                Effect.catchIf(
-                  (cause) => cause instanceof LaneRejectedError,
-                  () => Effect.void
-                )
-              ),
-            { "kiln.instance_id": id }
+          runOperation(this.#lanes, this.#repairStackFirewall, id, {
+            kind: "timer",
+          }).pipe(
+            Effect.catchIf(
+              (cause) => cause instanceof LaneRejectedError,
+              () => Effect.void
+            )
           )
         )
       )
@@ -3544,41 +3533,44 @@ export class LifecycleDriver {
     this.#edgeReconciliationFiber?.interruptUnsafe()
     this.#edgeReconciliationFiber = null
     if (settings.mode !== "coolify") return
-    // Each pass takes its turn with route and proxy changes and reads them
-    // once it has it. One that would wait, or a paused Relay's, is skipped.
-    const reconcile = this.#lanes
-      .run(
-        {
-          label: "relay.edge.reconcile",
-          locks: [exclusive(laneKeys.routes)],
-          whenBusy: "refuse",
-        },
-        Effect.tryPromise({
-          try: async () => {
-            const current = await this.proxySettings()
-            if (current.mode !== "coolify") return
-            await this.#serializeEdgeMutation(() =>
-              this.#reconcileExternalTraefikRoutes(this.#webRoutes, current)
+    const reconcile = runOperation(
+      this.#lanes,
+      this.#reconcileCoolifyEdge,
+      undefined,
+      { kind: "timer" }
+    ).pipe(
+      Effect.catch((cause) =>
+        cause instanceof LaneRejectedError
+          ? Effect.void
+          : Effect.sync(() =>
+              reportRelayError(cause, { operation: "relay.edge.reconcile" })
             )
-          },
-          catch: (cause) => cause,
-        })
       )
-      .pipe(
-        Effect.withSpan("relay.edge.reconcile"),
-        Effect.catch((cause) =>
-          cause instanceof LaneRejectedError
-            ? Effect.void
-            : Effect.logError(
-                "Relay could not reconcile the Coolify Traefik edge",
-                cause
-              )
-        )
-      )
+    )
     this.#edgeReconciliationFiber = Effect.runFork(
       Effect.sleep("30 seconds").pipe(Effect.andThen(reconcile), Effect.forever)
     )
   }
+
+  // Keeps routed game servers on the edge Coolify's Traefik reaches. Each
+  // pass takes its turn with route and proxy changes and reads them once it
+  // has it; one that would wait, or a paused Relay's, is skipped.
+  readonly #reconcileCoolifyEdge = operation<void>()({
+    name: "relay.edge.reconcile",
+    locks: () => [exclusive(laneKeys.routes)],
+    onlyIfFree: true,
+    run: () =>
+      Effect.tryPromise({
+        try: async () => {
+          const settings = await this.proxySettings()
+          if (settings.mode !== "coolify") return
+          await this.#serializeEdgeMutation(() =>
+            this.#reconcileExternalTraefikRoutes(this.#webRoutes, settings)
+          )
+        },
+        catch: (cause) => cause,
+      }),
+  })
 
   #serializeEdgeMutation(operation: () => Promise<void>): Promise<void> {
     const result = recoverPromise(
@@ -4158,6 +4150,19 @@ export class LifecycleDriver {
       )
     )
   }
+
+  readonly #repairStackFirewall = operation<string>()({
+    name: "relay.tailscale.stack.firewall",
+    locks: ({ input: stackId }) => [exclusive(laneKeys.instance(stackId))],
+    onlyIfFree: true,
+    carriesOnWhilePaused: true,
+    run: ({ input: stackId }) =>
+      Effect.annotateCurrentSpan("kiln.instance_id", stackId).pipe(
+        Effect.andThen(
+          lifecycleOperation(() => this.#repairTailscaleStackFirewall(stackId))
+        )
+      ),
+  })
 
   // Reads the stack again holding it, so the rules match what an apply or
   // removal that ran before left.
