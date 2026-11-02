@@ -135,6 +135,24 @@ the routes this long is conservative: a provisioning job holds them through
 its image download, so route and port changes, other creates and deletions,
 and game server starts wait for it.
 
+### Defining an operation
+
+New Relay work is defined once with `operation()` in
+`apps/relay/src/operations/operation.ts`, as Hearth's is: its stable name,
+the keys it changes, whether it still applies (`precondition`, checked as
+it's granted), whether it's only worth doing now (`onlyIfFree`, turned away
+rather than waiting), whether a pause leaves it running
+(`carriesOnWhilePaused`), and its work. `runOperation` admits it to the lanes,
+gives it a span (`RelayOperations.<name>`) and its duration and refusal
+metrics, and runs it to the end once started. Work it reaches runs inside
+it, under the locks it holds, and must need nothing more: one that would
+take another lock there dies naming it, so the outer operation declares it.
+A refusal fails with `LaneRejectedError`, which its caller turns into
+whatever its entry point says: a skipped pass for upkeep. The edge upkeep
+behind Coolify's Traefik, the repair of bundled Traefik for Hearth, and the
+repair of Tailscale forwarding rules run this way; control requests, the browser, SFTP and the workers move here
+area by area, and until then admit themselves as below.
+
 `apps/relay/src/operation-plans.ts` maps each control operation to its keys.
 Its switch is exhaustive, so a new operation can't compile until it declares
 what it locks, or that it locks nothing.

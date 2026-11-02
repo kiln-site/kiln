@@ -67,9 +67,11 @@ Before editing files for a substantial task:
 - Avoid patching framework/library internals unless explicitly given permission.
 - Use Sonner for transient feedback and shared tooltips
 - Every change the Relay makes to a game server, App, or database runs in its
-  operation lanes. A new control operation declares the locks it takes in
-  `apps/relay/src/operation-plans.ts`, and Relay-initiated work admits itself
-  the same way, rather than adding a lock of its own. See
+  operation lanes. New Relay work is an operation: define it with
+  `operation()` from `apps/relay/src/operations/operation.ts`, naming the
+  lane keys it changes, and run it with `runOperation`, rather than adding a
+  lock, queue or busy flag of its own. Control operations not yet moved
+  there declare their locks in `apps/relay/src/operation-plans.ts`. See
   [Relay operations](docs/relay-operations.md).
 - Every change Hearth makes is an operation: define it with `operation()`,
   naming the lane keys it changes, and run it from the server function's
