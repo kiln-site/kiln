@@ -143,30 +143,47 @@ afterwards, so the last file written is current. A direct create
 (`instance.create`) chooses the new server's ID as its request arrives, so
 it waits in that server's lane like a provisioning job.
 
-### Defining an operation
+### How work is admitted
 
-New Relay work is defined once with `operation()` in
-`apps/relay/src/operations/operation.ts`, as Hearth's is: its stable name,
-the keys it changes, whether it still applies (`precondition`, checked as
-it's granted), whether it's only worth doing now (`onlyIfFree`, turned away
-rather than waiting), whether a pause leaves it running
-(`carriesOnWhilePaused`), and its work. `runOperation` admits it to the lanes,
-gives it a span (`RelayOperations.<name>`) and its duration and refusal
-metrics, and runs it to the end once started. Work it reaches runs inside
-it, under the locks it holds, and must need nothing more: one that would
-take another lock there dies naming it, so the outer operation declares it.
-A refusal fails with `LaneRejectedError`, which its caller turns into
-whatever its entry point says: a skipped pass for upkeep. The edge upkeep
-behind Coolify's Traefik, the repair of bundled Traefik for Hearth, and the
-repair of Tailscale forwarding rules run this way; control requests, the browser, SFTP and the workers move here
-area by area, and until then admit themselves as below.
-`apps/relay/src/operations/coverage.test.ts` lists each place that still
-admits itself, and each semaphore the Relay keeps and why; a new one fails
-it, and so does a listed one that's gone, so the list only shrinks.
+Work reaches the lanes one of three ways, each naming the keys it changes:
 
-`apps/relay/src/operation-plans.ts` maps each control operation to its keys.
-Its switch is exhaustive, so a new operation can't compile until it declares
-what it locks, or that it locks nothing.
+- **Hearth's requests.** The control socket admits each as its frame
+  arrives (see [Arrival order](#arrival-order)), with the keys
+  `apps/relay/src/operation-plans.ts` maps its operation to. Its switch is
+  exhaustive, so a new operation can't compile until it declares what it
+  locks, or that it locks nothing.
+- **The browser, SFTP, schedules, crash recovery and the workers.** Each
+  entry point admits its own work with the shared lock helpers in
+  `operation-plans.ts`, since it owns what admission means there: the moment
+  a frame arrives, one SFTP request, a backup task a cancel withdraws, a
+  provisioning job held for its whole create.
+- **Upkeep run by `runOperation`.** Timers and workers that share
+  admission, tracing and metrics define their work once with `operation()`
+  in `apps/relay/src/operations/operation.ts`, as Hearth's is: its stable
+  name, the keys it changes, whether it still applies (`precondition`,
+  checked as it's granted), whether it's only worth doing now
+  (`onlyIfFree`, turned away rather than waiting), whether a pause leaves
+  it running (`carriesOnWhilePaused`), and its work. `runOperation` admits
+  it to the lanes, gives it a span (`RelayOperations.<name>`) and its
+  duration and refusal metrics, and runs it to the end once started. Work
+  it reaches runs inside it, under the locks it holds, and must need
+  nothing more: one that would take another lock there dies naming it, so
+  the outer operation declares it. A refusal fails with
+  `LaneRejectedError`, which its caller turns into whatever its entry point
+  says: a skipped pass for upkeep. The edge upkeep behind Coolify's
+  Traefik, the repair of bundled Traefik for Hearth, and the repair of
+  Tailscale forwarding rules run this way. Use it for new upkeep, and for
+  work whose callers would otherwise each repeat their own admission, span
+  and metrics; an entry point that owns its admission keeps admitting
+  directly.
+
+`apps/relay/src/operations/coverage.test.ts` lists each place that admits
+itself directly and each semaphore the Relay keeps, with its purpose; a new
+one fails it until it's listed, and so does a listed one that's gone. A
+semaphore is only for what lanes don't order: throughput, the order of
+the Relay's own saves, or pressure on admission, such as one SFTP
+session's changes waiting one at a time. It can't see a change that never
+enters the lanes at all.
 
 Most reads take no locks: they never wait, and they may see a resource
 mid-change. Reads that must see it whole, such as a database dump or completing

@@ -1,9 +1,10 @@
 /**
- * Relay operations: each change the Relay makes, defined once with the
+ * Relay operations: work the Relay starts itself, defined once with the
  * resources it changes, and run by one runner that admits it to the
- * operation lanes, traces and times it. The Relay's counterpart to Hearth's
- * `operation()` (apps/web/src/operations/operation.ts), with the same rules;
- * see docs/relay-operations.md.
+ * operation lanes, traces and times it. For timers and workers that share
+ * that admission, tracing and metrics; Hearth's requests, the browser and
+ * SFTP admit their own work. Shaped like Hearth's `operation()`
+ * (apps/web/src/operations/operation.ts); see docs/relay-operations.md.
  */
 import { randomUUID } from "node:crypto"
 
@@ -17,11 +18,7 @@ import {
   type OperationLanes,
 } from "../operation-lanes.js"
 
-/**
- * Who an operation runs for. The Relay's own timers and workers are all
- * that run operations so far; Hearth's requests, the browser and SFTP join
- * as they move here.
- */
+/** Who an operation runs for: one of the Relay's own timers or workers. */
 export interface RelayCaller {
   readonly kind: "timer" | "worker"
 }

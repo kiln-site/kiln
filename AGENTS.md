@@ -66,12 +66,15 @@ Before editing files for a substantial task:
   spans, for hot paths.
 - Avoid patching framework/library internals unless explicitly given permission.
 - Use Sonner for transient feedback and shared tooltips
-- Every change the Relay makes to a game server, App, or database runs in its
-  operation lanes. New Relay work is an operation: define it with
-  `operation()` from `apps/relay/src/operations/operation.ts`, naming the
-  lane keys it changes, and run it with `runOperation`, rather than adding a
-  lock, queue or busy flag of its own. Control operations not yet moved
-  there declare their locks in `apps/relay/src/operation-plans.ts`. See
+- Every change the Relay makes to a game server, App, database, or shared
+  infrastructure runs in its operation lanes, naming the lane keys it
+  changes, never a lock, queue or busy flag of its own. Hearth's control
+  requests declare their locks in `apps/relay/src/operation-plans.ts`; the
+  Relay's own timers and workers use `operation()` and `runOperation`
+  (`apps/relay/src/operations/operation.ts`) where several share admission,
+  tracing and metrics. A Semaphore is only for throughput, persistence order
+  or admission pressure, listed with its reason in
+  `apps/relay/src/operations/coverage.test.ts`. See
   [Relay operations](docs/relay-operations.md).
 - Every change Hearth makes is an operation: define it with `operation()`,
   naming the lane keys it changes, and run it from the server function's
