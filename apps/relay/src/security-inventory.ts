@@ -29,17 +29,12 @@ import { Effect, Semaphore } from "effect"
 
 import type { RelayConfig } from "./config.js"
 import {
-  containerName,
   DockerEngine,
   type DockerContainerInspect,
 } from "./docker-engine.js"
 import { promiseEffect, recoverPromise } from "./effect/promise.js"
-import { PLATFORM_ROLE_LABEL } from "./platform.js"
-import {
-  relayOwnerLabels,
-  relayOwnsLabels,
-  relayResourceNames,
-} from "./relay-resources.js"
+import { kilnContainerOwner } from "./kiln-containers.js"
+import { relayOwnerLabels, relayOwnsLabels } from "./relay-resources.js"
 
 // Inventories the software on the Relay's host and in the images its
 // containers run, with Syft, for Hearth to check against known
@@ -140,7 +135,7 @@ export class SecurityInventory {
     for (const container of listed) {
       const imageId = securityImageIdSchema.safeParse(container.ImageID)
       if (!imageId.success) continue
-      const owner = this.#owner(containerName(container), container)
+      const owner = kilnContainerOwner(this.#config, container)
       if (!owner) continue
       containers.push({
         ...owner,
@@ -222,56 +217,6 @@ export class SecurityInventory {
   // Who a container belongs to: the Relay, for itself and Kiln's services
   // beside it, or the game server, database, or app it runs. Others' are
   // left out.
-  #owner(
-    name: string,
-    container: {
-      readonly Id: string
-      readonly Labels: Readonly<Record<string, string>> | null
-    }
-  ): Pick<RelaySecurityContainer, "component" | "resource"> | null {
-    const relay = (component: string) => ({
-      component,
-      resource: { id: "relay", type: "relay" as const },
-    })
-    const self = this.#config.selfContainer ?? hostname()
-    if (name === self || container.Id.startsWith(self)) return relay("Relay")
-    const labels = container.Labels ?? {}
-    if (!relayOwnsLabels(this.#config, labels)) return null
-    const appId = labels["kiln.app.id"]
-    if (appId) {
-      return {
-        component: labels["kiln.app.service"] ?? null,
-        resource: { id: appId, type: "app" },
-      }
-    }
-    const databaseId = labels["kiln.database.id"]
-    if (databaseId) {
-      return { component: null, resource: { id: databaseId, type: "database" } }
-    }
-    const serverId = labels[this.#config.serverIdLabel]
-    if (serverId && labels["kiln.relay.managed"] === "true") {
-      return {
-        component: null,
-        resource: { id: serverId.toLowerCase(), type: "instance" },
-      }
-    }
-    const names = relayResourceNames(this.#config)
-    const service = new Map([
-      [names.traefikContainer, "Traefik"],
-      [names.coreDnsContainer, "CoreDNS"],
-      [names.tailscaleContainer, "Tailscale"],
-      [names.limboContainer, "Limbo"],
-    ]).get(name)
-    if (service) return relay(service)
-    const role = labels[PLATFORM_ROLE_LABEL]
-    if (this.#config.mode === "platform" && role) {
-      const platform = { cache: "Valkey", database: "MySQL", hearth: "Hearth" }
-      const component = platform[role as keyof typeof platform]
-      if (component) return relay(component)
-    }
-    return null
-  }
-
   #paths(target: RelaySecurityTarget): InventoryPaths {
     const key = target.kind === "host" ? "host" : target.imageId
     const name = createHash("sha256").update(key).digest("hex").slice(0, 32)

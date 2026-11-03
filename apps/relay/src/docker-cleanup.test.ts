@@ -11,7 +11,11 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 import { DockerCleanup } from "./docker-cleanup.js"
 import { DockerEngine } from "./docker-engine.js"
 import { fakeDocker } from "./test/docker.js"
-import { relayHarness, type RelayHarness } from "./test/relay.js"
+import {
+  relayHarness,
+  TEST_NAMESPACE,
+  type RelayHarness,
+} from "./test/relay.js"
 
 const appId = "d".repeat(40)
 
@@ -270,6 +274,54 @@ describe("image retention", () => {
         "hearth-before",
         "relay-before",
       ].sort()
+    )
+  })
+})
+
+describe("unused images", () => {
+  it("removes an image none of Kiln's containers has used for a day, and never one Kiln didn't run", async () => {
+    const harness = await relayHarness()
+    const owned = { "kiln.relay.owner": TEST_NAMESPACE }
+    const server = fakeDocker.addContainer({
+      image: "ghcr.io/example/yolks:java_21",
+      labels: {
+        ...owned,
+        [harness.config.serverIdLabel]: "e".repeat(32),
+        "kiln.relay.managed": "true",
+      },
+      name: "kiln-test-kiln-eeeeeeee",
+      running: true,
+    })
+    // A stopped database still uses its image.
+    fakeDocker.addContainer({
+      image: "postgres:17",
+      labels: { ...owned, "kiln.database.id": "f".repeat(32) },
+      name: "kiln-test-database",
+    })
+    // A person's own container, and an image they pulled.
+    const theirs = fakeDocker.addContainer({
+      image: "someone/app:1",
+      name: "their-app",
+    })
+    fakeDocker.images.set("someone/tool:1", {})
+    const pass = () =>
+      Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
+    await pass()
+
+    // The game server is deleted, and so is the person's container.
+    fakeDocker.removeContainer(server.name)
+    fakeDocker.removeContainer(theirs.name)
+    await pass()
+    expect(fakeDocker.images.has("ghcr.io/example/yolks:java_21")).toBe(true)
+
+    vi.useFakeTimers({
+      now: Date.now() + 25 * 60 * 60_000,
+      toFake: ["Date"],
+    })
+    await pass()
+
+    expect([...fakeDocker.images.keys()].sort()).toEqual(
+      ["postgres:17", "someone/app:1", "someone/tool:1"].sort()
     )
   })
 })

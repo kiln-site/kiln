@@ -926,16 +926,12 @@ const transferSweepFiber = forkRelayEffect(
     Effect.forever
   )
 )
-// A minute after starting, then hourly: leftover containers and what
-// finished updates left. A pass after a Relay's own update finds its helper
-// still running, and leaves it to the next.
+// A minute after starting, then hourly, and sooner while the disk is
+// nearly full. A pass after a Relay's own update finds its helper still
+// running, and leaves what the update left to the next.
 const dockerCleanupFiber = forkRelayEffect(
   "relay.docker.cleanup",
-  Effect.sleep("1 minute").pipe(
-    Effect.andThen(dockerCleanup.pass({ kind: "timer" })),
-    Effect.andThen(Effect.sleep("59 minutes")),
-    Effect.forever
-  )
+  dockerCleanup.run()
 )
 // Every power change to a game server, App, or database, whoever asks.
 const power = new ResourcePower({
