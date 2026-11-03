@@ -72,8 +72,8 @@ export interface DockerContainerSummary {
 export interface DockerEvent {
   readonly Type?: string
   readonly Action?: string
-  /** When it happened, in nanoseconds; past 2^53, so only near-exact. */
-  readonly timeNano?: number
+  /** When it happened, in nanoseconds since 1970, as Docker's digits. */
+  readonly timeNano?: string
   readonly Actor?: {
     readonly ID?: string
     /** A container's labels, with its `name`, `image`, and `exitCode`. */
@@ -504,7 +504,14 @@ export class DockerEngine {
     const lines = lineReader((line) => {
       if (!line.trim()) return
       // A line Docker cut short says nothing to count.
-      const event = Result.try(() => JSON.parse(line) as DockerEvent)
+      const event = Result.try(
+        () =>
+          // As a string, since nanoseconds since 1970 are past what a
+          // number holds exactly.
+          JSON.parse(
+            line.replace(/"timeNano":(\d+)/, '"timeNano":"$1"')
+          ) as DockerEvent
+      )
       if (Result.isSuccess(event)) onEvent(event.success)
     })
     return this.#exchange({

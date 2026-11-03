@@ -17,7 +17,6 @@ import { Clock, Effect, Metric } from "effect"
 
 import type { RelayConfig } from "./config.js"
 import type { DockerEngine } from "./docker-engine.js"
-import { forkRelayEffect } from "./effect/runtime.js"
 import { kilnContainerOwner } from "./kiln-containers.js"
 
 const sampleInterval = "15 seconds"
@@ -187,19 +186,22 @@ export function sampleNodeMetrics(
 /**
  * Counts containers' OOM kills and exits as Docker reports them, for good.
  * When Docker closes the stream, listening again asks for what happened
- * since the last event, or since the first connection, and skips what was
- * already counted. Docker only keeps its last 256 events, so a long gap on
- * a busy node can still lose some.
+ * from the second of the latest event, or of the first connection, and
+ * skips the events it already counted. Docker only keeps its last 256
+ * events, and none across its own restart, so a long gap on a busy node can
+ * still lose some.
  */
 export function watchContainerEvents(
   relayId: () => string,
   engine: DockerEngine,
   config: OwnerConfig
 ): Effect.Effect<never> {
-  // Whole seconds, as Docker's `since` takes them, so the boundary second
-  // replays and `lastCounted` drops what was already counted.
+  // Whole seconds, as Docker's `since` takes them. Events can arrive out of
+  // order and share a timestamp, so what was counted is told apart by
+  // container, action, and exact time, kept only for the seconds a replay
+  // can repeat.
   let since: number | undefined
-  let lastCounted = 0
+  const counted = new Map<string, number>()
   return Effect.gen(function* () {
     const from = since
     since ??= Math.floor((yield* Clock.currentTimeMillis) / 1000)
@@ -207,11 +209,17 @@ export function watchContainerEvents(
       { type: ["container"], event: ["oom", "die"] },
       { since: from },
       (event) => {
-        const at = event.timeNano
-        if (at !== undefined) {
-          if (at <= lastCounted) return
-          lastCounted = at
-          since = Math.floor(at / 1e9)
+        if (event.timeNano !== undefined) {
+          const identity = `${event.Actor?.ID}:${event.Action}:${event.timeNano}`
+          if (counted.has(identity)) return
+          const second = Number(BigInt(event.timeNano) / 1_000_000_000n)
+          counted.set(identity, second)
+          if (since === undefined || second > since) {
+            since = second
+            for (const [key, at] of counted) {
+              if (at < second) counted.delete(key)
+            }
+          }
         }
         const attributes = event.Actor?.Attributes ?? {}
         const group = groupOf(config, {
@@ -230,7 +238,7 @@ export function watchContainerEvents(
                 "kiln.container.group": group,
                 "exit.code": exitCode(attributes.exitCode),
               })
-        forkRelayEffect("relay.container.events", Metric.update(metric, 1))
+        Effect.runSync(Metric.update(metric, 1))
       }
     )
   }).pipe(
