@@ -17,7 +17,10 @@ import { encryptWithKeyring } from "../../keyring.mjs"
 import type { WebHostnameResource } from "@/effect/web-hostnames"
 
 import type { DomainActor } from "./domain-access.server"
-import { loadWebHostnameByNameEffect } from "@/effect/web-hostnames"
+import {
+  loadWebHostnameByNameEffect,
+  type ExistingWebRecord,
+} from "@/effect/web-hostnames"
 
 import {
   adoptExistingWebRecordEffect,
@@ -143,6 +146,11 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
       const id = `manual-${nextId}`
       records.set(id, record)
       return id
+    },
+    /** Changes a record in place, as someone in Cloudflare's dashboard. */
+    edit: (id: string, change: Partial<FakeRecord>) => {
+      const record = records.get(id)
+      if (record) records.set(id, { ...record, ...change })
     },
   }
 }
@@ -332,17 +340,18 @@ describeMysql("web route hostnames", () => {
           yield* save(owner, ["shop.owner.example"])
           const row = yield* loadWebHostnameByNameEffect("shop.owner.example")
           if (!row) return assert.fail("The hostname wasn't kept")
-          assert.deepEqual(row.existingRecord, {
+          const seen: ExistingWebRecord = {
             content: "otel.elsewhere.example",
             id: recordId,
             proxied: true,
             type: "CNAME",
-          })
-          const adopt = (actor: DomainActor, id: string) =>
+          }
+          assert.deepEqual(row.existingRecord, seen)
+          const adopt = (actor: DomainActor, record: ExistingWebRecord) =>
             adoptExistingWebRecordEffect(row, {
               actor,
               proxied: true,
-              recordId: id,
+              record,
             }).pipe(
               Effect.flip,
               Effect.map((error) => error.message)
@@ -352,15 +361,25 @@ describeMysql("web route hostnames", () => {
           // zone's connection, can't take it; nor can anyone take a record
           // other than the one they saw.
           assert.match(
-            yield* adopt(collaborator, recordId),
+            yield* adopt(collaborator, seen),
             /Only the owner of this domain's Cloudflare connection/u
           )
-          assert.match(yield* adopt(owner, "manual-99"), /changed in Cloudflare/u)
-          const untouched = [
-            "CNAME shop.owner.example otel.elsewhere.example (proxied)",
+          assert.match(
+            yield* adopt(owner, { ...seen, id: "manual-99" }),
+            /changed in Cloudflare/u
+          )
+          // Pointed elsewhere in Cloudflare since they saw it, under the
+          // same ID: not what they agreed to hand over.
+          cloudflare.edit(recordId, { content: "new.elsewhere.example" })
+          assert.match(yield* adopt(owner, seen), /changed in Cloudflare/u)
+          assert.deepEqual(cloudflare.records(), [
+            "CNAME shop.owner.example new.elsewhere.example (proxied)",
             "TXT shop.owner.example v=spf1 -all",
-          ]
-          assert.deepEqual(cloudflare.records(), untouched)
+          ])
+          // What Kiln shows for it is read again.
+          const reread = yield* loadWebHostnameByNameEffect("shop.owner.example")
+          assert.equal(reread?.existingRecord?.content, "new.elsewhere.example")
+          cloudflare.edit(recordId, { content: "otel.elsewhere.example" })
           assert.deepEqual(yield* hostnameRows, {
             "shop.owner.example": "external@relay-one",
           })
@@ -368,7 +387,7 @@ describeMysql("web route hostnames", () => {
           yield* adoptExistingWebRecordEffect(row, {
             actor: owner,
             proxied: true,
-            recordId,
+            record: seen,
           })
           assert.deepEqual(yield* hostnameRows, {
             "shop.owner.example": "active@relay-one",

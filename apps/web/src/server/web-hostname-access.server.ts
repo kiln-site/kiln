@@ -221,7 +221,7 @@ const adoptRecord = operation<AdoptWebHostnameRecordInput>()({
     adoptExistingWebRecordEffect(row, {
       actor,
       proxied: input.proxied,
-      recordId: input.recordId,
+      record: input.record,
     }).pipe(
       Effect.map((after) => ({
         lastError: after?.lastError ?? null,

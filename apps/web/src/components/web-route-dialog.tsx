@@ -59,7 +59,8 @@ export function WebRouteDialog({
   // An app's services; a game server's routes reach the server itself.
   services?: ReadonlyArray<WebRouteServiceOption>
   onOpenChange: (open: boolean) => void
-  // `proxied` only when the person changed it.
+  // `proxied` when the person changed it, or when it's on, so a hostname
+  // the save adds, such as a `www` counterpart, follows what it shows.
   onSubmit: (route: Route, proxied: boolean | undefined) => Promise<void>
 }) {
   const [mode, setMode] = React.useState<"redirect" | "serve">(
@@ -162,7 +163,7 @@ export function WebRouteDialog({
                 ...parsed.data,
                 ...(services ? { service: service.trim() || "app" } : {}),
               },
-              unmanaged ? undefined : (proxyChoice ?? undefined)
+              unmanaged ? undefined : (proxyChoice ?? (proxied || undefined))
             ),
           (cause) =>
             setError(cause instanceof Error ? cause.message : "Could not save")

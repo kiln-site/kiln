@@ -1206,7 +1206,7 @@ export function AdoptRecordDialog({
     mutationFn: () => {
       if (!record) throw new Error("There's no record to take over")
       return adoptWebHostnameRecord({
-        data: { id: hostname.id, proxied, recordId: record.id },
+        data: { id: hostname.id, proxied, record },
       })
     },
     // A refusal reads the record again, so the dialog shows what's there.

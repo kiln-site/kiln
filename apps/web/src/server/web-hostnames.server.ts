@@ -790,7 +790,7 @@ function addressRecords(
 
 /**
  * Takes over the record Cloudflare already had under a hostname, as its
- * owner confirmed it: the one address record there, `recordId`, as they saw
+ * owner confirmed it: the one address record there, `record`, as they saw
  * it. Only the owner of the hostname's Cloudflare connection may: being
  * able to change a resource's routes isn't enough to take a record someone
  * made in a zone that isn't theirs. Kiln then points it at the Relay, marks
@@ -803,7 +803,7 @@ export const adoptExistingWebRecordEffect = Effect.fn(
   "webHostnames.adoptExisting"
 )(function* (
   row: WebHostname,
-  input: { actor: DomainActor; proxied: boolean; recordId: string }
+  input: { actor: DomainActor; proxied: boolean; record: ExistingWebRecord }
 ) {
   yield* withCurrentRow("dns.webRoutes.adopt", row, (current) =>
     Effect.gen(function* () {
@@ -834,7 +834,16 @@ export const adoptExistingWebRecordEffect = Effect.fn(
       )
       const addresses = addressRecords(records)
       const found = existingWebRecord(records)
-      if (!found || found.id !== input.recordId) {
+      // The same record can point elsewhere by now: anything other than
+      // what they saw needs their say again.
+      const confirmed = input.record
+      if (
+        !found ||
+        found.id !== confirmed.id ||
+        found.type !== confirmed.type ||
+        found.content !== confirmed.content ||
+        found.proxied !== confirmed.proxied
+      ) {
         if (records.length > 0) {
           yield* markWebHostnameExternalEffect(
             current.id,
