@@ -1751,6 +1751,12 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.terminal.claim":
     case "relay.terminal.restart":
       return "relay.terminal"
+    // Watching and driving the node's desktop is as much as a host shell.
+    case "relay.desktop.read":
+    case "relay.desktop.attach":
+    case "relay.desktop.heartbeat":
+    case "relay.desktop.detach":
+      return "relay.terminal"
     // A shell in Kiln's own containers is as much as a host shell.
     case "relay.platform.terminal.attach":
     case "relay.platform.terminal.heartbeat":

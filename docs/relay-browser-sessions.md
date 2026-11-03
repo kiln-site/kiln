@@ -158,7 +158,8 @@ A socket with the same owner as an open one replaces it (1012), so a tab has
 one console and one resource socket per resource; tabs have separate keys.
 Console input waits in the game server's lifecycle lane with power changes
 ([Relay operations](relay-operations.md)). Kiln service logs are for platform
-administrators only. Backup links, terminals, and SFTP don't use capabilities.
+administrators only. Backup links, terminals, SFTP, and the
+[desktop](relay-desktop.md) don't use capabilities.
 
 ## Limits
 

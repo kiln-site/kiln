@@ -152,6 +152,10 @@ export const relayControlOperations = [
   "relay.terminal.write",
   "relay.terminal.claim",
   "relay.terminal.restart",
+  "relay.desktop.read",
+  "relay.desktop.attach",
+  "relay.desktop.heartbeat",
+  "relay.desktop.detach",
   "relay.platform.terminal.attach",
   "relay.platform.terminal.heartbeat",
   "relay.platform.terminal.detach",
@@ -296,6 +300,7 @@ export const relayControlOperations = [
 export type RelayControlOperation = (typeof relayControlOperations)[number]
 
 const auditedRelayControlOperations = new Set<RelayControlOperation>([
+  "relay.desktop.attach",
   "relay.rename",
   "relay.update.apply",
   "relay.restart",
@@ -459,6 +464,10 @@ export function relayControlOperationChanges(
     case "relay.terminal.write":
     case "relay.terminal.claim":
     case "relay.terminal.restart":
+    case "relay.desktop.read":
+    case "relay.desktop.attach":
+    case "relay.desktop.heartbeat":
+    case "relay.desktop.detach":
     case "relay.platform.terminal.attach":
     case "relay.platform.terminal.heartbeat":
     case "relay.platform.terminal.detach":
@@ -588,7 +597,8 @@ const terminalInputOperations = new Set<RelayControlOperation>([
   "relay.terminal.attach",
   "relay.terminal.claim",
   "relay.terminal.restart",
-  "relay.terminal.write",
+  "relay.terminal.write",  // A desktop stream takes the keyboard and mouse.
+  "relay.desktop.attach",
 ])
 
 /**
@@ -621,6 +631,8 @@ export function relayControlDeadlineMs(
   operation: RelayControlOperation
 ): number {
   if (operation === "relay.terminal.attach") return 360_000
+  // The streamer's image may have to be pulled first.
+  if (operation === "relay.desktop.attach") return 240_000
   if (operation === "relay.update.apply") return 15 * 60_000
   // The host's shell helper may have to be pulled first.
   if (operation === "relay.host.restart") return 120_000

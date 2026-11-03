@@ -13,6 +13,7 @@ import {
   History,
   LayoutDashboard,
   ListTodo,
+  Monitor,
   Network,
   Palette,
   Rocket,
@@ -553,6 +554,7 @@ export function appDestinationHref(
 export type RelayDestinationId =
   | "info"
   | "terminal"
+  | "desktop"
   | "volumes"
   | "files"
   | "logs"
@@ -587,6 +589,14 @@ export const relayDestinations = [
     label: "Terminal",
     permission: "relay.terminal",
     to: "/relay/$relayId/terminal",
+  },
+  {
+    icon: Monitor,
+    id: "desktop",
+    keywords: ["screen", "gui", "remote", "rdp", "vnc", "display", "node"],
+    label: "Desktop",
+    permission: "relay.terminal",
+    to: "/relay/$relayId/desktop",
   },
   {
     icon: HardDrive,

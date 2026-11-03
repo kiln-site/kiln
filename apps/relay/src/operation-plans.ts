@@ -496,7 +496,12 @@ export function controlRequestLocks(
     case "instance.network.ports.release":
       return null
 
-    // Terminals are interactive sessions, coordinated by their own registry.
+    // Terminals and the desktop are interactive sessions, coordinated by
+    // their own registries.
+    case "relay.desktop.read":
+    case "relay.desktop.attach":
+    case "relay.desktop.heartbeat":
+    case "relay.desktop.detach":
     case "relay.terminal.attach":
     case "relay.terminal.heartbeat":
     case "relay.terminal.detach":

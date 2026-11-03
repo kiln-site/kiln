@@ -614,6 +614,41 @@ export const relayHostAccessSchema = z.object({
   dataDirectory: z.string().min(1).optional(),
 })
 
+// The node's desktop, as the Relay finds it (apps/relay/src/desktop.ts):
+// the graphical session someone is signed in to, if any. Only X11 desktops
+// can be streamed; `disabled` means the Relay's host access is off.
+const relayDesktopSessionShape = {
+  displayManager: z.boolean(),
+  desktop: z.string().max(200).nullable(),
+  greeter: z.boolean(),
+  user: z.string().max(200).nullable(),
+}
+export const relayDesktopSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("x11"),
+    display: z.string().max(32),
+    ...relayDesktopSessionShape,
+  }),
+  z.object({ status: z.literal("wayland"), ...relayDesktopSessionShape }),
+  z.object({ status: z.literal("none"), displayManager: z.boolean() }),
+  z.object({ status: z.literal("disabled"), displayManager: z.boolean() }),
+])
+export type RelayDesktop = z.infer<typeof relayDesktopSchema>
+
+export const relayDesktopTicketSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{43}$/u)
+export const relayDesktopAttachedSchema = z.object({
+  desktop: relayDesktopSchema,
+  ticket: relayDesktopTicketSchema,
+})
+export const relayDesktopHeartbeatSchema = z.object({
+  tickets: z.array(relayDesktopTicketSchema).max(64),
+})
+export const relayDesktopDetachSchema = z.object({
+  ticket: relayDesktopTicketSchema,
+})
+
 // A Docker named volume on a Relay. Kiln manages two kinds, each with a
 // stable ID that names it to backups and deletion:
 //
