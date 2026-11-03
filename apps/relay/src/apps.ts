@@ -97,6 +97,7 @@ import {
 import {
   APP_SERVICE,
   relayOwnerLabel,
+  relayOwnerLabels,
   relayOwnsLabels,
   relayResourceNames,
   type RelayResourceNames,
@@ -3036,8 +3037,10 @@ export class AppDriver {
     return labels
   }
 
+  // Whose build it is, so a cleanup on a host with another Relay leaves
+  // that one's alone (docker-cleanup.ts).
   #imageLabels(appId: string): Record<string, string> {
-    return { [ID_LABEL]: appId }
+    return { [ID_LABEL]: appId, ...relayOwnerLabels(this.#config) }
   }
 
   #containerLabels(

@@ -191,6 +191,7 @@ request is answered once.
 | `relay:<id>#connections`            | Its pairing invitations and connected clients          |
 | `relay:<id>#host-files`             | Its host files mount                                   |
 | `relay:<id>#process`                | Restarting it or its host, and starting updates on it  |
+| `relay:<id>#docker-cleanup`         | A cleanup of its Docker someone asked for              |
 | `relay:<id>#authorization`          | What a Relay holds of who may do what                  |
 | `relay:<id>#database-connections`   | Apps' database connections handover                    |
 | `cloudflare-connection:<id>`        | A Cloudflare connection                                |

@@ -28,10 +28,7 @@ import {
 import { Effect, Semaphore } from "effect"
 
 import type { RelayConfig } from "./config.js"
-import {
-  DockerEngine,
-  type DockerContainerInspect,
-} from "./docker-engine.js"
+import { DockerEngine, type DockerContainerInspect } from "./docker-engine.js"
 import { promiseEffect, recoverPromise } from "./effect/promise.js"
 import { kilnContainerOwner } from "./kiln-containers.js"
 import { relayOwnerLabels, relayOwnsLabels } from "./relay-resources.js"

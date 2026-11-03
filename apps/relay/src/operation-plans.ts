@@ -441,6 +441,7 @@ export function controlRequestLocks(
     case "relay.update.status":
     case "relay.resources.read":
     case "relay.volumes.read":
+    case "relay.docker.storage":
     case "relay.rename":
     case "relay.audit.list":
     case "relay.networking.read":
@@ -538,6 +539,10 @@ export function controlRequestLocks(
     case "relay.restart":
     case "relay.host.restart":
     case "relay.host.files.mount":
+      return null
+
+    // Each part of a cleanup admits itself (docker-cleanup.ts).
+    case "relay.docker.cleanup":
       return null
 
     // Background work locks itself when the worker runs it.

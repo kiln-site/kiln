@@ -750,6 +750,56 @@ export const relayAppVolumesImportSchema = z.strictObject({
   apps: z.array(relayAppVolumesWriteSchema).max(10_000),
   unresolvedAppIds: z.array(volumeAppIdSchema).max(10_000),
 })
+// What a cleanup a person asks for removes beyond what the Relay's passes
+// do (docs/relay-runtime.md#docker-cleanup).
+export const relayDockerCleanupRequestSchema = z.strictObject({
+  // BuildKit's unused cache, the host's own builds' too.
+  buildCache: z.boolean(),
+  // Unused images no Kiln container ran, such as ones pulled by hand.
+  unknownImages: z.boolean(),
+})
+export const relayDockerCleanupResultSchema = z.object({
+  buildCacheBytes: z.number().int().nonnegative(),
+  containers: z.number().int().nonnegative(),
+  // What the removed images held of their own, shared layers left out.
+  imageBytes: z.number().int().nonnegative(),
+  images: z.number().int().nonnegative(),
+})
+const relayDockerAmountSchema = z.object({
+  bytes: z.number().int().nonnegative(),
+  images: z.number().int().nonnegative(),
+})
+// What Docker holds on a Relay's host and what a cleanup could remove.
+export const relayDockerStorageSchema = z.object({
+  buildCache: z.object({
+    bytes: z.number().int().nonnegative(),
+    reclaimableBytes: z.number().int().nonnegative(),
+  }),
+  images: z.object({
+    bytes: z.number().int().nonnegative(),
+    count: z.number().int().nonnegative(),
+  }),
+  // The latest cleanup since the Relay started, a pass or asked for.
+  lastCleanup: relayDockerCleanupResultSchema
+    .extend({
+      finishedAt: z.number().int().nonnegative(),
+      requested: z.boolean(),
+    })
+    .nullable(),
+  // Containers Docker refused to remove, which passes try again.
+  leftoverContainers: z.number().int().nonnegative(),
+  // What a cleanup now would remove of Kiln's own.
+  reclaimable: relayDockerAmountSchema,
+  // Unused images no Kiln container ran, removed only when asked.
+  unknown: relayDockerAmountSchema,
+})
+export type RelayDockerCleanupRequest = z.infer<
+  typeof relayDockerCleanupRequestSchema
+>
+export type RelayDockerCleanupResult = z.infer<
+  typeof relayDockerCleanupResultSchema
+>
+export type RelayDockerStorage = z.infer<typeof relayDockerStorageSchema>
 // The Relay's refusal while it waits for that import, followed by why.
 export const RELAY_VOLUME_REFERENCES_PENDING =
   "The Relay doesn't know yet which Apps use its volumes"

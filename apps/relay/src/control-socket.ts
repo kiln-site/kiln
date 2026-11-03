@@ -1786,10 +1786,12 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
           : null
     }
     case "relay.volumes.read":
+    case "relay.docker.storage":
       return "relay.read"
     case "relay.volumes.create":
     case "relay.volumes.rename":
     case "relay.volumes.delete":
+    case "relay.docker.cleanup":
       return "relay.configure"
     case "relay.volumes.references.import":
     case "relay.volumes.references.hold":

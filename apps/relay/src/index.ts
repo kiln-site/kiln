@@ -104,6 +104,7 @@ import {
   relayProxySettingsSchema,
   relayVolumeCreateSchema,
   relayVolumeDeleteSchema,
+  relayDockerCleanupRequestSchema,
   relayAppVolumesImportSchema,
   relayAppVolumesWriteSchema,
   relayVolumeRenameSchema,
@@ -2321,6 +2322,15 @@ async function executeControlRequest(
     }
     case "relay.volumes.read":
       return runRelayEffect("relay.volumes.read", volumes.list())
+    case "relay.docker.storage":
+      return runRelayEffect("relay.docker.storage", dockerCleanup.storage())
+    case "relay.docker.cleanup":
+      return runRelayEffect(
+        "relay.docker.cleanup",
+        dockerCleanup.cleanNow(
+          relayDockerCleanupRequestSchema.parse(request.payload)
+        )
+      )
     case "relay.volumes.create": {
       const input = relayVolumeCreateSchema.parse(request.payload)
       return runRelayEffect(

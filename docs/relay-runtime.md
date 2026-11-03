@@ -159,7 +159,7 @@ own:
   the App keeps the images of its 5 newest successful deployments; any
   other image built for it (`kiln.app.id`) is removed once it's a day old,
   which keeps a failed deployment's build for a day to look into, and an
-  image a deployment pulled is removed once no tag names it any longer.
+  image a deployment pulled goes like any other image Kiln ran (below).
   Builds from before deployments recorded their images: the newest 5 stand
   in until the App deploys again. This runs in the background, behind other
   cleanup but not the App's next deployment, which pulls an image again if
@@ -171,7 +171,6 @@ own:
   when no update recorded one. A pass leaves them alone while an update
   runs, like the containers above. On a host with another Kiln
   installation, this Relay removes that one's untagged old images too.
-
 - **Every other image Kiln ran.** Each pass notes the image of each of
   Kiln's containers (the Relay's own and its services, and every App's,
   database's, and game server's, as the security inventory counts them,
@@ -183,8 +182,18 @@ own:
   record existed, is never removed automatically.
 
 Named volumes are never removed by cleanup; they go only with the deletion
-that owns them. BuildKit's cache isn't either: App builds share Docker's
-default builder with the host, and Docker trims that cache itself.
+that owns them. Passes leave BuildKit's cache alone too: App builds share
+Docker's default builder with the host, and Docker trims that cache itself.
+
+A Relay's Info page in Hearth shows its Docker storage
+(`relay.docker.storage`, for anyone with `relay.read`): its images, what
+Kiln could remove now, unused images no Kiln container ran, BuildKit's
+cache, leftover containers, and the latest cleanup since the Relay started.
+Someone with `relay.configure` can clean up now (`relay.docker.cleanup`):
+what a pass removes, without waiting the day for images no Kiln container
+uses, and, if they choose, unused images no Kiln container ran and
+BuildKit's unused cache (`POST /build/prune`, the host's own builds' too).
+App builds keep their day, and retention and volumes stay as above.
 
 A pass runs a minute after the Relay starts and then every hour, and every
 ten minutes while the filesystem holding the Relay's data, usually Docker's

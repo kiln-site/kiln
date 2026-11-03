@@ -6,6 +6,7 @@ import {
   InfoPage,
 } from "@/components/info-page"
 import { RemoveRelayDialog } from "@/components/relay/relay-actions"
+import { RelayDockerStorageSection } from "@/components/relay/relay-docker-storage"
 import { RelayInfoRail } from "@/components/relay/relay-info-rail"
 import { RelayProxySettings } from "@/components/relay/relay-proxy-settings"
 import {
@@ -30,6 +31,7 @@ export function RelayInfoPage() {
       />
       <RelayGeneralSettings relay={relay} routeId={routeId} />
       <RelayProxySettings relay={relay} routeId={routeId} />
+      <RelayDockerStorageSection relay={relay} />
       <RelayDangerZone relay={relay} />
     </InfoPage>
   )
