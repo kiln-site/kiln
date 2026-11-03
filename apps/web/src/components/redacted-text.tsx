@@ -14,8 +14,8 @@ import { cn } from "@workspace/ui/lib/utils"
 
 const mosaicColumnEm = 0.6
 const mosaicHeightEm = 1.15
-const mosaicMinColumns = 14
-const mosaicColumnRange = 12
+const mosaicMinColumns = 10
+const mosaicColumnRange = 9
 const mosaicMinTone = 18
 const mosaicToneRange = 31
 const mosaicBlockColumns = [1, 1, 2, 2, 3, 4]
