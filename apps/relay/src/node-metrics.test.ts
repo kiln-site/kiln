@@ -48,14 +48,17 @@ describe("container events", () => {
         const first = exit("a", "1793721600000000001")
         const earlier = exit("b", "1793721600000000000")
         const sameTime = exit("c", "1793721600000000001")
-        const later = exit("a", "1793721601500000000")
-        const connections: Array<number | undefined> = []
-        const streams: Array<ReadonlyArray<DockerEvent>> = [
-          // Out of order, and two containers at the same instant.
-          [first, earlier, sameTime],
-          // Docker replays the boundary second, then something new.
-          [first, earlier, sameTime, later],
+        const nextSecond = exit("a", "1793721601500000000")
+        // From the second before, arriving after one from the next.
+        const late = exit("d", "1793721600900000000")
+        const afterReconnect = exit("e", "1793721602000000000")
+        // What Docker publishes on each connection, after replaying what it
+        // holds from `since`'s second, as it does, before going live.
+        const published: Array<ReadonlyArray<DockerEvent>> = [
+          [first, earlier, sameTime, nextSecond, late],
+          [afterReconnect],
         ]
+        const history: Array<DockerEvent> = []
         const engine = {
           events: (
             _filters: unknown,
@@ -63,10 +66,19 @@ describe("container events", () => {
             onEvent: (event: DockerEvent) => void
           ) =>
             Effect.suspend(() => {
-              connections.push(options.since)
-              const events = streams.shift()
+              const since = options.since
+              if (since !== undefined) {
+                for (const event of history) {
+                  if (BigInt(event.timeNano!) / 1_000_000_000n >= BigInt(since))
+                    onEvent(event)
+                }
+              }
+              const events = published.shift()
               if (!events) return Effect.never
-              for (const event of events) onEvent(event)
+              for (const event of events) {
+                history.push(event)
+                onEvent(event)
+              }
               return Effect.void
             }),
         } as unknown as DockerEngine
@@ -75,11 +87,10 @@ describe("container events", () => {
           watchContainerEvents(() => relayId, engine, config)
         )
         yield* TestClock.adjust("1 second")
-        assert.strictEqual(yield* countedExits(relayId), 3)
+        assert.strictEqual(yield* countedExits(relayId), 5)
 
         yield* TestClock.adjust("10 seconds")
-        assert.deepStrictEqual(connections, [undefined, 1793721600, 1793721601])
-        assert.strictEqual(yield* countedExits(relayId), 4)
+        assert.strictEqual(yield* countedExits(relayId), 6)
         yield* Fiber.interrupt(fiber)
       })
   )
