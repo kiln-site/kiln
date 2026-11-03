@@ -744,8 +744,18 @@ const InstancePickerFilterBar = React.memo(function InstancePickerFilterBar({
   total: number
 }) {
   const filtered = activeFilters.length > 0
+  const barRef = React.useRef<HTMLDivElement>(null)
+  // Removing filters can unmount whichever bar control holds focus, not just
+  // the one pressed, so any focus inside the bar goes back to search.
+  const focusInBar = () =>
+    barRef.current?.contains(document.activeElement) ?? false
+  const removeChip = React.useCallback(
+    (filterId: string) => onRemove(filterId, focusInBar()),
+    [onRemove]
+  )
   return (
     <div
+      ref={barRef}
       className={cn(
         "flex min-h-9 shrink-0 items-center gap-1.5 border-border/70 bg-muted/25 px-2 py-1",
         atBottom ? "border-t" : "border-b"
@@ -777,7 +787,7 @@ const InstancePickerFilterBar = React.memo(function InstancePickerFilterBar({
               key={filter.id}
               filter={filter}
               touch={atBottom}
-              onRemove={onRemove}
+              onRemove={removeChip}
             />
           ))}
         </div>
@@ -792,9 +802,7 @@ const InstancePickerFilterBar = React.memo(function InstancePickerFilterBar({
             "type-meta shrink-0 rounded-sm px-1 text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline",
             atBottom && "h-8"
           )}
-          onClick={(event) =>
-            onClear(event.currentTarget === document.activeElement)
-          }
+          onClick={() => onClear(focusInBar())}
           onMouseDown={atBottom ? keepSearchFocus : undefined}
         >
           Show all
@@ -810,7 +818,7 @@ const InstancePickerFilterChip = React.memo(function InstancePickerFilterChip({
   touch,
 }: {
   filter: InstancePickerFilter
-  onRemove: (filterId: string, hadFocus: boolean) => void
+  onRemove: (filterId: string) => void
   touch: boolean
 }) {
   const Icon =
@@ -833,9 +841,7 @@ const InstancePickerFilterChip = React.memo(function InstancePickerFilterChip({
           "grid place-items-center rounded-sm text-primary-ink/70 outline-none hover:bg-primary/15 hover:text-primary-ink focus-visible:ring-2 focus-visible:ring-ring/40",
           touch ? "mr-0.5 size-7" : "mr-0.5 size-5"
         )}
-        onClick={(event) =>
-          onRemove(filter.id, event.currentTarget === document.activeElement)
-        }
+        onClick={() => onRemove(filter.id)}
         onMouseDown={touch ? keepSearchFocus : undefined}
       >
         <X className="size-3" aria-hidden="true" />
