@@ -223,7 +223,7 @@ const PendingRow = memo(function PendingRow({
 })
 
 /**
- * Lifts a pending row's detail, such as a tooltip trigger or a blurred email,
+ * Lifts a pending row's detail, such as a tooltip trigger or a hidden email,
  * above the row's button so it still takes the pointer. Clicking it opens the
  * invitation unless it's a button of its own.
  */

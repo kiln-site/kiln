@@ -4,7 +4,7 @@ import { BadgeCheck } from "lucide-react"
 import { HearthMark } from "@/components/hearth-mark"
 import { UserIdentity } from "@/components/user-identity"
 
-// Who owns a resource, in its Info rail, with their email blurred until
+// Who owns a resource, in its Info rail, with their email hidden until
 // clicked. A resource no one owns, like a Relay set up with Kiln itself, is
 // the platform's.
 export function OwnerCard({
