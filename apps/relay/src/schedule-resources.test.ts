@@ -178,8 +178,9 @@ describe("schedules and power", () => {
       { error: "Not run: This database is being deleted", status: "not_run" },
     ])
     expect(container.state.running).toBe(true)
-    expect(container.processes.some(({ argv }) => argv.includes("./vacuum")))
-      .toBe(false)
+    expect(
+      container.processes.some(({ argv }) => argv.includes("./vacuum"))
+    ).toBe(false)
   })
 })
 

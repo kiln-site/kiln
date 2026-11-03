@@ -188,6 +188,14 @@ export interface RelayDockerCleanupRecord {
   readonly firstFailedAt: number
 }
 
+/** An image one of an App's deployments ran, kept to choose what to keep. */
+export interface RelayAppDeploymentImage {
+  readonly appId: string
+  readonly deploymentId: string
+  readonly finishedAt: number
+  readonly imageId: string
+}
+
 const OPERATION_JOURNAL_METADATA_KEY = "operation_journal_id"
 
 export interface RelayStoredInstanceName {
@@ -633,6 +641,21 @@ export class RelayStateStore extends Context.Service<
     /** Forgets a leftover container once it's gone. */
     readonly forgetDockerCleanup: (
       containerId: string
+    ) => Effect.Effect<void, RelayStateError>
+    /** Records the images a successful deployment runs. */
+    readonly recordAppDeploymentImages: (
+      input: Omit<RelayAppDeploymentImage, "imageId"> & {
+        readonly imageIds: ReadonlyArray<string>
+      }
+    ) => Effect.Effect<void, RelayStateError>
+    readonly listAppDeploymentImages: () => Effect.Effect<
+      ReadonlyArray<RelayAppDeploymentImage>,
+      RelayStateError
+    >
+    /** Forgets deployments' images: these deployments, or all of the App's. */
+    readonly forgetAppDeploymentImages: (
+      appId: string,
+      deploymentIds: ReadonlyArray<string> | null
     ) => Effect.Effect<void, RelayStateError>
     readonly createInvitation: (
       input: RelayInvitationInput
@@ -1714,6 +1737,18 @@ const migrations = SqliteMigrator.fromRecord({
       first_failed_at INTEGER NOT NULL
     ) STRICT`
   }),
+  // The images each App's successful deployments ran, so the newest few
+  // deployments keep theirs and older ones' are removed.
+  "34_app_deployment_images": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE IF NOT EXISTS relay_app_deployment_images (
+      app_id TEXT NOT NULL,
+      deployment_id TEXT NOT NULL,
+      image_id TEXT NOT NULL,
+      finished_at INTEGER NOT NULL,
+      PRIMARY KEY (app_id, deployment_id, image_id)
+    ) STRICT`
+  }),
 })
 
 // The App IDs a Hearth still owes, as stored; anything unreadable owes
@@ -2742,6 +2777,46 @@ const makeRelayStateStore = Effect.gen(function* () {
             )
           )
         )
+      ),
+    recordAppDeploymentImages: (input) =>
+      run(
+        "record_app_deployment_images",
+        sql.withTransaction(
+          Effect.forEach(
+            input.imageIds,
+            (imageId) => sql`
+              INSERT OR IGNORE INTO relay_app_deployment_images
+                (app_id, deployment_id, image_id, finished_at)
+              VALUES (${input.appId}, ${input.deploymentId}, ${imageId},
+                      ${input.finishedAt})
+            `,
+            { discard: true }
+          )
+        )
+      ),
+    listAppDeploymentImages: () =>
+      run(
+        "list_app_deployment_images",
+        sql<RelayAppDeploymentImage>`
+          SELECT app_id AS appId, deployment_id AS deploymentId,
+                 image_id AS imageId, finished_at AS finishedAt
+            FROM relay_app_deployment_images
+        `
+      ),
+    forgetAppDeploymentImages: (appId, deploymentIds) =>
+      run(
+        "forget_app_deployment_images",
+        deploymentIds === null
+          ? sql`
+              DELETE FROM relay_app_deployment_images WHERE app_id = ${appId}
+            `.pipe(Effect.asVoid)
+          : deploymentIds.length === 0
+            ? Effect.void
+            : sql`
+                DELETE FROM relay_app_deployment_images
+                 WHERE app_id = ${appId}
+                   AND deployment_id IN ${sql.in(deploymentIds)}
+              `.pipe(Effect.asVoid)
       ),
     forgetDockerCleanup: (containerId) =>
       run(

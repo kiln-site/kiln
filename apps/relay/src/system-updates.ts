@@ -51,6 +51,8 @@ interface ContainerInspect {
     Labels: Record<string, string | undefined> | null
   }
   Id: string
+  // Its image's ID.
+  Image: string
   Mounts?: Array<{ Destination?: string }> | null
   Name: string
 }
@@ -78,6 +80,9 @@ export interface UpdateOperation {
   // Labels a replacement whose container predates installation IDs.
   installationId?: string
   previousImage: string
+  // The image ID it ran before, kept after a successful update for a
+  // downgrade (docker-cleanup.ts). Records from before don't have it.
+  previousImageId?: string
   requestedImage: string
   // The Hearth request that started it, so a browser that lost the reply
   // can find it in the Relay's snapshot.
@@ -466,6 +471,25 @@ export class SystemUpdateManager {
     })
   }
 
+  /**
+   * The image each of Hearth and the Relay ran before its latest update,
+   * once that update succeeded: the one image a downgrade needs.
+   */
+  previousImages(): Effect.Effect<ReadonlyMap<KilnComponent, string>> {
+    return this.updates().pipe(
+      Effect.map(
+        () =>
+          new Map(
+            Array.from(this.#latest.values()).flatMap((operation) =>
+              operation.status === "succeeded" && operation.previousImageId
+                ? [[operation.component, operation.previousImageId] as const]
+                : []
+            )
+          )
+      )
+    )
+  }
+
   #remember(operations: ReadonlyArray<UpdateOperation>) {
     for (const operation of operations) {
       // One that can't be reported can't be compared with later ones either.
@@ -595,7 +619,9 @@ export const replaceRelayEffect = Effect.fn("relay.systemUpdates.replaceRelay")(
       input.targetContainer
     )
     const name = container.Name.replace(/^\//u, "")
-    if (kilnComponent(container.Config.Labels?.["io.kiln.component"]) !== "relay") {
+    if (
+      kilnComponent(container.Config.Labels?.["io.kiln.component"]) !== "relay"
+    ) {
       return yield* systemUpdateFailure(
         "replace.validate",
         `${name} isn't a Kiln Relay`
@@ -654,6 +680,7 @@ export const replaceRelayEffect = Effect.fn("relay.systemUpdates.replaceRelay")(
       id: randomUUID(),
       phase: "Preparing",
       previousImage: container.Config.Image,
+      previousImageId: container.Image,
       requestedImage: imageId,
       startedAt: new Date().toISOString(),
       status: "running",
@@ -929,6 +956,7 @@ const prepareUpdateEffect = Effect.fn("relay.systemUpdates.prepare")(function* (
         ? { installationId: installation.installationId }
         : {}),
       previousImage: container.Config.Image,
+      previousImageId: container.Image,
       requestedImage: input.targetImage,
       ...(requestId ? { requestId } : {}),
       startedAt,
@@ -1736,6 +1764,7 @@ function isUpdateOperation(value: unknown): value is UpdateOperation {
     typeof value.id === "string" &&
     optionalString(value.installationId) &&
     typeof value.previousImage === "string" &&
+    optionalString(value.previousImageId) &&
     typeof value.requestedImage === "string" &&
     optionalString(value.requestId) &&
     typeof value.startedAt === "string" &&

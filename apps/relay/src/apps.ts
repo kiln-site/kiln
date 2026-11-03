@@ -915,6 +915,11 @@ export class AppDriver {
           Effect.ignore
         )
     )
+    await Effect.runPromise(
+      this.#limits.state
+        .forgetAppDeploymentImages(input.appId, null)
+        .pipe(Effect.ignore)
+    )
     await rm(this.#dockerfilePath(input.appId), { force: true })
     await rm(this.#mountDirectory(input.appId), {
       force: true,
@@ -1159,7 +1164,28 @@ export class AppDriver {
         : errorMessage(outcome.failure)
     if (message === null) log(`Deployment finished in ${seconds}s`)
     else log(`Deployment failed after ${seconds}s: ${message}`, "error")
+    if (message === null) {
+      // Its images are kept while it's among the newest few; older
+      // deployments' go once it's finished, in the background
+      // (docker-cleanup.ts).
+      const imageIds = (await this.#appContainers(input.appId)).flatMap(
+        (container) =>
+          container.deploymentId === deployment.id && container.imageId
+            ? [container.imageId]
+            : []
+      )
+      await Effect.runPromise(
+        this.#cleanup.recordDeployment({
+          appId: input.appId,
+          deploymentId: deployment.id,
+          imageIds,
+        })
+      )
+    }
     await this.#finishDeployment(input.appId, deployment, message)
+    if (message === null) {
+      Effect.runFork(this.#cleanup.pruneAppImages(input.appId))
+    }
   }
 
   async #finishDeployment(

@@ -464,6 +464,7 @@ const dockerCleanup = new DockerCleanup({
   state: startupCore.state,
   updating: () =>
     systemUpdates.running().pipe(Effect.orElseSucceed(() => true)),
+  previousKilnImages: () => systemUpdates.previousImages(),
 })
 const docker = new DockerDriver(
   config,

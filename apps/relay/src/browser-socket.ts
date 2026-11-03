@@ -1308,7 +1308,13 @@ class ResourceHubRegistry {
   ) {
     const event = (history: RelayWorkloadUsageHistory) => {
       const usage = this.#workloadUsage(kind, id, history)
-      return JSON.stringify({ ...usage, id, kind, sequence, type: "resource.usage" })
+      return JSON.stringify({
+        ...usage,
+        id,
+        kind,
+        sequence,
+        type: "resource.usage",
+      })
     }
     const live = event("none")
     return {
