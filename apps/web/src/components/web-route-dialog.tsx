@@ -46,16 +46,22 @@ type Route = RelayInstanceWebRouteInput & { readonly service?: string }
 // Adds or edits a route. Every field stays in place as the choices change,
 // so the dialog never changes size under the pointer.
 export function WebRouteDialog({
+  proxiedFor,
   route,
   services,
   onOpenChange,
   onSubmit,
 }: {
+  // Whether Kiln keeps a hostname's record behind Cloudflare's proxy; null
+  // when it keeps no record for it.
+  proxiedFor: (hostname: string) => boolean | null
   route?: Route
   // An app's services; a game server's routes reach the server itself.
   services?: ReadonlyArray<WebRouteServiceOption>
   onOpenChange: (open: boolean) => void
-  onSubmit: (route: Route) => Promise<void>
+  // `proxied` when the person changed it, or when it's on, so a hostname
+  // the save adds, such as a `www` counterpart, follows what it shows.
+  onSubmit: (route: Route, proxied: boolean | undefined) => Promise<void>
 }) {
   const [mode, setMode] = React.useState<"redirect" | "serve">(
     route?.redirect ? "redirect" : "serve"
@@ -89,10 +95,18 @@ export function WebRouteDialog({
   const [preservePath, setPreservePath] = React.useState(
     route?.redirect?.preservePath ?? true
   )
+  // Null until changed: it follows the hostname's record until then.
+  const [proxyChoice, setProxyChoice] = React.useState<boolean | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [pending, setPending] = React.useState(false)
 
   const host = normalizeHostname(hostname)
+  const kept = host ? proxiedFor(host) : null
+  // A saved route's hostname Kiln keeps no record for is the owner's to
+  // point; a new one may land in a zone Kiln manages.
+  const unmanaged =
+    route !== undefined && host === route.hostname && kept === null
+  const proxied = !unmanaged && (proxyChoice ?? kept ?? false)
   const counterpart = host ? wwwCounterpart(host) : null
   const selectedService = services?.find(({ name }) => name === service)
 
@@ -144,10 +158,13 @@ export function WebRouteDialog({
       () =>
         recoverPromise(
           () =>
-            onSubmit({
-              ...parsed.data,
-              ...(services ? { service: service.trim() || "app" } : {}),
-            }),
+            onSubmit(
+              {
+                ...parsed.data,
+                ...(services ? { service: service.trim() || "app" } : {}),
+              },
+              unmanaged ? undefined : (proxyChoice ?? (proxied || undefined))
+            ),
           (cause) =>
             setError(cause instanceof Error ? cause.message : "Could not save")
         ),
@@ -394,6 +411,20 @@ export function WebRouteDialog({
               />
             </div>
           </div>
+
+          <ToggleRow
+            checked={proxied}
+            description={
+              unmanaged
+                ? "Kiln doesn't manage this domain's DNS"
+                : proxied
+                  ? "Visitors reach the Relay through Cloudflare"
+                  : "DNS only: visitors reach the Relay directly"
+            }
+            disabled={unmanaged}
+            label="Proxy through Cloudflare"
+            onCheckedChange={setProxyChoice}
+          />
 
           <Field label="Label (optional)">
             <Input

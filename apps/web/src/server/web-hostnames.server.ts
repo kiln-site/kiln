@@ -7,6 +7,7 @@ import {
   cloudflareHostnameAvailableEffect,
   createCloudflareWebRecordEffect,
   deleteCloudflareRecordEffect,
+  isCloudflareAddressRecordType,
   kilnRecordComment,
   listCloudflareRecordsEffect,
   listCloudflareZonesEffect,
@@ -16,6 +17,7 @@ import {
 import {
   listDomainConnectionsEffect,
   loadDomainConnectionCredentialEffect,
+  loadDomainConnectionEffect,
   loadManagedDomainEffect,
   updateDomainConnectionZonesEffect,
   type DomainConnection,
@@ -29,6 +31,7 @@ import {
 } from "@/effect/hostname-claims"
 import {
   activateWebHostnameEffect,
+  adoptWebHostnameRecordEffect,
   clearWebHostnameRecordEffect,
   deferWebHostnamesEffect,
   deleteRelayWebHostnamesEffect,
@@ -40,12 +43,15 @@ import {
   loadWebHostnameEffect,
   markRelayWebHostnamesRemovingEffect,
   markWebHostnameCoveredEffect,
+  markWebHostnameExternalEffect,
   markWebHostnamesRemovingEffect,
   reassignWebHostnamesEffect,
   reviveWebHostnamesEffect,
+  setWebHostnamesProxiedEffect,
   setWebHostnamesRoutedEffect,
   setWebHostnameStatusEffect,
   webHostnameCoveredEffect,
+  type ExistingWebRecord,
   type WebHostname,
   type WebHostnameResource,
 } from "@/effect/web-hostnames"
@@ -355,7 +361,15 @@ const claimHostnamesEffect = Effect.fn("webHostnames.claim")(function* (
 interface ClaimInput {
   actor: DomainActor
   hostnames: ReadonlyArray<string>
+  /** Puts some hostnames through Cloudflare's proxy, or takes them out. */
+  proxy?: WebHostnameProxyChange
   resource: WebHostnameResource
+}
+
+/** Whether some of a resource's hostnames go through Cloudflare's proxy. */
+export interface WebHostnameProxyChange {
+  hostnames: ReadonlyArray<string>
+  proxied: boolean
 }
 
 /**
@@ -374,6 +388,11 @@ export function saveWebRouteHostnamesEffect<A, E, R>(
     "dns.webRoutes.save",
     input.resource,
     Effect.gen(function* () {
+      const proxy = input.proxy && {
+        hostnames: [...new Set(input.proxy.hostnames.map(canonicalHostname))],
+        proxied: input.proxy.proxied,
+      }
+      if (proxy?.proxied) yield* refuseProxiedServerAddressEffect(input, proxy)
       // A failed save keeps its claims: the Relay may have taken the
       // routes even so. They get no record until a save says the routes
       // use them, and the next save that doesn't lets them go.
@@ -400,10 +419,36 @@ export function saveWebRouteHostnamesEffect<A, E, R>(
       )
       // So an app's generated address isn't deleted while a route uses it.
       yield* setWebHostnamesRoutedEffect(input.resource, [...wanted])
+      if (proxy) {
+        yield* setWebHostnamesProxiedEffect(
+          input.resource,
+          proxy.hostnames.filter((hostname) => wanted.has(hostname)),
+          proxy.proxied
+        )
+      }
       return saved
     })
   )
 }
+
+/**
+ * Refuses to proxy a game server's own address: its record is the game
+ * server domain's, which players connect to directly, and Cloudflare's
+ * proxy only carries web traffic.
+ */
+const refuseProxiedServerAddressEffect = Effect.fnUntraced(function* (
+  input: ClaimInput,
+  proxy: WebHostnameProxyChange
+) {
+  if (input.resource.resourceType !== "instance") return
+  for (const hostname of proxy.hostnames) {
+    if (yield* webHostnameCoveredEffect({ ...input.resource, hostname })) {
+      return yield* DomainConfigurationError.make({
+        message: `${hostname} is this game server's address, which players connect to directly, so it can't go through Cloudflare's proxy`,
+      })
+    }
+  }
+})
 
 /**
  * Lets go of claims whose routes never saved: each one nothing has made a
@@ -595,7 +640,10 @@ const reconcileWebHostnameEffect = Effect.fn("webHostnames.reconcile")(
       yield* removeWebHostnameEffect(row)
       return true
     }
-    const record = cloudflareAddressRecord(row.hostname, target)
+    const record = {
+      ...cloudflareAddressRecord(row.hostname, target),
+      proxied: row.proxied,
+    }
     if (
       !verify &&
       row.status === "active" &&
@@ -670,10 +718,10 @@ const reconcileWebHostnameEffect = Effect.fn("webHostnames.reconcile")(
           return
         }
       } else if (existing.length > 0) {
-        return yield* setWebHostnameStatusEffect(
+        return yield* markWebHostnameExternalEffect(
           row.id,
-          "external",
-          `Cloudflare already has a record for ${row.hostname}. Kiln leaves records it didn't create alone.`
+          externalRecordMessage(row),
+          existingWebRecord(existing)
         )
       }
       const created = yield* createCloudflareWebRecordEffect(
@@ -704,6 +752,133 @@ const reconcileWebHostnameEffect = Effect.fn("webHostnames.reconcile")(
     return true
   }
 )
+
+function externalRecordMessage(row: WebHostname): string {
+  return `Cloudflare already has a record for ${row.hostname}. Kiln leaves records it didn't create alone until you let it manage them.`
+}
+
+/**
+ * The one address record among those Cloudflare has under a name, which
+ * Kiln can take over; null when it has none, or several.
+ */
+function existingWebRecord(
+  records: ReadonlyArray<{
+    content?: string
+    id: string
+    proxied?: boolean
+    type: string
+  }>
+): ExistingWebRecord | null {
+  const addresses = addressRecords(records)
+  return addresses.length === 1 ? (addresses[0] ?? null) : null
+}
+
+function addressRecords(
+  records: ReadonlyArray<{
+    content?: string
+    id: string
+    proxied?: boolean
+    type: string
+  }>
+): Array<ExistingWebRecord> {
+  return records.flatMap(({ content, id, proxied, type }) =>
+    isCloudflareAddressRecordType(type)
+      ? [{ content: content ?? "", id, proxied: proxied ?? false, type }]
+      : []
+  )
+}
+
+/**
+ * Takes over the record Cloudflare already had under a hostname, as its
+ * owner confirmed it: the one address record there, `record`, as they saw
+ * it. Only the owner of the hostname's Cloudflare connection may: being
+ * able to change a resource's routes isn't enough to take a record someone
+ * made in a zone that isn't theirs. Kiln then points it at the Relay, marks
+ * it as its own, and deletes it with the hostname, as a record it made.
+ * Refuses, changing nothing in Cloudflare, when that record is gone or
+ * changed, or when the name has several address records; what Kiln shows
+ * for it is read again.
+ */
+export const adoptExistingWebRecordEffect = Effect.fn(
+  "webHostnames.adoptExisting"
+)(function* (
+  row: WebHostname,
+  input: { actor: DomainActor; proxied: boolean; record: ExistingWebRecord }
+) {
+  yield* withCurrentRow("dns.webRoutes.adopt", row, (current) =>
+    Effect.gen(function* () {
+      const owner = (yield* loadDomainConnectionEffect(current.connectionId))
+        ?.connection.ownerId
+      // A person's own connection, or Kiln's for administrators.
+      if (
+        owner === undefined ||
+        (owner === null ? !input.actor.admin : owner !== input.actor.id)
+      ) {
+        return yield* DomainConfigurationError.make({
+          message:
+            "Only the owner of this domain's Cloudflare connection can let Kiln manage its records",
+        })
+      }
+      if (current.status !== "external") {
+        return yield* DomainConfigurationError.make({
+          message: `Kiln already manages the record for ${current.hostname}`,
+        })
+      }
+      const { apiToken } = yield* loadDomainConnectionCredentialEffect(
+        current.connectionId
+      )
+      const records = yield* listCloudflareRecordsEffect(
+        apiToken,
+        current.zoneId,
+        current.hostname
+      )
+      const addresses = addressRecords(records)
+      const found = existingWebRecord(records)
+      // The same record can point elsewhere by now: anything other than
+      // what they saw needs their say again.
+      const confirmed = input.record
+      if (
+        !found ||
+        found.id !== confirmed.id ||
+        found.type !== confirmed.type ||
+        found.content !== confirmed.content ||
+        found.proxied !== confirmed.proxied
+      ) {
+        if (records.length > 0) {
+          yield* markWebHostnameExternalEffect(
+            current.id,
+            externalRecordMessage(current),
+            found
+          )
+        } else {
+          // Gone: the next sync makes Kiln's own.
+          yield* setWebHostnameStatusEffect(current.id, "pending", null)
+        }
+        return yield* DomainConfigurationError.make({
+          message:
+            records.length === 0
+              ? `The record for ${current.hostname} is gone from Cloudflare, so Kiln will create its own.`
+              : addresses.length > 1
+                ? `Cloudflare has more than one A, AAAA, or CNAME record for ${current.hostname}. Delete the extra ones there first.`
+                : found
+                  ? `The record for ${current.hostname} changed in Cloudflare. Review it and try again.`
+                  : `Cloudflare has no A, AAAA, or CNAME record for ${current.hostname} to take over. Delete its other records there for Kiln to create its own.`,
+        })
+      }
+      yield* adoptWebHostnameRecordEffect({
+        id: current.id,
+        proxied: input.proxied,
+        recordId: found.id,
+        recordType: found.type,
+      })
+    })
+  )
+  // Pointing it at the Relay can fail like any sync; the row says why and
+  // the DNS worker retries it.
+  yield* reconcileResourceWebHostnamesEffect(row).pipe(Effect.ignore)
+  publishWebHostnameChange([row.relayId])
+  return yield* loadWebHostnameEffect(row.id)
+})
 
 /**
  * Deletes a hostname's records and forgets it, letting go of its name. Also

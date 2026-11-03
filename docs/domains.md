@@ -9,8 +9,9 @@ domains are **Kiln provided**: anyone may get an address under them.
 
 A token needs **Zone Read** and **DNS Edit** on the zones Kiln should use.
 Hearth encrypts it at rest and never returns it to the browser. Every record
-Kiln makes is DNS-only and carries a comment naming the game server or app it
-belongs to.
+Kiln makes carries a comment naming the game server or app it belongs to.
+Records are DNS-only unless a web route turns on Cloudflare's proxy (below);
+a game server's address always is, since players connect to it directly.
 
 ## Web route hostnames
 
@@ -23,11 +24,26 @@ for every hostname a route answers on, its `www` counterpart included:
 - moving a game server to another Relay, with its web routes, points their
   records at the new Relay.
 
-Kiln never touches a record it didn't make. A hostname Cloudflare already
-has a record for shows as **Existing record**, and Kiln checks it again on
-the next Sync. A hostname in no connected zone is left for its owner to point
-at the Relay by hand; the Domains page still lists it, as **Manual DNS**,
-from what each Relay's proxy serves.
+Kiln never touches a record it didn't make on its own. A hostname
+Cloudflare already has a record for shows as **Existing record**, and Kiln
+checks it again on the next Sync, remembering the one `A`, `AAAA`, or
+`CNAME` record there, if there's exactly one.
+
+The owner of the hostname's Cloudflare connection (an administrator, for
+Kiln's), who may also change the route, can click **Existing record** to let
+Kiln manage that record. They see what it points at now, and choose whether
+it goes through Cloudflare's proxy, starting from how it is. Kiln then reads
+Cloudflare again under the resource's DNS lock and refuses, changing nothing,
+if that record is gone or changed or the name has several address records.
+Otherwise it keeps the record's ID as one it made, so the next sync points it
+at the Relay and marks it with Kiln's comment, and removing the route deletes
+it. Other records under the name, such as `TXT`, are left alone. Being able
+to change a resource's routes isn't enough: taking someone's record in a zone
+takes owning that zone's connection.
+
+A hostname in no connected zone is left for its owner to point at the Relay
+by hand; the Domains page still lists it, as **Manual DNS**, from what each
+Relay's proxy serves.
 
 Which connections a hostname may use is a security boundary:
 
@@ -52,6 +68,23 @@ The Relay reports where web traffic reaches it as `publicHost` in its
 snapshot, the same address game servers advertise (`KILN_RELAY_GAME_HOST`).
 If the Relay reports none, Hearth uses a game server's reported public host,
 then the address Hearth reaches the Relay at.
+
+## Cloudflare's proxy
+
+Each web route hostname Kiln keeps a record for is DNS-only or proxied
+(Cloudflare's orange cloud). The route dialog's **Proxy through Cloudflare**
+switch sets it for the route's hostname and its `www` counterpart, and the
+save marks a record that changes for the next sync, like a new one. Kiln
+keeps the records it manages that way, so Sync turns back a change made in
+Cloudflare's dashboard. The Domains page and each web route show it; an
+existing record shows how Cloudflare had it when Kiln last looked. A game
+server's own address can't be proxied, so a route on it refuses the switch.
+
+The Relay doesn't need to know: Traefik still gets each certificate over
+HTTP-01, which Cloudflare passes through to it, and the Relay only checks
+that the name resolves. Use Cloudflare's **Full (strict)** SSL mode with a
+proxied hostname; **Flexible** sends plain HTTP to Traefik, which redirects
+it back to HTTPS in a loop.
 
 ## Certificates
 
@@ -163,4 +196,5 @@ hostname.
 - `instance_domain`: game servers' vanity addresses, with the name a rename
   is moving one to.
 - `web_hostname`: web route hostnames and generated app addresses, with the
-  record Kiln made for each.
+  record Kiln made for each, whether it's proxied, and, while one is
+  `external`, the address record Cloudflare already had.

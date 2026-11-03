@@ -26,7 +26,10 @@ import { wakePollingWorker } from "@/lib/polling-worker"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
-import { listWebHostnamesEffect } from "@/effect/web-hostnames"
+import {
+  listWebHostnamesEffect,
+  webHostnameProxied,
+} from "@/effect/web-hostnames"
 import { isPlatformAdmin } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { promiseEffect } from "@/effect/promise"
@@ -177,17 +180,27 @@ export async function getDomainSettingsHandler() {
       ? access.app(row.relayId, row.resourceId, false)
       : access.instance(row.relayId, row.resourceId, false)
     if (!readable) return []
+    const canManage = isApp
+      ? access.app(row.relayId, row.resourceId, true)
+      : access.instance(row.relayId, row.resourceId, true)
     return [
       {
-        canManage: isApp
-          ? access.app(row.relayId, row.resourceId, true)
-          : access.instance(row.relayId, row.resourceId, true),
+        // The listed connections are the person's to manage.
+        canAdopt:
+          canManage &&
+          row.status === "external" &&
+          row.existingRecord !== null &&
+          connectionNames.has(row.connectionId),
+        canManage,
         certificate: pendingWebCertificate(row, row.hostname),
         connectionName: connectionNames.get(row.connectionId) ?? null,
+        existingRecord:
+          row.status === "external" ? row.existingRecord : null,
         generated: row.generated,
         hostname: row.hostname,
         id: row.id,
         lastError: row.lastError,
+        proxied: webHostnameProxied(row),
         relayId: row.relayId,
         routed: row.routed,
         relayName: resources.relayName(row.relayId),
@@ -289,11 +302,14 @@ export async function getManualWebHostnamesHandler(): Promise<
           },
           hostname
         ),
+        canAdopt: false,
         connectionName: null,
+        existingRecord: null,
         generated: false,
         hostname,
         id: key,
         lastError: null,
+        proxied: null,
         relayId: route.relayId,
         routed: true,
         relayName: resources.relayName(route.relayId),

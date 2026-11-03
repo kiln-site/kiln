@@ -18,6 +18,12 @@ import type { WebHostnameResource } from "@/effect/web-hostnames"
 
 import type { DomainActor } from "./domain-access.server"
 import {
+  loadWebHostnameByNameEffect,
+  type ExistingWebRecord,
+} from "@/effect/web-hostnames"
+
+import {
+  adoptExistingWebRecordEffect,
   reconcileResourceWebHostnamesEffect,
   saveWebRouteHostnamesEffect,
 } from "./web-hostnames.server"
@@ -36,6 +42,7 @@ interface FakeRecord {
   comment?: string
   content: string
   name: string
+  proxied?: boolean
   type: string
   zoneId: string
 }
@@ -118,9 +125,32 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
       Object.fromEntries(
         [...records.values()].map((record) => [record.name, record.content])
       ),
+    /** Every record, as `TYPE name content`, proxied ones marked. */
+    records: () =>
+      [...records.values()]
+        .map(
+          (record) =>
+            `${record.type} ${record.name} ${record.content}${record.proxied ? " (proxied)" : ""}`
+        )
+        .sort(),
+    /** `name → proxied` for every record. */
+    proxied: () =>
+      Object.fromEntries(
+        [...records.values()].map((record) => [
+          record.name,
+          record.proxied ?? false,
+        ])
+      ),
     seed: (record: FakeRecord) => {
       nextId += 1
-      records.set(`manual-${nextId}`, record)
+      const id = `manual-${nextId}`
+      records.set(id, record)
+      return id
+    },
+    /** Changes a record in place, as someone in Cloudflare's dashboard. */
+    edit: (id: string, change: Partial<FakeRecord>) => {
+      const record = records.get(id)
+      if (record) records.set(id, { ...record, ...change })
     },
   }
 }
@@ -284,6 +314,122 @@ describeMysql("web route hostnames", () => {
         yield* save(owner, [])
         assert.deepEqual(cloudflare.dns(), {
           "shop.owner.example": "198.51.100.7",
+        })
+      })
+    )
+
+    it.effect(
+      "takes over an existing record only for its connection's owner, then keeps and deletes it as its own",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare([ownerZone])
+          const recordId = cloudflare.seed({
+            content: "otel.elsewhere.example",
+            name: "shop.owner.example",
+            proxied: true,
+            type: "CNAME",
+            zoneId: ownerZone.id,
+          })
+          cloudflare.seed({
+            content: "v=spf1 -all",
+            name: "shop.owner.example",
+            type: "TXT",
+            zoneId: ownerZone.id,
+          })
+          yield* save(owner, ["shop.owner.example"])
+          const row = yield* loadWebHostnameByNameEffect("shop.owner.example")
+          if (!row) return assert.fail("The hostname wasn't kept")
+          const seen: ExistingWebRecord = {
+            content: "otel.elsewhere.example",
+            id: recordId,
+            proxied: true,
+            type: "CNAME",
+          }
+          assert.deepEqual(row.existingRecord, seen)
+          const adopt = (actor: DomainActor, record: ExistingWebRecord) =>
+            adoptExistingWebRecordEffect(row, {
+              actor,
+              proxied: true,
+              record,
+            }).pipe(
+              Effect.flip,
+              Effect.map((error) => error.message)
+            )
+
+          // Someone who may change the app's routes, but doesn't own the
+          // zone's connection, can't take it; nor can anyone take a record
+          // other than the one they saw.
+          assert.match(
+            yield* adopt(collaborator, seen),
+            /Only the owner of this domain's Cloudflare connection/u
+          )
+          assert.match(
+            yield* adopt(owner, { ...seen, id: "manual-99" }),
+            /changed in Cloudflare/u
+          )
+          // Pointed elsewhere in Cloudflare since they saw it, under the
+          // same ID: not what they agreed to hand over.
+          cloudflare.edit(recordId, { content: "new.elsewhere.example" })
+          assert.match(yield* adopt(owner, seen), /changed in Cloudflare/u)
+          assert.deepEqual(cloudflare.records(), [
+            "CNAME shop.owner.example new.elsewhere.example (proxied)",
+            "TXT shop.owner.example v=spf1 -all",
+          ])
+          // What Kiln shows for it is read again.
+          const reread = yield* loadWebHostnameByNameEffect("shop.owner.example")
+          assert.equal(reread?.existingRecord?.content, "new.elsewhere.example")
+          cloudflare.edit(recordId, { content: "otel.elsewhere.example" })
+          assert.deepEqual(yield* hostnameRows, {
+            "shop.owner.example": "external@relay-one",
+          })
+
+          yield* adoptExistingWebRecordEffect(row, {
+            actor: owner,
+            proxied: true,
+            record: seen,
+          })
+          assert.deepEqual(yield* hostnameRows, {
+            "shop.owner.example": "active@relay-one",
+          })
+          // Pointed at the Relay, still proxied; the other record stays.
+          assert.deepEqual(cloudflare.records(), [
+            "CNAME shop.owner.example relay-one.relay.test (proxied)",
+            "TXT shop.owner.example v=spf1 -all",
+          ])
+
+          // Removing the route deletes the record Kiln took over, and only
+          // that one.
+          yield* save(owner, [])
+          assert.deepEqual(cloudflare.records(), [
+            "TXT shop.owner.example v=spf1 -all",
+          ])
+        })
+    )
+
+    it.effect("puts a route's record through Cloudflare's proxy and back", () =>
+      Effect.gen(function* () {
+        yield* seed
+        const cloudflare = fakeCloudflare([ownerZone])
+        const proxy = (proxied: boolean) =>
+          saveWebRouteHostnamesEffect(
+            {
+              actor: owner,
+              hostnames: ["shop.owner.example"],
+              proxy: { hostnames: ["shop.owner.example"], proxied },
+              resource: app,
+            },
+            Effect.void
+          ).pipe(Effect.andThen(reconcileResourceWebHostnamesEffect(app)))
+
+        yield* save(owner, ["shop.owner.example"])
+        assert.deepEqual(cloudflare.proxied(), { "shop.owner.example": false })
+        yield* proxy(true)
+        assert.deepEqual(cloudflare.proxied(), { "shop.owner.example": true })
+        yield* proxy(false)
+        assert.deepEqual(cloudflare.proxied(), { "shop.owner.example": false })
+        assert.deepEqual(cloudflare.dns(), {
+          "shop.owner.example": "relay-one.relay.test",
         })
       })
     )

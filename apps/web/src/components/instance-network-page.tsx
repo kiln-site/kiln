@@ -74,6 +74,7 @@ import {
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import {
   WebRoutesSection,
+  type WebRouteProxyChange,
   type WebRouteRow,
 } from "@/components/web-routes-section"
 import {
@@ -161,10 +162,17 @@ function WebRoutesNetworkPage({
     enabled: permissions.networkRead,
   })
   const update = useMutation({
-    mutationFn: (next: Array<RelayInstanceWebRouteInput>) =>
+    mutationFn: ({
+      proxy,
+      routes: next,
+    }: {
+      proxy?: WebRouteProxyChange
+      routes: Array<RelayInstanceWebRouteInput>
+    }) =>
       updateInstanceWebRoutes({
         data: {
           instanceId: instance.id,
+          proxy,
           relayId: instance.relayId,
           routes: next,
         },
@@ -197,8 +205,11 @@ function WebRoutesNetworkPage({
   }, [permissions.powerRestart, relayConnected, restart])
 
   const saveWebRoutes = React.useCallback(
-    (next: Array<WebRouteRow>) =>
-      update.mutateAsync(next.map(({ service: _service, ...route }) => route)),
+    (next: Array<WebRouteRow>, proxy?: WebRouteProxyChange) =>
+      update.mutateAsync({
+        proxy,
+        routes: next.map(({ service: _service, ...route }) => route),
+      }),
     [update]
   )
 

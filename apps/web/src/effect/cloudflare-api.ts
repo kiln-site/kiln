@@ -23,8 +23,10 @@ const CloudflareDnsRecordSchema = Schema.Struct({
 
 const CloudflareListedRecordSchema = Schema.Struct({
   comment: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  content: Schema.optionalKey(Schema.String),
   id: Schema.String,
   name: Schema.String,
+  proxied: Schema.optionalKey(Schema.Boolean),
   type: Schema.String,
 })
 
@@ -65,7 +67,15 @@ export type CloudflareAddressRecordType = "A" | "AAAA" | "CNAME"
 export interface CloudflareAddressRecord {
   content: string
   name: string
+  /** Through Cloudflare's proxy; DNS-only when left out. */
+  proxied?: boolean
   type: CloudflareAddressRecordType
+}
+
+export function isCloudflareAddressRecordType(
+  type: string
+): type is CloudflareAddressRecordType {
+  return type === "A" || type === "AAAA" || type === "CNAME"
 }
 
 export interface CloudflareSrvRecord {
@@ -435,7 +445,7 @@ function webAddressRecordBody(
     comment,
     content: record.content,
     name: record.name,
-    proxied: false,
+    proxied: record.proxied ?? false,
     ttl: 1,
     type: record.type,
   }

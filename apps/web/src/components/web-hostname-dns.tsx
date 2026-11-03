@@ -8,6 +8,7 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
+import { CloudflareProxyStatus } from "@/components/cloudflare-proxy-status"
 import { resourceWebHostnamesQueryOptions } from "@/lib/query-options"
 import type {
   ResourceWebHostname,
@@ -59,7 +60,7 @@ export const WebHostnameDnsStatus = React.memo(function WebHostnameDnsStatus({
       {presentation.label}
     </span>
   )
-  return row.lastError ? (
+  const status = row.lastError ? (
     <Tooltip>
       <TooltipTrigger asChild>
         <span tabIndex={0}>{label}</span>
@@ -69,7 +70,44 @@ export const WebHostnameDnsStatus = React.memo(function WebHostnameDnsStatus({
   ) : (
     label
   )
+  return row.proxied === null ? (
+    status
+  ) : (
+    <span className="inline-flex shrink-0 items-center gap-2">
+      {status}
+      <CloudflareProxyStatus iconOnly proxied={row.proxied} />
+    </span>
+  )
 })
+
+/**
+ * Whether a resource's hostname goes through Cloudflare's proxy, as Kiln
+ * keeps it; null when Kiln doesn't keep its record.
+ */
+export function useWebHostnameProxied(
+  resource: WebHostnameResourceRef
+): (hostname: string) => boolean | null {
+  const { data } = useQuery({
+    ...resourceWebHostnamesQueryOptions(
+      resource.relayId,
+      resource.resourceType,
+      resource.resourceId
+    ),
+    select: selectProxied,
+  })
+  return React.useCallback(
+    (hostname: string) => data?.get(hostname) ?? null,
+    [data]
+  )
+}
+
+function selectProxied({ hostnames }: ResourceWebHostnames) {
+  return new Map(
+    hostnames
+      .filter((row) => row.status !== "external")
+      .map((row) => [row.hostname, row.proxied] as const)
+  )
+}
 
 function dnsPresentation(row: ResourceWebHostname) {
   switch (row.status) {

@@ -1,9 +1,10 @@
 // The Domains page's dialogs, also opened from a game server's network page. They load after the page: when the browser
 // is idle, or when one first opens.
 import * as React from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Effect, Fiber, Result } from "effect"
 import {
+  ArrowDown,
   ArrowLeft,
   Check,
   ChevronDown,
@@ -45,10 +46,12 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
+import { CloudflareProxyStatus } from "@/components/cloudflare-proxy-status"
 import {
   domainHostname,
   errorMessage,
   type DomainConnectionOverview,
+  type DomainSettings,
   type VanityDomainChoice,
 } from "@/components/domains-shared"
 import {
@@ -58,8 +61,9 @@ import {
   validateBlacklistPatterns,
   vanityLabelSchema,
 } from "@/lib/domain-schemas"
-import { queryKeys } from "@/lib/query-options"
+import { domainSettingsQueryOptions, queryKeys } from "@/lib/query-options"
 import {
+  adoptWebHostnameRecord,
   createInstanceDomain,
   deleteDomainConnection,
   discoverCloudflareDomains,
@@ -1173,6 +1177,133 @@ export function ReleaseHostnameDialog({
   )
 }
 
+/**
+ * Has Kiln take over the record Cloudflare already had for a web route's
+ * hostname: it points it at the Relay and deletes it with the route.
+ */
+export function AdoptRecordDialog({
+  hostname: opened,
+  onOpenChange,
+}: {
+  hostname: WebHostnameOverview
+  onOpenChange: (open: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  // As last read: a refused attempt reads the record again.
+  const selectLatest = React.useCallback(
+    (settings: DomainSettings) =>
+      settings.webHostnames.find((row) => row.id === opened.id),
+    [opened.id]
+  )
+  const { data: latest } = useQuery({
+    ...domainSettingsQueryOptions(),
+    select: selectLatest,
+  })
+  const hostname = latest ?? opened
+  const record = hostname.status === "external" ? hostname.existingRecord : null
+  const [proxied, setProxied] = React.useState(record?.proxied ?? false)
+  const adopt = useMutation({
+    mutationFn: () => {
+      if (!record) throw new Error("There's no record to take over")
+      return adoptWebHostnameRecord({
+        data: { id: hostname.id, proxied, record },
+      })
+    },
+    // A refusal reads the record again, so the dialog shows what's there.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["domains"] }),
+    onSuccess: (result) => {
+      showToast(
+        result.status === "error"
+          ? {
+              description: result.lastError ?? undefined,
+              message: `Kiln manages ${hostname.hostname}, but couldn't update it yet`,
+              type: "warning",
+            }
+          : { message: `Kiln manages ${hostname.hostname}`, type: "success" }
+      )
+      onOpenChange(false)
+    },
+  })
+  return (
+    <Dialog open onOpenChange={adopt.isPending ? undefined : onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Let Kiln manage this record</DialogTitle>
+          <DialogDescription>
+            Cloudflare already has a record for{" "}
+            <span className="font-mono">{hostname.hostname}</span> that Kiln
+            didn't create. Kiln will point it at {hostname.relayName}, keep it
+            in step with the route, and delete it when the route is removed.
+          </DialogDescription>
+        </DialogHeader>
+        {record ? (
+          <div className="grid gap-2 text-xs">
+            <div className="grid gap-1 border border-border/80 bg-muted/30 px-3 py-2">
+              <span className="type-technical-label text-muted-foreground">
+                Now
+              </span>
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="font-mono font-medium">{record.type}</span>
+                <span className="min-w-0 flex-1 truncate font-mono">
+                  {record.content}
+                </span>
+                <CloudflareProxyStatus proxied={record.proxied} />
+              </span>
+            </div>
+            <ArrowDown
+              aria-hidden
+              className="mx-auto size-3.5 text-muted-foreground"
+            />
+            <div className="grid gap-1 border border-primary/30 bg-primary/5 px-3 py-2">
+              <span className="type-technical-label text-primary-ink">
+                Managed by Kiln
+              </span>
+              <span className="min-w-0 truncate">
+                Points at the Relay {hostname.relayName}
+              </span>
+            </div>
+          </div>
+        ) : null}
+        <label className="flex items-center justify-between gap-4">
+          <span className="min-w-0">
+            <span className="type-label block">Proxy through Cloudflare</span>
+            <span className="type-meta block text-muted-foreground">
+              {proxied
+                ? "Visitors reach the Relay through Cloudflare"
+                : "DNS only: visitors reach the Relay directly"}
+            </span>
+          </span>
+          <Switch
+            aria-label="Proxy through Cloudflare"
+            checked={proxied}
+            disabled={adopt.isPending}
+            onCheckedChange={setProxied}
+          />
+        </label>
+        {adopt.error ? <ConfigurationError error={adopt.error} /> : null}
+        <DialogFooter>
+          <Button
+            disabled={adopt.isPending}
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            disabled={adopt.isPending || !record}
+            type="button"
+            onClick={() => adopt.mutate()}
+          >
+            {adopt.isPending ? <LoaderCircle className="animate-spin" /> : null}
+            Let Kiln manage it
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function CloudflarePermissionsPreview({ domain }: { domain: string }) {
   return (
     <div className="space-y-4">
@@ -1183,7 +1314,8 @@ function CloudflarePermissionsPreview({ domain }: { domain: string }) {
         <p className="type-meta">
           Add every zone Kiln should use to the token, or choose all zones. Kiln
           encrypts the token at rest, never returns it to the browser, and keeps
-          every managed record DNS-only.
+          the records it manages DNS-only unless you turn on Cloudflare's proxy
+          for a web route.
         </p>
       </div>
     </div>

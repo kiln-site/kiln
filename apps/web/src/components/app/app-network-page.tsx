@@ -42,6 +42,7 @@ import { TailscaleMembershipSection } from "@/components/tailscale-network-membe
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import {
   WebRoutesSection,
+  type WebRouteProxyChange,
   type WebRouteRow,
   type WebRouteServiceOption,
 } from "@/components/web-routes-section"
@@ -156,10 +157,11 @@ function AppWebRoutes({
     [app, compose]
   )
   const save = React.useCallback(
-    async (routes: Array<WebRouteRow>) => {
+    async (routes: Array<WebRouteRow>, proxy?: WebRouteProxyChange) => {
       const next = await updateAppWebRoutes({
         data: {
           appId: app.id,
+          proxy,
           relayId: app.relayId,
           routes: routes.map((route) => ({
             ...route,

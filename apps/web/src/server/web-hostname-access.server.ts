@@ -1,13 +1,14 @@
 import { relayCertificateCheckResultSchema } from "@workspace/contracts"
 import { Effect } from "effect"
 
-import { HostnameInUseError } from "@/effect/errors"
+import { DomainConfigurationError, HostnameInUseError } from "@/effect/errors"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
   listResourceWebHostnamesEffect,
   loadWebHostnameEffect,
   markResourceWebHostnamesRemovingEffect,
+  webHostnameProxied,
   type WebHostnameResource,
 } from "@/effect/web-hostnames"
 import { requireRelayPermission } from "@/lib/access-control"
@@ -25,6 +26,7 @@ import { requireEligibleResourceUser } from "@/server/auth"
 import { domainActor } from "@/server/domain-access.server"
 import { explainHostnameInUseEffect } from "@/server/domain-resource-access.server"
 import type {
+  AdoptWebHostnameRecordInput,
   CheckWebCertificateInput,
   ReleaseWebHostnameInput,
   ResourceWebHostnames,
@@ -36,12 +38,14 @@ import {
   pendingWebCertificates,
 } from "@/server/web-certificates.server"
 import {
+  adoptExistingWebRecordEffect,
   deleteResourceWebHostnamesEffect,
   generateAppHostnameEffect,
   publishWebHostnameChange,
   reconcileResourceWebHostnamesEffect,
   releaseWebHostnameEffect,
   saveWebRouteHostnamesEffect,
+  type WebHostnameProxyChange,
 } from "@/server/web-hostnames.server"
 
 function permissionFor(
@@ -96,6 +100,7 @@ export async function getResourceWebHostnamesHandler(
       hostname: row.hostname,
       id: row.id,
       lastError: row.lastError,
+      proxied: webHostnameProxied(row),
       status: row.status,
     })),
   }
@@ -188,6 +193,61 @@ export async function releaseWebHostnameHandler(data: ReleaseWebHostnameInput) {
   })
 }
 
+// Taking over a record changes its game server's or App's DNS, so it holds
+// that `#dns`. It also takes owning the domain's Cloudflare connection,
+// which the change checks.
+const adoptRecord = operation<AdoptWebHostnameRecordInput>()({
+  name: "webHostname.adopt",
+  doing: "Taking over its DNS record",
+  authorize: ({ input, user }) =>
+    signedIn(user).pipe(
+      Effect.flatMap((person) =>
+        Effect.gen(function* () {
+          const row = yield* loadWebHostnameEffect(input.id)
+          if (!row) {
+            return yield* DomainConfigurationError.make({
+              message: "This hostname no longer exists",
+            })
+          }
+          yield* promiseEffect(() =>
+            requireResourcePermission(person, row, true)
+          )
+          return { actor: domainActor(person), row }
+        })
+      )
+    ),
+  locks: ({ context: { row } }) => [exclusive(dnsKey(row))],
+  run: ({ context: { actor, row }, input }) =>
+    adoptExistingWebRecordEffect(row, {
+      actor,
+      proxied: input.proxied,
+      record: input.record,
+    }).pipe(
+      Effect.map((after) => ({
+        lastError: after?.lastError ?? null,
+        status: after?.status ?? null,
+      }))
+    ),
+  audit: ({ context: { row } }) => ({
+    id: row.resourceId,
+    kind: row.resourceType,
+    relayId: row.relayId,
+  }),
+})
+
+/**
+ * Lets Kiln manage the record Cloudflare already had under a hostname: it
+ * points it at the Relay, and deletes it with the route.
+ */
+export async function adoptWebHostnameRecordHandler(
+  data: AdoptWebHostnameRecordInput
+) {
+  // Signed in before the lookup, so an ID's existence isn't revealed.
+  return runOperationPromise(adoptRecord, data, {
+    user: await requireEligibleResourceUser(),
+  })
+}
+
 /**
  * Saves a resource's web routes with `save`, holding the hostnames they use
  * first so no other game server or app takes them meanwhile. Refuses
@@ -199,12 +259,13 @@ export async function saveClaimingWebRouteHostnames<T>(
   user: AuthenticatedUser,
   resource: WebHostnameResource,
   hostnames: ReadonlyArray<string>,
-  save: () => Promise<T>
+  save: () => Promise<T>,
+  proxy?: WebHostnameProxyChange
 ): Promise<T> {
   return runAppEffect(
     "webHostnames.claimAndSave",
     saveWebRouteHostnamesEffect(
-      { actor: domainActor(user), hostnames, resource },
+      { actor: domainActor(user), hostnames, proxy, resource },
       promiseEffect(save)
     ).pipe(
       // The save's own failure passes through as it was thrown.

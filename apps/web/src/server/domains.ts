@@ -22,6 +22,7 @@ import {
   saveDomainConnectionHandler,
 } from "@/server/domain-settings.server"
 import {
+  adoptWebHostnameRecordHandler,
   checkWebCertificateHandler,
   getResourceWebHostnamesHandler,
   releaseWebHostnameHandler,
@@ -93,6 +94,19 @@ const resourceWebHostnamesInputSchema = z.discriminatedUnion("resourceType", [
 
 const releaseWebHostnameInputSchema = z.object({ id: domainIdSchema })
 
+const adoptWebHostnameRecordInputSchema = z.object({
+  id: domainIdSchema,
+  /** Whether the record goes through Cloudflare's proxy once Kiln has it. */
+  proxied: z.boolean(),
+  /** The record as the person saw it and agreed to hand it over. */
+  record: z.object({
+    content: z.string().max(255),
+    id: z.string().regex(/^[a-f0-9]{32}$/u),
+    proxied: z.boolean(),
+    type: z.enum(["A", "AAAA", "CNAME"]),
+  }),
+})
+
 const checkWebCertificateInputSchema = resourceWebHostnamesInputSchema.and(
   z.object({ hostname: z.string().trim().toLowerCase().min(1).max(253) })
 )
@@ -119,6 +133,9 @@ export type ResourceWebHostnamesInput = z.infer<
 >
 export type ReleaseWebHostnameInput = z.infer<
   typeof releaseWebHostnameInputSchema
+>
+export type AdoptWebHostnameRecordInput = z.infer<
+  typeof adoptWebHostnameRecordInputSchema
 >
 export type CheckWebCertificateInput = z.infer<
   typeof checkWebCertificateInputSchema
@@ -168,15 +185,32 @@ export interface ManagedDomainOverview {
 
 /** A web route hostname, and the DNS record Kiln keeps for it, if any. */
 export interface WebHostnameOverview {
+  /**
+   * Whether the person may have Kiln take over its existing record: they
+   * may change its routes and own its Cloudflare connection.
+   */
+  canAdopt: boolean
   /** Whether the person may release it. */
   canManage: boolean
   /** The connection's name, when it's one the person sees. */
   connectionName: string | null
+  /**
+   * While `external`, the one address record Cloudflare already had, as
+   * Kiln last saw it; null when it had none, or several.
+   */
+  existingRecord: {
+    content: string
+    id: string
+    proxied: boolean
+    type: "A" | "AAAA" | "CNAME"
+  } | null
   /** Kiln's generated address for an app. */
   generated: boolean
   hostname: string
   id: string
   lastError: string | null
+  /** Through Cloudflare's proxy; null when Kiln doesn't know. */
+  proxied: boolean | null
   /** Used by a web route, so it goes with the route. */
   routed: boolean
   relayId: string
@@ -247,6 +281,8 @@ export interface ResourceWebHostname {
   hostname: string
   id: string
   lastError: string | null
+  /** Through Cloudflare's proxy; null when Kiln doesn't know. */
+  proxied: boolean | null
   status: Exclude<WebHostnameOverview["status"], "manual">
 }
 
@@ -308,3 +344,8 @@ export const checkWebCertificate = createServerFn({ method: "POST" })
 export const releaseWebHostname = createServerFn({ method: "POST" })
   .validator(releaseWebHostnameInputSchema)
   .handler(({ data }) => releaseWebHostnameHandler(data))
+
+/** Has Kiln take over the record Cloudflare already had for a hostname. */
+export const adoptWebHostnameRecord = createServerFn({ method: "POST" })
+  .validator(adoptWebHostnameRecordInputSchema)
+  .handler(({ data }) => adoptWebHostnameRecordHandler(data))

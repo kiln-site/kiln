@@ -45,6 +45,7 @@ import {
   claimPreparedProvisioning,
 } from "@/lib/provisioning.server"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
+import { webRouteProxySchema } from "@/lib/domain-schemas"
 import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
 import {
   awaitResourceDeletion,
@@ -517,6 +518,7 @@ export const getAppWebRoutes = createServerFn({ method: "GET" })
 // Saves the app's routes. Bundled Traefik serves them right away; an
 // external Traefik once a deploy labels the app's containers.
 const appWebRoutesSchema = appInputSchema.extend({
+  proxy: webRouteProxySchema.optional(),
   routes: relayAppWebRoutesWriteSchema.shape.routes,
 })
 
@@ -583,7 +585,8 @@ async function updateAppWebRoutesHandler(
           240_000,
           user.id
         )
-      )
+      ),
+    data.proxy
   )
   publishAppChange(relay.id, false)
   // Kiln keeps the DNS records of hostnames in zones it manages.
