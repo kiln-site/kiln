@@ -63,13 +63,12 @@ import {
   type KilnContainerOwner,
 } from "./kiln-containers.js"
 import type { ImageFacts } from "./docker-image-retention.js"
-import {
-  KILN_INSTALLATION_LABEL,
-  kilnComponent,
-  type KilnComponent,
-} from "./update-container.js"
+import type { UpdateCleanupState } from "./system-updates.js"
+import { KILN_INSTALLATION_LABEL, kilnComponent } from "./update-container.js"
 
 const UPDATE_HELPER_LABEL = "io.kiln.update-helper"
+// Docker states of a container that won't run again by itself.
+const EXITED = new Set(["dead", "exited"])
 // What the update helper renames the container it replaces to, until the
 // replacement is healthy (updater.ts).
 const UPDATE_BACKUP_NAME = /^(.+)-kiln-backup-\d+$/u
@@ -182,12 +181,8 @@ export interface DockerCleanupOptions {
   readonly engine: DockerEngine
   readonly lanes: OperationLanes
   readonly state: RelayStateStore["Service"]
-  /** Whether an update this Relay started is still under way. */
-  readonly updating: () => Effect.Effect<boolean>
-  /** The image Hearth and the Relay each ran before its latest update. */
-  readonly previousKilnImages: () => Effect.Effect<
-    ReadonlyMap<KilnComponent, string>
-  >
+  /** What Hearth's and the Relay's updates are doing and named. */
+  readonly updates: () => Effect.Effect<UpdateCleanupState>
 }
 
 export class DockerCleanup {
@@ -195,17 +190,15 @@ export class DockerCleanup {
   readonly #engine: DockerEngine
   readonly #lanes: OperationLanes
   readonly #state: RelayStateStore["Service"]
-  readonly #updating: () => Effect.Effect<boolean>
-  readonly #previousKilnImages: DockerCleanupOptions["previousKilnImages"]
+  readonly #updates: DockerCleanupOptions["updates"]
   #lastCleanup: DockerStorage["lastCleanup"] = null
 
   constructor(options: DockerCleanupOptions) {
-    this.#previousKilnImages = options.previousKilnImages
+    this.#updates = options.updates
     this.#config = options.config
     this.#engine = options.engine
     this.#lanes = options.lanes
     this.#state = options.state
-    this.#updating = options.updating
   }
 
   /**
@@ -278,6 +271,22 @@ export class DockerCleanup {
         Effect.logWarning("Relay couldn't record a deployment's images", cause)
       ),
       Effect.asVoid
+    )
+  }
+
+  /**
+   * Notes a build as it finishes, whatever becomes of its deployment: it's
+   * the App's, and kept a day from now.
+   */
+  noteBuild(appId: string, imageId: string): Effect.Effect<void> {
+    const state = this.#state
+    return Clock.currentTimeMillis.pipe(
+      Effect.flatMap((now) =>
+        state.noteDockerImagesUsed([{ imageId, owner: `app:${appId}` }], now)
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning("Relay couldn't record an App's build", cause)
+      )
     )
   }
 
@@ -469,9 +478,7 @@ export class DockerCleanup {
   }
 
   // Notes the images Kiln's containers use now.
-  #noteUsed(
-    listed?: ImageFacts["containers"]
-  ): Effect.Effect<void, unknown> {
+  #noteUsed(listed?: ImageFacts["containers"]): Effect.Effect<void, unknown> {
     return Effect.gen({ self: this }, function* () {
       const containers =
         listed ?? (yield* this.#engine.listContainers({ all: true }))
@@ -506,14 +513,12 @@ export class DockerCleanup {
     rules: Omit<RetentionRules, "kilnImages">
   ): Effect.Effect<Array<ImageRemoval>, unknown> {
     return Effect.gen({ self: this }, function* () {
-      const [records, deployments, previousKilnImages, updating, now] =
-        yield* Effect.all([
-          this.#state.listDockerImages(),
-          this.#state.listAppDeploymentImages(),
-          this.#previousKilnImages(),
-          this.#updating(),
-          Clock.currentTimeMillis,
-        ])
+      const [records, deployments, updates, now] = yield* Effect.all([
+        this.#state.listDockerImages(),
+        this.#state.listAppDeploymentImages(),
+        this.#updates(),
+        Clock.currentTimeMillis,
+      ])
       return removableImages(
         {
           containers,
@@ -524,10 +529,10 @@ export class DockerCleanup {
             const owner = kilnContainerOwner(this.#config, container)
             return owner?.resource.type === "app" ? owner.resource.id : null
           },
-          previousKilnImages,
+          kilnUpdates: updates,
           records,
         },
-        { ...rules, kilnImages: !updating }
+        { ...rules, kilnImages: !updates.updating }
       )
     })
   }
@@ -658,26 +663,30 @@ export class DockerCleanup {
   })
 
   // The helper of a finished update, and the container it set aside once
-  // the replacement under its name runs. Nothing while any update runs:
-  // a running helper may still roll back to the container it set aside.
+  // the replacement under its name runs. Nothing while any update starts or
+  // runs, by this Relay's records or a helper anyone's update made that
+  // hasn't exited: a helper may still roll back to the container it set
+  // aside. Only helpers of updates this Relay recorded as finished go.
   readonly #sweepUpdates = operation<void>()({
     name: "relay.docker.cleanup.updates",
     locks: () => [exclusive(laneKeys.dockerCleanup)],
     run: () =>
       Effect.gen({ self: this }, function* () {
         let removed = 0
-        if (yield* this.#updating()) return removed
+        const updates = yield* this.#updates()
+        if (updates.updating) return removed
         const containers = yield* this.#engine.listContainers({ all: true })
         const helpers = containers.filter(
           (container) => container.Labels?.[UPDATE_HELPER_LABEL] === "true"
         )
-        if (helpers.some((helper) => helper.State === "running")) {
+        if (helpers.some((helper) => !EXITED.has(helper.State))) {
           return removed
         }
         const byName = new Map(
           containers.map((container) => [containerName(container), container])
         )
         for (const helper of helpers) {
+          if (!updates.finishedHelpers.has(containerName(helper))) continue
           if (yield* this.#removeSwept(helper.Id, "update-helper")) removed += 1
         }
         for (const container of containers) {

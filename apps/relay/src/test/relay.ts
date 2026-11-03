@@ -125,8 +125,13 @@ export async function relayHarness(
       engine: new DockerEngine(config.dockerSocket),
       lanes,
       state,
-      updating: () => Effect.succeed(false),
-      previousKilnImages: () => Effect.succeed(new Map()),
+      updates: () =>
+        Effect.succeed({
+          finishedHelpers: new Set<string>(),
+          kept: new Set<string>(),
+          named: new Set<string>(),
+          updating: false,
+        }),
     })
     const docker = new DockerDriver(
       config,

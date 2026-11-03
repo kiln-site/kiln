@@ -99,6 +99,14 @@ interface UpdateBatch {
   operationIds: Array<string>
 }
 
+/** What Docker cleanup must know of updates; see `cleanupState`. */
+export interface UpdateCleanupState {
+  readonly finishedHelpers: ReadonlySet<string>
+  readonly kept: ReadonlySet<string>
+  readonly named: ReadonlySet<string>
+  readonly updating: boolean
+}
+
 interface InstallationIdentity {
   readonly installationId?: string | null
   readonly installationIdConfigured?: boolean
@@ -472,21 +480,68 @@ export class SystemUpdateManager {
   }
 
   /**
-   * The image each of Hearth and the Relay ran before its latest update,
-   * once that update succeeded: the one image a downgrade needs.
+   * What Docker cleanup must know of updates, from their records on disk,
+   * so it holds for one another process runs too (docker-cleanup.ts):
+   *
+   * - `updating`: one is starting or running, before its helper exists too.
+   * - `named`: every image an update replaced or put in place, by ID or
+   *   digest: the Hearth and Relay images that are this Relay's to remove.
+   * - `kept`: a running update's images, and the image each component ran
+   *   before its latest successful update, for a downgrade.
+   * - `finishedHelpers`: the helper containers of updates that finished.
    */
-  previousImages(): Effect.Effect<ReadonlyMap<KilnComponent, string>> {
-    return this.updates().pipe(
-      Effect.map(
-        () =>
-          new Map(
-            Array.from(this.#latest.values()).flatMap((operation) =>
-              operation.status === "succeeded" && operation.previousImageId
-                ? [[operation.component, operation.previousImageId] as const]
-                : []
-            )
+  cleanupState(): Effect.Effect<UpdateCleanupState> {
+    return recordedOperationsEffect(this.#operationsDirectory).pipe(
+      Effect.map((operations) => {
+        const images = (operation: UpdateOperation) => [
+          operation.requestedImage,
+          ...(operation.previousImageId ? [operation.previousImageId] : []),
+        ]
+        const running = operations.filter(
+          (operation) => operation.status === "running"
+        )
+        const latest = new Map<KilnComponent, UpdateOperation>()
+        for (const operation of operations) {
+          if (operation.status !== "succeeded") continue
+          const known = latest.get(operation.component)
+          if (!known || isNewer(operation, known)) {
+            latest.set(operation.component, operation)
+          }
+        }
+        const helpers = new Map<string, boolean>()
+        for (const operation of operations) {
+          const helper = `kiln-updater-${operation.batchId ?? operation.id}`
+          helpers.set(
+            helper,
+            (helpers.get(helper) ?? true) && operation.status !== "running"
           )
-      )
+        }
+        return {
+          finishedHelpers: new Set(
+            [...helpers].flatMap(([helper, finished]) =>
+              finished ? [helper] : []
+            )
+          ),
+          kept: new Set([
+            ...running.flatMap(images),
+            ...[...latest.values()].flatMap(
+              (operation) => operation.previousImageId ?? []
+            ),
+          ]),
+          named: new Set(operations.flatMap(images)),
+          updating:
+            running.length > 0 ||
+            this.#starting.size > 0 ||
+            this.#activeBatch !== null,
+        }
+      }),
+      // Records it can't read leave cleanup thinking an update runs.
+      Effect.orElseSucceed(() => ({
+        finishedHelpers: new Set<string>(),
+        kept: new Set<string>(),
+        named: new Set<string>(),
+        updating: true,
+      }))
     )
   }
 

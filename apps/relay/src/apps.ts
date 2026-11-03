@@ -1633,6 +1633,16 @@ export class AppDriver {
         timeout: BUILD_TIMEOUT_MS,
       }
     )
+    // The build is the App's from now, whatever becomes of the deployment,
+    // so a failed one's stays its day (docker-cleanup.ts).
+    await Effect.runPromise(
+      this.#engine.inspectImage(tag).pipe(
+        Effect.flatMap((image) =>
+          this.#cleanup.noteBuild(input.appId, image.Id)
+        ),
+        Effect.ignore
+      )
+    )
     return tag
   }
 

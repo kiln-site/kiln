@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto"
+import { mkdir, writeFile } from "node:fs/promises"
+import { join } from "node:path"
+
 import {
   defaultAppConfig,
   relayDeployAppSchema,
@@ -10,6 +14,7 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { DockerCleanup } from "./docker-cleanup.js"
 import { DockerEngine } from "./docker-engine.js"
+import { SystemUpdateManager, type UpdateOperation } from "./system-updates.js"
 import { fakeDocker } from "./test/docker.js"
 import {
   relayHarness,
@@ -26,6 +31,50 @@ let clock = 0
 afterEach(() => {
   vi.useRealTimers()
 })
+
+/**
+ * A cleanup reading update records on disk, written as the update helper
+ * writes them, through the Relay's own update manager.
+ */
+async function cleanupWithUpdates(
+  harness: RelayHarness,
+  operations: ReadonlyArray<UpdateOperation>
+) {
+  const directory = join(harness.config.dataDirectory, "updates")
+  await mkdir(directory, { recursive: true })
+  for (const operation of operations) {
+    await writeFile(
+      join(directory, `${operation.id}.json`),
+      JSON.stringify(operation)
+    )
+  }
+  const updates = new SystemUpdateManager(harness.config)
+  return new DockerCleanup({
+    config: harness.config,
+    engine: new DockerEngine(harness.config.dockerSocket),
+    lanes: harness.lanes,
+    state: harness.state,
+    updates: () => updates.cleanupState(),
+  })
+}
+
+function update(
+  fields: Pick<
+    UpdateOperation,
+    "component" | "requestedImage" | "startedAt" | "status"
+  > &
+    Partial<UpdateOperation>
+): UpdateOperation {
+  return {
+    error: null,
+    finishedAt: fields.status === "running" ? null : fields.startedAt,
+    id: randomUUID(),
+    previousImage: `ghcr.io/kiln-site/${fields.component}:latest`,
+    targetContainer: `kiln-${fields.component}`,
+    version: "0.1.0-nightly.2",
+    ...fields,
+  }
+}
 
 function appContainers() {
   return [...fakeDocker.containers.values()].filter(
@@ -92,7 +141,17 @@ describe("leftover containers", () => {
 })
 
 describe("update leftovers", () => {
-  function seedUpdate(input: { readonly helperRunning: boolean }) {
+  const finished = update({
+    batchId: "batch",
+    component: "relay",
+    requestedImage: "sha256:relay-new",
+    startedAt: "2026-01-01T00:00:00.000Z",
+    status: "succeeded",
+  })
+
+  function seedUpdate(helper: {
+    readonly state: "created" | "exited" | "running"
+  }) {
     fakeDocker.addContainer({
       image: "ghcr.io/kiln-site/relay:latest",
       labels: { "io.kiln.component": "relay" },
@@ -103,21 +162,27 @@ describe("update leftovers", () => {
       image: "ghcr.io/kiln-site/relay:old",
       labels: { "io.kiln.component": "relay" },
       name: "kiln-relay-kiln-backup-1767225600000",
+      startedAt: "2026-01-01T00:00:00.000Z",
     })
-    const helper = fakeDocker.addContainer({
+    const container = fakeDocker.addContainer({
       image: "ghcr.io/kiln-site/relay:latest",
       labels: { "io.kiln.update-helper": "true" },
       name: "kiln-updater-batch",
-      running: input.helperRunning,
+      running: helper.state === "running",
+      ...(helper.state === "exited" && {
+        startedAt: "2026-01-01T00:00:00.000Z",
+      }),
     })
-    return { backup, helper }
+    return { backup, helper: container }
   }
 
   it("removes a finished update's helper and the container it set aside, and nothing else", async () => {
     const harness = await relayHarness()
-    const { backup, helper } = seedUpdate({ helperRunning: false })
+    const cleanup = await cleanupWithUpdates(harness, [finished])
+    const { backup, helper } = seedUpdate({ state: "exited" })
     // Named like a set-aside container, but not one: a person's own, one
-    // whose replacement isn't running, and another installation's.
+    // whose replacement isn't running, and another installation's; and a
+    // helper of an update this Relay has no record of.
     fakeDocker.addContainer({ name: "web", running: true })
     const own = fakeDocker.addContainer({ name: "web-kiln-backup-1" })
     fakeDocker.addContainer({
@@ -140,25 +205,56 @@ describe("update leftovers", () => {
       },
       name: "other-hearth-kiln-backup-1",
     })
+    const unknownHelper = fakeDocker.addContainer({
+      labels: { "io.kiln.update-helper": "true" },
+      name: "kiln-updater-someone-elses",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    })
 
-    await Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
+    await Effect.runPromise(cleanup.pass({ kind: "timer" }))
 
     expect(fakeDocker.container(backup.id)).toBeUndefined()
     expect(fakeDocker.container(helper.id)).toBeUndefined()
-    for (const kept of [own, unreplaced, foreign]) {
+    for (const kept of [own, unreplaced, foreign, unknownHelper]) {
       expect(fakeDocker.container(kept.id)).toBeDefined()
     }
     expect(fakeDocker.container("kiln-relay")?.state.running).toBe(true)
   })
 
-  it("leaves the set-aside container while an update's helper runs, since it may roll back to it", async () => {
-    const harness = await relayHarness()
-    const { backup, helper } = seedUpdate({ helperRunning: true })
+  it("leaves the set-aside container while an update's helper is made or runs, since it may roll back to it", async () => {
+    for (const state of ["created", "running"] as const) {
+      const harness = await relayHarness()
+      const cleanup = await cleanupWithUpdates(harness, [finished])
+      const { backup, helper } = seedUpdate({ state })
 
-    await Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
+      await Effect.runPromise(cleanup.pass({ kind: "timer" }))
+
+      expect(fakeDocker.container(backup.id)).toBeDefined()
+      expect(fakeDocker.container(helper.id)).toBeDefined()
+      fakeDocker.reset()
+    }
+  })
+
+  it("leaves everything while an update's record says it runs, before its helper exists", async () => {
+    const harness = await relayHarness()
+    const cleanup = await cleanupWithUpdates(harness, [
+      update({
+        component: "relay",
+        requestedImage: "sha256:relay-next",
+        startedAt: "2026-01-02T00:00:00.000Z",
+        status: "running",
+      }),
+    ])
+    const { backup } = seedUpdate({ state: "exited" })
+    fakeDocker.container("kiln-updater-batch")!.name = "kiln-updater-old"
+    // The image it's pulled, which nothing uses yet.
+    fakeDocker.images.set("relay-next", { "io.kiln.component": "relay" })
+    fakeDocker.untaggedImages.add("relay-next")
+
+    await Effect.runPromise(cleanup.pass({ kind: "timer" }))
 
     expect(fakeDocker.container(backup.id)).toBeDefined()
-    expect(fakeDocker.container(helper.id)).toBeDefined()
+    expect(fakeDocker.images.has("relay-next")).toBe(true)
   })
 })
 
@@ -231,38 +327,72 @@ describe("image retention", () => {
     expect(fakeDocker.images.has("someone/else:1")).toBe(true)
   })
 
-  it("keeps the image Hearth and the Relay ran before their latest update, and no older untagged one", async () => {
+  it("keeps a build a day after the App's first deployment failed, even when asked to remove images Kiln didn't run", async () => {
     const harness = await relayHarness()
-    const image = (name: string, component: string, created: number) => {
-      fakeDocker.images.set(name, { "io.kiln.component": component })
+    await harness.apps.create({ id: appId, name: "Website" })
+    fakeDocker.failNext({ command: "create" }, "no space left on device")
+    const app = await deploy(harness, {
+      dockerfile: "FROM nginx:alpine\n",
+      sourceType: "dockerfile",
+    })
+    expect(app.deployment?.state).toBe("failed")
+    expect(builds()).toHaveLength(1)
+
+    await Effect.runPromise(
+      harness.cleanup.cleanNow({ buildCache: false, unknownImages: true })
+    )
+    expect(builds()).toHaveLength(1)
+
+    vi.useFakeTimers({ now: clock + 25 * 60 * 60_000, toFake: ["Date"] })
+    await Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
+    expect(builds()).toEqual([])
+  })
+
+  it("keeps Hearth's image from before its latest successful update, through a failed attempt since, and never another installation's", async () => {
+    const harness = await relayHarness()
+    const cleanup = await cleanupWithUpdates(harness, [
+      update({
+        component: "hearth",
+        previousImageId: "sha256:hearth-oldest",
+        requestedImage: "sha256:hearth-before",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        status: "succeeded",
+      }),
+      update({
+        component: "hearth",
+        previousImageId: "sha256:hearth-before",
+        requestedImage: "sha256:hearth-current",
+        startedAt: "2026-01-02T00:00:00.000Z",
+        status: "succeeded",
+      }),
+      // Pulled, then failed before replacing anything.
+      update({
+        component: "hearth",
+        previousImageId: "sha256:hearth-current",
+        requestedImage: "sha256:hearth-failed",
+        startedAt: "2026-01-03T00:00:00.000Z",
+        status: "failed",
+      }),
+    ])
+    const image = (name: string, created: number) => {
+      fakeDocker.images.set(name, { "io.kiln.component": "hearth" })
       fakeDocker.imageCreated.set(name, created)
       fakeDocker.untaggedImages.add(name)
     }
-    fakeDocker.images.set("ghcr.io/kiln-site/hearth:latest", {
-      "io.kiln.component": "hearth",
-    })
+    image("hearth-current", 300)
     fakeDocker.addContainer({
-      image: "ghcr.io/kiln-site/hearth:latest",
+      image: "hearth-current",
       name: "kiln-hearth",
       running: true,
     })
-    image("hearth-before", "hearth", 100)
-    image("hearth-older", "hearth", 200)
-    image("relay-older", "relay", 100)
-    image("relay-before", "relay", 200)
+    image("hearth-oldest", 100)
+    image("hearth-before", 200)
+    image("hearth-failed", 400)
+    // Another installation's on the same host, which no update here named.
+    image("hearth-elsewhere", 50)
     // A version someone pinned by its tag.
     fakeDocker.images.set("ghcr.io/kiln-site/hearth:0.1.0", {
       "io.kiln.component": "hearth",
-    })
-    const cleanup = new DockerCleanup({
-      config: harness.config,
-      engine: new DockerEngine(harness.config.dockerSocket),
-      lanes: harness.lanes,
-      // The Relay's own update predates records of the image it replaced.
-      previousKilnImages: () =>
-        Effect.succeed(new Map([["hearth", "sha256:hearth-before"]])),
-      state: harness.state,
-      updating: () => Effect.succeed(false),
     })
 
     await Effect.runPromise(cleanup.pass({ kind: "timer" }))
@@ -270,9 +400,9 @@ describe("image retention", () => {
     expect([...fakeDocker.images.keys()].sort()).toEqual(
       [
         "ghcr.io/kiln-site/hearth:0.1.0",
-        "ghcr.io/kiln-site/hearth:latest",
         "hearth-before",
-        "relay-before",
+        "hearth-current",
+        "hearth-elsewhere",
       ].sort()
     )
   })
