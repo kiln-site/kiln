@@ -135,6 +135,20 @@ export function reportAppError(
   )
 }
 
+/**
+ * Exports a log line from code outside an effect, such as a socket handler.
+ * Logs aren't sampled, so rare events like a connection dropping are always
+ * kept, unlike their traces.
+ */
+export function logAppEvent(
+  level: "info" | "warning",
+  message: string,
+  annotations: Readonly<Record<string, string | number | boolean | null>>
+): void {
+  const log = level === "info" ? Effect.logInfo : Effect.logWarning
+  runtime.runFork(log(message).pipe(Effect.annotateLogs(annotations)))
+}
+
 export async function disposeAppRuntime(): Promise<void> {
   await runtime.dispose()
 }
