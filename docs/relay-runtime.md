@@ -141,36 +141,48 @@ Kiln removes what it leaves on Docker once it's done with it
   and tried again by each cleanup pass until the container is gone, in its
   owner's lifecycle lane, so it never removes one mid-change.
 - An update's helper runs in its own process and can't record what it
-  couldn't remove. A pass removes a stopped `io.kiln.update-helper`
-  container, and a stopped `<name>-kiln-backup-<time>` container the helper
-  set aside, once a running container has the original name and the
-  set-aside one is a Hearth or Relay container of this installation
-  (`io.kiln.component`, and `io.kiln.installation` absent or this one's).
-  While any update helper runs, or an update this Relay started is still
-  pulling, a pass leaves both alone, since a helper rolling back needs the
-  container it set aside.
+  couldn't remove. A pass removes an exited `io.kiln.update-helper`
+  container of an update this Relay recorded as finished, and a stopped
+  `<name>-kiln-backup-<time>` container the helper set aside, once a
+  running container has the original name and the set-aside one is a
+  Hearth or Relay container of this installation (`io.kiln.component`, and
+  `io.kiln.installation` absent or this one's). While an update this Relay
+  recorded is starting or running, or any update helper on the host hasn't
+  exited, a pass leaves both alone, since a helper rolling back needs the
+  container it set aside. Only a container an update this Relay recorded
+  replaced counts as set aside. Update records live in the Relay's data
+  volume, so this holds for an update a restarted Relay or the helper
+  carries on; while any record can't be read, a pass leaves updates'
+  leftovers and Hearth's and the Relay's images alone. An update writes its
+  records in their turn after any cleanup deciding which images to remove
+  (`relay.update.record`, holding `relay:docker-cleanup` shared), so
+  cleanup either sees the update or is done before it pulls.
 
 Images are removed by unforced removal only, so Docker keeps any a
 container uses, even a stopped one, and never one Kiln can't tell is its
 own:
 
-- **App builds and images.** Each successful deployment records the image
-  IDs its containers run (`relay_app_deployment_images`). Once it finishes,
-  the App keeps the images of its 5 newest successful deployments; any
-  other image built for it (`kiln.app.id`) is removed once it's a day old,
-  which keeps a failed deployment's build for a day to look into, and an
-  image a deployment pulled goes like any other image Kiln ran (below).
-  Builds from before deployments recorded their images: the newest 5 stand
-  in until the App deploys again. This runs in the background, behind other
-  cleanup but not the App's next deployment, which pulls an image again if
-  it's gone.
-- **Hearth and Relay images.** Each pass removes Hearth and Relay images
-  (`io.kiln.component`) that no container uses and no tag names, keeping
-  for each the image it ran before its latest successful update (recorded
-  as `previousImageId` with the update), for a downgrade, or the newest
-  when no update recorded one. A pass leaves them alone while an update
-  runs, like the containers above. On a host with another Kiln
-  installation, this Relay removes that one's untagged old images too.
+- **App builds and images.** Each build is recorded as it finishes, and
+  each successful deployment records the image IDs its containers run
+  (`relay_app_deployment_images`). The App keeps the images of its 5 newest
+  successful deployments; any other build for it (`kiln.app.id`) is removed
+  a day after it was built, which keeps a failed deployment's build, its
+  first deployment's too, for a day to look into. An image a deployment
+  pulled goes like any other image Kiln ran (below). Builds from before
+  builds were recorded: for an App with no deployment record yet, its
+  newest 5 stand in until it deploys. After each successful deployment
+  this runs in the background, behind other cleanup but not the App's next
+  deployment, which pulls an image again if it's gone; passes run it too.
+- **Hearth and Relay images.** Only those this Relay's update records name
+  (the image each update replaced, as `previousImageId`, the one it put in
+  place, and the Relay image its helper ran, as `helperImage`) or its own
+  containers ran, so another Kiln installation on the host keeps its own.
+  Of those, each pass removes the ones no container uses and no tag names,
+  keeping a running update's images and, for each of Hearth and the Relay,
+  the image it ran before its latest successful update, for a downgrade.
+  Only when no such image is on the host does the newest stand in for it.
+  A pass leaves them alone while an update this Relay recorded starts or
+  runs.
 - **Every other image Kiln ran.** Each pass notes the image of each of
   Kiln's containers (the Relay's own and its services, and every App's,
   database's, and game server's, as the security inventory counts them,

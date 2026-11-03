@@ -100,8 +100,8 @@ then launches a short-lived updater from the selected Relay digest. The helper:
    rollback copy or a stopped helper left behind is removed by the
    Relay's next cleanup pass once no update runs (see
    [Relay runtime](relay-runtime.md#docker-cleanup)). The image it ran
-   before stays for a downgrade; older untagged Hearth and Relay images are
-   removed.
+   before its latest successful update stays for a downgrade; older
+   untagged images its updates named are removed.
 
 Update operation state lives in the Relay data volume, so a Relay can report
 the outcome after replacing itself. Each Relay reports the latest Hearth and

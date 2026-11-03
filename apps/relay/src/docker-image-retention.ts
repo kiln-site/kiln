@@ -29,8 +29,15 @@ export interface ImageFacts {
   readonly now: number
   /** Whether a container is one of this Relay's Apps'. */
   readonly ownsApp: (container: DockerContainerSummary) => string | null
-  /** The image Hearth and the Relay each ran before its latest update. */
-  readonly previousKilnImages: ReadonlyMap<KilnComponent, string>
+  /**
+   * Hearth and Relay images this Relay's updates named, by ID or digest,
+   * and those of them to keep: a running update's, and each component's
+   * from before its latest successful update.
+   */
+  readonly kilnUpdates: {
+    readonly kept: ReadonlySet<string>
+    readonly named: ReadonlySet<string>
+  }
   /** The images Kiln's containers ran, and when one last did. */
   readonly records: ReadonlyArray<RelayDockerImageRecord>
 }
@@ -69,14 +76,19 @@ export function removableImages(
     facts.containers.flatMap((container) => container.ImageID ?? [])
   )
   const kept = keptDeploymentImages(facts.deployments)
+  // An App this Relay deployed, runs, or built for, even one whose first
+  // deployment failed.
   const apps = new Set([
     ...facts.deployments.map((record) => record.appId),
     ...facts.containers.flatMap((container) => facts.ownsApp(container) ?? []),
+    ...facts.records.flatMap((record) =>
+      record.owner.startsWith("app:") ? [record.owner.slice("app:".length)] : []
+    ),
   ])
   const lastUsed = new Map(
     facts.records.map((record) => [record.imageId, record.lastUsedAt])
   )
-  const legacy = legacyBuilds(facts, apps)
+  const legacy = legacyBuilds(facts, apps, lastUsed)
   const removals: Array<ImageRemoval> = []
   const oldKiln = new Map<KilnComponent, Array<DockerImageSummary>>()
   for (const image of facts.images) {
@@ -84,8 +96,12 @@ export function removableImages(
     const labels = image.Labels ?? {}
     const component = kilnComponent(labels["io.kiln.component"])
     if (component) {
-      // One a tag still names may be pinned somewhere; it stays.
-      if (!tagged(image)) {
+      // Only one this Relay's updates named or its containers ran: another
+      // installation on the host keeps its own. One a tag still names may
+      // be pinned somewhere; it stays.
+      const own =
+        lastUsed.has(image.Id) || matches(image, facts.kilnUpdates.named)
+      if (own && !tagged(image)) {
         oldKiln.set(component, [...(oldKiln.get(component) ?? []), image])
       }
       continue
@@ -93,7 +109,13 @@ export function removableImages(
     const appId = labels[APP_IMAGE_LABEL]
     if (appId && apps.has(appId)) {
       if (legacy.has(image.Id)) continue
-      if (facts.now - (image.Created ?? 0) * 1000 < BUILD_GRACE_MS) continue
+      // A build Docker took from its cache keeps the first one's time, so
+      // when it was last built counts too.
+      const built = Math.max(
+        (image.Created ?? 0) * 1000,
+        lastUsed.get(image.Id) ?? 0
+      )
+      if (facts.now - built < BUILD_GRACE_MS) continue
       removals.push({ appId, image, kind: "app" })
       continue
     }
@@ -109,16 +131,31 @@ export function removableImages(
     }
   }
   if (rules.kilnImages) {
+    // Components whose kept image is on the host, even one a tag or a
+    // container keeps anyway.
+    const recorded = new Set(
+      facts.images.flatMap((image) => {
+        const component = kilnComponent(image.Labels?.["io.kiln.component"])
+        return component && matches(image, facts.kilnUpdates.kept)
+          ? [component]
+          : []
+      })
+    )
     for (const [component, candidates] of oldKiln) {
-      const keep =
-        candidates.find(
-          (image) => image.Id === facts.previousKilnImages.get(component)
-        ) ??
-        candidates.reduce((newest, image) =>
-          (image.Created ?? 0) > (newest.Created ?? 0) ? image : newest
-        )
+      // Without a record of the image before the latest update, the newest
+      // stands in for it.
+      const keep = new Set(
+        (recorded.has(component)
+          ? candidates.filter((image) => matches(image, facts.kilnUpdates.kept))
+          : [
+              candidates.reduce((newest, image) =>
+                (image.Created ?? 0) > (newest.Created ?? 0) ? image : newest
+              ),
+            ]
+        ).map((image) => image.Id)
+      )
       for (const image of candidates) {
-        if (image.Id !== keep.Id) {
+        if (!keep.has(image.Id)) {
           removals.push({ appId: null, image, kind: "kiln" })
         }
       }
@@ -159,14 +196,20 @@ function keptDeploymentImages(
   )
 }
 
-// Builds from before deployments recorded their images: for an App with
-// no record yet, its newest few stand in for its newest deployments'.
-function legacyBuilds(facts: ImageFacts, apps: ReadonlySet<string>) {
+// Builds from before Relays recorded builds and deployments' images: for
+// an App with no deployment record yet, its newest few unrecorded builds
+// stand in for its newest deployments'.
+function legacyBuilds(
+  facts: ImageFacts,
+  apps: ReadonlySet<string>,
+  recordedImages: ReadonlyMap<string, number>
+) {
   const recorded = new Set(facts.deployments.map((record) => record.appId))
   const builds = new Map<string, Array<DockerImageSummary>>()
   for (const image of facts.images) {
     const appId = image.Labels?.[APP_IMAGE_LABEL]
     if (!appId || !apps.has(appId) || recorded.has(appId)) continue
+    if (recordedImages.has(image.Id)) continue
     builds.set(appId, [...(builds.get(appId) ?? []), image])
   }
   return new Set(
@@ -176,6 +219,18 @@ function legacyBuilds(facts: ImageFacts, apps: ReadonlySet<string>) {
         .slice(0, KEPT_APP_DEPLOYMENTS)
         .map((image) => image.Id)
     )
+  )
+}
+
+// Whether one of `references` names the image, by its ID or a digest it
+// was pulled as.
+function matches(
+  image: DockerImageSummary,
+  references: ReadonlySet<string>
+): boolean {
+  return (
+    references.has(image.Id) ||
+    (image.RepoDigests ?? []).some((digest) => references.has(digest))
   )
 }
 
