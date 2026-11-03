@@ -1247,7 +1247,7 @@ export function AdoptRecordDialog({
                 <span className="min-w-0 flex-1 truncate font-mono">
                   {record.content}
                 </span>
-                <CloudflareProxyStatus iconOnly proxied={record.proxied} />
+                <CloudflareProxyStatus proxied={record.proxied} />
               </span>
             </div>
             <ArrowDown

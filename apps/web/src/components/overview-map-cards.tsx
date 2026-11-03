@@ -418,7 +418,7 @@ function ServiceMarks({
     <span className="flex items-center gap-2">
       {services.cloudflare ? (
         <Mark label="Cloudflare">
-          <CloudflareLogo className="size-3.5 text-[#f38020]" />
+          <CloudflareLogo className="size-3.5" />
         </Mark>
       ) : null}
       {services.tailscale ? (
@@ -505,7 +505,7 @@ export function HearthCard({
         {provider === "cloudflare" ? (
           <Mark label="Behind Cloudflare">
             <span className="grid size-6 place-items-center border border-orange-400/35 bg-orange-400/5">
-              <CloudflareLogo className="size-4 text-[#f38020]" />
+              <CloudflareLogo className="size-4" />
             </span>
           </Mark>
         ) : provider === "vercel" ? (

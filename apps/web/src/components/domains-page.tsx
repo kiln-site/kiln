@@ -934,27 +934,8 @@ const DomainsTable = React.memo(function DomainsTable({
         id: "domain",
         header: "Domain",
         sortFn: "text",
-        cell: ({ row }) => (
-          <div className="type-meta flex w-full min-w-0">
-            <WorkspaceCopyValueButton
-              label="domain"
-              value={rowHostname(row.original)}
-            />
-          </div>
-        ),
+        cell: ({ row }) => <DomainCell row={row.original} />,
         meta: dataTableColumnMeta({ width: "minmax(0,1.4fr)" }),
-      }),
-      domainTableColumnHelper.accessor((row) => proxyLabel(row), {
-        id: "proxy",
-        header: "Proxy",
-        sortFn: "text",
-        cell: ({ row }) => {
-          const proxied = rowProxied(row.original)
-          return proxied === null ? null : (
-            <CloudflareProxyStatus proxied={proxied} />
-          )
-        },
-        meta: dataTableColumnMeta({ hideBelow: "md", width: "7rem" }),
       }),
       domainTableColumnHelper.accessor(
         (row) => (row.kind === "server" ? row.domain.port : -1),
@@ -1013,6 +994,20 @@ function rowHostname(row: DomainRow): string {
 function portOf(row: DomainRow): number {
   return row.kind === "server" ? row.domain.port : -1
 }
+
+// The hostname, with Cloudflare's cloud when it's on a zone Kiln manages:
+// orange when proxied, grey when DNS only.
+const DomainCell = React.memo(function DomainCell({ row }: { row: DomainRow }) {
+  const proxied = rowProxied(row)
+  return (
+    <div className="type-meta flex w-full min-w-0 items-center gap-2">
+      <WorkspaceCopyValueButton label="domain" value={rowHostname(row)} />
+      {proxied === null ? null : (
+        <CloudflareProxyStatus iconOnly proxied={proxied} />
+      )}
+    </div>
+  )
+})
 
 // A game server's address is always DNS-only: players connect straight to
 // it, and Cloudflare's proxy only carries web traffic.
