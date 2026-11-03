@@ -750,6 +750,16 @@ function authenticateSocket(
   // One line for every session that authenticated, so a brief drop leaves
   // a record on the Relay of who closed it and why. Hearth logs its side
   // under the same session ID.
+  function sessionLogAttributes() {
+    return {
+      "kiln.hearth.client_id": authenticatedClient?.id ?? null,
+      "kiln.relay.connection_id": connectionId,
+      "kiln.relay.control.opener": dial ? "relay" : "hearth",
+      "kiln.relay.session_id": challenge.sessionId,
+      "network.peer.address": peerAddress ?? null,
+    }
+  }
+
   function logSessionClosed(code: number, reason: string): void {
     const now = Date.now()
     const unresponsive = (socket as TrackedWebSocket).kilnUnresponsive === true
@@ -762,8 +772,7 @@ function authenticateSocket(
         ? "Dropped Hearth's control connection: it stopped answering pings"
         : "Hearth's control connection closed",
       {
-        "kiln.hearth.client_id": authenticatedClient?.id ?? null,
-        "kiln.relay.connection_id": connectionId,
+        ...sessionLogAttributes(),
         "kiln.relay.control.close_cause": unresponsive
           ? "heartbeat"
           : socketError
@@ -772,10 +781,7 @@ function authenticateSocket(
         "kiln.relay.control.error": socketError,
         "kiln.relay.control.in_flight": inFlight.size,
         "kiln.relay.control.last_pong_ms": now - lastPongAt,
-        "kiln.relay.control.opener": dial ? "relay" : "hearth",
         "kiln.relay.control.session_ms": now - (authenticatedAt ?? openedAt),
-        "kiln.relay.session_id": challenge.sessionId,
-        "network.peer.address": peerAddress ?? null,
         "websocket.close.code": code,
         "websocket.close.reason": reason || null,
       }
@@ -1297,6 +1303,11 @@ function authenticateSocket(
       }
       authenticatedClient = client
       authenticatedAt = Date.now()
+      logRelayEvent(
+        "info",
+        "Hearth's control connection opened",
+        sessionLogAttributes()
+      )
       yield* Fiber.interrupt(authenticationTimeoutFiber)
       yield* promiseOperation(() =>
         options.runEffect(
