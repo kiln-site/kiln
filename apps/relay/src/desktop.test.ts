@@ -7,11 +7,13 @@ import {
 import { hostname } from "node:os"
 import type { AddressInfo } from "node:net"
 
+import { Effect } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { Desktop, DesktopUnavailableError } from "./desktop.js"
+import { exclusive, laneKeys, OperationLanes } from "./operation-lanes.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 
@@ -26,7 +28,7 @@ const x11 = [
   "gid=1000",
   "display=:0",
   "xauthority=/run/user/1000/gdm/Xauthority",
-  "pulse=/run/user/1000/pulse/native",
+  "pulse=yes",
 ].join("\n")
 const wayland = "displayManager=yes\nuser=ada\nclass=user\nstatus=wayland\n"
 
@@ -74,14 +76,16 @@ async function fakeVoxl() {
 }
 
 async function harness(script = x11) {
-  const { config } = await relayHarness()
+  const harnessed = await relayHarness()
+  const config = { ...harnessed.config, desktopImage: "example/voxl:test" }
   fakeDocker.addContainer({ name: hostname(), running: true })
   fakeDocker.images.set(config.desktopImage, {})
-  const desktop = new Desktop(config, { runScript: async () => script })
+  const lanes = new OperationLanes()
+  const desktop = new Desktop(config, { runScript: async () => script }, lanes)
   const server = createServer()
   desktop.attachServer(server)
   const port = await listen(server, 0)
-  return { config, desktop, port }
+  return { config, desktop, lanes, port }
 }
 
 // The status a WebSocket handshake to `path` gets.
@@ -161,12 +165,12 @@ describe("the node's desktop", () => {
 
   it("removes a streamer an earlier Relay process left, with nobody watching", async () => {
     await fakeVoxl()
-    const { config, desktop } = await harness()
+    const { config, desktop, lanes } = await harness()
     await desktop.attach()
     const name = `${TEST_NAMESPACE}-kiln-desktop`
     expect(fakeDocker.container(name)).toBeDefined()
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
-    const restarted = new Desktop(config, { runScript: async () => x11 })
+    const restarted = new Desktop(config, { runScript: async () => x11 }, lanes)
     const server = createServer()
     servers.push(server)
     restarted.attachServer(server)
@@ -187,6 +191,110 @@ describe("the node's desktop", () => {
     expect(desktop.heartbeat([ticket]).tickets).toEqual([ticket])
     vi.setSystemTime(now + 161_000)
     expect(desktop.heartbeat([ticket]).tickets).toEqual([])
+  })
+
+  it("doesn't trust what the session's processes report", async () => {
+    await fakeVoxl()
+    const name = `${TEST_NAMESPACE}-kiln-desktop`
+    // Each stands in for detection output a person's own processes shaped.
+    for (const script of [
+      `${x11}\nuid=0\ngid=0`,
+      x11.replace("uid=1000", "uid=0"),
+      x11.replace("display=:0", "display=:0/../../var/run"),
+    ]) {
+      const { desktop } = await harness(script)
+      await expect(desktop.attach()).rejects.toBeInstanceOf(
+        DesktopUnavailableError
+      )
+      expect(fakeDocker.container(name)).toBeUndefined()
+      fakeDocker.containers.clear()
+    }
+    const { desktop } = await harness(
+      x11.replace(
+        "xauthority=/run/user/1000/gdm/Xauthority",
+        "xauthority=/run/user/1000/../../docker.sock"
+      )
+    )
+    await desktop.attach()
+    const streamer = fakeDocker.container(name)
+    expect(streamer?.state.running).toBe(true)
+    expect(
+      streamer?.mounts.map((mount) => mount.source).join(" ")
+    ).not.toContain("docker.sock")
+  })
+
+  it("streams nothing without a streamer image", async () => {
+    const { config } = await relayHarness()
+    const desktop = new Desktop(
+      { ...config, desktopImage: null },
+      { runScript: async () => x11 },
+      new OperationLanes()
+    )
+    expect((await desktop.read()).status).toBe("unconfigured")
+    await expect(desktop.attach()).rejects.toBeInstanceOf(
+      DesktopUnavailableError
+    )
+  })
+
+  it("ends streams when the Relay pauses, and takes no input until it resumes", async () => {
+    const { upgrades } = await fakeVoxl()
+    const { desktop, lanes, port } = await harness()
+    let reachedHost = false
+    const { ticket } = await desktop.attach()
+    lanes.setPaused(true)
+    expect(await handshake(port, `/v1/desktop/${ticket}/ws`)).toBe(403)
+    expect(upgrades).toEqual([])
+    desktop.closeStreams()
+    expect(desktop.heartbeat([ticket]).tickets).toEqual([])
+    const paused = new Desktop(
+      { ...(await relayHarness()).config, desktopImage: "example/voxl:test" },
+      {
+        runScript: async () => {
+          reachedHost = true
+          return x11
+        },
+      },
+      lanes
+    )
+    expect((await paused.read()).status).toBe("paused")
+    expect(reachedHost).toBe(false)
+  })
+
+  it("keeps a streamer someone attached to while its idle removal waited", async () => {
+    await fakeVoxl()
+    const { desktop, lanes } = await harness()
+    await desktop.attach()
+    const name = `${TEST_NAMESPACE}-kiln-desktop`
+    const running = fakeDocker.container(name)?.id
+    let release = () => {}
+    const held = Effect.runPromise(
+      lanes.run(
+        { label: "relay.desktop.attach", locks: [exclusive(laneKeys.desktop)] },
+        Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              release = resolve
+            })
+        )
+      )
+    )
+    const { ticket } = await desktop.attach()
+    desktop.detach(ticket)
+    vi.useFakeTimers({
+      now: Date.now() + 10 * 60_000,
+      toFake: ["Date", "setInterval", "clearInterval"],
+    })
+    const server = createServer()
+    servers.push(server)
+    desktop.attachServer(server)
+    vi.advanceTimersByTime(20_000)
+    vi.useRealTimers()
+    const { ticket: kept } = await desktop.attach()
+    release()
+    await held
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(fakeDocker.container(name)?.id).toBe(running)
+    expect(desktop.heartbeat([kept]).tickets).toEqual([kept])
   })
 
   it("starts nothing for a desktop it can't stream", async () => {

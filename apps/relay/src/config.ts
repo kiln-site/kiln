@@ -141,8 +141,8 @@ export interface RelayConfig {
   // Relay runs on. Docker access already amounts to root there; this lets an
   // operator keep it out of the panel.
   hostAccess: boolean
-  /** The voxl image that streams the node's desktop (desktop.ts). */
-  desktopImage: string
+  /** The voxl image that streams the node's desktop; none turns it off. */
+  desktopImage: string | null
   // Where the host's filesystem is mounted; Files are off when it isn't.
   hostRootDirectory: string
   gameHost: string
@@ -319,9 +319,7 @@ export function loadConfig(
     dockerSocket: "/var/run/docker.sock",
     dataDirectory,
     hostAccess: booleanEnvironment(environment.KILN_RELAY_HOST_ACCESS, true),
-    desktopImage:
-      environment.KILN_RELAY_DESKTOP_IMAGE?.trim() ||
-      "ghcr.io/kiln-site/desktop:voxl-0.3.2",
+    desktopImage: environment.KILN_RELAY_DESKTOP_IMAGE?.trim() || null,
     hostRootDirectory: environment.KILN_RELAY_HOST_ROOT?.trim() || "/host",
     gameHost,
     gamePortRange: relayGamePortRange(environment),

@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { request as httpRequest } from "node:http"
 import type { IncomingMessage } from "node:http"
 import { request as httpsRequest } from "node:https"
@@ -45,6 +45,8 @@ const HEARTBEAT_INTERVAL_MS = 20_000
 const IDLE_MS = 60_000
 const MAX_SESSIONS_PER_USER = 8
 const MAX_SOCKETS_PER_SESSION = 4
+const HANDSHAKE_TIMEOUT_MS = 10_000
+const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 interface DesktopSession {
   readonly authSessionId: string
@@ -121,31 +123,39 @@ export function handleDesktopUpgrade(
     : null
   if (url?.pathname !== SOCKET_PATH) return false
   socket.on("error", () => socket.destroy())
+  // Only Hearth's own page: browsers let any site open a WebSocket here.
+  const session =
+    request.headers.origin === kilnPublicUrl().origin
+      ? findSession(url.searchParams.get("session") ?? "")
+      : null
+  if (
+    !session ||
+    session.relay.id !== url.searchParams.get("relay") ||
+    session.sockets.size >= MAX_SOCKETS_PER_SESSION
+  ) {
+    refuse(socket, 403, "Forbidden")
+    return true
+  }
+  // Counted from here, not once it's upgraded, so connections waiting on a
+  // slow Relay stay within the limit and end with the session.
+  session.sockets.add(socket)
+  socket.once("close", () => {
+    session.sockets.delete(socket)
+    if (session.sockets.size === 0) session.idleSince = Date.now()
+  })
   forkPromise(
-    () => admit(request, socket, head, url),
+    () => admit(session, request, socket, head),
     () => refuse(socket, 502, "Bad Gateway")
   )
   return true
 }
 
 async function admit(
+  session: DesktopSession,
   request: IncomingMessage,
   socket: Duplex,
-  head: Buffer,
-  url: URL
+  head: Buffer
 ) {
-  // Only Hearth's own page: browsers let any site open a WebSocket here.
-  if (request.headers.origin !== kilnPublicUrl().origin) {
-    return refuse(socket, 403, "Forbidden")
-  }
-  const session = findSession(url.searchParams.get("session") ?? "")
-  if (
-    !session ||
-    session.relay.id !== url.searchParams.get("relay") ||
-    session.sockets.size >= MAX_SOCKETS_PER_SESSION
-  ) {
-    return refuse(socket, 403, "Forbidden")
-  }
   const headers = new Headers()
   for (const [name, value] of Object.entries(request.headers)) {
     if (typeof value === "string") headers.set(name, value)
@@ -164,32 +174,29 @@ async function admit(
 }
 
 // Opens the same handshake on the Relay and, once it answers, joins the two
-// connections.
+// connections. What reaches the browser is written here, never copied from
+// the Relay, which could otherwise answer on Hearth's origin with headers
+// such as Set-Cookie.
 async function carry(
   session: DesktopSession,
   request: IncomingMessage,
   socket: Duplex,
   head: Buffer
 ) {
+  const key = request.headers["sec-websocket-key"]
+  if (typeof key !== "string") return refuse(socket, 400, "Bad Request")
   const relay = (await loadPersistedRelay(session.relay.id)) ?? session.relay
   const credentials = await loadRelayCredentials(relay.id)
   const control = relayControlEndpoint(relay)
   const tunnel = relayReachedThroughTunnel(relay.id)
     ? await openRelayTunnel(relay)
     : null
+  if (socket.destroyed) {
+    tunnel?.destroy()
+    return
+  }
   const send = tunnel || !control.useTls ? httpRequest : httpsRequest
-  const headers: Record<string, string> = {
-    connection: "Upgrade",
-    upgrade: "websocket",
-  }
-  for (const name of [
-    "sec-websocket-key",
-    "sec-websocket-version",
-    "sec-websocket-protocol",
-  ]) {
-    const value = request.headers[name]
-    if (typeof value === "string") headers[name] = value
-  }
+  const protocol = request.headers["sec-websocket-protocol"]
   const outgoing = send({
     ...(tunnel
       ? { createConnection: () => tunnel }
@@ -201,34 +208,74 @@ async function carry(
           port: control.port,
           rejectUnauthorized: control.useTls,
         }),
-    headers,
+    headers: {
+      connection: "Upgrade",
+      "sec-websocket-key": key,
+      "sec-websocket-version": "13",
+      ...(typeof protocol === "string"
+        ? { "sec-websocket-protocol": protocol }
+        : {}),
+      upgrade: "websocket",
+    },
     method: "GET",
     path: `/v1/desktop/${session.ticket}/ws`,
   })
+  // Whichever comes first ends the wait for the Relay's answer.
+  const abandon = () => outgoing.destroy()
+  const deadline = setTimeout(() => {
+    abandon()
+    refuse(socket, 504, "Gateway Timeout")
+  }, HANDSHAKE_TIMEOUT_MS)
+  deadline.unref()
+  const settled = () => {
+    clearTimeout(deadline)
+    socket.off("close", abandon)
+  }
+  socket.once("close", abandon)
   outgoing.once("response", (response) => {
+    settled()
     response.resume()
     refuse(socket, response.statusCode === 403 ? 403 : 502, "Bad Gateway")
   })
-  outgoing.once("error", () => refuse(socket, 502, "Bad Gateway"))
+  outgoing.once("error", () => {
+    settled()
+    refuse(socket, 502, "Bad Gateway")
+  })
   outgoing.once("upgrade", (response, upstream, upstreamHead) => {
+    settled()
+    const chosen = response.headers["sec-websocket-protocol"]
+    const offered =
+      typeof protocol === "string"
+        ? protocol.split(",").map((value) => value.trim())
+        : []
+    if (
+      response.headers["sec-websocket-accept"] !== websocketAccept(key) ||
+      (typeof chosen === "string" && !offered.includes(chosen))
+    ) {
+      upstream.destroy()
+      refuse(socket, 502, "Bad Gateway")
+      return
+    }
     if (socket.destroyed) {
       upstream.destroy()
       return
     }
-    const lines = ["HTTP/1.1 101 Switching Protocols"]
-    for (let index = 0; index < response.rawHeaders.length; index += 2) {
-      lines.push(
-        `${response.rawHeaders[index]}: ${response.rawHeaders[index + 1]}`
-      )
-    }
-    socket.write(`${lines.join("\r\n")}\r\n\r\n`)
+    socket.write(
+      [
+        "HTTP/1.1 101 Switching Protocols",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        `Sec-WebSocket-Accept: ${websocketAccept(key)}`,
+        ...(typeof chosen === "string"
+          ? [`Sec-WebSocket-Protocol: ${chosen}`]
+          : []),
+        "",
+        "",
+      ].join("\r\n")
+    )
     if (upstreamHead.length > 0) socket.write(upstreamHead)
     if (head.length > 0) upstream.write(head)
-    session.sockets.add(socket)
     const close = () => {
-      if (session.sockets.delete(socket) && session.sockets.size === 0) {
-        session.idleSince = Date.now()
-      }
       upstream.destroy()
       socket.destroy()
     }
@@ -240,6 +287,10 @@ async function carry(
     socket.pipe(upstream)
   })
   outgoing.end()
+}
+
+function websocketAccept(key: string) {
+  return createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64")
 }
 
 // Renews the ticket and checks access again; ends the session once it's no

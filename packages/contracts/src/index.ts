@@ -616,7 +616,8 @@ export const relayHostAccessSchema = z.object({
 
 // The node's desktop, as the Relay finds it (apps/relay/src/desktop.ts):
 // the graphical session someone is signed in to, if any. Only X11 desktops
-// can be streamed; `disabled` means the Relay's host access is off.
+// can be streamed. `disabled` means the Relay's host access is off,
+// `unconfigured` that it has no streamer image, and `paused` that it's paused.
 const relayDesktopSessionShape = {
   displayManager: z.boolean(),
   desktop: z.string().max(200).nullable(),
@@ -632,6 +633,8 @@ export const relayDesktopSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("wayland"), ...relayDesktopSessionShape }),
   z.object({ status: z.literal("none"), displayManager: z.boolean() }),
   z.object({ status: z.literal("disabled"), displayManager: z.boolean() }),
+  z.object({ status: z.literal("unconfigured"), displayManager: z.boolean() }),
+  z.object({ status: z.literal("paused"), displayManager: z.boolean() }),
 ])
 export type RelayDesktop = z.infer<typeof relayDesktopSchema>
 

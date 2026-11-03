@@ -21,9 +21,12 @@ import {
 import {
   ensuringPromise,
   forkPromise,
+  promiseEffect,
   recoverPromise,
 } from "./effect/promise.js"
 import type { HostShell } from "./host-shell.js"
+import { exclusive, laneKeys, type OperationLanes } from "./operation-lanes.js"
+import { operation, runOperation } from "./operations/operation.js"
 import { RELAY_OWNER_LABEL, relayOwnsLabels } from "./relay-resources.js"
 import { requestUrl } from "./request-url.js"
 
@@ -39,7 +42,7 @@ import { requestUrl } from "./request-url.js"
 const DESKTOP_LABEL = "kiln.relay.infrastructure"
 const DESKTOP_CONFIG_LABEL = "kiln.relay.desktop.config"
 // Raised whenever how the streamer runs changes, so older ones are replaced.
-const DESKTOP_REVISION = "1"
+const DESKTOP_REVISION = "2"
 // Inside the Relay's network namespace, which the streamer shares.
 const VOXL_PORT = 47901
 const VOXL_HOST = "127.0.0.1"
@@ -55,6 +58,15 @@ const STREAMER_IDLE_MS = 5 * 60_000
 const SWEEP_INTERVAL_MS = 10_000
 const MAX_TICKETS = 32
 const TICKET_PATTERN = /^\/v1\/desktop\/([A-Za-z0-9_-]{43})\/ws$/u
+const SESSION_TEXT_MAX = 200
+// What the detection script reports. The display and the cookie's path come
+// from the environment of the person's processes, which they control, and
+// become the streamer's mounts, so only exact shapes count; a root session
+// isn't streamed at all.
+const DISPLAY_PATTERN = /^:\d{1,4}$/u
+const UID_PATTERN = /^[1-9]\d{0,9}$/u
+const GID_PATTERN = /^\d{1,10}$/u
+const PATH_PATTERN = /^(?:\/[A-Za-z0-9._@+-]+)+$/u
 
 // Finds the desktop someone is signed in to on the node, from logind: the
 // active graphical session on a seat, a person's before the login screen's.
@@ -84,7 +96,7 @@ emit user "$(loginctl show-session "$pick" -p Name --value)"
 emit class "$(loginctl show-session "$pick" -p Class --value)"
 display=""; xauthority=""; desktop=""
 for pid in $(pgrep -u "$uid" 2>/dev/null); do
-  env=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null) || continue
+  env=$(tr '\n\0' ' \n' < "/proc/$pid/environ" 2>/dev/null) || continue
   value=$(printf '%s\n' "$env" | sed -n 's/^DISPLAY=//p' | head -n 1)
   [ -n "$desktop" ] || desktop=$(printf '%s\n' "$env" | sed -n 's/^XDG_CURRENT_DESKTOP=//p' | head -n 1)
   case "$value" in :[0-9]*) ;; *) continue ;; esac
@@ -96,23 +108,23 @@ emit desktop "$desktop"
 if [ "$type" = wayland ]; then emit status wayland; exit 0; fi
 number=$(printf '%s' "$display" | sed 's/^://; s/\..*$//')
 if [ -z "$number" ] || [ ! -S "/tmp/.X11-unix/X$number" ]; then emit status none; exit 0; fi
-if [ -z "$xauthority" ]; then
-  home=$(getent passwd "$uid" | cut -d: -f6)
-  [ -f "$home/.Xauthority" ] && xauthority="$home/.Xauthority"
-fi
+home=$(getent passwd "$uid" | cut -d: -f6)
+if [ -z "$xauthority" ] && [ -n "$home" ]; then xauthority="$home/.Xauthority"; fi
+# Mounted into the streamer, and named by that person's own processes: only
+# their own regular file counts.
+if [ -L "$xauthority" ] || [ ! -f "$xauthority" ] || [ "$(stat -c %u "$xauthority" 2>/dev/null)" != "$uid" ]; then xauthority=""; fi
 emit status x11
 emit uid "$uid"
 emit gid "$(id -g "$uid" 2>/dev/null || echo "$uid")"
 emit display ":$number"
 emit xauthority "$xauthority"
-pulse="/run/user/$uid/pulse/native"
-[ -S "$pulse" ] && emit pulse "$pulse"
+[ -S "/run/user/$uid/pulse/native" ] && emit pulse yes
 exit 0`
 
 interface X11Desktop {
   readonly display: string
   readonly gid: string
-  readonly pulse: string | null
+  readonly pulse: boolean
   readonly uid: string
   readonly xauthority: string | null
 }
@@ -136,11 +148,22 @@ export class Desktop {
   >
   readonly #engine: DockerEngine
   readonly #hostShell: Pick<HostShell, "runScript">
+  readonly #lanes: OperationLanes
   readonly #name: string
   readonly #tickets = new Map<string, Ticket>()
-  #pending: Promise<{ password: string }> | null = null
+  // Stopping the streamer waits its turn with attaching, which starts it, and
+  // only goes ahead if nobody has attached since.
+  readonly #stop = operation<{ readonly idleOnly: boolean }>()({
+    name: "relay.desktop.stop",
+    locks: () => [exclusive(laneKeys.desktop)],
+    precondition: ({ input }) => !input.idleOnly || this.#idle(),
+    run: () => promiseEffect(() => this.#removeStreamer()),
+  })
   #password: string | null = null
   #lastWatched = Date.now()
+  // Whether a streamer may be running, as one an earlier process left may be.
+  #mayBeRunning = true
+  #stopping = false
   #sweeper: ReturnType<typeof setInterval> | null = null
 
   constructor(
@@ -148,11 +171,13 @@ export class Desktop {
       RelayConfig,
       "desktopImage" | "dockerSocket" | "hostAccess" | "resourceNamespace"
     >,
-    hostShell: Pick<HostShell, "runScript">
+    hostShell: Pick<HostShell, "runScript">,
+    lanes: OperationLanes
   ) {
     this.#config = config
     this.#engine = new DockerEngine(config.dockerSocket)
     this.#hostShell = hostShell
+    this.#lanes = lanes
     this.#name = config.resourceNamespace
       ? `${config.resourceNamespace}-kiln-desktop`
       : "kiln-desktop"
@@ -170,7 +195,8 @@ export class Desktop {
   async attach(): Promise<{ desktop: RelayDesktop; ticket: string }> {
     const detected = await this.#detect()
     const x11 = detected.x11
-    if (!x11) {
+    const image = this.#config.desktopImage
+    if (!x11 || !image) {
       throw new DesktopUnavailableError(
         detected.public.status === "wayland"
           ? "This node's desktop runs on Wayland, which can't be streamed yet"
@@ -181,14 +207,14 @@ export class Desktop {
     if (this.#tickets.size >= MAX_TICKETS) {
       throw new DesktopUnavailableError("Too many desktop sessions are open")
     }
-    await this.#streamer(x11)
+    this.#mayBeRunning = true
+    await this.#ensure(x11, image)
     const ticket = randomBytes(32).toString("base64url")
     this.#tickets.set(ticket, {
       expiresAt: Date.now() + TICKET_TTL_MS,
       sockets: new Set(),
     })
     this.#lastWatched = Date.now()
-    this.#startSweeper()
     return { desktop: detected.public, ticket }
   }
 
@@ -214,19 +240,28 @@ export class Desktop {
     for (const socket of ticket.sockets) socket.destroy()
   }
 
+  /** Ends every ticket and stream, as when the Relay is paused. */
+  closeStreams(): void {
+    for (const id of this.#tickets.keys()) this.detach(id)
+  }
+
   /** Takes `/v1/desktop/<ticket>/ws` upgrades and carries them to voxl. */
   attachServer(server: Server): void {
     // Also clears a streamer an earlier process left, which no attach may
     // ever come back for.
-    this.#startSweeper()
+    this.#sweeper ??= setInterval(() => this.#sweep(), SWEEP_INTERVAL_MS)
+    this.#sweeper.unref()
     server.on("upgrade", (request: IncomingMessage, socket: Duplex, head) => {
       const match = TICKET_PATTERN.exec(requestUrl(request)?.pathname ?? "")
       if (!match) return
       socket.on("error", () => socket.destroy())
       const ticket = this.#ticket(match[1] ?? "")
       const password = this.#password
-      if (!ticket || !password) {
-        socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
+      if (!ticket || !password || this.#lanes.paused) {
+        // Upgraded sockets stay half open until they're destroyed.
+        socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n", () =>
+          socket.destroy()
+        )
         return
       }
       this.#lastWatched = Date.now()
@@ -235,8 +270,19 @@ export class Desktop {
   }
 
   /** Stops the streamer, as when host access is turned off. */
-  async remove(): Promise<void> {
-    for (const id of this.#tickets.keys()) this.detach(id)
+  remove(): Promise<void> {
+    return Effect.runPromise(
+      runOperation(
+        this.#lanes,
+        this.#stop,
+        { idleOnly: false },
+        { kind: "worker" }
+      )
+    )
+  }
+
+  async #removeStreamer(): Promise<void> {
+    this.closeStreams()
     const existing = await this.#inspect()
     if (existing && this.#owns(existing)) {
       await Effect.runPromise(
@@ -244,6 +290,7 @@ export class Desktop {
       )
     }
     this.#password = null
+    this.#mayBeRunning = false
   }
 
   #pipe(
@@ -308,39 +355,56 @@ export class Desktop {
     }
   }
 
-  #startSweeper() {
-    if (this.#sweeper) return
-    this.#sweeper = setInterval(() => {
-      this.#sweepTickets()
-      if (
-        this.#tickets.size === 0 &&
-        Date.now() - this.#lastWatched > STREAMER_IDLE_MS
-      ) {
-        clearInterval(this.#sweeper ?? undefined)
-        this.#sweeper = null
-        forkPromise(() => this.remove())
-      }
-    }, SWEEP_INTERVAL_MS)
-    this.#sweeper.unref()
+  #idle(): boolean {
+    return (
+      this.#tickets.size === 0 &&
+      Date.now() - this.#lastWatched > STREAMER_IDLE_MS
+    )
+  }
+
+  #sweep() {
+    this.#sweepTickets()
+    if (
+      !this.#mayBeRunning ||
+      this.#stopping ||
+      this.#lanes.paused ||
+      !this.#idle()
+    ) {
+      return
+    }
+    this.#stopping = true
+    forkPromise(() =>
+      ensuringPromise(
+        () =>
+          Effect.runPromise(
+            runOperation(
+              this.#lanes,
+              this.#stop,
+              { idleOnly: true },
+              { kind: "timer" }
+            )
+          ),
+        () => {
+          this.#stopping = false
+        }
+      )
+    )
   }
 
   async #detect(): Promise<Detected> {
-    if (!this.#config.hostAccess) {
-      return {
-        public: { status: "disabled", displayManager: false },
-        x11: null,
-      }
-    }
-    const values = new Map<string, string>()
-    for (const line of (await this.#hostShell.runScript(DETECT_SCRIPT)).split(
-      "\n"
-    )) {
-      const separator = line.indexOf("=")
-      if (separator > 0) {
-        values.set(line.slice(0, separator), line.slice(separator + 1).trim())
-      }
-    }
-    const text = (key: string) => values.get(key) || null
+    const unavailable = (status: "disabled" | "paused" | "unconfigured") => ({
+      public: { status, displayManager: false },
+      x11: null,
+    })
+    if (!this.#config.hostAccess) return unavailable("disabled")
+    if (!this.#config.desktopImage) return unavailable("unconfigured")
+    // Reaching the host can start its helper, which a paused Relay doesn't.
+    if (this.#lanes.paused) return unavailable("paused")
+    const values = parseDetection(
+      await this.#hostShell.runScript(DETECT_SCRIPT)
+    )
+    const text = (key: string) =>
+      values.get(key)?.slice(0, SESSION_TEXT_MAX) || null
     const displayManager = values.get("displayManager") === "yes"
     const session = {
       desktop: text("desktop"),
@@ -354,37 +418,39 @@ export class Desktop {
         x11: null,
       }
     }
-    const display = text("display")
-    const uid = text("uid")
-    if (status !== "x11" || !display || !uid || !/^\d+$/u.test(uid)) {
+    const display = values.get("display")
+    const uid = values.get("uid")
+    if (
+      status !== "x11" ||
+      !display ||
+      !DISPLAY_PATTERN.test(display) ||
+      !uid ||
+      !UID_PATTERN.test(uid)
+    ) {
       return { public: { status: "none", displayManager }, x11: null }
     }
-    const gid = text("gid")
+    const gid = values.get("gid")
+    const xauthority = values.get("xauthority")
     return {
       public: { status: "x11", displayManager, display, ...session },
       x11: {
         display,
-        gid: gid && /^\d+$/u.test(gid) ? gid : uid,
-        pulse: text("pulse"),
+        gid: gid && GID_PATTERN.test(gid) ? gid : uid,
+        pulse: values.get("pulse") === "yes",
         uid,
-        xauthority: text("xauthority"),
+        xauthority:
+          xauthority &&
+          PATH_PATTERN.test(xauthority) &&
+          !xauthority.split("/").includes("..")
+            ? xauthority
+            : null,
       },
     }
   }
 
-  // The streamer for `desktop`, started if it isn't. Concurrent callers
-  // share one start.
-  async #streamer(desktop: X11Desktop): Promise<{ password: string }> {
-    this.#pending ??= ensuringPromise(
-      () => this.#ensure(desktop),
-      () => {
-        this.#pending = null
-      }
-    )
-    return this.#pending
-  }
-
-  async #ensure(desktop: X11Desktop): Promise<{ password: string }> {
+  // The streamer for `desktop`, started if it isn't. Runs in the desktop's
+  // lane, with `relay.desktop.attach`.
+  async #ensure(desktop: X11Desktop, image: string): Promise<void> {
     // voxl joins the Relay's network namespace, so it must be the Relay's
     // current container.
     const relay = await recoverPromise(
@@ -400,7 +466,7 @@ export class Desktop {
     )
     const signature = JSON.stringify({
       desktop,
-      image: this.#config.desktopImage,
+      image,
       relay: relay.Id,
       revision: DESKTOP_REVISION,
     })
@@ -424,24 +490,43 @@ export class Desktop {
         (await healthy())
       ) {
         this.#password = password.slice("VOXL_PASSWORD=".length)
-        return { password: this.#password }
+        return
       }
       // Another display, person, or Relay: start over, ending the old
       // streams.
-      for (const id of this.#tickets.keys()) this.detach(id)
+      this.closeStreams()
       await Effect.runPromise(
         this.#engine.removeContainer(existing.Id, { force: true })
       )
     }
-    await Effect.runPromise(
-      ensureImage(this.#engine, this.#config.desktopImage)
-    )
+    await Effect.runPromise(ensureImage(this.#engine, image))
     const password = randomBytes(32).toString("base64url")
-    const number = desktop.display.slice(1)
-    const binds = [`/tmp/.X11-unix/X${number}:/tmp/.X11-unix/X${number}`]
-    if (desktop.xauthority)
-      binds.push(`${desktop.xauthority}:${XAUTHORITY_PATH}:ro`)
-    if (desktop.pulse) binds.push(`${desktop.pulse}:${PULSE_PATH}`)
+    const socket = `/tmp/.X11-unix/X${desktop.display.slice(1)}`
+    const pulse = `/run/user/${desktop.uid}/pulse/native`
+    // Mounts, not binds: Docker refuses a missing path instead of creating it.
+    const mounts = [
+      { ReadOnly: false, Source: socket, Target: socket, Type: "bind" },
+      ...(desktop.xauthority
+        ? [
+            {
+              ReadOnly: true,
+              Source: desktop.xauthority,
+              Target: XAUTHORITY_PATH,
+              Type: "bind",
+            },
+          ]
+        : []),
+      ...(desktop.pulse
+        ? [
+            {
+              ReadOnly: false,
+              Source: pulse,
+              Target: PULSE_PATH,
+              Type: "bind",
+            },
+          ]
+        : []),
+    ]
     const created = await Effect.runPromise(
       this.#engine.createContainer(this.#name, {
         Cmd: [
@@ -464,17 +549,17 @@ export class Desktop {
           ...(desktop.pulse ? [`PULSE_SERVER=unix:${PULSE_PATH}`] : []),
         ],
         HostConfig: {
-          Binds: binds,
           CapDrop: ["ALL"],
           Init: true,
           // MIT-SHM: the X server reads frames from shared memory voxl
           // creates.
           IpcMode: "host",
+          Mounts: mounts,
           NetworkMode: `container:${relay.Id}`,
           RestartPolicy: { Name: "no" },
           SecurityOpt: ["no-new-privileges"],
         },
-        Image: this.#config.desktopImage,
+        Image: image,
         Labels: {
           [DESKTOP_LABEL]: "desktop",
           [DESKTOP_CONFIG_LABEL]: signature,
@@ -489,7 +574,6 @@ export class Desktop {
     await Effect.runPromise(this.#engine.startContainer(created.Id))
     await this.#ready(created.Id)
     this.#password = password
-    return { password }
   }
 
   // Waits for voxl to answer, failing with why it stopped if it does.
@@ -529,6 +613,20 @@ export class Desktop {
         )
     )
   }
+}
+
+// One record per line; a repeated field isn't what the script wrote, so
+// nothing from that output counts.
+function parseDetection(output: string): ReadonlyMap<string, string> {
+  const values = new Map<string, string>()
+  for (const line of output.split("\n")) {
+    const separator = line.indexOf("=")
+    if (separator <= 0) continue
+    const key = line.slice(0, separator)
+    if (values.has(key)) return new Map()
+    values.set(key, line.slice(separator + 1).trim())
+  }
+  return values
 }
 
 function healthy(): Promise<boolean> {

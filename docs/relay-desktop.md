@@ -10,6 +10,9 @@ Relay: `desktop.ts`. Image: `apps/desktop/Dockerfile`.
 
 ## What a node needs
 
+- A streamer image, named by `KILN_RELAY_DESKTOP_IMAGE`. Kiln doesn't publish
+  one yet (see [Licensing](#licensing)), so the tab stays off until a Relay is
+  given one built from `apps/desktop`.
 - Host access on (`KILN_RELAY_HOST_ACCESS`, the default). The Relay finds the
   desktop through the same helper as the host terminal.
 - An **X11** session someone is signed in to, or a login screen on X11. voxl
@@ -40,6 +43,9 @@ browser ──HTTPS/WSS──▶ Hearth ──control endpoint or tunnel──�
    joins the two connections, bytes unchanged.
 5. The Relay checks the ticket and joins that connection to voxl, adding voxl's
    password. The browser never sees the ticket or the password.
+6. Hearth answers the browser with a handshake it writes itself, after checking
+   the Relay's `Sec-WebSocket-Accept`. None of the Relay's headers are passed
+   on: they would otherwise arrive from Hearth's origin, as `Set-Cookie` could.
 
 The stream doesn't use [browser capabilities](relay-browser-sessions.md): the
 client is voxl's and can't sign proofs, and a stream carried at the byte level
@@ -77,7 +83,14 @@ that started it, so restarting the Relay strands it. voxl's own file transfer,
 microphone, and resizing are off: Kiln has host files, and a viewer's window
 shouldn't change the size of a physical monitor.
 
-`KILN_RELAY_DESKTOP_IMAGE` overrides the image.
+Starting and stopping it take the `relay:desktop` lane, so a streamer that's
+been idle is never removed from under someone attaching. Pausing the Relay ends
+every stream and refuses new ones, since a stream takes input.
+
+The detection script's answers about the display and its cookie come from the
+environment of the signed-in person's processes, which they control. The Relay
+takes only exact shapes, mounts only a regular file that person owns, runs the
+streamer as the UID logind reports, and never streams a root session.
 
 ## Keyboard, fullscreen, and touch
 
@@ -107,7 +120,8 @@ at about a fifth of its size on a phone held upright.
 
 voxl is MIT, but its binary links x264 (GPL-2.0), so the streamer image is
 distributed under the GPL. It's a separate program in its own image, which
-Kiln's images don't include. Check this before publishing it.
+Kiln's images don't include, and CI only builds it. Check the license terms
+before publishing it, then give `KILN_RELAY_DESKTOP_IMAGE` a default.
 
 ## Limits
 

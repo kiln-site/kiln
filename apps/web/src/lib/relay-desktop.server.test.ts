@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto"
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http"
 import { connect, type AddressInfo } from "node:net"
+import type { Duplex } from "node:stream"
 
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test"
 
@@ -51,6 +53,16 @@ const keys: Array<string> = []
 let relayHeaders: Array<IncomingHttpHeaders & { path?: string }>
 let hearthPort: number
 let relay: PersistedRelay
+let lastAnswer = ""
+let relayAnswer: (headers: IncomingHttpHeaders) => Array<string> | null
+let relaySockets: Array<Duplex>
+
+const accept = (headers: IncomingHttpHeaders) =>
+  createHash("sha1")
+    .update(
+      `${headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`
+    )
+    .digest("base64")
 
 const listen = (server: Server) =>
   new Promise<number>((resolve) => {
@@ -69,11 +81,21 @@ beforeEach(async () => {
   vi.mocked(requireRelayPermission).mockResolvedValue(undefined)
   relayHeaders = []
   const fakeRelay = createServer()
+  relayAnswer = (headers) => [
+    "HTTP/1.1 101 Switching Protocols",
+    "Upgrade: websocket",
+    "Connection: Upgrade",
+    `Sec-WebSocket-Accept: ${accept(headers)}`,
+  ]
+  relaySockets = []
   fakeRelay.on("upgrade", (request, socket) => {
     relayHeaders.push({ ...request.headers, path: request.url })
-    socket.end(
-      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
-    )
+    relaySockets.push(socket)
+    socket.on("error", () => undefined)
+    socket.on("end", () => socket.destroy())
+    socket.resume()
+    const answer = relayAnswer(request.headers)
+    if (answer) socket.end(`${answer.join("\r\n")}\r\n\r\n`)
   })
   relay = {
     hostname: "127.0.0.1",
@@ -90,6 +112,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const key of keys.splice(0)) closeDesktopSession(key, user.id)
+  for (const socket of relaySockets) socket.destroy()
   await Promise.all(
     servers.splice(0).map(
       (server) =>
@@ -143,8 +166,11 @@ const handshake = (input: {
     socket.on("data", (data) => {
       answer += data.toString()
     })
-    socket.on("error", () => resolve(answer.split("\r\n")[0] ?? ""))
-    socket.on("close", () => resolve(answer.split("\r\n")[0] ?? ""))
+    socket.on("error", () => resolve(answer))
+    socket.on("close", () => resolve(answer))
+  }).then((answer) => {
+    lastAnswer = answer
+    return answer.split("\r\n")[0] ?? ""
   })
 
 it("carries a signed-in person's stream to the Relay with the ticket, without their cookie", async () => {
@@ -153,6 +179,45 @@ it("carries a signed-in person's stream to the Relay with the ticket, without th
   expect(relayHeaders).toHaveLength(1)
   expect(relayHeaders[0]?.path).toBe(`/v1/desktop/${ticket}/ws`)
   expect(relayHeaders[0]?.cookie).toBeUndefined()
+})
+
+it("answers the browser with its own handshake, not the Relay's headers", async () => {
+  const honest = relayAnswer
+  relayAnswer = (headers) => [
+    ...(honest(headers) ?? []),
+    "Set-Cookie: better-auth.session_token=attacker; Path=/",
+    "X-From-Relay: yes",
+  ]
+  const answer = await handshake({ origin, session: open() })
+  expect(answer).toContain("101")
+  expect(lastAnswer.toLowerCase()).toContain("sec-websocket-accept")
+  expect(lastAnswer.toLowerCase()).not.toContain("set-cookie")
+  expect(lastAnswer.toLowerCase()).not.toContain("x-from-relay")
+})
+
+it("refuses a Relay's handshake that doesn't answer the browser's key", async () => {
+  relayAnswer = () => [
+    "HTTP/1.1 101 Switching Protocols",
+    "Upgrade: websocket",
+    "Connection: Upgrade",
+    "Sec-WebSocket-Accept: wrong",
+  ]
+  expect(await handshake({ origin, session: open() })).toContain("502")
+})
+
+it("counts streams waiting on a Relay, and drops them with their session", async () => {
+  relayAnswer = () => null
+  const session = open()
+  const waiting = Array.from({ length: 4 }, () =>
+    handshake({ origin, session })
+  )
+  await vi.waitFor(() => expect(relayHeaders).toHaveLength(4))
+  expect(await handshake({ origin, session })).toContain("403")
+  closeDesktopSession(session, user.id)
+  await Promise.all(waiting)
+  await vi.waitFor(() =>
+    expect(relaySockets.every((socket) => socket.destroyed)).toBe(true)
+  )
 })
 
 it("refuses another site's page, or none, even with a live session", async () => {

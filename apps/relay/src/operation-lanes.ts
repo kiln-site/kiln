@@ -66,6 +66,7 @@ export const laneKeys = {
    * and, later, images. See docker-cleanup.ts.
    */
   dockerCleanup: "relay:docker-cleanup",
+  desktop: "relay:desktop",
 } as const
 
 /**

@@ -158,6 +158,24 @@ function DesktopContent({
           terminal
         />
       )
+    case "unconfigured":
+      return (
+        <DesktopPlaceholder
+          icon={<MonitorOff />}
+          title="Desktop streaming isn't set up"
+          description="Set KILN_RELAY_DESKTOP_IMAGE on the Relay to the image built from apps/desktop to show its node's desktop."
+          terminal
+        />
+      )
+    case "paused":
+      return (
+        <DesktopPlaceholder
+          icon={<MonitorOff />}
+          title="This Relay is paused"
+          description="The desktop takes keyboard and mouse input, so it can't open until the Relay resumes."
+          terminal
+        />
+      )
     case "disabled":
       return (
         <DesktopPlaceholder

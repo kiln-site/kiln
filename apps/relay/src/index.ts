@@ -480,7 +480,7 @@ const docker = new DockerDriver(
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
 const hostShell = new HostShell(config)
-const desktop = new Desktop(config, hostShell)
+const desktop = new Desktop(config, hostShell, lanes)
 const relayEngine = new DockerEngine(config.dockerSocket)
 const terminals = new ContainerTerminals(config)
 // The config itself, not a copy: it reads the installation ID Hearth gives
@@ -4603,6 +4603,8 @@ async function applyPauseHolds(): Promise<void> {
   const paused = holds.length > 0
   if (paused === lanes.paused) return
   lanes.setPaused(paused)
+  // A stream takes input, which a paused Relay refuses.
+  if (paused) desktop.closeStreams()
   if (!paused) {
     await runRelayEffect(
       "relay.resume",
