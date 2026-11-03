@@ -77,9 +77,7 @@ export type PowerAdapters<Results extends Record<PowerResourceKind, unknown>> =
     ) => Promise<Results[Kind]>
   }
 
-export class ResourcePower<
-  Results extends Record<PowerResourceKind, unknown>,
-> {
+export class ResourcePower<Results extends Record<PowerResourceKind, unknown>> {
   readonly #adapters: PowerAdapters<Results>
   readonly #intents = new PowerIntents()
   readonly #lanes: OperationLanes

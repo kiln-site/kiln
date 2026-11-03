@@ -583,6 +583,7 @@ export class FakeDocker {
       else if (argument === "--file" || argument === "--progress") index += 1
     }
     this.images.set(tag, labels)
+    this.imageCreated.set(tag, Math.floor(Date.now() / 1000))
     return {
       stderr: `#0 building with "default" instance using docker driver\n#1 naming to docker.io/library/${tag} done\n`,
       stdout: "",
@@ -859,7 +860,8 @@ export class FakeDocker {
         },
       },
       Id: container.id,
-      Image: `sha256:${container.image}`,
+      // The local image's ID, as listing images reports it.
+      Image: `sha256:${this.#imageKey(container.image) ?? container.image}`,
       Mounts: container.mounts.map((mount) => ({
         Destination: mount.destination,
         Name: mount.type === "volume" ? mount.source : undefined,

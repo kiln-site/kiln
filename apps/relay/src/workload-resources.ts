@@ -225,9 +225,9 @@ export class WorkloadResources {
     previous: RelayInstanceResources | null
   ): Promise<RelayInstanceResources> {
     const [stats, limits] = await Promise.all([
-      Effect.runPromise(this.#engine.containerStats(containerId)) as Promise<
-        DockerStats
-      >,
+      Effect.runPromise(
+        this.#engine.containerStats(containerId)
+      ) as Promise<DockerStats>,
       this.#containerLimits(containerId),
     ])
     const sampledAt = Date.now()

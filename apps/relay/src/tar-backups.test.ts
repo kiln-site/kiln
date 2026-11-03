@@ -31,7 +31,6 @@ import { RelayVolumes } from "./volumes.js"
 
 const volumeId = "3f9a21c4".padEnd(40, "0")
 
-
 async function relay() {
   const harness = await relayHarness()
   // The helpers run the Relay's own image, found through its container.

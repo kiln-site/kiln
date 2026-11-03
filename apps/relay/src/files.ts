@@ -659,8 +659,7 @@ export class FilesystemDriver {
               modifiedAt: metadata.mtimeMs,
             }
           }),
-        (handle) =>
-          Effect.tryPromise(() => handle.close()).pipe(Effect.ignore)
+        (handle) => Effect.tryPromise(() => handle.close()).pipe(Effect.ignore)
       )
       if (!read) {
         return yield* filesystemFailure(

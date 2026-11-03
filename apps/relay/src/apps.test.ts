@@ -26,7 +26,6 @@ import {
 
 const appId = "c".repeat(40)
 
-
 afterEach(() => {
   vi.useRealTimers()
   vi.unstubAllEnvs()

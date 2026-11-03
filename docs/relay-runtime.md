@@ -150,6 +150,28 @@ Kiln removes what it leaves on Docker once it's done with it
   pulling, a pass leaves both alone, since a helper rolling back needs the
   container it set aside.
 
+Images are removed by unforced removal only, so Docker keeps any a
+container uses, even a stopped one, and never one Kiln can't tell is its
+own:
+
+- **App builds and images.** Each successful deployment records the image
+  IDs its containers run (`relay_app_deployment_images`). Once it finishes,
+  the App keeps the images of its 5 newest successful deployments; any
+  other image built for it (`kiln.app.id`) is removed once it's a day old,
+  which keeps a failed deployment's build for a day to look into, and an
+  image a deployment pulled is removed once no tag names it any longer.
+  Builds from before deployments recorded their images: the newest 5 stand
+  in until the App deploys again. This runs in the background, behind other
+  cleanup but not the App's next deployment, which pulls an image again if
+  it's gone.
+- **Hearth and Relay images.** Each pass removes Hearth and Relay images
+  (`io.kiln.component`) that no container uses and no tag names, keeping
+  for each the image it ran before its latest successful update (recorded
+  as `previousImageId` with the update), for a downgrade, or the newest
+  when no update recorded one. A pass leaves them alone while an update
+  runs, like the containers above. On a host with another Kiln
+  installation, this Relay removes that one's untagged old images too.
+
 A pass runs a minute after the Relay starts and then every hour. Each part
 of it waits for nothing: work in its way leaves it for the next pass.
 Unforced image removal (`removeImage(..., { force: false })`) is refused

@@ -4,7 +4,10 @@ import { afterEach, describe, expect } from "vite-plus/test"
 
 import { DockerEngine } from "./docker-engine.js"
 import { fakeDocker } from "./test/docker.js"
-import { KILN_IMAGE_SOURCE, replaceContainerEffect } from "./update-container.js"
+import {
+  KILN_IMAGE_SOURCE,
+  replaceContainerEffect,
+} from "./update-container.js"
 
 const channelReference = "ghcr.io/kiln-site/hearth:latest-nightly"
 const targetDigest = `ghcr.io/kiln-site/hearth@sha256:${"c".repeat(64)}`

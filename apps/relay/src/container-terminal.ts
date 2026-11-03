@@ -211,7 +211,10 @@ export class ContainerTerminals {
    * left in its container, as freezing a database for its deletion does.
    * Best effort: work a client already sent may still finish.
    */
-  async endTarget(targetKey: string, containerId: string | null): Promise<void> {
+  async endTarget(
+    targetKey: string,
+    containerId: string | null
+  ): Promise<void> {
     await Promise.all(
       [...this.#sessions.entries()]
         .filter(([key]) => key.endsWith(`\u0000${targetKey}`))
