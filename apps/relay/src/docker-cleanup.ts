@@ -21,14 +21,20 @@ import { Clock, Effect, Metric } from "effect"
 
 import type { RelayConfig } from "./config.js"
 import {
+  imageOwnBytes,
+  keptDeployments,
+  removableImages,
+  type ImageRemoval,
+  type ImageRemovalKind,
+  type RetentionRules,
+} from "./docker-image-retention.js"
+import {
   containerName,
   isDockerNotFound,
-  type DockerContainerSummary,
   type DockerEngine,
   type DockerImageSummary,
 } from "./docker-engine.js"
 import type {
-  RelayAppDeploymentImage,
   RelayDockerCleanupOwner,
   RelayDockerCleanupRecord,
   RelayStateStore,
@@ -50,11 +56,13 @@ import {
   operation,
   runOperation,
   type RelayCaller,
+  type RelayOperation,
 } from "./operations/operation.js"
 import {
   kilnContainerOwner,
   type KilnContainerOwner,
 } from "./kiln-containers.js"
+import type { ImageFacts } from "./docker-image-retention.js"
 import {
   KILN_INSTALLATION_LABEL,
   kilnComponent,
@@ -65,17 +73,13 @@ const UPDATE_HELPER_LABEL = "io.kiln.update-helper"
 // What the update helper renames the container it replaces to, until the
 // replacement is healthy (updater.ts).
 const UPDATE_BACKUP_NAME = /^(.+)-kiln-backup-\d+$/u
-// The label on images an App's Dockerfile builds (apps.ts).
-const APP_IMAGE_LABEL = "kiln.app.id"
-/** How many of an App's newest successful deployments keep their images. */
-export const KEPT_APP_DEPLOYMENT_IMAGES = 5
-// How long a build stays, so a failed deployment's can be looked into.
-const BUILD_GRACE_SECONDS = 24 * 60 * 60
 // How long an image nothing uses stays, so a game server deleted and made
 // again, or a service turned off and on, doesn't download it again.
 const UNUSED_IMAGE_GRACE_MS = 24 * 60 * 60_000
-// Removals a pass makes at most, so one pass never holds cleanup long.
+// Image removals a pass makes at most, so one never holds cleanup long; a
+// person's cleanup goes further.
 const IMAGES_PER_PASS = 50
+const IMAGES_PER_CLEANUP = 500
 const PASS_INTERVAL_MS = 60 * 60_000
 // While the disk is this full, passes run this often instead.
 const DISK_PRESSURE = 0.9
@@ -109,7 +113,59 @@ const imageBytesRemoved = Metric.counter(
 )
 
 type RemovalKind = "leftover" | "update-backup" | "update-helper"
-type ImageKind = "app" | "kiln" | "unused"
+
+/** What a cleanup removed. */
+export interface DockerCleanupResult {
+  readonly buildCacheBytes: number
+  readonly containers: number
+  /** What the removed images held of their own, shared layers left out. */
+  readonly imageBytes: number
+  readonly images: number
+}
+
+/** What a person asks a cleanup to remove beyond what passes do. */
+export interface DockerCleanupRequest {
+  /** BuildKit's unused cache, the host's own builds' too. */
+  readonly buildCache: boolean
+  /** Unused images no Kiln container ran, such as a person's own. */
+  readonly unknownImages: boolean
+}
+
+/** What Docker holds on the host, and what a cleanup could remove of it. */
+export interface DockerStorage {
+  readonly buildCache: {
+    readonly bytes: number
+    readonly reclaimableBytes: number
+  }
+  readonly images: { readonly bytes: number; readonly count: number }
+  /** Containers Docker refused to remove, which passes try again. */
+  readonly leftoverContainers: number
+  /** What a cleanup now would remove of Kiln's own. */
+  readonly reclaimable: { readonly bytes: number; readonly images: number }
+  /** Unused images no Kiln container ran, removed only when asked. */
+  readonly unknown: { readonly bytes: number; readonly images: number }
+  readonly lastCleanup:
+    | (DockerCleanupResult & {
+        readonly finishedAt: number
+        readonly requested: boolean
+      })
+    | null
+}
+
+interface CollectInput {
+  readonly limit: number
+  readonly request: DockerCleanupRequest
+  readonly rules: Omit<RetentionRules, "kilnImages" | "unknownImages">
+  /** Only an App's builds, after its deployment. */
+  readonly appId: string | null
+}
+
+const NOTHING: DockerCleanupResult = {
+  buildCacheBytes: 0,
+  containers: 0,
+  imageBytes: 0,
+  images: 0,
+}
 
 type CleanupConfig = Pick<
   RelayConfig,
@@ -141,6 +197,7 @@ export class DockerCleanup {
   readonly #state: RelayStateStore["Service"]
   readonly #updating: () => Effect.Effect<boolean>
   readonly #previousKilnImages: DockerCleanupOptions["previousKilnImages"]
+  #lastCleanup: DockerStorage["lastCleanup"] = null
 
   constructor(options: DockerCleanupOptions) {
     this.#previousKilnImages = options.previousKilnImages
@@ -194,7 +251,10 @@ export class DockerCleanup {
     )
   }
 
-  /** Records the images a successful deployment runs. */
+  /**
+   * Records the images a successful deployment runs: they're kept while it's
+   * among the App's newest few, and in use from now for the day after.
+   */
   recordDeployment(input: {
     readonly appId: string
     readonly deploymentId: string
@@ -203,62 +263,134 @@ export class DockerCleanup {
     const state = this.#state
     return Clock.currentTimeMillis.pipe(
       Effect.flatMap((finishedAt) =>
-        state.recordAppDeploymentImages({ ...input, finishedAt })
+        Effect.all([
+          state.recordAppDeploymentImages({ ...input, finishedAt }),
+          state.noteDockerImagesUsed(
+            input.imageIds.map((imageId) => ({
+              imageId,
+              owner: `app:${input.appId}`,
+            })),
+            finishedAt
+          ),
+        ])
       ),
       Effect.catch((cause) =>
         Effect.logWarning("Relay couldn't record a deployment's images", cause)
-      )
+      ),
+      Effect.asVoid
     )
   }
 
   /**
-   * Removes the App's images that none of its newest successful
+   * Removes the App's builds that none of its newest successful
    * deployments runs, once they're a day old. Waits behind other cleanup,
    * but not for the App's next deployment.
    */
   pruneAppImages(appId: string): Effect.Effect<void> {
-    return runOperation(this.#lanes, this.#pruneApp, appId, {
-      kind: "worker",
-    }).pipe(
+    return runOperation(
+      this.#lanes,
+      this.#collect,
+      {
+        appId,
+        limit: IMAGES_PER_CLEANUP,
+        request: { buildCache: false, unknownImages: false },
+        rules: { unusedGraceMs: UNUSED_IMAGE_GRACE_MS },
+      },
+      { kind: "worker" }
+    ).pipe(
       Effect.catch((cause) =>
         Effect.logWarning("Relay couldn't remove an App's old images", cause)
-      )
+      ),
+      Effect.asVoid
     )
   }
 
   /**
-   * Removes what finished updates left, then tries each kept container
-   * again in its owner's lane. Work in the way waits for the next pass.
+   * A pass: what finished updates left, each kept container again in its
+   * owner's lane, then images. Work in the way leaves its part for the next
+   * pass.
    */
   pass(caller: RelayCaller): Effect.Effect<void> {
-    const lanes = this.#lanes
-    const state = this.#state
-    const skipBusy = <A, E>(effect: Effect.Effect<A, E | LaneRejectedError>) =>
-      effect.pipe(
-        Effect.asVoid,
-        Effect.catchIf(
-          (cause) => cause instanceof LaneRejectedError,
-          () => Effect.void
-        )
-      )
-    return Effect.gen({ self: this }, function* () {
-      yield* skipBusy(
-        runOperation(lanes, this.#sweepUpdates, undefined, caller)
-      )
-      const leftovers = yield* state.listDockerCleanups()
-      for (const leftover of leftovers) {
-        yield* skipBusy(
-          runOperation(lanes, this.#retryRemoval, leftover, caller)
-        )
-      }
-      yield* skipBusy(
-        runOperation(lanes, this.#collectImages, undefined, caller)
-      )
-    }).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Docker cleanup didn't finish", cause)
-      )
+    return this.#cleanup(
+      {
+        appId: null,
+        limit: IMAGES_PER_PASS,
+        request: { buildCache: false, unknownImages: false },
+        rules: { unusedGraceMs: UNUSED_IMAGE_GRACE_MS },
+      },
+      caller,
+      true
+    ).pipe(Effect.asVoid)
+  }
+
+  /**
+   * A cleanup a person asked for: what a pass removes, without waiting a
+   * day for images no Kiln container uses, and what they chose besides. It
+   * waits for other cleanup rather than turning away.
+   */
+  cleanNow(request: DockerCleanupRequest): Effect.Effect<DockerCleanupResult> {
+    return this.#cleanup(
+      {
+        appId: null,
+        limit: IMAGES_PER_CLEANUP,
+        request,
+        rules: { unusedGraceMs: 0 },
+      },
+      { kind: "worker" },
+      false
     )
+  }
+
+  /**
+   * What Docker holds and what a cleanup now could remove. Asks Docker to
+   * count every image's layers, so only when someone wants the figures.
+   */
+  storage(): Effect.Effect<DockerStorage, unknown> {
+    return Effect.gen({ self: this }, function* () {
+      const [usage, containers, leftovers] = yield* Effect.all(
+        [
+          this.#engine.imageDiskUsage({ timeout: 60_000 }),
+          this.#engine.listContainers({ all: true }),
+          this.#state.listDockerCleanups(),
+        ],
+        { concurrency: 3 }
+      )
+      const images = usage.Images ?? []
+      const removals = yield* this.#removals(images, containers, {
+        unknownImages: true,
+        unusedGraceMs: 0,
+      })
+      const total = (kinds: (kind: ImageRemovalKind) => boolean) => {
+        const chosen = removals.filter((removal) => kinds(removal.kind))
+        return {
+          bytes: chosen.reduce(
+            (sum, removal) => sum + imageOwnBytes(removal.image),
+            0
+          ),
+          images: chosen.length,
+        }
+      }
+      const cache = usage.BuildCache ?? []
+      return {
+        buildCache: {
+          bytes: cache.reduce((sum, record) => sum + (record.Size ?? 0), 0),
+          reclaimableBytes: cache.reduce(
+            (sum, record) => sum + (record.InUse ? 0 : (record.Size ?? 0)),
+            0
+          ),
+        },
+        images: {
+          bytes:
+            usage.LayersSize ??
+            images.reduce((sum, image) => sum + imageOwnBytes(image), 0),
+          count: images.length,
+        },
+        lastCleanup: this.#lastCleanup,
+        leftoverContainers: leftovers.length,
+        reclaimable: total((kind) => kind !== "unknown"),
+        unknown: total((kind) => kind === "unknown"),
+      }
+    })
   }
 
   /**
@@ -279,11 +411,81 @@ export class DockerCleanup {
           if (due) {
             lastPass = now
             yield* this.pass({ kind: "timer" })
+          } else {
+            // Between passes too, so a game server or database made and
+            // deleted within the hour still counts as Kiln's.
+            yield* this.#noteUsed().pipe(Effect.ignore)
           }
           yield* Effect.sleep("5 minutes")
         }).pipe(Effect.forever)
       )
     )
+  }
+
+  #cleanup(
+    input: CollectInput,
+    caller: RelayCaller,
+    onlyIfFree: boolean
+  ): Effect.Effect<DockerCleanupResult> {
+    const lanes = this.#lanes
+    const state = this.#state
+    const admit = <I, A>(
+      definition: RelayOperation<I, A, never, never>,
+      operationInput: I,
+      busy: A
+    ) =>
+      runOperation(
+        lanes,
+        { ...definition, onlyIfFree: onlyIfFree || definition.onlyIfFree },
+        operationInput,
+        caller
+      ).pipe(
+        Effect.catchIf(
+          (cause) => cause instanceof LaneRejectedError,
+          () => Effect.succeed(busy)
+        )
+      )
+    return Effect.gen({ self: this }, function* () {
+      const swept = yield* admit(this.#sweepUpdates, undefined, 0)
+      let retried = 0
+      for (const leftover of yield* state.listDockerCleanups()) {
+        if (yield* admit(this.#retryRemoval, leftover, false)) retried += 1
+      }
+      const collected = yield* admit(this.#collect, input, NOTHING)
+      const result = {
+        ...collected,
+        containers: swept + retried,
+      }
+      const finishedAt = yield* Clock.currentTimeMillis
+      this.#lastCleanup = { ...result, finishedAt, requested: !onlyIfFree }
+      return result
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Docker cleanup didn't finish", cause).pipe(
+          Effect.as(NOTHING)
+        )
+      )
+    )
+  }
+
+  // Notes the images Kiln's containers use now.
+  #noteUsed(
+    listed?: ImageFacts["containers"]
+  ): Effect.Effect<void, unknown> {
+    return Effect.gen({ self: this }, function* () {
+      const containers =
+        listed ?? (yield* this.#engine.listContainers({ all: true }))
+      const now = yield* Clock.currentTimeMillis
+      yield* this.#state.noteDockerImagesUsed(
+        containers.flatMap((container) => {
+          const owner = kilnContainerOwner(this.#config, container)
+          return owner && container.ImageID
+            ? [{ imageId: container.ImageID, owner: ownerKey(owner) }]
+            : []
+        }),
+        now
+      )
+    })
   }
 
   #underPressure(): Effect.Effect<boolean> {
@@ -296,14 +498,53 @@ export class DockerCleanup {
     )
   }
 
-  // Notes which images Kiln's containers use now, then removes those none
-  // has used for a day. App builds and Hearth's and the Relay's images keep
-  // to their own rules above; an image Kiln never ran isn't touched.
-  readonly #collectImages = operation<void>()({
+  // What the rules would remove now. Hearth's and the Relay's old images
+  // only while no update runs, as a rollback needs the old one.
+  #removals(
+    images: ReadonlyArray<DockerImageSummary>,
+    containers: ImageFacts["containers"],
+    rules: Omit<RetentionRules, "kilnImages">
+  ): Effect.Effect<Array<ImageRemoval>, unknown> {
+    return Effect.gen({ self: this }, function* () {
+      const [records, deployments, previousKilnImages, updating, now] =
+        yield* Effect.all([
+          this.#state.listDockerImages(),
+          this.#state.listAppDeploymentImages(),
+          this.#previousKilnImages(),
+          this.#updating(),
+          Clock.currentTimeMillis,
+        ])
+      return removableImages(
+        {
+          containers,
+          deployments,
+          images,
+          now,
+          ownsApp: (container) => {
+            const owner = kilnContainerOwner(this.#config, container)
+            return owner?.resource.type === "app" ? owner.resource.id : null
+          },
+          previousKilnImages,
+          records,
+        },
+        { ...rules, kilnImages: !updating }
+      )
+    })
+  }
+
+  // Notes which images Kiln's containers use now, then removes what the
+  // rules allow, and BuildKit's unused cache when asked. Beside each App's
+  // deployments, which hold it shared: a deployment that finds an image it
+  // pulled gone pulls it again, and each build is new. After a deployment,
+  // only that App's builds, and its deletion, which removes them itself,
+  // waits.
+  readonly #collect = operation<CollectInput>()({
     name: "relay.docker.cleanup.images",
-    locks: () => [exclusive(laneKeys.dockerCleanup)],
-    onlyIfFree: true,
-    run: () =>
+    locks: ({ input }) => [
+      exclusive(laneKeys.dockerCleanup),
+      ...(input.appId ? [shared(laneKeys.app(input.appId))] : []),
+    ],
+    run: ({ input }) =>
       Effect.gen({ self: this }, function* () {
         const [containers, images] = yield* Effect.all(
           [
@@ -312,49 +553,62 @@ export class DockerCleanup {
           ],
           { concurrency: 2 }
         )
-        const now = yield* Clock.currentTimeMillis
-        yield* this.#state.noteDockerImagesUsed(
-          containers.flatMap((container) => {
-            const owner = kilnContainerOwner(this.#config, container)
-            return owner && container.ImageID
-              ? [{ imageId: container.ImageID, owner: ownerKey(owner) }]
-              : []
-          }),
-          now
-        )
-        const [records, deployments] = yield* Effect.all([
-          this.#state.listDockerImages(),
-          this.#state.listAppDeploymentImages(),
-        ])
-        const kept = keptDeployments(deployments)
-        const keptImages = new Set(
-          deployments.flatMap((record) =>
-            kept.has(deploymentKey(record)) ? [record.imageId] : []
-          )
-        )
-        const used = usedImages(containers)
-        const present = new Map(images.map((image) => [image.Id, image]))
-        let removals = 0
-        for (const record of records) {
-          const image = present.get(record.imageId)
-          if (!image) {
+        yield* this.#noteUsed(containers)
+        const present = new Set(images.map((image) => image.Id))
+        for (const record of yield* this.#state.listDockerImages()) {
+          if (!present.has(record.imageId)) {
             yield* this.#state.forgetDockerImage(record.imageId)
-            continue
           }
-          if (used.has(image.Id) || keptImages.has(image.Id)) continue
-          const labels = image.Labels ?? {}
-          if (labels[APP_IMAGE_LABEL]) continue
-          if (kilnComponent(labels["io.kiln.component"])) continue
-          if (now - record.lastUsedAt < UNUSED_IMAGE_GRACE_MS) continue
-          if (removals >= IMAGES_PER_PASS) break
-          removals += 1
-          if (yield* this.#removeImage(image, "unused")) {
-            yield* this.#state.forgetDockerImage(image.Id)
+        }
+        const removals = (yield* this.#removals(images, containers, {
+          ...input.rules,
+          unknownImages: input.request.unknownImages,
+        }))
+          .filter(
+            (removal) =>
+              input.appId === null ||
+              (removal.kind === "app" && removal.appId === input.appId)
+          )
+          .slice(0, input.limit)
+        let removedImages = 0
+        let imageBytes = 0
+        for (const removal of removals) {
+          if (yield* this.#removeImage(removal.image, removal.kind)) {
+            removedImages += 1
+            imageBytes += imageOwnBytes(removal.image)
+            yield* this.#state.forgetDockerImage(removal.image.Id)
           }
+        }
+        // Deployments no longer among their App's newest have nothing more
+        // to keep.
+        const deployments = yield* this.#state.listAppDeploymentImages()
+        const kept = keptDeployments(deployments)
+        const dropped = new Map<string, Set<string>>()
+        for (const record of deployments) {
+          if (kept.has(`${record.appId}/${record.deploymentId}`)) continue
+          const app = dropped.get(record.appId) ?? new Set<string>()
+          app.add(record.deploymentId)
+          dropped.set(record.appId, app)
+        }
+        for (const [appId, deploymentIds] of dropped) {
+          yield* this.#state.forgetAppDeploymentImages(appId, [
+            ...deploymentIds,
+          ])
+        }
+        const buildCacheBytes = input.request.buildCache
+          ? ((yield* this.#engine.pruneBuildCache()).SpaceReclaimed ?? 0)
+          : 0
+        return {
+          ...NOTHING,
+          buildCacheBytes,
+          imageBytes,
+          images: removedImages,
         }
       }).pipe(
         Effect.catch((cause) =>
-          Effect.logWarning("Relay couldn't remove unused images", cause)
+          Effect.logWarning("Relay couldn't remove images", cause).pipe(
+            Effect.as(NOTHING)
+          )
         )
       ),
   })
@@ -368,6 +622,7 @@ export class DockerCleanup {
       return this.#remove(input.containerId, input.volumes).pipe(
         Effect.andThen(state.forgetDockerCleanup(input.containerId)),
         Effect.andThen(count(removed, "leftover")),
+        Effect.as(true),
         Effect.catch((cause) =>
           Effect.gen(function* () {
             yield* count(refused, "leftover")
@@ -394,9 +649,10 @@ export class DockerCleanup {
                 }
               )
             }
+            return false
           })
         ),
-        Effect.ignore
+        Effect.orElseSucceed(() => false)
       )
     },
   })
@@ -407,20 +663,22 @@ export class DockerCleanup {
   readonly #sweepUpdates = operation<void>()({
     name: "relay.docker.cleanup.updates",
     locks: () => [exclusive(laneKeys.dockerCleanup)],
-    onlyIfFree: true,
     run: () =>
       Effect.gen({ self: this }, function* () {
-        if (yield* this.#updating()) return
+        let removed = 0
+        if (yield* this.#updating()) return removed
         const containers = yield* this.#engine.listContainers({ all: true })
         const helpers = containers.filter(
           (container) => container.Labels?.[UPDATE_HELPER_LABEL] === "true"
         )
-        if (helpers.some((helper) => helper.State === "running")) return
+        if (helpers.some((helper) => helper.State === "running")) {
+          return removed
+        }
         const byName = new Map(
           containers.map((container) => [containerName(container), container])
         )
         for (const helper of helpers) {
-          yield* this.#removeSwept(helper.Id, "update-helper")
+          if (yield* this.#removeSwept(helper.Id, "update-helper")) removed += 1
         }
         for (const container of containers) {
           if (container.State === "running") continue
@@ -434,121 +692,26 @@ export class DockerCleanup {
           if (installation && installation !== this.#config.installationId) {
             continue
           }
-          yield* this.#removeSwept(container.Id, "update-backup")
+          if (yield* this.#removeSwept(container.Id, "update-backup")) {
+            removed += 1
+          }
         }
-        yield* this.#pruneKilnImages(containers)
+        return removed
       }).pipe(
         Effect.catch((cause) =>
-          Effect.logWarning("Relay couldn't look for update leftovers", cause)
+          Effect.logWarning(
+            "Relay couldn't look for update leftovers",
+            cause
+          ).pipe(Effect.as(0))
         )
       ),
   })
-
-  // Beside the App's deployments, which take it shared too: a deployment
-  // that finds an image it pulled gone pulls it again, and each build is
-  // new. Its deletion, which removes its images itself, waits.
-  readonly #pruneApp = operation<string>()({
-    name: "relay.docker.cleanup.app-images",
-    locks: ({ input }) => [
-      exclusive(laneKeys.dockerCleanup),
-      shared(laneKeys.app(input)),
-    ],
-    run: ({ input: appId }) =>
-      Effect.gen({ self: this }, function* () {
-        const [images, containers, records] = yield* Effect.all(
-          [
-            this.#engine.listImages(),
-            this.#engine.listContainers({ all: true }),
-            this.#state.listAppDeploymentImages(),
-          ],
-          { concurrency: 3 }
-        )
-        const now = yield* Clock.currentTimeMillis
-        const kept = keptDeployments(records)
-        const keptImages = new Set(
-          records.flatMap((record) =>
-            kept.has(deploymentKey(record)) ? [record.imageId] : []
-          )
-        )
-        const used = usedImages(containers)
-        const own = records.filter((record) => record.appId === appId)
-        const recorded = new Set(own.map((record) => record.imageId))
-        const built = images.filter(
-          (image) => image.Labels?.[APP_IMAGE_LABEL] === appId
-        )
-        // Builds from before deployments recorded their images: the newest
-        // few stand in for them until the App has a record.
-        const legacy = new Set(
-          own.length > 0
-            ? []
-            : [...built]
-                .sort(
-                  (left, right) => (right.Created ?? 0) - (left.Created ?? 0)
-                )
-                .slice(0, KEPT_APP_DEPLOYMENT_IMAGES)
-                .map((image) => image.Id)
-        )
-        for (const image of images) {
-          const isBuild = image.Labels?.[APP_IMAGE_LABEL] === appId
-          if (!isBuild && !recorded.has(image.Id)) continue
-          if (used.has(image.Id) || keptImages.has(image.Id)) continue
-          if (isBuild) {
-            if (legacy.has(image.Id)) continue
-            if (now / 1000 - (image.Created ?? 0) < BUILD_GRACE_SECONDS) {
-              continue
-            }
-          } else if (tagged(image)) {
-            // A pulled image its tag still names may be anyone's.
-            continue
-          }
-          yield* this.#removeImage(image, "app")
-        }
-        yield* this.#state.forgetAppDeploymentImages(appId, [
-          ...new Set(
-            own.flatMap((record) =>
-              kept.has(deploymentKey(record)) ? [] : [record.deploymentId]
-            )
-          ),
-        ])
-      }),
-  })
-
-  // Hearth's and the Relay's old images, once no tag names them: each keeps
-  // the one it ran before its latest update, or, without a record of it,
-  // the newest. Only while no update runs, as a rollback needs the old one.
-  #pruneKilnImages(
-    containers: ReadonlyArray<DockerContainerSummary>
-  ): Effect.Effect<void, unknown> {
-    return Effect.gen({ self: this }, function* () {
-      const [images, previous] = yield* Effect.all([
-        this.#engine.listImages({ filters: { label: ["io.kiln.component"] } }),
-        this.#previousKilnImages(),
-      ])
-      const used = usedImages(containers)
-      const unused = new Map<KilnComponent, Array<DockerImageSummary>>()
-      for (const image of images) {
-        const component = kilnComponent(image.Labels?.["io.kiln.component"])
-        if (!component || used.has(image.Id) || tagged(image)) continue
-        unused.set(component, [...(unused.get(component) ?? []), image])
-      }
-      for (const [component, candidates] of unused) {
-        const keep =
-          candidates.find((image) => image.Id === previous.get(component)) ??
-          candidates.reduce((newest, image) =>
-            (image.Created ?? 0) > (newest.Created ?? 0) ? image : newest
-          )
-        for (const image of candidates) {
-          if (image.Id !== keep.Id) yield* this.#removeImage(image, "kiln")
-        }
-      }
-    })
-  }
 
   // Unforced, so Docker keeps one a container started using meanwhile.
   // Whether it's gone.
   #removeImage(
     image: DockerImageSummary,
-    kind: ImageKind
+    kind: ImageRemovalKind
   ): Effect.Effect<boolean> {
     const attributes = { "cleanup.kind": kind }
     return this.#engine.removeImage(image.Id, { force: false }).pipe(
@@ -557,7 +720,7 @@ export class DockerCleanup {
           Metric.update(Metric.withAttributes(imagesRemoved, attributes), 1),
           Metric.update(
             Metric.withAttributes(imageBytesRemoved, attributes),
-            Math.max(image.Size ?? 0, 0)
+            imageOwnBytes(image)
           ),
         ])
       ),
@@ -572,9 +735,10 @@ export class DockerCleanup {
     )
   }
 
-  #removeSwept(containerId: string, kind: RemovalKind): Effect.Effect<void> {
+  #removeSwept(containerId: string, kind: RemovalKind): Effect.Effect<boolean> {
     return this.#remove(containerId, false).pipe(
       Effect.andThen(count(removed, kind)),
+      Effect.as(true),
       Effect.catch((cause) =>
         count(refused, kind).pipe(
           Effect.andThen(
@@ -583,7 +747,8 @@ export class DockerCleanup {
               error: cause.message,
               kind,
             })
-          )
+          ),
+          Effect.as(false)
         )
       )
     )
@@ -613,45 +778,6 @@ function ownerLocks(
     case undefined:
       return [exclusive(laneKeys.dockerCleanup)]
   }
-}
-
-// Each App's newest successful deployments, by `deploymentKey`.
-function keptDeployments(
-  records: ReadonlyArray<RelayAppDeploymentImage>
-): Set<string> {
-  const finished = new Map<string, Map<string, number>>()
-  for (const record of records) {
-    const deployments = finished.get(record.appId) ?? new Map()
-    deployments.set(record.deploymentId, record.finishedAt)
-    finished.set(record.appId, deployments)
-  }
-  const kept = new Set<string>()
-  for (const [appId, deployments] of finished) {
-    for (const [deploymentId] of [...deployments]
-      .sort((left, right) => right[1] - left[1])
-      .slice(0, KEPT_APP_DEPLOYMENT_IMAGES)) {
-      kept.add(deploymentKey({ appId, deploymentId }))
-    }
-  }
-  return kept
-}
-
-function deploymentKey(record: {
-  readonly appId: string
-  readonly deploymentId: string
-}): string {
-  return `${record.appId}/${record.deploymentId}`
-}
-
-// Images any container uses, running or not, Kiln's or anyone's.
-function usedImages(
-  containers: ReadonlyArray<DockerContainerSummary>
-): Set<string> {
-  return new Set(containers.flatMap((container) => container.ImageID ?? []))
-}
-
-function tagged(image: DockerImageSummary): boolean {
-  return (image.RepoTags ?? []).some((tag) => tag !== "<none>:<none>")
 }
 
 function ownerKey(owner: KilnContainerOwner): string {

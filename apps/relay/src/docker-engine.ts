@@ -163,6 +163,15 @@ export interface DockerImageSummary {
   readonly RepoTags?: ReadonlyArray<string> | null
   readonly RepoDigests?: ReadonlyArray<string> | null
   readonly Size?: number
+  // What it shares with other images; -1 when Docker didn't count it.
+  readonly SharedSize?: number
+}
+
+/** BuildKit's cache, as `docker system df` reports each record. */
+export interface DockerBuildCacheRecord {
+  readonly InUse?: boolean
+  readonly Shared?: boolean
+  readonly Size?: number
 }
 
 export interface DockerImage {
@@ -1194,6 +1203,42 @@ export class DockerEngine {
       path: `/system/df${query({ type: "volume" })}`,
       timeout: options.timeout,
     }).pipe(Effect.map((answer) => answer.Volumes ?? []))
+  }
+
+  /**
+   * Images and BuildKit's cache, as `docker system df -v` counts them: each
+   * image with what it shares with others. Volumes are left out, since
+   * Docker walks each to measure it.
+   */
+  imageDiskUsage(options: { readonly timeout?: number } = {}): Effect.Effect<
+    {
+      readonly BuildCache?: ReadonlyArray<DockerBuildCacheRecord> | null
+      readonly Images?: ReadonlyArray<DockerImageSummary> | null
+      // Every image's layers, counted once.
+      readonly LayersSize?: number
+    },
+    DockerEngineError
+  > {
+    return this.#json({
+      method: "GET",
+      path: "/system/df?type=image&type=build-cache",
+      timeout: options.timeout,
+    })
+  }
+
+  /**
+   * `docker builder prune`: BuildKit's cache that no build is using, of
+   * every builder on the daemon, the host's own builds' too.
+   */
+  pruneBuildCache(): Effect.Effect<
+    { readonly SpaceReclaimed?: number },
+    DockerEngineError
+  > {
+    return this.#json({
+      method: "POST",
+      path: "/build/prune",
+      timeout: 10 * 60_000,
+    })
   }
 
   inspectVolume(name: string): Effect.Effect<DockerVolume, DockerEngineError> {

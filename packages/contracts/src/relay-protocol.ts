@@ -163,6 +163,8 @@ export const relayControlOperations = [
   "relay.proxy.write",
   "relay.certificates.check",
   "relay.volumes.read",
+  "relay.docker.storage",
+  "relay.docker.cleanup",
   "relay.volumes.create",
   "relay.volumes.rename",
   "relay.volumes.delete",
@@ -303,6 +305,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.clients.update",
   "relay.clients.revoke",
   "relay.networking.write",
+  "relay.docker.cleanup",
   "relay.volumes.create",
   "relay.volumes.rename",
   "relay.volumes.delete",
@@ -410,6 +413,7 @@ export function relayControlOperationChanges(
     case "relay.proxy.read":
     case "relay.proxy.config.read":
     case "relay.volumes.read":
+    case "relay.docker.storage":
     case "relay.pairing.list":
     case "relay.clients.list":
     case "relay.platform.read":
@@ -494,6 +498,7 @@ export function relayControlOperationChanges(
     case "relay.volumes.create":
     case "relay.volumes.rename":
     case "relay.volumes.delete":
+    case "relay.docker.cleanup":
     case "relay.volumes.references.import":
     case "relay.volumes.references.hold":
     case "relay.pairing.create":
@@ -628,6 +633,10 @@ export function relayControlDeadlineMs(
   if (operation === "relay.networking.write") return 240_000
   if (operation === "relay.tailscale.write") return 90_000
   if (operation === "relay.host.files.mount") return 60_000
+  // Docker counts every image's layers to answer.
+  if (operation === "relay.docker.storage") return 90_000
+  // Removing images, and BuildKit's cache when asked, can take minutes.
+  if (operation === "relay.docker.cleanup") return 15 * 60_000
   // A repair can wait for MySQL to become healthy.
   if (operation === "relay.platform.action") return 240_000
   // An inventory may first wait for the host to be less busy, then reads a

@@ -325,3 +325,46 @@ describe("unused images", () => {
     )
   })
 })
+
+describe("cleanup a person asks for", () => {
+  it("reports what it could remove, then removes Kiln's unused images at once and only what they chose besides", async () => {
+    const harness = await relayHarness()
+    const database = fakeDocker.addContainer({
+      image: "postgres:16",
+      labels: {
+        "kiln.database.id": "f".repeat(32),
+        "kiln.relay.owner": TEST_NAMESPACE,
+      },
+      name: "kiln-test-database",
+    })
+    await Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
+    // The database is deleted a moment ago; someone pulled their own image.
+    fakeDocker.removeContainer(database.name)
+    fakeDocker.images.set("someone/tool:1", {})
+    fakeDocker.buildCache = [
+      { InUse: false, Size: 5_000_000 },
+      { InUse: true, Size: 2_000_000 },
+    ]
+
+    expect(await Effect.runPromise(harness.cleanup.storage())).toMatchObject({
+      buildCache: { bytes: 7_000_000, reclaimableBytes: 5_000_000 },
+      images: { count: 2 },
+      reclaimable: { bytes: 1_000_000, images: 1 },
+      unknown: { bytes: 1_000_000, images: 1 },
+    })
+
+    const kilnOnly = await Effect.runPromise(
+      harness.cleanup.cleanNow({ buildCache: false, unknownImages: false })
+    )
+    expect(kilnOnly).toMatchObject({ buildCacheBytes: 0, images: 1 })
+    expect([...fakeDocker.images.keys()]).toEqual(["someone/tool:1"])
+    expect(fakeDocker.buildCache).toHaveLength(2)
+
+    const everything = await Effect.runPromise(
+      harness.cleanup.cleanNow({ buildCache: true, unknownImages: true })
+    )
+    expect(everything).toMatchObject({ buildCacheBytes: 5_000_000, images: 1 })
+    expect(fakeDocker.images.size).toBe(0)
+    expect(fakeDocker.buildCache).toEqual([{ InUse: true, Size: 2_000_000 }])
+  })
+})

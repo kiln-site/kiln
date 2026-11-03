@@ -69,6 +69,7 @@ import {
 } from "@/lib/instance-favorites"
 import { getRelayResources } from "@/server/relay-host"
 import { getRelayVolumes } from "@/server/relay-volumes"
+import { getRelayDockerStorage } from "@/server/relay-docker"
 import { isDatabaseFilePath } from "@/lib/database-files"
 import { traceFileWork } from "@/lib/file-timing"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
@@ -288,6 +289,8 @@ export const queryKeys = {
   relayControlDial: (relayId: string) =>
     ["relays", "control-dial", relayId] as const,
   relayVolumes: (relayId: string) => ["relays", "volumes", relayId] as const,
+  relayDockerStorage: (relayId: string) =>
+    ["relays", "docker-storage", relayId] as const,
   relayProxyModes: ["relays", "proxy-modes"] as const,
   // Beside each game server's own routes, so route changes refresh both.
   relayWebRoutes: (relayId: string) => ["web-routes", relayId] as const,
@@ -928,6 +931,17 @@ export function relayVolumesQueryOptions(relayId: string) {
           : false,
     retry: false,
     staleTime: 30_000,
+  })
+}
+
+// Docker counts every image's layers for these figures, so they're read
+// when someone opens the Relay's Info page and after a cleanup, not polled.
+export function relayDockerStorageQueryOptions(relayId: string) {
+  return queryOptions({
+    queryFn: () => getRelayDockerStorage({ data: { relayId } }),
+    queryKey: queryKeys.relayDockerStorage(relayId),
+    retry: false,
+    staleTime: 60_000,
   })
 }
 
