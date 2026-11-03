@@ -11,6 +11,7 @@ import {
   Minus,
   Search,
   Star,
+  X,
 } from "lucide-react"
 import type { LucideProps } from "lucide-react"
 
@@ -138,6 +139,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   viewAll = false,
 }: InstancePickerContentProps) {
   const listId = React.useId()
+  const searchInputRef = React.useRef<HTMLInputElement>(null)
   const [search, setSearch] = React.useState("")
   const [activeIndex, setActiveIndex] = React.useState(-1)
   const { filterIds, setFilterIds } = useInstancePickerFilterIds()
@@ -214,6 +216,22 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
     [filterIds, setFilterIds, typeFilters]
   )
   const clearFilters = React.useCallback(() => setFilterIds([]), [setFilterIds])
+  // A filter bar button unmounts once its filter is gone, so focus that was
+  // on it returns to the search field rather than falling to the page.
+  const removeFilter = React.useCallback(
+    (filterId: string, hadFocus: boolean) => {
+      toggleFilter(filterId, false)
+      if (hadFocus) searchInputRef.current?.focus()
+    },
+    [toggleFilter]
+  )
+  const clearFiltersFromBar = React.useCallback(
+    (hadFocus: boolean) => {
+      clearFilters()
+      if (hadFocus) searchInputRef.current?.focus()
+    },
+    [clearFilters]
+  )
   const groups = React.useMemo(() => {
     if (!onSelectGroup) return emptyGroupList
     const kinds = includeKindGroups
@@ -319,6 +337,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           aria-hidden="true"
         />
         <Input
+          ref={searchInputRef}
           // On phones, wait for a tap so the keyboard doesn't cover the list.
           autoFocus={!searchAtBottom}
           type="search"
@@ -371,9 +390,25 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
     </div>
   )
 
+  // Saved filters carry across pickers, so the bar always says what's
+  // applied, even when nothing is, and that a search looks past them.
+  const filterBar =
+    items.length > 0 ? (
+      <InstancePickerFilterBar
+        activeFilters={activeFilters}
+        atBottom={searchAtBottom}
+        searching={query.length > 0}
+        shown={visibleItems.length}
+        total={items.length}
+        onClear={clearFiltersFromBar}
+        onRemove={removeFilter}
+      />
+    ) : null
+
   return (
     <>
       {searchAtBottom ? null : searchBar}
+      {searchAtBottom ? null : filterBar}
       {multiple && onSelectMany ? (
         <InstancePickerBulkBar
           itemKeys={selectableVisibleKeys}
@@ -453,6 +488,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           onNavigate={onNavigate}
         />
       ) : null}
+      {searchAtBottom ? filterBar : null}
       {searchAtBottom ? searchBar : null}
     </>
   )
@@ -686,6 +722,131 @@ const InstancePickerTypeMenu = React.memo(function InstancePickerTypeMenu({
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+})
+
+const InstancePickerFilterBar = React.memo(function InstancePickerFilterBar({
+  activeFilters,
+  atBottom,
+  onClear,
+  onRemove,
+  searching,
+  shown,
+  total,
+}: {
+  activeFilters: ReadonlyArray<InstancePickerFilter>
+  /** Sits above a phone's search field: touch-sized, keeps it focused. */
+  atBottom: boolean
+  onClear: (hadFocus: boolean) => void
+  onRemove: (filterId: string, hadFocus: boolean) => void
+  searching: boolean
+  shown: number
+  total: number
+}) {
+  const filtered = activeFilters.length > 0
+  const barRef = React.useRef<HTMLDivElement>(null)
+  // Removing filters can unmount whichever bar control holds focus, not just
+  // the one pressed, so any focus inside the bar goes back to search.
+  const focusInBar = () =>
+    barRef.current?.contains(document.activeElement) ?? false
+  const removeChip = React.useCallback(
+    (filterId: string) => onRemove(filterId, focusInBar()),
+    [onRemove]
+  )
+  return (
+    <div
+      ref={barRef}
+      className={cn(
+        "flex min-h-9 shrink-0 items-center gap-1.5 border-border/70 bg-muted/25 px-2 py-1",
+        atBottom ? "border-t" : "border-b"
+      )}
+    >
+      {searching || !filtered ? (
+        <span className="type-meta flex min-w-0 flex-1 items-center gap-1.5 text-muted-foreground">
+          {searching ? (
+            <Search className="size-3 shrink-0" aria-hidden="true" />
+          ) : (
+            <ListFilter className="size-3 shrink-0" aria-hidden="true" />
+          )}
+          <span className="truncate">
+            {searching
+              ? filtered
+                ? "Searching everything, filters paused"
+                : "Searching everything"
+              : "No filters"}
+          </span>
+        </span>
+      ) : (
+        <div
+          role="group"
+          aria-label="Active filters"
+          className="flex min-w-0 flex-1 flex-wrap items-center gap-1"
+        >
+          {activeFilters.map((filter) => (
+            <InstancePickerFilterChip
+              key={filter.id}
+              filter={filter}
+              touch={atBottom}
+              onRemove={removeChip}
+            />
+          ))}
+        </div>
+      )}
+      <span className="type-meta shrink-0 text-muted-foreground tabular-nums">
+        {shown === total ? `${total} total` : `${shown} of ${total}`}
+      </span>
+      {filtered && !searching ? (
+        <button
+          type="button"
+          className={cn(
+            "type-meta shrink-0 rounded-sm px-1 text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline",
+            atBottom && "h-8"
+          )}
+          onClick={() => onClear(focusInBar())}
+          onMouseDown={atBottom ? keepSearchFocus : undefined}
+        >
+          Show all
+        </button>
+      ) : null}
+    </div>
+  )
+})
+
+const InstancePickerFilterChip = React.memo(function InstancePickerFilterChip({
+  filter,
+  onRemove,
+  touch,
+}: {
+  filter: InstancePickerFilter
+  onRemove: (filterId: string) => void
+  touch: boolean
+}) {
+  const Icon =
+    filter.group === "type"
+      ? kindPresentation[filter.id as InstancePickerKind].Icon
+      : Star
+  return (
+    <span
+      className={cn(
+        "type-meta inline-flex items-center gap-1 rounded-md border border-primary/35 bg-primary/8 pl-2 text-primary-ink",
+        touch ? "h-8" : "h-6"
+      )}
+    >
+      <Icon className="size-3 shrink-0" aria-hidden="true" />
+      {filter.label}
+      <button
+        type="button"
+        aria-label={`Remove ${filter.label.toLocaleLowerCase()} filter`}
+        className={cn(
+          "grid place-items-center rounded-sm text-primary-ink/70 outline-none hover:bg-primary/15 hover:text-primary-ink focus-visible:ring-2 focus-visible:ring-ring/40",
+          touch ? "mr-0.5 size-7" : "mr-0.5 size-5"
+        )}
+        onClick={() => onRemove(filter.id)}
+        onMouseDown={touch ? keepSearchFocus : undefined}
+      >
+        <X className="size-3" aria-hidden="true" />
+      </button>
+    </span>
   )
 })
 
