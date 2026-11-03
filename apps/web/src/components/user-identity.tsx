@@ -6,7 +6,7 @@ import { UserAvatar } from "@/components/account-avatar"
 import { RedactedText } from "@/components/redacted-text"
 
 // A person as Kiln shows them: their picture (initials without one), name,
-// and email blurred until clicked.
+// and email hidden until clicked.
 export const UserIdentity = React.memo(function UserIdentity({
   accessory,
   avatarClassName,
