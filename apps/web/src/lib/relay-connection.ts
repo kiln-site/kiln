@@ -1382,7 +1382,12 @@ class RelayConnection {
           )
           this.#setState("unreachable", cause.message)
           if (replacing && !logged) {
-            this.#dropDetails = this.#sessionDetails("replacement_failed")
+            // Keeping how its socket closed, when that came first.
+            this.#dropDetails = {
+              ...this.#sessionDetails("replacement_failed"),
+              ...this.#dropDetails,
+              "kiln.relay.control.close_cause": "replacement_failed",
+            }
             this.#logDropped(Date.now())
           }
           this.#scheduleReconnect()
