@@ -56,10 +56,11 @@ export function RedactedText({
           {revealed ? (
             value
           ) : (
-            // One line tall, so revealing doesn't move what's around it.
+            // One line tall, like a value that fits on one line. Forced colors
+            // and printing drop gradients, which would leave nothing to click.
             <span
               aria-hidden
-              className="inline-block h-[1lh] max-w-full bg-left bg-no-repeat align-top"
+              className="inline-block h-[1lh] max-w-full bg-left bg-no-repeat align-top [print-color-adjust:exact] forced-colors:text-[color:CanvasText] forced-colors:forced-color-adjust-none"
               style={mosaicStyle}
             />
           )}
