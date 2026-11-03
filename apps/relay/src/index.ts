@@ -210,6 +210,7 @@ import {
   webCertificateStorePath,
 } from "./web-certificates.js"
 import { forkPromise, promiseEffect, recoverPromise } from "./effect/promise.js"
+import { DockerCleanup } from "./docker-cleanup.js"
 import { DockerEngine } from "./docker-engine.js"
 import { RelayVolumes } from "./volumes.js"
 import {
@@ -454,13 +455,24 @@ const operationPruneFiber = forkRelayEffect(
   )
 )
 const databaseConnections = new DatabaseConnections(config, startupCore.state)
+// Removes containers Relay is done with, trying again what Docker refuses,
+// and what finished updates leave. See docker-cleanup.ts.
+const dockerCleanup = new DockerCleanup({
+  config,
+  engine: new DockerEngine(config.dockerSocket),
+  lanes,
+  state: startupCore.state,
+  updating: () =>
+    systemUpdates.running().pipe(Effect.orElseSucceed(() => true)),
+})
 const docker = new DockerDriver(
   config,
   runtimeRecovery,
   bricks,
   startupCore.state,
   databaseConnections,
-  lanes
+  lanes,
+  dockerCleanup
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
 const hostShell = new HostShell(config)
@@ -573,7 +585,8 @@ const apps = new AppDriver(
   { allocations: docker.allocations, state: startupCore.state },
   databaseConnections,
   (dockerNames) =>
-    runRelayEffect("relay.apps.volumes", volumes.idsByDockerName(dockerNames))
+    runRelayEffect("relay.apps.volumes", volumes.idsByDockerName(dockerNames)),
+  dockerCleanup
 )
 lifecycle.useAppServiceContainers(async (appId, service) => {
   await apps.get(appId)
@@ -909,6 +922,17 @@ const transferSweepFiber = forkRelayEffect(
   Effect.sleep("1 hour").pipe(
     Effect.andThen(transferSources.sweep()),
     Effect.ignore,
+    Effect.forever
+  )
+)
+// A minute after starting, then hourly: leftover containers and what
+// finished updates left. A pass after a Relay's own update finds its helper
+// still running, and leaves it to the next.
+const dockerCleanupFiber = forkRelayEffect(
+  "relay.docker.cleanup",
+  Effect.sleep("1 minute").pipe(
+    Effect.andThen(dockerCleanup.pass({ kind: "timer" })),
+    Effect.andThen(Effect.sleep("59 minutes")),
     Effect.forever
   )
 )
@@ -1521,6 +1545,7 @@ const sftpServer = await Effect.runPromise(
         operationPruneFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         transferSweepFiber.interruptUnsafe()
+        dockerCleanupFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()
         scheduleFiber.interruptUnsafe()
         scheduleManager.close()
@@ -1814,6 +1839,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         certificateFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         transferSweepFiber.interruptUnsafe()
+        dockerCleanupFiber.interruptUnsafe()
         provisioningFiber.interruptUnsafe()
         scheduleFiber.interruptUnsafe()
         scheduleManager.close()

@@ -21,6 +21,7 @@ import {
   type DockerLogOptions,
 } from "./docker-engine.js"
 import type { BrickCatalog } from "./bricks.js"
+import type { DockerCleanup } from "./docker-cleanup.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { ensuringPromise, recoverPromise } from "./effect/promise.js"
 import { reportRelayError } from "./effect/runtime.js"
@@ -151,6 +152,7 @@ interface DockerInspect {
 }
 
 interface DockerRecreateInspect {
+  Id: string
   Config: Record<string, unknown> & {
     ExposedPorts?: Record<string, Record<string, never>>
     Labels?: Record<string, string> | null
@@ -452,7 +454,9 @@ export class DockerDriver {
     bricks: BrickCatalog,
     state: RelayStateStore["Service"],
     readonly databaseConnections: DatabaseConnections,
-    lanes: OperationLanes
+    lanes: OperationLanes,
+    /** Removes containers Relay is done with, trying again what fails. */
+    readonly cleanup: DockerCleanup
   ) {
     this.#bricks = bricks
     this.#config = config
@@ -1194,17 +1198,15 @@ export class DockerDriver {
         )
       )
     )
+    // The container set aside, by its ID: one Docker won't remove now is
+    // tried again later.
     await runEffect(
-      engine.removeContainer(backupName, { force: true, timeout: 90_000 }).pipe(
-        Effect.catch((cause) =>
-          Effect.sync(() => {
-            console.warn(
-              `Kiln ${portConfiguration ? "applied port allocations to" : "applied web routes to"} ${instance.name}, but could not remove backup container ${backupName}.`,
-              cause
-            )
-          })
-        )
-      )
+      this.cleanup.removeContainer(current.Id, {
+        owner: { id: instance.id, kind: "instance" },
+        reason: portConfiguration
+          ? "replaced to apply port allocations"
+          : "replaced to apply web routes",
+      })
     )
 
     const updated = (await this.inspectInstances()).find(

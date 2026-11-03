@@ -31,6 +31,7 @@ import { loadConfig, type RelayConfig } from "../config.js"
 import { ContainerCommands } from "../container-commands.js"
 import { DatabaseConnections } from "../database-connections.js"
 import { DatabaseDriver } from "../databases.js"
+import { DockerCleanup } from "../docker-cleanup.js"
 import { DockerDriver } from "../docker.js"
 import { DockerEngine } from "../docker-engine.js"
 import { makeRelayStateLayer, RelayStateStore } from "../effect/state.js"
@@ -51,6 +52,7 @@ export const TEST_NAMESPACE = "kiln-test"
 
 export interface RelayDrivers {
   readonly apps: AppDriver
+  readonly cleanup: DockerCleanup
   readonly bricks: BrickCatalog
   readonly commands: ContainerCommands
   readonly databaseConnections: DatabaseConnections
@@ -118,13 +120,21 @@ export async function relayHarness(
     const runtimeRecovery = new RuntimeRecoveryManager(config, state, lanes)
     await Effect.runPromise(runtimeRecovery.initialize())
     const databaseConnections = new DatabaseConnections(config, state)
+    const cleanup = new DockerCleanup({
+      config,
+      engine: new DockerEngine(config.dockerSocket),
+      lanes,
+      state,
+      updating: () => Effect.succeed(false),
+    })
     const docker = new DockerDriver(
       config,
       runtimeRecovery,
       bricks,
       state,
       databaseConnections,
-      lanes
+      lanes,
+      cleanup
     )
     const lifecycle = new LifecycleDriver(
       config,
@@ -173,7 +183,8 @@ export async function relayHarness(
       lanes,
       { allocations: docker.allocations, state },
       databaseConnections,
-      (dockerNames) => Effect.runPromise(volumes.idsByDockerName(dockerNames))
+      (dockerNames) => Effect.runPromise(volumes.idsByDockerName(dockerNames)),
+      cleanup
     )
     lifecycle.useAppServiceContainers(async (appId, service) => {
       await apps.get(appId)
@@ -192,6 +203,7 @@ export async function relayHarness(
     return {
       volumes,
       apps,
+      cleanup,
       bricks,
       commands: new ContainerCommands({
         apps,

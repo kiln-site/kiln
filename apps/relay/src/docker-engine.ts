@@ -153,6 +153,18 @@ export interface DockerVolumeUsage {
   readonly UsageData?: { readonly Size: number } | null
 }
 
+/** One image, as `GET /images/json` lists it. */
+export interface DockerImageSummary {
+  readonly Id: string
+  readonly Labels?: Readonly<Record<string, string>> | null
+  // Seconds since the epoch.
+  readonly Created?: number
+  // Tags pointing at it; none, or `<none>:<none>`, once every tag moved on.
+  readonly RepoTags?: ReadonlyArray<string> | null
+  readonly RepoDigests?: ReadonlyArray<string> | null
+  readonly Size?: number
+}
+
 export interface DockerImage {
   readonly Config?: {
     readonly Labels?: Readonly<Record<string, string>> | null
@@ -1194,7 +1206,7 @@ export class DockerEngine {
 
   listImages(
     options: { readonly filters?: DockerFilters } = {}
-  ): Effect.Effect<ReadonlyArray<{ readonly Id: string }>, DockerEngineError> {
+  ): Effect.Effect<ReadonlyArray<DockerImageSummary>, DockerEngineError> {
     return this.#json({
       method: "GET",
       path: `/images/json${query({
@@ -1287,11 +1299,17 @@ export class DockerEngine {
     })
   }
 
-  /** `docker image rm --force`. */
-  removeImage(reference: string): Effect.Effect<void, DockerEngineError> {
+  /**
+   * `docker image rm`. Unforced, Docker refuses (409) while any container,
+   * even a stopped one, uses the image, or while other tags still name it.
+   */
+  removeImage(
+    reference: string,
+    options: { readonly force: boolean }
+  ): Effect.Effect<void, DockerEngineError> {
     return this.#empty({
       method: "DELETE",
-      path: `/images/${imageSegment(reference)}${query({ force: true })}`,
+      path: `/images/${imageSegment(reference)}${query({ force: options.force || undefined })}`,
       timeout: 90_000,
     })
   }

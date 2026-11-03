@@ -61,6 +61,11 @@ export const laneKeys = {
   platform: "relay:platform",
   /** One of the Relay's Docker named volumes. */
   volume: (id: string) => `volume:${id}`,
+  /**
+   * Removing what Kiln left on Docker: leftover containers no resource owns
+   * and, later, images. See docker-cleanup.ts.
+   */
+  dockerCleanup: "relay:docker-cleanup",
 } as const
 
 /**

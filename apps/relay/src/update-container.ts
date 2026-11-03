@@ -264,11 +264,19 @@ export function replaceContainerEffect(
     )
     // The replacement is healthy, so the update has happened. The old
     // container (by its ID, whatever its name) is left behind if it can't
-    // be removed, rather than undoing a working update.
+    // be removed, rather than undoing a working update; the Relay's cleanup
+    // removes it once no update runs (docker-cleanup.ts).
     yield* onPhase("replace.removeBackup")
     yield* docker
       .removeContainer(current.Id, { force: true, timeout: 90_000 })
-      .pipe(Effect.ignore)
+      .pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning(
+            "The replaced container stays until the Relay removes it",
+            cause
+          )
+        )
+      )
   }).pipe(Effect.withSpan("relay.update.replaceContainer"))
 }
 

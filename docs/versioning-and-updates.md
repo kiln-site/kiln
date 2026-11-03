@@ -96,7 +96,10 @@ then launches a short-lived updater from the selected Relay digest. The helper:
 4. Waits for the replacement's Docker health check to report `healthy`, or,
    if the image has no health check, for it to stay running for 5 seconds.
    For Relays, see [Relay runtime](relay-runtime.md#health-check).
-5. Removes the rollback copy on success, or restores it on failure.
+5. Removes the rollback copy on success, or restores it on failure. A
+   rollback copy or a stopped helper left behind is removed by the
+   Relay's next cleanup pass once no update runs (see
+   [Relay runtime](relay-runtime.md#docker-cleanup)).
 
 Update operation state lives in the Relay data volume, so a Relay can report
 the outcome after replacing itself. Each Relay reports the latest Hearth and

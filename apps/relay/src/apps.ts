@@ -58,6 +58,7 @@ import {
   MAX_CONSOLE_HISTORY_CHARACTERS,
   type DockerConsoleSession,
 } from "./docker.js"
+import type { DockerCleanup } from "./docker-cleanup.js"
 import { createContainer, ramInBytes } from "./docker-container-spec.js"
 import {
   DockerEngine,
@@ -253,6 +254,7 @@ export class AppDriver {
   readonly #registryLookups = Semaphore.makeUnsafe(4)
   readonly #limits: AppLimitStores
   readonly #connections: DatabaseConnections
+  readonly #cleanup: DockerCleanup
   readonly #volumeIds: (
     dockerNames: ReadonlyArray<string>
   ) => Promise<ReadonlyArray<string>>
@@ -271,8 +273,10 @@ export class AppDriver {
     /** The managed volumes with these Docker names, by ID. */
     volumeIds: (
       dockerNames: ReadonlyArray<string>
-    ) => Promise<ReadonlyArray<string>>
+    ) => Promise<ReadonlyArray<string>>,
+    cleanup: DockerCleanup
   ) {
+    this.#cleanup = cleanup
     this.#volumeIds = volumeIds
     this.#config = config
     this.#engine = new DockerEngine(config.dockerSocket)
@@ -901,7 +905,10 @@ export class AppDriver {
           Effect.flatMap((images) =>
             Effect.forEach(
               images,
-              (image) => engine.removeImage(image.Id).pipe(Effect.ignore),
+              (image) =>
+                engine
+                  .removeImage(image.Id, { force: false })
+                  .pipe(Effect.ignore),
               { discard: true }
             )
           ),
@@ -1745,7 +1752,7 @@ export class AppDriver {
     if (Result.isFailure(switched)) {
       for (const container of await this.#appContainers(appId)) {
         if (container.deploymentId !== deployment.id) continue
-        await this.#removeContainer(container.id)
+        await this.#removeContainer(appId, container.id)
       }
       this.#log(appId, deployment, "Keeping the running containers", "warn")
       throw switched.failure
@@ -1761,7 +1768,7 @@ export class AppDriver {
         )
       }
       this.#log(appId, deployment, `Removing ${container.name}`)
-      await this.#removeContainer(container.id)
+      await this.#removeContainer(appId, container.id)
     }
   }
 
@@ -1885,7 +1892,7 @@ export class AppDriver {
               .map((container) => container.id)
           : []
       for (const container of new Set([...created, ...failed])) {
-        await this.#removeContainer(container)
+        await this.#removeContainer(appId, container)
       }
       for (const container of running) {
         this.#log(appId, deployment, `Restarting ${container.name}`, "warn")
@@ -1899,21 +1906,20 @@ export class AppDriver {
     }
     for (const container of previous) {
       this.#log(appId, deployment, `Removing ${container.name}`)
-      await this.#removeContainer(container.id)
+      await this.#removeContainer(appId, container.id)
     }
   }
 
   // With its anonymous volumes, such as those its image declares: a
   // container keeps nothing past its replacement but what the config mounts.
-  async #removeContainer(container: string) {
-    await docker(
-      this.#engine
-        .removeContainer(container, {
-          force: true,
-          timeout: 90_000,
-          volumes: true,
-        })
-        .pipe(Effect.ignore)
+  // One Docker won't remove is tried again later (docker-cleanup.ts).
+  async #removeContainer(appId: string, container: string) {
+    await Effect.runPromise(
+      this.#cleanup.removeContainer(container, {
+        owner: { id: appId, kind: "app" },
+        reason: "replaced by a deployment",
+        volumes: true,
+      })
     )
   }
 
@@ -2244,15 +2250,7 @@ export class AppDriver {
       )
     const discard = async () => {
       for (const container of await created()) {
-        await docker(
-          this.#engine
-            .removeContainer(container.id, {
-              force: true,
-              timeout: 90_000,
-              volumes: true,
-            })
-            .pipe(Effect.ignore)
-        )
+        await this.#removeContainer(input.appId, container.id)
       }
       await this.#removeComposeNetworks(input.appId, null, project)
     }
