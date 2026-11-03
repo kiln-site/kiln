@@ -436,6 +436,78 @@ describe("image retention", () => {
   })
 })
 
+describe("Hearth and Relay images", () => {
+  const image = (name: string, component: string, created: number) => {
+    fakeDocker.images.set(name, { "io.kiln.component": component })
+    fakeDocker.imageCreated.set(name, created)
+    fakeDocker.untaggedImages.add(name)
+  }
+
+  it("removes the helper images of failed Hearth updates but the newest", async () => {
+    const harness = await relayHarness()
+    const cleanup = await cleanupWithUpdates(harness, [
+      update({
+        component: "hearth",
+        helperImage: "sha256:relay-helper-1",
+        requestedImage: "sha256:hearth-next-1",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        status: "failed",
+      }),
+      update({
+        component: "hearth",
+        helperImage: "sha256:relay-helper-2",
+        requestedImage: "sha256:hearth-next-2",
+        startedAt: "2026-01-02T00:00:00.000Z",
+        status: "failed",
+      }),
+    ])
+    image("relay-helper-1", "relay", 100)
+    image("relay-helper-2", "relay", 200)
+
+    await Effect.runPromise(cleanup.pass({ kind: "timer" }))
+
+    expect(fakeDocker.images.has("relay-helper-1")).toBe(false)
+    expect(fakeDocker.images.has("relay-helper-2")).toBe(true)
+  })
+
+  it("keeps no other old image when the one before the latest update is kept anyway", async () => {
+    const harness = await relayHarness()
+    // The image before the latest update is pinned by a tag.
+    fakeDocker.images.set("ghcr.io/kiln-site/hearth:0.1.0", {
+      "io.kiln.component": "hearth",
+    })
+    const cleanup = await cleanupWithUpdates(harness, [
+      update({
+        component: "hearth",
+        requestedImage: "sha256:ghcr.io/kiln-site/hearth:0.1.0",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        status: "succeeded",
+        previousImageId: "sha256:hearth-oldest",
+      }),
+      update({
+        component: "hearth",
+        previousImageId: "sha256:ghcr.io/kiln-site/hearth:0.1.0",
+        requestedImage: "sha256:hearth-current",
+        startedAt: "2026-01-02T00:00:00.000Z",
+        status: "succeeded",
+      }),
+    ])
+    image("hearth-current", "hearth", 300)
+    fakeDocker.addContainer({
+      image: "hearth-current",
+      name: "kiln-hearth",
+      running: true,
+    })
+    image("hearth-oldest", "hearth", 100)
+
+    await Effect.runPromise(cleanup.pass({ kind: "timer" }))
+
+    expect([...fakeDocker.images.keys()].sort()).toEqual(
+      ["ghcr.io/kiln-site/hearth:0.1.0", "hearth-current"].sort()
+    )
+  })
+})
+
 describe("unused images", () => {
   it("removes an image none of Kiln's containers has used for a day, and never one Kiln didn't run", async () => {
     const harness = await relayHarness()

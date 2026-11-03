@@ -131,15 +131,22 @@ export function removableImages(
     }
   }
   if (rules.kilnImages) {
-    for (const candidates of oldKiln.values()) {
+    // Components whose kept image is on the host, even one a tag or a
+    // container keeps anyway.
+    const recorded = new Set(
+      facts.images.flatMap((image) => {
+        const component = kilnComponent(image.Labels?.["io.kiln.component"])
+        return component && matches(image, facts.kilnUpdates.kept)
+          ? [component]
+          : []
+      })
+    )
+    for (const [component, candidates] of oldKiln) {
       // Without a record of the image before the latest update, the newest
       // stands in for it.
-      const kept = candidates.filter((image) =>
-        matches(image, facts.kilnUpdates.kept)
-      )
       const keep = new Set(
-        (kept.length > 0
-          ? kept
+        (recorded.has(component)
+          ? candidates.filter((image) => matches(image, facts.kilnUpdates.kept))
           : [
               candidates.reduce((newest, image) =>
                 (image.Created ?? 0) > (newest.Created ?? 0) ? image : newest

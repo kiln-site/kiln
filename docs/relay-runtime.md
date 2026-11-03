@@ -174,13 +174,15 @@ own:
   this runs in the background, behind other cleanup but not the App's next
   deployment, which pulls an image again if it's gone; passes run it too.
 - **Hearth and Relay images.** Only those this Relay's update records name
-  (the image each update replaced, as `previousImageId`, and the one it put
-  in place) or its own containers ran, so another Kiln installation on the
-  host keeps its own. Of those, each pass removes the ones no container
-  uses and no tag names, keeping for each of Hearth and the Relay the image
-  it ran before its latest successful update, for a downgrade (or the
-  newest, without a record of it), and a running update's images. A pass
-  leaves them alone while an update this Relay recorded starts or runs.
+  (the image each update replaced, as `previousImageId`, the one it put in
+  place, and the Relay image its helper ran, as `helperImage`) or its own
+  containers ran, so another Kiln installation on the host keeps its own.
+  Of those, each pass removes the ones no container uses and no tag names,
+  keeping a running update's images and, for each of Hearth and the Relay,
+  the image it ran before its latest successful update, for a downgrade.
+  Only when no such image is on the host does the newest stand in for it.
+  A pass leaves them alone while an update this Relay recorded starts or
+  runs.
 - **Every other image Kiln ran.** Each pass notes the image of each of
   Kiln's containers (the Relay's own and its services, and every App's,
   database's, and game server's, as the security inventory counts them,

@@ -83,6 +83,9 @@ export interface UpdateOperation {
   // The image ID it ran before, kept after a successful update for a
   // downgrade (docker-cleanup.ts). Records from before don't have it.
   previousImageId?: string
+  // The Relay image its helper ran, by digest. Records from before, and a
+  // Relay's own replacement, which runs its target image, don't have it.
+  helperImage?: string
   requestedImage: string
   // The Hearth request that started it, so a browser that lost the reply
   // can find it in the Relay's snapshot.
@@ -289,7 +292,12 @@ export class SystemUpdateManager {
               ? -1
               : 1
         )
-        const operations = prepared.map(({ operation }) => operation)
+        // Each names the helper image it runs under, which may never become
+        // the Relay's own, so cleanup knows it's this Relay's.
+        const operations = prepared.map(({ operation }) => ({
+          ...operation,
+          helperImage: input.helperImage,
+        }))
 
         yield* acquireOperationLocksEffect(operationsDirectory, operations)
         for (const { id } of operations) starting.add(id)
@@ -499,8 +507,9 @@ export class SystemUpdateManager {
    * so it holds for one another process runs too (docker-cleanup.ts):
    *
    * - `updating`: one is starting or running, before its helper exists too.
-   * - `named`: every image an update replaced or put in place, by ID or
-   *   digest: the Hearth and Relay images that are this Relay's to remove.
+   * - `named`: every image an update replaced, put in place, or ran its
+   *   helper from, by ID or digest: the Hearth and Relay images that are
+   *   this Relay's to remove.
    * - `kept`: a running update's images, and the image each component ran
    *   before its latest successful update, for a downgrade.
    * - `finishedHelpers`: the helper containers of updates that finished.
@@ -518,6 +527,7 @@ export class SystemUpdateManager {
         const images = (operation: UpdateOperation) => [
           operation.requestedImage,
           ...(operation.previousImageId ? [operation.previousImageId] : []),
+          ...(operation.helperImage ? [operation.helperImage] : []),
         ]
         const running = operations.filter(
           (operation) => operation.status === "running"
@@ -1857,6 +1867,7 @@ function isUpdateOperation(value: unknown): value is UpdateOperation {
     optionalString(value.installationId) &&
     typeof value.previousImage === "string" &&
     optionalString(value.previousImageId) &&
+    optionalString(value.helperImage) &&
     typeof value.requestedImage === "string" &&
     optionalString(value.requestId) &&
     typeof value.startedAt === "string" &&
