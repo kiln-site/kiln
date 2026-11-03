@@ -67,6 +67,7 @@ import { loadedKilnInstallationId } from "@/effect/installation"
 import {
   forkAppEffect,
   forkAppEffectInTrace,
+  logAppEvent,
   reportAppError,
   runAppEffect,
 } from "@/effect/runtime"
@@ -231,7 +232,13 @@ function connectionFor(relay: RelayEndpoint): RelayConnection {
   // instanceof lets old and new module generations continuously evict each
   // other while long-lived requests are still active.
   if (connection && !connection.matches(effectiveRelay)) {
+    const previous = connection.endpoint
     connection.close()
+    logAppEvent("warning", "Relay's address changed, so Hearth reconnects", {
+      "kiln.relay.id": relay.id,
+      "kiln.relay.control.endpoint": `${formatHost(effectiveRelay.hostname)}:${effectiveRelay.port}`,
+      "kiln.relay.control.previous_endpoint": previous,
+    })
     connections.delete(relay.id)
     connection = undefined
   }
@@ -631,6 +638,20 @@ class RelayConnection {
   #livenessFiber: Fiber.Fiber<void, unknown> | null = null
   // The socket the liveness check dropped, so its close names why.
   #unresponsiveSocket: WebSocket | null = null
+  // The socket `reconnect` dropped, likewise.
+  #reconnectedSocket: WebSocket | null = null
+  // What the log says when the connection drops and comes back: the
+  // session, named by the Relay's challenge as the Relay's log names it too,
+  // and when it was last heard from.
+  #sessionId: string | null = null
+  #authenticatedAt: number | null = null
+  #lastHeardAt: number | null = null
+  #dropDetails: ConnectionLogAttributes | null = null
+  #dropped: {
+    readonly at: number
+    readonly cause: string
+    readonly sessionId: string | null
+  } | null = null
   // Whether this Hearth wants the Relay paused, and what the Relay last
   // took from it, so the pause loop knows when to tell it again.
   #wantsPaused: boolean | null = null
@@ -767,6 +788,11 @@ class RelayConnection {
     this.#reconnectFiber = null
     this.#socket = null
     if (previous) {
+      logAppEvent("info", "Relay replaced its control connection", {
+        ...this.#logAttributes(),
+        "kiln.relay.control.connected": connected,
+        "kiln.relay.control.pending": this.#pending.size,
+      })
       if (!idle) {
         const replaced = new Error("The Relay replaced its connection")
         this.#abortReverseRequests()
@@ -1172,7 +1198,13 @@ class RelayConnection {
    * configurations only as the current connection sent them.
    */
   reconnect(): void {
+    this.#reconnectedSocket = this.#socket
     this.#socket?.terminate()
+  }
+
+  /** Where Hearth opens its own connection to this Relay. */
+  get endpoint(): string {
+    return `${formatHost(this.#relay.hostname)}:${this.#relay.port}`
   }
 
   close(): void {
@@ -1211,6 +1243,7 @@ class RelayConnection {
       )
     }
     this.#unsettled.clear()
+    this.#dropDetails = { "kiln.relay.control.close_cause": "hearth_closed" }
     this.#setState("disconnected", null)
   }
 
@@ -1336,8 +1369,17 @@ class RelayConnection {
       Effect.catch((cause) =>
         Effect.sync(() => {
           socket.terminate()
+          // The connection it replaced is gone too, though it read as
+          // connected throughout.
+          const replacing = this.#swapping
           this.#swapping = false
           this.#setState("unreachable", cause.message)
+          if (replacing) {
+            this.#dropDetails = {
+              "kiln.relay.control.close_cause": "replacement_failed",
+            }
+            this.#logDropped(Date.now())
+          }
           this.#scheduleReconnect()
         }).pipe(Effect.andThen(Effect.fail(cause)))
       ),
@@ -1412,6 +1454,8 @@ class RelayConnection {
     return Effect.callback<void, RelayUnavailableError>((resume) => {
       let authenticated = false
       let challengeAnswered = false
+      let sessionId: string | null = null
+      let socketError: string | null = null
       const answerChallenge = (message: RelayAuthChallenge) => {
         if (challengeAnswered) {
           resume(
@@ -1438,6 +1482,7 @@ class RelayConnection {
           return
         }
         challengeAnswered = true
+        sessionId = message.sessionId
       }
       activeSocket.on("message", (data, binary) => {
         // A socket another one replaced says nothing more here.
@@ -1481,6 +1526,9 @@ class RelayConnection {
           // connection fail.
           this.#relayDials = this.#features.has(relayControlDialV1Feature)
           this.#browserAuthorizationReadiness = browserAuthorizationReadiness()
+          this.#sessionId = sessionId
+          this.#authenticatedAt = Date.now()
+          this.#lastHeardAt = this.#authenticatedAt
           this.#setState("authenticated", null)
           this.#watchLiveness(activeSocket)
           const synchronizeBrowserAuthorization = () => {
@@ -1661,11 +1709,13 @@ class RelayConnection {
         this.#handleMessage(message)
       })
       activeSocket.once("error", (cause) => {
+        socketError ??= cause.message
         resume(relayConnectionFailure(cause.message, cause))
       })
       activeSocket.once("close", (code, reason) => {
+        const unresponsive = this.#unresponsiveSocket === activeSocket
         const error = new Error(
-          this.#unresponsiveSocket === activeSocket
+          unresponsive
             ? "Relay stopped responding"
             : `Relay connection closed (${code}${reason.length ? `: ${reason.toString()}` : ""})`
         )
@@ -1674,8 +1724,30 @@ class RelayConnection {
           resume(relayConnectionFailure(error.message, error))
           return
         }
+        const now = Date.now()
+        this.#dropDetails = {
+          "kiln.relay.control.close_cause": unresponsive
+            ? "liveness"
+            : this.#reconnectedSocket === activeSocket
+              ? "hearth_reconnect"
+              : socketError
+                ? "error"
+                : "closed",
+          "kiln.relay.control.error": socketError,
+          // Rejecting what was pending can start the next connection, and
+          // the drop is logged from that, before this close sets the error.
+          "kiln.relay.control.last_error": error.message,
+          "kiln.relay.control.last_heard_ms":
+            this.#lastHeardAt === null ? null : now - this.#lastHeardAt,
+          "kiln.relay.control.pending": this.#pending.size,
+          "kiln.relay.control.session_ms":
+            this.#authenticatedAt === null ? null : now - this.#authenticatedAt,
+          "websocket.close.code": code,
+          "websocket.close.reason": reason.length ? reason.toString() : null,
+        }
         this.#socket = null
         this.#unresponsiveSocket = null
+        this.#reconnectedSocket = null
         this.#auditFiber?.interruptUnsafe()
         this.#auditFiber = null
         this.#volumeReferencesFiber?.interruptUnsafe()
@@ -1723,6 +1795,7 @@ class RelayConnection {
     let silentIntervals = 0
     const heard = () => {
       silentIntervals = 0
+      if (this.#socket === socket) this.#lastHeardAt = Date.now()
     }
     socket.on("message", heard)
     socket.on("ping", heard)
@@ -2109,6 +2182,53 @@ class RelayConnection {
     }
   }
 
+  // Every time the Relay stops reading as connected, which is when people see
+  // it drop, with what closed it. Logs aren't sampled, so a drop that lasts
+  // a moment still leaves its record; the Relay logs its side of the same
+  // session.
+  #logDropped(now: number): void {
+    const details = this.#dropDetails ?? {}
+    this.#dropDetails = null
+    const cause = details["kiln.relay.control.close_cause"]
+    this.#dropped = {
+      at: now,
+      cause: typeof cause === "string" ? cause : "unknown",
+      sessionId: this.#sessionId,
+    }
+    logAppEvent(
+      cause === "hearth_closed" ? "info" : "warning",
+      "Relay connection dropped",
+      {
+        ...this.#logAttributes(),
+        "kiln.relay.control.close_cause": "unknown",
+        "kiln.relay.control.last_error": this.#state.lastError,
+        "kiln.relay.control.status": this.#state.status,
+        ...details,
+      }
+    )
+  }
+
+  #logRestored(now: number): void {
+    const dropped = this.#dropped
+    this.#dropped = null
+    if (!dropped) return
+    logAppEvent("info", "Relay connection restored", {
+      ...this.#logAttributes(),
+      "kiln.relay.control.close_cause": dropped.cause,
+      "kiln.relay.control.downtime_ms": now - dropped.at,
+      "kiln.relay.control.previous_session_id": dropped.sessionId,
+    })
+  }
+
+  #logAttributes(): ConnectionLogAttributes {
+    return {
+      "kiln.relay.control.opener": this.#opener,
+      "kiln.relay.control.preference": this.#preference,
+      "kiln.relay.id": this.#relay.id,
+      "kiln.relay.session_id": this.#sessionId,
+    }
+  }
+
   #abortReverseRequests(): void {
     for (const { controller, fiber } of this.#reverseInFlight.values()) {
       controller.abort()
@@ -2122,9 +2242,16 @@ class RelayConnection {
       status === "authenticated" && this.#state.status !== "authenticated"
     const wasReachable = this.#state.status === "authenticated"
     const isReachable = status === "authenticated"
-    this.#state = { lastError, status, updatedAt: Date.now() }
+    const now = Date.now()
+    this.#state = { lastError, status, updatedAt: now }
     // Moving to another socket isn't the Relay going away.
     if (this.#swapping && !isReachable) return
+    if (wasReachable && !isReachable) this.#logDropped(now)
+    if (becameAuthenticated) {
+      // Left by a socket that closed before it authenticated.
+      this.#dropDetails = null
+      if (this.#dropped) this.#logRestored(now)
+    }
     if (
       wasReachable &&
       !isReachable &&
@@ -2475,6 +2602,10 @@ function auditFailure(error: unknown): {
   }
   return { errorCode: error.code, outcome: "failed" }
 }
+
+type ConnectionLogAttributes = Readonly<
+  Record<string, string | number | boolean | null>
+>
 
 interface PendingRequest {
   readonly deadline: number

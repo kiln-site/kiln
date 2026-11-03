@@ -201,6 +201,23 @@ export function reportRelayError(
   )
 }
 
+/**
+ * Exports a log line from code outside an effect, such as a socket handler.
+ * Logs aren't sampled, so rare events like a connection dropping are always
+ * kept, unlike their traces. Before the Relay runtime exists it only prints.
+ */
+export function logRelayEvent(
+  level: "info" | "warning",
+  message: string,
+  annotations: Readonly<Record<string, string | number | boolean | null>>
+): void {
+  const log = (level === "info" ? Effect.logInfo : Effect.logWarning)(
+    message
+  ).pipe(Effect.annotateLogs(annotations))
+  if (runtime) runtime.runFork(log)
+  else Effect.runFork(log)
+}
+
 export async function disposeRelayRuntime(): Promise<void> {
   await runtime?.dispose()
   runtime = null

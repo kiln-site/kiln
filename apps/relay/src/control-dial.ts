@@ -35,6 +35,9 @@ const DUPLICATE_RETRY_MS = 2 * 60_000
 // saved it.
 const REFUSED_RETRY_MS = 30 * 60_000
 const REFUSALS_BEFORE_WAITING = 5
+// Hearth is opening its own connection to this Relay, and takes a dial once
+// that fails.
+const HEARTH_CONNECTING_CODE = 1013
 
 const decodeHello = Schema.decodeUnknownOption(
   Schema.fromJsonString(RelayDialHelloSchema)
@@ -98,6 +101,9 @@ interface Dial {
   // While a session it opened is open, which ends on its own once Hearth no
   // longer wants it.
   inSession: boolean
+  // Whether the log already says Hearth can't be reached, once a streak, so
+  // it says when Hearth is reached again.
+  unreachable: boolean
   readonly url: string
 }
 
@@ -144,6 +150,7 @@ export function startControlDials(options: ControlDialOptions): ControlDials {
           announce: woken,
           fiber: null,
           inSession: false,
+          unreachable: false,
           url,
         }
         dials.set(clientId, dial)
@@ -245,8 +252,6 @@ const dialLoop = (
   Effect.gen(function* () {
     let failures = 0
     let refusals = 0
-    // Whether the log already says Hearth can't be reached, once a streak.
-    let reported = false
     const origin = hearthOrigin(dial.url)
     // Spread out, so Relays don't all arrive at once after Hearth restarts;
     // not one that was woken, which Hearth is waiting for.
@@ -255,11 +260,16 @@ const dialLoop = (
       const startedAt = Date.now()
       const ended = yield* dialOnce(options, clientId, dial)
       if (!wanted()) return
-      if (ended.reached) {
-        if (reported) console.log(`Reached Hearth at ${origin} again.`)
-        reported = false
-      } else if (!reported) {
-        reported = true
+      // Hearth answered but kept its own connection, as it does while that
+      // one holds: the dial stands by, which isn't Hearth being unreachable.
+      const standingBy =
+        ended.code === relayDialCloseCodes.duplicate ||
+        ended.code === HEARTH_CONNECTING_CODE
+      if (standingBy && dial.unreachable) {
+        dial.unreachable = false
+        console.log(`Reached Hearth at ${origin} again.`)
+      } else if (!ended.reached && !standingBy && !dial.unreachable) {
+        dial.unreachable = true
         console.log(
           `Couldn't reach Hearth at ${origin}: ${ended.error ?? "no answer"}. Trying again.`
         )
@@ -323,7 +333,10 @@ const dialOnce = (options: ControlDialOptions, clientId: string, dial: Dial) =>
       if (dial.announce) {
         dial.announce = false
         console.log(`Connected to Hearth at ${hearthOrigin(dial.url)}.`)
+      } else if (dial.unreachable) {
+        console.log(`Reached Hearth at ${hearthOrigin(dial.url)} again.`)
       }
+      dial.unreachable = false
       options.adopt(
         socket,
         {
@@ -338,13 +351,19 @@ const dialOnce = (options: ControlDialOptions, clientId: string, dial: Dial) =>
     socket.on("error", (cause) => {
       error ??= cause.message
     })
-    socket.once("close", (code) => {
+    socket.once("close", (code, reason) => {
       clearTimeout(helloTimer)
       dial.inSession = false
+      const closed = adopted || code !== 1006 ? code : null
       resume(
         Effect.succeed({
-          code: adopted || code !== 1006 ? code : null,
-          error,
+          code: closed,
+          // It opened and then closed: say how, rather than "no answer".
+          error:
+            error ??
+            (closed === null
+              ? null
+              : `connection closed (${closed}${reason.length ? `: ${reason.toString()}` : ""})`),
           reached: adopted,
         })
       )

@@ -87,6 +87,7 @@ import type {
 import { RelayNotFoundError } from "./effect/errors.js"
 import { promiseEffect } from "./effect/promise.js"
 import {
+  logRelayEvent,
   reportRelayError,
   traceParentSpan,
   traceRelayEffect,
@@ -311,6 +312,7 @@ export function attachControlSocket(
           for (const socket of sockets) {
             const tracked = socket as TrackedWebSocket
             if (tracked.kilnAlive === false) {
+              tracked.kilnUnresponsive = true
               socket.terminate()
               continue
             }
@@ -412,6 +414,8 @@ export function attachControlSocket(
 
 interface TrackedWebSocket extends WebSocket {
   kilnAlive?: boolean
+  // Set when the heartbeat dropped it for not answering a ping.
+  kilnUnresponsive?: boolean
 }
 
 interface InFlightRequest {
@@ -499,7 +503,17 @@ function authenticateSocket(
     )
   )
 
+  // What the log says about this session when it closes.
+  const openedAt = Date.now()
+  let authenticatedAt: number | null = null
+  let lastPongAt = openedAt
+  let socketError: string | null = null
+  socket.on("error", (cause) => {
+    socketError ??= cause.message
+  })
+
   socket.on("pong", () => {
+    lastPongAt = Date.now()
     ;(socket as TrackedWebSocket).kilnAlive = true
   })
   ;(socket as TrackedWebSocket).kilnAlive = true
@@ -704,7 +718,10 @@ function authenticateSocket(
     )
   })
 
-  socket.once("close", () => {
+  socket.once("close", (code, reason) => {
+    if (authenticatedClient) {
+      logSessionClosed(code, reason.toString())
+    }
     authenticationTimeoutFiber.interruptUnsafe()
     authenticationAttempt?.interruptUnsafe()
     authenticationAttempt = null
@@ -729,6 +746,41 @@ function authenticateSocket(
     }
     reversePending.clear()
   })
+
+  // One line for every session that authenticated, so a brief drop leaves
+  // a record on the Relay of who closed it and why. Hearth logs its side
+  // under the same session ID.
+  function logSessionClosed(code: number, reason: string): void {
+    const now = Date.now()
+    const unresponsive = (socket as TrackedWebSocket).kilnUnresponsive === true
+    // Ones that closed cleanly, such as Hearth moving to another socket or
+    // the Relay shutting down, aren't drops.
+    const clean = !unresponsive && (code === 1000 || code === 1001)
+    logRelayEvent(
+      clean ? "info" : "warning",
+      unresponsive
+        ? "Dropped Hearth's control connection: it stopped answering pings"
+        : "Hearth's control connection closed",
+      {
+        "kiln.hearth.client_id": authenticatedClient?.id ?? null,
+        "kiln.relay.connection_id": connectionId,
+        "kiln.relay.control.close_cause": unresponsive
+          ? "heartbeat"
+          : socketError
+            ? "error"
+            : "closed",
+        "kiln.relay.control.error": socketError,
+        "kiln.relay.control.in_flight": inFlight.size,
+        "kiln.relay.control.last_pong_ms": now - lastPongAt,
+        "kiln.relay.control.opener": dial ? "relay" : "hearth",
+        "kiln.relay.control.session_ms": now - (authenticatedAt ?? openedAt),
+        "kiln.relay.session_id": challenge.sessionId,
+        "network.peer.address": peerAddress ?? null,
+        "websocket.close.code": code,
+        "websocket.close.reason": reason || null,
+      }
+    )
+  }
 
   function authenticateClientEffect(
     clientId: string,
@@ -1244,6 +1296,7 @@ function authenticateSocket(
         })
       }
       authenticatedClient = client
+      authenticatedAt = Date.now()
       yield* Fiber.interrupt(authenticationTimeoutFiber)
       yield* promiseOperation(() =>
         options.runEffect(
