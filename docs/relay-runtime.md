@@ -129,6 +129,32 @@ Docker Desktop, the login sits in the system keychain instead of the file. To
 pull private images today, mount a config file with inline `auths` into the
 Relay container and point `DOCKER_CONFIG` at its directory.
 
+## Docker cleanup
+
+Kiln removes what it leaves on Docker once it's done with it
+(`apps/relay/src/docker-cleanup.ts`):
+
+- Work that replaces a container removes the old one itself: a deployment
+  its App's previous containers, a database change its old container, and
+  a game server's recreation for ports or routes the container it set
+  aside. A removal Docker refuses is recorded in the Relay's SQLite state
+  and tried again by each cleanup pass until the container is gone, in its
+  owner's lifecycle lane, so it never removes one mid-change.
+- An update's helper runs in its own process and can't record what it
+  couldn't remove. A pass removes a stopped `io.kiln.update-helper`
+  container, and a stopped `<name>-kiln-backup-<time>` container the helper
+  set aside, once a running container has the original name and the
+  set-aside one is a Hearth or Relay container of this installation
+  (`io.kiln.component`, and `io.kiln.installation` absent or this one's).
+  While any update helper runs, or an update this Relay started is still
+  pulling, a pass leaves both alone, since a helper rolling back needs the
+  container it set aside.
+
+A pass runs a minute after the Relay starts and then every hour. Each part
+of it waits for nothing: work in its way leaves it for the next pass.
+Unforced image removal (`removeImage(..., { force: false })`) is refused
+while any container, even a stopped one, uses the image.
+
 ## Health check
 
 The Relay image's Docker `HEALTHCHECK` runs `kiln-relay-healthcheck`, a small

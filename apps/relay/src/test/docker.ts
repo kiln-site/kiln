@@ -220,6 +220,10 @@ export class FakeDocker {
   readonly execs = new Map<string, FakeExec>()
   /** Local images and their labels. */
   readonly images = new Map<string, Record<string, string>>()
+  /** When each local image was made, in seconds; 0 unless a test says. */
+  readonly imageCreated = new Map<string, number>()
+  /** Local images no tag names any longer, as after a pull moved the tag. */
+  readonly untaggedImages = new Set<string>()
   /**
    * Programs that fail when a container runs them, with what they print to
    * stderr; they exit with code 1.
@@ -304,6 +308,8 @@ export class FakeDocker {
     this.networks.clear()
     this.volumes.clear()
     this.images.clear()
+    this.imageCreated.clear()
+    this.untaggedImages.clear()
     this.pulls.clear()
     this.imageConfigs.clear()
     this.imageTags.clear()
@@ -1697,7 +1703,10 @@ export class FakeDocker {
           .filter((container) =>
             filters.every((filter) => this.#matchesFilter(container, filter))
           )
-          .map((container) => containerSummary(container))
+          .map((container) => ({
+            ...containerSummary(container),
+            ImageID: `sha256:${this.#imageKey(container.image) ?? container.image}`,
+          }))
       )
     }
     if (method === "POST" && path === "/containers/create") {
@@ -2111,9 +2120,12 @@ export class FakeDocker {
         [...this.images]
           .filter(([, labels]) => this.#labelled(labels, filters, "image ls"))
           .map(([image, labels]) => ({
+            Created: this.imageCreated.get(image) ?? 0,
             Id: `sha256:${image}`,
             Labels: labels,
-            RepoTags: [image],
+            RepoDigests: [...(this.#repoDigests.get(image) ?? [])],
+            RepoTags: this.untaggedImages.has(image) ? [] : [image],
+            Size: 1_000_000,
           }))
       )
     }
@@ -2128,7 +2140,20 @@ export class FakeDocker {
           candidate === reference || `sha256:${candidate}` === reference
       )
       if (!image) throw new DockerFailure(`No such image: ${reference}`, 404)
+      await this.#checkpoint("image rm", image)
+      // Unforced, Docker keeps an image any container uses, even a stopped one.
+      const user = [...this.containers.values()].find(
+        (container) => this.#imageKey(container.image) === image
+      )
+      if (user && !flag("force")) {
+        throw new DockerFailure(
+          `conflict: unable to delete ${image} (must be forced) - image is being used by stopped container ${user.id}`,
+          409
+        )
+      }
       this.images.delete(image)
+      this.imageCreated.delete(image)
+      this.untaggedImages.delete(image)
       return json(200, [{ Deleted: `sha256:${image}` }])
     }
     if (method === "GET" && (parameters = route(/^\/images\/(.+)\/json$/u))) {
@@ -2169,9 +2194,7 @@ export class FakeDocker {
     const digests = this.#repoDigests.get(image) ?? new Set<string>()
     digests.add(`${repository}@${pulled}`)
     this.#repoDigests.set(image, digests)
-    const messages = [
-      { status: `Status: Downloaded newer image for ${image}` },
-    ]
+    const messages = [{ status: `Status: Downloaded newer image for ${image}` }]
     return {
       kind: "stream",
       write: (response) => {
@@ -2800,7 +2823,7 @@ function apiFilters(url: URL): Array<string> {
   )
 }
 
-function containerSummary(container: FakeContainer): unknown {
+function containerSummary(container: FakeContainer): Record<string, unknown> {
   return {
     Id: container.id,
     Image: container.image,

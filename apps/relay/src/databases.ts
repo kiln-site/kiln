@@ -675,9 +675,13 @@ export class DatabaseDriver {
       )
       throw replaced.failure
     }
-    // A container left behind is skipped, and removed when the Relay starts.
+    // A container Docker won't remove now is tried again later; one left
+    // behind is skipped, and removed when the Relay starts.
     await Effect.runPromise(
-      docker.removeContainer(container.Id, { force: true }).pipe(Effect.ignore)
+      this.#docker.cleanup.removeContainer(container.Id, {
+        owner: { id, kind: "database" },
+        reason: "replaced by a change to the database",
+      })
     )
     await this.#takeTailscaleAddresses(id)
   }
