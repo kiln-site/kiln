@@ -149,8 +149,14 @@ Kiln removes what it leaves on Docker once it's done with it
   `io.kiln.installation` absent or this one's). While an update this Relay
   recorded is starting or running, or any update helper on the host hasn't
   exited, a pass leaves both alone, since a helper rolling back needs the
-  container it set aside. Update records live in the Relay's data volume,
-  so this holds for an update a restarted Relay or the helper carries on.
+  container it set aside. Only a container an update this Relay recorded
+  replaced counts as set aside. Update records live in the Relay's data
+  volume, so this holds for an update a restarted Relay or the helper
+  carries on; while any record can't be read, a pass leaves updates'
+  leftovers and Hearth's and the Relay's images alone. An update writes its
+  records in their turn after any cleanup deciding which images to remove
+  (`relay.update.record`, holding `relay:docker-cleanup` shared), so
+  cleanup either sees the update or is done before it pulls.
 
 Images are removed by unforced removal only, so Docker keeps any a
 container uses, even a stopped one, and never one Kiln can't tell is its

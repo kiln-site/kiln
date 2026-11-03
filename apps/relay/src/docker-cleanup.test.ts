@@ -205,6 +205,16 @@ describe("update leftovers", () => {
       },
       name: "other-hearth-kiln-backup-1",
     })
+    // From before installation labels, by an update this Relay didn't make.
+    fakeDocker.addContainer({
+      labels: { "io.kiln.component": "hearth" },
+      name: "unlabeled-hearth",
+      running: true,
+    })
+    const unlabeled = fakeDocker.addContainer({
+      labels: { "io.kiln.component": "hearth" },
+      name: "unlabeled-hearth-kiln-backup-1",
+    })
     const unknownHelper = fakeDocker.addContainer({
       labels: { "io.kiln.update-helper": "true" },
       name: "kiln-updater-someone-elses",
@@ -215,7 +225,7 @@ describe("update leftovers", () => {
 
     expect(fakeDocker.container(backup.id)).toBeUndefined()
     expect(fakeDocker.container(helper.id)).toBeUndefined()
-    for (const kept of [own, unreplaced, foreign, unknownHelper]) {
+    for (const kept of [own, unreplaced, foreign, unlabeled, unknownHelper]) {
       expect(fakeDocker.container(kept.id)).toBeDefined()
     }
     expect(fakeDocker.container("kiln-relay")?.state.running).toBe(true)
@@ -233,6 +243,24 @@ describe("update leftovers", () => {
       expect(fakeDocker.container(helper.id)).toBeDefined()
       fakeDocker.reset()
     }
+  })
+
+  it("leaves updates' leftovers and images alone while an update record can't be read", async () => {
+    const harness = await relayHarness()
+    const cleanup = await cleanupWithUpdates(harness, [finished])
+    await writeFile(
+      join(harness.config.dataDirectory, "updates", `${randomUUID()}.json`),
+      "{ half-written"
+    )
+    const { backup, helper } = seedUpdate({ state: "exited" })
+    fakeDocker.images.set("relay-new", { "io.kiln.component": "relay" })
+    fakeDocker.untaggedImages.add("relay-new")
+
+    await Effect.runPromise(cleanup.pass({ kind: "timer" }))
+
+    expect(fakeDocker.container(backup.id)).toBeDefined()
+    expect(fakeDocker.container(helper.id)).toBeDefined()
+    expect(fakeDocker.images.has("relay-new")).toBe(true)
   })
 
   it("leaves everything while an update's record says it runs, before its helper exists", async () => {

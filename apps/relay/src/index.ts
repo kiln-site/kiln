@@ -231,7 +231,7 @@ import { LifecycleDriver, newInstanceId } from "./lifecycle.js"
 import { nodeSnapshot } from "./node.js"
 import { reportRelayMemoryMetrics } from "./relay-memory.js"
 import { sampleRelayCapacity } from "./relay-capacity.js"
-import { RelayPairingError } from "./effect/errors.js"
+import { RelayPairingError, RelaySystemUpdateError } from "./effect/errors.js"
 import {
   loadOrCreateRelayIdentity,
   renameRelayIdentity,
@@ -480,9 +480,32 @@ const relayEngine = new DockerEngine(config.dockerSocket)
 const terminals = new ContainerTerminals(config)
 // The config itself, not a copy: it reads the installation ID Hearth gives
 // the Relay later.
+// An update batch's records are written in their turn after a Docker
+// cleanup deciding which images to remove, so it either sees them or is
+// done before the batch pulls its images (docker-cleanup.ts).
+const recordUpdate = operation<Effect.Effect<void, RelaySystemUpdateError>>()({
+  name: "relay.update.record",
+  locks: () => [shared(laneKeys.dockerCleanup)],
+  carriesOnWhilePaused: true,
+  run: ({ input }) => input,
+})
 const systemUpdates = new SystemUpdateManager(config, {
   refuseTarget: (container) =>
     platformUpdateRefusal(config.dataDirectory, container),
+  recordOperations: (write) =>
+    runOperation(lanes, recordUpdate, write, { kind: "worker" }).pipe(
+      Effect.catchIf(
+        (cause) => cause instanceof LaneRejectedError,
+        (cause) =>
+          Effect.fail(
+            new RelaySystemUpdateError({
+              phase: "start.record",
+              reason: cause.message,
+              rollbackFailures: [],
+            })
+          )
+      )
+    ),
 })
 // Set once a restart of the Relay or its host is under way, so a second
 // request in the moment before the Relay goes down doesn't start another.

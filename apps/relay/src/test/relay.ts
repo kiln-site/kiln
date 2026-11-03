@@ -130,6 +130,7 @@ export async function relayHarness(
           finishedHelpers: new Set<string>(),
           kept: new Set<string>(),
           named: new Set<string>(),
+          targets: new Set<string>(),
           updating: false,
         }),
     })

@@ -104,6 +104,7 @@ export interface UpdateCleanupState {
   readonly finishedHelpers: ReadonlySet<string>
   readonly kept: ReadonlySet<string>
   readonly named: ReadonlySet<string>
+  readonly targets: ReadonlySet<string>
   readonly updating: boolean
 }
 
@@ -138,6 +139,9 @@ export class SystemUpdateManager {
   // Why a container may not be updated now, such as a Hearth held stopped
   // for an offline restore; null when it may.
   readonly #refuseTarget: (container: string) => Effect.Effect<string | null>
+  readonly #recordOperations: (
+    write: Effect.Effect<void, RelaySystemUpdateError>
+  ) => Effect.Effect<void, RelaySystemUpdateError>
 
   constructor(
     config: {
@@ -149,9 +153,17 @@ export class SystemUpdateManager {
     },
     options: {
       refuseTarget?: (container: string) => Effect.Effect<string | null>
+      /**
+       * Writes a batch's records where Docker cleanup can't be deciding
+       * meanwhile, so it either sees them or is done before the pulls.
+       */
+      recordOperations?: (
+        write: Effect.Effect<void, RelaySystemUpdateError>
+      ) => Effect.Effect<void, RelaySystemUpdateError>
     } = {}
   ) {
     this.#refuseTarget = options.refuseTarget ?? (() => Effect.succeed(null))
+    this.#recordOperations = options.recordOperations ?? ((write) => write)
     this.#engine = new DockerEngine(
       config.dockerSocket ?? "/var/run/docker.sock"
     )
@@ -300,11 +312,14 @@ export class SystemUpdateManager {
             }
           }
           // Recorded before the images are pulled, which can take minutes,
-          // so a Relay restarted meanwhile still knows about them.
-          yield* Effect.forEach(
-            operations,
-            (operation) => writeOperationEffect(operationsDirectory, operation),
-            { discard: true }
+          // so a Relay restarted meanwhile, and Docker cleanup, know of them.
+          yield* this.#recordOperations(
+            Effect.forEach(
+              operations,
+              (operation) =>
+                writeOperationEffect(operationsDirectory, operation),
+              { discard: true }
+            )
           )
           this.#remember(operations)
           const images = uniqueUpdateImages(input.helperImage, prepared)
@@ -489,10 +504,17 @@ export class SystemUpdateManager {
    * - `kept`: a running update's images, and the image each component ran
    *   before its latest successful update, for a downgrade.
    * - `finishedHelpers`: the helper containers of updates that finished.
+   * - `targets`: the containers finished updates replaced, whose set-aside
+   *   copies are this Relay's to remove.
    */
   cleanupState(): Effect.Effect<UpdateCleanupState> {
-    return recordedOperationsEffect(this.#operationsDirectory).pipe(
-      Effect.map((operations) => {
+    return Effect.all([
+      recordedOperationsEffect(this.#operationsDirectory, { strict: true }),
+      // Clears a finished batch this process started, as a check of its
+      // helper finds it stopped.
+      this.running(),
+    ]).pipe(
+      Effect.map(([operations, batchRunning]) => {
         const images = (operation: UpdateOperation) => [
           operation.requestedImage,
           ...(operation.previousImageId ? [operation.previousImageId] : []),
@@ -529,19 +551,31 @@ export class SystemUpdateManager {
             ),
           ]),
           named: new Set(operations.flatMap(images)),
+          targets: new Set(
+            operations.flatMap((operation) =>
+              operation.status === "running" ? [] : [operation.targetContainer]
+            )
+          ),
           updating:
-            running.length > 0 ||
-            this.#starting.size > 0 ||
-            this.#activeBatch !== null,
+            running.length > 0 || this.#starting.size > 0 || batchRunning,
         }
       }),
-      // Records it can't read leave cleanup thinking an update runs.
-      Effect.orElseSucceed(() => ({
-        finishedHelpers: new Set<string>(),
-        kept: new Set<string>(),
-        named: new Set<string>(),
-        updating: true,
-      }))
+      // A record it can't read may be a running update's, or the one that
+      // names the image to keep: cleanup leaves updates' work alone.
+      Effect.catch((cause) =>
+        Effect.logWarning(
+          "Docker cleanup leaves update leftovers alone: an update record can't be read",
+          cause
+        ).pipe(
+          Effect.as({
+            finishedHelpers: new Set<string>(),
+            kept: new Set<string>(),
+            named: new Set<string>(),
+            targets: new Set<string>(),
+            updating: true,
+          })
+        )
+      )
     )
   }
 
@@ -893,7 +927,7 @@ const relayDataDirectoryEffect = Effect.fnUntraced(function* (
 })
 
 const recordedOperationsEffect = Effect.fn("relay.systemUpdates.recorded")(
-  function* (directory: string) {
+  function* (directory: string, options: { readonly strict?: boolean } = {}) {
     const names = yield* systemUpdateOperation("operations.list", () =>
       readdir(directory)
     ).pipe(
@@ -907,8 +941,11 @@ const recordedOperationsEffect = Effect.fn("relay.systemUpdates.recorded")(
       names.filter((name) => operationFilePattern.test(name)),
       (name) =>
         readOperationEffect(directory, name.slice(0, -".json".length)).pipe(
-          // One unreadable record must not hide the others.
-          Effect.catch(() => Effect.succeed(null))
+          // One unreadable record must not hide the others, unless the
+          // caller must know of every one.
+          Effect.catch((cause) =>
+            options.strict ? Effect.fail(cause) : Effect.succeed(null)
+          )
         ),
       { concurrency: 8 }
     )

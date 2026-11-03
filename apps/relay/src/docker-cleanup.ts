@@ -695,6 +695,8 @@ export class DockerCleanup {
             containerName(container)
           )?.[1]
           if (!original || byName.get(original)?.State !== "running") continue
+          // Only one an update this Relay recorded set aside.
+          if (!updates.targets.has(original)) continue
           const labels = container.Labels ?? {}
           if (!kilnComponent(labels["io.kiln.component"])) continue
           const installation = labels[KILN_INSTALLATION_LABEL]
