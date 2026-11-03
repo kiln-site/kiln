@@ -139,6 +139,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   viewAll = false,
 }: InstancePickerContentProps) {
   const listId = React.useId()
+  const searchInputRef = React.useRef<HTMLInputElement>(null)
   const [search, setSearch] = React.useState("")
   const [activeIndex, setActiveIndex] = React.useState(-1)
   const { filterIds, setFilterIds } = useInstancePickerFilterIds()
@@ -215,9 +216,21 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
     [filterIds, setFilterIds, typeFilters]
   )
   const clearFilters = React.useCallback(() => setFilterIds([]), [setFilterIds])
+  // A filter bar button unmounts once its filter is gone, so focus that was
+  // on it returns to the search field rather than falling to the page.
   const removeFilter = React.useCallback(
-    (filterId: string) => toggleFilter(filterId, false),
+    (filterId: string, hadFocus: boolean) => {
+      toggleFilter(filterId, false)
+      if (hadFocus) searchInputRef.current?.focus()
+    },
     [toggleFilter]
+  )
+  const clearFiltersFromBar = React.useCallback(
+    (hadFocus: boolean) => {
+      clearFilters()
+      if (hadFocus) searchInputRef.current?.focus()
+    },
+    [clearFilters]
   )
   const groups = React.useMemo(() => {
     if (!onSelectGroup) return emptyGroupList
@@ -324,6 +337,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           aria-hidden="true"
         />
         <Input
+          ref={searchInputRef}
           // On phones, wait for a tap so the keyboard doesn't cover the list.
           autoFocus={!searchAtBottom}
           type="search"
@@ -386,7 +400,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
         searching={query.length > 0}
         shown={visibleItems.length}
         total={items.length}
-        onClear={clearFilters}
+        onClear={clearFiltersFromBar}
         onRemove={removeFilter}
       />
     ) : null
@@ -723,8 +737,8 @@ const InstancePickerFilterBar = React.memo(function InstancePickerFilterBar({
   activeFilters: ReadonlyArray<InstancePickerFilter>
   /** Sits above a phone's search field: touch-sized, keeps it focused. */
   atBottom: boolean
-  onClear: () => void
-  onRemove: (filterId: string) => void
+  onClear: (hadFocus: boolean) => void
+  onRemove: (filterId: string, hadFocus: boolean) => void
   searching: boolean
   shown: number
   total: number
@@ -732,7 +746,6 @@ const InstancePickerFilterBar = React.memo(function InstancePickerFilterBar({
   const filtered = activeFilters.length > 0
   return (
     <div
-      role="status"
       className={cn(
         "flex min-h-9 shrink-0 items-center gap-1.5 border-border/70 bg-muted/25 px-2 py-1",
         atBottom ? "border-t" : "border-b"
@@ -779,7 +792,9 @@ const InstancePickerFilterBar = React.memo(function InstancePickerFilterBar({
             "type-meta shrink-0 rounded-sm px-1 text-muted-foreground underline-offset-2 outline-none hover:text-foreground hover:underline focus-visible:underline",
             atBottom && "h-8"
           )}
-          onClick={onClear}
+          onClick={(event) =>
+            onClear(event.currentTarget === document.activeElement)
+          }
           onMouseDown={atBottom ? keepSearchFocus : undefined}
         >
           Show all
@@ -795,7 +810,7 @@ const InstancePickerFilterChip = React.memo(function InstancePickerFilterChip({
   touch,
 }: {
   filter: InstancePickerFilter
-  onRemove: (filterId: string) => void
+  onRemove: (filterId: string, hadFocus: boolean) => void
   touch: boolean
 }) {
   const Icon =
@@ -818,7 +833,9 @@ const InstancePickerFilterChip = React.memo(function InstancePickerFilterChip({
           "grid place-items-center rounded-sm text-primary-ink/70 outline-none hover:bg-primary/15 hover:text-primary-ink focus-visible:ring-2 focus-visible:ring-ring/40",
           touch ? "mr-0.5 size-7" : "mr-0.5 size-5"
         )}
-        onClick={() => onRemove(filter.id)}
+        onClick={(event) =>
+          onRemove(filter.id, event.currentTarget === document.activeElement)
+        }
         onMouseDown={touch ? keepSearchFocus : undefined}
       >
         <X className="size-3" aria-hidden="true" />
