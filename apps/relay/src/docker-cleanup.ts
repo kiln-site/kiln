@@ -67,8 +67,14 @@ import type { UpdateCleanupState } from "./system-updates.js"
 import { KILN_INSTALLATION_LABEL, kilnComponent } from "./update-container.js"
 
 const UPDATE_HELPER_LABEL = "io.kiln.update-helper"
+// What the Relay names an update's helper (system-updates.ts).
+const UPDATE_HELPER_PREFIX = "kiln-updater-"
 // Docker states of a container that won't run again by itself.
 const EXITED = new Set(["dead", "exited"])
+// How long an update helper, or the container it set aside, has been
+// stopped before it counts as left over without a record saying so. An
+// update finishes or rolls back within minutes.
+const LEGACY_LEFTOVER_AGE_MS = 24 * 60 * 60_000
 // What the update helper renames the container it replaces to, until the
 // replacement is healthy (updater.ts).
 const UPDATE_BACKUP_NAME = /^(.+)-kiln-backup-\d+$/u
@@ -113,10 +119,18 @@ const imageBytesRemoved = Metric.counter(
 
 type RemovalKind = "leftover" | "update-backup" | "update-helper"
 
+// Whether a removal took, and the failure if it's one this cleanup reports.
+interface RemovalOutcome {
+  readonly error: string | null
+  readonly removed: boolean
+}
+
 /** What a cleanup removed. */
 export interface DockerCleanupResult {
   readonly buildCacheBytes: number
   readonly containers: number
+  /** Why it stopped short, when it did. */
+  readonly error: string | null
   /** What the removed images held of their own, shared layers left out. */
   readonly imageBytes: number
   readonly images: number
@@ -143,6 +157,8 @@ export interface DockerStorage {
   readonly reclaimable: { readonly bytes: number; readonly images: number }
   /** Unused images no Kiln container ran, removed only when asked. */
   readonly unknown: { readonly bytes: number; readonly images: number }
+  /** A cleanup someone asked for that's still running. */
+  readonly cleaning: { readonly startedAt: number } | null
   readonly lastCleanup:
     | (DockerCleanupResult & {
         readonly finishedAt: number
@@ -162,6 +178,7 @@ interface CollectInput {
 const NOTHING: DockerCleanupResult = {
   buildCacheBytes: 0,
   containers: 0,
+  error: null,
   imageBytes: 0,
   images: 0,
 }
@@ -192,6 +209,11 @@ export class DockerCleanup {
   readonly #state: RelayStateStore["Service"]
   readonly #updates: DockerCleanupOptions["updates"]
   #lastCleanup: DockerStorage["lastCleanup"] = null
+  // A cleanup someone asked for, while it runs in the background.
+  #requested: { readonly startedAt: number } | null = null
+  // The figures storage() last counted, shown again while a cleanup runs
+  // rather than have Docker count every image's layers mid-removal.
+  #figures: Omit<DockerStorage, "cleaning" | "lastCleanup"> | null = null
 
   constructor(options: DockerCleanupOptions) {
     this.#updates = options.updates
@@ -351,10 +373,48 @@ export class DockerCleanup {
   }
 
   /**
+   * Starts a cleanup someone asked for and answers at once: it runs in the
+   * background, and `storage()` shows it until it's done. One already
+   * running is left to finish rather than started again.
+   */
+  startCleanup(request: DockerCleanupRequest): Effect.Effect<{
+    readonly alreadyRunning: boolean
+    readonly startedAt: number
+  }> {
+    return Effect.gen({ self: this }, function* () {
+      if (this.#requested) {
+        return { alreadyRunning: true, startedAt: this.#requested.startedAt }
+      }
+      const startedAt = yield* Clock.currentTimeMillis
+      const requested = { startedAt }
+      this.#requested = requested
+      yield* Effect.forkDetach(
+        this.cleanNow(request).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (this.#requested === requested) this.#requested = null
+            })
+          )
+        )
+      )
+      return { alreadyRunning: false, startedAt }
+    })
+  }
+
+  /**
    * What Docker holds and what a cleanup now could remove. Asks Docker to
-   * count every image's layers, so only when someone wants the figures.
+   * count every image's layers, so only when someone wants the figures,
+   * and not while a cleanup runs: the last figures stand until it's done.
    */
   storage(): Effect.Effect<DockerStorage, unknown> {
+    const requested = this.#requested
+    if (requested && this.#figures) {
+      return Effect.succeed({
+        ...this.#figures,
+        cleaning: { startedAt: requested.startedAt },
+        lastCleanup: this.#lastCleanup,
+      })
+    }
     return Effect.gen({ self: this }, function* () {
       const [usage, containers, leftovers] = yield* Effect.all(
         [
@@ -380,7 +440,7 @@ export class DockerCleanup {
         }
       }
       const cache = usage.BuildCache ?? []
-      return {
+      const figures = {
         buildCache: {
           bytes: cache.reduce((sum, record) => sum + (record.Size ?? 0), 0),
           reclaimableBytes: cache.reduce(
@@ -394,10 +454,15 @@ export class DockerCleanup {
             images.reduce((sum, image) => sum + imageOwnBytes(image), 0),
           count: images.length,
         },
-        lastCleanup: this.#lastCleanup,
         leftoverContainers: leftovers.length,
         reclaimable: total((kind) => kind !== "unknown"),
         unknown: total((kind) => kind === "unknown"),
+      }
+      this.#figures = figures
+      return {
+        ...figures,
+        cleaning: this.#requested && { startedAt: this.#requested.startedAt },
+        lastCleanup: this.#lastCleanup,
       }
     })
   }
@@ -455,7 +520,12 @@ export class DockerCleanup {
         )
       )
     return Effect.gen({ self: this }, function* () {
-      const swept = yield* admit(this.#sweepUpdates, undefined, 0)
+      const swept = yield* admit(this.#sweepUpdates, undefined, {
+        error: null,
+        removed: 0,
+      })
+      // A leftover Docker still refuses stays recorded, and counted, for
+      // the next pass: not a failure of this cleanup.
       let retried = 0
       for (const leftover of yield* state.listDockerCleanups()) {
         if (yield* admit(this.#retryRemoval, leftover, false)) retried += 1
@@ -463,16 +533,23 @@ export class DockerCleanup {
       const collected = yield* admit(this.#collect, input, NOTHING)
       const result = {
         ...collected,
-        containers: swept + retried,
+        containers: swept.removed + retried,
+        error: swept.error ?? collected.error,
       }
       const finishedAt = yield* Clock.currentTimeMillis
       this.#lastCleanup = { ...result, finishedAt, requested: !onlyIfFree }
       return result
     }).pipe(
+      // Kept as the latest cleanup too, so someone who asked for it hears
+      // how it ended.
       Effect.catch((cause) =>
-        Effect.logWarning("Docker cleanup didn't finish", cause).pipe(
-          Effect.as(NOTHING)
-        )
+        Effect.gen({ self: this }, function* () {
+          yield* Effect.logWarning("Docker cleanup didn't finish", cause)
+          const result = { ...NOTHING, error: errorMessage(cause) }
+          const finishedAt = yield* Clock.currentTimeMillis
+          this.#lastCleanup = { ...result, finishedAt, requested: !onlyIfFree }
+          return result
+        })
       )
     )
   }
@@ -577,8 +654,11 @@ export class DockerCleanup {
           .slice(0, input.limit)
         let removedImages = 0
         let imageBytes = 0
+        let error: string | null = null
         for (const removal of removals) {
-          if (yield* this.#removeImage(removal.image, removal.kind)) {
+          const outcome = yield* this.#removeImage(removal.image, removal.kind)
+          error ??= outcome.error
+          if (outcome.removed) {
             removedImages += 1
             imageBytes += imageOwnBytes(removal.image)
             yield* this.#state.forgetDockerImage(removal.image.Id)
@@ -606,13 +686,14 @@ export class DockerCleanup {
         return {
           ...NOTHING,
           buildCacheBytes,
+          error,
           imageBytes,
           images: removedImages,
         }
       }).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("Relay couldn't remove images", cause).pipe(
-            Effect.as(NOTHING)
+            Effect.as({ ...NOTHING, error: errorMessage(cause) })
           )
         )
       ),
@@ -666,28 +747,50 @@ export class DockerCleanup {
   // the replacement under its name runs. Nothing while any update starts or
   // runs, by this Relay's records or a helper anyone's update made that
   // hasn't exited: a helper may still roll back to the container it set
-  // aside. Only helpers of updates this Relay recorded as finished go.
+  // aside. Helpers and set-aside containers of updates this Relay recorded
+  // as finished go, and, from before updates were recorded, ones Kiln's
+  // updater named that have been stopped for a day.
   readonly #sweepUpdates = operation<void>()({
     name: "relay.docker.cleanup.updates",
     locks: () => [exclusive(laneKeys.dockerCleanup)],
     run: () =>
       Effect.gen({ self: this }, function* () {
         let removed = 0
+        let error: string | null = null
+        const remove = (containerId: string, kind: RemovalKind) =>
+          this.#removeSwept(containerId, kind).pipe(
+            Effect.tap((outcome) =>
+              Effect.sync(() => {
+                if (outcome.removed) removed += 1
+                error ??= outcome.error
+              })
+            )
+          )
         const updates = yield* this.#updates()
-        if (updates.updating) return removed
+        if (updates.updating) return { error, removed }
         const containers = yield* this.#engine.listContainers({ all: true })
         const helpers = containers.filter(
           (container) => container.Labels?.[UPDATE_HELPER_LABEL] === "true"
         )
         if (helpers.some((helper) => !EXITED.has(helper.State))) {
-          return removed
+          return { error, removed }
         }
         const byName = new Map(
           containers.map((container) => [containerName(container), container])
         )
+        const now = yield* Clock.currentTimeMillis
         for (const helper of helpers) {
-          if (!updates.finishedHelpers.has(containerName(helper))) continue
-          if (yield* this.#removeSwept(helper.Id, "update-helper")) removed += 1
+          const name = containerName(helper)
+          if (
+            !updates.finishedHelpers.has(name) &&
+            !(
+              name.startsWith(UPDATE_HELPER_PREFIX) &&
+              (yield* this.#stoppedLongAgo(helper.Id, now))
+            )
+          ) {
+            continue
+          }
+          yield* remove(helper.Id, "update-helper")
         }
         for (const container of containers) {
           if (container.State === "running") continue
@@ -695,35 +798,64 @@ export class DockerCleanup {
             containerName(container)
           )?.[1]
           if (!original || byName.get(original)?.State !== "running") continue
-          // Only one an update this Relay recorded set aside.
-          if (!updates.targets.has(original)) continue
           const labels = container.Labels ?? {}
           if (!kilnComponent(labels["io.kiln.component"])) continue
+          // One an update this Relay recorded set aside, or, from before
+          // updates were recorded, one stopped for a day: no update holds
+          // its rollback copy that long.
+          if (
+            !updates.targets.has(original) &&
+            !(yield* this.#stoppedLongAgo(container.Id, now))
+          ) {
+            continue
+          }
           const installation = labels[KILN_INSTALLATION_LABEL]
           if (installation && installation !== this.#config.installationId) {
             continue
           }
-          if (yield* this.#removeSwept(container.Id, "update-backup")) {
-            removed += 1
-          }
+          yield* remove(container.Id, "update-backup")
         }
-        return removed
+        return { error, removed }
       }).pipe(
         Effect.catch((cause) =>
           Effect.logWarning(
             "Relay couldn't look for update leftovers",
             cause
-          ).pipe(Effect.as(0))
+          ).pipe(Effect.as({ error: errorMessage(cause), removed: 0 }))
         )
       ),
   })
 
-  // Unforced, so Docker keeps one a container started using meanwhile.
-  // Whether it's gone.
+  // Whether a container stopped over a day ago, by when Docker says it
+  // finished; one that never ran, or can't be read, didn't.
+  #stoppedLongAgo(containerId: string, now: number): Effect.Effect<boolean> {
+    return this.#engine
+      .inspectContainer<{ readonly State: { readonly FinishedAt?: string } }>(
+        containerId
+      )
+      .pipe(
+        Effect.map((container) => {
+          const finished = Date.parse(container.State.FinishedAt ?? "")
+          return (
+            Number.isFinite(finished) &&
+            finished > 0 &&
+            now - finished >= LEGACY_LEFTOVER_AGE_MS
+          )
+        }),
+        Effect.orElseSucceed(() => false)
+      )
+  }
+
+  // Unforced, so Docker keeps one a container started using meanwhile:
+  // that refusal (409) isn't a failure, nor is one already gone; anything
+  // else is, and goes in the cleanup's result.
   #removeImage(
     image: DockerImageSummary,
     kind: ImageRemovalKind
-  ): Effect.Effect<boolean> {
+  ): Effect.Effect<{
+    readonly error: string | null
+    readonly removed: boolean
+  }> {
     const attributes = { "cleanup.kind": kind }
     return this.#engine.removeImage(image.Id, { force: false }).pipe(
       Effect.andThen(
@@ -735,21 +867,33 @@ export class DockerCleanup {
           ),
         ])
       ),
-      Effect.as(true),
-      Effect.catchIf(isDockerNotFound, () => Effect.succeed(true)),
-      Effect.catch((cause) =>
-        Effect.logDebug("Docker kept an image", {
-          error: cause.message,
-          imageId: image.Id,
-        }).pipe(Effect.as(false))
+      Effect.as<RemovalOutcome>({ error: null, removed: true }),
+      Effect.catchIf(isDockerNotFound, () =>
+        Effect.succeed<RemovalOutcome>({ error: null, removed: true })
+      ),
+      Effect.catch((cause): Effect.Effect<RemovalOutcome> =>
+        cause.status === 409
+          ? Effect.logDebug("Docker kept an image", {
+              error: cause.message,
+              imageId: image.Id,
+            }).pipe(Effect.as({ error: null, removed: false }))
+          : Effect.logWarning("Docker didn't remove an image", {
+              error: cause.message,
+              imageId: image.Id,
+            }).pipe(Effect.as({ error: errorMessage(cause), removed: false }))
       )
     )
   }
 
-  #removeSwept(containerId: string, kind: RemovalKind): Effect.Effect<boolean> {
-    return this.#remove(containerId, false).pipe(
+  // Unforced: Docker refuses one that started again since it was checked,
+  // or that's already gone, which isn't a failure; anything else is.
+  #removeSwept(
+    containerId: string,
+    kind: RemovalKind
+  ): Effect.Effect<RemovalOutcome> {
+    return this.#engine.removeContainer(containerId, { timeout: 90_000 }).pipe(
       Effect.andThen(count(removed, kind)),
-      Effect.as(true),
+      Effect.as({ error: null, removed: true }),
       Effect.catch((cause) =>
         count(refused, kind).pipe(
           Effect.andThen(
@@ -759,7 +903,13 @@ export class DockerCleanup {
               kind,
             })
           ),
-          Effect.as(false)
+          Effect.as({
+            error:
+              cause.status === 404 || cause.status === 409
+                ? null
+                : errorMessage(cause),
+            removed: false,
+          })
         )
       )
     )
@@ -789,6 +939,13 @@ function ownerLocks(
     case undefined:
       return [exclusive(laneKeys.dockerCleanup)]
   }
+}
+
+function errorMessage(cause: unknown): string {
+  return (cause instanceof Error ? cause.message : String(cause)).slice(
+    0,
+    2_000
+  )
 }
 
 function ownerKey(owner: KilnContainerOwner): string {

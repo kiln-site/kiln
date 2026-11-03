@@ -761,9 +761,17 @@ export const relayDockerCleanupRequestSchema = z.strictObject({
 export const relayDockerCleanupResultSchema = z.object({
   buildCacheBytes: z.number().int().nonnegative(),
   containers: z.number().int().nonnegative(),
+  // Why it stopped short, when it did.
+  error: z.string().max(2_000).nullable(),
   // What the removed images held of their own, shared layers left out.
   imageBytes: z.number().int().nonnegative(),
   images: z.number().int().nonnegative(),
+})
+// A cleanup someone asked for runs in the background; the Relay answers as
+// it starts, or with the one already running.
+export const relayDockerCleanupStartSchema = z.object({
+  alreadyRunning: z.boolean(),
+  startedAt: z.number().int().nonnegative(),
 })
 const relayDockerAmountSchema = z.object({
   bytes: z.number().int().nonnegative(),
@@ -779,6 +787,8 @@ export const relayDockerStorageSchema = z.object({
     bytes: z.number().int().nonnegative(),
     count: z.number().int().nonnegative(),
   }),
+  // A cleanup someone asked for that's still running in the background.
+  cleaning: z.object({ startedAt: z.number().int().nonnegative() }).nullable(),
   // The latest cleanup since the Relay started, a pass or asked for.
   lastCleanup: relayDockerCleanupResultSchema
     .extend({

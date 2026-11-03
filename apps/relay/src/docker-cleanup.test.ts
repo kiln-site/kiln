@@ -286,6 +286,58 @@ describe("update leftovers", () => {
   })
 })
 
+describe("leftovers from before updates were recorded", () => {
+  it("removes a helper and set-aside container stopped over a day, and none that stopped since", async () => {
+    const harness = await relayHarness()
+    const dayAgo = new Date(Date.now() - 25 * 60 * 60_000).toISOString()
+    const hourAgo = new Date(Date.now() - 60 * 60_000).toISOString()
+    fakeDocker.addContainer({
+      image: "ghcr.io/kiln-site/relay:latest",
+      labels: { "io.kiln.component": "relay" },
+      name: "kiln-relay",
+      running: true,
+    })
+    const stopped = (
+      name: string,
+      labels: Record<string, string>,
+      at: string
+    ) =>
+      fakeDocker.addContainer({
+        finishedAt: at,
+        image: "ghcr.io/kiln-site/relay:old",
+        labels,
+        name,
+        startedAt: at,
+      })
+    const relay = { "io.kiln.component": "relay" }
+    const helper = { "io.kiln.update-helper": "true" }
+    const oldBackup = stopped(
+      "kiln-relay-kiln-backup-1700000000000",
+      relay,
+      dayAgo
+    )
+    const newBackup = stopped(
+      "kiln-relay-kiln-backup-1767225600000",
+      relay,
+      hourAgo
+    )
+    const oldHelper = stopped("kiln-updater-legacy", helper, dayAgo)
+    const newHelper = stopped("kiln-updater-recent", helper, hourAgo)
+    // Kiln's game servers share the prefix, and a stopped one stays; so
+    // does a container labelled as a helper that isn't named like one.
+    const server = stopped("kiln-e1534cce", {}, dayAgo)
+    const odd = stopped("not-an-updater", helper, dayAgo)
+
+    await Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
+
+    expect(fakeDocker.container(oldBackup.id)).toBeUndefined()
+    expect(fakeDocker.container(oldHelper.id)).toBeUndefined()
+    for (const kept of [newBackup, newHelper, server, odd]) {
+      expect(fakeDocker.container(kept.id)).toBeDefined()
+    }
+  })
+})
+
 describe("image retention", () => {
   const builds = () =>
     [...fakeDocker.images.keys()].filter((image) =>
@@ -596,5 +648,100 @@ describe("cleanup a person asks for", () => {
     expect(everything).toMatchObject({ buildCacheBytes: 5_000_000, images: 1 })
     expect(fakeDocker.images.size).toBe(0)
     expect(fakeDocker.buildCache).toEqual([{ InUse: true, Size: 2_000_000 }])
+  })
+})
+
+describe("a cleanup someone asks for, in the background", () => {
+  it("answers as it starts, runs one at a time, and shows it running until it's done", async () => {
+    const harness = await relayHarness()
+    const database = fakeDocker.addContainer({
+      image: "postgres:16",
+      labels: {
+        "kiln.database.id": "f".repeat(32),
+        "kiln.relay.owner": TEST_NAMESPACE,
+      },
+      name: "kiln-test-database",
+    })
+    await Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
+    fakeDocker.removeContainer(database.name)
+    await Effect.runPromise(harness.cleanup.storage())
+    const removal = fakeDocker.hold({ command: "image rm" })
+
+    const started = await Effect.runPromise(
+      harness.cleanup.startCleanup({ buildCache: false, unknownImages: false })
+    )
+    await removal.reached
+    const again = await Effect.runPromise(
+      harness.cleanup.startCleanup({ buildCache: false, unknownImages: true })
+    )
+    const running = await Effect.runPromise(harness.cleanup.storage())
+
+    expect(started.alreadyRunning).toBe(false)
+    expect(again).toEqual({
+      alreadyRunning: true,
+      startedAt: started.startedAt,
+    })
+    expect(running.cleaning).toEqual({ startedAt: started.startedAt })
+    expect(fakeDocker.images.has("postgres:16")).toBe(true)
+
+    removal.release()
+    await vi.waitFor(async () => {
+      const done = await Effect.runPromise(harness.cleanup.storage())
+      expect(done.cleaning).toBeNull()
+      expect(done.lastCleanup).toMatchObject({ images: 1, requested: true })
+    })
+    expect(fakeDocker.images.has("postgres:16")).toBe(false)
+  })
+
+  it("keeps how a cleanup that failed in the background ended", async () => {
+    const harness = await relayHarness()
+    // Read once, so reads while it runs answer from these figures.
+    await Effect.runPromise(harness.cleanup.storage())
+    // Docker fails it as it looks for update leftovers, then recovers
+    // before it removes images.
+    fakeDocker.failNext(
+      { command: "ps" },
+      "Cannot connect to the Docker daemon"
+    )
+
+    await Effect.runPromise(
+      harness.cleanup.startCleanup({ buildCache: false, unknownImages: false })
+    )
+
+    await vi.waitFor(async () => {
+      const done = await Effect.runPromise(harness.cleanup.storage())
+      expect(done.cleaning).toBeNull()
+      expect(done.lastCleanup?.error).toContain(
+        "Cannot connect to the Docker daemon"
+      )
+    })
+  })
+
+  it("keeps the image and says it didn't finish when Docker fails to remove one", async () => {
+    const harness = await relayHarness()
+    const database = fakeDocker.addContainer({
+      image: "postgres:16",
+      labels: {
+        "kiln.database.id": "f".repeat(32),
+        "kiln.relay.owner": TEST_NAMESPACE,
+      },
+      name: "kiln-test-database",
+    })
+    await Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
+    fakeDocker.removeContainer(database.name)
+    await Effect.runPromise(harness.cleanup.storage())
+    fakeDocker.failNext({ command: "image rm" }, "layer is locked")
+
+    await Effect.runPromise(
+      harness.cleanup.startCleanup({ buildCache: false, unknownImages: false })
+    )
+
+    await vi.waitFor(async () => {
+      const done = await Effect.runPromise(harness.cleanup.storage())
+      expect(done.cleaning).toBeNull()
+      expect(done.lastCleanup).toMatchObject({ images: 0 })
+      expect(done.lastCleanup?.error).toContain("layer is locked")
+    })
+    expect(fakeDocker.images.has("postgres:16")).toBe(true)
   })
 })
