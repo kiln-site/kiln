@@ -306,6 +306,40 @@ that move. Ten-second samples can miss a spike shorter than that; the refusal
 counters and request durations record every request as it happens, though a
 request Hearth refuses before sending is only counted, not timed.
 
+## Node metrics
+
+To size what Kiln keeps for itself against what workloads may take, the Relay
+also reports what its node spends and who spends it, with the same
+`OTEL_METRICS_EXPORTER=otlp`. It samples every fifteen seconds; OOM kills and
+exits are counted from Docker's events as they happen. Every metric is
+labelled with `relay.id`.
+
+Container metrics carry `kiln.container.group`, one of `relay`, `hearth`,
+`mysql`, `valkey` (the last three in platform mode), `relay_services`
+(Traefik, CoreDNS, Tailscale, Limbo), `game_server`, `app`, `database`, or
+`other` for every container Kiln doesn't run, such as Coolify's. Workloads
+are summed per kind, never labelled per resource, and every group is written
+each sample, so one that empties reads zero.
+
+| Metric                                                                                       | Meaning                                                                                                                                                                                |
+| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `relay.container.count`                                                                      | Running containers in the group.                                                                                                                                                       |
+| `relay.container.cpu.time`                                                                   | CPU seconds the group used. Its rate is cores in use.                                                                                                                                  |
+| `relay.container.cpu.throttled_time`                                                         | Seconds the group's CPU limits held it back.                                                                                                                                           |
+| `relay.container.memory.usage`, `relay.container.memory.anon`, `relay.container.memory.file` | Container memory, page cache included; the anonymous part, which can't be reclaimed without swap; and the page cache, which can.                                                       |
+| `relay.container.oom_kills`                                                                  | Times the kernel killed a process in the group for want of memory, whether the container's limit or the node ran out.                                                                  |
+| `relay.container.exits`                                                                      | Times one of the group's containers stopped, by `exit.code`. Stops Kiln asks for count too; 137 is a SIGKILL, as an OOM kill sends.                                                    |
+| `relay.host.cpu.time`, `relay.host.cpu.cores`                                                | The node's CPU seconds by `cpu.mode` (`user`, `system`, `iowait`, `steal`, `idle`, ...), across all cores, and its core count.                                                         |
+| `relay.host.memory.total`, `relay.host.memory.available`, `relay.host.swap.used`             | The node's memory, what it can give out without swapping, and the swap in use.                                                                                                         |
+| `relay.host.pressure.stall_time`                                                             | Seconds tasks stalled for `pressure.resource` (`cpu`, `memory`, `io`), by `pressure.scope`: `some` (at least one task waited) or `full` (all did). Its rate is the share of time lost. |
+| `relay.host.oom_kills`                                                                       | Processes the kernel killed for want of memory anywhere on the node, Kiln's containers or not.                                                                                         |
+
+Host readings come from `/proc`, which a container shares with its host, so a
+Relay in a container reports the whole node. Pressure needs Linux's PSI:
+kernel 4.20 or later with it enabled (Debian also needs `psi=1` on the kernel
+command line); without it the pressure metric is absent. Counters start from
+the Relay's first sample, so a restart loses at most one interval.
+
 ## Connection drops
 
 Both ends log each control connection that ends, unsampled, so a drop that

@@ -68,6 +68,19 @@ export interface DockerContainerSummary {
   readonly Mounts?: ReadonlyArray<DockerMount>
 }
 
+/** One of Docker's events, as `events` streams them. */
+export interface DockerEvent {
+  readonly Type?: string
+  readonly Action?: string
+  /** When it happened, in nanoseconds since 1970, as Docker's digits. */
+  readonly timeNano?: string
+  readonly Actor?: {
+    readonly ID?: string
+    /** A container's labels, with its `name`, `image`, and `exitCode`. */
+    readonly Attributes?: Readonly<Record<string, string>>
+  }
+}
+
 /** A container's mount, as both container listing and inspection report it. */
 export interface DockerMount {
   readonly Destination: string
@@ -458,13 +471,61 @@ export class DockerEngine {
     })
   }
 
-  containerStats(reference: string): Effect.Effect<unknown, DockerEngineError> {
+  /**
+   * A container's stats. Docker waits a second for a second reading, to
+   * work out CPU use since the first, unless `oneShot` asks for the first
+   * alone, whose counters are only totals.
+   */
+  containerStats(
+    reference: string,
+    options: { readonly oneShot?: boolean } = {}
+  ): Effect.Effect<unknown, DockerEngineError> {
     return this.#json({
       maxBytes: 1024 * 1024,
       method: "GET",
-      path: `/containers/${segment(reference)}/stats${query({ stream: false })}`,
+      path: `/containers/${segment(reference)}/stats${query({
+        stream: false,
+        "one-shot": options.oneShot || undefined,
+      })}`,
       timeout: 2_500,
     })
+  }
+
+  /**
+   * Hands each event Docker reports to `onEvent`, until the effect is
+   * interrupted or Docker ends the stream: from now on, or first those it
+   * still holds from `since` (Unix seconds) onwards.
+   */
+  events(
+    filters: DockerFilters,
+    options: { readonly since?: number | undefined },
+    onEvent: (event: DockerEvent) => void
+  ): Effect.Effect<void, DockerEngineError> {
+    const lines = lineReader((line) => {
+      if (!line.trim()) return
+      // A line Docker cut short says nothing to count.
+      const event = Result.try(
+        () =>
+          // As a string, since nanoseconds since 1970 are past what a
+          // number holds exactly.
+          JSON.parse(
+            line.replace(/"timeNano":(\d+)/, '"timeNano":"$1"')
+          ) as DockerEvent
+      )
+      if (Result.isSuccess(event)) onEvent(event.success)
+    })
+    return this.#exchange({
+      method: "GET",
+      onData: (chunk) => {
+        lines.read(chunk)
+        return undefined
+      },
+      path: `/events${query({
+        filters: JSON.stringify(filters),
+        since: options.since,
+      })}`,
+      timeout: null,
+    }).pipe(Effect.asVoid)
   }
 
   resizeContainer(
