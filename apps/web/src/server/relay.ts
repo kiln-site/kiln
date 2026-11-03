@@ -89,6 +89,7 @@ import {
 import { syncInstanceDomainAfterPortUpdateBestEffort } from "@/server/relay-port-update.server"
 import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
+import { webRouteProxySchema } from "@/lib/domain-schemas"
 import {
   instanceDeletionName,
   requireDeleteConfirmation,
@@ -229,6 +230,7 @@ const actionInputSchema = instanceInputSchema.extend(
 )
 
 const webRoutesInputSchema = instanceInputSchema.extend({
+  proxy: webRouteProxySchema.optional(),
   routes: relayInstanceWebRouteInputsSchema,
 })
 
@@ -814,7 +816,8 @@ async function updateInstanceWebRoutesHandler(
             user.id
           )
         ).json()
-      )
+      ),
+    data.proxy
   )
   publishRealtimeChange({
     audience: { kind: "relays", relayIds: [data.relayId] },

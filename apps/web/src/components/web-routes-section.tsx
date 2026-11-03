@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query"
 import {
   primaryWebRoute,
   relayInstanceWebRouteInputsSchema,
+  webRouteHostnames,
   webRouteHosts,
   webRouteUrl,
 } from "@workspace/contracts"
@@ -42,6 +43,7 @@ import {
 } from "@/components/web-route-dialog"
 import { WebCertificateStatus } from "@/components/web-certificate-status"
 import {
+  useWebHostnameProxied,
   WebHostnameDnsStatus,
   type WebHostnameResourceRef,
 } from "@/components/web-hostname-dns"
@@ -59,6 +61,12 @@ export type WebRouteRow = RelayInstanceWebRouteInput & {
 }
 
 type DisplayedRoute = WebRouteRow & { readonly rowId: string }
+
+/** Whether a route's hostnames go through Cloudflare's proxy, as changed. */
+export interface WebRouteProxyChange {
+  hostnames: Array<string>
+  proxied: boolean
+}
 
 export type { WebRouteServiceOption }
 
@@ -88,13 +96,25 @@ export function WebRoutesSection({
   status: IdentityStatusPresentation | null
   // Applies saved routes, such as by deploying or restarting.
   statusAction?: React.ReactNode
-  onSave: (routes: Array<WebRouteRow>) => Promise<unknown>
+  // `proxy` when a route's dialog changed whether its hostnames go through
+  // Cloudflare's proxy.
+  onSave: (
+    routes: Array<WebRouteRow>,
+    proxy?: WebRouteProxyChange
+  ) => Promise<unknown>
 }) {
   const [editing, setEditing] = React.useState<
     { mode: "add" } | { mode: "edit"; route: DisplayedRoute } | null
   >(null)
+  const proxiedFor = useWebHostnameProxied(dnsResource)
   const save = useMutation({
-    mutationFn: async (routes: Array<WebRouteRow>) => {
+    mutationFn: async ({
+      proxy,
+      routes,
+    }: {
+      proxy?: WebRouteProxyChange
+      routes: Array<WebRouteRow>
+    }) => {
       const next = withPrimary(routes)
       // The checks every route list gets; an app's also names services.
       const parsed = relayInstanceWebRouteInputsSchema.safeParse(
@@ -103,7 +123,7 @@ export function WebRoutesSection({
       if (!parsed.success) {
         throw new Error(parsed.error.issues[0]?.message ?? "Routes are invalid")
       }
-      await onSave(next)
+      await onSave(next, proxy)
     },
   })
   const saved = React.useMemo(
@@ -113,7 +133,7 @@ export function WebRoutesSection({
   // While a change saves, the table shows it.
   const displayed = React.useMemo(
     () =>
-      (save.isPending ? save.variables : saved)?.map(
+      (save.isPending ? save.variables?.routes : saved)?.map(
         (route, index): DisplayedRoute => ({
           ...route,
           rowId: route.id ?? `new-${index}-${route.hostname}`,
@@ -131,7 +151,7 @@ export function WebRoutesSection({
     (next: Array<WebRouteRow>, failure: string, onSaved?: () => void) =>
       forkPromise(
         async () => {
-          await save.mutateAsync(next)
+          await save.mutateAsync({ routes: next })
           onSaved?.()
         },
         (cause) =>
@@ -278,12 +298,13 @@ export function WebRoutesSection({
       />
       {editing && saved ? (
         <WebRouteDialog
+          proxiedFor={proxiedFor}
           route={editing.mode === "edit" ? editing.route : undefined}
           services={services}
           onOpenChange={(open) => {
             if (!open) setEditing(null)
           }}
-          onSubmit={async (route) => {
+          onSubmit={async (route, proxied) => {
             const next =
               editing.mode === "edit"
                 ? saved.map((candidate) =>
@@ -300,7 +321,13 @@ export function WebRoutesSection({
                     // The first route a server or app gets is its primary.
                     { ...route, primary: !primaryWebRoute(saved) },
                   ]
-            await save.mutateAsync(next)
+            await save.mutateAsync({
+              proxy:
+                proxied === undefined
+                  ? undefined
+                  : { hostnames: webRouteHostnames(route), proxied },
+              routes: next,
+            })
             setEditing(null)
           }}
         />

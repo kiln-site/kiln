@@ -40,6 +40,7 @@ import {
   DataTableActionGroup,
   DataTableEmptyState,
 } from "@/components/data-table"
+import { CloudflareProxyStatus } from "@/components/cloudflare-proxy-status"
 import { DataTable } from "@/components/data-table-view"
 import {
   DataTableToolbar,
@@ -102,6 +103,7 @@ type DomainDialog =
   | { kind: "delete"; domain: ManagedDomainOverview }
   | { kind: "edit"; domain: ManagedDomainOverview }
   | { hostname: WebHostnameOverview; kind: "release" }
+  | { hostname: WebHostnameOverview; kind: "adopt" }
   | null
 
 /**
@@ -158,6 +160,7 @@ const domainTableSearchFields = [
   (row: DomainRow) =>
     row.kind === "server" ? row.domain.relayName : row.hostname.relayName,
   (row: DomainRow) => rowStatus(row).label,
+  (row: DomainRow) => proxyLabel(row),
 ] as const
 
 // The dialogs are large and opened rarely, so they load after the page: when
@@ -188,6 +191,9 @@ const ReleaseHostnameDialog = React.lazy(async () => ({
 }))
 const EditDomainDialog = React.lazy(async () => ({
   default: (await loadDomainDialogs()).EditDomainDialog,
+}))
+const AdoptRecordDialog = React.lazy(async () => ({
+  default: (await loadDomainDialogs()).AdoptRecordDialog,
 }))
 
 /** The game server or app the table is filtered to. */
@@ -356,6 +362,13 @@ export const DomainsPage = React.memo(function DomainsPage({
         ) : null}
         {dialog?.kind === "release" ? (
           <ReleaseHostnameDialog
+            key={dialog.hostname.id}
+            hostname={dialog.hostname}
+            onOpenChange={closeDialog}
+          />
+        ) : null}
+        {dialog?.kind === "adopt" ? (
+          <AdoptRecordDialog
             key={dialog.hostname.id}
             hostname={dialog.hostname}
             onOpenChange={closeDialog}
@@ -879,7 +892,9 @@ const DomainsTable = React.memo(function DomainsTable({
         id: "status",
         header: () => <span className="sr-only sm:not-sr-only">Status</span>,
         sortFn: "text",
-        cell: ({ row }) => <DomainStatusCell row={row.original} />,
+        cell: ({ row }) => (
+          <DomainStatusCell row={row.original} onDialog={onDialog} />
+        ),
         meta: dataTableColumnMeta(
           { width: { base: "2.5rem", sm: statusColumnWidth } },
           {
@@ -928,6 +943,18 @@ const DomainsTable = React.memo(function DomainsTable({
           </div>
         ),
         meta: dataTableColumnMeta({ width: "minmax(0,1.4fr)" }),
+      }),
+      domainTableColumnHelper.accessor((row) => proxyLabel(row), {
+        id: "proxy",
+        header: "Proxy",
+        sortFn: "text",
+        cell: ({ row }) => {
+          const proxied = rowProxied(row.original)
+          return proxied === null ? null : (
+            <CloudflareProxyStatus proxied={proxied} />
+          )
+        },
+        meta: dataTableColumnMeta({ hideBelow: "md", width: "7rem" }),
       }),
       domainTableColumnHelper.accessor(
         (row) => (row.kind === "server" ? row.domain.port : -1),
@@ -987,11 +1014,24 @@ function portOf(row: DomainRow): number {
   return row.kind === "server" ? row.domain.port : -1
 }
 
+// A game server's address is always DNS-only: players connect straight to
+// it, and Cloudflare's proxy only carries web traffic.
+function rowProxied(row: DomainRow): boolean | null {
+  return row.kind === "server" ? false : row.hostname.proxied
+}
+
+function proxyLabel(row: DomainRow): string {
+  const proxied = rowProxied(row)
+  return proxied === null ? "" : proxied ? "Proxied" : "DNS only"
+}
+
 // A web hostname still waiting on its certificate checks again when clicked,
 // for whoever may change its route.
 const DomainStatusCell = React.memo(function DomainStatusCell({
+  onDialog,
   row,
 }: {
+  onDialog: (dialog: DomainDialog) => void
   row: DomainRow
 }) {
   const certificate =
@@ -1006,7 +1046,18 @@ const DomainStatusCell = React.memo(function DomainStatusCell({
       />
     )
   }
-  return <StatusIndicator status={rowStatus(row)} />
+  // An existing record Kiln may take over offers to, when clicked.
+  const adoptable = row.kind === "web" && row.hostname.canAdopt
+  return (
+    <StatusIndicator
+      status={rowStatus(row)}
+      onActivate={
+        adoptable
+          ? () => onDialog({ hostname: row.hostname, kind: "adopt" })
+          : undefined
+      }
+    />
+  )
 })
 
 function webResourceRef(hostname: WebHostnameOverview) {
@@ -1353,7 +1404,9 @@ function hostnameStatusPresentation(
   }
   if (hostname.status === "external") {
     return {
-      detail: hostname.lastError ?? undefined,
+      detail: hostname.canAdopt
+        ? "Cloudflare already has a record Kiln didn't create.\nClick to let Kiln manage it."
+        : (hostname.lastError ?? undefined),
       label: "Existing record",
       tone: "warning",
     }

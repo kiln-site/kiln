@@ -69,3 +69,16 @@ export function validateBlacklistPatterns(
         )
   )
 }
+
+/**
+ * Puts a web route's hostnames through Cloudflare's proxy, or takes them out,
+ * as a route save asks. Hearth keeps it, beside the record it makes for each;
+ * the Relay's routes don't change.
+ */
+export const webRouteProxySchema = z.object({
+  hostnames: z
+    .array(z.string().trim().toLowerCase().min(1).max(253))
+    .min(1)
+    .max(2),
+  proxied: z.boolean(),
+})
