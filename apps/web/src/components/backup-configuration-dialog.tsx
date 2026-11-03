@@ -120,11 +120,8 @@ export function BackupConfigurationDialog({
   const [name, setName] = React.useState(
     () => initialName ?? timestampedBackupName("manual")
   )
-  const [targetKeyValue, setTargetKeyValue] = React.useState(
-    () =>
-      targets.find((target) => target.key === initialTargetKey)?.key ??
-      targets.at(0)?.key ??
-      ""
+  const [targetKeyValue, setTargetKeyValue] = React.useState(() =>
+    initialBackupTargetKey(targets, initialTargetKey)
   )
   const [destinationKeys, setDestinationKeys] = React.useState<Array<string>>(
     () => [
@@ -190,11 +187,7 @@ export function BackupConfigurationDialog({
 
   const resetConfiguration = () => {
     setName(initialName ?? timestampedBackupName("manual"))
-    setTargetKeyValue(
-      targets.find((candidate) => candidate.key === initialTargetKey)?.key ??
-        targets.at(0)?.key ??
-        ""
-    )
+    setTargetKeyValue(initialBackupTargetKey(targets, initialTargetKey))
     setDestinationKeys([
       ...(initialDestinationKeys ?? [
         allowDefaultDestination ? "default" : "local",
@@ -585,7 +578,9 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
             />
           ) : (
             <span className="px-1 text-muted-foreground">
-              No targets available
+              {targets.length === 0
+                ? "No targets available"
+                : "Choose a target"}
             </span>
           )}
           <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
@@ -607,6 +602,20 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
     </DrawerPopover>
   )
 })
+
+/**
+ * The target a new backup starts on: the one the page is looking at, or the
+ * only one there is. Anything else waits for a choice, so a backup never
+ * quietly lands on whichever resource happens to sort first.
+ */
+function initialBackupTargetKey(
+  targets: ReadonlyArray<BackupConfigurationTarget>,
+  initialTargetKey: string | undefined
+): string {
+  if (targets.some((target) => target.key === initialTargetKey))
+    return initialTargetKey ?? ""
+  return targets.length === 1 ? (targets[0]?.key ?? "") : ""
+}
 
 function backupTargetItem(
   target: BackupConfigurationTarget
