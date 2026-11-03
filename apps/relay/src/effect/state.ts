@@ -196,6 +196,17 @@ export interface RelayAppDeploymentImage {
   readonly imageId: string
 }
 
+/**
+ * An image one of Kiln's containers ran, and when Relay last saw one use
+ * it: what makes an image Kiln's to remove once nothing has for a while.
+ */
+export interface RelayDockerImageRecord {
+  readonly imageId: string
+  /** Whose container ran it: `app:<id>`, `database:<id>`, `relay`, … */
+  readonly owner: string
+  readonly lastUsedAt: number
+}
+
 const OPERATION_JOURNAL_METADATA_KEY = "operation_journal_id"
 
 export interface RelayStoredInstanceName {
@@ -652,6 +663,18 @@ export class RelayStateStore extends Context.Service<
       ReadonlyArray<RelayAppDeploymentImage>,
       RelayStateError
     >
+    /** Notes that Kiln's containers use these images now. */
+    readonly noteDockerImagesUsed: (
+      images: ReadonlyArray<Omit<RelayDockerImageRecord, "lastUsedAt">>,
+      now: number
+    ) => Effect.Effect<void, RelayStateError>
+    readonly listDockerImages: () => Effect.Effect<
+      ReadonlyArray<RelayDockerImageRecord>,
+      RelayStateError
+    >
+    readonly forgetDockerImage: (
+      imageId: string
+    ) => Effect.Effect<void, RelayStateError>
     /** Forgets deployments' images: these deployments, or all of the App's. */
     readonly forgetAppDeploymentImages: (
       appId: string,
@@ -1749,6 +1772,16 @@ const migrations = SqliteMigrator.fromRecord({
       PRIMARY KEY (app_id, deployment_id, image_id)
     ) STRICT`
   }),
+  // The images Kiln's containers ran, and when one last did, so an image
+  // nothing has used for a day is removed, and no image Kiln never ran.
+  "35_docker_images": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE IF NOT EXISTS relay_docker_images (
+      image_id TEXT PRIMARY KEY NOT NULL,
+      owner TEXT NOT NULL,
+      last_used_at INTEGER NOT NULL
+    ) STRICT`
+  }),
 })
 
 // The App IDs a Hearth still owes, as stored; anything unreadable owes
@@ -2802,6 +2835,38 @@ const makeRelayStateStore = Effect.gen(function* () {
                  image_id AS imageId, finished_at AS finishedAt
             FROM relay_app_deployment_images
         `
+      ),
+    noteDockerImagesUsed: (images, now) =>
+      run(
+        "note_docker_images_used",
+        sql.withTransaction(
+          Effect.forEach(
+            images,
+            (image) => sql`
+              INSERT INTO relay_docker_images (image_id, owner, last_used_at)
+              VALUES (${image.imageId}, ${image.owner}, ${now})
+              ON CONFLICT (image_id) DO UPDATE SET
+                owner = excluded.owner,
+                last_used_at = excluded.last_used_at
+            `,
+            { discard: true }
+          )
+        )
+      ),
+    listDockerImages: () =>
+      run(
+        "list_docker_images",
+        sql<RelayDockerImageRecord>`
+          SELECT image_id AS imageId, owner, last_used_at AS lastUsedAt
+            FROM relay_docker_images
+        `
+      ),
+    forgetDockerImage: (imageId) =>
+      run(
+        "forget_docker_image",
+        sql`
+          DELETE FROM relay_docker_images WHERE image_id = ${imageId}
+        `.pipe(Effect.asVoid)
       ),
     forgetAppDeploymentImages: (appId, deploymentIds) =>
       run(

@@ -10,13 +10,19 @@
  * Images: each App keeps the images of its newest successful deployments,
  * and a build stays a day whatever became of its deployment; Hearth and the
  * Relay keep the image they ran before their latest update, for a
- * downgrade. See docs/relay-runtime.md.
+ * downgrade. Any other image goes once none of Kiln's containers has used
+ * it for a day; an image Kiln's containers never ran is never Kiln's to
+ * remove. Passes run hourly, and sooner while the disk is nearly full. See
+ * docs/relay-runtime.md.
  */
+import { statfs } from "node:fs/promises"
+
 import { Clock, Effect, Metric } from "effect"
 
 import type { RelayConfig } from "./config.js"
 import {
   containerName,
+  isDockerNotFound,
   type DockerContainerSummary,
   type DockerEngine,
   type DockerImageSummary,
@@ -46,6 +52,10 @@ import {
   type RelayCaller,
 } from "./operations/operation.js"
 import {
+  kilnContainerOwner,
+  type KilnContainerOwner,
+} from "./kiln-containers.js"
+import {
   KILN_INSTALLATION_LABEL,
   kilnComponent,
   type KilnComponent,
@@ -61,6 +71,15 @@ const APP_IMAGE_LABEL = "kiln.app.id"
 export const KEPT_APP_DEPLOYMENT_IMAGES = 5
 // How long a build stays, so a failed deployment's can be looked into.
 const BUILD_GRACE_SECONDS = 24 * 60 * 60
+// How long an image nothing uses stays, so a game server deleted and made
+// again, or a service turned off and on, doesn't download it again.
+const UNUSED_IMAGE_GRACE_MS = 24 * 60 * 60_000
+// Removals a pass makes at most, so one pass never holds cleanup long.
+const IMAGES_PER_PASS = 50
+const PASS_INTERVAL_MS = 60 * 60_000
+// While the disk is this full, passes run this often instead.
+const DISK_PRESSURE = 0.9
+const PRESSURE_PASS_INTERVAL_MS = 10 * 60_000
 
 const removed = Metric.counter("relay.docker.cleanup.removed", {
   description: "Containers Relay removed after the work that left them",
@@ -90,10 +109,20 @@ const imageBytesRemoved = Metric.counter(
 )
 
 type RemovalKind = "leftover" | "update-backup" | "update-helper"
-type ImageKind = "app" | "kiln"
+type ImageKind = "app" | "kiln" | "unused"
+
+type CleanupConfig = Pick<
+  RelayConfig,
+  | "dataDirectory"
+  | "installationId"
+  | "mode"
+  | "resourceNamespace"
+  | "selfContainer"
+  | "serverIdLabel"
+>
 
 export interface DockerCleanupOptions {
-  readonly config: Pick<RelayConfig, "installationId">
+  readonly config: CleanupConfig
   readonly engine: DockerEngine
   readonly lanes: OperationLanes
   readonly state: RelayStateStore["Service"]
@@ -106,7 +135,7 @@ export interface DockerCleanupOptions {
 }
 
 export class DockerCleanup {
-  readonly #config: Pick<RelayConfig, "installationId">
+  readonly #config: CleanupConfig
   readonly #engine: DockerEngine
   readonly #lanes: OperationLanes
   readonly #state: RelayStateStore["Service"]
@@ -222,12 +251,113 @@ export class DockerCleanup {
           runOperation(lanes, this.#retryRemoval, leftover, caller)
         )
       }
+      yield* skipBusy(
+        runOperation(lanes, this.#collectImages, undefined, caller)
+      )
     }).pipe(
       Effect.catch((cause) =>
         Effect.logWarning("Docker cleanup didn't finish", cause)
       )
     )
   }
+
+  /**
+   * Passes for as long as the Relay runs: a minute after it starts, then
+   * hourly, and every ten minutes while the disk holding the Relay's data,
+   * usually Docker's too, is nearly full. Each pass is its own operations.
+   */
+  run(): Effect.Effect<never> {
+    let lastPass = Number.NEGATIVE_INFINITY
+    return Effect.sleep("1 minute").pipe(
+      Effect.andThen(
+        Effect.gen({ self: this }, function* () {
+          const now = yield* Clock.currentTimeMillis
+          const due =
+            now - lastPass >= PASS_INTERVAL_MS ||
+            (now - lastPass >= PRESSURE_PASS_INTERVAL_MS &&
+              (yield* this.#underPressure()))
+          if (due) {
+            lastPass = now
+            yield* this.pass({ kind: "timer" })
+          }
+          yield* Effect.sleep("5 minutes")
+        }).pipe(Effect.forever)
+      )
+    )
+  }
+
+  #underPressure(): Effect.Effect<boolean> {
+    return Effect.tryPromise(() => statfs(this.#config.dataDirectory)).pipe(
+      Effect.map(
+        (disk) =>
+          disk.blocks > 0 && 1 - disk.bavail / disk.blocks >= DISK_PRESSURE
+      ),
+      Effect.orElseSucceed(() => false)
+    )
+  }
+
+  // Notes which images Kiln's containers use now, then removes those none
+  // has used for a day. App builds and Hearth's and the Relay's images keep
+  // to their own rules above; an image Kiln never ran isn't touched.
+  readonly #collectImages = operation<void>()({
+    name: "relay.docker.cleanup.images",
+    locks: () => [exclusive(laneKeys.dockerCleanup)],
+    onlyIfFree: true,
+    run: () =>
+      Effect.gen({ self: this }, function* () {
+        const [containers, images] = yield* Effect.all(
+          [
+            this.#engine.listContainers({ all: true }),
+            this.#engine.listImages(),
+          ],
+          { concurrency: 2 }
+        )
+        const now = yield* Clock.currentTimeMillis
+        yield* this.#state.noteDockerImagesUsed(
+          containers.flatMap((container) => {
+            const owner = kilnContainerOwner(this.#config, container)
+            return owner && container.ImageID
+              ? [{ imageId: container.ImageID, owner: ownerKey(owner) }]
+              : []
+          }),
+          now
+        )
+        const [records, deployments] = yield* Effect.all([
+          this.#state.listDockerImages(),
+          this.#state.listAppDeploymentImages(),
+        ])
+        const kept = keptDeployments(deployments)
+        const keptImages = new Set(
+          deployments.flatMap((record) =>
+            kept.has(deploymentKey(record)) ? [record.imageId] : []
+          )
+        )
+        const used = usedImages(containers)
+        const present = new Map(images.map((image) => [image.Id, image]))
+        let removals = 0
+        for (const record of records) {
+          const image = present.get(record.imageId)
+          if (!image) {
+            yield* this.#state.forgetDockerImage(record.imageId)
+            continue
+          }
+          if (used.has(image.Id) || keptImages.has(image.Id)) continue
+          const labels = image.Labels ?? {}
+          if (labels[APP_IMAGE_LABEL]) continue
+          if (kilnComponent(labels["io.kiln.component"])) continue
+          if (now - record.lastUsedAt < UNUSED_IMAGE_GRACE_MS) continue
+          if (removals >= IMAGES_PER_PASS) break
+          removals += 1
+          if (yield* this.#removeImage(image, "unused")) {
+            yield* this.#state.forgetDockerImage(image.Id)
+          }
+        }
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Relay couldn't remove unused images", cause)
+        )
+      ),
+  })
 
   readonly #retryRemoval = operation<RelayDockerCleanupRecord>()({
     name: "relay.docker.cleanup.leftover",
@@ -415,10 +545,11 @@ export class DockerCleanup {
   }
 
   // Unforced, so Docker keeps one a container started using meanwhile.
+  // Whether it's gone.
   #removeImage(
     image: DockerImageSummary,
     kind: ImageKind
-  ): Effect.Effect<void> {
+  ): Effect.Effect<boolean> {
     const attributes = { "cleanup.kind": kind }
     return this.#engine.removeImage(image.Id, { force: false }).pipe(
       Effect.andThen(
@@ -430,13 +561,14 @@ export class DockerCleanup {
           ),
         ])
       ),
+      Effect.as(true),
+      Effect.catchIf(isDockerNotFound, () => Effect.succeed(true)),
       Effect.catch((cause) =>
         Effect.logDebug("Docker kept an image", {
           error: cause.message,
           imageId: image.Id,
-        })
-      ),
-      Effect.asVoid
+        }).pipe(Effect.as(false))
+      )
     )
   }
 
@@ -520,6 +652,12 @@ function usedImages(
 
 function tagged(image: DockerImageSummary): boolean {
   return (image.RepoTags ?? []).some((tag) => tag !== "<none>:<none>")
+}
+
+function ownerKey(owner: KilnContainerOwner): string {
+  return owner.resource.type === "relay"
+    ? "relay"
+    : `${owner.resource.type}:${owner.resource.id}`
 }
 
 function count(

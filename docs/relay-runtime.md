@@ -172,8 +172,26 @@ own:
   runs, like the containers above. On a host with another Kiln
   installation, this Relay removes that one's untagged old images too.
 
-A pass runs a minute after the Relay starts and then every hour. Each part
-of it waits for nothing: work in its way leaves it for the next pass.
+- **Every other image Kiln ran.** Each pass notes the image of each of
+  Kiln's containers (the Relay's own and its services, and every App's,
+  database's, and game server's, as the security inventory counts them,
+  `kiln-containers.ts`) with the time (`relay_docker_images`). An image
+  none of Kiln's containers has used for a day is removed: a deleted game
+  server's or database's, an old Traefik or CoreDNS, a turned-off
+  service's. A pass removes at most 50. An image no Kiln container ever
+  ran, such as one a person pulled or one Kiln stopped using before this
+  record existed, is never removed automatically.
+
+Named volumes are never removed by cleanup; they go only with the deletion
+that owns them. BuildKit's cache isn't either: App builds share Docker's
+default builder with the host, and Docker trims that cache itself.
+
+A pass runs a minute after the Relay starts and then every hour, and every
+ten minutes while the filesystem holding the Relay's data, usually Docker's
+too, is 90% full. Each part of it waits for nothing: work in its way leaves
+it for the next pass. A container create that finds its image removed
+meanwhile pulls it again (`createContainer` in `docker-container-spec.ts`),
+so a removal racing a create costs a download, never the create.
 Unforced image removal (`removeImage(..., { force: false })`) is refused
 while any container, even a stopped one, uses the image.
 
