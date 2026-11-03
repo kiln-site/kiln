@@ -150,7 +150,10 @@ Kiln removes what it leaves on Docker once it's done with it
   recorded is starting or running, or any update helper on the host hasn't
   exited, a pass leaves both alone, since a helper rolling back needs the
   container it set aside. Only a container an update this Relay recorded
-  replaced counts as set aside. Update records live in the Relay's data
+  replaced counts as set aside, or, from before updates were recorded, a
+  helper or set-aside container named as Kiln's updater names them that has
+  been stopped for a day (by Docker's `FinishedAt`), which no update ever
+  is. Other containers named `kiln-…`, such as game servers, aren't these. Update records live in the Relay's data
   volume, so this holds for an update a restarted Relay or the helper
   carries on; while any record can't be read, a pass leaves updates'
   leftovers and Hearth's and the Relay's images alone. An update writes its
@@ -201,8 +204,12 @@ A Relay's Info page in Hearth shows its Docker storage
 (`relay.docker.storage`, for anyone with `relay.read`): its images, what
 Kiln could remove now, unused images no Kiln container ran, BuildKit's
 cache, leftover containers, and the latest cleanup since the Relay started.
-Someone with `relay.configure` can clean up now (`relay.docker.cleanup`):
-what a pass removes, without waiting the day for images no Kiln container
+Someone with `relay.configure` can clean up now (`relay.docker.cleanup`),
+which the Relay starts in the background and answers at once; it runs one
+such cleanup at a time, and while it runs the storage figures stay those it
+last counted and show it running, so Hearth checks for its end every few
+seconds without Docker counting layers mid-removal. It removes what a pass
+removes, without waiting the day for images no Kiln container
 uses, and, if they choose, unused images no Kiln container ran and
 BuildKit's unused cache (`POST /build/prune`, the host's own builds' too).
 App builds keep their day, and retention and volumes stay as above.

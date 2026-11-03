@@ -2348,7 +2348,7 @@ async function executeControlRequest(
     case "relay.docker.cleanup":
       return runRelayEffect(
         "relay.docker.cleanup",
-        dockerCleanup.cleanNow(
+        dockerCleanup.startCleanup(
           relayDockerCleanupRequestSchema.parse(request.payload)
         )
       )

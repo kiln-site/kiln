@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start"
 import {
   relayDockerCleanupRequestSchema,
-  relayDockerCleanupResultSchema,
+  relayDockerCleanupStartSchema,
   relayDockerStorageSchema,
   relayIdSchema,
 } from "@workspace/contracts"
@@ -34,9 +34,10 @@ export const getRelayDockerStorage = createServerFn({ method: "GET" })
     )
   })
 
-// Removes what the Relay's hourly passes would, without waiting a day for
-// images no Kiln container uses, and what the person chose besides. The
-// Relay orders it with its own passes; this keeps two people's apart.
+// Starts a cleanup on the Relay that removes what its hourly passes would,
+// without waiting a day for images no Kiln container uses, and what the
+// person chose besides. It runs in the background; the storage figures
+// show it until it's done, and the Relay runs one at a time.
 const cleanUpRelayDockerOperation = operation<z.infer<typeof cleanupSchema>>()({
   name: "relay.docker.cleanup",
   doing: "Cleaning up this Relay's Docker",
@@ -58,7 +59,7 @@ const cleanUpRelayDockerOperation = operation<z.infer<typeof cleanupSchema>>()({
   ],
   run: ({ context: { relay, user }, input }) =>
     promiseEffect(async () =>
-      relayDockerCleanupResultSchema.parse(
+      relayDockerCleanupStartSchema.parse(
         await databaseRpc(
           relay,
           "relay.docker.cleanup",
@@ -66,7 +67,7 @@ const cleanUpRelayDockerOperation = operation<z.infer<typeof cleanupSchema>>()({
             buildCache: input.buildCache,
             unknownImages: input.unknownImages,
           },
-          15 * 60_000,
+          30_000,
           user.id
         )
       )

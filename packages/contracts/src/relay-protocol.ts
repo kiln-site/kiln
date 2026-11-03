@@ -635,8 +635,6 @@ export function relayControlDeadlineMs(
   if (operation === "relay.host.files.mount") return 60_000
   // Docker counts every image's layers to answer.
   if (operation === "relay.docker.storage") return 90_000
-  // Removing images, and BuildKit's cache when asked, can take minutes.
-  if (operation === "relay.docker.cleanup") return 15 * 60_000
   // A repair can wait for MySQL to become healthy.
   if (operation === "relay.platform.action") return 240_000
   // An inventory may first wait for the host to be less busy, then reads a

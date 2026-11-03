@@ -33,15 +33,22 @@ export function RelayDockerStorageSection({
 }) {
   const { connected } = useRelayLiveStatus(relay)
   const canClean = useRelayPermission(relay.id, "relay.configure")
-  const [cleaning, setCleaning] = React.useState(false)
+  const [choosing, setChoosing] = React.useState(false)
   const { data: storage, error } = useQuery({
     ...relayDockerStorageQueryOptions(relay.id),
     enabled: connected,
   })
+  useCleanupFinishedToast(relay, storage)
+  const running = storage?.cleaning ?? null
   const action =
     canClean && storage && connected ? (
-      <Button size="sm" variant="outline" onClick={() => setCleaning(true)}>
-        Clean up
+      <Button
+        disabled={running !== null}
+        size="sm"
+        variant="outline"
+        onClick={() => setChoosing(true)}
+      >
+        {running ? "Cleaning up…" : "Clean up"}
       </Button>
     ) : null
 
@@ -101,18 +108,61 @@ export function RelayDockerStorageSection({
           {storage.leftoverContainers} waiting to be removed
         </InfoFact>
       ) : null}
-      <InfoFact label="Last cleanup">
-        <LastCleanup cleanup={storage.lastCleanup} />
+      <InfoFact label={running ? "Cleanup" : "Last cleanup"}>
+        {running ? (
+          <span className="truncate">
+            Running, started <RelativeTime timestamp={running.startedAt} />
+          </span>
+        ) : (
+          <LastCleanup cleanup={storage.lastCleanup} />
+        )}
       </InfoFact>
-      {cleaning ? (
+      {choosing ? (
         <CleanUpDialog
           relay={relay}
           storage={storage}
-          onOpenChange={setCleaning}
+          onOpenChange={setChoosing}
         />
       ) : null}
     </InfoSection>
   )
+}
+
+// Says how a cleanup this page saw running ended, once it's done. One that
+// ends after someone leaves the page shows as the card's last cleanup.
+function useCleanupFinishedToast(
+  relay: RelayDirectoryEntry,
+  storage: RelayDockerStorage | undefined
+) {
+  const watching = React.useRef<number | null>(null)
+  const startedAt = storage?.cleaning?.startedAt ?? null
+  const finished = storage?.lastCleanup ?? null
+  React.useEffect(() => {
+    if (startedAt !== null) {
+      watching.current = startedAt
+      return
+    }
+    const since = watching.current
+    if (since === null || !finished || finished.finishedAt < since) return
+    watching.current = null
+    showToast(
+      finished.error
+        ? {
+            description: finished.error,
+            message: `${relay.name} didn’t finish cleaning up`,
+            type: "error",
+          }
+        : {
+            description: capitalized(`${cleanupSummary(finished)}.`),
+            message: `Cleaned up ${relay.name}`,
+            type: "success",
+          }
+    )
+  }, [finished, relay.name, startedAt])
+}
+
+function capitalized(text: string) {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`
 }
 
 function amount({ bytes, images }: { bytes: number; images: number }) {
@@ -127,6 +177,13 @@ function LastCleanup({
   cleanup: RelayDockerStorage["lastCleanup"]
 }) {
   if (!cleanup) return <>Not since the Relay started</>
+  if (cleanup.error) {
+    return (
+      <span className="truncate" title={cleanup.error}>
+        <RelativeTime timestamp={cleanup.finishedAt} /> · didn’t finish
+      </span>
+    )
+  }
   return (
     <span className="truncate">
       <RelativeTime timestamp={cleanup.finishedAt} /> ·{" "}
@@ -170,26 +227,40 @@ function CleanUpDialog({
   const queryClient = useQueryClient()
   const [buildCache, setBuildCache] = React.useState(false)
   const [unknownImages, setUnknownImages] = React.useState(false)
+  // Only starting it waits: the cleanup itself runs on the Relay in the
+  // background, and the card shows it until it's done.
   const cleanup = useMutation({
     mutationFn: () =>
       cleanUpRelayDocker({
         data: { buildCache, relayId: relay.id, unknownImages },
       }),
-    onSuccess: async (result) => {
+    onSuccess: async (started) => {
       onOpenChange(false)
-      const summary = cleanupSummary(result)
-      showToast({
-        message: `Cleaned up ${relay.name}`,
-        description: `${summary.charAt(0).toUpperCase()}${summary.slice(1)}.`,
-        type: "success",
-      })
-      await queryClient.invalidateQueries({
+      // A read from before it started mustn't land after and hide it.
+      await queryClient.cancelQueries({
         queryKey: queryKeys.relayDockerStorage(relay.id),
+      })
+      queryClient.setQueryData<RelayDockerStorage>(
+        queryKeys.relayDockerStorage(relay.id),
+        (current) =>
+          current && {
+            ...current,
+            cleaning: { startedAt: started.startedAt },
+          }
+      )
+      showToast({
+        description: started.alreadyRunning
+          ? "The current cleanup will continue."
+          : "It runs in the background; you can leave this page.",
+        message: started.alreadyRunning
+          ? `${relay.name} is already cleaning up`
+          : `Cleaning up ${relay.name}`,
+        type: "info",
       })
     },
     onError: (cause) =>
       showToast({
-        description: messageFrom(cause, "The Relay didn’t finish cleaning up."),
+        description: messageFrom(cause, "The Relay didn’t start cleaning up."),
         message: "Could not clean up Docker",
         type: "error",
       }),
@@ -249,7 +320,7 @@ function CleanUpDialog({
             type="button"
             onClick={() => cleanup.mutate()}
           >
-            {pending ? "Cleaning up…" : "Clean up"}
+            {pending ? "Starting…" : "Clean up"}
           </Button>
         </DialogFooter>
       </DialogContent>

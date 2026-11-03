@@ -935,11 +935,14 @@ export function relayVolumesQueryOptions(relayId: string) {
 }
 
 // Docker counts every image's layers for these figures, so they're read
-// when someone opens the Relay's Info page and after a cleanup, not polled.
+// when someone opens the Relay's Info page and after a cleanup.
 export function relayDockerStorageQueryOptions(relayId: string) {
   return queryOptions({
     queryFn: () => getRelayDockerStorage({ data: { relayId } }),
     queryKey: queryKeys.relayDockerStorage(relayId),
+    // While a cleanup runs in the background the Relay answers from the
+    // figures it last counted, so checking for its end is cheap.
+    refetchInterval: (query) => (query.state.data?.cleaning ? 3_000 : false),
     retry: false,
     staleTime: 60_000,
   })

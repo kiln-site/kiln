@@ -248,7 +248,7 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
   }
   if (operation === "relay.update.apply") return "Applied a Relay update"
   if (operation === "relay.restart") return "Restarted the Relay"
-  if (operation === "relay.docker.cleanup") return "Cleaned up Docker"
+  if (operation === "relay.docker.cleanup") return "Started Docker cleanup"
   if (operation === "relay.host.restart") return "Restarted the Relay’s host"
   if (operation === "relay.pairing.create") {
     return "Created a Relay invitation"
