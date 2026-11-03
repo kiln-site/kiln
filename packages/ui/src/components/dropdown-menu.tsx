@@ -36,11 +36,17 @@ function DropdownMenuTrigger({
 function DropdownMenuContent({
   className,
   align = "start",
+  container,
   sideOffset = 4,
   ...props
-}: React.ComponentProps<typeof DropdownMenuPrimitive.Content>) {
+}: React.ComponentProps<typeof DropdownMenuPrimitive.Content> & {
+  /** Where the menu renders: inside a fullscreen element, it must be there. */
+  container?: React.ComponentProps<
+    typeof DropdownMenuPrimitive.Portal
+  >["container"]
+}) {
   return (
-    <DropdownMenuPrimitive.Portal>
+    <DropdownMenuPrimitive.Portal container={container}>
       <DropdownMenuPrimitive.Content
         data-slot="dropdown-menu-content"
         sideOffset={sideOffset}

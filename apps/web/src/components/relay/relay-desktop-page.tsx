@@ -296,10 +296,12 @@ function DesktopFrame({
     if (ended) onEnded()
   }, [ended, onEnded])
   const frame = React.useRef<HTMLIFrameElement>(null)
-  const { expanded, toggleExpanded } = useDesktopExpansion(frame)
+  const [root, setRoot] = React.useState<HTMLDivElement | null>(null)
+  const { expanded, toggleExpanded } = useDesktopExpansion(frame, root)
   const params = new URLSearchParams({ relay: relayId, session })
   return (
     <div
+      ref={setRoot}
       className={cn(
         "flex min-h-0 flex-1 flex-col bg-black",
         expanded && "fixed inset-0 z-50"
@@ -316,6 +318,8 @@ function DesktopFrame({
           <DropdownMenuContent
             align="end"
             className={cn(expanded && "z-60")}
+            // Only the fullscreen element's own content shows.
+            container={expanded ? root : undefined}
             onCloseAutoFocus={(event) => {
               event.preventDefault()
               frame.current?.focus()
@@ -337,8 +341,14 @@ function DesktopFrame({
         </Button>
       </div>
       <iframe
-        // Keys go to the desktop as soon as it shows.
-        onLoad={(event) => event.currentTarget.focus()}
+        onLoad={(event) => {
+          // Fullscreen is the toolbar's, with Send keys beside it.
+          const own =
+            event.currentTarget.contentDocument?.getElementById("fs-btn")
+          if (own) own.style.display = "none"
+          // Keys go to the desktop as soon as it shows.
+          event.currentTarget.focus()
+        }}
         ref={frame}
         allow="autoplay; clipboard-read; clipboard-write; fullscreen; keyboard-map"
         className="min-h-0 w-full flex-1 border-0 bg-black"
@@ -354,11 +364,15 @@ interface KeyboardLockNavigator extends Navigator {
   readonly keyboard?: { lock: () => Promise<void>; unlock: () => void }
 }
 
-// Fullscreen on voxl's page, as its own button does, so either leaves it.
-// Only the top-level page may take the keyboard, which lets browser shortcuts
-// such as Ctrl+W reach the desktop, so that happens here. Where a browser has
-// no fullscreen for pages, as on iPhones, the desktop fills the window instead.
-function useDesktopExpansion(frame: React.RefObject<HTMLIFrameElement | null>) {
+// Fullscreen on the toolbar and desktop together, which keeps Send keys in
+// reach. Only the top-level page may take the keyboard, which lets browser
+// shortcuts such as Ctrl+W reach the desktop, so that happens here too. Where a
+// browser has no fullscreen for pages, as on iPhones, the desktop fills the
+// window instead.
+function useDesktopExpansion(
+  frame: React.RefObject<HTMLIFrameElement | null>,
+  root: HTMLElement | null
+) {
   const keyboard = (navigator as KeyboardLockNavigator).keyboard
   const [native, setNative] = React.useState(false)
   const [filled, setFilled] = React.useState(false)
@@ -389,9 +403,7 @@ function useDesktopExpansion(frame: React.RefObject<HTMLIFrameElement | null>) {
     } else if (document.fullscreenEnabled) {
       forkPromise(
         async () => {
-          await frame.current?.contentDocument?.documentElement.requestFullscreen(
-            { navigationUI: "hide" }
-          )
+          await root?.requestFullscreen({ navigationUI: "hide" })
         },
         () => setFilled(true)
       )
@@ -399,7 +411,7 @@ function useDesktopExpansion(frame: React.RefObject<HTMLIFrameElement | null>) {
       setFilled(true)
     }
     frame.current?.focus()
-  }, [filled, frame, native])
+  }, [filled, frame, native, root])
   return { expanded: native || filled, toggleExpanded }
 }
 

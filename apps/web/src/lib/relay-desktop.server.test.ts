@@ -265,6 +265,21 @@ it("leaves other upgrades alone", async () => {
   expect(answer).toBe("")
 })
 
+it("ends a session a page can't get a stream on, however often it retries", async () => {
+  relayAnswer = () => ["HTTP/1.1 403 Forbidden", "Connection: close"]
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
+  try {
+    const session = open()
+    for (let elapsed = 0; elapsed < 90_000; elapsed += 20_000) {
+      await handshake({ origin, session })
+      vi.advanceTimersByTime(20_000)
+    }
+    expect(desktopSessionOpen(session, user.id)).toBe(false)
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
 it("keeps a session from anyone but its owner, and ends it on the Relay", async () => {
   const session = open()
   expect(desktopSessionOpen(session, "user-2")).toBe(false)

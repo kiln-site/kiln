@@ -72,7 +72,12 @@ async function fakeVoxl() {
     )
   })
   await listen(server, VOXL_PORT)
-  return { state, upgrades }
+  const stop = () =>
+    new Promise((resolve) => {
+      server.closeAllConnections()
+      server.close(resolve)
+    })
+  return { state, stop, upgrades }
 }
 
 async function harness(script = x11) {
@@ -177,6 +182,17 @@ describe("the node's desktop", () => {
     vi.advanceTimersByTime(6 * 60_000)
     vi.useRealTimers()
     await vi.waitFor(() => expect(fakeDocker.container(name)).toBeUndefined())
+  })
+
+  it("ends a ticket once its streamer is gone, so the page attaches again", async () => {
+    const voxl = await fakeVoxl()
+    const { desktop, port } = await harness()
+    const { ticket } = await desktop.attach()
+    await voxl.stop()
+    await handshake(port, `/v1/desktop/${ticket}/ws`).catch(() => 0)
+    await vi.waitFor(() =>
+      expect(desktop.heartbeat([ticket]).tickets).toEqual([])
+    )
   })
 
   it("lets a ticket lapse without Hearth's heartbeats, and keeps it with them", async () => {

@@ -265,7 +265,7 @@ export class Desktop {
         return
       }
       this.#lastWatched = Date.now()
-      this.#pipe(request, socket, head, ticket, password)
+      this.#pipe(request, socket, head, match[1] ?? "", ticket, password)
     })
   }
 
@@ -297,20 +297,28 @@ export class Desktop {
     request: IncomingMessage,
     socket: Duplex,
     head: Buffer,
+    id: string,
     ticket: Ticket,
     password: string
   ) {
     const upstream: Socket = connect(VOXL_PORT, VOXL_HOST)
     ticket.sockets.add(socket)
+    let connected = false
     const close = () => {
       ticket.sockets.delete(socket)
       upstream.destroy()
       socket.destroy()
     }
-    upstream.once("error", close)
+    upstream.once("error", () => {
+      // A streamer that's gone ends the ticket, so Hearth's next heartbeat
+      // tells the page to attach again, which starts another.
+      if (!connected) this.detach(id)
+      close()
+    })
     upstream.once("close", close)
     socket.once("close", close)
     upstream.once("connect", () => {
+      connected = true
       upstream.setNoDelay(true)
       // The browser's own handshake, so voxl's answer completes it. No
       // Origin: Hearth checked the page, and voxl takes a request without

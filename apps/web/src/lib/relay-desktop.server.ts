@@ -58,7 +58,12 @@ interface DesktopSession {
   readonly userId: string
   // The sign-in the last stream opened with, checked again on each renewal.
   headers: Headers | null
+  // Since when no stream has been running. Attempts that don't get as far
+  // as a stream don't count, or a page retrying a gone streamer would
+  // hold its session open forever.
   idleSince: number
+  // Streams the Relay accepted, of `sockets`.
+  streams: number
 }
 
 declare global {
@@ -86,6 +91,7 @@ export function openDesktopSession(input: {
     authSessionId: input.authSessionId,
     headers: null,
     idleSince: Date.now(),
+    streams: 0,
     key,
     relay: input.relay,
     sockets: new Set(),
@@ -139,12 +145,17 @@ export function handleDesktopUpgrade(
   // Counted from here, not once it's upgraded, so connections waiting on a
   // slow Relay stay within the limit and end with the session.
   session.sockets.add(socket)
+  const deadline = setTimeout(
+    () => refuse(socket, 504, "Gateway Timeout"),
+    HANDSHAKE_TIMEOUT_MS
+  )
+  deadline.unref()
   socket.once("close", () => {
+    clearTimeout(deadline)
     session.sockets.delete(socket)
-    if (session.sockets.size === 0) session.idleSince = Date.now()
   })
   forkPromise(
-    () => admit(session, request, socket, head),
+    () => admit(session, request, socket, head, () => clearTimeout(deadline)),
     () => refuse(socket, 502, "Bad Gateway")
   )
   return true
@@ -154,7 +165,8 @@ async function admit(
   session: DesktopSession,
   request: IncomingMessage,
   socket: Duplex,
-  head: Buffer
+  head: Buffer,
+  answered: () => void
 ) {
   const headers = new Headers()
   for (const [name, value] of Object.entries(request.headers)) {
@@ -170,7 +182,7 @@ async function admit(
     return refuse(socket, 403, "Forbidden")
   }
   session.headers = headers
-  await carry(session, request, socket, head)
+  await carry(session, request, socket, head, answered)
 }
 
 // Opens the same handshake on the Relay and, once it answers, joins the two
@@ -181,7 +193,8 @@ async function carry(
   session: DesktopSession,
   request: IncomingMessage,
   socket: Duplex,
-  head: Buffer
+  head: Buffer,
+  answered: () => void
 ) {
   const key = request.headers["sec-websocket-key"]
   if (typeof key !== "string") return refuse(socket, 400, "Bad Request")
@@ -220,15 +233,10 @@ async function carry(
     method: "GET",
     path: `/v1/desktop/${session.ticket}/ws`,
   })
-  // Whichever comes first ends the wait for the Relay's answer.
+  // A browser that leaves, or the deadline, ends the wait for the Relay.
   const abandon = () => outgoing.destroy()
-  const deadline = setTimeout(() => {
-    abandon()
-    refuse(socket, 504, "Gateway Timeout")
-  }, HANDSHAKE_TIMEOUT_MS)
-  deadline.unref()
   const settled = () => {
-    clearTimeout(deadline)
+    answered()
     socket.off("close", abandon)
   }
   socket.once("close", abandon)
@@ -275,6 +283,11 @@ async function carry(
     )
     if (upstreamHead.length > 0) socket.write(upstreamHead)
     if (head.length > 0) upstream.write(head)
+    session.streams += 1
+    socket.once("close", () => {
+      session.streams -= 1
+      if (session.streams === 0) session.idleSince = Date.now()
+    })
     const close = () => {
       upstream.destroy()
       socket.destroy()
@@ -296,7 +309,7 @@ function websocketAccept(key: string) {
 // Renews the ticket and checks access again; ends the session once it's no
 // longer used, or no longer allowed.
 function renew(session: DesktopSession) {
-  if (session.sockets.size === 0 && Date.now() - session.idleSince > IDLE_MS) {
+  if (session.streams === 0 && Date.now() - session.idleSince > IDLE_MS) {
     endSession(session)
     return
   }

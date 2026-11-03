@@ -54,7 +54,8 @@ sign-in and permission every 20 seconds, so a lost permission ends the stream
 within that time. A ticket lapses 60 seconds after its last renewal.
 
 A stream that can't go on ends its Hearth session: the Relay restarted and lost
-its tickets, nothing has connected for a minute, or access is gone. voxl's
+its tickets, the streamer is gone, which ends its ticket at the next attempt,
+no stream has run for a minute, or access is gone. voxl's
 client would keep trying, so the page checks its session every 10 seconds and,
 without one, opens another, which finds whatever the node shows now.
 
