@@ -13,7 +13,7 @@
  */
 import { readFile } from "node:fs/promises"
 
-import { Effect, Metric } from "effect"
+import { Clock, Effect, Metric } from "effect"
 
 import type { RelayConfig } from "./config.js"
 import type { DockerEngine } from "./docker-engine.js"
@@ -148,7 +148,9 @@ interface GroupTotals {
 class Increments {
   readonly #last = new Map<string, number>()
 
-  next(key: string, value: number): number {
+  /** Missing readings add nothing and keep the baseline. */
+  next(key: string, value: number | undefined): number {
+    if (value === undefined) return 0
     const last = this.#last.get(key)
     this.#last.set(key, value)
     return last === undefined || value < last ? 0 : value - last
@@ -183,36 +185,55 @@ export function sampleNodeMetrics(
 }
 
 /**
- * Counts containers' OOM kills and exits as Docker reports them, for good,
- * listening again whenever Docker closes the stream.
+ * Counts containers' OOM kills and exits as Docker reports them, for good.
+ * When Docker closes the stream, listening again asks for what happened
+ * since the last event, or since the first connection, and skips what was
+ * already counted. Docker only keeps its last 256 events, so a long gap on
+ * a busy node can still lose some.
  */
 export function watchContainerEvents(
   relayId: () => string,
   engine: DockerEngine,
   config: OwnerConfig
 ): Effect.Effect<never> {
-  return Effect.suspend(() =>
-    engine.events({ type: ["container"], event: ["oom", "die"] }, (event) => {
-      const attributes = event.Actor?.Attributes ?? {}
-      const group = groupOf(config, {
-        Id: event.Actor?.ID ?? "",
-        Labels: attributes,
-        Names: attributes.name ? [`/${attributes.name}`] : [],
-      })
-      const metric =
-        event.Action === "oom"
-          ? Metric.withAttributes(container.oomKills, {
-              "relay.id": relayId(),
-              "kiln.container.group": group,
-            })
-          : Metric.withAttributes(container.exits, {
-              "relay.id": relayId(),
-              "kiln.container.group": group,
-              "exit.code": exitCode(attributes.exitCode),
-            })
-      forkRelayEffect("relay.container.events", Metric.update(metric, 1))
-    })
-  ).pipe(
+  // Whole seconds, as Docker's `since` takes them, so the boundary second
+  // replays and `lastCounted` drops what was already counted.
+  let since: number | undefined
+  let lastCounted = 0
+  return Effect.gen(function* () {
+    const from = since
+    since ??= Math.floor((yield* Clock.currentTimeMillis) / 1000)
+    yield* engine.events(
+      { type: ["container"], event: ["oom", "die"] },
+      { since: from },
+      (event) => {
+        const at = event.timeNano
+        if (at !== undefined) {
+          if (at <= lastCounted) return
+          lastCounted = at
+          since = Math.floor(at / 1e9)
+        }
+        const attributes = event.Actor?.Attributes ?? {}
+        const group = groupOf(config, {
+          Id: event.Actor?.ID ?? "",
+          Labels: attributes,
+          Names: attributes.name ? [`/${attributes.name}`] : [],
+        })
+        const metric =
+          event.Action === "oom"
+            ? Metric.withAttributes(container.oomKills, {
+                "relay.id": relayId(),
+                "kiln.container.group": group,
+              })
+            : Metric.withAttributes(container.exits, {
+                "relay.id": relayId(),
+                "kiln.container.group": group,
+                "exit.code": exitCode(attributes.exitCode),
+              })
+        forkRelayEffect("relay.container.events", Metric.update(metric, 1))
+      }
+    )
+  }).pipe(
     // Observational: a Docker that's away or restarting is listened to again.
     Effect.ignore,
     Effect.andThen(Effect.sleep(eventsRetryInterval)),
@@ -333,28 +354,31 @@ const sampleContainers = Effect.fnUntraced(
         },
       ])
     )
-    const seen = new Set<string>()
     for (const entry of sampled) {
       if (entry === null) continue
       const total = totals.get(entry.group)!
       const { cpu_stats: cpu, memory_stats: memory } = entry.stats
-      seen.add(`${entry.id}:cpu`)
-      seen.add(`${entry.id}:throttled`)
       total.count += 1
       total.cpuNanos += increments.next(
         `${entry.id}:cpu`,
-        cpu?.cpu_usage?.total_usage ?? 0
+        cpu?.cpu_usage?.total_usage
       )
       total.throttledNanos += increments.next(
         `${entry.id}:throttled`,
-        cpu?.throttling_data?.throttled_time ?? 0
+        cpu?.throttling_data?.throttled_time
       )
       total.usageBytes += memory?.usage ?? 0
-      // cgroup v2 names them anon and file; v1, rss and cache.
-      total.anonBytes += memory?.stats?.anon ?? memory?.stats?.rss ?? 0
-      total.fileBytes += memory?.stats?.file ?? memory?.stats?.cache ?? 0
+      // cgroup v2 names them anon and file. v1's total_ figures count the
+      // container's nested cgroups too, which rss and cache leave out.
+      const stats = memory?.stats
+      total.anonBytes += stats?.anon ?? stats?.total_rss ?? stats?.rss ?? 0
+      total.fileBytes += stats?.file ?? stats?.total_cache ?? stats?.cache ?? 0
     }
-    increments.retain(seen)
+    // A container whose stats failed this time keeps its baselines, so its
+    // next reading still counts from its last.
+    increments.retain(
+      new Set(listed.flatMap(({ Id }) => [`${Id}:cpu`, `${Id}:throttled`]))
+    )
 
     // Every group is written each time, so one that empties reads zero
     // rather than keeping its last containers' values.

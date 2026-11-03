@@ -72,6 +72,8 @@ export interface DockerContainerSummary {
 export interface DockerEvent {
   readonly Type?: string
   readonly Action?: string
+  /** When it happened, in nanoseconds; past 2^53, so only near-exact. */
+  readonly timeNano?: number
   readonly Actor?: {
     readonly ID?: string
     /** A container's labels, with its `name`, `image`, and `exitCode`. */
@@ -490,11 +492,13 @@ export class DockerEngine {
   }
 
   /**
-   * Hands each event Docker reports from now on to `onEvent`, until the
-   * effect is interrupted or Docker ends the stream.
+   * Hands each event Docker reports to `onEvent`, until the effect is
+   * interrupted or Docker ends the stream: from now on, or first those it
+   * still holds from `since` (Unix seconds) onwards.
    */
   events(
     filters: DockerFilters,
+    options: { readonly since?: number | undefined },
     onEvent: (event: DockerEvent) => void
   ): Effect.Effect<void, DockerEngineError> {
     const lines = lineReader((line) => {
@@ -509,7 +513,10 @@ export class DockerEngine {
         lines.read(chunk)
         return undefined
       },
-      path: `/events${query({ filters: JSON.stringify(filters) })}`,
+      path: `/events${query({
+        filters: JSON.stringify(filters),
+        since: options.since,
+      })}`,
       timeout: null,
     }).pipe(Effect.asVoid)
   }
