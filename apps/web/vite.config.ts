@@ -281,7 +281,9 @@ function relayControlUpgrades(): Plugin {
     name: "kiln:relay-control-upgrades",
     configureServer(server) {
       server.httpServer?.on("upgrade", (request, socket, head) => {
+        const desktop = request.url?.startsWith("/desktop-client/ws")
         if (
+          !desktop &&
           !request.url?.startsWith("/api/relays/control") &&
           !request.url?.startsWith("/api/relays/tunnel")
         ) {
@@ -290,6 +292,25 @@ function relayControlUpgrades(): Plugin {
         const environment = server.environments.ssr
         if (!environment || !isRunnableDevEnvironment(environment)) {
           socket.destroy()
+          return
+        }
+        if (desktop) {
+          Effect.runFork(
+            Effect.tryPromise(() =>
+              environment.runner.import<
+                typeof import("./src/lib/relay-desktop.server")
+              >("/src/lib/relay-desktop.server.ts")
+            ).pipe(
+              Effect.match({
+                onFailure: () => socket.destroy(),
+                onSuccess: (module) => {
+                  if (!module.handleDesktopUpgrade(request, socket, head)) {
+                    socket.destroy()
+                  }
+                },
+              })
+            )
+          )
           return
         }
         Effect.runFork(

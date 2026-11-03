@@ -59,6 +59,7 @@ import {
 } from "./lib/relay-registry"
 import { relayConnectionsCapacity } from "./lib/relay-connection"
 import { handleRelayControlUpgrade } from "./lib/relay-control-dial.server"
+import { handleDesktopUpgrade } from "./lib/relay-desktop.server"
 import {
   startSecurityScans,
   stopSecurityScans,
@@ -182,14 +183,18 @@ const handleStartRequest = createStartHandler(hearthStreamHandler)
 
 /**
  * Takes a WebSocket upgrade the fetch handler can't: a Relay opening its
- * control connection to Hearth. False for any other.
+ * control connection to Hearth, or a desktop page's stream. False for any
+ * other.
  */
 export function handleUpgrade(
   request: IncomingMessage,
   socket: Duplex,
   head: Buffer
 ): boolean {
-  return handleRelayControlUpgrade(request, socket, head)
+  return (
+    handleRelayControlUpgrade(request, socket, head) ||
+    handleDesktopUpgrade(request, socket, head)
+  )
 }
 
 let shutdownPromise: Promise<void> | undefined

@@ -95,6 +95,21 @@ export class HostShell {
     )
   }
 
+  // Runs a short script on the host, as root, and returns what it prints.
+  async runScript(script: string): Promise<string> {
+    const container = await this.container()
+    const output = await Effect.runPromise(
+      this.#engine.exec(
+        container,
+        [...hostNamespaces, "--", "sh", "-c", script],
+        {
+          timeout: 15_000,
+        }
+      )
+    )
+    return output.stdout
+  }
+
   // Removes the helper, when host access has been turned off.
   async remove(): Promise<void> {
     const existing = await this.#inspect()

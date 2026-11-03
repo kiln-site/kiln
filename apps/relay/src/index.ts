@@ -4,6 +4,7 @@ import {
   HOST_TERMINAL_KEY,
   HostAccessDisabledError,
 } from "./host-shell.js"
+import { Desktop } from "./desktop.js"
 import { createServer as createHttpServer } from "node:http"
 import { createServer as createHttpsServer } from "node:https"
 import { createHmac, randomBytes, randomUUID } from "node:crypto"
@@ -68,6 +69,8 @@ import {
   relayDatabaseTerminalAttachSchema,
   relayDatabaseTerminalDetachSchema,
   relayDatabaseTerminalHeartbeatSchema,
+  relayDesktopDetachSchema,
+  relayDesktopHeartbeatSchema,
   relayDatabaseTerminalClaimSchema,
   relayDatabaseTerminalRestartSchema,
   relayDatabaseTerminalWriteSchema,
@@ -477,6 +480,7 @@ const docker = new DockerDriver(
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
 const hostShell = new HostShell(config)
+const desktop = new Desktop(config, hostShell, lanes)
 const relayEngine = new DockerEngine(config.dockerSocket)
 const terminals = new ContainerTerminals(config)
 // The config itself, not a copy: it reads the installation ID Hearth gives
@@ -647,6 +651,7 @@ const databaseDumpFilesystem = new FilesystemDriver({
 // sessions swept with the rest. Only the Relay itself sweeps: a CLI command
 // runs beside it, often from one of those sessions.
 if (!hostShell.enabled && cliArguments.length === 0) {
+  forkPromise(() => desktop.remove())
   forkPromise(() => hostShell.remove())
 }
 if (cliArguments.length === 0)
@@ -1456,6 +1461,7 @@ const controlDials = startControlDials({
     : {}),
 })
 rejectMalformedUpgrades(server)
+desktop.attachServer(server)
 const browserSocket = attachBrowserSocket({
   config,
   gate: transferGate,
@@ -2223,6 +2229,17 @@ async function executeControlRequest(
           requestHearth("hearth.database.terminal.output", output, timeoutMs)
       )
     }
+    case "relay.desktop.read":
+      return desktop.read()
+    case "relay.desktop.attach":
+      return desktop.attach()
+    case "relay.desktop.heartbeat":
+      return desktop.heartbeat(
+        relayDesktopHeartbeatSchema.parse(request.payload).tickets
+      )
+    case "relay.desktop.detach":
+      desktop.detach(relayDesktopDetachSchema.parse(request.payload).ticket)
+      return { detached: true }
     case "relay.terminal.heartbeat": {
       const input = relayDatabaseTerminalHeartbeatSchema.parse(request.payload)
       return terminals.heartbeat(
@@ -4586,6 +4603,8 @@ async function applyPauseHolds(): Promise<void> {
   const paused = holds.length > 0
   if (paused === lanes.paused) return
   lanes.setPaused(paused)
+  // A stream takes input, which a paused Relay refuses.
+  if (paused) desktop.closeStreams()
   if (!paused) {
     await runRelayEffect(
       "relay.resume",

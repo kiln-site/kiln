@@ -862,6 +862,8 @@ function relayTabRoute(tab: RelayDestinationId) {
       return "/relay/$relayId/info" as const
     case "terminal":
       return "/relay/$relayId/terminal"
+    case "desktop":
+      return "/relay/$relayId/desktop" as const
     case "logs":
       return "/relay/$relayId/logs" as const
     case "volumes":

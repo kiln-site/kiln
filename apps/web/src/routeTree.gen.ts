@@ -112,6 +112,7 @@ import { Route as AppInfraUpdatesChangelogRouteImport } from './routes/_app.infr
 import { Route as AppRelayRelayIdIndexRouteImport } from './routes/_app/relay/$relayId.index'
 import { Route as AppRelayRelayIdSplatRouteImport } from './routes/_app/relay/$relayId.$'
 import { Route as AppRelayRelayIdDatabaseRouteImport } from './routes/_app/relay/$relayId.database'
+import { Route as AppRelayRelayIdDesktopRouteImport } from './routes/_app/relay/$relayId.desktop'
 import { Route as AppRelayRelayIdFilesRouteImport } from './routes/_app/relay/$relayId.files'
 import { Route as AppRelayRelayIdInfoRouteImport } from './routes/_app/relay/$relayId.info'
 import { Route as AppRelayRelayIdLogsRouteImport } from './routes/_app/relay/$relayId.logs'
@@ -653,6 +654,11 @@ const AppRelayRelayIdDatabaseRoute = AppRelayRelayIdDatabaseRouteImport.update({
   path: '/database',
   getParentRoute: () => AppRelayRelayIdRoute,
 } as any)
+const AppRelayRelayIdDesktopRoute = AppRelayRelayIdDesktopRouteImport.update({
+  id: '/desktop',
+  path: '/desktop',
+  getParentRoute: () => AppRelayRelayIdRoute,
+} as any)
 const AppRelayRelayIdFilesRoute = AppRelayRelayIdFilesRouteImport.update({
   id: '/files',
   path: '/files',
@@ -870,6 +876,7 @@ export interface FileRoutesByFullPath {
   '/infra/updates/changelog': typeof AppInfraUpdatesChangelogRoute
   '/relay/$relayId/$': typeof AppRelayRelayIdSplatRoute
   '/relay/$relayId/database': typeof AppRelayRelayIdDatabaseRoute
+  '/relay/$relayId/desktop': typeof AppRelayRelayIdDesktopRoute
   '/relay/$relayId/files': typeof AppRelayRelayIdFilesRouteWithChildren
   '/relay/$relayId/info': typeof AppRelayRelayIdInfoRoute
   '/relay/$relayId/logs': typeof AppRelayRelayIdLogsRoute
@@ -987,6 +994,7 @@ export interface FileRoutesByTo {
   '/infra/updates/changelog': typeof AppInfraUpdatesChangelogRoute
   '/relay/$relayId/$': typeof AppRelayRelayIdSplatRoute
   '/relay/$relayId/database': typeof AppRelayRelayIdDatabaseRoute
+  '/relay/$relayId/desktop': typeof AppRelayRelayIdDesktopRoute
   '/relay/$relayId/files': typeof AppRelayRelayIdFilesRouteWithChildren
   '/relay/$relayId/info': typeof AppRelayRelayIdInfoRoute
   '/relay/$relayId/logs': typeof AppRelayRelayIdLogsRoute
@@ -1115,6 +1123,7 @@ export interface FileRoutesById {
   '/_app/infra/updates/changelog': typeof AppInfraUpdatesChangelogRoute
   '/_app/relay/$relayId/$': typeof AppRelayRelayIdSplatRoute
   '/_app/relay/$relayId/database': typeof AppRelayRelayIdDatabaseRoute
+  '/_app/relay/$relayId/desktop': typeof AppRelayRelayIdDesktopRoute
   '/_app/relay/$relayId/files': typeof AppRelayRelayIdFilesRouteWithChildren
   '/_app/relay/$relayId/info': typeof AppRelayRelayIdInfoRoute
   '/_app/relay/$relayId/logs': typeof AppRelayRelayIdLogsRoute
@@ -1243,6 +1252,7 @@ export interface FileRouteTypes {
     | '/infra/updates/changelog'
     | '/relay/$relayId/$'
     | '/relay/$relayId/database'
+    | '/relay/$relayId/desktop'
     | '/relay/$relayId/files'
     | '/relay/$relayId/info'
     | '/relay/$relayId/logs'
@@ -1360,6 +1370,7 @@ export interface FileRouteTypes {
     | '/infra/updates/changelog'
     | '/relay/$relayId/$'
     | '/relay/$relayId/database'
+    | '/relay/$relayId/desktop'
     | '/relay/$relayId/files'
     | '/relay/$relayId/info'
     | '/relay/$relayId/logs'
@@ -1487,6 +1498,7 @@ export interface FileRouteTypes {
     | '/_app/infra/updates/changelog'
     | '/_app/relay/$relayId/$'
     | '/_app/relay/$relayId/database'
+    | '/_app/relay/$relayId/desktop'
     | '/_app/relay/$relayId/files'
     | '/_app/relay/$relayId/info'
     | '/_app/relay/$relayId/logs'
@@ -2281,6 +2293,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRelayRelayIdDatabaseRouteImport
       parentRoute: typeof AppRelayRelayIdRoute
     }
+    '/_app/relay/$relayId/desktop': {
+      id: '/_app/relay/$relayId/desktop'
+      path: '/desktop'
+      fullPath: '/relay/$relayId/desktop'
+      preLoaderRoute: typeof AppRelayRelayIdDesktopRouteImport
+      parentRoute: typeof AppRelayRelayIdRoute
+    }
     '/_app/relay/$relayId/files': {
       id: '/_app/relay/$relayId/files'
       path: '/files'
@@ -2634,6 +2653,7 @@ const AppRelayRelayIdFilesRouteWithChildren =
 interface AppRelayRelayIdRouteChildren {
   AppRelayRelayIdSplatRoute: typeof AppRelayRelayIdSplatRoute
   AppRelayRelayIdDatabaseRoute: typeof AppRelayRelayIdDatabaseRoute
+  AppRelayRelayIdDesktopRoute: typeof AppRelayRelayIdDesktopRoute
   AppRelayRelayIdFilesRoute: typeof AppRelayRelayIdFilesRouteWithChildren
   AppRelayRelayIdInfoRoute: typeof AppRelayRelayIdInfoRoute
   AppRelayRelayIdLogsRoute: typeof AppRelayRelayIdLogsRoute
@@ -2646,6 +2666,7 @@ interface AppRelayRelayIdRouteChildren {
 const AppRelayRelayIdRouteChildren: AppRelayRelayIdRouteChildren = {
   AppRelayRelayIdSplatRoute: AppRelayRelayIdSplatRoute,
   AppRelayRelayIdDatabaseRoute: AppRelayRelayIdDatabaseRoute,
+  AppRelayRelayIdDesktopRoute: AppRelayRelayIdDesktopRoute,
   AppRelayRelayIdFilesRoute: AppRelayRelayIdFilesRouteWithChildren,
   AppRelayRelayIdInfoRoute: AppRelayRelayIdInfoRoute,
   AppRelayRelayIdLogsRoute: AppRelayRelayIdLogsRoute,

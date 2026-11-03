@@ -1,0 +1,24 @@
+name: Desktop image
+
+# Builds the desktop streamer's image and publishes nothing: it links x264,
+# so it's distributed under the GPL, separately from Kiln's images.
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - ".github/workflows/desktop-image.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the image
+        run: docker build --tag kiln-desktop:ci apps/desktop
+      - name: Run it
+        run: docker run --rm kiln-desktop:ci --version

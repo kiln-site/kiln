@@ -1,0 +1,1 @@
+"use strict";(()=>{var e=class extends AudioWorkletProcessor{buf=new Float32Array(960);n=0;process(s){let t=s[0]&&s[0][0];if(!t)return!0;for(let r=0;r<t.length;r++)this.buf[this.n++]=t[r],this.n===this.buf.length&&(this.port.postMessage(this.buf,[this.buf.buffer]),this.buf=new Float32Array(960),this.n=0);return!0}};registerProcessor("mic-capture",e);})();

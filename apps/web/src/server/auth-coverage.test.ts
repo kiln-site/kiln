@@ -104,6 +104,9 @@ const notOperations: Record<string, string> = {
     "Signs short-lived capabilities; changes nothing",
   "relay-capability.ts:issueFileCapability":
     "Signs a short-lived capability; changes nothing",
+  "relay-desktop.ts:openRelayDesktop":
+    "Opens this person's desktop session, coordinated by the Relay's own registry",
+  "relay-desktop.ts:closeRelayDesktop": "Ends this person's desktop session",
   "relay-host.ts:claimRelayTerminal":
     "Takes over this person's terminal session",
   "relay-host.ts:restartRelayTerminal":

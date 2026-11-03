@@ -496,6 +496,15 @@ export function controlRequestLocks(
     case "instance.network.ports.release":
       return null
 
+    // The streamer is shared infrastructure; its tickets and streams are
+    // interactive sessions like terminals.
+    case "relay.desktop.attach":
+      return [exclusive(laneKeys.desktop)]
+    case "relay.desktop.read":
+    case "relay.desktop.heartbeat":
+    case "relay.desktop.detach":
+      return null
+
     // Terminals are interactive sessions, coordinated by their own registry.
     case "relay.terminal.attach":
     case "relay.terminal.heartbeat":
