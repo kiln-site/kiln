@@ -647,6 +647,7 @@ class RelayConnection {
   #authenticatedAt: number | null = null
   #lastHeardAt: number | null = null
   #dropDetails: ConnectionLogAttributes | null = null
+  #socketError: string | null = null
   #dropped: {
     readonly at: number
     readonly cause: string
@@ -1308,6 +1309,8 @@ class RelayConnection {
     this.#livenessFiber?.interruptUnsafe()
     this.#livenessFiber = null
     this.#setState("connecting", null)
+    // After the change above, which can log the last socket's drop.
+    this.#socketError = null
     this.#eventSequence = 0
     this.#hasPushedSnapshot = false
     this.#pushedSnapshot = null
@@ -1369,15 +1372,17 @@ class RelayConnection {
       Effect.catch((cause) =>
         Effect.sync(() => {
           socket.terminate()
-          // The connection it replaced is gone too, though it read as
-          // connected throughout.
           const replacing = this.#swapping
           this.#swapping = false
+          // Logged as the state changes, when this socket had authenticated.
+          // Else the connection it replaced is gone too, though it read as
+          // connected throughout, so the drop is logged here.
+          const logged = this.#noteFailedSession(
+            replacing ? "replacement_failed" : null
+          )
           this.#setState("unreachable", cause.message)
-          if (replacing) {
-            this.#dropDetails = {
-              "kiln.relay.control.close_cause": "replacement_failed",
-            }
+          if (replacing && !logged) {
+            this.#dropDetails = this.#sessionDetails("replacement_failed")
             this.#logDropped(Date.now())
           }
           this.#scheduleReconnect()
@@ -1438,6 +1443,7 @@ class RelayConnection {
         Effect.sync(() => {
           socket?.terminate()
           if (!socket) this.#attempt += 1
+          this.#noteFailedSession(null)
           this.#setState("unreachable", cause.message)
           this.#scheduleReconnect()
         }).pipe(Effect.andThen(Effect.fail(cause)))
@@ -1455,7 +1461,6 @@ class RelayConnection {
       let authenticated = false
       let challengeAnswered = false
       let sessionId: string | null = null
-      let socketError: string | null = null
       const answerChallenge = (message: RelayAuthChallenge) => {
         if (challengeAnswered) {
           resume(
@@ -1709,7 +1714,7 @@ class RelayConnection {
         this.#handleMessage(message)
       })
       activeSocket.once("error", (cause) => {
-        socketError ??= cause.message
+        if (this.#socket === activeSocket) this.#socketError ??= cause.message
         resume(relayConnectionFailure(cause.message, cause))
       })
       activeSocket.once("close", (code, reason) => {
@@ -1724,24 +1729,19 @@ class RelayConnection {
           resume(relayConnectionFailure(error.message, error))
           return
         }
-        const now = Date.now()
         this.#dropDetails = {
-          "kiln.relay.control.close_cause": unresponsive
-            ? "liveness"
-            : this.#reconnectedSocket === activeSocket
-              ? "hearth_reconnect"
-              : socketError
-                ? "error"
-                : "closed",
-          "kiln.relay.control.error": socketError,
+          ...this.#sessionDetails(
+            unresponsive
+              ? "liveness"
+              : this.#reconnectedSocket === activeSocket
+                ? "hearth_reconnect"
+                : this.#socketError
+                  ? "error"
+                  : "closed"
+          ),
           // Rejecting what was pending can start the next connection, and
           // the drop is logged from that, before this close sets the error.
           "kiln.relay.control.last_error": error.message,
-          "kiln.relay.control.last_heard_ms":
-            this.#lastHeardAt === null ? null : now - this.#lastHeardAt,
-          "kiln.relay.control.pending": this.#pending.size,
-          "kiln.relay.control.session_ms":
-            this.#authenticatedAt === null ? null : now - this.#authenticatedAt,
           "websocket.close.code": code,
           "websocket.close.reason": reason.length ? reason.toString() : null,
         }
@@ -2186,6 +2186,31 @@ class RelayConnection {
   // it drop, with what closed it. Logs aren't sampled, so a drop that lasts
   // a moment still leaves its record; the Relay logs its side of the same
   // session.
+  // What the drop's log says about the session as it ends.
+  #sessionDetails(closeCause: string): ConnectionLogAttributes {
+    const now = Date.now()
+    return {
+      "kiln.relay.control.close_cause": closeCause,
+      "kiln.relay.control.error": this.#socketError,
+      "kiln.relay.control.last_heard_ms":
+        this.#lastHeardAt === null ? null : now - this.#lastHeardAt,
+      "kiln.relay.control.pending": this.#pending.size,
+      "kiln.relay.control.session_ms":
+        this.#authenticatedAt === null ? null : now - this.#authenticatedAt,
+    }
+  }
+
+  // A session that failed before it was fully up, such as one whose first
+  // snapshot never came, reads as dropped once its state changes, before
+  // its socket's close says how. Says whether that change logs the drop.
+  #noteFailedSession(closeCause: string | null): boolean {
+    if (this.#state.status !== "authenticated") return false
+    this.#dropDetails = this.#sessionDetails(
+      closeCause ?? (this.#socketError ? "error" : "failed")
+    )
+    return true
+  }
+
   #logDropped(now: number): void {
     const details = this.#dropDetails ?? {}
     this.#dropDetails = null
