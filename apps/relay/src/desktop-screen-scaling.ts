@@ -1,9 +1,24 @@
+import { createHash } from "node:crypto"
 import type { Socket } from "node:net"
 
 import sharp from "sharp"
 import type { WebSocket } from "ws"
 
 import { Bytes } from "./desktop-bytes.js"
+import {
+  CLIPBOARD_IMAGE,
+  clipboardImage,
+  fetchPasteboard,
+  MAX_PASTEBOARD_ARCHIVE_BYTES,
+  MAX_PASTEBOARD_IMAGE_BYTES,
+  MAX_PASTEBOARD_TEXT_BYTES,
+  MISC_STATUS,
+  PASTEBOARD,
+  PASTEBOARD_CHANGED,
+  pasteboardContents,
+  pasteboardMessage,
+  startPasteboard,
+} from "./desktop-mac-pasteboard.js"
 import type { ScreenVideo } from "./desktop-video.js"
 import { forkPromise } from "./effect/promise.js"
 
@@ -38,7 +53,8 @@ const H264_RESET = 1
 // H.264 level 5.1, which browsers can decode: a larger picture is scaled to fit.
 const MAX_VIDEO_PIXELS = 9_437_184
 
-const MAX_CUT_TEXT_BYTES = 1024 * 1024
+const ARCHIVE_CHUNK_BYTES = 1024 * 1024
+const MAX_VIEWER_CUT_BYTES = CLIPBOARD_IMAGE.length + MAX_PASTEBOARD_IMAGE_BYTES
 const MAX_CURSOR_SIZE = 1024
 // Four 5K displays. A stream holds the image, and a copy of it, in memory.
 const MAX_IMAGE_PIXELS = 60_000_000
@@ -224,6 +240,9 @@ export function carryScaledScreen(
   new ScaledScreen(mac, viewer, openVideo).start()
 }
 
+const imageId = (image: Buffer) =>
+  createHash("sha256").update(image).digest("base64")
+
 class ScaledScreen {
   readonly #mac: Socket
   readonly #viewer: WebSocket
@@ -250,6 +269,7 @@ class ScaledScreen {
   #videoShown = false
   // What the viewer last asked for, to show again without the encoder.
   #wanted: Buffer | null = null
+  #pastedImage: string | null = null
 
   constructor(
     mac: Socket,
@@ -378,6 +398,7 @@ class ScaledScreen {
     this.#image = { height, width }
     await this.#send(init)
     await this.#passFromMac(nameBytes)
+    await this.#write(startPasteboard())
 
     const format = Buffer.alloc(20)
     format[4] = 32 // bits per pixel
@@ -410,13 +431,52 @@ class ScaledScreen {
       } else if (type === 3) {
         const header = Buffer.from(await this.#fromMac.read(7))
         const length = header.readUInt32BE(3)
-        if (length > MAX_CUT_TEXT_BYTES) return this.#close()
+        if (length > MAX_PASTEBOARD_TEXT_BYTES) return this.#close()
         const text = await this.#fromMac.read(length)
         await this.#send([Buffer.from([3]), header, text])
+      } else if (type === MISC_STATUS) {
+        const status = await this.#fromMac.read(7)
+        if (status.readUInt16BE(5) === PASTEBOARD_CHANGED) {
+          await this.#write(fetchPasteboard())
+        }
+      } else if (type === PASTEBOARD) {
+        await this.#readPasteboard()
       } else {
         return this.#close()
       }
     }
+  }
+
+  // In pieces, as a large one would overflow what's held of the connection.
+  async #readPasteboard() {
+    const header = await this.#fromMac.read(15)
+    const size = header.readUInt32BE(11)
+    const keep = size <= MAX_PASTEBOARD_ARCHIVE_BYTES
+    const pieces: Array<Buffer> = []
+    for (let left = size; left > 0; left -= ARCHIVE_CHUNK_BYTES) {
+      const piece = await this.#fromMac.read(
+        Math.min(left, ARCHIVE_CHUNK_BYTES)
+      )
+      if (keep) pieces.push(Buffer.from(piece))
+    }
+    if (!keep) return
+    const contents = await pasteboardContents(Buffer.concat(pieces))
+    if (!contents) return
+    if ("text" in contents) return this.#sendCutText([contents.text])
+    // The Mac saying it has the image the viewer just gave it.
+    if (imageId(contents.image) === this.#pastedImage) return
+    await this.#sendCutText([CLIPBOARD_IMAGE, contents.image])
+  }
+
+  // Which the page reads as UTF-8, rather than VNC's Latin-1.
+  #sendCutText(parts: ReadonlyArray<Buffer>) {
+    const header = Buffer.alloc(8)
+    header[0] = 3
+    header.writeUInt32BE(
+      parts.reduce((total, part) => total + part.length, 0),
+      4
+    )
+    return this.#send([header, ...parts])
   }
 
   async #readUpdate() {
@@ -511,9 +571,12 @@ class ScaledScreen {
       } else if (type === 6) {
         const header = Buffer.from(await this.#fromViewer.read(7))
         const length = header.readUInt32BE(3)
-        if (length > MAX_CUT_TEXT_BYTES) return this.#close()
-        const text = await this.#fromViewer.read(length)
-        await this.#write(Buffer.concat([Buffer.from([6]), header, text]))
+        if (length > MAX_VIEWER_CUT_BYTES) return this.#close()
+        const cut = Buffer.from(await this.#fromViewer.read(length))
+        const image = clipboardImage(cut)
+        this.#pastedImage = image && imageId(image)
+        // Waited for here, so a paste that follows finds it there.
+        await this.#write(await pasteboardMessage(cut))
       } else if (type === VIEW_MESSAGE) {
         const view = Buffer.from(await this.#fromViewer.read(13))
         this.#wanted = view

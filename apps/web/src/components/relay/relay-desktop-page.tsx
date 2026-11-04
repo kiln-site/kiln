@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router"
 import type { RelayDesktop, RelayDesktopMonitor } from "@workspace/contracts"
 import { Result } from "effect"
 import {
+  ClipboardPaste,
   Command,
   Gem,
   Keyboard,
@@ -470,6 +471,16 @@ function DesktopFrame({
           >
             <Keyboard />
             <ToolbarLabel>Keyboard</ToolbarLabel>
+          </Button>
+        ) : null}
+        {client.offersPaste && touch ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => surface.current?.paste?.()}
+          >
+            <ClipboardPaste />
+            <ToolbarLabel>Paste</ToolbarLabel>
           </Button>
         ) : null}
         {monitors.length > 0 ? (

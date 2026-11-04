@@ -6,6 +6,11 @@ import { LoaderCircle, RotateCw, TriangleAlert } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 
+import {
+  desktopClipboardContent,
+  DesktopPasteField,
+  useDesktopClipboard,
+} from "@/components/relay/relay-desktop-clipboard"
 import { DesktopKeyboard } from "@/components/relay/relay-desktop-keyboard"
 import {
   desktopStreamUrl,
@@ -71,6 +76,9 @@ const VIEW_MESSAGE = 0xfa
 const RESIZE_SETTLE_MS = 150
 const IMAGE_SIZE_NOTICE = /^kiln-image:(\d+)x(\d+)$/u
 const VIDEO_NOTICE = /^kiln-video:(on|off)$/u
+const CLIENT_CUT_TEXT = 6
+const CLIENT_CUT_TEXT_HEADER_BYTES = 8
+const V = letter("v")
 
 interface View {
   decodesVideo: boolean
@@ -115,6 +123,18 @@ function sendView(
   socket.send(message.buffer)
 }
 
+// What the Relay turns into Apple's own pasteboard message. It's sent here rather
+// than through noVNC, which keeps only Latin-1 of what it's given.
+function sendClipboard(rfb: NoVnc, cutText: Uint8Array) {
+  const socket = rfb._sock._websocket
+  if (socket?.readyState !== WebSocket.OPEN) return
+  const message = new Uint8Array(CLIENT_CUT_TEXT_HEADER_BYTES + cutText.length)
+  message[0] = CLIENT_CUT_TEXT
+  new DataView(message.buffer).setUint32(4, cutText.length)
+  message.set(cutText, CLIENT_CUT_TEXT_HEADER_BYTES)
+  socket.send(message)
+}
+
 const accountStorageKey = (relayId: string) => `kiln:desktop-account:${relayId}`
 
 function rememberedAccount(relayId: string) {
@@ -140,6 +160,7 @@ function ScreenSharingSurface({
   session,
   surface,
 }: DesktopSurfaceProps) {
+  const root = React.useRef<HTMLDivElement>(null)
   const target = React.useRef<HTMLDivElement>(null)
   // What the viewer last tried, kept across a wrong password.
   const account = React.useRef<string | null>(null)
@@ -172,6 +193,27 @@ function ScreenSharingSurface({
     if (document.activeElement !== keyboard.current) client.current?.focus()
   }, [])
 
+  const sendCutText = React.useCallback((cutText: Uint8Array) => {
+    if (client.current) sendClipboard(client.current, cutText)
+  }, [])
+  const pressPaste = React.useCallback((holdingCommand: boolean) => {
+    const send = sendRawKey.current
+    if (!send) return
+    if (!holdingCommand) send(command.keysym, command.code, true)
+    send(V.keysym, V.code, true)
+    send(V.keysym, V.code, false)
+    if (!holdingCommand) send(command.keysym, command.code, false)
+  }, [])
+  const clipboard = useDesktopClipboard({
+    area: root,
+    connected: connection.status === "connected",
+    focus: takeKeys,
+    pressPaste,
+    send: sendCutText,
+  })
+  const receiveContent = React.useEffectEvent(clipboard.receive)
+  const { paste } = clipboard
+
   const showView = React.useCallback(() => {
     const rfb = client.current
     if (rfb && target.current && imageSize.current) {
@@ -183,6 +225,7 @@ function ScreenSharingSurface({
     surface,
     () => ({
       focus: () => client.current?.focus(),
+      paste: () => forkPromise(paste, () => undefined),
       sendKeys: (combo) => {
         const send = sendRawKey.current
         if (!send) return
@@ -210,7 +253,7 @@ function ScreenSharingSurface({
         showView()
       },
     }),
-    [showView]
+    [paste, showView]
   )
 
   React.useEffect(() => {
@@ -256,6 +299,9 @@ function ScreenSharingSurface({
             monitor.y + monitor.height <= image.height
           if (!fits) view.current.monitor = undefined
           showView()
+        })
+        rfb.addEventListener("clipboard", (event) => {
+          receiveContent(desktopClipboardContent(event.detail.text))
         })
         rfb.addEventListener("connect", () => {
           if (cancelled) return
@@ -326,7 +372,7 @@ function ScreenSharingSurface({
   }, [showView])
 
   return (
-    <div className="relative min-h-0 w-full flex-1 bg-black">
+    <div ref={root} className="relative min-h-0 w-full flex-1 bg-black">
       <div
         ref={target}
         aria-label="Node desktop"
@@ -334,15 +380,12 @@ function ScreenSharingSurface({
         role="application"
       />
       {trackpad && connection.status === "connected" ? (
-        <DesktopTrackpad
-          image={image}
-          onUsed={takeKeys}
-        />
+        <DesktopTrackpad image={image} onUsed={takeKeys} />
       ) : null}
-      <DesktopKeyboard
-        input={keyboard}
-        send={sendRawKey}
-        onOpen={onKeyboard}
+      <DesktopKeyboard input={keyboard} send={sendRawKey} onOpen={onKeyboard} />
+      <DesktopPasteField
+        field={clipboard.field}
+        onPaste={clipboard.finishPaste}
       />
       {connection.status === "connected" ? null : (
         <div className="absolute inset-0 grid place-items-center bg-card/95 p-4">
@@ -453,6 +496,7 @@ const option = { code: "AltLeft", key: "Alt", keysym: META_LEFT }
 export const screenSharingClient: DesktopClient = {
   cropsMonitors: true,
   offersKeyboard: true,
+  offersPaste: true,
   offersTrackpad: true,
   offersLossless: true,
   Surface: ScreenSharingSurface,

@@ -1,5 +1,6 @@
 import { connect, createServer, type Socket } from "node:net"
 import type { AddressInfo, Server } from "node:net"
+import { constants, deflateSync, inflateSync } from "node:zlib"
 
 import sharp from "sharp"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
@@ -17,12 +18,55 @@ const ARD = 30
 const TOKEN = "t".repeat(43)
 const ENCODED = Buffer.from([0, 0, 0, 1, 0x65, 0x88])
 
+const VIEWER_INFO = 0x21
+const SET_MODE = 0x0a
+const AUTO_PASTEBOARD = 0x15
+const FETCH_PASTEBOARD = 0x0b
+const PASTEBOARD = 0x1f
+const WATCHING = [VIEWER_INFO, SET_MODE, AUTO_PASTEBOARD]
+const UTF8_TEXT = "public.utf8-plain-text"
+const IMAGE_MARKER = "\0kiln-image\0"
+
 const cleanups: Array<() => void> = []
 
 afterEach(() => {
   vi.useRealTimers()
   for (const cleanup of cleanups.splice(0)) cleanup()
 })
+
+const counted = (bytes: Buffer) => {
+  const size = Buffer.alloc(4)
+  size.writeUInt32BE(bytes.length)
+  return Buffer.concat([size, bytes])
+}
+
+// One item of a pasteboard archive, in the formats given.
+function pasteboardArchive(formats: Record<string, string>) {
+  const count = Buffer.alloc(4)
+  count.writeUInt32BE(Object.keys(formats).length)
+  return Buffer.concat([
+    count,
+    ...Object.entries(formats).flatMap(([name, data]) => [
+      counted(Buffer.from(name)),
+      Buffer.alloc(8),
+      counted(Buffer.from(data)),
+    ]),
+  ])
+}
+
+const deflated = (bytes: Buffer) =>
+  deflateSync(bytes, { finishFlush: constants.Z_SYNC_FLUSH })
+
+// What a Mac's been sent, as one item with the one format.
+function pastedIn(compressed: Buffer) {
+  const archive = inflateSync(compressed, {
+    finishFlush: constants.Z_SYNC_FLUSH,
+  })
+  const nameSize = archive.readUInt32BE(4)
+  const name = archive.subarray(8, 8 + nameSize).toString()
+  const data = archive.subarray(8 + nameSize + 12).toString()
+  return name === UTF8_TEXT ? data : `${name} ${data}`
+}
 
 // Bytes from a socket, read in the sizes a protocol calls for.
 class Incoming {
@@ -66,6 +110,11 @@ function fakeMac(
   const requests: Array<Request> = []
   const pointers: Array<{ x: number; y: number }> = []
   const signIn = { keys: Buffer.alloc(0) }
+  // What's reached the Mac of the viewer's typing and pasting, in order.
+  const inputs: Array<string> = []
+  // How far Apple's messages have come, in the order the Mac needs them.
+  const watching: Array<number> = []
+  let pasteboard: Buffer = Buffer.alloc(0)
   let answering = true
   let socket: Socket | null = null
   const paint = ({ height, width, x, y }: Omit<Request, "incremental">) => {
@@ -126,15 +175,45 @@ function fakeMac(
           }
           requests.push(request)
           if (answering && !request.incremental) paint(request)
+        } else if (type === 4) {
+          const body = await incoming.read(7)
+          inputs.push(`key ${String(body.readUInt32BE(3))}`)
         } else if (type === 5) {
           const body = await incoming.read(5)
           pointers.push({ x: body.readUInt16BE(1), y: body.readUInt16BE(3) })
+        } else if (type === VIEWER_INFO) {
+          await incoming.read(65)
+          watching.push(VIEWER_INFO)
+        } else if (type === SET_MODE) {
+          await incoming.read(3)
+          watching.push(SET_MODE)
+        } else if (type === AUTO_PASTEBOARD) {
+          const body = await incoming.read(7)
+          if (body[2] === 1) watching.push(AUTO_PASTEBOARD)
+        } else if (type === FETCH_PASTEBOARD) {
+          await incoming.read(7)
+          const compressed = deflated(pasteboard)
+          const reply = Buffer.alloc(16)
+          reply[0] = PASTEBOARD
+          reply.writeUInt32BE(pasteboard.length, 8)
+          reply.writeUInt32BE(compressed.length, 12)
+          connection.write(Buffer.concat([reply, compressed]))
+        } else if (type === PASTEBOARD) {
+          const header = await incoming.read(15)
+          const compressed = await incoming.read(header.readUInt32BE(11))
+          inputs.push(`pasted ${pastedIn(compressed)}`)
         }
       }
     }
     void run()
   })
   return {
+    // A Mac only says so to a viewer that's asked in the right order.
+    copy: (archive: Buffer) => {
+      pasteboard = archive
+      if (watching.join() !== WATCHING.join()) return
+      socket?.write(Buffer.from([0x14, 0, 0, 4, 0, 1, 0, 2]))
+    },
     changeImage: (width: number, height: number) => {
       const header = Buffer.alloc(16)
       header.writeUInt16BE(1, 2)
@@ -146,9 +225,11 @@ function fakeMac(
     goQuiet: () => {
       answering = false
     },
+    inputs,
     paint,
     pointers,
     requests,
+    sendRaw: (bytes: Buffer) => socket?.write(bytes),
     server,
     signIn,
   }
@@ -380,6 +461,118 @@ describe("a Mac's sign-in", () => {
     const refusal = await viewer.incoming.read(4 + 4 + 2)
     expect(refusal.readUInt32BE(0)).toBe(1)
     expect(refusal.subarray(8).toString()).toBe("no")
+  })
+})
+
+describe("a Mac's clipboard", () => {
+  const started = async (mac = fakeMac({ height: 64, width: 64 })) => {
+    const viewer = await viewerOf(mac)
+    await signIn(viewer)
+    await enter(viewer)
+    return { mac, viewer }
+  }
+
+  const readCutText = async ({ incoming }: Viewer) => {
+    const header = await incoming.read(8)
+    expect(header[0]).toBe(3)
+    return Buffer.from(await incoming.read(header.readUInt32BE(4))).toString()
+  }
+
+  const readCutImage = async ({ incoming }: Viewer) => {
+    const header = await incoming.read(8)
+    expect(header[0]).toBe(3)
+    const cut = Buffer.from(await incoming.read(header.readUInt32BE(4)))
+    expect(cut.subarray(0, IMAGE_MARKER.length).toString()).toBe(IMAGE_MARKER)
+    return cut.subarray(IMAGE_MARKER.length)
+  }
+
+  const pasteboardImage = (png: Buffer) => {
+    const name = counted(Buffer.from("public.png"))
+    const count = Buffer.alloc(4)
+    count.writeUInt32BE(1)
+    return Buffer.concat([count, name, Buffer.alloc(8), counted(png)])
+  }
+
+  it("brings what the Mac copies to the viewer, whatever else came with it", async () => {
+    const { mac, viewer } = await started()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    mac.copy(
+      pasteboardArchive({
+        "public.rtf": "{\\rtf1 lots of formatting}",
+        [UTF8_TEXT]: "héllo → 🙂",
+      })
+    )
+    expect(await readCutText(viewer)).toBe("héllo → 🙂")
+  })
+
+  it("puts the viewer's text on the Mac before the keys that paste it", async () => {
+    const { mac, viewer } = await started()
+    const text = Buffer.from("héllo → 🙂")
+    const cut = Buffer.alloc(8)
+    cut[0] = 6
+    cut.writeUInt32BE(text.length, 4)
+    viewer.socket.send(Buffer.concat([cut, text]))
+    const key = Buffer.alloc(8)
+    key[0] = 4
+    key[1] = 1
+    key.writeUInt32BE(0x76, 4)
+    viewer.socket.send(key)
+    await until(() => mac.inputs.length === 2)
+    expect(mac.inputs).toEqual(["pasted héllo → 🙂", "key 118"])
+  })
+
+  it("brings an image to the viewer, and not back from where it came", async () => {
+    const png = await sharp({
+      create: {
+        background: { b: 0, g: 0, r: 200 },
+        channels: 3,
+        height: 2,
+        width: 2,
+      },
+    })
+      .png()
+      .toBuffer()
+    const { mac, viewer } = await started()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    mac.copy(pasteboardImage(png))
+    expect(await readCutImage(viewer)).toEqual(png)
+
+    const given = Buffer.concat([Buffer.from(IMAGE_MARKER), Buffer.from("png")])
+    const cut = Buffer.alloc(8)
+    cut[0] = 6
+    cut.writeUInt32BE(given.length, 4)
+    viewer.socket.send(Buffer.concat([cut, given]))
+    await until(() => mac.inputs.length === 1)
+    expect(mac.inputs).toEqual(["pasted public.png png"])
+    // The Mac reporting what it was given, and then something new.
+    mac.copy(pasteboardImage(Buffer.from("png")))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    mac.copy(pasteboardArchive({ [UTF8_TEXT]: "after" }))
+    expect(await readCutText(viewer)).toBe("after")
+  })
+
+  it("carries on past a pasteboard it can't read", async () => {
+    const { mac, viewer } = await started()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const broken = Buffer.alloc(16)
+    broken[0] = PASTEBOARD
+    broken.writeUInt32BE(4, 12)
+    mac.sendRaw(Buffer.concat([broken, Buffer.from([1, 2, 3, 4])]))
+    mac.copy(pasteboardArchive({ [UTF8_TEXT]: "after" }))
+    expect(await readCutText(viewer)).toBe("after")
+  })
+
+  it("steps over a pasteboard too large to read", async () => {
+    const { mac, viewer } = await started()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const size = 65 * 1024 * 1024
+    const huge = Buffer.alloc(16)
+    huge[0] = PASTEBOARD
+    huge.writeUInt32BE(size, 8)
+    huge.writeUInt32BE(size, 12)
+    mac.sendRaw(Buffer.concat([huge, Buffer.alloc(size)]))
+    mac.copy(pasteboardArchive({ [UTF8_TEXT]: "after" }))
+    expect(await readCutText(viewer)).toBe("after")
   })
 })
 

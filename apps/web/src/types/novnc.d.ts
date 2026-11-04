@@ -6,6 +6,10 @@ declare module "@novnc/novnc" {
       type: "desktopname",
       listener: (event: CustomEvent<{ name: string }>) => void
     ): void
+    addEventListener(
+      type: "clipboard",
+      listener: (event: CustomEvent<{ text: string }>) => void
+    ): void
     addEventListener(type: string, listener: EventListener): void
     focusOnClick: boolean
     scaleViewport: boolean

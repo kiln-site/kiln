@@ -25,6 +25,8 @@ export interface DesktopSurface {
   setTrackpad?: (trackpad: boolean) => void
   /** Opens or closes a phone's keyboard, from the tap on the toolbar. */
   toggleKeyboard?: () => void
+  /** Pastes the browser's clipboard, for a touch screen with no paste key. */
+  paste?: () => void
   /** The monitor on show, for a client that can ask for only that much. */
   showMonitor?: (monitor: RelayDesktopMonitor | undefined) => void
   /** Presses keys down in order and lets them go in reverse. */
@@ -60,6 +62,8 @@ export interface DesktopClient {
   readonly offersTrackpad?: boolean
   /** Whether touch screens get `DesktopSurface.toggleKeyboard`. voxl has its own. */
   readonly offersKeyboard?: boolean
+  /** Whether touch screens get `DesktopSurface.paste`. voxl has no need. */
+  readonly offersPaste?: boolean
   /** Whether the toolbar offers `DesktopSurface.setLossless`. */
   readonly offersLossless?: boolean
   /** Shown while the stream opens. */
