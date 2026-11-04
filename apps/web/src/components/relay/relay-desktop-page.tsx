@@ -475,6 +475,7 @@ function DesktopFrame({
         ) : null}
         {client.offersPaste && touch ? (
           <Button
+            disabled={!imageSize}
             size="sm"
             variant="ghost"
             onClick={() => surface.current?.paste?.()}
@@ -578,7 +579,9 @@ function DesktopFrame({
         </DropdownMenu>
         <Button size="sm" variant="ghost" onClick={toggleExpanded}>
           {expanded ? <Minimize /> : <Maximize />}
-          <ToolbarLabel>{expanded ? "Exit fullscreen" : "Fullscreen"}</ToolbarLabel>
+          <ToolbarLabel>
+            {expanded ? "Exit fullscreen" : "Fullscreen"}
+          </ToolbarLabel>
         </Button>
         <Button size="sm" variant="ghost" onClick={onDisconnect}>
           <Unplug />

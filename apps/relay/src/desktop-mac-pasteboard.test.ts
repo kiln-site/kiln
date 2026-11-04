@@ -107,6 +107,22 @@ describe("a pasteboard from a Mac", () => {
     ).toBeNull()
   })
 
+  it("won't decode a TIFF with more pixels than a picture can have", async () => {
+    const tiff = await sharp({
+      create: {
+        background: { b: 0, g: 0, r: 0 },
+        channels: 3,
+        height: 10_000,
+        width: 7_000,
+      },
+    })
+      .tiff({ compression: "deflate" })
+      .toBuffer()
+    expect(
+      await pasteboardContents(packed(item(format(TIFF, tiff))))
+    ).toBeNull()
+  })
+
   it("survives an image that isn't one", async () => {
     const archive = packed(item(format(TIFF, Buffer.from("not a picture"))))
     expect(await pasteboardContents(archive)).toBeNull()

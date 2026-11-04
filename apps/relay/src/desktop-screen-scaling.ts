@@ -463,8 +463,11 @@ class ScaledScreen {
     const contents = await pasteboardContents(Buffer.concat(pieces))
     if (!contents) return
     if ("text" in contents) return this.#sendCutText([contents.text])
-    // The Mac saying it has the image the viewer just gave it.
-    if (imageId(contents.image) === this.#pastedImage) return
+    // The Mac saying it has the image the viewer just gave it. That's only the
+    // once: copying the same one again later is a copy like any other.
+    const pasted = imageId(contents.image) === this.#pastedImage
+    this.#pastedImage = null
+    if (pasted) return
     await this.#sendCutText([CLIPBOARD_IMAGE, contents.image])
   }
 

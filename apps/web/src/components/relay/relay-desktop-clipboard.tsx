@@ -2,18 +2,21 @@ import * as React from "react"
 
 import { showToast } from "@workspace/ui/components/sonner"
 
+import { viewerUsesCommand } from "@/components/relay/relay-desktop-surface"
 import { forkPromise, recoverPromise } from "@/effect/promise"
 
-// Mirrors text and images between a Mac and the viewer's browser. The Relay does the Mac's
-// side (desktop-mac-pasteboard.ts). This side has what browsers allow to work with:
+// Mirrors text and images between a Mac and the viewer's browser. The Relay does
+// the Mac's side (desktop-mac-pasteboard.ts). This side has what browsers allow to
+// work with:
 //
-// - What the Mac copies goes on the browser's clipboard, which only takes writes
-//   while the page has focus, and on phones from a tap: a write that's refused
-//   waits for the next time one can work.
-// - What the browser holds can be read from a paste, which noVNC stops by taking
-//   every key: Paste is kept from it, and lands in a hidden field instead.
-//   Chromium browsers can also be given leave to read it, which is what lets
-//   copying elsewhere and coming back reach the Mac without a key.
+// - What the Mac copies goes on the browser's clipboard while the viewer's on this
+//   page. That takes focus, and on phones a tap, so a refused write waits for the
+//   next one. Copies made while the viewer's elsewhere are left, rather than
+//   replacing what they've copied there in the meantime.
+// - The browser's clipboard only goes to the Mac on Paste, as it's whatever the
+//   viewer last copied, passwords included, and this may be anyone's Mac. noVNC
+//   stops the paste event by taking every key, so Paste is kept from it and lands
+//   in a hidden field instead.
 
 /** What the Relay carries of a clipboard (desktop-mac-pasteboard.ts). */
 const MAX_TEXT_BYTES = 1024 * 1024
@@ -66,27 +69,19 @@ async function readClipboard(): Promise<ClipboardContent> {
 // Whether this press is Paste on the viewer's own computer. Other computers'
 // Control is the Mac's Command, as with every other shortcut.
 function isPaste(event: KeyboardEvent) {
-  const modifier = navigator.platform.startsWith("Mac")
-    ? event.metaKey
-    : event.ctrlKey
   return (
-    modifier &&
+    (viewerUsesCommand() ? event.metaKey : event.ctrlKey) &&
     !event.altKey &&
     !event.shiftKey &&
     event.key.toLowerCase() === "v"
   )
 }
 
-// Asking is what makes Chromium offer the permission. Other browsers show a Paste
-// bubble for each read and don't have this query, so they stay with the paste key.
-async function canReadQuietly() {
-  if (!navigator.permissions) return false
-  const status = await recoverPromise(
-    () =>
-      navigator.permissions.query({ name: "clipboard-read" as PermissionName }),
-    () => null
-  )
-  return status !== null && status.state !== "denied"
+const isModifier = ({ key }: KeyboardEvent) =>
+  key === "Control" || key === "Meta" || key === "Alt" || key === "Shift"
+
+const showTooLarge = (message: string) => {
+  showToast({ message, type: "error" })
 }
 
 export function useDesktopClipboard({
@@ -101,28 +96,27 @@ export function useDesktopClipboard({
   connected: boolean
   /** Gives the keys back to the desktop. */
   focus: () => void
-  /** Sends V, with Command unless the viewer's holding it. */
+  /** Sends Command and V, and lets go of Command unless the viewer's holding it. */
   pressPaste: (holdingCommand: boolean) => void
   send: (cutText: Uint8Array) => void
 }) {
   const field = React.useRef<HTMLTextAreaElement>(null)
-  // What each side was last known to hold, so nothing's mirrored back.
-  const known = React.useRef<string | null>(null)
+  // Text just sent, which the Mac will report back once.
+  const sent = React.useRef<string | null>(null)
   const waiting = React.useRef<ClipboardContent | null>(null)
   const pasting = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const holdingCommand = React.useRef(false)
 
   const sendText = React.useCallback(
     (text: string) => {
       const bytes = encoder.encode(text)
       if (bytes.length > MAX_TEXT_BYTES) {
-        showToast({
-          message: "That's too much text to send to the desktop, over 1 MB.",
-          type: "error",
-        })
-        return
+        showTooLarge("That's too much text to send to the desktop, over 1 MB.")
+        return false
       }
-      known.current = text
+      sent.current = text
       send(bytes)
+      return true
     },
     [send]
   )
@@ -131,18 +125,18 @@ export function useDesktopClipboard({
     async (image: Blob) => {
       const png = await pngOf(image)
       if (png.size > MAX_IMAGE_BYTES) {
-        showToast({
-          message:
-            "That image is too large to send to the desktop, over 15 MB.",
-          type: "error",
-        })
-        return
+        showTooLarge(
+          "That image is too large to send to the desktop, over 15 MB."
+        )
+        return false
       }
       const marker = encoder.encode(IMAGE_MARKER)
       const cutText = new Uint8Array(marker.length + png.size)
       cutText.set(marker)
       cutText.set(new Uint8Array(await png.arrayBuffer()), marker.length)
+      sent.current = null
       send(cutText)
+      return true
     },
     [send]
   )
@@ -157,57 +151,48 @@ export function useDesktopClipboard({
           : navigator.clipboard.write([new ClipboardItem({ [PNG]: content })]))
         if (waiting.current === content) waiting.current = null
       },
-      // Not allowed yet: tried again with the next tap, key, or return here.
+      // Not allowed yet: tried again with the next tap or key.
       () => undefined
     )
   }, [])
 
   const receive = React.useCallback(
     (content: ClipboardContent) => {
-      if (content === known.current) return
-      known.current = typeof content === "string" ? content : null
+      if (content === sent.current) {
+        sent.current = null
+        return
+      }
+      if (!document.hasFocus()) return
       waiting.current = content
       flush()
     },
     [flush]
   )
 
-  // What was copied elsewhere, on coming back. A clipboard that can't be read
-  // says nothing: Paste still works.
-  const pull = React.useCallback(async () => {
-    if (!navigator.clipboard?.readText || !(await canReadQuietly())) return
-    const text = await recoverPromise(
-      () => navigator.clipboard.readText(),
-      () => null
-    )
-    if (text && text !== known.current) sendText(text)
-  }, [sendText])
-
+  // Rejected content leaves the key unsent, or the Mac would paste something else.
   const finishPaste = React.useCallback(
     (pasted: DataTransfer | null) => {
       if (pasting.current === null) return
       clearTimeout(pasting.current)
       pasting.current = null
       focus()
-      // Sent even when it's what the Mac last said, which may since have been
-      // an image or anything else that doesn't come here as text.
+      const press = () => pressPaste(holdingCommand.current)
       const text = pasted?.getData("text/plain")
       const image = [...(pasted?.files ?? [])].find((file) =>
         file.type.startsWith("image/")
       )
-      if (text || !image) {
-        if (text) sendText(text)
-        pressPaste(true)
+      if (!text && image) {
+        forkPromise(
+          async () => {
+            if (await sendImage(image)) press()
+          },
+          () => showTooLarge("That image couldn't be read.")
+        )
         return
       }
-      // Reading it takes a moment, by when the viewer may have let go.
-      forkPromise(
-        async () => {
-          await sendImage(image)
-          pressPaste(false)
-        },
-        () => pressPaste(false)
-      )
+      // Sent even when it's what the Mac last said, which may since have been
+      // something that doesn't come here.
+      if (!text || sendText(text)) press()
     },
     [focus, pressPaste, sendImage, sendText]
   )
@@ -221,40 +206,64 @@ export function useDesktopClipboard({
       })
       return
     }
-    if (typeof content !== "string") await sendImage(content)
-    else if (content) sendText(content)
-    pressPaste(false)
+    const fits =
+      typeof content === "string"
+        ? !content || sendText(content)
+        : await sendImage(content)
+    if (fits) pressPaste(false)
   }, [pressPaste, sendImage, sendText])
 
   React.useEffect(() => {
     const element = area.current
     if (!element || !connected) return
     const onKey = (event: KeyboardEvent) => {
-      flush()
-      if (!isPaste(event)) return
-      // Left to happen, for the paste event, and kept from noVNC, which would
-      // stop it and send the Mac a V before the text. Command's already there.
-      event.stopPropagation()
-      if (pasting.current !== null) return
-      field.current?.focus()
-      pasting.current = setTimeout(() => finishPaste(null), PASTE_WAIT_MS)
+      // What the hidden field gets while it has the keys is noVNC's, which only
+      // listens on its canvas: a key let go of here would stay down on the Mac.
+      if (event.target === field.current) {
+        if (event.type === "keyup" && isModifier(event)) {
+          holdingCommand.current = false
+        }
+        if (isPaste(event)) event.stopPropagation()
+        else {
+          element
+            .querySelector("canvas")
+            ?.dispatchEvent(new KeyboardEvent(event.type, event))
+        }
+        return
+      }
+      if (event.type === "keyup") {
+        if (isModifier(event)) holdingCommand.current = false
+        return
+      }
+      if (isPaste(event)) {
+        // Left to happen, for the paste event, and kept from noVNC, which would
+        // stop it. What the viewer's pasting comes before what the Mac last said.
+        event.stopPropagation()
+        waiting.current = null
+        holdingCommand.current = true
+        if (pasting.current !== null) return
+        field.current?.focus()
+        pasting.current = setTimeout(() => finishPaste(null), PASTE_WAIT_MS)
+        return
+      }
+      if (!isModifier(event)) flush()
     }
-    const onReturn = () => {
-      flush()
-      forkPromise(pull, () => undefined)
+    const onLeave = () => {
+      holdingCommand.current = false
     }
     element.addEventListener("keydown", onKey, true)
+    element.addEventListener("keyup", onKey, true)
     element.addEventListener("pointerup", flush, true)
-    window.addEventListener("focus", onReturn)
-    forkPromise(pull, () => undefined)
+    window.addEventListener("blur", onLeave)
     return () => {
       element.removeEventListener("keydown", onKey, true)
+      element.removeEventListener("keyup", onKey, true)
       element.removeEventListener("pointerup", flush, true)
-      window.removeEventListener("focus", onReturn)
+      window.removeEventListener("blur", onLeave)
       if (pasting.current !== null) clearTimeout(pasting.current)
       pasting.current = null
     }
-  }, [area, connected, finishPaste, flush, pull])
+  }, [area, connected, finishPaste, flush])
 
   return { field, finishPaste, paste, receive }
 }

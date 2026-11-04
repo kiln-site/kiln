@@ -17,6 +17,7 @@ import {
   digit,
   keys,
   letter,
+  viewerUsesCommand,
   type DesktopClient,
   type DesktopImageSize,
   type DesktopSurfaceProps,
@@ -47,16 +48,26 @@ const ALT_LEFT = 0xffe9
 const ALT_RIGHT = 0xffea
 const META_LEFT = 0xffe7
 const META_RIGHT = 0xffe8
+const MODE_SWITCH = 0xff7e
+const LEVEL3_SHIFT = 0xfe03
 
 // What macOS's server makes of keys, measured: Alt and Super are both Command,
-// and only Meta is Option. So a viewer's Alt is sent as Meta, on any computer.
+// and only Meta is Option. noVNC has already swapped a Mac viewer's keys for
+// other kinds of server, sending Command as Alt and Option as these two, so
+// those need only Option corrected. Elsewhere a viewer's Alt is sent as Meta.
 // Other computers' shortcuts use Control where a Mac's use Command, so their
 // Control is the Mac's Command, and their Windows key the Mac's Control.
 function macKeysym(keysym: number) {
-  if (keysym === ALT_LEFT) return META_LEFT
-  if (keysym === ALT_RIGHT) return META_RIGHT
-  if (navigator.platform.startsWith("Mac")) return keysym
+  if (viewerUsesCommand()) {
+    if (keysym === MODE_SWITCH) return META_LEFT
+    if (keysym === LEVEL3_SHIFT) return META_RIGHT
+    return keysym
+  }
   switch (keysym) {
+    case ALT_LEFT:
+      return META_LEFT
+    case ALT_RIGHT:
+      return META_RIGHT
     case CONTROL_LEFT:
       return SUPER_LEFT
     case CONTROL_RIGHT:
@@ -165,6 +176,7 @@ function ScreenSharingSurface({
   // What the viewer last tried, kept across a wrong password.
   const account = React.useRef<string | null>(null)
   const client = React.useRef<NoVnc | null>(null)
+  const signedIn = React.useRef(false)
   const imageSize = React.useRef<DesktopImageSize | null>(null)
   const view = React.useRef<View>({
     decodesVideo: false,
@@ -193,13 +205,18 @@ function ScreenSharingSurface({
     if (document.activeElement !== keyboard.current) client.current?.focus()
   }, [])
 
+  // Only once signed in: before that the socket's open, and anything sent would
+  // reach the Mac in the middle of its sign-in, from someone who hasn't.
   const sendCutText = React.useCallback((cutText: Uint8Array) => {
-    if (client.current) sendClipboard(client.current, cutText)
+    if (client.current && signedIn.current) {
+      sendClipboard(client.current, cutText)
+    }
   }, [])
+  // Command goes first whether or not it's held: noVNC can be holding it back.
   const pressPaste = React.useCallback((holdingCommand: boolean) => {
     const send = sendRawKey.current
     if (!send) return
-    if (!holdingCommand) send(command.keysym, command.code, true)
+    send(command.keysym, command.code, true)
     send(V.keysym, V.code, true)
     send(V.keysym, V.code, false)
     if (!holdingCommand) send(command.keysym, command.code, false)
@@ -225,7 +242,9 @@ function ScreenSharingSurface({
     surface,
     () => ({
       focus: () => client.current?.focus(),
-      paste: () => forkPromise(paste, () => undefined),
+      paste: () => {
+        if (signedIn.current) forkPromise(paste, () => undefined)
+      },
       sendKeys: (combo) => {
         const send = sendRawKey.current
         if (!send) return
@@ -305,6 +324,7 @@ function ScreenSharingSurface({
         })
         rfb.addEventListener("connect", () => {
           if (cancelled) return
+          signedIn.current = true
           rejected.current = false
           if (account.current) rememberAccount(relayId, account.current)
           setConnection({ status: "connected" })
@@ -328,6 +348,7 @@ function ScreenSharingSurface({
           rejected.current = true
         })
         rfb.addEventListener("disconnect", () => {
+          signedIn.current = false
           client.current = null
           imageSize.current = null
           onImageSize(null)
@@ -344,6 +365,7 @@ function ScreenSharingSurface({
     )
     return () => {
       cancelled = true
+      signedIn.current = false
       client.current?.disconnect()
       client.current = null
     }

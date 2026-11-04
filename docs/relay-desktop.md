@@ -285,16 +285,20 @@ a browser's can't hold a file at all. Kiln's host files are the way to move one.
 Browsers guard their clipboards, so the page (`relay-desktop-clipboard.tsx`) works
 with what each allows:
 
-- What the Mac copies is written to the browser's clipboard. That needs the page
-  to have focus, and on phones a tap, so a refused write waits for the next chance.
+- What the Mac copies while the viewer's on the page is written to the browser's
+  clipboard. That needs focus, and on phones a tap, so a refused write waits for
+  the next one. Copies made while they're elsewhere are left, rather than replacing
+  what they've copied there since.
 - Paste on the viewer's keyboard is kept from noVNC, which would stop the browser's
   paste event. It lands in a hidden field, what was pasted goes to the Mac, and then
   the Mac gets the V. The Relay finishes with it before reading the next key.
-- Chromium browsers ask once for leave to read the clipboard. With it, text copied
-  elsewhere reaches the Mac when the page gets focus back. An image waits for Paste.
 - A touch screen has no paste key, so the toolbar has **Paste**.
 
-Anyone viewing gets what's copied on the Mac, as they'd see it on screen.
+The browser's clipboard only ever goes to the Mac on Paste. It's whatever the viewer
+last copied, passwords included, so it isn't sent just for opening a desktop or
+coming back to the tab. That means pasting from a menu on the Mac uses the Mac's own
+clipboard until the viewer's pasted once. Anyone viewing gets what's copied on the
+Mac, as they'd see it on screen.
 
 ## Stream recovery on a Mac
 
@@ -305,8 +309,8 @@ connection, so the page reconnects and asks again.
 ## Keyboard, fullscreen, and touch
 
 On a Mac, macOS's server reads Alt and Super as Command, and only Meta as
-Option, so the page sends a viewer's Alt as Meta. Other computers' Control is
-sent as Command, and their Windows key as Control, so shortcuts work by habit.
+Option, so the page sends a viewer's Alt or Option as Meta. Other computers' Control
+is sent as Command, and their Windows key as Control, so shortcuts work by habit.
 
 voxl sends each key to the desktop as an X keysym, so the viewer's layout
 decides what it types. A Mac's Command key becomes Control, so Linux shortcuts

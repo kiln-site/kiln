@@ -33,6 +33,10 @@ export interface DesktopSurface {
   sendKeys: (keys: ReadonlyArray<SendableKey>) => void
 }
 
+/** Whether shortcuts here use Command: a Mac, or an iPad or iPhone's keyboard. */
+export const viewerUsesCommand = () =>
+  /^(Mac|iPhone|iPad|iPod)/u.test(navigator.platform)
+
 /** The size of the image a client shows, in the desktop's pixels. */
 export interface DesktopImageSize {
   readonly height: number

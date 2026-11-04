@@ -36,6 +36,8 @@ export const CLIPBOARD_IMAGE = Buffer.from("\0kiln-image\0")
 
 // A 5K display's picture, uncompressed, with room for what comes with it.
 const MAX_INFLATED_BYTES = 128 * 1024 * 1024
+// As many as a stream's picture can have, before decoding one.
+const MAX_TIFF_PIXELS = 60_000_000
 const TEXT_FLAVOR = Buffer.from("public.utf8-plain-text")
 const PNG_FLAVOR = Buffer.from("public.png")
 const TIFF_FLAVOR = Buffer.from("public.tiff")
@@ -144,7 +146,10 @@ export async function pasteboardContents(
       }
       const image =
         png ??
-        (tiff && (await sharp(tiff).png({ compressionLevel: 3 }).toBuffer()))
+        (tiff &&
+          (await sharp(tiff, { limitInputPixels: MAX_TIFF_PIXELS })
+            .png({ compressionLevel: 3 })
+            .toBuffer()))
       return image && image.length <= MAX_PASTEBOARD_IMAGE_BYTES
         ? { image: Buffer.from(image) }
         : null

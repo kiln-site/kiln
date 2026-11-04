@@ -549,6 +549,9 @@ describe("a Mac's clipboard", () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
     mac.copy(pasteboardArchive({ [UTF8_TEXT]: "after" }))
     expect(await readCutText(viewer)).toBe("after")
+    // Copied on the Mac this time.
+    mac.copy(pasteboardImage(Buffer.from("png")))
+    expect((await readCutImage(viewer)).toString()).toBe("png")
   })
 
   it("carries on past a pasteboard it can't read", async () => {
