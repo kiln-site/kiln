@@ -291,7 +291,10 @@ with what each allows:
   what they've copied there since.
 - Paste on the viewer's keyboard is kept from noVNC, which would stop the browser's
   paste event. It lands in a hidden field, what was pasted goes to the Mac, and then
-  the Mac gets the V. The Relay finishes with it before reading the next key.
+  the Mac gets the V. The Relay finishes with it before reading the next key. Text
+  the Mac gave the browser stays out of this, so a file or rich text copied on the
+  Mac still pastes as itself there. An image can't be told apart that way, as
+  browsers re-encode them, so one copied and pasted on the Mac goes round as PNG.
 - A touch screen has no paste key, so the toolbar has **Paste**.
 
 The browser's clipboard only ever goes to the Mac on Paste. It's whatever the viewer

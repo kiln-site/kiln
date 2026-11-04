@@ -52,18 +52,21 @@ async function pngOf(image: Blob) {
   return canvas.convertToBlob({ type: PNG })
 }
 
+const UNSUPPORTED = Symbol("Nothing the desktop can take")
+
 // What a browser's clipboard holds, for the toolbar's Paste. Text comes first, as
 // on the Mac's side, and what's only an image needs the newer of the two calls.
-async function readClipboard(): Promise<ClipboardContent> {
+async function readClipboard(): Promise<ClipboardContent | typeof UNSUPPORTED> {
   if (!navigator.clipboard.read) return navigator.clipboard.readText()
-  for (const item of await navigator.clipboard.read()) {
+  const items = await navigator.clipboard.read()
+  for (const item of items) {
     if (item.types.includes("text/plain")) {
       return (await item.getType("text/plain")).text()
     }
     const image = item.types.find((type) => type.startsWith("image/"))
     if (image) return item.getType(image)
   }
-  return ""
+  return items.some((item) => item.types.length > 0) ? UNSUPPORTED : ""
 }
 
 // Whether this press is Paste on the viewer's own computer. Other computers'
@@ -85,9 +88,12 @@ const isModifier = ({ key }: KeyboardEvent) =>
 
 const canvasOf = (area: HTMLElement) => area.querySelector("canvas")
 
-const showTooLarge = (message: string) => {
+const showProblem = (message: string) => {
   showToast({ message, type: "error" })
 }
+
+const showUnsupported = () =>
+  showProblem("Only text and images can be pasted into the desktop.")
 
 export function useDesktopClipboard({
   area,
@@ -106,8 +112,13 @@ export function useDesktopClipboard({
   send: (cutText: Uint8Array) => void
 }) {
   const field = React.useRef<HTMLTextAreaElement>(null)
-  // Text just sent, which the Mac will report back once.
+  // Text just sent, which the Mac will report back.
   const sent = React.useRef<string | null>(null)
+  // Text the Mac last gave this browser. It's the plain version of whatever's on
+  // the Mac, so pasting it there should leave the file or rich text it stands for.
+  const mirrored = React.useRef<string | null>(null)
+  // Which connection this is: what a paste finds after waiting may be a new one.
+  const session = React.useRef(0)
   const waiting = React.useRef<ClipboardContent | null>(null)
   const pasting = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const holdingCommand = React.useRef(false)
@@ -116,7 +127,7 @@ export function useDesktopClipboard({
     (text: string) => {
       const bytes = encoder.encode(text)
       if (bytes.length > MAX_TEXT_BYTES) {
-        showTooLarge("That's too much text to send to the desktop, over 1 MB.")
+        showProblem("That's too much text to send to the desktop, over 1 MB.")
         return false
       }
       sent.current = text
@@ -127,21 +138,23 @@ export function useDesktopClipboard({
   )
 
   const sendImage = React.useCallback(
-    async (image: Blob) => {
+    async (image: Blob, press: () => void) => {
+      const started = session.current
       const png = await pngOf(image)
       if (png.size > MAX_IMAGE_BYTES) {
-        showTooLarge(
+        showProblem(
           "That image is too large to send to the desktop, over 15 MB."
         )
-        return false
+        return
       }
       const marker = encoder.encode(IMAGE_MARKER)
       const cutText = new Uint8Array(marker.length + png.size)
       cutText.set(marker)
       cutText.set(new Uint8Array(await png.arrayBuffer()), marker.length)
+      if (session.current !== started) return
       sent.current = null
       send(cutText)
-      return true
+      press()
     },
     [send]
   )
@@ -163,18 +176,25 @@ export function useDesktopClipboard({
 
   const receive = React.useCallback(
     (content: ClipboardContent) => {
-      if (content === sent.current) {
-        sent.current = null
-        return
-      }
-      if (!document.hasFocus()) return
+      const echo = content === sent.current
+      sent.current = null
+      if (echo || !document.hasFocus()) return
+      mirrored.current = typeof content === "string" ? content : null
       waiting.current = content
       flush()
     },
     [flush]
   )
 
-  // Rejected content leaves the key unsent, or the Mac would paste something else.
+  // Text that's what the Mac gave us stays on the Mac as it was. Rejected content
+  // leaves the key unsent, or the Mac would paste something else.
+  const pasteText = React.useCallback(
+    (text: string, press: () => void) => {
+      if (text === mirrored.current || sendText(text)) press()
+    },
+    [sendText]
+  )
+
   const finishPaste = React.useCallback(
     (pasted: DataTransfer | null) => {
       if (pasting.current === null) return
@@ -186,38 +206,32 @@ export function useDesktopClipboard({
       const image = [...(pasted?.files ?? [])].find((file) =>
         file.type.startsWith("image/")
       )
-      if (!text && image) {
+      if (text) pasteText(text, press)
+      else if (image) {
         forkPromise(
-          async () => {
-            if (await sendImage(image)) press()
-          },
-          () => showTooLarge("That image couldn't be read.")
+          () => sendImage(image, press),
+          () => showProblem("That image couldn't be read.")
         )
-        return
-      }
-      // Sent even when it's what the Mac last said, which may since have been
-      // something that doesn't come here.
-      if (!text || sendText(text)) press()
+      } else if (pasted && pasted.types.length > 0) showUnsupported()
+      // Nothing here to paste, or no paste event at all: it's the Mac's own.
+      else press()
     },
-    [focus, pressPaste, sendImage, sendText]
+    [focus, pasteText, pressPaste, sendImage]
   )
 
   const paste = React.useCallback(async () => {
+    const started = session.current
     waiting.current = null
     const content = await recoverPromise(readClipboard, () => null)
+    if (session.current !== started) return
     if (content === null) {
-      showToast({
-        message: "This browser didn't allow reading its clipboard.",
-        type: "error",
-      })
-      return
-    }
-    const fits =
-      typeof content === "string"
-        ? !content || sendText(content)
-        : await sendImage(content)
-    if (fits) pressPaste(false)
-  }, [pressPaste, sendImage, sendText])
+      showProblem("This browser didn't allow reading its clipboard.")
+    } else if (content === UNSUPPORTED) showUnsupported()
+    else if (typeof content !== "string") {
+      await sendImage(content, () => pressPaste(false))
+    } else if (content) pasteText(content, () => pressPaste(false))
+    else pressPaste(false)
+  }, [pasteText, pressPaste, sendImage])
 
   React.useEffect(() => {
     const element = area.current
@@ -269,6 +283,8 @@ export function useDesktopClipboard({
       window.removeEventListener("blur", onLeave)
       if (pasting.current !== null) clearTimeout(pasting.current)
       pasting.current = null
+      waiting.current = null
+      session.current += 1
     }
   }, [area, connected, finishPaste, flush])
 

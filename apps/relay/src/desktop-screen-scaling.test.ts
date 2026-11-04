@@ -554,6 +554,21 @@ describe("a Mac's clipboard", () => {
     expect((await readCutImage(viewer)).toString()).toBe("png")
   })
 
+  it("expects an image back only in the Mac's next report", async () => {
+    const { mac, viewer } = await started()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const given = Buffer.concat([Buffer.from(IMAGE_MARKER), Buffer.from("png")])
+    const cut = Buffer.alloc(8)
+    cut[0] = 6
+    cut.writeUInt32BE(given.length, 4)
+    viewer.socket.send(Buffer.concat([cut, given]))
+    await until(() => mac.inputs.length === 1)
+    mac.copy(pasteboardArchive({ [UTF8_TEXT]: "something else first" }))
+    expect(await readCutText(viewer)).toBe("something else first")
+    mac.copy(pasteboardImage(Buffer.from("png")))
+    expect((await readCutImage(viewer)).toString()).toBe("png")
+  })
+
   it("carries on past a pasteboard it can't read", async () => {
     const { mac, viewer } = await started()
     await new Promise((resolve) => setTimeout(resolve, 20))

@@ -449,6 +449,9 @@ class ScaledScreen {
 
   // In pieces, as a large one would overflow what's held of the connection.
   async #readPasteboard() {
+    // The Mac's report of an image the viewer gave it comes next, or not at all.
+    const pastedImage = this.#pastedImage
+    this.#pastedImage = null
     const header = await this.#fromMac.read(15)
     const size = header.readUInt32BE(11)
     const keep = size <= MAX_PASTEBOARD_ARCHIVE_BYTES
@@ -463,11 +466,7 @@ class ScaledScreen {
     const contents = await pasteboardContents(Buffer.concat(pieces))
     if (!contents) return
     if ("text" in contents) return this.#sendCutText([contents.text])
-    // The Mac saying it has the image the viewer just gave it. That's only the
-    // once: copying the same one again later is a copy like any other.
-    const pasted = imageId(contents.image) === this.#pastedImage
-    this.#pastedImage = null
-    if (pasted) return
+    if (imageId(contents.image) === pastedImage) return
     await this.#sendCutText([CLIPBOARD_IMAGE, contents.image])
   }
 
