@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { SqlClient } from "effect/sql"
 
 import { migrations } from "@/migrations"
+import { explicitBackupDestinations } from "@/migrations/0054_explicit_backup_destinations"
 import { describeMysql, testDatabaseClient } from "@/test/database"
 
 import { applyMigrations } from "./migrations"
@@ -179,6 +180,14 @@ describeMysql("database migrations", () => {
           yield* sql`SET FOREIGN_KEY_CHECKS = 1`
 
           yield* applyMigrations(migrations)
+
+          // Stopped after settling, with the column still there and saying
+          // something else now: what was settled stays. Then run once more
+          // with the column gone.
+          yield* sql`ALTER TABLE kiln_backup_policy
+            ADD COLUMN storage_id char(36) DEFAULT NULL`
+          yield* explicitBackupDestinations.run
+          yield* explicitBackupDestinations.run
 
           const json = (saved: unknown) =>
             (typeof saved === "string" ? JSON.parse(saved) : saved) as {
