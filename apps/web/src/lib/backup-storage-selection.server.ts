@@ -3,34 +3,19 @@ import type { BackupTargetKind } from "@workspace/contracts"
 import { loadBackupStorageEffect } from "@/backups/destinations/s3"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { getBackupPolicyEffect } from "@/effect/backups"
 import { runAppEffect } from "@/effect/runtime"
 
-// Resolve the policy once so authorization and reservation use the same destination.
-export async function resolveBackupStorageSelection(input: {
+// Whether this person may send a target's backup to these destinations. The
+// Relay's own storage (null) needs nothing more than taking the backup.
+export async function requireBackupStorageSelection(input: {
   relayId: string
+  storageIds: ReadonlyArray<string | null>
   targetId: string
   targetKind: Exclude<BackupTargetKind, "platform">
-  storageId?: string | null
-  storageIds?: ReadonlyArray<string | null>
-}): Promise<Array<string | null>> {
-  if (input.storageIds !== undefined) return [...input.storageIds]
-  if (input.storageId !== undefined) return [input.storageId]
-  const policy = await runAppEffect(
-    "backups.resolveStoragePolicy",
-    getBackupPolicyEffect(input.relayId, input.targetKind, input.targetId)
-  )
-  return [policy.storageId]
-}
-
-export async function resolveAuthorizedBackupStorageSelection(
-  input: Parameters<typeof resolveBackupStorageSelection>[0] & {
-    user: AuthenticatedUser
-  }
-): Promise<Array<string | null>> {
-  const storageIds = await resolveBackupStorageSelection(input)
+  user: AuthenticatedUser
+}): Promise<void> {
   await Promise.all(
-    [...new Set(storageIds)].map(async (storageId) => {
+    [...new Set(input.storageIds)].map(async (storageId) => {
       if (storageId === null) return
       const storage = await runAppEffect(
         "backups.loadSelectedStorage",
@@ -55,5 +40,4 @@ export async function resolveAuthorizedBackupStorageSelection(
       }
     })
   )
-  return storageIds
 }

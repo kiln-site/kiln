@@ -249,8 +249,8 @@ describeMysql("Hearth operations", () => {
           ).pipe(Effect.forkChild({ startImmediately: true }))
           yield* Effect.yieldNow
 
-          // A backup to the preferred destination, which changes while it
-          // waits for the first one's save.
+          // Work whose lock follows a setting, which changes while it waits
+          // for the first one's save.
           let preferred = "first"
           const backingUp = yield* runOperation(
             operation<void>()({

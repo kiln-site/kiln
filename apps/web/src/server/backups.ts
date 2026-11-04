@@ -54,8 +54,7 @@ const instanceBackupInputSchema = z.strictObject({
   mode: z.enum(["full", "incremental"]).optional(),
   name: z.string().trim().min(1).max(120),
   relayId: relayIdSchema,
-  storageId: z.uuid().nullable().optional(),
-  storageIds: z.array(z.uuid().nullable()).min(1).max(16).optional(),
+  storageIds: z.array(z.uuid().nullable()).min(1).max(16),
 })
 
 const databaseBackupInputSchema = z.strictObject({
@@ -69,8 +68,7 @@ const databaseBackupInputSchema = z.strictObject({
     .optional(),
   name: z.string().trim().min(1).max(120),
   relayId: relayIdSchema,
-  storageId: z.uuid().nullable().optional(),
-  storageIds: z.array(z.uuid().nullable()).min(1).max(16).optional(),
+  storageIds: z.array(z.uuid().nullable()).min(1).max(16),
 })
 
 const platformBackupInputSchema = z.strictObject({
@@ -83,8 +81,7 @@ const platformBackupInputSchema = z.strictObject({
     .optional(),
   name: z.string().trim().min(1).max(120),
   relayId: relayIdSchema,
-  storageId: z.uuid().nullable().optional(),
-  storageIds: z.array(z.uuid().nullable()).min(1).max(16).optional(),
+  storageIds: z.array(z.uuid().nullable()).min(1).max(16),
 })
 
 // An App's folder, or a volume: one Kiln made, or `<App ID>/<key>` for one
@@ -100,8 +97,7 @@ const resourceBackupInputSchema = z.strictObject({
     .optional(),
   name: z.string().trim().min(1).max(120),
   relayId: relayIdSchema,
-  storageId: z.uuid().nullable().optional(),
-  storageIds: z.array(z.uuid().nullable()).min(1).max(16).optional(),
+  storageIds: z.array(z.uuid().nullable()).min(1).max(16),
   target: backupTargetSchema.extend({ kind: z.enum(["app", "volume"]) }),
 })
 
@@ -115,7 +111,7 @@ const appBackupsInputSchema = z.strictObject({
 const createAppBackupsInputSchema = appBackupsInputSchema.extend({
   consistency: backupConsistencySchema.default("live"),
   name: z.string().trim().min(1).max(120),
-  storageIds: z.array(z.uuid().nullable()).min(1).max(16).optional(),
+  storageIds: z.array(z.uuid().nullable()).min(1).max(16),
 })
 
 const resolveRestoreInputSchema = z.strictObject({

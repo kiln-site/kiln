@@ -190,8 +190,8 @@ export async function retryResourceDeletionHandler(
     relayId: input.relayId,
     resourceId: input.resourceId,
     retryOf: deletion.attempt,
+    storageId: deletion.storageId,
     user,
-    ...(finalBackup ? { storageId: deletion.storageId } : {}),
   })
 }
 

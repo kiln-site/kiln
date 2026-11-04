@@ -63,10 +63,6 @@ import {
 import { loadAppConfigEffect } from "@/effect/managed-apps"
 import { recoverPromise } from "@/effect/promise"
 import { configuredVolumeIds } from "@/lib/app-volume-references.server"
-import {
-  resolveAuthorizedBackupStorageSelection,
-  resolveBackupStorageSelection,
-} from "@/lib/backup-storage-selection.server"
 import { grantHasPermission } from "@/lib/permissions"
 import { scheduleBackupCopyProcessing } from "@/lib/backup-copy"
 import { requestBackupRetention } from "@/lib/backup-maintenance.server"
@@ -133,12 +129,7 @@ export async function createInstanceBackupHandler(
     user,
   })
   authorization.require("backup.create")
-  const storageIds = await resolveBackupStorageSelection({
-    ...data,
-    targetId: data.instanceId,
-    targetKind: "instance",
-  })
-  await validateRequestedStorage({ storageIds }, user.id, false, async () =>
+  await validateRequestedStorage(data, user.id, false, async () =>
     authorization.require("backup.download")
   )
   const snapshot = relaySnapshotSchema.parse(
@@ -157,7 +148,7 @@ export async function createInstanceBackupHandler(
       ...(data.mode === undefined ? {} : { mode: data.mode }),
       relayId: relay.id,
       requestedMaxBytes: data.maxBytes ?? null,
-      storageIds,
+      storageIds: data.storageIds,
       targetId: data.instanceId,
       taskId: randomUUID(),
     })
@@ -186,12 +177,7 @@ export async function createDatabaseBackupHandler(
     user,
   })
   authorization.require("backup.create")
-  const storageIds = await resolveBackupStorageSelection({
-    ...data,
-    targetId: data.databaseId,
-    targetKind: "database",
-  })
-  await validateRequestedStorage({ storageIds }, user.id, false, async () =>
+  await validateRequestedStorage(data, user.id, false, async () =>
     authorization.require("backup.download")
   )
   const records = await runAppEffect(
@@ -216,7 +202,7 @@ export async function createDatabaseBackupHandler(
       name: data.name,
       relayId: relay.id,
       requestedMaxBytes: data.maxBytes ?? null,
-      storageIds,
+      storageIds: data.storageIds,
       targetId: data.databaseId,
       taskId: randomUUID(),
     })
@@ -247,8 +233,7 @@ export async function createPlatformBackupHandler(
       name: data.name,
       relayId: relay.id,
       requestedMaxBytes: data.maxBytes ?? null,
-      ...(data.storageId === undefined ? {} : { storageId: data.storageId }),
-      ...(data.storageIds === undefined ? {} : { storageIds: data.storageIds }),
+      storageIds: data.storageIds,
       targetId: kilnInstallationId(),
       taskId: randomUUID(),
     })
@@ -292,12 +277,7 @@ export async function createResourceBackupHandler(
       "A stopped backup stops and starts every App that uses what it backs up; you need permission to manage each"
     )
   }
-  const storageIds = await resolveBackupStorageSelection({
-    ...data,
-    targetId: target.id,
-    targetKind: target.kind,
-  })
-  await validateRequestedStorage({ storageIds }, user.id, false, () =>
+  await validateRequestedStorage(data, user.id, false, () =>
     requireBackupTargetPermission(user, relay.id, target, "backup.download")
   )
   const input = await runAppEffect(
@@ -309,7 +289,7 @@ export async function createResourceBackupHandler(
       name: data.name,
       relayId: relay.id,
       requestedMaxBytes: data.maxBytes ?? null,
-      storageIds,
+      storageIds: data.storageIds,
       targetId: target.id,
       targetKind: target.kind,
       taskId: randomUUID(),
@@ -629,7 +609,7 @@ export async function copyBackupToDestinationHandler(
     throw new Error("Incremental snapshots cannot be copied to S3")
   }
   await validateRequestedStorage(
-    { storageId: data.storageId },
+    { storageIds: [data.storageId] },
     user.id,
     backup.targetKind === "platform"
   )
@@ -758,10 +738,7 @@ export async function getBackupExportStateHandler(
 
 export async function restoreInstanceBackupHandler(
   user: AuthenticatedUser,
-  data: BackupRestoreInput,
-  // Where its safety backup goes, when settled before; the target's
-  // preferred destination otherwise.
-  settledSafetyStorageIds?: ReadonlyArray<string | null>
+  data: BackupRestoreInput
 ) {
   const backup = await runAppEffect(
     "backups.getForRestore",
@@ -802,15 +779,6 @@ export async function restoreInstanceBackupHandler(
       user,
     })
   }
-  const safetyStorageIds = data.safetyBackup
-    ? await resolveAuthorizedBackupStorageSelection({
-        relayId: relay.id,
-        storageIds: settledSafetyStorageIds,
-        targetId: backup.targetId,
-        targetKind: "instance",
-        user,
-      })
-    : undefined
   const snapshot = relaySnapshotSchema.parse(
     await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
   )
@@ -833,7 +801,7 @@ export async function restoreInstanceBackupHandler(
           createdBy: user.id,
           name: `Before restoring ${backup.name}`.slice(0, 120),
           reason: "pre_restore",
-          storageIds: safetyStorageIds,
+          storageIds: [null],
           relayId: relay.id,
           requestedMaxBytes: null,
           targetId: backup.targetId,
@@ -865,10 +833,7 @@ export async function restoreInstanceBackupHandler(
 
 export async function restoreDatabaseBackupHandler(
   user: AuthenticatedUser,
-  data: BackupRestoreInput,
-  // Where its safety backup goes, when settled before; the target's
-  // preferred destination otherwise.
-  settledSafetyStorageIds?: ReadonlyArray<string | null>
+  data: BackupRestoreInput
 ) {
   const backup = await runAppEffect(
     "backups.getForDatabaseRestore",
@@ -906,15 +871,6 @@ export async function restoreDatabaseBackupHandler(
       user,
     })
   }
-  const safetyStorageIds = data.safetyBackup
-    ? await resolveAuthorizedBackupStorageSelection({
-        relayId: relay.id,
-        storageIds: settledSafetyStorageIds,
-        targetId: backup.targetId,
-        targetKind: "database",
-        user,
-      })
-    : undefined
   const records = await runAppEffect(
     "backups.databaseRestoreTarget",
     listManagedDatabaseRecordsEffect()
@@ -935,7 +891,7 @@ export async function restoreDatabaseBackupHandler(
           createdBy: user.id,
           name: `Before restoring ${backup.name}`.slice(0, 120),
           reason: "pre_restore",
-          storageIds: safetyStorageIds,
+          storageIds: [null],
           relayId: relay.id,
           requestedMaxBytes: null,
           targetId: backup.targetId,
@@ -971,10 +927,7 @@ export async function restoreDatabaseBackupHandler(
  */
 export async function restoreResourceBackupHandler(
   user: AuthenticatedUser,
-  data: BackupRestoreInput,
-  // Where its safety backup goes, when settled before; the target's
-  // preferred destination otherwise.
-  settledSafetyStorageIds?: ReadonlyArray<string | null>
+  data: BackupRestoreInput
 ) {
   const backup = await runAppEffect(
     "backups.getForResourceRestore",
@@ -995,15 +948,6 @@ export async function restoreResourceBackupHandler(
   if (data.safetyBackup) {
     await requireBackupTargetPermission(user, relay.id, target, "backup.create")
   }
-  const safetyStorageIds = data.safetyBackup
-    ? await resolveAuthorizedBackupStorageSelection({
-        relayId: relay.id,
-        storageIds: settledSafetyStorageIds,
-        targetId: target.id,
-        targetKind: target.kind,
-        user,
-      })
-    : undefined
   const safety = data.safetyBackup
     ? await runAppEffect(
         "backups.reserveResourceSafety",
@@ -1015,7 +959,7 @@ export async function restoreResourceBackupHandler(
           reason: "pre_restore",
           relayId: relay.id,
           requestedMaxBytes: null,
-          storageIds: safetyStorageIds,
+          storageIds: [null],
           targetId: target.id,
           targetKind: target.kind,
           taskId: randomUUID(),
@@ -1189,18 +1133,13 @@ async function resticBackupDownload(input: {
 }
 
 async function validateRequestedStorage(
-  input: {
-    storageId?: string | null
-    storageIds?: Array<string | null>
-  },
+  input: { storageIds: ReadonlyArray<string | null> },
   userId: string,
   platformOnly = false,
   requirePersonalStoragePermission?: () => Promise<unknown>
 ): Promise<void> {
-  const storageIds =
-    input.storageIds ?? (input.storageId === undefined ? [] : [input.storageId])
   await Promise.all(
-    [...new Set(storageIds)]
+    [...new Set(input.storageIds)]
       .filter((storageId): storageId is string => storageId !== null)
       .map(async (storageId) => {
         const storage = await runAppEffect(

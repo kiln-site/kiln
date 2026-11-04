@@ -148,11 +148,10 @@ export const durableOperation = <
     Effect.fnUntraced(function* ({ operationId }) {
       const instance = yield* WorkflowEngine.WorkflowInstance
       const exit = yield* Effect.gen(function* () {
-        const input = yield* Activity.make({
-          name: "Operations.load",
-          success: options.input,
-          execute: loadInput(options.input, operationId),
-        })
+        // Its record's, read each time it runs rather than kept as an
+        // activity's result: nothing changes a started operation's input
+        // but a migration, which a run cut off by that upgrade must see.
+        const input = yield* loadInput(options.input, operationId)
         // Only to link the run to the request that started it.
         const record = yield* loadOperation(operationId).pipe(
           Effect.catch(() => Effect.succeed(null))

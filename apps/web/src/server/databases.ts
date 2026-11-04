@@ -897,7 +897,7 @@ export const deleteManagedDatabase = createServerFn({ method: "POST" })
   .validator(
     databaseInputSchema.extend(deleteConfirmationSchema.shape).extend({
       createBackup: z.boolean().default(true),
-      storageId: z.uuid().nullable().optional(),
+      storageId: z.uuid().nullable(),
     })
   )
   .handler(async ({ data }) => {

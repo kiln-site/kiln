@@ -19,7 +19,6 @@ const f = vi.hoisted(() => ({
   storage: vi.fn(),
   reserve: vi.fn(),
   dispatch: vi.fn(),
-  policy: vi.fn(),
   grants: vi.fn(),
   catalog: vi.fn(),
   reserveDatabase: vi.fn(),
@@ -53,7 +52,6 @@ vi.mock("@/backups/destinations/s3", async (original) => ({
 vi.mock("@/effect/backups", async (original) => ({
   ...(await original<typeof import("@/effect/backups")>()),
   reserveInstanceBackupEffect: f.reserve,
-  getBackupPolicyEffect: f.policy,
   listBackupCatalogEffect: f.catalog,
   reserveDatabaseBackupEffect: f.reserveDatabase,
   reserveBackupRestoreEffect: f.reserveRestore,
@@ -193,7 +191,6 @@ beforeEach(() => {
   f.catalog.mockReturnValue(Effect.succeed([]))
   f.databases.mockReturnValue(Effect.succeed([]))
   f.dispatch.mockResolvedValue(undefined)
-  f.policy.mockReturnValue(Effect.succeed({ storageId: null }))
 })
 const unexpectedIO = () =>
   Effect.die(new Error("Unexpected unmocked service call"))
@@ -251,16 +248,12 @@ describe("CLI backup export boundary", () => {
     await run(createCliBackupEffect(principal, input))
     expect(f.reserve).toHaveBeenCalled()
   })
-  it("rechecks download authority for personal policy defaults and pins the selected destination", async () => {
+  it("refuses a backup that doesn't say where it goes", async () => {
     allowed.add("backup.create")
-    f.policy.mockReturnValue(Effect.succeed({ storageId: input.storageId }))
-    const { storageId: _storageId, ...defaults } = input
+    const { storageId: _storageId, ...unnamed } = input
     await expect(
-      run(createCliBackupEffect(principal, defaults))
-    ).rejects.toMatchObject({ code: "forbidden" })
+      run(createCliBackupEffect(principal, unnamed))
+    ).rejects.toBeDefined()
     expect(f.reserve).not.toHaveBeenCalled()
-    allowed.add("backup.download")
-    await run(createCliBackupEffect(principal, defaults))
-    expect(f.reserve.mock.calls[0]?.[0].storageId).toBe(input.storageId)
   })
 })

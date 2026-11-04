@@ -4,7 +4,6 @@ import {
   Check,
   ChevronsUpDown,
   Cloud,
-  CloudCog,
   CirclePause,
   HardDrive,
   LoaderCircle,
@@ -66,7 +65,6 @@ interface BackupStorageOption {
 }
 
 export function BackupConfigurationDialog({
-  allowDefaultDestination = true,
   allowIncremental,
   consistencyChoice: fixedConsistencyChoice,
   description = "Relay runs this job in its single durable queue. Servers remain online while their data is archived.",
@@ -87,7 +85,6 @@ export function BackupConfigurationDialog({
   targets,
   title,
 }: {
-  allowDefaultDestination?: boolean
   allowIncremental?: boolean
   /**
    * An App's or a volume's backup, always a full archive, offers taking it
@@ -124,11 +121,7 @@ export function BackupConfigurationDialog({
     initialBackupTargetKey(targets, initialTargetKey)
   )
   const [destinationKeys, setDestinationKeys] = React.useState<Array<string>>(
-    () => [
-      ...(initialDestinationKeys ?? [
-        allowDefaultDestination ? "default" : "local",
-      ]),
-    ]
+    () => [...(initialDestinationKeys ?? ["local"])]
   )
   const [mode, setMode] = React.useState<"full" | "incremental">(initialMode)
   const [consistency, setConsistency] = React.useState<"live" | "stopped">(
@@ -158,21 +151,18 @@ export function BackupConfigurationDialog({
     [storage, target?.kind]
   )
   const destinationKeysInUse = React.useMemo(() => {
-    const fallbackDestination = allowDefaultDestination ? "default" : "local"
     const allowed = new Set([
-      ...(allowDefaultDestination ? ["default"] : []),
       "local",
       ...availableStorage.map((destination) => destination.id),
     ])
     const next = destinationKeys.filter((destination) =>
       allowed.has(destination)
     )
-    const usable = next.length > 0 ? next : [fallbackDestination]
+    const usable = next.length > 0 ? next : ["local"]
     return effectiveMode === "incremental" || singleDestination
-      ? [usable[0] ?? fallbackDestination]
+      ? usable.slice(0, 1)
       : usable
   }, [
-    allowDefaultDestination,
     availableStorage,
     destinationKeys,
     effectiveMode,
@@ -188,11 +178,7 @@ export function BackupConfigurationDialog({
   const resetConfiguration = () => {
     setName(initialName ?? timestampedBackupName("manual"))
     setTargetKeyValue(initialBackupTargetKey(targets, initialTargetKey))
-    setDestinationKeys([
-      ...(initialDestinationKeys ?? [
-        allowDefaultDestination ? "default" : "local",
-      ]),
-    ])
+    setDestinationKeys([...(initialDestinationKeys ?? ["local"])])
     setMode(initialMode)
     setConsistency("live")
   }
@@ -205,21 +191,12 @@ export function BackupConfigurationDialog({
   const toggleDestination = (destination: string, checked: boolean) => {
     setDestinationKeys((current) => {
       if (effectiveMode === "incremental" || singleDestination) {
-        if (!checked) {
-          return [allowDefaultDestination ? "default" : "local"]
-        }
-        return [destination]
+        return checked ? [destination] : ["local"]
       }
-      if (destination === "default") {
-        return checked ? ["default"] : ["local"]
-      }
-      const withoutDefault = current.filter((key) => key !== "default")
       const next = checked
-        ? [...new Set([...withoutDefault, destination])]
-        : withoutDefault.filter((key) => key !== destination)
-      return next.length > 0
-        ? next
-        : [allowDefaultDestination ? "default" : "local"]
+        ? [...new Set([...current, destination])]
+        : current.filter((key) => key !== destination)
+      return next.length > 0 ? next : ["local"]
     })
   }
 
@@ -271,7 +248,6 @@ export function BackupConfigurationDialog({
             />
           ) : null}
           <BackupDestinationChoices
-            allowDefaultDestination={allowDefaultDestination}
             availableStorage={availableStorage}
             effectiveMode={effectiveMode}
             selectedDestinations={selectedDestinations}
@@ -400,7 +376,6 @@ function BackupConsistencyChoices({
 }
 
 function BackupDestinationChoices({
-  allowDefaultDestination,
   availableStorage,
   effectiveMode,
   onToggleDestination,
@@ -408,7 +383,6 @@ function BackupDestinationChoices({
   singleDestination,
   targetKind,
 }: {
-  allowDefaultDestination: boolean
   availableStorage: ReadonlyArray<BackupStorageOption>
   effectiveMode: "full" | "incremental"
   onToggleDestination: (destination: string, checked: boolean) => void
@@ -420,17 +394,6 @@ function BackupDestinationChoices({
     <fieldset>
       <legend className="mb-2 text-xs font-medium">Destinations</legend>
       <div className="grid gap-2 sm:grid-cols-2">
-        {allowDefaultDestination ? (
-          <BackupDestinationChoice
-            checked={selectedDestinations.has("default")}
-            description="Use the target’s preferred destination"
-            icon={CloudCog}
-            label="Default"
-            onCheckedChange={(checked) =>
-              onToggleDestination("default", checked)
-            }
-          />
-        ) : null}
         <BackupDestinationChoice
           checked={selectedDestinations.has("local")}
           description="Keep a copy on this Relay"
@@ -458,9 +421,7 @@ function BackupDestinationChoices({
             ? "Choose one destination. Full archives can stay on this Relay or use S3."
             : targetKind === "platform"
               ? "Kiln's backups can stay on this Relay or use platform-owned S3."
-              : targetKind === "instance"
-                ? "Choose one or more copies. Default uses this server’s preferred destination."
-                : "Choose one or more copies. Default uses Relay-local storage."}
+              : "Choose one or more copies."}
       </span>
     </fieldset>
   )

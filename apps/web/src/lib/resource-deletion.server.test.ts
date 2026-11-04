@@ -70,6 +70,7 @@ const deleteServer = (user = owner) =>
     kind: "instance",
     relayId,
     resourceId: serverId,
+    storageId: null,
     user,
   })
 

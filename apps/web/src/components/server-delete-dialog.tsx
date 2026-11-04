@@ -44,7 +44,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
   const confirmation = useDeleteConfirmation(target.name)
   const [error, setError] = React.useState<string | null>(null)
   const [createBackup, setCreateBackup] = React.useState(target.backupAvailable)
-  const [backupDestination, setBackupDestination] = React.useState("default")
+  const [backupDestination, setBackupDestination] = React.useState("local")
   const deletion = useMutation({
     mutationFn: deleteInstance,
     onSuccess: () =>
@@ -80,12 +80,7 @@ export const ServerDeleteDialog = React.memo(function ServerDeleteDialog({
               createBackup,
               instanceId: target.id,
               relayId: target.relayId,
-              ...(createBackup && backupDestination !== "default"
-                ? {
-                    storageId:
-                      backupDestination === "local" ? null : backupDestination,
-                  }
-                : {}),
+              storageId: backupDestination === "local" ? null : backupDestination,
             },
           }),
         catch: (cause) => cause,

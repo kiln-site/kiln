@@ -299,6 +299,8 @@ export const cliDeleteServerRequestSchema = cliTargetSchema
   .extend({
     confirmation: z.string().min(1).max(256),
     password: z.string().max(128),
+    // Where its final backup goes: a destination, or the Relay itself (null).
+    storageId: z.union([z.uuid(), z.null()]),
   })
   .strict()
 
@@ -357,7 +359,7 @@ const cliCreateBackupBaseSchema = z.object({
   mode: backupModeSchema.optional(),
   name: z.string().trim().min(1).max(120),
   relayId: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
-  storageId: z.union([z.uuid(), z.null()]).optional(),
+  storageId: z.union([z.uuid(), z.null()]),
 })
 
 export const cliCreateBackupRequestSchema = z.discriminatedUnion("targetKind", [

@@ -4,10 +4,7 @@ import { createServerFn } from "@tanstack/react-start"
 import { Effect } from "effect"
 import { z } from "zod"
 
-import { type BackupTarget, backupTargetSchema } from "@workspace/contracts"
-
 import {
-  relayIdSchema,
   resticS3BucketSchema,
   resticS3RegionSchema,
 } from "@workspace/contracts"
@@ -18,18 +15,12 @@ import {
   loadBackupStorageEffect,
   loadBackupStorageCredentialEffect,
   saveBackupStorageEffect,
-  setBackupPolicyStorageEffect,
   type BackupStorageRecord,
 } from "@/backups/destinations/s3"
 import { ensuringPromise, promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
-import { hasPlatformPermission, isPlatformAdmin } from "@/lib/access-control"
-import {
-  publishBackupSettingsChange,
-  publishBackupStorageChange,
-} from "@/lib/backup-realtime.server"
-import { kilnInstallationId } from "@/effect/installation"
-import type { AuthenticatedUser } from "@/lib/auth-session"
+import { hasPlatformPermission } from "@/lib/access-control"
+import { publishBackupStorageChange } from "@/lib/backup-realtime.server"
 import {
   normalizeObjectPrefix,
   normalizeS3Endpoint,
@@ -37,14 +28,13 @@ import {
   type S3BackupCredential,
 } from "@/backups/destinations/s3"
 import { backupStorageKey, backupStorageSettingsKey } from "@/lib/backup-lanes"
-import { exclusive, shared } from "@/operations/lanes"
+import { exclusive } from "@/operations/lanes"
 import {
   operation,
   runOperationPromise,
   signedIn,
 } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
-import { backupPolicyLock } from "@/server/backup-operations.server"
 
 const backupStorageIdSchema = z.uuid()
 export const backupStorageInputSchema = z.strictObject({
@@ -60,12 +50,6 @@ export const backupStorageInputSchema = z.strictObject({
   platform: z.boolean().default(false),
   region: z.string().trim().pipe(resticS3RegionSchema),
   secretAccessKey: z.string().min(1).max(2_048).optional(),
-})
-
-const preferredStorageInputSchema = z.strictObject({
-  relayId: relayIdSchema,
-  storageId: backupStorageIdSchema.nullable(),
-  target: backupTargetSchema,
 })
 
 export const getBackupStorage = createServerFn({ method: "GET" }).handler(
@@ -238,103 +222,6 @@ export const deleteBackupStorage = createServerFn({ method: "POST" })
       user: await requireEligibleResourceUser(),
     })
   )
-
-// Where a target's backups go when none is chosen.
-const preferDestination = operation<
-  z.infer<typeof preferredStorageInputSchema>
->()({
-  name: "backup.policy.storage",
-  doing: "Changing these backup settings",
-  authorize: ({ input, user }) =>
-    signedIn(user).pipe(
-      Effect.flatMap((person) =>
-        promiseEffect(async () => ({
-          target: await requireBackupPolicyTarget(input, person),
-          user: person,
-        }))
-      )
-    ),
-  locks: ({ input }) => [
-    backupPolicyLock(input.relayId, input.target),
-    ...(input.storageId
-      ? [shared(backupStorageSettingsKey(input.storageId))]
-      : []),
-  ],
-  run: ({ context: { target, user }, input: data }) =>
-    promiseEffect(async () => {
-      if (data.storageId) {
-        const storage = await runAppEffect(
-          "backupStorage.loadPreferred",
-          loadBackupStorageEffect(data.storageId)
-        )
-        if (
-          !storage ||
-          (target.kind === "platform"
-            ? storage.ownerUserId !== null
-            : !canUseStorage(storage, user.id)) ||
-          !storage.enabled ||
-          storage.deleting
-        ) {
-          throw new Error("Backup destination is unavailable")
-        }
-        if (storage.ownerUserId !== null && target.kind !== "platform") {
-          const { requireBackupTargetPermission } =
-            await import("@/server/backup-target-access.server")
-          await requireBackupTargetPermission(
-            user,
-            data.relayId,
-            target,
-            "backup.download"
-          )
-        }
-      }
-      await runAppEffect(
-        "backupStorage.setPreferred",
-        setBackupPolicyStorageEffect({
-          relayId: data.relayId,
-          storageId: data.storageId,
-          targetId: target.id,
-          targetKind: target.kind,
-        })
-      )
-      publishBackupSettingsChange(data.relayId)
-      return { updated: true }
-    }),
-  audit: ({ context: { target }, input }) => ({
-    id: target.id,
-    kind: target.kind,
-    relayId: input.relayId,
-  }),
-})
-
-export const setPreferredBackupStorage = createServerFn({ method: "POST" })
-  .validator(preferredStorageInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(preferDestination, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
-
-async function requireBackupPolicyTarget(
-  input: { relayId: string; target: BackupTarget },
-  user: AuthenticatedUser
-): Promise<BackupTarget> {
-  if (input.target.kind === "platform") {
-    if (!isPlatformAdmin(user)) {
-      throw new Error("Platform backup settings require administrator access")
-    }
-    return { id: kilnInstallationId(), kind: "platform" }
-  }
-  const { requireBackupTargetPermission } =
-    await import("@/server/backup-target-access.server")
-  await requireBackupTargetPermission(
-    user,
-    input.relayId,
-    input.target,
-    "backup.create"
-  )
-  return input.target
-}
 
 export function visibleBackupStorage(
   storage: ReadonlyArray<BackupStorageRecord>,

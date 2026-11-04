@@ -280,9 +280,9 @@ const attempt = <Input, Context, A, E, R>(
         const startedAt = yield* Clock.currentTimeMillis
         const occupant = label ? laneOccupants.get(label) : undefined
         if (occupant) occupant.startedAt = startedAt
-        // What it read may have changed while it waited, as which backup
-        // destination is preferred: checked again, and taken from the top
-        // if it now changes something its locks don't cover.
+        // What it read may have changed while it waited: checked again,
+        // and taken from the top if it now changes something its locks
+        // don't cover.
         const rechecked =
           waited && definition.authorize
             ? yield* authorize.pipe(

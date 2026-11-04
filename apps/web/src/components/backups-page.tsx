@@ -1510,13 +1510,9 @@ function CreateBackupDialog({
       const data = {
         name: configuration.name,
         relayId: target.relayId,
-        ...(configuration.destinationKeys.includes("default")
-          ? {}
-          : {
-              storageIds: configuration.destinationKeys.map((destination) =>
-                destination === "local" ? null : destination
-              ),
-            }),
+        storageIds: configuration.destinationKeys.map((destination) =>
+          destination === "local" ? null : destination
+        ),
       }
       if (target.kind === "instance") {
         return createInstanceBackup({
@@ -1586,7 +1582,6 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
   filters: BackupFilters
   onFiltersChange: (change: Partial<BackupFilters>) => void
 }) {
-  const { data: storage } = useSuspenseQuery(backupStorageQueryOptions())
   const { data: backupScope } = useSuspenseQuery({
     ...relaySnapshotQueryOptions(),
     notifyOnChangeProps: ["data"],
@@ -1680,7 +1675,6 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
       {selectedTarget ? (
         <BackupSettingsSurface
           isPlatformAdmin={capabilities.isPlatformAdmin}
-          storage={storage}
           target={selectedTarget}
         />
       ) : (
@@ -1700,11 +1694,9 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
 function BackupSettingsSurface({
   isPlatformAdmin,
   target,
-  storage,
 }: {
   isPlatformAdmin: boolean
   target: BackupScopeOption
-  storage: Array<BackupStorage>
 }) {
   if (target.kind === "app") {
     return (
@@ -1712,7 +1704,6 @@ function BackupSettingsSurface({
         appId={target.id}
         isPlatformAdmin={isPlatformAdmin}
         relayId={target.relayId}
-        storage={storage}
       />
     )
   }
@@ -1721,7 +1712,6 @@ function BackupSettingsSurface({
       <KilnVolumesSettings
         isPlatformAdmin={isPlatformAdmin}
         relayId={target.relayId}
-        storage={storage}
       />
     )
   }
@@ -1730,7 +1720,6 @@ function BackupSettingsSurface({
       isPlatformAdmin={isPlatformAdmin}
       name={target.name}
       relayId={target.relayId}
-      storage={storage}
       target={backupPolicyTarget(target)}
     />
   )
@@ -1742,14 +1731,12 @@ function TargetSettings({
   isPlatformAdmin,
   name,
   relayId,
-  storage,
   target,
   titled = false,
 }: {
   isPlatformAdmin: boolean
   name: string
   relayId: string
-  storage: Array<BackupStorage>
   target: BackupTarget
   titled?: boolean
 }) {
@@ -1767,7 +1754,6 @@ function TargetSettings({
           name={name}
           policy={policy.data}
           relayId={relayId}
-          storage={storage}
           target={target}
         />
       ) : policy.error ? (
@@ -1787,12 +1773,10 @@ function AppTargetsSettings({
   appId,
   isPlatformAdmin,
   relayId,
-  storage,
 }: {
   appId: string
   isPlatformAdmin: boolean
   relayId: string
-  storage: Array<BackupStorage>
 }) {
   const targets = useQuery(appBackupsQueryOptions(relayId, appId))
   if (!targets.data) {
@@ -1816,7 +1800,6 @@ function AppTargetsSettings({
               : `Volume ${target.name ?? target.id}`
           }
           relayId={relayId}
-          storage={storage}
           target={{ id: target.id, kind: target.kind }}
           titled
         />
@@ -1829,11 +1812,9 @@ function AppTargetsSettings({
 function KilnVolumesSettings({
   isPlatformAdmin,
   relayId,
-  storage,
 }: {
   isPlatformAdmin: boolean
   relayId: string
-  storage: Array<BackupStorage>
 }) {
   const volumes = useQuery(relayVolumesQueryOptions(relayId))
   const kilnVolumes = React.useMemo(
@@ -1869,7 +1850,6 @@ function KilnVolumesSettings({
           isPlatformAdmin={isPlatformAdmin}
           name={`Volume ${volume.name}`}
           relayId={relayId}
-          storage={storage}
           target={{ id: volume.id, kind: "volume" }}
           titled
         />
@@ -2436,7 +2416,8 @@ function RestoreBackupDialog({
           <span>
             <span className="block text-xs font-semibold">Safety backup</span>
             <span className="type-meta mt-1 block text-muted-foreground">
-              Take a new full backup immediately before restoring.
+              Take a new full backup on this Relay immediately before
+              restoring.
             </span>
           </span>
           <Switch

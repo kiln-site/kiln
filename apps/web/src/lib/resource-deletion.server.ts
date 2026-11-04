@@ -36,7 +36,7 @@ import { requireRelayPermissionsEffect } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { timestampedBackupName } from "@/lib/backup-name"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
-import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
+import { requireBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay } from "@/lib/relay-registry"
@@ -339,9 +339,9 @@ const checkAccess = (input: DeletionInput) =>
     }
     if (deletion.finalBackup && deletion.storageId !== null) {
       yield* promiseEffect(() =>
-        resolveAuthorizedBackupStorageSelection({
+        requireBackupStorageSelection({
           relayId: input.relayId,
-          storageId: deletion.storageId,
+          storageIds: [deletion.storageId],
           targetId: input.resourceId,
           targetKind: input.kind,
           user,
@@ -962,7 +962,7 @@ export const reconcileResourceDeletions = Effect.fnUntraced(function* () {
  * checked may delete it. A new deletion, or one that failed or was
  * cancelled, starts its next attempt; one already running is returned as
  * it is. With a final backup, `storageId` names where it goes, null for the
- * Relay's own disk, or the resource's usual destination when left out.
+ * Relay's own disk.
  */
 export const requestResourceDeletionEffect = Effect.fn(
   "ResourceDeletions.request"
@@ -979,22 +979,21 @@ export const requestResourceDeletionEffect = Effect.fn(
   resourceId: string
   /** The failed attempt a retry read: it goes ahead only from that one. */
   retryOf?: number
-  storageId?: string | null
+  storageId: string | null
   user: AuthenticatedUser
 }) {
-  const [storageId = null] = input.finalBackup
-    ? yield* promiseEffect(() =>
-        resolveAuthorizedBackupStorageSelection({
-          relayId: input.relayId,
-          targetId: input.resourceId,
-          targetKind: input.kind,
-          user: input.user,
-          ...(input.storageId === undefined
-            ? {}
-            : { storageId: input.storageId }),
-        })
-      )
-    : []
+  const storageId = input.finalBackup ? input.storageId : null
+  if (input.finalBackup) {
+    yield* promiseEffect(() =>
+      requireBackupStorageSelection({
+        relayId: input.relayId,
+        storageIds: [input.storageId],
+        targetId: input.resourceId,
+        targetKind: input.kind,
+        user: input.user,
+      })
+    )
+  }
   const deletion = yield* requestResourceDeletionRowEffect({
     finalBackup: input.finalBackup,
     kind: input.kind,

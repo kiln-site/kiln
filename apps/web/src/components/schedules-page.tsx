@@ -3273,7 +3273,6 @@ const ActionEditor = React.memo(function ActionEditor({
       </div>
       {action.type === "backup" ? (
         <BackupConfigurationDialog
-          allowDefaultDestination={false}
           allowIncremental
           // A step that backs up only Apps takes them live or stopped, each
           // App's folder and owned volumes together; Hearth checks stopping

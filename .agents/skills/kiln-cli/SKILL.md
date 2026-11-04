@@ -109,7 +109,7 @@ reconfiguring a running server requires the corresponding stop/restart permissio
 Changing a Brick or non-resource startup variables requires
 `instance.configuration.write`. Resource limits require
 `instance.limits.write`; changes affecting both require both permissions.
-Creating a backup (including a restore safety backup) in a user-owned destination
+Creating a backup in a user-owned destination
 also requires `backup.download`, because it exports the backup contents. A read-only CLI credential never gains write
 access from a more permissive preset.
 
@@ -221,12 +221,13 @@ read commands still accept legacy stored names up to 120 characters.
 Permanently delete a server and its data only after verifying the full target:
 
 ```sh
-kiln server delete <server> --confirm <name>
+kiln server delete <server> --confirm <name> --storage <local|destination-uuid>
 ```
 
 `--confirm` takes the server's name exactly as `kiln server info <server>`
-shows it, the same confirmation Hearth asks for. The CLI then asks for the
-account password without echoing it; pipe it with `--password-stdin` when
+shows it, the same confirmation Hearth asks for. `--storage` says where the
+final backup goes: `local` for the Relay, or a destination's UUID. The CLI then
+asks for the account password without echoing it; pipe it with `--password-stdin` when
 there's no terminal. A wrong name or password deletes nothing. After five
 wrong passwords in 15 minutes, the account's password checks are refused
 (`rate_limited`) until the oldest ages out; don't retry in a loop. Deletion
@@ -269,30 +270,21 @@ Create a manual backup with a reference from `backups targets`. Server backups
 default to incremental restic snapshots stored on the Relay or an S3
 destination. Pass `--mode full` for a portable zip, which can also use local or
 S3 storage; `--mode` applies only to server backups. Incremental mode accepts
-exactly one destination. `--storage default` uses the backup policy's usual
-destinations; pass one `--storage` value at most. A backup without `--name` is
-named `CLI backup`.
+exactly one destination. `--storage` is required, and takes `local` for the
+Relay or a destination's UUID; pass one `--storage` value at most. A backup
+without `--name` is named `CLI backup`.
 
 ```sh
-kiln backups create server <relay-id>:<instance-id> --name "Before update"
+kiln backups create server <relay-id>:<instance-id> --storage local --name "Before update"
 kiln backups create server <relay-id>:<instance-id> --storage <destination-uuid>
 kiln backups create server <relay-id>:<instance-id> --mode full --storage local
-kiln backups create database <relay-id>:<database-id> --name "Before migration"
-kiln backups create platform <relay-id> --name "Before Hearth update"
-```
-
-The default destination follows the server backup policy and otherwise uses
-Relay-local storage. Override it explicitly when needed:
-
-```sh
-kiln backups create server <server> --storage local
-kiln backups create server <server> --storage <destination-uuid>
-kiln backups create server <server> --mode full --storage local
-kiln backups create server <server> --mode full --storage <destination-uuid>
+kiln backups create database <relay-id>:<database-id> --storage local --name "Before migration"
+kiln backups create platform <relay-id> --storage local --name "Before Hearth update"
 ```
 
 Restore a complete server or database backup by UUID, including incremental
-snapshots. A full safety backup is created first unless explicitly disabled.
+snapshots. A full safety backup is created first, on the Relay, unless explicitly
+disabled.
 Game servers must be stopped; managed databases remain online for their
 logical import:
 

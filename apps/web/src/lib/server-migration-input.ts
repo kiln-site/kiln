@@ -9,10 +9,10 @@ import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
 /** What someone chose to carry over when copying a game server. */
 export const serverMigrationOptionsSchema = z.object({
   /**
-   * A full backup of the old server first: to an S3 destination, the Relay
-   * itself (null), or wherever its backups go by default (left out).
+   * A full backup of the old server first: to an S3 destination, or the
+   * Relay itself (null).
    */
-  backup: z.object({ storageId: z.uuid().nullable().optional() }).nullable(),
+  backup: z.object({ storageId: z.uuid().nullable() }).nullable(),
   /** The old server's people get the same access to the copy. */
   copyAccess: z.boolean(),
   /** The copy's activity includes the old server's history. */
@@ -27,11 +27,10 @@ export const serverMigrationOptionsSchema = z.object({
   stopSource: z.boolean(),
   /**
    * A finished move deletes the old server once a final full backup of it
-   * has finished: to an S3 destination, the Relay itself (null), or
-   * wherever its backups go by default (left out).
+   * has finished: to an S3 destination, or the Relay itself (null).
    */
   deleteSource: z
-    .object({ storageId: z.uuid().nullable().optional() })
+    .object({ storageId: z.uuid().nullable() })
     .nullable()
     .default(null),
   /** The copy's limits, when they differ from the old server's. */

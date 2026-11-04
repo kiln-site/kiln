@@ -60,7 +60,6 @@ interface BackupPolicyRow extends RowDataPacket {
   quantity_limit: number | null
   retention_days: number | null
   size_limit_bytes: number | string | null
-  storage_id: string | null
 }
 
 interface BackupStorageKeyRow extends RowDataPacket {
@@ -362,7 +361,6 @@ export interface BackupPolicy {
   quantityLimit: number | null
   retentionDays: number | null
   sizeLimitBytes: number | null
-  storageId: string | null
 }
 
 export interface BackupCreateDispatch extends Omit<
@@ -439,8 +437,7 @@ export interface BackupCreateReservation {
   reason?: BackupCreateTaskInput["reason"]
   relayId: string
   requestedMaxBytes: number | null
-  storageId?: string | null
-  storageIds?: ReadonlyArray<string | null>
+  storageIds: ReadonlyArray<string | null>
   targetId: string
   targetKind: BackupRow["target_kind"]
   taskId: string
@@ -515,7 +512,7 @@ const lockBackupPolicy = Effect.fnUntraced(function* (
     ]
   )
   return yield* transaction.queryRows<BackupPolicyRow>(
-    `SELECT exclude_patterns, quantity_limit, size_limit_bytes, storage_id,
+    `SELECT exclude_patterns, quantity_limit, size_limit_bytes,
                   admin_quantity_limit, admin_size_limit_bytes,
             retention_days, admin_retention_days
              FROM ${databaseTable("backup_policy")}
@@ -570,11 +567,7 @@ const reserveBackupCreateIn = Effect.fnUntraced(function* (
       : (input.mode ?? "incremental")
   const artifactKind =
     mode === "incremental" ? "restic_snapshot" : input.artifactKind
-  const requestedStorageIds = deduplicateStorageIds(
-    input.storageIds ?? [
-      input.storageId === undefined ? policy.storage_id : input.storageId,
-    ]
-  )
+  const requestedStorageIds = deduplicateStorageIds(input.storageIds)
   if (mode === "incremental" && requestedStorageIds.length !== 1) {
     return yield* BackupStorageError.make({
       code: "storage_unavailable",
@@ -806,8 +799,7 @@ export const reserveInstanceBackupEffect = Effect.fn("backups.reserve")(
     reason?: BackupCreateTaskInput["reason"]
     relayId: string
     requestedMaxBytes: number | null
-    storageId?: string | null
-    storageIds?: ReadonlyArray<string | null>
+    storageIds: ReadonlyArray<string | null>
     targetId: string
     taskId: string
   }) =>
@@ -829,8 +821,7 @@ export const reserveDatabaseBackupEffect = Effect.fn("backups.reserveDatabase")(
     reason?: BackupCreateTaskInput["reason"]
     relayId: string
     requestedMaxBytes: number | null
-    storageId?: string | null
-    storageIds?: ReadonlyArray<string | null>
+    storageIds: ReadonlyArray<string | null>
     targetId: string
     taskId: string
   }) =>
@@ -849,8 +840,7 @@ export const reservePlatformBackupEffect = Effect.fn("backups.reservePlatform")(
     name: string
     relayId: string
     requestedMaxBytes: number | null
-    storageId?: string | null
-    storageIds?: ReadonlyArray<string | null>
+    storageIds: ReadonlyArray<string | null>
     targetId: string
     taskId: string
   }) =>
@@ -881,7 +871,7 @@ export const reserveResourceBackupEffect = Effect.fn("backups.reserveResource")(
     reason?: BackupCreateTaskInput["reason"]
     relayId: string
     requestedMaxBytes: number | null
-    storageIds?: ReadonlyArray<string | null>
+    storageIds: ReadonlyArray<string | null>
     targetId: string
     targetKind: "app" | "volume"
     taskId: string
@@ -3479,7 +3469,7 @@ export const getBackupPolicyEffect = Effect.fn("backups.getPolicy")(function* (
   const database = yield* Database
   const rows = yield* database.queryRows<BackupPolicyRow>(
     "backup_policy_get",
-    `SELECT exclude_patterns, quantity_limit, size_limit_bytes, storage_id,
+    `SELECT exclude_patterns, quantity_limit, size_limit_bytes,
             admin_quantity_limit, admin_size_limit_bytes,
             retention_days, admin_retention_days
        FROM ${databaseTable("backup_policy")}
@@ -3502,7 +3492,6 @@ export const getBackupPolicyEffect = Effect.fn("backups.getPolicy")(function* (
       policy?.size_limit_bytes ?? null,
       "backup size limit"
     ),
-    storageId: policy?.storage_id ?? null,
   } satisfies BackupPolicy
 })
 
@@ -3528,7 +3517,7 @@ export const getBackupUsageEffect = Effect.fn("backups.getUsage")(function* (
     ),
     database.queryRows<BackupPolicyRow>(
       "backup_usage_policy_get",
-      `SELECT exclude_patterns, quantity_limit, size_limit_bytes, storage_id,
+      `SELECT exclude_patterns, quantity_limit, size_limit_bytes,
               admin_quantity_limit, admin_size_limit_bytes,
             retention_days, admin_retention_days
          FROM ${databaseTable("backup_policy")}

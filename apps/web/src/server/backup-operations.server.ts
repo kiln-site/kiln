@@ -3,7 +3,6 @@ import { Effect } from "effect"
 import {
   getBackupCatalogRecordEffect,
   getBackupForTaskEffect,
-  getBackupPolicyEffect,
 } from "@/effect/backups"
 import { kilnInstallationId } from "@/effect/installation"
 import { promiseEffect } from "@/effect/promise"
@@ -19,7 +18,6 @@ import {
   backupStorageSettingsKey,
   backupTargetKey,
 } from "@/lib/backup-lanes"
-import { resolveBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import type { BackupCatalogRecord } from "@/effect/backups"
 import type { BackupTarget } from "@workspace/contracts"
 import type { BackupAction } from "@/lib/backup-target-permissions"
@@ -79,9 +77,9 @@ import type {
 // Each destination a backup is reserved to, so it isn't changed or deleted
 // meanwhile. The Relay's own storage is none.
 const destinations = (
-  storageIds: ReadonlyArray<string | null> | undefined
+  storageIds: ReadonlyArray<string | null>
 ): Array<LaneLock> =>
-  [...new Set(storageIds ?? [])].flatMap((id) =>
+  [...new Set(storageIds)].flatMap((id) =>
     id ? [shared(backupStorageSettingsKey(id))] : []
   )
 
@@ -104,31 +102,16 @@ export const backUpInstance = operation<InstanceBackupInput>()({
         relayId: input.relayId,
         user: person,
       })
-    ).pipe(
-      Effect.flatMap((person) =>
-        promiseEffect(async () => ({
-          storageIds: await resolveBackupStorageSelection({
-            ...input,
-            targetId: input.instanceId,
-            targetKind: "instance",
-          }),
-          user: person,
-        }))
-      )
     ),
-  locks: ({ context, input }) => [
+  locks: ({ input }) => [
     shared(
       backupTargetKey(input.relayId, { id: input.instanceId, kind: "instance" })
     ),
-    ...destinations(context.storageIds),
+    ...destinations(input.storageIds),
   ],
   run: ({ context, input }) =>
     promiseEffect(() =>
-      createInstanceBackupHandler(context.user, {
-        ...input,
-        storageId: undefined,
-        storageIds: context.storageIds,
-      })
+      createInstanceBackupHandler(context, input)
     ),
   audit: ({ input }) => ({
     id: input.instanceId,
@@ -148,31 +131,16 @@ export const backUpDatabase = operation<DatabaseBackupInput>()({
         relayId: input.relayId,
         user: person,
       })
-    ).pipe(
-      Effect.flatMap((person) =>
-        promiseEffect(async () => ({
-          storageIds: await resolveBackupStorageSelection({
-            ...input,
-            targetId: input.databaseId,
-            targetKind: "database",
-          }),
-          user: person,
-        }))
-      )
     ),
-  locks: ({ context, input }) => [
+  locks: ({ input }) => [
     shared(
       backupTargetKey(input.relayId, { id: input.databaseId, kind: "database" })
     ),
-    ...destinations(context.storageIds),
+    ...destinations(input.storageIds),
   ],
   run: ({ context, input }) =>
     promiseEffect(() =>
-      createDatabaseBackupHandler(context.user, {
-        ...input,
-        storageId: undefined,
-        storageIds: context.storageIds,
-      })
+      createDatabaseBackupHandler(context, input)
     ),
   audit: ({ input }) => ({
     id: input.databaseId,
@@ -196,29 +164,14 @@ export const backUpResource = operation<ResourceBackupInput>()({
         input.target,
         "backup.create"
       )
-    ).pipe(
-      Effect.flatMap((person) =>
-        promiseEffect(async () => ({
-          storageIds: await resolveBackupStorageSelection({
-            ...input,
-            targetId: input.target.id,
-            targetKind: input.target.kind,
-          }),
-          user: person,
-        }))
-      )
     ),
-  locks: ({ context, input }) => [
+  locks: ({ input }) => [
     shared(backupTargetKey(input.relayId, input.target)),
-    ...destinations(context.storageIds),
+    ...destinations(input.storageIds),
   ],
   run: ({ context, input }) =>
     promiseEffect(() =>
-      createResourceBackupHandler(context.user, {
-        ...input,
-        storageId: undefined,
-        storageIds: context.storageIds,
-      })
+      createResourceBackupHandler(context, input)
     ),
   audit: ({ input }) => ({
     id: input.target.id,
@@ -228,13 +181,13 @@ export const backUpResource = operation<ResourceBackupInput>()({
 })
 
 // An App's folder and the volumes it owns, together, to the destinations
-// chosen for them or the App's preferred one.
+// chosen for them.
 export const backUpApp = operation<{
   appId: string
   consistency: "live" | "stopped"
   name: string
   relayId: string
-  storageIds?: Array<string | null> | undefined
+  storageIds: Array<string | null>
 }>()({
   name: "backup.app.create",
   doing: "Backing up this App",
@@ -246,29 +199,14 @@ export const backUpApp = operation<{
         { id: input.appId, kind: "app" },
         "backup.create"
       )
-    ).pipe(
-      Effect.flatMap((person) =>
-        promiseEffect(async () => ({
-          storageIds: await resolveBackupStorageSelection({
-            relayId: input.relayId,
-            storageIds: input.storageIds,
-            targetId: input.appId,
-            targetKind: "app",
-          }),
-          user: person,
-        }))
-      )
     ),
-  locks: ({ context, input }) => [
+  locks: ({ input }) => [
     shared(backupTargetKey(input.relayId, { id: input.appId, kind: "app" })),
-    ...destinations(context.storageIds),
+    ...destinations(input.storageIds),
   ],
   run: ({ context, input }) =>
     promiseEffect(() =>
-      createAppBackupsHandler(context.user, {
-        ...input,
-        storageIds: context.storageIds,
-      })
+      createAppBackupsHandler(context, input)
     ),
   audit: ({ input }) => ({
     id: input.appId,
@@ -280,40 +218,20 @@ export const backUpApp = operation<{
 export const backUpPlatform = operation<PlatformBackupInput>()({
   name: "backup.platform.create",
   doing: "Backing up Kiln",
-  authorize: ({ input, user }) =>
+  authorize: ({ user }) =>
     signedIn(user).pipe(
       Effect.filterOrFail(
         isPlatformAdmin,
         () => new Error("Platform backups require administrator access")
-      ),
-      Effect.flatMap((person) =>
-        Effect.gen(function* () {
-          const storageIds =
-            input.storageIds ??
-            (input.storageId === undefined
-              ? [
-                  (yield* getBackupPolicyEffect(
-                    input.relayId,
-                    "platform",
-                    kilnInstallationId()
-                  )).storageId,
-                ]
-              : [input.storageId])
-          return { storageIds, user: person }
-        })
       )
     ),
-  locks: ({ context, input }) => [
+  locks: ({ input }) => [
     shared(backupTargetKey(input.relayId, { id: "", kind: "platform" })),
-    ...destinations(context.storageIds),
+    ...destinations(input.storageIds),
   ],
   run: ({ context, input }) =>
     promiseEffect(() =>
-      createPlatformBackupHandler(context.user, {
-        ...input,
-        storageId: undefined,
-        storageIds: context.storageIds,
-      })
+      createPlatformBackupHandler(context, input)
     ),
   audit: ({ input }) => ({
     id: "platform",
@@ -324,14 +242,13 @@ export const backUpPlatform = operation<PlatformBackupInput>()({
 
 // A restore replaces its target's data, so it holds the target whole, and
 // the backup it restores, so that isn't deleted under it. Its safety backup,
-// taken first, is reserved within it.
+// taken first and kept on the Relay, is reserved within it.
 const restoreOperation = <A>(
   name: string,
   doing: string,
   handler: (
     user: AuthenticatedUser,
-    data: BackupRestoreInput,
-    settledSafetyStorageIds?: ReadonlyArray<string | null>
+    data: BackupRestoreInput
   ) => Promise<A>
 ) =>
   operation<BackupRestoreInput>()({
@@ -343,36 +260,15 @@ const restoreOperation = <A>(
           Effect.gen(function* () {
             const backup = yield* getBackupCatalogRecordEffect(input.backupId)
             // The run says why one that's gone can't be restored.
-            if (!backup) return { backup: null, storageIds: [], user: person }
+            if (!backup) return { backup: null, user: person }
             yield* promiseEffect(() => requireBackupAction(person, backup))
-            const storageIds =
-              input.safetyBackup && backup.targetKind !== "platform"
-                ? yield* promiseEffect(() =>
-                    resolveBackupStorageSelection({
-                      relayId: backup.relayId,
-                      targetId: backup.targetId,
-                      targetKind: backup.targetKind as Exclude<
-                        typeof backup.targetKind,
-                        "platform"
-                      >,
-                    })
-                  )
-                : []
-            return { backup, storageIds, user: person }
+            return { backup, user: person }
           })
         )
       ),
-    locks: ({ context: { backup, storageIds } }) =>
-      backup ? [...restoreLocks(backup), ...destinations(storageIds)] : [],
-    // Its safety backup goes to the destinations it holds.
+    locks: ({ context: { backup } }) => (backup ? restoreLocks(backup) : []),
     run: ({ context, input }) =>
-      promiseEffect(() =>
-        handler(
-          context.user,
-          input,
-          input.safetyBackup ? context.storageIds : undefined
-        )
-      ),
+      promiseEffect(() => handler(context.user, input)),
     audit: ({ context: { backup } }) =>
       backup
         ? {
@@ -563,7 +459,7 @@ export const downloadBackup = backupOperation({
 })
 
 // What a target's backups keep and leave out, and where they go.
-export const backupPolicyLock = (
+const backupPolicyLock = (
   relayId: string,
   target: { id: string; kind: BackupTarget["kind"] }
 ) => exclusive(partKey(backupTargetKey(relayId, target), "backup-policy"))
