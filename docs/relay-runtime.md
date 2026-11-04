@@ -379,6 +379,77 @@ sides of one session can be lined up.
 | `Hearth's control connection closed`                              | Relay  | An authenticated session ended, with its close code and reason, who opened it, and the time since Hearth last answered a ping.                                                                                                                                                                                                                                                                        |
 | `Dropped Hearth's control connection: it stopped answering pings` | Relay  | The Relay's 15-second heartbeat got no pong in time and dropped the session.                                                                                                                                                                                                                                                                                                                          |
 
+## Workload memory limit
+
+Game servers, Apps, and databases on a node run under one systemd slice,
+`kilnworkloads.slice`, with a memory ceiling they share, which leaves the rest
+to Kiln and the OS. Its size is the node's memory less a reserve (see
+[Memory for Kiln and the OS](self-hosting.md#memory-for-kiln-and-the-os)).
+The slice takes no memory itself; it's a ceiling, not a set-aside amount. Each
+workload keeps its own limit.
+
+The Relay sets the slice up each time it starts, as a short-lived privileged
+container that enters the host, like [host access](#host-access) and under
+the same `KILN_RELAY_HOST_ACCESS` setting:
+
+    systemctl set-property kilnworkloads.slice MemoryMax=<bytes> MemorySwapMax=0 CPUWeight=50
+
+The name has no hyphen because systemd reads one as nesting. It needs Docker
+on systemd's cgroup driver and cgroup v2, not rootless, and a Relay with no
+`KILN_RELAY_RESOURCE_NAMESPACE`, since a namespaced Relay shares its Docker
+host. Anywhere else the Relay logs why and runs without it. Hearth's assignable
+memory applies either way.
+
+New workloads go in the slice only once the kernel is seen enforcing it: a
+probe container has to land in the slice with `memory.max` at the right value.
+If that fails on a first setup, the change is undone. If it fails on a node with
+a limit already, the limit stays, and new workloads stay out of the slice until
+a later start confirms it. The same probe failing never stops the Relay or a
+workload starting.
+
+**What it covers.** Only memory charged inside the slice. App builds run in
+Docker's daemon, and other software on the host and Kiln's own containers run
+outside it, so they aren't held back, and a runaway Kiln container can still
+press on workloads. Workloads with no memory limit share what the others
+leave, so one can still starve another; the ceiling holds them all together.
+The Relay also sets `OomScoreAdj=300` on workloads, which makes them likelier
+victims of a node-wide out-of-memory kill but doesn't guarantee it. `CPUWeight=50`
+gives everything outside the slice, as a whole, twice the slice's share while
+CPUs are contended, and nothing while they aren't.
+
+**Existing workloads** need a new container to enter the slice, and the Relay
+never restarts one for it. A game server moves the next time it starts or
+restarts, an App on its next deployment, and a database when its container is
+next replaced. Until then it runs outside the ceiling, and the Node card counts
+it.
+
+**Size changes.** The ceiling stays as high as the memory limits already
+assigned, up to the node's memory and rounded down to a whole MiB, so a node
+over budget when this arrives keeps what they promise. Bringing those limits
+down doesn't bring the ceiling with them. The Node card shows it above its
+target until someone lowers it. Raising it takes effect at once, without
+restarting anything.
+
+The Relay never lowers a ceiling, because that can kill workloads. Raising the
+reserve therefore leaves an existing ceiling as it is, and the Node card shows
+it above its target. To lower it, accepting that risk, run this on the host. The
+Relay keeps a ceiling set this way, as long as it isn't below the target:
+
+    systemctl set-property kilnworkloads.slice MemoryMax=<bytes>
+
+**Turning it off.** Set `KILN_RELAY_WORKLOAD_MEMORY_LIMIT=false` and restart the
+Relay, which removes the limit from the running slice. Workloads stay in the
+slice, unlimited. With host access off, or to remove it by hand, run both of
+these on the host, since `systemctl revert` alone leaves the kernel enforcing
+the old limit:
+
+    systemctl set-property kilnworkloads.slice MemoryMax=infinity MemorySwapMax=infinity CPUWeight=100
+    systemctl revert kilnworkloads.slice
+
+Kiln owns the slice's settings: each Relay start sets its swap and CPU weight
+again, and raises a ceiling that's below the target. Use
+`KILN_RELAY_RESERVED_MEMORY` to change the target.
+
 ## Host access
 
 The Relay workspace includes a root terminal on its Docker host, protected by

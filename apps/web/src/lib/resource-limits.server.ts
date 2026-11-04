@@ -32,7 +32,8 @@ export function nodeResourceCapacity(
     cpu: { nodeCores: node.cpu.cores },
     memory: {
       availableBytes: Math.max(
-        node.memory.totalBytes - allocated("memoryBytes"),
+        (node.memory.assignableBytes ?? node.memory.totalBytes) -
+          allocated("memoryBytes"),
         current.memoryBytes ?? 0
       ),
       nodeTotalBytes: node.memory.totalBytes,

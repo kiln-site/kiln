@@ -247,7 +247,12 @@ describe("Kiln deployed without Kiln's labels", () => {
     // Virtual time for the samples; Docker's answers take real time.
     const clock = ManagedRuntime.make(TestClock.layer())
     const sampler = clock.runFork(
-      sampleNodeMetrics(() => relayId, kiln.context.engine, kiln.harness.config)
+      sampleNodeMetrics(
+        () => relayId,
+        kiln.context.engine,
+        kiln.harness.config,
+        kiln.harness.docker.allocations
+      )
     )
     onTestFinished(async () => {
       await run(Fiber.interrupt(sampler))
@@ -280,7 +285,12 @@ describe("Kiln deployed without Kiln's labels", () => {
 
     const relayId = "relay-with-a-stuck-search"
     const sampler = Effect.runFork(
-      sampleNodeMetrics(() => relayId, kiln.context.engine, kiln.harness.config)
+      sampleNodeMetrics(
+        () => relayId,
+        kiln.context.engine,
+        kiln.harness.config,
+        kiln.harness.docker.allocations
+      )
     )
     onTestFinished(async () => {
       stuck.release()

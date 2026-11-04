@@ -237,6 +237,7 @@ import { nodeSnapshot } from "./node.js"
 import { reportRelayMemoryMetrics } from "./relay-memory.js"
 import { sampleRelayCapacity } from "./relay-capacity.js"
 import { sampleNodeMetrics, watchContainerEvents } from "./node-metrics.js"
+import { WorkloadSlice } from "./workload-slice.js"
 import { RelayPairingError, RelaySystemUpdateError } from "./effect/errors.js"
 import {
   loadOrCreateRelayIdentity,
@@ -1562,7 +1563,18 @@ const capacityMetricsFiber = forkRelayEffect(
 // What the node and its containers spend, for its metrics.
 const nodeMetricsFiber = forkRelayEffect(
   "relay.node.metrics",
-  sampleNodeMetrics(() => config.nodeId, relayEngine, config)
+  sampleNodeMetrics(() => config.nodeId, relayEngine, config, docker.allocations)
+)
+// The ceiling on what the node's workloads use together.
+const workloadSliceFiber = forkRelayEffect(
+  "relay.workload-slice",
+  new WorkloadSlice(
+    config,
+    relayEngine,
+    hostShell,
+    docker.allocations,
+    lanes
+  ).reconcile()
 )
 const containerEventsFiber = forkRelayEffect(
   "relay.container.events",
@@ -1615,6 +1627,7 @@ const sftpServer = await Effect.runPromise(
         capacityMetricsFiber.interruptUnsafe()
         nodeMetricsFiber.interruptUnsafe()
         containerEventsFiber.interruptUnsafe()
+        workloadSliceFiber.interruptUnsafe()
         operationPruneFiber.interruptUnsafe()
         backupFiber.interruptUnsafe()
         transferSweepFiber.interruptUnsafe()
@@ -1920,6 +1933,7 @@ function shutdownRelay(signal: NodeJS.Signals): Promise<void> {
         capacityMetricsFiber.interruptUnsafe()
         nodeMetricsFiber.interruptUnsafe()
         containerEventsFiber.interruptUnsafe()
+        workloadSliceFiber.interruptUnsafe()
         operationPruneFiber.interruptUnsafe()
         tlsRefreshFiber.interruptUnsafe()
         joinFiber?.interruptUnsafe()

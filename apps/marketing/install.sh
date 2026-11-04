@@ -558,6 +558,17 @@ check_docker() {
     stop "Docker couldn't run a test container."
 }
 
+# Warns on a machine under Kiln's minimum; it may still suit a small Relay.
+check_memory() {
+  [ -r /proc/meminfo ] || return 0
+  kibibytes=$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)
+  case "$kibibytes" in
+    "" | *[!0-9]*) return 0 ;;
+  esac
+  [ "$kibibytes" -lt 1800000 ] || return 0
+  say "This machine has $((kibibytes / 1024)) MB of memory. Kiln needs at least 2 GB, and 4 GB or more is recommended."
+}
+
 # What needs doing before Docker works; asked up front, so the rest runs
 # without stopping.
 plan_docker() {
@@ -1417,6 +1428,7 @@ if [ "$docker_missing" -eq 1 ]; then
   docker_reachable || fail "Docker didn't start."
 fi
 step "Checking Docker" check_docker
+check_memory
 check_ports
 step_progress=pull_progress
 step "Downloading Kiln" pull_relay

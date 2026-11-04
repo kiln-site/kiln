@@ -6,7 +6,11 @@ import {
   type ResourceLimits,
 } from "@workspace/contracts"
 
-import type { ContainerSpec } from "./docker-container-spec.js"
+import type { RelayConfig } from "./config.js"
+import {
+  WORKLOAD_SLICE_LABEL,
+  type ContainerSpec,
+} from "./docker-container-spec.js"
 
 // Resource limits for any container the Relay creates. Docker keeps the
 // memory and CPU limits in the container's HostConfig, so those are read
@@ -16,6 +20,14 @@ import type { ContainerSpec } from "./docker-container-spec.js"
 export const DISK_LIMIT_LABEL = "kiln.limits.disk-bytes"
 
 const NANO_CPUS_PER_MILLI = 1_000_000
+
+/** What's left free by default for Kiln and the OS, beside a Relay alone. */
+const NODE_RESERVED_MEMORY_BYTES = 1024 ** 3
+/** The same with Hearth, its database and its cache on the node. */
+const PLATFORM_RESERVED_MEMORY_BYTES = 2 * 1024 ** 3
+
+/** Makes a workload the likelier victim of a node-wide out-of-memory kill. */
+const WORKLOAD_OOM_SCORE_ADJ = 300
 
 /** The memory and CPU parts of a container's spec. */
 export function containerLimitSpec(
@@ -111,7 +123,21 @@ export function widestResourceLimits(
   }
 }
 
+/** How the node's memory limit on workloads stands, for Hearth to show. */
+export interface WorkloadLimitStatus {
+  /** The limit in force, or null when workloads have none. */
+  readonly limitBytes: number | null
+  /** The limit the node's reserve asks for. */
+  readonly targetBytes: number
+  /** Running workloads outside it, which it doesn't hold. */
+  readonly outsideCount: number
+}
+
 export class ResourceAllocations {
+  readonly #config: Pick<RelayConfig, "mode" | "reservedMemoryBytes">
+  #workloadSlice: string | null = null
+  #workloadLimitBytes: number | null = null
+  #workloadsOutside = 0
   readonly #sources = new Map<
     string,
     () => Promise<ReadonlyArray<ResourceAllocation>>
@@ -123,6 +149,61 @@ export class ResourceAllocations {
     readonly kind: string
     readonly limits: ResourceLimits
   }> = []
+
+  constructor(config: Pick<RelayConfig, "mode" | "reservedMemoryBytes">) {
+    this.#config = config
+  }
+
+  /** The memory instances' limits may assign, after the node's reserve. */
+  get assignableMemoryBytes(): number {
+    const total = totalmem()
+    const reserved =
+      this.#config.reservedMemoryBytes ??
+      Math.min(
+        this.#config.mode === "platform"
+          ? PLATFORM_RESERVED_MEMORY_BYTES
+          : NODE_RESERVED_MEMORY_BYTES,
+        total / 2
+      )
+    return Math.max(total - reserved, 0)
+  }
+
+  /** Where new workloads run from now on, and the limit in force. */
+  setWorkloadLimit(
+    slice: string | null,
+    limitBytes: number | null
+  ): void {
+    this.#workloadSlice = slice
+    this.#workloadLimitBytes = limitBytes
+  }
+
+  setWorkloadsOutside(count: number): void {
+    this.#workloadsOutside = count
+  }
+
+  get workloadLimit(): WorkloadLimitStatus {
+    return {
+      limitBytes: this.#workloadLimitBytes,
+      outsideCount: this.#workloadsOutside,
+      targetBytes: this.assignableMemoryBytes,
+    }
+  }
+
+  /** What a game server, App, or database's container is created with. */
+  workloadSpec(): Pick<ContainerSpec, "cgroupParent" | "oomScoreAdj"> {
+    return {
+      ...(this.#workloadSlice && { cgroupParent: this.#workloadSlice }),
+      oomScoreAdj: WORKLOAD_OOM_SCORE_ADJ,
+    }
+  }
+
+  /** Whether a container with these labels would move by being recreated. */
+  wouldMoveWorkload(labels: Readonly<Record<string, string>>): boolean {
+    return (
+      this.#workloadSlice !== null &&
+      labels[WORKLOAD_SLICE_LABEL] !== this.#workloadSlice
+    )
+  }
 
   register(
     kind: string,
@@ -181,8 +262,15 @@ export class ResourceAllocations {
  * limit only has to fit the node's cores.
  */
 export function assertResourceLimitsFit(input: {
+  /** The memory instances may assign on this node. */
+  readonly assignableMemoryBytes: number
   /** The instance's current disk limit, which it may keep. */
   readonly currentDiskBytes: number | null
+  /**
+   * The instance's current memory limit, which it may keep however full the
+   * node has since become.
+   */
+  readonly currentMemoryBytes: number | null
   readonly limits: ResourceLimits
   readonly nodeDiskBytes: number
   /** Limits of every other container on the node. */
@@ -198,11 +286,14 @@ export function assertResourceLimitsFit(input: {
       `CPU limit exceeds the node's ${cores} ${cores === 1 ? "core" : "cores"}`
     )
   }
-  if (limits.memoryBytes !== null) {
-    const allocated = sumLimit(input.others, "memoryBytes")
-    if (allocated + limits.memoryBytes > totalmem()) {
+  if (
+    limits.memoryBytes !== null &&
+    limits.memoryBytes > (input.currentMemoryBytes ?? 0)
+  ) {
+    const available = input.assignableMemoryBytes - sumLimit(input.others, "memoryBytes")
+    if (limits.memoryBytes > available) {
       throw new Error(
-        `Memory limit exceeds the node's assignable capacity (${formatAllocationBytes(Math.max(totalmem() - allocated, 0))} available)`
+        `Memory limit exceeds the node's assignable capacity (${formatAllocationBytes(Math.max(available, 0))} available)`
       )
     }
   }

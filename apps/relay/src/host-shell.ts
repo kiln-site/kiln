@@ -1,9 +1,13 @@
+import { randomUUID } from "node:crypto"
+
 import { Effect } from "effect"
 
 import type { RelayConfig } from "./config.js"
+import { runWithInput } from "./docker-container-spec.js"
 import {
   DockerEngine,
   ensureImage,
+  type DockerEngineError,
   isDockerNotFound,
   type DockerContainerInspect,
 } from "./docker-engine.js"
@@ -108,6 +112,32 @@ export class HostShell {
       )
     )
     return output.stdout
+  }
+
+  /**
+   * Runs a short script on the host, as root, in a container of its own that
+   * Docker removes as it exits, for work that shouldn't start the helper or
+   * share it with anyone's shell. Fails if the script exits non-zero.
+   */
+  runOnce(script: string): Effect.Effect<string, DockerEngineError> {
+    return runWithInput(
+      this.#engine,
+      {
+        command: [...hostNamespaces, "--", "sh", "-c", script],
+        image: HOST_SHELL_IMAGE,
+        labels: {
+          "kiln.relay.owned": "true",
+          ...(this.#config.resourceNamespace
+            ? { [RELAY_OWNER_LABEL]: this.#config.resourceNamespace }
+            : {}),
+        },
+        name: `${this.#name}-once-${randomUUID()}`,
+        pidMode: "host",
+        privileged: true,
+      },
+      "",
+      { timeout: 30_000 }
+    ).pipe(Effect.map((output) => output.stdout))
   }
 
   // Removes the helper, when host access has been turned off.

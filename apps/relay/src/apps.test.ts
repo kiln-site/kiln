@@ -211,6 +211,42 @@ describe("App volumes", () => {
     "",
   ].join("\n")
 
+  it("runs a Compose App's services in the node's workload slice", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    const slice = "kilnworkloads.slice"
+    harness.docker.allocations.setWorkloadLimit(slice, 1024 ** 3)
+
+    await deploy(harness, {
+      compose: "services:\n  web:\n    image: nginx:alpine\n    cgroup_parent: elsewhere\n",
+      sourceType: "compose",
+    })
+
+    const [container] = [...fakeDocker.containers.values()].filter(
+      (candidate) => candidate.labels["kiln.app.id"] === appId
+    )
+    expect(container?.cgroupParent).toBe(slice)
+    expect(container?.labels["kiln.relay.workload-slice"]).toBe(slice)
+    await removeCompose()
+  })
+
+  it("won't let a Compose file put a service in the slice itself", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+
+    await deploy(harness, {
+      compose:
+        "services:\n  web:\n    image: nginx:alpine\n    cgroup_parent: kilnworkloads.slice\n",
+      sourceType: "compose",
+    })
+
+    const [container] = [...fakeDocker.containers.values()].filter(
+      (candidate) => candidate.labels["kiln.app.id"] === appId
+    )
+    expect(container?.cgroupParent).toBe("")
+    await removeCompose()
+  })
+
   it("keeps a Compose volume's ID and data through redeploys and a rolled deployment", async () => {
     const removeCompose = await composeConfigCommand()
     const harness = await createdApp()

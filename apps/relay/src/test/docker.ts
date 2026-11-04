@@ -84,6 +84,8 @@ export interface FakeContainer {
   restartMaximumRetryCount?: number
   memoryBytes: number
   nanoCpus: number
+  cgroupParent: string
+  oomScoreAdj: number
   mounts: Array<FakeMount>
   portBindings: PortBindings
   networkMode: string
@@ -182,6 +184,8 @@ export interface ContainerSeed {
   tty?: boolean
   memoryBytes?: number
   nanoCpus?: number
+  cgroupParent?: string
+  oomScoreAdj?: number
   running?: boolean
   exitCode?: number
   oomKilled?: boolean
@@ -376,6 +380,8 @@ export class FakeDocker {
       restartPolicy: seed.restartPolicy ?? "no",
       memoryBytes: seed.memoryBytes ?? 0,
       nanoCpus: seed.nanoCpus ?? 0,
+      cgroupParent: seed.cgroupParent ?? "",
+      oomScoreAdj: seed.oomScoreAdj ?? 0,
       mounts: [...(seed.mounts ?? [])],
       portBindings: {},
       networkMode: seed.networks?.[0] ?? "bridge",
@@ -614,8 +620,10 @@ export class FakeDocker {
           cpus?: number
           healthcheck?: { disable?: boolean; test?: unknown }
           image?: string
+          cgroup_parent?: string
           labels?: Record<string, string>
           mem_limit?: number
+          oom_score_adj?: number
           networks?: Record<string, { aliases?: Array<string> } | null>
           volumes?: Array<{
             read_only?: boolean
@@ -705,6 +713,8 @@ export class FakeDocker {
       const created = this.container(name)
       if (created) {
         created.memoryBytes = settings.mem_limit ?? 0
+        created.cgroupParent = settings.cgroup_parent ?? ""
+        created.oomScoreAdj = settings.oom_score_adj ?? 0
         created.nanoCpus = Math.round((settings.cpus ?? 0) * 1e9)
         created.healthCheck = settings.healthcheck
           ? !settings.healthcheck.disable
@@ -851,10 +861,12 @@ export class FakeDocker {
       },
       HostConfig: {
         Binds: binds,
+        CgroupParent: container.cgroupParent,
         Memory: container.memoryBytes,
         Mounts: volumeMounts,
         NanoCpus: container.nanoCpus,
         NetworkMode: container.networkMode,
+        OomScoreAdj: container.oomScoreAdj,
         PortBindings: container.portBindings,
         VolumesFrom: container.volumesFrom.length
           ? container.volumesFrom
@@ -1009,6 +1021,8 @@ export class FakeDocker {
     interactive: boolean
     labels: Record<string, string>
     memoryBytes: number
+    cgroupParent?: string
+    oomScoreAdj?: number
     mounts: Array<FakeMount>
     name: string | undefined
     nanoCpus: number
@@ -1037,6 +1051,8 @@ export class FakeDocker {
       image: input.image,
       labels: input.labels,
       memoryBytes: input.memoryBytes,
+      ...(input.cgroupParent && { cgroupParent: input.cgroupParent }),
+      ...(input.oomScoreAdj && { oomScoreAdj: input.oomScoreAdj }),
       mounts: input.mounts,
       name,
       nanoCpus: input.nanoCpus,
@@ -2389,6 +2405,8 @@ export class FakeDocker {
       interactive: body.OpenStdin ?? false,
       labels: { ...body.Labels },
       memoryBytes: host.Memory ?? 0,
+      ...(host.CgroupParent && { cgroupParent: host.CgroupParent }),
+      ...(host.OomScoreAdj && { oomScoreAdj: host.OomScoreAdj }),
       mounts,
       name,
       nanoCpus: host.NanoCpus ?? 0,
@@ -2708,8 +2726,10 @@ interface CreateBody {
     AutoRemove?: boolean
     VolumesFrom?: Array<string> | null
     Binds?: Array<string> | null
+    CgroupParent?: string
     Memory?: number
     NanoCpus?: number
+    OomScoreAdj?: number
     Mounts?: Array<{
       ReadOnly?: boolean
       Source?: string

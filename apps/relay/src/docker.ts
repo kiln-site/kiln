@@ -14,6 +14,7 @@ import {
 } from "./database-connections.js"
 import { LaneRejectedError, type OperationLanes } from "./operation-lanes.js"
 import { instanceLifecycleLocks } from "./operation-plans.js"
+import { WORKLOAD_SLICE_LABEL } from "./docker-container-spec.js"
 import {
   DockerEngine,
   DockerEngineError,
@@ -458,6 +459,7 @@ export class DockerDriver {
     /** Removes containers Relay is done with, trying again what fails. */
     readonly cleanup: DockerCleanup
   ) {
+    this.allocations = new ResourceAllocations(config)
     this.#bricks = bricks
     this.#config = config
     this.#engine = new DockerEngine(config.dockerSocket)
@@ -491,7 +493,7 @@ export class DockerDriver {
   }
 
   /** Every instance's limits; other kinds of instance register theirs. */
-  readonly allocations = new ResourceAllocations()
+  readonly allocations: ResourceAllocations
 
   async inspectInstances(): Promise<Array<RelayInstance>> {
     await this.#initializeLifecycleSessions()
@@ -1047,6 +1049,11 @@ export class DockerDriver {
       )
     }
 
+    // Stays where it is while no slice is confirmed, label and all.
+    const placement = this.allocations.workloadSpec()
+    if (placement.cgroupParent) {
+      labels[WORKLOAD_SLICE_LABEL] = placement.cgroupParent
+    }
     const exposedPorts =
       portConfiguration === undefined
         ? current.Config.ExposedPorts
@@ -1115,7 +1122,11 @@ export class DockerDriver {
             ExposedPorts: exposedPorts,
             HostConfig: {
               ...current.HostConfig,
+              ...(placement.cgroupParent && {
+                CgroupParent: placement.cgroupParent,
+              }),
               NetworkMode: primaryNetwork,
+              OomScoreAdj: placement.oomScoreAdj,
               PortBindings: portBindings,
               RestartPolicy: { Name: "no" },
             },
