@@ -509,7 +509,11 @@ function AccessForm({
   })
 
   const header = user ? (
-    <UserHeader user={user} tab={tab} onTab={platform ? setTab : undefined} />
+    <UserHeader
+      user={user}
+      tab={tab}
+      onTab={platform ? setTab : undefined}
+    />
   ) : (
     <div className="space-y-3">
       <div>

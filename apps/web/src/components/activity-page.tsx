@@ -89,7 +89,9 @@ import {
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
-import { activityQueryOptions } from "@/lib/query-options"
+import {
+  activityQueryOptions,
+} from "@/lib/query-options"
 import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import type { ActivityData, ActivityEntry } from "@/server/activity"
 

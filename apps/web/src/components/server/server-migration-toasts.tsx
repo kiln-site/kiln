@@ -75,9 +75,10 @@ export const ServerMigrationToasts = React.memo(
         }
         shown.current.add(migration.id)
         showToast({
-          action: migration.cancellable
-            ? { label: "Cancel", onClick: () => cancelCopy(migration.id) }
-            : undefined,
+          action:
+            migration.cancellable
+              ? { label: "Cancel", onClick: () => cancelCopy(migration.id) }
+              : undefined,
           description: migrationProgress(migration),
           dismissible: true,
           duration: Number.POSITIVE_INFINITY,

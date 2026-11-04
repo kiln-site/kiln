@@ -800,44 +800,39 @@ function mayAdoptRecords(ownerId: string | null, actor: DomainActor) {
  * and whether that record already points at the Relay. One that doesn't
  * moves there when it's handed over, so the person needs to know.
  */
-export const adoptableWebHostnamesEffect = Effect.fn("webHostnames.adoptable")(
-  function* (rows: ReadonlyArray<WebHostname>, actor: DomainActor) {
-    const candidates = rows.filter(
-      (row) => row.status === "external" && row.existingRecord !== null
-    )
-    const adoptable = new Map<string, boolean>()
-    const targets = new Map<string, string | null>()
-    for (const connectionId of new Set(
-      candidates.map((row) => row.connectionId)
-    )) {
-      const connection = yield* loadDomainConnectionEffect(connectionId)
-      if (
-        !connection ||
-        !mayAdoptRecords(connection.connection.ownerId, actor)
-      ) {
-        continue
-      }
-      for (const row of candidates) {
-        if (row.connectionId !== connectionId) continue
-        let target = targets.get(row.relayId)
-        if (target === undefined) {
-          target = yield* relayPublicHostEffect(row.relayId).pipe(
-            Effect.orElseSucceed(() => null)
-          )
-          targets.set(row.relayId, target)
-        }
-        const wanted =
-          target === null ? null : cloudflareAddressRecord(row.hostname, target)
-        adoptable.set(
-          row.id,
-          wanted?.type === row.existingRecord?.type &&
-            wanted?.content === row.existingRecord?.content
-        )
-      }
+export const adoptableWebHostnamesEffect = Effect.fn(
+  "webHostnames.adoptable"
+)(function* (rows: ReadonlyArray<WebHostname>, actor: DomainActor) {
+  const candidates = rows.filter(
+    (row) => row.status === "external" && row.existingRecord !== null
+  )
+  const adoptable = new Map<string, boolean>()
+  const targets = new Map<string, string | null>()
+  for (const connectionId of new Set(candidates.map((row) => row.connectionId))) {
+    const connection = yield* loadDomainConnectionEffect(connectionId)
+    if (!connection || !mayAdoptRecords(connection.connection.ownerId, actor)) {
+      continue
     }
-    return adoptable
+    for (const row of candidates) {
+      if (row.connectionId !== connectionId) continue
+      let target = targets.get(row.relayId)
+      if (target === undefined) {
+        target = yield* relayPublicHostEffect(row.relayId).pipe(
+          Effect.orElseSucceed(() => null)
+        )
+        targets.set(row.relayId, target)
+      }
+      const wanted =
+        target === null ? null : cloudflareAddressRecord(row.hostname, target)
+      adoptable.set(
+        row.id,
+        wanted?.type === row.existingRecord?.type &&
+          wanted?.content === row.existingRecord?.content
+      )
+    }
   }
-)
+  return adoptable
+})
 
 /**
  * Takes over the record Cloudflare already had under a hostname, as its

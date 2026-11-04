@@ -170,7 +170,10 @@ export class ResourceAllocations {
   }
 
   /** Where new workloads run from now on, and the limit in force. */
-  setWorkloadLimit(slice: string | null, limitBytes: number | null): void {
+  setWorkloadLimit(
+    slice: string | null,
+    limitBytes: number | null
+  ): void {
     this.#workloadSlice = slice
     this.#workloadLimitBytes = limitBytes
   }

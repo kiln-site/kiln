@@ -122,15 +122,13 @@ export const TailscalePage = React.memo(function TailscalePage({
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-2 pb-3 sm:px-5 sm:pb-5">
-      {stacks.length > 0 ? (
-        <TailscaleNetworkPicker
-          selectedStack={selectedStack}
-          stacks={stacks}
-          onAdd={openCreate}
-          onConfigure={setEditingId}
-          onSelect={selectNetwork}
-        />
-      ) : null}
+      {stacks.length > 0 ? <TailscaleNetworkPicker
+        selectedStack={selectedStack}
+        stacks={stacks}
+        onAdd={openCreate}
+        onConfigure={setEditingId}
+        onSelect={selectNetwork}
+      /> : null}
 
       <DataTableWorkspace
         toolbar={

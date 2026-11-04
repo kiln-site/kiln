@@ -422,8 +422,7 @@ describeMysql("web route hostnames", () => {
             "TXT shop.owner.example v=spf1 -all",
           ])
           // What Kiln shows for it is read again.
-          const reread =
-            yield* loadWebHostnameByNameEffect("shop.owner.example")
+          const reread = yield* loadWebHostnameByNameEffect("shop.owner.example")
           assert.equal(reread?.existingRecord?.content, "new.elsewhere.example")
           cloudflare.edit(recordId, { content: "otel.elsewhere.example" })
           assert.deepEqual(yield* hostnameRows, {

@@ -2,15 +2,12 @@ import { createServerFn } from "@tanstack/react-start"
 
 export const getPublicRuntimeConfig = createServerFn({ method: "GET" }).handler(
   async () => {
-    const [
-      { kilnGitRepository, kilnLegalUrls },
-      { otlpTarget },
-      { Effect, Option },
-    ] = await Promise.all([
-      import("@/lib/environment"),
-      import("@workspace/telemetry"),
-      import("effect"),
-    ])
+    const [{ kilnGitRepository, kilnLegalUrls }, { otlpTarget }, { Effect, Option }] =
+      await Promise.all([
+        import("@/lib/environment"),
+        import("@workspace/telemetry"),
+        import("effect"),
+      ])
     const [{ telemetryDefaults }, { browserTraceSampleRatio }] =
       await Promise.all([
         import("@/effect/runtime"),

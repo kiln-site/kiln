@@ -5,7 +5,11 @@ import { appIdFromFileRoot, isRelayFileRoot } from "@workspace/contracts"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { recoverPromise } from "@/effect/promise"
-import { base64ToBlob, blobToBase64, prepareIconImage } from "@/lib/icon-image"
+import {
+  base64ToBlob,
+  blobToBase64,
+  prepareIconImage,
+} from "@/lib/icon-image"
 import { ICON_SOURCE_MAX_BYTES, type InstanceIconSubject } from "@/lib/icons"
 import { changeIcon } from "@/lib/icon-changes"
 import { iconIndexQueryOptions } from "@/lib/query-options"
@@ -62,8 +66,7 @@ export function useFileIconActions(root: { id: string; relayId: string }) {
           )
           return null
         },
-        (cause) =>
-          errorMessage(cause, `Could not set the ${noun.toLowerCase()} icon`)
+        (cause) => errorMessage(cause, `Could not set the ${noun.toLowerCase()} icon`)
       )
       showToast(
         outcome
@@ -91,11 +94,7 @@ export function useFileIconActions(root: { id: string; relayId: string }) {
           const contentBase64 = await blobToBase64(picture.blob)
           await changeIcon(queryClient, self, () =>
             saveCustomIcon({
-              data: {
-                contentBase64,
-                origin: { type: "upload" },
-                subject: self,
-              },
+              data: { contentBase64, origin: { type: "upload" }, subject: self },
             })
           )
           return null
@@ -130,10 +129,7 @@ async function readPictureFile(
     (cause) => cause
   )
   if (direct instanceof Blob) return direct
-  if (
-    !(direct instanceof RelayTransferError) ||
-    direct.reason !== "unavailable"
-  ) {
+  if (!(direct instanceof RelayTransferError) || direct.reason !== "unavailable") {
     throw direct
   }
   const read = await readPictureSourceFile({

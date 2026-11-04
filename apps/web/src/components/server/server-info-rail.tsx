@@ -1,9 +1,6 @@
 import * as React from "react"
 
-import {
-  InstanceInfoRail,
-  InfoContainerCard,
-} from "@/components/resource-info-rail"
+import { InstanceInfoRail, InfoContainerCard } from "@/components/resource-info-rail"
 import {
   formatCpuLimit,
   formatDiskLimit,

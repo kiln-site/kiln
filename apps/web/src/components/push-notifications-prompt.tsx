@@ -66,8 +66,8 @@ export const PushNotificationsPrompt = React.memo(
             <DialogTitle>Get notified on this device?</DialogTitle>
             <DialogDescription>
               Kiln can tell you about invitations, Kiln updates, and disk
-              warnings, even when the app is closed. You can change this anytime
-              on the Notifications page.
+              warnings, even when the app is closed. You can change this
+              anytime on the Notifications page.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

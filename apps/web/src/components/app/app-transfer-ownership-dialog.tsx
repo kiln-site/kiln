@@ -32,7 +32,8 @@ export function AppTransferOwnershipDialog({
   const queryClient = useQueryClient()
   const [email, setEmail] = React.useState("")
   const transfer = useMutation({
-    mutationFn: () => transferAppOwnership({ data: { appId, email, relayId } }),
+    mutationFn: () =>
+      transferAppOwnership({ data: { appId, email, relayId } }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({
         queryKey: ["app-owner", relayId, appId],

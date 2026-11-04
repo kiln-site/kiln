@@ -943,9 +943,7 @@ function PasskeysPanel() {
     setPending("add")
     const confirmation = await recoverPromise(
       () =>
-        rotateSession(() =>
-          authClient.passwordConfirmation.confirm({ password })
-        ),
+        rotateSession(() => authClient.passwordConfirmation.confirm({ password })),
       (cause) => failedAuthResult(cause, "Could not confirm your password")
     )
     if (confirmation.error) {

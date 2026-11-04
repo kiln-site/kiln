@@ -6,10 +6,7 @@ import {
   databaseRelayAvailable,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
-import {
-  InstanceInfoRail,
-  InfoContainerCard,
-} from "@/components/resource-info-rail"
+import { InstanceInfoRail, InfoContainerCard } from "@/components/resource-info-rail"
 import { formatBytes } from "@/lib/format-bytes"
 import { formatCpuLimit, formatMemoryLimit } from "@/lib/resource-limits"
 import { managedDatabaseContainerQueryOptions } from "@/lib/query-options"

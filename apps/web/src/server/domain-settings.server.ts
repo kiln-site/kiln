@@ -194,7 +194,8 @@ export async function getDomainSettingsHandler() {
         canManage,
         certificate: pendingWebCertificate(row, row.hostname),
         connectionName: connectionNames.get(row.connectionId) ?? null,
-        existingRecord: row.status === "external" ? row.existingRecord : null,
+        existingRecord:
+          row.status === "external" ? row.existingRecord : null,
         generated: row.generated,
         hostname: row.hostname,
         id: row.id,

@@ -439,10 +439,7 @@ async function prepareRelayScheduleActions(
                 ),
           { concurrency: scheduleReconciliationConcurrency }
         ).pipe(
-          Effect.map((executions) => ({
-            ...action,
-            executions: executions.flat(),
-          }))
+          Effect.map((executions) => ({ ...action, executions: executions.flat() }))
         )
       },
       { concurrency: 1 }

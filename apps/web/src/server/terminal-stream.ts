@@ -201,9 +201,7 @@ export function platformTerminalTarget(
     authorize: async (current) => {
       const { isPlatformAdmin } = await import("@/lib/access-control")
       if (!isPlatformAdmin(current)) {
-        throw new Error(
-          "Only platform administrators can open Kiln's terminals"
-        )
+        throw new Error("Only platform administrators can open Kiln's terminals")
       }
     },
     operations: {

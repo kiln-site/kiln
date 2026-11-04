@@ -261,22 +261,22 @@ const UserTable = memo(function UserTable({
   )
   return (
     <DataTable
-      definition={definition}
-      source={source}
-      emptyState={
-        <DataTableEmptyState
-          icon={
-            <Users className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
-          }
-          title={search ? "No users match your search" : "No users"}
-          description={
-            search
-              ? "Try a name or email address."
-              : "Add a user to invite them to Kiln."
-          }
-        />
-      }
-    />
+        definition={definition}
+        source={source}
+        emptyState={
+          <DataTableEmptyState
+            icon={
+              <Users className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+            }
+            title={search ? "No users match your search" : "No users"}
+            description={
+              search
+                ? "Try a name or email address."
+                : "Add a user to invite them to Kiln."
+            }
+          />
+        }
+      />
   )
 })
 

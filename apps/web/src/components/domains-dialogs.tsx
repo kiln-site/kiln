@@ -59,10 +59,7 @@ import {
   validateBlacklistPatterns,
   vanityLabelSchema,
 } from "@/lib/domain-schemas"
-import {
-  queryKeys,
-  resourceWebHostnamesQueryOptions,
-} from "@/lib/query-options"
+import { queryKeys, resourceWebHostnamesQueryOptions } from "@/lib/query-options"
 import {
   adoptWebHostnameRecord,
   createInstanceDomain,

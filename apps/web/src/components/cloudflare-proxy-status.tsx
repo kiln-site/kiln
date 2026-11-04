@@ -29,9 +29,7 @@ export const CloudflareProxyStatus = React.memo(function CloudflareProxyStatus({
     <span
       className={cn(
         "type-meta inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap",
-        proxied
-          ? "text-orange-600 dark:text-orange-400"
-          : "text-muted-foreground",
+        proxied ? "text-orange-600 dark:text-orange-400" : "text-muted-foreground",
         className
       )}
       tabIndex={iconOnly ? 0 : undefined}

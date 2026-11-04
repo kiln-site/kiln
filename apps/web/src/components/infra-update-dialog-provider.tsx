@@ -1,6 +1,10 @@
 import * as React from "react"
 import { useSuspenseQuery } from "@tanstack/react-query"
-import { useNavigate, useRouter, useRouterState } from "@tanstack/react-router"
+import {
+  useNavigate,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router"
 
 import { forkPromise, tapPromiseError } from "@/effect/promise"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
