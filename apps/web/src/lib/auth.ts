@@ -12,6 +12,7 @@ import { emailOTP } from "better-auth/plugins/email-otp"
 import { multiSession } from "better-auth/plugins/multi-session"
 import { twoFactor } from "better-auth/plugins/two-factor"
 import { tanstackStartCookies } from "better-auth/tanstack-start"
+import type { RowDataPacket } from "mysql2/promise"
 import { Resend } from "resend"
 import { Effect } from "effect"
 
@@ -431,6 +432,12 @@ export { publicSignupEnabled }
  * sign-in can't work on tables that fail this.
  */
 export async function checkAuthSchema(): Promise<void> {
+  // This server stores `twoFactor` as `twofactor`, and finds it either way.
+  // Better Auth compares names exactly, so it would report the table missing.
+  const [[server]] = await databasePool.query<
+    Array<RowDataPacket & { foldedTableNames: number | string }>
+  >("SELECT @@lower_case_table_names AS foldedTableNames")
+  if (Number(server?.foldedTableNames) === 1) return
   const { explicitSchemaCheck } = await auth.$context
   if (!explicitSchemaCheck) {
     throw new Error("Better Auth has no schema check for this database")
