@@ -4,6 +4,8 @@ import {
   HOST_TERMINAL_KEY,
   HostAccessDisabledError,
 } from "./host-shell.js"
+import { ScreenSharingDesktop } from "./desktop-screen-sharing.js"
+import { VoxlDesktop } from "./desktop-voxl.js"
 import { Desktop } from "./desktop.js"
 import { createServer as createHttpServer } from "node:http"
 import { createServer as createHttpsServer } from "node:https"
@@ -480,7 +482,14 @@ const docker = new DockerDriver(
 )
 const databases = new DatabaseDriver(config, docker, databaseConnections)
 const hostShell = new HostShell(config)
-const desktop = new Desktop(config, hostShell, lanes)
+const desktop = new Desktop(
+  [
+    new ScreenSharingDesktop(config, hostShell),
+    new VoxlDesktop(config, hostShell),
+  ],
+  config,
+  lanes
+)
 const relayEngine = new DockerEngine(config.dockerSocket)
 const terminals = new ContainerTerminals(config)
 // The config itself, not a copy: it reads the installation ID Hearth gives

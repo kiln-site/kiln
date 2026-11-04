@@ -143,6 +143,8 @@ export interface RelayConfig {
   hostAccess: boolean
   /** The voxl image that streams the node's desktop; none turns it off. */
   desktopImage: string | null
+  /** Where a Relay in Docker on a Mac reaches the Mac's Screen Sharing. */
+  screenSharingAddress: { readonly host: string; readonly port: number }
   // Where the host's filesystem is mounted; Files are off when it isn't.
   hostRootDirectory: string
   gameHost: string
@@ -320,6 +322,7 @@ export function loadConfig(
     dataDirectory,
     hostAccess: booleanEnvironment(environment.KILN_RELAY_HOST_ACCESS, true),
     desktopImage: environment.KILN_RELAY_DESKTOP_IMAGE?.trim() || null,
+    screenSharingAddress: screenSharingAddress(environment),
     hostRootDirectory: environment.KILN_RELAY_HOST_ROOT?.trim() || "/host",
     gameHost,
     gamePortRange: relayGamePortRange(environment),
@@ -623,6 +626,17 @@ function parseCoolifyPublicOrigin(raw: string): string {
 function effectiveUrlPort(url: URL): number {
   if (url.port) return Number(url.port)
   return url.protocol === "https:" ? 443 : 80
+}
+
+function screenSharingAddress(environment: NodeJS.ProcessEnv) {
+  const value =
+    environment.KILN_RELAY_SCREEN_SHARING_ADDRESS?.trim() ||
+    "host.docker.internal:5900"
+  const [, host, port] = /^([A-Za-z0-9.-]+):(\d{1,5})$/u.exec(value) ?? []
+  if (!host || !port || Number(port) > 65_535) {
+    throw new Error("KILN_RELAY_SCREEN_SHARING_ADDRESS must be host:port")
+  }
+  return { host, port: Number(port) }
 }
 
 function traefikImage(environment: NodeJS.ProcessEnv): string {

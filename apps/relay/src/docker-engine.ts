@@ -237,6 +237,7 @@ export class DockerEngine {
     {
       readonly Architecture?: string
       readonly KernelVersion?: string
+      readonly Labels?: ReadonlyArray<string> | null
       readonly OperatingSystem?: string
       readonly SecurityOptions?: ReadonlyArray<string> | null
       readonly ServerVersion?: string
