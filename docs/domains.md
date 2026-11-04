@@ -30,8 +30,9 @@ checks it again on the next Sync, remembering the one `A`, `AAAA`, or
 `CNAME` record there, if there's exactly one.
 
 The owner of the hostname's Cloudflare connection (an administrator, for
-Kiln's), who may also change the route, can click **Existing record** to let
-Kiln manage that record. They see what it points at now, and choose whether
+Kiln's), who may also change the route, gets **Let Kiln manage** on the
+Domains page and in the route's row, in place of its edit and remove buttons.
+They see what the record points at now, and choose whether
 it goes through Cloudflare's proxy, starting from how it is. Kiln then reads
 Cloudflare again under the resource's DNS lock and refuses, changing nothing,
 if that record is gone or changed or the name has several address records.

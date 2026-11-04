@@ -788,6 +788,33 @@ function addressRecords(
   )
 }
 
+// A person's own connection, or Kiln's for administrators. Being able to
+// change a resource's routes isn't enough to take a record someone made in
+// a zone that isn't theirs.
+function mayAdoptRecords(ownerId: string | null, actor: DomainActor) {
+  return ownerId === null ? actor.admin : ownerId === actor.id
+}
+
+/** Which of `rows` have an existing record `actor` may hand to Kiln. */
+export const adoptableWebHostnamesEffect = Effect.fn(
+  "webHostnames.adoptable"
+)(function* (rows: ReadonlyArray<WebHostname>, actor: DomainActor) {
+  const candidates = rows.filter(
+    (row) => row.status === "external" && row.existingRecord !== null
+  )
+  const adoptable = new Set<string>()
+  for (const connectionId of new Set(candidates.map((row) => row.connectionId))) {
+    const connection = yield* loadDomainConnectionEffect(connectionId)
+    if (!connection || !mayAdoptRecords(connection.connection.ownerId, actor)) {
+      continue
+    }
+    for (const row of candidates) {
+      if (row.connectionId === connectionId) adoptable.add(row.id)
+    }
+  }
+  return adoptable
+})
+
 /**
  * Takes over the record Cloudflare already had under a hostname, as its
  * owner confirmed it: the one address record there, `record`, as they saw
@@ -809,11 +836,7 @@ export const adoptExistingWebRecordEffect = Effect.fn(
     Effect.gen(function* () {
       const owner = (yield* loadDomainConnectionEffect(current.connectionId))
         ?.connection.ownerId
-      // A person's own connection, or Kiln's for administrators.
-      if (
-        owner === undefined ||
-        (owner === null ? !input.actor.admin : owner !== input.actor.id)
-      ) {
+      if (owner === undefined || !mayAdoptRecords(owner, input.actor)) {
         return yield* DomainConfigurationError.make({
           message:
             "Only the owner of this domain's Cloudflare connection can let Kiln manage its records",
