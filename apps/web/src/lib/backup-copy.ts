@@ -1,6 +1,3 @@
-import { request as httpRequest } from "node:http"
-import type { IncomingMessage } from "node:http"
-import { request as httpsRequest } from "node:https"
 import type { Readable } from "node:stream"
 
 import { Cause, Effect } from "effect"
@@ -19,21 +16,12 @@ import {
   putS3BackupObject,
   withS3BackupObject,
 } from "@/backups/destinations/s3"
-import { relayControlEndpoint } from "@/lib/relay-control-endpoint"
-import {
-  openRelayTunnel,
-  relayReachedThroughTunnel,
-} from "@/lib/relay-tunnel.server"
+import { requestRelayBackup } from "@/lib/relay-backup-request.server"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
-import {
-  listPersistedRelays,
-  loadRelayCredentials,
-  type PersistedRelay,
-} from "@/lib/relay-registry"
+import { listPersistedRelays, loadRelayCredentials } from "@/lib/relay-registry"
 
 let copyWorkerRunning = false
 let copyWorkerRequested = false
-const BACKUP_COPY_IDLE_TIMEOUT_MS = 60_000
 
 export function scheduleBackupCopyProcessing(): void {
   copyWorkerRequested = true
@@ -242,51 +230,6 @@ const localBackupCopySourceEffect = Effect.fn("backups.localCopySource")(
     }
   }
 )
-
-// Reaches the Relay as Hearth does for anything else: through a tunnel when
-// the Relay dials it, which already speaks TLS to its listener when that
-// needs it, else at its listener.
-async function requestRelayBackup(
-  relay: PersistedRelay,
-  caCertificatePem: string | null,
-  path: string,
-  signal: AbortSignal
-): Promise<IncomingMessage> {
-  const endpoint = relayControlEndpoint(relay)
-  const tunnel = relayReachedThroughTunnel(relay.id)
-    ? await openRelayTunnel(relay)
-    : null
-  const useTls = endpoint.useTls && !tunnel
-  const url = new URL(
-    path,
-    `${useTls ? "https" : "http"}://${formatHost(endpoint.hostname)}:${endpoint.port}`
-  )
-  const request = useTls ? httpsRequest : httpRequest
-  return new Promise((resolve, reject) => {
-    const outgoing = request(
-      url,
-      {
-        ca: useTls ? (caCertificatePem ?? undefined) : undefined,
-        ...(tunnel ? { createConnection: () => tunnel } : {}),
-        method: "GET",
-        rejectUnauthorized: useTls,
-        signal,
-      },
-      resolve
-    )
-    outgoing.once("error", reject)
-    outgoing.setTimeout(BACKUP_COPY_IDLE_TIMEOUT_MS, () => {
-      outgoing.destroy(new Error("The backup copy stopped making progress"))
-    })
-    outgoing.end()
-  })
-}
-
-function formatHost(hostname: string): string {
-  return hostname.includes(":") && !hostname.startsWith("[")
-    ? `[${hostname}]`
-    : hostname
-}
 
 function uploadBackupCopyEffect(
   task: ClaimedBackupCopyTask,
