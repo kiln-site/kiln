@@ -696,17 +696,17 @@ class RelayConnection {
     const reported = snapshot.relay?.browserOrigin
     if (!reported) return
     const relayId = this.#relay.id
-    forkAppEffect(
-      "relay.browserOrigin.remember",
-      promiseEffect(async () => {
+    forkPromise(
+      async () => {
         const { rememberRelayBrowserOrigin } =
           await import("@/lib/relay-registry")
         await rememberRelayBrowserOrigin(relayId, new URL(reported).origin)
-      }).pipe(
-        Effect.catchCause((cause) =>
+      },
+      (cause) => {
+        Effect.runFork(
           Effect.logWarning("Couldn't save the Relay's browser origin", cause)
         )
-      )
+      }
     )
   }
 

@@ -4,10 +4,13 @@ import { TestClock } from "effect/testing"
 import { afterAll, beforeEach, vi } from "vite-plus/test"
 
 import { disposeAppRuntime } from "@/effect/runtime"
-import { loadPersistedRelay } from "@/lib/relay-registry"
+import {
+  loadPersistedRelay,
+  rememberRelayBrowserOrigin,
+} from "@/lib/relay-registry"
 import { tryRelayPublicRoute } from "@/server/relay-public-route.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRelay } from "@/test/seed"
+import { insertRelay, selectRows } from "@/test/seed"
 
 const relayId = "r".repeat(43)
 const relayHost = "203.0.113.7"
@@ -126,6 +129,23 @@ describeMysql("Looking for a Relay's public route", () => {
         })
         assert.deepStrictEqual(relay.steps, ["start"])
         assert.deepStrictEqual(route.reads, [])
+      })
+    )
+
+    // A Relay can move while Hearth is away, which leaves only its report.
+    it.effect("follows where a connected Relay says browsers reach it", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay(relayId, {
+          browser_origin: `https://${relayHost}:4100`,
+        })
+
+        yield* Effect.promise(() =>
+          rememberRelayBrowserOrigin(relayId, `https://${relayHost}`)
+        )
+
+        const [row] = yield* selectRows<{ browser_origin: string }>("relay")
+        assert.strictEqual(row?.browser_origin, `https://${relayHost}`)
       })
     )
 

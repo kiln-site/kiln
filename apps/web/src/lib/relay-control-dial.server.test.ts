@@ -24,7 +24,6 @@ vi.mock("@/lib/relay-registry", () => ({
   listPersistedRelays: vi.fn(async () => []),
   loadPersistedRelay: vi.fn(),
   loadRelayCredentials: vi.fn(),
-  rememberRelayBrowserOrigin: vi.fn(async () => undefined),
 }))
 vi.mock("@/lib/sftp-authorization", () => ({
   resolveSftpAuthorization: vi.fn(),
@@ -51,11 +50,7 @@ import {
 import type { RelayEndpoint } from "@/lib/relay-control-endpoint"
 import { handleRelayControlUpgrade } from "@/lib/relay-control-dial.server"
 import { openRelayTunnel } from "@/lib/relay-tunnel.server"
-import {
-  loadPersistedRelay,
-  loadRelayCredentials,
-  rememberRelayBrowserOrigin,
-} from "@/lib/relay-registry"
+import { loadPersistedRelay, loadRelayCredentials } from "@/lib/relay-registry"
 
 const relayId = "relay-control-dial-test"
 const relayKeys = generateKeyPairSync("ed25519")
@@ -140,22 +135,6 @@ it("refuses a challenge it didn't ask for, and a Relay it doesn't know", async (
   const unknown = await dialHearth()
   await expect(advanceUntil(unknown.closed)).resolves.toBe(
     relayDialCloseCodes.unknownRelay
-  )
-})
-
-// A Relay can move while Hearth is away, which leaves only this to tell it.
-it("keeps where a connecting Relay says browsers reach it", async () => {
-  relayAt(await closedPort(), "relay")
-  const dialing = await dialHearth()
-  await dialing.authenticate()
-  await advanceUntil(until(() => relayConnectionOpener(relayId) === "relay"))
-
-  await advanceUntil(
-    until(() => vi.mocked(rememberRelayBrowserOrigin).mock.calls.length > 0)
-  )
-  expect(rememberRelayBrowserOrigin).toHaveBeenCalledWith(
-    relayId,
-    "https://203.0.113.7"
   )
 })
 
@@ -354,14 +333,7 @@ function snapshotEvent() {
   return {
     event: "relay.snapshot",
     id: randomUUID(),
-    payload: {
-      ...snapshot,
-      relay: {
-        browserOrigin: "https://203.0.113.7",
-        id: "r".repeat(43),
-        name: "Test Relay",
-      },
-    },
+    payload: snapshot,
     seq: 1,
     type: "event",
     v: 1,
