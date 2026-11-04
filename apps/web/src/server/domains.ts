@@ -96,8 +96,6 @@ const releaseWebHostnameInputSchema = z.object({ id: domainIdSchema })
 
 const adoptWebHostnameRecordInputSchema = z.object({
   id: domainIdSchema,
-  /** Whether the record goes through Cloudflare's proxy once Kiln has it. */
-  proxied: z.boolean(),
   /** The record as the person saw it and agreed to hand it over. */
   record: z.object({
     content: z.string().max(255),
@@ -276,11 +274,17 @@ export interface ResourceWebHostnames {
 
 /** A web hostname as a game server's or app's network page shows it. */
 export interface ResourceWebHostname {
+  /** Its existing record can be handed to Kiln by this person. */
+  canAdopt: boolean
   canRelease: boolean
+  /** The record `canAdopt` would hand over. */
+  existingRecord: WebHostnameOverview["existingRecord"]
   generated: boolean
   hostname: string
   id: string
   lastError: string | null
+  /** The record `canAdopt` would hand over already points at the Relay. */
+  pointsAtRelay: boolean
   /** Through Cloudflare's proxy; null when Kiln doesn't know. */
   proxied: boolean | null
   status: Exclude<WebHostnameOverview["status"], "manual">

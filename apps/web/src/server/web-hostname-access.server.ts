@@ -38,6 +38,7 @@ import {
   pendingWebCertificates,
 } from "@/server/web-certificates.server"
 import {
+  adoptableWebHostnamesEffect,
   adoptExistingWebRecordEffect,
   deleteResourceWebHostnamesEffect,
   generateAppHostnameEffect,
@@ -90,16 +91,27 @@ export async function getResourceWebHostnamesHandler(
     "webHostnames.resource",
     listResourceWebHostnamesEffect(data)
   )
+  const adoptable = canChange
+    ? await runAppEffect(
+        "webHostnames.adoptable",
+        adoptableWebHostnamesEffect(rows, domainActor(user))
+      )
+    : new Map<string, boolean>()
   return {
     canChange,
     certificates: pendingWebCertificates(data),
     hostnames: rows.map((row) => ({
+      canAdopt: adoptable.has(row.id),
       // Only an app's generated address no route uses.
       canRelease: canChange && row.generated && !row.routed,
+      // Only to someone who can take it over: what's at the name otherwise
+      // isn't this page's to show.
+      existingRecord: adoptable.has(row.id) ? row.existingRecord : null,
       generated: row.generated,
       hostname: row.hostname,
       id: row.id,
       lastError: row.lastError,
+      pointsAtRelay: adoptable.get(row.id) ?? false,
       proxied: webHostnameProxied(row),
       status: row.status,
     })),
@@ -220,7 +232,6 @@ const adoptRecord = operation<AdoptWebHostnameRecordInput>()({
   run: ({ context: { actor, row }, input }) =>
     adoptExistingWebRecordEffect(row, {
       actor,
-      proxied: input.proxied,
       record: input.record,
     }).pipe(
       Effect.map((after) => ({

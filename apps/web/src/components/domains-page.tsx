@@ -50,6 +50,7 @@ import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { InfoCopyValue, InfoRailCard } from "@/components/info-page"
 import { HearthMark } from "@/components/hearth-mark"
 import { InfraSyncButton } from "@/components/infra-sync-button"
+import { AdoptRecordButton } from "@/components/web-hostname-dns"
 import { InstanceCard } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
 import {
@@ -371,6 +372,7 @@ export const DomainsPage = React.memo(function DomainsPage({
           <AdoptRecordDialog
             key={dialog.hostname.id}
             hostname={dialog.hostname}
+            resource={webResourceRef(dialog.hostname)}
             onOpenChange={closeDialog}
           />
         ) : null}
@@ -892,9 +894,7 @@ const DomainsTable = React.memo(function DomainsTable({
         id: "status",
         header: () => <span className="sr-only sm:not-sr-only">Status</span>,
         sortFn: "text",
-        cell: ({ row }) => (
-          <DomainStatusCell row={row.original} onDialog={onDialog} />
-        ),
+        cell: ({ row }) => <DomainStatusCell row={row.original} />,
         meta: dataTableColumnMeta(
           { width: { base: "2.5rem", sm: statusColumnWidth } },
           {
@@ -1023,10 +1023,8 @@ function proxyLabel(row: DomainRow): string {
 // A web hostname still waiting on its certificate checks again when clicked,
 // for whoever may change its route.
 const DomainStatusCell = React.memo(function DomainStatusCell({
-  onDialog,
   row,
 }: {
-  onDialog: (dialog: DomainDialog) => void
   row: DomainRow
 }) {
   const certificate =
@@ -1041,18 +1039,7 @@ const DomainStatusCell = React.memo(function DomainStatusCell({
       />
     )
   }
-  // An existing record Kiln may take over offers to, when clicked.
-  const adoptable = row.kind === "web" && row.hostname.canAdopt
-  return (
-    <StatusIndicator
-      status={rowStatus(row)}
-      onActivate={
-        adoptable
-          ? () => onDialog({ hostname: row.hostname, kind: "adopt" })
-          : undefined
-      }
-    />
-  )
+  return <StatusIndicator status={rowStatus(row)} />
 })
 
 function webResourceRef(hostname: WebHostnameOverview) {
@@ -1189,9 +1176,18 @@ const DomainRowActions = React.memo(function DomainRowActions({
   const hostname = rowHostname(row)
   const zoneName =
     row.kind === "server" ? row.domain.zoneName : row.hostname.zoneName
+  // An address no route uses keeps its delete button: nothing else removes it.
+  const adoptable =
+    row.kind === "web" && row.hostname.canAdopt && row.hostname.routed
   return (
     <DataTableActionGroup>
-      {row.kind === "server" ? (
+      {row.kind === "web" && adoptable ? (
+        <AdoptRecordButton
+          compact
+          hostname={hostname}
+          onClick={() => onDialog({ hostname: row.hostname, kind: "adopt" })}
+        />
+      ) : row.kind === "server" ? (
         <RowActionButton
           disabledReason={
             !row.domain.canManage
@@ -1226,21 +1222,23 @@ const DomainRowActions = React.memo(function DomainRowActions({
           <TooltipContent side="bottom">Edit web routes</TooltipContent>
         </Tooltip>
       )}
-      <RowActionButton
-        destructive
-        disabledReason={deleteDisabledReason(row)}
-        label={`Delete ${hostname}`}
-        tooltip="Delete"
-        onClick={() =>
-          onDialog(
-            row.kind === "server"
-              ? { domain: row.domain, kind: "delete" }
-              : { hostname: row.hostname, kind: "release" }
-          )
-        }
-      >
-        <Trash2 />
-      </RowActionButton>
+      {adoptable ? null : (
+        <RowActionButton
+          destructive
+          disabledReason={deleteDisabledReason(row)}
+          label={`Delete ${hostname}`}
+          tooltip="Delete"
+          onClick={() =>
+            onDialog(
+              row.kind === "server"
+                ? { domain: row.domain, kind: "delete" }
+                : { hostname: row.hostname, kind: "release" }
+            )
+          }
+        >
+          <Trash2 />
+        </RowActionButton>
+      )}
       {zoneName ? (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1400,7 +1398,7 @@ function hostnameStatusPresentation(
   if (hostname.status === "external") {
     return {
       detail: hostname.canAdopt
-        ? "Cloudflare already has a record Kiln didn't create.\nClick to let Kiln manage it."
+        ? "Cloudflare already has a record Kiln didn't create."
         : (hostname.lastError ?? undefined),
       label: "Existing record",
       tone: "warning",

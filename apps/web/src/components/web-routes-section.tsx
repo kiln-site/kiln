@@ -43,6 +43,8 @@ import {
 } from "@/components/web-route-dialog"
 import { WebCertificateStatus } from "@/components/web-certificate-status"
 import {
+  AdoptRecordButton,
+  useAdoptableWebHostnames,
   useWebHostnameProxied,
   WebHostnameDnsStatus,
   type WebHostnameResourceRef,
@@ -54,6 +56,11 @@ import {
 } from "@/lib/data-table"
 import type { DataTableSource } from "@/lib/data-table-source"
 import { forkPromise } from "@/effect/promise"
+import type { ResourceWebHostname } from "@/server/domains"
+
+const AdoptRecordDialog = React.lazy(async () => ({
+  default: (await import("@/components/domains-dialogs")).AdoptRecordDialog,
+}))
 
 // A route as this section edits it: an app's names the service it reaches.
 export type WebRouteRow = RelayInstanceWebRouteInput & {
@@ -106,7 +113,11 @@ export function WebRoutesSection({
   const [editing, setEditing] = React.useState<
     { mode: "add" } | { mode: "edit"; route: DisplayedRoute } | null
   >(null)
+  const [adopting, setAdopting] = React.useState<ResourceWebHostname | null>(
+    null
+  )
   const proxiedFor = useWebHostnameProxied(dnsResource)
+  const adoptable = useAdoptableWebHostnames(dnsResource)
   const save = useMutation({
     mutationFn: async ({
       proxy,
@@ -282,6 +293,7 @@ export function WebRoutesSection({
         </div>
       </div>
       <WebRoutesTable
+        adoptable={adoptable}
         canWrite={canWrite}
         disabled={busy}
         dnsResource={dnsResource}
@@ -292,6 +304,7 @@ export function WebRoutesSection({
         services={services}
         showPrimary={showPrimary}
         onAdd={canWrite ? () => setEditing({ mode: "add" }) : undefined}
+        onAdopt={setAdopting}
         onEdit={edit}
         onMakePrimary={makePrimary}
         onRemove={remove}
@@ -332,6 +345,18 @@ export function WebRoutesSection({
           }}
         />
       ) : null}
+      {adopting ? (
+        <React.Suspense fallback={null}>
+          <AdoptRecordDialog
+            key={adopting.id}
+            hostname={adopting}
+            resource={dnsResource}
+            onOpenChange={(open) => {
+              if (!open) setAdopting(null)
+            }}
+          />
+        </React.Suspense>
+      ) : null}
     </section>
   )
 }
@@ -345,6 +370,7 @@ function withPrimary(routes: Array<WebRouteRow>): Array<WebRouteRow> {
 const columnHelper = createDataTableColumnHelper<DisplayedRoute>()
 
 const WebRoutesTable = React.memo(function WebRoutesTable({
+  adoptable,
   canWrite,
   disabled,
   dnsResource,
@@ -355,10 +381,12 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
   services,
   showPrimary,
   onAdd,
+  onAdopt,
   onEdit,
   onMakePrimary,
   onRemove,
 }: {
+  adoptable: ReadonlyArray<ResourceWebHostname>
   canWrite: boolean
   disabled: boolean
   dnsResource: WebHostnameResourceRef
@@ -369,6 +397,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
   services: ReadonlyArray<WebRouteServiceOption> | undefined
   showPrimary: boolean
   onAdd?: () => void
+  onAdopt: (hostname: ResourceWebHostname) => void
   onEdit: (route: DisplayedRoute) => void
   onMakePrimary: (route: DisplayedRoute) => void
   onRemove: (route: DisplayedRoute) => void
@@ -445,16 +474,25 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
             enableSorting: false,
             cell: ({ row }) => (
               <RouteActions
+                adoptable={adoptable.find(
+                  (hostname) => hostname.hostname === row.original.hostname
+                )}
                 canWrite={canWrite}
                 disabled={disabled}
                 pending={pending && row.original.id === undefined}
                 route={row.original}
+                onAdopt={onAdopt}
                 onEdit={onEdit}
                 onRemove={onRemove}
               />
             ),
             meta: dataTableColumnMeta(
-              { width: "5.5rem" },
+              {
+                width:
+                  adoptable.length > 0
+                    ? { base: "5.5rem", sm: "11.5rem" }
+                    : "5.5rem",
+              },
               { cellClassName: "px-2", headerClassName: "px-2" }
             ),
           }),
@@ -462,9 +500,11 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
         getRowId: (route) => route.rowId,
       }),
     [
+      adoptable,
       canWrite,
       disabled,
       dnsResource,
+      onAdopt,
       onEdit,
       onMakePrimary,
       onRemove,
@@ -663,17 +703,22 @@ function routeDestination(
 }
 
 const RouteActions = React.memo(function RouteActions({
+  adoptable,
   canWrite,
   disabled,
   pending,
   route,
+  onAdopt,
   onEdit,
   onRemove,
 }: {
+  // Its hostname's existing record, when this person can hand it to Kiln.
+  adoptable: ResourceWebHostname | undefined
   canWrite: boolean
   disabled: boolean
   pending: boolean
   route: DisplayedRoute
+  onAdopt: (hostname: ResourceWebHostname) => void
   onEdit: (route: DisplayedRoute) => void
   onRemove: (route: DisplayedRoute) => void
 }) {
@@ -688,6 +733,17 @@ const RouteActions = React.memo(function RouteActions({
         >
           <LoaderCircle className="size-4 animate-spin" />
         </span>
+      </DataTableActionGroup>
+    )
+  }
+  if (adoptable) {
+    return (
+      <DataTableActionGroup>
+        <AdoptRecordButton
+          disabled={disabled}
+          hostname={adoptable.hostname}
+          onClick={() => onAdopt(adoptable)}
+        />
       </DataTableActionGroup>
     )
   }

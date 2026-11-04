@@ -2,6 +2,7 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { CircleAlert, CircleCheck, LoaderCircle } from "lucide-react"
 
+import { Button } from "@workspace/ui/components/button"
 import {
   Tooltip,
   TooltipContent,
@@ -77,6 +78,68 @@ export const WebHostnameDnsStatus = React.memo(function WebHostnameDnsStatus({
       {status}
       <CloudflareProxyStatus iconOnly proxied={row.proxied} />
     </span>
+  )
+})
+
+/** The hostnames whose existing record this person can hand to Kiln. */
+export function useAdoptableWebHostnames(
+  resource: WebHostnameResourceRef
+): ReadonlyArray<ResourceWebHostname> {
+  const { data } = useQuery({
+    ...resourceWebHostnamesQueryOptions(
+      resource.relayId,
+      resource.resourceType,
+      resource.resourceId
+    ),
+    select: selectAdoptable,
+  })
+  return data ?? noHostnames
+}
+
+const noHostnames: ReadonlyArray<ResourceWebHostname> = []
+
+function selectAdoptable({ hostnames }: ResourceWebHostnames) {
+  return hostnames.filter((row) => row.canAdopt)
+}
+
+/** Offers to hand a hostname's existing record to Kiln, in a row's actions. */
+export const AdoptRecordButton = React.memo(function AdoptRecordButton({
+  compact = false,
+  disabled,
+  hostname,
+  onClick,
+}: {
+  /** Just "Manage", where the row has no room for more. */
+  compact?: boolean
+  disabled?: boolean
+  hostname: string
+  onClick: () => void
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          aria-label={`Allow Kiln to manage the record for ${hostname}`}
+          disabled={disabled}
+          size="xs"
+          type="button"
+          variant="outline"
+          onClick={onClick}
+        >
+          {compact ? (
+            "Manage"
+          ) : (
+            <>
+              <span className="sm:hidden">Manage</span>
+              <span className="max-sm:hidden">Allow Kiln to manage</span>
+            </>
+          )}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        Allow Kiln to manage this record
+      </TooltipContent>
+    </Tooltip>
   )
 })
 

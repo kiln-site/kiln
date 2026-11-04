@@ -4,7 +4,6 @@ import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Effect, Fiber, Result } from "effect"
 import {
-  ArrowDown,
   ArrowLeft,
   Check,
   ChevronDown,
@@ -46,12 +45,11 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
-import { CloudflareProxyStatus } from "@/components/cloudflare-proxy-status"
+import type { WebHostnameResourceRef } from "@/components/web-hostname-dns"
 import {
   domainHostname,
   errorMessage,
   type DomainConnectionOverview,
-  type DomainSettings,
   type VanityDomainChoice,
 } from "@/components/domains-shared"
 import {
@@ -61,7 +59,7 @@ import {
   validateBlacklistPatterns,
   vanityLabelSchema,
 } from "@/lib/domain-schemas"
-import { domainSettingsQueryOptions, queryKeys } from "@/lib/query-options"
+import { queryKeys, resourceWebHostnamesQueryOptions } from "@/lib/query-options"
 import {
   adoptWebHostnameRecord,
   createInstanceDomain,
@@ -73,6 +71,7 @@ import {
   updateInstanceDomain,
   type DiscoveredCloudflareZone,
   type ManagedDomainOverview,
+  type ResourceWebHostnames,
   type WebHostnameOverview,
 } from "@/server/domains"
 
@@ -1182,31 +1181,38 @@ export function ReleaseHostnameDialog({
  * hostname: it points it at the Relay and deletes it with the route.
  */
 export function AdoptRecordDialog({
-  hostname: opened,
+  hostname,
   onOpenChange,
+  resource,
 }: {
-  hostname: WebHostnameOverview
+  hostname: Pick<WebHostnameOverview, "existingRecord" | "hostname" | "id">
   onOpenChange: (open: boolean) => void
+  resource: WebHostnameResourceRef
 }) {
   const queryClient = useQueryClient()
   // As last read: a refused attempt reads the record again.
   const selectLatest = React.useCallback(
-    (settings: DomainSettings) =>
-      settings.webHostnames.find((row) => row.id === opened.id),
-    [opened.id]
+    ({ hostnames }: ResourceWebHostnames) =>
+      hostnames.find((row) => row.id === hostname.id) ?? null,
+    [hostname.id]
   )
-  const { data: latest } = useQuery({
-    ...domainSettingsQueryOptions(),
+  const { data: latest, error: loadError } = useQuery({
+    ...resourceWebHostnamesQueryOptions(
+      resource.relayId,
+      resource.resourceType,
+      resource.resourceId
+    ),
     select: selectLatest,
   })
-  const hostname = latest ?? opened
-  const record = hostname.status === "external" ? hostname.existingRecord : null
-  const [proxied, setProxied] = React.useState(record?.proxied ?? false)
+  const record =
+    latest === undefined
+      ? hostname.existingRecord
+      : (latest?.existingRecord ?? null)
   const adopt = useMutation({
     mutationFn: () => {
       if (!record) throw new Error("There's no record to take over")
       return adoptWebHostnameRecord({
-        data: { id: hostname.id, proxied, record },
+        data: { id: hostname.id, record },
       })
     },
     // A refusal reads the record again, so the dialog shows what's there.
@@ -1228,58 +1234,28 @@ export function AdoptRecordDialog({
     <Dialog open onOpenChange={adopt.isPending ? undefined : onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Let Kiln manage this record</DialogTitle>
+          <DialogTitle>Allow Kiln to manage this record?</DialogTitle>
           <DialogDescription>
-            Cloudflare already has a record for{" "}
-            <span className="font-mono">{hostname.hostname}</span> that Kiln
-            didn't create. Kiln will point it at {hostname.relayName}, keep it
-            in step with the route, and delete it when the route is removed.
+            {latest === undefined
+              ? "\u00A0"
+              : !record
+                ? "Kiln can't take over this record anymore."
+                : latest?.pointsAtRelay
+                  ? "It already points at the Relay. Kiln will keep it updated and delete it with the route."
+                  : "Kiln will point it at the Relay and delete it with the route."}
           </DialogDescription>
         </DialogHeader>
-        {record ? (
-          <div className="grid gap-2 text-xs">
-            <div className="grid gap-1 border border-border/80 bg-muted/30 px-3 py-2">
-              <span className="type-technical-label text-muted-foreground">
-                Now
-              </span>
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="font-mono font-medium">{record.type}</span>
-                <span className="min-w-0 flex-1 truncate font-mono">
-                  {record.content}
-                </span>
-                <CloudflareProxyStatus proxied={record.proxied} />
-              </span>
-            </div>
-            <ArrowDown
-              aria-hidden
-              className="mx-auto size-3.5 text-muted-foreground"
-            />
-            <div className="grid gap-1 border border-primary/30 bg-primary/5 px-3 py-2">
-              <span className="type-technical-label text-primary-ink">
-                Managed by Kiln
-              </span>
-              <span className="min-w-0 truncate">
-                Points at the Relay {hostname.relayName}
-              </span>
-            </div>
-          </div>
-        ) : null}
-        <label className="flex items-center justify-between gap-4">
-          <span className="min-w-0">
-            <span className="type-label block">Proxy through Cloudflare</span>
-            <span className="type-meta block text-muted-foreground">
-              {proxied
-                ? "Visitors reach the Relay through Cloudflare"
-                : "DNS only: visitors reach the Relay directly"}
-            </span>
+        <div className="flex min-w-0 items-baseline justify-between gap-4">
+          <span className="truncate text-sm font-medium">
+            {hostname.hostname}
           </span>
-          <Switch
-            aria-label="Proxy through Cloudflare"
-            checked={proxied}
-            disabled={adopt.isPending}
-            onCheckedChange={setProxied}
-          />
-        </label>
+          {record ? (
+            <span className="type-code truncate text-muted-foreground">
+              {record.content}
+            </span>
+          ) : null}
+        </div>
+        {loadError ? <ConfigurationError error={loadError} /> : null}
         {adopt.error ? <ConfigurationError error={adopt.error} /> : null}
         <DialogFooter>
           <Button
@@ -1291,12 +1267,12 @@ export function AdoptRecordDialog({
             Cancel
           </Button>
           <Button
-            disabled={adopt.isPending || !record}
+            disabled={adopt.isPending || !record || latest === undefined}
             type="button"
             onClick={() => adopt.mutate()}
           >
             {adopt.isPending ? <LoaderCircle className="animate-spin" /> : null}
-            Let Kiln manage it
+            Allow
           </Button>
         </DialogFooter>
       </DialogContent>
