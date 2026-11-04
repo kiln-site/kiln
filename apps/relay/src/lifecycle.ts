@@ -2275,6 +2275,7 @@ export class LifecycleDriver {
         if (usesExternalEdge && routes.length > 0) {
           await this.#ensureEdgeNetwork()
         }
+        const limits = await this.#pendingLimitsThatFit(instance)
         const updated = await this.#docker.recreateOwnedInstance(
           instance,
           routeLabels,
@@ -2288,8 +2289,10 @@ export class LifecycleDriver {
               ...portAllocationContainerLabels(allocations),
               "kiln.traefik.service.port": String(primary.internalPort),
             },
-          }
+          },
+          limits
         )
+        if (limits) await this.#docker.setPendingLimits(instance.id, null)
         await this.reattachTailscaleMember(
           instanceTailscaleMemberId(instance.id)
         )
@@ -2548,6 +2551,22 @@ export class LifecycleDriver {
       tailscale: input.tailscale ?? { enabled: false },
       variables: input.variables,
     })
+  }
+
+  // Limits saved for a container being replaced anyway. A disk limit its
+  // files have since outgrown keeps waiting, for the start that says so.
+  async #pendingLimitsThatFit(
+    instance: RelayInstanceConfig
+  ): Promise<ResourceLimits | undefined> {
+    const limits = await this.#docker.pendingLimits(instance.id)
+    if (!limits) return undefined
+    if (limits.diskBytes === null) return limits
+    const usedBytes = await runLifecycle(
+      directoryApparentSizeEffect(
+        join(this.#config.rootDirectory, instance.directory)
+      )
+    )
+    return usedBytes > limits.diskBytes ? undefined : limits
   }
 
   /**

@@ -13,8 +13,6 @@ import {
 import type { ResourceLimitDraft } from "@/lib/resource-limits"
 
 export type ResourceLimitUnit = LimitScale & {
-  /** Whether the limit takes fractions, as GiB do; else whole units. */
-  decimals: boolean
   label: string
   /** Shown units per stored unit, as percent per core. */
   scale: number
@@ -149,7 +147,7 @@ function ResourceLimitInput({
   onChange,
   onNudge,
   shown,
-  unit: { decimals, label, scale, spoken, unit },
+  unit: { label, scale, spoken, unit },
   value,
 }: {
   disabled: boolean
@@ -161,6 +159,9 @@ function ResourceLimitInput({
   unit: ResourceLimitUnit
   value: ResourceLimitDraft
 }) {
+  // What's being typed, as typed: read back from the draft, a percent's
+  // `12.` would lose its point before the `5` arrives.
+  const [typing, setTyping] = React.useState<string | null>(null)
   return (
     <label className="relative order-2 sm:order-3">
       <Input
@@ -171,19 +172,19 @@ function ResourceLimitInput({
           value.limited ? "pr-9" : "pr-2"
         )}
         disabled={disabled}
-        inputMode={decimals ? "decimal" : "numeric"}
+        inputMode="decimal"
         value={
-          !value.limited
+          typing ??
+          (!value.limited
             ? "No limit"
             : scale === 1 || shown === null
               ? value.value
-              : String(shown)
+              : String(shown))
         }
+        onBlur={() => setTyping(null)}
         onChange={(event) => {
-          const typed = event.currentTarget.value.replace(
-            decimals ? /[^\d.]/gu : /\D/gu,
-            ""
-          )
+          const typed = event.currentTarget.value.replace(/[^\d.]/gu, "")
+          setTyping(typed)
           onChange({
             limited: true,
             value:
@@ -196,6 +197,7 @@ function ResourceLimitInput({
         onKeyDown={(event) => {
           if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return
           event.preventDefault()
+          setTyping(null)
           onNudge(event.key === "ArrowUp")
         }}
       />
@@ -208,21 +210,17 @@ function ResourceLimitInput({
   )
 }
 
-// The limit in the units shown, null while it isn't a number, and rounded
-// as it's shown, so typing into a fraction can't run its digits together.
+// The limit in the units shown, null while it isn't a number.
 function limitValue(
   { limited, value }: ResourceLimitDraft,
-  { decimals, scale }: ResourceLimitUnit
+  { scale }: ResourceLimitUnit
 ) {
   const stored = Number(value)
   if (!limited || value.trim() === "" || !Number.isFinite(stored)) {
     return { current: null, shown: null }
   }
   const current = stored * scale
-  return {
-    current,
-    shown: decimals ? Number(current.toFixed(2)) : Math.round(current),
-  }
+  return { current, shown: Number(current.toFixed(2)) }
 }
 
 function spokenLimit(
@@ -234,8 +232,8 @@ function spokenLimit(
   return shown === null ? "Not set" : `${shown} ${spoken}`
 }
 
-function formatValue(value: number, { decimals, unit }: ResourceLimitUnit) {
-  const number = decimals ? Number(value.toFixed(2)) : Math.round(value)
+function formatValue(value: number, { unit }: ResourceLimitUnit) {
+  const number = Number(value.toFixed(2))
   return unit === "%" ? `${number}%` : `${number} ${unit}`
 }
 

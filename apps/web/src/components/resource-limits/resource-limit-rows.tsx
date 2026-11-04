@@ -18,7 +18,6 @@ import type {
 const GIBIBYTE = 1024 ** 3
 
 const MEMORY: ResourceLimitUnit = {
-  decimals: true,
   fallbackMax: 16,
   label: "Memory",
   min: 0.25,
@@ -29,7 +28,6 @@ const MEMORY: ResourceLimitUnit = {
 }
 
 const CPU: ResourceLimitUnit = {
-  decimals: false,
   fallbackMax: 400,
   label: "CPU",
   min: 10,
@@ -40,7 +38,6 @@ const CPU: ResourceLimitUnit = {
 }
 
 const DISK: ResourceLimitUnit = {
-  decimals: true,
   fallbackMax: 100,
   label: "Disk",
   min: 1,

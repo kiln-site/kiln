@@ -3573,6 +3573,7 @@ async function executeControlRequest(
           "relay.instance.deletePreparedName",
           startup.state.deleteInstanceName(instanceId)
         )
+        await docker.setPendingLimits(instanceId, null)
         await resourceFreezes.forget("instance", instanceId)
         return { deleted: true, instanceId }
       }
