@@ -87,18 +87,20 @@ curl -fsSL https://kiln.site/install | sh -s -- --join 'https://kiln.example.com
 ```
 
 The link carries Hearth's address and a code that lasts 30 minutes (**New
-command** in the dialog makes another and retires the old). When ports 80
-and 443 are free, the Relay runs its own Traefik on them, like a platform
-install, and Kiln reaches it at `https://<public IP>` with a Let's Encrypt
-certificate (the six-day one for an IP address). Apps on that machine get
-their domains and HTTPS from the same Traefik. The installer waits for the
-certificate before the Relay announces itself to Hearth. When Let's Encrypt
-can't reach the machine on port 80, as when a router sends 80 and 443 to
-another machine, the Relay opens no ports at all and connects to Kiln
-instead (below); `--proxy hearth` asks for that from the start. When
-something else already has 80 or 443, or the machine has no curl to check
-HTTPS with, the Relay uses port 4100 and its own certificate: `--proxy
-none` asks for that.
+command** in the dialog makes another and retires the old). The Relay opens
+no ports and connects to Kiln itself (below), so it's added seconds after you
+confirm it, on any network. Once it's added, Kiln looks for
+[a public route](#public-routes), and moves the Relay to one if the internet
+reaches the machine.
+
+To choose instead: `--proxy hearth` keeps the Relay connecting to Kiln and
+never looks for a route. `--proxy traefik` runs the Relay's own Traefik on
+ports 80 and 443 from the start, and the installer waits for its certificate
+before the Relay announces itself. When Let's Encrypt can't reach the machine
+there, the Relay connects to Kiln instead. `--proxy none` uses port 4100 and
+the Relay's own certificate. A Relay release that can't connect to Kiln, or a
+Hearth on `localhost`, gets the choice the installer made before: Traefik when
+ports 80 and 443 are free, else port 4100.
 
 Once the Relay announces itself, the installer prints a link to confirm it
 in Hearth, which opens the dialog on that Relay, and its fingerprint, which
@@ -150,6 +152,42 @@ connection, to open a tunnel back to Hearth for each one, and passes the
 traffic through unchanged. That traffic counts against Hearth's bandwidth.
 Websites and game ports on such a machine still need a port forwarded, or a
 Relay that browsers and players can reach to enter through.
+
+#### Public routes
+
+A Relay that connects to Kiln works anywhere, but its consoles and files
+cross Hearth, and it can't serve App domains or game server web routes. So
+Kiln checks whether the internet reaches a Relay it just added, and the
+**Check for a public route** button on the Relay's page does the same at any
+time, as after forwarding ports. The Relay stays connected through Hearth
+throughout:
+
+1. Its Traefik starts on ports 80 and 443, answering only a random path, and
+   joins the Relay's network to reach it. The Relay itself changes nothing,
+   not even its networks, since joining one can drop its connection to
+   Hearth. A port already in use ends it here.
+2. Hearth asks for that path at the Relay's address from outside. The answer
+   is a secret Hearth gave the Relay over its connection, so anything else
+   that holds port 80 at that address, as another machine on the same router
+   does, fails. Nothing has asked Let's Encrypt for anything yet, so this uses
+   none of its limit on failed validations.
+3. Traefik asks for the Relay's certificate, and Hearth reads the path again
+   over HTTPS, trusting only a public certificate.
+4. The Relay saves Traefik mode and restarts once to change its listener's
+   protocol. Game servers, Apps, and databases keep running. Its control
+   connection doesn't change: it keeps connecting to Hearth, which saves
+   where browsers now reach it when it reconnects.
+
+If any step before the last fails, Traefik is removed and the Relay carries
+on as it was, with no restart. Relays with private addresses aren't tried,
+and neither is one installed with `--proxy hearth` unless someone asks from
+its page. A Relay whose port 4100 is published can't use its Traefik, so it
+needs the install command run again first. Kiln looks once, when the Relay is added, and doesn't look again by
+itself, since moving a Relay restarts it.
+
+Kiln doesn't watch a route afterwards: a Relay whose route stops working
+stays in Traefik mode. Consoles and usage fall back to Hearth; file transfers
+and websites need the route back.
 
 Set `KILN_RELAY_DIAL_URL` on Hearth when Relays should connect to another
 address than `KILN_URL`. Hearth doesn't ask Relays to connect when
@@ -228,23 +266,23 @@ which platform backups and Kiln's updates find them by, plus
 
 Set these on the Relay. Everything else is generated.
 
-| Variable                       | Default                                         | Meaning                                                                                                   |
-| ------------------------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `KILN_URL`                     | Required on first start                         | Where people open Hearth. Saved; later starts may change it.                                              |
-| `KILN_PLATFORM_HEARTH_PORT`    | `3000`                                          | Host port for Hearth                                                                                      |
-| `KILN_PLATFORM_PROXY`          | `none` (Compose: `traefik`; the installer asks) | `traefik` runs Traefik on 80 and 443 for an https `KILN_URL`; `coolify` labels Hearth for Coolify's proxy |
-| `KILN_RELAY_ACME_CA_SERVER`    | Let's Encrypt                                   | Another ACME directory for Traefik, such as Let's Encrypt's staging one                                   |
-| `KILN_PLATFORM_HEARTH_BIND`    | `0.0.0.0`                                       | Host address for Hearth's port                                                                            |
-| `KILN_RELAY_GAME_HOST`         | The host in `KILN_URL`                          | Where players connect to game servers                                                                     |
-| `KILN_PLATFORM_HEARTH_IMAGE`   | Hearth with the Relay's tag                     | First start only; Kiln's updates change it afterwards                                                     |
-| `KILN_PLATFORM_DATABASE_IMAGE` | `mysql:8.4`                                     | First start only; a database engine is never swapped under its data                                       |
-| `KILN_PLATFORM_CACHE_IMAGE`    | `valkey/valkey:9.1.2-alpine`                    | First start only; `none` runs Hearth without a cache                                                      |
-| `KILN_RELAY_RESERVED_MEMORY`   | 1 GiB, or 2 GiB in platform mode                | Memory left for Kiln and the OS, such as `3g`. |
-| `KILN_RELAY_WORKLOAD_MEMORY_LIMIT` | `true`                                       | `false` runs workloads with no shared memory ceiling. |
-| `KILN_RELAY_CONTAINER`         | Found and proven                                | The Relay's own container, where it can't find it (Podman, Docker in Docker)                              |
-| `KILN_INSTALLATION_ID`         | Generated                                       | First start only                                                                                          |
-| `BETTER_AUTH_SECRETS`          | Generated                                       | First start only; for moving an existing Hearth here                                                      |
-| `KILN_PLATFORM_BACKUP_KEY`     | Generated                                       | First start only; encrypts platform backups, and the recovery kit holds it                                |
+| Variable                           | Default                                         | Meaning                                                                                                   |
+| ---------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `KILN_URL`                         | Required on first start                         | Where people open Hearth. Saved; later starts may change it.                                              |
+| `KILN_PLATFORM_HEARTH_PORT`        | `3000`                                          | Host port for Hearth                                                                                      |
+| `KILN_PLATFORM_PROXY`              | `none` (Compose: `traefik`; the installer asks) | `traefik` runs Traefik on 80 and 443 for an https `KILN_URL`; `coolify` labels Hearth for Coolify's proxy |
+| `KILN_RELAY_ACME_CA_SERVER`        | Let's Encrypt                                   | Another ACME directory for Traefik, such as Let's Encrypt's staging one                                   |
+| `KILN_PLATFORM_HEARTH_BIND`        | `0.0.0.0`                                       | Host address for Hearth's port                                                                            |
+| `KILN_RELAY_GAME_HOST`             | The host in `KILN_URL`                          | Where players connect to game servers                                                                     |
+| `KILN_PLATFORM_HEARTH_IMAGE`       | Hearth with the Relay's tag                     | First start only; Kiln's updates change it afterwards                                                     |
+| `KILN_PLATFORM_DATABASE_IMAGE`     | `mysql:8.4`                                     | First start only; a database engine is never swapped under its data                                       |
+| `KILN_PLATFORM_CACHE_IMAGE`        | `valkey/valkey:9.1.2-alpine`                    | First start only; `none` runs Hearth without a cache                                                      |
+| `KILN_RELAY_RESERVED_MEMORY`       | 1 GiB, or 2 GiB in platform mode                | Memory left for Kiln and the OS, such as `3g`.                                                            |
+| `KILN_RELAY_WORKLOAD_MEMORY_LIMIT` | `true`                                          | `false` runs workloads with no shared memory ceiling.                                                     |
+| `KILN_RELAY_CONTAINER`             | Found and proven                                | The Relay's own container, where it can't find it (Podman, Docker in Docker)                              |
+| `KILN_INSTALLATION_ID`             | Generated                                       | First start only                                                                                          |
+| `BETTER_AUTH_SECRETS`              | Generated                                       | First start only; for moving an existing Hearth here                                                      |
+| `KILN_PLATFORM_BACKUP_KEY`         | Generated                                       | First start only; encrypts platform backups, and the recovery kit holds it                                |
 
 These are passed on to Hearth when set on the Relay: `KILN_ENABLE_SIGNUPS`,
 `KILN_MARKETING_URL`, `KILN_SUPER_USER_EMAIL`, `KILN_SUPER_USER_PASSWORD`,

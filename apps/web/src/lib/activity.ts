@@ -230,6 +230,7 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
   }
   if (operation === "relay.rename") return "Renamed a Relay"
   if (operation === "relay.proxy.write") return "Updated Relay proxy settings"
+  if (operation === "relay.proxy.trial") return "Tried a Relay's public route"
   if (operation === "relay.networking.write") {
     return "Updated Relay networking"
   }
@@ -314,7 +315,8 @@ export function activityPermissionForAudit(
   if (
     operation === "relay.tailscale.install" ||
     operation === "relay.tailscale.write" ||
-    operation === "relay.proxy.write"
+    operation === "relay.proxy.write" ||
+    operation === "relay.proxy.trial"
   ) {
     return "relay.configure"
   }

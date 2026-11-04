@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { isIP } from "node:net"
 
-import { webRouteHosts } from "@workspace/contracts"
+import { RELAY_PROXY_TRIAL_PATH, webRouteHosts } from "@workspace/contracts"
 import type {
   RelayInstanceWebRoute,
   RelayProxySettings,
@@ -433,6 +433,95 @@ export function traefikDynamicConfiguration(
   // Clients send no server name for an address, so its certificate has to
   // be the one Traefik answers with by default.
   if (ipHost) {
+    lines.push(
+      "tls:",
+      "  stores:",
+      "    default:",
+      "      defaultGeneratedCert:",
+      "        resolver: kiln-ip",
+      "        domain:",
+      `          main: ${JSON.stringify(ipHost)}`
+    )
+  }
+  lines.push("")
+  return `${lines.join("\n")}\n`
+}
+
+/** Whether this Relay could be reached through the bundled Traefik at all. */
+export function traefikServesRelay(
+  config: Pick<RelayConfig, "advertisedHost" | "platformEdge">,
+  image: string
+): boolean {
+  if (config.platformEdge || !isTraefikHostname(config.advertisedHost)) {
+    return false
+  }
+  return (
+    isIP(config.advertisedHost) === 0 ||
+    traefikIpHost({ ...config, proxyMode: "traefik" }, image) !== null
+  )
+}
+
+/**
+ * What the bundled Traefik serves during a trial of the Relay's public route
+ * (lifecycle.ts): only the trial's own path, on to the Relay's listener at
+ * `upstream`. The listener keeps the protocol it has for Hearth, so Traefik
+ * doesn't check its certificate, on the private network between them. Until `certificate`,
+ * nothing here asks Let's Encrypt for anything, so a route that leads
+ * elsewhere costs no failed validation.
+ */
+export function traefikTrialConfiguration(
+  config: RelayConfig,
+  settings: RelayProxySettings,
+  trial: {
+    readonly certificate: boolean
+    readonly id: string
+    readonly upstream: string
+  }
+): string {
+  const path = `${RELAY_PROXY_TRIAL_PATH}/${trial.id}`
+  const ipHost = traefikIpHost(
+    { ...config, proxyMode: "traefik" },
+    settings.traefikImage
+  )
+  const lines = [
+    "http:",
+    "  routers:",
+    "    kiln-route-trial:",
+    `      rule: ${JSON.stringify(`Path(\`${path}\`)`)}`,
+    "      priority: 1000",
+    "      entryPoints:",
+    "        - web",
+    "      service: kiln-relay",
+  ]
+  if (trial.certificate) {
+    lines.push(
+      "    kiln-route-trial-secure:",
+      `      rule: ${JSON.stringify(
+        `Host(\`${config.advertisedHost}\`) && Path(\`${path}\`)`
+      )}`,
+      "      priority: 1000",
+      "      entryPoints:",
+      "        - websecure",
+      "      service: kiln-relay",
+      "      tls:",
+      `        certResolver: ${ipHost ? "kiln-ip" : "kiln"}`,
+      ...(ipHost
+        ? ["        domains:", `          - main: ${JSON.stringify(ipHost)}`]
+        : [])
+    )
+  }
+  lines.push(
+    "  services:",
+    "    kiln-relay:",
+    "      loadBalancer:",
+    "        serversTransport: kiln-relay",
+    "        servers:",
+    `          - url: ${JSON.stringify(trial.upstream)}`,
+    "  serversTransports:",
+    "    kiln-relay:",
+    "      insecureSkipVerify: true"
+  )
+  if (trial.certificate && ipHost) {
     lines.push(
       "tls:",
       "  stores:",

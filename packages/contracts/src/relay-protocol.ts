@@ -165,6 +165,7 @@ export const relayControlOperations = [
   "relay.proxy.read",
   "relay.proxy.config.read",
   "relay.proxy.write",
+  "relay.proxy.trial",
   "relay.certificates.check",
   "relay.volumes.read",
   "relay.docker.storage",
@@ -322,6 +323,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.tailscale.stack.remove",
   "relay.tailscale.write",
   "relay.proxy.write",
+  "relay.proxy.trial",
   "relay.platform.action",
   "relay.terminal.attach",
   "relay.terminal.restart",
@@ -503,6 +505,7 @@ export function relayControlOperationChanges(
     case "relay.host.files.mount":
     case "relay.host.restart":
     case "relay.proxy.write":
+    case "relay.proxy.trial":
     case "relay.certificates.check":
     case "relay.volumes.create":
     case "relay.volumes.rename":
@@ -642,6 +645,7 @@ export function relayControlDeadlineMs(
   if (operation === "relay.tailscale.stack.dns") return 60_000
   // Proxy and networking writes can pull and start edge containers.
   if (operation === "relay.proxy.write") return 240_000
+  if (operation === "relay.proxy.trial") return 240_000
   if (operation === "relay.networking.write") return 240_000
   if (operation === "relay.tailscale.write") return 90_000
   if (operation === "relay.host.files.mount") return 60_000

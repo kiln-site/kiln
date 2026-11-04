@@ -691,6 +691,25 @@ class RelayConnection {
     return this.#relayDials
   }
 
+  // Once per connection, the first time the Relay says where it is.
+  #rememberBrowserOrigin(snapshot: RelaySnapshot): void {
+    const reported = snapshot.relay?.browserOrigin
+    if (!reported) return
+    const relayId = this.#relay.id
+    forkPromise(
+      async () => {
+        const { rememberRelayBrowserOrigin } =
+          await import("@/lib/relay-registry")
+        await rememberRelayBrowserOrigin(relayId, new URL(reported).origin)
+      },
+      (cause) => {
+        Effect.runFork(
+          Effect.logWarning("Couldn't save the Relay's browser origin", cause)
+        )
+      }
+    )
+  }
+
   prefer(direction: RelayControlDirection): void {
     this.#preference = direction
   }
@@ -1650,6 +1669,7 @@ class RelayConnection {
             this.#hasPushedSnapshot = true
             this.#noticePause(previousSnapshot)
             if (!previousSnapshot) {
+              this.#rememberBrowserOrigin(pushed)
               publishRealtimeChange({
                 relayId: this.#relay.id,
                 type: "relay.snapshot.reset",

@@ -51,6 +51,10 @@ asked=0
 cli=0
 stored=""
 proxy=""
+# "check" has Kiln look for a public route once the Relay is added.
+public_route=""
+# Whether this install may have the Relay connect to Kiln itself by default.
+connects_itself=1
 
 usage() {
   cat <<'EOF'
@@ -708,6 +712,7 @@ start_node_relay() {
     $relay_port --publish "$sftp_port:2022" \
     --env KILN_RELAY_HOST="$relay_host" \
     ${proxy:+--env KILN_RELAY_PROXY="$proxy"} \
+    ${public_route:+--env KILN_RELAY_PUBLIC_ROUTE="$public_route"} \
     ${KILN_ACME_CA_SERVER:+--env KILN_RELAY_ACME_CA_SERVER="$KILN_ACME_CA_SERVER"} \
     ${relay_join:+--env KILN_RELAY_JOIN="$relay_join"} \
     ${namespace:+--env KILN_RELAY_RESOURCE_NAMESPACE="$namespace"} \
@@ -775,6 +780,11 @@ join_hearth() {
   say ""
   say "  ${green}${bold}Relay added$reset ${dim}in $(duration $(($(now) - started_at)))$reset"
   say ""
+  if [ "$public_route" = "check" ]; then
+    say "  ${dim}It connects to Kiln. Kiln moves it to its own HTTPS if the$reset"
+    say "  ${dim}internet can reach this machine.$reset"
+    say ""
+  fi
   say "  ${dim}Install log: $log_file$reset"
   say ""
 }
@@ -847,6 +857,15 @@ choose_node_proxy() {
     proxy=$stored
     return 0
   fi
+  # Joining, the Relay connects to Kiln itself and is added right away, with
+  # no ports opened. Kiln then checks whether the internet reaches this
+  # machine, and moves it to its own HTTPS if it does.
+  if [ -z "$proxy" ] && [ -n "$join" ] && [ "$connects_itself" -eq 1 ] &&
+    ! joins_local_hearth; then
+    proxy=hearth
+    public_route=check
+    return 0
+  fi
   # The installer checks the Relay's HTTPS with curl before it joins.
   if [ "$proxy" = "traefik" ] && ! command -v curl >/dev/null 2>&1; then
     fail "Checking the Relay's HTTPS needs curl. Install curl, or run this again with --proxy none."
@@ -879,6 +898,15 @@ choose_node_proxy() {
   proxy=none
 }
 
+# Whether the join link's Hearth is on this machine, which Kiln never asks a
+# Relay to connect to.
+joins_local_hearth() {
+  case "$join" in
+    *://localhost[:/#]* | *://127.* | *://\[::1\]*) return 0 ;;
+  esac
+  return 1
+}
+
 # The proxy mode a Relay's data here already has, or nothing: read with the
 # Relay's own image, whose entrypoint is Node.
 stored_proxy_mode() {
@@ -896,11 +924,10 @@ wait_relay_https() {
   insecure=""
   # A test directory's certificates aren't trusted.
   [ -z "${KILN_ACME_CA_SERVER:-}" ] || insecure="-k"
-  waited=0
+  deadline=$(($(now) + 180))
   until curl -sS $insecure --max-time 5 -o /dev/null \
     --connect-to "$relay_host:443:127.0.0.1:443" "https://$relay_host/" 2>/dev/null; do
-    waited=$((waited + 3))
-    if [ "$waited" -ge 180 ]; then
+    if [ "$(now)" -ge "$deadline" ]; then
       curl -sS $insecure --max-time 5 -o /dev/null \
         --connect-to "$relay_host:443:127.0.0.1:443" "https://$relay_host/" || true
       stop "HTTPS isn't working yet."
@@ -1061,10 +1088,9 @@ wait_https() {
   insecure=""
   # A test directory's certificates aren't trusted.
   [ -z "${KILN_ACME_CA_SERVER:-}" ] || insecure="-k"
-  waited=0
+  deadline=$(($(now) + 180))
   until curl -fsS $insecure --max-time 5 -o /dev/null "$url/" 2>/dev/null; do
-    waited=$((waited + 3))
-    if [ "$waited" -ge 180 ]; then
+    if [ "$(now)" -ge "$deadline" ]; then
       curl -sS $insecure --max-time 5 -o /dev/null "$url/" || true
       stop "HTTPS isn't working yet."
     fi
@@ -1432,6 +1458,17 @@ check_memory
 check_ports
 step_progress=pull_progress
 step "Downloading Kiln" pull_relay
+
+# A Relay release that can't connect to Kiln itself chooses again, as it
+# would have without this.
+if [ "$public_route" = "check" ] && ! relay_feature control-dial; then
+  log "this Relay can't connect to Kiln itself"
+  connects_itself=0
+  proxy=""
+  public_route=""
+  choose_node_proxy
+  check_ports
+fi
 
 # Behind Traefik at an IP address, the Relay needs a release that gets a
 # certificate for one; an older one is reached at port 4100, as before.

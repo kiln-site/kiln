@@ -109,6 +109,7 @@ export interface ProvenContainer {
 }
 
 export interface RelayConfig {
+  checksPublicRoute: boolean
   advertisedHost: string
   advertisedHostInferred: boolean
   backupTimeoutMs: number
@@ -318,6 +319,9 @@ export function loadConfig(
           ? (coolifyPublicOrigin ?? `https://${formatUrlHost(advertisedHost)}`)
           : directBrowserOrigin,
     browserLimits: relayBrowserLimits(environment),
+    // The installer sets it on a Relay it added connecting to Hearth by
+    // default, not on one someone asked to keep that way.
+    checksPublicRoute: environment.KILN_RELAY_PUBLIC_ROUTE?.trim() === "check",
     canProvisionInstances: booleanEnvironment(
       environment.KILN_RELAY_ALLOW_PROVISIONING,
       true

@@ -1,6 +1,3 @@
-import { request as httpRequest } from "node:http"
-import type { IncomingMessage } from "node:http"
-import { request as httpsRequest } from "node:https"
 import type { Readable } from "node:stream"
 
 import { Cause, Effect } from "effect"
@@ -19,17 +16,12 @@ import {
   putS3BackupObject,
   withS3BackupObject,
 } from "@/backups/destinations/s3"
-import { relayControlEndpoint } from "@/lib/relay-control-endpoint"
+import { requestRelayBackup } from "@/lib/relay-backup-request.server"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
-import {
-  listPersistedRelays,
-  loadRelayCredentials,
-  type PersistedRelay,
-} from "@/lib/relay-registry"
+import { listPersistedRelays, loadRelayCredentials } from "@/lib/relay-registry"
 
 let copyWorkerRunning = false
 let copyWorkerRequested = false
-const BACKUP_COPY_IDLE_TIMEOUT_MS = 60_000
 
 export function scheduleBackupCopyProcessing(): void {
   copyWorkerRequested = true
@@ -191,8 +183,10 @@ const localBackupCopySourceEffect = Effect.fn("backups.localCopySource")(
           cause,
         }),
     })
-    const signedUrl = new URL(signed.url)
-    if (signedUrl.origin !== new URL(relay.browserOrigin).origin) {
+    // Signed for a browser, at wherever one reaches the Relay; Hearth takes
+    // only its token, to the Relay itself.
+    const token = new URL(signed.url).searchParams.get("token")
+    if (!token) {
       return yield* copyFailure("The local backup download URL is invalid")
     }
     const credentials = yield* Effect.tryPromise({
@@ -210,7 +204,7 @@ const localBackupCopySourceEffect = Effect.fn("backups.localCopySource")(
         requestRelayBackup(
           relay,
           credentials.caCertificatePem,
-          signedUrl,
+          `/v1/browser/backups/${encodeURIComponent(task.archiveId)}?token=${encodeURIComponent(token)}`,
           signal
         ),
       catch: (cause) =>
@@ -236,44 +230,6 @@ const localBackupCopySourceEffect = Effect.fn("backups.localCopySource")(
     }
   }
 )
-
-function requestRelayBackup(
-  relay: PersistedRelay,
-  caCertificatePem: string | null,
-  signedUrl: URL,
-  signal: AbortSignal
-): Promise<IncomingMessage> {
-  const endpoint = relayControlEndpoint(relay)
-  const protocol = endpoint.useTls ? "https" : "http"
-  const url = new URL(
-    signedUrl.pathname + signedUrl.search,
-    `${protocol}://${formatHost(endpoint.hostname)}:${endpoint.port}`
-  )
-  const request = endpoint.useTls ? httpsRequest : httpRequest
-  return new Promise((resolve, reject) => {
-    const outgoing = request(
-      url,
-      {
-        ca: endpoint.useTls ? (caCertificatePem ?? undefined) : undefined,
-        method: "GET",
-        rejectUnauthorized: endpoint.useTls,
-        signal,
-      },
-      resolve
-    )
-    outgoing.once("error", reject)
-    outgoing.setTimeout(BACKUP_COPY_IDLE_TIMEOUT_MS, () => {
-      outgoing.destroy(new Error("The backup copy stopped making progress"))
-    })
-    outgoing.end()
-  })
-}
-
-function formatHost(hostname: string): string {
-  return hostname.includes(":") && !hostname.startsWith("[")
-    ? `[${hostname}]`
-    : hostname
-}
 
 function uploadBackupCopyEffect(
   task: ClaimedBackupCopyTask,
