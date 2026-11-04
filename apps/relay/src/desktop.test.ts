@@ -249,19 +249,6 @@ describe("the node's desktop", () => {
     ).not.toContain("docker.sock")
   })
 
-  it("streams nothing without a streamer image", async () => {
-    const { config } = await relayHarness()
-    const desktop = desktopOn(
-      { ...config, desktopImage: null },
-      async () => x11,
-      new OperationLanes()
-    )
-    expect((await desktop.read()).status).toBe("unconfigured")
-    await expect(desktop.attach()).rejects.toBeInstanceOf(
-      DesktopUnavailableError
-    )
-  })
-
   it("ends streams when the Relay pauses, and takes no input until it resumes", async () => {
     const { upgrades } = await fakeVoxl()
     const { desktop, lanes, port } = await harness()

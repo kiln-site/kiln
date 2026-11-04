@@ -3,7 +3,11 @@
 # an X11 display to the browser as H.264 over a WebSocket. The Relay runs it
 # beside the node's own display server and passes the browser's connection
 # through Hearth to it. voxl is MIT, but it links x264 (GPL-2.0), so this
-# image is distributed under the GPL, separately from Kiln's own images.
+# image is distributed under the GPL, separately from Kiln's own images, with
+# its source beside it (the `source` target).
+#
+# A new version also needs DESKTOP_IMAGE_TAG (apps/relay/src/config.ts) and
+# the client Hearth serves (docs/relay-desktop.md).
 ARG VOXL_VERSION=0.3.2
 
 FROM rust:1.91-slim-trixie AS build
@@ -22,12 +26,40 @@ RUN printf '%s\n' 'prefix=/usr' 'libdir=${prefix}/lib/x86_64-linux-gnu' \
   > /usr/share/pkgconfig/libyuv.pc
 RUN cargo install voxl-server --version "${VOXL_VERSION}" --locked --root /opt/voxl
 
+# The source of what the GPL covers: voxl and the crates built into it, and
+# Debian's x264 and PulseAudio, which it links. Published as
+# `desktop:<version>-source`, from the same place as the image.
+FROM rust:1.91-slim-trixie AS source-files
+ARG VOXL_VERSION
+RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends curl dpkg-dev \
+  && mkdir -p /src/debian \
+  && cd /src/debian \
+  && apt-get source --download-only x264 pulseaudio \
+  && cd /src \
+  && curl -fsSL "https://static.crates.io/crates/voxl-server/voxl-server-${VOXL_VERSION}.crate" \
+    | tar -xz \
+  && cd "voxl-server-${VOXL_VERSION}" \
+  && cargo vendor --locked --versioned-dirs ../vendor > /dev/null
+
+FROM scratch AS source
+COPY --from=source-files /src /src
+
 FROM debian:trixie-slim
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates libopus0 libpulse0 libx264-164 libxcb1 libyuv0 \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=build /opt/voxl/bin/voxl /usr/local/bin/voxl
+# Fails the build if a library it links is missing.
+RUN ["/usr/local/bin/voxl", "--version"]
+RUN mkdir -p /usr/share/doc/voxl \
+  && printf '%s\n' \
+    'voxl is MIT licensed, but this binary links x264, so it is distributed' \
+    'under the GPL: see /usr/share/common-licenses/GPL-2. Its complete source' \
+    'is published beside this image, under this tag followed by -source.' \
+  > /usr/share/doc/voxl/NOTICE
 LABEL org.opencontainers.image.source="https://github.com/kiln-site/kiln" \
   org.opencontainers.image.licenses="GPL-2.0-or-later" \
   org.opencontainers.image.description="voxl desktop streamer for Kiln Relays"

@@ -197,15 +197,6 @@ function DesktopContent({
           terminal
         />
       )
-    case "unconfigured":
-      return (
-        <DesktopPlaceholder
-          icon={<MonitorOff />}
-          title="Desktop streaming isn't set up"
-          description="Set KILN_RELAY_DESKTOP_IMAGE on the Relay to the image built from apps/desktop to show its node's desktop."
-          terminal
-        />
-      )
     case "paused":
       return (
         <DesktopPlaceholder
@@ -695,7 +686,7 @@ function noSubscription() {
   return () => undefined
 }
 
-// The desktop's place, grayed out, saying why there's nothing to show.
+// Why there's nothing to show, in the desktop's place.
 function DesktopPlaceholder({
   children,
   description,
@@ -711,30 +702,24 @@ function DesktopPlaceholder({
 }) {
   const { routeId } = useRelayWorkspace()
   return (
-    <div className="grid min-h-0 flex-1 place-items-center bg-card p-4 sm:p-8">
-      <div className="relative grid aspect-video w-full max-w-4xl place-items-center overflow-hidden rounded-lg border border-border/70 bg-muted/40 px-6 text-center">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-0 [background-image:radial-gradient(circle_at_center,var(--color-border)_1px,transparent_1px)] [background-size:18px_18px] opacity-60"
-        />
-        <div className="relative flex max-w-sm flex-col items-center">
-          <span className="mb-4 text-muted-foreground [&_svg]:size-6">
-            {icon}
-          </span>
-          <p className="text-sm font-semibold">{title}</p>
-          <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-            {description}
-          </p>
-          {terminal ? (
-            <Button asChild className="mt-4" size="sm">
-              <Link params={{ relayId: routeId }} to="/relay/$relayId/terminal">
-                <TerminalSquare />
-                Open terminal
-              </Link>
-            </Button>
-          ) : null}
-          {children}
+    <div className="grid min-h-0 flex-1 place-items-center overflow-y-auto bg-card p-6 text-center">
+      <div className="flex max-w-sm flex-col items-center">
+        <div className="mb-4 grid size-11 place-items-center rounded-xl border bg-muted/20 text-muted-foreground [&_svg]:size-5">
+          {icon}
         </div>
+        <p className="text-sm font-semibold">{title}</p>
+        <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+          {description}
+        </p>
+        {terminal ? (
+          <Button asChild className="mt-4" size="sm">
+            <Link params={{ relayId: routeId }} to="/relay/$relayId/terminal">
+              <TerminalSquare />
+              Open terminal
+            </Link>
+          </Button>
+        ) : null}
+        {children}
       </div>
     </div>
   )

@@ -16,8 +16,13 @@ import {
   decodeRelayJoinLink,
   isKilnInstallationId,
   kilnGitRepositoryRawUrl,
+  kilnImageRepository,
   resolveKilnGitRepository,
 } from "@workspace/contracts"
+
+// voxl's version, which the desktop image is published under: the Desktop
+// image workflow checks this against apps/desktop/Dockerfile.
+const DESKTOP_IMAGE_TAG = "0.3.2"
 
 export interface RelayInstanceConfig {
   brickFormat?: string
@@ -141,8 +146,8 @@ export interface RelayConfig {
   // Relay runs on. Docker access already amounts to root there; this lets an
   // operator keep it out of the panel.
   hostAccess: boolean
-  /** The voxl image that streams the node's desktop; none turns it off. */
-  desktopImage: string | null
+  /** The voxl image that streams the node's desktop. */
+  desktopImage: string
   /** Where a Relay in Docker on a Mac reaches the Mac's Screen Sharing. */
   screenSharingAddress: { readonly host: string; readonly port: number }
   // Where the host's filesystem is mounted; Files are off when it isn't.
@@ -321,7 +326,9 @@ export function loadConfig(
     dockerSocket: "/var/run/docker.sock",
     dataDirectory,
     hostAccess: booleanEnvironment(environment.KILN_RELAY_HOST_ACCESS, true),
-    desktopImage: environment.KILN_RELAY_DESKTOP_IMAGE?.trim() || null,
+    desktopImage:
+      environment.KILN_RELAY_DESKTOP_IMAGE?.trim() ||
+      `${kilnImageRepository("desktop", gitRepository)}:${DESKTOP_IMAGE_TAG}`,
     screenSharingAddress: screenSharingAddress(environment),
     hostRootDirectory: environment.KILN_RELAY_HOST_ROOT?.trim() || "/host",
     gameHost,

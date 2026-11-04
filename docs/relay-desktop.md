@@ -19,9 +19,6 @@ showing a desktop is one backend, one client, and a status in
 
 ## What a Linux node needs
 
-- A streamer image, named by `KILN_RELAY_DESKTOP_IMAGE`. Kiln doesn't publish
-  one yet (see [Licensing](#licensing)), so the tab stays off until a Relay is
-  given one built from `apps/desktop`.
 - Host access on (`KILN_RELAY_HOST_ACCESS`, the default). The Relay finds the
   desktop through the same helper as the host terminal.
 - An **X11** session someone is signed in to, or a login screen on X11. voxl
@@ -29,6 +26,11 @@ showing a desktop is one backend, one client, and a status in
   here, sign in with an Xorg session such as "GNOME on Xorg", or set
   `WaylandEnable=false` in `/etc/gdm3/daemon.conf`.
 - Docker running the Relay in a container, as every install does.
+
+Nothing needs setting up. The first time someone opens a node's desktop, the
+Relay downloads the streamer, `ghcr.io/kiln-site/desktop:<voxl version>` (a
+fork's own, for a fork's Relay). `KILN_RELAY_DESKTOP_IMAGE` names another image
+to use instead, such as a build of `apps/desktop` on an offline node.
 
 Opening the desktop needs `relay.terminal`: driving someone's desktop is worth
 as much as a root shell on the node. A node with nothing to show still opens
@@ -46,9 +48,10 @@ server macOS already has:
    is.
 3. Sign in on the tab with a Mac account Screen Sharing allows.
 
-No image, helper, or port forward is needed. The Relay reaches
-`host.docker.internal:5900` and connects out to Hearth as it always does. It
-tells a Mac apart by what Docker reports: `OrbStack`, or `Docker Desktop` with
+No image, helper, or port forward is needed, and a Mac never downloads the Linux
+streamer. The Relay reaches `host.docker.internal:5900` and connects out to
+Hearth as it always does. It tells a Mac apart by what Docker reports:
+`OrbStack`, or `Docker Desktop` with
 its socket under `/Users`. It sees Screen Sharing is on when the port greets it
 as a VNC server. `KILN_RELAY_SCREEN_SHARING_ADDRESS` overrides where it looks,
 for another Docker runtime. Turning host access off turns this off too.
@@ -111,7 +114,9 @@ without one, opens another, which finds whatever the node shows now.
 The client's JavaScript runs on Hearth's origin, where it could use the
 person's session. So it's never fetched from a node: `public/desktop-client`
 is a copy from the pinned voxl version, and a Relay only ever supplies video
-and audio frames. Update that copy whenever `VOXL_VERSION` changes.
+and audio frames. Update that copy, and `DESKTOP_IMAGE_TAG` in the Relay's
+`config.ts`, whenever `VOXL_VERSION` changes. The **Desktop image** workflow
+fails if the tag doesn't match, and publishes `VOXL_VERSION` from `main`.
 
 ## The streamer
 
@@ -246,8 +251,13 @@ at about a fifth of its size on a phone held upright.
 
 voxl is MIT, but its binary links x264 (GPL-2.0), so the streamer image is
 distributed under the GPL. It's a separate program in its own image, which
-Kiln's images don't include, and CI only builds it. Check the license terms
-before publishing it, then give `KILN_RELAY_DESKTOP_IMAGE` a default.
+Kiln's images don't include: a Relay talks to it only over a socket, and pulls
+it only when someone opens a desktop.
+
+The GPL asks that its source be offered from the same place as the binary, so
+the **Desktop image** workflow publishes `desktop:<voxl version>-source` next to
+each `desktop:<voxl version>`. It's an image of files rather than a program:
+voxl, the crates built into it, and Debian's x264 and PulseAudio, under `/src`.
 
 ## Limits
 

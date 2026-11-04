@@ -66,22 +66,23 @@ async function fakeVnc(greeting = "RFB 003.889\n") {
   return { port: await listen(server), received, server }
 }
 
-async function harness(port: number) {
+async function harness(
+  port: number,
+  voxlScript: () => Promise<string> = async () => {
+    throw new Error("A Mac has no X11 session to find")
+  }
+) {
   const { config: relay } = await relayHarness()
   const config = {
     ...relay,
-    desktopImage: null,
+    desktopImage: "example/voxl:test",
     screenSharingAddress: { host: "127.0.0.1", port },
   }
   const lanes = new OperationLanes()
   const desktop = new Desktop(
     [
       new ScreenSharingDesktop(config, { runScript: async () => macHost }),
-      new VoxlDesktop(config, {
-        runScript: async () => {
-          throw new Error("A Mac has no X11 session to find")
-        },
-      }),
+      new VoxlDesktop(config, { runScript: voxlScript }),
     ],
     config,
     lanes
@@ -201,6 +202,7 @@ describe("a Mac's desktop", () => {
     const { desktop } = await harness(vnc.port)
     await desktop.attach()
     expect(fakeDocker.containers.size).toBe(0)
+    expect(fakeDocker.pulls.size).toBe(0)
   })
 
   it("turns away a stream without a live ticket, or while paused", async () => {
@@ -260,8 +262,8 @@ describe("a Mac's desktop", () => {
       },
     ]) {
       fakeDocker.info = info
-      const { desktop } = await harness(vnc.port)
-      expect((await desktop.read()).status).toBe("unconfigured")
+      const { desktop } = await harness(vnc.port, async () => "")
+      expect((await desktop.read()).status).toBe("none")
     }
     fakeDocker.info = {
       Labels: [

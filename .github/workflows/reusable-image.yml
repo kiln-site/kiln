@@ -44,6 +44,16 @@ on:
         required: false
         type: string
         default: ""
+      license_label:
+        description: Explicit org.opencontainers.image.licenses override
+        required: false
+        type: string
+        default: ""
+      target:
+        description: Dockerfile stage to build, when not the last
+        required: false
+        type: string
+        default: ""
       publish_manifest:
         description: Whether this workflow should publish the multi-platform manifest
         required: false
@@ -124,6 +134,7 @@ jobs:
             ${{ inputs.tags }}
           labels: |
             ${{ inputs.source_label && format('org.opencontainers.image.source={0}', inputs.source_label) || '' }}
+            ${{ inputs.license_label && format('org.opencontainers.image.licenses={0}', inputs.license_label) || '' }}
             ${{ inputs.version && format('org.opencontainers.image.version={0}', inputs.version) || '' }}
 
       - name: Verify release version label
@@ -144,6 +155,7 @@ jobs:
         with:
           context: .
           file: ${{ inputs.dockerfile }}
+          target: ${{ inputs.target }}
           build-args: |
             ${{ inputs.build_args }}
             KILN_VERSION=${{ inputs.version }}

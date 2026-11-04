@@ -66,6 +66,7 @@ ghcr.io/example/my-panel/hearth
 ghcr.io/example/my-panel/relay
 ghcr.io/example/my-panel/bricks-java
 ghcr.io/example/my-panel/bricks-steamcmd
+ghcr.io/example/my-panel/desktop
 ```
 
 Kiln upstream keeps its existing `ghcr.io/kiln-site/<component>` names and legacy
@@ -74,7 +75,8 @@ the fork. Image names are lowercase; source repository identity preserves GitHub
 canonical spelling.
 
 1. Enable Actions in the fork and set the variables above.
-2. Run **Ember images** manually once to seed the runtime images.
+2. Run **Ember images** and **Desktop image** manually once to seed the runtime
+   images.
 3. Run **Nightly release** on `main`.
 4. Make each new GHCR package **public** and grant the repository Actions access
    if it was previously created elsewhere. Repository visibility does not make

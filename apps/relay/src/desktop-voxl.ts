@@ -155,15 +155,14 @@ export class VoxlDesktop implements DesktopBackend {
 
   async prepare(closeStreams: () => void): Promise<RelayDesktop> {
     const detected = await this.#detect()
-    const image = this.#config.desktopImage
-    if (!detected.x11 || !image) {
+    if (!detected.x11) {
       throw new DesktopUnavailableError(
         detected.public.status === "wayland"
           ? "This node's desktop runs on Wayland, which can't be streamed yet"
           : "This node has no graphical desktop to show"
       )
     }
-    await this.#ensure(detected.x11, image, closeStreams)
+    await this.#ensure(detected.x11, closeStreams)
     return detected.public
   }
 
@@ -227,12 +226,6 @@ export class VoxlDesktop implements DesktopBackend {
   }
 
   async #detect(): Promise<Detected> {
-    if (!this.#config.desktopImage) {
-      return {
-        public: { status: "unconfigured", displayManager: false },
-        x11: null,
-      }
-    }
     const values = parseDetection(
       await this.#hostShell.runScript(DETECT_SCRIPT)
     )
@@ -291,9 +284,9 @@ export class VoxlDesktop implements DesktopBackend {
   // lane, with `relay.desktop.attach`.
   async #ensure(
     desktop: X11Desktop,
-    image: string,
     closeStreams: () => void
   ): Promise<void> {
+    const image = this.#config.desktopImage
     // voxl joins the Relay's network namespace, so it must be the Relay's
     // current container.
     const relay = await recoverPromise(
