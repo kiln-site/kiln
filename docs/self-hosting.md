@@ -411,6 +411,11 @@ own pages (the **Kiln** button beside **Updates** in Infrastructure) show
 their Hearth, database, cache, and any Traefik in front of them read-only:
 their logs, but no restarts or shells.
 
+Hearth runs on MariaDB 10.11 or newer as well as MySQL 8.4, so an install made
+the old way can keep a MariaDB database. Kiln's checks run on MySQL 8.4 and
+MariaDB 11.8. Its platform backups still run `mysqldump`, which newer MariaDB
+images don't include.
+
 A Relay on the same Docker host finds them by Kiln's labels
 (`io.kiln.installation` and `io.kiln.resource`, which Kiln's old Compose file
 set), or else from Hearth itself. Each time Hearth connects it names the container it

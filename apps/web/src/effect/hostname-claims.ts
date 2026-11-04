@@ -46,7 +46,7 @@ export const claimHostnamesEffect = Effect.fn("hostnameClaims.claim")(
         `SELECT relay_id, resource_type, resource_id
            FROM ${claimTable}
           WHERE hostname = ?
-          FOR SHARE`,
+          LOCK IN SHARE MODE`,
         [hostname]
       )
       const holder = row ? claimOwner(row) : null

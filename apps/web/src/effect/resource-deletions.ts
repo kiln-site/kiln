@@ -453,7 +453,7 @@ export const recordRelayDeletingEffect = Effect.fn(
     "resource_deletion_relay_deleting",
     `UPDATE ${databaseTable("resource_deletion")}
         SET relay_deleting_at = COALESCE(relay_deleting_at, ?),
-            volume_ids = COALESCE(volume_ids, CAST(? AS JSON)),
+            volume_ids = COALESCE(volume_ids, JSON_EXTRACT(?, '$')),
             updated_at = ?
       WHERE id = ?`,
     [now, JSON.stringify(input.volumeIds), now, input.id]
@@ -516,7 +516,7 @@ export const refuseResourcesBeingDeleted = Effect.fnUntraced(function* (
       `SELECT status, relay_deleted_at, relay_deleting_at
          FROM ${databaseTable("resource_deletion")}
         WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
-        FOR SHARE`,
+        LOCK IN SHARE MODE`,
       [resource.relayId, resource.kind, resource.id]
     )
     if (!deletion) continue

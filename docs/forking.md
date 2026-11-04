@@ -200,8 +200,9 @@ scoped to the existing URL/profile system.
   itself, stop with **Start a new Nightly release from main.** Start a fresh
   workflow run from `main` in those cases. No run metadata or permanent run tags
   are stored.
-- **Code checks** runs four jobs: `Static checks`, `Tests`, `Hearth tests`
-  and `Build`. Repository rulesets decide which are required.
+- **Code checks** runs five jobs: `Static checks`, `Tests`, `Hearth tests`,
+  `Hearth tests (MariaDB)` and `Build`. Repository rulesets decide which are
+  required.
 
 ## Merging upstream
 

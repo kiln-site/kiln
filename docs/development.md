@@ -85,7 +85,9 @@ Hearth stage. Validate user-visible changes in the browser.
 To use a disposable MySQL outside the dev stack, set `KILN_TEST_MYSQL=1`
 and `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, and `DB_PASSWORD`.
 `DB_NAME` must end in `_test`; the test runner creates per-worker databases.
-CI supplies these variables for its MySQL container.
+CI supplies these variables for its MySQL container, and runs the same suite
+on MariaDB, which some installations use for Hearth. Point these variables at a
+`mariadb:11.8` container to check a query there.
 
 The build stage writes to `artifacts/verify/build.log`, then prints the log
 and returns the build's exit status. This avoids Vite+ output-forwarding

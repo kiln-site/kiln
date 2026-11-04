@@ -472,7 +472,7 @@ async function listActivityLineage(): Promise<Array<LineageRow>> {
             destination_relay_id, destination_instance_id, finished_at
        FROM ${databaseTable("server_migration")}
       WHERE state = 'completed' AND finished_at IS NOT NULL
-        AND options->>'$.keepActivity' = 'true'`
+        AND JSON_UNQUOTE(JSON_EXTRACT(options, '$.keepActivity')) = 'true'`
   )
   return rows
 }
