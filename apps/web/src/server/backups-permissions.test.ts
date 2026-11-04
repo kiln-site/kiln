@@ -198,24 +198,11 @@ describeMysql("backup authorization", () => {
       })
     )
 
-    it.effect("restore queues the safety backup ahead of the restore", () =>
+    it.effect("restore queues a Relay-local safety backup first", () =>
       Effect.gen(function* () {
-        const { personalStorageId } = yield* seed
+        yield* seed
         const backupId = yield* seedBackup
-        yield* insertRows("backup_policy", {
-          relay_id: relayId,
-          target_kind: "instance",
-          target_id: instanceId,
-          storage_id: personalStorageId,
-          exclude_patterns: "[]",
-          created_at: at,
-          updated_at: at,
-        })
-        yield* grant(instanceId, [
-          "backup.restore",
-          "backup.create",
-          "backup.download",
-        ])
+        yield* grant(instanceId, ["backup.restore", "backup.create"])
 
         const result = yield* Effect.promise(() =>
           restoreInstanceBackupHandler(user, { backupId, safetyBackup: true })
@@ -235,6 +222,16 @@ describeMysql("backup authorization", () => {
         assert.strictEqual(restore?.task_kind, "restore")
         assert.strictEqual(safety?.task_kind, "create")
         assert.strictEqual(restore?.depends_on_task_id, safety?.id)
+        const artifacts = yield* selectRows<{
+          backup_id: string
+          storage_id: string | null
+        }>("backup_artifact")
+        assert.deepStrictEqual(
+          artifacts
+            .filter((artifact) => artifact.backup_id === result.safetyBackupId)
+            .map((artifact) => artifact.storage_id),
+          [null]
+        )
       })
     )
 

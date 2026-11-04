@@ -53,7 +53,6 @@ import { z } from "zod"
 import { cliRelaySubject, requireCliWrite } from "@/effect/cli-access"
 import {
   listBackupCatalogEffect,
-  getBackupPolicyEffect,
   reserveBackupDeleteEffect,
   reserveBackupExportEffect,
   reserveBackupRestoreEffect,
@@ -431,27 +430,11 @@ export const listCliBackupTargetsEffect = Effect.fn("cli.api.backups.targets")(
 export const createCliBackupEffect = Effect.fn("cli.api.backups.create")(
   function* (principal: CliPrincipal, unknownInput: unknown) {
     yield* requireCliWrite(principal)
-    const requested = yield* parseInput(
+    const input = yield* parseInput(
       cliCreateBackupRequestSchema,
       unknownInput
     )
-    const relay = yield* authorizeCliBackupCreateTarget(principal, requested)
-    // Pin the policy default before authorizing so a later policy change cannot
-    // redirect a create-only request into a user-controlled destination.
-    const input =
-      requested.targetKind !== "platform" && requested.storageId === undefined
-        ? {
-            ...requested,
-            storageId: (yield* mapCliBackupFailure(
-              getBackupPolicyEffect(
-                requested.relayId,
-                requested.targetKind,
-                requested.targetId
-              ),
-              "Hearth could not load the backup destination policy."
-            )).storageId,
-          }
-        : requested
+    const relay = yield* authorizeCliBackupCreateTarget(principal, input)
     yield* validateCliBackupStorage(principal, input)
     const backupId = randomUUID()
     const taskId = randomUUID()
@@ -461,7 +444,7 @@ export const createCliBackupEffect = Effect.fn("cli.api.backups.create")(
       name: input.name,
       relayId: relay.id,
       requestedMaxBytes: null,
-      ...(input.storageId === undefined ? {} : { storageId: input.storageId }),
+      storageIds: [input.storageId],
       taskId,
     }
     const dispatch = yield* mapCliBackupFailure(
@@ -560,25 +543,7 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
         return yield* cliNotFound("The restore target was not found.")
       }
     }
-    // A safety backup can export the live target through its default policy.
-    // Resolve and authorize that destination before either task is reserved.
-    let safetyStorageId: string | null = null
-    if (input.safetyBackup) {
-      safetyStorageId = (yield* mapCliBackupFailure(
-        getBackupPolicyEffect(
-          backup.relayId,
-          backup.targetKind,
-          backup.targetId
-        ),
-        "Hearth could not load the safety backup destination policy."
-      )).storageId
-      yield* validateCliBackupStorage(principal, {
-        relayId: backup.relayId,
-        targetKind: backup.targetKind,
-        targetId: backup.targetId,
-        storageId: safetyStorageId,
-      })
-    }
+    // A safety backup stays on the Relay.
     const safety = input.safetyBackup
       ? yield* mapCliBackupFailure(
           backup.targetKind === "instance"
@@ -587,7 +552,7 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
                 createdBy: principal.user.id,
                 name: `Before restoring ${backup.name}`.slice(0, 120),
                 reason: "pre_restore",
-                storageId: safetyStorageId,
+                storageIds: [null],
                 relayId: relay.id,
                 requestedMaxBytes: null,
                 targetId: backup.targetId,
@@ -598,7 +563,7 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
                 createdBy: principal.user.id,
                 name: `Before restoring ${backup.name}`.slice(0, 120),
                 reason: "pre_restore",
-                storageId: safetyStorageId,
+                storageIds: [null],
                 relayId: relay.id,
                 requestedMaxBytes: null,
                 targetId: backup.targetId,
@@ -1023,6 +988,7 @@ export const deleteCliServerEffect = Effect.fn("cli.api.servers.delete")(
             kind: "instance",
             relayId: relay.id,
             resourceId: input.instanceId,
+            storageId: input.storageId,
             user: principal.user,
           })
         ),
@@ -1376,7 +1342,7 @@ const validateCliBackupStorage = Effect.fn("cli.api.backups.storage.authorize")(
     principal: CliPrincipal,
     input: {
       relayId: string
-      storageId?: string | null
+      storageId: string | null
     } & (
       | { targetKind: "instance" | "database"; targetId: string }
       | { targetKind: "platform" }

@@ -47,7 +47,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { advanceAuthorizationRevisionEffect } from "@/lib/authorization-revision"
 import { backupStorageSettingsKey } from "@/lib/backup-lanes"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
-import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
+import { requireBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import { databaseTable } from "@/lib/database-config"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { activeRelay, type PersistedRelay } from "@/lib/relay-registry"
@@ -586,10 +586,8 @@ const migrationSteps = (input: ServerMigrationInput, operationId: string) =>
           queued: true,
           relayId: input.source.relayId,
           resourceId: input.source.instanceId,
+          storageId: deletion.storageId,
           user: actor,
-          ...(deletion.storageId === undefined
-            ? {}
-            : { storageId: deletion.storageId }),
         })
       )
     }
@@ -857,18 +855,15 @@ const provisioned = (input: ServerMigrationInput) =>
 // ID, a step cut off once it's reserved finds it, so it's reserved once.
 const reserveBackup = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
   Effect.gen(function* () {
-    for (const storageId of new Set(input.backupStorageIds)) {
-      if (storageId === null) continue
-      yield* promiseEffect(() =>
-        resolveAuthorizedBackupStorageSelection({
-          relayId: input.source.relayId,
-          storageId,
-          targetId: input.source.instanceId,
-          targetKind: "instance",
-          user: actor,
-        })
-      )
-    }
+    yield* promiseEffect(() =>
+      requireBackupStorageSelection({
+        relayId: input.source.relayId,
+        storageIds: input.backupStorageIds,
+        targetId: input.source.instanceId,
+        targetKind: "instance",
+        user: actor,
+      })
+    )
     const backupId = backupIdOf(input)
     if (yield* getBackupCatalogRecordEffect(backupId)) return
     const [source, destination] = yield* relays(input)
@@ -1198,6 +1193,7 @@ const endMigrationEffect = (
           queued: true,
           relayId: row.destination_relay_id,
           resourceId: row.destination_instance_id,
+          storageId: null,
           user: person,
         }).pipe(
           Effect.catch((cause) =>

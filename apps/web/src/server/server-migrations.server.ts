@@ -43,7 +43,7 @@ import {
   startServerMigrationEffect,
 } from "@/lib/server-migrations.server"
 import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
-import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
+import { requireBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import { relayResourceLimitsRequest } from "@/lib/resource-limits.server"
 import type {
   MigrationRelayRoom,
@@ -285,19 +285,15 @@ export async function startServerMigrationHandler(
       )
     }
   }
-  // A backup first goes where they chose, or its usual destinations, settled
-  // now: the copy holds them while it runs.
-  const backupStorageIds = options.backup
-    ? await resolveAuthorizedBackupStorageSelection({
-        relayId: relay.id,
-        targetId: instance.id,
-        targetKind: "instance",
-        user,
-        ...(options.backup.storageId === undefined
-          ? {}
-          : { storageId: options.backup.storageId }),
-      })
-    : []
+  // A backup first goes where they chose: the copy holds that while it runs.
+  const backupStorageIds = options.backup ? [options.backup.storageId] : []
+  await requireBackupStorageSelection({
+    relayId: relay.id,
+    storageIds: backupStorageIds,
+    targetId: instance.id,
+    targetKind: "instance",
+    user,
+  })
   // Deleting the old server backs it up first, to a destination they may use.
   if (options.deleteSource) {
     await requireDeleteConfirmation({
@@ -306,14 +302,12 @@ export async function startServerMigrationHandler(
       password: data.confirmation?.password ?? "",
       user,
     })
-    await resolveAuthorizedBackupStorageSelection({
+    await requireBackupStorageSelection({
       relayId: relay.id,
+      storageIds: [options.deleteSource.storageId],
       targetId: instance.id,
       targetKind: "instance",
       user,
-      ...(options.deleteSource.storageId === undefined
-        ? {}
-        : { storageId: options.deleteSource.storageId }),
     })
   }
   const problems = await runAppEffect(

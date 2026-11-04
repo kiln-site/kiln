@@ -36,15 +36,11 @@ import {
 /** What a backup of an App's folder or a volume names. */
 export type ResourceTarget = { id: string; kind: "app" | "volume" }
 
-// The destinations a configuration chose, or none for the target's own.
+// The destinations a configuration chose.
 function storageIds(configuration: BackupConfiguration) {
-  return configuration.destinationKeys.includes("default")
-    ? {}
-    : {
-        storageIds: configuration.destinationKeys.map((destination) =>
-          destination === "local" ? null : destination
-        ),
-      }
+  return configuration.destinationKeys.map((destination) =>
+    destination === "local" ? null : destination
+  )
 }
 
 /**
@@ -82,7 +78,7 @@ export function ResourceBackupDialog({
               consistency: configuration.consistency,
               name: configuration.name,
               relayId,
-              ...storageIds(configuration),
+              storageIds: storageIds(configuration),
             },
           })
         : createResourceBackup({
@@ -91,7 +87,7 @@ export function ResourceBackupDialog({
               name: configuration.name,
               relayId,
               target,
-              ...storageIds(configuration),
+              storageIds: storageIds(configuration),
             },
           }),
     onSuccess: async (result, configuration) => {
@@ -235,7 +231,7 @@ export function ResourceRestoreDialog({
           <span>
             <span className="block text-xs font-semibold">Safety backup</span>
             <span className="type-meta mt-1 block text-muted-foreground">
-              Back up what it holds now, live, before restoring.
+              Back up what it holds now, live, to this Relay before restoring.
             </span>
           </span>
           <Switch

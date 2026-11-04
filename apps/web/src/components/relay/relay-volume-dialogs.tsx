@@ -214,7 +214,7 @@ export function DeleteVolumeDialog({
   const refresh = useRefreshVolumes(relayId)
   const confirmation = useDeleteConfirmation(volume.name)
   const [createBackup, setCreateBackup] = React.useState(true)
-  const [backupDestination, setBackupDestination] = React.useState("default")
+  const [backupDestination, setBackupDestination] = React.useState("local")
   const remove = useMutation({
     mutationFn: () =>
       deleteRelayVolume({
@@ -223,12 +223,7 @@ export function DeleteVolumeDialog({
           createBackup,
           relayId,
           volumeId: volume.id!,
-          ...(createBackup && backupDestination !== "default"
-            ? {
-                storageId:
-                  backupDestination === "local" ? null : backupDestination,
-              }
-            : {}),
+          storageId: backupDestination === "local" ? null : backupDestination,
         },
       }),
     onSuccess: async () => {

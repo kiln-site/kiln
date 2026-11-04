@@ -27,7 +27,6 @@ import {
   reconcileRelayBackups,
 } from "@/lib/backup-reconciliation"
 import type { BackupRun } from "@/lib/backup-runs"
-import { resolveBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import { grantsAllowBackup } from "@/lib/backup-target-permissions"
 import { relayRpc } from "@/lib/relay-connection"
 import {
@@ -119,7 +118,7 @@ export async function createAppBackupsHandler(
     consistency: BackupConsistency
     name: string
     relayId: string
-    storageIds?: Array<string | null> | undefined
+    storageIds: Array<string | null>
   }
 ) {
   const relay = await activeRelay(data.relayId)
@@ -154,13 +153,7 @@ export async function createAppBackupsHandler(
       "A stopped backup stops and starts every App that uses what it backs up; you need permission to manage each"
     )
   }
-  const storageIds = await resolveBackupStorageSelection({
-    relayId: relay.id,
-    storageIds: data.storageIds,
-    targetId: data.appId,
-    targetKind: "app",
-  })
-  await requirePersonalStorage(storageIds, user, relay.id, app)
+  await requirePersonalStorage(data.storageIds, user, relay.id, app)
   const batchId = randomUUID()
   // All of the App's backups, or none: one refused, as by a ceiling of no
   // backups, refuses the batch rather than leave it short of a member.
@@ -179,7 +172,7 @@ export async function createAppBackupsHandler(
         name: data.name,
         relayId: relay.id,
         requestedMaxBytes: null,
-        storageIds,
+        storageIds: data.storageIds,
         targetId: target.id,
         targetKind: target.kind,
         taskId: randomUUID(),

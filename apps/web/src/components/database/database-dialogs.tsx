@@ -550,16 +550,14 @@ export function DeleteDatabaseDialog({
   const confirmation = useDeleteConfirmation(database.name)
   const supportsBackup = databaseEngineSupportsLogicalBackups(database.engine)
   const [createBackup, setCreateBackup] = React.useState(supportsBackup)
-  const [backupDestination, setBackupDestination] = React.useState("default")
+  const [backupDestination, setBackupDestination] = React.useState("local")
   const remove = useMutation({
     mutationFn: () =>
       deleteManagedDatabase({
         data: {
           ...confirmation.input,
           createBackup: supportsBackup && createBackup,
-          ...(createBackup && backupDestination !== "default"
-            ? { storageId: backupDestination === "local" ? null : backupDestination }
-            : {}),
+          storageId: backupDestination === "local" ? null : backupDestination,
           databaseId: database.id,
           relayId: database.relayId,
         },

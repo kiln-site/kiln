@@ -63,17 +63,15 @@ export const scheduleBackupActionSchema = z
      * backed up live; absent is live.
      */
     consistency: backupConsistencySchema.optional(),
-    destination: z
-      .discriminatedUnion("kind", [
-        z.object({ kind: z.literal("local") }).strict(),
-        z
-          .object({
-            kind: z.literal("storage"),
-            storageId: z.uuid(),
-          })
-          .strict(),
-      ])
-      .default({ kind: "local" }),
+    destination: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("local") }).strict(),
+      z
+        .object({
+          kind: z.literal("storage"),
+          storageId: z.uuid(),
+        })
+        .strict(),
+    ]),
     id: scheduleActionIdSchema,
     mode: backupModeSchema.default("full"),
     name: z

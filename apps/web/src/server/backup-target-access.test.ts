@@ -183,6 +183,7 @@ describeMysql("App and volume backup authorization", () => {
               createResourceBackupHandler(user, {
                 name: "Before the upgrade",
                 relayId,
+                storageIds: [null],
                 target,
               })
             )

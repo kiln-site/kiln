@@ -1,8 +1,8 @@
-import { expect, layer } from "@effect/vitest"
+import { layer } from "@effect/vitest"
 import { Effect } from "effect"
 
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { resolveAuthorizedBackupStorageSelection } from "@/lib/backup-storage-selection.server"
+import { requireBackupStorageSelection } from "@/lib/backup-storage-selection.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertGrant,
@@ -71,23 +71,21 @@ const seed = (permission: string | null) =>
     })
   })
 
-const resolve = (
-  input: Partial<Parameters<typeof resolveAuthorizedBackupStorageSelection>[0]>
-) =>
+const check = (storageId: string | null) =>
   Effect.tryPromise(() =>
-    resolveAuthorizedBackupStorageSelection({ ...selection, ...input })
+    requireBackupStorageSelection({ ...selection, storageIds: [storageId] })
   )
 
-const refused = (effect: ReturnType<typeof resolve>) => Effect.flip(effect)
+const refused = (effect: ReturnType<typeof check>) => Effect.flip(effect)
 
-describeMysql("resolveAuthorizedBackupStorageSelection", () => {
+describeMysql("requireBackupStorageSelection", () => {
   layer(TestDatabase)((it) => {
     it.effect(
       "rejects another user's destination even with download permission",
       () =>
         Effect.gen(function* () {
           yield* seed("backup.download")
-          yield* refused(resolve({ storageId: foreign }))
+          yield* refused(check(foreign))
         })
     )
 
@@ -101,34 +99,31 @@ describeMysql("resolveAuthorizedBackupStorageSelection", () => {
           { ...storage(deleting, null), enabled: true, deleting: true },
         ])
         for (const storageId of [disabled, deleting]) {
-          yield* refused(resolve({ storageId }))
+          yield* refused(check(storageId))
         }
       })
     )
 
-    it.effect(
-      "pins and authorizes the policy default when no destination is selected",
-      () =>
-        Effect.gen(function* () {
-          yield* seed("backup.create")
-          yield* insertRows("backup_policy", {
-            relay_id: "relay-one",
-            target_kind: "instance",
-            target_id: "instance-one",
-            storage_id: personal,
-            exclude_patterns: "[]",
-            created_at: 0,
-            updated_at: 0,
-          })
-          yield* refused(resolve({}))
+    it.effect("a personal destination needs download permission", () =>
+      Effect.gen(function* () {
+        yield* seed("backup.create")
+        yield* refused(check(personal))
 
-          yield* insertRows("access_selection", {
-            access_id: "grant",
-            selection_kind: "permission",
-            selection_key: "backup.download",
-          })
-          expect(yield* resolve({})).toEqual([personal])
+        yield* insertRows("access_selection", {
+          access_id: "grant",
+          selection_kind: "permission",
+          selection_key: "backup.download",
         })
+        yield* check(personal)
+      })
+    )
+
+    it.effect("the Relay's own storage and shared destinations need nothing", () =>
+      Effect.gen(function* () {
+        yield* seed("backup.create")
+        yield* check(null)
+        yield* check(platform)
+      })
     )
   })
 })

@@ -1,12 +1,6 @@
 import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import {
-  FolderX,
-  HardDrive,
-  History,
-  LoaderCircle,
-  ShieldCheck,
-} from "lucide-react"
+import { FolderX, History, LoaderCircle, ShieldCheck } from "lucide-react"
 import type { BackupTarget } from "@workspace/contracts"
 
 import { Button } from "@workspace/ui/components/button"
@@ -15,13 +9,6 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from "@workspace/ui/components/input-group"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 import { Switch } from "@workspace/ui/components/switch"
 import { Textarea } from "@workspace/ui/components/textarea"
@@ -29,20 +16,15 @@ import { Textarea } from "@workspace/ui/components/textarea"
 import { SettingsPanel, SettingsRow } from "@/components/settings-panel"
 import { queryKeys } from "@/lib/query-options"
 import {
-  setPreferredBackupStorage,
-  type getBackupStorage,
-} from "@/server/backup-storage"
-import {
   updateBackupExcludes,
   updateBackupLimits,
   type getBackupPolicy,
 } from "@/server/backups"
 
 // One target's backup settings: its retention, a platform administrator's
-// ceiling on it, where its backups go, and what game server backups leave
-// out. A blank retention field keeps without that limit.
+// ceiling on it, and what game server backups leave out. A blank retention
+// field keeps without that limit.
 
-type BackupStorage = Awaited<ReturnType<typeof getBackupStorage>>[number]
 type BackupPolicy = Awaited<ReturnType<typeof getBackupPolicy>>
 
 const GIB = 1024 ** 3
@@ -64,14 +46,12 @@ export function BackupTargetSettings({
   name,
   policy,
   relayId,
-  storage,
   target,
 }: {
   isPlatformAdmin: boolean
   name: string
   policy: BackupPolicy
   relayId: string
-  storage: ReadonlyArray<BackupStorage>
   target: BackupTarget
 }) {
   const queryClient = useQueryClient()
@@ -89,24 +69,10 @@ export function BackupTargetSettings({
         quantity: policy.quantityLimit,
         sizeBytes: policy.sizeLimitBytes,
       }),
-      storageId: policy.storageId ?? "local",
     }),
     [policy]
   )
   const [draft, setDraft] = React.useState(initial)
-  const destinations = React.useMemo(
-    () =>
-      storage.filter(
-        (destination) =>
-          destination.enabled &&
-          !destination.deleting &&
-          (target.kind !== "platform" || destination.ownerUserId === null)
-      ),
-    [storage, target.kind]
-  )
-  const storageId = destinations.some((option) => option.id === draft.storageId)
-    ? draft.storageId
-    : "local"
   const retention = parseRetention(draft.retention)
   const ceiling = draft.enabled ? parseRetention(draft.ceiling) : null
   const valid = retention !== null && (!draft.enabled || ceiling !== null)
@@ -151,13 +117,6 @@ export function BackupTargetSettings({
               },
             })
           : null,
-        setPreferredBackupStorage({
-          data: {
-            relayId,
-            storageId: storageId === "local" ? null : storageId,
-            target,
-          },
-        }),
       ])
     },
     onSuccess: async () => {
@@ -207,31 +166,8 @@ export function BackupTargetSettings({
           </SettingsPanel>
         ) : null}
       </div>
-      <div className="grid gap-4">
-        <SettingsPanel icon={<HardDrive />} title="Destination">
-          <SettingsRow label="Back up to">
-            <Select
-              value={storageId}
-              onValueChange={(next) => setDraft({ ...draft, storageId: next })}
-            >
-              <SelectTrigger
-                aria-label="Preferred backup destination"
-                className="h-8 w-56 [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent className="w-max min-w-(--radix-select-trigger-width)">
-                <SelectItem value="local">This Relay</SelectItem>
-                {destinations.map((destination) => (
-                  <SelectItem key={destination.id} value={destination.id}>
-                    {destination.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </SettingsRow>
-        </SettingsPanel>
-        {excludable(target.kind) ? (
+      {excludable(target.kind) ? (
+        <div className="grid gap-4">
           <SettingsPanel icon={<FolderX />} title="Exclusions">
             <div className="p-4">
               <Textarea
@@ -245,22 +181,22 @@ export function BackupTargetSettings({
               />
             </div>
           </SettingsPanel>
-        ) : null}
-        <div className="flex items-center justify-end gap-3">
-          {save.error ? (
-            <p className="min-w-0 flex-1 text-xs text-destructive">
-              {save.error.message}
-            </p>
-          ) : null}
-          <Button
-            disabled={!changed || !valid || save.isPending}
-            type="button"
-            onClick={() => save.mutate()}
-          >
-            {save.isPending ? <LoaderCircle className="animate-spin" /> : null}
-            Save
-          </Button>
         </div>
+      ) : null}
+      <div className="flex items-center justify-end gap-3 lg:col-span-2">
+        {save.error ? (
+          <p className="min-w-0 flex-1 text-xs text-destructive">
+            {save.error.message}
+          </p>
+        ) : null}
+        <Button
+          disabled={!changed || !valid || save.isPending}
+          type="button"
+          onClick={() => save.mutate()}
+        >
+          {save.isPending ? <LoaderCircle className="animate-spin" /> : null}
+          Save
+        </Button>
       </div>
     </div>
   )

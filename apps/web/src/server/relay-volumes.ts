@@ -197,7 +197,7 @@ export const deleteRelayVolume = createServerFn({ method: "POST" })
   .validator(
     volumeSchema.extend(deleteConfirmationSchema.shape).extend({
       createBackup: z.boolean().default(true),
-      storageId: z.uuid().nullable().optional(),
+      storageId: z.uuid().nullable(),
     })
   )
   .handler(async ({ data }) => {
@@ -228,10 +228,8 @@ export const deleteRelayVolume = createServerFn({ method: "POST" })
       kind: "volume",
       relayId: relay.id,
       resourceId: data.volumeId,
+      storageId: data.storageId,
       user,
-      ...(data.createBackup && data.storageId !== undefined
-        ? { storageId: data.storageId }
-        : {}),
     })
     await awaitResourceDeletion(deletion)
     publishRelayVolumesChange(relay.id)
