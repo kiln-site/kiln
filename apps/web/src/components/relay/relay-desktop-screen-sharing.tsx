@@ -16,6 +16,7 @@ import {
   type DesktopImageSize,
   type DesktopSurfaceProps,
 } from "@/components/relay/relay-desktop-surface"
+import { DesktopTrackpad } from "@/components/relay/relay-desktop-trackpad"
 import { decodesDesktopVideo } from "@/components/relay/relay-desktop-video-check"
 import { forkPromise } from "@/effect/promise"
 
@@ -157,9 +158,19 @@ function ScreenSharingSurface({
   // one has to say so.
   const rejected = React.useRef(false)
   const [attempt, setAttempt] = React.useState(0)
+  const [trackpad, setTrackpad] = React.useState(false)
   const [connection, setConnection] = React.useState<Connection>({
     status: "connecting",
   })
+
+  const image = React.useCallback(
+    () => target.current?.querySelector("canvas") ?? null,
+    []
+  )
+  // Keys go to the desktop, unless a phone's keyboard is taking them.
+  const takeKeys = React.useCallback(() => {
+    if (document.activeElement !== keyboard.current) client.current?.focus()
+  }, [])
 
   const showView = React.useCallback(() => {
     const rfb = client.current
@@ -180,6 +191,7 @@ function ScreenSharingSurface({
           send(key.keysym, key.code, false)
         }
       },
+      setTrackpad,
       toggleKeyboard: () => {
         const field = keyboard.current
         if (document.activeElement === field) field?.blur()
@@ -291,6 +303,12 @@ function ScreenSharingSurface({
     }
   }, [attempt, onImageSize, onVideo, relayId, session, showView])
 
+  // The trackpad's clicks would otherwise close a phone's keyboard, as the
+  // canvas took the focus from it. It decides what has the keys itself.
+  React.useEffect(() => {
+    if (client.current) client.current.focusOnClick = !trackpad
+  }, [connection.status, trackpad])
+
   // A new size is a new picture to scale, once the window stops moving.
   React.useEffect(() => {
     const element = target.current
@@ -315,6 +333,12 @@ function ScreenSharingSurface({
         className="absolute inset-0"
         role="application"
       />
+      {trackpad && connection.status === "connected" ? (
+        <DesktopTrackpad
+          image={image}
+          onUsed={takeKeys}
+        />
+      ) : null}
       <DesktopKeyboard
         input={keyboard}
         send={sendRawKey}
@@ -429,6 +453,7 @@ const option = { code: "AltLeft", key: "Alt", keysym: META_LEFT }
 export const screenSharingClient: DesktopClient = {
   cropsMonitors: true,
   offersKeyboard: true,
+  offersTrackpad: true,
   offersLossless: true,
   Surface: ScreenSharingSurface,
   combos: [

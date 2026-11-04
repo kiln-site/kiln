@@ -21,6 +21,8 @@ export interface DesktopSurface {
   setLossless?: (lossless: boolean) => void
   /** Skips pixels while the picture moves, to keep up with big displays. */
   setFastMotion?: (fastMotion: boolean) => void
+  /** Moves the pointer by dragging, like a trackpad, instead of where it's touched. */
+  setTrackpad?: (trackpad: boolean) => void
   /** Opens or closes a phone's keyboard, from the tap on the toolbar. */
   toggleKeyboard?: () => void
   /** The monitor on show, for a client that can ask for only that much. */
@@ -54,6 +56,8 @@ export interface DesktopClient {
   readonly combos: ReadonlyArray<SendableCombo>
   /** Whether it shows just the monitor it's given, instead of the page. */
   readonly cropsMonitors?: boolean
+  /** Whether the toolbar offers `DesktopSurface.setTrackpad`. */
+  readonly offersTrackpad?: boolean
   /** Whether touch screens get `DesktopSurface.toggleKeyboard`. voxl has its own. */
   readonly offersKeyboard?: boolean
   /** Whether the toolbar offers `DesktopSurface.setLossless`. */

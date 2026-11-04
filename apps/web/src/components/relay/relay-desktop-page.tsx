@@ -2,6 +2,7 @@ import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import type { RelayDesktop, RelayDesktopMonitor } from "@workspace/contracts"
+import { Result } from "effect"
 import {
   Command,
   Gem,
@@ -15,6 +16,7 @@ import {
   Rabbit,
   RotateCw,
   TerminalSquare,
+  Touchpad,
   TriangleAlert,
   Unplug,
 } from "lucide-react"
@@ -62,6 +64,8 @@ const SESSION_CHECK_MS = 10_000
 const LAYOUT_CHECK_MS = 1_000
 const LAYOUT_CHECKS_FOR_MS = 10_000
 const TOUCH_SCREEN = "(any-pointer: coarse)"
+const MAIN_POINTER_IS_TOUCH = "(pointer: coarse)"
+const TRACKPAD_STORAGE_KEY = "kiln:desktop-trackpad"
 
 function relayDesktopQueryOptions(relayId: string) {
   return {
@@ -380,6 +384,10 @@ function DesktopFrame({
   const [video, setVideo] = React.useState(false)
   const [keyboardOpen, setKeyboardOpen] = React.useState(false)
   const touch = useTouchScreen()
+  const [trackpad, setTrackpad] = React.useState(prefersTrackpad)
+  React.useEffect(() => {
+    surface.current?.setTrackpad?.(trackpad)
+  }, [trackpad])
   const [fastMotion, setFastMotion] = React.useState(true)
   React.useEffect(() => {
     surface.current?.setFastMotion?.(fastMotion)
@@ -425,7 +433,31 @@ function DesktopFrame({
         expanded && "fixed inset-0 z-50"
       )}
     >
-      <div className="flex h-9 shrink-0 items-center justify-end gap-1 overflow-x-auto border-b border-border/70 bg-card px-2">
+      <div className="flex h-9 shrink-0 items-center gap-1 overflow-x-auto border-b border-border/70 bg-card px-2 sm:justify-end">
+        {client.offersTrackpad ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-pressed={trackpad}
+                size="sm"
+                variant={trackpad ? "secondary" : "ghost"}
+                onClick={() => {
+                  const next = !trackpad
+                  setTrackpad(next)
+                  rememberTrackpad(next)
+                  surface.current?.focus()
+                }}
+              >
+                <Touchpad />
+                <ToolbarLabel>Trackpad</ToolbarLabel>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              Drag to move the pointer, tap to click, and drag two fingers to
+              scroll.
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
         {client.offersKeyboard && touch ? (
           <Button
             aria-pressed={keyboardOpen}
@@ -563,6 +595,24 @@ function DesktopFrame({
 // Icons alone on a phone, where the toolbar can't hold every name.
 function ToolbarLabel({ children }: { children: React.ReactNode }) {
   return <span className="max-sm:sr-only">{children}</span>
+}
+
+// What this browser was last set to, or else what suits its main pointer: a
+// laptop with a touch screen still has a mouse first.
+function prefersTrackpad() {
+  const saved = Result.getOrElse(
+    Result.try(() => window.localStorage.getItem(TRACKPAD_STORAGE_KEY)),
+    () => null
+  )
+  return saved === null
+    ? window.matchMedia(MAIN_POINTER_IS_TOUCH).matches
+    : saved === "true"
+}
+
+function rememberTrackpad(trackpad: boolean) {
+  Result.try(() =>
+    window.localStorage.setItem(TRACKPAD_STORAGE_KEY, String(trackpad))
+  )
 }
 
 function useTouchScreen() {

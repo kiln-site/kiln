@@ -7,6 +7,7 @@ declare module "@novnc/novnc" {
       listener: (event: CustomEvent<{ name: string }>) => void
     ): void
     addEventListener(type: string, listener: EventListener): void
+    focusOnClick: boolean
     scaleViewport: boolean
     showDotCursor: boolean
     disconnect(): void

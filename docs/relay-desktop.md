@@ -287,8 +287,17 @@ On touch screens, tap clicks, long press right-clicks, one finger drags, and two
 fingers scroll. voxl's toolbar adds an on-screen keyboard button, and on a Mac the
 page's does: noVNC draws on a canvas, which can't open a phone's keyboard, so a
 hidden text field takes the typing and the page sends what its text became, with
-Shift around what needs it, as a keyboard would. There's no
-pinch zoom, and a physical monitor isn't resized to fit, so a 1080p desktop shows
+Shift around what needs it, as a keyboard would.
+
+On a Mac, **Trackpad** on the toolbar moves the pointer by dragging, instead of
+to where you touch, as a phone is too small to point at a desktop. It's on for
+browsers whose main pointer is touch, and each browser remembers what it was set
+to. The pointer starts in the middle. Tap clicks where it is, a double tap held
+down drags, a long press or two-finger tap right-clicks, and two fingers scroll.
+It's a layer over noVNC's canvas that sends it the mouse events it already takes
+(`relay-desktop-trackpad.tsx`), so nothing about the stream changes.
+
+There's no pinch zoom, and a physical monitor isn't resized to fit, so a 1080p desktop shows
 at about a fifth of its size on a phone held upright.
 
 ## Licensing
