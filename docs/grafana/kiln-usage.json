@@ -125,7 +125,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (kiln_container_group) (relay_container_memory_anon_bytes{kiln_container_group=~\"hearth|mysql|valkey\",kiln_installation_id=~\"$installation\"})",
+          "expr": "sum by (kiln_container_group) (max by (instance, kiln_container_group) (relay_container_memory_anon_bytes{kiln_container_group=~\"hearth|mysql|valkey\",kiln_installation_id=~\"$installation\"}))",
           "legendFormat": "{{kiln_container_group}}",
           "range": true
         }
@@ -237,7 +237,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (kiln_container_group) (relay_container_memory_usage_bytes{kiln_container_group=~\"hearth|mysql|valkey\",kiln_installation_id=~\"$installation\"})",
+          "expr": "sum by (kiln_container_group) (max by (instance, kiln_container_group) (relay_container_memory_usage_bytes{kiln_container_group=~\"hearth|mysql|valkey\",kiln_installation_id=~\"$installation\"}))",
           "legendFormat": "{{kiln_container_group}}",
           "range": true
         }
@@ -293,7 +293,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(hearth_memory_rss_bytes{kiln_installation_id=~\"$installation\"})",
+          "expr": "sum(max by (kiln_installation_id) (hearth_memory_rss_bytes{kiln_installation_id=~\"$installation\"}))",
           "legendFormat": "Resident",
           "range": true
         },
@@ -304,7 +304,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(hearth_memory_heap_used_bytes{kiln_installation_id=~\"$installation\"})",
+          "expr": "sum(max by (kiln_installation_id) (hearth_memory_heap_used_bytes{kiln_installation_id=~\"$installation\"}))",
           "legendFormat": "V8 heap",
           "range": true
         },
@@ -315,7 +315,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(hearth_memory_external_bytes{kiln_installation_id=~\"$installation\"})",
+          "expr": "sum(max by (kiln_installation_id) (hearth_memory_external_bytes{kiln_installation_id=~\"$installation\"}))",
           "legendFormat": "Outside V8",
           "range": true
         }
@@ -735,7 +735,7 @@
             "uid": "prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (kiln_container_group) (relay_container_memory_anon_bytes{kiln_installation_id=~\"$installation\",kiln_relay_name=~\"$relay\"})",
+          "expr": "sum by (kiln_container_group) (max by (instance, kiln_container_group) (relay_container_memory_anon_bytes{kiln_installation_id=~\"$installation\",kiln_relay_name=~\"$relay\"}))",
           "legendFormat": "{{kiln_container_group}}",
           "range": true
         }

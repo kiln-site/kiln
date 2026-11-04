@@ -1,9 +1,9 @@
 import { createHmac } from "node:crypto"
 import { hostname } from "node:os"
 
-import { Effect, Fiber, Metric } from "effect"
+import { Effect, Fiber, ManagedRuntime, Metric } from "effect"
 import { TestClock } from "effect/testing"
-import { describe, expect, it, vi } from "vite-plus/test"
+import { describe, expect, it, onTestFinished, vi } from "vite-plus/test"
 
 import { DockerEngine } from "./docker-engine.js"
 import { sampleNodeMetrics } from "./node-metrics.js"
@@ -244,23 +244,21 @@ describe("Kiln deployed without Kiln's labels", () => {
     ).resolves.toBe(true)
 
     const relayId = "relay-beside-coolify"
-    await run(
-      Effect.gen(function* () {
-        const sampler = yield* Effect.forkChild(
-          sampleNodeMetrics(
-            () => relayId,
-            kiln.context.engine,
-            kiln.harness.config
-          )
-        )
-        // Virtual time for the samples; Docker's answers take real time.
-        const sampled = () => containersInGroup(relayId, "hearth")
-        while ((yield* Effect.promise(sampled)) !== 1) {
-          yield* Effect.promise(() => new Promise((go) => setTimeout(go, 20)))
-          yield* TestClock.adjust("15 seconds")
-        }
-        yield* Fiber.interrupt(sampler)
-      }).pipe(Effect.provide(TestClock.layer()))
+    // Virtual time for the samples; Docker's answers take real time.
+    const clock = ManagedRuntime.make(TestClock.layer())
+    const sampler = clock.runFork(
+      sampleNodeMetrics(() => relayId, kiln.context.engine, kiln.harness.config)
+    )
+    onTestFinished(async () => {
+      await run(Fiber.interrupt(sampler))
+      await clock.dispose()
+    })
+    await vi.waitFor(
+      async () => {
+        await clock.runPromise(TestClock.adjust("15 seconds"))
+        await expect(containersInGroup(relayId, "hearth")).resolves.toBe(1)
+      },
+      { timeout: 4_000 }
     )
     await expect(containersInGroup(relayId, "mysql")).resolves.toBe(1)
     await expect(containersInGroup(relayId, "valkey")).resolves.toBe(1)
@@ -283,12 +281,14 @@ describe("Kiln deployed without Kiln's labels", () => {
     const sampler = Effect.runFork(
       sampleNodeMetrics(() => relayId, kiln.context.engine, kiln.harness.config)
     )
+    onTestFinished(async () => {
+      stuck.release()
+      await run(Fiber.interrupt(sampler))
+    })
     await stuck.reached
     await vi.waitFor(async () => {
       await expect(containersInGroup(relayId, "other")).resolves.toBe(4)
     })
-    stuck.release()
-    await run(Fiber.interrupt(sampler))
   })
 
   it("reports nothing for a Hearth that can't prove the container it names", async () => {
