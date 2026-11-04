@@ -120,8 +120,9 @@ and audio frames. Whenever `VOXL_VERSION` changes, update that copy with its
 `VERSION` file, and `KILN_DESKTOP_IMAGE_TAG`, which is `<voxl version>-<revision>`.
 Raise `DESKTOP_IMAGE_REVISION` in `apps/desktop/Dockerfile` for any other change to
 the image, as Relays keep the image a tag named. A test fails until they agree.
-The **Desktop image** workflow publishes that tag from `main`, and a release fails
-until the image and its source can be pulled anonymously.
+The **Desktop image** workflow publishes that tag from `main`. A nightly that gets
+there first waits up to 20 minutes for the image and its source to be anonymously
+pullable, then fails, and a stable release checks once.
 
 ## The streamer
 
