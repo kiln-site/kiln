@@ -3,8 +3,9 @@
 # an X11 display to the browser as H.264 over a WebSocket. The Relay runs it
 # beside the node's own display server and passes the browser's connection
 # through Hearth to it. voxl is MIT, but it links x264 (GPL-2.0), so this
-# image is distributed under the GPL, separately from Kiln's own images. Debian's
-# libraries' source ships inside it, and voxl's beside it (the `source` target).
+# image is distributed under the GPL, separately from Kiln's own images. The
+# source of the libraries it adds ships inside it, and voxl's beside it (the
+# `source` target).
 #
 # A new version also needs KILN_DESKTOP_IMAGE_TAG and the client Hearth serves
 # (docs/relay-desktop.md); scripts/desktop-image.test.mjs checks they agree.
@@ -56,22 +57,31 @@ RUN printf '%s\n' \
 FROM scratch AS source
 COPY --from=source-files /src /src
 
+# Certificates go in first: what the second install adds is everything voxl's
+# libraries bring, however deep, and it's all that source-packages lists.
 FROM debian:trixie-slim AS runtime
 RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && dpkg-query -W -f '${Package}\n' | sort > /tmp/before \
   && apt-get install -y --no-install-recommends \
-    ca-certificates libopus0 libpulse0 libx264-164 libxcb1 libyuv0 \
-  && rm -rf /var/lib/apt/lists/*
+    libopus0 libpulse0 libx264-164 libxcb1 libyuv0 \
+  && mkdir -p /usr/share/doc/voxl \
+  && dpkg-query -W -f '${Package}\n' | sort | comm -13 /tmp/before - \
+    | xargs dpkg-query -W -f '${source:Package}=${source:Version}\n' | sort -u \
+    > /usr/share/doc/voxl/source-packages \
+  && dpkg-query -W -f '${Package} ${Version} ${source:Package} ${source:Version}\n' \
+    > /usr/share/doc/voxl/debian-packages \
+  && rm -rf /var/lib/apt/lists/* /tmp/before
 
-# The source of the x264 and PulseAudio this image links, at the versions it
-# installed. They go in the image, so the two can't drift apart.
+# The source of those libraries, at the versions this image installed. It goes
+# in the image, so the two can't drift apart.
 FROM runtime AS debian-source
-RUN packages="$(dpkg-query -W -f '${source:Package}=${source:Version}\n' libx264-164 libpulse0)" \
-  && sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources \
+RUN sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources \
   && apt-get update \
   && apt-get install -y --no-install-recommends dpkg-dev \
   && mkdir /debian \
   && cd /debian \
-  && apt-get source --download-only $packages
+  && apt-get source --download-only $(cat /usr/share/doc/voxl/source-packages)
 
 FROM runtime
 COPY --from=build /opt/voxl/bin/voxl /usr/local/bin/voxl
@@ -82,9 +92,12 @@ RUN ["/usr/local/bin/voxl", "--version"]
 RUN printf '%s\n' \
     'voxl is MIT licensed, but this binary links x264, so it is distributed' \
     'under the GPL: see /usr/share/common-licenses/GPL-2. The source of the' \
-    'x264 and PulseAudio it links is in source/. The source of voxl and the' \
-    'crates built into it is published beside this image, under this tag' \
-    'followed by -source. Their licenses are in licenses/.' \
+    'libraries this image adds to Debian, listed in source-packages, is in' \
+    'source/. The source of voxl and the crates built into it is published' \
+    'beside this image, under this tag followed by -source. Their licenses' \
+    'are in licenses/. debian-packages lists every Debian package here,' \
+    "including Debian's base image, whose source is in Debian's archive at" \
+    'https://snapshot.debian.org.' \
   > /usr/share/doc/voxl/NOTICE
 LABEL org.opencontainers.image.source="https://github.com/kiln-site/kiln" \
   org.opencontainers.image.licenses="GPL-2.0-or-later" \
