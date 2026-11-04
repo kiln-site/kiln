@@ -4,24 +4,32 @@
  * and pressure stalls, and each group of containers' CPU, memory, throttling,
  * OOM kills, and exits.
  *
- * Kiln's own containers (the Relay, and in platform mode Hearth, MySQL, and
- * Valkey) report one group each. Workloads report one group per kind and
- * everything Kiln doesn't run reports as `other`, so labels stay to small
- * fixed sets however many containers a node runs.
+ * Kiln's own containers (the Relay, and Hearth, its database, and its cache
+ * on the host they run on, whatever deployed them) report one group each.
+ * Workloads report one group per kind and everything Kiln doesn't run reports
+ * as `other`, so labels stay to small fixed sets however many containers a
+ * node runs.
  *
  * Sampling is a hot path, so it reports through metrics, never spans.
  */
 import { readFile } from "node:fs/promises"
 
+import type { RelayPlatformServiceRole } from "@workspace/contracts"
 import { Clock, Effect, Metric } from "effect"
 
 import type { RelayConfig } from "./config.js"
 import type { DockerEngine } from "./docker-engine.js"
 import { kilnContainerOwner } from "./kiln-containers.js"
+import { platformServiceContainers } from "./platform.js"
 
 const sampleInterval = "15 seconds"
 const eventsRetryInterval = "5 seconds"
 const statsConcurrency = 4
+// Finding the services can inspect every container while Hearth is away from
+// this host, so it runs once a minute, beside the samples rather than in them.
+// Docker answers each request within 30 seconds, but a search makes many.
+const serviceSearchInterval = "1 minute"
+const serviceSearchTimeout = "50 seconds"
 
 const containerGroups = [
   "relay",
@@ -39,7 +47,13 @@ type ContainerGroup = (typeof containerGroups)[number]
 
 type OwnerConfig = Pick<
   RelayConfig,
-  "mode" | "resourceNamespace" | "selfContainer" | "serverIdLabel"
+  | "dataDirectory"
+  | "installationId"
+  | "mode"
+  | "provenHearth"
+  | "resourceNamespace"
+  | "selfContainer"
+  | "serverIdLabel"
 >
 
 const platformGroups: Partial<Record<string, ContainerGroup>> = {
@@ -48,6 +62,16 @@ const platformGroups: Partial<Record<string, ContainerGroup>> = {
   MySQL: "mysql",
   Valkey: "valkey",
 }
+
+const serviceGroups = {
+  cache: "valkey",
+  database: "mysql",
+  hearth: "hearth",
+} as const satisfies Record<RelayPlatformServiceRole, ContainerGroup>
+
+// Which containers are Kiln's services, as last found, by container ID. Both
+// the sampler and the event stream read it; a failed search keeps the last.
+let serviceContainers: ReadonlyMap<string, ContainerGroup> = new Map()
 
 const host = {
   cpuTime: counter(
@@ -171,7 +195,7 @@ export function sampleNodeMetrics(
 ): Effect.Effect<never> {
   const hostIncrements = new Increments()
   const containerIncrements = new Increments()
-  return Effect.suspend(() => {
+  const sampling = Effect.suspend(() => {
     const id = relayId()
     return Effect.all(
       [
@@ -181,6 +205,32 @@ export function sampleNodeMetrics(
       { concurrency: "unbounded", discard: true }
     )
   }).pipe(Effect.andThen(Effect.sleep(sampleInterval)), Effect.forever)
+  return Effect.forkChild(findServiceContainers(engine, config)).pipe(
+    Effect.andThen(sampling)
+  )
+}
+
+function findServiceContainers(
+  engine: DockerEngine,
+  config: OwnerConfig
+): Effect.Effect<never> {
+  return platformServiceContainers(engine, config).pipe(
+    Effect.tap((found) =>
+      Effect.sync(() => {
+        serviceContainers = new Map(
+          [...found].map(([role, container]) => [
+            container.Id,
+            serviceGroups[role],
+          ])
+        )
+      })
+    ),
+    Effect.timeout(serviceSearchTimeout),
+    Effect.ignore,
+    Effect.withTracerEnabled(false),
+    Effect.andThen(Effect.sleep(serviceSearchInterval)),
+    Effect.forever
+  )
 }
 
 /**
@@ -427,6 +477,8 @@ function groupOf(
     readonly Names: ReadonlyArray<string>
   }
 ): ContainerGroup {
+  const service = serviceContainers.get(summary.Id)
+  if (service) return service
   const owner = kilnContainerOwner(config, summary)
   if (!owner) return "other"
   switch (owner.resource.type) {

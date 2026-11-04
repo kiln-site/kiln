@@ -65,6 +65,7 @@ import {
   startSecurityScans,
   stopSecurityScans,
 } from "./lib/security-scans.server"
+import { startHearthMetrics, stopHearthMetrics } from "./lib/hearth-metrics"
 import { startRelayMetrics, stopRelayMetrics } from "./lib/relay-metrics"
 import { relayPassthroughUsages } from "./lib/relay-passthrough-limits.server"
 import { stopScheduleDeliveries } from "./server/schedule-deployment.server"
@@ -81,6 +82,7 @@ startAppImageUpdateChecks()
 startIconDetection()
 startSecurityScans()
 startRelayMetrics(relayConnectionsCapacity, relayPassthroughUsages)
+startHearthMetrics()
 
 const pairRelayFromEnvironment = Effect.tryPromise({
   try: initializeRelayFromEnvironment,
@@ -213,6 +215,7 @@ export function shutdownHearth(): Promise<void> {
     stopPollingWorkers(),
     stopSecurityScans(),
     stopRelayMetrics(),
+    stopHearthMetrics(),
     stopScheduleDeliveries(),
   ])
     .then(() => Effect.runPromise(stopWarmCacheRefreshes))

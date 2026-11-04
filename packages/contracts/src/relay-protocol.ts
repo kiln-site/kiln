@@ -763,6 +763,9 @@ export const RelayAuthResponseSchema = Schema.Struct({
   // Hearth's installation ID, which the Relay saves as its own. Relays
   // validate it themselves so an ID they can't use never fails authentication.
   installationId: Schema.optionalKey(Schema.String),
+  // What Hearth calls this Relay, which it saves as its own name. Hearth
+  // names a Relay when someone confirms it, after the Relay chose a default.
+  relayName: Schema.optionalKey(Schema.String),
   // The container Hearth runs in, and an HMAC of
   // `relayHearthContainerTranscript` keyed by its BETTER_AUTH_SECRETS, which
   // a Relay on the same host checks against that container's environment.

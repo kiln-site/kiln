@@ -315,11 +315,19 @@ exits are counted from Docker's events as they happen. Every metric is
 labelled with `relay.id`.
 
 Container metrics carry `kiln.container.group`, one of `relay`, `hearth`,
-`mysql`, `valkey` (the last three in platform mode), `relay_services`
-(Traefik, CoreDNS, Tailscale, Limbo), `game_server`, `app`, `database`, or
-`other` for every container Kiln doesn't run, such as Coolify's. Workloads
-are summed per kind, never labelled per resource, and every group is written
-each sample, so one that empties reads zero.
+`mysql`, `valkey`, `relay_services` (Traefik, CoreDNS, Tailscale, Limbo),
+`game_server`, `app`, `database`, or `other` for every container Kiln doesn't
+run, such as Coolify's. Workloads are summed per kind, never labelled per
+resource, and every group is written each sample, so one that empties reads
+zero.
+
+`hearth`, `mysql`, and `valkey` are Hearth and the database and cache it uses,
+whatever their engine (`mysql` includes MariaDB, `valkey` includes Redis) and
+however they were deployed. The Relay on their Docker host finds them the way
+[Kiln's pages](self-hosting.md#installs-that-run-hearth-by-hand) do, once a
+minute, so Hearth, MySQL, and Valkey deployed by Coolify report without any
+labels. Only a Relay on their host can see them: without one these groups read
+zero on every Relay, and only Hearth's own process metrics below report.
 
 | Metric                                                                                       | Meaning                                                                                                                                                                                |
 | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -339,6 +347,20 @@ Relay in a container reports the whole node. Pressure needs Linux's PSI:
 kernel 4.20 or later with it enabled (Debian also needs `psi=1` on the kernel
 command line); without it the pressure metric is absent. Counters start from
 the Relay's first sample, so a restart loses at most one interval.
+
+## Hearth's process metrics
+
+With the same `OTEL_METRICS_EXPORTER=otlp`, Hearth reports its own process
+every fifteen seconds, from inside it, so these report however Hearth was
+deployed and whether or not a Relay shares its host. Its container's numbers
+are the `hearth` group above, which also counts child processes such as Grype:
+expect that group's CPU to run well above `hearth.cpu.time` while Grype
+updates its database.
+
+| Metric                                                                   | Meaning                                                      |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| `hearth.memory.rss`, `hearth.memory.heap_used`, `hearth.memory.external` | Resident memory, the JavaScript heap, and native memory.     |
+| `hearth.cpu.time`                                                        | CPU seconds Hearth's process used. Its rate is cores in use. |
 
 ## Connection drops
 

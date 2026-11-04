@@ -41,10 +41,15 @@ Hearth, so it follows Hearth's configuration. Hearth, its browsers, and its
 Relays tag their telemetry with the `kiln.installation_id` resource attribute.
 A Relay reports an installation ID Hearth gives it from its next start. Each
 Relay also sends its ID, the fingerprint Hearth knows it by, as
-`service.instance.id`, and its name as `kiln.relay.name`; a rename is reported
-from its next start. Prometheus's OTLP receiver turns `service.instance.id`
-into the `instance` label, so group Relays by it and join names from
-`target_info`.
+`service.instance.id`, and its name as `kiln.relay.name`. Hearth gives a Relay
+its name each time it connects, and a new name is reported from the Relay's
+next start. Prometheus's OTLP receiver turns `service.instance.id` into the
+`instance` label, so group Relays by it and join names from `target_info`.
+[`docs/grafana/kiln-usage.json`](grafana/kiln-usage.json) is a Grafana
+dashboard of what Hearth, its database and cache, and each Relay spend. It
+expects a Prometheus data source with the UID `prometheus`, and needs
+`kiln.installation_id` and `kiln.relay.name` among the receiver's promoted
+resource attributes.
 
 Normal GitHub `ubuntu-24.04` / `ubuntu-24.04-arm` runners are the default.
 Image PRs, manual image runs, and scheduled image builds retain GitHub runners.

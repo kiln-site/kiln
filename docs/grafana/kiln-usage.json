@@ -1,0 +1,802 @@
+{
+  "uid": "kiln-usage",
+  "title": "Kiln Usage",
+  "tags": ["kiln"],
+  "schemaVersion": 41,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "refresh": "1m",
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "installation",
+        "label": "Installation",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(target_info, kiln_installation_id)",
+          "refId": "installation"
+        },
+        "definition": "label_values(target_info, kiln_installation_id)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 2,
+        "sort": 1
+      },
+      {
+        "name": "relay",
+        "label": "Relay",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(target_info{job=\"relay\"}, kiln_relay_name)",
+          "refId": "relay"
+        },
+        "definition": "label_values(target_info{job=\"relay\"}, kiln_relay_name)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 2,
+        "sort": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Hearth, its database, and its cache",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Memory in use",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kiln_container_group) (max by (instance, kiln_container_group) (relay_container_memory_anon_bytes{kiln_container_group=~\"hearth|mysql|valkey\",kiln_installation_id=~\"$installation\"}))",
+          "legendFormat": "{{kiln_container_group}}",
+          "range": true
+        }
+      ],
+      "description": "Anonymous memory, which can't be reclaimed without swap. mysql includes MariaDB and valkey includes Redis. Reported by the Relay on their Docker host; without one these read zero."
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "CPU",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kiln_container_group) (rate(relay_container_cpu_time_seconds_total{kiln_container_group=~\"hearth|mysql|valkey\",kiln_installation_id=~\"$installation\"}[$__rate_interval]))",
+          "legendFormat": "{{kiln_container_group}}",
+          "range": true
+        }
+      ],
+      "description": "Cores in use by each container, its child processes included."
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Memory with page cache",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 8,
+        "x": 0,
+        "y": 11
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kiln_container_group) (max by (instance, kiln_container_group) (relay_container_memory_usage_bytes{kiln_container_group=~\"hearth|mysql|valkey\",kiln_installation_id=~\"$installation\"}))",
+          "legendFormat": "{{kiln_container_group}}",
+          "range": true
+        }
+      ],
+      "description": "Everything charged to the container. The kernel reclaims the page cache under pressure."
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Hearth process memory",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 8,
+        "x": 8,
+        "y": 11
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(max by (kiln_installation_id) (hearth_memory_rss_bytes{kiln_installation_id=~\"$installation\"}))",
+          "legendFormat": "Resident",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(max by (kiln_installation_id) (hearth_memory_heap_used_bytes{kiln_installation_id=~\"$installation\"}))",
+          "legendFormat": "V8 heap",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(max by (kiln_installation_id) (hearth_memory_external_bytes{kiln_installation_id=~\"$installation\"}))",
+          "legendFormat": "Outside V8",
+          "range": true
+        }
+      ],
+      "description": "Reported by Hearth itself, however it was deployed."
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Hearth process CPU",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 8,
+        "x": 16,
+        "y": 11
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(hearth_cpu_time_seconds_total{kiln_installation_id=~\"$installation\"}[$__rate_interval]))",
+          "legendFormat": "Hearth",
+          "range": true
+        }
+      ],
+      "description": "Cores used by Hearth's own process. Child processes such as Grype count only in the CPU panel above."
+    },
+    {
+      "id": 7,
+      "type": "row",
+      "title": "Relays",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Relay process memory",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 8,
+        "x": 0,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (instance, kiln_relay_name) (relay_memory_rss_bytes{kiln_installation_id=~\"$installation\",kiln_relay_name=~\"$relay\"})",
+          "legendFormat": "{{kiln_relay_name}}",
+          "range": true
+        }
+      ],
+      "description": "The Relay's Node.js process (RSS)."
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Relay container memory in use",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 8,
+        "x": 8,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max by (instance, kiln_relay_name) (relay_container_memory_anon_bytes{kiln_container_group=\"relay\",kiln_installation_id=~\"$installation\",kiln_relay_name=~\"$relay\"})",
+          "legendFormat": "{{kiln_relay_name}}",
+          "range": true
+        }
+      ],
+      "description": "The Relay's container, page cache left out."
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Relay CPU",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 8,
+        "x": 16,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (instance, kiln_relay_name) (rate(relay_container_cpu_time_seconds_total{kiln_container_group=\"relay\",kiln_installation_id=~\"$installation\",kiln_relay_name=~\"$relay\"}[$__rate_interval]))",
+          "legendFormat": "{{kiln_relay_name}}",
+          "range": true
+        }
+      ],
+      "description": "Cores used by the Relay's container."
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Nodes",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Node memory used",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 33
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "1 - max by (instance, kiln_relay_name) (relay_host_memory_available_bytes{kiln_installation_id=~\"$installation\",kiln_relay_name=~\"$relay\"}) / max by (instance, kiln_relay_name) (relay_host_memory_total_bytes{kiln_installation_id=~\"$installation\",kiln_relay_name=~\"$relay\"})",
+          "legendFormat": "{{kiln_relay_name}}",
+          "range": true
+        }
+      ],
+      "description": "Share of the node's memory it can't give out without swapping."
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Node CPU busy",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 33
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "none"
+            }
+          },
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (instance, kiln_relay_name) (rate(relay_host_cpu_time_seconds_total{cpu_mode!=\"idle\",kiln_installation_id=~\"$installation\",kiln_relay_name=~\"$relay\"}[$__rate_interval])) / max by (instance, kiln_relay_name) (relay_host_cpu_cores{kiln_installation_id=~\"$installation\",kiln_relay_name=~\"$relay\"})",
+          "legendFormat": "{{kiln_relay_name}}",
+          "range": true
+        }
+      ],
+      "description": "Share of the node's cores doing anything but idling."
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Memory in use by group",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 43
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kiln_container_group) (max by (instance, kiln_container_group) (relay_container_memory_anon_bytes{kiln_installation_id=~\"$installation\",kiln_relay_name=~\"$relay\"}))",
+          "legendFormat": "{{kiln_container_group}}",
+          "range": true
+        }
+      ],
+      "description": "What each kind of container on the selected Relays holds."
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "CPU by group",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 12,
+        "y": 43
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 25,
+            "showPoints": "never",
+            "lineWidth": 1,
+            "spanNulls": 60000,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": ["lastNotNull", "max"]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (kiln_container_group) (rate(relay_container_cpu_time_seconds_total{kiln_installation_id=~\"$installation\",kiln_relay_name=~\"$relay\"}[$__rate_interval]))",
+          "legendFormat": "{{kiln_container_group}}",
+          "range": true
+        }
+      ],
+      "description": "Cores used by each kind of container on the selected Relays."
+    }
+  ]
+}

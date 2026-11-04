@@ -1653,6 +1653,25 @@ const platformProxy = Effect.fnUntraced(function* (
   return null
 })
 
+/**
+ * Kiln's services on this host, however they were deployed: by this Relay,
+ * with Kiln's labels, or, as under Coolify, beside a Hearth that proved its
+ * container.
+ */
+export const platformServiceContainers = Effect.fnUntraced(function* (
+  engine: DockerEngine,
+  config: Pick<
+    RelayConfig,
+    "dataDirectory" | "installationId" | "mode" | "provenHearth"
+  >
+) {
+  const state =
+    config.mode === "platform"
+      ? yield* readPlatformState(config.dataDirectory)
+      : null
+  return yield* platformContainers(engine, config, state)
+})
+
 /** The container for one of Kiln's services, or the proxy in front of it. */
 export const platformTargetContainer = Effect.fnUntraced(function* (
   context: Pick<PlatformReadContext, "config" | "engine">,
@@ -1662,11 +1681,7 @@ export const platformTargetContainer = Effect.fnUntraced(function* (
   if (target === "proxy") {
     return (yield* platformProxy(engine, config))?.container ?? null
   }
-  const state =
-    config.mode === "platform"
-      ? yield* readPlatformState(config.dataDirectory)
-      : null
-  return (yield* platformContainers(engine, config, state)).get(target) ?? null
+  return (yield* platformServiceContainers(engine, config)).get(target) ?? null
 })
 
 /**

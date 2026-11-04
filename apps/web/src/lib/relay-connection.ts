@@ -1850,6 +1850,11 @@ class RelayConnection {
     const installationId = credentials.sendInstallationId
       ? loadedKilnInstallationId()
       : null
+    // Likewise its name, which its telemetry carries: a Relay that kept its
+    // ID belongs to another installation, which named it.
+    const relayName = credentials.sendInstallationId
+      ? credentials.relayName
+      : null
     const hearthContainer = hearthContainerClaim(
       challenge,
       credentials.clientId
@@ -1876,6 +1881,7 @@ class RelayConnection {
         type: "auth.response",
         v: 1,
         ...(installationId ? { installationId } : {}),
+        ...(relayName ? { relayName } : {}),
         ...(hearthContainer ? { hearthContainer } : {}),
         dial: dialTarget(),
       })

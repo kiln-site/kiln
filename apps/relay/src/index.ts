@@ -1386,6 +1386,15 @@ const server = activeTls
     )
   : createHttpServer(requestHandler)
 
+async function renameRelay(name: string) {
+  relayIdentity = await runRelayEffect(
+    "relay.control.rename",
+    renameRelayIdentity(config, relayIdentity, name)
+  )
+  config.nodeName = relayIdentity.name
+  config.nodeId = relayIdentity.fingerprint
+}
+
 const controlSocket = attachControlSocket({
   adoptInstallationId: (installationId) =>
     recoverPromise(
@@ -1396,6 +1405,24 @@ const controlSocket = attachControlSocket({
         ),
       (cause) => {
         reportRelayError(cause, { operation: "relay.installation.adopt" })
+      }
+    ),
+  adoptRelayName: (name) =>
+    recoverPromise(
+      async () => {
+        if (name.trim() === relayIdentity.name) return
+        await renameRelay(name)
+        // Not awaited: this runs under the connection's authentication
+        // deadline, and a snapshot waits on Docker.
+        forkPromise(
+          () => snapshotHub.refresh(),
+          (cause) => {
+            reportRelayError(cause, { operation: "relay.name.adopt" })
+          }
+        )
+      },
+      (cause) => {
+        reportRelayError(cause, { operation: "relay.name.adopt" })
       }
     ),
   identifyHearth: (claim) => {
@@ -1684,6 +1711,19 @@ const platformContext: PlatformContext = {
   config,
   engine: relayEngine,
 }
+// Starts bundled Traefik for Hearth, or joins it to Kiln's network, after a
+// platform pass. It changes the routes and reads Kiln's services.
+const repairPlatformEdge = operation<void>()({
+  name: "relay.platform.edge",
+  locks: () => [exclusive(laneKeys.routes), shared(laneKeys.platform)],
+  run: () =>
+    Effect.tryPromise(() => lifecycle.reconcilePlatformEdge()).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Traefik couldn't serve Hearth", cause)
+      )
+    ),
+})
+
 const platformFiber = forkRelayEffect("relay.platform", platformLoop())
 // See web-certificates.ts.
 const certificateFiber = forkRelayEffect(
@@ -3973,16 +4013,7 @@ async function executeControlRequest(
       )
     }
     case "relay.rename": {
-      relayIdentity = await runRelayEffect(
-        "relay.control.rename",
-        renameRelayIdentity(
-          config,
-          relayIdentity,
-          requiredString(payload, "name")
-        )
-      )
-      config.nodeName = relayIdentity.name
-      config.nodeId = relayIdentity.fingerprint
+      await renameRelay(requiredString(payload, "name"))
       await snapshotHub.refresh()
       await appendRelayAudit("relay.renamed", client.id, request.id, {
         name: relayIdentity.name,
@@ -4078,19 +4109,6 @@ function notePlatformPass(result: PlatformPassResult): void {
     state: result.state ?? platformPass.state,
   }
 }
-
-// Starts bundled Traefik for Hearth, or joins it to Kiln's network, after a
-// platform pass. It changes the routes and reads Kiln's services.
-const repairPlatformEdge = operation<void>()({
-  name: "relay.platform.edge",
-  locks: () => [exclusive(laneKeys.routes), shared(laneKeys.platform)],
-  run: () =>
-    Effect.tryPromise(() => lifecycle.reconcilePlatformEdge()).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Traefik couldn't serve Hearth", cause)
-      )
-    ),
-})
 
 /**
  * Passes over Kiln's services every 30 seconds in platform mode. Otherwise

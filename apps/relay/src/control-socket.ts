@@ -139,6 +139,8 @@ export interface ControlSocketOptions {
   // Saves the installation ID a full-access Hearth authenticated with. The
   // session is ready only once this settles; it reports its own failures.
   readonly adoptInstallationId?: (installationId: string) => Promise<void>
+  // Saves the name a full-access Hearth calls this Relay, the same way.
+  readonly adoptRelayName?: (name: string) => Promise<void>
   /**
    * Checks, in the background, the container a full-access Hearth says it
    * runs in: `proof` must be an HMAC of `transcript` keyed by that
@@ -545,6 +547,7 @@ function authenticateSocket(
           message.signature,
           message.features ?? [],
           message.installationId,
+          message.relayName,
           message.hearthContainer
         ).pipe(
           Effect.tap(() =>
@@ -793,6 +796,7 @@ function authenticateSocket(
     signature: string,
     features: ReadonlyArray<string>,
     installationId: string | undefined,
+    relayName: string | undefined,
     hearthContainer: { readonly id: string; readonly proof: string } | undefined
   ): EffectType.Effect<void, Error> {
     return Effect.gen(function* () {
@@ -827,6 +831,7 @@ function authenticateSocket(
       yield* completedAuthenticationEffect(
         client,
         installationId,
+        relayName,
         hearthContainer
       )
     })
@@ -1262,6 +1267,7 @@ function authenticateSocket(
   function completedAuthenticationEffect(
     client: RelayClientGrant,
     installationId: string | undefined,
+    relayName: string | undefined,
     hearthContainer: { readonly id: string; readonly proof: string } | undefined
   ): EffectType.Effect<void, Error> {
     return Effect.gen(function* () {
@@ -1283,6 +1289,10 @@ function authenticateSocket(
       const adopt = options.adoptInstallationId
       if (adopt && installationId && client.role === "full_access") {
         yield* promiseOperation(() => adopt(installationId)).pipe(Effect.ignore)
+      }
+      const adoptName = options.adoptRelayName
+      if (adoptName && relayName && client.role === "full_access") {
+        yield* promiseOperation(() => adoptName(relayName)).pipe(Effect.ignore)
       }
       if (
         options.identifyHearth &&
