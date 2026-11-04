@@ -1393,7 +1393,6 @@ async function renameRelay(name: string) {
   )
   config.nodeName = relayIdentity.name
   config.nodeId = relayIdentity.fingerprint
-  await snapshotHub.refresh()
 }
 
 const controlSocket = attachControlSocket({
@@ -1411,7 +1410,16 @@ const controlSocket = attachControlSocket({
   adoptRelayName: (name) =>
     recoverPromise(
       async () => {
-        if (name.trim() !== relayIdentity.name) await renameRelay(name)
+        if (name.trim() === relayIdentity.name) return
+        await renameRelay(name)
+        // Not awaited: this runs under the connection's authentication
+        // deadline, and a snapshot waits on Docker.
+        forkPromise(
+          () => snapshotHub.refresh(),
+          (cause) => {
+            reportRelayError(cause, { operation: "relay.name.adopt" })
+          }
+        )
       },
       (cause) => {
         reportRelayError(cause, { operation: "relay.name.adopt" })
@@ -4006,6 +4014,7 @@ async function executeControlRequest(
     }
     case "relay.rename": {
       await renameRelay(requiredString(payload, "name"))
+      await snapshotHub.refresh()
       await appendRelayAudit("relay.renamed", client.id, request.id, {
         name: relayIdentity.name,
       })

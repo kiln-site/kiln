@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto"
 import { hostname } from "node:os"
 
 import { Effect, Fiber, Metric } from "effect"
+import { TestClock } from "effect/testing"
 import { describe, expect, it, vi } from "vite-plus/test"
 
 import { DockerEngine } from "./docker-engine.js"
@@ -243,17 +244,50 @@ describe("Kiln deployed without Kiln's labels", () => {
     ).resolves.toBe(true)
 
     const relayId = "relay-beside-coolify"
-    const sampler = Effect.runFork(
-      sampleNodeMetrics(() => relayId, kiln.context.engine, kiln.harness.config)
+    await run(
+      Effect.gen(function* () {
+        const sampler = yield* Effect.forkChild(
+          sampleNodeMetrics(
+            () => relayId,
+            kiln.context.engine,
+            kiln.harness.config
+          )
+        )
+        // Virtual time for the samples; Docker's answers take real time.
+        const sampled = () => containersInGroup(relayId, "hearth")
+        while ((yield* Effect.promise(sampled)) !== 1) {
+          yield* Effect.promise(() => new Promise((go) => setTimeout(go, 20)))
+          yield* TestClock.adjust("15 seconds")
+        }
+        yield* Fiber.interrupt(sampler)
+      }).pipe(Effect.provide(TestClock.layer()))
     )
-    await vi.waitFor(async () => {
-      await expect(containersInGroup(relayId, "hearth")).resolves.toBe(1)
-    })
     await expect(containersInGroup(relayId, "mysql")).resolves.toBe(1)
     await expect(containersInGroup(relayId, "valkey")).resolves.toBe(1)
     // The other app's database stays where everything else Kiln doesn't run is.
     await expect(containersInGroup(relayId, "database")).resolves.toBe(0)
     await expect(containersInGroup(relayId, "other")).resolves.toBe(1)
+  })
+
+  it("keeps sampling while finding Hearth's containers is stuck", async () => {
+    const kiln = await coolify()
+    await expect(
+      kiln.identify({ containerId: kiln.hearth.id, key: secret })
+    ).resolves.toBe(true)
+    const stuck = fakeDocker.hold({
+      command: "inspect",
+      target: kiln.hearth.name,
+    })
+
+    const relayId = "relay-with-a-stuck-search"
+    const sampler = Effect.runFork(
+      sampleNodeMetrics(() => relayId, kiln.context.engine, kiln.harness.config)
+    )
+    await stuck.reached
+    await vi.waitFor(async () => {
+      await expect(containersInGroup(relayId, "other")).resolves.toBe(4)
+    })
+    stuck.release()
     await run(Fiber.interrupt(sampler))
   })
 

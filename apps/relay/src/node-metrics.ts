@@ -26,8 +26,10 @@ const sampleInterval = "15 seconds"
 const eventsRetryInterval = "5 seconds"
 const statsConcurrency = 4
 // Finding the services can inspect every container while Hearth is away from
-// this host, so it runs once a minute, not on every sample.
-const samplesPerServiceRefresh = 4
+// this host, so it runs once a minute, beside the samples rather than in them.
+// Docker answers each request within 30 seconds, but a search makes many.
+const serviceSearchInterval = "1 minute"
+const serviceSearchTimeout = "50 seconds"
 
 const containerGroups = [
   "relay",
@@ -193,42 +195,41 @@ export function sampleNodeMetrics(
 ): Effect.Effect<never> {
   const hostIncrements = new Increments()
   const containerIncrements = new Increments()
-  let samples = 0
-  return Effect.suspend(() => {
+  const sampling = Effect.suspend(() => {
     const id = relayId()
-    const services =
-      samples++ % samplesPerServiceRefresh === 0
-        ? refreshServiceContainers(engine, config)
-        : Effect.void
-    return services.pipe(
-      Effect.andThen(
-        Effect.all(
-          [
-            sampleHost(id, hostIncrements),
-            sampleContainers(id, engine, config, containerIncrements),
-          ],
-          { concurrency: "unbounded", discard: true }
-        )
-      )
+    return Effect.all(
+      [
+        sampleHost(id, hostIncrements),
+        sampleContainers(id, engine, config, containerIncrements),
+      ],
+      { concurrency: "unbounded", discard: true }
     )
   }).pipe(Effect.andThen(Effect.sleep(sampleInterval)), Effect.forever)
+  return Effect.forkChild(findServiceContainers(engine, config)).pipe(
+    Effect.andThen(sampling)
+  )
 }
 
-function refreshServiceContainers(
+function findServiceContainers(
   engine: DockerEngine,
   config: OwnerConfig
-): Effect.Effect<void> {
+): Effect.Effect<never> {
   return platformServiceContainers(engine, config).pipe(
-    Effect.map((found) => {
-      serviceContainers = new Map(
-        [...found].map(([role, container]) => [
-          container.Id,
-          serviceGroups[role],
-        ])
-      )
-    }),
+    Effect.tap((found) =>
+      Effect.sync(() => {
+        serviceContainers = new Map(
+          [...found].map(([role, container]) => [
+            container.Id,
+            serviceGroups[role],
+          ])
+        )
+      })
+    ),
+    Effect.timeout(serviceSearchTimeout),
     Effect.ignore,
-    Effect.withTracerEnabled(false)
+    Effect.withTracerEnabled(false),
+    Effect.andThen(Effect.sleep(serviceSearchInterval)),
+    Effect.forever
   )
 }
 
