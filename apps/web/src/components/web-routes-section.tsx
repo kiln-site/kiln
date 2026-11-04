@@ -490,7 +490,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
               {
                 width:
                   adoptable.length > 0
-                    ? { base: "5.5rem", sm: "9.5rem" }
+                    ? { base: "5.5rem", sm: "11.5rem" }
                     : "5.5rem",
               },
               { cellClassName: "px-2", headerClassName: "px-2" }

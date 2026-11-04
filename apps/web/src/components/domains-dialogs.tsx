@@ -45,7 +45,6 @@ import {
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
 
-import { CloudflareProxyStatus } from "@/components/cloudflare-proxy-status"
 import type { WebHostnameResourceRef } from "@/components/web-hostname-dns"
 import {
   domainHostname,
@@ -1194,7 +1193,7 @@ export function AdoptRecordDialog({
   // As last read: a refused attempt reads the record again.
   const selectLatest = React.useCallback(
     ({ hostnames }: ResourceWebHostnames) =>
-      hostnames.find((row) => row.id === hostname.id)?.existingRecord ?? null,
+      hostnames.find((row) => row.id === hostname.id) ?? null,
     [hostname.id]
   )
   const { data: latest } = useQuery({
@@ -1205,7 +1204,10 @@ export function AdoptRecordDialog({
     ),
     select: selectLatest,
   })
-  const record = latest === undefined ? hostname.existingRecord : latest
+  const record =
+    latest === undefined
+      ? hostname.existingRecord
+      : (latest?.existingRecord ?? null)
   const adopt = useMutation({
     mutationFn: () => {
       if (!record) throw new Error("There's no record to take over")
@@ -1232,23 +1234,22 @@ export function AdoptRecordDialog({
     <Dialog open onOpenChange={adopt.isPending ? undefined : onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Let Kiln manage this record?</DialogTitle>
+          <DialogTitle>Allow Kiln to manage this record?</DialogTitle>
           <DialogDescription>
-            Kiln will point this record at the route's Relay and delete it when
-            the route is removed.
+            {latest === undefined
+              ? "\u00A0"
+              : latest?.pointsAtRelay
+                ? "It already points at the Relay. Kiln will keep it updated and delete it with the route."
+                : "Kiln will point it at the Relay and delete it with the route."}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-1 border border-border/80 bg-muted/30 px-3 py-2 text-xs">
-          <span className="truncate font-mono font-medium">
+        <div className="flex min-w-0 items-baseline justify-between gap-4">
+          <span className="truncate text-sm font-medium">
             {hostname.hostname}
           </span>
           {record ? (
-            <span className="flex min-w-0 items-center gap-2">
-              <span className="font-mono">{record.type}</span>
-              <span className="min-w-0 flex-1 truncate font-mono">
-                {record.content}
-              </span>
-              <CloudflareProxyStatus proxied={record.proxied} />
+            <span className="type-code truncate text-muted-foreground">
+              {record.content}
             </span>
           ) : null}
         </div>
@@ -1263,12 +1264,12 @@ export function AdoptRecordDialog({
             Cancel
           </Button>
           <Button
-            disabled={adopt.isPending || !record}
+            disabled={adopt.isPending || !record || latest === undefined}
             type="button"
             onClick={() => adopt.mutate()}
           >
             {adopt.isPending ? <LoaderCircle className="animate-spin" /> : null}
-            Let Kiln manage
+            Allow
           </Button>
         </DialogFooter>
       </DialogContent>

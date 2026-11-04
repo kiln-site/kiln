@@ -795,21 +795,35 @@ function mayAdoptRecords(ownerId: string | null, actor: DomainActor) {
   return ownerId === null ? actor.admin : ownerId === actor.id
 }
 
-/** Which of `rows` have an existing record `actor` may hand to Kiln. */
+/**
+ * The ones of `rows` whose existing record `actor` may hand to Kiln, by ID,
+ * and whether that record already points at the Relay. One that doesn't
+ * moves there when it's handed over, so the person needs to know.
+ */
 export const adoptableWebHostnamesEffect = Effect.fn(
   "webHostnames.adoptable"
 )(function* (rows: ReadonlyArray<WebHostname>, actor: DomainActor) {
   const candidates = rows.filter(
     (row) => row.status === "external" && row.existingRecord !== null
   )
-  const adoptable = new Set<string>()
+  const adoptable = new Map<string, boolean>()
   for (const connectionId of new Set(candidates.map((row) => row.connectionId))) {
     const connection = yield* loadDomainConnectionEffect(connectionId)
     if (!connection || !mayAdoptRecords(connection.connection.ownerId, actor)) {
       continue
     }
     for (const row of candidates) {
-      if (row.connectionId === connectionId) adoptable.add(row.id)
+      if (row.connectionId !== connectionId) continue
+      const target = yield* relayPublicHostEffect(row.relayId).pipe(
+        Effect.orElseSucceed(() => null)
+      )
+      const wanted =
+        target === null ? null : cloudflareAddressRecord(row.hostname, target)
+      adoptable.set(
+        row.id,
+        wanted?.type === row.existingRecord?.type &&
+          wanted?.content === row.existingRecord?.content
+      )
     }
   }
   return adoptable
@@ -839,7 +853,7 @@ export const adoptExistingWebRecordEffect = Effect.fn(
       if (owner === undefined || !mayAdoptRecords(owner, input.actor)) {
         return yield* DomainConfigurationError.make({
           message:
-            "Only the owner of this domain's Cloudflare connection can let Kiln manage its records",
+            "Only the owner of this domain's Cloudflare connection can allow Kiln to manage its records",
         })
       }
       if (current.status !== "external") {

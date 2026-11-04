@@ -96,7 +96,7 @@ export async function getResourceWebHostnamesHandler(
         "webHostnames.adoptable",
         adoptableWebHostnamesEffect(rows, domainActor(user))
       )
-    : new Set<string>()
+    : new Map<string, boolean>()
   return {
     canChange,
     certificates: pendingWebCertificates(data),
@@ -111,6 +111,7 @@ export async function getResourceWebHostnamesHandler(
       hostname: row.hostname,
       id: row.id,
       lastError: row.lastError,
+      pointsAtRelay: adoptable.get(row.id) ?? false,
       proxied: webHostnameProxied(row),
       status: row.status,
     })),

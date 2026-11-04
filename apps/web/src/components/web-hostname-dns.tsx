@@ -119,7 +119,7 @@ export const AdoptRecordButton = React.memo(function AdoptRecordButton({
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          aria-label={`Let Kiln manage the record for ${hostname}`}
+          aria-label={`Allow Kiln to manage the record for ${hostname}`}
           disabled={disabled}
           size="xs"
           type="button"
@@ -131,13 +131,13 @@ export const AdoptRecordButton = React.memo(function AdoptRecordButton({
           ) : (
             <>
               <span className="sm:hidden">Manage</span>
-              <span className="max-sm:hidden">Let Kiln manage</span>
+              <span className="max-sm:hidden">Allow Kiln to manage</span>
             </>
           )}
         </Button>
       </TooltipTrigger>
       <TooltipContent side="bottom">
-        Let Kiln manage this record
+        Allow Kiln to manage this record
       </TooltipContent>
     </Tooltip>
   )

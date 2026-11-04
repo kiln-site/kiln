@@ -357,6 +357,15 @@ describeMysql("web route hostnames", () => {
               row.id
             )
           )
+          // Pointed elsewhere, it moves when handed over; the person is told
+          // whether it will.
+          const pointsAtRelay = (content: string) =>
+            adoptableWebHostnamesEffect(
+              [{ ...row, existingRecord: { ...seen, content } }],
+              owner
+            ).pipe(Effect.map((adoptable) => adoptable.get(row.id)))
+          assert.isFalse(yield* pointsAtRelay(seen.content))
+          assert.isTrue(yield* pointsAtRelay("relay-one.relay.test"))
           const adopt = (actor: DomainActor, record: ExistingWebRecord) =>
             adoptExistingWebRecordEffect(row, { actor, record }).pipe(
               Effect.flip,

@@ -283,6 +283,8 @@ export interface ResourceWebHostname {
   hostname: string
   id: string
   lastError: string | null
+  /** The record `canAdopt` would hand over already points at the Relay. */
+  pointsAtRelay: boolean
   /** Through Cloudflare's proxy; null when Kiln doesn't know. */
   proxied: boolean | null
   status: Exclude<WebHostnameOverview["status"], "manual">
