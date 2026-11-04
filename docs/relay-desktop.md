@@ -284,7 +284,10 @@ Where a browser has no fullscreen for pages, as on iPhones, the desktop fills
 the window instead.
 
 On touch screens, tap clicks, long press right-clicks, one finger drags, and two
-fingers scroll. voxl's toolbar adds an on-screen keyboard button. There's no
+fingers scroll. voxl's toolbar adds an on-screen keyboard button, and on a Mac the
+page's does: noVNC draws on a canvas, which can't open a phone's keyboard, so a
+hidden text field takes the typing and the page sends what its text became, with
+Shift around what needs it, as a keyboard would. There's no
 pinch zoom, and a physical monitor isn't resized to fit, so a 1080p desktop shows
 at about a fifth of its size on a phone held upright.
 

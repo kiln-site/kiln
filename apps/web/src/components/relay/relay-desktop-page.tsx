@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import type { RelayDesktop, RelayDesktopMonitor } from "@workspace/contracts"
 import {
+  Command,
   Gem,
   Keyboard,
   LoaderCircle,
@@ -60,6 +61,7 @@ import {
 const SESSION_CHECK_MS = 10_000
 const LAYOUT_CHECK_MS = 1_000
 const LAYOUT_CHECKS_FOR_MS = 10_000
+const TOUCH_SCREEN = "(any-pointer: coarse)"
 
 function relayDesktopQueryOptions(relayId: string) {
   return {
@@ -376,6 +378,8 @@ function DesktopFrame({
     surface.current?.showMonitor?.(monitor)
   }, [monitor])
   const [video, setVideo] = React.useState(false)
+  const [keyboardOpen, setKeyboardOpen] = React.useState(false)
+  const touch = useTouchScreen()
   const [fastMotion, setFastMotion] = React.useState(true)
   React.useEffect(() => {
     surface.current?.setFastMotion?.(fastMotion)
@@ -421,13 +425,29 @@ function DesktopFrame({
         expanded && "fixed inset-0 z-50"
       )}
     >
-      <div className="flex h-9 shrink-0 items-center justify-end gap-1 border-b border-border/70 bg-card px-2">
+      <div className="flex h-9 shrink-0 items-center justify-end gap-1 overflow-x-auto border-b border-border/70 bg-card px-2">
+        {client.offersKeyboard && touch ? (
+          <Button
+            aria-pressed={keyboardOpen}
+            size="sm"
+            variant={keyboardOpen ? "secondary" : "ghost"}
+            // Stays on the hidden field, so a second tap can close the keyboard
+            // rather than finding it already gone.
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={() => surface.current?.toggleKeyboard?.()}
+          >
+            <Keyboard />
+            <ToolbarLabel>Keyboard</ToolbarLabel>
+          </Button>
+        ) : null}
         {monitors.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="ghost">
                 <Monitor />
-                {monitor ? `Monitor ${(chosen ?? 0) + 1}` : "All monitors"}
+                <ToolbarLabel>
+                  {monitor ? `Monitor ${(chosen ?? 0) + 1}` : "All monitors"}
+                </ToolbarLabel>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent {...menuProps}>
@@ -465,7 +485,7 @@ function DesktopFrame({
                 }}
               >
                 <Rabbit />
-                Fast motion
+                <ToolbarLabel>Fast motion</ToolbarLabel>
               </Button>
             </TooltipTrigger>
             <TooltipContent>
@@ -487,7 +507,7 @@ function DesktopFrame({
                 }}
               >
                 <Gem />
-                Lossless
+                <ToolbarLabel>Lossless</ToolbarLabel>
               </Button>
             </TooltipTrigger>
             <TooltipContent>
@@ -498,8 +518,8 @@ function DesktopFrame({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button size="sm" variant="ghost">
-              <Keyboard />
-              Send keys
+              <Command />
+              <ToolbarLabel>Send keys</ToolbarLabel>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent {...menuProps}>
@@ -515,11 +535,11 @@ function DesktopFrame({
         </DropdownMenu>
         <Button size="sm" variant="ghost" onClick={toggleExpanded}>
           {expanded ? <Minimize /> : <Maximize />}
-          {expanded ? "Exit fullscreen" : "Fullscreen"}
+          <ToolbarLabel>{expanded ? "Exit fullscreen" : "Fullscreen"}</ToolbarLabel>
         </Button>
         <Button size="sm" variant="ghost" onClick={onDisconnect}>
           <Unplug />
-          Disconnect
+          <ToolbarLabel>Disconnect</ToolbarLabel>
         </Button>
       </div>
       <DesktopViewport
@@ -532,11 +552,31 @@ function DesktopFrame({
           session={session}
           surface={surface}
           onImageSize={setImageSize}
+          onKeyboard={setKeyboardOpen}
           onVideo={setVideo}
         />
       </DesktopViewport>
     </div>
   )
+}
+
+// Icons alone on a phone, where the toolbar can't hold every name.
+function ToolbarLabel({ children }: { children: React.ReactNode }) {
+  return <span className="max-sm:sr-only">{children}</span>
+}
+
+function useTouchScreen() {
+  return React.useSyncExternalStore(
+    subscribeToPointer,
+    () => window.matchMedia(TOUCH_SCREEN).matches,
+    () => false
+  )
+}
+
+function subscribeToPointer(onChange: () => void) {
+  const query = window.matchMedia(TOUCH_SCREEN)
+  query.addEventListener("change", onChange)
+  return () => query.removeEventListener("change", onChange)
 }
 
 // Shows one monitor of the image by making the client's element as large as

@@ -6,6 +6,7 @@ import { LoaderCircle, RotateCw, TriangleAlert } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 
+import { DesktopKeyboard } from "@/components/relay/relay-desktop-keyboard"
 import {
   desktopStreamUrl,
   digit,
@@ -132,6 +133,7 @@ function rememberAccount(relayId: string, account: string) {
 function ScreenSharingSurface({
   desktop,
   onImageSize,
+  onKeyboard,
   onVideo,
   relayId,
   session,
@@ -150,6 +152,7 @@ function ScreenSharingSurface({
   })
   // Straight to the Mac, for the toolbar's keys, which already name Mac keys.
   const sendRawKey = React.useRef<NoVnc["sendKey"] | null>(null)
+  const keyboard = React.useRef<HTMLTextAreaElement>(null)
   // Kept across attempts: a wrong password ends the connection, and the next
   // one has to say so.
   const rejected = React.useRef(false)
@@ -176,6 +179,11 @@ function ScreenSharingSurface({
         for (const key of [...combo].reverse()) {
           send(key.keysym, key.code, false)
         }
+      },
+      toggleKeyboard: () => {
+        const field = keyboard.current
+        if (document.activeElement === field) field?.blur()
+        else field?.focus()
       },
       setFastMotion: (fastMotion) => {
         view.current.fastMotion = fastMotion
@@ -307,6 +315,11 @@ function ScreenSharingSurface({
         className="absolute inset-0"
         role="application"
       />
+      <DesktopKeyboard
+        input={keyboard}
+        send={sendRawKey}
+        onOpen={onKeyboard}
+      />
       {connection.status === "connected" ? null : (
         <div className="absolute inset-0 grid place-items-center bg-card/95 p-4">
           {connection.status === "connecting" ? (
@@ -415,6 +428,7 @@ const option = { code: "AltLeft", key: "Alt", keysym: META_LEFT }
 
 export const screenSharingClient: DesktopClient = {
   cropsMonitors: true,
+  offersKeyboard: true,
   offersLossless: true,
   Surface: ScreenSharingSurface,
   combos: [
