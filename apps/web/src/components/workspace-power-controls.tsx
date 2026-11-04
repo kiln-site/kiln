@@ -124,7 +124,7 @@ export function WorkspacePowerControls({
             <Button
               variant="outline"
               size="icon-lg"
-              className="hidden h-9 w-9 bg-card shadow-none md:inline-flex"
+              className="hidden h-9 w-9 !border-yellow-400/65 !bg-yellow-500 !text-black shadow-none hover:!border-yellow-300 hover:!bg-yellow-400 disabled:!border-yellow-500/35 disabled:!bg-yellow-500/45 disabled:!text-black/70 md:inline-flex"
               aria-label={`Restart ${noun}`}
               disabled={restartUnavailable}
               onClick={() => runAction("restart")}
