@@ -114,8 +114,9 @@ export function useDesktopClipboard({
   const field = React.useRef<HTMLTextAreaElement>(null)
   // Text just sent, which the Mac will report back.
   const sent = React.useRef<string | null>(null)
-  // Text the Mac last gave this browser. It's the plain version of whatever's on
-  // the Mac, so pasting it there should leave the file or rich text it stands for.
+  // Text the Mac gave this browser, while that's still what the Mac holds. It's
+  // the plain version of it, so pasting it there should leave the file or rich
+  // text it stands for.
   const mirrored = React.useRef<string | null>(null)
   // Which connection this is: what a paste finds after waiting may be a new one.
   const session = React.useRef(0)
@@ -131,6 +132,7 @@ export function useDesktopClipboard({
         return false
       }
       sent.current = text
+      mirrored.current = null
       send(bytes)
       return true
     },
@@ -153,6 +155,7 @@ export function useDesktopClipboard({
       cutText.set(new Uint8Array(await png.arrayBuffer()), marker.length)
       if (session.current !== started) return
       sent.current = null
+      mirrored.current = null
       send(cutText)
       press()
     },
@@ -178,6 +181,7 @@ export function useDesktopClipboard({
     (content: ClipboardContent) => {
       const echo = content === sent.current
       sent.current = null
+      mirrored.current = null
       if (echo || !document.hasFocus()) return
       mirrored.current = typeof content === "string" ? content : null
       waiting.current = content
@@ -284,6 +288,7 @@ export function useDesktopClipboard({
       if (pasting.current !== null) clearTimeout(pasting.current)
       pasting.current = null
       waiting.current = null
+      mirrored.current = null
       session.current += 1
     }
   }, [area, connected, finishPaste, flush])

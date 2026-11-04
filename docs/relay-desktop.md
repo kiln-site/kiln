@@ -295,6 +295,9 @@ with what each allows:
   the Mac gave the browser stays out of this, so a file or rich text copied on the
   Mac still pastes as itself there. An image can't be told apart that way, as
   browsers re-encode them, so one copied and pasted on the Mac goes round as PNG.
+  Something copied on the Mac that doesn't come here, such as a PDF, leaves the
+  browser as it was: if that's text from the Mac, Paste gets the PDF, and otherwise
+  it's what the viewer last copied that goes to the Mac.
 - A touch screen has no paste key, so the toolbar has **Paste**.
 
 The browser's clipboard only ever goes to the Mac on Paste. It's whatever the viewer
