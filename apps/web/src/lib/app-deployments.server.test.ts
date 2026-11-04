@@ -27,6 +27,8 @@ import { insertRelay, insertRows, insertUser } from "@/test/seed"
 const relay = vi.hoisted(() => ({
   count: 0,
   configs: [] as Array<{ environment?: string } | undefined>,
+  // Whether each deployment sent, in order, skipped the build cache.
+  noCache: [] as Array<boolean>,
   deployments: new Map<string, { id: string; state: string }>(),
   journal: new Map<string, { result: unknown; status: "succeeded" }>(),
   // Apps it doesn't have, as one whose provisioning failed.
@@ -44,6 +46,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     payload: {
       appId?: string
       config?: { environment?: string }
+      noCache?: boolean
       operationId?: string
       requests?: Array<{ id: string }>
     },
@@ -66,6 +69,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       relay.deployments.set(appId, deployment)
       relay.sent.push(appId)
       relay.configs.push(payload.config)
+      relay.noCache.push(payload.noCache === true)
       const result = relayApp(appId)
       if (frame.operationId) {
         relay.journal.set(frame.operationId, { result, status: "succeeded" })
@@ -94,6 +98,7 @@ const fourth = "d".repeat(40)
 const fifth = "e".repeat(40)
 const sixth = "f".repeat(40)
 const seventh = "7".repeat(40)
+const eighth = "8".repeat(40)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -151,13 +156,15 @@ const ask = (
   appId: string,
   trigger: "manual" | "update" = "manual",
   userId: string | null = null,
-  awaitProvisioning = false
+  awaitProvisioning = false,
+  noCache = false
 ) =>
   Effect.promise(() => import("@/lib/app-deployments.server")).pipe(
     Effect.flatMap(({ askAppDeploymentEffect }) =>
       askAppDeploymentEffect({
         appId,
         awaitProvisioning,
+        noCache,
         relayId,
         trigger,
         userId,
@@ -392,6 +399,51 @@ describeMysql("App deployments", () => {
           )
           yield* readmitWaitingOperations
           yield* until(() => sentTo(seventh) === 1)
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "skip the build cache once asked to, whatever joins the ask, and only for that deployment",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.count = 0
+          relay.deployments.clear()
+          relay.journal.clear()
+          relay.noCache.length = 0
+          relay.sent.length = 0
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* seedApp(eighth)
+          const finish = () =>
+            Effect.sync(() =>
+              relay.deployments.set(eighth, {
+                ...relay.deployments.get(eighth)!,
+                state: "succeeded",
+              })
+            )
+
+          yield* deploy(eighth)
+          yield* until(() => sentTo(eighth) === 1)
+
+          // Asked while one runs, then joined by a plain ask, as a push's.
+          const joined = yield* ask(eighth, "manual", null, false, true)
+          yield* deploy(eighth)
+          yield* finish()
+          yield* until(() => sentTo(eighth) === 2)
+
+          yield* finish()
+          yield* ended(joined)
+          yield* deploy(eighth)
+          yield* until(() => sentTo(eighth) === 3)
+
+          assert.deepStrictEqual(relay.noCache, [false, true, false])
         }).pipe(TestClock.withLive),
       60_000
     )

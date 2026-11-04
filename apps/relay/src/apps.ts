@@ -1630,7 +1630,11 @@ export class AppDriver {
       })
       await writeFile(dockerfile, input.config.dockerfile, { mode: 0o600 })
     }
-    this.#log(input.appId, deployment, `Building ${tag}`)
+    this.#log(
+      input.appId,
+      deployment,
+      `Building ${tag}${input.noCache ? " without the cache" : ""}`
+    )
     await this.#stream(
       input.appId,
       deployment,
@@ -1639,6 +1643,7 @@ export class AppDriver {
         "build",
         "--progress",
         "plain",
+        ...(input.noCache ? ["--no-cache"] : []),
         ...labelArguments(this.#imageLabels(input.appId)),
         "--tag",
         tag,
@@ -2091,6 +2096,7 @@ export class AppDriver {
           databases,
           deploymentId: deployment.id,
           mounts,
+          noCache: input.noCache === true,
           routes,
           serviceLimits: input.config.serviceLimits,
           tailscale,
@@ -2119,6 +2125,7 @@ export class AppDriver {
               ),
             { surge }
           )
+        if (input.noCache) log("Building without the cache")
         if (running && blocker === null) {
           // Its own project, so its networks and containers stand apart from
           // the running ones until it takes over.
@@ -2445,6 +2452,7 @@ export class AppDriver {
       deploymentId: string
       // The config's mounts, beside the Compose file's own.
       mounts: ReadonlyArray<ConfigMount>
+      noCache: boolean
       routes: AppRoutePlan
       serviceLimits: AppConfig["serviceLimits"]
       tailscale: ReadonlyArray<{
@@ -2527,6 +2535,11 @@ export class AppDriver {
           }
       services[name] = {
         ...service,
+        // `up` has no flag for this; a service's build says it itself.
+        ...(options.noCache &&
+          service.build !== undefined && {
+            build: { ...(service.build as object), no_cache: true },
+          }),
         ...composeLimits(service, options.serviceLimits[name]),
         ...placement,
         container_name: this.#containerName(

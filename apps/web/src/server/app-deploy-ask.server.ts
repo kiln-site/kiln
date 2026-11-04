@@ -9,6 +9,8 @@ export interface AppDeployAsk {
   commit?: { sha: string; source: string }
   /** A redeploy's digest, and the image it was of. */
   image?: { digest: string; source: string }
+  /** Builds every layer afresh, ignoring Docker's build cache. */
+  noCache?: boolean
   relayId: string
   trigger: Extract<AppDeploymentAsk, "manual" | "redeploy">
 }

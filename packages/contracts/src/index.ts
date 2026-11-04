@@ -1154,6 +1154,8 @@ export const relayDeployAppSchema = z
     // tag names when the deployment pulls it.
     imageDigest: imageDigestSchema.optional(),
     name: appNameSchema,
+    // Build every layer afresh, ignoring Docker's build cache.
+    noCache: z.boolean().optional(),
   })
   .strict()
 

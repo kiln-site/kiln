@@ -107,6 +107,8 @@ export interface AppDeploymentRequest {
   pinned?: { commitSha: string; source: string }
   /** An image digest to deploy again, as a rollback of an image update. */
   imageDigest?: string
+  /** Builds every layer afresh, ignoring Docker's build cache. */
+  noCache?: boolean
   relayId: string
   trigger: AppDeploymentTrigger
   /** Who asked, for the record and the Relay's audit; null for automation. */
@@ -146,6 +148,7 @@ const DeployPlan = Schema.Struct({
     ),
     imageDigest: Schema.optionalKey(Schema.String),
     name: Schema.String,
+    noCache: Schema.optionalKey(Schema.Boolean),
   }),
   record: Schema.Struct({
     appId: Schema.String,
@@ -243,6 +246,7 @@ const prepareAppDeploymentEffect = Effect.fn("Apps.deploy.prepare")(function* (
       }),
       ...(imageDigest && { imageDigest }),
       name: app.name,
+      ...(request.noCache && { noCache: true }),
     },
     record: {
       appId: request.appId,
@@ -697,6 +701,8 @@ const DeployInput = Schema.Struct({
   requestedBy: Schema.NullOr(Schema.String),
   /** A new app's first deploy, once its Relay has provisioned it. */
   awaitProvisioning: Schema.optionalKey(Schema.Boolean),
+  /** Builds without the cache, whatever joins it: it's how, not what. */
+  noCache: Schema.optionalKey(Schema.Boolean),
 })
 type DeployInput = typeof DeployInput.Type
 
@@ -727,6 +733,7 @@ export const deployAppOperation = durableOperation({
           ...((waiting.awaitProvisioning || asked.awaitProvisioning) && {
             awaitProvisioning: true,
           }),
+          ...((waiting.noCache || asked.noCache) && { noCache: true }),
         },
   doing: () => "Deploying this App",
   input: DeployInput,
@@ -932,7 +939,12 @@ const askedDeployment = (input: DeployInput) =>
     // One who may no longer is refused, as who asked; a push or poll that
     // joined their ask is Kiln's own.
     const userId = allowed || !automatic ? input.requestedBy : null
-    const base = { appId: input.appId, relayId: input.relayId, userId }
+    const base = {
+      appId: input.appId,
+      ...(input.noCache && { noCache: true }),
+      relayId: input.relayId,
+      userId,
+    }
     const request: AppDeploymentRequest = automatic
       ? {
           ...base,
@@ -1248,6 +1260,7 @@ export const askAppDeploymentEffect = Effect.fn("Apps.deploy.ask")(
     awaitProvisioning?: boolean
     commit?: { sha: string; source: string }
     image?: { digest: string; source: string }
+    noCache?: boolean
     relayId: string
     trigger: AppDeploymentAsk
     userId?: string | null
@@ -1266,6 +1279,7 @@ export const askAppDeploymentEffect = Effect.fn("Apps.deploy.ask")(
         }),
         requestedBy: ask.userId ?? null,
         ...(ask.awaitProvisioning && { awaitProvisioning: true }),
+        ...(ask.noCache && { noCache: true }),
       },
       { key: appDeployKey(ask.relayId, ask.appId) }
     )
