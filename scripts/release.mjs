@@ -21,6 +21,9 @@ import {
   compareKilnReleaseVersions,
 } from "../packages/contracts/src/release-version.ts"
 
+const PUBLISH_WAIT_MS = 20 * 60_000
+const PUBLISH_POLL_MS = 20_000
+
 const execFileAsync = promisify(execFile)
 const runAsync = async (file, args) => {
   const { stdout } = await execFileAsync(file, args, {
@@ -314,6 +317,23 @@ function assertPublicDesktopImage(repository, commit) {
   )
 }
 
+/**
+ * Runs `check` until it passes. A push that changes the desktop image publishes
+ * it and starts a nightly at once, and nothing would run a nightly again that
+ * got here first. An image that never comes still fails the release.
+ */
+export async function untilPublished(check) {
+  const deadline = Date.now() + PUBLISH_WAIT_MS
+  for (;;) {
+    try {
+      return await check()
+    } catch (cause) {
+      if (Date.now() >= deadline) throw cause
+      await new Promise((resolve) => setTimeout(resolve, PUBLISH_POLL_MS))
+    }
+  }
+}
+
 function publishRelease(manifest, existing, title, repository) {
   const tag = `v${manifest.version}`
   if (existing) {
@@ -442,7 +462,7 @@ async function nightly() {
       compatibility: { relayProtocol: protocol },
     }
     validateReleaseManifest(manifest, repository, version)
-    await assertPublicDesktopImage(repository, commit)
+    await untilPublished(() => assertPublicDesktopImage(repository, commit))
     reserveTag(tag, commit)
     publishRelease(
       manifest,

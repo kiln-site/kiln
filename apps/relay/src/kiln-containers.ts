@@ -64,6 +64,7 @@ export function kilnContainerOwner(
     [names.limboContainer, "Limbo"],
   ]).get(name)
   if (service) return relay(service)
+  if (labels["kiln.relay.infrastructure"] === "desktop") return relay("Desktop")
   const role = labels[PLATFORM_ROLE_LABEL]
   if (config.mode === "platform" && role) {
     const platform = { cache: "Valkey", database: "MySQL", hearth: "Hearth" }

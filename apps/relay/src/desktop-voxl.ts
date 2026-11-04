@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { request as httpRequest } from "node:http"
 import { connect, type Socket } from "node:net"
-import { hostname } from "node:os"
 
 import type { RelayDesktop } from "@workspace/contracts"
 import { Effect } from "effect"
@@ -12,23 +11,15 @@ import {
   type DesktopBackend,
   type DesktopStream,
 } from "./desktop-backend.js"
-import {
-  DockerEngine,
-  ensureImage,
-  isDockerNotFound,
-  type DockerContainerInspect,
-} from "./docker-engine.js"
-import { recoverPromise } from "./effect/promise.js"
+import { DesktopHelper } from "./desktop-helper.js"
+import { ensureImage } from "./docker-engine.js"
 import type { HostShell } from "./host-shell.js"
-import { RELAY_OWNER_LABEL, relayOwnsLabels } from "./relay-resources.js"
 
 // An X11 desktop, streamed by voxl (apps/desktop). voxl runs in a helper
 // container beside the node's X server: it connects to the display's socket
 // as the signed-in person, and shares the Relay's network namespace, so it
 // listens only where the Relay can reach it.
 
-const DESKTOP_LABEL = "kiln.relay.infrastructure"
-const DESKTOP_CONFIG_LABEL = "kiln.relay.desktop.config"
 // Raised whenever how the streamer runs changes, so older ones are replaced.
 const DESKTOP_REVISION = "2"
 // Inside the Relay's network namespace, which the streamer shares.
@@ -130,18 +121,14 @@ type VoxlConfig = Pick<
 
 export class VoxlDesktop implements DesktopBackend {
   readonly #config: VoxlConfig
-  readonly #engine: DockerEngine
+  readonly #helper: DesktopHelper
   readonly #hostShell: Pick<HostShell, "runScript">
-  readonly #name: string
   #password: string | null = null
 
   constructor(config: VoxlConfig, hostShell: Pick<HostShell, "runScript">) {
     this.#config = config
-    this.#engine = new DockerEngine(config.dockerSocket)
+    this.#helper = new DesktopHelper(config, "kiln-desktop")
     this.#hostShell = hostShell
-    this.#name = config.resourceNamespace
-      ? `${config.resourceNamespace}-kiln-desktop`
-      : "kiln-desktop"
   }
 
   // The last in line: whatever no other backend serves.
@@ -216,12 +203,7 @@ export class VoxlDesktop implements DesktopBackend {
   }
 
   async release(): Promise<void> {
-    const existing = await this.#inspect()
-    if (existing && this.#owns(existing)) {
-      await Effect.runPromise(
-        this.#engine.removeContainer(existing.Id, { force: true })
-      )
-    }
+    await this.#helper.release()
     this.#password = null
   }
 
@@ -289,30 +271,15 @@ export class VoxlDesktop implements DesktopBackend {
     const image = this.#config.desktopImage
     // voxl joins the Relay's network namespace, so it must be the Relay's
     // current container.
-    const relay = await recoverPromise(
-      () =>
-        Effect.runPromise(
-          this.#engine.inspectContainer<DockerContainerInspect>(hostname())
-        ),
-      () => {
-        throw new DesktopUnavailableError(
-          "The desktop needs the Relay to run in a Docker container"
-        )
-      }
-    )
+    const relay = await this.#helper.relayContainer()
     const signature = JSON.stringify({
       desktop,
       image,
       relay: relay.Id,
       revision: DESKTOP_REVISION,
     })
-    const existing = await this.#inspect()
+    const existing = await this.#helper.existing()
     if (existing) {
-      if (!this.#owns(existing)) {
-        throw new Error(
-          `Docker container ${this.#name} exists but is not owned by this Relay`
-        )
-      }
       const password = existing.Config.Env?.find((entry) =>
         entry.startsWith("VOXL_PASSWORD=")
       )
@@ -320,8 +287,7 @@ export class VoxlDesktop implements DesktopBackend {
       // that still runs but that nothing can reach: only one that answers
       // is kept.
       if (
-        existing.Config.Labels?.[DESKTOP_CONFIG_LABEL] === signature &&
-        existing.State.Running &&
+        this.#helper.matches(existing, signature) &&
         password &&
         (await healthy())
       ) {
@@ -331,11 +297,9 @@ export class VoxlDesktop implements DesktopBackend {
       // Another display, person, or Relay: start over, ending the old
       // streams.
       closeStreams()
-      await Effect.runPromise(
-        this.#engine.removeContainer(existing.Id, { force: true })
-      )
+      await this.#helper.remove(existing.Id)
     }
-    await Effect.runPromise(ensureImage(this.#engine, image))
+    await Effect.runPromise(ensureImage(this.#helper.engine, image))
     const password = randomBytes(32).toString("base64url")
     const socket = `/tmp/.X11-unix/X${desktop.display.slice(1)}`
     const pulse = `/run/user/${desktop.uid}/pulse/native`
@@ -364,7 +328,7 @@ export class VoxlDesktop implements DesktopBackend {
         : []),
     ]
     const created = await Effect.runPromise(
-      this.#engine.createContainer(this.#name, {
+      this.#helper.engine.createContainer(this.#helper.name, {
         Cmd: [
           `--addr=${VOXL_HOST}`,
           `--port=${VOXL_PORT}`,
@@ -396,18 +360,11 @@ export class VoxlDesktop implements DesktopBackend {
           SecurityOpt: ["no-new-privileges"],
         },
         Image: image,
-        Labels: {
-          [DESKTOP_LABEL]: "desktop",
-          [DESKTOP_CONFIG_LABEL]: signature,
-          "kiln.relay.owned": "true",
-          ...(this.#config.resourceNamespace
-            ? { [RELAY_OWNER_LABEL]: this.#config.resourceNamespace }
-            : {}),
-        },
+        Labels: this.#helper.labels(signature),
         User: `${desktop.uid}:${desktop.gid}`,
       })
     )
-    await Effect.runPromise(this.#engine.startContainer(created.Id))
+    await Effect.runPromise(this.#helper.engine.startContainer(created.Id))
     await this.#ready(created.Id)
     this.#password = password
   }
@@ -417,7 +374,7 @@ export class VoxlDesktop implements DesktopBackend {
     const deadline = Date.now() + 15_000
     while (Date.now() < deadline) {
       if (await healthy()) return
-      const state = await this.#inspect()
+      const state = await this.#helper.inspect()
       if (!state?.State.Running) {
         throw new DesktopUnavailableError(
           `The desktop streamer stopped (exit code ${state?.State.ExitCode ?? "unknown"}). It may not be able to open the display.`
@@ -426,28 +383,9 @@ export class VoxlDesktop implements DesktopBackend {
       await new Promise((resolve) => setTimeout(resolve, 150))
     }
     await Effect.runPromise(
-      this.#engine.removeContainer(id, { force: true }).pipe(Effect.ignore)
+      this.#helper.engine.removeContainer(id, { force: true }).pipe(Effect.ignore)
     )
     throw new DesktopUnavailableError("The desktop streamer didn't start")
-  }
-
-  #owns(container: DockerContainerInspect): boolean {
-    return (
-      relayOwnsLabels(this.#config, container.Config.Labels) &&
-      container.Config.Labels?.[DESKTOP_LABEL] === "desktop"
-    )
-  }
-
-  async #inspect(): Promise<DockerContainerInspect | null> {
-    return Effect.runPromise(
-      this.#engine
-        .inspectContainer<DockerContainerInspect>(this.#name)
-        .pipe(
-          Effect.catch((cause) =>
-            isDockerNotFound(cause) ? Effect.succeed(null) : Effect.fail(cause)
-          )
-        )
-    )
   }
 }
 

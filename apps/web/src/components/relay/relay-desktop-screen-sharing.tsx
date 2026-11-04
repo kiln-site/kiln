@@ -6,6 +6,7 @@ import { LoaderCircle, RotateCw, TriangleAlert } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 
+import { DesktopKeyboard } from "@/components/relay/relay-desktop-keyboard"
 import {
   desktopStreamUrl,
   digit,
@@ -15,6 +16,8 @@ import {
   type DesktopImageSize,
   type DesktopSurfaceProps,
 } from "@/components/relay/relay-desktop-surface"
+import { DesktopTrackpad } from "@/components/relay/relay-desktop-trackpad"
+import { decodesDesktopVideo } from "@/components/relay/relay-desktop-video-check"
 import { forkPromise } from "@/effect/promise"
 
 // A Mac's desktop, through macOS's own Screen Sharing. noVNC plays it, in a
@@ -67,8 +70,10 @@ function macKeysym(keysym: number) {
 const VIEW_MESSAGE = 0xfa
 const RESIZE_SETTLE_MS = 150
 const IMAGE_SIZE_NOTICE = /^kiln-image:(\d+)x(\d+)$/u
+const VIDEO_NOTICE = /^kiln-video:(on|off)$/u
 
 interface View {
+  decodesVideo: boolean
   fastMotion: boolean
   lossless: boolean
   monitor: RelayDesktopMonitor | undefined
@@ -78,7 +83,7 @@ function sendView(
   rfb: NoVnc,
   element: HTMLElement,
   image: DesktopImageSize,
-  { fastMotion, lossless, monitor }: View
+  { decodesVideo, fastMotion, lossless, monitor }: View
 ) {
   const socket = rfb._sock._websocket
   if (socket?.readyState !== WebSocket.OPEN) return
@@ -103,7 +108,10 @@ function sendView(
     Math.round(area.height * scale),
   ]
   fields.forEach((value, index) => message.setUint16(1 + index * 2, value))
-  message.setUint8(13, (lossless ? 1 : 0) | (fastMotion ? 2 : 0))
+  message.setUint8(
+    13,
+    (lossless ? 1 : 0) | (fastMotion ? 2 : 0) | (decodesVideo ? 4 : 0)
+  )
   socket.send(message.buffer)
 }
 
@@ -126,6 +134,8 @@ function rememberAccount(relayId: string, account: string) {
 function ScreenSharingSurface({
   desktop,
   onImageSize,
+  onKeyboard,
+  onVideo,
   relayId,
   session,
   surface,
@@ -136,19 +146,31 @@ function ScreenSharingSurface({
   const client = React.useRef<NoVnc | null>(null)
   const imageSize = React.useRef<DesktopImageSize | null>(null)
   const view = React.useRef<View>({
+    decodesVideo: false,
     fastMotion: true,
     lossless: false,
     monitor: undefined,
   })
   // Straight to the Mac, for the toolbar's keys, which already name Mac keys.
   const sendRawKey = React.useRef<NoVnc["sendKey"] | null>(null)
+  const keyboard = React.useRef<HTMLTextAreaElement>(null)
   // Kept across attempts: a wrong password ends the connection, and the next
   // one has to say so.
   const rejected = React.useRef(false)
   const [attempt, setAttempt] = React.useState(0)
+  const [trackpad, setTrackpad] = React.useState(false)
   const [connection, setConnection] = React.useState<Connection>({
     status: "connecting",
   })
+
+  const image = React.useCallback(
+    () => target.current?.querySelector("canvas") ?? null,
+    []
+  )
+  // Keys go to the desktop, unless a phone's keyboard is taking them.
+  const takeKeys = React.useCallback(() => {
+    if (document.activeElement !== keyboard.current) client.current?.focus()
+  }, [])
 
   const showView = React.useCallback(() => {
     const rfb = client.current
@@ -168,6 +190,12 @@ function ScreenSharingSurface({
         for (const key of [...combo].reverse()) {
           send(key.keysym, key.code, false)
         }
+      },
+      setTrackpad,
+      toggleKeyboard: () => {
+        const field = keyboard.current
+        if (document.activeElement === field) field?.blur()
+        else field?.focus()
       },
       setFastMotion: (fastMotion) => {
         view.current.fastMotion = fastMotion
@@ -194,7 +222,11 @@ function ScreenSharingSurface({
     }
     forkPromise(
       async () => {
-        const { default: RFB } = await import("@novnc/novnc")
+        const [{ default: RFB }, decodesVideo] = await Promise.all([
+          import("@novnc/novnc"),
+          decodesDesktopVideo(),
+        ])
+        view.current.decodesVideo = decodesVideo
         const element = target.current
         if (cancelled || !element) return
         const rfb = new RFB(element, desktopStreamUrl(relayId, session))
@@ -210,6 +242,8 @@ function ScreenSharingSurface({
         // The Relay says so this way when the Mac's displays change
         // (desktop-screen-scaling.ts).
         rfb.addEventListener("desktopname", (event) => {
+          const video = VIDEO_NOTICE.exec(event.detail.name)
+          if (video) onVideo?.(video[1] === "on")
           const size = IMAGE_SIZE_NOTICE.exec(event.detail.name)
           if (!size) return
           const image = { height: Number(size[2]), width: Number(size[1]) }
@@ -251,6 +285,7 @@ function ScreenSharingSurface({
           client.current = null
           imageSize.current = null
           onImageSize(null)
+          onVideo?.(false)
           if (cancelled) return
           if (failedSignIn) {
             setAttempt((value) => value + 1)
@@ -266,7 +301,13 @@ function ScreenSharingSurface({
       client.current?.disconnect()
       client.current = null
     }
-  }, [attempt, onImageSize, relayId, session, showView])
+  }, [attempt, onImageSize, onVideo, relayId, session, showView])
+
+  // The trackpad's clicks would otherwise close a phone's keyboard, as the
+  // canvas took the focus from it. It decides what has the keys itself.
+  React.useEffect(() => {
+    if (client.current) client.current.focusOnClick = !trackpad
+  }, [connection.status, trackpad])
 
   // A new size is a new picture to scale, once the window stops moving.
   React.useEffect(() => {
@@ -291,6 +332,17 @@ function ScreenSharingSurface({
         aria-label="Node desktop"
         className="absolute inset-0"
         role="application"
+      />
+      {trackpad && connection.status === "connected" ? (
+        <DesktopTrackpad
+          image={image}
+          onUsed={takeKeys}
+        />
+      ) : null}
+      <DesktopKeyboard
+        input={keyboard}
+        send={sendRawKey}
+        onOpen={onKeyboard}
       />
       {connection.status === "connected" ? null : (
         <div className="absolute inset-0 grid place-items-center bg-card/95 p-4">
@@ -400,6 +452,8 @@ const option = { code: "AltLeft", key: "Alt", keysym: META_LEFT }
 
 export const screenSharingClient: DesktopClient = {
   cropsMonitors: true,
+  offersKeyboard: true,
+  offersTrackpad: true,
   offersLossless: true,
   Surface: ScreenSharingSurface,
   combos: [

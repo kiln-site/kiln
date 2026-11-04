@@ -102,7 +102,7 @@ export function kilnImageRepository(
  * checks it's public, and scripts/desktop-image.test.mjs that it's the version
  * apps/desktop builds and the client Hearth serves.
  */
-export const KILN_DESKTOP_IMAGE_TAG = "0.3.2"
+export const KILN_DESKTOP_IMAGE_TAG = "0.3.2-1"
 
 export function kilnDesktopImage(repository?: string): string {
   return `${kilnImageRepository("desktop", repository)}:${KILN_DESKTOP_IMAGE_TAG}`

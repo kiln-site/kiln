@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http"
+import { hostname } from "node:os"
 import { createServer as createTcpServer } from "node:net"
 import type { AddressInfo, Server as TcpServer, Socket } from "node:net"
 
@@ -51,6 +52,21 @@ const listen = (server: Server | TcpServer) =>
     )
   })
 
+// Stands in for the encoder, where the Relay looks for it, answering pings.
+async function fakeEncoder() {
+  const server = createTcpServer((socket) => {
+    sockets.push(socket)
+    socket.on("error", () => undefined)
+    socket.on("data", (data) => {
+      if (data.at(-1) === 3) socket.write(Buffer.from([3]))
+    })
+  })
+  await new Promise<void>((resolve) =>
+    server.listen(47902, "127.0.0.1", () => resolve())
+  )
+  return { close: () => server.close() }
+}
+
 // Stands in for Screen Sharing: greets as a VNC server does, and echoes.
 async function fakeVnc(greeting = "RFB 003.889\n") {
   const received: Array<string> = []
@@ -81,7 +97,11 @@ async function harness(
   const lanes = new OperationLanes()
   const desktop = new Desktop(
     [
-      new ScreenSharingDesktop(config, { runScript: async () => macHost }),
+      new ScreenSharingDesktop(
+        config,
+        { runScript: async () => macHost },
+        lanes
+      ),
       new VoxlDesktop(config, { runScript: voxlScript }),
     ],
     config,
@@ -196,13 +216,48 @@ describe("a Mac's desktop", () => {
     expect(await firstMessage(port, ticket)).toContain("RFB 003.889")
   })
 
-  it("needs no streamer", async () => {
+  it("doesn't make anyone wait for the desktop image", async () => {
     onMac()
     const vnc = await fakeVnc()
     const { desktop } = await harness(vnc.port)
+    fakeDocker.addContainer({ name: hostname(), running: true })
+    const pulling = fakeDocker.hold({ command: "pull" })
+    const { desktop: shown } = await desktop.attach()
+    expect(shown.status).toBe("screen-sharing")
+    expect(fakeDocker.containers.size).toBe(1)
+    await pulling.reached
+    pulling.release()
+  })
+
+  it("opens all the same when the desktop image can't download", async () => {
+    onMac()
+    const vnc = await fakeVnc()
+    const { desktop } = await harness(vnc.port)
+    fakeDocker.addContainer({ name: hostname(), running: true })
+    fakeDocker.failNext({ command: "pull" }, "no such image")
+    const { desktop: shown } = await desktop.attach()
+    expect(shown.status).toBe("screen-sharing")
+    await vi.waitFor(() => expect(fakeDocker.pulls.size).toBe(0))
+  })
+
+  it("runs its encoder with nothing but the Relay's loopback", async () => {
+    onMac()
+    const vnc = await fakeVnc()
+    const encoder = await fakeEncoder()
+    const { desktop } = await harness(vnc.port)
+    fakeDocker.addContainer({ name: hostname(), running: true })
+    fakeDocker.images.set("example/voxl:test", {})
     await desktop.attach()
-    expect(fakeDocker.containers.size).toBe(0)
+    const named = () =>
+      [...fakeDocker.containers.values()].find((container) =>
+        container.name.endsWith("kiln-desktop-encoder")
+      )
+    expect(named()?.state.running).toBe(true)
+    expect(named()?.mounts).toEqual([])
     expect(fakeDocker.pulls.size).toBe(0)
+    await desktop.remove()
+    expect(named()).toBeUndefined()
+    encoder.close()
   })
 
   it("turns away a stream without a live ticket, or while paused", async () => {
@@ -240,7 +295,8 @@ describe("a Mac's desktop", () => {
             ...config,
             screenSharingAddress: { host: "127.0.0.1", port: vnc.port },
           },
-          { runScript: async () => "" }
+          { runScript: async () => "" },
+          new OperationLanes()
         ),
       ],
       { hostAccess: false },

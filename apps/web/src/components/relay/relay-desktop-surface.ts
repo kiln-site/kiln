@@ -21,6 +21,10 @@ export interface DesktopSurface {
   setLossless?: (lossless: boolean) => void
   /** Skips pixels while the picture moves, to keep up with big displays. */
   setFastMotion?: (fastMotion: boolean) => void
+  /** Moves the pointer by dragging, like a trackpad, instead of where it's touched. */
+  setTrackpad?: (trackpad: boolean) => void
+  /** Opens or closes a phone's keyboard, from the tap on the toolbar. */
+  toggleKeyboard?: () => void
   /** The monitor on show, for a client that can ask for only that much. */
   showMonitor?: (monitor: RelayDesktopMonitor | undefined) => void
   /** Presses keys down in order and lets them go in reverse. */
@@ -37,6 +41,10 @@ export interface DesktopSurfaceProps {
   desktop: RelayDesktop
   /** The image's size once it shows, and null when it stops. */
   onImageSize: (size: DesktopImageSize | null) => void
+  /** Whether the picture is coming as video, for the toolbar. */
+  onVideo?: (video: boolean) => void
+  /** Whether a phone's keyboard is open, for the toolbar. */
+  onKeyboard?: (open: boolean) => void
   relayId: string
   session: string
   surface: React.Ref<DesktopSurface>
@@ -48,6 +56,10 @@ export interface DesktopClient {
   readonly combos: ReadonlyArray<SendableCombo>
   /** Whether it shows just the monitor it's given, instead of the page. */
   readonly cropsMonitors?: boolean
+  /** Whether the toolbar offers `DesktopSurface.setTrackpad`. */
+  readonly offersTrackpad?: boolean
+  /** Whether touch screens get `DesktopSurface.toggleKeyboard`. voxl has its own. */
+  readonly offersKeyboard?: boolean
   /** Whether the toolbar offers `DesktopSurface.setLossless`. */
   readonly offersLossless?: boolean
   /** Shown while the stream opens. */

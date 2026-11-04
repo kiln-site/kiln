@@ -608,6 +608,72 @@ describe("unused images", () => {
   })
 })
 
+describe("the desktop image", () => {
+  it("stays once a stream has used it, unlike one from an older version", async () => {
+    const harness = await relayHarness()
+    const owned = { "kiln.relay.owner": TEST_NAMESPACE }
+    const current = harness.config.desktopImage
+    const older = `${current}-older`
+    for (const [name, image] of [
+      ["kiln-test-kiln-desktop-encoder", current],
+      ["kiln-test-kiln-desktop", older],
+    ] as const) {
+      fakeDocker.addContainer({
+        image,
+        labels: { ...owned, "kiln.relay.infrastructure": "desktop" },
+        name,
+        running: true,
+      })
+    }
+    const pass = () =>
+      Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
+    await pass()
+    fakeDocker.removeContainer("kiln-test-kiln-desktop-encoder")
+    fakeDocker.removeContainer("kiln-test-kiln-desktop")
+    await pass()
+
+    vi.useFakeTimers({
+      now: Date.now() + 25 * 60 * 60_000,
+      toFake: ["Date"],
+    })
+    await pass()
+
+    expect(fakeDocker.images.has(current)).toBe(true)
+    expect(fakeDocker.images.has(older)).toBe(false)
+  })
+
+  it("stays when it's named by digest, as a pinned Relay names it", async () => {
+    const harness = await relayHarness()
+    const owned = { "kiln.relay.owner": TEST_NAMESPACE }
+    const pinned = `ghcr.io/example/desktop@sha256:${"a".repeat(64)}`
+    harness.config.desktopImage = pinned
+    await Effect.runPromise(
+      new DockerEngine(harness.config.dockerSocket).pullImage(pinned, {
+        timeout: 1_000,
+      })
+    )
+    fakeDocker.addContainer({
+      image: pinned,
+      labels: { ...owned, "kiln.relay.infrastructure": "desktop" },
+      name: "kiln-test-kiln-desktop-encoder",
+      running: true,
+    })
+    const pass = () =>
+      Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
+    await pass()
+    fakeDocker.removeContainer("kiln-test-kiln-desktop-encoder")
+    await pass()
+
+    vi.useFakeTimers({
+      now: Date.now() + 25 * 60 * 60_000,
+      toFake: ["Date"],
+    })
+    await pass()
+
+    expect(fakeDocker.images.has(pinned)).toBe(true)
+  })
+})
+
 describe("cleanup a person asks for", () => {
   it("reports what it could remove, then removes Kiln's unused images at once and only what they chose besides", async () => {
     const harness = await relayHarness()

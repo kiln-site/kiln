@@ -13,17 +13,20 @@ import {
 } from "./desktop-backend.js"
 import { DockerEngine } from "./docker-engine.js"
 import { carryScaledScreen } from "./desktop-screen-scaling.js"
+import { DesktopVideo } from "./desktop-video.js"
 import { recoverPromise } from "./effect/promise.js"
 import type { HostShell } from "./host-shell.js"
+import type { OperationLanes } from "./operation-lanes.js"
 import { MAC_HOST_SCRIPT, parseMacHost } from "./mac-host.js"
 
 // A Mac's desktop, through macOS's own Screen Sharing. Docker on a Mac runs
 // containers in a Linux VM, where nothing can capture the Mac's screen, but
 // they can reach services on the Mac itself, and Screen Sharing is one: a VNC
 // server the Mac's owner turns on in System Settings. So nothing is installed
-// and there's no helper. The viewer signs in to the Mac, in noVNC, with its own
-// account, which Kiln never sees, and the Relay shrinks the picture on its way
-// (desktop-screen-scaling.ts).
+// on the Mac. The viewer signs in to it, in noVNC, with its own account, which
+// Kiln never sees, and the Relay shrinks the picture on its way
+// (desktop-screen-scaling.ts), through a video encoder when it can get one
+// (desktop-video.ts).
 
 const PROBE_TIMEOUT_MS = 2_000
 const GREETING_BYTES = 12
@@ -32,7 +35,10 @@ const MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 
 type ScreenSharingConfig = Pick<
   RelayConfig,
-  "dockerSocket" | "screenSharingAddress"
+  | "desktopImage"
+  | "dockerSocket"
+  | "resourceNamespace"
+  | "screenSharingAddress"
 >
 
 export class ScreenSharingDesktop implements DesktopBackend {
@@ -40,6 +46,7 @@ export class ScreenSharingDesktop implements DesktopBackend {
   readonly #hostShell: Pick<HostShell, "runScript">
   readonly #host: string
   readonly #port: number
+  readonly #video: DesktopVideo
   readonly #server = new WebSocketServer({
     clientTracking: false,
     maxPayload: MAX_MESSAGE_BYTES,
@@ -50,12 +57,14 @@ export class ScreenSharingDesktop implements DesktopBackend {
 
   constructor(
     config: ScreenSharingConfig,
-    hostShell: Pick<HostShell, "runScript">
+    hostShell: Pick<HostShell, "runScript">,
+    lanes: OperationLanes
   ) {
     this.#engine = new DockerEngine(config.dockerSocket)
     this.#hostShell = hostShell
     this.#host = config.screenSharingAddress.host
     this.#port = config.screenSharingAddress.port
+    this.#video = new DesktopVideo(config, lanes)
   }
 
   async applies(): Promise<boolean> {
@@ -92,6 +101,16 @@ export class ScreenSharingDesktop implements DesktopBackend {
     if (desktop.status !== "screen-sharing") {
       throw new DesktopUnavailableError("Screen Sharing is off on this Mac")
     }
+    // Without video the desktop still shows, as JPEG.
+    await recoverPromise(
+      () => this.#video.prepare(),
+      (cause) =>
+        Effect.runPromise(
+          Effect.logWarning("The desktop's video encoder isn't available", {
+            cause,
+          })
+        )
+    )
     return desktop
   }
 
@@ -107,13 +126,12 @@ export class ScreenSharingDesktop implements DesktopBackend {
       upstream.once("error", () => {
         if (!connected) stream.unreachable()
       })
-      carryScaledScreen(upstream, webSocket)
+      carryScaledScreen(upstream, webSocket, () => this.#video.open())
     })
   }
 
-  // Nothing of Kiln's runs for this backend.
   release(): Promise<void> {
-    return Promise.resolve()
+    return this.#video.release()
   }
 
   // Whether Screen Sharing answers: a VNC server greets whoever connects.

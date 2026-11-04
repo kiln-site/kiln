@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
-import { test } from "vite-plus/test"
+import { test, vi } from "vite-plus/test"
 
 import {
   desktopImageTags,
   nightlyRollingTags,
+  untilPublished,
   validateReleaseManifest,
   validateStablePromotion,
 } from "./release.mjs"
@@ -168,6 +169,29 @@ test("stable promotion requires the newest nightly in its line and cannot roll b
         `v${input}`,
         name
       )
+  }
+})
+
+test("a nightly waits for an image still publishing, but not for ever", async () => {
+  vi.useFakeTimers()
+  try {
+    let checks = 0
+    const waited = untilPublished(async () => {
+      checks += 1
+      if (checks < 3) throw new Error("not yet")
+      return "public"
+    })
+    await vi.advanceTimersByTimeAsync(60_000)
+    assert.equal(await waited, "public")
+
+    const never = untilPublished(async () => {
+      throw new Error("Anonymous pull failed")
+    })
+    const refused = assert.rejects(never, /Anonymous pull failed/u)
+    await vi.advanceTimersByTimeAsync(21 * 60_000)
+    await refused
+  } finally {
+    vi.useRealTimers()
   }
 })
 

@@ -186,6 +186,7 @@ const NOTHING: DockerCleanupResult = {
 type CleanupConfig = Pick<
   RelayConfig,
   | "dataDirectory"
+  | "desktopImage"
   | "installationId"
   | "mode"
   | "resourceNamespace"
@@ -590,16 +591,23 @@ export class DockerCleanup {
     rules: Omit<RetentionRules, "kilnImages">
   ): Effect.Effect<Array<ImageRemoval>, unknown> {
     return Effect.gen({ self: this }, function* () {
-      const [records, deployments, updates, now] = yield* Effect.all([
-        this.#state.listDockerImages(),
-        this.#state.listAppDeploymentImages(),
-        this.#updates(),
-        Clock.currentTimeMillis,
-      ])
+      const [records, deployments, updates, now, desktopImageId] =
+        yield* Effect.all([
+          this.#state.listDockerImages(),
+          this.#state.listAppDeploymentImages(),
+          this.#updates(),
+          Clock.currentTimeMillis,
+          // By ID, as Docker reads however the image was named: by digest, say.
+          this.#engine.inspectImage(this.#config.desktopImage).pipe(
+            Effect.map((image) => image.Id),
+            Effect.catchIf(isDockerNotFound, () => Effect.succeed(null))
+          ),
+        ])
       return removableImages(
         {
           containers,
           deployments,
+          desktopImageId,
           images,
           now,
           ownsApp: (container) => {

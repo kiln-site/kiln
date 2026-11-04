@@ -485,7 +485,7 @@ const databases = new DatabaseDriver(config, docker, databaseConnections)
 const hostShell = new HostShell(config)
 const desktop = new Desktop(
   [
-    new ScreenSharingDesktop(config, hostShell),
+    new ScreenSharingDesktop(config, hostShell, lanes),
     new VoxlDesktop(config, hostShell),
   ],
   config,

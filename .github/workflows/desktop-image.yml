@@ -30,19 +30,20 @@ jobs:
     uses: ./.github/workflows/release-config.yml
 
   version:
-    name: Read the voxl version
+    name: Read the image's tag
     runs-on: ubuntu-24.04
     outputs:
-      voxl: ${{ steps.version.outputs.voxl }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Read it from the Dockerfile
         id: version
         run: |
-          version="$(sed -n 's/^ARG VOXL_VERSION=//p' apps/desktop/Dockerfile)"
-          test -n "$version"
-          echo "voxl=$version" >> "$GITHUB_OUTPUT"
+          voxl="$(sed -n 's/^ARG VOXL_VERSION=//p' apps/desktop/Dockerfile)"
+          revision="$(sed -n 's/^ARG DESKTOP_IMAGE_REVISION=//p' apps/desktop/Dockerfile)"
+          test -n "$voxl" && test -n "$revision"
+          echo "tag=$voxl-$revision" >> "$GITHUB_OUTPUT"
 
   image:
     needs: [config, version]
@@ -56,7 +57,7 @@ jobs:
       # workflow's scopes can start with the other.
       cache_scope: desktop-streamer
       license_label: GPL-2.0-or-later
-      tags: type=raw,value=${{ needs.version.outputs.voxl }}
+      tags: type=raw,value=${{ needs.version.outputs.tag }}
       # Only main replaces what Relays pull, whatever a manual run's branch.
       publish: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.PUBLISH_IMAGES == 'true' }}
       publish_provenance: mode=max
@@ -77,5 +78,5 @@ jobs:
         KILN_GIT_REPO=${{ needs.config.outputs.repository }}
         SOURCE_COMMIT=${{ github.sha }}
       license_label: GPL-2.0-or-later
-      tags: type=raw,value=${{ needs.version.outputs.voxl }}-source
+      tags: type=raw,value=${{ needs.version.outputs.tag }}-source
       publish: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.PUBLISH_IMAGES == 'true' }}
