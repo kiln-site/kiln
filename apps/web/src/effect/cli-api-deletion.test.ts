@@ -58,6 +58,7 @@ const seed = Effect.gen(function* () {
 const deleteServer = (input: Record<string, unknown>) =>
   Effect.flip(
     deleteCliServerEffect(principal, {
+      storageId: null,
       instanceId: serverId,
       relayId,
       ...input,

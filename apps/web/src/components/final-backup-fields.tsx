@@ -14,8 +14,8 @@ import { backupStorageQueryOptions } from "@/lib/query-options"
 
 /**
  * Whether a deletion takes a final backup first, and where it goes: the
- * target's default destination, the Relay's own disk, or a destination of
- * the viewer's. `destination` is "default", "local", or a destination's ID.
+ * Relay's own disk or a destination of the viewer's. `destination` is
+ * "local" or a destination's ID.
  */
 export const FinalBackupFields = React.memo(function FinalBackupFields({
   available = true,
@@ -106,9 +106,6 @@ export const FinalBackupFields = React.memo(function FinalBackupFields({
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="min-w-(--radix-select-trigger-width)">
-            <SelectItem value="default">
-              Default · Preferred destination
-            </SelectItem>
             <SelectItem value="local">Local Relay</SelectItem>
             {availableStorage.map((candidate) => (
               <SelectItem key={candidate.id} value={candidate.id}>

@@ -172,6 +172,7 @@ describeMysql("App backups", () => {
             consistency: "live",
             name: "Before the upgrade",
             relayId,
+            storageIds: [null],
           })
         )
 

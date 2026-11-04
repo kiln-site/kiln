@@ -758,7 +758,7 @@ describeMysql("Server migrations", () => {
           const { service, startHearth } = yield* hearths
           yield* seed
           const hearth = yield* startHearth
-          const deleting = { deleteSource: {} }
+          const deleting = { deleteSource: { storageId: null } }
 
           // Cancelled just before its files finish copying, the old server
           // stopped for it: it ends cancelled, never handing the old server
@@ -963,7 +963,9 @@ function insertLegacy(row: {
     id: row.id,
     mode: "migrate",
     options: JSON.stringify(
-      options("migrate", { deleteSource: row.deleteSource ? {} : null })
+      options("migrate", {
+        deleteSource: row.deleteSource ? { storageId: null } : null,
+      })
     ),
     requested_by: mover.id,
     source_instance_id: row.source,

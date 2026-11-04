@@ -287,7 +287,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
       .safeParse(rest[0])
     if (!targetKind.success) {
       return yield* invalidUsage(
-        "Usage: kiln backups create <server|database|platform> <reference> [--name <name>] [--mode full|incremental] [--storage <default|local|id>]"
+        "Usage: kiln backups create <server|database|platform> <reference> --storage <local|id> [--name <name>] [--mode full|incremental]"
       )
     }
     const storageId = yield* parseBackupStorageEffect(args.storage)
@@ -299,7 +299,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
     const common = {
       name: args.name?.trim() || "CLI backup",
       ...(args.mode ? { mode: args.mode } : {}),
-      ...(storageId === undefined ? {} : { storageId }),
+      storageId,
     }
     const body =
       targetKind.data === "platform"
@@ -504,6 +504,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
         "Deletion permanently removes server data. Type the server's name with --confirm <name>."
       )
     }
+    const storageId = yield* parseBackupStorageEffect(args.storage)
     const password = args.passwordStdin
       ? (yield* readStdinEffect()).replace(/\r?\n$/u, "")
       : process.stdin.isTTY
@@ -517,7 +518,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
       cliDeleteServerResponseSchema,
       jsonRequest(
         "DELETE",
-        { ...target, confirmation: args.confirm, password },
+        { ...target, confirmation: args.confirm, password, storageId },
         CLI_LONG_OPERATION_TIMEOUT_MS
       )
     )
@@ -1073,14 +1074,13 @@ const parseBackupIdEffect = Effect.fn("cli.backupId.parse")(function* (
 
 const parseBackupStorageEffect = Effect.fn("cli.backupStorage.parse")(
   function* (value: string | undefined) {
-    if (!value || value === "default") return undefined
     if (value === "local") return null
     const parsed = z.uuid().safeParse(value)
     if (!parsed.success) {
       return yield* commandError({
         code: "invalid_arguments",
         exitCode: 2,
-        message: "--storage must be default, local, or a destination UUID.",
+        message: "--storage must be local or a destination UUID.",
       })
     }
     return parsed.data
@@ -1220,7 +1220,8 @@ Commands:
   activity list                           Show accessible recent activity
   backups targets                         List resources that can be backed up
   backups list                            List accessible backups
-  backups create <type> <reference>       Create a manual backup
+  backups create <type> <reference> --storage <local|id>
+                                          Create a manual backup
                                           (server default: incremental)
   backup restore <backup-id>              Restore a server or database backup
   backup download <backup-id> [local]     Download a backup
@@ -1231,7 +1232,7 @@ Commands:
   server info <server>                    Show server metadata and resources
   server startup <server> [options]       Change startup settings
   server brick <server> <brick>           Change a server's Brick
-  server delete <server> --confirm <name> [--password-stdin]
+  server delete <server> --confirm <name> --storage <local|id> [--password-stdin]
                                           Permanently delete a server, after a
                                           final backup; asks for your password
   server power <server> <action>          Start, stop, restart, or kill a server
@@ -1271,8 +1272,8 @@ Options:
       --password-stdin
                        Read your account password from standard input
       --profile <id>  Use a named profile
-      --storage <default|local|id>
-                       Select a backup destination
+      --storage <local|id>
+                       Choose where a backup goes
       --token <token> Use a token without saving it
       --url <url>     Use a specific Kiln or Hearth URL
       --variable <name=value>

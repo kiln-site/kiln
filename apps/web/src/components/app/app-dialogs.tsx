@@ -38,7 +38,7 @@ export function DeleteAppDialog({
   const queryClient = useQueryClient()
   const confirmation = useDeleteConfirmation(app.name)
   const [createBackup, setCreateBackup] = React.useState(true)
-  const [backupDestination, setBackupDestination] = React.useState("default")
+  const [backupDestination, setBackupDestination] = React.useState("local")
   const remove = useMutation({
     mutationFn: () =>
       deleteApp({
@@ -47,12 +47,7 @@ export function DeleteAppDialog({
           appId: app.id,
           createBackup,
           relayId: app.relayId,
-          ...(createBackup && backupDestination !== "default"
-            ? {
-                storageId:
-                  backupDestination === "local" ? null : backupDestination,
-              }
-            : {}),
+          storageId: backupDestination === "local" ? null : backupDestination,
         },
       }),
     onSuccess: async () => {

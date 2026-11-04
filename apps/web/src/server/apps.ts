@@ -606,7 +606,7 @@ export const deleteApp = createServerFn({ method: "POST" })
   .validator(
     appInputSchema.extend(deleteConfirmationSchema.shape).extend({
       createBackup: z.boolean().default(true),
-      storageId: z.uuid().nullable().optional(),
+      storageId: z.uuid().nullable(),
     })
   )
   .handler(async ({ data }) => {
@@ -633,10 +633,8 @@ export const deleteApp = createServerFn({ method: "POST" })
       kind: "app",
       relayId: relay.id,
       resourceId: data.appId,
+      storageId: data.storageId,
       user,
-      ...(data.createBackup && data.storageId !== undefined
-        ? { storageId: data.storageId }
-        : {}),
     })
     await awaitResourceDeletion(deletion)
     return { deleted: true }
