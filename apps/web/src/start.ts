@@ -11,7 +11,10 @@ import {
   isAccountChangedError,
   renderedAccountHeader,
 } from "./lib/browser-accounts"
-import { isSessionRotating } from "./lib/session-rotation"
+import {
+  isSessionRotating,
+  sessionRotationSettled,
+} from "./lib/session-rotation"
 import { reportAppError, traceAppPromise } from "./effect/runtime"
 import { requestSpanName } from "./observability/request-span"
 
@@ -50,6 +53,15 @@ const errorMiddleware = createMiddleware({ type: "function" }).server(
     tapPromiseError(next, (cause) =>
       reportRequestError(cause, requestSpanName(method, "", serverFnMeta))
     )
+)
+
+// Sent while the session is being replaced, a call would carry the dying
+// cookie, and its signed-out answer would clear the new one.
+const sessionRotationMiddleware = createMiddleware({ type: "function" }).client(
+  async ({ next }) => {
+    await sessionRotationSettled()
+    return next()
+  }
 )
 
 // Hearth refuses calls from a tab that still renders an account the browser
@@ -96,5 +108,9 @@ function isConnectionReset(cause: unknown): boolean {
 
 export const startInstance = createStart(() => ({
   requestMiddleware: [tracingMiddleware, csrfMiddleware],
-  functionMiddleware: [renderedAccountMiddleware, errorMiddleware],
+  functionMiddleware: [
+    sessionRotationMiddleware,
+    renderedAccountMiddleware,
+    errorMiddleware,
+  ],
 }))

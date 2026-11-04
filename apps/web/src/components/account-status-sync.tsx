@@ -1,6 +1,11 @@
 import { Result } from "effect"
+import { recoverPromise } from "@/effect/promise"
 import { withRenderedAccount } from "@/lib/browser-accounts"
-import { holdStreamAcrossSessionRotation } from "@/lib/session-rotation"
+import {
+  holdStreamAcrossSessionRotation,
+  isSessionRotating,
+} from "@/lib/session-rotation"
+import { getAuthState } from "@/server/auth"
 import { memo, useEffect } from "react"
 
 export const AccountStatusSync = memo(function AccountStatusSync({
@@ -38,10 +43,24 @@ export const AccountStatusSync = memo(function AccountStatusSync({
         Result.match({ onSuccess: () => undefined, onFailure: () => undefined })
       )
     }
+    // Refused outright, the stream never reports the session it found dead.
+    // Restricted pages have no other stream to notice.
+    const onError = (event: Event) => {
+      if ((event.target as EventSource).readyState !== EventSource.CLOSED)
+        return
+      void recoverPromise(
+        async () => {
+          const { user } = await getAuthState()
+          if (!user && !isSessionRotating()) window.location.replace("/")
+        },
+        () => undefined
+      )
+    }
     return holdStreamAcrossSessionRotation({
       open() {
         source = new EventSource(withRenderedAccount("/api/account-status"))
         source.addEventListener("message", onMessage)
+        source.addEventListener("error", onError)
       },
       close() {
         source?.close()
