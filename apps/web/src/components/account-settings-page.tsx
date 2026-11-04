@@ -52,6 +52,7 @@ import {
 import { DISPLAY_NAME_MAX_LENGTH, parseDisplayName } from "@/lib/display-name"
 import { isMinecraftUsername } from "@/lib/minecraft-profile"
 import { queryKeys } from "@/lib/query-options"
+import { rotateSession } from "@/lib/session-rotation"
 import { getCliCredentials, revokeCliCredential } from "@/server/cli"
 import {
   resumeBrowserAccountSession,
@@ -539,11 +540,13 @@ function PasswordRow() {
       () =>
         recoverPromise(
           () =>
-            authClient.changePassword({
-              currentPassword,
-              newPassword,
-              revokeOtherSessions: true,
-            }),
+            rotateSession(() =>
+              authClient.changePassword({
+                currentPassword,
+                newPassword,
+                revokeOtherSessions: true,
+              })
+            ),
           (cause) => failedAuthResult(cause, "Could not change your password")
         ),
       () => setPending(false)
@@ -700,7 +703,7 @@ function TwoFactorRow() {
     }
     setPending("verify")
     const result = await recoverPromise(
-      () => authClient.twoFactor.verifyTotp({ code }),
+      () => rotateSession(() => authClient.twoFactor.verifyTotp({ code })),
       (cause) => failedAuthResult(cause, "The authenticator code is invalid")
     )
     setPending(null)
@@ -724,7 +727,7 @@ function TwoFactorRow() {
     event.preventDefault()
     setPending("disable")
     const result = await recoverPromise(
-      () => authClient.twoFactor.disable({ password }),
+      () => rotateSession(() => authClient.twoFactor.disable({ password })),
       (cause) => failedAuthResult(cause, "Could not disable 2FA")
     )
     setPending(null)
@@ -939,7 +942,8 @@ function PasskeysPanel() {
     }
     setPending("add")
     const confirmation = await recoverPromise(
-      () => authClient.passwordConfirmation.confirm({ password }),
+      () =>
+        rotateSession(() => authClient.passwordConfirmation.confirm({ password })),
       (cause) => failedAuthResult(cause, "Could not confirm your password")
     )
     if (confirmation.error) {

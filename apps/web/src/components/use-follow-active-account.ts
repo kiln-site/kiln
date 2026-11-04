@@ -8,6 +8,7 @@ import {
   readActiveAccount,
   setRenderedAccount,
 } from "@/lib/browser-accounts"
+import { isSessionRotating } from "@/lib/session-rotation"
 import { getActiveBrowserAccountId } from "@/server/browser-accounts"
 
 const resumeCheckIntervalMs = 2_000
@@ -31,7 +32,8 @@ export function useFollowActiveAccount(userId: string | null) {
     let checkedAt = 0
     let trailing: ReturnType<typeof setTimeout> | undefined
     const reloadIfChanged = (active: string | null) => {
-      if (active !== null && active !== expected) window.location.reload()
+      if (active !== null && active !== expected && !isSessionRotating())
+        window.location.reload()
     }
     const onStorage = (event: StorageEvent) => {
       if (event.key === activeAccountStorageKey) reloadIfChanged(event.newValue)
