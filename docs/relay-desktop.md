@@ -1,14 +1,23 @@
 # Relay desktop
 
-A Relay's **Desktop** tab shows its node's graphical desktop in the browser,
-with keyboard, mouse, clipboard, and sound. [voxl](https://github.com/tembo/voxl)
-does the streaming: H.264 over one WebSocket, decoded with WebCodecs.
+A Relay's **Desktop** tab shows its node's graphical desktop in the browser.
+How depends on the node:
 
-Hearth: `server/relay-desktop.ts`, `lib/relay-desktop.server.ts`,
-`components/relay/relay-desktop-page.tsx`, `public/desktop-client`.
-Relay: `desktop.ts`. Image: `apps/desktop/Dockerfile`.
+| Node             | Shown by                                                            | Backend                     | Client                 |
+| ---------------- | ------------------------------------------------------------------- | --------------------------- | ---------------------- |
+| Linux, with X11  | [voxl](https://github.com/tembo/voxl), H.264 decoded with WebCodecs | `desktop-voxl.ts`           | voxl's own, in a frame |
+| Mac, with Docker | macOS's Screen Sharing, scaled by the Relay                         | `desktop-screen-sharing.ts` | noVNC                  |
 
-## What a node needs
+Relay: `desktop.ts` keeps what they share: tickets, streams, pausing, and letting
+go once nobody's watching. Each backend implements `DesktopBackend`
+(`desktop-backend.ts`), and the first whose `applies()` is true shows the node.
+Hearth: `server/relay-desktop.ts`, `lib/relay-desktop.server.ts`.
+Page: `components/relay/relay-desktop-page.tsx` is the toolbar and session around
+a `DesktopClient` (`relay-desktop-surface.ts`), one per backend. A new way of
+showing a desktop is one backend, one client, and a status in
+`relayDesktopSchema`.
+
+## What a Linux node needs
 
 - A streamer image, named by `KILN_RELAY_DESKTOP_IMAGE`. Kiln doesn't publish
   one yet (see [Licensing](#licensing)), so the tab stays off until a Relay is
@@ -24,6 +33,44 @@ Relay: `desktop.ts`. Image: `apps/desktop/Dockerfile`.
 Opening the desktop needs `relay.terminal`: driving someone's desktop is worth
 as much as a root shell on the node. A node with nothing to show still opens
 the tab, grayed out, with a link to its terminal.
+
+## What a Mac needs
+
+Docker on a Mac runs containers in a Linux VM. Nothing there can capture the
+Mac's screen, but it can reach services on the Mac, so the Relay uses the VNC
+server macOS already has:
+
+1. Install the Relay as usual. Nothing changes in Docker.
+2. Turn on Screen Sharing in System Settings, under General, Sharing. Only
+   someone at the Mac can. The tab says so until it's on, and notices when it
+   is.
+3. Sign in on the tab with a Mac account Screen Sharing allows.
+
+No image, helper, or port forward is needed. The Relay reaches
+`host.docker.internal:5900` and connects out to Hearth as it always does. It
+tells a Mac apart by what Docker reports: `OrbStack`, or `Docker Desktop` with
+its socket under `/Users`. It sees Screen Sharing is on when the port greets it
+as a VNC server. `KILN_RELAY_SCREEN_SHARING_ADDRESS` overrides where it looks,
+for another Docker runtime. Turning host access off turns this off too.
+
+The viewer needs both `relay.terminal` in Kiln and a Mac login. The Mac login
+goes from the browser to the Mac inside Apple's own sign-in exchange, which the
+Relay passes along unread, and Kiln doesn't save it.
+
+OrbStack's VM can also run commands on the Mac: its `mac` command does, as the
+signed-in person. Anyone with `relay.terminal` on an OrbStack Mac can reach it
+through the node's terminal, so treat that permission as their account on the
+Mac too. Kiln doesn't use it.
+
+Use another computer to view a Mac. Viewing a Mac from itself works, but it has
+one pointer: moving it over the picture sends the Mac's pointer to the matching
+place on the Mac, away from where you're looking, so clicks seem to go nowhere.
+
+Screen Sharing listens on every network the Mac is on, not only for the Relay,
+so anyone who can reach the Mac can try to sign in. Don't forward its port.
+
+The Relay runs in Docker, which normally starts when someone logs in, so a
+restarted Mac can't be reached from Kiln until then. A Mac that sleeps drops off.
 
 ## How it connects
 
@@ -93,7 +140,85 @@ environment of the signed-in person's processes, which they control. The Relay
 takes only exact shapes, mounts only a regular file that person owns, runs the
 streamer as the UID logind reports, and never streams a root session.
 
+## Monitors
+
+Screen Sharing sends every display as one image and doesn't say where each one
+is, so the Relay reads the arrangements macOS keeps in
+`/Library/Preferences/com.apple.windowserver.displays.plist`, through its host
+helper, and the page takes the one that fits the image. On Linux, `xrandr` says.
+
+A backend reports monitors as rectangles of the image in `layouts`. The page
+takes the arrangement whose size fits the image, reading it again when none does:
+macOS saves a new one a few seconds after the displays change.
+
+The page's `DesktopViewport` crops a client to a monitor by enlarging its element
+and clipping it, so a client needs no support for it. With voxl it's only a crop:
+the whole image is still sent. A client with `cropsMonitors` is sent just that
+monitor instead, as on a Mac. Without a layout that fits, the picker stays hidden
+and the page shows the whole image.
+
+The accounts offered at sign-in are the folders in `/Users`, which the Relay
+reads the same way, so they're suggestions. The page remembers the last account
+that signed in, per Relay, in that browser, and never a password.
+
+## Scaling a Mac's picture
+
+macOS's server is the limit on a Mac. Whatever noVNC offers, it answers with ZRLE,
+Zlib, or Raw, all lossless, at the displays' full size, and neither it nor VNC
+can scale. A Retina display in motion cost about 5 MB an update, 100 ms on the Mac
+to compress and 70 ms in the browser to decode, at about 5 updates a second.
+
+So the Relay, next to the Mac, does it (`desktop-screen-scaling.ts`). After
+sign-in it asks for Raw, which costs the Mac almost nothing and crosses to the
+Docker VM at about 1 GB/s, and keeps the picture in memory. The page tells it which
+part of the image to show and the size that fills the Desktop tab, and it
+sends JPEG of that size. noVNC stays a plain VNC client: it sees a smaller
+framebuffer and Tight rectangles, and the Relay maps its pointer back to the Mac.
+
+```
+Mac ──Raw, full size──▶ Relay ──JPEG, tab size──▶ browser
+```
+
+That brought a Retina display to 13 to 16 updates a second at about 100 KB each
+with a video playing, and a 5120 × 2880 one to 9 to 16.
+
+Moving pictures go out at lower quality and sharpen 250 ms after they stop, and
+small changes such as typing go out sharp at once. Fetching and encoding overlap,
+and at most one update waits between them, so nothing old queues up. Each is sent
+once the browser asks, so a slow connection gets fewer updates, not late ones.
+When the Mac's displays change it sends a new size. The Relay passes that on as a
+desktop name, the one thing noVNC tells a page about, and the page asks again.
+
+Each change is scaled apart from the rest of the picture, so it has to land on
+the same pixels it would if everything were scaled together, or what's around it
+shifts by a fraction of a pixel with every update. So the Relay scales in
+sixteenths, where 16 of the Mac's pixels are a whole number of the viewer's,
+rounding up from the tab's size, and sends whole 256-pixel tiles, which line up
+JPEG's blocks too. A display that isn't a whole number of steps shows a thin
+black edge of up to 15 of its pixels.
+
+**Fast motion**, on by default, keeps every second pixel and row of a large
+moving update before scaling it, a quarter of the work, where the picture is
+scaled to half size or less. Small details shimmer while they move, and sharpen
+when they stop.
+
+**Lossless** on the toolbar sends every pixel at full size as PNG, for small text
+and artwork, and moves much more slowly. It's for reading, not for watching.
+
+`sharp` does the work, in the Relay's image only. It's Apache-2.0, and the libvips
+it bundles is LGPL-3.0.
+
+## Stream recovery on a Mac
+
+noVNC ends with the connection rather than retrying. The page shows why, and
+Try again connects with the same session. A wrong password closes the
+connection, so the page reconnects and asks again.
+
 ## Keyboard, fullscreen, and touch
+
+On a Mac, macOS's server reads Alt and Super as Command, and only Meta as
+Option, so the page sends a viewer's Alt as Meta. Other computers' Control is
+sent as Command, and their Windows key as Control, so shortcuts work by habit.
 
 voxl sends each key to the desktop as an X keysym, so the viewer's layout
 decides what it types. A Mac's Command key becomes Control, so Linux shortcuts
@@ -130,4 +255,7 @@ before publishing it, then give `KILN_RELAY_DESKTOP_IMAGE` a default.
   against Hearth's bandwidth and adds a hop. Relays browsers can reach could
   take it directly.
 - One display per node. Viewers share it, and all of them can type.
+- A Mac's picture is scaled on the Relay's CPU, while someone watches, and each
+  stream holds the whole area on show in memory, twice. Images over 60 million
+  pixels aren't shown.
 - voxl encodes on the CPU: about 1.5 cores on a busy desktop.

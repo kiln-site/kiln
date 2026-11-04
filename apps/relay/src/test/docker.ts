@@ -214,6 +214,8 @@ class DockerFailure extends Error {
 }
 
 export class FakeDocker {
+  /** What `GET /info` answers: what Docker says about itself. */
+  info: Record<string, unknown> = {}
   readonly containers = new Map<string, FakeContainer>()
   readonly networks = new Map<string, FakeNetwork>()
   readonly volumes = new Map<string, FakeVolume>()
@@ -1694,6 +1696,7 @@ export class FakeDocker {
         .map((part) => decodeURIComponent(part))
     let parameters: Array<string> | undefined
 
+    if (method === "GET" && path === "/info") return json(200, this.info)
     if (method === "GET" && path === "/version") {
       return json(200, { ApiVersion: "1.47", Version: "27.3.1" })
     }

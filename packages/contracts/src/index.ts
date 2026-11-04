@@ -616,7 +616,9 @@ export const relayHostAccessSchema = z.object({
 
 // The node's desktop, as the Relay finds it (apps/relay/src/desktop.ts):
 // the graphical session someone is signed in to, if any. Only X11 desktops
-// can be streamed. `disabled` means the Relay's host access is off,
+// can be streamed. On a Mac, where Docker runs in a VM, it's the Mac's own
+// Screen Sharing: `screen-sharing`, or `screen-sharing-off` until the Mac's
+// owner turns it on. `disabled` means the Relay's host access is off,
 // `unconfigured` that it has no streamer image, and `paused` that it's paused.
 const relayDesktopSessionShape = {
   displayManager: z.boolean(),
@@ -624,13 +626,39 @@ const relayDesktopSessionShape = {
   greeter: z.boolean(),
   user: z.string().max(200).nullable(),
 }
+// One display's place in the image a desktop's client shows, in its pixels.
+export const relayDesktopMonitorSchema = z.object({
+  height: z.number().int().positive(),
+  width: z.number().int().positive(),
+  x: z.number().int().nonnegative(),
+  y: z.number().int().nonnegative(),
+})
+export type RelayDesktopMonitor = z.infer<typeof relayDesktopMonitorSchema>
+// Arrangements a node's displays may be in. A Mac keeps every one it has had,
+// so the client takes the one that fits the image it's sent.
+const relayDesktopLayoutsSchema = z
+  .array(z.array(relayDesktopMonitorSchema).max(16))
+  .max(64)
+
 export const relayDesktopSchema = z.discriminatedUnion("status", [
   z.object({
     status: z.literal("x11"),
     display: z.string().max(32),
+    layouts: relayDesktopLayoutsSchema,
     ...relayDesktopSessionShape,
   }),
   z.object({ status: z.literal("wayland"), ...relayDesktopSessionShape }),
+  z.object({
+    status: z.literal("screen-sharing"),
+    // Accounts the Mac has, to offer at sign-in.
+    accounts: z.array(z.string().max(64)).max(32),
+    displayManager: z.boolean(),
+    layouts: relayDesktopLayoutsSchema,
+  }),
+  z.object({
+    status: z.literal("screen-sharing-off"),
+    displayManager: z.boolean(),
+  }),
   z.object({ status: z.literal("none"), displayManager: z.boolean() }),
   z.object({ status: z.literal("disabled"), displayManager: z.boolean() }),
   z.object({ status: z.literal("unconfigured"), displayManager: z.boolean() }),

@@ -12,7 +12,9 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
 vi.mock("./command.js", () => import("./test/docker.js"))
 
-import { Desktop, DesktopUnavailableError } from "./desktop.js"
+import { DesktopUnavailableError } from "./desktop-backend.js"
+import { VoxlDesktop } from "./desktop-voxl.js"
+import { Desktop } from "./desktop.js"
 import { exclusive, laneKeys, OperationLanes } from "./operation-lanes.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
@@ -33,6 +35,14 @@ const x11 = [
 const wayland = "displayManager=yes\nuser=ada\nclass=user\nstatus=wayland\n"
 
 const servers: Array<Server> = []
+
+const desktopOn = (
+  config: ConstructorParameters<typeof VoxlDesktop>[0] & {
+    readonly hostAccess: boolean
+  },
+  runScript: () => Promise<string>,
+  lanes: OperationLanes
+) => new Desktop([new VoxlDesktop(config, { runScript })], config, lanes)
 
 afterEach(async () => {
   vi.useRealTimers()
@@ -86,7 +96,7 @@ async function harness(script = x11) {
   fakeDocker.addContainer({ name: hostname(), running: true })
   fakeDocker.images.set(config.desktopImage, {})
   const lanes = new OperationLanes()
-  const desktop = new Desktop(config, { runScript: async () => script }, lanes)
+  const desktop = desktopOn(config, async () => script, lanes)
   const server = createServer()
   desktop.attachServer(server)
   const port = await listen(server, 0)
@@ -175,7 +185,7 @@ describe("the node's desktop", () => {
     const name = `${TEST_NAMESPACE}-kiln-desktop`
     expect(fakeDocker.container(name)).toBeDefined()
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
-    const restarted = new Desktop(config, { runScript: async () => x11 }, lanes)
+    const restarted = desktopOn(config, async () => x11, lanes)
     const server = createServer()
     servers.push(server)
     restarted.attachServer(server)
@@ -241,9 +251,9 @@ describe("the node's desktop", () => {
 
   it("streams nothing without a streamer image", async () => {
     const { config } = await relayHarness()
-    const desktop = new Desktop(
+    const desktop = desktopOn(
       { ...config, desktopImage: null },
-      { runScript: async () => x11 },
+      async () => x11,
       new OperationLanes()
     )
     expect((await desktop.read()).status).toBe("unconfigured")
@@ -262,13 +272,11 @@ describe("the node's desktop", () => {
     expect(upgrades).toEqual([])
     desktop.closeStreams()
     expect(desktop.heartbeat([ticket]).tickets).toEqual([])
-    const paused = new Desktop(
+    const paused = desktopOn(
       { ...(await relayHarness()).config, desktopImage: "example/voxl:test" },
-      {
-        runScript: async () => {
-          reachedHost = true
-          return x11
-        },
+      async () => {
+        reachedHost = true
+        return x11
       },
       lanes
     )

@@ -1,16 +1,21 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import type { RelayDesktop } from "@workspace/contracts"
+import type { RelayDesktop, RelayDesktopMonitor } from "@workspace/contracts"
 import {
+  Gem,
   Keyboard,
   LoaderCircle,
   Maximize,
   Minimize,
+  Monitor,
   MonitorOff,
+  Plug,
+  Rabbit,
   RotateCw,
   TerminalSquare,
   TriangleAlert,
+  Unplug,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -18,11 +23,27 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { RelayKindIcon } from "@/components/instance-kind-icon"
+import { screenSharingClient } from "@/components/relay/relay-desktop-screen-sharing"
+import {
+  monitorsOf,
+  type DesktopClient,
+  type DesktopImageSize,
+  type DesktopSurface,
+} from "@/components/relay/relay-desktop-surface"
+import { voxlClient } from "@/components/relay/relay-desktop-voxl"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
 import { forkPromise } from "@/effect/promise"
@@ -33,44 +54,12 @@ import {
   openRelayDesktop,
 } from "@/server/relay-desktop"
 
-// The node's desktop, streamed by voxl. The stream plays in voxl's own
-// client, served by Hearth (public/desktop-client) in a frame; Hearth
-// carries its WebSocket to the Relay (lib/relay-desktop.server.ts).
+// The node's desktop. Which client shows it depends on the node
+// (relay.desktop.read); the toolbar and the session around it are the same.
 
-const DESKTOP_CLIENT = "/desktop-client/index.html"
 const SESSION_CHECK_MS = 10_000
-
-interface SendableKey {
-  readonly code: string
-  readonly key: string
-}
-const CONTROL = { code: "ControlLeft", key: "Control" }
-const ALT = { code: "AltLeft", key: "Alt" }
-const SUPER = { code: "OSLeft", key: "Meta" }
-const letter = (key: string) => ({
-  code: `Key${key.toUpperCase()}`,
-  key,
-})
-// What a browser or the viewer's own computer may keep from the desktop.
-const SENDABLE_KEYS: ReadonlyArray<{
-  readonly keys: ReadonlyArray<SendableKey>
-  readonly label: string
-}> = [
-  {
-    label: "Ctrl+Alt+Delete",
-    keys: [CONTROL, ALT, { code: "Delete", key: "Delete" }],
-  },
-  { label: "Super", keys: [SUPER] },
-  { label: "Alt+Tab", keys: [ALT, { code: "Tab", key: "Tab" }] },
-  { label: "Alt+F4", keys: [ALT, { code: "F4", key: "F4" }] },
-  { label: "Ctrl+W", keys: [CONTROL, letter("w")] },
-  { label: "Ctrl+T", keys: [CONTROL, letter("t")] },
-  { label: "Ctrl+Alt+T", keys: [CONTROL, ALT, letter("t")] },
-  {
-    label: "Print Screen",
-    keys: [{ code: "PrintScreen", key: "PrintScreen" }],
-  },
-]
+const LAYOUT_CHECK_MS = 1_000
+const LAYOUT_CHECKS_FOR_MS = 10_000
 
 function relayDesktopQueryOptions(relayId: string) {
   return {
@@ -81,7 +70,10 @@ function relayDesktopQueryOptions(relayId: string) {
     // Checks again while there's nothing to show, so the page lights up
     // when someone signs in at the node.
     refetchInterval: (query: { state: { data?: RelayDesktop } }) =>
-      query.state.data?.status === "x11" ? false : 15_000,
+      query.state.data?.status === "x11" ||
+      query.state.data?.status === "screen-sharing"
+        ? false
+        : 15_000,
   }
 }
 
@@ -115,19 +107,66 @@ export function RelayDesktopPage() {
       />
     )
   }
-  return <DesktopContent desktop={desktop.data} relayId={relay.id} />
+  return (
+    <DesktopContent
+      checking={desktop.isFetching}
+      desktop={desktop.data}
+      relayId={relay.id}
+      onCheckAgain={() => {
+        forkPromise(() => desktop.refetch())
+      }}
+    />
+  )
 }
 
 function DesktopContent({
+  checking,
   desktop,
+  onCheckAgain,
   relayId,
 }: {
+  checking: boolean
   desktop: RelayDesktop
+  onCheckAgain: () => void
   relayId: string
 }) {
   switch (desktop.status) {
     case "x11":
-      return <DesktopStream key={desktop.display} relayId={relayId} />
+      return (
+        <DesktopStream
+          client={voxlClient}
+          desktop={desktop}
+          key={desktop.display}
+          relayId={relayId}
+        />
+      )
+    case "screen-sharing":
+      return (
+        <DesktopStream
+          client={screenSharingClient}
+          desktop={desktop}
+          relayId={relayId}
+        />
+      )
+    case "screen-sharing-off":
+      return (
+        <DesktopPlaceholder
+          icon={<MonitorOff />}
+          title="Screen Sharing is off on this Mac"
+          description="Turn it on in System Settings, under General, Sharing. Other devices that can reach this Mac can then try to sign in to it, so don't forward its port 5900 on your router."
+        >
+          <Button
+            className="mt-4"
+            disabled={checking}
+            size="sm"
+            variant="outline"
+            onClick={onCheckAgain}
+          >
+            <RotateCw />
+            Check again
+          </Button>
+        </DesktopPlaceholder>
+      )
     case "wayland":
       return (
         <DesktopPlaceholder
@@ -192,14 +231,24 @@ type StreamState =
   | { status: "open"; session: string }
   | { status: "failed"; message: string }
 
-function DesktopStream({ relayId }: { relayId: string }) {
+function DesktopStream({
+  client,
+  desktop,
+  relayId,
+}: {
+  client: DesktopClient
+  desktop: RelayDesktop
+  relayId: string
+}) {
   const [attempt, setAttempt] = React.useState(0)
   const [state, setState] = React.useState<StreamState>({ status: "opening" })
+  const [connected, setConnected] = React.useState(true)
   const reopen = React.useCallback(() => setAttempt((value) => value + 1), [])
-  const supported = useStreamingSupport()
+  const unsupported = useUnsupported(client)
+  const supported = unsupported === null
 
   React.useEffect(() => {
-    if (!supported) return
+    if (!supported || !connected) return
     let session: string | null = null
     let cancelled = false
     setState({ status: "opening" })
@@ -233,15 +282,29 @@ function DesktopStream({ relayId }: { relayId: string }) {
         )
       }
     }
-  }, [attempt, relayId, supported])
+  }, [attempt, connected, relayId, supported])
 
   if (!supported) {
     return (
       <DesktopPlaceholder
         icon={<TriangleAlert />}
         title="This browser can't play the desktop"
-        description="Streaming the desktop needs WebCodecs, which browsers only allow on HTTPS pages. Open Kiln over HTTPS in a current browser."
+        description={unsupported ?? ""}
       />
+    )
+  }
+  if (!connected) {
+    return (
+      <DesktopPlaceholder
+        icon={<Unplug />}
+        title="Disconnected"
+        description="This page has let go of the desktop. Nothing on the node changed."
+      >
+        <Button className="mt-4" size="sm" onClick={() => setConnected(true)}>
+          <Plug />
+          Connect
+        </Button>
+      </DesktopPlaceholder>
     )
   }
   if (state.status === "failed") {
@@ -264,20 +327,33 @@ function DesktopStream({ relayId }: { relayId: string }) {
       <DesktopPlaceholder
         icon={<LoaderCircle className="animate-spin" />}
         title="Opening the desktop"
-        description="Starting the stream on the node. The first time, the Relay downloads the streamer."
+        description={client.opening}
       />
     )
   }
   return (
-    <DesktopFrame relayId={relayId} session={state.session} onEnded={reopen} />
+    <DesktopFrame
+      client={client}
+      desktop={desktop}
+      relayId={relayId}
+      session={state.session}
+      onDisconnect={() => setConnected(false)}
+      onEnded={reopen}
+    />
   )
 }
 
 function DesktopFrame({
+  client,
+  desktop,
+  onDisconnect,
   onEnded,
   relayId,
   session,
 }: {
+  client: DesktopClient
+  desktop: RelayDesktop
+  onDisconnect: () => void
   onEnded: () => void
   relayId: string
   session: string
@@ -295,10 +371,56 @@ function DesktopFrame({
   React.useEffect(() => {
     if (ended) onEnded()
   }, [ended, onEnded])
-  const frame = React.useRef<HTMLIFrameElement>(null)
+  const surface = React.useRef<DesktopSurface>(null)
   const [root, setRoot] = React.useState<HTMLDivElement | null>(null)
-  const { expanded, toggleExpanded } = useDesktopExpansion(frame, root)
-  const params = new URLSearchParams({ relay: relayId, session })
+  const { expanded, toggleExpanded } = useDesktopExpansion(surface, root)
+  const [imageSize, setImageSize] = React.useState<DesktopImageSize | null>(
+    null
+  )
+  const [chosen, setChosen] = React.useState<number | null>(null)
+  const monitors = monitorsOf(desktop, imageSize)
+  // A monitor that's gone, as when the arrangement changes, shows them all.
+  const monitor = chosen === null ? undefined : monitors[chosen]
+  React.useEffect(() => {
+    surface.current?.showMonitor?.(monitor)
+  }, [monitor])
+  const [fastMotion, setFastMotion] = React.useState(true)
+  React.useEffect(() => {
+    surface.current?.setFastMotion?.(fastMotion)
+  }, [fastMotion])
+  const [lossless, setLossless] = React.useState(false)
+  React.useEffect(() => {
+    surface.current?.setLossless?.(lossless)
+  }, [lossless])
+  // An image no arrangement fits means the node's displays just changed, and
+  // a Mac takes a moment to save the new one.
+  const queryClient = useQueryClient()
+  const unplaced = imageSize !== null && monitors.length === 0
+  React.useEffect(() => {
+    if (!unplaced) return
+    const check = () => {
+      forkPromise(() =>
+        queryClient.refetchQueries({ queryKey: ["relay-desktop", relayId] })
+      )
+    }
+    check()
+    const again = setInterval(check, LAYOUT_CHECK_MS)
+    const stop = setTimeout(() => clearInterval(again), LAYOUT_CHECKS_FOR_MS)
+    return () => {
+      clearInterval(again)
+      clearTimeout(stop)
+    }
+  }, [imageSize, queryClient, relayId, unplaced])
+  const menuProps = {
+    align: "end",
+    className: cn(expanded && "z-60"),
+    // Only the fullscreen element's own content shows.
+    container: expanded ? root : undefined,
+    onCloseAutoFocus: (event: Event) => {
+      event.preventDefault()
+      surface.current?.focus()
+    },
+  } as const
   return (
     <div
       ref={setRoot}
@@ -308,6 +430,79 @@ function DesktopFrame({
       )}
     >
       <div className="flex h-9 shrink-0 items-center justify-end gap-1 border-b border-border/70 bg-card px-2">
+        {monitors.length > 0 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="ghost">
+                <Monitor />
+                {monitor ? `Monitor ${(chosen ?? 0) + 1}` : "All monitors"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent {...menuProps}>
+              <DropdownMenuRadioGroup
+                value={monitor ? String(chosen) : "all"}
+                onValueChange={(value) =>
+                  setChosen(value === "all" ? null : Number(value))
+                }
+              >
+                <DropdownMenuRadioItem value="all">
+                  All monitors
+                </DropdownMenuRadioItem>
+                {monitors.map(({ height, width }, index) => (
+                  <DropdownMenuRadioItem key={index} value={String(index)}>
+                    Monitor {index + 1}
+                    <DropdownMenuShortcut>
+                      {width} × {height}
+                    </DropdownMenuShortcut>
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+        {client.offersLossless ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-pressed={fastMotion}
+                size="sm"
+                variant={fastMotion ? "secondary" : "ghost"}
+                onClick={() => {
+                  setFastMotion((value) => !value)
+                  surface.current?.focus()
+                }}
+              >
+                <Rabbit />
+                Fast motion
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              Keeps big displays moving by skipping pixels in motion. Sharpens
+              when it stops.
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+        {client.offersLossless ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-pressed={lossless}
+                size="sm"
+                variant={lossless ? "secondary" : "ghost"}
+                onClick={() => {
+                  setLossless((value) => !value)
+                  surface.current?.focus()
+                }}
+              >
+                <Gem />
+                Lossless
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              Every pixel exact, for small text and artwork. Moves slower.
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button size="sm" variant="ghost">
@@ -315,20 +510,11 @@ function DesktopFrame({
               Send keys
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent
-            align="end"
-            className={cn(expanded && "z-60")}
-            // Only the fullscreen element's own content shows.
-            container={expanded ? root : undefined}
-            onCloseAutoFocus={(event) => {
-              event.preventDefault()
-              frame.current?.focus()
-            }}
-          >
-            {SENDABLE_KEYS.map((combo) => (
+          <DropdownMenuContent {...menuProps}>
+            {client.combos.map((combo) => (
               <DropdownMenuItem
                 key={combo.label}
-                onSelect={() => sendKeys(frame.current, combo.keys)}
+                onSelect={() => surface.current?.sendKeys(combo.keys)}
               >
                 {combo.label}
               </DropdownMenuItem>
@@ -339,24 +525,106 @@ function DesktopFrame({
           {expanded ? <Minimize /> : <Maximize />}
           {expanded ? "Exit fullscreen" : "Fullscreen"}
         </Button>
+        <Button size="sm" variant="ghost" onClick={onDisconnect}>
+          <Unplug />
+          Disconnect
+        </Button>
       </div>
-      <iframe
-        onLoad={(event) => {
-          // Fullscreen is the toolbar's, with Send keys beside it.
-          const own =
-            event.currentTarget.contentDocument?.getElementById("fs-btn")
-          if (own) own.style.display = "none"
-          // Keys go to the desktop as soon as it shows.
-          event.currentTarget.focus()
-        }}
-        ref={frame}
-        allow="autoplay; clipboard-read; clipboard-write; fullscreen; keyboard-map"
-        className="min-h-0 w-full flex-1 border-0 bg-black"
-        src={`${DESKTOP_CLIENT}?${params}`}
-        title="Node desktop"
-      />
+      <DesktopViewport
+        imageSize={client.cropsMonitors ? null : imageSize}
+        monitor={monitor}
+      >
+        <client.Surface
+          desktop={desktop}
+          relayId={relayId}
+          session={session}
+          surface={surface}
+          onImageSize={setImageSize}
+        />
+      </DesktopViewport>
     </div>
   )
+}
+
+// Shows one monitor of the image by making the client's element as large as
+// the whole image would be at that monitor's scale, and clipping it to that
+// monitor. The client needs no idea of it: its own scaling and pointer mapping
+// follow its element, so this works for any of them.
+function DesktopViewport({
+  children,
+  imageSize,
+  monitor,
+}: {
+  children: React.ReactNode
+  imageSize: DesktopImageSize | null
+  monitor: RelayDesktopMonitor | undefined
+}) {
+  const [area, setArea] = React.useState<HTMLDivElement | null>(null)
+  const [areaSize, setAreaSize] = React.useState({ height: 0, width: 0 })
+  React.useEffect(() => {
+    if (!area) return
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return
+      setAreaSize({
+        height: entry.contentRect.height,
+        width: entry.contentRect.width,
+      })
+    })
+    observer.observe(area)
+    return () => observer.disconnect()
+  }, [area])
+  const crop =
+    monitor && imageSize && areaSize.width > 0
+      ? cropOf(monitor, imageSize, areaSize)
+      : undefined
+  return (
+    <div
+      className="relative flex min-h-0 w-full flex-1 overflow-hidden bg-black"
+      ref={setArea}
+    >
+      <div
+        className={cn(
+          "flex min-h-0",
+          crop ? "absolute overflow-hidden" : "w-full flex-1"
+        )}
+        style={crop?.monitor}
+      >
+        <div
+          className={cn("flex min-h-0", crop ? "absolute" : "w-full flex-1")}
+          style={crop?.image}
+        >
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// The monitor centered in the area, clipping the image to it so that its
+// neighbours don't show in the margins, and the image placed behind it.
+function cropOf(
+  monitor: RelayDesktopMonitor,
+  image: DesktopImageSize,
+  area: DesktopImageSize
+): { image: React.CSSProperties; monitor: React.CSSProperties } {
+  const scale = Math.min(
+    area.width / monitor.width,
+    area.height / monitor.height
+  )
+  return {
+    image: {
+      height: image.height * scale,
+      left: -monitor.x * scale,
+      top: -monitor.y * scale,
+      width: image.width * scale,
+    },
+    monitor: {
+      height: monitor.height * scale,
+      left: (area.width - monitor.width * scale) / 2,
+      top: (area.height - monitor.height * scale) / 2,
+      width: monitor.width * scale,
+    },
+  }
 }
 
 // Keyboard Lock, which only Chromium browsers have, so TypeScript doesn't.
@@ -370,7 +638,7 @@ interface KeyboardLockNavigator extends Navigator {
 // browser has no fullscreen for pages, as on iPhones, the desktop fills the
 // window instead.
 function useDesktopExpansion(
-  frame: React.RefObject<HTMLIFrameElement | null>,
+  surface: React.RefObject<DesktopSurface | null>,
   root: HTMLElement | null
 ) {
   const keyboard = (navigator as KeyboardLockNavigator).keyboard
@@ -387,14 +655,14 @@ function useDesktopExpansion(
       } else {
         keyboard?.unlock()
       }
-      frame.current?.focus()
+      surface.current?.focus()
     }
     document.addEventListener("fullscreenchange", onChange)
     return () => {
       document.removeEventListener("fullscreenchange", onChange)
       keyboard?.unlock()
     }
-  }, [frame, keyboard])
+  }, [keyboard, surface])
   const toggleExpanded = React.useCallback(() => {
     if (native) {
       forkPromise(() => document.exitFullscreen())
@@ -410,35 +678,16 @@ function useDesktopExpansion(
     } else {
       setFilled(true)
     }
-    frame.current?.focus()
-  }, [filled, frame, native, root])
+    surface.current?.focus()
+  }, [filled, native, root, surface])
   return { expanded: native || filled, toggleExpanded }
 }
 
-// Presses keys down in order and lets them go in reverse, through the keyboard
-// handlers of voxl's page, for what a browser or the viewer's own computer
-// keeps for itself. `code` follows voxl's mapping: OSLeft is always the
-// desktop's Super key, which a Mac's Command key doesn't reach.
-function sendKeys(
-  frame: HTMLIFrameElement | null,
-  keys: ReadonlyArray<SendableKey>
-) {
-  const view = frame?.contentWindow as (Window & typeof globalThis) | null
-  const target = frame?.contentDocument?.getElementById("kbd")
-  if (!view || !target) return
-  const fire = (type: "keydown" | "keyup", key: SendableKey) =>
-    target.dispatchEvent(
-      new view.KeyboardEvent(type, { bubbles: true, cancelable: true, ...key })
-    )
-  for (const key of keys) fire("keydown", key)
-  for (const key of [...keys].reverse()) fire("keyup", key)
-}
-
-function useStreamingSupport() {
+function useUnsupported(client: DesktopClient) {
   return React.useSyncExternalStore(
     noSubscription,
-    () => window.isSecureContext && "VideoDecoder" in window,
-    () => true
+    client.unsupported,
+    () => null
   )
 }
 

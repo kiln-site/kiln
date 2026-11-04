@@ -11,7 +11,7 @@ COPY --chown=vp:vp apps/relay/package.runtime.json ./package.json
 COPY --chown=vp:vp apps/relay/pnpm-lock.runtime.yaml ./pnpm-lock.yaml
 COPY --chown=vp:vp apps/relay/runtime.npmrc ./.npmrc
 RUN --mount=type=cache,target=/home/vp/.local/share/pnpm/store,uid=1000,gid=1000,sharing=locked \
-  vp install --prod --frozen-lockfile --no-optional --ignore-scripts
+  vp install --prod --frozen-lockfile --ignore-scripts
 
 FROM ghcr.io/voidzero-dev/vite-plus:${VITE_PLUS_VERSION} AS build
 
