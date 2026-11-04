@@ -52,7 +52,9 @@ jobs:
       name: Desktop streamer
       image: ${{ needs.config.outputs.prefix }}/desktop
       dockerfile: apps/desktop/Dockerfile
-      cache_scope: desktop
+      # Each publish takes the digests its scope starts with, so neither of this
+      # workflow's scopes can start with the other.
+      cache_scope: desktop-streamer
       license_label: GPL-2.0-or-later
       tags: type=raw,value=${{ needs.version.outputs.voxl }}
       # Only main replaces what Relays pull, whatever a manual run's branch.
