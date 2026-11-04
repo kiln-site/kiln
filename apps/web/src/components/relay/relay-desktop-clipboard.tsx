@@ -68,9 +68,12 @@ async function readClipboard(): Promise<ClipboardContent> {
 
 // Whether this press is Paste on the viewer's own computer. Other computers'
 // Control is the Mac's Command, as with every other shortcut.
+const holdsCommand = (event: KeyboardEvent) =>
+  viewerUsesCommand() ? event.metaKey : event.ctrlKey
+
 function isPaste(event: KeyboardEvent) {
   return (
-    (viewerUsesCommand() ? event.metaKey : event.ctrlKey) &&
+    holdsCommand(event) &&
     !event.altKey &&
     !event.shiftKey &&
     event.key.toLowerCase() === "v"
@@ -200,6 +203,7 @@ export function useDesktopClipboard({
   )
 
   const paste = React.useCallback(async () => {
+    waiting.current = null
     const content = await recoverPromise(readClipboard, () => null)
     if (content === null) {
       showToast({
@@ -219,22 +223,20 @@ export function useDesktopClipboard({
     const element = area.current
     if (!element || !connected) return
     const onKey = (event: KeyboardEvent) => {
+      if (event.type === "keyup") holdingCommand.current = holdsCommand(event)
       // What the hidden field gets while it has the keys is noVNC's, which only
       // listens on its canvas: a key let go of here would stay down on the Mac.
+      // Paste is left for the browser, and everything else is only the Mac's.
       if (event.target === field.current) {
-        if (event.type === "keyup" && isModifier(event)) {
-          holdingCommand.current = false
+        if (isPaste(event)) {
+          event.stopPropagation()
+          return
         }
-        if (isPaste(event)) event.stopPropagation()
-        else {
-          canvasOf(element)?.dispatchEvent(new KeyboardEvent(event.type, event))
-        }
+        event.preventDefault()
+        canvasOf(element)?.dispatchEvent(new KeyboardEvent(event.type, event))
         return
       }
-      if (event.type === "keyup") {
-        if (isModifier(event)) holdingCommand.current = false
-        return
-      }
+      if (event.type === "keyup") return
       if (isPaste(event)) {
         // Left to happen, for the paste event, and kept from noVNC, which would
         // stop it. What the viewer's pasting comes before what the Mac last said.
@@ -243,9 +245,7 @@ export function useDesktopClipboard({
         holdingCommand.current = true
         // On Windows, noVNC holds Control back until the next key, in case it's
         // AltGr. The one it won't see is this, so a release says the same.
-        canvasOf(element)?.dispatchEvent(
-          new KeyboardEvent("keyup", { code: event.code, key: event.key })
-        )
+        canvasOf(element)?.dispatchEvent(new KeyboardEvent("keyup", event))
         if (pasting.current !== null) return
         field.current?.focus()
         pasting.current = setTimeout(() => finishPaste(null), PASTE_WAIT_MS)
@@ -253,8 +253,10 @@ export function useDesktopClipboard({
       }
       if (!isModifier(event)) flush()
     }
+    // What's waiting is older than whatever's copied elsewhere from here on.
     const onLeave = () => {
       holdingCommand.current = false
+      waiting.current = null
     }
     element.addEventListener("keydown", onKey, true)
     element.addEventListener("keyup", onKey, true)
