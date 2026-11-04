@@ -50,8 +50,8 @@ server macOS already has:
 
 No port forward is needed, and nothing is installed on the Mac. The first time
 someone opens the desktop it shows as JPEG, while the Relay downloads the desktop
-image for its video encoder in the background, and the next time as video. The
-Relay reaches `host.docker.internal:5900` and connects out to
+image for its video encoder in the background. Once that's done, opening it again
+gets video where the browser can decode it. The Relay reaches `host.docker.internal:5900` and connects out to
 Hearth as it always does. It tells a Mac apart by what Docker reports:
 `OrbStack`, or `Docker Desktop` with
 its socket under `/Users`. It sees Screen Sharing is on when the port greets it

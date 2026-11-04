@@ -25,8 +25,8 @@ export interface ImageFacts {
   readonly containers: ReadonlyArray<DockerContainerSummary>
   /** The images each App's successful deployments ran. */
   readonly deployments: ReadonlyArray<RelayAppDeploymentImage>
-  /** The desktop image, kept while a tag names it: a Mac has to wait for it. */
-  readonly desktopImage: string
+  /** The image the desktop runs, by ID: a Mac has to wait to get it back. */
+  readonly desktopImageId: string | null
   readonly images: ReadonlyArray<DockerImageSummary>
   readonly now: number
   /** Whether a container is one of this Relay's Apps'. */
@@ -95,7 +95,7 @@ export function removableImages(
   const oldKiln = new Map<KilnComponent, Array<DockerImageSummary>>()
   for (const image of facts.images) {
     if (used.has(image.Id) || kept.has(image.Id)) continue
-    if (image.RepoTags?.includes(facts.desktopImage)) continue
+    if (image.Id === facts.desktopImageId) continue
     const labels = image.Labels ?? {}
     const component = kilnComponent(labels["io.kiln.component"])
     if (component) {

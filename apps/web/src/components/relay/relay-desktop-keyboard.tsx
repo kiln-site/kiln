@@ -37,7 +37,17 @@ function typeCharacter(send: SendKey, character: string) {
   if (shifted) send(SHIFT, "ShiftLeft", false)
 }
 
-function commonStart(before: string, after: string) {
+const characters = new Intl.Segmenter(undefined, { granularity: "grapheme" })
+
+// What a person calls characters: an emoji is several of JavaScript's, and one
+// press of Backspace.
+const charactersOf = (text: string) =>
+  Array.from(characters.segment(text), ({ segment }) => segment)
+
+function commonStart(
+  before: ReadonlyArray<string>,
+  after: ReadonlyArray<string>
+) {
   let length = 0
   while (
     length < before.length &&
@@ -85,18 +95,18 @@ export function DesktopKeyboard({
       onInput={(event) => {
         const field = event.currentTarget
         const sendKey = send.current
-        const before = typed.current
-        const after = field.value
+        const before = charactersOf(typed.current)
+        const after = charactersOf(field.value)
         const kept = commonStart(before, after)
         if (sendKey) {
           for (let left = before.length - kept; left > 0; left -= 1) {
             press(sendKey, BACKSPACE, "Backspace")
           }
-          for (const character of after.slice(kept)) {
-            typeCharacter(sendKey, character)
+          for (const point of after.slice(kept).join("")) {
+            typeCharacter(sendKey, point)
           }
         }
-        typed.current = after
+        typed.current = field.value
         if (after.length < LOW_WATER || after.length > FILLER.length * 2) {
           field.value = FILLER
           typed.current = FILLER
