@@ -288,6 +288,7 @@ export function useDesktopClipboard({
       if (pasting.current !== null) clearTimeout(pasting.current)
       pasting.current = null
       waiting.current = null
+      sent.current = null
       mirrored.current = null
       session.current += 1
     }
