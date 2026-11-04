@@ -57,7 +57,7 @@ export async function saveInstanceLimits(
       relay,
       "instance.limits.write",
       { instanceId: data.instanceId, limits: data.limits },
-      60_000,
+      240_000,
       user.id
     )
   )

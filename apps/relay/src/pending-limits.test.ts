@@ -207,6 +207,30 @@ describe("limits saved for a game server's next restart", () => {
     expect(await harness.docker.pendingLimits(server)).toBeNull()
   })
 
+  it.each(["create", "start"])(
+    "stay saved when a restart fails to %s, for the next one",
+    async (command) => {
+      const harness = await relayHarness()
+      const { container, instance } = await runningServer(harness)
+      await harness.lifecycle.setInstanceLimits(instance, saved)
+      fakeDocker.failNext({ command }, "no space left on device")
+
+      await expect(
+        harness.lifecycle.runInstanceAction(instance, "restart", [])
+      ).rejects.toThrow(/could not apply/u)
+
+      expect(await harness.docker.pendingLimits(server)).toEqual(saved)
+      const restored = await harness.docker.findInstance(server)
+      if (!restored) throw new Error("The server didn't come back")
+      expect(current(container.name).memoryBytes).toBe(container.memoryBytes)
+
+      await harness.lifecycle.runInstanceAction(restored, "restart", [])
+
+      expect(current(container.name).memoryBytes).toBe(GIBIBYTE)
+      expect(await harness.docker.pendingLimits(server)).toBeNull()
+    }
+  )
+
   it("are dropped when set back to what the server has", async () => {
     const harness = await relayHarness()
     const { instance } = await runningServer(harness)
