@@ -11,6 +11,7 @@ import {
   NO_RESOURCE_LIMITS,
   observedResourceLimitsSchema,
   resourceLimitsInputSchema,
+  resourceLimitsSchema,
   serviceResourceLimitsSchema,
 } from "./resource-limits.js"
 import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
@@ -968,6 +969,9 @@ export const appPortSchema = z
 
 // Memory and CPU limits by service name. A service without an entry has
 // none.
+// Image and Dockerfile apps run one service under this name.
+export const APP_SERVICE = "app"
+
 export const appServiceLimitsSchema = z
   .record(appServiceNameSchema, serviceResourceLimitsSchema)
   .refine((limits) => Object.keys(limits).length <= 64, "Too many services")
@@ -1566,6 +1570,13 @@ export const relayPrepareInstanceSchema = relayCreateInstanceSchema.extend({
 export const relayProvisionInstanceSchema = z.object({
   instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
 })
+
+export const relayInstanceLimitsWriteSchema = z
+  .object({
+    instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+    limits: resourceLimitsSchema,
+  })
+  .strict()
 
 export const relayUpdateInstanceStartupSchema = z
   .object({
@@ -2307,6 +2318,9 @@ export const relayInstanceSchema = z.object({
   tailscale: relayInstanceTailscaleSchema.default({ enabled: false }),
   variables: brickVariableValuesSchema.optional(),
   managedByRelay: z.boolean().default(false),
+  // Limits saved since its container was made, which it takes when it next
+  // restarts. Absent when `limits` are the ones saved.
+  pendingLimits: resourceLimitsSchema.optional(),
   limits: relayInstanceLimitsSchema.default({
     cpuMillis: null,
     diskBytes: DEFAULT_INSTANCE_DISK_LIMIT_BYTES,

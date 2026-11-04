@@ -93,7 +93,7 @@ export function migrationSourceRoom(
   rootBytes: number | null,
   given: ResourceLimits | null = null
 ): MigrationSourceRoom {
-  const limits = given ?? instance.limits
+  const limits = given ?? instance.pendingLimits ?? instance.limits
   const ownDisk = instance.limits.diskBytes ?? DEFAULT_INSTANCE_DISK_LIMIT_BYTES
   if (rootBytes !== null) {
     return { limits, usedBytes: rootBytes, usedFrom: "measured" }

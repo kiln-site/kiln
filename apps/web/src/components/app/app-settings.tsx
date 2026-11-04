@@ -523,7 +523,7 @@ const WebRouteFact = React.memo(function WebRouteFact({
   )
 })
 
-function DeployToApplyButton({ app }: { app: App }) {
+export function DeployToApplyButton({ app }: { app: App }) {
   const queryClient = useQueryClient()
   const deploy = useMutation({
     mutationFn: () =>

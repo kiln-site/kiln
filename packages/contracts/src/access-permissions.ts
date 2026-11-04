@@ -432,7 +432,7 @@ const permissionCopy: Record<
   },
   "instance.limits.write": {
     label: "Manage resource limits",
-    description: "Change the server’s memory and disk limits.",
+    description: "Change the server’s memory, CPU, and disk limits.",
   },
   "instance.logs.read": {
     label: "View saved logs",

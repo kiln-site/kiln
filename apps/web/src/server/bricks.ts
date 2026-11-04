@@ -12,8 +12,6 @@ import {
   relayIdSchema,
   relaySnapshotSchema,
   relayUpdateInstanceStartupSchema,
-  resolveResourceLimits,
-  resourceLimitsEqual,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -63,8 +61,8 @@ import {
   requiredRelay,
 } from "@/server/bricks.server"
 import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
-import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayResourceLimitsRequest } from "@/lib/resource-limits.server"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import {
   startupPowerPermission,
   startupResourceLimitsChanged,
@@ -104,6 +102,13 @@ export const hearthUpdateInstanceStartupInputSchema =
           code: "custom",
           message: "Brick definitions are resolved by Hearth",
           path: ["recipeDefinition"],
+        })
+      }
+      if (value.limits !== undefined || value.diskLimitBytes !== undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "Limits are changed on their own",
+          path: ["limits"],
         })
       }
     })
@@ -382,17 +387,7 @@ async function updateInstanceStartupHandler(
     : null
   const networkChanged = startupNetworkChanged(existing.tailscale, data)
   let configurationChanged = Boolean(data.reinstall || recipeChanged)
-  const requestedLimits =
-    data.limits ??
-    (data.diskLimitBytes === undefined
-      ? undefined
-      : { diskBytes: data.diskLimitBytes })
-  let limitsChanged =
-    !data.reinstall &&
-    !resourceLimitsEqual(
-      resolveResourceLimits(existing.limits, requestedLimits),
-      existing.limits
-    )
+  let limitsChanged = false
   if (!data.reinstall) {
     const { brick: previousRecipe } = await loadInstanceRecipe(relay, existing)
     const nextRecipe = recipeDefinition ?? previousRecipe
@@ -434,9 +429,6 @@ async function updateInstanceStartupHandler(
   } = data
   const input = relayUpdateInstanceStartupSchema.parse({
     ...trustedData,
-    ...(data.reinstall
-      ? {}
-      : relayResourceLimitsRequest(relay.id, existing.limits, requestedLimits)),
     ...(recipeDefinition ? { recipeDefinition } : {}),
   })
   const instance = relayInstanceSchema.parse(

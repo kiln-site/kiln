@@ -1,9 +1,10 @@
 import * as React from "react"
 
-// Which container the Info page's Container section shows. It pages
-// through them by ID, and the page's service tags, such as a route's
-// target, pick a service's container. Only the section subscribes, so
-// selecting re-renders nothing else.
+// Which container the Info page's Container section shows, and whose limits
+// its Resource limits section shows. The first pages through them by ID, the
+// second by service, and the page's service tags, such as a route's target,
+// pick a service's container. Only those two subscribe, so selecting
+// re-renders nothing else.
 export interface AppContainerTarget {
   // While a redeploy replaces a container, two share a service, so paging
   // picks one by ID; a service tag leaves it out.
@@ -45,4 +46,26 @@ export const AppContainerSelectionContext =
 
 export function useAppContainerSelection(): AppContainerSelection | null {
   return React.useContext(AppContainerSelectionContext)
+}
+
+export function useSelectedAppContainer() {
+  const selection = useAppContainerSelection()
+  const selected = React.useSyncExternalStore(
+    selection?.subscribe ?? subscribeNever,
+    selection?.get ?? getNone,
+    getNone
+  )
+  return { select: selection?.select ?? ignore, selected }
+}
+
+function subscribeNever() {
+  return () => undefined
+}
+
+function getNone(): AppContainerTarget | null {
+  return null
+}
+
+function ignore() {
+  return undefined
 }

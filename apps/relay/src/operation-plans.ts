@@ -774,6 +774,11 @@ export function controlRequestLocks(
     // These recreate the container with new labels, as a start does.
     case "instance.network.databases.remove":
       return instance(instanceLifecycleLocks)
+    // Saved for the next restart, so it leaves the container alone but waits
+    // for one in progress, which clears what it applied. Taking the node's
+    // allocations happens in its turn, once its files are measured.
+    case "instance.limits.write":
+      return instance(instanceLifecycleLocks)
     case "instance.rename":
       return instance((id) => [
         shared(laneKeys.instance(id)),

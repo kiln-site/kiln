@@ -75,6 +75,25 @@ export function resolveResourceLimits(
   }
 }
 
+/**
+ * The larger of two sets of limits, field by field, for what to hold while
+ * one gives way to the other. No limit holds nothing.
+ */
+export function widestResourceLimits(
+  current: ResourceLimits,
+  next: ResourceLimits
+): ResourceLimits {
+  const widest = (key: ResourceLimitKey) => {
+    const [left, right] = [current[key], next[key]]
+    return left === null ? right : right === null ? left : Math.max(left, right)
+  }
+  return {
+    cpuMillis: widest("cpuMillis"),
+    diskBytes: widest("diskBytes"),
+    memoryBytes: widest("memoryBytes"),
+  }
+}
+
 export function resourceLimitsEqual(
   left: ResourceLimits,
   right: ResourceLimits

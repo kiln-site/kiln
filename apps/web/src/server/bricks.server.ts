@@ -7,17 +7,8 @@ import {
 import type { z } from "zod"
 
 import { runAppEffect } from "@/effect/runtime"
-import {
-  canReadRelayNode,
-  isPlatformAdmin,
-  listUserGrants,
-  requireRelayPermission,
-} from "@/lib/access-control"
+import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import {
-  instanceCapacity,
-  relayAllocations,
-} from "@/lib/resource-limits.server"
 import { hydrateBrickIcon } from "@/lib/brick-catalog-source.server"
 import { hydrateBrickVariables } from "@/lib/brick-variables"
 import { relayJsonEffect } from "@/lib/relay-client"
@@ -47,17 +38,7 @@ export async function getInstanceStartupHandler(
   if (!instance) throw new Error("Instance not found")
   const { brick, brickSource } = await loadInstanceRecipe(relay, instance)
   const variables = hydrateBrickVariables(brick, instance.variables)
-  const grants = isPlatformAdmin(user)
-    ? []
-    : await listUserGrants(user.id, relay.id)
   return {
-    allocation: canReadRelayNode(user, relay.id, grants)
-      ? instanceCapacity(
-          snapshot.node,
-          await relayAllocations(relay, snapshot),
-          { id: instance.id, kind: "server" }
-        )
-      : null,
     brick,
     brickSource,
     instance: relayInstanceSchema.parse(instance),

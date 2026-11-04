@@ -47,11 +47,10 @@ import { RenameButton } from "@/components/rename-dialog"
 import { useCopyFeedback } from "@/components/workspace-header"
 import {
   backupUsageQueryOptions,
-  managedDatabaseCapacityQueryOptions,
   managedDatabaseCredentialQueryOptions,
   queryKeys,
 } from "@/lib/query-options"
-import { ResourceLimitsSection } from "@/components/resource-limits-section"
+import { ResourceLimitsSection } from "@/components/resource-limits/resource-limits-section"
 import {
   renameManagedDatabase,
   updateManagedDatabaseLimits,
@@ -550,10 +549,6 @@ export function DatabaseLimitsSection({
   editable: boolean
 }) {
   const queryClient = useQueryClient()
-  const { data: capacity = null } = useQuery({
-    ...managedDatabaseCapacityQueryOptions(database.relayId, database.id),
-    enabled: editable && available,
-  })
   const groups = React.useMemo(
     () => [{ key: "database", limits: database.limits }],
     [database.limits]
@@ -569,24 +564,19 @@ export function DatabaseLimitsSection({
           relayId: database.relayId,
         },
       })
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.databases.all }),
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.databases.capacity(database.relayId, database.id),
-        }),
-      ])
+      await queryClient.invalidateQueries({ queryKey: queryKeys.databases.all })
     },
     [database.id, database.relayId, queryClient]
   )
   return (
     <ResourceLimitsSection
-      capacity={capacity}
       disabledReason={
         available ? undefined : "Reconnect this database's Relay first"
       }
       editable={editable}
       groups={groups}
       hint="Changing memory or CPU applies at once. Removing one restarts the database. Over its disk limit, the database keeps running and everyone with access is warned."
+      target={{ id: database.id, kind: "database", relayId: database.relayId }}
       onSave={save}
     />
   )

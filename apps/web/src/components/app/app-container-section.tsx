@@ -1,25 +1,13 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import {
-  CPU_LIMIT_MILLIS_PER_CORE,
-  type AppConfig,
-  type ServiceResourceLimits,
-} from "@workspace/contracts"
-import {
-  ChevronLeft,
-  ChevronRight,
-  Container,
-  ScrollText,
-  Tags,
-} from "lucide-react"
+import { Container, ScrollText, Tags } from "lucide-react"
 
 import { Button, buttonVariants } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { AppContainerLabelsDialog } from "@/components/app/app-container-labels-dialog"
 import {
-  useAppContainerSelection,
+  useSelectedAppContainer,
   type AppContainerTarget,
 } from "@/components/app/app-container-selection"
 import {
@@ -32,16 +20,10 @@ import {
   InfoCopyValue,
   InfoFact,
   InfoFactPair,
+  InfoPager,
   InfoSection,
 } from "@/components/info-page"
 import { useUptime } from "@/components/resource-meters"
-import { UsageBar } from "@/components/usage-bar"
-import { formatBytes } from "@/lib/format-bytes"
-import {
-  appConfigQueryOptions,
-  resourceLimitsCapacityQueryOptions,
-} from "@/lib/query-options"
-import { formatCpuLimit, formatMemoryLimit } from "@/lib/resource-limits"
 
 type AppContainer = App["containers"][number]
 
@@ -50,9 +32,8 @@ const startedAtFormatter = new Intl.DateTimeFormat(undefined, {
   timeStyle: "medium",
 })
 
-// One container at a time, paged through in its header: what it runs and
-// its limits against the node. The page's service tags select
-// one too.
+// One container at a time, paged through in its header: what it runs. The
+// page's service tags select one too.
 export function AppContainerSection({
   app,
   routeId,
@@ -61,19 +42,14 @@ export function AppContainerSection({
   routeId: string
 }) {
   const containers = React.useMemo(() => appContainers(app), [app])
-  const selection = useAppContainerSelection()
-  const selected = React.useSyncExternalStore(
-    selection?.subscribe ?? subscribeNever,
-    selection?.get ?? getNone,
-    getNone
-  )
+  const { select, selected } = useSelectedAppContainer()
   const [labelsOpen, setLabelsOpen] = React.useState(false)
   const index = selectedIndex(containers, selected)
   const container = containers[index]
   const step = (offset: number) => {
     const next =
       containers[(index + offset + containers.length) % containers.length]
-    if (next) selection?.select({ containerId: next.id, service: next.service })
+    if (next) select({ containerId: next.id, service: next.service })
   }
 
   if (!appRelayAvailable(app) || !container) {
@@ -95,9 +71,10 @@ export function AppContainerSection({
       title="Container"
       status={
         containers.length > 1 ? (
-          <ContainerPager
+          <InfoPager
             count={containers.length}
             index={index}
+            noun="container"
             onStep={step}
           />
         ) : null
@@ -134,57 +111,7 @@ export function AppContainerSection({
       }
     >
       <ContainerFacts app={app} container={container} />
-      <ContainerLimits app={app} service={container.service} />
     </InfoSection>
-  )
-}
-
-function ContainerPager({
-  count,
-  index,
-  onStep,
-}: {
-  count: number
-  index: number
-  onStep: (offset: number) => void
-}) {
-  return (
-    <div className="flex items-center gap-0.5">
-      <PagerButton label="Previous container" onClick={() => onStep(-1)}>
-        <ChevronLeft />
-      </PagerButton>
-      <span
-        aria-live="polite"
-        className="px-0.5 text-xs text-muted-foreground tabular-nums"
-      >
-        <span className="text-foreground">{index + 1}</span>/{count}
-      </span>
-      <PagerButton label="Next container" onClick={() => onStep(1)}>
-        <ChevronRight />
-      </PagerButton>
-    </div>
-  )
-}
-
-function PagerButton({
-  children,
-  label,
-  onClick,
-}: {
-  children: React.ReactNode
-  label: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      className="grid size-6 place-items-center text-muted-foreground transition-colors outline-none hover:bg-muted/60 hover:text-foreground focus-visible:text-primary-ink focus-visible:ring-1 focus-visible:ring-ring [&_svg]:size-3.5!"
-      onClick={onClick}
-    >
-      {children}
-    </button>
   )
 }
 
@@ -282,105 +209,6 @@ function ContainerUptime({ container }: { container: AppContainer }) {
   )
 }
 
-// The container's limits against the node, side by side when there's room:
-// its service's CPU and memory, and how full the node's disk is, since apps
-// have no disk limit of their own.
-const ContainerLimits = React.memo(function ContainerLimits({
-  app,
-  service,
-}: {
-  app: App
-  service: string
-}) {
-  const select = React.useCallback(
-    ({ config }: { config: AppConfig }): ServiceResourceLimits => ({
-      cpuMillis: config.serviceLimits[service]?.cpuMillis ?? null,
-      memoryBytes: config.serviceLimits[service]?.memoryBytes ?? null,
-    }),
-    [service]
-  )
-  const { data: limits } = useQuery({
-    ...appConfigQueryOptions(app.relayId, app.id),
-    select,
-  })
-  const { data: capacity } = useQuery({
-    ...resourceLimitsCapacityQueryOptions(app.relayId, "app", app.id),
-    enabled: appRelayAvailable(app),
-  })
-  const cores = capacity?.cpu.nodeCores
-  const memoryTotal = capacity?.memory.nodeTotalBytes
-  const disk = capacity?.storage
-
-  return (
-    <div className="grid gap-x-8 gap-y-3 py-3 sm:grid-cols-3">
-      <LimitBar
-        indicatorClassName="[&_[data-slot=progress-indicator]]:bg-sky-400/85"
-        label="CPU"
-        limit={limits?.cpuMillis}
-        total={
-          cores === undefined ? undefined : cores * CPU_LIMIT_MILLIS_PER_CORE
-        }
-        value={formatCpuLimit}
-        detail={
-          cores === undefined
-            ? undefined
-            : `of ${cores} ${cores === 1 ? "core" : "cores"}`
-        }
-      />
-      <LimitBar
-        indicatorClassName="[&_[data-slot=progress-indicator]]:bg-violet-400/85"
-        label="Memory"
-        limit={limits?.memoryBytes}
-        total={memoryTotal}
-        value={formatMemoryLimit}
-        detail={
-          memoryTotal === undefined
-            ? undefined
-            : `of ${formatBytes(memoryTotal)}`
-        }
-      />
-      <UsageBar
-        detail={disk ? `of ${formatBytes(disk.nodeTotalBytes)}` : undefined}
-        indicatorClassName="[&_[data-slot=progress-indicator]]:bg-emerald-400/80"
-        label="Disk"
-        used={disk?.nodeUsedBytes}
-        total={disk?.nodeTotalBytes}
-        title="The node's disk, shared with everything else on it"
-        value={disk ? `${formatBytes(disk.nodeUsedBytes)} used` : "—"}
-      />
-    </div>
-  )
-})
-
-// A limit's share of the node; no limit leaves the bar empty.
-function LimitBar({
-  detail,
-  indicatorClassName,
-  label,
-  limit,
-  total,
-  value,
-}: {
-  detail: string | undefined
-  indicatorClassName: string
-  label: string
-  // `null` for no limit, `undefined` while the config loads.
-  limit: number | null | undefined
-  total: number | undefined
-  value: (limit: number | null) => string
-}) {
-  return (
-    <UsageBar
-      detail={limit === null ? undefined : detail}
-      indicatorClassName={indicatorClassName}
-      label={label}
-      used={limit ?? undefined}
-      total={total}
-      value={limit === undefined ? "—" : value(limit)}
-    />
-  )
-}
-
 // The selected container, or, once a redeploy replaces it, its service's
 // newest container, so the section stays on the same service.
 function selectedIndex(
@@ -396,12 +224,4 @@ function selectedIndex(
     0,
     containers.findIndex((container) => container.service === selected.service)
   )
-}
-
-function subscribeNever() {
-  return () => undefined
-}
-
-function getNone(): AppContainerTarget | null {
-  return null
 }

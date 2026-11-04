@@ -11,11 +11,7 @@ import {
   RotateCcw,
   Save,
 } from "lucide-react"
-import type {
-  Brick,
-  BrickVariableValue,
-  RelayInstanceLimits,
-} from "@workspace/contracts"
+import type { Brick, BrickVariableValue } from "@workspace/contracts"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -37,7 +33,6 @@ import {
 import { BrickVariableField } from "@/components/brick-variable-fields"
 import { MinecraftJavaVersionFields } from "@/components/minecraft-java-version-fields"
 import { BrickIcon } from "@/components/brick-icon"
-import { ResourceLimitsEditor } from "@/components/resource-limits-editor"
 import {
   useInstanceIdentity,
   useInstancePermissions,
@@ -61,12 +56,6 @@ import {
   invalidateRelaySnapshots,
   updateRelaySnapshots,
 } from "@/lib/server-workspace"
-import {
-  parseResourceLimitsDraft,
-  resourceLimitsDraft,
-  type ResourceLimitsCapacity,
-  type ResourceLimitsDraft,
-} from "@/lib/resource-limits"
 import { updateInstanceStartup } from "@/server/bricks"
 
 const emptyBricks: Array<Brick> = []
@@ -101,8 +90,6 @@ function brickViewFromBrick(brick: Brick, source = brick.source): BrickView {
 
 interface StartupEditing {
   canEdit: boolean
-  canEditConfiguration: boolean
-  canEditLimits: boolean
   canStart: boolean
   canViewConsole: boolean
 }
@@ -120,15 +107,13 @@ export function StartupWorkspace() {
   const editing = React.useMemo<StartupEditing>(
     () => ({
       canEdit:
-        (permissions.configurationWrite || permissions.limitsWrite) &&
+        permissions.configurationWrite &&
         relayConnected &&
         (!(
           desiredState === "running" ||
           ["running", "starting", "stopping"].includes(observedState ?? "")
         ) ||
           permissions.powerRestart),
-      canEditConfiguration: permissions.configurationWrite,
-      canEditLimits: permissions.limitsWrite,
       canStart: permissions.powerStart,
       canViewConsole: permissions.consoleRead,
     }),
@@ -164,8 +149,12 @@ export function StartupWorkspace() {
       brick={startupQuery.data.brick}
       brickSource={startupQuery.data.brickSource}
       editing={editing}
-      allocation={startupQuery.data.allocation}
-      initialLimits={startupQuery.data.instance.limits}
+      memoryBytes={
+        (
+          startupQuery.data.instance.pendingLimits ??
+          startupQuery.data.instance.limits
+        ).memoryBytes
+      }
       initialVariables={startupQuery.data.variables}
       instanceId={instance.id}
       observedState={startupQuery.data.instance.observedState}
@@ -178,8 +167,7 @@ const StartupForm = React.memo(function StartupForm({
   brick: initialBrick,
   brickSource: initialBrickSource,
   editing,
-  allocation,
-  initialLimits,
+  memoryBytes,
   initialVariables,
   instanceId,
   observedState,
@@ -188,14 +176,13 @@ const StartupForm = React.memo(function StartupForm({
   brick: Brick
   brickSource: string
   editing: StartupEditing
-  allocation: ResourceLimitsCapacity | null
-  initialLimits: RelayInstanceLimits
+  memoryBytes: number | null
   initialVariables: Record<string, BrickVariableValue>
   instanceId: string
   observedState: string
   relayId: string
 }) {
-  const { canEdit, canEditConfiguration, canEditLimits, canStart } = editing
+  const { canEdit, canStart } = editing
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [view, setView] = React.useState(() =>
@@ -203,9 +190,6 @@ const StartupForm = React.memo(function StartupForm({
   )
   const [variables, setVariables] =
     React.useState<Record<string, BrickVariableValue>>(initialVariables)
-  const [limitsDraft, setLimitsDraft] = React.useState(() =>
-    resourceLimitsDraft(initialLimits)
-  )
   const [swapOpen, setSwapOpen] = React.useState(false)
   const [reinstallOpen, setReinstallOpen] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -213,7 +197,7 @@ const StartupForm = React.memo(function StartupForm({
 
   const catalogQuery = useQuery({
     ...brickCatalogQueryOptions(),
-    enabled: swapOpen && canEdit && canEditConfiguration,
+    enabled: swapOpen && canEdit,
   })
 
   const saveMutation = useMutation({
@@ -312,11 +296,6 @@ const StartupForm = React.memo(function StartupForm({
       )
       return
     }
-    const parsedLimits = parseResourceLimitsDraft(limitsDraft, allocation)
-    if (canEditLimits && "error" in parsedLimits) {
-      setError(parsedLimits.error)
-      return
-    }
     submittingRef.current = true
     await Effect.runPromise(
       Effect.tryPromise({
@@ -324,9 +303,6 @@ const StartupForm = React.memo(function StartupForm({
           saveMutation
             .mutateAsync({
               data: {
-                ...(canEditLimits && "limits" in parsedLimits
-                  ? { limits: parsedLimits.limits }
-                  : {}),
                 instanceId,
                 recipe: view.source,
                 relayId,
@@ -360,8 +336,7 @@ const StartupForm = React.memo(function StartupForm({
   }
 
   async function onReinstall() {
-    if (!canEdit || !canEditConfiguration || pending || submittingRef.current)
-      return
+    if (!canEdit || pending || submittingRef.current) return
     setError(null)
     submittingRef.current = true
     await Effect.runPromise(
@@ -415,22 +390,20 @@ const StartupForm = React.memo(function StartupForm({
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">
       <div className="mx-auto max-w-3xl space-y-6 px-5 py-6 sm:px-8 sm:py-8">
         <StartupSettingsForm
-          allocation={allocation}
           editing={editing}
           error={reinstallOpen ? null : error}
           isRunning={isRunning}
-          limitsDraft={limitsDraft}
+          memoryBytes={memoryBytes}
           pending={pending}
           saved={saved}
           memoryVariable={memoryVariable}
           variables={variables}
           view={view}
-          onLimitsChange={setLimitsDraft}
           onReinstall={() => setReinstallOpen(true)}
           onSubmit={onSubmit}
           onSwap={() => setSwapOpen(true)}
           onVariableChange={(name, value) => {
-            if (!canEdit || !canEditConfiguration) return
+            if (!canEdit) return
             setVariables((current) => {
               const updated = updateBrickVariable(current, name, value)
               return name === "version"
@@ -441,7 +414,7 @@ const StartupForm = React.memo(function StartupForm({
         />
       </div>
 
-      {canEdit && canEditConfiguration ? (
+      {canEdit ? (
         <>
           <StartupBrickSwapDialog
             open={swapOpen}
@@ -476,33 +449,29 @@ const StartupForm = React.memo(function StartupForm({
 })
 
 function StartupSettingsForm({
-  allocation,
   editing,
   error,
   isRunning,
-  limitsDraft,
+  memoryBytes,
   pending,
   saved,
   memoryVariable,
   variables,
   view,
-  onLimitsChange,
   onReinstall,
   onSubmit,
   onSwap,
   onVariableChange,
 }: {
-  allocation: ResourceLimitsCapacity | null
   editing: StartupEditing
   error: string | null
   isRunning: boolean
-  limitsDraft: ResourceLimitsDraft
+  memoryBytes: number | null
   pending: boolean
   saved: boolean
   memoryVariable: string | null
   variables: Record<string, BrickVariableValue>
   view: BrickView
-  onLimitsChange: (draft: ResourceLimitsDraft) => void
   onReinstall: () => void
   onSubmit: React.FormEventHandler<HTMLFormElement>
   onSwap: () => void
@@ -511,7 +480,7 @@ function StartupSettingsForm({
     value: BrickVariableValue | undefined
   ) => void
 }) {
-  const { canEdit, canEditConfiguration, canEditLimits, canStart } = editing
+  const { canEdit, canStart } = editing
   const variableDefinitions = view.variables
   const javaArgsDefinition = variableDefinitions.java_args
   const pairVersionAndJava =
@@ -530,7 +499,7 @@ function StartupSettingsForm({
   const managedFlags = javaArgsDefinition
     ? managedJavaStartupFlags(
         view.environment,
-        javaContainerMemory(limitsDraft),
+        javaContainerMemory(memoryBytes),
         variables,
         {
           id: view.id,
@@ -543,27 +512,11 @@ function StartupSettingsForm({
 
   return (
     <form className="space-y-6" onSubmit={onSubmit}>
-      <StartupSection
-        accessory={
-          <span className="type-technical-label text-muted-foreground">
-            Node capacity
-          </span>
-        }
-        title="Resource Limits"
-      >
-        <ResourceLimitsEditor
-          capacity={allocation}
-          disabled={!canEdit || !canEditLimits || pending}
-          draft={limitsDraft}
-          onChange={onLimitsChange}
-        />
-      </StartupSection>
-
       <StartupSection title="Brick Configuration">
         <div className="overflow-hidden rounded-xl border border-border/75 bg-background/45">
           <BrickSummary
             view={view}
-            canEdit={canEdit && canEditConfiguration}
+            canEdit={canEdit}
             pending={pending}
             onReinstall={onReinstall}
             onSwap={onSwap}
@@ -573,7 +526,7 @@ function StartupSettingsForm({
               {pairVersionAndJava ? (
                 <MinecraftJavaVersionFields
                   brickId={view.id}
-                  disabled={!canEdit || !canEditConfiguration || pending}
+                  disabled={!canEdit || pending}
                   environment={view.environment}
                   javaVersion={
                     typeof variables.java_version === "string"
@@ -598,7 +551,7 @@ function StartupSettingsForm({
               {entries.map(([name, definition]) => (
                 <BrickVariableField
                   key={name}
-                  disabled={!canEdit || !canEditConfiguration || pending}
+                  disabled={!canEdit || pending}
                   name={name}
                   definition={definition}
                   value={variables[name]}
@@ -613,7 +566,7 @@ function StartupSettingsForm({
                       /^Extra JVM flags\.\s*/u,
                       ""
                     )}
-                    disabled={!canEdit || !canEditConfiguration || pending}
+                    disabled={!canEdit || pending}
                     name="java_args"
                     definition={javaArgsDefinition}
                     value={variables.java_args}
@@ -787,11 +740,8 @@ function BrickSummary({
 }
 
 /** The memory limit as Java sizes its heap from it, like `2048m`. */
-function javaContainerMemory(draft: ResourceLimitsDraft): string | undefined {
-  const gibibytes = Number(draft.memoryGiB.value)
-  return draft.memoryGiB.limited && Number.isFinite(gibibytes) && gibibytes > 0
-    ? `${Math.round(gibibytes * 1024)}m`
-    : undefined
+function javaContainerMemory(bytes: number | null): string | undefined {
+  return bytes === null ? undefined : `${Math.round(bytes / 1024 ** 2)}m`
 }
 
 function brickMemoryVariable(template: string): string | null {

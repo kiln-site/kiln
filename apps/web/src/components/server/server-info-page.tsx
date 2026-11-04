@@ -12,6 +12,7 @@ import {
 } from "@/components/info-page"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { ServerInfoRail } from "@/components/server/server-info-rail"
+import { ServerLimitsSection } from "@/components/server/server-limits-section"
 import {
   ServerMigrationDialog,
   type ServerMigrationMode,
@@ -49,7 +50,9 @@ export function ServerInfoPage({
     configurationWrite: boolean
     copyServer: boolean
     deleteServer: boolean
+    limitsWrite: boolean
     networkRead: boolean
+    powerRestart: boolean
     shareLogs: boolean
   }
   relayConnected: boolean
@@ -86,6 +89,14 @@ export function ServerInfoPage({
         canViewStartup={permissions.configurationRead}
         instance={instance}
       />
+      {provisioning ? null : (
+        <ServerLimitsSection
+          canRestart={permissions.powerRestart}
+          editable={permissions.limitsWrite}
+          instance={instance}
+          relayConnected={relayConnected}
+        />
+      )}
       {permissions.copyServer && !provisioning ? (
         <ServerMigrationSection
           instance={instance}

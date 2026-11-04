@@ -6,6 +6,8 @@ import {
   type ResourceLimits,
 } from "@workspace/contracts"
 
+export { widestResourceLimits } from "@workspace/contracts"
+
 import type { RelayConfig } from "./config.js"
 import {
   WORKLOAD_SLICE_LABEL,
@@ -42,6 +44,26 @@ export function containerLimitSpec(
     ...(limits.cpuMillis !== null && {
       nanoCpus: limits.cpuMillis * NANO_CPUS_PER_MILLI,
     }),
+  }
+}
+
+/**
+ * What a container being recreated takes in place of its old limits. Docker
+ * reads 0 as no limit, and refuses a reservation above the memory limit.
+ */
+export function containerLimitHostConfig(
+  limits: ResourceLimits,
+  memoryReservation: unknown
+): Record<string, number> {
+  const memory = limits.memoryBytes ?? 0
+  return {
+    Memory: memory,
+    MemorySwap: memory,
+    NanoCpus: (limits.cpuMillis ?? 0) * NANO_CPUS_PER_MILLI,
+    ...(typeof memoryReservation === "number" &&
+      limits.memoryBytes !== null && {
+        MemoryReservation: Math.min(memoryReservation, limits.memoryBytes),
+      }),
   }
 }
 
@@ -102,27 +124,6 @@ export interface ResourceAllocation {
  * one kind leave room for the others. Each kind registers where its limits
  * come from.
  */
-/**
- * The larger of two sets of limits, field by field, for what to hold while
- * one gives way to the other. No limit holds nothing.
- */
-export function widestResourceLimits(
-  current: ResourceLimits,
-  next: ResourceLimits
-): ResourceLimits {
-  const widest = (key: keyof ResourceLimits) =>
-    current[key] === null
-      ? next[key]
-      : next[key] === null
-        ? current[key]
-        : Math.max(current[key], next[key])
-  return {
-    cpuMillis: widest("cpuMillis"),
-    diskBytes: widest("diskBytes"),
-    memoryBytes: widest("memoryBytes"),
-  }
-}
-
 /** How the node's memory limit on workloads stands, for Hearth to show. */
 export interface WorkloadLimitStatus {
   /** The limit in force, or null when workloads have none. */
@@ -290,7 +291,8 @@ export function assertResourceLimitsFit(input: {
     limits.memoryBytes !== null &&
     limits.memoryBytes > (input.currentMemoryBytes ?? 0)
   ) {
-    const available = input.assignableMemoryBytes - sumLimit(input.others, "memoryBytes")
+    const available =
+      input.assignableMemoryBytes - sumLimit(input.others, "memoryBytes")
     if (limits.memoryBytes > available) {
       throw new Error(
         `Memory limit exceeds the node's assignable capacity (${formatAllocationBytes(Math.max(available, 0))} available)`
