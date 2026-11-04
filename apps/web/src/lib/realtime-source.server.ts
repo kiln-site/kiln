@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks"
 import { randomUUID } from "node:crypto"
 
 import type { RelayInstance, RelaySnapshotDelta } from "@workspace/contracts"
@@ -89,11 +90,17 @@ export function publishRealtimeChange(
   return event
 }
 
+// Listeners run in the context they subscribed from, never the publisher's. A
+// publisher is usually another user's request, and whatever a listener does
+// there, such as Better Auth setting a cookie, lands on that user's response.
 export function subscribeRealtimeChanges(
   listener: RealtimeSourceListener
 ): () => void {
-  state.listeners.add(listener)
-  return () => state.listeners.delete(listener)
+  const runInSubscriberContext = AsyncLocalStorage.snapshot()
+  const bound: RealtimeSourceListener = (event) =>
+    runInSubscriberContext(listener, event)
+  state.listeners.add(bound)
+  return () => state.listeners.delete(bound)
 }
 
 export function allocateRealtimeCursor(): {

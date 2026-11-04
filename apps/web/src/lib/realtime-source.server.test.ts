@@ -1,7 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks"
+
 import { describe, expect, it } from "vite-plus/test"
 
 import {
   classifyRealtimeEvent,
+  publishRealtimeChange,
+  subscribeRealtimeChanges,
   type RealtimeSourceEvent,
 } from "./realtime-source.server"
 
@@ -9,6 +13,27 @@ const epoch = "00000000-0000-4000-8000-000000000001"
 const identity = { sessionId: "session-one", userId: "user-one" }
 
 describe("realtime source", () => {
+  it("runs listeners in their subscriber's context, not the publisher's", async () => {
+    const request = new AsyncLocalStorage<string>()
+    const seen = new Promise<string | undefined>((resolve) => {
+      const unsubscribe = request.run("subscriber", () =>
+        subscribeRealtimeChanges(() => {
+          // Auth work finishes after the listener returns.
+          void Promise.resolve().then(() => {
+            unsubscribe()
+            resolve(request.getStore())
+          })
+        })
+      )
+    })
+
+    request.run("publisher", () =>
+      publishRealtimeChange({ relayId: "relay", type: "relay.snapshot.reset" })
+    )
+
+    expect(await seen).toBe("subscriber")
+  })
+
   it("never coalesces targeted access policy changes as normal overflow", () => {
     const event = {
       epoch,
