@@ -10,6 +10,7 @@ import {
 } from "@/components/app/app-container-selection"
 import { AppContainerSection } from "@/components/app/app-container-section"
 import { AppInfoRail } from "@/components/app/app-info-rail"
+import { AppLimitsSection } from "@/components/app/app-limits-section"
 import { appRelayAvailable, type App } from "@/components/app/app-presentation"
 import {
   AppGeneralSettings,
@@ -96,6 +97,9 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
           </div>
         </div>
         <AppContainerSection app={app} routeId={routeId} />
+        {config.data ? (
+          <AppLimitsSection app={app} config={config.data.config} />
+        ) : null}
         {config.data ? (
           <AppVolumesSection
             app={app}

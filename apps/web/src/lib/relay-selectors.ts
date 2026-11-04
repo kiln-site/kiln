@@ -303,6 +303,35 @@ export function selectInstanceSettings(instanceId: string, relayId?: string) {
   }
 }
 
+// Whether saving a game server's limits restarts it, and the files a disk
+// limit has to hold, rounded so usage ticking up doesn't render the section.
+export function selectInstanceLimitsState(
+  instanceId: string,
+  relayId?: string
+) {
+  return (snapshot: RelayFleetSnapshot) => {
+    const instance = snapshot.instances.find(
+      (candidate) =>
+        candidate.id === instanceId &&
+        (!relayId || candidate.relayId === relayId)
+    )
+    const usedBytes = instance?.resources?.storage.usedBytes ?? null
+    return {
+      diskUsedBytes:
+        usedBytes === null
+          ? null
+          : Math.ceil(usedBytes / DISK_USED_ROUNDING) * DISK_USED_ROUNDING,
+      running:
+        instance?.desiredState === "running" ||
+        ["running", "starting", "stopping"].includes(
+          instance?.observedState ?? ""
+        ),
+    }
+  }
+}
+
+const DISK_USED_ROUNDING = 64 * 1024 ** 2
+
 export function selectInstanceObservedState(
   instanceId: string,
   relayId?: string

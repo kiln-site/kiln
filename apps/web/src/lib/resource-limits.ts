@@ -11,17 +11,12 @@ import { formatBytes } from "@/lib/format-bytes"
 // Memory, CPU, and disk limits as every instance's settings show and edit
 // them. `null` means no limit.
 
-export type ResourceCapacity = {
-  availableBytes: number
-  nodeTotalBytes: number
-  nodeUsedBytes: number
-}
-
-/** What the node can still give an instance, for those who may see it. */
+/** What a node can still give an instance, for those who may see it. */
 export type ResourceLimitsCapacity = {
-  cpu: { nodeCores: number }
-  memory: ResourceCapacity
-  storage: ResourceCapacity
+  /** Memory and disk its limits can still take, past every instance's. */
+  assignableDiskBytes: number
+  assignableMemoryBytes: number
+  cores: number
 }
 
 /**
@@ -30,12 +25,14 @@ export type ResourceLimitsCapacity = {
  */
 export type ResourceLimitDraft = { limited: boolean; value: string }
 
-/** Limits as the editor's inputs hold them, in cores and GiB. */
+/** Limits as the sliders hold them, in cores and GiB. */
 export type ResourceLimitsDraft = {
   cpuCores: ResourceLimitDraft
   diskGiB: ResourceLimitDraft
   memoryGiB: ResourceLimitDraft
 }
+
+export type ResourceLimitField = keyof ResourceLimitsDraft
 
 // What an input offers when a limit is turned on for the first time.
 const DRAFT_DEFAULTS = { cpuCores: "1", diskGiB: "5", memoryGiB: "2" }
@@ -52,8 +49,7 @@ export function formatDiskLimit(bytes: number | null): string {
 
 export function formatCpuLimit(millis: number | null): string {
   if (millis === null) return "No limit"
-  const cores = millis / CPU_LIMIT_MILLIS_PER_CORE
-  return `${Number(cores.toFixed(2))} ${cores === 1 ? "core" : "cores"}`
+  return `${Number(((millis / CPU_LIMIT_MILLIS_PER_CORE) * 100).toFixed(1))}%`
 }
 
 export function resourceLimitsDraft(
@@ -86,7 +82,9 @@ export function resourceLimitsDraft(
 export function parseResourceLimitsDraft(
   draft: ResourceLimitsDraft,
   capacity: ResourceLimitsCapacity | null
-): { limits: ResourceLimits } | { error: string } {
+):
+  | { limits: ResourceLimits }
+  | { error: string; field: ResourceLimitField | null } {
   const memoryBytes = parseGibibytes(draft.memoryGiB)
   if (
     memoryBytes === undefined ||
@@ -94,6 +92,7 @@ export function parseResourceLimitsDraft(
   ) {
     return {
       error: `Enter a memory limit of at least ${formatBytes(MINIMUM_MEMORY_LIMIT_BYTES)}.`,
+      field: "memoryGiB",
     }
   }
   const diskBytes = parseGibibytes(draft.diskGiB)
@@ -103,6 +102,7 @@ export function parseResourceLimitsDraft(
   ) {
     return {
       error: `Enter a disk limit of at least ${formatBytes(MINIMUM_INSTANCE_DISK_LIMIT_BYTES)}.`,
+      field: "diskGiB",
     }
   }
   const cpuMillis = parseCores(draft.cpuCores)
@@ -111,36 +111,49 @@ export function parseResourceLimitsDraft(
     (cpuMillis !== null && cpuMillis < MINIMUM_CPU_LIMIT_MILLIS)
   ) {
     return {
-      error: `Enter a CPU limit of at least ${MINIMUM_CPU_LIMIT_MILLIS / CPU_LIMIT_MILLIS_PER_CORE} cores.`,
+      error: `Enter a CPU limit of at least ${formatCpuLimit(MINIMUM_CPU_LIMIT_MILLIS)}.`,
+      field: "cpuCores",
     }
   }
   const limits = { cpuMillis, diskBytes, memoryBytes }
-  const capacityError = resourceLimitsCapacityError(capacity, limits)
-  return capacityError ? { error: capacityError } : { limits }
+  const overCapacity = resourceLimitsCapacityError(capacity, limits)
+  return overCapacity ?? { limits }
 }
 
-export function resourceLimitsCapacityError(
+/** A draft's memory limit in bytes, when it holds one. */
+export function draftMemoryBytes(draft: ResourceLimitsDraft): number | null {
+  return parseGibibytes(draft.memoryGiB) ?? null
+}
+
+function resourceLimitsCapacityError(
   capacity: ResourceLimitsCapacity | null,
   limits: ResourceLimits
-): string | null {
+): { error: string; field: ResourceLimitField } | null {
   if (capacity === null) return null
-  if (
-    limits.cpuMillis !== null &&
-    limits.cpuMillis > capacity.cpu.nodeCores * CPU_LIMIT_MILLIS_PER_CORE
-  ) {
-    return `The CPU limit exceeds the node's ${formatCpuLimit(capacity.cpu.nodeCores * CPU_LIMIT_MILLIS_PER_CORE)}.`
+  const nodeCpuMillis = capacity.cores * CPU_LIMIT_MILLIS_PER_CORE
+  if (limits.cpuMillis !== null && limits.cpuMillis > nodeCpuMillis) {
+    return {
+      error: `The CPU limit exceeds the node's ${formatCpuLimit(nodeCpuMillis)}.`,
+      field: "cpuCores",
+    }
   }
   if (
     limits.memoryBytes !== null &&
-    limits.memoryBytes > capacity.memory.availableBytes
+    limits.memoryBytes > capacity.assignableMemoryBytes
   ) {
-    return `The memory limit exceeds the ${formatBytes(capacity.memory.availableBytes)} this node can assign.`
+    return {
+      error: `The memory limit exceeds the ${formatBytes(capacity.assignableMemoryBytes)} this node can assign.`,
+      field: "memoryGiB",
+    }
   }
   if (
     limits.diskBytes !== null &&
-    limits.diskBytes > capacity.storage.availableBytes
+    limits.diskBytes > capacity.assignableDiskBytes
   ) {
-    return `The disk limit exceeds the ${formatBytes(capacity.storage.availableBytes)} this node can assign.`
+    return {
+      error: `The disk limit exceeds the ${formatBytes(capacity.assignableDiskBytes)} this node can assign.`,
+      field: "diskGiB",
+    }
   }
   return null
 }

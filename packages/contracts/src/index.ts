@@ -968,6 +968,9 @@ export const appPortSchema = z
 
 // Memory and CPU limits by service name. A service without an entry has
 // none.
+// Image and Dockerfile apps run one service under this name.
+export const APP_SERVICE = "app"
+
 export const appServiceLimitsSchema = z
   .record(appServiceNameSchema, serviceResourceLimitsSchema)
   .refine((limits) => Object.keys(limits).length <= 64, "Too many services")

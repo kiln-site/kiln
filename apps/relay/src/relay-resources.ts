@@ -1,4 +1,8 @@
-import { appFileRootId, appIdFromFileRoot } from "@workspace/contracts"
+import {
+  APP_SERVICE,
+  appFileRootId,
+  appIdFromFileRoot,
+} from "@workspace/contracts"
 
 import type { RelayConfig } from "./config.js"
 
@@ -58,8 +62,7 @@ export function relayResourceNames(
   }
 }
 
-// Image and Dockerfile apps run one service under this name.
-export const APP_SERVICE = "app"
+export { APP_SERVICE }
 
 // App web routes are stored owned by `app:<appId>`, the key files use for an
 // app's data directory, so they never collide with a server's.

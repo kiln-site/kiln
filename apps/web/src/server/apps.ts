@@ -2,7 +2,6 @@ import { randomBytes, randomUUID } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
 import {
-  appConfigSchema,
   appIdSchema,
   appNameSchema,
   appServiceNameSchema,
@@ -425,7 +424,7 @@ const changeAppLimits = resourceOperation({
     if (!(await relayAppLimitsSupported(relay.id))) {
       throw new Error("Update this Relay to set app limits")
     }
-    const limits = appConfigSchema.pick({ serviceLimits: true }).parse(data)
+    const limits = { serviceLimits: data.serviceLimits }
     // Saved once the Relay applies them, so limits it refuses aren't used
     // by the next deployment, and into the config saved by then, so other
     // edits made meanwhile stay.

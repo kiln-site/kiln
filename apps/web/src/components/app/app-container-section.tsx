@@ -1,11 +1,5 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import {
-  CPU_LIMIT_MILLIS_PER_CORE,
-  type AppConfig,
-  type ServiceResourceLimits,
-} from "@workspace/contracts"
 import {
   ChevronLeft,
   ChevronRight,
@@ -35,13 +29,6 @@ import {
   InfoSection,
 } from "@/components/info-page"
 import { useUptime } from "@/components/resource-meters"
-import { UsageBar } from "@/components/usage-bar"
-import { formatBytes } from "@/lib/format-bytes"
-import {
-  appConfigQueryOptions,
-  resourceLimitsCapacityQueryOptions,
-} from "@/lib/query-options"
-import { formatCpuLimit, formatMemoryLimit } from "@/lib/resource-limits"
 
 type AppContainer = App["containers"][number]
 
@@ -50,9 +37,8 @@ const startedAtFormatter = new Intl.DateTimeFormat(undefined, {
   timeStyle: "medium",
 })
 
-// One container at a time, paged through in its header: what it runs and
-// its limits against the node. The page's service tags select
-// one too.
+// One container at a time, paged through in its header: what it runs. The
+// page's service tags select one too.
 export function AppContainerSection({
   app,
   routeId,
@@ -134,7 +120,6 @@ export function AppContainerSection({
       }
     >
       <ContainerFacts app={app} container={container} />
-      <ContainerLimits app={app} service={container.service} />
     </InfoSection>
   )
 }
@@ -279,105 +264,6 @@ function ContainerUptime({ container }: { container: AppContainer }) {
     >
       {uptime ?? (container.running ? "—" : "Stopped")}
     </span>
-  )
-}
-
-// The container's limits against the node, side by side when there's room:
-// its service's CPU and memory, and how full the node's disk is, since apps
-// have no disk limit of their own.
-const ContainerLimits = React.memo(function ContainerLimits({
-  app,
-  service,
-}: {
-  app: App
-  service: string
-}) {
-  const select = React.useCallback(
-    ({ config }: { config: AppConfig }): ServiceResourceLimits => ({
-      cpuMillis: config.serviceLimits[service]?.cpuMillis ?? null,
-      memoryBytes: config.serviceLimits[service]?.memoryBytes ?? null,
-    }),
-    [service]
-  )
-  const { data: limits } = useQuery({
-    ...appConfigQueryOptions(app.relayId, app.id),
-    select,
-  })
-  const { data: capacity } = useQuery({
-    ...resourceLimitsCapacityQueryOptions(app.relayId, "app", app.id),
-    enabled: appRelayAvailable(app),
-  })
-  const cores = capacity?.cpu.nodeCores
-  const memoryTotal = capacity?.memory.nodeTotalBytes
-  const disk = capacity?.storage
-
-  return (
-    <div className="grid gap-x-8 gap-y-3 py-3 sm:grid-cols-3">
-      <LimitBar
-        indicatorClassName="[&_[data-slot=progress-indicator]]:bg-sky-400/85"
-        label="CPU"
-        limit={limits?.cpuMillis}
-        total={
-          cores === undefined ? undefined : cores * CPU_LIMIT_MILLIS_PER_CORE
-        }
-        value={formatCpuLimit}
-        detail={
-          cores === undefined
-            ? undefined
-            : `of ${cores} ${cores === 1 ? "core" : "cores"}`
-        }
-      />
-      <LimitBar
-        indicatorClassName="[&_[data-slot=progress-indicator]]:bg-violet-400/85"
-        label="Memory"
-        limit={limits?.memoryBytes}
-        total={memoryTotal}
-        value={formatMemoryLimit}
-        detail={
-          memoryTotal === undefined
-            ? undefined
-            : `of ${formatBytes(memoryTotal)}`
-        }
-      />
-      <UsageBar
-        detail={disk ? `of ${formatBytes(disk.nodeTotalBytes)}` : undefined}
-        indicatorClassName="[&_[data-slot=progress-indicator]]:bg-emerald-400/80"
-        label="Disk"
-        used={disk?.nodeUsedBytes}
-        total={disk?.nodeTotalBytes}
-        title="The node's disk, shared with everything else on it"
-        value={disk ? `${formatBytes(disk.nodeUsedBytes)} used` : "—"}
-      />
-    </div>
-  )
-})
-
-// A limit's share of the node; no limit leaves the bar empty.
-function LimitBar({
-  detail,
-  indicatorClassName,
-  label,
-  limit,
-  total,
-  value,
-}: {
-  detail: string | undefined
-  indicatorClassName: string
-  label: string
-  // `null` for no limit, `undefined` while the config loads.
-  limit: number | null | undefined
-  total: number | undefined
-  value: (limit: number | null) => string
-}) {
-  return (
-    <UsageBar
-      detail={limit === null ? undefined : detail}
-      indicatorClassName={indicatorClassName}
-      label={label}
-      used={limit ?? undefined}
-      total={total}
-      value={limit === undefined ? "—" : value(limit)}
-    />
   )
 }
 

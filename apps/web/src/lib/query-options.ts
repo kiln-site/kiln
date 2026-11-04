@@ -237,9 +237,6 @@ export const queryKeys = {
     // Outside "databases", so list refreshes don't measure the volume again.
     container: (relayId: string, databaseId: string) =>
       ["database-container", relayId, databaseId] as const,
-    // Outside "databases": it asks the Relay for every instance's limits.
-    capacity: (relayId: string, databaseId: string) =>
-      resourceLimitsCapacityKey(relayId, "database", databaseId),
   },
   fileActivity: (relayId: string, instanceId: string) =>
     ["file-activity", relayId, instanceId] as const,
@@ -711,34 +708,20 @@ export function managedDatabaseContainerQueryOptions(
   })
 }
 
-function resourceLimitsCapacityKey(
-  relayId: string,
-  kind: "app" | "database",
-  id: string
-) {
-  return ["resource-limits-capacity", relayId, kind, id] as const
-}
-
-// What the node can still give an app or database, for its limits editor;
-// null for those who can't see the node.
+// What the node can still give an instance, for its limits; null for those
+// who can't see the node. Its own key, as it asks the Relay for every
+// instance's limits, so list refreshes shouldn't repeat it.
 export function resourceLimitsCapacityQueryOptions(
   relayId: string,
-  kind: "app" | "database",
+  kind: "app" | "database" | "server",
   id: string
 ) {
   return queryOptions({
-    queryKey: resourceLimitsCapacityKey(relayId, kind, id),
+    queryKey: ["resource-limits-capacity", relayId, kind, id] as const,
     queryFn: () => getResourceLimitsCapacity({ data: { id, kind, relayId } }),
     retry: false,
     staleTime: 30_000,
   })
-}
-
-export function managedDatabaseCapacityQueryOptions(
-  relayId: string,
-  databaseId: string
-) {
-  return resourceLimitsCapacityQueryOptions(relayId, "database", databaseId)
 }
 
 export function accessCapabilitiesQueryOptions() {

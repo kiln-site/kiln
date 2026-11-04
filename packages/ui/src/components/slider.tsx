@@ -48,7 +48,7 @@ function Slider({
     <SliderPrimitive.Root
       data-slot="slider"
       className={cn(
-        "group relative w-full touch-none px-1.5 select-none",
+        "group relative w-full touch-none px-1.5 select-none data-[disabled]:opacity-60",
         className
       )}
       max={max}
@@ -56,69 +56,73 @@ function Slider({
       onValueChange={(value, details) => onValueChange?.(value, details.reason)}
       {...props}
     >
-      <SliderPrimitive.Control className="flex h-4 w-full cursor-pointer items-center data-[disabled]:cursor-default">
-        <SliderPrimitive.Track className="relative h-1 w-full bg-muted-foreground/20">
-          <SliderPrimitive.Indicator className="bg-primary" />
-          {zones
-            .filter((zone) => zone.from < max && zone.to > zone.from)
-            .map((zone) => (
-              <span
-                key={`${zone.from}:${zone.to}`}
-                aria-hidden="true"
-                className="absolute inset-y-0 bg-destructive/70"
-                style={{
-                  left: percent(zone.from),
-                  right: `calc(100% - ${percent(zone.to)})`,
-                }}
-              />
-            ))}
-          {ticks.map((tick) => (
-            <span
-              key={tick.value}
-              aria-hidden="true"
-              className="absolute top-full h-1 w-px -translate-x-1/2 bg-muted-foreground/45"
-              style={{ left: percent(tick.value) }}
-            />
-          ))}
-          {marks.map((mark) => (
-            <span
-              key={mark}
-              aria-hidden="true"
-              className="absolute -top-1 h-3 w-0.5 -translate-x-1/2 bg-foreground/55"
-              style={{ left: percent(mark) }}
-            />
-          ))}
-          <SliderPrimitive.Thumb
-            aria-label={label}
-            getAriaValueText={
-              valueText ? (_formatted, value) => valueText(value) : undefined
-            }
-            className="size-3.5 border-2 border-background bg-primary shadow-sm ring-1 ring-primary outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-          />
-        </SliderPrimitive.Track>
-      </SliderPrimitive.Control>
-      {ticks.some((tick) => tick.label) ? (
-        <div aria-hidden="true" className="relative mt-1 h-3.5">
-          {ticks.map((tick) =>
-            tick.label ? (
+      {/* The axis's labels are part of the control, so pressing one goes
+          there, and a finger has more to land on than the track. */}
+      <SliderPrimitive.Control className="w-full cursor-pointer data-[disabled]:cursor-default">
+        <div className="flex h-4 w-full items-center">
+          <SliderPrimitive.Track className="relative h-1 w-full bg-muted-foreground/20">
+            <SliderPrimitive.Indicator className="bg-primary" />
+            {zones
+              .filter((zone) => zone.from < max && zone.to > zone.from)
+              .map((zone) => (
+                <span
+                  key={`${zone.from}:${zone.to}`}
+                  aria-hidden="true"
+                  className="absolute inset-y-0 bg-destructive/70"
+                  style={{
+                    left: percent(zone.from),
+                    right: `calc(100% - ${percent(zone.to)})`,
+                  }}
+                />
+              ))}
+            {ticks.map((tick) => (
               <span
                 key={tick.value}
-                className={cn(
-                  "absolute top-0 font-mono text-[0.625rem] leading-none whitespace-nowrap text-muted-foreground tabular-nums",
-                  fraction(tick.value) < 0.04
-                    ? "translate-x-0"
-                    : fraction(tick.value) > 0.96
-                      ? "-translate-x-full"
-                      : "-translate-x-1/2"
-                )}
+                aria-hidden="true"
+                className="absolute top-full h-1 w-px -translate-x-1/2 bg-muted-foreground/45"
                 style={{ left: percent(tick.value) }}
-              >
-                {tick.label}
-              </span>
-            ) : null
-          )}
+              />
+            ))}
+            {marks.map((mark) => (
+              <span
+                key={mark}
+                aria-hidden="true"
+                className="absolute -top-1 h-3 w-0.5 -translate-x-1/2 bg-foreground/55"
+                style={{ left: percent(mark) }}
+              />
+            ))}
+            <SliderPrimitive.Thumb
+              aria-label={label}
+              getAriaValueText={
+                valueText ? (_formatted, value) => valueText(value) : undefined
+              }
+              className="size-3.5 border-2 border-background bg-primary shadow-sm ring-1 ring-primary outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+            />
+          </SliderPrimitive.Track>
         </div>
-      ) : null}
+        {ticks.some((tick) => tick.label) ? (
+          <div aria-hidden="true" className="relative mt-1 h-3.5">
+            {ticks.map((tick) =>
+              tick.label ? (
+                <span
+                  key={tick.value}
+                  className={cn(
+                    "absolute top-0 font-mono text-[0.625rem] leading-none whitespace-nowrap text-muted-foreground tabular-nums",
+                    fraction(tick.value) < 0.04
+                      ? "translate-x-0"
+                      : fraction(tick.value) > 0.96
+                        ? "-translate-x-full"
+                        : "-translate-x-1/2"
+                  )}
+                  style={{ left: percent(tick.value) }}
+                >
+                  {tick.label}
+                </span>
+              ) : null
+            )}
+          </div>
+        ) : null}
+      </SliderPrimitive.Control>
     </SliderPrimitive.Root>
   )
 }

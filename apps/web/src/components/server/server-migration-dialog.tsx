@@ -1,10 +1,9 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  CPU_LIMIT_MILLIS_PER_CORE,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
   MINIMUM_MEMORY_LIMIT_BYTES,
-  type ResourceLimits,
+  resourceLimitsEqual,
 } from "@workspace/contracts"
 import {
   ArrowRight,
@@ -26,7 +25,6 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
-import { Slider } from "@workspace/ui/components/slider"
 import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
 
@@ -40,12 +38,12 @@ import {
   InstancePickerContent,
   type InstancePickerItem,
 } from "@/components/instance-picker"
+import { ResourceLimitRows } from "@/components/resource-limits/resource-limit-rows"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { formatBytes } from "@/lib/format-bytes"
 import {
   parseResourceLimitsDraft,
   resourceLimitsDraft,
-  type ResourceLimitDraft,
   type ResourceLimitsDraft,
 } from "@/lib/resource-limits"
 import {
@@ -202,7 +200,7 @@ function MigrationForm({
   const parsed = parseResourceLimitsDraft(draft, null)
   const limits = "limits" in parsed ? parsed.limits : null
   const limitsChanged =
-    limits !== null && !sameLimits(limits, preview.source.limits)
+    limits !== null && !resourceLimitsEqual(limits, preview.source.limits)
 
   // Whether the copy fits there, as the Relays said when the dialog opened.
   // Checked again when it starts and before the server stops.
@@ -463,12 +461,13 @@ function MigrationForm({
             Reset
           </Button>
         </div>
-        <LimitRows
-          destination={selected}
+        <ResourceLimitRows
+          capacity={room}
           disabled={pending}
+          diskFloorBytes={usedBytes}
           draft={draft}
+          invalid={"error" in parsed ? parsed.field : null}
           original={preview.source.limits}
-          usedBytes={usedBytes}
           onChange={setDraft}
         />
       </section>
@@ -754,304 +753,6 @@ function StatusLine({ status }: { status: Status | null }) {
   )
 }
 
-// The copy's memory, CPU, and disk: a slider each, on a log scale from the
-// smallest useful limit to what the Relay can assign, notched and labeled
-// along its axis, with a last stop past the end for no limit. The old
-// server's limit is marked, and what the Relay can't follow is shaded red.
-function LimitRows({
-  destination,
-  disabled,
-  draft,
-  onChange,
-  original,
-  usedBytes,
-}: {
-  destination: ServerMigrationDestination | undefined
-  disabled: boolean
-  draft: ResourceLimitsDraft
-  onChange: React.Dispatch<React.SetStateAction<ResourceLimitsDraft>>
-  original: ResourceLimits
-  usedBytes: number | null
-}) {
-  const room = destination?.room ?? null
-  const gib = (bytes: number | null) =>
-    bytes === null ? null : bytes / GIBIBYTE
-  const set = (key: keyof ResourceLimitsDraft) => (value: ResourceLimitDraft) =>
-    onChange((current) => ({ ...current, [key]: value }))
-  return (
-    <div className="grid grid-cols-[4rem_minmax(0,1fr)_5.5rem] items-start gap-x-3 gap-y-3">
-      <LimitRow
-        assignable={gib(room?.assignableMemoryBytes ?? null)}
-        disabled={disabled}
-        fallbackMax={16}
-        label="Memory"
-        min={0.25}
-        original={gib(original.memoryBytes)}
-        scale={1}
-        step={(value) => (value < 4 ? 0.25 : value < 16 ? 0.5 : 1)}
-        unit="GiB"
-        value={draft.memoryGiB}
-        onChange={set("memoryGiB")}
-      />
-      <LimitRow
-        assignable={room ? room.cores * 100 : null}
-        disabled={disabled}
-        fallbackMax={400}
-        label="CPU"
-        decimals={false}
-        min={10}
-        original={
-          original.cpuMillis === null
-            ? null
-            : (original.cpuMillis / CPU_LIMIT_MILLIS_PER_CORE) * 100
-        }
-        scale={100}
-        step={(value) => (value < 100 ? 5 : value < 400 ? 10 : 25)}
-        unit="%"
-        value={draft.cpuCores}
-        onChange={set("cpuCores")}
-      />
-      <LimitRow
-        assignable={gib(room?.assignableDiskBytes ?? null)}
-        below={gib(usedBytes)}
-        disabled={disabled}
-        fallbackMax={100}
-        decimals={false}
-        label="Disk"
-        min={1}
-        original={gib(original.diskBytes)}
-        scale={1}
-        step={() => 1}
-        unit="GiB"
-        value={draft.diskGiB}
-        onChange={set("diskGiB")}
-      />
-    </div>
-  )
-}
-
-// Slider positions: the axis runs 0 to AXIS, and NO_LIMIT is the stop past
-// its end; anything past halfway to it snaps there.
-const AXIS = 1000
-const NO_LIMIT = 1200
-
-function LimitRow({
-  assignable,
-  below = null,
-  decimals = true,
-  disabled,
-  fallbackMax,
-  label,
-  min,
-  onChange,
-  original,
-  scale,
-  step,
-  unit,
-  value,
-}: {
-  /** What the Relay can give, shown as the axis's end; null if unknown. */
-  assignable: number | null
-  /** A value the limit can't go under, shaded red, such as the files. */
-  below?: number | null
-  /** Whether the limit takes fractions, as memory does; else whole units. */
-  decimals?: boolean
-  disabled: boolean
-  fallbackMax: number
-  label: string
-  min: number
-  onChange: (value: ResourceLimitDraft) => void
-  original: number | null
-  /** Shown units per stored unit, as percent per core. */
-  scale: number
-  step: (value: number) => number
-  unit: string
-  value: ResourceLimitDraft
-}) {
-  const stored = Number(value.value)
-  const current =
-    value.limited && value.value.trim() !== "" && Number.isFinite(stored)
-      ? stored * scale
-      : null
-  // The axis ends at what the Relay can assign, or further when the old
-  // server's limit or the value already does.
-  const max = Math.max(
-    assignable ?? fallbackMax,
-    original ?? 0,
-    current ?? 0,
-    min * 2
-  )
-  const span = Math.log(max / min)
-  const position = (shown: number) =>
-    (AXIS * Math.log(Math.max(shown, min) / min)) / span
-  const snap = (shown: number) => {
-    const size = step(shown)
-    const near = Math.round(shown / size) * size
-    return Number(
-      (near > max ? Math.floor(shown / size) * size : near).toFixed(4)
-    )
-  }
-  const ticks = [
-    ...axisTicks(min, max).map((tick) => ({
-      label: formatAxis(tick, unit),
-      value: position(tick),
-    })),
-    { label: "No limit", value: NO_LIMIT },
-  ]
-  const zones = [
-    ...(below !== null && below > min
-      ? [{ from: 0, to: position(below) }]
-      : []),
-    ...(assignable !== null && assignable < max
-      ? [{ from: position(assignable), to: AXIS }]
-      : []),
-  ]
-  return (
-    <>
-      <span className="type-label flex h-7 items-center">{label}</span>
-      <Slider
-        aria-label={`${label} limit`}
-        disabled={disabled}
-        valueText={() =>
-          !value.limited
-            ? "No limit"
-            : current === null
-              ? "Not set"
-              : `${decimals ? Number(current.toFixed(2)) : Math.round(current)} ${unit === "%" ? "percent" : unit}`
-        }
-        marks={[original === null ? NO_LIMIT : position(original)]}
-        max={NO_LIMIT}
-        min={0}
-        step={1}
-        ticks={ticks}
-        value={
-          !value.limited
-            ? NO_LIMIT
-            : current === null
-              ? 0
-              : Math.min(position(current), AXIS)
-        }
-        zones={zones}
-        className="pt-1.5"
-        onValueChange={(next, reason) => {
-          const limitTo = (shown: number) =>
-            onChange({
-              limited: true,
-              value: String(Number((shown / scale).toFixed(4))),
-            })
-          if (reason === "keyboard") {
-            // A key moves one snapped value, and past the axis's end, or
-            // back from it, to no limit and the largest limit.
-            const sliderAt = !value.limited
-              ? NO_LIMIT
-              : current === null
-                ? 0
-                : position(current)
-            if (next <= 0) return limitTo(min)
-            if (next >= NO_LIMIT && next > sliderAt) {
-              return onChange({ ...value, limited: false })
-            }
-            if (!value.limited) {
-              const largest = Math.floor(max / step(max)) * step(max)
-              return limitTo(Number(largest.toFixed(4)))
-            }
-            const at = current ?? min
-            const up = next > sliderAt
-            // Going down from a tier's first value takes the tier below.
-            const size = step(up ? at : at * (1 - 1e-9))
-            const stepped = Number(
-              (up
-                ? Math.floor(at / size + 1e-9) * size + size
-                : Math.ceil(at / size - 1e-9) * size - size
-              ).toFixed(4)
-            )
-            if (stepped > max) return onChange({ ...value, limited: false })
-            return limitTo(Math.max(stepped, min))
-          }
-          if (next > (AXIS + NO_LIMIT) / 2) {
-            return onChange({ ...value, limited: false })
-          }
-          limitTo(snap(min * Math.exp((Math.min(next, AXIS) / AXIS) * span)))
-        }}
-      />
-      <label className="relative">
-        <Input
-          aria-label={`${label} limit in ${unit}`}
-          className={cn(
-            "h-7 pl-2 text-right font-mono text-xs tabular-nums",
-            value.limited ? "pr-9" : "pr-2"
-          )}
-          disabled={disabled}
-          inputMode={decimals ? "decimal" : "numeric"}
-          value={
-            !value.limited
-              ? "No limit"
-              : scale === 1 || current === null
-                ? value.value
-                : // A whole-number limit shows whole, so typing into a
-                  // fraction like 123.4% can't run its digits together.
-                  String(
-                    decimals ? Number(current.toFixed(2)) : Math.round(current)
-                  )
-          }
-          onChange={(event) => {
-            const typed = event.currentTarget.value.replace(
-              decimals ? /[^\d.]/gu : /\D/gu,
-              ""
-            )
-            onChange({
-              limited: true,
-              value:
-                typed === "" || scale === 1
-                  ? typed
-                  : String(Number(typed) / scale),
-            })
-          }}
-        />
-        {value.limited ? (
-          <span className="type-meta pointer-events-none absolute inset-y-0 right-2 flex items-center text-muted-foreground">
-            {unit}
-          </span>
-        ) : null}
-      </label>
-    </>
-  )
-}
-
-// Round values along a log axis: 1, 2, and 5 of each power of ten, or only
-// the powers when that's too many, with both ends, dropping any too close
-// to a neighbour to label.
-function axisTicks(min: number, max: number): Array<number> {
-  const candidates: Array<number> = []
-  for (
-    let exponent = Math.floor(Math.log10(min));
-    10 ** exponent <= max;
-    exponent += 1
-  ) {
-    for (const factor of [1, 2, 5]) {
-      const value = Number((factor * 10 ** exponent).toPrecision(3))
-      if (value > min && value < max) candidates.push(value)
-    }
-  }
-  const round =
-    candidates.length > 4
-      ? candidates.filter((value) => Number.isInteger(Math.log10(value)))
-      : candidates
-  const span = Math.log(max / min)
-  const ticks = [min]
-  for (const value of [...round, max]) {
-    const previous = ticks[ticks.length - 1] ?? min
-    if (Math.log(value / previous) / span >= 0.12) ticks.push(value)
-    else if (value === max) ticks[ticks.length - 1] = max
-  }
-  return ticks
-}
-
-function formatAxis(value: number, unit: string): string {
-  const number = Number(value.toFixed(value < 1 ? 2 : value < 10 ? 1 : 0))
-  return unit === "%" ? `${number}%` : String(number)
-}
-
 // The suggestion for a limit that won't fit: the nearest that would.
 function limitFix(
   problem: MigrationRoomProblem | undefined,
@@ -1279,14 +980,6 @@ function roundDown(value: number, step: number): number {
 
 function roundUp(value: number, step: number): number {
   return Math.ceil(value / step) * step
-}
-
-function sameLimits(left: ResourceLimits, right: ResourceLimits): boolean {
-  return (
-    left.cpuMillis === right.cpuMillis &&
-    left.diskBytes === right.diskBytes &&
-    left.memoryBytes === right.memoryBytes
-  )
 }
 
 function defaultDestination(

@@ -29,25 +29,17 @@ export function nodeResourceCapacity(
   const allocated = (key: "diskBytes" | "memoryBytes") =>
     others.reduce((total, limits) => total + (limits[key] ?? 0), 0)
   return {
-    cpu: { nodeCores: node.cpu.cores },
-    memory: {
-      availableBytes: Math.max(
-        (node.memory.assignableBytes ?? node.memory.totalBytes) -
-          allocated("memoryBytes"),
-        current.memoryBytes ?? 0
-      ),
-      nodeTotalBytes: node.memory.totalBytes,
-      nodeUsedBytes: node.memory.usedBytes,
-    },
-    storage: {
-      availableBytes: relayDiskAllocationAvailableBytes(
-        node.storage.totalBytes,
-        allocated("diskBytes"),
-        current.diskBytes ?? 0
-      ),
-      nodeTotalBytes: node.storage.totalBytes,
-      nodeUsedBytes: node.storage.usedBytes,
-    },
+    assignableDiskBytes: relayDiskAllocationAvailableBytes(
+      node.storage.totalBytes,
+      allocated("diskBytes"),
+      current.diskBytes ?? 0
+    ),
+    assignableMemoryBytes: Math.max(
+      (node.memory.assignableBytes ?? node.memory.totalBytes) -
+        allocated("memoryBytes"),
+      current.memoryBytes ?? 0
+    ),
+    cores: node.cpu.cores,
   }
 }
 
@@ -137,17 +129,16 @@ export async function relayAllocations(
 /**
  * What the node can give one instance, given every instance's limits. An
  * instance with several entries, such as an app's containers, keeps what
- * all of them hold.
+ * all of them hold, and an app with none, not yet deployed, holds nothing.
  */
 export function instanceCapacity(
   node: Pick<RelayNode, "cpu" | "memory" | "storage">,
   allocations: ReadonlyArray<InstanceAllocation>,
   target: { id: string; kind: InstanceAllocation["kind"] }
-): ResourceLimitsCapacity | null {
+): ResourceLimitsCapacity {
   const own = (allocation: InstanceAllocation) =>
     allocation.kind === target.kind && allocation.id === target.id
   const current = allocations.filter(own)
-  if (current.length === 0) return null
   const total = (key: "diskBytes" | "memoryBytes") =>
     current.reduce((sum, allocation) => sum + (allocation.limits[key] ?? 0), 0)
   return nodeResourceCapacity(
