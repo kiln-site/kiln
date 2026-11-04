@@ -2076,6 +2076,7 @@ export class AppDriver {
           databases,
           deploymentId: deployment.id,
           mounts,
+          noCache: input.noCache === true,
           routes,
           serviceLimits: input.config.serviceLimits,
           tailscale,
@@ -2104,35 +2105,7 @@ export class AppDriver {
               ),
             { surge }
           )
-        // `up` can't skip the cache, so this builds first and leaves `up`
-        // nothing to do, whichever project it then runs under.
-        if (input.noCache) {
-          log("Building without the cache")
-          await traceRelayPromise("relay.apps.deployment.composeBuild", () =>
-            this.#stream(
-              input.appId,
-              deployment,
-              "docker-compose",
-              [
-                ...composeArguments(base),
-                "--progress",
-                "plain",
-                "build",
-                "--no-cache",
-              ],
-              {
-                env: environment,
-                input: JSON.stringify(
-                  this.#prepareCompose(normalized, {
-                    ...options,
-                    deferAliases: false,
-                  })
-                ),
-                timeout: BUILD_TIMEOUT_MS,
-              }
-            )
-          )
-        }
+        if (input.noCache) log("Building without the cache")
         if (running && blocker === null) {
           // Its own project, so its networks and containers stand apart from
           // the running ones until it takes over.
@@ -2459,6 +2432,7 @@ export class AppDriver {
       deploymentId: string
       // The config's mounts, beside the Compose file's own.
       mounts: ReadonlyArray<ConfigMount>
+      noCache: boolean
       routes: AppRoutePlan
       serviceLimits: AppConfig["serviceLimits"]
       tailscale: ReadonlyArray<{
@@ -2538,6 +2512,11 @@ export class AppDriver {
           }
       services[name] = {
         ...service,
+        // `up` has no flag for this; a service's build says it itself.
+        ...(options.noCache &&
+          service.build !== undefined && {
+            build: { ...(service.build as object), no_cache: true },
+          }),
         ...composeLimits(service, options.serviceLimits[name]),
         container_name: this.#containerName(
           options.appId,

@@ -433,14 +433,13 @@ describeMysql("App deployments", () => {
           yield* until(() => sentTo(eighth) === 1)
 
           // Asked while one runs, then joined by a plain ask, as a push's.
-          yield* ask(eighth, "manual", null, false, true)
+          const joined = yield* ask(eighth, "manual", null, false, true)
           yield* deploy(eighth)
           yield* finish()
           yield* until(() => sentTo(eighth) === 2)
 
           yield* finish()
-          yield* until(() => relay.deployments.get(eighth)?.state === "succeeded")
-          yield* Effect.sleep("3 seconds")
+          yield* ended(joined)
           yield* deploy(eighth)
           yield* until(() => sentTo(eighth) === 3)
 
