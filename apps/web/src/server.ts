@@ -17,6 +17,7 @@ import {
 import { forkPromise } from "./effect/promise"
 import { resumeInvitationDelivery } from "./lib/access-invitation-delivery"
 import { scheduleBackupCopyProcessing } from "./lib/backup-copy"
+import { checkAuthSchema } from "./lib/auth"
 import { stopWarmCacheRefreshes } from "./lib/cache"
 import { wakePendingAuthorizationDelivery } from "./lib/authorization-delivery"
 import { scheduleInstancePostProvisionProcessing } from "./lib/instance-post-provision"
@@ -69,6 +70,7 @@ import { relayPassthroughUsages } from "./lib/relay-passthrough-limits.server"
 import { stopScheduleDeliveries } from "./server/schedule-deployment.server"
 
 await migrateDatabase()
+await checkAuthSchema()
 // Before the app runtime starts, so telemetry carries the ID, and before
 // Relays connect, since Hearth sends it to them.
 await loadInstallationId()
