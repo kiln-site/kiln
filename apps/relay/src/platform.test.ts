@@ -258,7 +258,8 @@ describe("Kiln deployed without Kiln's labels", () => {
         await clock.runPromise(TestClock.adjust("15 seconds"))
         await expect(containersInGroup(relayId, "hearth")).resolves.toBe(1)
       },
-      { timeout: 4_000 }
+      // Slowly enough that a search isn't timed out by the jumps themselves.
+      { interval: 250, timeout: 4_000 }
     )
     await expect(containersInGroup(relayId, "mysql")).resolves.toBe(1)
     await expect(containersInGroup(relayId, "valkey")).resolves.toBe(1)
