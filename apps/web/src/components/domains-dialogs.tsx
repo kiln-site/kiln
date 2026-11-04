@@ -1232,21 +1232,26 @@ export function AdoptRecordDialog({
     <Dialog open onOpenChange={adopt.isPending ? undefined : onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Let Kiln manage {hostname.hostname}?</DialogTitle>
+          <DialogTitle>Let Kiln manage this record?</DialogTitle>
           <DialogDescription>
             Kiln will point this record at the route's Relay and delete it when
             the route is removed.
           </DialogDescription>
         </DialogHeader>
-        {record ? (
-          <div className="flex min-w-0 items-center gap-2 border border-border/80 bg-muted/30 px-3 py-2 text-xs">
-            <span className="font-mono font-medium">{record.type}</span>
-            <span className="min-w-0 flex-1 truncate font-mono">
-              {record.content}
+        <div className="grid gap-1 border border-border/80 bg-muted/30 px-3 py-2 text-xs">
+          <span className="truncate font-mono font-medium">
+            {hostname.hostname}
+          </span>
+          {record ? (
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="font-mono">{record.type}</span>
+              <span className="min-w-0 flex-1 truncate font-mono">
+                {record.content}
+              </span>
+              <CloudflareProxyStatus proxied={record.proxied} />
             </span>
-            <CloudflareProxyStatus proxied={record.proxied} />
-          </div>
-        ) : null}
+          ) : null}
+        </div>
         {adopt.error ? <ConfigurationError error={adopt.error} /> : null}
         <DialogFooter>
           <Button
