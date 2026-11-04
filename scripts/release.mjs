@@ -11,7 +11,6 @@ import { pathToFileURL } from "node:url"
 import { promisify } from "node:util"
 
 import {
-  KILN_DESKTOP_IMAGE_TAG,
   kilnImagePrefix,
   kilnImageRepository,
   kilnImageSource,
@@ -291,15 +290,27 @@ async function assertPublicManifest(image, digest) {
     )
 }
 
+/**
+ * The desktop image tags a release's Relays need, from that release's own
+ * contracts: a nightly promoted later may name another version, or predate
+ * Relays having a default.
+ */
+export function desktopImageTags(contracts) {
+  const tag = /KILN_DESKTOP_IMAGE_TAG = "([^"]+)"/u.exec(contracts)?.[1]
+  return tag ? [tag, `${tag}-source`] : []
+}
+
 // Relays pull the streamer themselves, the first time someone opens a desktop,
 // so a release can't go out naming one nobody can download, or without its
 // source beside it.
-function assertPublicDesktopImage(repository) {
+function assertPublicDesktopImage(repository, commit) {
   const image = kilnImageRepository("desktop", repository)
+  const contracts = run("git", [
+    "show",
+    `${commit}:packages/contracts/src/git-repository.ts`,
+  ])
   return Promise.all(
-    [KILN_DESKTOP_IMAGE_TAG, `${KILN_DESKTOP_IMAGE_TAG}-source`].map((tag) =>
-      assertPublicManifest(image, tag)
-    )
+    desktopImageTags(contracts).map((tag) => assertPublicManifest(image, tag))
   )
 }
 
@@ -431,7 +442,7 @@ async function nightly() {
       compatibility: { relayProtocol: protocol },
     }
     validateReleaseManifest(manifest, repository, version)
-    await assertPublicDesktopImage(repository)
+    await assertPublicDesktopImage(repository, commit)
     reserveTag(tag, commit)
     publishRelease(
       manifest,
@@ -481,7 +492,7 @@ async function stable() {
   )
     throw new Error("Nightly tag and manifest disagree")
   await Promise.all([
-    assertPublicDesktopImage(repository),
+    assertPublicDesktopImage(repository, manifest.commit),
     ...Object.values(manifest.components).map(({ image, digest }) =>
       assertPublicManifest(image, digest)
     ),

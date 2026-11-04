@@ -3,8 +3,8 @@
 # an X11 display to the browser as H.264 over a WebSocket. The Relay runs it
 # beside the node's own display server and passes the browser's connection
 # through Hearth to it. voxl is MIT, but it links x264 (GPL-2.0), so this
-# image is distributed under the GPL, separately from Kiln's own images, with
-# its source beside it (the `source` target).
+# image is distributed under the GPL, separately from Kiln's own images. Debian's
+# libraries' source ships inside it, and voxl's beside it (the `source` target).
 #
 # A new version also needs KILN_DESKTOP_IMAGE_TAG and the client Hearth serves
 # (docs/relay-desktop.md); scripts/desktop-image.test.mjs checks they agree.
@@ -25,29 +25,23 @@ RUN printf '%s\n' 'prefix=/usr' 'libdir=${prefix}/lib/x86_64-linux-gnu' \
   | sed "s|x86_64-linux-gnu|$(gcc -dumpmachine)|" \
   > /usr/share/pkgconfig/libyuv.pc
 RUN cargo install voxl-server --version "${VOXL_VERSION}" --locked --root /opt/voxl
-# The licenses of voxl and the crates built into it go where the binary goes.
-RUN find /usr/local/cargo/registry/src -mindepth 3 -maxdepth 3 -type f \
-    \( -iname 'LICEN[CS]E*' -o -iname 'COPYING*' -o -iname 'NOTICE*' \) \
-    -exec sh -c 'for file; do \
-      directory="/opt/voxl/licenses/$(basename "$(dirname "$file")")"; \
-      mkdir -p "$directory" && cp "$file" "$directory/"; \
-    done' sh {} +
+# The licenses of voxl and the crates built into it go where the binary goes,
+# nested ones too: voxl embeds a font, and some crates' tables have their own.
+RUN mkdir /opt/voxl/licenses \
+  && cd /usr/local/cargo/registry/src/*/ \
+  && find . -type f ! -name '*.rs' \
+    \( -iname '*LICEN[CS]E*' -o -iname 'COPYING*' -o -iname 'NOTICE*' \) \
+    -exec cp --parents -t /opt/voxl/licenses {} +
 
-# The source of what the GPL covers: voxl and the crates built into it, and
-# Debian's x264 and PulseAudio, which it links. Published as
-# `desktop:<version>-source`, from the same place as the image. It starts from
-# the build stage to take the exact versions the build installed.
-FROM build AS source-files
+# voxl's source and the crates built into it, which a version pins exactly.
+# Published as `desktop:<version>-source`, from the same place as the image.
+FROM rust:1.91-slim-trixie AS source-files
 ARG VOXL_VERSION
 ARG KILN_GIT_REPO=https://github.com/kiln-site/kiln
 ARG SOURCE_COMMIT=main
-RUN packages="$(dpkg-query -W -f '${source:Package}=${source:Version}\n' libx264-dev libpulse-dev)" \
-  && sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources \
-  && apt-get update \
-  && apt-get install -y --no-install-recommends curl dpkg-dev \
-  && mkdir -p /src/debian \
-  && cd /src/debian \
-  && apt-get source --download-only $packages \
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl \
+  && mkdir /src \
   && cd /src \
   && curl -fsSL "https://static.crates.io/crates/voxl-server/voxl-server-${VOXL_VERSION}.crate" \
     | tar -xz \
@@ -56,27 +50,41 @@ RUN packages="$(dpkg-query -W -f '${source:Package}=${source:Version}\n' libx264
   && cargo vendor --locked --versioned-dirs ../vendor > .cargo/config.toml
 RUN printf '%s\n' \
     "voxl-server-${VOXL_VERSION}: voxl, set up to build from vendor/." \
-    'debian: the x264 and PulseAudio the image links.' \
     "How it's built: ${KILN_GIT_REPO}/blob/${SOURCE_COMMIT}/apps/desktop/Dockerfile" \
   > /src/README
 
 FROM scratch AS source
 COPY --from=source-files /src /src
 
-FROM debian:trixie-slim
+FROM debian:trixie-slim AS runtime
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates libopus0 libpulse0 libx264-164 libxcb1 libyuv0 \
   && rm -rf /var/lib/apt/lists/*
+
+# The source of the x264 and PulseAudio this image links, at the versions it
+# installed. They go in the image, so the two can't drift apart.
+FROM runtime AS debian-source
+RUN packages="$(dpkg-query -W -f '${source:Package}=${source:Version}\n' libx264-164 libpulse0)" \
+  && sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends dpkg-dev \
+  && mkdir /debian \
+  && cd /debian \
+  && apt-get source --download-only $packages
+
+FROM runtime
 COPY --from=build /opt/voxl/bin/voxl /usr/local/bin/voxl
 COPY --from=build /opt/voxl/licenses /usr/share/doc/voxl/licenses
+COPY --from=debian-source /debian /usr/share/doc/voxl/source
 # Fails the build if a library it links is missing.
 RUN ["/usr/local/bin/voxl", "--version"]
 RUN printf '%s\n' \
     'voxl is MIT licensed, but this binary links x264, so it is distributed' \
-    'under the GPL: see /usr/share/common-licenses/GPL-2. Its complete source' \
-    'is published beside this image, under this tag followed by -source.' \
-    'The licenses of voxl and the crates built into it are in licenses/.' \
+    'under the GPL: see /usr/share/common-licenses/GPL-2. The source of the' \
+    'x264 and PulseAudio it links is in source/. The source of voxl and the' \
+    'crates built into it is published beside this image, under this tag' \
+    'followed by -source. Their licenses are in licenses/.' \
   > /usr/share/doc/voxl/NOTICE
 LABEL org.opencontainers.image.source="https://github.com/kiln-site/kiln" \
   org.opencontainers.image.licenses="GPL-2.0-or-later" \

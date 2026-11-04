@@ -255,12 +255,14 @@ distributed under the GPL. It's a separate program in its own image, which
 Kiln's images don't include: a Relay talks to it only over a socket, and pulls
 it only when someone opens a desktop.
 
-The GPL asks that its source be offered from the same place as the binary, so
-the **Desktop image** workflow publishes `desktop:<voxl version>-source` next to
-each `desktop:<voxl version>`. It's an image of files rather than a program:
-voxl, the crates built into it, and the versions of Debian's x264 and PulseAudio
-the build used, under `/src`. The image itself carries the licenses of voxl and
-those crates, in `/usr/share/doc/voxl`.
+The GPL asks that its source be offered from the same place as the binary. The
+source of Debian's x264 and PulseAudio ships inside the image, at the versions it
+installed, so an update to either can't leave the two apart. voxl and the crates
+built into it are too large for that, and a version pins them exactly, so the
+**Desktop image** workflow publishes them as `desktop:<voxl version>-source`, an
+image of files rather than a program, under `/src`. The streamer's image carries
+the licenses of voxl and those crates, and the notices nested in them, such as
+the font voxl embeds. All of it is in `/usr/share/doc/voxl`.
 
 ## Limits
 
