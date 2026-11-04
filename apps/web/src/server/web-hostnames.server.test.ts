@@ -23,6 +23,7 @@ import {
 } from "@/effect/web-hostnames"
 
 import {
+  adoptableWebHostnamesEffect,
   adoptExistingWebRecordEffect,
   reconcileResourceWebHostnamesEffect,
   saveWebRouteHostnamesEffect,
@@ -347,6 +348,15 @@ describeMysql("web route hostnames", () => {
             type: "CNAME",
           }
           assert.deepEqual(row.existingRecord, seen)
+          // Pages offer it, and show the record, only to those who can.
+          assert.isTrue(
+            (yield* adoptableWebHostnamesEffect([row], owner)).has(row.id)
+          )
+          assert.isFalse(
+            (yield* adoptableWebHostnamesEffect([row], collaborator)).has(
+              row.id
+            )
+          )
           const adopt = (actor: DomainActor, record: ExistingWebRecord) =>
             adoptExistingWebRecordEffect(row, {
               actor,

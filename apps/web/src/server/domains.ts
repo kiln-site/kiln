@@ -276,7 +276,11 @@ export interface ResourceWebHostnames {
 
 /** A web hostname as a game server's or app's network page shows it. */
 export interface ResourceWebHostname {
+  /** Its existing record can be handed to Kiln by this person. */
+  canAdopt: boolean
   canRelease: boolean
+  /** The record `canAdopt` would hand over. */
+  existingRecord: WebHostnameOverview["existingRecord"]
   generated: boolean
   hostname: string
   id: string

@@ -47,11 +47,11 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { CloudflareProxyStatus } from "@/components/cloudflare-proxy-status"
+import type { WebHostnameResourceRef } from "@/components/web-hostname-dns"
 import {
   domainHostname,
   errorMessage,
   type DomainConnectionOverview,
-  type DomainSettings,
   type VanityDomainChoice,
 } from "@/components/domains-shared"
 import {
@@ -61,7 +61,7 @@ import {
   validateBlacklistPatterns,
   vanityLabelSchema,
 } from "@/lib/domain-schemas"
-import { domainSettingsQueryOptions, queryKeys } from "@/lib/query-options"
+import { queryKeys, resourceWebHostnamesQueryOptions } from "@/lib/query-options"
 import {
   adoptWebHostnameRecord,
   createInstanceDomain,
@@ -73,6 +73,7 @@ import {
   updateInstanceDomain,
   type DiscoveredCloudflareZone,
   type ManagedDomainOverview,
+  type ResourceWebHostnames,
   type WebHostnameOverview,
 } from "@/server/domains"
 
@@ -1182,25 +1183,30 @@ export function ReleaseHostnameDialog({
  * hostname: it points it at the Relay and deletes it with the route.
  */
 export function AdoptRecordDialog({
-  hostname: opened,
+  hostname,
   onOpenChange,
+  resource,
 }: {
-  hostname: WebHostnameOverview
+  hostname: Pick<WebHostnameOverview, "existingRecord" | "hostname" | "id">
   onOpenChange: (open: boolean) => void
+  resource: WebHostnameResourceRef
 }) {
   const queryClient = useQueryClient()
   // As last read: a refused attempt reads the record again.
   const selectLatest = React.useCallback(
-    (settings: DomainSettings) =>
-      settings.webHostnames.find((row) => row.id === opened.id),
-    [opened.id]
+    ({ hostnames }: ResourceWebHostnames) =>
+      hostnames.find((row) => row.id === hostname.id)?.existingRecord ?? null,
+    [hostname.id]
   )
   const { data: latest } = useQuery({
-    ...domainSettingsQueryOptions(),
+    ...resourceWebHostnamesQueryOptions(
+      resource.relayId,
+      resource.resourceType,
+      resource.resourceId
+    ),
     select: selectLatest,
   })
-  const hostname = latest ?? opened
-  const record = hostname.status === "external" ? hostname.existingRecord : null
+  const record = latest === undefined ? hostname.existingRecord : latest
   const [proxied, setProxied] = React.useState(record?.proxied ?? false)
   const adopt = useMutation({
     mutationFn: () => {
@@ -1232,8 +1238,8 @@ export function AdoptRecordDialog({
           <DialogDescription>
             Cloudflare already has a record for{" "}
             <span className="font-mono">{hostname.hostname}</span> that Kiln
-            didn't create. Kiln will point it at {hostname.relayName}, keep it
-            in step with the route, and delete it when the route is removed.
+            didn't create. Kiln will point it at the route's Relay, keep it in
+            step with the route, and delete it when the route is removed.
           </DialogDescription>
         </DialogHeader>
         {record ? (
@@ -1259,7 +1265,7 @@ export function AdoptRecordDialog({
                 Managed by Kiln
               </span>
               <span className="min-w-0 truncate">
-                Points at the Relay {hostname.relayName}
+                Points at the route's Relay
               </span>
             </div>
           </div>
