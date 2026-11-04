@@ -4,7 +4,6 @@ import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Effect, Fiber, Result } from "effect"
 import {
-  ArrowDown,
   ArrowLeft,
   Check,
   ChevronDown,
@@ -1234,51 +1233,23 @@ export function AdoptRecordDialog({
     <Dialog open onOpenChange={adopt.isPending ? undefined : onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Let Kiln manage this record</DialogTitle>
+          <DialogTitle>Let Kiln manage {hostname.hostname}?</DialogTitle>
           <DialogDescription>
-            Cloudflare already has a record for{" "}
-            <span className="font-mono">{hostname.hostname}</span> that Kiln
-            didn't create. Kiln will point it at the route's Relay, keep it in
-            step with the route, and delete it when the route is removed.
+            Kiln will point this record at the route's Relay and delete it when
+            the route is removed.
           </DialogDescription>
         </DialogHeader>
         {record ? (
-          <div className="grid gap-2 text-xs">
-            <div className="grid gap-1 border border-border/80 bg-muted/30 px-3 py-2">
-              <span className="type-technical-label text-muted-foreground">
-                Now
-              </span>
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="font-mono font-medium">{record.type}</span>
-                <span className="min-w-0 flex-1 truncate font-mono">
-                  {record.content}
-                </span>
-                <CloudflareProxyStatus proxied={record.proxied} />
-              </span>
-            </div>
-            <ArrowDown
-              aria-hidden
-              className="mx-auto size-3.5 text-muted-foreground"
-            />
-            <div className="grid gap-1 border border-primary/30 bg-primary/5 px-3 py-2">
-              <span className="type-technical-label text-primary-ink">
-                Managed by Kiln
-              </span>
-              <span className="min-w-0 truncate">
-                Points at the route's Relay
-              </span>
-            </div>
+          <div className="flex min-w-0 items-center gap-2 border border-border/80 bg-muted/30 px-3 py-2 text-xs">
+            <span className="font-mono font-medium">{record.type}</span>
+            <span className="min-w-0 flex-1 truncate font-mono">
+              {record.content}
+            </span>
+            <CloudflareProxyStatus proxied={record.proxied} />
           </div>
         ) : null}
         <label className="flex items-center justify-between gap-4">
-          <span className="min-w-0">
-            <span className="type-label block">Proxy through Cloudflare</span>
-            <span className="type-meta block text-muted-foreground">
-              {proxied
-                ? "Visitors reach the Relay through Cloudflare"
-                : "DNS only: visitors reach the Relay directly"}
-            </span>
-          </span>
+          <span className="type-label">Proxy through Cloudflare</span>
           <Switch
             aria-label="Proxy through Cloudflare"
             checked={proxied}
@@ -1302,7 +1273,7 @@ export function AdoptRecordDialog({
             onClick={() => adopt.mutate()}
           >
             {adopt.isPending ? <LoaderCircle className="animate-spin" /> : null}
-            Let Kiln manage it
+            Let Kiln manage
           </Button>
         </DialogFooter>
       </DialogContent>
