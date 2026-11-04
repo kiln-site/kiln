@@ -1,10 +1,11 @@
 import { createHmac } from "node:crypto"
 import { hostname } from "node:os"
 
-import { Effect } from "effect"
-import { describe, expect, it } from "vite-plus/test"
+import { Effect, Fiber, Metric } from "effect"
+import { describe, expect, it, vi } from "vite-plus/test"
 
 import { DockerEngine } from "./docker-engine.js"
+import { sampleNodeMetrics } from "./node-metrics.js"
 import {
   addOwnerInvitation,
   isPlatformOwner,
@@ -219,6 +220,42 @@ describe("Kiln deployed without Kiln's labels", () => {
       status: () => run(platformStatus(context, null)),
     }
   }
+
+  const containersInGroup = (relayId: string, group: string) =>
+    run(
+      Metric.snapshot.pipe(
+        Effect.map((snapshots) => {
+          const found = snapshots.find(
+            ({ attributes, id }) =>
+              id === "relay.container.count" &&
+              attributes?.["relay.id"] === relayId &&
+              attributes["kiln.container.group"] === group
+          )
+          return (found?.state as { value?: number } | undefined)?.value
+        })
+      )
+    )
+
+  it("reports a proven Hearth's containers under their own metric groups", async () => {
+    const kiln = await coolify()
+    await expect(
+      kiln.identify({ containerId: kiln.hearth.id, key: secret })
+    ).resolves.toBe(true)
+
+    const relayId = "relay-beside-coolify"
+    const sampler = Effect.runFork(
+      sampleNodeMetrics(() => relayId, kiln.context.engine, kiln.harness.config)
+    )
+    await vi.waitFor(async () => {
+      await expect(containersInGroup(relayId, "hearth")).resolves.toBe(1)
+    })
+    await expect(containersInGroup(relayId, "mysql")).resolves.toBe(1)
+    await expect(containersInGroup(relayId, "valkey")).resolves.toBe(1)
+    // The other app's database stays where everything else Kiln doesn't run is.
+    await expect(containersInGroup(relayId, "database")).resolves.toBe(0)
+    await expect(containersInGroup(relayId, "other")).resolves.toBe(1)
+    await run(Fiber.interrupt(sampler))
+  })
 
   it("reports nothing for a Hearth that can't prove the container it names", async () => {
     const kiln = await coolify()

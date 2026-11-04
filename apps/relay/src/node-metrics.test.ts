@@ -6,7 +6,10 @@ import type { DockerEngine, DockerEvent } from "./docker-engine.js"
 import { watchContainerEvents } from "./node-metrics.js"
 
 const config = {
+  dataDirectory: "/data",
+  installationId: null,
   mode: "node" as const,
+  provenHearth: null,
   resourceNamespace: "",
   selfContainer: "kiln-relay",
   serverIdLabel: "kiln.instance.id",

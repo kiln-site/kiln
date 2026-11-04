@@ -1327,11 +1327,12 @@ export function loadRelayCredentials(
 }
 
 /**
- * What Hearth connects to a Relay with: its credentials, and whether it
- * sends its installation ID (`send_installation_id`), which a Relay with
- * none saves as its own.
+ * What Hearth connects to a Relay with: its credentials, its name for the
+ * Relay, and whether it sends its installation ID (`send_installation_id`),
+ * which a Relay with none saves as its own.
  */
 export type RelayConnectionCredentials = RelayCredentials & {
+  relayName: string
   sendInstallationId: boolean
 }
 
@@ -1361,6 +1362,7 @@ export const loadRelayCredentialsEffect = Effect.fn("relays.credentials")(
     }
     return {
       ...(yield* decryptRelayCredentialsEffect(encryptedRelayCredentials(row))),
+      relayName: row.name,
       sendInstallationId: Boolean(row.send_installation_id),
     } satisfies RelayConnectionCredentials
   }

@@ -93,6 +93,7 @@ beforeEach(async () => {
     relayPublicKeyPem: relayKeys.publicKey
       .export({ format: "pem", type: "spki" })
       .toString(),
+    relayName: "Test Relay",
     sendInstallationId: false,
   })
   // Hearth, as Relays dial it.

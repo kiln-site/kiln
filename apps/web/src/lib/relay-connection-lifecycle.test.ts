@@ -306,6 +306,7 @@ async function setupRelayServer(
   vi.mocked(loadRelayCredentials).mockResolvedValue({
     caCertificatePem: null,
     clientId: "hearth-client",
+    relayName: "Test Relay",
     sendInstallationId: true,
     clientPrivateKeyPem: clientKeys.privateKey
       .export({
