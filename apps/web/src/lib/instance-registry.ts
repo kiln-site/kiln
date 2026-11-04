@@ -130,7 +130,7 @@ export function claimInstanceOwnerEffect<E, R>(
   return Effect.gen(function* () {
     // The Relay first, then the server, as access changes take them.
     yield* transaction.queryRows(
-      `SELECT id FROM ${databaseTable("relay")} WHERE id = ? FOR SHARE`,
+      `SELECT id FROM ${databaseTable("relay")} WHERE id = ? LOCK IN SHARE MODE`,
       [scope.relayId]
     )
     // Create a new server's row, or take the existing one exclusively, before

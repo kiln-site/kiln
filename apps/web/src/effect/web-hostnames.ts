@@ -201,7 +201,7 @@ export const insertWebHostnameEffect = Effect.fn("webHostnames.insert")(
           "webHostnames.insert",
           `SELECT 1 FROM ${databaseTable("domain_integration")}
             WHERE id = ?
-            FOR SHARE`,
+            LOCK IN SHARE MODE`,
           [input.connectionId]
         )
         if (connections.length === 0) {

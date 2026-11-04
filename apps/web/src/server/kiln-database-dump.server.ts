@@ -29,14 +29,11 @@ export const KILN_DATABASE_IMPORT_LIMIT_BYTES = 32 * 1024 * 1024
 const INSERT_BATCH_CHARACTERS = 512 * 1024
 
 // Values come back as MySQL wrote them, so they go back unchanged: dates and
-// big numbers as text, JSON as its text rather than parsed, and binary values
-// as bytes, which `escape` writes as hex.
+// big numbers as text, JSON as its text rather than parsed (`jsonStrings`,
+// since MariaDB's JSON columns report no JSON type here), and binary values as
+// bytes, which `escape` writes as hex.
 const dumpTypeCast: TypeCast = (field, next) =>
-  field.type === "JSON"
-    ? field.string("utf8")
-    : field.type === "GEOMETRY"
-      ? field.buffer()
-      : next()
+  field.type === "GEOMETRY" ? field.buffer() : next()
 
 interface DumpTable {
   columns: ReadonlyArray<string>
@@ -462,6 +459,7 @@ function openConnection(
         database: config.database,
         dateStrings: true,
         host: config.host,
+        jsonStrings: true,
         multipleStatements: options.multipleStatements,
         password: config.password,
         port: config.port,

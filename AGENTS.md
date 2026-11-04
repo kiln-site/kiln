@@ -132,7 +132,10 @@ How to write them:
   it, or fake it at that single boundary.
 - Web code that touches MySQL runs against a real database with
   `apps/web/src/test/database.ts`; assert rows and results. CI runs these
-  suites; locally run `pnpm dev:docker:test` against the dev stack's MySQL.
+  suites on MySQL and MariaDB; locally run `pnpm dev:docker:test` against the
+  dev stack's MySQL. Hearth's SQL must work on both, so write
+  `LOCK IN SHARE MODE`, `JSON_UNQUOTE(JSON_EXTRACT(...))` and
+  `JSON_EXTRACT(?, '$')`, not `FOR SHARE`, `->>` or `CAST(? AS JSON)`.
 - Relay code that drives Docker uses the stateful fake in
   `apps/relay/src/test/docker.ts`; assert the resulting container state.
 - Control time with Effect's `TestClock` or `vi.useFakeTimers`, never real

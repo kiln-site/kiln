@@ -474,7 +474,7 @@ export const updateGitHubSyncEffect = Effect.fn("github.sync.update")(
       `UPDATE ${databaseTable("github_sync")}
           SET last_commit_sha = IF(
                 repository_id = ? AND branch = ? AND source_path = ?
-                  AND target_path = ? AND include_patterns = CAST(? AS JSON),
+                  AND target_path = ? AND include_patterns = JSON_EXTRACT(?, '$'),
                 last_commit_sha, NULL),
               repository_id = ?, repository = ?, branch = ?,
               source_path = ?, target_path = ?, include_patterns = ?,
@@ -690,7 +690,7 @@ export const recordGitHubSyncAttemptEffect = Effect.fn(
     "github.sync.recordAttempt",
     `UPDATE ${databaseTable("github_sync")}
         SET synced_files = JSON_SET(
-              synced_files, CONCAT('$.', JSON_QUOTE(?)), CAST(? AS JSON)),
+              synced_files, CONCAT('$.', JSON_QUOTE(?)), JSON_EXTRACT(?, '$')),
             last_commit_sha = NULL
       WHERE id = ?`,
     [path, JSON.stringify(file), id]

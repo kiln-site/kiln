@@ -382,7 +382,7 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
             `SELECT domain FROM ${databaseTable("domain_zone")}
               WHERE integration_id <> ?
                 AND domain IN (${[...requested.keys()].map(() => "?").join(", ")})
-              FOR SHARE`,
+              LOCK IN SHARE MODE`,
             [input.id, ...requested.keys()]
           )
           const [conflict] = taken
@@ -402,7 +402,7 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
                ON zone.domain = assignment.domain
                OR zone.domain = assignment.next_domain
             WHERE zone.integration_id = ?
-            FOR SHARE`,
+            LOCK IN SHARE MODE`,
           [input.id]
         )
         // The web records it keeps stay reachable, to repoint or delete.
@@ -411,7 +411,7 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
         >(
           `SELECT hostname, zone_id FROM ${databaseTable("web_hostname")}
             WHERE integration_id = ?
-            FOR SHARE`,
+            LOCK IN SHARE MODE`,
           [input.id]
         )
         const stranded = webRecords.find(
@@ -590,7 +590,7 @@ export const deleteDomainConnectionEffect = Effect.fn(
       >(
         `SELECT COUNT(*) AS total FROM ${databaseTable("instance_domain")}
           WHERE ${connectionDomainsMatch}
-          FOR SHARE`,
+          LOCK IN SHARE MODE`,
         [id, id, id]
       )
       yield* connectionInUseFailure(Number(used?.total ?? 0))
@@ -1001,7 +1001,7 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
       const zones = yield* transaction.queryRows<RowDataPacket>(
         `SELECT 1 FROM ${databaseTable("domain_zone")}
           WHERE domain = ? AND zone_id = ? AND integration_id = ?
-          FOR SHARE`,
+          LOCK IN SHARE MODE`,
         [input.domain, input.zoneId, input.connectionId]
       )
       if (zones.length === 0) {
@@ -1078,7 +1078,7 @@ export const beginInstanceDomainRenameEffect = Effect.fn(
         "domains.assignment.beginRename",
         `SELECT 1 FROM ${databaseTable("domain_zone")}
           WHERE domain = ?
-          FOR SHARE`,
+          LOCK IN SHARE MODE`,
         [input.domain]
       )
       if (zones.length === 0) {

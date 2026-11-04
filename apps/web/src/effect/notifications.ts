@@ -287,7 +287,8 @@ export const resolveMigrationSourceNotificationsEffect = Effect.fn(
     "notifications.migrationSource.find",
     `SELECT DISTINCT user_id FROM ${databaseTable("notification")}
       WHERE kind = 'server.migration'
-        AND data->>'$.source.relayId' = ? AND data->>'$.source.id' = ?`,
+        AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.source.relayId')) = ?
+        AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.source.id')) = ?`,
     [relayId, instanceId]
   )
   if (!rows.length) return []
@@ -296,7 +297,8 @@ export const resolveMigrationSourceNotificationsEffect = Effect.fn(
     `UPDATE ${databaseTable("notification")}
         SET data = JSON_SET(data, '$.sourceDeleted', true)
       WHERE kind = 'server.migration'
-        AND data->>'$.source.relayId' = ? AND data->>'$.source.id' = ?`,
+        AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.source.relayId')) = ?
+        AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.source.id')) = ?`,
     [relayId, instanceId]
   )
   return rows.map((row) => row.user_id)

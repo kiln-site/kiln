@@ -28,15 +28,23 @@ jobs:
             env: {}
           - name: Hearth tests
             # Runs alone so its import-heavy suite gets the whole runner.
-            mysql: true
+            mysql: mysql:8.4
+            mysql-admin: mysqladmin
             stage: hearth
-            env:
+            env: &hearth-env
               KILN_TEST_MYSQL: "1"
               DB_HOST: 127.0.0.1
               DB_PORT: "3306"
               DB_NAME: kiln_test
               DB_USERNAME: root
               DB_PASSWORD: root
+          - name: Hearth tests (MariaDB)
+            # Some installations run Hearth on MariaDB, which rejects MySQL's
+            # newer syntax and reports JSON columns differently.
+            mysql: mariadb:11.8
+            mysql-admin: mariadb-admin
+            stage: hearth
+            env: *hearth-env
           - name: Build
             stage: build
             env: {}
@@ -50,7 +58,7 @@ jobs:
           docker run --detach --name mysql --tmpfs /var/lib/mysql \
             --publish 127.0.0.1:3306:3306 \
             --env MYSQL_ROOT_PASSWORD=root --env MYSQL_DATABASE=kiln_test \
-            mysql:8.4 --skip-log-bin --innodb-flush-log-at-trx-commit=0 \
+            ${{ matrix.mysql }} --skip-log-bin --innodb-flush-log-at-trx-commit=0 \
             --innodb-doublewrite=0 > "$RUNNER_TEMP/mysql.log" 2>&1 &
 
       - name: Check out repository
@@ -69,7 +77,7 @@ jobs:
         if: matrix.mysql
         run: |
           timeout 120 sh -c 'until docker exec mysql \
-            mysqladmin ping -h 127.0.0.1 -proot --silent; do sleep 1; done' ||
+            ${{ matrix.mysql-admin }} ping -h 127.0.0.1 -proot --silent; do sleep 1; done' ||
             { cat "$RUNNER_TEMP/mysql.log"; docker logs mysql; exit 1; }
 
       - name: Run ${{ matrix.name }}
