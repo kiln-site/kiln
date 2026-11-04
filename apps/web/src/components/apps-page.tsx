@@ -477,15 +477,17 @@ const AppActions = React.memo(function AppActions({
         id: app.id,
       }),
     })
+  const deployName =
+    (app.detail?.containerCount ?? 0) > 0 ? "Redeploy" : "Deploy"
   const deploy = useMutation({
     mutationFn: () =>
       deployApp({ data: { appId: app.id, relayId: app.relayId } }),
     onSuccess: async () => {
       // It runs once any deployment running ends.
-      showToast({ message: "Deploy queued", type: "success" })
+      showToast({ message: `${deployName} queued`, type: "success" })
       await invalidate()
     },
-    onError: (error) => showAppOperationError("Deploy failed", error),
+    onError: (error) => showAppOperationError(`${deployName} failed`, error),
   })
   const action = useMutation({
     mutationFn: (nextAction: "restart" | "start" | "stop") =>
@@ -504,7 +506,7 @@ const AppActions = React.memo(function AppActions({
   const deploying = app.detail?.deploying === true || hearth?.deploying === true
   // Waiting its turn: asking again would only join it.
   const queued = !deploying && hearth?.queuedId != null
-  const deployLabel = deploying ? "Deploying" : queued ? "Queued" : "Deploy"
+  const deployLabel = deploying ? "Deploying" : queued ? "Queued" : deployName
   const running =
     state.phase === "ready" && state.observation.runtime === "running"
   const busy = deploy.isPending || action.isPending
@@ -520,7 +522,7 @@ const AppActions = React.memo(function AppActions({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                aria-label={`Deploy ${app.name}`}
+                aria-label={`${deployName} ${app.name}`}
                 className="text-muted-foreground hover:text-primary-ink"
                 disabled={deployDisabled}
                 size="icon-sm"

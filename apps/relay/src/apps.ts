@@ -1611,7 +1611,11 @@ export class AppDriver {
       })
       await writeFile(dockerfile, input.config.dockerfile, { mode: 0o600 })
     }
-    this.#log(input.appId, deployment, `Building ${tag}`)
+    this.#log(
+      input.appId,
+      deployment,
+      `Building ${tag}${input.noCache ? " without the cache" : ""}`
+    )
     await this.#stream(
       input.appId,
       deployment,
@@ -1620,6 +1624,7 @@ export class AppDriver {
         "build",
         "--progress",
         "plain",
+        ...(input.noCache ? ["--no-cache"] : []),
         ...labelArguments(this.#imageLabels(input.appId)),
         "--tag",
         tag,
@@ -2099,6 +2104,35 @@ export class AppDriver {
               ),
             { surge }
           )
+        // `up` can't skip the cache, so this builds first and leaves `up`
+        // nothing to do, whichever project it then runs under.
+        if (input.noCache) {
+          log("Building without the cache")
+          await traceRelayPromise("relay.apps.deployment.composeBuild", () =>
+            this.#stream(
+              input.appId,
+              deployment,
+              "docker-compose",
+              [
+                ...composeArguments(base),
+                "--progress",
+                "plain",
+                "build",
+                "--no-cache",
+              ],
+              {
+                env: environment,
+                input: JSON.stringify(
+                  this.#prepareCompose(normalized, {
+                    ...options,
+                    deferAliases: false,
+                  })
+                ),
+                timeout: BUILD_TIMEOUT_MS,
+              }
+            )
+          )
+        }
         if (running && blocker === null) {
           // Its own project, so its networks and containers stand apart from
           // the running ones until it takes over.

@@ -83,6 +83,9 @@ const appInputSchema = z.strictObject({
   appId: appIdSchema,
   relayId: relayIdSchema,
 })
+const deployAppInputSchema = appInputSchema.extend({
+  noCache: z.boolean().optional(),
+})
 const createAppInputSchema = z.strictObject({
   name: appNameSchema,
   relayId: relayIdSchema,
@@ -392,11 +395,16 @@ export const renameApp = createServerFn({ method: "POST" })
 // already asked for. Its log and the app's state follow it from there, and
 // Hearth records how it ends.
 export const deployApp = createServerFn({ method: "POST" })
-  .validator(appInputSchema)
+  .validator(deployAppInputSchema)
   .handler(async ({ data }) => {
     const queued = await runOperationPromise(
       askAppDeploy,
-      { appId: data.appId, relayId: data.relayId, trigger: "manual" },
+      {
+        appId: data.appId,
+        ...(data.noCache && { noCache: true }),
+        relayId: data.relayId,
+        trigger: "manual",
+      },
       { user: await requireEligibleResourceUser() }
     )
     publishAppChange(data.relayId, false)

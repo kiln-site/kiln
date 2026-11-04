@@ -615,6 +615,7 @@ function InstancePowerControls({
       killWarning="This immediately terminates the container. Unsaved world data may be lost."
       noun="server"
       powerPermissions={powerPermissions}
+      restartButton
       target={{
         name: instance.name,
         observedState,

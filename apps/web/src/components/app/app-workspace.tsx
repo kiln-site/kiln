@@ -9,7 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useHydrated, useNavigate } from "@tanstack/react-router"
 import { primaryWebRoute, webRouteUrl } from "@workspace/contracts"
 import type { RelayInstanceWebRoute } from "@workspace/contracts"
-import { Rocket, Trash2, X } from "lucide-react"
+import { Hammer, Rocket, Trash2, X } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -55,6 +55,7 @@ import { appRouteIdentifier, resolveAppRoute } from "@/lib/app-route"
 import type { ServerAction } from "@/lib/instance-power-state"
 import { appDestinations } from "@/lib/navigation-destinations"
 import {
+  appConfigQueryOptions,
   appDirectoryQueryOptions,
   appWebRoutesQueryOptions,
 } from "@/lib/query-options"
@@ -341,6 +342,13 @@ function AppPowerControls({
   )
   const canManage = !deletion && app.permissions.includes("app.manage")
   const deployed = app.containers.length > 0
+  const deployLabel = deployed ? "Redeploy" : "Deploy"
+  // An image is pulled, so it has no build cache to skip.
+  const { data: sourceType } = useQuery({
+    ...appConfigQueryOptions(app.relayId, app.id),
+    enabled: canManage,
+    select: ({ config }) => config.sourceType,
+  })
   const powerPermissions = React.useMemo(
     () => ({
       kill: false,
@@ -371,12 +379,18 @@ function AppPowerControls({
     },
   })
   const deploy = useMutation({
-    mutationFn: () =>
-      deployApp({ data: { appId: app.id, relayId: app.relayId } }),
+    mutationFn: (noCache: boolean) =>
+      deployApp({
+        data: {
+          appId: app.id,
+          relayId: app.relayId,
+          ...(noCache && { noCache }),
+        },
+      }),
     onMutate: () => onError(null),
     onSuccess: async () => {
       // It runs once any deployment running ends.
-      showToast({ message: "Deploy queued", type: "success" })
+      showToast({ message: `${deployLabel} queued`, type: "success" })
       await invalidate()
       // Follow the deployment as it happens.
       if (app.permissions.includes("app.logs.read")) {
@@ -389,7 +403,7 @@ function AppPowerControls({
     },
     onError: (cause) => {
       onError(cause.message)
-      showAppOperationError("Deploy failed", cause)
+      showAppOperationError(`${deployLabel} failed`, cause)
     },
   })
   const runAction = action.mutateAsync
@@ -410,6 +424,8 @@ function AppPowerControls({
     (relayConnected && app.deployment?.state === "running") ||
     hearth?.deploying === true
   const queued = hearth?.queuedId ?? null
+  const deployDisabled = !relayConnected || action.isPending
+  const deployPending = deploy.isPending || deploying || queued !== null
 
   if (!canManage) return null
   return (
@@ -419,15 +435,26 @@ function AppPowerControls({
       ) : null}
       <WorkspacePowerControls
         action={action.isPending ? action.variables : null}
+        menuAction={
+          deployed && sourceType !== undefined && sourceType !== "image"
+            ? {
+                description: "Rebuild every layer from scratch",
+                disabled: deployDisabled || deployPending,
+                icon: <Hammer className="size-3.5" />,
+                label: "Redeploy without cache",
+                onClick: () => deploy.mutate(true),
+              }
+            : undefined
+        }
         noun="app"
         powerPermissions={powerPermissions}
         primaryAction={{
-          disabled: !relayConnected || action.isPending,
+          disabled: deployDisabled,
           icon: <Rocket />,
-          label: "Deploy",
-          pending: deploy.isPending || deploying || queued !== null,
+          label: deployLabel,
+          pending: deployPending,
           pendingLabel: deploying || deploy.isPending ? "Deploying" : "Queued",
-          onClick: () => deploy.mutate(),
+          onClick: () => deploy.mutate(false),
         }}
         target={{
           name: app.name,

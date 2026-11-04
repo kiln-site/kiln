@@ -27,7 +27,7 @@ import {
 } from "@/lib/instance-power-state"
 
 // Takes the place of Start and Stop, which stay in the actions menu, for kinds
-// whose main action is something else, like an app's Deploy.
+// whose main action is something else, like an app's Redeploy.
 export interface WorkspacePrimaryAction {
   disabled: boolean
   icon: React.ReactNode
@@ -37,12 +37,23 @@ export interface WorkspacePrimaryAction {
   onClick: () => void
 }
 
+// A kind's own action, listed in the actions menu after the power actions.
+export interface WorkspaceMenuAction {
+  description: string
+  disabled: boolean
+  icon: React.ReactNode
+  label: string
+  onClick: () => void
+}
+
 export function WorkspacePowerControls({
   action,
   killWarning,
+  menuAction,
   noun,
   powerPermissions,
   primaryAction,
+  restartButton = false,
   target,
   onAction,
   relayConnected,
@@ -50,10 +61,13 @@ export function WorkspacePowerControls({
   action: ServerAction | null
   // Shown before a kill; kill is offered only when this is set.
   killWarning?: string
+  menuAction?: WorkspaceMenuAction
   // Lowercase, for example "server".
   noun: string
   powerPermissions: Record<ServerAction, boolean>
   primaryAction?: WorkspacePrimaryAction
+  // Puts Restart beside Start and Stop, as well as in the actions menu.
+  restartButton?: boolean
   target: {
     name: string
     observedState: RelayObservedState | undefined
@@ -92,6 +106,8 @@ export function WorkspacePowerControls({
     !powerPermissions.start || controlsUnavailable || powerIsOn || isStopping
   const stopUnavailable =
     !powerPermissions.stop || controlsUnavailable || !powerIsOn || isStopping
+  const restartUnavailable =
+    !powerPermissions.restart || controlsUnavailable || !isRunning
 
   function runAction(nextAction: ServerAction) {
     if (!powerPermissions[nextAction]) return
@@ -151,6 +167,25 @@ export function WorkspacePowerControls({
                   : "Start"}
         </Button>
       )}
+      {restartButton && powerPermissions.restart ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon-lg"
+              className="hidden h-9 w-9 bg-card shadow-none md:inline-flex"
+              aria-label={`Restart ${noun}`}
+              disabled={restartUnavailable}
+              onClick={() => runAction("restart")}
+            >
+              <RotateCw />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            Restart
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
       <Popover
         open={serverActionsOpen}
         onOpenChange={(open) => {
@@ -234,9 +269,7 @@ export function WorkspacePowerControls({
               />
               <PowerActionButton
                 description="Gracefully stop and start"
-                disabled={
-                  !powerPermissions.restart || controlsUnavailable || !isRunning
-                }
+                disabled={restartUnavailable}
                 icon={<RotateCw className="size-3.5" />}
                 label="Restart"
                 onClick={() => runAction("restart")}
@@ -254,6 +287,18 @@ export function WorkspacePowerControls({
                   label="Kill"
                   tone="kill"
                   onClick={() => setConfirmKill(true)}
+                />
+              ) : null}
+              {menuAction ? (
+                <PowerActionButton
+                  description={menuAction.description}
+                  disabled={menuAction.disabled}
+                  icon={menuAction.icon}
+                  label={menuAction.label}
+                  onClick={() => {
+                    setServerActionsOpen(false)
+                    menuAction.onClick()
+                  }}
                 />
               ) : null}
             </div>
