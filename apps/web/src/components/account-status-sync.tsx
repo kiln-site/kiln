@@ -1,5 +1,6 @@
 import { Result } from "effect"
 import { withRenderedAccount } from "@/lib/browser-accounts"
+import { holdStreamAcrossSessionRotation } from "@/lib/session-rotation"
 import { memo, useEffect } from "react"
 
 export const AccountStatusSync = memo(function AccountStatusSync({
@@ -10,7 +11,7 @@ export const AccountStatusSync = memo(function AccountStatusSync({
   resumePath?: string
 }) {
   useEffect(() => {
-    const source = new EventSource(withRenderedAccount("/api/account-status"))
+    let source: EventSource | null = null
     let previousVerification: boolean | null = null
     const onMessage = (event: MessageEvent<string>) => {
       Result.try(() => {
@@ -37,8 +38,16 @@ export const AccountStatusSync = memo(function AccountStatusSync({
         Result.match({ onSuccess: () => undefined, onFailure: () => undefined })
       )
     }
-    source.addEventListener("message", onMessage)
-    return () => source.close()
+    return holdStreamAcrossSessionRotation({
+      open() {
+        source = new EventSource(withRenderedAccount("/api/account-status"))
+        source.addEventListener("message", onMessage)
+      },
+      close() {
+        source?.close()
+        source = null
+      },
+    })
   }, [restricted, resumePath])
   return null
 })

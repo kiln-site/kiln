@@ -34,6 +34,7 @@ import {
 } from "@/lib/realtime-events"
 import { getFreshRelayConnectionState } from "@/server/relay"
 import { notifyRelayBrowserAuthorizationChanged } from "@/lib/relay-browser-credentials"
+import { holdStreamAcrossSessionRotation } from "@/lib/session-rotation"
 
 const maximumBufferedEvents = 256
 const maximumRememberedEvents = 512
@@ -432,9 +433,16 @@ export function startRealtimeSync(
     nextSource.addEventListener("ping", handleActivity)
     nextSource.addEventListener("error", handleError)
   }
-  connectSource()
+  const releaseSource = holdStreamAcrossSessionRotation({
+    open: connectSource,
+    close: disconnectSource,
+  })
   streamWatchdog = setInterval(() => {
-    if (closed || !realtimeStreamIsStale(lastStreamActivityAt, Date.now())) {
+    if (
+      closed ||
+      !source ||
+      !realtimeStreamIsStale(lastStreamActivityAt, Date.now())
+    ) {
       return
     }
     console.warn("[Kiln realtime] Stream heartbeat timed out; reconnecting")
@@ -446,6 +454,6 @@ export function startRealtimeSync(
     if (recoveryRetry) clearTimeout(recoveryRetry)
     if (hearthRefreshRetry) clearTimeout(hearthRefreshRetry)
     if (streamWatchdog) clearInterval(streamWatchdog)
-    disconnectSource()
+    releaseSource()
   }
 }

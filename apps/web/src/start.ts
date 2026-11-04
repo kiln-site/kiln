@@ -11,6 +11,7 @@ import {
   isAccountChangedError,
   renderedAccountHeader,
 } from "./lib/browser-accounts"
+import { isSessionRotating } from "./lib/session-rotation"
 import { reportAppError, traceAppPromise } from "./effect/runtime"
 import { requestSpanName } from "./observability/request-span"
 
@@ -64,7 +65,8 @@ const renderedAccountMiddleware = createMiddleware({ type: "function" }).client(
             : { headers: { [renderedAccountHeader]: account } }
         ),
       (cause) => {
-        if (isAccountChangedError(cause)) window.location.reload()
+        if (isAccountChangedError(cause) && !isSessionRotating())
+          window.location.reload()
       }
     )
   }

@@ -12,6 +12,7 @@ import {
   renderedAccountHeader,
 } from "@/lib/browser-accounts"
 import { passwordConfirmationClient } from "@/lib/password-confirmation-client"
+import { isSessionRotating } from "@/lib/session-rotation"
 
 export const authClient = createAuthClient({
   // Better Auth refuses calls from a tab that still renders an account the
@@ -23,7 +24,10 @@ export const authClient = createAuthClient({
       return context
     },
     onError(context) {
-      if (context.error.message === accountChangedMessage)
+      if (
+        context.error.message === accountChangedMessage &&
+        !isSessionRotating()
+      )
         window.location.reload()
     },
   },
