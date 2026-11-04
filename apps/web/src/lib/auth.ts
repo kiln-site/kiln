@@ -12,6 +12,7 @@ import { emailOTP } from "better-auth/plugins/email-otp"
 import { multiSession } from "better-auth/plugins/multi-session"
 import { twoFactor } from "better-auth/plugins/two-factor"
 import { tanstackStartCookies } from "better-auth/tanstack-start"
+import type { RowDataPacket } from "mysql2/promise"
 import { Resend } from "resend"
 import { Effect } from "effect"
 
@@ -333,6 +334,10 @@ export const auth = betterAuth({
   },
   trustedOrigins: parseTrustedOrigins(publicUrl.origin, authUrl.origin),
   advanced: {
+    // Better Auth checks its tables when it initializes, which is before
+    // Hearth migrates them, and keeps a mismatch until its own migrator
+    // clears it. Kiln owns these migrations; see `checkAuthSchema`.
+    database: { validateSchema: false },
     cookiePrefix: "kiln",
     useSecureCookies: authUrl.protocol === "https:",
     defaultCookieAttributes: {
@@ -420,6 +425,25 @@ export const auth = betterAuth({
 export type AuthSession = typeof auth.$Infer.Session
 
 export { publicSignupEnabled }
+
+/**
+ * Stops Hearth from starting when the migrated tables don't fit Better Auth.
+ * Run it after migrating: nothing checks them once Hearth is serving, and
+ * sign-in can't work on tables that fail this.
+ */
+export async function checkAuthSchema(): Promise<void> {
+  // This server stores `twoFactor` as `twofactor`, and finds it either way.
+  // Better Auth compares names exactly, so it would report the table missing.
+  const [[server]] = await databasePool.query<
+    Array<RowDataPacket & { foldedTableNames: number | string }>
+  >("SELECT @@lower_case_table_names AS foldedTableNames")
+  if (Number(server?.foldedTableNames) === 1) return
+  const { explicitSchemaCheck } = await auth.$context
+  if (!explicitSchemaCheck) {
+    throw new Error("Better Auth has no schema check for this database")
+  }
+  await explicitSchemaCheck()
+}
 
 async function recordBetterAuthAuthorizationChange(
   userId: string,
