@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import type { ResourceLimits } from "@workspace/contracts"
+import { resourceLimitsEqual, type ResourceLimits } from "@workspace/contracts"
 import { RotateCw } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -89,7 +89,10 @@ export function ServerLimitsSection({
       await invalidateRelaySnapshots(queryClient)
     },
   })
-  const pending = pendingLimits !== undefined
+  // What's saved can match what's running, if a restart applied it and then
+  // couldn't say so.
+  const pending =
+    pendingLimits !== undefined && !resourceLimitsEqual(pendingLimits, limits)
   return (
     <ResourceLimitsSection
       action={
