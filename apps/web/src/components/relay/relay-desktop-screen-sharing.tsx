@@ -212,11 +212,11 @@ function ScreenSharingSurface({
       sendClipboard(client.current, cutText)
     }
   }, [])
-  // Command goes first whether or not it's held: noVNC can be holding it back.
+  // A Command that's held stays noVNC's to let go of, as whichever key it sent.
   const pressPaste = React.useCallback((holdingCommand: boolean) => {
     const send = sendRawKey.current
     if (!send) return
-    send(command.keysym, command.code, true)
+    if (!holdingCommand) send(command.keysym, command.code, true)
     send(V.keysym, V.code, true)
     send(V.keysym, V.code, false)
     if (!holdingCommand) send(command.keysym, command.code, false)

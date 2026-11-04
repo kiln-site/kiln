@@ -80,6 +80,8 @@ function isPaste(event: KeyboardEvent) {
 const isModifier = ({ key }: KeyboardEvent) =>
   key === "Control" || key === "Meta" || key === "Alt" || key === "Shift"
 
+const canvasOf = (area: HTMLElement) => area.querySelector("canvas")
+
 const showTooLarge = (message: string) => {
   showToast({ message, type: "error" })
 }
@@ -96,7 +98,7 @@ export function useDesktopClipboard({
   connected: boolean
   /** Gives the keys back to the desktop. */
   focus: () => void
-  /** Sends Command and V, and lets go of Command unless the viewer's holding it. */
+  /** Sends V, with Command unless the viewer's holding it. */
   pressPaste: (holdingCommand: boolean) => void
   send: (cutText: Uint8Array) => void
 }) {
@@ -225,9 +227,7 @@ export function useDesktopClipboard({
         }
         if (isPaste(event)) event.stopPropagation()
         else {
-          element
-            .querySelector("canvas")
-            ?.dispatchEvent(new KeyboardEvent(event.type, event))
+          canvasOf(element)?.dispatchEvent(new KeyboardEvent(event.type, event))
         }
         return
       }
@@ -241,6 +241,11 @@ export function useDesktopClipboard({
         event.stopPropagation()
         waiting.current = null
         holdingCommand.current = true
+        // On Windows, noVNC holds Control back until the next key, in case it's
+        // AltGr. The one it won't see is this, so a release says the same.
+        canvasOf(element)?.dispatchEvent(
+          new KeyboardEvent("keyup", { code: event.code, key: event.key })
+        )
         if (pasting.current !== null) return
         field.current?.focus()
         pasting.current = setTimeout(() => finishPaste(null), PASTE_WAIT_MS)
