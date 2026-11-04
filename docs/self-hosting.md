@@ -175,12 +175,14 @@ throughout:
    over HTTPS, trusting only a public certificate.
 4. The Relay saves Traefik mode and restarts once to change its listener's
    protocol. Game servers, Apps, and databases keep running. Its control
-   connection doesn't change: it keeps connecting to Hearth.
+   connection doesn't change: it keeps connecting to Hearth, which saves
+   where browsers now reach it when it reconnects.
 
 If any step before the last fails, Traefik is removed and the Relay carries
 on as it was, with no restart. Relays with private addresses aren't tried,
 and neither is one installed with `--proxy hearth` unless someone asks from
-its page. Kiln looks once, when the Relay is added, and doesn't look again by
+its page. A Relay whose port 4100 is published can't use its Traefik, so it
+needs the install command run again first. Kiln looks once, when the Relay is added, and doesn't look again by
 itself, since moving a Relay restarts it.
 
 Kiln doesn't watch a route afterwards: a Relay whose route stops working

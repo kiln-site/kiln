@@ -45,6 +45,11 @@ async function hearthRelay() {
         "utf8"
       ),
     harness,
+    publishListener: () => {
+      relayContainer.portBindings["4100/tcp"] = [
+        { HostIp: "0.0.0.0", HostPort: "4100" },
+      ]
+    },
     relayNetworks: () => [...relayContainer.networks.keys()],
     savedMode: async () =>
       (JSON.parse(await readFile(proxyFile, "utf8")) as { mode: string }).mode,
@@ -139,6 +144,30 @@ it("refuses a stale trial's steps once another took over", async () => {
   ).not.toBeNull()
   expect(await relay.harness.lifecycle.commitProxyTrial(id)).not.toBeNull()
   expect(await relay.savedMode()).toBe("hearth")
+})
+
+// Traefik mode refuses to start with the listener published, so committing
+// would leave a Relay that can't come back.
+it("starts no trial when the Relay's listener is published", async () => {
+  const relay = await hearthRelay()
+  relay.publishListener()
+
+  expect(await relay.start()).toContain("published")
+
+  expect(relay.traefik()).toBeUndefined()
+  expect(await relay.savedMode()).toBe("hearth")
+})
+
+it("can't be undone once committed, as by a late stop", async () => {
+  const relay = await hearthRelay()
+  await relay.start()
+  await relay.harness.lifecycle.requestProxyTrialCertificate(id)
+  await relay.harness.lifecycle.commitProxyTrial(id)
+
+  await relay.harness.lifecycle.stopProxyTrial(id)
+
+  expect(relay.traefik()?.state.running).toBe(true)
+  expect(await relay.savedMode()).toBe("traefik")
 })
 
 it("starts no trial when something else holds port 80", async () => {

@@ -20,6 +20,10 @@ import {
   withS3BackupObject,
 } from "@/backups/destinations/s3"
 import { relayControlEndpoint } from "@/lib/relay-control-endpoint"
+import {
+  openRelayTunnel,
+  relayReachedThroughTunnel,
+} from "@/lib/relay-tunnel.server"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import {
   listPersistedRelays,
@@ -191,8 +195,10 @@ const localBackupCopySourceEffect = Effect.fn("backups.localCopySource")(
           cause,
         }),
     })
-    const signedUrl = new URL(signed.url)
-    if (signedUrl.origin !== new URL(relay.browserOrigin).origin) {
+    // Signed for a browser, at wherever one reaches the Relay; Hearth takes
+    // only its token, to the Relay itself.
+    const token = new URL(signed.url).searchParams.get("token")
+    if (!token) {
       return yield* copyFailure("The local backup download URL is invalid")
     }
     const credentials = yield* Effect.tryPromise({
@@ -210,7 +216,7 @@ const localBackupCopySourceEffect = Effect.fn("backups.localCopySource")(
         requestRelayBackup(
           relay,
           credentials.caCertificatePem,
-          signedUrl,
+          `/v1/browser/backups/${encodeURIComponent(task.archiveId)}?token=${encodeURIComponent(token)}`,
           signal
         ),
       catch: (cause) =>
@@ -237,26 +243,33 @@ const localBackupCopySourceEffect = Effect.fn("backups.localCopySource")(
   }
 )
 
-function requestRelayBackup(
+// Reaches the Relay as Hearth does for anything else: through a tunnel when
+// the Relay dials it, which already speaks TLS to its listener when that
+// needs it, else at its listener.
+async function requestRelayBackup(
   relay: PersistedRelay,
   caCertificatePem: string | null,
-  signedUrl: URL,
+  path: string,
   signal: AbortSignal
 ): Promise<IncomingMessage> {
   const endpoint = relayControlEndpoint(relay)
-  const protocol = endpoint.useTls ? "https" : "http"
+  const tunnel = relayReachedThroughTunnel(relay.id)
+    ? await openRelayTunnel(relay)
+    : null
+  const useTls = endpoint.useTls && !tunnel
   const url = new URL(
-    signedUrl.pathname + signedUrl.search,
-    `${protocol}://${formatHost(endpoint.hostname)}:${endpoint.port}`
+    path,
+    `${useTls ? "https" : "http"}://${formatHost(endpoint.hostname)}:${endpoint.port}`
   )
-  const request = endpoint.useTls ? httpsRequest : httpRequest
+  const request = useTls ? httpsRequest : httpRequest
   return new Promise((resolve, reject) => {
     const outgoing = request(
       url,
       {
-        ca: endpoint.useTls ? (caCertificatePem ?? undefined) : undefined,
+        ca: useTls ? (caCertificatePem ?? undefined) : undefined,
+        ...(tunnel ? { createConnection: () => tunnel } : {}),
         method: "GET",
-        rejectUnauthorized: endpoint.useTls,
+        rejectUnauthorized: useTls,
         signal,
       },
       resolve

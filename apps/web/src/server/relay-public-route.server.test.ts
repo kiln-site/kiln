@@ -7,7 +7,7 @@ import { disposeAppRuntime } from "@/effect/runtime"
 import { loadPersistedRelay } from "@/lib/relay-registry"
 import { tryRelayPublicRoute } from "@/server/relay-public-route.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRelay, selectRows } from "@/test/seed"
+import { insertRelay } from "@/test/seed"
 
 const relayId = "r".repeat(43)
 const relayHost = "203.0.113.7"
@@ -74,10 +74,6 @@ const tryRoute = Effect.fnUntraced(function* (hostname = relayHost) {
   return yield* Fiber.join(running)
 })
 
-const browserOrigin = selectRows<{ browser_origin: string }>("relay").pipe(
-  Effect.map(([row]) => row?.browser_origin)
-)
-
 describeMysql("Looking for a Relay's public route", () => {
   layer(TestDatabase)((it) => {
     it.effect("moves the Relay once its route works end to end", () =>
@@ -88,7 +84,6 @@ describeMysql("Looking for a Relay's public route", () => {
 
         assert.strictEqual(outcome.status, "direct")
         assert.deepStrictEqual(relay.steps, ["start", "certificate", "commit"])
-        assert.strictEqual(yield* browserOrigin, `https://${relayHost}`)
       })
     )
 
@@ -102,7 +97,6 @@ describeMysql("Looking for a Relay's public route", () => {
 
           assert.strictEqual(outcome.status, "through-hearth")
           assert.deepStrictEqual(relay.steps, ["start", "stop"])
-          assert.strictEqual(yield* browserOrigin, `https://${relayHost}:4100`)
         })
     )
 
@@ -117,7 +111,6 @@ describeMysql("Looking for a Relay's public route", () => {
 
           assert.strictEqual(outcome.status, "through-hearth")
           assert.deepStrictEqual(relay.steps, ["start", "certificate", "stop"])
-          assert.strictEqual(yield* browserOrigin, `https://${relayHost}:4100`)
         })
     )
 

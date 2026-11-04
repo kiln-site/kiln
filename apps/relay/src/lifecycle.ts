@@ -1267,6 +1267,10 @@ export class LifecycleDriver {
     }
     const { conflicts } = await this.#traefikPortConflicts(settings)
     if (conflicts) return conflicts
+    // Traefik mode refuses to start with it published.
+    if ((await this.#publishedListenerBindings()).length > 0) {
+      return `This Relay's port ${this.#config.port} is published, so it can't use its Traefik. Run the install command again to set it up without it.`
+    }
     const listener = await this.#relayListenerOnItsNetwork(input.upstreamTls)
     if (!listener) return "This Relay isn't on a network Traefik can join."
     this.#proxyTrial = {
@@ -1316,6 +1320,8 @@ export class LifecycleDriver {
       ...(await this.proxySettings()),
       mode: "traefik",
     })
+    // Decided: neither a late `stop` nor the trial's expiry may undo it.
+    this.#proxyTrial = null
     // From its restart Traefik reaches the Relay on their own network.
     await recoverPromise(
       () =>
@@ -1451,6 +1457,15 @@ export class LifecycleDriver {
 
   async assertPrivateProxyListener(): Promise<void> {
     if (!usesProxyTlsTermination(this.#config.proxyMode)) return
+    if ((await this.#publishedListenerBindings()).length > 0) {
+      throw new Error(
+        `Proxy TLS mode refuses to start because Relay's private HTTP port ${this.#config.port} is published on the host. Remove the host port mapping and expose the port only to the private Traefik network.`
+      )
+    }
+  }
+
+  // Where the host publishes the Relay's listener, beyond its own loopback.
+  async #publishedListenerBindings() {
     const reference = process.env.HOSTNAME?.trim()
     if (!reference) {
       throw new Error(
@@ -1468,14 +1483,9 @@ export class LifecycleDriver {
     )
     const bindings = inspected.HostConfig?.PortBindings
     const published = bindings?.[`${this.#config.port}/tcp`] ?? []
-    const unsafe = published.filter(
+    return published.filter(
       (binding) => binding.HostIp !== "127.0.0.1" && binding.HostIp !== "::1"
     )
-    if (unsafe.length > 0) {
-      throw new Error(
-        `Proxy TLS mode refuses to start because Relay's private HTTP port ${this.#config.port} is published on the host. Remove the host port mapping and expose the port only to the private Traefik network.`
-      )
-    }
   }
 
   hydrateProxySettings(settings: RelayProxySettings): void {

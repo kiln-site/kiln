@@ -545,8 +545,14 @@ const reserveRelayRestart = () =>
     relayEngine.inspectContainer(hostname())
   )
 
-// Docker restarts the Relay once Hearth has its answer.
-function restartRelayContainer(container: { readonly Id: string }) {
+// Docker restarts the Relay once Hearth has its answer. `onFailure` replaces
+// giving up, for a restart the Relay can't go without.
+function restartRelayContainer(
+  container: { readonly Id: string },
+  onFailure: () => void = () => {
+    restarting = false
+  }
+) {
   forkRelayEffect(
     "relay.restart",
     Effect.sleep("1 second").pipe(
@@ -556,7 +562,7 @@ function restartRelayContainer(container: { readonly Id: string }) {
       Effect.withSpan("Relay.restart"),
       Effect.catch((cause) =>
         Effect.sync(() => {
-          restarting = false
+          onFailure()
           reportRelayError(cause, { operation: "relay.restart" })
         })
       )
@@ -623,7 +629,11 @@ async function runProxyTrialStep(
         restarting = false
         return problem
       }
-      restartRelayContainer(relayContainer)
+      // Its saved mode and running listener now differ, so it can't stay up.
+      // Exiting has Docker's restart policy start it instead.
+      restartRelayContainer(relayContainer, () => {
+        process.kill(process.pid, "SIGTERM")
+      })
       return null
     }
   }

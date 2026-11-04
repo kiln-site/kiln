@@ -1063,19 +1063,21 @@ export async function updatePersistedRelay(input: {
   return relay
 }
 
-// Where browsers reach a Relay, once it has moved. Hearth checks signed
-// download links against it.
-export async function setPersistedRelayBrowserOrigin(
+// Keeps what a connected Relay reports as where browsers reach it, so it
+// follows a Relay that moved even if Hearth was away when it did.
+export async function rememberRelayBrowserOrigin(
   id: string,
   browserOrigin: string
 ): Promise<void> {
-  await databasePool.execute(
+  const [result] = await databasePool.execute<
+    import("mysql2/promise").ResultSetHeader
+  >(
     `UPDATE ${databaseTable("relay")}
         SET browser_origin = ?, updated_at = ?
-      WHERE id = ?`,
-    [browserOrigin, Date.now(), id]
+      WHERE id = ? AND browser_origin <> ?`,
+    [browserOrigin, Date.now(), id, browserOrigin]
   )
-  publishRelayCollectionChange(id)
+  if (result.affectedRows > 0) publishRelayCollectionChange(id)
 }
 
 export async function setPersistedRelayEnabled(

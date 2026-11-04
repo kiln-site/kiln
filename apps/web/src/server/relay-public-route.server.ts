@@ -134,12 +134,6 @@ export const tryRelayPublicRoute = Effect.fn("relayPublicRoute.try")(function* (
     const commit = yield* step({ id, step: "commit" })
     if (commit) return throughHearth(commit)
     committed = true
-    const { setPersistedRelayBrowserOrigin } = yield* promiseEffect(
-      () => import("@/lib/relay-registry")
-    )
-    yield* promiseEffect(() =>
-      setPersistedRelayBrowserOrigin(relay.id, secure.origin)
-    )
     return { status: "direct" } satisfies RelayPublicRouteOutcome
   }).pipe(
     Effect.ensuring(
