@@ -118,6 +118,25 @@ export function WorkspacePowerControls({
 
   return (
     <div className="flex shrink-0 items-center justify-end gap-1.5">
+      {restartButton && powerPermissions.restart ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon-lg"
+              className="hidden h-9 w-9 bg-card shadow-none md:inline-flex"
+              aria-label={`Restart ${noun}`}
+              disabled={restartUnavailable}
+              onClick={() => runAction("restart")}
+            >
+              <RotateCw />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>
+            Restart
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
       {primaryAction ? (
         <Button
           variant="outline"
@@ -167,25 +186,6 @@ export function WorkspacePowerControls({
                   : "Start"}
         </Button>
       )}
-      {restartButton && powerPermissions.restart ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="outline"
-              size="icon-lg"
-              className="hidden h-9 w-9 bg-card shadow-none md:inline-flex"
-              aria-label={`Restart ${noun}`}
-              disabled={restartUnavailable}
-              onClick={() => runAction("restart")}
-            >
-              <RotateCw />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6}>
-            Restart
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
       <Popover
         open={serverActionsOpen}
         onOpenChange={(open) => {
