@@ -16,13 +16,9 @@ import {
   decodeRelayJoinLink,
   isKilnInstallationId,
   kilnGitRepositoryRawUrl,
-  kilnImageRepository,
+  kilnDesktopImage,
   resolveKilnGitRepository,
 } from "@workspace/contracts"
-
-// voxl's version, which the desktop image is published under: the Desktop
-// image workflow checks this against apps/desktop/Dockerfile.
-const DESKTOP_IMAGE_TAG = "0.3.2"
 
 export interface RelayInstanceConfig {
   brickFormat?: string
@@ -328,7 +324,7 @@ export function loadConfig(
     hostAccess: booleanEnvironment(environment.KILN_RELAY_HOST_ACCESS, true),
     desktopImage:
       environment.KILN_RELAY_DESKTOP_IMAGE?.trim() ||
-      `${kilnImageRepository("desktop", gitRepository)}:${DESKTOP_IMAGE_TAG}`,
+      kilnDesktopImage(gitRepository),
     screenSharingAddress: screenSharingAddress(environment),
     hostRootDirectory: environment.KILN_RELAY_HOST_ROOT?.trim() || "/host",
     gameHost,

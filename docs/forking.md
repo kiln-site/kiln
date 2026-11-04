@@ -81,7 +81,8 @@ canonical spelling.
 4. Make each new GHCR package **public** and grant the repository Actions access
    if it was previously created elsewhere. Repository visibility does not make
    packages public. The nightly release deliberately fails before publication
-   if Hearth or Relay cannot be pulled anonymously; rerun after fixing visibility.
+   if Hearth, Relay, or the desktop image and its source cannot be pulled
+   anonymously; rerun after fixing visibility.
 5. Download `distribution.env` from your release. Prepare `.env` from
    `.env.example` with your `KILN_URL`, then deploy from your fork checkout:
 

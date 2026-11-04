@@ -97,6 +97,17 @@ export function kilnImageRepository(
   return `${kilnImagePrefix(repository)}/${component}`
 }
 
+/**
+ * voxl's version, which the desktop streamer is published under. A release
+ * checks it's public, and scripts/desktop-image.test.mjs that it's the version
+ * apps/desktop builds and the client Hearth serves.
+ */
+export const KILN_DESKTOP_IMAGE_TAG = "0.3.2"
+
+export function kilnDesktopImage(repository?: string): string {
+  return `${kilnImageRepository("desktop", repository)}:${KILN_DESKTOP_IMAGE_TAG}`
+}
+
 export function kilnImageSource(repository?: string): string {
   const resolved = resolveKilnGitRepository(repository)
   return resolved === DEFAULT_KILN_GIT_REPO ? LEGACY_KILN_GIT_REPO : resolved

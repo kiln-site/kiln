@@ -196,7 +196,7 @@ describe("a Mac's desktop", () => {
     expect(await firstMessage(port, ticket)).toContain("RFB 003.889")
   })
 
-  it("needs no streamer image or anything else running", async () => {
+  it("needs no streamer", async () => {
     onMac()
     const vnc = await fakeVnc()
     const { desktop } = await harness(vnc.port)

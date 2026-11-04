@@ -48,7 +48,7 @@ server macOS already has:
    is.
 3. Sign in on the tab with a Mac account Screen Sharing allows.
 
-No image, helper, or port forward is needed, and a Mac never downloads the Linux
+No image or port forward is needed, and a Mac never downloads the Linux
 streamer. The Relay reaches `host.docker.internal:5900` and connects out to
 Hearth as it always does. It tells a Mac apart by what Docker reports:
 `OrbStack`, or `Docker Desktop` with
@@ -114,9 +114,10 @@ without one, opens another, which finds whatever the node shows now.
 The client's JavaScript runs on Hearth's origin, where it could use the
 person's session. So it's never fetched from a node: `public/desktop-client`
 is a copy from the pinned voxl version, and a Relay only ever supplies video
-and audio frames. Update that copy, and `DESKTOP_IMAGE_TAG` in the Relay's
-`config.ts`, whenever `VOXL_VERSION` changes. The **Desktop image** workflow
-fails if the tag doesn't match, and publishes `VOXL_VERSION` from `main`.
+and audio frames. Whenever `VOXL_VERSION` changes, update that copy with its
+`VERSION` file, and `KILN_DESKTOP_IMAGE_TAG`. A test fails until all three agree.
+The **Desktop image** workflow publishes `VOXL_VERSION` from `main`, and a release
+fails until that image and its source can be pulled anonymously.
 
 ## The streamer
 
@@ -257,7 +258,9 @@ it only when someone opens a desktop.
 The GPL asks that its source be offered from the same place as the binary, so
 the **Desktop image** workflow publishes `desktop:<voxl version>-source` next to
 each `desktop:<voxl version>`. It's an image of files rather than a program:
-voxl, the crates built into it, and Debian's x264 and PulseAudio, under `/src`.
+voxl, the crates built into it, and the versions of Debian's x264 and PulseAudio
+the build used, under `/src`. The image itself carries the licenses of voxl and
+those crates, in `/usr/share/doc/voxl`.
 
 ## Limits
 

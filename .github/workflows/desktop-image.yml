@@ -37,12 +37,11 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Check Relays ask for this version
+      - name: Read it from the Dockerfile
         id: version
         run: |
           version="$(sed -n 's/^ARG VOXL_VERSION=//p' apps/desktop/Dockerfile)"
           test -n "$version"
-          grep --quiet --fixed-strings "DESKTOP_IMAGE_TAG = \"$version\"" apps/relay/src/config.ts
           echo "voxl=$version" >> "$GITHUB_OUTPUT"
 
   image:
@@ -56,7 +55,8 @@ jobs:
       cache_scope: desktop
       license_label: GPL-2.0-or-later
       tags: type=raw,value=${{ needs.version.outputs.voxl }}
-      publish: ${{ github.event_name != 'pull_request' && vars.PUBLISH_IMAGES == 'true' }}
+      # Only main replaces what Relays pull, whatever a manual run's branch.
+      publish: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.PUBLISH_IMAGES == 'true' }}
       publish_provenance: mode=max
       publish_sbom: true
 
@@ -71,6 +71,9 @@ jobs:
       target: source
       cache_scope: desktop-source
       architectures: '["amd64"]'
+      build_args: |
+        KILN_GIT_REPO=${{ needs.config.outputs.repository }}
+        SOURCE_COMMIT=${{ github.sha }}
       license_label: GPL-2.0-or-later
       tags: type=raw,value=${{ needs.version.outputs.voxl }}-source
-      publish: ${{ github.event_name != 'pull_request' && vars.PUBLISH_IMAGES == 'true' }}
+      publish: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.PUBLISH_IMAGES == 'true' }}
