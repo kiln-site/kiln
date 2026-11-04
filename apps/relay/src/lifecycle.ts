@@ -372,6 +372,7 @@ interface AllocationRequest {
   /** Whether its data must already fit the disk limit. */
   checkExistingUsage: boolean
   currentDiskLimitBytes: number | null
+  currentMemoryLimitBytes: number | null
   directory: string
   id: string
   limits: ResourceLimits
@@ -1891,6 +1892,11 @@ export class LifecycleDriver {
               : undefined
           if (
             pendingExternalPort ||
+            // Only when it's stopping anyway: a start sent to a running
+            // server mustn't take it down for this.
+            (this.#docker.allocations.wouldMoveWorkload(labels) &&
+              (action === "restart" ||
+                !(await this.#containerRunning(instance.service)))) ||
             routeLabelsRequireRestart(labels, routes, desiredLabels) ||
             (desiredPortLabels &&
               portLabelsRequireRestart(labels, desiredPortLabels))
@@ -2381,6 +2387,7 @@ export class LifecycleDriver {
     }
     return this.#provisionManagedInstance({
       grandfatheredDiskLimitBytes: null,
+      grandfatheredMemoryLimitBytes: null,
       id,
       limits: input,
       onPhase,
@@ -2445,6 +2452,7 @@ export class LifecycleDriver {
       {
         checkExistingUsage: true,
         currentDiskLimitBytes: existing.limits.diskBytes,
+        currentMemoryLimitBytes: existing.limits.memoryBytes,
         directory: join(this.#config.rootDirectory, existing.directory),
         holds: widestResourceLimits(existing.limits, limits),
         id: existing.id,
@@ -2469,6 +2477,7 @@ export class LifecycleDriver {
           lifecycleOperation(async () => {
             const reconfigured = await this.#provisionManagedInstance({
               grandfatheredDiskLimitBytes: existing.limits.diskBytes,
+              grandfatheredMemoryLimitBytes: existing.limits.memoryBytes,
               id: existing.id,
               limits,
               prepareDirectory: false,
@@ -2511,6 +2520,7 @@ export class LifecycleDriver {
 
   async #provisionManagedInstance(input: {
     grandfatheredDiskLimitBytes: number | null
+    grandfatheredMemoryLimitBytes: number | null
     id: string
     /** Limits to apply, or a create request to take them from. */
     limits:
@@ -2566,6 +2576,7 @@ export class LifecycleDriver {
       {
         checkExistingUsage: !input.prepareDirectory,
         currentDiskLimitBytes: input.grandfatheredDiskLimitBytes,
+        currentMemoryLimitBytes: input.grandfatheredMemoryLimitBytes,
         directory: join(this.#config.rootDirectory, input.id),
         id: input.id,
         limits,
@@ -2821,6 +2832,7 @@ export class LifecycleDriver {
             interactive: true,
             labels,
             ...containerLimitSpec(limits),
+            ...this.#docker.allocations.workloadSpec(),
             name: containerName,
             network: {
               aliases: [containerName],
@@ -3234,7 +3246,10 @@ export class LifecycleDriver {
             this.#docker.allocations.others("server", input.id),
           ])
           assertResourceLimitsFit({
+            assignableMemoryBytes:
+              this.#docker.allocations.assignableMemoryBytes,
             currentDiskBytes: input.currentDiskLimitBytes,
+            currentMemoryBytes: input.currentMemoryLimitBytes,
             limits: input.limits,
             nodeDiskBytes: filesystem.blocks * filesystem.bsize,
             others,

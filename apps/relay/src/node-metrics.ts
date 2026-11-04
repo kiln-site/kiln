@@ -18,9 +18,11 @@ import type { RelayPlatformServiceRole } from "@workspace/contracts"
 import { Clock, Effect, Metric } from "effect"
 
 import type { RelayConfig } from "./config.js"
+import { WORKLOAD_SLICE_LABEL } from "./docker-container-spec.js"
 import type { DockerEngine } from "./docker-engine.js"
 import { kilnContainerOwner } from "./kiln-containers.js"
 import { platformServiceContainers } from "./platform.js"
+import type { ResourceAllocations } from "./resource-limits.js"
 
 const sampleInterval = "15 seconds"
 const eventsRetryInterval = "5 seconds"
@@ -44,6 +46,12 @@ const containerGroups = [
 ] as const
 
 type ContainerGroup = (typeof containerGroups)[number]
+
+const workloadGroups: ReadonlySet<ContainerGroup> = new Set([
+  "app",
+  "database",
+  "game_server",
+])
 
 type OwnerConfig = Pick<
   RelayConfig,
@@ -191,7 +199,8 @@ class Increments {
 export function sampleNodeMetrics(
   relayId: () => string,
   engine: DockerEngine,
-  config: OwnerConfig
+  config: OwnerConfig,
+  allocations: Pick<ResourceAllocations, "setWorkloadsOutside">
 ): Effect.Effect<never> {
   const hostIncrements = new Increments()
   const containerIncrements = new Increments()
@@ -200,7 +209,7 @@ export function sampleNodeMetrics(
     return Effect.all(
       [
         sampleHost(id, hostIncrements),
-        sampleContainers(id, engine, config, containerIncrements),
+        sampleContainers(id, engine, config, containerIncrements, allocations),
       ],
       { concurrency: "unbounded", discard: true }
     )
@@ -381,9 +390,17 @@ const sampleContainers = Effect.fnUntraced(
     relayId: string,
     engine: DockerEngine,
     config: OwnerConfig,
-    increments: Increments
+    increments: Increments,
+    allocations: Pick<ResourceAllocations, "setWorkloadsOutside">
   ) {
     const listed = yield* engine.listContainers()
+    allocations.setWorkloadsOutside(
+      listed.filter(
+        (summary) =>
+          workloadGroups.has(groupOf(config, summary)) &&
+          !summary.Labels?.[WORKLOAD_SLICE_LABEL]
+      ).length
+    )
     const sampled = yield* Effect.forEach(
       listed,
       (summary) =>

@@ -4,6 +4,8 @@ import { isIP } from "node:net"
 import { hostname } from "node:os"
 import { Effect, Result } from "effect"
 
+import { ramInBytes } from "./docker-container-spec.js"
+
 import type {
   BrickReadiness,
   RelayInstancePortAllocation,
@@ -142,6 +144,13 @@ export interface RelayConfig {
   // Relay runs on. Docker access already amounts to root there; this lets an
   // operator keep it out of the panel.
   hostAccess: boolean
+  /**
+   * The memory to leave for Kiln and the OS, from
+   * KILN_RELAY_RESERVED_MEMORY, or null for the default.
+   */
+  reservedMemoryBytes: number | null
+  /** Whether workloads run under a memory limit on the node. */
+  workloadMemoryLimit: boolean
   /** The voxl image that streams the node's desktop. */
   desktopImage: string
   /** Where a Relay in Docker on a Mac reaches the Mac's Screen Sharing. */
@@ -322,6 +331,11 @@ export function loadConfig(
     dockerSocket: "/var/run/docker.sock",
     dataDirectory,
     hostAccess: booleanEnvironment(environment.KILN_RELAY_HOST_ACCESS, true),
+    reservedMemoryBytes: reservedMemory(environment),
+    workloadMemoryLimit: booleanEnvironment(
+      environment.KILN_RELAY_WORKLOAD_MEMORY_LIMIT,
+      true
+    ),
     desktopImage:
       environment.KILN_RELAY_DESKTOP_IMAGE?.trim() ||
       kilnDesktopImage(gitRepository),
@@ -872,6 +886,18 @@ function sftpDevAuthentication(environment: NodeJS.ProcessEnv): boolean {
     throw new Error("Development SFTP authentication cannot run in production")
   }
   return enabled
+}
+
+function reservedMemory(environment: NodeJS.ProcessEnv): number | null {
+  const value = environment.KILN_RELAY_RESERVED_MEMORY?.trim()
+  if (!value) return null
+  const bytes = Result.try(() => ramInBytes(value))
+  if (Result.isFailure(bytes)) {
+    throw new Error(
+      `KILN_RELAY_RESERVED_MEMORY must be a size like 3g, received ${value}`
+    )
+  }
+  return bytes.success
 }
 
 function booleanEnvironment(value: string | undefined, fallback: boolean) {

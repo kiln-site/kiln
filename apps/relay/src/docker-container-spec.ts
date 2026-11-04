@@ -82,6 +82,12 @@ export interface ContainerSpec {
   readonly devices?: ReadonlyArray<string>
   readonly sysctls?: Readonly<Record<string, string>>
   readonly pidsLimit?: number
+  /** The cgroup to run under, such as a systemd slice. */
+  readonly cgroupParent?: string
+  /** Who the kernel kills first when the whole node runs out of memory. */
+  readonly oomScoreAdj?: number
+  readonly pidMode?: "host"
+  readonly privileged?: boolean
   /** Sizes in Docker's notation, such as `64m`, which recipes use. */
   readonly memory?: string
   readonly memoryReservation?: string
@@ -97,6 +103,13 @@ export interface ContainerSpec {
   /** Docker removes the container once it exits. */
   readonly autoRemove?: boolean
 }
+
+/**
+ * Labels a container placed in a cgroup parent, naming it. Set with the
+ * parent here, so one is never without the other: the Relay trusts it to find
+ * everything that could start in the node's workload slice.
+ */
+export const WORKLOAD_SLICE_LABEL = "kiln.relay.workload-slice"
 
 function containerCreateBody(spec: ContainerSpec): unknown {
   const network = spec.network
@@ -116,7 +129,10 @@ function containerCreateBody(spec: ContainerSpec): unknown {
   const healthcheck = spec.healthcheck
   return {
     Image: spec.image,
-    Labels: { ...spec.labels },
+    Labels: {
+      ...spec.labels,
+      ...(spec.cgroupParent && { [WORKLOAD_SLICE_LABEL]: spec.cgroupParent }),
+    },
     ...(spec.command?.length && { Cmd: [...spec.command] }),
     ...(spec.entrypoint !== undefined && { Entrypoint: [spec.entrypoint] }),
     ...(spec.env && {
@@ -152,6 +168,7 @@ function containerCreateBody(spec: ContainerSpec): unknown {
       ...(spec.autoRemove && { AutoRemove: true }),
       ...(spec.binds?.length && { Binds: [...spec.binds] }),
       ...(spec.capAdd?.length && { CapAdd: [...spec.capAdd] }),
+      ...(spec.cgroupParent && { CgroupParent: spec.cgroupParent }),
       ...(spec.capDrop?.length && { CapDrop: [...spec.capDrop] }),
       ...(spec.devices?.length && {
         Devices: spec.devices.map((path) => ({
@@ -178,8 +195,11 @@ function containerCreateBody(spec: ContainerSpec): unknown {
         NetworkMode: typeof network === "string" ? network : network.name,
       }),
       ...(spec.nanoCpus && { NanoCpus: spec.nanoCpus }),
+      ...(spec.oomScoreAdj && { OomScoreAdj: spec.oomScoreAdj }),
+      ...(spec.pidMode && { PidMode: spec.pidMode }),
       ...(spec.pidsLimit && { PidsLimit: spec.pidsLimit }),
       ...(spec.ports?.length && { PortBindings: bindings }),
+      ...(spec.privileged && { Privileged: true }),
       ...(spec.readOnly && { ReadonlyRootfs: true }),
       ...(spec.restart && { RestartPolicy: { Name: spec.restart } }),
       ...(spec.securityOpt?.length && { SecurityOpt: [...spec.securityOpt] }),

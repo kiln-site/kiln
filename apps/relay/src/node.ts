@@ -69,8 +69,10 @@ export async function nodeSnapshot(
       ...(cpuModel ? { model: cpuModel } : {}),
     },
     memory: {
+      assignableBytes: docker.allocations.assignableMemoryBytes,
       totalBytes: totalMemory,
       usedBytes: totalMemory - freemem(),
+      workloadLimit: docker.allocations.workloadLimit,
     },
     storage: {
       totalBytes: storageTotal,

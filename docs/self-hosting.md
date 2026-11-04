@@ -5,6 +5,16 @@ Kiln on its own host (Hearth, Hearth's MySQL database, and a Valkey cache),
 pairs with that Hearth, and keeps them running. Every other machine runs a
 plain Relay that you pair from Hearth.
 
+## Requirements
+
+Kiln needs at least 2 GB of memory, and 4 GB or more is recommended. Those
+are the machine's whole memory, before any game server, App, or database.
+
+As a starting estimate, Kiln itself takes about 1 GB on a machine that runs
+everything: 300 MB for the Relay, 250 MB for MySQL and Valkey together, and
+500 MB for Hearth. Only the Relay's figure has been measured so far. A machine
+that only runs a Relay needs the Relay's share.
+
 ## Install
 
 On the machine that will host Hearth:
@@ -229,6 +239,8 @@ Set these on the Relay. Everything else is generated.
 | `KILN_PLATFORM_HEARTH_IMAGE`   | Hearth with the Relay's tag                     | First start only; Kiln's updates change it afterwards                                                     |
 | `KILN_PLATFORM_DATABASE_IMAGE` | `mysql:8.4`                                     | First start only; a database engine is never swapped under its data                                       |
 | `KILN_PLATFORM_CACHE_IMAGE`    | `valkey/valkey:9.1.2-alpine`                    | First start only; `none` runs Hearth without a cache                                                      |
+| `KILN_RELAY_RESERVED_MEMORY`   | 1 GiB, or 2 GiB in platform mode                | Memory left for Kiln and the OS, such as `3g`. |
+| `KILN_RELAY_WORKLOAD_MEMORY_LIMIT` | `true`                                       | `false` runs workloads with no shared memory ceiling. |
 | `KILN_RELAY_CONTAINER`         | Found and proven                                | The Relay's own container, where it can't find it (Podman, Docker in Docker)                              |
 | `KILN_INSTALLATION_ID`         | Generated                                       | First start only                                                                                          |
 | `BETTER_AUTH_SECRETS`          | Generated                                       | First start only; for moving an existing Hearth here                                                      |
@@ -303,6 +315,26 @@ Hearth, its database and its cache, and repair them (the same pass the Relay
 runs every 30 seconds). Ones deployed with Compose or Coolify appear
 read-only, labeled with what manages them, when a Relay runs on their host.
 Hearth updates from the Updates dialog as with Compose.
+
+## Memory for Kiln and the OS
+
+Each Relay keeps some of its machine's memory away from game servers, Apps,
+and databases, so they can't take what Kiln and the OS need. Hearth only
+assigns memory limits up to what's left, and on Linux with systemd the Relay
+also holds them to it together.
+
+| Machine                                 | Left free by default |
+| --------------------------------------- | -------------------- |
+| Relay only                              | 1 GiB                |
+| Hearth, MySQL, and Valkey there as well | 2 GiB                |
+| Under twice those                       | Half the machine     |
+
+These are starting estimates. A machine running other software needs more:
+set `KILN_RELAY_RESERVED_MEMORY` on the Relay to a size like `3g`.
+
+The Relay's Node card shows the limit in force. See
+[Relay runtime](relay-runtime.md#workload-memory-limit) for how it works, what
+it covers, and how to turn it off with `KILN_RELAY_WORKLOAD_MEMORY_LIMIT=false`.
 
 ## On the Relay's host
 

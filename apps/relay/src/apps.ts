@@ -59,7 +59,12 @@ import {
   type DockerConsoleSession,
 } from "./docker.js"
 import type { DockerCleanup } from "./docker-cleanup.js"
-import { createContainer, ramInBytes } from "./docker-container-spec.js"
+import {
+  createContainer,
+  ramInBytes,
+  WORKLOAD_SLICE_LABEL,
+  type ContainerSpec,
+} from "./docker-container-spec.js"
 import {
   DockerEngine,
   isDockerNotFound,
@@ -749,8 +754,11 @@ export class AppDriver {
             locks: [exclusive(laneKeys.allocations)],
           },
           promiseEffect(async () => {
-            await this.#assertLimitsFit(appId, services)
             const containers = await this.#appContainers(appId)
+            const keeps = combinedLimits(
+              containers.map((container) => container.limits)
+            ).memoryBytes
+            await this.#assertLimitsFit(appId, services, [], keeps)
             const running = containers
               .filter((container) => container.running)
               .map((container) => container.limits)
@@ -759,7 +767,7 @@ export class AppDriver {
               running.length > 0 &&
               (await recoverPromise(
                 () =>
-                  this.#assertLimitsFit(appId, services, running).then(
+                  this.#assertLimitsFit(appId, services, running, null).then(
                     () => true
                   ),
                 () => false
@@ -798,13 +806,22 @@ export class AppDriver {
     appId: string,
     services: ReadonlyArray<ServiceResourceLimits>,
     // Containers that keep running beside the new ones.
-    alongside: ReadonlyArray<ServiceResourceLimits> = []
+    alongside: ReadonlyArray<ServiceResourceLimits>,
+    // The App's memory limits now, all together, which it may keep however
+    // full the node has since become.
+    keepsMemoryBytes: number | null
   ): Promise<void> {
     const [filesystem, others] = await Promise.all([
       statfs(this.#config.rootDirectory),
       this.#limits.allocations.others(APP_KIND, appId),
     ])
     const nodeDiskBytes = filesystem.blocks * filesystem.bsize
+    const allocations = this.#limits.allocations
+    const requested = combinedLimits(services).memoryBytes
+    const keeps =
+      keepsMemoryBytes !== null &&
+      requested !== null &&
+      requested <= keepsMemoryBytes
     // Each service's memory counts against the node, with the others'.
     const allocated: Array<typeof NO_RESOURCE_LIMITS> = [
       ...others,
@@ -813,7 +830,9 @@ export class AppDriver {
     for (const service of services) {
       const limits = { ...NO_RESOURCE_LIMITS, ...service }
       assertResourceLimitsFit({
+        assignableMemoryBytes: allocations.assignableMemoryBytes,
         currentDiskBytes: null,
+        currentMemoryBytes: keeps ? limits.memoryBytes : null,
         limits,
         nodeDiskBytes,
         others: allocated,
@@ -1693,6 +1712,7 @@ export class AppDriver {
           ...NO_RESOURCE_LIMITS,
           ...config.serviceLimits[APP_SERVICE],
         }),
+        ...this.#limits.allocations.workloadSpec(),
         labels: {
           ...routes.labels(APP_SERVICE),
           ...image.labels,
@@ -2454,6 +2474,9 @@ export class AppDriver {
         )
       }
     }
+    const { labels: placementLabels, ...placement } = composePlacement(
+      this.#limits.allocations.workloadSpec()
+    )
     const services: Record<string, ComposeService> = {}
     for (const [name, service] of Object.entries(normalized.services ?? {})) {
       if (!appServiceNameSchema.safeParse(name).success) {
@@ -2505,6 +2528,7 @@ export class AppDriver {
       services[name] = {
         ...service,
         ...composeLimits(service, options.serviceLimits[name]),
+        ...placement,
         container_name: this.#containerName(
           options.appId,
           name,
@@ -2519,6 +2543,7 @@ export class AppDriver {
             options.deploymentId,
             options.commit
           ),
+          ...placementLabels,
         },
         restart: service.restart ?? "unless-stopped",
         ...(service.network_mode ? {} : { networks }),
@@ -3543,6 +3568,26 @@ function composeNumber(
   return Result.isSuccess(parsed) && Number.isFinite(parsed.success)
     ? parsed.success
     : null
+}
+
+// Where a service's container runs, as Compose sets it. Kiln's placement
+// replaces anything the Compose file says, which can't name a parent even
+// when Kiln has none for it: the label is how the Relay finds what could
+// start in the node's workload slice.
+function composePlacement(
+  placement: Pick<ContainerSpec, "cgroupParent" | "oomScoreAdj">
+): {
+  cgroup_parent: string | undefined
+  labels: Record<string, string>
+  oom_score_adj: number | undefined
+} {
+  return {
+    cgroup_parent: placement.cgroupParent,
+    labels: placement.cgroupParent
+      ? { [WORKLOAD_SLICE_LABEL]: placement.cgroupParent }
+      : {},
+    oom_score_adj: placement.oomScoreAdj,
+  }
 }
 
 // A service's limits as Compose sets them; a limit Kiln doesn't set leaves

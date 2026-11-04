@@ -50,6 +50,7 @@ import {
   type ContainerHealthcheck,
   createContainer,
   runWithInput,
+  WORKLOAD_SLICE_LABEL,
 } from "./docker-container-spec.js"
 import {
   DockerEngine,
@@ -505,6 +506,7 @@ export class DatabaseDriver {
           name: container,
           network: { aliases: [databaseHostname(input.id)], name: network },
           restart: "unless-stopped",
+          ...this.#docker.allocations.workloadSpec(),
         })
       )
       containerCreated = true
@@ -554,7 +556,9 @@ export class DatabaseDriver {
       this.#docker.allocations.others(DATABASE_KIND, id),
     ])
     assertResourceLimitsFit({
+      assignableMemoryBytes: this.#docker.allocations.assignableMemoryBytes,
       currentDiskBytes: current.diskBytes,
+      currentMemoryBytes: current.memoryBytes,
       limits: next,
       nodeDiskBytes: filesystem.blocks * filesystem.bsize,
       others,
@@ -629,7 +633,13 @@ export class DatabaseDriver {
           healthcheck: databaseHealthcheck(engine),
           hostname: databaseHostname(id),
           image: labels["kiln.database.image"] ?? container.Config.Image,
-          labels: stringLabels(labels),
+          // What the old container's label said of it, not this one.
+          labels: Object.fromEntries(
+            Object.entries(stringLabels(labels)).filter(
+              ([label]) => label !== WORKLOAD_SLICE_LABEL
+            )
+          ),
+          ...this.#docker.allocations.workloadSpec(),
           mounts: [
             {
               source: requiredLabel(labels, "kiln.database.volume"),

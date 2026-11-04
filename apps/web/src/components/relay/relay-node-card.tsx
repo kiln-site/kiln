@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
+import type { RelayNode } from "@workspace/contracts"
 import { Server } from "lucide-react"
 
 import { InfoCopyValue, InfoFact, InfoRailCard } from "@/components/info-page"
@@ -23,6 +24,7 @@ export interface RelayNodeFacts {
   bootedAt: string | null
   platform: string
   version: string
+  workloadLimit: RelayNode["memory"]["workloadLimit"] | null
 }
 
 // The node's details change rarely; selecting just these keeps usage samples
@@ -44,6 +46,7 @@ export function useRelayNodeFacts(relayId: string): RelayNodeFacts | null {
         bootedAt: node.bootedAt ?? null,
         platform: node.platform,
         version: node.version,
+        workloadLimit: node.memory.workloadLimit ?? null,
       }
     },
     [relayId]
@@ -89,6 +92,16 @@ export function RelayNodeCard({
             {platformLabel(facts.platform)}, {facts.arch}
           </InfoFact>
           <InfoFact label="Docker">{facts.dockerVersion}</InfoFact>
+          {facts.workloadLimit ? (
+            <InfoFact label="Workload memory">
+              <span
+                className="truncate"
+                title="What game servers, Apps, and Databases can use together on this node, which leaves the rest to Kiln and the OS"
+              >
+                {workloadLimitLabel(facts.workloadLimit)}
+              </span>
+            </InfoFact>
+          ) : null}
           {facts.bootedAt ? (
             <InfoFact label="Uptime">
               <NodeUptime bootedAt={facts.bootedAt} connected={connected} />
@@ -179,6 +192,19 @@ const RelayNodeUsage = React.memo(function RelayNodeUsage({
     </div>
   )
 })
+
+function workloadLimitLabel(
+  limit: NonNullable<RelayNode["memory"]["workloadLimit"]>
+): string {
+  if (limit.limitBytes === null) return "No limit"
+  return [
+    `Limited to ${formatBytes(limit.limitBytes)}`,
+    ...(limit.limitBytes > limit.targetBytes
+      ? [`above the ${formatBytes(limit.targetBytes)} target`]
+      : []),
+    ...(limit.outsideCount > 0 ? [`${limit.outsideCount} outside it`] : []),
+  ].join(", ")
+}
 
 function platformLabel(platform: string): string {
   if (platform === "linux") return "Linux"

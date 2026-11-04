@@ -2472,8 +2472,27 @@ export const relayNodeSchema = z.object({
     model: z.string().min(1).max(200).optional(),
   }),
   memory: z.object({
+    /**
+     * What instances' limits may assign, after what's left for Kiln and the
+     * OS. Absent from Relays that predate it, which an update reaches.
+     */
+    assignableBytes: z.number().nonnegative().optional(),
     totalBytes: z.number().nonnegative(),
     usedBytes: z.number().nonnegative(),
+    /**
+     * The ceiling on the node's workloads together. Absent from Relays that
+     * predate it, which an update reaches.
+     */
+    workloadLimit: z
+      .object({
+        /** The limit in force, or null when workloads have none. */
+        limitBytes: z.number().nonnegative().nullable(),
+        /** The limit the node's reserve asks for. */
+        targetBytes: z.number().nonnegative(),
+        /** Running workloads outside it, which it doesn't hold. */
+        outsideCount: z.number().int().nonnegative(),
+      })
+      .optional(),
   }),
   storage: z.object({
     totalBytes: z.number().nonnegative(),
