@@ -106,7 +106,11 @@ import {
   relayCertificateCheckInputSchema,
   relayCertificateCheckResultSchema,
   relayProxyConfigurationSchema,
+  RELAY_PROXY_TRIAL_PATH,
   relayProxySettingsSchema,
+  relayProxyTrialInputSchema,
+  relayProxyTrialResultSchema,
+  type RelayProxyTrialInput,
   relayVolumeCreateSchema,
   relayVolumeDeleteSchema,
   relayDockerCleanupRequestSchema,
@@ -215,7 +219,12 @@ import {
   WebCertificates,
   webCertificateStorePath,
 } from "./web-certificates.js"
-import { forkPromise, promiseEffect, recoverPromise } from "./effect/promise.js"
+import {
+  forkPromise,
+  promiseEffect,
+  recoverPromise,
+  tapPromiseError,
+} from "./effect/promise.js"
 import { DockerCleanup } from "./docker-cleanup.js"
 import { DockerEngine } from "./docker-engine.js"
 import { RelayVolumes } from "./volumes.js"
@@ -528,6 +537,98 @@ let restarting = false
 
 // Reserves the restart before anything is awaited, so concurrent requests
 // can't both begin one, and releases it if the restart never begins.
+// Fails here, while Hearth is still waiting, when the Relay isn't a
+// container Docker can restart.
+const reserveRelayRestart = () =>
+  reserveRestart(
+    "relay.restart.inspect",
+    relayEngine.inspectContainer(hostname())
+  )
+
+// Docker restarts the Relay once Hearth has its answer.
+function restartRelayContainer(container: { readonly Id: string }) {
+  forkRelayEffect(
+    "relay.restart",
+    Effect.sleep("1 second").pipe(
+      Effect.andThen(
+        relayEngine.restartContainer(container.Id, { seconds: 15 })
+      ),
+      Effect.withSpan("Relay.restart"),
+      Effect.catch((cause) =>
+        Effect.sync(() => {
+          restarting = false
+          reportRelayError(cause, { operation: "relay.restart" })
+        })
+      )
+    )
+  )
+}
+
+// Longer than Hearth keeps a trial open, so this only ends one Hearth lost
+// track of, by restarting partway through.
+const PROXY_TRIAL_LIMIT = "5 minutes"
+
+const expireProxyTrial = operation<string>()({
+  name: "relay.proxy.trial.expire",
+  locks: () => [exclusive(laneKeys.routes)],
+  carriesOnWhilePaused: true,
+  run: ({ input }) => relayOperation(() => lifecycle.stopProxyTrial(input)),
+})
+
+async function runProxyTrialStep(
+  input: RelayProxyTrialInput
+): Promise<string | null> {
+  switch (input.step) {
+    case "start": {
+      if (input.automatic && !config.checksPublicRoute) {
+        return "This Relay wasn't installed to look for a public route."
+      }
+      const problem = await lifecycle.startProxyTrial({
+        answer: input.answer,
+        id: input.id,
+        upstreamTls: activeTls !== null,
+      })
+      if (problem) return problem
+      forkRelayEffect(
+        "relay.proxy.trial.expire",
+        Effect.sleep(PROXY_TRIAL_LIMIT).pipe(
+          Effect.andThen(
+            runOperation(lanes, expireProxyTrial, input.id, { kind: "timer" })
+          ),
+          Effect.catch((cause) =>
+            Effect.sync(() =>
+              reportRelayError(cause, {
+                operation: "relay.proxy.trial.expire",
+              })
+            )
+          )
+        )
+      )
+      return null
+    }
+    case "certificate":
+      return lifecycle.requestProxyTrialCertificate(input.id)
+    case "stop":
+      await lifecycle.stopProxyTrial(input.id)
+      return null
+    case "commit": {
+      const relayContainer = await reserveRelayRestart()
+      const problem = await tapPromiseError(
+        () => lifecycle.commitProxyTrial(input.id),
+        () => {
+          restarting = false
+        }
+      )
+      if (problem) {
+        restarting = false
+        return problem
+      }
+      restartRelayContainer(relayContainer)
+      return null
+    }
+  }
+}
+
 function reserveRestart<A, E>(
   name: string,
   begin: Effect.Effect<A, E, RelayStateStore>
@@ -1350,6 +1451,7 @@ const requestHandler = (
     relayOperation(async () => {
       if (handleHealthRequest(request, response)) return
       if (trustProbe(request, response)) return
+      if (proxyTrialProbe(request, response)) return
       if (bootstrapDiscovery(request, response)) return
       if (await pairingRequest(request, response)) return
       if (await backupDownloads.handleRequest(request, response)) return
@@ -1563,7 +1665,12 @@ const capacityMetricsFiber = forkRelayEffect(
 // What the node and its containers spend, for its metrics.
 const nodeMetricsFiber = forkRelayEffect(
   "relay.node.metrics",
-  sampleNodeMetrics(() => config.nodeId, relayEngine, config, docker.allocations)
+  sampleNodeMetrics(
+    () => config.nodeId,
+    relayEngine,
+    config,
+    docker.allocations
+  )
 )
 // The ceiling on what the node's workloads use together.
 const workloadSliceFiber = forkRelayEffect(
@@ -1780,6 +1887,37 @@ async function pairingRequest(
     )
   )
   json(response, 201, result)
+  return true
+}
+
+// Answers a trial of the Relay's public route (lifecycle.ts). The path names
+// the trial, so anyone along the route may see it; what answers it they
+// can't have, which is how Hearth knows the route ends at this Relay.
+function proxyTrialProbe(
+  request: IncomingMessage,
+  response: ServerResponse
+): boolean {
+  const { pathname } = new URL(request.url ?? "/", "http://relay")
+  if (
+    request.method !== "GET" ||
+    !pathname.startsWith(`${RELAY_PROXY_TRIAL_PATH}/`)
+  ) {
+    return false
+  }
+  const answer = lifecycle.proxyTrialAnswer(
+    pathname.slice(RELAY_PROXY_TRIAL_PATH.length + 1)
+  )
+  if (!answer) {
+    json(response, 404, { error: "No such trial" })
+    return true
+  }
+  response
+    .writeHead(200, {
+      "Cache-Control": "no-store",
+      "Content-Length": String(Buffer.byteLength(answer)),
+      "Content-Type": "text/plain",
+    })
+    .end(answer)
   return true
 }
 
@@ -2177,28 +2315,7 @@ async function executeControlRequest(
         systemUpdates.status(requiredString(payload, "operationId"))
       )
     case "relay.restart": {
-      // Fails here, while Hearth is still waiting, when the Relay isn't a
-      // container Docker can restart.
-      const relayContainer = await reserveRestart(
-        "relay.restart.inspect",
-        relayEngine.inspectContainer(hostname())
-      )
-      // Docker restarts the Relay once Hearth has its answer.
-      forkRelayEffect(
-        "relay.restart",
-        Effect.sleep("1 second").pipe(
-          Effect.andThen(
-            relayEngine.restartContainer(relayContainer.Id, { seconds: 15 })
-          ),
-          Effect.withSpan("Relay.restart"),
-          Effect.catch((cause) =>
-            Effect.sync(() => {
-              restarting = false
-              reportRelayError(cause, { operation: "relay.restart" })
-            })
-          )
-        )
-      )
+      restartRelayContainer(await reserveRelayRestart())
       return { restarting: true }
     }
     case "relay.host.restart":
@@ -2415,6 +2532,12 @@ async function executeControlRequest(
       await snapshotHub.refresh()
       return proxy
     }
+    case "relay.proxy.trial":
+      return relayProxyTrialResultSchema.parse({
+        problem: await runProxyTrialStep(
+          relayProxyTrialInputSchema.parse(request.payload)
+        ),
+      })
     case "relay.certificates.check": {
       const { hostname, owner } = relayCertificateCheckInputSchema.parse(
         request.payload

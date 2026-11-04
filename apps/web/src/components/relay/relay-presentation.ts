@@ -219,7 +219,7 @@ export function proxyModeCoverage(
     case "hearth":
       return {
         items,
-        note: "For domains, switch to Bundled or Coolify Traefik.",
+        note: "Domains need a route of the Relay’s own. Look for one when ports 80 and 443 lead to this machine.",
       }
     case "traefik":
       return {

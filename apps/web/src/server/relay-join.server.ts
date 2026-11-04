@@ -1485,10 +1485,22 @@ const applyInstallation = Effect.fn("relayJoin.applyInstallation")(function* (
 ) {
   const observed = json(row.observed_installation)
   if (intent.installation === "keep" || !intent.targetInstallationId) {
-    return yield* finishJoin(row.id, generation, "paired", false)
+    return yield* finishJoin(
+      row.id,
+      generation,
+      "paired",
+      false,
+      envelope.relayFingerprint
+    )
   }
   if (observed?.id === intent.targetInstallationId) {
-    return yield* finishJoin(row.id, generation, "paired", true)
+    return yield* finishJoin(
+      row.id,
+      generation,
+      "paired",
+      true,
+      envelope.relayFingerprint
+    )
   }
   if (
     !observed ||
@@ -1518,7 +1530,13 @@ const recoverInstallation = Effect.fn("relayJoin.recoverInstallation")(
     )
     switch (lookup.status) {
       case "succeeded":
-        return yield* finishJoin(row.id, generation, "paired", true)
+        return yield* finishJoin(
+          row.id,
+          generation,
+          "paired",
+          true,
+          envelope.relayFingerprint
+        )
       case "running":
         yield* Effect.sleep("2 seconds")
         return
@@ -1527,7 +1545,13 @@ const recoverInstallation = Effect.fn("relayJoin.recoverInstallation")(
       case "unknown": {
         const current = yield* readInstallation(envelope.relayFingerprint)
         return current.id === intent.targetInstallationId
-          ? yield* finishJoin(row.id, generation, "paired", true)
+          ? yield* finishJoin(
+              row.id,
+              generation,
+              "paired",
+              true,
+              envelope.relayFingerprint
+            )
           : yield* needsReview(row.id, generation, current)
       }
     }
@@ -1630,7 +1654,8 @@ const finishJoin = Effect.fnUntraced(function* (
   joinId: string,
   generation: number,
   state: "paired" | "expired",
-  sendInstallationId: boolean | null
+  sendInstallationId: boolean | null,
+  relayId: string | null = null
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -1656,6 +1681,12 @@ const finishJoin = Effect.fnUntraced(function* (
       }
     })
   )
+  if (state === "paired" && relayId) {
+    const { checkAddedRelayPublicRoute } = yield* promiseEffect(
+      () => import("@/server/relay-public-route.server")
+    )
+    checkAddedRelayPublicRoute(relayId)
+  }
 })
 
 // ------------------------------------------------------------- network
@@ -1819,7 +1850,7 @@ function forbiddenAddress(address: string, family: number): boolean {
 }
 
 // A Relay at an address rather than a name, which no lookup sees.
-function assertRelayAddress(host: string): void {
+export function assertRelayAddress(host: string): void {
   const family = isIP(host)
   if (family !== 0 && forbiddenAddress(host, family)) {
     throw new RelayJoinFailure(`Hearth won't connect to ${host}`)
@@ -1828,7 +1859,7 @@ function assertRelayAddress(host: string): void {
 
 // Resolves a Relay's name for the connection itself, refusing any answer
 // with a forbidden address, so what was checked is what's connected to.
-const relayDestinationLookup: LookupFunction = (
+export const relayDestinationLookup: LookupFunction = (
   hostname,
   options,
   callback

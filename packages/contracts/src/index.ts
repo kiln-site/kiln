@@ -665,9 +665,7 @@ export const relayDesktopSchema = z.discriminatedUnion("status", [
 ])
 export type RelayDesktop = z.infer<typeof relayDesktopSchema>
 
-export const relayDesktopTicketSchema = z
-  .string()
-  .regex(/^[A-Za-z0-9_-]{43}$/u)
+export const relayDesktopTicketSchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u)
 export const relayDesktopAttachedSchema = z.object({
   desktop: relayDesktopSchema,
   ticket: relayDesktopTicketSchema,
@@ -1733,6 +1731,43 @@ export const relayConnectionSettingsSchema = z
   })
   .strict()
 
+// What a trial of a Relay's public route is named by, in the path anyone on
+// that route sees, and what only the Relay answers with.
+const relayProxyTrialSecretSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{32,64}$/u, "Use a random URL-safe value")
+
+/**
+ * One step of trying a Hearth-mode Relay's public route: its Traefik comes
+ * up beside the Relay's own listener, Hearth reaches it from outside on port
+ * 80 (`start`) and then over HTTPS (`certificate`), and only then does the
+ * Relay move to Traefik mode (`commit`). `stop` ends it with nothing changed.
+ * `automatic` asks only of a Relay installed to look for one.
+ */
+export const relayProxyTrialInputSchema = z.discriminatedUnion("step", [
+  z
+    .object({
+      answer: relayProxyTrialSecretSchema,
+      automatic: z.boolean(),
+      id: relayProxyTrialSecretSchema,
+      step: z.literal("start"),
+    })
+    .strict(),
+  z
+    .object({
+      id: relayProxyTrialSecretSchema,
+      step: z.enum(["certificate", "commit", "stop"]),
+    })
+    .strict(),
+])
+
+/** Why the step couldn't happen; null when it did. */
+export const relayProxyTrialResultSchema = z
+  .object({ problem: z.string().max(1024).nullable() })
+  .strict()
+
+export type RelayProxyTrialInput = z.infer<typeof relayProxyTrialInputSchema>
+
 export const relayProxySettingsSchema = z
   .object({
     mode: relayProxyModeSchema,
@@ -1946,6 +1981,8 @@ export const relayAppWebRoutesWriteSchema = z
     routes: relayInstanceWebRouteArraySchema(relayAppWebRouteInputSchema),
   })
   .strict()
+
+export const RELAY_PROXY_TRIAL_PATH = "/.well-known/kiln-route"
 
 export const relayProxyDiagnosticsSchema = z
   .object({

@@ -1,8 +1,10 @@
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { ArrowRight, Check, Waypoints, X } from "lucide-react"
 import type { RelayProxyDiagnostics } from "@workspace/contracts"
 
+import { Button } from "@workspace/ui/components/button"
+import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
@@ -12,7 +14,7 @@ import {
   InfoHint,
   InfoSection,
 } from "@/components/info-page"
-import { messageFrom } from "@/components/relay/relay-actions"
+import { messageFrom, showRelayError } from "@/components/relay/relay-actions"
 import {
   proxyModeCoverage,
   type ProxyModeCoverage,
@@ -23,10 +25,46 @@ import {
 import {
   RelayConfigureButton,
   useRelayHostFiles,
+  useRelayPermission,
 } from "@/components/relay/relay-settings"
 import { StatusIndicator } from "@/components/status-indicator"
 import { relayProxyQueryOptions } from "@/lib/query-options"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
+import { checkRelayPublicRoute } from "@/server/relays"
+
+// Looks for a route of the Relay's own, as Kiln did when it was added; ports
+// forwarded since then count.
+function RelayPublicRouteFact({ relay }: { relay: RelayDirectoryEntry }) {
+  const canConfigure = useRelayPermission(relay.id, "relay.configure")
+  const check = useMutation({
+    mutationFn: () => checkRelayPublicRoute({ data: { id: relay.id } }),
+    onError: (cause) =>
+      showRelayError(cause, "Couldn't check for a public route"),
+    onSuccess: (outcome) =>
+      showToast(
+        outcome.status === "direct"
+          ? {
+              message: "Public route found. The Relay is restarting to use it.",
+              type: "success",
+            }
+          : { message: outcome.reason, type: "info" }
+      ),
+  })
+  if (!canConfigure) return null
+  return (
+    <InfoFact label="Public route">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={check.isPending}
+        onClick={() => check.mutate()}
+      >
+        {check.isPending ? "Checking…" : "Check for a public route"}
+      </Button>
+    </InfoFact>
+  )
+}
 
 // How the Relay publishes web domains: its proxy's settings and whether it's
 // healthy. The bundled Traefik's details only show in that mode.
@@ -83,6 +121,9 @@ export function RelayProxySettings({
           <ProxyModeCoverageList coverage={proxyModeCoverage(diagnostics)} />
         </InfoHint>
       </InfoFact>
+      {settings.mode === "hearth" ? (
+        <RelayPublicRouteFact relay={relay} />
+      ) : null}
       {bundled ? (
         <>
           <InfoFact label="Traefik image">

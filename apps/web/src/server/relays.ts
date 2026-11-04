@@ -38,6 +38,7 @@ import { grantHasPermission } from "@/lib/permissions"
 import { runAppEffect } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { publishRelayProxyChange } from "@/lib/relay-proxy-realtime.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { exclusive, partKey, relayKey, shared } from "@/operations/lanes"
 import {
@@ -795,6 +796,36 @@ export const updateRelayProxy = createServerFn({ method: "POST" })
     })
   )
 
+const checkRelayRoute = operation<z.infer<typeof relayIdSchema>>()({
+  name: "relay.publicRoute.check",
+  doing: "Checking this Relay's public route",
+  authorize: ({ input, user }) => relayAdministration(user, input.id),
+  locks: ({ input }) => [exclusive(relayPart(input.id, "proxy"))],
+  run: ({ context: { user }, input }) =>
+    Effect.gen(function* () {
+      const [relay, { tryRelayPublicRoute }] = yield* promiseEffect(() =>
+        Promise.all([
+          enabledRelay(input.id),
+          import("@/server/relay-public-route.server"),
+        ])
+      )
+      return yield* tryRelayPublicRoute(relay, {
+        automatic: false,
+        subject: user.id,
+      })
+    }),
+  audit: ({ input }) => relayAudit(input.id),
+  publish: ({ input }) => publishRelayProxyChange(input.id),
+})
+
+export const checkRelayPublicRoute = createServerFn({ method: "POST" })
+  .validator(relayIdSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(checkRelayRoute, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
 export const getRelayTailscale = createServerFn({ method: "GET" })
   .validator(relayIdSchema)
   .handler(async ({ data }) => {
@@ -885,15 +916,6 @@ export const installRelayTailscale = createServerFn({ method: "POST" })
       user: await requireEligibleResourceUser(),
     })
   )
-
-function publishRelayProxyChange(relayId: string): void {
-  publishRealtimeChange({
-    audience: { kind: "relays", relayIds: [relayId] },
-    scope: { relayId },
-    topics: ["relay-proxy"],
-    type: "hearth.invalidate",
-  })
-}
 
 function publishRelayTailscaleChange(relayId: string): void {
   publishRealtimeChange({

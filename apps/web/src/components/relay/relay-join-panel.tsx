@@ -399,8 +399,9 @@ function JoinReview({
         </div>
       ) : unreachable ? (
         <p className="type-meta text-muted-foreground">
-          Hearth can't reach this machine, so the Relay connects to Hearth
-          instead, and its consoles and file transfers go through Hearth.
+          This Relay connects to Hearth, and its consoles and file transfers
+          go through Hearth. If the internet can reach this machine, Kiln moves
+          it to its own HTTPS after it's added.
         </p>
       ) : null}
 
