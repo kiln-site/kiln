@@ -3,9 +3,6 @@ import {
   brickVariableValuesSchema,
   relayInstanceSchema,
   relaySnapshotSchema,
-  relayUpdateInstanceStartupSchema,
-  type RelayUpdateInstanceStartup,
-  type ResourceLimits,
 } from "@workspace/contracts"
 import type { z } from "zod"
 
@@ -14,17 +11,9 @@ import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { hydrateBrickIcon } from "@/lib/brick-catalog-source.server"
 import { hydrateBrickVariables } from "@/lib/brick-variables"
-import {
-  invalidateRelayCache,
-  relayCachePolicy,
-  relayJsonEffect,
-} from "@/lib/relay-client"
-import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { relayJsonEffect } from "@/lib/relay-client"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { activeRelay } from "@/lib/relay-registry"
-import { relayResourceLimitsRequest } from "@/lib/resource-limits.server"
-import { startupPowerPermission } from "@/lib/startup-permissions"
-import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
 
 // Server-side work behind the Brick server functions in ./bricks, which
 // authenticate the caller first.
@@ -55,81 +44,6 @@ export async function getInstanceStartupHandler(
     instance: relayInstanceSchema.parse(instance),
     variables: brickVariableValuesSchema.parse(variables),
   }
-}
-
-// A game server's limits are part of its container, so they apply the way
-// Startup does: a running server restarts on the new ones, and a stopped one
-// has them from its next start. The rest of its Startup stays as it is.
-export async function updateInstanceLimitsHandler(
-  user: AuthenticatedUser,
-  data: { instanceId: string; limits: ResourceLimits; relayId: string }
-) {
-  const relay = await requiredRelay(data.relayId)
-  const existing = await requiredRelayInstance(relay, data.instanceId)
-  const start = existing.desiredState === "running"
-  const powerPermission = startupPowerPermission(existing, { start })
-  if (powerPermission) {
-    await requireRelayPermission({
-      instanceId: data.instanceId,
-      permission: powerPermission,
-      relayId: relay.id,
-      user,
-    })
-  }
-  if (!existing.variables) {
-    throw new Error("Instance is missing its applied Brick variables")
-  }
-  return applyInstanceStartup(user, relay, data.instanceId, {
-    ...relayResourceLimitsRequest(relay.id, existing.limits, data.limits),
-    start,
-    variables: existing.variables,
-  })
-}
-
-/** Rebuilds a game server's container from `input`, and tells everyone. */
-export async function applyInstanceStartup(
-  user: AuthenticatedUser,
-  relay: PersistedRelay,
-  instanceId: string,
-  input: RelayUpdateInstanceStartup
-) {
-  const instance = relayInstanceSchema.parse(
-    await requestRelay(
-      relay,
-      `/v1/instances/${encodeURIComponent(instanceId)}/startup`,
-      {
-        method: "PUT",
-        body: JSON.stringify(relayUpdateInstanceStartupSchema.parse(input)),
-      },
-      360_000,
-      user.id
-    )
-  )
-  await provisionInstanceDomainBestEffort(instance, relay.id)
-  await runAppEffect(
-    "relay.snapshot.invalidate",
-    invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
-  )
-  publishRealtimeChange({
-    instance,
-    relayId: relay.id,
-    type: "instance.upsert",
-  })
-  return instance
-}
-
-export async function requiredRelayInstance(
-  relay: PersistedRelay,
-  instanceId: string
-) {
-  const snapshot = relaySnapshotSchema.parse(
-    await requestRelay(relay, "/v1/snapshot")
-  )
-  const instance = snapshot.instances.find(
-    (candidate) => candidate.id === instanceId
-  )
-  if (!instance) throw new Error("Instance not found")
-  return instance
 }
 
 export async function loadInstanceRecipe(

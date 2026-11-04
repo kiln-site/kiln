@@ -27,7 +27,13 @@ interface Finger {
 type Gesture =
   | { kind: "idle" }
   // One finger, which might still be a tap.
-  | { kind: "one"; moved: boolean; startedAt: number; startX: number; startY: number }
+  | {
+      kind: "one"
+      moved: boolean
+      startedAt: number
+      startX: number
+      startY: number
+    }
   // A second tap that stayed down: dragging with the button held.
   | { kind: "held"; moved: boolean; startX: number; startY: number }
   | { kind: "two"; moved: boolean; startedAt: number; x: number; y: number }

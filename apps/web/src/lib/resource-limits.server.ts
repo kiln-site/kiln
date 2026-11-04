@@ -5,6 +5,7 @@ import {
   relayAppSchema,
   relayManagedDatabaseSchema,
   relayResourceLimitsV1Feature,
+  widestResourceLimits,
   type RelayNode,
   type RelaySnapshot,
   type ResourceLimits,
@@ -91,7 +92,10 @@ export async function relayAllocations(
   const servers = snapshot.instances.map((instance) => ({
     id: instance.id,
     kind: "server" as const,
-    limits: instance.limits,
+    // Limits waiting for a restart stay held.
+    limits: instance.pendingLimits
+      ? widestResourceLimits(instance.limits, instance.pendingLimits)
+      : instance.limits,
   }))
   const features = relayConnectionFeatures(relay.id)
   if (!features.has(relayResourceLimitsV1Feature)) return servers

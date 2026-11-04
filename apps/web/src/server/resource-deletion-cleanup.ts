@@ -85,7 +85,11 @@ export const cleanUpDeletedResourceEffect = Effect.fn(
     kind: kind === "instance" ? "server" : kind,
     relayId,
   })
-  yield* removeIconsEffect({ kind: kind === "instance" ? "server" : kind, relayId, id })
+  yield* removeIconsEffect({
+    kind: kind === "instance" ? "server" : kind,
+    relayId,
+    id,
+  })
   // The Relay has removed it, so its directory record goes too. Live
   // snapshots never remove records on their own.
   yield* kind === "instance"
@@ -103,7 +107,9 @@ function cleanupStep<TError, TRequirements>(
 ) {
   return cleanup.pipe(
     Effect.asVoid,
-    Effect.catch((error) => reportCleanupFailureEffect(operation, resource, error))
+    Effect.catch((error) =>
+      reportCleanupFailureEffect(operation, resource, error)
+    )
   )
 }
 

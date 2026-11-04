@@ -10,8 +10,7 @@ import { useFollowActiveAccount } from "@/components/use-follow-active-account"
 
 export function AppRouterApplication() {
   const usesAppFrame = useRouterState({
-    select: (state) =>
-      state.matches.some((match) => match.routeId === "/_app"),
+    select: (state) => state.matches.some((match) => match.routeId === "/_app"),
   })
 
   const userId = useRouterState({ select: selectSignedInUserId })

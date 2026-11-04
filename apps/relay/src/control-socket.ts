@@ -1988,6 +1988,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "instance.provision.prepare":
     case "instance.provision.claim":
     case "instance.startup.write":
+    case "instance.limits.write":
       return "instance.create"
     case "instance.provision.cancel":
       return "instance.delete"

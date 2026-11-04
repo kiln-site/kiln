@@ -12,7 +12,6 @@ import {
   relayIdSchema,
   relaySnapshotSchema,
   relayUpdateInstanceStartupSchema,
-  resourceLimitsSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -39,6 +38,7 @@ import { listPersistedRelays } from "@/lib/relay-registry"
 import { listMcJarVersionsEffect } from "@/effect/mcjarfiles"
 import { provisionServer } from "@/lib/server-provisioning.server"
 import { runAppEffect } from "@/effect/runtime"
+import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { promiseEffect } from "@/effect/promise"
 import { provisioningInstanceId } from "@/lib/provisioning.server"
 import { dnsKey } from "@/lib/dns-operations"
@@ -55,15 +55,14 @@ import {
   visibleBrickCatalogs,
 } from "@/server/brick-catalogs.server"
 import {
-  applyInstanceStartup,
   getInstanceStartupHandler,
   loadInstanceRecipe,
   requestRelay,
   requiredRelay,
-  requiredRelayInstance,
-  updateInstanceLimitsHandler,
 } from "@/server/bricks.server"
+import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
 import { relayResourceLimitsRequest } from "@/lib/resource-limits.server"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import {
   startupPowerPermission,
   startupResourceLimitsChanged,
@@ -113,10 +112,6 @@ export const hearthUpdateInstanceStartupInputSchema =
         })
       }
     })
-
-const instanceLimitsInputSchema = instanceInputSchema
-  .extend({ limits: resourceLimitsSchema })
-  .strict()
 
 export const getBrickCatalog = createServerFn({ method: "GET" }).handler(
   async () => {
@@ -338,20 +333,6 @@ export function startupNetworkChanged(
   )
 }
 
-// Replacing a game server's container provisions its domains afterwards.
-const instanceDomainLocks = (input: {
-  instanceId: string
-  relayId: string
-}) => [
-  exclusive(
-    dnsKey({
-      relayId: input.relayId,
-      resourceId: input.instanceId,
-      resourceType: "instance",
-    })
-  ),
-]
-
 // Startup weighs several permissions against what changes, so only reading
 // its configuration is checked before the lanes; the run checks the rest.
 const changeInstanceStartup = resourceOperation({
@@ -361,7 +342,16 @@ const changeInstanceStartup = resourceOperation({
   name: "instance.startup.update",
   // A reinstall replaces it.
   lock: (input) => (input.reinstall ? "whole" : { part: "config" }),
-  alsoLocks: instanceDomainLocks,
+  // It provisions its domains afterwards.
+  alsoLocks: (input) => [
+    exclusive(
+      dnsKey({
+        relayId: input.relayId,
+        resourceId: input.instanceId,
+        resourceType: "instance",
+      })
+    ),
+  ],
   doing: "Changing this game server's startup",
   permission: () => "instance.configuration.read",
   run: updateInstanceStartupHandler,
@@ -437,33 +427,34 @@ async function updateInstanceStartupHandler(
     recipeDefinition: _untrustedRecipeDefinition,
     ...trustedData
   } = data
-  return applyInstanceStartup(user, relay, data.instanceId, {
+  const input = relayUpdateInstanceStartupSchema.parse({
     ...trustedData,
     ...(recipeDefinition ? { recipeDefinition } : {}),
   })
-}
-
-// A game server's limits are part of its container, so they apply the way
-// Startup does: a running server restarts on the new ones, and a stopped one
-// has them from its next start. The rest of its Startup stays as it is.
-const changeInstanceLimits = resourceOperation({
-  kind: "instance",
-  id: (input: z.infer<typeof instanceLimitsInputSchema>) => input.instanceId,
-  name: "instance.limits.update",
-  lock: { part: "config" },
-  alsoLocks: instanceDomainLocks,
-  doing: "Changing this game server's limits",
-  permission: () => "instance.limits.write",
-  run: updateInstanceLimitsHandler,
-})
-
-export const updateInstanceLimits = createServerFn({ method: "POST" })
-  .validator(instanceLimitsInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(changeInstanceLimits, data, {
-      user: await requireEligibleResourceUser(),
-    })
+  const instance = relayInstanceSchema.parse(
+    await requestRelay(
+      relay,
+      `/v1/instances/${encodeURIComponent(data.instanceId)}/startup`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      },
+      360_000,
+      user.id
+    )
   )
+  await provisionInstanceDomainBestEffort(instance, relay.id)
+  await runAppEffect(
+    "relay.snapshot.invalidate",
+    invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
+  )
+  publishRealtimeChange({
+    instance,
+    relayId: relay.id,
+    type: "instance.upsert",
+  })
+  return instance
+}
 
 function recipePreview(brick: z.infer<typeof brickSchema>) {
   const { iconSvg: _iconSvg, ...recipe } = brick
@@ -651,4 +642,18 @@ async function visibleRecipeDefinition(
   ].find((candidate) => candidate.source === source)
   if (!brick) return null
   return brickRecipeDefinition(brick)
+}
+
+async function requiredRelayInstance(
+  relay: PersistedRelay,
+  instanceId: string
+) {
+  const snapshot = relaySnapshotSchema.parse(
+    await requestRelay(relay, "/v1/snapshot")
+  )
+  const instance = snapshot.instances.find(
+    (candidate) => candidate.id === instanceId
+  )
+  if (!instance) throw new Error("Instance not found")
+  return instance
 }

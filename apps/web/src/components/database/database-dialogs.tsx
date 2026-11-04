@@ -558,7 +558,10 @@ export function DeleteDatabaseDialog({
           ...confirmation.input,
           createBackup: supportsBackup && createBackup,
           ...(createBackup && backupDestination !== "default"
-            ? { storageId: backupDestination === "local" ? null : backupDestination }
+            ? {
+                storageId:
+                  backupDestination === "local" ? null : backupDestination,
+              }
             : {}),
           databaseId: database.id,
           relayId: database.relayId,

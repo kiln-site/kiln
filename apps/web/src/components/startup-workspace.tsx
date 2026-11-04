@@ -11,10 +11,7 @@ import {
   RotateCcw,
   Save,
 } from "lucide-react"
-import type {
-  Brick,
-  BrickVariableValue,
-} from "@workspace/contracts"
+import type { Brick, BrickVariableValue } from "@workspace/contracts"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -152,7 +149,12 @@ export function StartupWorkspace() {
       brick={startupQuery.data.brick}
       brickSource={startupQuery.data.brickSource}
       editing={editing}
-      memoryBytes={startupQuery.data.instance.limits.memoryBytes}
+      memoryBytes={
+        (
+          startupQuery.data.instance.pendingLimits ??
+          startupQuery.data.instance.limits
+        ).memoryBytes
+      }
       initialVariables={startupQuery.data.variables}
       instanceId={instance.id}
       observedState={startupQuery.data.instance.observedState}
@@ -334,8 +336,7 @@ const StartupForm = React.memo(function StartupForm({
   }
 
   async function onReinstall() {
-    if (!canEdit || pending || submittingRef.current)
-      return
+    if (!canEdit || pending || submittingRef.current) return
     setError(null)
     submittingRef.current = true
     await Effect.runPromise(

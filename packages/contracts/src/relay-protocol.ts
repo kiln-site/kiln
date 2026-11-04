@@ -262,6 +262,7 @@ export const relayControlOperations = [
   "instance.provision.cancel",
   "instance.startup.write",
   "instance.rename",
+  "instance.limits.write",
   "instance.delete",
   "instance.action",
   "instance.resources.read",
@@ -337,6 +338,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "instance.provision.cancel",
   "instance.startup.write",
   "instance.rename",
+  "instance.limits.write",
   "instance.delete",
   "instance.action",
   "instance.files.write",
@@ -561,6 +563,7 @@ export function relayControlOperationChanges(
     case "instance.provision.cancel":
     case "instance.startup.write":
     case "instance.rename":
+    case "instance.limits.write":
     case "instance.delete":
     case "instance.action":
     case "instance.files.write":

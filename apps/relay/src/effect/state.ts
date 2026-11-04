@@ -34,6 +34,7 @@ import {
   relayInstanceSchema,
   relayManagedDatabaseSchema,
   resticSnapshotIdSchema,
+  type ResourceLimits,
 } from "@workspace/contracts"
 
 import { RelayStateError } from "./errors.js"
@@ -888,6 +889,15 @@ export class RelayStateStore extends Context.Service<
       kind: RelayDiskLimitKind,
       id: string,
       bytes: number | null
+    ) => Effect.Effect<void, RelayStateError>
+    /** Game servers' limits saved until their next restart, by ID. */
+    readonly listPendingLimits: () => Effect.Effect<
+      ReadonlyMap<string, ResourceLimits>,
+      RelayStateError
+    >
+    readonly setPendingLimits: (
+      instanceId: string,
+      limits: ResourceLimits | null
     ) => Effect.Effect<void, RelayStateError>
     readonly getRuntimeRecovery: (
       instanceId: string
@@ -1780,6 +1790,17 @@ const migrations = SqliteMigrator.fromRecord({
       image_id TEXT PRIMARY KEY NOT NULL,
       owner TEXT NOT NULL,
       last_used_at INTEGER NOT NULL
+    ) STRICT`
+  }),
+  // A game server's limits are part of its container, so ones saved while
+  // it's running wait here for its next restart.
+  "36_pending_limits": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE relay_pending_limits (
+      instance_id TEXT PRIMARY KEY NOT NULL,
+      cpu_millis INTEGER,
+      disk_bytes INTEGER,
+      memory_bytes INTEGER
     ) STRICT`
   }),
 })
@@ -4034,6 +4055,54 @@ const makeRelayStateStore = Effect.gen(function* () {
               VALUES (${kind}, ${id}, ${bytes})
               ON CONFLICT (kind, resource_id) DO UPDATE
               SET disk_bytes = excluded.disk_bytes
+            `
+        ).pipe(Effect.asVoid)
+      ),
+    listPendingLimits: () =>
+      run(
+        "list_pending_limits",
+        sql<{
+          cpuMillis: number | null
+          diskBytes: number | null
+          id: string
+          memoryBytes: number | null
+        }>`
+          SELECT
+            instance_id AS id,
+            cpu_millis AS cpuMillis,
+            disk_bytes AS diskBytes,
+            memory_bytes AS memoryBytes
+          FROM relay_pending_limits
+        `.pipe(
+          Effect.map(
+            (rows) => new Map(rows.map(({ id, ...limits }) => [id, limits]))
+          )
+        )
+      ),
+    setPendingLimits: (instanceId, limits) =>
+      run(
+        "set_pending_limits",
+        (limits === null
+          ? sql`
+              DELETE FROM relay_pending_limits
+              WHERE instance_id = ${instanceId}
+            `
+          : sql`
+              INSERT INTO relay_pending_limits (
+                instance_id,
+                cpu_millis,
+                disk_bytes,
+                memory_bytes
+              ) VALUES (
+                ${instanceId},
+                ${limits.cpuMillis},
+                ${limits.diskBytes},
+                ${limits.memoryBytes}
+              )
+              ON CONFLICT (instance_id) DO UPDATE SET
+                cpu_millis = excluded.cpu_millis,
+                disk_bytes = excluded.disk_bytes,
+                memory_bytes = excluded.memory_bytes
             `
         ).pipe(Effect.asVoid)
       ),

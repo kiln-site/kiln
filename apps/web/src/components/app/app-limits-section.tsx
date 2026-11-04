@@ -9,16 +9,19 @@ import {
 import { Gauge } from "lucide-react"
 
 import {
+  appContainers,
   appRelayAvailable,
   appServices,
   type App,
 } from "@/components/app/app-presentation"
+import { DeployToApplyButton } from "@/components/app/app-settings"
 import { InfoSection } from "@/components/info-page"
 import {
   ResourceLimitsSection,
   type ResourceLimitsGroup,
 } from "@/components/resource-limits/resource-limits-section"
 import { appConfigQueryOptions, queryKeys } from "@/lib/query-options"
+import { StatusIndicator } from "@/components/status-indicator"
 import type { ResourceLimitField } from "@/lib/resource-limits"
 import { updateAppLimits } from "@/server/apps"
 
@@ -29,6 +32,12 @@ const SERVICE_FIELDS: ReadonlyArray<ResourceLimitField> = [
   "cpuCores",
 ]
 
+const PENDING_DEPLOY = {
+  detail: "Deploy this app to remove the limits taken off its services.",
+  label: "Pending deploy",
+  tone: "warning",
+} as const
+
 export function AppLimitsSection({
   app,
   config,
@@ -37,7 +46,9 @@ export function AppLimitsSection({
   config: AppConfig
 }) {
   const queryClient = useQueryClient()
+  const canManage = app.permissions.includes("app.manage")
   const available = appRelayAvailable(app)
+  const pending = deployPending(app, config)
   const services = limitedServices(app, config).join("\n")
   const { serviceLimits } = config
   const groups = React.useMemo<ReadonlyArray<ResourceLimitsGroup>>(() => {
@@ -86,16 +97,35 @@ export function AppLimitsSection({
   }
   return (
     <ResourceLimitsSection
+      action={
+        pending && canManage && available ? (
+          <DeployToApplyButton app={app} />
+        ) : null
+      }
       disabledReason={
         available ? undefined : "Reconnect this App's Relay first"
       }
-      editable={app.permissions.includes("app.manage")}
+      editable={canManage}
       groups={groups}
-      hint="Changing memory or CPU applies at once. Removing one applies the next time the app deploys."
+      hint="Changing memory or CPU applies at once. Removing a limit applies the next time the app deploys."
+      status={pending ? <StatusIndicator status={PENDING_DEPLOY} /> : null}
       target={{ id: app.id, kind: "app", relayId: app.relayId }}
       onSave={save}
     />
   )
+}
+
+// Docker can't take a limit off a running container, so a limit removed
+// stays on it until the next deploy.
+function deployPending(app: App, { serviceLimits }: AppConfig): boolean {
+  return appContainers(app).some(({ limits, service }) => {
+    const saved = serviceLimits[service]
+    return (
+      saved !== undefined &&
+      (saved.cpuMillis !== (limits?.cpuMillis ?? null) ||
+        saved.memoryBytes !== (limits?.memoryBytes ?? null))
+    )
+  })
 }
 
 // What's running, or before the first deployment, what's been limited

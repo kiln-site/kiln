@@ -31,7 +31,9 @@ const token = "target-session-token"
 // The browser cookie for a session, signed as Better Auth signs its own.
 const sessionCookie = Effect.promise(() => auth.$context).pipe(
   Effect.map(({ authCookies, secret }) => {
-    const signature = createHmac("sha256", secret).update(token).digest("base64")
+    const signature = createHmac("sha256", secret)
+      .update(token)
+      .digest("base64")
     const value = encodeURIComponent(`${token}.${signature}`)
     return {
       header: `${authCookies.sessionToken.name}=${value}`,
@@ -111,7 +113,11 @@ describeMysql("realtime request isolation", () => {
         `
 
         const cookies = yield* publishFromAnotherRequest(
-          { reauthenticate: false, type: "access.changed", userIds: ["target"] },
+          {
+            reauthenticate: false,
+            type: "access.changed",
+            userIds: ["target"],
+          },
           reader
         )
 

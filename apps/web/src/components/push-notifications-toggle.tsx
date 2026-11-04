@@ -36,10 +36,9 @@ export const PushNotificationsToggle = React.memo(
     React.useEffect(() => {
       let cancelled = false
       const load = () =>
-        void recoverPromise(
-          loadPushState,
-          (): PushState => ({ status: "unsupported" })
-        ).then((next) => !cancelled && setState(next))
+        void recoverPromise(loadPushState, (): PushState => ({
+          status: "unsupported",
+        })).then((next) => !cancelled && setState(next))
       load()
       window.addEventListener(pushChangedEvent, load)
       return () => {
@@ -141,8 +140,7 @@ async function loadPushState(): Promise<PushState> {
     data: { endpoint: subscription?.endpoint ?? null },
   })
   return {
-    status:
-      subscribed && Notification.permission === "granted" ? "on" : "off",
+    status: subscribed && Notification.permission === "granted" ? "on" : "off",
     publicKey,
   }
 }

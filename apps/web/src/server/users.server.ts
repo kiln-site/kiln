@@ -1,7 +1,6 @@
 import type { RowDataPacket } from "mysql2/promise"
 import type { PermissionSelection } from "@workspace/contracts"
 
-
 import { isPlatformAdmin } from "@/lib/access-control"
 import { isAccountEnabled } from "@/lib/account-policy"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -461,4 +460,3 @@ export async function getUserAccessHandler(
     ),
   }
 }
-

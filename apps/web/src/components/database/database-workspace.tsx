@@ -69,7 +69,9 @@ export const DatabaseWorkspaceShell = React.memo(
             noun={{ one: "database", other: "databases" }}
             workspace={workspace}
           >
-            <DatabaseProvisioningBoundary>{children}</DatabaseProvisioningBoundary>
+            <DatabaseProvisioningBoundary>
+              {children}
+            </DatabaseProvisioningBoundary>
           </ResourceWorkspaceBoundary>
         </div>
       </WorkspaceFrame>
@@ -295,11 +297,13 @@ function DatabasePowerControls({
 }) {
   const { database } = workspace
   const queryClient = useQueryClient()
-  const { data: deletion } = useQuery(resourceDeletionQueryOptions({
-    kind: "database",
-    relayId: database.relayId,
-    resourceId: database.id,
-  }))
+  const { data: deletion } = useQuery(
+    resourceDeletionQueryOptions({
+      kind: "database",
+      relayId: database.relayId,
+      resourceId: database.id,
+    })
+  )
   const canPower = !deletion && database.permissions.includes("database.power")
   const powerPermissions = React.useMemo(
     () => ({ kill: false, restart: canPower, start: canPower, stop: canPower }),

@@ -101,10 +101,7 @@ export function BrowserAccountsPage({
                 })
               }}
             >
-              <UserAvatar
-                name={account.name}
-                userId={account.userId}
-              />
+              <UserAvatar name={account.name} userId={account.userId} />
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2">
                   <span className="truncate text-sm font-medium">

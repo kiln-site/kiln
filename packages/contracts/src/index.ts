@@ -11,6 +11,7 @@ import {
   NO_RESOURCE_LIMITS,
   observedResourceLimitsSchema,
   resourceLimitsInputSchema,
+  resourceLimitsSchema,
   serviceResourceLimitsSchema,
 } from "./resource-limits.js"
 import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
@@ -1570,6 +1571,13 @@ export const relayProvisionInstanceSchema = z.object({
   instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
 })
 
+export const relayInstanceLimitsWriteSchema = z
+  .object({
+    instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+    limits: resourceLimitsSchema,
+  })
+  .strict()
+
 export const relayUpdateInstanceStartupSchema = z
   .object({
     diskLimitBytes: relayRequestedDiskLimitBytesSchema.optional(),
@@ -2310,6 +2318,9 @@ export const relayInstanceSchema = z.object({
   tailscale: relayInstanceTailscaleSchema.default({ enabled: false }),
   variables: brickVariableValuesSchema.optional(),
   managedByRelay: z.boolean().default(false),
+  // Limits saved since its container was made, which it takes when it next
+  // restarts. Absent when `limits` are the ones saved.
+  pendingLimits: resourceLimitsSchema.optional(),
   limits: relayInstanceLimitsSchema.default({
     cpuMillis: null,
     diskBytes: DEFAULT_INSTANCE_DISK_LIMIT_BYTES,

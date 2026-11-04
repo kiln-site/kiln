@@ -56,6 +56,7 @@ import {
   relayProxySettingsSchema,
   relayInstanceSchema,
   resolveResourceLimits,
+  resourceLimitsEqual,
   relayTailscaleOverviewSchema,
   relayTailscaleSettingsSchema,
   migrateLegacyTailscaleBindings,
@@ -1964,18 +1965,20 @@ export class LifecycleDriver {
       )
       return updated
     }
+    const pendingLimits =
+      action === "start" || action === "restart"
+        ? await this.#docker.pendingLimits(instance.id)
+        : null
     if (action === "start" || action === "restart") {
       const usedBytes = await runLifecycle(
         directoryApparentSizeEffect(
           join(this.#config.rootDirectory, instance.directory)
         )
       )
-      if (
-        instance.limits.diskBytes !== null &&
-        usedBytes > instance.limits.diskBytes
-      ) {
+      const { diskBytes } = pendingLimits ?? instance.limits
+      if (diskBytes !== null && usedBytes > diskBytes) {
         throw new Error(
-          `Cannot ${action} ${instance.name}: its ${formatAllocationBytes(usedBytes)} of files exceed the ${formatAllocationBytes(instance.limits.diskBytes)} disk quota`
+          `Cannot ${action} ${instance.name}: its ${formatAllocationBytes(usedBytes)} of files exceed the ${formatAllocationBytes(diskBytes)} disk quota`
         )
       }
     }
@@ -2032,13 +2035,16 @@ export class LifecycleDriver {
                   },
                 }
               : undefined
+          // Only when it's stopping anyway: a start sent to a running server
+          // mustn't take it down for these.
+          const stopping =
+            action === "restart" ||
+            !(await this.#containerRunning(instance.service))
+          const limits = pendingLimits && stopping ? pendingLimits : undefined
           if (
             pendingExternalPort ||
-            // Only when it's stopping anyway: a start sent to a running
-            // server mustn't take it down for this.
-            (this.#docker.allocations.wouldMoveWorkload(labels) &&
-              (action === "restart" ||
-                !(await this.#containerRunning(instance.service)))) ||
+            limits ||
+            (this.#docker.allocations.wouldMoveWorkload(labels) && stopping) ||
             routeLabelsRequireRestart(labels, routes, desiredLabels) ||
             (desiredPortLabels &&
               portLabelsRequireRestart(labels, desiredPortLabels))
@@ -2055,8 +2061,10 @@ export class LifecycleDriver {
                 ? this.#resources.edgeNetwork
                 : null,
               action,
-              portConfiguration
+              portConfiguration,
+              limits
             )
+            if (limits) await this.#docker.setPendingLimits(instance.id, null)
             await this.reattachTailscaleMember(
               instanceTailscaleMemberId(instance.id)
             )
@@ -2542,6 +2550,41 @@ export class LifecycleDriver {
     })
   }
 
+  /**
+   * Saves a game server's limits for its next restart, leaving its container
+   * alone. They're checked and their capacity held from here, so the restart
+   * can't fail for want of room.
+   */
+  async setInstanceLimits(
+    instance: RelayInstanceConfig,
+    limits: ResourceLimits
+  ): Promise<void> {
+    if (!instance.managedByRelay) {
+      throw new Error("Relay can only change containers it created")
+    }
+    if (instance.brickId === builtinTailscaleBrickId) {
+      throw new Error("A Tailscale network's limits are its own")
+    }
+    if (resourceLimitsEqual(limits, instance.limits)) {
+      await this.#docker.setPendingLimits(instance.id, null)
+      return
+    }
+    const release = await this.#reserveAllocation({
+      checkExistingUsage: true,
+      currentDiskLimitBytes: instance.limits.diskBytes,
+      currentMemoryLimitBytes: instance.limits.memoryBytes,
+      directory: join(this.#config.rootDirectory, instance.directory),
+      holds: widestResourceLimits(instance.limits, limits),
+      id: instance.id,
+      limits,
+    })
+    await Effect.runPromise(
+      Effect.promise(() =>
+        this.#docker.setPendingLimits(instance.id, limits)
+      ).pipe(Effect.ensuring(Effect.sync(release)))
+    )
+  }
+
   async reconfigureInstance(
     instanceId: string,
     input: RelayUpdateInstanceStartup
@@ -2571,7 +2614,14 @@ export class LifecycleDriver {
       start,
       tailscale,
       variables,
-    } = resolveInstanceStartupReconfigure(existing, input)
+    } = resolveInstanceStartupReconfigure(
+      {
+        ...existing,
+        limits:
+          (await this.#docker.pendingLimits(instanceId)) ?? existing.limits,
+      },
+      input
+    )
     if (tailscale.enabled) {
       const duplicate = inspected.find(
         (instance) =>
@@ -2645,6 +2695,7 @@ export class LifecycleDriver {
             await this.reattachTailscaleMember(
               instanceTailscaleMemberId(existing.id)
             )
+            await this.#docker.setPendingLimits(existing.id, null)
             return reconfigured
           }).pipe(
             Effect.mapError(

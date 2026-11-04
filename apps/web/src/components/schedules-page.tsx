@@ -2120,7 +2120,8 @@ function TargetRunAudit({
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-semibold">{run.target.name}</p>
           <p className="type-meta truncate font-mono text-muted-foreground">
-            {run.target.kind === "app" ? "App" : run.target.kind} · {run.target.id}
+            {run.target.kind === "app" ? "App" : run.target.kind} ·{" "}
+            {run.target.id}
           </p>
         </div>
         <span className="type-meta text-muted-foreground">
@@ -3088,9 +3089,7 @@ const ActionEditor = React.memo(function ActionEditor({
     selectedActionTargets.every((target) => target.kind === "app")
   const changeAction = React.useCallback(
     (next: ScheduleActionDraft) =>
-      onChange(
-        namingNewTargets(action, next, selectedOptions, permissionKey)
-      ),
+      onChange(namingNewTargets(action, next, selectedOptions, permissionKey)),
     [action, onChange, permissionKey, selectedOptions]
   )
   const appServiceOptions = useAppServices(commandApps)
@@ -3323,7 +3322,9 @@ const ActionEditor = React.memo(function ActionEditor({
           singleDestination
           storage={storage}
           submitLabel="Save backup"
-          targets={selectedOptions.filter(isBackupOption).map(scheduleBackupTarget)}
+          targets={selectedOptions
+            .filter(isBackupOption)
+            .map(scheduleBackupTarget)}
           title="Configure Backup"
         />
       ) : null}
@@ -3352,7 +3353,9 @@ function NamedRestrictedTargetsNote({
   const databases = targets.filter(
     (target) => shell(target) && target.kind === "database"
   )
-  const apps = targets.filter((target) => shell(target) && target.kind === "app")
+  const apps = targets.filter(
+    (target) => shell(target) && target.kind === "app"
+  )
   const others = targets.filter((target) => !shell(target))
   return (
     <p className="type-meta rounded-md border border-amber-400/30 bg-amber-400/5 px-2.5 py-2 text-pretty text-amber-300 light:text-amber-700">
@@ -3648,7 +3651,10 @@ const CommandEditorField = React.memo(function CommandEditorField({
   services: Readonly<Record<string, string>> | undefined
   targetKinds: ReadonlyArray<ScheduleTarget["kind"]>
   value: string
-  onChange: (value: string, services: Record<string, string> | undefined) => void
+  onChange: (
+    value: string,
+    services: Record<string, string> | undefined
+  ) => void
 }) {
   const [open, setOpen] = React.useState(false)
   const [draft, setDraft] = React.useState(value)

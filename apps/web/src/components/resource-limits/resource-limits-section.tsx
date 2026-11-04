@@ -31,6 +31,8 @@ export interface ResourceLimitsGroup {
 }
 
 type SectionProps = {
+  /** Beside the title, such as what applies them. */
+  action?: React.ReactNode
   /** Why the limits can't change right now, such as an offline Relay. */
   disabledReason?: string
   /** What a disk limit can't go under, such as the files already there. */
@@ -40,7 +42,8 @@ type SectionProps = {
   /** What saving does, for this kind of instance. */
   hint: React.ReactNode
   onSave: (limits: Readonly<Record<string, ResourceLimits>>) => Promise<unknown>
-  saveLabel?: string
+  /** Whether saved limits are waiting on something to apply. */
+  status?: React.ReactNode
   target: {
     id: string
     kind: "app" | "database" | "server"
@@ -52,7 +55,7 @@ type SectionProps = {
 // every kind of instance. Saving sends every group's limits; `onSave`
 // applies them.
 export function ResourceLimitsSection(props: SectionProps) {
-  const { disabledReason, editable, groups, target } = props
+  const { action, disabledReason, editable, groups, status, target } = props
   const capacityOptions = resourceLimitsCapacityQueryOptions(
     target.relayId,
     target.kind,
@@ -63,7 +66,13 @@ export function ResourceLimitsSection(props: SectionProps) {
     enabled: editable && disabledReason === undefined,
   })
   return (
-    <InfoSection content icon={<Gauge />} title="Resource limits">
+    <InfoSection
+      action={action}
+      content
+      icon={<Gauge />}
+      status={status}
+      title="Resource limits"
+    >
       {/* New limits from the Relay start a fresh draft. */}
       <ResourceLimitsForm
         {...props}
@@ -91,7 +100,6 @@ function ResourceLimitsForm({
   hint,
   loadingCapacity,
   onSave,
-  saveLabel = "Save limits",
 }: SectionProps & {
   capacity: ResourceLimitsCapacity | null
   capacityKey: ReadonlyArray<unknown>
@@ -217,7 +225,7 @@ function ResourceLimitsForm({
               type="submit"
             >
               {pending ? <LoaderCircle className="animate-spin" /> : null}
-              {saveLabel}
+              Save limits
             </Button>
           </div>
         ) : null}

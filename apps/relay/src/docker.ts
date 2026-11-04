@@ -43,6 +43,7 @@ import type {
   RelayInstanceLifecycleState,
   RelayInstanceResources,
   RelaySftpPublicationStatus,
+  ResourceLimits,
 } from "@workspace/contracts"
 import {
   builtinTailscaleBrickId,
@@ -97,9 +98,12 @@ import {
   type DockerStats,
 } from "./resource-samples.js"
 import {
+  containerLimitHostConfig,
   containerResourceLimits,
   DISK_LIMIT_LABEL,
   ResourceAllocations,
+  resourceLimitLabels,
+  widestResourceLimits,
 } from "./resource-limits.js"
 import { WEB_ROUTE_LABEL_PREFIX } from "./web-route-labels.js"
 import type { RelayWebRouteLabelSnapshot } from "./web-route-labels.js"
@@ -484,12 +488,35 @@ export class DockerDriver {
         { repairNames: !running }
       )
     })
-    this.allocations.register("server", async () =>
-      (await this.#discover()).map(({ config }) => ({
-        id: config.id,
-        limits: config.limits,
-      }))
-    )
+    // Limits waiting for a restart stay held, so the restart can't find the
+    // node has been given to something else.
+    this.allocations.register("server", async () => {
+      const [discovered, pending] = await Promise.all([
+        this.#discover(),
+        runEffect(this.#state.listPendingLimits()),
+      ])
+      return discovered.map(({ config }) => {
+        const saved = pending.get(config.id)
+        return {
+          id: config.id,
+          limits: saved
+            ? widestResourceLimits(config.limits, saved)
+            : config.limits,
+        }
+      })
+    })
+  }
+
+  /** Limits saved for a game server's next restart, if any. */
+  async pendingLimits(id: string): Promise<ResourceLimits | null> {
+    return (await runEffect(this.#state.listPendingLimits())).get(id) ?? null
+  }
+
+  async setPendingLimits(
+    id: string,
+    limits: ResourceLimits | null
+  ): Promise<void> {
+    await runEffect(this.#state.setPendingLimits(id, limits))
   }
 
   /** Every instance's limits; other kinds of instance register theirs. */
@@ -1003,7 +1030,8 @@ export class DockerDriver {
     routeLabels: Readonly<Record<string, string>>,
     edgeNetwork: string | null,
     action: "start" | "restart" | "stop",
-    portConfiguration?: DockerPortConfiguration
+    portConfiguration?: DockerPortConfiguration,
+    limits?: ResourceLimits
   ): Promise<RelayInstance> {
     if (!instance.managedByRelay) {
       throw new Error("Relay can only recreate containers it created")
@@ -1035,6 +1063,12 @@ export class DockerDriver {
         if (isManagedPortLabel(label)) delete labels[label]
       }
       Object.assign(labels, portConfiguration.labels)
+    }
+    if (limits) {
+      Object.assign(labels, resourceLimitLabels(limits), {
+        "kiln.instance.disk-bytes": String(limits.diskBytes ?? 0),
+        "kiln.instance.memory-bytes": String(limits.memoryBytes ?? 0),
+      })
     }
 
     const primaryNetwork = Object.hasOwn(
@@ -1122,6 +1156,11 @@ export class DockerDriver {
             ExposedPorts: exposedPorts,
             HostConfig: {
               ...current.HostConfig,
+              ...(limits &&
+                containerLimitHostConfig(
+                  limits,
+                  current.HostConfig.MemoryReservation
+                )),
               ...(placement.cgroupParent && {
                 CgroupParent: placement.cgroupParent,
               }),

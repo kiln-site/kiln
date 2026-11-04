@@ -232,7 +232,7 @@ export async function previewServerMigrationHandler(
     },
     source: {
       instanceId: instance.id,
-      limits: instance.limits,
+      limits: instance.pendingLimits ?? instance.limits,
       name: instance.name,
       nodeArch: relay.nodeArch,
       provisioning: Boolean(instance.provisioning),

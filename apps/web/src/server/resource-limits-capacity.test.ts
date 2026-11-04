@@ -13,27 +13,18 @@ import { afterAll, vi } from "vite-plus/test"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
-import { updateInstanceLimitsHandler } from "@/server/bricks.server"
 import { getResourceLimitsCapacityHandler } from "@/server/resource-limits.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows } from "@/test/seed"
 
-// The Relay is the only network boundary: it reports its node and servers and
-// takes the new limits.
-const relay = vi.hoisted(() => ({
-  applied: [] as Array<unknown>,
-  snapshot: undefined as unknown,
-}))
+// The Relay is the only network boundary: it reports its node and servers.
+const relay = vi.hoisted(() => ({ snapshot: undefined as unknown }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
   relayConnectionFeatures: () => new Set([relayResourceLimitsV1Feature]),
-  relayRpc: async (_relay: unknown, operation: string, payload: unknown) => {
+  relayRpc: async (_relay: unknown, operation: string) => {
     if (operation === "relay.snapshot") return relay.snapshot
     if (operation === "database.list") return []
-    if (operation === "instance.startup.write") {
-      relay.applied.push(payload)
-      return instance
-    }
     throw new Error(`Unexpected Relay operation ${operation}`)
   },
 }))
@@ -72,7 +63,7 @@ const instance = relayInstanceSchema.parse({
   version: "1.21",
   connectAddress: "play.example.test:25565",
   brickSource: builtinTailscaleBrick.source,
-  variables: { secret: "kept" },
+  variables: {},
   limits: { diskBytes: 1024 ** 3, memoryBytes: 1024 ** 3 },
 })
 
@@ -125,7 +116,6 @@ const grant = (
   })
 
 const seed = Effect.gen(function* () {
-  relay.applied = []
   relay.snapshot = snapshotWith(instance)
   yield* resetDatabase
   yield* insertRelay(relayId)
@@ -136,20 +126,6 @@ const capacity = (id = instance.id, kind: "app" | "server" = "server") =>
   Effect.promise(() =>
     getResourceLimitsCapacityHandler(member, { id, kind, relayId })
   )
-
-const newLimits = {
-  cpuMillis: 2000,
-  diskBytes: 2 * 1024 ** 3,
-  memoryBytes: null,
-}
-
-const saveLimits = Effect.tryPromise(() =>
-  updateInstanceLimitsHandler(member, {
-    instanceId: instance.id,
-    limits: newLimits,
-    relayId,
-  })
-)
 
 describeMysql("resource limits", () => {
   layer(TestDatabase)((it) => {
@@ -192,58 +168,24 @@ describeMysql("resource limits", () => {
       })
     )
 
-    it.effect("keeps a stopped server's Startup and leaves it stopped", () =>
+    it.effect("keeps limits waiting for a restart held from the rest", () =>
       Effect.gen(function* () {
         yield* seed
-
-        yield* saveLimits
-
-        assert.deepInclude(relay.applied[0], {
-          limits: newLimits,
-          start: false,
-          variables: { secret: "kept" },
-        })
-      })
-    )
-
-    it.effect("refuses to restart a running server without permission", () =>
-      Effect.gen(function* () {
-        yield* seed
-        yield* grant({ relayId, resourceType: "instance" }, [
-          "instance.limits.write",
+        yield* grant({ relayId, resourceType: "relay" }, [
+          "app.read",
+          "relay.read",
         ])
         relay.snapshot = snapshotWith({
           ...instance,
-          desiredState: "running",
-          observedState: "running",
+          pendingLimits: {
+            cpuMillis: null,
+            diskBytes: 1024 ** 3,
+            memoryBytes: 3 * 1024 ** 3,
+          },
         })
 
-        const refused = yield* Effect.exit(saveLimits)
-
-        assert.isTrue(refused._tag === "Failure")
-        assert.deepEqual(relay.applied, [])
-      })
-    )
-
-    it.effect("restarts a running server on its new limits", () =>
-      Effect.gen(function* () {
-        yield* seed
-        yield* grant({ relayId, resourceType: "instance" }, [
-          "instance.limits.write",
-          "instance.power.restart",
-        ])
-        relay.snapshot = snapshotWith({
-          ...instance,
-          desiredState: "running",
-          observedState: "running",
-        })
-
-        yield* saveLimits
-
-        assert.deepInclude(relay.applied[0], {
-          limits: newLimits,
-          start: true,
-        })
+        const room = yield* capacity("c".repeat(40), "app")
+        assert.strictEqual(room?.assignableMemoryBytes, 3 * 1024 ** 3)
       })
     )
   })

@@ -64,6 +64,8 @@ import {
   relayDeployAppSchema,
   relayDatabaseActionSchema,
   relayDatabaseLimitsSchema,
+  relayInstanceLimitsWriteSchema,
+  type ResourceLimits,
   relayDatabaseDataReadSchema,
   relayDatabaseDataWriteSchema,
   relayPlatformDatabaseReadSchema,
@@ -2131,6 +2133,7 @@ async function relaySnapshot() {
     instances,
     storedNames,
     pendingPrimaryPorts,
+    pendingLimits,
     provisioningJobs,
     sftpPublication,
     updates,
@@ -2146,6 +2149,9 @@ async function relaySnapshot() {
           runRelayEffectUntraced(startup.state.listPendingPrimaryPorts())
         ),
         relayOperation(() =>
+          runRelayEffectUntraced(startup.state.listPendingLimits())
+        ),
+        relayOperation(() =>
           runRelayEffectUntraced(startup.state.listProvisioningJobs())
         ),
         relayOperation(() => docker.relaySftpPublication(sftpServer.port)),
@@ -2154,9 +2160,12 @@ async function relaySnapshot() {
       { concurrency: 4 }
     )
   )
-  const visibleInstances = applyStoredPendingPrimaryPorts(
-    applyStoredInstanceNames(instances, storedNames),
-    pendingPrimaryPorts
+  const visibleInstances = applyPendingLimits(
+    applyStoredPendingPrimaryPorts(
+      applyStoredInstanceNames(instances, storedNames),
+      pendingPrimaryPorts
+    ),
+    pendingLimits
   )
   const retained = Array.from(retainedInstances.values())
   const provisioningById = new Map(
@@ -3506,6 +3515,16 @@ async function executeControlRequest(
         return relayInstanceWithStoredName(instance)
       })
     }
+    case "instance.limits.write": {
+      const { limits } = relayInstanceLimitsWriteSchema.parse(payload)
+      const instance = await requiredInstance(payload)
+      await lifecycle.setInstanceLimits(instance, limits)
+      const updated = (await docker.inspectInstances()).find(
+        (candidate) => candidate.id === instance.id
+      )
+      if (!updated) throw new Error("Instance not found")
+      return refreshRelayInstance(updated)
+    }
     case "instance.rename": {
       const instance = await requiredInstance(payload)
       const name = relayInstanceNameSchema.parse(payload.name)
@@ -3566,6 +3585,7 @@ async function executeControlRequest(
         "relay.instance.deletePendingPrimaryPort",
         startup.state.deletePendingPrimaryPort(instanceId)
       )
+      await docker.setPendingLimits(instanceId, null)
       // Its routes go with it, so their hostnames are free again.
       await withRoutesLock("instance.delete.routes", async () => {
         await runRelayEffect(
@@ -4676,7 +4696,7 @@ async function requiredInstance(payload: Readonly<Record<string, unknown>>) {
 }
 
 async function relayInstanceWithStoredName(instance: RelayInstance) {
-  const [names, pendingPrimaryPorts] = await Effect.runPromise(
+  const [names, pendingPrimaryPorts, pendingLimits] = await Effect.runPromise(
     Effect.all(
       [
         relayOperation(() =>
@@ -4691,14 +4711,23 @@ async function relayInstanceWithStoredName(instance: RelayInstance) {
             startup.state.listPendingPrimaryPorts()
           )
         ),
+        relayOperation(() =>
+          runRelayEffect(
+            "relay.instance.pendingLimits",
+            startup.state.listPendingLimits()
+          )
+        ),
       ] as const,
-      { concurrency: 2 }
+      { concurrency: 3 }
     )
   )
   return (
-    applyStoredPendingPrimaryPorts(
-      applyStoredInstanceNames([instance], names),
-      pendingPrimaryPorts
+    applyPendingLimits(
+      applyStoredPendingPrimaryPorts(
+        applyStoredInstanceNames([instance], names),
+        pendingPrimaryPorts
+      ),
+      pendingLimits
     )[0] ?? instance
   )
 }
@@ -4707,6 +4736,16 @@ async function refreshRelayInstance(instance: RelayInstance) {
   const updated = await relayInstanceWithStoredName(instance)
   await snapshotHub.refresh()
   return updated
+}
+
+function applyPendingLimits(
+  instances: ReadonlyArray<RelayInstance>,
+  pendingLimits: ReadonlyMap<string, ResourceLimits>
+): Array<RelayInstance> {
+  return instances.map((instance) => {
+    const limits = pendingLimits.get(instance.id)
+    return limits ? { ...instance, pendingLimits: limits } : instance
+  })
 }
 
 function applyStoredPendingPrimaryPorts(

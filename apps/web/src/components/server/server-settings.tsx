@@ -244,7 +244,9 @@ export function ServerProvisioningSection({
   const failed = provisioning.phase === "failed"
   return (
     <InfoSection
-      icon={failed ? <TriangleAlert /> : <LoaderCircle className="animate-spin" />}
+      icon={
+        failed ? <TriangleAlert /> : <LoaderCircle className="animate-spin" />
+      }
       title="Provisioning"
       status={
         <StatusIndicator
@@ -389,7 +391,9 @@ function BrickRecipeDialogBody({
     <>
       <DialogHeader className="sr-only">
         <DialogTitle>{recipeQuery.data?.name ?? "Brick recipe"}</DialogTitle>
-        <DialogDescription>Preview this server&apos;s recipe.</DialogDescription>
+        <DialogDescription>
+          Preview this server&apos;s recipe.
+        </DialogDescription>
       </DialogHeader>
       {recipeQuery.isPending ? (
         <div className="grid h-[min(72dvh,42rem)] min-h-80 place-items-center bg-card text-muted-foreground">

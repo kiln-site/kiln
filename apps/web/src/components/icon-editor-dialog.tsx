@@ -34,10 +34,7 @@ import {
 import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
-import {
-  IconImage,
-  useIconUrl,
-} from "@/components/icon-image"
+import { IconImage, useIconUrl } from "@/components/icon-image"
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import {
   base64ToBlob,
@@ -204,7 +201,9 @@ function IconEditorDialog({
         () =>
           recoverPromise(
             async () => ({ icon: await prepareIconImage(await load(), fit) }),
-            (cause) => ({ error: errorMessage(cause, "Could not use that image") })
+            (cause) => ({
+              error: errorMessage(cause, "Could not use that image"),
+            })
           ),
         () => setPreparing(false)
       )
@@ -228,7 +227,9 @@ function IconEditorDialog({
             async () => ({
               blob: await readSourceFile(subject, files, path, service),
             }),
-            (cause) => ({ error: errorMessage(cause, "Could not read that file") })
+            (cause) => ({
+              error: errorMessage(cause, "Could not read that file"),
+            })
           ),
         () => setPreparing(false)
       )
@@ -941,7 +942,9 @@ function DetectionStatus({
         variant="ghost"
         className="shrink-0"
         disabled={detect.isPending}
-        title={found && details?.custom ? "Your own icon is shown instead" : looksFor}
+        title={
+          found && details?.custom ? "Your own icon is shown instead" : looksFor
+        }
         onClick={() => detect.mutate()}
       >
         <RefreshCw className={cn(detect.isPending && "animate-spin")} />

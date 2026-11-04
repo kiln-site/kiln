@@ -95,6 +95,7 @@ export type InstanceSettingsInstance = Pick<
   | "javaVersion"
   | "limits"
   | "name"
+  | "pendingLimits"
   | "ports"
   | "provisioning"
   | "publicHost"
@@ -280,6 +281,7 @@ export function selectInstanceSettings(instanceId: string, relayId?: string) {
         javaVersion: instance.javaVersion,
         limits: instance.limits,
         name: instance.name,
+        pendingLimits: instance.pendingLimits,
         ports: instance.ports,
         provisioning: instance.provisioning,
         publicHost: instance.publicHost,
@@ -303,8 +305,9 @@ export function selectInstanceSettings(instanceId: string, relayId?: string) {
   }
 }
 
-// Whether saving a game server's limits restarts it, and the files a disk
-// limit has to hold, rounded so usage ticking up doesn't render the section.
+// Whether a game server is running, so saved limits wait on a restart or a
+// start, and the files a disk limit has to hold, rounded so usage ticking up
+// doesn't render the section.
 export function selectInstanceLimitsState(
   instanceId: string,
   relayId?: string
