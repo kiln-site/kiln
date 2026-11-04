@@ -5,9 +5,9 @@ import { Slider } from "@workspace/ui/components/slider"
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
-  AXIS_END,
   limitAxis,
   NO_LIMIT_POSITION,
+  type LimitMove,
   type LimitScale,
 } from "@/lib/resource-limit-axis"
 import type { ResourceLimitDraft } from "@/lib/resource-limits"
@@ -22,10 +22,6 @@ export type ResourceLimitUnit = LimitScale & {
   spoken: string
   unit: string
 }
-
-// How close, in slider positions, a drag has to come to the saved limit to
-// land on it, so it can be found again whatever value it is.
-const SAVED_LIMIT_PULL = 12
 
 // One limit: its name, a slider, and the same value in a box to type into.
 // Memoized, so dragging one slider renders only that row.
@@ -54,51 +50,29 @@ export const ResourceLimitSlider = React.memo(function ResourceLimitSlider({
   unit: ResourceLimitUnit
   value: ResourceLimitDraft
 }) {
-  const { decimals, label, min, scale, spoken } = unit
-  const stored = Number(value.value)
-  const current =
-    value.limited && value.value.trim() !== "" && Number.isFinite(stored)
-      ? stored * scale
-      : null
+  const { label, min, scale, spoken } = unit
+  const { current, shown } = limitValue(value, unit)
   const axis = limitAxis(unit, { assignable, original })
-  const limitTo = (shown: number) =>
-    onChange({
-      limited: true,
-      value: String(Number((shown / scale).toFixed(4))),
-    })
-  const noLimit = () => onChange({ ...value, limited: false })
-  const nudge = (up: boolean) => {
-    if (!value.limited) {
-      if (!up) limitTo(axis.largest)
-      return
+  const move = (to: LimitMove) => {
+    if (to === "no-limit") onChange({ ...value, limited: false })
+    else if (to !== null) {
+      onChange({
+        limited: true,
+        value: String(Number((to / scale).toFixed(4))),
+      })
     }
-    const stepped = axis.next(current ?? min, up)
-    if (stepped > axis.max) noLimit()
-    else limitTo(Math.max(stepped, min))
   }
-  const sliderAt = !value.limited
-    ? NO_LIMIT_POSITION
-    : current === null
-      ? 0
-      : axis.position(current)
-  const shown =
-    current === null
-      ? null
-      : decimals
-        ? Number(current.toFixed(2))
-        : Math.round(current)
+  // A limit that isn't a number yet steps from the axis's start.
+  const stepFrom = value.limited ? (current ?? min) : null
+  const sliderAt = axis.sliderAt(value.limited, current)
   const changed = value.limited ? current !== original : original !== null
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_5.5rem] items-start gap-x-3 gap-y-1 sm:grid-cols-[5rem_minmax(0,1fr)_5.5rem]">
-      <div className="order-1 min-h-7 min-w-0">
-        <span className="type-label flex h-7 items-center">{label}</span>
-        {changed ? (
-          <span className="type-meta block whitespace-nowrap text-muted-foreground tabular-nums">
-            was {original === null ? "no limit" : formatValue(original, unit)}
-          </span>
-        ) : null}
-      </div>
+      <ResourceLimitName
+        original={changed ? { value: original } : null}
+        unit={unit}
+      />
       <Slider
         aria-label={`${label} limit`}
         className={cn(
@@ -119,39 +93,18 @@ export const ResourceLimitSlider = React.memo(function ResourceLimitSlider({
           })),
           { label: "No limit", value: NO_LIMIT_POSITION },
         ]}
-        value={Math.min(sliderAt, value.limited ? AXIS_END : NO_LIMIT_POSITION)}
-        valueText={() =>
-          !value.limited
-            ? "No limit"
-            : shown === null
-              ? "Not set"
-              : `${shown} ${spoken}`
+        value={sliderAt}
+        valueText={() => spokenLimit(value.limited, shown, spoken)}
+        zones={axis.zones(assignable, below)}
+        onValueChange={(next, reason) =>
+          move(
+            axis.slide(next, {
+              at: sliderAt,
+              current: stepFrom,
+              keyboard: reason === "keyboard",
+            })
+          )
         }
-        zones={[
-          ...(below !== null && below > min
-            ? [{ from: 0, to: axis.position(below) }]
-            : []),
-          ...(assignable !== null && assignable < axis.max
-            ? [{ from: axis.position(assignable), to: AXIS_END }]
-            : []),
-        ]}
-        onValueChange={(next, reason) => {
-          if (reason === "keyboard") {
-            // A key moves one round value, and past the axis's end, or back
-            // from it, to no limit and the largest limit.
-            if (next <= 0) return limitTo(min)
-            if (next >= NO_LIMIT_POSITION && next > sliderAt) return noLimit()
-            return nudge(next > sliderAt)
-          }
-          if (next > (AXIS_END + NO_LIMIT_POSITION) / 2) return noLimit()
-          if (
-            original !== null &&
-            Math.abs(next - axis.position(original)) <= SAVED_LIMIT_PULL
-          ) {
-            return limitTo(original)
-          }
-          limitTo(axis.valueAt(next))
-        }}
       />
       <ResourceLimitInput
         disabled={disabled}
@@ -160,11 +113,34 @@ export const ResourceLimitSlider = React.memo(function ResourceLimitSlider({
         unit={unit}
         value={value}
         onChange={onChange}
-        onNudge={nudge}
+        onNudge={(up) => move(axis.nudge(stepFrom, up))}
       />
     </div>
   )
 })
+
+// The limit's name, and what it was once changed.
+function ResourceLimitName({
+  original,
+  unit,
+}: {
+  original: { value: number | null } | null
+  unit: ResourceLimitUnit
+}) {
+  return (
+    <div className="order-1 min-h-7 min-w-0">
+      <span className="type-label flex h-7 items-center">{unit.label}</span>
+      {original ? (
+        <span className="type-meta block whitespace-nowrap text-muted-foreground tabular-nums">
+          was{" "}
+          {original.value === null
+            ? "no limit"
+            : formatValue(original.value, unit)}
+        </span>
+      ) : null}
+    </div>
+  )
+}
 
 // The limit as a number to type, and to step with the arrow keys.
 function ResourceLimitInput({
@@ -230,6 +206,32 @@ function ResourceLimitInput({
       ) : null}
     </label>
   )
+}
+
+// The limit in the units shown, null while it isn't a number, and rounded
+// as it's shown, so typing into a fraction can't run its digits together.
+function limitValue(
+  { limited, value }: ResourceLimitDraft,
+  { decimals, scale }: ResourceLimitUnit
+) {
+  const stored = Number(value)
+  if (!limited || value.trim() === "" || !Number.isFinite(stored)) {
+    return { current: null, shown: null }
+  }
+  const current = stored * scale
+  return {
+    current,
+    shown: decimals ? Number(current.toFixed(2)) : Math.round(current),
+  }
+}
+
+function spokenLimit(
+  limited: boolean,
+  shown: number | null,
+  spoken: string
+): string {
+  if (!limited) return "No limit"
+  return shown === null ? "Not set" : `${shown} ${spoken}`
 }
 
 function formatValue(value: number, { decimals, unit }: ResourceLimitUnit) {

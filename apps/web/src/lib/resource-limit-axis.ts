@@ -7,6 +7,13 @@ export const AXIS_END = 1000
 /** The stop for no limit; anything past halfway to it snaps there. */
 export const NO_LIMIT_POSITION = 1260
 
+// How close, in slider positions, a drag has to come to the saved limit to
+// land on it, so it can be found again whatever value it is.
+const SAVED_LIMIT_PULL = 12
+
+/** Where a move leaves the limit: a value, no limit, or where it was. */
+export type LimitMove = number | "no-limit" | null
+
 export type LimitScale = {
   /** The axis's end when what the node can give isn't known. */
   fallbackMax: number
@@ -17,13 +24,22 @@ export type LimitScale = {
 
 export type LimitAxis = {
   max: number
-  /** The value the keyboard lands on coming back from no limit. */
-  largest: number
-  /** The next round value up or down from one. */
-  next: (value: number, up: boolean) => number
+  /** One round value up or down; `current` is null for no limit. */
+  nudge: (current: number | null, up: boolean) => LimitMove
   position: (value: number) => number
+  /** Where the slider sits for a limit, held to the axis if past its end. */
+  sliderAt: (limited: boolean, current: number | null) => number
+  /** Where the slider moving to `next` takes the limit. */
+  slide: (
+    next: number,
+    from: { at: number; current: number | null; keyboard: boolean }
+  ) => LimitMove
   ticks: ReadonlyArray<{ position: number; value: number }>
-  valueAt: (position: number) => number
+  /** The stretches to shade: under `below`, and past what the node can give. */
+  zones: (
+    assignable: number | null,
+    below: number | null
+  ) => ReadonlyArray<{ from: number; to: number }>
 }
 
 export function limitAxis(
@@ -41,29 +57,59 @@ export function limitAxis(
   const span = Math.log(max / min)
   const position = (value: number) =>
     (AXIS_END * Math.log(Math.max(value, min) / min)) / span
+  const valueAt = (at: number) => {
+    const value = min * Math.exp((Math.min(at, AXIS_END) / AXIS_END) * span)
+    const size = step(value)
+    const near = Math.round(value / size) * size
+    return rounded(near > max ? Math.floor(value / size) * size : near)
+  }
+  const nudge = (current: number | null, up: boolean): LimitMove => {
+    // Past the axis's end is no limit, and back from it the largest limit.
+    if (current === null) {
+      return up ? null : rounded(Math.floor(max / step(max)) * step(max))
+    }
+    // Going down from a tier's first value takes the tier below.
+    const size = step(up ? current : current * (1 - 1e-9))
+    const stepped = rounded(
+      up
+        ? Math.floor(current / size + 1e-9) * size + size
+        : Math.ceil(current / size - 1e-9) * size - size
+    )
+    return stepped > max ? "no-limit" : Math.max(stepped, min)
+  }
   return {
-    largest: rounded(Math.floor(max / step(max)) * step(max)),
     max,
-    next: (value, up) => {
-      // Going down from a tier's first value takes the tier below.
-      const size = step(up ? value : value * (1 - 1e-9))
-      return rounded(
-        up
-          ? Math.floor(value / size + 1e-9) * size + size
-          : Math.ceil(value / size - 1e-9) * size - size
-      )
-    },
+    nudge,
     position,
+    slide: (next, { at, current, keyboard }) => {
+      if (keyboard) {
+        if (next <= 0) return min
+        if (next >= NO_LIMIT_POSITION && next > at) return "no-limit"
+        return nudge(current, next > at)
+      }
+      if (next > (AXIS_END + NO_LIMIT_POSITION) / 2) return "no-limit"
+      const saved = input.original
+      return saved !== null &&
+        Math.abs(next - position(saved)) <= SAVED_LIMIT_PULL
+        ? saved
+        : valueAt(next)
+    },
+    sliderAt: (limited, current) => {
+      if (!limited) return NO_LIMIT_POSITION
+      return current === null ? 0 : Math.min(position(current), AXIS_END)
+    },
     ticks: axisTicks(min, max).map((value) => ({
       position: position(value),
       value,
     })),
-    valueAt: (at) => {
-      const value = min * Math.exp((Math.min(at, AXIS_END) / AXIS_END) * span)
-      const size = step(value)
-      const near = Math.round(value / size) * size
-      return rounded(near > max ? Math.floor(value / size) * size : near)
-    },
+    zones: (assignable, below) => [
+      ...(below !== null && below > min
+        ? [{ from: 0, to: position(below) }]
+        : []),
+      ...(assignable !== null && assignable < max
+        ? [{ from: position(assignable), to: AXIS_END }]
+        : []),
+    ],
   }
 }
 
