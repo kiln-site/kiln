@@ -25,11 +25,17 @@ export interface DesktopSurface {
   setTrackpad?: (trackpad: boolean) => void
   /** Opens or closes a phone's keyboard, from the tap on the toolbar. */
   toggleKeyboard?: () => void
+  /** Pastes the browser's clipboard, for a touch screen with no paste key. */
+  paste?: () => void
   /** The monitor on show, for a client that can ask for only that much. */
   showMonitor?: (monitor: RelayDesktopMonitor | undefined) => void
   /** Presses keys down in order and lets them go in reverse. */
   sendKeys: (keys: ReadonlyArray<SendableKey>) => void
 }
+
+/** Whether shortcuts here use Command: a Mac, or an iPad or iPhone's keyboard. */
+export const viewerUsesCommand = () =>
+  /^(Mac|iPhone|iPad|iPod)/u.test(navigator.platform)
 
 /** The size of the image a client shows, in the desktop's pixels. */
 export interface DesktopImageSize {
@@ -60,6 +66,8 @@ export interface DesktopClient {
   readonly offersTrackpad?: boolean
   /** Whether touch screens get `DesktopSurface.toggleKeyboard`. voxl has its own. */
   readonly offersKeyboard?: boolean
+  /** Whether touch screens get `DesktopSurface.paste`. voxl has no need. */
+  readonly offersPaste?: boolean
   /** Whether the toolbar offers `DesktopSurface.setLossless`. */
   readonly offersLossless?: boolean
   /** Shown while the stream opens. */

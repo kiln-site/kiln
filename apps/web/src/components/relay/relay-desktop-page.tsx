@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router"
 import type { RelayDesktop, RelayDesktopMonitor } from "@workspace/contracts"
 import { Result } from "effect"
 import {
+  ClipboardPaste,
   Command,
   Gem,
   Keyboard,
@@ -472,6 +473,17 @@ function DesktopFrame({
             <ToolbarLabel>Keyboard</ToolbarLabel>
           </Button>
         ) : null}
+        {client.offersPaste && touch ? (
+          <Button
+            disabled={!imageSize}
+            size="sm"
+            variant="ghost"
+            onClick={() => surface.current?.paste?.()}
+          >
+            <ClipboardPaste />
+            <ToolbarLabel>Paste</ToolbarLabel>
+          </Button>
+        ) : null}
         {monitors.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -567,7 +579,9 @@ function DesktopFrame({
         </DropdownMenu>
         <Button size="sm" variant="ghost" onClick={toggleExpanded}>
           {expanded ? <Minimize /> : <Maximize />}
-          <ToolbarLabel>{expanded ? "Exit fullscreen" : "Fullscreen"}</ToolbarLabel>
+          <ToolbarLabel>
+            {expanded ? "Exit fullscreen" : "Fullscreen"}
+          </ToolbarLabel>
         </Button>
         <Button size="sm" variant="ghost" onClick={onDisconnect}>
           <Unplug />

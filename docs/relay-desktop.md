@@ -72,7 +72,9 @@ one pointer: moving it over the picture sends the Mac's pointer to the matching
 place on the Mac, away from where you're looking, so clicks seem to go nowhere.
 
 Screen Sharing listens on every network the Mac is on, not only for the Relay,
-so anyone who can reach the Mac can try to sign in. Don't forward its port.
+so anyone who can reach the Mac can try to sign in. Don't forward its port. Keep
+macOS current too: before 26.6.1, 15.7.9 and 14.8.9, Screen Sharing had a bug
+(CVE-2026-65400) that let anyone who could reach that port in without signing in.
 
 The Relay runs in Docker, which normally starts when someone logs in, so a
 restarted Mac can't be reached from Kiln until then. A Mac that sleeps drops off.
@@ -258,6 +260,52 @@ noVNC takes each slice for a whole frame, so the encoder uses one thread and one
 slice. H.264 at level 5.1 stops at 9.4 million pixels, so a larger tab gets a
 smaller picture, scaled up.
 
+## Clipboard
+
+voxl mirrors text and images itself, between the X clipboard and the browser.
+
+A Mac ignores VNC's own clipboard messages in both directions, even after agreeing
+to them, so the Relay uses the ones Apple's viewer does
+(`desktop-mac-pasteboard.ts`), which work on the plain session noVNC opens. They
+aren't documented: this was measured on macOS 27, and
+[remotex](https://github.com/andrewtheguy/remotex/blob/HEAD/docs/apple-vnc-889.md)
+has the protocol written up. After sign-in the Relay asks the Mac to say when its
+pasteboard changes, and fetches it when it does. That's an archive of every
+format of everything on it, so a line of text can come with megabytes of images.
+The Relay keeps the text if there is any, as copying from a document brings a
+picture of it too, and otherwise an image, and sends it to the page as cut text:
+UTF-8, or PNG behind a marker. A browser's clipboard takes no other kind of image,
+and Macs often keep theirs as TIFF, so `sharp` converts those. An archive over
+64 MB is skipped, and text over 1 MB or an image over 15 MB stays where it is,
+either way. An image pasted on the Mac isn't mirrored back.
+
+Copied files stay out of this. All a Mac's clipboard holds of one is its path, and
+a browser's can't hold a file at all. Kiln's host files are the way to move one.
+
+Browsers guard their clipboards, so the page (`relay-desktop-clipboard.tsx`) works
+with what each allows:
+
+- What the Mac copies while the viewer's on the page is written to the browser's
+  clipboard. That needs focus, and on phones a tap, so a refused write waits for
+  the next one. Copies made while they're elsewhere are left, rather than replacing
+  what they've copied there since.
+- Paste on the viewer's keyboard is kept from noVNC, which would stop the browser's
+  paste event. It lands in a hidden field, what was pasted goes to the Mac, and then
+  the Mac gets the V. The Relay finishes with it before reading the next key. Text
+  the Mac gave the browser stays out of this, so a file or rich text copied on the
+  Mac still pastes as itself there. An image can't be told apart that way, as
+  browsers re-encode them, so one copied and pasted on the Mac goes round as PNG.
+  Something copied on the Mac that doesn't come here, such as a PDF, leaves the
+  browser as it was: if that's text from the Mac, Paste gets the PDF, and otherwise
+  it's what the viewer last copied that goes to the Mac.
+- A touch screen has no paste key, so the toolbar has **Paste**.
+
+The browser's clipboard only ever goes to the Mac on Paste. It's whatever the viewer
+last copied, passwords included, so it isn't sent just for opening a desktop or
+coming back to the tab. That means pasting from a menu on the Mac uses the Mac's own
+clipboard until the viewer's pasted once. Anyone viewing gets what's copied on the
+Mac, as they'd see it on screen.
+
 ## Stream recovery on a Mac
 
 noVNC ends with the connection rather than retrying. The page shows why, and
@@ -267,8 +315,8 @@ connection, so the page reconnects and asks again.
 ## Keyboard, fullscreen, and touch
 
 On a Mac, macOS's server reads Alt and Super as Command, and only Meta as
-Option, so the page sends a viewer's Alt as Meta. Other computers' Control is
-sent as Command, and their Windows key as Control, so shortcuts work by habit.
+Option, so the page sends a viewer's Alt or Option as Meta. Other computers' Control
+is sent as Command, and their Windows key as Control, so shortcuts work by habit.
 
 voxl sends each key to the desktop as an X keysym, so the viewer's layout
 decides what it types. A Mac's Command key becomes Control, so Linux shortcuts
@@ -334,3 +382,7 @@ the notices nested in them, such as the font voxl embeds. All of it is in
   and each stream holds the whole area on show in memory, twice, or three times
   with video. Images over 60 million pixels aren't shown.
 - voxl encodes on the CPU: about 1.5 cores on a busy desktop.
+- A Mac has no sound. VNC doesn't carry any, a container can't hear the Mac, and
+  Apple only sends it in High Performance mode, which shows a virtual display
+  instead of the real ones, and sends UDP to the address on the connection, which
+  through Docker is the Mac's own loopback.
