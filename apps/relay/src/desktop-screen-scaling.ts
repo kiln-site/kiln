@@ -3,6 +3,8 @@ import type { Socket } from "node:net"
 import sharp from "sharp"
 import type { WebSocket } from "ws"
 
+import { Bytes } from "./desktop-bytes.js"
+import type { ScreenVideo } from "./desktop-video.js"
 import { forkPromise } from "./effect/promise.js"
 
 // Shrinks a Mac's picture before it leaves the node. macOS's server sends only
@@ -13,11 +15,16 @@ import { forkPromise } from "./effect/promise.js"
 // screen. noVNC stays a plain VNC client: it sees a server that happens to have
 // a small framebuffer and offers Tight. Sign-in passes through unread, so the
 // viewer's login still only reaches the Mac.
+//
+// Where there's an encoder (desktop-video.ts) and the viewer can decode it, the
+// picture goes out as H.264 instead, which suits motion and costs a fraction of
+// the bytes. JPEG stays for everyone else, and takes over if the encoder goes.
 
 const VIEW_MESSAGE = 0xfa
 const RAW = 0
 const TIGHT = 7
 const TIGHT_PNG = -260
+const H264 = 50
 const DESKTOP_SIZE = -223
 const CURSOR = -239
 const DESKTOP_NAME = -307
@@ -26,8 +33,11 @@ const TIGHT_PNG_DATA = 0xa0
 const SECURITY_NONE = 1
 const SECURITY_VNC = 2
 const SECURITY_ARD = 30
+// That decoding should start over for this rectangle's picture.
+const H264_RESET = 1
+// H.264 level 5.1, which browsers can decode: a larger picture is scaled to fit.
+const MAX_VIDEO_PIXELS = 9_437_184
 
-const MAX_BUFFERED_BYTES = 32 * 1024 * 1024
 const MAX_CUT_TEXT_BYTES = 1024 * 1024
 const MAX_CURSOR_SIZE = 1024
 // Four 5K displays. A stream holds the image, and a copy of it, in memory.
@@ -57,6 +67,9 @@ const MAX_PNG_PIXELS = 1_000_000
 const PNG = { adaptiveFiltering: false, compressionLevel: 2 }
 const LOSSLESS = 1
 const FAST_MOTION = 2
+// The page says so here, not in the encodings noVNC offers, as noVNC's own check
+// fails in Chrome on a Mac (relay-desktop-video-check.ts).
+const DECODES_VIDEO = 4
 // A change is scaled apart from the rest of the picture, so it has to land on
 // the same pixels it would if everything were scaled together, or what's around
 // it shifts by a fraction of a pixel with each update. So scales are sixteenths,
@@ -87,6 +100,8 @@ interface View {
   readonly frame: Buffer
   readonly height: number
   readonly lossless: boolean
+  // Whether it goes out as H.264.
+  readonly video: boolean
   // The frame's size: the area, rounded up to whole steps unless lossless.
   readonly frameHeight: number
   readonly frameWidth: number
@@ -96,92 +111,6 @@ interface View {
   // What's changed since the viewer last got it, and what it has only roughly.
   changed: Rectangle | null
   rough: Rectangle | null
-}
-
-// Bytes as they arrive, read in whatever sizes the protocol calls for.
-class Bytes {
-  readonly #source: { pause: () => void; resume: () => void }
-  #chunks: Array<Buffer> = []
-  #length = 0
-  #offset = 0
-  #paused = false
-  #wanted = 0
-  #wake: (() => void) | null = null
-  #sink: ((chunk: Buffer) => void) | null = null
-
-  constructor(source: { pause: () => void; resume: () => void }) {
-    this.#source = source
-  }
-
-  push(chunk: Buffer) {
-    if (this.#sink) {
-      this.#sink(chunk)
-      return
-    }
-    this.#chunks.push(chunk)
-    this.#length += chunk.length
-    if (this.#wake && this.#length >= this.#wanted) {
-      const wake = this.#wake
-      this.#wake = null
-      wake()
-    }
-    if (!this.#paused && this.#length >= MAX_BUFFERED_BYTES) {
-      this.#paused = true
-      this.#source.pause()
-    }
-  }
-
-  /** The next bytes if they've arrived, valid until the next read. */
-  take(size: number): Buffer | null {
-    if (this.#length < size) return null
-    this.#length -= size
-    const first = this.#chunks[0]
-    let result: Buffer
-    if (first && first.length - this.#offset >= size) {
-      result = first.subarray(this.#offset, this.#offset + size)
-      this.#offset += size
-      if (this.#offset === first.length) {
-        this.#chunks.shift()
-        this.#offset = 0
-      }
-    } else {
-      result = Buffer.allocUnsafe(size)
-      let filled = 0
-      while (filled < size) {
-        const chunk = this.#chunks[0]
-        if (!chunk) break
-        const copied = chunk.copy(result, filled, this.#offset)
-        filled += copied
-        this.#offset += copied
-        if (this.#offset === chunk.length) {
-          this.#chunks.shift()
-          this.#offset = 0
-        }
-      }
-    }
-    if (this.#paused && this.#length < MAX_BUFFERED_BYTES / 2) {
-      this.#paused = false
-      this.#source.resume()
-    }
-    return result
-  }
-
-  async read(size: number): Promise<Buffer> {
-    const ready = this.take(size)
-    if (ready) return ready
-    await new Promise<void>((wake) => {
-      this.#wanted = size
-      this.#wake = wake
-    })
-    return this.take(size) ?? Buffer.alloc(0)
-  }
-
-  /** Hands everything from now on straight to `sink`. */
-  drainTo(sink: (chunk: Buffer) => void) {
-    const rest = this.take(this.#length)
-    if (rest && rest.length > 0) sink(rest)
-    this.#sink = sink
-  }
 }
 
 const holdable = (width: number, height: number) =>
@@ -244,6 +173,34 @@ function imageSizeNotice(width: number, height: number) {
   ])
 }
 
+// So is whether a viewer's getting video, for the toolbar.
+function videoNotice(on: boolean) {
+  const name = Buffer.from(`kiln-video:${on ? "on" : "off"}`)
+  const length = Buffer.alloc(4)
+  length.writeUInt32BE(name.length)
+  return update([
+    Buffer.concat([
+      rectangleHeader({ height: 0, width: 0, x: 0, y: 0 }, DESKTOP_NAME),
+      length,
+      name,
+    ]),
+  ])
+}
+
+function videoRectangle(view: View, encoded: Buffer, flags: number) {
+  const header = Buffer.alloc(8)
+  header.writeUInt32BE(encoded.length, 0)
+  header.writeUInt32BE(flags, 4)
+  return Buffer.concat([
+    rectangleHeader(
+      { height: view.height, width: view.width, x: 0, y: 0 },
+      H264
+    ),
+    header,
+    encoded,
+  ])
+}
+
 // Tight's length: seven bits a byte, up to three bytes.
 function compactLength(length: number) {
   if (length > MAX_TIGHT_BYTES) throw new RangeError("Too much for Tight")
@@ -259,8 +216,12 @@ function compactLength(length: number) {
 }
 
 /** Carries one viewer's stream to the Mac until either end closes. */
-export function carryScaledScreen(mac: Socket, viewer: WebSocket): void {
-  new ScaledScreen(mac, viewer).start()
+export function carryScaledScreen(
+  mac: Socket,
+  viewer: WebSocket,
+  openVideo: () => ScreenVideo | null = () => null
+): void {
+  new ScaledScreen(mac, viewer, openVideo).start()
 }
 
 class ScaledScreen {
@@ -268,6 +229,7 @@ class ScaledScreen {
   readonly #viewer: WebSocket
   readonly #fromMac: Bytes
   readonly #fromViewer: Bytes
+  readonly #openVideo: () => ScreenVideo | null
   #image = { height: 0, width: 0 }
   #view: View | null = null
   #viewerReady = false
@@ -281,10 +243,22 @@ class ScaledScreen {
   #timer: ReturnType<typeof setInterval> | null = null
   #snapshot = Buffer.alloc(0)
   #fastMotion = false
+  #video: ScreenVideo | null = null
+  #videoGone = false
+  #videoView: View | null = null
+  #videoReset = false
+  #videoShown = false
+  // What the viewer last asked for, to show again without the encoder.
+  #wanted: Buffer | null = null
 
-  constructor(mac: Socket, viewer: WebSocket) {
+  constructor(
+    mac: Socket,
+    viewer: WebSocket,
+    openVideo: () => ScreenVideo | null
+  ) {
     this.#mac = mac
     this.#viewer = viewer
+    this.#openVideo = openVideo
     this.#fromMac = new Bytes(mac)
     this.#fromViewer = new Bytes({
       pause: () => viewer.pause(),
@@ -318,6 +292,7 @@ class ScaledScreen {
     if (this.#closed) return
     this.#closed = true
     if (this.#timer) clearInterval(this.#timer)
+    this.#video?.close()
     this.#mac.destroy()
     this.#viewer.terminate()
   }
@@ -540,7 +515,9 @@ class ScaledScreen {
         const text = await this.#fromViewer.read(length)
         await this.#write(Buffer.concat([Buffer.from([6]), header, text]))
       } else if (type === VIEW_MESSAGE) {
-        await this.#show(await this.#fromViewer.read(13))
+        const view = Buffer.from(await this.#fromViewer.read(13))
+        this.#wanted = view
+        await this.#show(view)
       } else {
         return this.#close()
       }
@@ -577,25 +554,42 @@ class ScaledScreen {
     // Lossless is every pixel, exactly: nothing to scale.
     const lossless = ((message[12] ?? 0) & LOSSLESS) !== 0
     this.#fastMotion = ((message[12] ?? 0) & FAST_MOTION) !== 0
+    if (((message[12] ?? 0) & DECODES_VIDEO) !== 0 && !this.#videoGone) {
+      this.#video ??= this.#openVideo()
+    }
+    const hasVideo = this.#video !== null
+    if (hasVideo !== this.#videoShown) {
+      this.#videoShown = hasVideo
+      await this.#send(videoNotice(hasVideo))
+    }
+    const video = hasVideo && !lossless
     const steps = Math.ceil(
       Math.max(
         message.readUInt16BE(8) / area.width,
         message.readUInt16BE(10) / area.height
       ) * SCALE_STEPS
     )
-    const scale = lossless
-      ? 1
-      : Math.min(Math.max(steps, 1), SCALE_STEPS) / SCALE_STEPS
     const whole = (size: number) =>
       lossless ? size : Math.ceil(size / SCALE_STEPS) * SCALE_STEPS
     const frameWidth = whole(area.width)
     const frameHeight = whole(area.height)
-    const width = frameWidth * scale
-    const height = frameHeight * scale
+    const mostSteps = video
+      ? Math.floor(
+          Math.sqrt(MAX_VIDEO_PIXELS / (frameWidth * frameHeight)) * SCALE_STEPS
+        )
+      : SCALE_STEPS
+    const scale = lossless
+      ? 1
+      : Math.min(Math.max(steps, 1), mostSteps, SCALE_STEPS) / SCALE_STEPS
+    // Video's sizes are even, as 4:2:0 needs.
+    const fitted = (size: number) => (video ? size - (size % 2) : size)
+    const width = fitted(frameWidth * scale)
+    const height = fitted(frameHeight * scale)
     const shown = this.#view
     if (
       shown &&
       shown.lossless === lossless &&
+      shown.video === video &&
       shown.width === width &&
       shown.height === height &&
       shown.area.x === x &&
@@ -615,6 +609,7 @@ class ScaledScreen {
       lossless,
       rough: null,
       scale,
+      video,
       width,
     }
     this.#ask(false)
@@ -647,11 +642,16 @@ class ScaledScreen {
     if (view.changed && this.#viewerReady && !this.#encoding) {
       const changed = view.changed
       view.changed = null
-      const small =
-        changed.width * changed.height <
-        view.area.width * view.area.height * SMALL_CHANGE
-      if (!small && !view.lossless) view.rough = union(view.rough, changed)
-      this.#encode(view, changed, small ? SHARP : ROUGH)
+      if (view.video) {
+        view.rough = union(view.rough, changed)
+        this.#encodeVideo(view, changed, false)
+      } else {
+        const small =
+          changed.width * changed.height <
+          view.area.width * view.area.height * SMALL_CHANGE
+        if (!small && !view.lossless) view.rough = union(view.rough, changed)
+        this.#encode(view, changed, small ? SHARP : ROUGH)
+      }
     }
     if (!view.changed && !this.#asked) this.#ask(true)
   }
@@ -669,7 +669,8 @@ class ScaledScreen {
     ) {
       const rough = view.rough
       view.rough = null
-      this.#encode(view, rough, SHARP)
+      if (view.video) this.#encodeVideo(view, null, true)
+      else this.#encode(view, rough, SHARP)
     }
     if (!this.#asked) return
     const asking = performance.now() - this.#askedAt
@@ -678,6 +679,62 @@ class ScaledScreen {
       now - this.#updatedAt > REFRESH_AFTER_MS &&
       now - this.#inputAt < RECENT_INPUT_MS
     this.#ask(!stuck)
+  }
+
+  // What's changed goes to the encoder, which keeps the whole picture. No
+  // change is the same picture again, sharper.
+  #encodeVideo(view: View, changed: Rectangle | null, sharpen: boolean) {
+    const video = this.#video
+    if (!video) return
+    this.#encoding = true
+    this.#viewerReady = false
+    if (this.#videoView !== view) {
+      this.#videoView = view
+      this.#videoReset = true
+      video.size(
+        { height: view.frameHeight, width: view.frameWidth },
+        { height: view.height, width: view.width }
+      )
+    }
+    const area = changed ?? { height: 0, width: 0, x: 0, y: 0 }
+    forkPromise(
+      async () => {
+        const encoded = await video.encode(
+          view.frame,
+          view.frameWidth,
+          area,
+          sharpen
+        )
+        if (encoded === null) {
+          await this.#loseVideo()
+          return
+        }
+        if (this.#view === view && encoded.length > 0) {
+          const flags = this.#videoReset ? H264_RESET : 0
+          this.#videoReset = false
+          this.#sentAt = Date.now()
+          await this.#send(update([videoRectangle(view, encoded, flags)]))
+        } else {
+          this.#viewerReady = true
+        }
+        this.#encoding = false
+        this.#step()
+      },
+      () => this.#close()
+    )
+  }
+
+  // JPEG takes over, at a size it can scale to, and the stream carries on.
+  async #loseVideo() {
+    this.#video?.close()
+    this.#video = null
+    this.#videoGone = true
+    this.#videoView = null
+    this.#viewerReady = true
+    this.#encoding = false
+    if (this.#closed || !this.#wanted) return
+    await this.#show(this.#wanted)
+    this.#step()
   }
 
   #encode(view: View, changed: Rectangle, jpeg: JpegQuality) {

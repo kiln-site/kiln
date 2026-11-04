@@ -15,6 +15,7 @@ import {
   type DesktopImageSize,
   type DesktopSurfaceProps,
 } from "@/components/relay/relay-desktop-surface"
+import { decodesDesktopVideo } from "@/components/relay/relay-desktop-video-check"
 import { forkPromise } from "@/effect/promise"
 
 // A Mac's desktop, through macOS's own Screen Sharing. noVNC plays it, in a
@@ -67,8 +68,10 @@ function macKeysym(keysym: number) {
 const VIEW_MESSAGE = 0xfa
 const RESIZE_SETTLE_MS = 150
 const IMAGE_SIZE_NOTICE = /^kiln-image:(\d+)x(\d+)$/u
+const VIDEO_NOTICE = /^kiln-video:(on|off)$/u
 
 interface View {
+  decodesVideo: boolean
   fastMotion: boolean
   lossless: boolean
   monitor: RelayDesktopMonitor | undefined
@@ -78,7 +81,7 @@ function sendView(
   rfb: NoVnc,
   element: HTMLElement,
   image: DesktopImageSize,
-  { fastMotion, lossless, monitor }: View
+  { decodesVideo, fastMotion, lossless, monitor }: View
 ) {
   const socket = rfb._sock._websocket
   if (socket?.readyState !== WebSocket.OPEN) return
@@ -103,7 +106,10 @@ function sendView(
     Math.round(area.height * scale),
   ]
   fields.forEach((value, index) => message.setUint16(1 + index * 2, value))
-  message.setUint8(13, (lossless ? 1 : 0) | (fastMotion ? 2 : 0))
+  message.setUint8(
+    13,
+    (lossless ? 1 : 0) | (fastMotion ? 2 : 0) | (decodesVideo ? 4 : 0)
+  )
   socket.send(message.buffer)
 }
 
@@ -126,6 +132,7 @@ function rememberAccount(relayId: string, account: string) {
 function ScreenSharingSurface({
   desktop,
   onImageSize,
+  onVideo,
   relayId,
   session,
   surface,
@@ -136,6 +143,7 @@ function ScreenSharingSurface({
   const client = React.useRef<NoVnc | null>(null)
   const imageSize = React.useRef<DesktopImageSize | null>(null)
   const view = React.useRef<View>({
+    decodesVideo: false,
     fastMotion: true,
     lossless: false,
     monitor: undefined,
@@ -194,7 +202,11 @@ function ScreenSharingSurface({
     }
     forkPromise(
       async () => {
-        const { default: RFB } = await import("@novnc/novnc")
+        const [{ default: RFB }, decodesVideo] = await Promise.all([
+          import("@novnc/novnc"),
+          decodesDesktopVideo(),
+        ])
+        view.current.decodesVideo = decodesVideo
         const element = target.current
         if (cancelled || !element) return
         const rfb = new RFB(element, desktopStreamUrl(relayId, session))
@@ -210,6 +222,8 @@ function ScreenSharingSurface({
         // The Relay says so this way when the Mac's displays change
         // (desktop-screen-scaling.ts).
         rfb.addEventListener("desktopname", (event) => {
+          const video = VIDEO_NOTICE.exec(event.detail.name)
+          if (video) onVideo?.(video[1] === "on")
           const size = IMAGE_SIZE_NOTICE.exec(event.detail.name)
           if (!size) return
           const image = { height: Number(size[2]), width: Number(size[1]) }
@@ -251,6 +265,7 @@ function ScreenSharingSurface({
           client.current = null
           imageSize.current = null
           onImageSize(null)
+          onVideo?.(false)
           if (cancelled) return
           if (failedSignIn) {
             setAttempt((value) => value + 1)
@@ -266,7 +281,7 @@ function ScreenSharingSurface({
       client.current?.disconnect()
       client.current = null
     }
-  }, [attempt, onImageSize, relayId, session, showView])
+  }, [attempt, onImageSize, onVideo, relayId, session, showView])
 
   // A new size is a new picture to scale, once the window stops moving.
   React.useEffect(() => {
@@ -411,7 +426,8 @@ export const screenSharingClient: DesktopClient = {
     { label: "Force Quit", keys: [command, option, keys.escape] },
     { label: "Lock Screen", keys: [keys.control, command, letter("q")] },
   ],
-  opening: "Connecting to Screen Sharing on this Mac.",
+  opening:
+    "Connecting to Screen Sharing on this Mac. The first time, the Relay downloads the video encoder.",
   unsupported: () =>
     window.isSecureContext
       ? null

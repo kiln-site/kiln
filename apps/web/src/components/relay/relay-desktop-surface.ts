@@ -37,6 +37,8 @@ export interface DesktopSurfaceProps {
   desktop: RelayDesktop
   /** The image's size once it shows, and null when it stops. */
   onImageSize: (size: DesktopImageSize | null) => void
+  /** Whether the picture is coming as video, for the toolbar. */
+  onVideo?: (video: boolean) => void
   relayId: string
   session: string
   surface: React.Ref<DesktopSurface>

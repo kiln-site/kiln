@@ -375,6 +375,7 @@ function DesktopFrame({
   React.useEffect(() => {
     surface.current?.showMonitor?.(monitor)
   }, [monitor])
+  const [video, setVideo] = React.useState(false)
   const [fastMotion, setFastMotion] = React.useState(true)
   React.useEffect(() => {
     surface.current?.setFastMotion?.(fastMotion)
@@ -451,7 +452,7 @@ function DesktopFrame({
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
-        {client.offersLossless ? (
+        {client.offersLossless && !video ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -531,6 +532,7 @@ function DesktopFrame({
           session={session}
           surface={surface}
           onImageSize={setImageSize}
+          onVideo={setVideo}
         />
       </DesktopViewport>
     </div>

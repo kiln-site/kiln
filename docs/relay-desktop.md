@@ -6,7 +6,7 @@ How depends on the node:
 | Node             | Shown by                                                            | Backend                     | Client                 |
 | ---------------- | ------------------------------------------------------------------- | --------------------------- | ---------------------- |
 | Linux, with X11  | [voxl](https://github.com/tembo/voxl), H.264 decoded with WebCodecs | `desktop-voxl.ts`           | voxl's own, in a frame |
-| Mac, with Docker | macOS's Screen Sharing, scaled by the Relay                         | `desktop-screen-sharing.ts` | noVNC                  |
+| Mac, with Docker | macOS's Screen Sharing, as H.264 or JPEG through the Relay          | `desktop-screen-sharing.ts` | noVNC                  |
 
 Relay: `desktop.ts` keeps what they share: tickets, streams, pausing, and letting
 go once nobody's watching. Each backend implements `DesktopBackend`
@@ -28,7 +28,7 @@ showing a desktop is one backend, one client, and a status in
 - Docker running the Relay in a container, as every install does.
 
 Nothing needs setting up. The first time someone opens a node's desktop, the
-Relay downloads the streamer, `ghcr.io/kiln-site/desktop:<voxl version>` (a
+Relay downloads the streamer, `ghcr.io/kiln-site/desktop:<tag>` (a
 fork's own, for a fork's Relay). `KILN_RELAY_DESKTOP_IMAGE` names another image
 to use instead, such as a build of `apps/desktop` on an offline node.
 
@@ -48,8 +48,9 @@ server macOS already has:
    is.
 3. Sign in on the tab with a Mac account Screen Sharing allows.
 
-No image or port forward is needed, and a Mac never downloads the Linux
-streamer. The Relay reaches `host.docker.internal:5900` and connects out to
+No port forward is needed, and nothing is installed on the Mac. The first time
+someone opens the desktop, the Relay downloads the desktop image for its video
+encoder, and shows JPEG if it can't. The Relay reaches `host.docker.internal:5900` and connects out to
 Hearth as it always does. It tells a Mac apart by what Docker reports:
 `OrbStack`, or `Docker Desktop` with
 its socket under `/Users`. It sees Screen Sharing is on when the port greets it
@@ -115,9 +116,11 @@ The client's JavaScript runs on Hearth's origin, where it could use the
 person's session. So it's never fetched from a node: `public/desktop-client`
 is a copy from the pinned voxl version, and a Relay only ever supplies video
 and audio frames. Whenever `VOXL_VERSION` changes, update that copy with its
-`VERSION` file, and `KILN_DESKTOP_IMAGE_TAG`. A test fails until all three agree.
-The **Desktop image** workflow publishes `VOXL_VERSION` from `main`, and a release
-fails until that image and its source can be pulled anonymously.
+`VERSION` file, and `KILN_DESKTOP_IMAGE_TAG`, which is `<voxl version>-<revision>`.
+Raise `DESKTOP_IMAGE_REVISION` in `apps/desktop/Dockerfile` for any other change to
+the image, as Relays keep the image a tag named. A test fails until they agree.
+The **Desktop image** workflow publishes that tag from `main`, and a release fails
+until the image and its source can be pulled anonymously.
 
 ## The streamer
 
@@ -214,6 +217,43 @@ and artwork, and moves much more slowly. It's for reading, not for watching.
 `sharp` does the work, in the Relay's image only. It's Apache-2.0, and the libvips
 it bundles is LGPL-3.0.
 
+## Video on a Mac
+
+Where it can, the Relay sends a Mac's picture as H.264 rather than JPEG. On a test
+pattern changing every frame, that took a 3024 × 1964 image from about 20 updates
+a second to about 37, at about 33 KB each, with the Relay no longer doing the
+scaling.
+
+```
+Mac ──Raw, full size──▶ Relay ──what changed──▶ encoder
+browser ◀──H.264, tab size── Relay ◀──H.264──────┘
+```
+
+x264 is under the GPL, so it stays out of the Relay's image. The encoder
+(`apps/desktop/encoder.c`) is in the desktop image, and the Relay
+(`desktop-video.ts`) starts it as `kiln-desktop-encoder`, on the way to a stream,
+and removes it after 5 minutes unwatched. It runs as nobody on a read-only root,
+with no capabilities or mounts, in the Relay's network namespace, listening on
+`127.0.0.1:47902` for a random token. It sees only pixels: sign-in is over before
+a stream reaches it. Each viewer gets a connection and a process of its own.
+
+The Relay still keeps the picture, and still fetches and sends in overlapping
+stages. It sends the encoder only what changed, and the encoder keeps the whole
+picture, scales it to the tab's size, and answers with a frame. A picture that
+stops moving is encoded once more at a higher quality, so text ends up crisp.
+Colour stays 4:2:0, so **Lossless** is still the way to read small coloured text.
+Lossless stays PNG, and Fast motion leaves the toolbar, as it's about JPEG.
+
+JPEG takes over for anything that can't do this: an encoder that can't start, one
+that stops mid-stream, and a browser that can't decode it. noVNC only offers H.264
+if its own sample decodes, and that fails in Chrome on a Mac, so the page tries a
+real frame from the encoder instead (`relay-desktop-video-check.ts`) and tells the
+Relay in its view message. noVNC always holds a decoder, and plays what comes.
+
+noVNC takes each slice for a whole frame, so the encoder uses one thread and one
+slice. H.264 at level 5.1 stops at 9.4 million pixels, so a larger tab gets a
+smaller picture, scaled up.
+
 ## Stream recovery on a Mac
 
 noVNC ends with the connection rather than retrying. The page shows why, and
@@ -263,8 +303,8 @@ aren't linked and are left out, and so is the base image, like those under Kiln'
 other images: `debian-packages` lists its versions, and Debian's archive has their
 source. voxl and the crates built into it are too large to ship inside, and a
 version pins them exactly, so the **Desktop image** workflow publishes them as
-`desktop:<voxl version>-source`, an image of files rather than a program, under
-`/src`. The streamer's image carries the licenses of voxl and those crates, and
+`desktop:<tag>-source`, with `encoder.c`, an image of files rather than a
+program, under `/src`. The streamer's image carries the licenses of voxl and those crates, and
 the notices nested in them, such as the font voxl embeds. All of it is in
 `/usr/share/doc/voxl`.
 
@@ -274,7 +314,7 @@ the notices nested in them, such as the font voxl embeds. All of it is in
   against Hearth's bandwidth and adds a hop. Relays browsers can reach could
   take it directly.
 - One display per node. Viewers share it, and all of them can type.
-- A Mac's picture is scaled on the Relay's CPU, while someone watches, and each
-  stream holds the whole area on show in memory, twice. Images over 60 million
-  pixels aren't shown.
+- A Mac's picture is scaled and encoded on the node's CPU, while someone watches,
+  and each stream holds the whole area on show in memory, twice, or three times
+  with video. Images over 60 million pixels aren't shown.
 - voxl encodes on the CPU: about 1.5 cores on a busy desktop.

@@ -6,12 +6,16 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 import { WebSocket, WebSocketServer } from "ws"
 
 import { carryScaledScreen } from "./desktop-screen-scaling.js"
+import { ScreenVideo } from "./desktop-video.js"
 
 const TIGHT = 7
 const TIGHT_PNG = -260
+const H264 = 50
 const DESKTOP_SIZE = -223
 const DESKTOP_NAME = -307
 const ARD = 30
+const TOKEN = "t".repeat(43)
+const ENCODED = Buffer.from([0, 0, 0, 1, 0x65, 0x88])
 
 const cleanups: Array<() => void> = []
 
@@ -150,8 +154,74 @@ function fakeMac(
   }
 }
 
+interface EncoderFrame {
+  readonly area: { height: number; width: number; x: number; y: number }
+  readonly pixels: Buffer
+  readonly sharpen: boolean
+}
+
+// Stands in for apps/desktop/encoder.c, answering each frame the same way.
+async function fakeEncoder() {
+  const frames: Array<EncoderFrame> = []
+  const sizes: Array<Array<number>> = []
+  const tokens: Array<string> = []
+  const connections: Array<Socket> = []
+  const server = createServer((connection) => {
+    connections.push(connection)
+    connection.on("error", () => undefined)
+    const incoming = new Incoming()
+    connection.on("data", (data) => incoming.push(data))
+    const run = async () => {
+      tokens.push((await incoming.read(43)).toString())
+      for (;;) {
+        const type = (await incoming.read(1))[0]
+        if (type === 1) {
+          const size = await incoming.read(8)
+          sizes.push([0, 2, 4, 6].map((at) => size.readUInt16BE(at)))
+        } else {
+          const header = Buffer.from(await incoming.read(9))
+          const area = {
+            height: header.readUInt16BE(7),
+            width: header.readUInt16BE(5),
+            x: header.readUInt16BE(1),
+            y: header.readUInt16BE(3),
+          }
+          const pixels = Buffer.from(
+            await incoming.read(area.width * area.height * 4)
+          )
+          frames.push({ area, pixels, sharpen: header[0] === 1 })
+          const length = Buffer.alloc(4)
+          length.writeUInt32BE(ENCODED.length)
+          connection.write(Buffer.concat([length, ENCODED]))
+        }
+      }
+    }
+    void run()
+  })
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve())
+  )
+  const { port } = server.address() as AddressInfo
+  cleanups.push(() => {
+    for (const connection of connections) connection.destroy()
+    server.close()
+  })
+  return {
+    frames,
+    open: () => new ScreenVideo(connect(port, "127.0.0.1"), TOKEN),
+    sizes,
+    stop: () => {
+      for (const connection of connections) connection.destroy()
+    },
+    tokens,
+  }
+}
+
 // Stands in for noVNC, signing in and reading what a VNC client would.
-async function viewerOf(mac: ReturnType<typeof fakeMac>) {
+async function viewerOf(
+  mac: ReturnType<typeof fakeMac>,
+  openVideo?: () => ScreenVideo | null
+) {
   const listening = (server: Server | WebSocketServer) =>
     new Promise<number>((resolve) => {
       const onListening = () => resolve((server.address() as AddressInfo).port)
@@ -165,7 +235,7 @@ async function viewerOf(mac: ReturnType<typeof fakeMac>) {
   const relay = new WebSocketServer({ host: "127.0.0.1", port: 0 })
   const relayPort = await listening(relay)
   relay.on("connection", (viewer) => {
-    carryScaledScreen(connect(macPort, "127.0.0.1"), viewer)
+    carryScaledScreen(connect(macPort, "127.0.0.1"), viewer, openVideo)
   })
   const socket = new WebSocket(`ws://127.0.0.1:${relayPort}`)
   cleanups.push(() => {
@@ -206,7 +276,8 @@ function askToShow(
   { socket }: Viewer,
   area: { height: number; width: number; x: number; y: number },
   size: { height: number; width: number },
-  lossless = false
+  lossless = false,
+  decodesVideo = false
 ) {
   const message = Buffer.alloc(14)
   message[0] = 0xfa
@@ -216,7 +287,7 @@ function askToShow(
   message.writeUInt16BE(area.height, 7)
   message.writeUInt16BE(size.width, 9)
   message.writeUInt16BE(size.height, 11)
-  message[13] = lossless ? 1 : 0
+  message[13] = (lossless ? 1 : 0) | (decodesVideo ? 4 : 0)
   socket.send(message)
 }
 
@@ -238,6 +309,7 @@ const compactLength = async (incoming: Incoming) => {
 interface Rectangle {
   readonly data: Buffer
   readonly encoding: number
+  readonly flags: number
   readonly height: number
   readonly width: number
   readonly x: number
@@ -252,16 +324,22 @@ async function readUpdate({ incoming }: Viewer) {
     const rectangle = Buffer.from(await incoming.read(12))
     const encoding = rectangle.readInt32BE(8)
     let data = Buffer.alloc(0)
+    let flags = 0
     if (encoding === TIGHT || encoding === TIGHT_PNG) {
       await incoming.read(1)
       data = Buffer.from(await incoming.read(await compactLength(incoming)))
     } else if (encoding === DESKTOP_NAME) {
       const length = (await incoming.read(4)).readUInt32BE(0)
       data = Buffer.from(await incoming.read(length))
+    } else if (encoding === H264) {
+      const header = Buffer.from(await incoming.read(8))
+      flags = header.readUInt32BE(4)
+      data = Buffer.from(await incoming.read(header.readUInt32BE(0)))
     }
     rectangles.push({
       data,
       encoding,
+      flags,
       height: rectangle.readUInt16BE(6),
       width: rectangle.readUInt16BE(4),
       x: rectangle.readUInt16BE(0),
@@ -451,5 +529,156 @@ describe("a Mac's picture", () => {
     await vi.advanceTimersByTimeAsync(800)
     await until(() => mac.requests.length > asked)
     expect(mac.requests.at(-1)).toMatchObject({ ...area, incremental: true })
+  })
+})
+
+describe("a Mac's picture as video", () => {
+  const area = { height: 200, width: 400, x: 100, y: 50 }
+  const size = { height: 100, width: 200 }
+
+  // A video viewer past the notice and the size, as it starts every stream.
+  const watching = async (decodesVideo = true) => {
+    const mac = fakeMac({ height: 400, width: 800 })
+    const encoder = await fakeEncoder()
+    const viewer = await viewerOf(mac, encoder.open)
+    await signIn(viewer)
+    await enter(viewer)
+    askForUpdate(viewer)
+    askToShow(viewer, area, size, false, decodesVideo)
+    return { encoder, mac, viewer }
+  }
+
+  const started = async () => {
+    const stream = await watching()
+    const [notice] = await readUpdate(stream.viewer)
+    expect(notice?.data.toString()).toBe("kiln-video:on")
+    await readUpdate(stream.viewer)
+    return stream
+  }
+
+  it("sends H.264 of the whole picture, starting decoding over", async () => {
+    const { encoder, viewer } = await started()
+    const [picture] = await readUpdate(viewer)
+    expect(picture).toMatchObject({
+      encoding: H264,
+      flags: 1,
+      height: 104,
+      width: 200,
+      x: 0,
+      y: 0,
+    })
+    expect(picture?.data).toEqual(ENCODED)
+    expect(encoder.tokens).toEqual([TOKEN])
+    expect(encoder.sizes).toEqual([[400, 208, 200, 104]])
+    // The Mac's colour, as sent, for the encoder to scale.
+    const [frame] = encoder.frames
+    expect(frame?.area).toEqual({ height: 200, width: 400, x: 0, y: 0 })
+    expect([...(frame?.pixels.subarray(0, 3) ?? [])]).toEqual([200, 0, 0])
+  })
+
+  it("only asks the encoder to start over when the picture changes", async () => {
+    const { encoder, mac, viewer } = await started()
+    await readUpdate(viewer)
+    mac.paint({ height: 8, width: 8, x: 110, y: 60 })
+    askForUpdate(viewer)
+    const [next] = await readUpdate(viewer)
+    expect(next).toMatchObject({ encoding: H264, flags: 0 })
+    expect(encoder.frames.at(-1)?.area).toEqual({
+      height: 8,
+      width: 8,
+      x: 10,
+      y: 10,
+    })
+    askToShow(viewer, area, { height: 50, width: 100 }, false, true)
+    await readUpdate(viewer)
+    askForUpdate(viewer)
+    const [resized] = await readUpdate(viewer)
+    expect(resized).toMatchObject({ encoding: H264, flags: 1 })
+    expect(encoder.sizes).toHaveLength(2)
+  })
+
+  it("keeps sizes even, as 4:2:0 needs", async () => {
+    const { encoder, viewer } = await started()
+    await readUpdate(viewer)
+    askForUpdate(viewer)
+    askToShow(viewer, area, { height: 87, width: 175 }, false, true)
+    const [shown] = await readUpdate(viewer)
+    expect(shown).toMatchObject({
+      encoding: DESKTOP_SIZE,
+      height: 90,
+      width: 174,
+    })
+    await readUpdate(viewer)
+    expect(encoder.sizes.at(-1)).toEqual([400, 208, 174, 90])
+  })
+
+  it("scales a picture to what browsers can decode", async () => {
+    const mac = fakeMac({ height: 2880, width: 7680 })
+    const encoder = await fakeEncoder()
+    const viewer = await viewerOf(mac, encoder.open)
+    await signIn(viewer)
+    await enter(viewer)
+    askForUpdate(viewer)
+    askToShow(
+      viewer,
+      { height: 2880, width: 7680, x: 0, y: 0 },
+      { height: 2880, width: 7680 },
+      false,
+      true
+    )
+    await readUpdate(viewer)
+    const [shown] = await readUpdate(viewer)
+    expect((shown?.width ?? 0) * (shown?.height ?? 0)).toBeLessThanOrEqual(
+      9_437_184
+    )
+  })
+
+  it("sends a still picture again, sharper", async () => {
+    vi.useFakeTimers({
+      toFake: ["clearInterval", "Date", "performance", "setInterval"],
+    })
+    const { encoder, viewer } = await started()
+    await readUpdate(viewer)
+    askForUpdate(viewer)
+    await vi.advanceTimersByTimeAsync(400)
+    await readUpdate(viewer)
+    expect(encoder.frames.at(-1)).toMatchObject({
+      area: { height: 0, width: 0 },
+      sharpen: true,
+    })
+  })
+
+  it("keeps JPEG for a viewer that can't decode it", async () => {
+    const { encoder, viewer } = await watching(false)
+    await readUpdate(viewer)
+    const [picture] = await readUpdate(viewer)
+    expect(picture?.encoding).toBe(TIGHT)
+    expect(encoder.tokens).toEqual([])
+  })
+
+  it("keeps Lossless exact", async () => {
+    const { encoder, viewer } = await started()
+    await readUpdate(viewer)
+    askForUpdate(viewer)
+    askToShow(viewer, area, size, true, true)
+    await readUpdate(viewer)
+    const [picture] = await readUpdate(viewer)
+    expect(picture?.encoding).toBe(TIGHT_PNG)
+    expect(encoder.sizes).toHaveLength(1)
+  })
+
+  it("carries on as JPEG when the encoder goes", async () => {
+    const { encoder, mac, viewer } = await started()
+    await readUpdate(viewer)
+    encoder.stop()
+    mac.paint({ height: 8, width: 8, x: 110, y: 60 })
+    askForUpdate(viewer)
+    const [notice] = await readUpdate(viewer)
+    expect(notice?.data.toString()).toBe("kiln-video:off")
+    const [shown] = await readUpdate(viewer)
+    expect(shown?.encoding).toBe(DESKTOP_SIZE)
+    const [picture] = await readUpdate(viewer)
+    expect(picture?.encoding).toBe(TIGHT)
+    expect(viewer.socket.readyState).toBe(WebSocket.OPEN)
   })
 })

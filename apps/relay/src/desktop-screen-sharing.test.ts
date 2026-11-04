@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http"
+import { hostname } from "node:os"
 import { createServer as createTcpServer } from "node:net"
 import type { AddressInfo, Server as TcpServer, Socket } from "node:net"
 
@@ -50,6 +51,21 @@ const listen = (server: Server | TcpServer) =>
       resolve((server.address() as AddressInfo).port)
     )
   })
+
+// Stands in for the encoder, where the Relay looks for it, answering pings.
+async function fakeEncoder() {
+  const server = createTcpServer((socket) => {
+    sockets.push(socket)
+    socket.on("error", () => undefined)
+    socket.on("data", (data) => {
+      if (data.at(-1) === 3) socket.write(Buffer.from([3]))
+    })
+  })
+  await new Promise<void>((resolve) =>
+    server.listen(47902, "127.0.0.1", () => resolve())
+  )
+  return { close: () => server.close() }
+}
 
 // Stands in for Screen Sharing: greets as a VNC server does, and echoes.
 async function fakeVnc(greeting = "RFB 003.889\n") {
@@ -196,13 +212,35 @@ describe("a Mac's desktop", () => {
     expect(await firstMessage(port, ticket)).toContain("RFB 003.889")
   })
 
-  it("needs no streamer", async () => {
+  it("opens without a video encoder, which is only for the picture", async () => {
     onMac()
     const vnc = await fakeVnc()
     const { desktop } = await harness(vnc.port)
+    fakeDocker.addContainer({ name: hostname(), running: true })
+    fakeDocker.failNext({ command: "pull" }, "no such image")
+    const { desktop: shown } = await desktop.attach()
+    expect(shown.status).toBe("screen-sharing")
+    expect(fakeDocker.containers.size).toBe(1)
+  })
+
+  it("runs its encoder with nothing but the Relay's loopback", async () => {
+    onMac()
+    const vnc = await fakeVnc()
+    const encoder = await fakeEncoder()
+    const { desktop } = await harness(vnc.port)
+    fakeDocker.addContainer({ name: hostname(), running: true })
+    fakeDocker.images.set("example/voxl:test", {})
     await desktop.attach()
-    expect(fakeDocker.containers.size).toBe(0)
+    const named = () =>
+      [...fakeDocker.containers.values()].find((container) =>
+        container.name.endsWith("kiln-desktop-encoder")
+      )
+    expect(named()?.state.running).toBe(true)
+    expect(named()?.mounts).toEqual([])
     expect(fakeDocker.pulls.size).toBe(0)
+    await desktop.remove()
+    expect(named()).toBeUndefined()
+    encoder.close()
   })
 
   it("turns away a stream without a live ticket, or while paused", async () => {

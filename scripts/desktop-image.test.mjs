@@ -14,9 +14,8 @@ test("Relays, the image, and Hearth's client are the same voxl", async () => {
     read("apps/desktop/Dockerfile"),
     read("apps/web/public/desktop-client/VERSION"),
   ])
-  assert.equal(
-    /^ARG VOXL_VERSION=(.+)$/mu.exec(dockerfile)?.[1],
-    KILN_DESKTOP_IMAGE_TAG
-  )
-  assert.equal(client.trim(), KILN_DESKTOP_IMAGE_TAG)
+  const voxl = /^ARG VOXL_VERSION=(.+)$/mu.exec(dockerfile)?.[1]
+  const revision = /^ARG DESKTOP_IMAGE_REVISION=(.+)$/mu.exec(dockerfile)?.[1]
+  assert.equal(`${voxl}-${revision}`, KILN_DESKTOP_IMAGE_TAG)
+  assert.equal(client.trim(), voxl)
 })
