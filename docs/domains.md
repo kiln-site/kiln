@@ -32,9 +32,8 @@ checks it again on the next Sync, remembering the one `A`, `AAAA`, or
 The owner of the hostname's Cloudflare connection (an administrator, for
 Kiln's), who may also change the route, gets **Let Kiln manage** on the
 Domains page and in the route's row, in place of its edit and remove buttons.
-They see what the record points at now, and choose whether
-it goes through Cloudflare's proxy, starting from how it is. Kiln then reads
-Cloudflare again under the resource's DNS lock and refuses, changing nothing,
+They see what the record points at now, and it stays proxied or DNS-only as
+it was. Kiln then reads Cloudflare again under the resource's DNS lock and refuses, changing nothing,
 if that record is gone or changed or the name has several address records.
 Otherwise it keeps the record's ID as one it made, so the next sync points it
 at the Relay and marks it with Kiln's comment, and removing the route deletes

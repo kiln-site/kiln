@@ -358,11 +358,7 @@ describeMysql("web route hostnames", () => {
             )
           )
           const adopt = (actor: DomainActor, record: ExistingWebRecord) =>
-            adoptExistingWebRecordEffect(row, {
-              actor,
-              proxied: true,
-              record,
-            }).pipe(
+            adoptExistingWebRecordEffect(row, { actor, record }).pipe(
               Effect.flip,
               Effect.map((error) => error.message)
             )
@@ -396,7 +392,6 @@ describeMysql("web route hostnames", () => {
 
           yield* adoptExistingWebRecordEffect(row, {
             actor: owner,
-            proxied: true,
             record: seen,
           })
           assert.deepEqual(yield* hostnameRows, {

@@ -96,8 +96,6 @@ const releaseWebHostnameInputSchema = z.object({ id: domainIdSchema })
 
 const adoptWebHostnameRecordInputSchema = z.object({
   id: domainIdSchema,
-  /** Whether the record goes through Cloudflare's proxy once Kiln has it. */
-  proxied: z.boolean(),
   /** The record as the person saw it and agreed to hand it over. */
   record: z.object({
     content: z.string().max(255),

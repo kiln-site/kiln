@@ -1206,12 +1206,11 @@ export function AdoptRecordDialog({
     select: selectLatest,
   })
   const record = latest === undefined ? hostname.existingRecord : latest
-  const [proxied, setProxied] = React.useState(record?.proxied ?? false)
   const adopt = useMutation({
     mutationFn: () => {
       if (!record) throw new Error("There's no record to take over")
       return adoptWebHostnameRecord({
-        data: { id: hostname.id, proxied, record },
+        data: { id: hostname.id, record },
       })
     },
     // A refusal reads the record again, so the dialog shows what's there.
@@ -1248,15 +1247,6 @@ export function AdoptRecordDialog({
             <CloudflareProxyStatus proxied={record.proxied} />
           </div>
         ) : null}
-        <label className="flex items-center justify-between gap-4">
-          <span className="type-label">Proxy through Cloudflare</span>
-          <Switch
-            aria-label="Proxy through Cloudflare"
-            checked={proxied}
-            disabled={adopt.isPending}
-            onCheckedChange={setProxied}
-          />
-        </label>
         {adopt.error ? <ConfigurationError error={adopt.error} /> : null}
         <DialogFooter>
           <Button

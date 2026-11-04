@@ -830,7 +830,7 @@ export const adoptExistingWebRecordEffect = Effect.fn(
   "webHostnames.adoptExisting"
 )(function* (
   row: WebHostname,
-  input: { actor: DomainActor; proxied: boolean; record: ExistingWebRecord }
+  input: { actor: DomainActor; record: ExistingWebRecord }
 ) {
   yield* withCurrentRow("dns.webRoutes.adopt", row, (current) =>
     Effect.gen(function* () {
@@ -890,7 +890,7 @@ export const adoptExistingWebRecordEffect = Effect.fn(
       }
       yield* adoptWebHostnameRecordEffect({
         id: current.id,
-        proxied: input.proxied,
+        proxied: found.proxied,
         recordId: found.id,
         recordType: found.type,
       })
