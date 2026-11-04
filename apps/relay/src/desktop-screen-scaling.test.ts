@@ -160,8 +160,10 @@ interface EncoderFrame {
   readonly sharpen: boolean
 }
 
-// Stands in for apps/desktop/encoder.c, answering each frame the same way.
-async function fakeEncoder() {
+// Stands in for apps/desktop/encoder.c, answering each frame the same way, or
+// taking each one and saying nothing, as a stuck one does.
+async function fakeEncoder({ answers = true } = {}) {
+  let answering = answers
   const frames: Array<EncoderFrame> = []
   const sizes: Array<Array<number>> = []
   const tokens: Array<string> = []
@@ -190,6 +192,7 @@ async function fakeEncoder() {
             await incoming.read(area.width * area.height * 4)
           )
           frames.push({ area, pixels, sharpen: header[0] === 1 })
+          if (!answering) continue
           const length = Buffer.alloc(4)
           length.writeUInt32BE(ENCODED.length)
           connection.write(Buffer.concat([length, ENCODED]))
@@ -210,6 +213,9 @@ async function fakeEncoder() {
     frames,
     open: () => new ScreenVideo(connect(port, "127.0.0.1"), TOKEN),
     sizes,
+    silence: () => {
+      answering = false
+    },
     stop: () => {
       for (const connection of connections) connection.destroy()
     },
@@ -665,6 +671,32 @@ describe("a Mac's picture as video", () => {
     const [picture] = await readUpdate(viewer)
     expect(picture?.encoding).toBe(TIGHT_PNG)
     expect(encoder.sizes).toHaveLength(1)
+  })
+
+  it("carries on as JPEG when the encoder stops answering", async () => {
+    vi.useFakeTimers({
+      toFake: [
+        "clearInterval",
+        "clearTimeout",
+        "Date",
+        "performance",
+        "setInterval",
+        "setTimeout",
+      ],
+    })
+    const { encoder, mac, viewer } = await started()
+    await readUpdate(viewer)
+    encoder.silence()
+    const sent = encoder.frames.length
+    mac.paint({ height: 8, width: 8, x: 110, y: 60 })
+    askForUpdate(viewer)
+    await until(() => encoder.frames.length > sent)
+    await vi.advanceTimersByTimeAsync(5_000)
+    const [notice] = await readUpdate(viewer)
+    expect(notice?.data.toString()).toBe("kiln-video:off")
+    await readUpdate(viewer)
+    const [picture] = await readUpdate(viewer)
+    expect(picture?.encoding).toBe(TIGHT)
   })
 
   it("carries on as JPEG when the encoder goes", async () => {

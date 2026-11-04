@@ -26,6 +26,8 @@
 #include <x264.h>
 
 #define TOKEN_BYTES 43
+// A connection that hasn't shown the token by now is gone.
+#define TOKEN_SECONDS 10
 #define MESSAGE_SIZE 0x01
 #define MESSAGE_FRAME 0x02
 #define MESSAGE_PING 0x03
@@ -219,7 +221,9 @@ static int encode_frame(struct stream *stream, int fd) {
 
 static void serve(int fd, const char *token) {
   char offered[TOKEN_BYTES];
+  alarm(TOKEN_SECONDS);
   if (!read_all(fd, offered, TOKEN_BYTES)) return;
+  alarm(0);
   uint8_t difference = 0;
   for (int index = 0; index < TOKEN_BYTES; index += 1) {
     difference |= (uint8_t)(offered[index] ^ token[index]);

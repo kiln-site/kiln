@@ -16,6 +16,7 @@ import { carryScaledScreen } from "./desktop-screen-scaling.js"
 import { DesktopVideo } from "./desktop-video.js"
 import { recoverPromise } from "./effect/promise.js"
 import type { HostShell } from "./host-shell.js"
+import type { OperationLanes } from "./operation-lanes.js"
 import { MAC_HOST_SCRIPT, parseMacHost } from "./mac-host.js"
 
 // A Mac's desktop, through macOS's own Screen Sharing. Docker on a Mac runs
@@ -56,13 +57,14 @@ export class ScreenSharingDesktop implements DesktopBackend {
 
   constructor(
     config: ScreenSharingConfig,
-    hostShell: Pick<HostShell, "runScript">
+    hostShell: Pick<HostShell, "runScript">,
+    lanes: OperationLanes
   ) {
     this.#engine = new DockerEngine(config.dockerSocket)
     this.#hostShell = hostShell
     this.#host = config.screenSharingAddress.host
     this.#port = config.screenSharingAddress.port
-    this.#video = new DesktopVideo(config)
+    this.#video = new DesktopVideo(config, lanes)
   }
 
   async applies(): Promise<boolean> {

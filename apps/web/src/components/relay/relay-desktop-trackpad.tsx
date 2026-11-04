@@ -137,7 +137,15 @@ export function DesktopTrackpad({
     return () => observer.disconnect()
   }, [place, send])
 
-  React.useEffect(() => () => clearTimeout(longPress.current), [])
+  // Layout, as the canvas and this layer are still there to send it through. A
+  // button held as the toggle goes off would otherwise stay down on the Mac.
+  React.useLayoutEffect(
+    () => () => {
+      clearTimeout(longPress.current)
+      if (gesture.current.kind === "held") send("mouseup", LEFT, 0)
+    },
+    [send]
+  )
 
   const moveBy = (dx: number, dy: number, gain: number) => {
     const box = image()?.getBoundingClientRect()
@@ -164,6 +172,10 @@ export function DesktopTrackpad({
       aria-hidden
       className="absolute inset-0 touch-none overflow-hidden"
       onContextMenu={(event) => event.preventDefault()}
+      // After an ordinary release, the finger's already gone from the list.
+      onLostPointerCapture={(event) => {
+        if (fingers.current.has(event.pointerId)) finish()
+      }}
       onPointerCancel={finish}
       onPointerDown={(event) => {
         // Keeps a phone's keyboard open, and the browser's selection away.
@@ -220,6 +232,8 @@ export function DesktopTrackpad({
         if (!finger) return
         const current = gesture.current
         if (current.kind === "two") {
+          // One's lifted, and the other's on its way: fingers rarely go at once.
+          if (fingers.current.size < 2) return
           const before = middleOf(fingers.current)
           finger.x = event.clientX
           finger.y = event.clientY

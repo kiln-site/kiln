@@ -49,8 +49,9 @@ server macOS already has:
 3. Sign in on the tab with a Mac account Screen Sharing allows.
 
 No port forward is needed, and nothing is installed on the Mac. The first time
-someone opens the desktop, the Relay downloads the desktop image for its video
-encoder, and shows JPEG if it can't. The Relay reaches `host.docker.internal:5900` and connects out to
+someone opens the desktop it shows as JPEG, while the Relay downloads the desktop
+image for its video encoder in the background, and the next time as video. The
+Relay reaches `host.docker.internal:5900` and connects out to
 Hearth as it always does. It tells a Mac apart by what Docker reports:
 `OrbStack`, or `Docker Desktop` with
 its socket under `/Users`. It sees Screen Sharing is on when the port greets it
@@ -233,9 +234,11 @@ x264 is under the GPL, so it stays out of the Relay's image. The encoder
 (`apps/desktop/encoder.c`) is in the desktop image, and the Relay
 (`desktop-video.ts`) starts it as `kiln-desktop-encoder`, on the way to a stream,
 and removes it after 5 minutes unwatched. It runs as nobody on a read-only root,
-with no capabilities or mounts, in the Relay's network namespace, listening on
-`127.0.0.1:47902` for a random token. It sees only pixels: sign-in is over before
-a stream reaches it. Each viewer gets a connection and a process of its own.
+with no capabilities or mounts and a process limit, in the Relay's network
+namespace, listening on `127.0.0.1:47902` for a random token. It sees only pixels:
+sign-in is over before a stream reaches it. Each viewer gets a connection and a
+process of its own. Docker cleanup keeps the current desktop image, as a Mac would
+otherwise lose video after a day nobody watched, and removes old ones.
 
 The Relay still keeps the picture, and still fetches and sends in overlapping
 stages. It sends the encoder only what changed, and the encoder keeps the whole
@@ -245,7 +248,7 @@ Colour stays 4:2:0, so **Lossless** is still the way to read small coloured text
 Lossless stays PNG, and Fast motion leaves the toolbar, as it's about JPEG.
 
 JPEG takes over for anything that can't do this: an encoder that can't start, one
-that stops mid-stream, and a browser that can't decode it. noVNC only offers H.264
+that stops or stops answering mid-stream, and a browser that can't decode it. noVNC only offers H.264
 if its own sample decodes, and that fails in Chrome on a Mac, so the page tries a
 real frame from the encoder instead (`relay-desktop-video-check.ts`) and tells the
 Relay in its view message. noVNC always holds a decoder, and plays what comes.

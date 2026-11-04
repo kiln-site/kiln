@@ -1,4 +1,4 @@
-import { recoverPromise } from "@/effect/promise"
+import { ensuringPromise, recoverPromise } from "@/effect/promise"
 
 // Whether this browser can play a Mac's picture as H.264, tried on one real
 // frame from the encoder (apps/desktop/encoder.c). noVNC has a check of its own
@@ -9,6 +9,8 @@ import { recoverPromise } from "@/effect/promise"
 
 const CODEC = "avc1.42c00a"
 const SIZE = 64
+// The stream waits on this, so a decoder that never answers counts as none.
+const CHECK_MS = 2_000
 const KEY_FRAME = [
   "AAAAAWdCwAraEJpqAhoMgAAAAwCAAAAeR4kTUAAAAAFozg/IAAABBgX//1XcRem9",
   "5tlIt5Ys2CDZI+7veDI2NCAtIGNvcmUgMTY0IHIzMTA4IDMxZTE5ZjkgLSBILjI2",
@@ -41,22 +43,31 @@ async function decodesKeyFrame() {
       frame.close()
     },
   })
-  decoder.configure({
-    codec: CODEC,
-    codedHeight: SIZE,
-    codedWidth: SIZE,
-    optimizeForLatency: true,
-  })
-  decoder.decode(
-    new EncodedVideoChunk({
-      data: Uint8Array.from(atob(KEY_FRAME), (byte) => byte.charCodeAt(0)),
-      timestamp: 0,
-      type: "key",
-    })
+  return ensuringPromise(
+    async () => {
+      decoder.configure({
+        codec: CODEC,
+        codedHeight: SIZE,
+        codedWidth: SIZE,
+        optimizeForLatency: true,
+      })
+      decoder.decode(
+        new EncodedVideoChunk({
+          data: Uint8Array.from(atob(KEY_FRAME), (byte) => byte.charCodeAt(0)),
+          timestamp: 0,
+          type: "key",
+        })
+      )
+      await Promise.race([
+        decoder.flush(),
+        new Promise((resolve) => setTimeout(resolve, CHECK_MS)),
+      ])
+      return frames > 0
+    },
+    () => {
+      if (decoder.state !== "closed") decoder.close()
+    }
   )
-  await decoder.flush()
-  decoder.close()
-  return frames > 0
 }
 
 let checked: Promise<boolean> | null = null

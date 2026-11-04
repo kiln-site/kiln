@@ -97,7 +97,11 @@ async function harness(
   const lanes = new OperationLanes()
   const desktop = new Desktop(
     [
-      new ScreenSharingDesktop(config, { runScript: async () => macHost }),
+      new ScreenSharingDesktop(
+        config,
+        { runScript: async () => macHost },
+        lanes
+      ),
       new VoxlDesktop(config, { runScript: voxlScript }),
     ],
     config,
@@ -212,7 +216,20 @@ describe("a Mac's desktop", () => {
     expect(await firstMessage(port, ticket)).toContain("RFB 003.889")
   })
 
-  it("opens without a video encoder, which is only for the picture", async () => {
+  it("doesn't make anyone wait for the desktop image", async () => {
+    onMac()
+    const vnc = await fakeVnc()
+    const { desktop } = await harness(vnc.port)
+    fakeDocker.addContainer({ name: hostname(), running: true })
+    const pulling = fakeDocker.hold({ command: "pull" })
+    const { desktop: shown } = await desktop.attach()
+    expect(shown.status).toBe("screen-sharing")
+    expect(fakeDocker.containers.size).toBe(1)
+    await pulling.reached
+    pulling.release()
+  })
+
+  it("opens all the same when the desktop image can't download", async () => {
     onMac()
     const vnc = await fakeVnc()
     const { desktop } = await harness(vnc.port)
@@ -220,7 +237,7 @@ describe("a Mac's desktop", () => {
     fakeDocker.failNext({ command: "pull" }, "no such image")
     const { desktop: shown } = await desktop.attach()
     expect(shown.status).toBe("screen-sharing")
-    expect(fakeDocker.containers.size).toBe(1)
+    await vi.waitFor(() => expect(fakeDocker.pulls.size).toBe(0))
   })
 
   it("runs its encoder with nothing but the Relay's loopback", async () => {
@@ -278,7 +295,8 @@ describe("a Mac's desktop", () => {
             ...config,
             screenSharingAddress: { host: "127.0.0.1", port: vnc.port },
           },
-          { runScript: async () => "" }
+          { runScript: async () => "" },
+          new OperationLanes()
         ),
       ],
       { hostAccess: false },

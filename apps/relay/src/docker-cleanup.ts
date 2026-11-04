@@ -186,6 +186,7 @@ const NOTHING: DockerCleanupResult = {
 type CleanupConfig = Pick<
   RelayConfig,
   | "dataDirectory"
+  | "desktopImage"
   | "installationId"
   | "mode"
   | "resourceNamespace"
@@ -600,6 +601,7 @@ export class DockerCleanup {
         {
           containers,
           deployments,
+          desktopImage: this.#config.desktopImage,
           images,
           now,
           ownsApp: (container) => {

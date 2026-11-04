@@ -67,6 +67,8 @@ export const laneKeys = {
    */
   dockerCleanup: "relay:docker-cleanup",
   desktop: "relay:desktop",
+  /** Downloading the desktop image, which nobody attaching should wait for. */
+  desktopImage: "relay:desktop-image",
 } as const
 
 /**

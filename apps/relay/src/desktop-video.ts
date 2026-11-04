@@ -6,13 +6,16 @@ import { Effect } from "effect"
 import type { RelayConfig } from "./config.js"
 import { Bytes } from "./desktop-bytes.js"
 import { DesktopHelper } from "./desktop-helper.js"
-import { ensureImage } from "./docker-engine.js"
+import { ensuringPromise, forkPromise } from "./effect/promise.js"
+import { exclusive, laneKeys, type OperationLanes } from "./operation-lanes.js"
+import { operation, runOperation } from "./operations/operation.js"
 
 // H.264 for a Mac's picture. x264 can't go in the Relay's image, so an encoder
 // from the desktop image (apps/desktop/encoder.c) runs beside it, with nothing
 // but the Relay's loopback to reach it. It only ever sees pixels: sign-in is
 // over before a stream gets here. A Mac still shows its desktop without it, as
-// JPEG, so nothing here may stand in the way of that.
+// JPEG, so nothing here may stand in the way of that: the image downloads in the
+// background, for whoever opens the desktop next.
 
 const ENCODER_HOST = "127.0.0.1"
 const ENCODER_PORT = 47902
@@ -25,6 +28,11 @@ const MESSAGE_FRAME = 0x02
 const MESSAGE_PING = 0x03
 const FLAG_SHARPEN = 0x01
 const PING_TIMEOUT_MS = 1_000
+// Far past any frame. An encoder this slow has stopped, and the picture with it.
+const FRAME_TIMEOUT_MS = 5_000
+const PULL_TIMEOUT_MS = 300_000
+// A process for each viewer, and a few to spare.
+const MAX_ENCODER_PROCESSES = 64
 const READY_TIMEOUT_MS = 15_000
 const READY_POLL_MS = 150
 
@@ -76,7 +84,7 @@ export class ScreenVideo {
    * and resolves with H.264 once it has. An empty `area` encodes the same
    * picture again, sharper. Null means the encoder has gone.
    */
-  encode(
+  async encode(
     image: Buffer,
     stride: number,
     area: Area,
@@ -89,7 +97,14 @@ export class ScreenVideo {
     header.writeUInt16BE(area.y, 4)
     header.writeUInt16BE(area.width, 6)
     header.writeUInt16BE(area.height, 8)
-    return Promise.race([this.#closed, this.#send(header, image, stride, area)])
+    // Closing is what gives up: an answer that came later would otherwise be
+    // taken for the next frame's.
+    const stalled = setTimeout(() => this.close(), FRAME_TIMEOUT_MS)
+    return ensuringPromise(
+      () =>
+        Promise.race([this.#closed, this.#send(header, image, stride, area)]),
+      () => clearTimeout(stalled)
+    )
   }
 
   close() {
@@ -132,11 +147,23 @@ function pixelsOf(image: Buffer, stride: number, area: Area) {
 export class DesktopVideo {
   readonly #helper: DesktopHelper
   readonly #image: string
+  readonly #lanes: OperationLanes
+  // In a lane of its own: it can take minutes, which nobody attaching waits for.
+  readonly #pull = operation<void>()({
+    name: "relay.desktop.image.pull",
+    locks: () => [exclusive(laneKeys.desktopImage)],
+    onlyIfFree: true,
+    run: () =>
+      this.#helper.engine
+        .pullImage(this.#image, { timeout: PULL_TIMEOUT_MS })
+        .pipe(Effect.asVoid),
+  })
   #token: string | null = null
 
-  constructor(config: VideoConfig) {
+  constructor(config: VideoConfig, lanes: OperationLanes) {
     this.#helper = new DesktopHelper(config, "kiln-desktop-encoder")
     this.#image = config.desktopImage
+    this.#lanes = lanes
   }
 
   /** Runs in the desktop's lane, with `relay.desktop.attach`. */
@@ -164,7 +191,10 @@ export class DesktopVideo {
       }
       await this.#helper.remove(existing.Id)
     }
-    await Effect.runPromise(ensureImage(this.#helper.engine, this.#image))
+    if (!(await this.#imageIsHere())) {
+      this.#pullImage()
+      return
+    }
     const token = randomBytes(32).toString("base64url")
     const created = await Effect.runPromise(
       this.#helper.engine.createContainer(this.#helper.name, {
@@ -175,6 +205,7 @@ export class DesktopVideo {
           CapDrop: ["ALL"],
           Init: true,
           NetworkMode: `container:${relay.Id}`,
+          PidsLimit: MAX_ENCODER_PROCESSES,
           ReadonlyRootfs: true,
           RestartPolicy: { Name: "no" },
           SecurityOpt: ["no-new-privileges"],
@@ -201,6 +232,30 @@ export class DesktopVideo {
   async release(): Promise<void> {
     await this.#helper.release()
     this.#token = null
+  }
+
+  #imageIsHere() {
+    return Effect.runPromise(
+      this.#helper.engine.inspectImage(this.#image).pipe(
+        Effect.as(true),
+        Effect.catch(() => Effect.succeed(false))
+      )
+    )
+  }
+
+  #pullImage() {
+    forkPromise(
+      () =>
+        Effect.runPromise(
+          runOperation(this.#lanes, this.#pull, undefined, { kind: "worker" })
+        ),
+      (cause) =>
+        forkPromise(() =>
+          Effect.runPromise(
+            Effect.logWarning("The desktop image didn't download", { cause })
+          )
+        )
+    )
   }
 
   async #ready(id: string, token: string) {

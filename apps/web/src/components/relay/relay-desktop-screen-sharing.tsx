@@ -465,8 +465,7 @@ export const screenSharingClient: DesktopClient = {
     { label: "Force Quit", keys: [command, option, keys.escape] },
     { label: "Lock Screen", keys: [keys.control, command, letter("q")] },
   ],
-  opening:
-    "Connecting to Screen Sharing on this Mac. The first time, the Relay downloads the video encoder.",
+  opening: "Connecting to Screen Sharing on this Mac.",
   unsupported: () =>
     window.isSecureContext
       ? null

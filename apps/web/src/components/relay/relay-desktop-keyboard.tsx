@@ -74,7 +74,12 @@ export function DesktopKeyboard({
       tabIndex={-1}
       onBlur={() => onOpen?.(false)}
       onFocus={(event) => {
-        event.currentTarget.setSelectionRange(FILLER.length, FILLER.length)
+        // Fresh each time, with the caret at the end: what's here was typed
+        // before, and a change in the middle of it would retype it.
+        const field = event.currentTarget
+        field.value = FILLER
+        typed.current = FILLER
+        field.setSelectionRange(FILLER.length, FILLER.length)
         onOpen?.(true)
       }}
       onInput={(event) => {
