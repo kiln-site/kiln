@@ -3,6 +3,7 @@ import { createLink } from "@tanstack/react-router"
 import {
   ArrowRight,
   Check,
+  ChevronLeft,
   ChevronRight,
   Copy,
   Eye,
@@ -70,6 +71,59 @@ export function InfoPage({
         </aside>
       </div>
     </section>
+  )
+}
+
+// Steps through one thing of several in a section's header, such as an
+// app's containers.
+export function InfoPager({
+  count,
+  index,
+  noun,
+  onStep,
+}: {
+  count: number
+  index: number
+  noun: string
+  onStep: (offset: number) => void
+}) {
+  return (
+    <div className="flex items-center gap-0.5">
+      <InfoPagerButton label={`Previous ${noun}`} onClick={() => onStep(-1)}>
+        <ChevronLeft />
+      </InfoPagerButton>
+      <span
+        aria-live="polite"
+        className="px-0.5 text-xs text-muted-foreground tabular-nums"
+      >
+        <span className="text-foreground">{index + 1}</span>/{count}
+      </span>
+      <InfoPagerButton label={`Next ${noun}`} onClick={() => onStep(1)}>
+        <ChevronRight />
+      </InfoPagerButton>
+    </div>
+  )
+}
+
+function InfoPagerButton({
+  children,
+  label,
+  onClick,
+}: {
+  children: React.ReactNode
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      className="grid size-6 place-items-center text-muted-foreground transition-colors outline-none hover:bg-muted/60 hover:text-foreground focus-visible:text-primary-ink focus-visible:ring-1 focus-visible:ring-ring [&_svg]:size-3.5!"
+      onClick={onClick}
+    >
+      {children}
+    </button>
   )
 }
 

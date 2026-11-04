@@ -14,8 +14,9 @@ import {
   appServices,
   type App,
 } from "@/components/app/app-presentation"
+import { useSelectedAppContainer } from "@/components/app/app-container-selection"
 import { DeployToApplyButton } from "@/components/app/app-settings"
-import { InfoSection } from "@/components/info-page"
+import { InfoPager, InfoSection } from "@/components/info-page"
 import {
   ResourceLimitsSection,
   type ResourceLimitsGroup,
@@ -26,7 +27,8 @@ import type { ResourceLimitField } from "@/lib/resource-limits"
 import { updateAppLimits } from "@/server/apps"
 
 // An app's services share its data, so each has its own memory and CPU and
-// there's no disk limit to set.
+// there's no disk limit to set. One shows at a time, paged through like the
+// Container section, and the two stay on the same service.
 const SERVICE_FIELDS: ReadonlyArray<ResourceLimitField> = [
   "memoryGiB",
   "cpuCores",
@@ -51,6 +53,7 @@ export function AppLimitsSection({
   const pending = deployPending(app, config)
   const services = limitedServices(app, config).join("\n")
   const { serviceLimits } = config
+  const { select, selected } = useSelectedAppContainer()
   const groups = React.useMemo<ReadonlyArray<ResourceLimitsGroup>>(() => {
     const names = services === "" ? [] : services.split("\n")
     return names.map((service) => ({
@@ -86,6 +89,14 @@ export function AppLimitsSection({
     },
     [app.id, app.relayId, queryClient, serviceLimits]
   )
+  const shownIndex = Math.max(
+    groups.findIndex((group) => group.key === selected?.service),
+    0
+  )
+  const step = (offset: number) => {
+    const next = groups[(shownIndex + offset + groups.length) % groups.length]
+    if (next) select({ service: next.key })
+  }
   if (groups.length === 0) {
     return (
       <InfoSection content icon={<Gauge />} title="Resource limits">
@@ -108,7 +119,20 @@ export function AppLimitsSection({
       editable={canManage}
       groups={groups}
       hint="Changing memory or CPU applies at once. Removing a limit applies the next time the app deploys."
-      status={pending ? <StatusIndicator status={PENDING_DEPLOY} /> : null}
+      shownGroup={groups[shownIndex]?.key}
+      status={
+        <>
+          {groups.length > 1 ? (
+            <InfoPager
+              count={groups.length}
+              index={shownIndex}
+              noun="service"
+              onStep={step}
+            />
+          ) : null}
+          {pending ? <StatusIndicator status={PENDING_DEPLOY} /> : null}
+        </>
+      }
       target={{ id: app.id, kind: "app", relayId: app.relayId }}
       onSave={save}
     />

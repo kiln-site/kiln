@@ -42,7 +42,12 @@ type SectionProps = {
   /** What saving does, for this kind of instance. */
   hint: React.ReactNode
   onSave: (limits: Readonly<Record<string, ResourceLimits>>) => Promise<unknown>
-  /** Whether saved limits are waiting on something to apply. */
+  /**
+   * The one group to show, when they're paged through. Every group's draft
+   * is kept and saved either way.
+   */
+  shownGroup?: string
+  /** Beside the title, such as whether saved limits are waiting. */
   status?: React.ReactNode
   target: {
     id: string
@@ -100,6 +105,7 @@ function ResourceLimitsForm({
   hint,
   loadingCapacity,
   onSave,
+  shownGroup,
 }: SectionProps & {
   capacity: ResourceLimitsCapacity | null
   capacityKey: ReadonlyArray<unknown>
@@ -181,19 +187,21 @@ function ResourceLimitsForm({
 
   return (
     <form className="space-y-4" onSubmit={save}>
-      {parsed.map(({ draft, group, result, room }) => (
-        <ResourceLimitsGroupRows
-          key={group.key}
-          capacity={room}
-          disabled={disabled}
-          diskFloorBytes={diskFloorBytes}
-          draft={draft}
-          group={group}
-          invalid={"error" in result ? (result.field ?? null) : null}
-          loading={loadingCapacity}
-          onChange={setGroup}
-        />
-      ))}
+      {parsed.map(({ draft, group, result, room }) =>
+        shownGroup !== undefined && group.key !== shownGroup ? null : (
+          <ResourceLimitsGroupRows
+            key={group.key}
+            capacity={room}
+            disabled={disabled}
+            diskFloorBytes={diskFloorBytes}
+            draft={draft}
+            group={group}
+            invalid={"error" in result ? (result.field ?? null) : null}
+            loading={loadingCapacity}
+            onChange={setGroup}
+          />
+        )
+      )}
       {saveError || problemText ? (
         <p className="type-support text-destructive">
           {saveError ?? problemText}

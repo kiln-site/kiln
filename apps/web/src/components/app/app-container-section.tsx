@@ -1,19 +1,13 @@
 import * as React from "react"
 import { Link } from "@tanstack/react-router"
-import {
-  ChevronLeft,
-  ChevronRight,
-  Container,
-  ScrollText,
-  Tags,
-} from "lucide-react"
+import { Container, ScrollText, Tags } from "lucide-react"
 
 import { Button, buttonVariants } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { AppContainerLabelsDialog } from "@/components/app/app-container-labels-dialog"
 import {
-  useAppContainerSelection,
+  useSelectedAppContainer,
   type AppContainerTarget,
 } from "@/components/app/app-container-selection"
 import {
@@ -26,6 +20,7 @@ import {
   InfoCopyValue,
   InfoFact,
   InfoFactPair,
+  InfoPager,
   InfoSection,
 } from "@/components/info-page"
 import { useUptime } from "@/components/resource-meters"
@@ -47,19 +42,14 @@ export function AppContainerSection({
   routeId: string
 }) {
   const containers = React.useMemo(() => appContainers(app), [app])
-  const selection = useAppContainerSelection()
-  const selected = React.useSyncExternalStore(
-    selection?.subscribe ?? subscribeNever,
-    selection?.get ?? getNone,
-    getNone
-  )
+  const { select, selected } = useSelectedAppContainer()
   const [labelsOpen, setLabelsOpen] = React.useState(false)
   const index = selectedIndex(containers, selected)
   const container = containers[index]
   const step = (offset: number) => {
     const next =
       containers[(index + offset + containers.length) % containers.length]
-    if (next) selection?.select({ containerId: next.id, service: next.service })
+    if (next) select({ containerId: next.id, service: next.service })
   }
 
   if (!appRelayAvailable(app) || !container) {
@@ -81,9 +71,10 @@ export function AppContainerSection({
       title="Container"
       status={
         containers.length > 1 ? (
-          <ContainerPager
+          <InfoPager
             count={containers.length}
             index={index}
+            noun="container"
             onStep={step}
           />
         ) : null
@@ -121,55 +112,6 @@ export function AppContainerSection({
     >
       <ContainerFacts app={app} container={container} />
     </InfoSection>
-  )
-}
-
-function ContainerPager({
-  count,
-  index,
-  onStep,
-}: {
-  count: number
-  index: number
-  onStep: (offset: number) => void
-}) {
-  return (
-    <div className="flex items-center gap-0.5">
-      <PagerButton label="Previous container" onClick={() => onStep(-1)}>
-        <ChevronLeft />
-      </PagerButton>
-      <span
-        aria-live="polite"
-        className="px-0.5 text-xs text-muted-foreground tabular-nums"
-      >
-        <span className="text-foreground">{index + 1}</span>/{count}
-      </span>
-      <PagerButton label="Next container" onClick={() => onStep(1)}>
-        <ChevronRight />
-      </PagerButton>
-    </div>
-  )
-}
-
-function PagerButton({
-  children,
-  label,
-  onClick,
-}: {
-  children: React.ReactNode
-  label: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      className="grid size-6 place-items-center text-muted-foreground transition-colors outline-none hover:bg-muted/60 hover:text-foreground focus-visible:text-primary-ink focus-visible:ring-1 focus-visible:ring-ring [&_svg]:size-3.5!"
-      onClick={onClick}
-    >
-      {children}
-    </button>
   )
 }
 
@@ -282,12 +224,4 @@ function selectedIndex(
     0,
     containers.findIndex((container) => container.service === selected.service)
   )
-}
-
-function subscribeNever() {
-  return () => undefined
-}
-
-function getNone(): AppContainerTarget | null {
-  return null
 }
