@@ -1176,10 +1176,12 @@ const DomainRowActions = React.memo(function DomainRowActions({
   const hostname = rowHostname(row)
   const zoneName =
     row.kind === "server" ? row.domain.zoneName : row.hostname.zoneName
-  const adoptable = row.kind === "web" && row.hostname.canAdopt
+  // An address no route uses keeps its delete button: nothing else removes it.
+  const adoptable =
+    row.kind === "web" && row.hostname.canAdopt && row.hostname.routed
   return (
     <DataTableActionGroup>
-      {row.kind === "web" && row.hostname.canAdopt ? (
+      {row.kind === "web" && adoptable ? (
         <AdoptRecordButton
           compact
           hostname={hostname}

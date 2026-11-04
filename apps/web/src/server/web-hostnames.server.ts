@@ -807,6 +807,7 @@ export const adoptableWebHostnamesEffect = Effect.fn(
     (row) => row.status === "external" && row.existingRecord !== null
   )
   const adoptable = new Map<string, boolean>()
+  const targets = new Map<string, string | null>()
   for (const connectionId of new Set(candidates.map((row) => row.connectionId))) {
     const connection = yield* loadDomainConnectionEffect(connectionId)
     if (!connection || !mayAdoptRecords(connection.connection.ownerId, actor)) {
@@ -814,9 +815,13 @@ export const adoptableWebHostnamesEffect = Effect.fn(
     }
     for (const row of candidates) {
       if (row.connectionId !== connectionId) continue
-      const target = yield* relayPublicHostEffect(row.relayId).pipe(
-        Effect.orElseSucceed(() => null)
-      )
+      let target = targets.get(row.relayId)
+      if (target === undefined) {
+        target = yield* relayPublicHostEffect(row.relayId).pipe(
+          Effect.orElseSucceed(() => null)
+        )
+        targets.set(row.relayId, target)
+      }
       const wanted =
         target === null ? null : cloudflareAddressRecord(row.hostname, target)
       adoptable.set(

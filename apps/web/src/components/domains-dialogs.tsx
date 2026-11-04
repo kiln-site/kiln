@@ -1196,7 +1196,7 @@ export function AdoptRecordDialog({
       hostnames.find((row) => row.id === hostname.id) ?? null,
     [hostname.id]
   )
-  const { data: latest } = useQuery({
+  const { data: latest, error: loadError } = useQuery({
     ...resourceWebHostnamesQueryOptions(
       resource.relayId,
       resource.resourceType,
@@ -1238,9 +1238,11 @@ export function AdoptRecordDialog({
           <DialogDescription>
             {latest === undefined
               ? "\u00A0"
-              : latest?.pointsAtRelay
-                ? "It already points at the Relay. Kiln will keep it updated and delete it with the route."
-                : "Kiln will point it at the Relay and delete it with the route."}
+              : !record
+                ? "Kiln can't take over this record anymore."
+                : latest?.pointsAtRelay
+                  ? "It already points at the Relay. Kiln will keep it updated and delete it with the route."
+                  : "Kiln will point it at the Relay and delete it with the route."}
           </DialogDescription>
         </DialogHeader>
         <div className="flex min-w-0 items-baseline justify-between gap-4">
@@ -1253,6 +1255,7 @@ export function AdoptRecordDialog({
             </span>
           ) : null}
         </div>
+        {loadError ? <ConfigurationError error={loadError} /> : null}
         {adopt.error ? <ConfigurationError error={adopt.error} /> : null}
         <DialogFooter>
           <Button

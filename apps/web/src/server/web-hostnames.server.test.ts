@@ -28,6 +28,22 @@ import {
   reconcileResourceWebHostnamesEffect,
   saveWebRouteHostnamesEffect,
 } from "./web-hostnames.server"
+import { getResourceWebHostnamesHandler } from "./web-hostname-access.server"
+
+// Who's signed in, and what they may change, for the network page's read.
+const access = vi.hoisted(() => ({ canManage: true }))
+vi.mock("@/server/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/auth")>()),
+  requireEligibleResourceUser: async () => ({ id: "owner", role: "user" }),
+}))
+vi.mock("@/lib/access-control", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/access-control")>()),
+  requireRelayPermission: async ({ permission }: { permission: string }) => {
+    if (permission === "app.manage" && !access.canManage) {
+      throw new Error("Forbidden")
+    }
+  },
+}))
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
 
@@ -366,6 +382,20 @@ describeMysql("web route hostnames", () => {
             ).pipe(Effect.map((adoptable) => adoptable.get(row.id)))
           assert.isFalse(yield* pointsAtRelay(seen.content))
           assert.isTrue(yield* pointsAtRelay("relay-one.relay.test"))
+          // The network page shows the record only to whoever can take it
+          // over: someone who can only read the app sees neither.
+          const asRead = (canManage: boolean) =>
+            Effect.promise(async () => {
+              access.canManage = canManage
+              const { hostnames } = await getResourceWebHostnamesHandler(app)
+              return hostnames.find(({ id }) => id === row.id)
+            })
+          const ownerView = yield* asRead(true)
+          assert.isTrue(ownerView?.canAdopt)
+          assert.deepEqual(ownerView?.existingRecord, seen)
+          const readerView = yield* asRead(false)
+          assert.isFalse(readerView?.canAdopt)
+          assert.isNull(readerView?.existingRecord)
           const adopt = (actor: DomainActor, record: ExistingWebRecord) =>
             adoptExistingWebRecordEffect(row, { actor, record }).pipe(
               Effect.flip,
