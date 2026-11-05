@@ -5,6 +5,7 @@ import {
   appServiceNameSchema,
   databaseEngineSchema,
   databaseIdSchema,
+  newDatabaseNamesShape,
   appServiceLimitsSchema,
   relayAppLimitsV1Feature,
   relayAppSchema,
@@ -80,6 +81,7 @@ const createAppInputSchema = z.strictObject({
   database: z
     .discriminatedUnion("kind", [
       z.strictObject({
+        ...newDatabaseNamesShape,
         engine: databaseEngineSchema,
         kind: z.literal("new"),
         name: relayDatabaseNameSchema,

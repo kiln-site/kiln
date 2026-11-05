@@ -1,7 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto"
 
 import { relayAppSchema } from "@workspace/contracts"
-import type { DatabaseEngine } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
 
@@ -34,7 +33,10 @@ import {
 } from "@/operations/operation"
 import { publishAppChange } from "@/server/app-access"
 import { appDatabaseEnvironment } from "@/server/app-database-environment.server"
-import { createDatabase } from "@/server/database-create.server"
+import {
+  createDatabase,
+  type CreateDatabaseInput,
+} from "@/server/database-create.server"
 import {
   databaseRpc,
   requiredCredential,
@@ -45,7 +47,10 @@ export interface CreateAppInput {
   // A database to connect it to from the start, a new one or one on its
   // Relay, whose credentials go in its environment.
   database?:
-    | { engine: DatabaseEngine; kind: "new"; name: string }
+    | (Pick<
+        CreateDatabaseInput,
+        "databaseName" | "engine" | "name" | "username"
+      > & { kind: "new" })
     | { id: string; kind: "existing" }
   name: string
   relayId: string
@@ -160,10 +165,12 @@ async function createAppHandler(
     await runOperationPromise(
       createDatabase,
       {
+        databaseName: data.database.databaseName,
         engine: data.database.engine,
         id: databaseId,
         name: data.database.name,
         relayId: relay.id,
+        username: data.database.username,
       },
       { user }
     )

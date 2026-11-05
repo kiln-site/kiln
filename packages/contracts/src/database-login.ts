@@ -19,6 +19,12 @@ export const databasePasswordSchema = z
   .string()
   .regex(DATABASE_PASSWORD_PATTERN)
 
+/** What a new database may be given rather than have generated. */
+export const newDatabaseNamesShape = {
+  databaseName: databaseNameFieldSchema.optional(),
+  username: databaseUsernameSchema.optional(),
+}
+
 /** Redis and Valkey have no named databases to connect to. */
 export function databaseEngineHasNamedDatabase(
   engine: DatabaseEngine

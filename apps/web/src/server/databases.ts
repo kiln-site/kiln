@@ -13,11 +13,11 @@ import {
   databaseQueryInputSchema,
   databaseQueryResultSchema,
   databaseRowsInputSchema,
-  databaseNameFieldSchema,
   databasePasswordSchema,
   databaseRowsSchema,
   databaseUsernameIssue,
   databaseUsernameSchema,
+  newDatabaseNamesShape,
   relayDatabaseNameSchema,
   relayIdSchema,
   relayDatabaseTerminalClaimSchema,
@@ -75,11 +75,10 @@ import {
 } from "@/server/managed-database-access"
 
 const createDatabaseInputSchema = z.strictObject({
-  databaseName: databaseNameFieldSchema.optional(),
+  ...newDatabaseNamesShape,
   engine: databaseEngineSchema,
   name: relayDatabaseNameSchema,
   relayId: relayIdSchema,
-  username: databaseUsernameSchema.optional(),
 })
 const databaseInputSchema = z.strictObject({
   databaseId: databaseIdSchema,

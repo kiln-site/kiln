@@ -200,6 +200,33 @@ describeMysql("Creating an App with a database", () => {
       })
     )
 
+    it.effect("gives a new database the names chosen for it", () =>
+      Effect.gen(function* () {
+        yield* seed(["app.create", "database.create"])
+
+        const created = yield* createApp({
+          database: {
+            databaseName: "blog_data",
+            engine: "postgres",
+            kind: "new",
+            name: "Blog",
+            username: "blog_owner",
+          },
+        })
+
+        const [saved] = relay.connections.get(created.id)!
+        const credential = yield* loadManagedDatabaseCredentialEffect(
+          relayId,
+          saved!
+        )
+        assert.strictEqual(credential?.databaseName, "blog_data")
+        assert.strictEqual(credential?.username, "blog_owner")
+        const app = yield* loadAppConfigEffect(relayId, created.id)
+        assert.include(app?.config.environment, "DB_USER=blog_owner")
+        assert.include(app?.config.environment, "DB_NAME=blog_data")
+      })
+    )
+
     it.effect("creates a database with the name and username it's given", () =>
       Effect.gen(function* () {
         yield* seed(["database.create"])
