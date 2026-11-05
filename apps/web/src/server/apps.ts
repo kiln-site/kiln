@@ -54,7 +54,7 @@ import {
 import { requireEligibleResourceUser } from "@/server/auth"
 import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { resourceOperation } from "@/server/resource-operation.server"
-import { createAppOperation } from "@/server/app-create.server"
+import { createAppOperation, withNewAppIds } from "@/server/app-create.server"
 import { connectDatabase } from "@/server/database-connections.server"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import { databaseRpc } from "@/server/managed-database-access"
@@ -173,7 +173,7 @@ export const getAppOwner = createServerFn({ method: "GET" })
 export const createApp = createServerFn({ method: "POST" })
   .validator(createAppInputSchema)
   .handler(async ({ data }) =>
-    runOperationPromise(createAppOperation, data, {
+    runOperationPromise(createAppOperation, withNewAppIds(data), {
       user: await requireEligibleResourceUser(),
     })
   )

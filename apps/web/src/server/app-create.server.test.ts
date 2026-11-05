@@ -85,7 +85,11 @@ vi.mock("@/server/web-hostname-access.server", () => ({
   generateAppHostnameBestEffort: () => Promise.resolve(),
 }))
 
-import { createAppOperation, type CreateAppInput } from "./app-create.server"
+import {
+  createAppOperation,
+  withNewAppIds,
+  type CreateAppInput,
+} from "./app-create.server"
 
 const relayId = "r".repeat(43)
 const otherRelayId = "s".repeat(43)
@@ -153,10 +157,12 @@ const seed = (permissions: ReadonlyArray<AccessPermission>) =>
     yield* seedDatabase(database, relayId, "Shared")
   })
 
-const createApp = (input: Pick<CreateAppInput, "database">) =>
+const createApp = (
+  input: Pick<CreateAppInput, "database"> & { name?: string }
+) =>
   runOperation(
     createAppOperation,
-    { name: "Blog", relayId, ...input },
+    withNewAppIds({ name: "Blog", relayId, ...input }),
     { user: person("alice") }
   )
 
@@ -208,6 +214,31 @@ describeMysql("Creating an App with a database", () => {
         assert.deepStrictEqual(relay.connections.get(created.id), [database])
         const app = yield* loadAppConfigEffect(relayId, created.id)
         assert.include(app?.config.environment, "DB_PASS=the-password\n")
+      })
+    )
+
+    it.effect("creates several Apps on one database at once", () =>
+      Effect.gen(function* () {
+        yield* seed([
+          "app.create",
+          "database.credentials.read",
+          "database.network.write",
+        ])
+
+        // They take the database's connections in turn, so all but the
+        // first wait for it.
+        const names = ["One", "Two", "Three", "Four", "Five", "Six"]
+        const created = yield* Effect.all(
+          names.map((name) =>
+            createApp({ database: { id: database, kind: "existing" }, name })
+          ),
+          { concurrency: "unbounded" }
+        )
+
+        assert.strictEqual(new Set(created.map(({ id }) => id)).size, 6)
+        for (const { id } of created) {
+          assert.deepStrictEqual(relay.connections.get(id), [database])
+        }
       })
     )
 

@@ -9,7 +9,7 @@ export function databaseProvisioning(
   return {
     kind: "database",
     label: "database.provision",
-    locks: databaseLocks,
+    locks: (job) => databaseLocks(job.instanceId),
     withState: (placeholder, state) => ({
       ...placeholder,
       observedState: state.phase === "failed" ? "failed" : "provisioning",

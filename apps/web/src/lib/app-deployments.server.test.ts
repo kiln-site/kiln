@@ -36,6 +36,7 @@ const relay = vi.hoisted(() => ({
   // Each app's saved database connections, and where the databases that
   // haven't finished provisioning are.
   connections: new Map<string, Array<string>>(),
+  databaseLists: 0,
   provisioning: new Map<string, string>(),
   sent: [] as Array<string>,
 }))
@@ -86,6 +87,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       return [{ app: relayApp(id), id, view: "detail" }]
     }
     if (operation === "database.list") {
+      relay.databaseLists++
       return [...relay.provisioning].map(([id, phase]) =>
         relayDatabase(id, phase)
       )
@@ -368,7 +370,7 @@ describeMysql("App deployments", () => {
 
           // Its containers couldn't join a network that isn't there yet.
           const id = yield* ask(ninth)
-          yield* Effect.sleep("500 millis")
+          yield* until(() => relay.databaseLists > 0)
           assert.strictEqual((yield* loadOperation(id))?.state, "waiting")
           assert.strictEqual(sentTo(ninth), 0)
 

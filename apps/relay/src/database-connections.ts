@@ -289,6 +289,16 @@ export class DatabaseConnections {
     return Effect.runPromise(this.state.listMemberDatabaseConnections(member))
   }
 
+  /** Whether a database is on this Relay, or being created for it. */
+  async databaseExists(databaseId: string): Promise<boolean> {
+    if ((await this.resolve({ id: databaseId, kind: "database" })) !== null)
+      return true
+    const jobs = await Effect.runPromise(this.state.listProvisioningJobs())
+    return jobs.some(
+      (job) => job.kind === "database" && job.instanceId === databaseId
+    )
+  }
+
   /** The members connected to a database on this Relay. */
   members(databaseId: string): Array<DatabaseConnectionMember> {
     const members: Array<DatabaseConnectionMember> = []

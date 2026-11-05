@@ -459,8 +459,10 @@ export class AppDriver {
     }
     await this.#ensureResources(input.id)
     // Saved, for its deployments to join: it has no containers yet, and a
-    // database created with it may have no network yet.
+    // database created with it may have no network yet. One deleted since
+    // Hearth asked stays deleted.
     for (const databaseId of input.databaseIds ?? []) {
+      if (!(await this.#connections.databaseExists(databaseId))) continue
       await this.#connections.set(
         { id: input.id, kind: "app" },
         databaseId,

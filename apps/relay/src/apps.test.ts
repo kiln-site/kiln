@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -135,9 +136,30 @@ function appContainers(id = appId) {
 }
 
 describe("an App created with a database", () => {
-  it("keeps the connection though the database doesn't exist yet", async () => {
+  const databaseId = "d".repeat(40)
+
+  it("keeps the connection to one still provisioning", async () => {
     const harness = await relayHarness()
-    const databaseId = "d".repeat(40)
+    const database = {
+      databaseName: "kiln_main",
+      engine: "postgres",
+      id: databaseId,
+      name: "Main",
+      password: "p".repeat(24),
+      username: "kiln_main",
+    } as const
+    await Effect.runPromise(
+      harness.state.enqueueProvisioningJob(
+        {
+          idempotencyKey: randomUUID(),
+          input: database,
+          instanceId: databaseId,
+          kind: "database",
+          placeholder: harness.databases.placeholder(database),
+        },
+        Date.now()
+      )
+    )
 
     await harness.apps.create({
       databaseIds: [databaseId],
@@ -148,6 +170,18 @@ describe("an App created with a database", () => {
     expect((await harness.apps.get(appId)).savedDatabaseIds).toEqual([
       databaseId,
     ])
+  })
+
+  it("doesn't bring back a connection to one deleted meanwhile", async () => {
+    const harness = await relayHarness()
+
+    await harness.apps.create({
+      databaseIds: [databaseId],
+      id: appId,
+      name: "Website",
+    })
+
+    expect((await harness.apps.get(appId)).savedDatabaseIds).toEqual([])
   })
 })
 

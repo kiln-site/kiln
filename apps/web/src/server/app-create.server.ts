@@ -51,6 +51,25 @@ export interface CreateAppInput {
   relayId: string
 }
 
+interface CreateAppIds {
+  /** The App's and a new database's, settled as it's asked for. */
+  databaseId: string | null
+  id: string
+}
+
+// Settled once, not in `authorize`, which runs again after a wait: new IDs
+// would be new lanes, and it would keep taking its turn again.
+export const withNewAppIds = (input: CreateAppInput) => ({
+  ...input,
+  databaseId:
+    input.database?.kind === "existing"
+      ? input.database.id
+      : input.database
+        ? randomBytes(20).toString("hex")
+        : null,
+  id: randomBytes(20).toString("hex"),
+})
+
 const cancelledSchema = z.object({ cancelled: z.boolean() })
 
 // What connecting an App to an existing database at its creation takes:
@@ -60,14 +79,14 @@ const existingDatabasePermissions = [
   "database.credentials.read",
 ] as const
 
-// Holds the App it creates, by the ID it settles first, and its Relay
+// Holds the App it creates, by the ID it was given, and its Relay
 // shared, so the Relay isn't removed meanwhile. The Relay is read once
 // admitted, so one removed since can't gain the App. A database created
-// with it is held whole, by its ID. An existing one holds its connections,
+// with it is held whole. An existing one holds its connections,
 // and its credentials shared, so a rotation waits for the copy going into
 // the App's environment; copying them takes reading them, so joining alone
 // isn't enough.
-export const createAppOperation = operation<CreateAppInput>()({
+export const createAppOperation = operation<CreateAppInput & CreateAppIds>()({
   name: "app.create",
   doing: "Creating this App",
   authorize: ({ input, user }) =>
@@ -90,26 +109,16 @@ export const createAppOperation = operation<CreateAppInput>()({
             await requireRelayPermission({ ...need, relayId, user: person })
           }
         })
-      ),
-      Effect.map((person) => ({
-        databaseId:
-          input.database?.kind === "existing"
-            ? input.database.id
-            : input.database
-              ? randomBytes(20).toString("hex")
-              : null,
-        id: randomBytes(20).toString("hex"),
-        user: person,
-      }))
+      )
     ),
-  locks: ({ context, input }) => {
-    const { databaseId } = context
+  locks: ({ input }) => {
+    const { databaseId, id } = input
     const database =
       databaseId === null
         ? null
         : resourceKey("database", input.relayId, databaseId)
     return [
-      exclusive(resourceKey("app", input.relayId, context.id)),
+      exclusive(resourceKey("app", input.relayId, id)),
       shared(relayKey(input.relayId)),
       ...(database === null
         ? []
@@ -121,12 +130,10 @@ export const createAppOperation = operation<CreateAppInput>()({
             ]),
     ]
   },
-  run: ({ context, input }) =>
-    promiseEffect(() =>
-      createAppHandler(context.user, input, context.id, context.databaseId)
-    ),
-  audit: ({ context, input }) => ({
-    id: context.id,
+  run: ({ context: user, input }) =>
+    promiseEffect(() => createAppHandler(user, input)),
+  audit: ({ input }) => ({
+    id: input.id,
     kind: "app",
     relayId: input.relayId,
   }),
@@ -134,10 +141,9 @@ export const createAppOperation = operation<CreateAppInput>()({
 
 async function createAppHandler(
   user: AuthenticatedUser,
-  data: CreateAppInput,
-  id: string,
-  databaseId: string | null
+  data: CreateAppInput & CreateAppIds
 ) {
+  const { databaseId, id } = data
   const relay = await requiredRelay(data.relayId)
   const nameExists = await runAppEffect(
     "apps.name.preflight",
