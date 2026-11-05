@@ -1,20 +1,34 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { DatabaseEngine } from "@workspace/contracts"
+import { ChevronsUpDown, Plus } from "lucide-react"
 
+import { Button } from "@workspace/ui/components/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 
+import { DatabaseEngineChoice } from "@/components/database/database-engine-choice"
+import { engineLabel } from "@/components/database/database-presentation"
 import {
-  engineLabel,
-  engineOptions,
-} from "@/components/database/database-presentation"
+  DrawerPopover,
+  DrawerPopoverContent,
+  DrawerPopoverTrigger,
+} from "@/components/drawer-popover"
+import { InstanceCard } from "@/components/instance-card"
+import { DatabaseKindIcon } from "@/components/instance-kind-icon"
+import {
+  InstancePickerContent,
+  InstancePickerFooterAction,
+  InstancePickerHeaderAction,
+  type InstancePickerItem,
+} from "@/components/instance-picker"
 import { infraRelayOptionsQueryOptions } from "@/lib/infra-directory"
 import { managedDatabaseDirectoryQueryOptions } from "@/lib/query-options"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
@@ -22,29 +36,16 @@ import type { getManagedDatabaseDirectory } from "@/server/databases"
 // The database a new app starts connected to: none, a new one on its Relay,
 // or one already there. Its credentials go in the app's environment.
 
-type DatabaseMode = "existing" | "new" | "none"
+export type AppDatabaseDraft =
+  | { kind: "none" }
+  | { engine: DatabaseEngine; kind: "new"; name: string }
+  | { engine: DatabaseEngine; id: string; kind: "existing"; name: string }
 
-export interface AppDatabaseDraft {
-  databaseId: string
-  engine: DatabaseEngine
-  mode: DatabaseMode
-  name: string
-}
-
-export const emptyAppDatabaseDraft: AppDatabaseDraft = {
-  databaseId: "",
-  engine: "postgres",
-  mode: "none",
-  name: "",
-}
-
-export function appDatabaseDraftReady(draft: AppDatabaseDraft): boolean {
-  return draft.mode !== "existing" || draft.databaseId !== ""
-}
+export const noAppDatabase: AppDatabaseDraft = { kind: "none" }
 
 /** What creating the app asks for. A new database is named as the app is. */
 export function appDatabaseInput(draft: AppDatabaseDraft, appName: string) {
-  switch (draft.mode) {
+  switch (draft.kind) {
     case "none":
       return undefined
     case "new":
@@ -54,27 +55,31 @@ export function appDatabaseInput(draft: AppDatabaseDraft, appName: string) {
         name: draft.name.trim() || appName,
       }
     case "existing":
-      return { id: draft.databaseId, kind: "existing" as const }
+      return { id: draft.id, kind: "existing" as const }
   }
 }
 
-const modes: ReadonlyArray<{ id: DatabaseMode; label: string }> = [
-  { id: "none", label: "None" },
-  { id: "new", label: "New" },
-  { id: "existing", label: "Existing" },
-]
+type DatabaseDirectory = Awaited<ReturnType<typeof getManagedDatabaseDirectory>>
 
-const connectableOn =
-  (relayId: string) =>
-  (directory: Awaited<ReturnType<typeof getManagedDatabaseDirectory>>) =>
-    directory.filter(
-      (database) =>
-        database.relayId === relayId &&
-        database.permissions.includes("database.network.write") &&
-        database.permissions.includes("database.credentials.read")
-    )
+const connectableOn = (relayId: string) => (directory: DatabaseDirectory) =>
+  directory.filter(
+    (database) =>
+      database.relayId === relayId &&
+      database.permissions.includes("database.network.write") &&
+      database.permissions.includes("database.credentials.read")
+  )
 
-export function AppDatabaseFields({
+const databaseItem = (
+  database: DatabaseDirectory[number]
+): InstancePickerItem => ({
+  identity: { id: database.id, kind: "database", relayId: database.relayId },
+  key: database.id,
+  meta: `${engineLabel(database.engine)} · ${database.shortId}`,
+  name: database.name,
+  searchText: `${database.id} ${database.engine}`,
+})
+
+export const AppDatabaseFields = React.memo(function AppDatabaseFields({
   appName,
   draft,
   onChange,
@@ -85,131 +90,236 @@ export function AppDatabaseFields({
   onChange: (draft: AppDatabaseDraft) => void
   relayId: string
 }) {
-  const engineLabelId = React.useId()
-  const existingLabelId = React.useId()
+  const [open, setOpen] = React.useState(false)
+  const [creating, setCreating] = React.useState(false)
   const selectConnectable = React.useMemo(
     () => connectableOn(relayId),
     [relayId]
   )
+  // Both are asked for up front, so the picker opens already filled in.
+  const { data: databases } = useQuery({
+    ...managedDatabaseDirectoryQueryOptions(),
+    select: selectConnectable,
+  })
   const { data: canCreate } = useQuery({
     ...infraRelayOptionsQueryOptions("database"),
     select: ({ relays }) =>
       relays.some((relay) => relay.id === relayId && relay.canCreate),
   })
-  // Asked for only once someone wants to pick one.
-  const databases = useQuery({
-    ...managedDatabaseDirectoryQueryOptions(),
-    enabled: draft.mode === "existing",
-    select: selectConnectable,
-  })
-  const existing = databases.data?.find(({ id }) => id === draft.databaseId)
-  const engine = draft.mode === "new" ? draft.engine : existing?.engine
+  const items = React.useMemo(
+    () => (databases ?? []).map(databaseItem),
+    [databases]
+  )
+  const selectedKeys = React.useMemo(
+    () => new Set(draft.kind === "existing" ? [draft.id] : []),
+    [draft]
+  )
+  const select = React.useCallback(
+    (item: InstancePickerItem) => {
+      const database = databases?.find(({ id }) => id === item.key)
+      if (!database) return
+      onChange({
+        engine: database.engine,
+        id: database.id,
+        kind: "existing",
+        name: database.name,
+      })
+      setOpen(false)
+    },
+    [databases, onChange]
+  )
+  const selectNone = React.useCallback(() => {
+    onChange(noAppDatabase)
+    setOpen(false)
+  }, [onChange])
+  const startCreating = React.useCallback(() => {
+    setOpen(false)
+    setCreating(true)
+  }, [])
+  // The new database's dialog takes focus; the trigger mustn't take it back.
+  const keepCreatingFocus = React.useCallback(
+    (event: Event) => {
+      if (creating) event.preventDefault()
+    },
+    [creating]
+  )
 
   return (
-    <fieldset className="space-y-3">
-      <legend className="mb-2 text-xs font-medium">Database</legend>
-      <div className="grid grid-cols-3 gap-2">
-        {modes.map((mode) => (
-          <button
-            key={mode.id}
-            aria-pressed={draft.mode === mode.id}
-            className={`type-card-title rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-              draft.mode === mode.id
-                ? "border-primary/60 bg-primary/10 text-foreground"
-                : "border-border/70 bg-background/30 text-muted-foreground hover:bg-accent/30"
-            }`}
-            disabled={mode.id === "new" && canCreate === false}
+    <div>
+      <span className="mb-2 block text-xs font-medium">Database</span>
+      <DrawerPopover open={open} onOpenChange={setOpen}>
+        <DrawerPopoverTrigger asChild>
+          <Button
             type="button"
-            onClick={() => onChange({ ...draft, mode: mode.id })}
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            aria-label="Database"
+            className="h-12 w-full justify-between gap-3 px-2 font-normal"
           >
-            {mode.label}
-          </button>
-        ))}
-      </div>
-      {draft.mode === "new" ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div>
-            <span id={engineLabelId} className="mb-2 block text-xs font-medium">
-              Engine
-            </span>
-            <Select
-              value={draft.engine}
-              onValueChange={(value) =>
-                onChange({ ...draft, engine: value as DatabaseEngine })
-              }
-            >
-              <SelectTrigger
-                aria-labelledby={engineLabelId}
-                className="h-9 w-full px-3"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {engineOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label} {option.description}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+            <AppDatabaseSummary
+              appName={appName}
+              draft={draft}
+              relayId={relayId}
+            />
+            <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+          </Button>
+        </DrawerPopoverTrigger>
+        <DrawerPopoverContent
+          title="Databases"
+          align="start"
+          className="z-[70] w-(--radix-popover-trigger-width) min-w-72 overflow-hidden p-0"
+          onCloseAutoFocus={keepCreatingFocus}
+        >
+          <InstancePickerContent
+            ariaLabel="Databases"
+            emptyMessage="No databases on this Relay"
+            favoritesFilter={false}
+            footer={
+              canCreate === false ? undefined : (
+                <InstancePickerFooterAction
+                  icon={Plus}
+                  label="Create a new database"
+                  onClick={startCreating}
+                />
+              )
+            }
+            header={
+              <InstancePickerHeaderAction
+                label="No database"
+                selected={draft.kind === "none"}
+                onClick={selectNone}
+              />
+            }
+            items={items}
+            selectedKeys={selectedKeys}
+            onSelect={select}
+          />
+        </DrawerPopoverContent>
+      </DrawerPopover>
+      <p className="type-meta mt-2 text-muted-foreground">
+        A database joins the app's private network, with its credentials in the
+        environment as <span className="font-mono">DB_*</span> variables.
+      </p>
+      {creating ? (
+        <NewAppDatabaseDialog
+          appName={appName}
+          draft={draft}
+          onChange={onChange}
+          onClose={() => setCreating(false)}
+        />
+      ) : null}
+    </div>
+  )
+})
+
+// What the trigger shows: always an icon and two lines, so that what's
+// chosen never changes the dialog's height.
+function AppDatabaseSummary({
+  appName,
+  draft,
+  relayId,
+}: {
+  appName: string
+  draft: AppDatabaseDraft
+  relayId: string
+}) {
+  if (draft.kind === "existing") {
+    return (
+      <InstanceCard
+        className="min-w-0 flex-1 gap-2 text-left"
+        iconClassName="size-7 border-0 bg-muted/55"
+        instance={{ id: draft.id, kind: "database", relayId }}
+        meta={engineLabel(draft.engine)}
+        name={draft.name}
+        nameClassName="type-control-sm"
+        showFavorite={false}
+        showStatus={false}
+      />
+    )
+  }
+  const creating = draft.kind === "new"
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-2 text-left">
+      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted/55">
+        <DatabaseKindIcon className="size-3.5" />
+      </span>
+      <span className="min-w-0">
+        <span className="type-control-sm block truncate">
+          {creating
+            ? draft.name.trim() || appName || "New database"
+            : "No database"}
+        </span>
+        <span className="type-meta block truncate text-muted-foreground">
+          {creating
+            ? `New ${engineLabel(draft.engine)} database`
+            : "Connect one later from the app's Network page"}
+        </span>
+      </span>
+    </span>
+  )
+}
+
+function NewAppDatabaseDialog({
+  appName,
+  draft,
+  onChange,
+  onClose,
+}: {
+  appName: string
+  draft: AppDatabaseDraft
+  onChange: (draft: AppDatabaseDraft) => void
+  onClose: () => void
+}) {
+  const [engine, setEngine] = React.useState<DatabaseEngine>(
+    draft.kind === "new" ? draft.engine : "postgres"
+  )
+  const [name, setName] = React.useState(draft.kind === "new" ? draft.name : "")
+  const add = () => {
+    onChange({ engine, kind: "new", name })
+    onClose()
+  }
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>New database</DialogTitle>
+          <DialogDescription>
+            Created with the app, on the same Relay.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
           <label className="block">
             <span className="mb-2 block text-xs font-medium">Name</span>
             <Input
+              autoFocus
               maxLength={120}
               placeholder={appName || "Same as the app"}
-              value={draft.name}
-              onChange={(event) =>
-                onChange({ ...draft, name: event.currentTarget.value })
-              }
+              value={name}
+              onChange={(event) => setName(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") add()
+              }}
             />
           </label>
+          <DatabaseEngineChoice value={engine} onChange={setEngine} />
         </div>
-      ) : null}
-      {draft.mode === "existing" ? (
-        databases.data?.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            There are no databases on this Relay you can connect to.
-          </p>
-        ) : (
-          <div>
-            <span
-              id={existingLabelId}
-              className="mb-2 block text-xs font-medium"
-            >
-              Connect to
-            </span>
-            <Select
-              value={draft.databaseId}
-              onValueChange={(databaseId) => onChange({ ...draft, databaseId })}
-            >
-              <SelectTrigger
-                aria-labelledby={existingLabelId}
-                className="h-9 w-full px-3"
-              >
-                <SelectValue placeholder="Choose a database" />
-              </SelectTrigger>
-              <SelectContent>
-                {databases.data?.map((database) => (
-                  <SelectItem key={database.id} value={database.id}>
-                    {database.name} · {engineLabel(database.engine)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )
-      ) : null}
-      {draft.mode !== "none" ? (
-        <p className="type-meta text-muted-foreground">
-          Connected on its private network, with{" "}
-          <span className="font-mono">
-            DB_HOST, DB_PORT, DB_USER, DB_PASS
-            {engine === "redis" || engine === "valkey" ? "" : ", DB_NAME"}
-          </span>{" "}
-          in the app's environment.
-        </p>
-      ) : null}
-    </fieldset>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="button" onClick={add}>
+            <Plus />
+            Add database
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

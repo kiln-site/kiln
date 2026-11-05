@@ -58,9 +58,9 @@ import { useAppDeployState } from "@/components/app/use-app-deploy-state"
 import { DeleteAppDialog } from "@/components/app/app-dialogs"
 import {
   AppDatabaseFields,
-  appDatabaseDraftReady,
   appDatabaseInput,
-  emptyAppDatabaseDraft,
+  noAppDatabase,
+  type AppDatabaseDraft,
 } from "@/components/app/app-database-fields"
 import {
   GitHubSourceFields,
@@ -723,7 +723,8 @@ function CreateAppDialog({
     () => availableRelays.at(0)?.id ?? ""
   )
   const [github, setGitHub] = React.useState(emptyGitHubSourceDraft)
-  const [database, setDatabase] = React.useState(emptyAppDatabaseDraft)
+  const [database, setDatabase] =
+    React.useState<AppDatabaseDraft>(noAppDatabase)
   const relayLabelId = React.useId()
   const create = useMutation({
     mutationFn: async () => {
@@ -771,7 +772,6 @@ function CreateAppDialog({
   const ready =
     name.trim() !== "" &&
     relayId !== "" &&
-    appDatabaseDraftReady(database) &&
     (kind !== "github" || githubSourceDraftReady(github))
 
   return (
@@ -835,8 +835,8 @@ function CreateAppDialog({
               value={relayId}
               onValueChange={(next) => {
                 setRelayId(next)
-                // An app connects only to databases on its own Relay.
-                setDatabase((draft) => ({ ...draft, databaseId: "" }))
+                // What's on one Relay, or allowed there, isn't on another.
+                setDatabase(noAppDatabase)
               }}
             >
               <SelectTrigger

@@ -67,6 +67,10 @@ interface InstancePickerContentProps {
   emptyMessage?: string
   /** Shows the "Show favorites only" filter. Off ignores a saved choice. */
   favoritesFilter?: boolean
+  /** Stays below the list, whatever it's searched for or filtered by. */
+  footer?: React.ReactNode
+  /** Stays above the list, whatever it's searched for or filtered by. */
+  header?: React.ReactNode
   items: ReadonlyArray<InstancePickerItem>
   /** Multi-select shows checkboxes and keeps the picker open on select. */
   multiple?: boolean
@@ -125,6 +129,8 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   ariaLabel = "Instances",
   emptyMessage = "No instances found",
   favoritesFilter = true,
+  footer,
+  header,
   includeAllGroup = false,
   includeKindGroups = true,
   items: sourceItems,
@@ -424,6 +430,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           onSelect={onSelectGroup}
         />
       ) : null}
+      {header}
       {visibleItems.length > 0 ? (
         <div
           ref={scrollElementRef}
@@ -488,6 +495,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
           onNavigate={onNavigate}
         />
       ) : null}
+      {footer}
       {searchAtBottom ? filterBar : null}
       {searchAtBottom ? searchBar : null}
     </>
@@ -1093,6 +1101,67 @@ function InstancePickerEmptyState({
   )
 }
 
+const footerRowClassName =
+  "type-control-sm group flex h-9 w-full items-center gap-2 rounded-md bg-muted/45 px-2.5 text-foreground transition-colors outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/40"
+
+const footerRowArrowClassName =
+  "ml-auto size-3.5 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5"
+
+/** A choice beside the instances, for the picker's `header`. */
+export const InstancePickerHeaderAction = React.memo(
+  function InstancePickerHeaderAction({
+    label,
+    onClick,
+    selected,
+  }: {
+    label: string
+    onClick: () => void
+    selected: boolean
+  }) {
+    return (
+      <div className="border-b border-border/70 p-1.5">
+        <button
+          type="button"
+          aria-pressed={selected}
+          className="type-control-sm flex h-9 w-full items-center gap-2 rounded-md px-2.5 text-foreground transition-colors outline-none hover:bg-muted/55 focus-visible:ring-2 focus-visible:ring-ring/40"
+          onClick={onClick}
+        >
+          <span>{label}</span>
+          {selected ? (
+            <Check
+              className="ml-auto size-3.5 text-primary-ink"
+              aria-hidden="true"
+            />
+          ) : null}
+        </button>
+      </div>
+    )
+  }
+)
+
+/** Something to do instead of choosing, for the picker's `footer`. */
+export const InstancePickerFooterAction = React.memo(
+  function InstancePickerFooterAction({
+    icon: Icon,
+    label,
+    onClick,
+  }: {
+    icon: React.ComponentType<LucideProps>
+    label: string
+    onClick: () => void
+  }) {
+    return (
+      <div className="border-t border-border/70 p-1.5">
+        <button type="button" className={footerRowClassName} onClick={onClick}>
+          <Icon className="size-3.5" aria-hidden="true" />
+          <span>{label}</span>
+          <ArrowRight className={footerRowArrowClassName} aria-hidden="true" />
+        </button>
+      </div>
+    )
+  }
+)
+
 const viewAllDestinations = {
   app: { label: "View all apps", to: "/infra/apps" },
   database: { label: "View all databases", to: "/infra/databases" },
@@ -1125,14 +1194,11 @@ const InstancePickerViewAll = React.memo(function InstancePickerViewAll({
         to={destination.to}
         search={search ? { search } : {}}
         onClick={onNavigate}
-        className="type-control-sm group flex h-9 w-full items-center gap-2 rounded-md bg-muted/45 px-2.5 text-foreground transition-colors outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/40"
+        className={footerRowClassName}
       >
         <Icon className="size-3.5" aria-hidden="true" />
         <span>{destination.label}</span>
-        <ArrowRight
-          className="ml-auto size-3.5 text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5"
-          aria-hidden="true"
-        />
+        <ArrowRight className={footerRowArrowClassName} aria-hidden="true" />
       </Link>
     </div>
   )

@@ -80,11 +80,11 @@ import {
   ImportDatabaseDialog,
   useDatabaseExport,
 } from "@/components/database/database-dialogs"
+import { DatabaseEngineChoice } from "@/components/database/database-engine-choice"
 import { DatabaseNetworkPicker } from "@/components/database/database-network"
 import {
   engineBadgeClasses,
   engineLabel,
-  engineOptions,
   showDatabaseOperationError,
 } from "@/components/database/database-presentation"
 import {
@@ -834,29 +834,7 @@ function CreateDatabaseDialog({
               onChange={(event) => setName(event.currentTarget.value)}
             />
           </label>
-          <fieldset>
-            <legend className="mb-2 text-xs font-medium">Engine</legend>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-              {engineOptions.map((option) => (
-                <button
-                  key={option.value}
-                  aria-pressed={engine === option.value}
-                  className={`rounded-lg border px-2 py-3 text-left transition-colors ${
-                    engine === option.value
-                      ? "border-primary/60 bg-primary/10 text-foreground"
-                      : "border-border/70 bg-background/30 text-muted-foreground hover:bg-accent/30"
-                  }`}
-                  type="button"
-                  onClick={() => setEngine(option.value)}
-                >
-                  <span className="type-card-title block">{option.label}</span>
-                  <span className="type-meta mt-0.5 block font-mono">
-                    {option.description}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </fieldset>
+          <DatabaseEngineChoice value={engine} onChange={setEngine} />
           <div>
             <span id={relayLabelId} className="mb-2 block text-xs font-medium">
               Relay
