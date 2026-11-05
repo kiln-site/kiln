@@ -674,20 +674,12 @@ const readRelayApp = Effect.fnUntraced(function* (
 })
 
 declare global {
-  var kilnAppDeploymentPollBaselines:
-    | Map<string, { head: string; source: string }>
-    | undefined
   var kilnAppDeploymentPollFailures: Map<string, string> | undefined
   var kilnAppDeploymentPoller: Fiber.Fiber<void> | undefined
 }
 
 // Each polled app's last failure, reported once.
 const pollFailures = (globalThis.kilnAppDeploymentPollFailures ??= new Map())
-
-// The branch head each polled app that has never deployed was first seen at.
-// Saving a source deploys nothing, so only a commit past this is a push. A
-// restart sees the head afresh, which can only wait for the next commit.
-const pollBaselines = (globalThis.kilnAppDeploymentPollBaselines ??= new Map())
 
 const Pin = Schema.Struct({ source: Schema.String, value: Schema.String })
 
@@ -1368,8 +1360,8 @@ export function startAppDeploymentPolling(): void {
 }
 
 // Asks a polled app to deploy its branch's head once it's past what the
-// app last deployed, or, before its first deployment, what its branch held
-// when first seen, as a push would. A failure is reported once.
+// app last deployed, as a push would, or, before it has deployed from this
+// branch, what the branch held when chosen. A failure is reported once.
 const pollApp = (source: AppGitHubSource) =>
   Effect.gen(function* () {
     const key = `${source.relayId}:${source.appId}`
@@ -1386,22 +1378,17 @@ const pollApp = (source: AppGitHubSource) =>
       })
     )
     if (head === null) return
-    const branch = `${source.repositoryId}/${source.branch}`
     const { head: last } = yield* latestAppDeploymentsEffect(source.appId)
-    if (last === null) {
-      const baseline = pollBaselines.get(key)
-      if (baseline?.source !== branch) {
-        pollBaselines.set(key, { head, source: branch })
-        return
-      }
-      if (baseline.head === head) return
-    } else {
-      pollBaselines.delete(key)
-      if (last.commitSha === head) return
-    }
+    if (last?.commitSha === head) return
+    const deployedHere =
+      last?.repository === source.repository && last.branch === source.branch
+    if (!deployedHere && head === source.baselineCommit) return
     yield* askAppDeploymentEffect({
       appId: source.appId,
-      commit: { sha: head, source: branch },
+      commit: {
+        sha: head,
+        source: `${source.repositoryId}/${source.branch}`,
+      },
       relayId: source.relayId,
       trigger: "poll",
     })

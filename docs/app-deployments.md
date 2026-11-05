@@ -12,8 +12,7 @@ a day; older ones are removed (see
 again builds or pulls it again.
 
 Creating an app deploys nothing, whatever its source. **Add App** opens the
-app's page, where it can be configured first, and its first deployment comes
-from **Deploy**.
+app's page, where it can be configured before anyone clicks **Deploy**.
 
 ## GitHub sources
 
@@ -54,12 +53,11 @@ deploys nothing, so a failing commit isn't retried every minute, and a
 commit deployed again from the Deployments list, as a rollback, stays until
 a new commit lands.
 
-Choosing a source deploys nothing unless asked to, so what its branch already
-holds waits for **Deploy**. A new commit still deploys an app that has never
-deployed. A check takes the branch's head when it first sees such an app,
-keeping that in memory, and deploys only what lands after it. A commit that
-lands before that first check, within the minute, or while Hearth restarts,
-waits for the next one.
+Choosing a repository or branch deploys nothing unless asked to. Hearth keeps
+the commit the branch held then, in `app_github_source`, and a check doesn't
+take it for a new one until the app has deployed from that branch. A commit
+after it still deploys, even if the app has never deployed. Saving the same
+branch again keeps that commit, so one no check has seen yet isn't missed.
 
 Deploying on push hands the branch the app's trust: whoever can push to it
 can run what a pasted Compose file could, host binds included. Turn it off,

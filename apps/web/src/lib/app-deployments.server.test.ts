@@ -24,7 +24,7 @@ import { readmitWaitingOperations } from "@/operations/durable"
 import { loadOperation } from "@/operations/records"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRelay, insertRows, insertUser } from "@/test/seed"
+import { insertRelay, insertRows, insertUser, selectRows } from "@/test/seed"
 
 import { encryptWithKeyring } from "../../keyring.mjs"
 
@@ -108,6 +108,7 @@ vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 // Effect's fetch client keeps the first `fetch` it sees, so the fake is
 // installed once and its answer changes instead.
 let branchHead = ""
+let branchHeadReads = 0
 const github = vi.fn(async (input: RequestInfo | URL) => {
   const url = new URL(input instanceof Request ? input.url : String(input))
   if (url.pathname.endsWith("/access_tokens")) {
@@ -116,6 +117,7 @@ const github = vi.fn(async (input: RequestInfo | URL) => {
       token: "installation-token",
     })
   }
+  branchHeadReads++
   return Response.json({
     author: { login: "octo" },
     commit: { author: { name: "Octo" }, message: "A commit" },
@@ -143,7 +145,6 @@ const sixth = "f".repeat(40)
 const seventh = "7".repeat(40)
 const eighth = "8".repeat(40)
 const ninth = "9".repeat(40)
-const tenth = "0".repeat(40)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -217,39 +218,55 @@ const seedApp = (appId: string) =>
     }))
   })
 
-// An app deploying a repository through a connection GitHub can't push to,
-// so Hearth polls its branch.
+// A connection GitHub can't push to, so Hearth polls its apps' branches.
+const polledConnectionId = "22222222-2222-4222-8222-222222222222"
+const seedPolledConnection = Effect.gen(function* () {
+  const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 })
+  yield* insertRows("github_connection", {
+    id: polledConnectionId,
+    owner_user_id: "owner",
+    app_id: 4242,
+    app_slug: "kiln-test",
+    app_name: "Kiln test",
+    app_url: "https://github.com/apps/kiln-test",
+    app_owner_login: "octo",
+    client_id: "Iv1.test",
+    credentials_ciphertext: encryptWithKeyring(
+      JSON.stringify({
+        clientSecret: "client-secret",
+        privateKey: privateKey.export({ format: "pem", type: "pkcs1" }),
+        webhookSecret: "webhook-secret",
+      }),
+      betterAuthSecrets(),
+      "kiln-github-app-credentials"
+    ),
+    webhook_active: false,
+    installation_id: 777,
+    account_login: "octo",
+    account_type: "User",
+    repository_selection: "selected",
+    suspended: false,
+    created_at: 0,
+    updated_at: 0,
+  })
+})
+
+const saveSource = (appId: string, branch: string, baselineCommit: string) =>
+  saveAppGitHubSourceEffect({
+    appId,
+    autoDeploy: true,
+    baselineCommit,
+    branch,
+    build: "dockerfile",
+    connectionId: polledConnectionId,
+    createdBy: "owner",
+    path: "Dockerfile",
+    repository: "octo/app",
+    repositoryId: 1,
+  })
+
 const seedPolledApp = (appId: string) =>
   Effect.gen(function* () {
-    const connectionId = "22222222-2222-4222-8222-222222222222"
-    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 })
-    yield* insertRows("github_connection", {
-      id: connectionId,
-      owner_user_id: "owner",
-      app_id: 4242,
-      app_slug: "kiln-test",
-      app_name: "Kiln test",
-      app_url: "https://github.com/apps/kiln-test",
-      app_owner_login: "octo",
-      client_id: "Iv1.test",
-      credentials_ciphertext: encryptWithKeyring(
-        JSON.stringify({
-          clientSecret: "client-secret",
-          privateKey: privateKey.export({ format: "pem", type: "pkcs1" }),
-          webhookSecret: "webhook-secret",
-        }),
-        betterAuthSecrets(),
-        "kiln-github-app-credentials"
-      ),
-      webhook_active: false,
-      installation_id: 777,
-      account_login: "octo",
-      account_type: "User",
-      repository_selection: "selected",
-      suspended: false,
-      created_at: 0,
-      updated_at: 0,
-    })
     yield* createAppRecordEffect({
       appId,
       createdBy: "owner",
@@ -260,18 +277,42 @@ const seedPolledApp = (appId: string) =>
       ...config,
       sourceType: "github",
     }))
-    yield* saveAppGitHubSourceEffect({
-      appId,
-      autoDeploy: true,
-      branch: "main",
-      build: "dockerfile",
-      connectionId,
-      createdBy: "owner",
-      path: "Dockerfile",
-      repository: "octo/app",
-      repositoryId: 1,
-    })
   })
+
+// The app's last deployment, from a branch it may have moved on from.
+const seedDeployed = (appId: string, branch: string, id: string) =>
+  insertAppDeploymentEffect({
+    appId,
+    branch,
+    commitAuthor: null,
+    commitMessage: null,
+    commitSha: "3".repeat(40),
+    error: null,
+    finishedAt: new Date(1_000).toISOString(),
+    id,
+    imageDigest: null,
+    relayDeploymentId: "20261031090000",
+    relayId,
+    repository: "octo/app",
+    rolling: null,
+    sourceType: "github",
+    startedAt: new Date(0).toISOString(),
+    status: "succeeded",
+    trigger: "manual",
+    triggeredBy: null,
+  })
+
+// What `check` finds while the minute poll runs, stopping it however that
+// ends.
+const whilePolling = <A, E, R>(check: Effect.Effect<A, E, R>) =>
+  Effect.promise(() => import("@/lib/app-deployments.server")).pipe(
+    Effect.flatMap(({ startAppDeploymentPolling, stopAppDeploymentPolling }) =>
+      Effect.sync(startAppDeploymentPolling).pipe(
+        Effect.andThen(check),
+        Effect.ensuring(Effect.promise(stopAppDeploymentPolling))
+      )
+    )
+  )
 
 const ask = (
   appId: string,
@@ -604,7 +645,7 @@ describeMysql("App deployments", () => {
     )
 
     it.effect(
-      "poll a never-deployed app past what its branch held, deploying only a new commit",
+      "poll past what a branch held when chosen, deploying only a commit after it",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
@@ -618,31 +659,68 @@ describeMysql("App deployments", () => {
             configs_cleared_at: 0,
             relay_id: relayId,
           })
-          yield* seedPolledApp(tenth)
-          const { startAppDeploymentPolling, stopAppDeploymentPolling } =
-            yield* Effect.promise(
-              () => import("@/lib/app-deployments.server")
+          yield* seedPolledConnection
+          const held = "1".repeat(40)
+          const pushed = "2".repeat(40)
+          // Two of each, as a poll checks them in no set order and the last
+          // read may not have finished.
+          const created = ["a1".repeat(20), "a2".repeat(20)]
+          const moved = ["b1".repeat(20), "b2".repeat(20)]
+          for (const app of created) {
+            yield* seedPolledApp(app)
+            yield* saveSource(app, "main", held)
+          }
+          for (const [index, app] of moved.entries()) {
+            yield* seedPolledApp(app)
+            yield* saveSource(app, "main", "4".repeat(40))
+            yield* seedDeployed(
+              app,
+              "main",
+              `33333333-3333-4333-8333-33333333333${index}`
             )
-          const polledOnce = () =>
-            globalThis.kilnAppDeploymentPollBaselines?.has(
-              `${relayId}:${tenth}`
-            ) === true
+            yield* saveSource(app, "dev", held)
+          }
 
-          // What the branch held when the source was saved isn't a push.
-          branchHead = "1".repeat(40)
-          startAppDeploymentPolling()
-          yield* until(polledOnce)
-          yield* Effect.promise(stopAppDeploymentPolling)
-          assert.isNull((yield* latestAppDeploymentsEffect(tenth)).latest)
+          // Created, or moved to another branch, with nothing new on it.
+          branchHead = held
+          branchHeadReads = 0
+          yield* whilePolling(
+            until(() => branchHeadReads >= created.length + moved.length)
+          )
+          const operations = yield* selectRows<{ kind: string }>("operation")
+          assert.deepEqual(
+            operations.filter(({ kind }) => kind === "app.deploy"),
+            []
+          )
 
-          // A commit after it is, as it would be from a webhook.
-          branchHead = "2".repeat(40)
-          startAppDeploymentPolling()
-          yield* until(() => sentTo(tenth) === 1)
-          yield* Effect.promise(stopAppDeploymentPolling)
-          assert.strictEqual(
-            (yield* latestAppDeploymentsEffect(tenth)).latest?.commitSha,
-            branchHead
+          // A commit lands, and the source is saved again before any check
+          // sees it: it's still a push, to all of them.
+          branchHead = pushed
+          yield* saveSource(created[0]!, "main", pushed)
+          yield* whilePolling(
+            until(() =>
+              [...created, ...moved].every((app) => sentTo(app) === 1)
+            )
+          )
+          for (const app of [...created, ...moved]) {
+            const { latest } = yield* latestAppDeploymentsEffect(app)
+            assert.strictEqual(latest?.commitSha, pushed)
+            relay.deployments.set(app, {
+              ...relay.deployments.get(app)!,
+              state: "succeeded",
+            })
+          }
+          yield* selectRows<{ kind: string; state: string }>("operation").pipe(
+            Effect.repeat({
+              schedule: Schedule.spaced("100 millis"),
+              until: (rows) =>
+                rows.every(
+                  ({ kind, state }) =>
+                    kind !== "app.deploy" ||
+                    (state !== "running" && state !== "waiting")
+                ),
+            }),
+            Effect.timeout("20 seconds")
           )
         }).pipe(TestClock.withLive),
       60_000

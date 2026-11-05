@@ -52,6 +52,7 @@ import { appDeploymentsQueued } from "./0051_app_deployments_queued"
 import { serverMigrationOperations } from "./0052_server_migration_operations"
 import { webHostnameProxy } from "./0053_web_hostname_proxy"
 import { explicitBackupDestinations } from "./0054_explicit_backup_destinations"
+import { appSourceBaseline } from "./0055_app_source_baseline"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -107,4 +108,5 @@ export const migrations: ReadonlyArray<Migration> = [
   serverMigrationOperations,
   webHostnameProxy,
   explicitBackupDestinations,
+  appSourceBaseline,
 ]

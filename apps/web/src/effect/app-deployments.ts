@@ -22,6 +22,8 @@ export type AppDeploymentStatus = "failed" | "running" | "succeeded" | "unknown"
 export interface AppGitHubSource {
   appId: string
   autoDeploy: boolean
+  /** What the branch held when chosen. Null for a source from before Kiln kept it. */
+  baselineCommit: string | null
   branch: string
   build: AppGitHubBuild
   /** Null once its source was removed from Kiln. */
@@ -62,6 +64,7 @@ interface SourceRow extends RowDataPacket {
   app_id: string
   relay_id: string
   auto_deploy: boolean | number
+  baseline_commit: string | null
   branch: string
   build: AppGitHubBuild
   connection_id: string | null
@@ -94,8 +97,8 @@ interface DeploymentRow extends RowDataPacket {
 
 // With the app's Relay, from its row.
 const sourceColumns = `source.app_id, source.connection_id,
-  source.repository_id, source.repository, source.branch, source.build,
-  source.path, source.auto_deploy, source.created_by, app.relay_id`
+  source.repository_id, source.repository, source.branch,
+  source.baseline_commit, source.build, source.path, source.auto_deploy, source.created_by, app.relay_id`
 
 function sourceTable() {
   return `${databaseTable("app_github_source")} source
@@ -173,6 +176,12 @@ export const countAppGitHubSourcesEffect = Effect.fn(
   return new Map(rows.map((row) => [row.connection_id, Number(row.count)]))
 })
 
+/**
+ * Saves an app's source. Saving the same branch again keeps its baseline, so
+ * a commit no check has seen yet still counts as a push; a new repository or
+ * branch takes the one given. The baseline comes first: each assignment sees
+ * those before it.
+ */
 export const saveAppGitHubSourceEffect = Effect.fn("apps.github.source.save")(
   function* (source: Omit<AppGitHubSource, "relayId">) {
     const database = yield* Database
@@ -180,10 +189,18 @@ export const saveAppGitHubSourceEffect = Effect.fn("apps.github.source.save")(
     yield* database.execute(
       "apps.github.source.save",
       `INSERT INTO ${databaseTable("app_github_source")}
-         (app_id, connection_id, repository_id, repository, branch, build,
-          path, auto_deploy, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         (app_id, connection_id, repository_id, repository, branch,
+          baseline_commit, build, path, auto_deploy, created_by, created_at,
+          updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
+         baseline_commit = IF(
+           baseline_commit IS NOT NULL
+             AND repository_id = VALUES(repository_id)
+             AND branch = VALUES(branch),
+           baseline_commit,
+           VALUES(baseline_commit)
+         ),
          connection_id = VALUES(connection_id),
          repository_id = VALUES(repository_id),
          repository = VALUES(repository),
@@ -198,6 +215,7 @@ export const saveAppGitHubSourceEffect = Effect.fn("apps.github.source.save")(
         source.repositoryId,
         source.repository,
         source.branch,
+        source.baselineCommit,
         source.build,
         source.path,
         source.autoDeploy,
@@ -441,6 +459,7 @@ function toSource(row: SourceRow): AppGitHubSource {
   return {
     appId: row.app_id,
     autoDeploy: Boolean(row.auto_deploy),
+    baselineCommit: row.baseline_commit,
     branch: row.branch,
     build: row.build,
     connectionId: row.connection_id,
