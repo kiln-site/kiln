@@ -11,6 +11,9 @@ a day; older ones are removed (see
 [Relay runtime](relay-runtime.md#docker-cleanup)). Deploying an older one
 again builds or pulls it again.
 
+Creating an app deploys nothing, whatever its source. **Add App** opens the
+app's page, where it can be configured before anyone clicks **Deploy**.
+
 ## GitHub sources
 
 A GitHub app builds one branch of a repository a source can read: either a
@@ -49,6 +52,14 @@ deploys once. A push or poll for the branch head the app last tried
 deploys nothing, so a failing commit isn't retried every minute, and a
 commit deployed again from the Deployments list, as a rollback, stays until
 a new commit lands.
+
+Choosing a repository or branch deploys nothing unless asked to. Hearth keeps
+the commit the branch held then, in `app_github_source`, and a check doesn't
+take it for a new one until the app has deployed from that branch. A commit
+after it still deploys, even if the app has never deployed. Saving the same
+branch again keeps that commit, so one no check has seen yet isn't missed. An
+app returning to a branch it last deployed from catches up with what landed
+there meanwhile.
 
 Deploying on push hands the branch the app's trust: whoever can push to it
 can run what a pasted Compose file could, host binds included. Turn it off,

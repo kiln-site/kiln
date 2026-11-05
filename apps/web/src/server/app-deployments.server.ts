@@ -24,6 +24,7 @@ import {
   type AppGitHubSource,
 } from "@/effect/app-deployments"
 import {
+  getGitHubCommitEffect,
   getGitHubFileEffect,
   getGitHubRepositoryEffect,
   githubInstallationTokenEffect,
@@ -399,11 +400,17 @@ export async function saveAppGitHubSourceHandler(
     "github.repository.get",
     getGitHubRepositoryEffect(token, data.repository)
   )
+  // Choosing a branch doesn't deploy it: what it holds now isn't a push.
+  const baseline = await runAppEffect(
+    "github.commit.get",
+    getGitHubCommitEffect(token, repository.full_name, data.branch)
+  )
   await runAppEffect(
     "apps.github.source.save",
     saveAppGitHubSourceEffect({
       appId: data.appId,
       autoDeploy: data.autoDeploy,
+      baselineCommit: baseline.sha,
       branch: data.branch,
       build: data.build,
       connectionId: data.connectionId,

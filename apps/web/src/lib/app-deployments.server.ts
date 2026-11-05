@@ -1360,7 +1360,8 @@ export function startAppDeploymentPolling(): void {
 }
 
 // Asks a polled app to deploy its branch's head once it's past what the
-// app last deployed, as a push would. A failure is reported once.
+// app last deployed, as a push would, or, before it has deployed from this
+// branch, what the branch held when chosen. A failure is reported once.
 const pollApp = (source: AppGitHubSource) =>
   Effect.gen(function* () {
     const key = `${source.relayId}:${source.appId}`
@@ -1379,6 +1380,9 @@ const pollApp = (source: AppGitHubSource) =>
     if (head === null) return
     const { head: last } = yield* latestAppDeploymentsEffect(source.appId)
     if (last?.commitSha === head) return
+    const deployedHere =
+      last?.repository === source.repository && last.branch === source.branch
+    if (!deployedHere && head === source.baselineCommit) return
     yield* askAppDeploymentEffect({
       appId: source.appId,
       commit: {
