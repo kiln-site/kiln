@@ -174,7 +174,7 @@ export const AppDatabaseFields = React.memo(function AppDatabaseFields({
           <InstancePickerContent
             ariaLabel="Databases"
             emptyMessage="No databases on this Relay"
-            favoritesFilter={false}
+            filterBar={false}
             footer={
               canCreate === false ? undefined : (
                 <InstancePickerFooterAction

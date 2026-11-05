@@ -67,6 +67,12 @@ interface InstancePickerContentProps {
   emptyMessage?: string
   /** Shows the "Show favorites only" filter. Off ignores a saved choice. */
   favoritesFilter?: boolean
+  /**
+   * Shows the bar saying which filters apply and how many rows they leave.
+   * Off suits a list too short to need it; the filter buttons still show
+   * what's on.
+   */
+  filterBar?: boolean
   /** Stays below the list, whatever it's searched for or filtered by. */
   footer?: React.ReactNode
   /** Stays above the list, whatever it's searched for or filtered by. */
@@ -129,6 +135,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   ariaLabel = "Instances",
   emptyMessage = "No instances found",
   favoritesFilter = true,
+  filterBar: showFilterBar = true,
   footer,
   header,
   includeAllGroup = false,
@@ -399,7 +406,7 @@ export const InstancePickerContent = React.memo(function InstancePickerContent({
   // Saved filters carry across pickers, so the bar always says what's
   // applied, even when nothing is, and that a search looks past them.
   const filterBar =
-    items.length > 0 ? (
+    showFilterBar && items.length > 0 ? (
       <InstancePickerFilterBar
         activeFilters={activeFilters}
         atBottom={searchAtBottom}
