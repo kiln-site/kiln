@@ -37,6 +37,7 @@ import {
 } from "@workspace/contracts"
 
 import {
+  engineLabel,
   showDatabaseOperationError,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
@@ -44,6 +45,7 @@ import {
   DeleteConfirmationFields,
   useDeleteConfirmation,
 } from "@/components/delete-confirmation-fields"
+import { InstanceCard } from "@/components/instance-card"
 import { downloadRelayFile, uploadRelayFile } from "@/lib/relay-file-transfer"
 import {
   managedDatabaseCredentialQueryOptions,
@@ -255,11 +257,9 @@ function EditDatabaseCredentialsDialog({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit {database.name}&apos;s credentials</DialogTitle>
+          <DialogTitle>Edit credentials</DialogTitle>
           <DialogDescription>
-            Changes apply right away. Anything still using the old credentials,
-            like a game server&apos;s config or an App&apos;s environment,
-            can&apos;t connect until you give it the new ones.
+            Anything using the old credentials will need the new ones.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -269,6 +269,18 @@ function EditDatabaseCredentialsDialog({
             if (canSave) update.mutate()
           }}
         >
+          <div className="border border-border/75 bg-background/35 p-3">
+            <InstanceCard
+              instance={{
+                id: database.id,
+                kind: "database",
+                relayId: database.relayId,
+              }}
+              meta={engineLabel(database.engine)}
+              name={database.name}
+              showFavorite={false}
+            />
+          </div>
           <label className="block">
             <span className="mb-2 block text-xs font-medium">Username</span>
             <Input
@@ -325,8 +337,7 @@ function EditDatabaseCredentialsDialog({
           </div>
           {renaming && database.engine === "postgres" ? (
             <p className="text-xs text-muted-foreground">
-              Changing the username restarts this database, which takes a few
-              seconds.
+              Changing the username restarts the database.
             </p>
           ) : null}
           {update.error ? (
