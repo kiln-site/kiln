@@ -1,6 +1,11 @@
 import { randomBytes, randomUUID } from "node:crypto"
 
-import { relayManagedDatabaseSchema } from "@workspace/contracts"
+import {
+  databaseEngineHasNamedDatabase,
+  databaseNameIssue,
+  databaseUsernameIssue,
+  relayManagedDatabaseSchema,
+} from "@workspace/contracts"
 import type { DatabaseEngine } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
@@ -27,11 +32,15 @@ import {
 } from "@/server/managed-database-access"
 
 export interface CreateDatabaseInput {
+  /** Generated when left out. Ignored by an engine with no named databases. */
+  databaseName?: string
   engine: DatabaseEngine
   /** Settled by the operation creating it with something else. */
   id?: string
   name: string
   relayId: string
+  /** Generated when left out. */
+  username?: string
 }
 
 const cancelledSchema = z.object({ cancelled: z.boolean() })
@@ -86,9 +95,15 @@ async function createDatabaseHandler(
       `A database named "${data.name}" already exists on ${relay.name}`
     )
   }
-  const username = `kiln_${randomBytes(6).toString("hex")}`
+  const username = data.username ?? `kiln_${randomBytes(6).toString("hex")}`
   const password = randomBytes(36).toString("base64url")
-  const databaseName = `kiln_${id.slice(0, 12)}`
+  const databaseName =
+    (databaseEngineHasNamedDatabase(data.engine) ? data.databaseName : null) ??
+    `kiln_${id.slice(0, 12)}`
+  const issue =
+    databaseNameIssue(data.engine, databaseName) ??
+    databaseUsernameIssue(data.engine, username)
+  if (issue) throw new Error(issue)
   // The Relay creates it in the background; it opens on its provisioning
   // page at once.
   const cancel = () =>

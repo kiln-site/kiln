@@ -25,6 +25,11 @@ import {
   databaseWriteRequestSchema,
 } from "./database-browser.js"
 import {
+  databaseNameFieldSchema,
+  databasePasswordSchema,
+  databaseUsernameSchema,
+} from "./database-login.js"
+import {
   appServiceNameSchema,
   fileRootIdSchema,
   legacyTailscaleMemberId,
@@ -48,6 +53,7 @@ export * from "./minecraft-java.js"
 export * from "./cli.js"
 export * from "./instance-limits.js"
 export * from "./resource-limits.js"
+export * from "./database-login.js"
 export * from "./security.js"
 export * from "./instance-overview.js"
 export * from "./icon-images.js"
@@ -240,12 +246,12 @@ export const relayManagedDatabaseSchema = z
 
 export const relayCreateDatabaseSchema = z
   .object({
-    databaseName: z.string().regex(/^[a-z][a-z0-9_]{0,47}$/u),
+    databaseName: databaseNameFieldSchema,
     engine: databaseEngineSchema,
     id: databaseIdSchema,
     name: relayDatabaseNameSchema,
-    password: z.string().min(24).max(256),
-    username: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/u),
+    password: databasePasswordSchema,
+    username: databaseUsernameSchema,
   })
   .strict()
 
@@ -297,10 +303,11 @@ export type RelayResourceFreeze = z.infer<typeof relayResourceFreezeSchema>
 
 export const relayRotateDatabaseCredentialsSchema = z
   .object({
-    currentPassword: z.string().min(24).max(256),
+    currentPassword: databasePasswordSchema,
     databaseId: databaseIdSchema,
-    nextPassword: z.string().min(24).max(256),
-    username: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/u),
+    nextPassword: databasePasswordSchema,
+    nextUsername: databaseUsernameSchema,
+    username: databaseUsernameSchema,
   })
   .strict()
 
@@ -349,8 +356,8 @@ export const relayDatabaseNetworkImportResultSchema = z
 export const relayDatabaseExportSchema = z
   .object({
     databaseId: databaseIdSchema,
-    password: z.string().min(24).max(256),
-    username: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/u),
+    password: databasePasswordSchema,
+    username: databaseUsernameSchema,
   })
   .strict()
 

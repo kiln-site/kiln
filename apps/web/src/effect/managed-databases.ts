@@ -186,16 +186,20 @@ export const loadManagedDatabaseCredentialEffect = Effect.fn(
 
 export const rotateManagedDatabaseCredentialEffect = Effect.fn(
   "managedDatabases.rotateCredential"
-)(function* (relayId: string, databaseId: string, password: string) {
+)(function* (
+  relayId: string,
+  databaseId: string,
+  login: { password: string; username: string }
+) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  const ciphertext = yield* encryptPassword(password)
+  const ciphertext = yield* encryptPassword(login.password)
   const result = yield* database.execute(
     "managed_database_credential_rotate",
     `UPDATE ${databaseTable("database")}
-        SET password_ciphertext = ?, updated_at = ?
+        SET password_ciphertext = ?, username = ?, updated_at = ?
       WHERE relay_id = ? AND database_id = ?`,
-    [ciphertext, now, relayId, databaseId]
+    [ciphertext, login.username, now, relayId, databaseId]
   )
   if (result.affectedRows !== 1) {
     return yield* Effect.fail(new Error("Database record not found"))

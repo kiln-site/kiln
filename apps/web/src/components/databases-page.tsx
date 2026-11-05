@@ -12,7 +12,12 @@ import * as React from "react"
 import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Link, useNavigate } from "@tanstack/react-router"
-import type { DatabaseEngine } from "@workspace/contracts"
+import {
+  databaseEngineHasNamedDatabase,
+  databaseNameIssue,
+  databaseUsernameIssue,
+  type DatabaseEngine,
+} from "@workspace/contracts"
 import {
   Database,
   Download,
@@ -787,14 +792,31 @@ function CreateDatabaseDialog({
   const availableRelays = relays.filter((relay) => relay.canCreate)
   const [name, setName] = React.useState("")
   const [engine, setEngine] = React.useState<DatabaseEngine>("postgres")
+  const [databaseName, setDatabaseName] = React.useState("")
+  const [username, setUsername] = React.useState("")
   const [relayId, setRelayId] = React.useState(
     () => availableRelays.at(0)?.id ?? ""
   )
   const relayLabelId = React.useId()
+  const named = databaseEngineHasNamedDatabase(engine)
+  const chosenDatabaseName = named ? databaseName.trim() : ""
+  const chosenUsername = username.trim()
+  const databaseNameProblem = chosenDatabaseName
+    ? databaseNameIssue(engine, chosenDatabaseName)
+    : null
+  const usernameProblem = chosenUsername
+    ? databaseUsernameIssue(engine, chosenUsername)
+    : null
   const create = useMutation({
     mutationFn: () =>
       createManagedDatabase({
-        data: { engine, name: name.trim(), relayId },
+        data: {
+          engine,
+          name: name.trim(),
+          relayId,
+          ...(chosenDatabaseName && { databaseName: chosenDatabaseName }),
+          ...(chosenUsername && { username: chosenUsername }),
+        },
       }),
     onSuccess: async (created) => {
       await queryClient.invalidateQueries({
@@ -820,7 +842,8 @@ function CreateDatabaseDialog({
           <DialogTitle>Add database</DialogTitle>
           <DialogDescription>
             Hearth creates a private network, persistent volume, and generated
-            credentials. No host port is published.
+            password, and names anything you leave blank. No host port is
+            published.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -835,6 +858,24 @@ function CreateDatabaseDialog({
             />
           </label>
           <DatabaseEngineChoice value={engine} onChange={setEngine} />
+          <div className={cn("grid gap-3", named && "sm:grid-cols-2")}>
+            {named ? (
+              <DatabaseIdentifierField
+                issue={databaseNameProblem}
+                label="Database name"
+                maxLength={48}
+                value={databaseName}
+                onChange={setDatabaseName}
+              />
+            ) : null}
+            <DatabaseIdentifierField
+              issue={usernameProblem}
+              label="Username"
+              maxLength={32}
+              value={username}
+              onChange={setUsername}
+            />
+          </div>
           <div>
             <span id={relayLabelId} className="mb-2 block text-xs font-medium">
               Relay
@@ -868,7 +909,12 @@ function CreateDatabaseDialog({
             Cancel
           </Button>
           <Button
-            disabled={create.isPending || !name.trim() || !relayId}
+            disabled={
+              create.isPending ||
+              !name.trim() ||
+              !relayId ||
+              Boolean(databaseNameProblem || usernameProblem)
+            }
             type="button"
             onClick={() => create.mutate()}
           >
@@ -882,6 +928,42 @@ function CreateDatabaseDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// A name inside the database engine, generated unless one is given.
+function DatabaseIdentifierField({
+  issue,
+  label,
+  maxLength,
+  onChange,
+  value,
+}: {
+  issue: string | null
+  label: string
+  maxLength: number
+  onChange: (value: string) => void
+  value: string
+}) {
+  return (
+    <label className="block min-w-0">
+      <span className="mb-2 block text-xs font-medium">{label}</span>
+      <Input
+        autoCapitalize="none"
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
+        aria-invalid={Boolean(issue)}
+        className="font-mono"
+        maxLength={maxLength}
+        placeholder="Generated"
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+      />
+      {issue ? (
+        <span className="mt-1.5 block text-xs text-destructive">{issue}</span>
+      ) : null}
+    </label>
   )
 }
 

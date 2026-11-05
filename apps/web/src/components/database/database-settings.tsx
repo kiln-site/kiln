@@ -1,6 +1,9 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import type { ResourceLimits } from "@workspace/contracts"
+import {
+  databaseEngineHasNamedDatabase,
+  type ResourceLimits,
+} from "@workspace/contracts"
 import {
   ArrowRight,
   Cable,
@@ -23,6 +26,7 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import {
   DATABASE_DUMP_ACCEPT,
+  EditDatabaseCredentialsButton,
   ImportDatabaseDialog,
   RotateDatabasePasswordButton,
   useDatabaseExport,
@@ -178,13 +182,27 @@ export function DatabaseCredentialsSection({
             }
           />
           {canRotate ? (
-            <RotateDatabasePasswordButton
-              database={database}
-              disabledReason={
-                available ? undefined : "Reconnect this database's Relay first"
-              }
-              size="sm"
-            />
+            <>
+              <RotateDatabasePasswordButton
+                database={database}
+                disabledReason={
+                  available
+                    ? undefined
+                    : "Reconnect this database's Relay first"
+                }
+                size="sm"
+              />
+              <EditDatabaseCredentialsButton
+                database={database}
+                disabledReason={
+                  available
+                    ? undefined
+                    : "Reconnect this database's Relay first"
+                }
+                size="sm"
+                username={values?.username}
+              />
+            </>
           ) : null}
         </>
       }
@@ -514,7 +532,7 @@ export function DatabaseConnectionSettings({
 }
 
 function hasNamedDatabase(database: Pick<ManagedDatabase, "engine">): boolean {
-  return database.engine !== "redis" && database.engine !== "valkey"
+  return databaseEngineHasNamedDatabase(database.engine)
 }
 
 function databaseConnectionUrl(

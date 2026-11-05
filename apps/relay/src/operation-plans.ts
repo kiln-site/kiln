@@ -701,7 +701,15 @@ export function controlRequestLocks(
     case "database.wipe":
     case "database.delete":
       return database(databaseDeleteLocks)
+    // Renaming a login may replace the container, which leaves the node's
+    // allocations for a moment as a limit change does.
     case "database.credentials.rotate":
+      return database((id) =>
+        stringField(payload, "nextUsername") ===
+        stringField(payload, "username")
+          ? databaseLocks(id)
+          : [...databaseLocks(id), exclusive(laneKeys.allocations)]
+      )
     case "database.dump.import":
     case "database.data.write":
       return database(databaseLocks)

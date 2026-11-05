@@ -6,14 +6,18 @@ import {
   databaseEngineSupportsBrowsing,
   databaseEngineSupportsLogicalBackups,
   databaseEngineSchema,
+  databaseIdSchema,
   databaseMutateInputSchema,
   databaseMutateResultSchema,
   databaseOverviewSchema,
   databaseQueryInputSchema,
   databaseQueryResultSchema,
   databaseRowsInputSchema,
+  databaseNameFieldSchema,
+  databasePasswordSchema,
   databaseRowsSchema,
-  databaseIdSchema,
+  databaseUsernameIssue,
+  databaseUsernameSchema,
   relayDatabaseNameSchema,
   relayIdSchema,
   relayDatabaseTerminalClaimSchema,
@@ -71,9 +75,11 @@ import {
 } from "@/server/managed-database-access"
 
 const createDatabaseInputSchema = z.strictObject({
+  databaseName: databaseNameFieldSchema.optional(),
   engine: databaseEngineSchema,
   name: relayDatabaseNameSchema,
   relayId: relayIdSchema,
+  username: databaseUsernameSchema.optional(),
 })
 const databaseInputSchema = z.strictObject({
   databaseId: databaseIdSchema,
@@ -82,6 +88,15 @@ const databaseInputSchema = z.strictObject({
 const databaseActionInputSchema = databaseInputSchema.extend({
   action: z.enum(["start", "stop", "restart"]),
 })
+const databaseCredentialsInputSchema = databaseInputSchema
+  .extend({
+    password: databasePasswordSchema.optional(),
+    username: databaseUsernameSchema.optional(),
+  })
+  .refine(
+    (input) => input.password !== undefined || input.username !== undefined,
+    "Choose a new username or password"
+  )
 const databaseLimitsInputSchema = databaseInputSchema.extend({
   limits: resourceLimitsInputSchema,
 })
@@ -357,69 +372,84 @@ export const updateManagedDatabaseLimits = createServerFn({ method: "POST" })
     })
   )
 
-// Reads the credentials it rotates once admitted, so a rotation never
-// starts from one another just replaced. It holds the database's
-// credentials, so another rotation, or anything that sends the password,
-// waits for it; a wipe holds the whole database.
-const rotateDatabasePassword = resourceOperation({
+// Reads the credentials it changes once admitted, so a change never starts
+// from ones another just replaced. It holds the database's credentials, so
+// another change, or anything that sends the password, waits for it; a wipe
+// holds the whole database. What's left out stays as it is.
+const changeDatabaseCredentials = resourceOperation({
   kind: "database",
-  id: (input: z.infer<typeof databaseInputSchema>) => input.databaseId,
+  id: (input: z.infer<typeof databaseCredentialsInputSchema>) =>
+    input.databaseId,
   name: "database.credentials.rotate",
   lock: { part: "credentials" },
-  doing: "Changing this database's password",
+  doing: "Changing this database's credentials",
   permission: () => "database.credentials.rotate",
   run: async (user, data) => {
     const relay = await requiredRelay(data.relayId)
     const credential = await requiredCredential(data.relayId, data.databaseId)
-    const nextPassword = randomBytes(36).toString("base64url")
-    await databaseRpc(
-      relay,
-      "database.credentials.rotate",
-      {
-        currentPassword: credential.password,
-        databaseId: data.databaseId,
-        nextPassword,
-        username: credential.username,
-      },
-      180_000,
-      user.id
-    )
+    const current = {
+      password: credential.password,
+      username: credential.username,
+    }
+    const next = {
+      password: data.password ?? current.password,
+      username: data.username ?? current.username,
+    }
+    if (next.username !== current.username) {
+      const issue = databaseUsernameIssue(credential.engine, next.username)
+      if (issue) throw new Error(issue)
+    }
+    const apply = (from: typeof current, to: typeof current) =>
+      databaseRpc(
+        relay,
+        "database.credentials.rotate",
+        {
+          currentPassword: from.password,
+          databaseId: data.databaseId,
+          nextPassword: to.password,
+          nextUsername: to.username,
+          username: from.username,
+        },
+        // A rename can replace the container, as a limit change can.
+        240_000,
+        user.id
+      )
+    await apply(current, next)
     const persisted = await promiseResult(() =>
       runAppEffect(
         "managedDatabases.credential.persistRotation",
         rotateManagedDatabaseCredentialEffect(
           data.relayId,
           data.databaseId,
-          nextPassword
+          next
         )
       )
     )
     if (Result.isFailure(persisted)) {
-      await ignorePromise(() =>
-        databaseRpc(
-          relay,
-          "database.credentials.rotate",
-          {
-            currentPassword: nextPassword,
-            databaseId: data.databaseId,
-            nextPassword: credential.password,
-            username: credential.username,
-          },
-          180_000,
-          user.id
-        )
-      )
+      await ignorePromise(() => apply(next, current))
       throw persisted.failure
     }
     publishDatabaseCredentialChange(relay.id, data.databaseId)
-    return { rotated: true }
+    return { changed: true }
   },
 })
 
 export const rotateManagedDatabasePassword = createServerFn({ method: "POST" })
   .validator(databaseInputSchema)
   .handler(async ({ data }) =>
-    runOperationPromise(rotateDatabasePassword, data, {
+    runOperationPromise(
+      changeDatabaseCredentials,
+      { ...data, password: randomBytes(36).toString("base64url") },
+      { user: await requireEligibleResourceUser() }
+    )
+  )
+
+export const updateManagedDatabaseCredentials = createServerFn({
+  method: "POST",
+})
+  .validator(databaseCredentialsInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(changeDatabaseCredentials, data, {
       user: await requireEligibleResourceUser(),
     })
   )

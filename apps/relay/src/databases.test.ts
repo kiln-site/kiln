@@ -123,6 +123,7 @@ describe("managed database credentials and dumps", () => {
         currentPassword: password,
         databaseId: id,
         nextPassword,
+        nextUsername: "kiln_user",
         username: "kiln_user",
       })
 
@@ -137,6 +138,85 @@ describe("managed database credentials and dumps", () => {
       expect(processes[0]?.argv.join(" ")).not.toContain(password)
     }
   )
+
+  it.each(["redis", "valkey"] as const)(
+    "renames %s's login, and puts it back when the database won't load it",
+    async (engine) => {
+      const harness = await relayHarness()
+      const id = "e".repeat(40)
+      await createDatabase(harness, id, engine)
+      const acl = () =>
+        fakeDocker.volumes.get(volumeOf(id))?.files.get("users.acl")
+      const change = {
+        currentPassword: password,
+        databaseId: id,
+        nextPassword,
+        nextUsername: "app_user",
+        username: "kiln_user",
+      }
+
+      fakeDocker.programFailures.set(
+        engine === "redis" ? "redis-cli" : "valkey-cli",
+        "ERR Error loading ACLs"
+      )
+      await expect(harness.databases.rotateCredentials(change)).rejects.toThrow(
+        "ERR Error loading ACLs"
+      )
+      expect(acl()).toContain("user kiln_user ")
+
+      fakeDocker.programFailures.clear()
+      await harness.databases.rotateCredentials(change)
+      expect(acl()).toContain("user app_user ")
+      expect(acl()).not.toContain("kiln_user")
+    }
+  )
+
+  // Backups run with no login from Hearth, as the container's POSTGRES_USER.
+  it("gives Postgres a new container naming the login it was renamed to", async () => {
+    const harness = await relayHarness()
+    const id = "f".repeat(40)
+    await createDatabase(harness, id)
+    const original = databaseContainer(id)
+
+    await harness.databases.rotateCredentials({
+      currentPassword: password,
+      databaseId: id,
+      nextPassword,
+      nextUsername: "app_user",
+      username: "kiln_user",
+    })
+
+    const replaced = databaseContainer(id)
+    expect(replaced.id).not.toBe(original.id)
+    expect(replaced.state.running).toBe(true)
+    expect(replaced.env).toMatchObject({
+      POSTGRES_DB: "kiln_app",
+      POSTGRES_PASSWORD: nextPassword,
+      POSTGRES_USER: "app_user",
+    })
+    expect(await harness.databases.list()).toHaveLength(1)
+  })
+
+  it("keeps the Postgres container when the login can't be renamed", async () => {
+    const harness = await relayHarness()
+    const id = "f".repeat(40)
+    await createDatabase(harness, id)
+    const original = databaseContainer(id)
+
+    fakeDocker.programFailures.set("psql", 'role "app_user" already exists')
+    await expect(
+      harness.databases.rotateCredentials({
+        currentPassword: password,
+        databaseId: id,
+        nextPassword,
+        nextUsername: "app_user",
+        username: "kiln_user",
+      })
+    ).rejects.toThrow("already exists")
+
+    expect(databaseContainer(id).id).toBe(original.id)
+    expect(databaseContainer(id).env.POSTGRES_USER).toBe("kiln_user")
+  })
 
   it("exports a dump far past the old limit for download, keeping the last whole one when a dump fails", async () => {
     const harness = await relayHarness()

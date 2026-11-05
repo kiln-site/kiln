@@ -468,8 +468,8 @@ const permissionCopy: Record<
     description: "Reveal the username and password used to connect.",
   },
   "database.credentials.rotate": {
-    label: "Reset database password",
-    description: "Generate a new password for database connections.",
+    label: "Change database credentials",
+    description: "Generate a new password, or set a new username or password.",
   },
   "database.power": {
     label: "Control database power",

@@ -593,11 +593,12 @@ export class DatabaseDriver {
   }
 
   // A new container over the old one's volume and network, with the same
-  // environment. The old one is set aside until the new one is ready, and
-  // put back if it never is.
+  // environment but for `env`. The old one is set aside until the new one is
+  // ready, and put back if it never is.
   async #replaceContainer(
     container: DatabaseContainerInspect,
-    limits: ResourceLimits
+    limits: ResourceLimits,
+    env: Readonly<Record<string, string>> = {}
   ): Promise<void> {
     const labels = container.Config.Labels ?? {}
     const id = requiredLabel(labels, "kiln.database.id")
@@ -624,12 +625,15 @@ export class DatabaseDriver {
       await Effect.runPromise(
         createContainer(docker, {
           command: spec.command ?? [],
-          env: Object.fromEntries(
-            (container.Config.Env ?? []).map((entry) => {
-              const separator = entry.indexOf("=")
-              return [entry.slice(0, separator), entry.slice(separator + 1)]
-            })
-          ),
+          env: {
+            ...Object.fromEntries(
+              (container.Config.Env ?? []).map((entry) => {
+                const separator = entry.indexOf("=")
+                return [entry.slice(0, separator), entry.slice(separator + 1)]
+              })
+            ),
+            ...env,
+          },
           healthcheck: databaseHealthcheck(engine),
           hostname: databaseHostname(id),
           image: labels["kiln.database.image"] ?? container.Config.Image,
@@ -890,14 +894,21 @@ export class DatabaseDriver {
     return { databaseId: input.databaseId, deleted: true }
   }
 
+  // Changes the database's password, its username, or both. Applied in full
+  // or not at all, so Hearth can keep what it knows of the login.
   async rotateCredentials(
     input: RelayRotateDatabaseCredentials
   ): Promise<RelayManagedDatabase> {
     const database = await this.#required(input.databaseId)
     const container = requiredContainerId(database)
     if (!database.observedState.match(/^(?:running|starting)$/u)) {
-      throw new Error("Start the database before rotating its password")
+      throw new Error("Start the database before changing its credentials")
     }
+    const current = {
+      password: input.currentPassword,
+      username: input.username,
+    }
+    const next = { password: input.nextPassword, username: input.nextUsername }
     if (database.engine === "redis" || database.engine === "valkey") {
       const engine = database.engine
       const labels = await this.#labels(database.id)
@@ -906,13 +917,13 @@ export class DatabaseDriver {
         this.#engine,
         database.image,
         volume,
-        input.username,
-        input.nextPassword
+        next.username,
+        next.password
       )
       const loaded = await promiseResult(() =>
         this.#client(
           container,
-          databaseAclLoadClient(engine, input.username, input.currentPassword),
+          databaseAclLoadClient(engine, current.username, current.password),
           undefined,
           60_000
         )
@@ -922,22 +933,104 @@ export class DatabaseDriver {
           this.#engine,
           database.image,
           volume,
-          input.username,
-          input.currentPassword
+          current.username,
+          current.password
         )
         throw loaded.failure
       }
       return this.#required(input.databaseId)
     }
 
-    const sql = rotationSql(database.engine, input.username, input.nextPassword)
-    await this.#client(
-      container,
-      databaseClient(database, input.username, input.currentPassword, "import"),
-      sql,
-      60_000
-    )
+    if (next.username === current.username) {
+      await this.#client(
+        container,
+        databaseClient(database, current.username, current.password, "import"),
+        passwordSql(database.engine, current.username, next.password),
+        60_000
+      )
+    } else if (database.engine === "postgres") {
+      await this.#renamePostgresLogin(database, container, current, next)
+      // Backups and restores log in as the container's POSTGRES_USER, which
+      // only a new container can change.
+      const replaced = await promiseResult(async () => {
+        const inspected = await this.#container(database.id)
+        await traceRelayPromise(
+          "relay.databases.replaceContainer",
+          () =>
+            this.#replaceContainer(inspected, database.limits, {
+              POSTGRES_PASSWORD: next.password,
+              POSTGRES_USER: next.username,
+            }),
+          { "relay.database_id": database.id }
+        )
+      })
+      if (Result.isFailure(replaced)) {
+        await promiseResult(() =>
+          this.#renamePostgresLogin(database, container, next, current)
+        )
+        throw replaced.failure
+      }
+    } else {
+      // Only root may rename a user. The rename goes first, as the step that
+      // can fail on a name already taken, which then changes nothing.
+      await this.#client(
+        container,
+        databaseRootClient(database.engine),
+        `RENAME USER '${current.username}'@'%' TO '${next.username}'@'%';\n` +
+          passwordSql(database.engine, next.username, next.password),
+        60_000
+      )
+    }
     return this.#required(input.databaseId)
+  }
+
+  // Postgres won't rename the role a session logged in as, and this login is
+  // the database's only superuser, so a helper role renames it and goes
+  // again. It only lives this long, with a password nothing keeps.
+  async #renamePostgresLogin(
+    database: RelayManagedDatabase,
+    container: string,
+    from: DatabaseLogin,
+    to: DatabaseLogin
+  ): Promise<void> {
+    const helper = {
+      password: randomBytes(36).toString("base64url"),
+      username: `kiln_rename_${randomBytes(8).toString("hex")}`,
+    }
+    const run = (login: DatabaseLogin, sql: string) =>
+      this.#client(
+        container,
+        databaseClient(database, login.username, login.password, "import"),
+        sql,
+        60_000
+      )
+    await run(
+      from,
+      `CREATE ROLE "${helper.username}" SUPERUSER LOGIN PASSWORD '${helper.password}';\n`
+    )
+    const renamed = await promiseResult(() =>
+      run(
+        helper,
+        `BEGIN;\nALTER ROLE "${from.username}" RENAME TO "${to.username}";\n` +
+          passwordSql("postgres", to.username, to.password) +
+          "COMMIT;\n"
+      )
+    )
+    // Whichever login works now removes the helper. One left behind doesn't
+    // undo the change, and its password is gone with this call.
+    const removed = await promiseResult(() =>
+      run(
+        Result.isSuccess(renamed) ? to : from,
+        `DROP ROLE "${helper.username}";\n`
+      )
+    )
+    if (Result.isFailure(removed)) {
+      console.warn(
+        `Database ${database.shortId} kept its helper role ${helper.username}:`,
+        removed.failure
+      )
+    }
+    if (Result.isFailure(renamed)) throw renamed.failure
   }
 
   // The caller holds the database's lock and the member's across lookup,
@@ -1527,6 +1620,11 @@ interface DatabaseClient {
   readonly env: ReadonlyArray<string>
 }
 
+interface DatabaseLogin {
+  readonly password: string
+  readonly username: string
+}
+
 function databaseClient(
   database: RelayManagedDatabase,
   username: string,
@@ -1602,20 +1700,25 @@ function databaseWipeClient(
     }
   }
   if (database.engine === "mysql" || database.engine === "mariadb") {
-    const root =
-      database.engine === "mysql"
-        ? "MYSQL_ROOT_PASSWORD"
-        : "MARIADB_ROOT_PASSWORD"
-    const client = database.engine === "mysql" ? "mysql" : "mariadb"
     return {
-      command: ["sh", "-ec", `MYSQL_PWD="$${root}" exec ${client} --user=root`],
-      env: [],
+      ...databaseRootClient(database.engine),
       input: `DROP DATABASE IF EXISTS \`${name}\`;\nCREATE DATABASE \`${name}\`;\n`,
     }
   }
   return {
     ...keyValueClient(database.engine, username, password, ["FLUSHALL"]),
     input: "",
+  }
+}
+
+// MySQL and MariaDB's administrator, whose password only the container knows.
+function databaseRootClient(engine: "mariadb" | "mysql"): DatabaseClient {
+  const root =
+    engine === "mysql" ? "MYSQL_ROOT_PASSWORD" : "MARIADB_ROOT_PASSWORD"
+  const client = engine === "mysql" ? "mysql" : "mariadb"
+  return {
+    command: ["sh", "-ec", `MYSQL_PWD="$${root}" exec ${client} --user=root`],
+    env: [],
   }
 }
 
@@ -1673,18 +1776,20 @@ function databaseAclLoadClient(
   return keyValueClient(engine, username, password, ["ACL", "LOAD"])
 }
 
-function rotationSql(
+// A password goes in the statement as a quoted string. MySQL and MariaDB also
+// read backslashes in one as escapes; Postgres takes them as they are.
+function passwordSql(
   engine: "mariadb" | "mysql" | "postgres",
   username: string,
   password: string
 ): string {
-  const escapedPassword = password
-    .replaceAll("\\", "\\\\")
-    .replaceAll("'", "''")
+  const escaped = (
+    engine === "postgres" ? password : password.replaceAll("\\", "\\\\")
+  ).replaceAll("'", "''")
   if (engine === "postgres") {
-    return `ALTER USER "${username}" WITH PASSWORD '${escapedPassword}';\n`
+    return `ALTER USER "${username}" WITH PASSWORD '${escaped}';\n`
   }
-  return `ALTER USER '${username}'@'%' IDENTIFIED BY '${escapedPassword}';\n`
+  return `ALTER USER '${username}'@'%' IDENTIFIED BY '${escaped}';\n`
 }
 
 // Writes the users file Redis and Valkey load into their data volume, with

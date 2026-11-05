@@ -13,6 +13,7 @@ import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
 import { runOperation } from "@/operations/operation"
+import { createDatabase } from "@/server/database-create.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertGrant,
@@ -195,6 +196,51 @@ describeMysql("Creating an App with a database", () => {
             `DB_NAME=${credential!.databaseName}`,
             "",
           ].join("\n")
+        )
+      })
+    )
+
+    it.effect("creates a database with the name and username it's given", () =>
+      Effect.gen(function* () {
+        yield* seed(["database.create"])
+
+        const created = yield* runOperation(
+          createDatabase,
+          {
+            databaseName: "shop_data",
+            engine: "postgres",
+            name: "Shop",
+            relayId,
+            username: "shop_owner",
+          },
+          { user: person("alice") }
+        )
+
+        const credential = yield* loadManagedDatabaseCredentialEffect(
+          relayId,
+          created.id
+        )
+        assert.strictEqual(credential?.databaseName, "shop_data")
+        assert.strictEqual(credential?.username, "shop_owner")
+      })
+    )
+
+    it.effect("records no database for a username its engine keeps", () =>
+      Effect.gen(function* () {
+        yield* seed(["database.create"])
+
+        const error = yield* runOperation(
+          createDatabase,
+          { engine: "mysql", name: "Shop", relayId, username: "root" },
+          { user: person("alice") }
+        ).pipe(Effect.flip)
+
+        assert.include(String(error), "reserved")
+        assert.deepStrictEqual(relay.jobs, [])
+        const rows = yield* selectRows<{ name: string }>("database")
+        assert.deepStrictEqual(
+          rows.map((row) => row.name),
+          ["Shared"]
         )
       })
     )

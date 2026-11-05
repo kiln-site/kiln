@@ -1,9 +1,19 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
+import { afterAll, vi } from "vite-plus/test"
 
-import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
+import {
+  createManagedDatabaseRecordEffect,
+  listManagedDatabaseRecordsEffect,
+  loadManagedDatabaseCredentialEffect,
+  rotateManagedDatabaseCredentialEffect,
+} from "@/effect/managed-databases"
+import { disposeAppRuntime } from "@/effect/runtime"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertRows } from "@/test/seed"
+
+vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
+afterAll(() => disposeAppRuntime())
 
 const now = Date.UTC(2026, 8, 1)
 const relayOne = "r".repeat(43)
@@ -29,6 +39,35 @@ const insertManagedDatabase = (
 
 describeMysql("managed database persistence", () => {
   layer(TestDatabase)((it) => {
+    it.effect("replaces the login it keeps for a database", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay(relayOne)
+        yield* createManagedDatabaseRecordEffect({
+          createdBy: "user-one",
+          databaseId: "postgres-id",
+          databaseName: "shop",
+          engine: "postgres",
+          name: "Shop",
+          password: "the-old-password",
+          relayId: relayOne,
+          username: "shop_owner",
+        })
+
+        yield* rotateManagedDatabaseCredentialEffect(relayOne, "postgres-id", {
+          password: "the-new-password",
+          username: "store_admin",
+        })
+
+        const credential = yield* loadManagedDatabaseCredentialEffect(
+          relayOne,
+          "postgres-id"
+        )
+        assert.strictEqual(credential?.password, "the-new-password")
+        assert.strictEqual(credential?.username, "store_admin")
+      })
+    )
+
     it.effect("lists metadata without credentials", () =>
       Effect.gen(function* () {
         yield* resetDatabase
