@@ -178,9 +178,9 @@ export const countAppGitHubSourcesEffect = Effect.fn(
 
 /**
  * Saves an app's source. Saving the same branch again keeps its baseline, so
- * a commit no check has seen yet still counts as a push; a new repository or
- * branch takes the one given. The baseline comes first: each assignment sees
- * those before it.
+ * a commit no check has seen yet still counts as a push; a new repository,
+ * name or branch takes the one given, compared exactly, as Git does. The
+ * baseline comes first: each assignment sees those before it.
  */
 export const saveAppGitHubSourceEffect = Effect.fn("apps.github.source.save")(
   function* (source: Omit<AppGitHubSource, "relayId">) {
@@ -197,7 +197,8 @@ export const saveAppGitHubSourceEffect = Effect.fn("apps.github.source.save")(
          baseline_commit = IF(
            baseline_commit IS NOT NULL
              AND repository_id = VALUES(repository_id)
-             AND branch = VALUES(branch),
+             AND CAST(repository AS BINARY) = CAST(VALUES(repository) AS BINARY)
+             AND CAST(branch AS BINARY) = CAST(VALUES(branch) AS BINARY),
            baseline_commit,
            VALUES(baseline_commit)
          ),

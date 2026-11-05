@@ -10,6 +10,7 @@ import {
   finishAppDeploymentEffect,
   insertAppDeploymentEffect,
   latestAppDeploymentsEffect,
+  loadAppGitHubSourceEffect,
   saveAppGitHubSourceEffect,
 } from "@/effect/app-deployments"
 import {
@@ -251,7 +252,12 @@ const seedPolledConnection = Effect.gen(function* () {
   })
 })
 
-const saveSource = (appId: string, branch: string, baselineCommit: string) =>
+const saveSource = (
+  appId: string,
+  branch: string,
+  baselineCommit: string,
+  repository = "octo/app"
+) =>
   saveAppGitHubSourceEffect({
     appId,
     autoDeploy: true,
@@ -261,7 +267,7 @@ const saveSource = (appId: string, branch: string, baselineCommit: string) =>
     connectionId: polledConnectionId,
     createdBy: "owner",
     path: "Dockerfile",
-    repository: "octo/app",
+    repository,
     repositoryId: 1,
   })
 
@@ -724,6 +730,39 @@ describeMysql("App deployments", () => {
           )
         }).pipe(TestClock.withLive),
       60_000
+    )
+
+    it.effect(
+      "keep a source's baseline only while it's the very same branch",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* seedPolledConnection
+          yield* seedPolledApp(first)
+          const baseline = Effect.map(
+            loadAppGitHubSourceEffect(first),
+            (source) => source?.baselineCommit
+          )
+          const [one, two, three, four] = ["1", "2", "3", "4"].map((digit) =>
+            digit.repeat(40)
+          )
+
+          yield* saveSource(first, "main", one!)
+          yield* saveSource(first, "main", two!)
+          assert.strictEqual(yield* baseline, one)
+
+          // Git's branches differ by case, whatever the column's collation.
+          yield* saveSource(first, "Main", two!)
+          assert.strictEqual(yield* baseline, two)
+
+          yield* saveSource(first, "dev", three!)
+          assert.strictEqual(yield* baseline, three)
+
+          yield* saveSource(first, "dev", four!, "octo/renamed")
+          assert.strictEqual(yield* baseline, four)
+        })
     )
 
     it.effect("end a deploy queued for a Relay that's gone", () =>

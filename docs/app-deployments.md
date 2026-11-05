@@ -57,7 +57,9 @@ Choosing a repository or branch deploys nothing unless asked to. Hearth keeps
 the commit the branch held then, in `app_github_source`, and a check doesn't
 take it for a new one until the app has deployed from that branch. A commit
 after it still deploys, even if the app has never deployed. Saving the same
-branch again keeps that commit, so one no check has seen yet isn't missed.
+branch again keeps that commit, so one no check has seen yet isn't missed. An
+app returning to a branch it last deployed from catches up with what landed
+there meanwhile.
 
 Deploying on push hands the branch the app's trust: whoever can push to it
 can run what a pasted Compose file could, host binds included. Turn it off,
