@@ -172,6 +172,32 @@ describe("an App created with a database", () => {
     ])
   })
 
+  it("keeps the connection to one whose container is being replaced", async () => {
+    const harness = await relayHarness()
+    // Between containers, as when a limit comes off, only its network shows.
+    const network = "database-network"
+    fakeDocker.addNetwork({
+      internal: true,
+      labels: {
+        "kiln.database.id": databaseId,
+        "kiln.database.network": network,
+        "kiln.relay.owner": TEST_NAMESPACE,
+        "kiln.resource.kind": "database",
+      },
+      name: network,
+    })
+
+    await harness.apps.create({
+      databaseIds: [databaseId],
+      id: appId,
+      name: "Website",
+    })
+
+    expect((await harness.apps.get(appId)).savedDatabaseIds).toEqual([
+      databaseId,
+    ])
+  })
+
   it("doesn't bring back a connection to one deleted meanwhile", async () => {
     const harness = await relayHarness()
 

@@ -289,10 +289,13 @@ export class DatabaseConnections {
     return Effect.runPromise(this.state.listMemberDatabaseConnections(member))
   }
 
-  /** Whether a database is on this Relay, or being created for it. */
+  /**
+   * Whether a database is on this Relay, or being created for it. Its network
+   * says so, not its container: that's replaced as limits and images change,
+   * and only deleting the database removes the network.
+   */
   async databaseExists(databaseId: string): Promise<boolean> {
-    if ((await this.resolve({ id: databaseId, kind: "database" })) !== null)
-      return true
+    if ((await this.#networks([])).has(databaseId)) return true
     const jobs = await Effect.runPromise(this.state.listProvisioningJobs())
     return jobs.some(
       (job) => job.kind === "database" && job.instanceId === databaseId
