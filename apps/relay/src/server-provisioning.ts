@@ -19,7 +19,7 @@ export function serverProvisioning(options: {
     // The create takes the routes itself, once its image is downloaded, for
     // what every game server shares: the game network, the Relay's CoreDNS,
     // and their private hostnames.
-    locks: instanceReplaceLocks,
+    locks: (job) => instanceReplaceLocks(job.instanceId),
     withState: (placeholder, state) => ({
       ...placeholder,
       observedState: state.phase === "failed" ? "failed" : "provisioning",

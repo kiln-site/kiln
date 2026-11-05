@@ -1134,7 +1134,13 @@ export const relayAppSchema = z.object({
 })
 
 export const relayCreateAppSchema = z
-  .object({ id: appIdSchema, name: appNameSchema })
+  .object({
+    // The databases it's connected to from the start, which may still be
+    // provisioning. Jobs saved before this have none.
+    databaseIds: z.array(databaseIdSchema).max(32).default([]),
+    id: appIdSchema,
+    name: appNameSchema,
+  })
   .strict()
 
 export const relayPrepareAppSchema = relayCreateAppSchema.extend({
@@ -3425,7 +3431,7 @@ export type RelayApp = z.infer<typeof relayAppSchema>
 export type RelayAppContainer = z.infer<typeof relayAppContainerSchema>
 export type RelayAppLimits = z.infer<typeof relayAppLimitsSchema>
 export type RelayAppDeployment = z.infer<typeof relayAppDeploymentSchema>
-export type RelayCreateApp = z.infer<typeof relayCreateAppSchema>
+export type RelayCreateApp = z.input<typeof relayCreateAppSchema>
 export type RelayDeployApp = z.infer<typeof relayDeployAppSchema>
 export type AppGitHubBuild = z.infer<typeof appGitHubBuildSchema>
 export type RelayAppGitHubCheckout = z.infer<

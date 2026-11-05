@@ -3,7 +3,9 @@ import {
   relayAppDeploymentLogSchema,
   relayAppImageUpdatesV1Feature,
   relayAppSchema,
+  relayManagedDatabaseSchema,
   type AppConfig,
+  type RelayApp,
 } from "@workspace/contracts"
 import { logException } from "@workspace/telemetry"
 import {
@@ -741,11 +743,12 @@ export const deployAppOperation = durableOperation({
   locks: (input) => appDeploymentLocks(input.relayId, input.appId),
   // Starts once its Relay is there to deploy it, has the databases it
   // keeps for the app (handed over as its own operation, started here if
-  // it's not), and runs no deployment from before deployments queued,
-  // which nothing holds: the minute sweep settles that. Until then it
-  // waits, holding nothing, so what's asked meanwhile joins it, it can be
-  // cancelled, and a deletion of the app isn't kept waiting. One whose
-  // Relay is gone starts, to find nothing to deploy.
+  // it's not), runs no deployment from before deployments queued, which
+  // nothing holds: the minute sweep settles that, and has no database of
+  // the app still provisioning, whose network its containers couldn't join.
+  // Until then it waits, holding nothing, so what's asked meanwhile joins
+  // it, it can be cancelled, and a deletion of the app isn't kept waiting.
+  // One whose Relay is gone starts, to find nothing to deploy.
   ready: (input) =>
     Effect.gen(function* () {
       const relays = yield* listPersistedRelaysEffect()
@@ -756,7 +759,9 @@ export const deployAppOperation = durableOperation({
       }
       if (!(yield* appDatabaseConnectionsHandedOverEffect(relay))) return false
       const { latest } = yield* latestAppDeploymentsEffect(input.appId)
-      return latest?.status !== "running"
+      if (latest?.status === "running") return false
+      const app = yield* readRelayApp(relay, input.appId)
+      return app === null || !(yield* awaitsDatabase(relay, app))
     }).pipe(Effect.catch(() => Effect.succeed(false))),
   // A failure ends it failed, so what it was for is asked again.
   run: (input, operation) =>
@@ -835,8 +840,39 @@ const provisioningState = (input: DeployInput) =>
     if (app === null || app.provisioning?.phase === "failed") {
       return "gone" as const
     }
-    return app.provisioning ? ("waiting" as const) : ("ready" as const)
+    return app.provisioning || (yield* awaitsDatabase(relay, app))
+      ? ("waiting" as const)
+      : ("ready" as const)
   }).pipe(Effect.catch(() => Effect.succeed("waiting" as const)))
+
+// Whether a database the app is connected to is still being created. One
+// whose provisioning failed won't get a network, so nothing waits for it.
+const awaitsDatabase = Effect.fnUntraced(function* (
+  relay: PersistedRelay,
+  app: RelayApp
+) {
+  if (app.savedDatabaseIds.length === 0) return false
+  const response = yield* Effect.tryPromise({
+    try: (signal) =>
+      relayRpc(relay, "database.list", {}, 10_000, undefined, signal),
+    catch: (cause) =>
+      ExternalServiceError.make({
+        cause,
+        message: "Could not read the app's databases from its Relay",
+        service: "Relay",
+      }),
+  })
+  const parsed = relayManagedDatabaseSchema.array().safeParse(response)
+  return (
+    parsed.success &&
+    parsed.data.some(
+      ({ id, provisioning }) =>
+        app.savedDatabaseIds.includes(id) &&
+        provisioning !== undefined &&
+        provisioning.phase !== "failed"
+    )
+  )
+})
 
 // Takes what the app's request asks and decides what that deploys, as one
 // step: nothing for an app being deleted, which settles what was asked, so

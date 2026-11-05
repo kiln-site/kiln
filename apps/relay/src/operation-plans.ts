@@ -77,6 +77,17 @@ export function appReplaceLocks(appId: string): Array<LaneLock> {
   return [exclusive(laneKeys.app(appId))]
 }
 
+/** Creating an App connected to databases, which may still be provisioning. */
+export function appCreateLocks(
+  appId: string,
+  databaseIds: ReadonlyArray<string>
+): Array<LaneLock> {
+  return [
+    ...appReplaceLocks(appId),
+    ...databaseIds.map((id) => shared(laneKeys.databaseConnections(id))),
+  ]
+}
+
 /**
  * Starting an App, which also reads every volume it mounts: a restore of one
  * holds it alone, so the App waits for it rather than start on half its
@@ -93,6 +104,14 @@ export function appStartLocks(
 /** Changing a database itself: its settings, data, or container. */
 export function databaseLocks(databaseId: string): Array<LaneLock> {
   return [exclusive(laneKeys.database(databaseId))]
+}
+
+/** Deleting a database forgets its connections, so none is added meanwhile. */
+export function databaseDeleteLocks(databaseId: string): Array<LaneLock> {
+  return [
+    ...databaseLocks(databaseId),
+    exclusive(laneKeys.databaseConnections(databaseId)),
+  ]
 }
 
 /** Changing a database's running process: power and commands. */
@@ -681,6 +700,7 @@ export function controlRequestLocks(
       )
     case "database.wipe":
     case "database.delete":
+      return database(databaseDeleteLocks)
     case "database.credentials.rotate":
     case "database.dump.import":
     case "database.data.write":
@@ -733,8 +753,12 @@ export function controlRequestLocks(
       ]
     }
 
-    case "app.create":
-      return app(appReplaceLocks, "id")
+    case "app.create": {
+      const databaseIds = Array.isArray(payload.databaseIds)
+        ? payload.databaseIds.filter(Predicate.isString)
+        : []
+      return app((id) => appCreateLocks(id, databaseIds), "id")
+    }
     // Stops the running build beside it, which holds the App's lifecycle,
     // so a deletion needn't wait for the build it removes.
     case "app.deployment.abort":

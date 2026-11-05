@@ -1683,6 +1683,17 @@ function memberActionsForRequest(
     // It connects Apps.
     case "database.network.import":
       return ["app.manage"]
+    // A new App connected to databases changes their connections too.
+    case "app.create":
+    case "app.provision.prepare": {
+      const databaseIds =
+        request.payload && typeof request.payload === "object"
+          ? (request.payload as Record<string, unknown>).databaseIds
+          : undefined
+      return Array.isArray(databaseIds) && databaseIds.length > 0
+        ? ["database.network.write"]
+        : []
+    }
     default:
       return []
   }

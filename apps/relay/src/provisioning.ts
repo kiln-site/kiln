@@ -62,7 +62,7 @@ export interface ProvisioningAdapter<Kind extends RelayProvisioningKind> {
   /** Names the lane work, as in `instance.provision`. */
   readonly label: string
   /** What a job holds for the whole create. */
-  readonly locks: (instanceId: string) => ReadonlyArray<LaneLock>
+  readonly locks: (job: RelayProvisioningJob<Kind>) => ReadonlyArray<LaneLock>
   /** The placeholder showing where provisioning is. */
   readonly withState: (
     placeholder: RelayProvisioningJob<Kind>["placeholder"],
@@ -383,7 +383,7 @@ export class ProvisioningManager {
       this.#claims.delete(job.instanceId)
       const refused = yield* this.#lanes
         .run(
-          { label: adapter.label, locks: adapter.locks(job.instanceId) },
+          { label: adapter.label, locks: adapter.locks(job) },
           this.#provision(job)
         )
         .pipe(

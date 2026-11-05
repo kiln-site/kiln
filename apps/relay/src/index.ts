@@ -2894,6 +2894,9 @@ async function executeControlRequest(
         )
       )
       if (discarded) {
+        // One that never finished has no container for its delete to find,
+        // and an App created with it may be connected to it.
+        await databases.connections.forgetDatabase(input.databaseId)
         await resourceFreezes.forget("database", input.databaseId)
         return { databaseId: input.databaseId, deleted: true }
       }

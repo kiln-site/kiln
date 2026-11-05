@@ -235,6 +235,36 @@ describe("Relay control socket", () => {
     })
   })
 
+  it("takes a database's network permission to create an App connected to it", async () => {
+    const relay = await startRelay({
+      execute: async () => ({ prepared: true }),
+    })
+    const hearth = await relay.pair({ role: "custom", actions: ["app.create"] })
+    const { inbox, socket } = await relay.connect(hearth)
+    const app = {
+      id: "a".repeat(40),
+      idempotencyKey: randomUUID(),
+      name: "Blog",
+    }
+    const alone = sendRequest(socket, "app.provision.prepare", {
+      ...app,
+      databaseIds: [],
+    })
+    expect(await inbox.next()).toMatchObject({
+      replyTo: alone,
+      type: "response",
+    })
+    const connected = sendRequest(socket, "app.provision.prepare", {
+      ...app,
+      databaseIds: ["d".repeat(40)],
+    })
+    expect(await inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: connected,
+      type: "error",
+    })
+  })
+
   describe("operation IDs", () => {
     const features = [relaySnapshotDeltaFeature]
     const instanceId = "d".repeat(40)
