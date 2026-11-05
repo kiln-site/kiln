@@ -932,19 +932,6 @@ export class DatabaseDriver {
     return this.#required(input.databaseId)
   }
 
-  // Whether the database still takes the login being replaced. False once an
-  // earlier attempt got past it; failing if the new login doesn't work either,
-  // with why the old one didn't.
-  async #stillOnOldLogin(
-    tryOld: () => Promise<unknown>,
-    tryNew: () => Promise<unknown>
-  ): Promise<boolean> {
-    const old = await promiseResult(tryOld)
-    if (Result.isSuccess(old)) return true
-    if (Result.isFailure(await promiseResult(tryNew))) throw old.failure
-    return false
-  }
-
   async #changeKeyValueLogin(
     database: RelayManagedDatabase,
     engine: "redis" | "valkey",
@@ -959,10 +946,15 @@ export class DatabaseDriver {
         undefined,
         60_000
       )
-    const load = await this.#stillOnOldLogin(
-      () => ping(current),
-      () => ping(next)
-    )
+    // Only a login with the right password answers, so one that answers to
+    // the new login means an earlier attempt loaded it.
+    const old = await promiseResult(() => ping(current))
+    if (
+      Result.isFailure(old) &&
+      Result.isFailure(await promiseResult(() => ping(next)))
+    ) {
+      throw old.failure
+    }
     const volume = requiredLabel(
       await this.#labels(database.id),
       "kiln.database.volume"
@@ -974,7 +966,7 @@ export class DatabaseDriver {
       next.username,
       next.password
     )
-    if (!load) return
+    if (Result.isFailure(old)) return
     const loaded = await promiseResult(() =>
       this.#client(
         container,
@@ -1015,14 +1007,29 @@ export class DatabaseDriver {
       )
       return
     }
-    // A client in the container is trusted whatever its password, so this
-    // says which role exists, and the rename sets both at once.
-    const rename = await this.#stillOnOldLogin(
-      () => run(current, "SELECT 1;\n"),
-      () => run(next, "SELECT 1;\n")
-    )
-    if (rename) {
+    // A client in the container is trusted whatever its password, so a login
+    // that works only says the role exists: another role can have the new
+    // name. The rename goes ahead, and refuses that, unless Postgres says the
+    // old role is gone, which only an earlier attempt's rename does. That
+    // rename set the password too.
+    const old = await promiseResult(() => run(current, "SELECT 1;\n"))
+    if (Result.isSuccess(old)) {
       await this.#renamePostgresLogin(database, container, current, next)
+    } else if (
+      String(old.failure).includes(`role "${current.username}" does not exist`)
+    ) {
+      await run(next, "SELECT 1;\n")
+    } else {
+      throw old.failure
+    }
+    // A restart can leave an earlier rename's helper behind. It's no use to
+    // anyone, and a failure here doesn't undo the change.
+    const swept = await promiseResult(() => run(next, sweepHelperRolesSql))
+    if (Result.isFailure(swept)) {
+      console.warn(
+        `Database ${database.shortId} kept an old helper role:`,
+        swept.failure
+      )
     }
     // Backups and restores log in as the container's POSTGRES_USER, which
     // only a new container can change.
@@ -1079,7 +1086,8 @@ export class DatabaseDriver {
       run(passwordSql(engine, next.username, next.password))
     )
     if (Result.isFailure(changed)) {
-      if (rename) {
+      // Renamed by this attempt or an earlier one: Hearth keeps the old login.
+      if (next.username !== current.username) {
         await this.#undoLoginChange(database, () =>
           run(
             `RENAME USER '${next.username}'@'%' TO '${current.username}'@'%';\n`
@@ -1116,7 +1124,7 @@ export class DatabaseDriver {
   ): Promise<void> {
     const helper = {
       password: randomBytes(36).toString("base64url"),
-      username: `kiln_rename_${randomBytes(8).toString("hex")}`,
+      username: `${POSTGRES_HELPER_ROLE}${randomBytes(8).toString("hex")}`,
     }
     const run = (login: DatabaseLogin, sql: string) =>
       this.#client(
@@ -1833,6 +1841,21 @@ function databaseWipeClient(
 }
 
 // MySQL and MariaDB's administrator, whose password only the container knows.
+// What Postgres logins renamed through a helper leave behind if a restart
+// cuts them off: the name, then 16 hex digits.
+const POSTGRES_HELPER_ROLE = "kiln_rename_"
+const sweepHelperRolesSql = `DO $$
+DECLARE helper text;
+BEGIN
+  FOR helper IN
+    SELECT rolname FROM pg_roles
+     WHERE rolname ~ '^${POSTGRES_HELPER_ROLE}[0-9a-f]{16}$'
+  LOOP
+    EXECUTE format('DROP ROLE %I', helper);
+  END LOOP;
+END $$;
+`
+
 function databaseRootClient(engine: "mariadb" | "mysql"): DatabaseClient {
   const root =
     engine === "mysql" ? "MYSQL_ROOT_PASSWORD" : "MARIADB_ROOT_PASSWORD"

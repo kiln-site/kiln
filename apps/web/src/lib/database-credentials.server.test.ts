@@ -24,6 +24,7 @@ const relay = vi.hoisted(() => ({
   journal: new Map<string, unknown>(),
   next: [] as Array<"interrupted" | "loses-reply" | "refuses">,
   sent: [] as Array<Record<string, unknown>>,
+  subjects: [] as Array<string | undefined>,
 }))
 
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
@@ -34,7 +35,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     operation: string,
     payload: Record<string, unknown>,
     _timeout?: number,
-    _subject?: string,
+    subject?: string,
     _signal?: AbortSignal,
     frame: { operationId?: string } = {}
   ) => {
@@ -45,6 +46,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     }
     const id = frame.operationId ?? ""
     relay.sent.push(payload)
+    relay.subjects.push(subject)
     const outcome = relay.next.shift()
     if (outcome === "refuses") {
       relay.journal.set(id, {
@@ -87,6 +89,7 @@ const seeded = Effect.gen(function* () {
   relay.journal.clear()
   relay.next.length = 0
   relay.sent.length = 0
+  relay.subjects.length = 0
   yield* createManagedDatabaseRecordEffect({
     createdBy: "user-one",
     databaseId,
@@ -102,6 +105,7 @@ const seeded = Effect.gen(function* () {
 const runToEnd = (change: { password?: string; username?: string }) =>
   Effect.gen(function* () {
     const id = yield* startDurableOperation(changeDatabaseLogin, {
+      actorId: "user-one",
       databaseId,
       relayId,
       ...(change.username !== undefined && { username: change.username }),
@@ -143,6 +147,7 @@ describeMysql("changing a database's login", () => {
 
           assert.strictEqual(done?.state, "succeeded")
           assert.notInclude(JSON.stringify(done?.input), "the-new-password")
+          assert.deepStrictEqual(relay.subjects, ["user-one"])
           assert.deepStrictEqual(relay.sent, [
             {
               currentPassword: "the-old-password",

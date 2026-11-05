@@ -301,6 +301,51 @@ describe("managed database credentials and dumps", () => {
     expect(databaseContainer(id).id).not.toBe(original.id)
     expect(databaseContainer(id).env.POSTGRES_USER).toBe("app_user")
     expect(original.executedSql.join("")).not.toContain("RENAME TO")
+    // What the restart left of the rename goes too.
+    expect(original.executedSql.join("")).toContain("DROP ROLE")
+  })
+
+  it("finishes a rename even if an old helper role won't go", async () => {
+    const harness = await relayHarness()
+    const id = "f".repeat(40)
+    await createDatabase(harness, id)
+    fakeDocker.programAnswers = (_argv, input) =>
+      input.startsWith("DO $$") ? { failure: "role is in use" } : undefined
+
+    await harness.databases.rotateCredentials({
+      currentPassword: password,
+      databaseId: id,
+      nextPassword,
+      nextUsername: "app_user",
+      username: "kiln_user",
+    })
+
+    expect(databaseContainer(id).env.POSTGRES_USER).toBe("app_user")
+  })
+
+  it("doesn't take a role already called the new name for the rename", async () => {
+    const harness = await relayHarness()
+    const id = "f".repeat(40)
+    await createDatabase(harness, id)
+    const original = databaseContainer(id)
+    // Still starting, so the old role doesn't answer; another has the name.
+    fakeDocker.programAnswers = (argv) =>
+      argv.includes("kiln_user")
+        ? { failure: "the database system is starting up" }
+        : undefined
+
+    await expect(
+      harness.databases.rotateCredentials({
+        currentPassword: password,
+        databaseId: id,
+        nextPassword,
+        nextUsername: "app_user",
+        username: "kiln_user",
+      })
+    ).rejects.toThrow("starting up")
+
+    expect(databaseContainer(id).id).toBe(original.id)
+    expect(databaseContainer(id).env.POSTGRES_USER).toBe("kiln_user")
   })
 
   it("leaves the Postgres container alone when one sent again finds it done", async () => {
@@ -400,6 +445,23 @@ describe("managed database credentials and dumps", () => {
       const sql = databaseContainer(id).executedSql.join("")
       expect(sql).not.toContain("RENAME USER")
       expect(sql).toContain("ALTER USER 'app_user'@'%' IDENTIFIED BY")
+    })
+
+    it("takes the old name back from an earlier attempt's rename when the password can't be set", async () => {
+      const harness = await relayHarness()
+      await createDatabase(harness, id, engine)
+      fakeDocker.programAnswers = (_argv, input) =>
+        input.startsWith("ALTER USER")
+          ? { failure: "ERROR 1819 password policy" }
+          : listing(input, "app_user")
+
+      await expect(harness.databases.rotateCredentials(change)).rejects.toThrow(
+        "password policy"
+      )
+
+      expect(databaseContainer(id).executedSql.join("")).toContain(
+        "RENAME USER 'app_user'@'%' TO 'kiln_user'@'%'"
+      )
     })
 
     it("refuses a name already taken, changing nothing", async () => {

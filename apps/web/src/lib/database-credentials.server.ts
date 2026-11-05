@@ -19,6 +19,8 @@ import { awaitOperationEnd, loadOperation } from "@/operations/records"
 import { RelayCommandError, relayCommand } from "@/operations/relay-command"
 
 const ChangeInput = Schema.Struct({
+  // Who asked, for the audit of what's sent to the Relay.
+  actorId: Schema.String,
   databaseId: Schema.String,
   // The new password, encrypted as the database's own, since this is kept
   // until it ends and for a while after. Left out, the password stays.
@@ -105,6 +107,7 @@ export const changeDatabaseLogin = durableOperation({
             })),
             Effect.mapError(asCommandError)
           ),
+          subject: input.actorId,
           // A rename can replace the container, as a limit change can.
           timeoutMs: 240_000,
         }).pipe(Effect.result)
@@ -169,6 +172,7 @@ export const changeDatabaseLoginAndWait = <AuthorizeError>(
     const id = yield* startDurableOperation(
       changeDatabaseLogin,
       {
+        actorId: options.actorId,
         databaseId: change.databaseId,
         relayId: change.relayId,
         ...(change.username !== undefined && { username: change.username }),

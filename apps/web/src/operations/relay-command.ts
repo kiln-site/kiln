@@ -82,6 +82,8 @@ export const relayCommand = <A = unknown, R = never>(options: {
    */
   readonly sendPayload?: Effect.Effect<unknown, RelayCommandError, R>
   readonly timeoutMs?: number
+  /** Who asked for it, for Hearth's audit and the Relay's. */
+  readonly subject?: string
   readonly success?: Schema.Codec<A, unknown>
   /** What the reply said, when the Relay no longer has it. */
   readonly recover?: Effect.Effect<A, RelayCommandError, R>
@@ -188,6 +190,7 @@ const settle = <A, R>(
     readonly payload: unknown
     readonly sendPayload?: Effect.Effect<unknown, RelayCommandError, R>
     readonly timeoutMs?: number
+    readonly subject?: string
     readonly success?: Schema.Codec<A, unknown>
     readonly recover?: Effect.Effect<A, RelayCommandError, R>
   },
@@ -207,7 +210,7 @@ const settle = <A, R>(
             options.operation,
             payload,
             options.timeoutMs,
-            undefined,
+            options.subject,
             undefined,
             { journal: command.journal, operationId: command.id, parent }
           )
