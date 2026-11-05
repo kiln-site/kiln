@@ -423,7 +423,8 @@ a Postgres `GRANT` to it or a MySQL view it defined. If the database's username
 has changed since, such a dump fails to restore on Postgres, and on MySQL and
 MariaDB restores objects that fail when used. Change the username back to
 restore it. Kiln refuses to rename a MySQL or MariaDB login that views,
-triggers, routines or events run as, since those would break the same way.
+triggers, routines or events run as, or a Postgres login a schema is named
+after, since those would break the same way.
 
 Kiln platform restore is deliberately offline because importing Hearth's own
 catalog while Hearth is serving requests cannot be made transactionally safe.

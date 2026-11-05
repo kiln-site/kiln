@@ -1014,6 +1014,7 @@ export class DatabaseDriver {
     // rename set the password too.
     const old = await promiseResult(() => run(current, "SELECT 1;\n"))
     if (Result.isSuccess(old)) {
+      await run(current, schemaNamedAfterLoginSql(current.username))
       await this.#renamePostgresLogin(database, container, current, next)
     } else if (
       String(old.failure).includes(`role "${current.username}" does not exist`)
@@ -1077,13 +1078,16 @@ export class DatabaseDriver {
     if (rename) {
       // These keep their definer by name, so a rename leaves views failing
       // and writes to tables with triggers refused. MySQL lets root do it.
-      const definer = `'${current.username}@%'`
+      const definer = `DEFINER = '${current.username}@%'`
+      const asDefiner = `${definer} AND SECURITY_TYPE = 'DEFINER'`
       const stored = await run(
-        ["VIEWS", "TRIGGERS", "ROUTINES", "EVENTS"]
-          .map(
-            (table) =>
-              `SELECT 1 FROM information_schema.${table} WHERE DEFINER = ${definer}`
-          )
+        [
+          `VIEWS WHERE ${asDefiner}`,
+          `ROUTINES WHERE ${asDefiner}`,
+          `TRIGGERS WHERE ${definer}`,
+          `EVENTS WHERE ${definer}`,
+        ]
+          .map((source) => `SELECT 1 FROM information_schema.${source}`)
           .join(" UNION ALL ") + " LIMIT 1;\n"
       )
       if (stored.stdout.trim()) {
@@ -1857,6 +1861,18 @@ function databaseWipeClient(
 }
 
 // MySQL and MariaDB's administrator, whose password only the container knows.
+// Postgres looks in the schema named after the login first, so a rename would
+// leave whoever connects without the tables in one, and renaming it too would
+// break what names it. Fails, and so stops the client, if there is one.
+const schemaNamedAfterLoginSql = (username: string) => `\\set SHOW_CONTEXT never
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_namespace WHERE nspname = '${username}') THEN
+    RAISE EXCEPTION 'A schema is named after ${username}, and renaming it would hide its tables from this login. Move them or keep the username.';
+  END IF;
+END $$;
+`
+
 // What Postgres logins renamed through a helper leave behind if a restart
 // cuts them off: the name, then 16 hex digits.
 const POSTGRES_HELPER_ROLE = "kiln_rename_"
@@ -1947,13 +1963,12 @@ function passwordSql(
   username: string,
   password: string
 ): string {
-  const escaped = (
-    engine === "postgres" ? password : password.replaceAll("\\", "\\\\")
-  ).replaceAll("'", "''")
-  if (engine === "postgres") {
-    return `ALTER USER "${username}" WITH PASSWORD '${escaped}';\n`
-  }
-  return `ALTER USER '${username}'@'%' IDENTIFIED BY '${escaped}';\n`
+  const escaped = password.replaceAll("\\", "\\\\").replaceAll("'", "''")
+  // Read the same whatever the database is set to: Postgres's E'' strings
+  // always take backslashes as escapes, and the session's mode does in MySQL.
+  return engine === "postgres"
+    ? `ALTER USER "${username}" WITH PASSWORD E'${escaped}';\n`
+    : `SET SESSION sql_mode = '';\nALTER USER '${username}'@'%' IDENTIFIED BY '${escaped}';\n`
 }
 
 // Writes the users file Redis and Valkey load into their data volume, with

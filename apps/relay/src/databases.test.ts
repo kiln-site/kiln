@@ -310,7 +310,7 @@ describe("managed database credentials and dumps", () => {
     const id = "f".repeat(40)
     await createDatabase(harness, id)
     fakeDocker.programAnswers = (_argv, input) =>
-      input.startsWith("DO $$") ? { failure: "role is in use" } : undefined
+      input.includes("DROP ROLE %I") ? { failure: "role is in use" } : undefined
 
     await harness.databases.rotateCredentials({
       currentPassword: password,
@@ -346,6 +346,30 @@ describe("managed database credentials and dumps", () => {
 
     expect(databaseContainer(id).id).toBe(original.id)
     expect(databaseContainer(id).env.POSTGRES_USER).toBe("kiln_user")
+  })
+
+  it("refuses to rename a Postgres login that a schema is named after", async () => {
+    const harness = await relayHarness()
+    const id = "f".repeat(40)
+    await createDatabase(harness, id)
+    const original = databaseContainer(id)
+    fakeDocker.programAnswers = (_argv, input) =>
+      input.includes("pg_namespace")
+        ? { failure: "ERROR:  A schema is named after kiln_user" }
+        : undefined
+
+    await expect(
+      harness.databases.rotateCredentials({
+        currentPassword: password,
+        databaseId: id,
+        nextPassword,
+        nextUsername: "app_user",
+        username: "kiln_user",
+      })
+    ).rejects.toThrow("A schema is named after kiln_user")
+
+    expect(original.executedSql.join("")).not.toContain("RENAME TO")
+    expect(databaseContainer(id).id).toBe(original.id)
   })
 
   it("leaves the Postgres container alone when one sent again finds it done", async () => {
@@ -422,7 +446,7 @@ describe("managed database credentials and dumps", () => {
       const harness = await relayHarness()
       await createDatabase(harness, id, engine)
       fakeDocker.programAnswers = (_argv, input) =>
-        input.startsWith("ALTER USER")
+        input.includes("ALTER USER")
           ? { failure: "ERROR 1819 password policy" }
           : listing(input, "kiln_user")
 
@@ -451,7 +475,7 @@ describe("managed database credentials and dumps", () => {
       const harness = await relayHarness()
       await createDatabase(harness, id, engine)
       fakeDocker.programAnswers = (_argv, input) =>
-        input.startsWith("ALTER USER")
+        input.includes("ALTER USER")
           ? { failure: "ERROR 1819 password policy" }
           : listing(input, "app_user")
 
