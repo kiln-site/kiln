@@ -221,7 +221,7 @@ export function AppCodeDialog({
           <DialogDescription>{document.hint}</DialogDescription>
         </DialogHeader>
         <CodeDocumentPanel
-          className="h-[min(84dvh,52rem)]"
+          className="h-[min(84dvh,52rem)] min-h-0"
           footer={
             canManage ? (
               <>
