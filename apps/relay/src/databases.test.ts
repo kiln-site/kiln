@@ -464,6 +464,41 @@ describe("managed database credentials and dumps", () => {
       )
     })
 
+    it("refuses to rename a login that views or triggers run as", async () => {
+      const harness = await relayHarness()
+      await createDatabase(harness, id, engine)
+      fakeDocker.programAnswers = (_argv, input) =>
+        input.includes("information_schema")
+          ? "1\n"
+          : listing(input, "kiln_user")
+
+      await expect(harness.databases.rotateCredentials(change)).rejects.toThrow(
+        "renaming it would break them"
+      )
+
+      const sql = databaseContainer(id).executedSql.join("")
+      expect(sql).not.toContain("RENAME USER")
+      expect(sql).not.toContain("ALTER USER")
+    })
+
+    it("still changes the password of a login that views run as", async () => {
+      const harness = await relayHarness()
+      await createDatabase(harness, id, engine)
+      fakeDocker.programAnswers = (_argv, input) =>
+        input.includes("information_schema")
+          ? "1\n"
+          : listing(input, "kiln_user")
+
+      await harness.databases.rotateCredentials({
+        ...change,
+        nextUsername: "kiln_user",
+      })
+
+      expect(databaseContainer(id).executedSql.join("")).toContain(
+        "ALTER USER 'kiln_user'@'%' IDENTIFIED BY"
+      )
+    })
+
     it("refuses a name already taken, changing nothing", async () => {
       const harness = await relayHarness()
       await createDatabase(harness, id, engine)

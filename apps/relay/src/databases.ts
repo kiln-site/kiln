@@ -1075,6 +1075,22 @@ export class DatabaseDriver {
     const rename =
       next.username !== current.username && users.has(current.username)
     if (rename) {
+      // These keep their definer by name, so a rename leaves views failing
+      // and writes to tables with triggers refused. MySQL lets root do it.
+      const definer = `'${current.username}@%'`
+      const stored = await run(
+        ["VIEWS", "TRIGGERS", "ROUTINES", "EVENTS"]
+          .map(
+            (table) =>
+              `SELECT 1 FROM information_schema.${table} WHERE DEFINER = ${definer}`
+          )
+          .join(" UNION ALL ") + " LIMIT 1;\n"
+      )
+      if (stored.stdout.trim()) {
+        throw new Error(
+          `Views, triggers, routines or events run as ${current.username}, and renaming it would break them. Recreate them under another account first, or keep the username.`
+        )
+      }
       // The step that can fail on a name already taken, which changes nothing.
       await run(
         `RENAME USER '${current.username}'@'%' TO '${next.username}'@'%';\n`
