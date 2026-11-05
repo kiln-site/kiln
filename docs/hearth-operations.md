@@ -226,6 +226,12 @@ An App's changes take its parts too: `#config` for its configuration and
 limits, `#name`, `#power`, and `#deploy` for starting a deployment. Its image
 update settings hold it shared.
 
+Creating an App with a database holds that database too: a new one whole, by
+the ID it settles first, and an existing one's `#connections`, with its
+`#credentials` shared while they're copied into the App's environment. A new
+database is created as an operation of its own inside the App's, under those
+locks.
+
 An image check is a read: it asks the registry with no lane held and
 records what it found holding the App shared, so it conflicts with nothing
 but replacing or removing the whole App. What it found counts only while it still describes

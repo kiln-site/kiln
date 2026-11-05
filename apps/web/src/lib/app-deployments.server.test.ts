@@ -33,6 +33,10 @@ const relay = vi.hoisted(() => ({
   journal: new Map<string, { result: unknown; status: "succeeded" }>(),
   // Apps it doesn't have, as one whose provisioning failed.
   missing: new Set<string>(),
+  // Each app's saved database connections, and where the databases that
+  // haven't finished provisioning are.
+  connections: new Map<string, Array<string>>(),
+  provisioning: new Map<string, string>(),
   sent: [] as Array<string>,
 }))
 
@@ -81,6 +85,11 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       if (relay.missing.has(id)) return []
       return [{ app: relayApp(id), id, view: "detail" }]
     }
+    if (operation === "database.list") {
+      return [...relay.provisioning].map(([id, phase]) =>
+        relayDatabase(id, phase)
+      )
+    }
     return {}
   },
 }))
@@ -99,6 +108,7 @@ const fifth = "e".repeat(40)
 const sixth = "f".repeat(40)
 const seventh = "7".repeat(40)
 const eighth = "8".repeat(40)
+const ninth = "9".repeat(40)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -123,9 +133,29 @@ function relayApp(id: string) {
     id,
     network: `kiln-app-${id.slice(0, 8)}`,
     observedState: "running",
-    savedDatabaseIds: [],
+    savedDatabaseIds: relay.connections.get(id) ?? [],
     shortId: id.slice(0, 8),
     status: "Running",
+  }
+}
+
+function relayDatabase(id: string, phase: string) {
+  return {
+    containerId: null,
+    createdAt: new Date(0).toISOString(),
+    databaseName: "kiln_main",
+    engine: "postgres",
+    hostname: `database-${id}`,
+    id,
+    image: "postgres:17",
+    internalPort: 5432,
+    members: [],
+    name: "Main",
+    observedState: "provisioning",
+    provisioning: { attempt: 0, error: null, phase },
+    shortId: id.slice(0, 8),
+    status: "Preparing database",
+    supportsImportExport: true,
   }
 }
 
@@ -314,6 +344,40 @@ describeMysql("App deployments", () => {
           assert.strictEqual(refused?.status, "failed")
           assert.strictEqual(refused?.triggeredBy, "removed-person")
           assert.strictEqual(sentTo(fifth), 0)
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "wait for a connected database still provisioning, but not one that failed",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.sent.length = 0
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* seedApp(ninth)
+          const database = "b".repeat(40)
+          relay.connections.set(ninth, [database])
+          relay.provisioning.set(database, "pulling_image")
+
+          // Its containers couldn't join a network that isn't there yet.
+          const id = yield* ask(ninth)
+          yield* Effect.sleep("500 millis")
+          assert.strictEqual((yield* loadOperation(id))?.state, "waiting")
+          assert.strictEqual(sentTo(ninth), 0)
+
+          // One that failed will never have one, so it goes without.
+          relay.provisioning.set(database, "failed")
+          yield* readmitWaitingOperations
+          yield* until(() => sentTo(ninth) === 1)
+          relay.connections.clear()
+          relay.provisioning.clear()
         }).pipe(TestClock.withLive),
       60_000
     )

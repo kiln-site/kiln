@@ -201,6 +201,24 @@ named volumes Kiln doesn't manage, and paths on the node outside the app's
 folder. Files an app's configuration mounts and a repository checkout don't
 count; each deployment writes them again.
 
+## Starting with a database
+
+**Add App** can start an app connected to a database: a new one on its Relay,
+or one already there. Connecting to an existing database copies its
+credentials, so it takes that database's `database.network.write` and
+`database.credentials.read`; creating one takes `database.create`.
+
+Hearth creates a new database first, so one that can't be made leaves no app,
+then records the app with the connection's variables in its environment:
+`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, and `DB_NAME`, which Redis and
+Valkey don't have. They're an ordinary part of the environment, copied once:
+edit them like any other, and change `DB_PASS` after rotating the password.
+
+The Relay saves the connection when the app's provisioning job runs, whether
+or not the database exists yet. A deployment waits while a database the app
+is connected to is still provisioning, since its containers couldn't join a
+network that isn't there; one whose provisioning failed doesn't hold it up.
+
 ## How deployments queue
 
 An app deploys the same way whatever asked: a push, a poll that found a new

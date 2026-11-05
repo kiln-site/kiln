@@ -51,7 +51,7 @@ import {
 // reaches, and its environment, who owns it, and its deployment. Its name and status are in the
 // header.
 export function AppInfoRail({ app, routeId }: { app: App; routeId: string }) {
-  const databases = app.connectedDatabaseIds.length
+  const databases = app.savedDatabaseIds.length
   return (
     <>
       <InfoRailGroup card>

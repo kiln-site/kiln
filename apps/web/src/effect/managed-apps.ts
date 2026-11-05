@@ -84,12 +84,16 @@ export const createAppRecordEffect = Effect.fn("apps.create")(
   function* (input: {
     appId: string
     createdBy: string
+    environment?: string
     name: string
     relayId: string
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    const ciphertext = yield* encryptConfig(defaultAppConfig)
+    const ciphertext = yield* encryptConfig({
+      ...defaultAppConfig,
+      environment: input.environment ?? "",
+    })
     yield* database.execute(
       "app_create",
       `INSERT INTO ${databaseTable("app")}

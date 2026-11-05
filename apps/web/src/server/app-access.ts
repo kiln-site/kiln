@@ -21,6 +21,7 @@ import { databasePool } from "@/lib/database"
 import { transferResourceOwnershipEffect } from "@/lib/platform-access"
 import { grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { requiredRelay } from "@/server/managed-database-access"
 
@@ -284,4 +285,16 @@ export async function transferAppOwnershipHandler(
     )
   )
   return { previousOwnerId: result.previousOwnerId, userId: recipient.id }
+}
+
+export function publishAppChange(
+  relayId: string,
+  directoryChanged: boolean
+): void {
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [relayId] },
+    scope: { relayId },
+    topics: directoryChanged ? ["apps", "app-directory"] : ["apps"],
+    type: "hearth.invalidate",
+  })
 }

@@ -57,6 +57,12 @@ import {
 import { useAppDeployState } from "@/components/app/use-app-deploy-state"
 import { DeleteAppDialog } from "@/components/app/app-dialogs"
 import {
+  AppDatabaseFields,
+  appDatabaseDraftReady,
+  appDatabaseInput,
+  emptyAppDatabaseDraft,
+} from "@/components/app/app-database-fields"
+import {
   GitHubSourceFields,
   emptyGitHubSourceDraft,
   githubSourceDraftReady,
@@ -717,10 +723,17 @@ function CreateAppDialog({
     () => availableRelays.at(0)?.id ?? ""
   )
   const [github, setGitHub] = React.useState(emptyGitHubSourceDraft)
+  const [database, setDatabase] = React.useState(emptyAppDatabaseDraft)
   const relayLabelId = React.useId()
   const create = useMutation({
     mutationFn: async () => {
-      const created = await createApp({ data: { name: name.trim(), relayId } })
+      const created = await createApp({
+        data: {
+          database: appDatabaseInput(database, name.trim()),
+          name: name.trim(),
+          relayId,
+        },
+      })
       if (kind !== "github") return { created, sourceError: null }
       // The app exists by now; a source it can't save is set on its page.
       const saved = await recoverPromise(
@@ -758,6 +771,7 @@ function CreateAppDialog({
   const ready =
     name.trim() !== "" &&
     relayId !== "" &&
+    appDatabaseDraftReady(database) &&
     (kind !== "github" || githubSourceDraftReady(github))
 
   return (
@@ -817,7 +831,14 @@ function CreateAppDialog({
             <span id={relayLabelId} className="mb-2 block text-xs font-medium">
               Relay
             </span>
-            <Select value={relayId} onValueChange={setRelayId}>
+            <Select
+              value={relayId}
+              onValueChange={(next) => {
+                setRelayId(next)
+                // An app connects only to databases on its own Relay.
+                setDatabase((draft) => ({ ...draft, databaseId: "" }))
+              }}
+            >
               <SelectTrigger
                 aria-labelledby={relayLabelId}
                 className="h-9 w-full px-3"
@@ -833,6 +854,12 @@ function CreateAppDialog({
               </SelectContent>
             </Select>
           </div>
+          <AppDatabaseFields
+            appName={name.trim()}
+            draft={database}
+            relayId={relayId}
+            onChange={setDatabase}
+          />
           {kind === "github" ? (
             <GitHubSourceFields draft={github} onChange={setGitHub} />
           ) : null}

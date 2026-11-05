@@ -134,6 +134,23 @@ function appContainers(id = appId) {
   )
 }
 
+describe("an App created with a database", () => {
+  it("keeps the connection though the database doesn't exist yet", async () => {
+    const harness = await relayHarness()
+    const databaseId = "d".repeat(40)
+
+    await harness.apps.create({
+      databaseIds: [databaseId],
+      id: appId,
+      name: "Website",
+    })
+
+    expect((await harness.apps.get(appId)).savedDatabaseIds).toEqual([
+      databaseId,
+    ])
+  })
+})
+
 describe("rolling deployments", () => {
   it("stops the running container first when it writes to a mounted path, but not when it only reads one", async () => {
     const harness = await createdApp()
@@ -218,7 +235,8 @@ describe("App volumes", () => {
     harness.docker.allocations.setWorkloadLimit(slice, 1024 ** 3)
 
     await deploy(harness, {
-      compose: "services:\n  web:\n    image: nginx:alpine\n    cgroup_parent: elsewhere\n",
+      compose:
+        "services:\n  web:\n    image: nginx:alpine\n    cgroup_parent: elsewhere\n",
       sourceType: "compose",
     })
 
