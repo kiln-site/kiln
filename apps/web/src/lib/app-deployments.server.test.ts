@@ -354,6 +354,30 @@ const ended = (id: string) =>
     Effect.timeout("20 seconds")
   )
 
+// The commit each app's queued deployment asks for.
+const queuedDeploys = selectRows<{ id: string; kind: string }>(
+  "operation"
+).pipe(
+  Effect.flatMap((rows) =>
+    Effect.forEach(
+      rows.filter(({ kind }) => kind === "app.deploy"),
+      ({ id }) => loadOperation(id)
+    )
+  ),
+  Effect.map(
+    (operations) =>
+      new Map(
+        operations.map((operation) => {
+          const input = operation!.input as {
+            appId: string
+            commit?: { value: string }
+          }
+          return [input.appId, input.commit?.value]
+        })
+      )
+  )
+)
+
 const sentTo = (appId: string) =>
   relay.sent.filter((sent) => sent === appId).length
 
@@ -655,16 +679,10 @@ describeMysql("App deployments", () => {
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
-          relay.deployments.clear()
-          relay.journal.clear()
-          relay.sent.length = 0
-          yield* insertRelay(relayId)
+          // Disabled, so what's asked stays queued: the poll asks through
+          // Hearth's engine, which can't run it beside this suite's.
+          yield* insertRelay(relayId, { enabled: false })
           yield* insertUser("owner")
-          yield* insertRows("relay_database_connection_import", {
-            acknowledged_at: 0,
-            configs_cleared_at: 0,
-            relay_id: relayId,
-          })
           yield* seedPolledConnection
           const held = "1".repeat(40)
           const pushed = "2".repeat(40)
@@ -693,41 +711,24 @@ describeMysql("App deployments", () => {
           yield* whilePolling(
             until(() => branchHeadReads >= created.length + moved.length)
           )
-          const operations = yield* selectRows<{ kind: string }>("operation")
-          assert.deepEqual(
-            operations.filter(({ kind }) => kind === "app.deploy"),
-            []
-          )
+          assert.strictEqual((yield* queuedDeploys).size, 0)
 
           // A commit lands, and the source is saved again before any check
           // sees it: it's still a push, to all of them.
           branchHead = pushed
           yield* saveSource(created[0]!, "main", pushed)
-          yield* whilePolling(
-            until(() =>
-              [...created, ...moved].every((app) => sentTo(app) === 1)
+          const queued = yield* whilePolling(
+            queuedDeploys.pipe(
+              Effect.repeat({
+                schedule: Schedule.spaced("100 millis"),
+                until: ({ size }) => size === created.length + moved.length,
+              }),
+              Effect.timeout("20 seconds")
             )
           )
           for (const app of [...created, ...moved]) {
-            const { latest } = yield* latestAppDeploymentsEffect(app)
-            assert.strictEqual(latest?.commitSha, pushed)
-            relay.deployments.set(app, {
-              ...relay.deployments.get(app)!,
-              state: "succeeded",
-            })
+            assert.strictEqual(queued.get(app), pushed)
           }
-          yield* selectRows<{ kind: string; state: string }>("operation").pipe(
-            Effect.repeat({
-              schedule: Schedule.spaced("100 millis"),
-              until: (rows) =>
-                rows.every(
-                  ({ kind, state }) =>
-                    kind !== "app.deploy" ||
-                    (state !== "running" && state !== "waiting")
-                ),
-            }),
-            Effect.timeout("20 seconds")
-          )
         }).pipe(TestClock.withLive),
       60_000
     )
