@@ -743,7 +743,7 @@ function CreateAppDialog({
             data: {
               ...github,
               appId: created.id,
-              deploy: true,
+              deploy: false,
               path: github.path.trim(),
               relayId,
             },
@@ -780,9 +780,8 @@ function CreateAppDialog({
         <DialogHeader>
           <DialogTitle>Add App</DialogTitle>
           <DialogDescription>
-            {kind === "github"
-              ? "Hearth creates the app with its own network and data directory, then deploys the branch."
-              : "Hearth creates the app with its own network and data directory. Choose what it runs on the next page, then deploy it."}
+            Hearth creates the app with its own network and data directory.
+            Configure it on the next page, then deploy it.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -882,12 +881,10 @@ function CreateAppDialog({
           >
             {create.isPending ? (
               <LoaderCircle className="animate-spin" />
-            ) : kind === "github" ? (
-              <Rocket />
             ) : (
               <Plus />
             )}
-            {kind === "github" ? "Create and deploy" : "Create app"}
+            Create app
           </Button>
         </DialogFooter>
       </DialogContent>

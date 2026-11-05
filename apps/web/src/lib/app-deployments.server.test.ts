@@ -1,13 +1,16 @@
+import { generateKeyPairSync } from "node:crypto"
+
 import { assert, layer } from "@effect/vitest"
 import { Effect, Layer, Schedule } from "effect"
 import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
-import { afterAll, vi } from "vite-plus/test"
+import { afterAll, beforeAll, vi } from "vite-plus/test"
 
 import {
   finishAppDeploymentEffect,
   insertAppDeploymentEffect,
   latestAppDeploymentsEffect,
+  saveAppGitHubSourceEffect,
 } from "@/effect/app-deployments"
 import {
   createAppRecordEffect,
@@ -15,12 +18,15 @@ import {
 } from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { databaseTableName } from "@/lib/database-config"
+import { betterAuthSecrets } from "@/lib/environment"
 import { operationsTablePrefix } from "@/operations/engine"
 import { readmitWaitingOperations } from "@/operations/durable"
 import { loadOperation } from "@/operations/records"
 import { testOperationsEngine } from "@/operations/test/engine"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertRows, insertUser } from "@/test/seed"
+
+import { encryptWithKeyring } from "../../keyring.mjs"
 
 // The Relay is the only fake: one deployment per app, refusing another
 // while it runs, as the Relay does, and an outcome journal by command ID.
@@ -43,7 +49,7 @@ const relay = vi.hoisted(() => ({
 
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
-  relayConnectionFeatures: () => new Set(["connected"]),
+  relayConnectionFeatures: () => new Set(["app-github-v1", "connected"]),
   relayJournal: async () => ({ clientId: "hearth-one", journalId: "one" }),
   relayRpc: async (
     _relay: unknown,
@@ -98,7 +104,33 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
-afterAll(() => disposeAppRuntime())
+// GitHub, for an installation's token and the branch head a test moves.
+// Effect's fetch client keeps the first `fetch` it sees, so the fake is
+// installed once and its answer changes instead.
+let branchHead = ""
+const github = vi.fn(async (input: RequestInfo | URL) => {
+  const url = new URL(input instanceof Request ? input.url : String(input))
+  if (url.pathname.endsWith("/access_tokens")) {
+    return Response.json({
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+      token: "installation-token",
+    })
+  }
+  return Response.json({
+    author: { login: "octo" },
+    commit: { author: { name: "Octo" }, message: "A commit" },
+    sha: branchHead,
+  })
+})
+
+beforeAll(() => {
+  vi.stubGlobal("fetch", github)
+})
+
+afterAll(async () => {
+  vi.unstubAllGlobals()
+  await disposeAppRuntime()
+})
 
 const relayId = "r".repeat(43)
 const first = "a".repeat(40)
@@ -111,6 +143,7 @@ const sixth = "f".repeat(40)
 const seventh = "7".repeat(40)
 const eighth = "8".repeat(40)
 const ninth = "9".repeat(40)
+const tenth = "0".repeat(40)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -182,6 +215,62 @@ const seedApp = (appId: string) =>
       image: "ghcr.io/kiln-site/marketing:latest",
       sourceType: "image",
     }))
+  })
+
+// An app deploying a repository through a connection GitHub can't push to,
+// so Hearth polls its branch.
+const seedPolledApp = (appId: string) =>
+  Effect.gen(function* () {
+    const connectionId = "22222222-2222-4222-8222-222222222222"
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 })
+    yield* insertRows("github_connection", {
+      id: connectionId,
+      owner_user_id: "owner",
+      app_id: 4242,
+      app_slug: "kiln-test",
+      app_name: "Kiln test",
+      app_url: "https://github.com/apps/kiln-test",
+      app_owner_login: "octo",
+      client_id: "Iv1.test",
+      credentials_ciphertext: encryptWithKeyring(
+        JSON.stringify({
+          clientSecret: "client-secret",
+          privateKey: privateKey.export({ format: "pem", type: "pkcs1" }),
+          webhookSecret: "webhook-secret",
+        }),
+        betterAuthSecrets(),
+        "kiln-github-app-credentials"
+      ),
+      webhook_active: false,
+      installation_id: 777,
+      account_login: "octo",
+      account_type: "User",
+      repository_selection: "selected",
+      suspended: false,
+      created_at: 0,
+      updated_at: 0,
+    })
+    yield* createAppRecordEffect({
+      appId,
+      createdBy: "owner",
+      name: `app-${appId.slice(0, 4)}`,
+      relayId,
+    })
+    yield* updateAppConfigEffect(relayId, appId, (config) => ({
+      ...config,
+      sourceType: "github",
+    }))
+    yield* saveAppGitHubSourceEffect({
+      appId,
+      autoDeploy: true,
+      branch: "main",
+      build: "dockerfile",
+      connectionId,
+      createdBy: "owner",
+      path: "Dockerfile",
+      repository: "octo/app",
+      repositoryId: 1,
+    })
   })
 
 const ask = (
@@ -510,6 +599,51 @@ describeMysql("App deployments", () => {
           yield* until(() => sentTo(eighth) === 3)
 
           assert.deepStrictEqual(relay.noCache, [false, true, false])
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "poll a never-deployed app past what its branch held, deploying only a new commit",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.deployments.clear()
+          relay.journal.clear()
+          relay.sent.length = 0
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* seedPolledApp(tenth)
+          const { startAppDeploymentPolling, stopAppDeploymentPolling } =
+            yield* Effect.promise(
+              () => import("@/lib/app-deployments.server")
+            )
+          const polledOnce = () =>
+            globalThis.kilnAppDeploymentPollBaselines?.has(
+              `${relayId}:${tenth}`
+            ) === true
+
+          // What the branch held when the source was saved isn't a push.
+          branchHead = "1".repeat(40)
+          startAppDeploymentPolling()
+          yield* until(polledOnce)
+          yield* Effect.promise(stopAppDeploymentPolling)
+          assert.isNull((yield* latestAppDeploymentsEffect(tenth)).latest)
+
+          // A commit after it is, as it would be from a webhook.
+          branchHead = "2".repeat(40)
+          startAppDeploymentPolling()
+          yield* until(() => sentTo(tenth) === 1)
+          yield* Effect.promise(stopAppDeploymentPolling)
+          assert.strictEqual(
+            (yield* latestAppDeploymentsEffect(tenth)).latest?.commitSha,
+            branchHead
+          )
         }).pipe(TestClock.withLive),
       60_000
     )
