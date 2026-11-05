@@ -290,12 +290,22 @@ export class DatabaseConnections {
   }
 
   /**
-   * Whether a database is on this Relay, or being created for it. Its network
-   * says so, not its container: that's replaced as limits and images change,
-   * and only deleting the database removes the network.
+   * Whether anything of a database is left on this Relay. Deleting it takes
+   * its container, its network and its job, and nothing else takes all
+   * three: its container is set aside as limits and images change, and it
+   * has only a job until it's created. A second network, which deleting
+   * leaves behind, at worst leaves a connection to disconnect.
    */
   async databaseExists(databaseId: string): Promise<boolean> {
-    if ((await this.#networks([])).has(databaseId)) return true
+    if ((await this.resolve({ id: databaseId, kind: "database" })) !== null)
+      return true
+    const networks = await Effect.runPromise(
+      this.#docker.listNetworks({
+        filters: { label: [`kiln.database.id=${databaseId}`] },
+      })
+    )
+    if (networks.some(({ Labels }) => relayOwnsLabels(this.config, Labels)))
+      return true
     const jobs = await Effect.runPromise(this.state.listProvisioningJobs())
     return jobs.some(
       (job) => job.kind === "database" && job.instanceId === databaseId

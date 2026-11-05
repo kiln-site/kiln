@@ -137,6 +137,17 @@ function appContainers(id = appId) {
 
 describe("an App created with a database", () => {
   const databaseId = "d".repeat(40)
+  const addDatabaseNetwork = (name: string) =>
+    fakeDocker.addNetwork({
+      internal: true,
+      labels: {
+        "kiln.database.id": databaseId,
+        "kiln.database.network": name,
+        "kiln.relay.owner": TEST_NAMESPACE,
+        "kiln.resource.kind": "database",
+      },
+      name,
+    })
 
   it("keeps the connection to one still provisioning", async () => {
     const harness = await relayHarness()
@@ -175,17 +186,23 @@ describe("an App created with a database", () => {
   it("keeps the connection to one whose container is being replaced", async () => {
     const harness = await relayHarness()
     // Between containers, as when a limit comes off, only its network shows.
-    const network = "database-network"
-    fakeDocker.addNetwork({
-      internal: true,
-      labels: {
-        "kiln.database.id": databaseId,
-        "kiln.database.network": network,
-        "kiln.relay.owner": TEST_NAMESPACE,
-        "kiln.resource.kind": "database",
-      },
-      name: network,
+    addDatabaseNetwork("database-network")
+
+    await harness.apps.create({
+      databaseIds: [databaseId],
+      id: appId,
+      name: "Website",
     })
+
+    expect((await harness.apps.get(appId)).savedDatabaseIds).toEqual([
+      databaseId,
+    ])
+  })
+
+  it("keeps the connection to one with more networks than it should have", async () => {
+    const harness = await relayHarness()
+    addDatabaseNetwork("database-network")
+    addDatabaseNetwork("database-network-again")
 
     await harness.apps.create({
       databaseIds: [databaseId],
