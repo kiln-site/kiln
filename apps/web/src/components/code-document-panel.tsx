@@ -17,6 +17,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
+import { cn } from "@workspace/ui/lib/utils"
 import { loadSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 
 const SyntaxCodeEditor = React.lazy(async () => {
@@ -31,20 +32,21 @@ type FeedbackState = "idle" | "pending" | "success" | "error"
 
 // A code document in a dialog: a Brick recipe to read, or an app's
 // Dockerfile or Compose file to edit. Editing adds the page's own actions,
-// such as Save, to the toolbar.
+// such as Save, in a footer below the document.
 export function CodeDocumentPanel({
-  actions,
+  className,
   content,
   edit,
+  footer,
   languagePath,
   noun,
   onShare,
   sourceLabel,
   sourceUrl,
   title,
+  wrapPreference,
 }: {
-  // Toolbar buttons from the page, before the panel's own.
-  actions?: React.ReactNode
+  className?: string
   content: string
   edit?: {
     // The saved content, which changes are marked against.
@@ -52,6 +54,8 @@ export function CodeDocumentPanel({
     placeholder?: string
     onChange: (content: string) => void
   }
+  // Buttons from the page, below the document.
+  footer?: React.ReactNode
   languagePath: string
   // Lowercase, as in "Copy recipe".
   noun: string
@@ -60,10 +64,14 @@ export function CodeDocumentPanel({
   sourceLabel?: string
   sourceUrl?: string | null
   title: string
+  // Keeps line wrapping between visits, for documents that want it to.
+  wrapPreference?: { read: () => boolean; write: (wrapLines: boolean) => void }
 }) {
   const [copyState, setCopyState] = React.useState<FeedbackState>("idle")
   const [shareState, setShareState] = React.useState<FeedbackState>("idle")
-  const [wrapLines, setWrapLines] = React.useState(!edit)
+  const [wrapLines, setWrapLines] = React.useState(
+    () => wrapPreference?.read() ?? !edit
+  )
   const copyResetTimer = React.useRef<number | null>(null)
   const shareResetTimer = React.useRef<number | null>(null)
 
@@ -109,8 +117,18 @@ export function CodeDocumentPanel({
     )
   }
 
+  function toggleWrapLines() {
+    setWrapLines(!wrapLines)
+    wrapPreference?.write(!wrapLines)
+  }
+
   return (
-    <section className="flex h-[min(72dvh,42rem)] min-h-80 min-w-0 flex-col overflow-hidden bg-card">
+    <section
+      className={cn(
+        "flex h-[min(72dvh,42rem)] min-h-80 min-w-0 flex-col overflow-hidden bg-card",
+        className
+      )}
+    >
       <div className="flex min-h-14 shrink-0 items-center gap-2 border-b px-3 py-2 pr-12 sm:gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <FileCode2 className="size-5 shrink-0 text-primary-ink" />
@@ -118,7 +136,6 @@ export function CodeDocumentPanel({
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
-          {actions}
           {onShare ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -224,7 +241,7 @@ export function CodeDocumentPanel({
                   wrapLines ? "Disable line wrapping" : "Enable line wrapping"
                 }
                 aria-pressed={wrapLines}
-                onClick={() => setWrapLines((current) => !current)}
+                onClick={toggleWrapLines}
               >
                 <WrapText />
               </Button>
@@ -257,6 +274,12 @@ export function CodeDocumentPanel({
           />
         </React.Suspense>
       </div>
+
+      {footer ? (
+        <div className="flex shrink-0 justify-end gap-2 border-t px-3 py-2">
+          {footer}
+        </div>
+      ) : null}
     </section>
   )
 }

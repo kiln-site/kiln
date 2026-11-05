@@ -24,6 +24,7 @@ import {
 } from "@/components/app/app-presentation"
 import { CodeDocumentPanel } from "@/components/code-document-panel"
 import { recoverPromise } from "@/effect/promise"
+import { environmentWrapPreference } from "@/lib/environment-wrap-preference"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import {
   GitHubSourceFields,
@@ -141,6 +142,7 @@ export const appDocuments = {
     noun: "environment",
     path: ".env",
     placeholder: "DATABASE_URL=postgres://…\nNODE_ENV=production",
+    wrapPreference: environmentWrapPreference,
   },
 } as const
 
@@ -152,7 +154,7 @@ export function AppDocumentDialog({
   kind,
   ...props
 }: {
-  app: Pick<App, "id" | "permissions" | "relayId">
+  app: Pick<App, "containers" | "id" | "permissions" | "relayId">
   canManage: boolean
   deploying: boolean
   kind: AppDocumentKind
@@ -181,11 +183,19 @@ export function AppCodeDialog({
   routeId,
   saved,
 }: {
-  app: Pick<App, "id" | "permissions" | "relayId">
+  app: Pick<App, "containers" | "id" | "permissions" | "relayId">
   canManage: boolean
   configFor: (draft: string) => Partial<EditableAppConfig>
   deploying: boolean
-  document: { hint: string; noun: string; path: string; placeholder: string }
+  document: {
+    hint: string
+    noun: string
+    path: string
+    placeholder: string
+    wrapPreference?: React.ComponentProps<
+      typeof CodeDocumentPanel
+    >["wrapPreference"]
+  }
   onOpenChange: (open: boolean) => void
   routeId: string
   saved: string
@@ -205,13 +215,14 @@ export function AppCodeDialog({
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-5xl">
+      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-6xl">
         <DialogHeader className="sr-only">
           <DialogTitle>{document.path}</DialogTitle>
           <DialogDescription>{document.hint}</DialogDescription>
         </DialogHeader>
         <CodeDocumentPanel
-          actions={
+          className="h-[min(84dvh,52rem)] min-h-0"
+          footer={
             canManage ? (
               <>
                 <Button
@@ -237,7 +248,9 @@ export function AppCodeDialog({
                   ) : (
                     <Rocket />
                   )}
-                  Save and deploy
+                  {app.containers.length > 0
+                    ? "Save and redeploy"
+                    : "Save and deploy"}
                 </Button>
               </>
             ) : null
@@ -255,6 +268,7 @@ export function AppCodeDialog({
           languagePath={document.path}
           noun={document.noun}
           title={document.path}
+          wrapPreference={document.wrapPreference}
         />
       </DialogContent>
     </Dialog>
