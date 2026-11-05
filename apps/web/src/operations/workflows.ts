@@ -2,6 +2,7 @@ import { Layer } from "effect"
 
 import { deliverInvitation } from "@/lib/access-invitation-delivery"
 import { deployAppOperation } from "@/lib/app-deployments.server"
+import { changeDatabaseLogin } from "@/lib/database-credentials.server"
 import { githubSyncRunOperation } from "@/lib/github-sync.server"
 import { deleteResource, keepResource } from "@/lib/resource-deletion.server"
 import {
@@ -19,6 +20,7 @@ import { rewriteTailscaleDns } from "@/lib/tailscale-dns.server"
 export const HearthWorkflows = Layer.mergeAll(
   deliverInvitation.layer,
   deployAppOperation.layer,
+  changeDatabaseLogin.layer,
   githubSyncRunOperation.layer,
   deleteResource.layer,
   keepResource.layer,

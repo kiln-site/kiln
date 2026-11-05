@@ -30,7 +30,7 @@ import {
   resourceLimitsInputSchema,
 } from "@workspace/contracts"
 import type { RelayManagedDatabase } from "@workspace/contracts"
-import { Effect, Result } from "effect"
+
 import { z } from "zod"
 
 import {
@@ -38,8 +38,8 @@ import {
   listManagedDatabaseRecordsEffect,
   loadManagedDatabaseCredentialEffect,
   renameManagedDatabaseRecordEffect,
-  rotateManagedDatabaseCredentialEffect,
 } from "@/effect/managed-databases"
+import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
   isPlatformAdmin,
@@ -56,7 +56,6 @@ import {
 } from "@/lib/resource-deletion.server"
 import { accessPermissions, grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
-import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { partKey, resourceKey, shared } from "@/operations/lanes"
 import { runOperationPromise } from "@/operations/operation"
@@ -371,65 +370,39 @@ export const updateManagedDatabaseLimits = createServerFn({ method: "POST" })
     })
   )
 
-// Reads the credentials it changes once admitted, so a change never starts
-// from ones another just replaced. It holds the database's credentials, so
-// another change, or anything that sends the password, waits for it; a wipe
-// holds the whole database. What's left out stays as it is.
+// The change holds its own locks until it ends, so this holds none and waits
+// for it, for the person to hear how it went.
 const changeDatabaseCredentials = resourceOperation({
   kind: "database",
   id: (input: z.infer<typeof databaseCredentialsInputSchema>) =>
     input.databaseId,
   name: "database.credentials.rotate",
-  lock: { part: "credentials" },
+  lock: null,
   doing: "Changing this database's credentials",
   permission: () => "database.credentials.rotate",
   run: async (user, data) => {
-    const relay = await requiredRelay(data.relayId)
+    await requiredRelay(data.relayId)
     const credential = await requiredCredential(data.relayId, data.databaseId)
-    const current = {
-      password: credential.password,
-      username: credential.username,
-    }
-    const next = {
-      password: data.password ?? current.password,
-      username: data.username ?? current.username,
-    }
-    if (next.username !== current.username) {
-      const issue = databaseUsernameIssue(credential.engine, next.username)
+    if (data.username !== undefined && data.username !== credential.username) {
+      const issue = databaseUsernameIssue(credential.engine, data.username)
       if (issue) throw new Error(issue)
     }
-    const apply = (from: typeof current, to: typeof current) =>
-      databaseRpc(
-        relay,
-        "database.credentials.rotate",
-        {
-          currentPassword: from.password,
-          databaseId: data.databaseId,
-          nextPassword: to.password,
-          nextUsername: to.username,
-          username: from.username,
-        },
-        // A rename can replace the container, as a limit change can.
-        240_000,
-        user.id
-      )
-    await apply(current, next)
-    const persisted = await promiseResult(() =>
-      runAppEffect(
-        "managedDatabases.credential.persistRotation",
-        rotateManagedDatabaseCredentialEffect(
-          data.relayId,
-          data.databaseId,
-          next
-        )
-      )
+    const { changeDatabaseLoginAndWait } =
+      await import("@/lib/database-credentials.server")
+    return runAppEffect(
+      "database.credentials.change",
+      changeDatabaseLoginAndWait(data, {
+        actorId: user.id,
+        authorize: promiseEffect(() =>
+          requireRelayPermission({
+            databaseId: data.databaseId,
+            permission: "database.credentials.rotate",
+            relayId: data.relayId,
+            user,
+          })
+        ),
+      })
     )
-    if (Result.isFailure(persisted)) {
-      await ignorePromise(() => apply(next, current))
-      throw persisted.failure
-    }
-    publishDatabaseCredentialChange(relay.id, data.databaseId)
-    return { changed: true }
   },
 })
 
@@ -807,18 +780,6 @@ async function databaseOnRelay(
   return item.database?.provisioning ? "provisioning" : "running"
 }
 
-function publishDatabaseCredentialChange(
-  relayId: string,
-  databaseId: string
-): void {
-  publishRealtimeChange({
-    audience: { kind: "relays", relayIds: [relayId] },
-    scope: { databaseId, relayId },
-    topics: ["database-credentials"],
-    type: "hearth.invalidate",
-  })
-}
-
 function hasDatabasePermission(
   user: AuthenticatedUser,
   grants: ReadonlyArray<AccessGrant>,
@@ -835,17 +796,5 @@ function hasDatabasePermission(
         (grant.resourceType === "database" &&
           databaseId !== undefined &&
           grant.resourceId === databaseId))
-  )
-}
-
-function promiseResult<TResult>(run: () => Promise<TResult>) {
-  return Effect.runPromise(
-    Effect.result(Effect.tryPromise({ try: run, catch: (cause) => cause }))
-  )
-}
-
-async function ignorePromise(run: () => Promise<unknown>): Promise<void> {
-  await Effect.runPromise(
-    Effect.tryPromise({ try: run, catch: (cause) => cause }).pipe(Effect.ignore)
   )
 }

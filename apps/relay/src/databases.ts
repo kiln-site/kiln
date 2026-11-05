@@ -894,8 +894,9 @@ export class DatabaseDriver {
     return { databaseId: input.databaseId, deleted: true }
   }
 
-  // Changes the database's password, its username, or both. Applied in full
-  // or not at all, so Hearth can keep what it knows of the login.
+  // Changes the database's password, its username, or both. Hearth sends it
+  // again after a restart cut one short, so each engine first works out how
+  // far the login got, and a change that fails leaves the login as it was.
   async rotateCredentials(
     input: RelayRotateDatabaseCredentials
   ): Promise<RelayManagedDatabase> {
@@ -910,78 +911,198 @@ export class DatabaseDriver {
     }
     const next = { password: input.nextPassword, username: input.nextUsername }
     if (database.engine === "redis" || database.engine === "valkey") {
-      const engine = database.engine
-      const labels = await this.#labels(database.id)
-      const volume = requiredLabel(labels, "kiln.database.volume")
+      await this.#changeKeyValueLogin(
+        database,
+        database.engine,
+        container,
+        current,
+        next
+      )
+    } else if (database.engine === "postgres") {
+      await this.#changePostgresLogin(database, container, current, next)
+    } else {
+      await this.#changeMysqlLogin(
+        database,
+        database.engine,
+        container,
+        current,
+        next
+      )
+    }
+    return this.#required(input.databaseId)
+  }
+
+  // Whether the database still takes the login being replaced. False once an
+  // earlier attempt got past it; failing if the new login doesn't work either,
+  // with why the old one didn't.
+  async #stillOnOldLogin(
+    tryOld: () => Promise<unknown>,
+    tryNew: () => Promise<unknown>
+  ): Promise<boolean> {
+    const old = await promiseResult(tryOld)
+    if (Result.isSuccess(old)) return true
+    if (Result.isFailure(await promiseResult(tryNew))) throw old.failure
+    return false
+  }
+
+  async #changeKeyValueLogin(
+    database: RelayManagedDatabase,
+    engine: "redis" | "valkey",
+    container: string,
+    current: DatabaseLogin,
+    next: DatabaseLogin
+  ): Promise<void> {
+    const ping = (login: DatabaseLogin) =>
+      this.#client(
+        container,
+        keyValueClient(engine, login.username, login.password, ["PING"]),
+        undefined,
+        60_000
+      )
+    const load = await this.#stillOnOldLogin(
+      () => ping(current),
+      () => ping(next)
+    )
+    const volume = requiredLabel(
+      await this.#labels(database.id),
+      "kiln.database.volume"
+    )
+    await writeAclFile(
+      this.#engine,
+      database.image,
+      volume,
+      next.username,
+      next.password
+    )
+    if (!load) return
+    const loaded = await promiseResult(() =>
+      this.#client(
+        container,
+        databaseAclLoadClient(engine, current.username, current.password),
+        undefined,
+        60_000
+      )
+    )
+    if (Result.isFailure(loaded)) {
       await writeAclFile(
         this.#engine,
         database.image,
         volume,
-        next.username,
-        next.password
+        current.username,
+        current.password
       )
-      const loaded = await promiseResult(() =>
-        this.#client(
-          container,
-          databaseAclLoadClient(engine, current.username, current.password),
-          undefined,
-          60_000
-        )
-      )
-      if (Result.isFailure(loaded)) {
-        await writeAclFile(
-          this.#engine,
-          database.image,
-          volume,
-          current.username,
-          current.password
-        )
-        throw loaded.failure
-      }
-      return this.#required(input.databaseId)
+      throw loaded.failure
     }
+  }
 
-    if (next.username === current.username) {
-      await this.#client(
+  async #changePostgresLogin(
+    database: RelayManagedDatabase,
+    container: string,
+    current: DatabaseLogin,
+    next: DatabaseLogin
+  ): Promise<void> {
+    const run = (login: DatabaseLogin, sql: string) =>
+      this.#client(
         container,
-        databaseClient(database, current.username, current.password, "import"),
-        passwordSql(database.engine, current.username, next.password),
+        databaseClient(database, login.username, login.password, "import"),
+        sql,
         60_000
       )
-    } else if (database.engine === "postgres") {
+    if (next.username === current.username) {
+      await run(
+        current,
+        passwordSql("postgres", current.username, next.password)
+      )
+      return
+    }
+    // A client in the container is trusted whatever its password, so this
+    // says which role exists, and the rename sets both at once.
+    const rename = await this.#stillOnOldLogin(
+      () => run(current, "SELECT 1;\n"),
+      () => run(next, "SELECT 1;\n")
+    )
+    if (rename) {
       await this.#renamePostgresLogin(database, container, current, next)
-      // Backups and restores log in as the container's POSTGRES_USER, which
-      // only a new container can change.
-      const replaced = await promiseResult(async () => {
-        const inspected = await this.#container(database.id)
-        await traceRelayPromise(
-          "relay.databases.replaceContainer",
-          () =>
-            this.#replaceContainer(inspected, database.limits, {
-              POSTGRES_PASSWORD: next.password,
-              POSTGRES_USER: next.username,
-            }),
-          { "relay.database_id": database.id }
-        )
-      })
-      if (Result.isFailure(replaced)) {
-        await promiseResult(() =>
-          this.#renamePostgresLogin(database, container, next, current)
-        )
-        throw replaced.failure
+    }
+    // Backups and restores log in as the container's POSTGRES_USER, which
+    // only a new container can change.
+    const replaced = await promiseResult(async () => {
+      const inspected = await this.#container(database.id)
+      if (inspected.Config.Env?.includes(`POSTGRES_USER=${next.username}`)) {
+        return
       }
-    } else {
-      // Only root may rename a user. The rename goes first, as the step that
-      // can fail on a name already taken, which then changes nothing.
-      await this.#client(
-        container,
-        databaseRootClient(database.engine),
-        `RENAME USER '${current.username}'@'%' TO '${next.username}'@'%';\n` +
-          passwordSql(database.engine, next.username, next.password),
-        60_000
+      await traceRelayPromise(
+        "relay.databases.replaceContainer",
+        () =>
+          this.#replaceContainer(inspected, database.limits, {
+            POSTGRES_PASSWORD: next.password,
+            POSTGRES_USER: next.username,
+          }),
+        { "relay.database_id": database.id }
+      )
+    })
+    if (Result.isFailure(replaced)) {
+      await this.#undoLoginChange(database, () =>
+        this.#renamePostgresLogin(database, container, next, current)
+      )
+      throw replaced.failure
+    }
+  }
+
+  // Only root may rename a user, and root's password is the one thing here
+  // no earlier attempt can have changed. A rename and a new password are two
+  // statements MySQL commits apart, so the list says whether the first went.
+  async #changeMysqlLogin(
+    database: RelayManagedDatabase,
+    engine: "mariadb" | "mysql",
+    container: string,
+    current: DatabaseLogin,
+    next: DatabaseLogin
+  ): Promise<void> {
+    const root = databaseRootClient(engine)
+    const run = (sql: string) => this.#client(container, root, sql, 60_000)
+    const listed = await run(
+      `SELECT User FROM mysql.user WHERE Host = '%' AND User IN ('${current.username}', '${next.username}');\n`
+    )
+    const users = new Set(listed.stdout.split("\n"))
+    const rename =
+      next.username !== current.username && users.has(current.username)
+    if (rename) {
+      // The step that can fail on a name already taken, which changes nothing.
+      await run(
+        `RENAME USER '${current.username}'@'%' TO '${next.username}'@'%';\n`
+      )
+    } else if (!users.has(next.username)) {
+      throw new Error("The database has neither its old login nor its new one")
+    }
+    const changed = await promiseResult(() =>
+      run(passwordSql(engine, next.username, next.password))
+    )
+    if (Result.isFailure(changed)) {
+      if (rename) {
+        await this.#undoLoginChange(database, () =>
+          run(
+            `RENAME USER '${next.username}'@'%' TO '${current.username}'@'%';\n`
+          )
+        )
+      }
+      throw changed.failure
+    }
+  }
+
+  // The failure that led here is the one to report. Should this fail too,
+  // sending the same change again finishes it.
+  async #undoLoginChange(
+    database: RelayManagedDatabase,
+    undo: () => Promise<unknown>
+  ): Promise<void> {
+    const undone = await promiseResult(undo)
+    if (Result.isFailure(undone)) {
+      console.warn(
+        `Database ${database.shortId} couldn't take its old login back:`,
+        undone.failure
       )
     }
-    return this.#required(input.databaseId)
   }
 
   // Postgres won't rename the role a session logged in as, and this login is
@@ -1717,7 +1838,11 @@ function databaseRootClient(engine: "mariadb" | "mysql"): DatabaseClient {
     engine === "mysql" ? "MYSQL_ROOT_PASSWORD" : "MARIADB_ROOT_PASSWORD"
   const client = engine === "mysql" ? "mysql" : "mariadb"
   return {
-    command: ["sh", "-ec", `MYSQL_PWD="$${root}" exec ${client} --user=root`],
+    command: [
+      "sh",
+      "-ec",
+      `MYSQL_PWD="$${root}" exec ${client} --user=root --batch --skip-column-names`,
+    ],
     env: [],
   }
 }

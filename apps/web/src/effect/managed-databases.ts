@@ -127,7 +127,7 @@ export const createManagedDatabaseRecordEffect = Effect.fn(
 }) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  const ciphertext = yield* encryptPassword(input.password)
+  const ciphertext = yield* encryptManagedDatabasePassword(input.password)
   yield* database.execute(
     "managed_databases_create",
     `INSERT INTO ${databaseTable("database")}
@@ -165,9 +165,11 @@ export const loadManagedDatabaseCredentialEffect = Effect.fn(
   )
   const row = rows.at(0)
   if (!row) return null
-  const decrypted = yield* decryptPassword(row.password_ciphertext)
+  const decrypted = yield* decryptManagedDatabasePassword(
+    row.password_ciphertext
+  )
   if (decrypted.needsRotation) {
-    const rotated = yield* encryptPassword(decrypted.plaintext)
+    const rotated = yield* encryptManagedDatabasePassword(decrypted.plaintext)
     const now = yield* Clock.currentTimeMillis
     yield* database.execute(
       "managed_database_credential_reencrypt",
@@ -193,7 +195,7 @@ export const rotateManagedDatabaseCredentialEffect = Effect.fn(
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  const ciphertext = yield* encryptPassword(login.password)
+  const ciphertext = yield* encryptManagedDatabasePassword(login.password)
   const result = yield* database.execute(
     "managed_database_credential_rotate",
     `UPDATE ${databaseTable("database")}
@@ -264,7 +266,7 @@ function toRecord(row: ManagedDatabaseRow): ManagedDatabaseRecord {
   }
 }
 
-function encryptPassword(password: string) {
+export function encryptManagedDatabasePassword(password: string) {
   return Effect.try({
     try: () =>
       encryptWithKeyring(
@@ -280,7 +282,7 @@ function encryptPassword(password: string) {
   })
 }
 
-function decryptPassword(ciphertext: string) {
+export function decryptManagedDatabasePassword(ciphertext: string) {
   return Effect.try({
     try: () =>
       decryptWithKeyring(
