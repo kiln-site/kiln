@@ -1,14 +1,26 @@
 import * as React from "react"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import { ArrowRight, LoaderCircle, RefreshCw } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
+import { parseImageReference, type ImageTagSuggestion } from "@/lib/image-tags"
 import type { SecurityFix, SecurityItem, SecurityUse } from "@/lib/security"
+import {
+  securityImageVersionsQueryOptions,
+  securityQueryKeys,
+} from "@/lib/security-queries"
 import { deployAppImageUpdate } from "@/server/app-image-updates"
+import { deployApp, updateAppConfig } from "@/server/apps"
 
 /** What a row's button says it leads to. */
 export function securityFixLabel(fix: SecurityFix): string {
@@ -16,7 +28,7 @@ export function securityFixLabel(fix: SecurityFix): string {
     case "deploy-update":
       return "Update"
     case "change-version":
-      return "Choose a version"
+      return "Update version"
     case "kiln-update":
       return "Update Kiln"
     case "host-packages":
@@ -60,7 +72,7 @@ export function SecurityFixPanel(props: FixProps) {
     case "deploy-update":
       return <DeployUpdate key={key} {...props} fix={fix} />
     case "change-version":
-      return <ChangeVersion key={key} {...props} />
+      return <ChangeVersion key={key} {...props} fix={fix} />
     case "rebuild":
       return <Rebuild key={key} {...props} fix={fix} />
     case "host-packages":
@@ -161,6 +173,17 @@ function imageParts(image: string): { name: string; tag: string | null } {
     : { name: named, tag: null }
 }
 
+function imageOrigin(image: string): string {
+  switch (parseImageReference(image)?.registry) {
+    case "docker.io":
+      return "Docker Hub image"
+    case "ghcr.io":
+      return "GitHub Packages image"
+    default:
+      return "Container image"
+  }
+}
+
 // Where what's running came from, and what's running of it: what someone
 // needs to know before pressing anything.
 export function securityFixSource(
@@ -177,7 +200,7 @@ export function securityFixSource(
       const { name, tag } = imageParts(fix.image)
       return {
         current: tag ?? "Unknown",
-        detail: "Container image",
+        detail: imageOrigin(fix.image),
         name,
       }
     }
@@ -206,7 +229,7 @@ export function securityFixSource(
       const { name, tag } = imageParts(item.name)
       return {
         current: tag ?? "Unknown",
-        detail: "Container image",
+        detail: imageOrigin(item.name),
         name,
       }
     }
@@ -332,22 +355,127 @@ function DeployUpdate({
   )
 }
 
-// Kiln doesn't know what's newer, so it points at where the image is set.
-function ChangeVersion(props: FixProps) {
+const suggestionLabels = {
+  major: "Major update",
+  minor: "Newest of this major version",
+  patch: "Smallest change",
+} satisfies Record<ImageTagSuggestion["kind"], string>
+
+// Far enough to help without a major update. The nearest patch can be as old
+// as what it replaces, and a major one can need changes.
+function recommended(
+  suggestions: ReadonlyArray<ImageTagSuggestion>
+): ImageTagSuggestion | undefined {
+  return (
+    suggestions.find((suggestion) => suggestion.kind === "minor") ??
+    suggestions.find((suggestion) => suggestion.kind === "patch") ??
+    suggestions[0]
+  )
+}
+
+function ChangeVersion({
+  fix,
+  ...props
+}: FixProps & { fix: Extract<SecurityFix, { kind: "change-version" }> }) {
   const { item, use } = props
+  const { data, error, isPending } = useQuery(
+    securityImageVersionsQueryOptions(use.relayId, use.resourceId)
+  )
+  const [chosen, setChosen] = React.useState<string | null>(null)
+  const queryClient = useQueryClient()
+  const deploy = useMutation({
+    mutationFn: async (image: string) => {
+      const target = { appId: use.resourceId, relayId: use.relayId }
+      await updateAppConfig({ data: { ...target, config: { image } } })
+      await deployApp({ data: target })
+      return image
+    },
+    onError: failedToast,
+    onSuccess: (image) => {
+      deployingToast(`${use.name} with ${image}`)
+      void queryClient.invalidateQueries({ queryKey: securityQueryKeys.all })
+    },
+  })
+  const suggestions = data?.suggestions ?? []
+  const best = recommended(suggestions)
+  const target =
+    suggestions.find((suggestion) => suggestion.image === chosen) ?? best
+  if (isPending) {
+    return (
+      <FixLayout
+        {...props}
+        action={
+          <Button disabled size="sm" type="button">
+            Update and redeploy
+          </Button>
+        }
+        to={<ChangeTo loading value="Checking" />}
+      />
+    )
+  }
+  if (error || !target) {
+    return (
+      <FixLayout
+        {...props}
+        action={
+          item.fixable > 0 || error ? (
+            <Button asChild size="sm" variant="outline">
+              <SecurityResourceLink use={use}>
+                Choose a version
+              </SecurityResourceLink>
+            </Button>
+          ) : undefined
+        }
+        to={
+          <NoChange
+            value={error ? "Couldn't check for versions" : "No newer version"}
+          />
+        }
+      />
+    )
+  }
   return (
     <FixLayout
       {...props}
       action={
-        item.fixable > 0 ? (
-          <Button asChild size="sm" variant="outline">
-            <SecurityResourceLink use={use}>
-              Choose a version
-            </SecurityResourceLink>
-          </Button>
-        ) : undefined
+        <Button
+          disabled={deploy.isPending || !fix.allowed}
+          size="sm"
+          type="button"
+          onClick={() => deploy.mutate(target.image)}
+        >
+          {deploy.isPending ? <LoaderCircle className="animate-spin" /> : null}
+          Update and redeploy
+        </Button>
       }
-      to={<NoChange value="Choose a newer version" />}
+      note={fix.allowed ? "Volumes are kept." : "You can't change this image."}
+      to={
+        suggestions.length > 1 ? (
+          <Select
+            value={target.image}
+            onValueChange={(image) => setChosen(image as string)}
+          >
+            <SelectTrigger
+              aria-label="Version to update to"
+              className="h-7 min-w-0 border-0 bg-transparent px-1 font-mono text-[0.8125rem] font-medium text-emerald-300 light:text-emerald-700"
+            >
+              <span className="truncate">{target.tag}</span>
+            </SelectTrigger>
+            <SelectContent>
+              {suggestions.map((suggestion) => (
+                <SelectItem key={suggestion.tag} value={suggestion.image}>
+                  {suggestion.tag}
+                  {suggestion === best
+                    ? " (recommended)"
+                    : ` (${suggestionLabels[suggestion.kind].toLowerCase()})`}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <ChangeTo value={target.tag} />
+        )
+      }
     />
   )
 }

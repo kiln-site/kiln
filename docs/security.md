@@ -34,17 +34,22 @@ light however many a host has. The dialog keeps one size throughout.
 
 What Kiln offers depends on where the software came from:
 
-| Where                 | Fix                                                                              |
-| --------------------- | -------------------------------------------------------------------------------- |
-| Image app, tag moved  | **Update and redeploy** deploys the image the tag names, as the app's Updates do |
-| Image app, otherwise  | A pointer to where its image is set                                              |
-| Built apps            | A hint: the change goes in its repository or file, then **Redeploy**             |
-| Relay host            | A pointer to its Terminal                                                        |
-| Kiln's own services   | A pointer to updating Kiln                                                       |
-| Database, game server | A hint: Kiln and Bricks choose these images                                      |
+| Where                 | Fix                                                                                                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Image app, tag moved  | **Update and redeploy** deploys the image the tag names, as the app's Updates do                                                                           |
+| Image app, otherwise  | Newer versions of the tag its registry lists, recommending the newest of its major version; **Update and redeploy** changes the app's image and deploys it |
+| Built apps            | A hint: the change goes in its repository or file, then **Redeploy**                                                                                       |
+| Relay host            | A pointer to its Terminal                                                                                                                                  |
+| Kiln's own services   | A pointer to updating Kiln                                                                                                                                 |
+| Database, game server | A hint: Kiln and Bricks choose these images                                                                                                                |
 
-When a deployment ends, whatever started it, Kiln inventories what the app runs
-now rather than waiting for the next sweep.
+Versions are read anonymously from Docker Hub and GHCR, the only registries
+Kiln asks, so an image's name can't send Hearth anywhere else. A private image,
+or one from another registry, gets the hint instead. Only a tag that spells out
+a version is compared, against tags of the same shape: `1.21.0-alpine` moves to
+`1.21.6-alpine`, never to `1.21` or `1.21.6`. A newer version isn't known to fix
+anything until it runs, so when a deployment ends, whatever started it, Kiln
+inventories what the app runs now rather than waiting for the next sweep.
 
 ## Staying out of the way
 

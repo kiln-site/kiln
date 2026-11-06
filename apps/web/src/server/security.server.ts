@@ -3,6 +3,7 @@ import type { AccessPermission } from "@workspace/contracts"
 import { loadAppImageUpdatesEffect } from "@/effect/app-image-updates"
 import { loadAppGitHubSourceEffect } from "@/effect/app-deployments"
 import { listRelayAppConfigsEffect } from "@/effect/managed-apps"
+import { listRegistryTagsEffect } from "@/effect/registry-tags"
 import { runAppEffect } from "@/effect/runtime"
 import {
   loadSecurityFindingsEffect,
@@ -14,6 +15,11 @@ import {
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
+import {
+  parseImageReference,
+  suggestImageTags,
+  type ImageTagSuggestion,
+} from "@/lib/image-tags"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import {
   scanRelaySoon,
@@ -39,6 +45,7 @@ import {
   runOperationPromise,
   signedIn,
 } from "@/operations/operation"
+import { authorizedAppFor } from "@/server/app-access"
 import { requireEligibleResourceUser } from "@/server/auth"
 
 // Rows read for one inventory's rollup: past any real image or host, and a
@@ -405,6 +412,23 @@ export async function getSecurityPackagesHandler(input: {
     loadSecurityFindingsEffect(input.relayId, input.sbomKey, FINDINGS_READ)
   )
   return groupSecurityFindings(findings, FINDINGS_SHOWN_PER_PACKAGE)
+}
+
+/** Newer versions of the image an app runs, as its registry lists them. */
+export async function getSecurityImageVersionsHandler(input: {
+  appId: string
+  relayId: string
+}): Promise<{ image: string; suggestions: Array<ImageTagSuggestion> }> {
+  const user = await requireEligibleResourceUser()
+  const { app } = await authorizedAppFor(user, input, "app.read")
+  const { image } = app.config
+  const reference = parseImageReference(image)
+  if (!reference) return { image, suggestions: [] }
+  const tags = await runAppEffect(
+    "security.registryTags",
+    listRegistryTagsEffect(reference)
+  )
+  return { image, suggestions: suggestImageTags(reference, tags) }
 }
 
 /**
