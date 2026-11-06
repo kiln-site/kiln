@@ -20,6 +20,22 @@ const MYSQL_VOLUME = "kiln-dev-mysql"
 const SHARED_PROJECT = "kiln-dev-shared"
 const RCLONE_IMAGE = "rclone/rclone:1.74"
 
+// Rows on the MySQL they describe, so they can't disagree with it about what
+// exists. Everything teardown deletes is named here, never guessed from a
+// pattern.
+const REGISTRY = `
+CREATE DATABASE IF NOT EXISTS kiln_dev;
+CREATE TABLE IF NOT EXISTS kiln_dev.stacks (
+  stack VARCHAR(63) NOT NULL PRIMARY KEY,
+  app_database VARCHAR(64) NOT NULL,
+  app_user VARCHAR(32) NOT NULL,
+  test_database VARCHAR(64) NOT NULL,
+  checkout VARCHAR(1024) NOT NULL,
+  state ENUM('provisioning', 'ready', 'destroying') NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+`
+
 const command = process.argv[2] ?? "start"
 const initialDirectory = process.cwd()
 const worktreeRoot = captureAt(initialDirectory, "git", [
@@ -325,22 +341,6 @@ function mysql(statements) {
   }
   return result.stdout.trim()
 }
-
-// Rows on the MySQL they describe, so they can't disagree with it about what
-// exists. Everything teardown deletes is named here, never guessed from a
-// pattern.
-const REGISTRY = `
-CREATE DATABASE IF NOT EXISTS kiln_dev;
-CREATE TABLE IF NOT EXISTS kiln_dev.stacks (
-  stack VARCHAR(63) NOT NULL PRIMARY KEY,
-  app_database VARCHAR(64) NOT NULL,
-  app_user VARCHAR(32) NOT NULL,
-  test_database VARCHAR(64) NOT NULL,
-  checkout VARCHAR(1024) NOT NULL,
-  state ENUM('provisioning', 'ready', 'destroying') NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-`
 
 function parseRegistryRow(line) {
   const [name, database, user, testDatabase, checkout, state] = line.split("\t")
