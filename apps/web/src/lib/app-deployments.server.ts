@@ -50,8 +50,8 @@ import {
 import { loadGitHubConnectionCredentialEffect } from "@/effect/github-sync"
 import { loadAppConfigEffect } from "@/effect/managed-apps"
 import {
-  notifyUsersEffect,
   publishNotificationChange,
+  replaceNotificationEffect,
 } from "@/effect/notifications"
 import { promiseEffect } from "@/effect/promise"
 import {
@@ -71,6 +71,7 @@ import { loadOperation } from "@/operations/records"
 import { RelayCommandError, relayCommand } from "@/operations/relay-command"
 import { appDeploymentLocks } from "@/lib/app-lanes"
 import { appDatabaseConnectionsHandedOverEffect } from "@/lib/app-database-connections.server"
+import type { NotificationContent } from "@/lib/notifications"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import {
@@ -329,11 +330,31 @@ const recordRefusal = (
     Effect.ignore
   )
 
+// What a deployment's notification adds up with the unread ones it replaces.
+function mergedDeployments(
+  unread: ReadonlyArray<NotificationContent>,
+  failed: boolean
+) {
+  let count = 1
+  let failures = failed ? 1 : 0
+  for (const previous of unread) {
+    if (previous.kind !== "app.deployed") continue
+    count += previous.count ?? 1
+    failures += previous.failures ?? (previous.status === "failed" ? 1 : 0)
+  }
+  return {
+    ...(count > 1 && { count }),
+    ...(failures > 0 && { failures }),
+  }
+}
+
 /**
  * Tells everyone who can deploy the app how a deployment ended, unless they
- * started it. An image update that deployed answers the app's update
- * notifications: the app runs the newest image now. Other deployments leave
- * them to the check that follows, since a rollback runs an older image.
+ * started it. Each App has one such notification, which adds up deployments
+ * while it's unread; the Deployments page keeps each of them. An image update
+ * that deployed answers the app's update notifications: the app runs the
+ * newest image now. Other deployments leave them to the check that follows,
+ * since a rollback runs an older image.
  */
 const announceDeploymentEffect = Effect.fnUntraced(
   function* (
@@ -356,24 +377,44 @@ const announceDeploymentEffect = Effect.fnUntraced(
       ),
     ])
     if (!app) return
-    const delivered = yield* notifyUsersEffect(
-      recipients,
-      `app.deployed:${record.id}`,
-      {
-        deploymentId: record.id,
-        kind: "app.deployed",
-        resource: {
-          id: record.appId,
-          name: app.name,
-          relayId: record.relayId,
-          type: "app",
-        },
-        status,
-        update: record.trigger === "update",
-      },
-      { actorUserId: record.triggeredBy }
-    )
-    if (delivered > 0) publishNotificationChange(recipients)
+    const resource = {
+      id: record.appId,
+      name: app.name,
+      relayId: record.relayId,
+      type: "app",
+    } as const
+    const sameApp = (content: NotificationContent) =>
+      content.kind === "app.deployed" &&
+      content.resource.relayId === record.relayId &&
+      content.resource.id === record.appId
+    const notified = new Set<string>()
+    for (const userId of new Set(recipients)) {
+      const changed = yield* replaceNotificationEffect(
+        userId,
+        "app.deployed",
+        (unread) => ({
+          ...mergedDeployments(unread, status === "failed"),
+          deploymentId: record.id,
+          kind: "app.deployed",
+          resource,
+          status,
+          update: record.trigger === "update",
+        }),
+        {
+          actorUserId: record.triggeredBy,
+          matches: sameApp,
+          // A deployment that worked answers the one that didn't.
+          settles: (content) =>
+            status === "succeeded" &&
+            content.kind === "app.deployed" &&
+            content.status === "failed" &&
+            sameApp(content),
+          sourceKey: `app.deployed:${record.id}`,
+        }
+      )
+      if (changed) notified.add(userId)
+    }
+    publishNotificationChange([...notified])
     // The update it deployed is installed. Other deployments are settled
     // by the check that follows them.
     if (

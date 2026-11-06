@@ -13,6 +13,7 @@ import {
   openSourceKeysEffect,
   platformAdminIdsEffect,
   publishNotificationChange,
+  replaceNotificationEffect,
   resolveNotificationsEffect,
 } from "@/effect/notifications"
 import { forkAppEffect } from "@/effect/runtime"
@@ -108,19 +109,32 @@ export const recordStartedKilnVersionEffect = Effect.fn(
         if (!isUpdate(previousVersion)) return []
         const actorUserId = yield* takeUpdateRequesterEffect(now)
         const admins = yield* platformAdminIdsEffect()
-        yield* notifyUsersEffect(
-          admins,
-          `kiln.updated:${currentVersion}`,
-          {
-            kind: "kiln.updated",
-            name: findKilnRelease(releases, currentVersion)?.name,
-            previousName: findKilnRelease(releases, previousVersion)?.name,
-            previousVersion,
-            url: releaseTagUrl(currentVersion),
-            version: currentVersion,
-          },
-          { actorUserId }
-        )
+        for (const admin of admins)
+          yield* replaceNotificationEffect(
+            admin,
+            "kiln.updated",
+            (unread) => {
+              // Where the updates they haven't seen started from.
+              const first = unread.find(
+                (notification) => notification.kind === "kiln.updated"
+              )
+              return {
+                kind: "kiln.updated",
+                name: findKilnRelease(releases, currentVersion)?.name,
+                previousName:
+                  first?.kind === "kiln.updated"
+                    ? first.previousName
+                    : findKilnRelease(releases, previousVersion)?.name,
+                previousVersion:
+                  first?.kind === "kiln.updated"
+                    ? first.previousVersion
+                    : previousVersion,
+                url: releaseTagUrl(currentVersion),
+                version: currentVersion,
+              }
+            },
+            { actorUserId, sourceKey: `kiln.updated:${currentVersion}` }
+          )
         return admins
       })
   )

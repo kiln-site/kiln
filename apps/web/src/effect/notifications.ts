@@ -112,26 +112,58 @@ export const notifyUsersEffect = Effect.fn("notifications.notify")(function* (
   return result.affectedRows
 })
 
+export interface ReplaceOptions extends NotifyOptions {
+  /** Which of the kind's open notifications it replaces. Defaults to all. */
+  matches?: (content: NotificationContent) => boolean
+  /**
+   * Which of those it answers even for someone who won't hear of it, such as
+   * a failed deployment their own next one fixed.
+   */
+  settles?: (content: NotificationContent) => boolean
+  /** Names the event, so a retry changes nothing. Defaults to a new event. */
+  sourceKey?: string
+}
+
 /**
  * Delivers the user a notification that takes the place of their open ones
  * of its kind, or of a kind it replaced, as a running report does: those are
  * cleared, and the new one arrives as news. `content` gets the unread ones,
- * oldest first, to fold in what they said. Inside a transaction it commits
- * with it; then `publishNotificationChange`.
+ * oldest first, to fold in what they said. Someone who won't hear of it keeps
+ * what they have, other than what it settles. Inside a transaction it commits
+ * with it; then `publishNotificationChange`. Answers whether the inbox changed.
  */
 export const replaceNotificationEffect = Effect.fn("notifications.replace")(
   function* (
     userId: string,
     kind: NotificationKind,
-    content: (unread: ReadonlyArray<NotificationContent>) => NotificationContent
+    content: (
+      unread: ReadonlyArray<NotificationContent>
+    ) => NotificationContent,
+    options: ReplaceOptions = {}
   ) {
     const database = yield* Database
     const table = databaseTable("notification")
     const now = yield* Clock.currentTimeMillis
+    const { actorUserId, matches, settles, sourceKey } = options
     return yield* database.transaction("notifications.replace", (tx) =>
       Effect.gen(function* () {
+        // Two at once for one person would each find nothing to replace, and
+        // deadlock on the rows they then add. Development sign-in has no user
+        // row to hold, but only one person to race.
+        yield* tx.queryRows(
+          `SELECT id FROM ${databaseTable("user")} WHERE id = ? FOR UPDATE`,
+          [userId]
+        )
+        if (sourceKey !== undefined) {
+          const [delivered] = yield* tx.queryRows<RowDataPacket>(
+            `SELECT id FROM ${table}
+              WHERE user_id = ? AND source_key = ? LIMIT 1`,
+            [userId, sourceKey]
+          )
+          if (delivered) return false
+        }
         const kinds = [kind, ...(formerNotificationKinds[kind] ?? [])]
-        const open = yield* tx.queryRows<NotificationRow>(
+        const rows = yield* tx.queryRows<NotificationRow>(
           `SELECT id, kind, data, created_at, read_at FROM ${table}
             WHERE user_id = ? AND dismissed_at IS NULL
               AND kind IN (${kinds.map(() => "?").join(", ")})
@@ -139,26 +171,37 @@ export const replaceNotificationEffect = Effect.fn("notifications.replace")(
             FOR UPDATE`,
           [userId, ...kinds]
         )
-        // Oldest first, as they arrived.
-        const unread = open
-          .filter((row) => row.read_at === null)
-          .reverse()
-          .flatMap((row) =>
-            Option.toArray(decodeNotificationContent(row.kind, row.data))
-          )
-        if (open.length)
+        const open = rows.flatMap((row) => {
+          const decoded = decodeNotificationContent(row.kind, row.data)
+          const stored = Option.getOrNull(decoded)
+          if (matches && (stored === null || !matches(stored))) return []
+          return [{ id: row.id, read: row.read_at !== null, stored }]
+        })
+        const preferences = yield* loadUserNotificationPreferencesEffect(userId)
+        const hidden = userId === actorUserId || !preferences.kinds[kind].inbox
+        const replaced = hidden
+          ? open.filter(({ stored }) => stored && settles?.(stored))
+          : open
+        if (replaced.length)
           yield* tx.execute(
             `UPDATE ${table}
                 SET dismissed_at = ?, read_at = COALESCE(read_at, ?),
                     push_pending = NULL
-              WHERE id IN (${open.map(() => "?").join(", ")})`,
-            [now, now, ...open.map((row) => row.id)]
+              WHERE id IN (${replaced.map(() => "?").join(", ")})`,
+            [now, now, ...replaced.map(({ id }) => id)]
           )
-        yield* notifyUsersEffect(
+        // Oldest first, as they arrived.
+        const unread = open
+          .filter(({ read }) => !read)
+          .reverse()
+          .flatMap(({ stored }) => (stored ? [stored] : []))
+        const delivered = yield* notifyUsersEffect(
           [userId],
-          `${kind}:${randomUUID()}`,
-          content(unread)
+          sourceKey ?? `${kind}:${randomUUID()}`,
+          content(unread),
+          { actorUserId }
         )
+        return delivered > 0 || replaced.length > 0
       })
     )
   }
@@ -218,6 +261,93 @@ export const openSourceKeysEffect = Effect.fnUntraced(function* (
     [kind, `${prefix.replace(/[\\%_]/g, (match) => `\\${match}`)}%`]
   )
   return rows.map((row) => row.source_key)
+})
+
+/**
+ * Every source key of a kind's notifications under `prefix`, cleared ones too,
+ * for finding what `forgetNotificationsEffect` can forget.
+ */
+export const sourceKeysEffect = Effect.fnUntraced(function* (
+  kind: NotificationKind,
+  prefix: string
+) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & { source_key: string }
+  >(
+    "notifications.sourceKeys",
+    `SELECT DISTINCT source_key FROM ${databaseTable("notification")}
+      WHERE kind = ? AND source_key LIKE ?`,
+    [kind, `${prefix.replace(/[\\%_]/g, (match) => `\\${match}`)}%`]
+  )
+  return rows.map((row) => row.source_key)
+})
+
+/**
+ * Clears notifications for a condition that has ended and gives up their
+ * source keys, so it can notify again if it comes back, even for those who
+ * cleared them. The rows stay under keys of their own, since the next push
+ * closes what's on a person's devices from them. Answers whose inboxes
+ * changed, for `publishNotificationChange`.
+ */
+export const forgetNotificationsEffect = Effect.fn("notifications.forget")(
+  function* (kind: NotificationKind, sourceKeys: ReadonlyArray<string>) {
+    if (!sourceKeys.length) return []
+    const database = yield* Database
+    const table = databaseTable("notification")
+    const keys = sourceKeys.map(() => "?").join(", ")
+    const now = yield* Clock.currentTimeMillis
+    return yield* database.transaction("notifications.forget", (tx) =>
+      Effect.gen(function* () {
+        const rows = yield* tx.queryRows<RowDataPacket & { user_id: string }>(
+          `SELECT DISTINCT user_id FROM ${table}
+            WHERE kind = ? AND dismissed_at IS NULL
+              AND source_key IN (${keys})
+            FOR UPDATE`,
+          [kind, ...sourceKeys]
+        )
+        yield* tx.execute(
+          `UPDATE ${table}
+              SET source_key = CONCAT('forgotten:', id),
+                  dismissed_at = COALESCE(dismissed_at, ?),
+                  read_at = COALESCE(read_at, ?),
+                  push_pending = NULL
+            WHERE kind = ? AND source_key IN (${keys})`,
+          [now, now, kind, ...sourceKeys]
+        )
+        return rows.map((row) => row.user_id)
+      })
+    )
+  }
+)
+
+/**
+ * Keeps an open disk limit warning's usage current without making it news.
+ * Answers whose inboxes changed.
+ */
+export const refreshDiskLimitUsageEffect = Effect.fn(
+  "notifications.refreshDiskLimitUsage"
+)(function* (sourceKey: string, usedBytes: number) {
+  const database = yield* Database
+  const table = databaseTable("notification")
+  const current = String(usedBytes)
+  const where = `kind = 'resource.disk-limit' AND dismissed_at IS NULL
+    AND source_key = ?
+    AND JSON_UNQUOTE(JSON_EXTRACT(data, '$.usedBytes')) <> ?`
+  const rows = yield* database.queryRows<RowDataPacket & { user_id: string }>(
+    "notifications.diskLimitUsage.find",
+    `SELECT user_id FROM ${table} WHERE ${where}`,
+    [sourceKey, current]
+  )
+  if (!rows.length) return []
+  yield* database.execute(
+    "notifications.diskLimitUsage.refresh",
+    `UPDATE ${table}
+        SET data = JSON_SET(data, '$.usedBytes', CAST(? AS UNSIGNED))
+      WHERE ${where}`,
+    [current, sourceKey, current]
+  )
+  return rows.map((row) => row.user_id)
 })
 
 /**

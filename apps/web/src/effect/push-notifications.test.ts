@@ -4,7 +4,11 @@ import { SqlClient } from "effect/sql"
 import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 
-import { notifyUsersEffect } from "@/effect/notifications"
+import {
+  forgetNotificationsEffect,
+  listNotificationsEffect,
+  notifyUsersEffect,
+} from "@/effect/notifications"
 import {
   WebPush,
   pushPendingNotificationsEffect,
@@ -52,13 +56,21 @@ const insertSession = (id: string, userId: string, expiresAt: number) =>
 
 // The push service, recording what it was asked to deliver.
 function fakePushService() {
-  const sent: Array<{ endpoint: string; title: string }> = []
+  const sent: Array<{
+    close: ReadonlyArray<string> | undefined
+    endpoint: string
+    title: string
+  }> = []
   const layer = Layer.succeed(
     WebPush,
     WebPush.of({
       send: (target, message) =>
         Effect.sync(() => {
-          sent.push({ endpoint: target.endpoint, title: message.title })
+          sent.push({
+            close: message.close,
+            endpoint: target.endpoint,
+            title: message.title,
+          })
           return "delivered" as const
         }),
     })
@@ -122,6 +134,49 @@ describeMysql("push notifications", () => {
             subscription("phone").endpoint,
           ])
         })
+    )
+
+    it.effect("closes a forgotten warning when its condition comes back", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertMember("user-a")
+        yield* TestClock.setTime(1_000_000)
+        yield* insertSession("session-a", "user-a", 2_000_000)
+        yield* savePushSubscriptionEffect(
+          "user-a",
+          "session-a",
+          subscription("phone")
+        )
+        const push = fakePushService()
+        const key = "resource.disk-limit:database:relay-a:db-a:100"
+        const warning: NotificationContent = {
+          kind: "resource.disk-limit",
+          limitBytes: 100,
+          resource: {
+            id: "db-a",
+            name: "main",
+            relayId: "relay-a",
+            type: "database",
+          },
+          usedBytes: 120,
+        }
+
+        yield* notifyUsersEffect(["user-a"], key, warning)
+        const [first] = yield* listNotificationsEffect("user-a")
+        yield* pushDelay
+        yield* pushPendingNotificationsEffect().pipe(Effect.provide(push.layer))
+
+        // It fits again, then outgrows the limit again.
+        yield* forgetNotificationsEffect("resource.disk-limit", [key])
+        assert.deepStrictEqual(yield* listNotificationsEffect("user-a"), [])
+        yield* TestClock.adjust("1 minute")
+        yield* notifyUsersEffect(["user-a"], key, warning)
+        yield* pushDelay
+        yield* pushPendingNotificationsEffect().pipe(Effect.provide(push.layer))
+
+        assert.strictEqual(push.sent.length, 2)
+        assert.deepStrictEqual(push.sent[1]?.close, [first?.id])
+      })
     )
 
     it.effect("pushes nothing to an account that was disabled", () =>
