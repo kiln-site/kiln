@@ -14,9 +14,12 @@ import { spawnSync } from "node:child_process"
 import {
   cacheNamespace,
   grantPattern,
+  isReservedProject,
+  sqlIdentifier,
   sqlString,
   stackResources,
   withBoxLock,
+  withStackLock,
 } from "./dev-shared.mjs"
 
 // Raise with `io.kiln.dev.shared.version` in compose.dev.shared.yaml.
@@ -141,14 +144,17 @@ const composeEnvironment = {
 
 switch (command) {
   case "start":
-    await prepareStack()
+    // Released before following it, so `refresh` works from another shell.
+    await withStackLock(stack, prepareStack)
     printStack()
     compose(["up", "hearth"], composeEnvironment)
     break
   case "up":
-    await prepareStack()
-    printStack()
-    compose(["up", "--detach", "--wait", "hearth"], composeEnvironment)
+    await withStackLock(stack, async () => {
+      await prepareStack()
+      printStack()
+      compose(["up", "--detach", "--wait", "hearth"], composeEnvironment)
+    })
     warnOutsideSlice(stackContainers())
     console.log("\nDevelopment stack is ready.")
     break
@@ -156,13 +162,13 @@ switch (command) {
     compose(["down"], composeEnvironment)
     break
   case "destroy":
-    await destroy()
+    await withStackLock(stack, destroy)
     break
   case "logs":
     compose(["logs", "--follow", "hearth", "relay"], composeEnvironment)
     break
   case "refresh":
-    await refresh()
+    await withStackLock(stack, refresh)
     break
   case "url":
     console.log(hearthUrl)
@@ -187,11 +193,12 @@ switch (command) {
 // this stack's user, which can make its own test databases and no others, and
 // which destroy drops, so a run can't bring them back afterwards.
 async function test() {
-  await withBoxLock(() => {
-    ensureShared()
-    provisionStack()
-  })
-  const override = process.env.KILN_TEST_DB_NAME
+  await withStackLock(stack, () =>
+    withBoxLock(() => {
+      ensureShared()
+      provisionStack()
+    })
+  )
   run(
     process.execPath,
     [
@@ -204,9 +211,9 @@ async function test() {
       KILN_TEST_MYSQL: "1",
       DB_HOST: "127.0.0.1",
       DB_PORT: publishedMysqlPort(),
-      DB_NAME: override ?? resources.testDatabase,
-      DB_USERNAME: override ? "root" : resources.user,
-      DB_PASSWORD: override ? "kiln-root" : settings.get("DB_PASSWORD"),
+      DB_NAME: resources.testDatabase,
+      DB_USERNAME: resources.user,
+      DB_PASSWORD: settings.get("DB_PASSWORD"),
     },
     worktreeRoot
   )
@@ -262,13 +269,18 @@ function refuseLegacyStack() {
   )
 }
 
+// False only when Docker says there's no such volume: teardown reads that as
+// proof nothing is registered, which a failed lookup isn't.
 function volumeExists(name) {
-  return (
-    spawnSync("docker", ["volume", "inspect", name], {
-      cwd: worktreeRoot,
-      env: process.env,
-    }).status === 0
-  )
+  const result = spawnSync("docker", ["volume", "inspect", name], {
+    cwd: worktreeRoot,
+    encoding: "utf8",
+    env: process.env,
+  })
+  if (result.status === 0) return true
+  if (/no such volume/iu.test(result.stderr ?? "")) return false
+  process.stderr.write(result.stderr ?? "")
+  fail(`Could not tell whether Docker volume ${name} exists.`)
 }
 
 function composeShared(arguments_) {
@@ -403,7 +415,8 @@ function provisionStack() {
   if (!row) {
     const existing = mysql(`
       SELECT schema_name FROM information_schema.schemata
-      WHERE schema_name = ${sqlString(resources.database)};
+      WHERE schema_name = ${sqlString(resources.database)}
+        OR schema_name LIKE ${sqlString(testDatabasesLike(resources.testDatabase))};
       SELECT user FROM mysql.user WHERE user = ${sqlString(resources.user)};`)
     if (existing) {
       fail(
@@ -426,42 +439,72 @@ function provisionStack() {
     WHERE stack = ${sqlString(stack)};`)
 }
 
-// Deletes what the row names and nothing else: the user first, so a test run
-// still going can't recreate what follows.
+function testDatabasesLike(testDatabase) {
+  return `${grantPattern(testDatabase)}%`
+}
+
+function waitBriefly() {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500)
+}
+
+// Locks the user out, then ends its sessions, and only then deletes: dropping
+// a user leaves its connections running, and one that got in late could
+// recreate what follows. Deletes what the row names and nothing else.
 function dropStackData(row) {
   const user = `${sqlString(row.user)}@'%'`
-  const sessions = mysql(`
-    SELECT id FROM information_schema.processlist
-    WHERE user = ${sqlString(row.user)};`)
-  mysql(`DROP USER IF EXISTS ${user};`)
-  for (const session of sessions.split("\n").filter(Boolean)) {
-    // A session may end by itself first.
-    spawnSync(
-      "docker",
-      [
-        "exec",
-        "--env",
-        "MYSQL_PWD=kiln-root",
-        MYSQL_CONTAINER,
-        "mysql",
-        "--user=root",
-        "--execute",
-        `KILL ${Number(session)}`,
-      ],
-      { cwd: worktreeRoot, env: process.env, stdio: "ignore" }
-    )
-  }
+  mysql(`ALTER USER IF EXISTS ${user} ACCOUNT LOCK;`)
+  endSessions(row.user)
   const databases = mysql(`
-    SELECT schema_name FROM information_schema.schemata
+    SELECT HEX(schema_name) FROM information_schema.schemata
     WHERE schema_name = ${sqlString(row.database)}
-      OR schema_name = ${sqlString(row.testDatabase)}
-      OR schema_name LIKE ${sqlString(`${grantPattern(row.testDatabase)}\\_%`)};`)
+      OR schema_name LIKE ${sqlString(testDatabasesLike(row.testDatabase))};`)
   const drops = databases
     .split("\n")
     .filter(Boolean)
-    .map((name) => `DROP DATABASE IF EXISTS \`${name}\`;`)
+    .map((hex) => Buffer.from(hex, "hex").toString("utf8"))
+    .map((name) => `DROP DATABASE IF EXISTS ${sqlIdentifier(name)};`)
   if (drops.length > 0) mysql(drops.join("\n"))
+  mysql(`DROP USER IF EXISTS ${user};`)
   dropCacheKeys(row.database)
+}
+
+function endSessions(user) {
+  const NO_SUCH_THREAD = "ERROR 1094"
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const sessions = mysql(`
+      SELECT id FROM information_schema.processlist
+      WHERE user = ${sqlString(user)};`)
+      .split("\n")
+      .filter(Boolean)
+    if (sessions.length === 0) return
+    for (const session of sessions) {
+      const result = spawnSync(
+        "docker",
+        [
+          "exec",
+          "--interactive",
+          "--env",
+          "MYSQL_PWD=kiln-root",
+          MYSQL_CONTAINER,
+          "mysql",
+          "--user=root",
+        ],
+        {
+          cwd: worktreeRoot,
+          encoding: "utf8",
+          env: process.env,
+          input: `KILL ${Number(session)};`,
+        }
+      )
+      // A session may end by itself first.
+      if (result.status !== 0 && !result.stderr?.includes(NO_SUCH_THREAD)) {
+        process.stderr.write(result.stderr ?? "")
+        fail(`Could not end session ${session} of ${user}.`)
+      }
+    }
+    waitBriefly()
+  }
+  fail(`Sessions of ${user} are still running.`)
 }
 
 function dropCacheKeys(database) {
@@ -677,7 +720,9 @@ async function shared(action, arguments_) {
       })
       break
     case "remove":
-      await removeOrphan(arguments_[0])
+      await withStackLock(arguments_[0] ?? "", () =>
+        removeOrphan(arguments_[0])
+      )
       break
     default:
       fail("Usage: pnpm dev:docker:shared <status|up|down|destroy|remove>")
@@ -878,14 +923,22 @@ function s3(action) {
           "--env",
           "RCLONE_CONFIG_S3_FORCE_PATH_STYLE=true",
           "--env",
-          `RCLONE_CONFIG_S3_ACCESS_KEY_ID=${credentials.get("KILN_DEV_S3_ACCESS_KEY")}`,
+          "RCLONE_CONFIG_S3_ACCESS_KEY_ID",
           "--env",
-          `RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=${credentials.get("KILN_DEV_S3_SECRET_KEY")}`,
+          "RCLONE_CONFIG_S3_SECRET_ACCESS_KEY",
           RCLONE_IMAGE,
           "mkdir",
           `s3:${S3_BUCKET}`,
         ],
-        process.env
+        {
+          ...process.env,
+          RCLONE_CONFIG_S3_ACCESS_KEY_ID: credentials.get(
+            "KILN_DEV_S3_ACCESS_KEY"
+          ),
+          RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: credentials.get(
+            "KILN_DEV_S3_SECRET_KEY"
+          ),
+        }
       )
       console.log(
         `\nS3 is ready. Add this to each box's .env:\n\n${s3Settings()}`
@@ -1215,6 +1268,11 @@ function projectName() {
   if (!/^[a-z0-9][a-z0-9-]{0,62}$/u.test(name)) {
     fail(
       "KILN_DEV_PROJECT must be 1–63 lowercase letters, digits, or hyphens, starting with a letter or digit."
+    )
+  }
+  if (isReservedProject(name)) {
+    fail(
+      `${name} is the Compose project of the box's shared services, and destroying a stack under it would delete them. Set KILN_DEV_PROJECT to another name.`
     )
   }
   if (override && saved && override !== saved) {

@@ -5,9 +5,12 @@ import { describe, expect, it } from "vite-plus/test"
 import {
   cacheNamespace,
   grantPattern,
+  isReservedProject,
+  sqlIdentifier,
   sqlString,
   stackResources,
   withBoxLock,
+  withStackLock,
 } from "./dev-shared.mjs"
 
 const module = fileURLToPath(new URL("dev-shared.mjs", import.meta.url))
@@ -20,8 +23,16 @@ describe("stack resources", () => {
     expect(stack.database).toMatch(/^s_[a-f0-9]{12}$/u)
     expect(stack.user).toMatch(/^u_[a-f0-9]{12}$/u)
     expect(stack.testDatabase).toMatch(/^t_[a-f0-9]{12}_test$/u)
-    expect(namedLikeItsTests.database.startsWith(stack.testDatabase)).toBe(false)
+    expect(namedLikeItsTests.database.startsWith(stack.testDatabase)).toBe(
+      false
+    )
     expect(namedLikeItsTests.testDatabase).not.toBe(stack.testDatabase)
+  })
+
+  it("keeps stacks off the box's own Compose projects", () => {
+    expect(isReservedProject("kiln-dev-shared")).toBe(true)
+    expect(isReservedProject("kiln-dev-s3")).toBe(true)
+    expect(isReservedProject("kiln-shared-a")).toBe(false)
   })
 
   it("leaves room for the longest test database name", () => {
@@ -35,6 +46,12 @@ describe("sql text", () => {
   it("escapes grant wildcards", () => {
     expect(grantPattern("s_ab%c")).toBe("s\\_ab\\%c")
     expect(grantPattern("t_abc_test") + "%").toBe("t\\_abc\\_test%")
+  })
+
+  it("keeps a hostile database name inside its identifier", () => {
+    expect(sqlIdentifier("t_a_test_x`;DROP DATABASE s_b;#")).toBe(
+      "`t_a_test_x``;DROP DATABASE s_b;#`"
+    )
   })
 
   it("quotes strings", () => {
@@ -52,6 +69,22 @@ describe("cache namespace", () => {
         tablePrefix: "kiln_",
       })
     ).toBe("kiln:hearth:v1:ab932f5f8e5c2cfa")
+  })
+})
+
+describe("stack lock", () => {
+  it("runs one command at a time on a stack", async () => {
+    const order = []
+    const hold = (name, milliseconds) =>
+      withStackLock("kiln-lock-test", async () => {
+        order.push(`${name} in`)
+        await new Promise((settle) => setTimeout(settle, milliseconds))
+        order.push(`${name} out`)
+      })
+
+    await Promise.all([hold("a", 80), hold("b", 1)])
+
+    expect(order).toEqual(["a in", "a out", "b in", "b out"])
   })
 })
 

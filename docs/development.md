@@ -146,7 +146,9 @@ One [RustFS](https://rustfs.com) serves development backups for every box, with
 a real certificate through Tailscale Serve. It runs on S02, at
 `https://s02.tail3e4733.ts.net:8480`, keeping its data on `/archive`. Tailnet
 peers reach it directly. Containers on S02 can't reach Serve, so they go through
-a small forwarder, and `dev:docker` picks that route for itself.
+a small forwarder on Docker's gateway address, and `dev:docker` picks that route
+for itself. Any container on S02 can reach the forwarder, so the endpoint's
+credentials are what protect it there.
 
 To use it from a box, add the settings to the primary checkout's `.env`, then
 run `pnpm dev:docker:down` and `pnpm dev:docker:up` in each stack, since

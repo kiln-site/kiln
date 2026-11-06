@@ -27,13 +27,30 @@ export function sqlString(value) {
   return `'${String(value).replaceAll("\\", "\\\\").replaceAll("'", "''")}'`
 }
 
+// For a name read back from the server: test users can create any name under
+// their prefix, and root runs what's built from it.
+export function sqlIdentifier(value) {
+  return `\`${String(value).replaceAll("`", "``")}\``
+}
+
 // `_` and `%` are wildcards in a GRANT's database name, even in backticks, so
 // `s_abc` unescaped also grants `sXabc`.
 export function grantPattern(value) {
   return value.replaceAll(/[\\_%]/gu, "\\$&")
 }
 
-const LOCK_PORT = 29871
+const BOX_LOCK_PORT = 29871
+const STACK_LOCK_PORTS = 1000
+const STACK_LOCK_BASE = 28000
+const STACK_LOCK_WAIT_MS = 15 * 60_000
+
+// Compose projects of the box's own services. A stack can't take either name:
+// tearing it down would delete what every other stack uses.
+const RESERVED_PROJECTS = new Set(["kiln-dev-shared", "kiln-dev-s3"])
+
+export function isReservedProject(name) {
+  return RESERVED_PROJECTS.has(name)
+}
 
 /**
  * Runs `work` holding the box's one lock, serializing what changes its shared
@@ -43,7 +60,7 @@ const LOCK_PORT = 29871
  */
 export async function withBoxLock(
   work,
-  { port = LOCK_PORT, timeoutMs = 180_000 } = {}
+  { port = BOX_LOCK_PORT, timeoutMs = 180_000 } = {}
 ) {
   const server = createServer()
   server.unref()
@@ -70,4 +87,17 @@ export async function withBoxLock(
   } finally {
     await new Promise((settle) => server.close(settle))
   }
+}
+
+/**
+ * Runs `work` as the only command changing `stack`, for as long as it takes,
+ * so a destroy can't act on what a start has since rebuilt. Stacks sharing a
+ * port only wait for each other. Take this before the box lock.
+ */
+export function withStackLock(stack, work) {
+  const hash = createHash("sha256").update(stack).digest()
+  return withBoxLock(work, {
+    port: STACK_LOCK_BASE + (hash.readUInt32BE(0) % STACK_LOCK_PORTS),
+    timeoutMs: STACK_LOCK_WAIT_MS,
+  })
 }
