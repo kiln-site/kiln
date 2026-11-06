@@ -3,6 +3,22 @@ import { describe, expect, it } from "vite-plus/test"
 import { loadConfig } from "./config.js"
 
 describe("loadConfig", () => {
+  it("reads a shared platform database, named in full", () => {
+    const container = { KILN_RELAY_PLATFORM_DATABASE_CONTAINER: "kiln-dev-mysql" }
+    const name = { KILN_RELAY_PLATFORM_DATABASE_NAME: "s_aaaaaaaaaaaa" }
+
+    expect(loadConfig({ ...container, ...name }).platformDatabase).toEqual({
+      container: "kiln-dev-mysql",
+      name: "s_aaaaaaaaaaaa",
+    })
+    expect(loadConfig({}).platformDatabase).toBeNull()
+    expect(() => loadConfig(container)).toThrow("must be set together")
+    expect(() => loadConfig(name)).toThrow("must be set together")
+    expect(() =>
+      loadConfig({ ...container, KILN_RELAY_PLATFORM_DATABASE_NAME: "a`b" })
+    ).toThrow("letters, numbers, or underscores")
+  })
+
   it("rejects a weak platform recovery key", () => {
     expect(
       loadConfig({

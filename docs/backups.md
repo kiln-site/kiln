@@ -644,11 +644,8 @@ deleted catalog rows are cleared and the destination is removed. A purge failure
 listed as `deleting` with `last_error` so the operator can retry instead of
 silently orphaning data.
 
-Development preview (`pnpm dev:docker`) starts a TLS MinIO at
-`https://minio:9000`. Register it as a platform destination with path-style
-access, private-network allowed, bucket `kiln-backups`, region `us-east-1`,
-access key `kiln`, and secret `kilnminiodevpassword`. Hearth and the Relay's
-full-archive uploads trust the generated certificate through
-`NODE_EXTRA_CA_CERTS`; Relay restic uses `RESTIC_CACERT`.
+Development stacks have no S3 of their own. They share one RustFS endpoint on
+the maintainers' tailnet; see
+[Tailnet S3](development.md#tailnet-s3) for it, and for running your own.
 
 Ceph RGW works through the S3-compatible destination.

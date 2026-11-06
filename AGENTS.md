@@ -132,8 +132,8 @@ How to write them:
   it, or fake it at that single boundary.
 - Web code that touches MySQL runs against a real database with
   `apps/web/src/test/database.ts`; assert rows and results. CI runs these
-  suites on MySQL and MariaDB; locally run `pnpm dev:docker:test` against the
-  dev stack's MySQL. Hearth's SQL must work on both, so write
+  suites on MySQL and MariaDB; locally run `pnpm dev:docker:test` on the box's
+  shared MySQL. Hearth's SQL must work on both, so write
   `LOCK IN SHARE MODE`, `JSON_UNQUOTE(JSON_EXTRACT(...))` and
   `JSON_EXTRACT(?, '$')`, not `FOR SHARE`, `->>` or `CAST(? AS JSON)`.
 - Relay code that drives Docker uses the stateful fake in

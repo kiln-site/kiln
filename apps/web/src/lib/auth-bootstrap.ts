@@ -22,6 +22,9 @@ import { kilnFavorite } from "@/lib/instance-favorites"
 
 const emailSchema = z.email().transform((value) => value.trim().toLowerCase())
 const FIRST_USER_LOCK = `${databaseTablePrefix()}:first-user`
+// Named locks are shared by every database on a server and limited to 64
+// characters. Hearths in different databases don't share a first user.
+const firstUserLockName = "LEFT(SHA2(CONCAT(DATABASE(), '.', ?), 256), 64)"
 
 interface UserCountRow extends RowDataPacket {
   user_count: number
@@ -397,7 +400,7 @@ function withFirstUserLock<TResult>(
         Effect.gen(function* () {
           const [rows] = yield* promiseEffect(() =>
             resource.connection.query<Array<RowDataPacket>>(
-              "SELECT GET_LOCK(?, 10) AS acquired",
+              `SELECT GET_LOCK(${firstUserLockName}, 10) AS acquired`,
               [FIRST_USER_LOCK]
             )
           )
@@ -409,9 +412,10 @@ function withFirstUserLock<TResult>(
       (resource) =>
         (resource.locked
           ? promiseEffect(() =>
-              resource.connection.query("SELECT RELEASE_LOCK(?)", [
-                FIRST_USER_LOCK,
-              ])
+              resource.connection.query(
+                `SELECT RELEASE_LOCK(${firstUserLockName})`,
+                [FIRST_USER_LOCK]
+              )
             )
           : Effect.succeed(undefined)
         ).pipe(

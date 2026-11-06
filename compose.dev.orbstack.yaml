@@ -1,8 +1,5 @@
 # Optional OrbStack DNS/HTTPS access instead of published localhost ports.
 services:
-  mysql:
-    ports: !reset []
-
   relay:
     ports: !reset []
 

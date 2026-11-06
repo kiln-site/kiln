@@ -1,64 +1,16 @@
-# Kiln's development stack: Hearth and a Relay run from this checkout,
-# beside MySQL, Valkey, and MinIO. Start it with `pnpm dev:docker`, which
-# supplies the environment. It isn't a way to run Kiln: install that with
-# https://kiln.site/install, or compose.yaml.
+# Kiln's development stack: Hearth and a Relay run from this checkout, using
+# the box's shared MySQL and Valkey (compose.dev.shared.yaml). Start it with
+# `pnpm dev:docker`, which starts those and supplies the environment. It isn't
+# a way to run Kiln: install that with https://kiln.site/install, or
+# compose.yaml.
 services:
-  cache:
-    image: ${CACHE_IMAGE:-valkey/valkey:9.1.2-alpine}
-    restart: unless-stopped
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        if command -v valkey-server >/dev/null; then
-          exec valkey-server --save "" --appendonly no
-        fi
-        exec redis-server --save "" --appendonly no
-    tmpfs:
-      - /data
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "if command -v valkey-cli >/dev/null; then valkey-cli ping; else redis-cli ping; fi | grep -q PONG",
-        ]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-
-  mysql:
-    image: mysql:8.4
-    restart: unless-stopped
-    environment:
-      MYSQL_DATABASE: ${DB_NAME:-hearth}
-      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
-      MYSQL_ROOT_PASSWORD: kiln-root
-      MYSQL_USER: ${DB_USERNAME:-kiln}
-      TZ: America/New_York
-    volumes:
-      - hearth-mysql:/var/lib/mysql
-    labels:
-      io.kiln.installation: ${KILN_INSTALLATION_ID:-}
-      io.kiln.resource: hearth-database
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'mysqladmin ping -h 127.0.0.1 -u"$${MYSQL_USER}" -p"$${MYSQL_PASSWORD}"',
-        ]
-      interval: 3s
-      timeout: 3s
-      retries: 20
-    ports:
-      - "127.0.0.1:${KILN_DEV_MYSQL_PORT:-3306}:3306"
-
   relay:
     image: node:24-alpine
     restart: "no"
+    cgroup_parent: ${KILN_DEV_CGROUP_PARENT:-}
     working_dir: /workspace
-    depends_on:
-      minio-certs:
-        condition: service_completed_successfully
+    extra_hosts:
+      - "${KILN_DEV_S3_HOST:-kiln-dev-s3.invalid}:${KILN_DEV_S3_ADDRESS:-127.0.0.1}"
     environment:
       KILN_GIT_REPO: ${KILN_GIT_REPO:-}
       KILN_INSTALLATION_ID: ${KILN_INSTALLATION_ID:-}
@@ -114,9 +66,9 @@ services:
       npm_config_store_dir: /root/.local/share/pnpm/store
       # Upgrade-only read path for instances created from the old Relay catalog.
       KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/catalog.yml
-      RESTIC_CACERT: /minio-certs/public.crt
-      # Full-archive uploads go through Node, not restic.
-      NODE_EXTRA_CA_CERTS: /minio-certs/public.crt
+      # Platform backups dump this stack's database on the shared MySQL.
+      KILN_RELAY_PLATFORM_DATABASE_CONTAINER: ${KILN_RELAY_PLATFORM_DATABASE_CONTAINER:-}
+      KILN_RELAY_PLATFORM_DATABASE_NAME: ${KILN_RELAY_PLATFORM_DATABASE_NAME:-}
     command:
       - /bin/sh
       - -lc
@@ -220,7 +172,6 @@ services:
         volume:
           nocopy: true
       - kiln-dev-pnpm-store:/root/.local/share/pnpm/store
-      - minio-certs:/minio-certs:ro
       - relay-dev-tools:/opt/kiln-tools
     ports:
       - "127.0.0.1:${KILN_DEV_SFTP_PORT:-2022}:2022"
@@ -230,22 +181,18 @@ services:
   hearth:
     image: node:24-alpine
     restart: "no"
+    cgroup_parent: ${KILN_DEV_CGROUP_PARENT:-}
     working_dir: /workspace
     depends_on:
-      cache:
-        condition: service_healthy
-      mysql:
-        condition: service_healthy
       relay:
         condition: service_healthy
-      minio-certs:
-        condition: service_completed_successfully
-      minio:
-        condition: service_started
-      minio-setup:
-        condition: service_completed_successfully
+    networks:
+      - default
+      - shared
+    extra_hosts:
+      - "${KILN_DEV_S3_HOST:-kiln-dev-s3.invalid}:${KILN_DEV_S3_ADDRESS:-127.0.0.1}"
     environment:
-      DB_HOST: mysql
+      DB_HOST: kiln-dev-mysql
       DB_PORT: ${DB_PORT:-3306}
       DB_NAME: ${DB_NAME:-hearth}
       DB_USERNAME: ${DB_USERNAME:-kiln}
@@ -257,7 +204,7 @@ services:
       KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/catalog.yml
       KILN_MARKETING_URL: ${KILN_MARKETING_URL:-}
       KILN_INSTALLATION_ID: ${KILN_INSTALLATION_ID:-}
-      CACHE_HOST: ${CACHE_HOST:-cache}
+      CACHE_HOST: ${CACHE_HOST:-kiln-dev-cache}
       CACHE_PORT: ${CACHE_PORT:-6379}
       CACHE_USERNAME: ${CACHE_USERNAME:-}
       CACHE_PASSWORD: ${CACHE_PASSWORD:-}
@@ -293,7 +240,6 @@ services:
       OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
       NODE_ENV: development
       npm_config_store_dir: /root/.local/share/pnpm/store
-      NODE_EXTRA_CA_CERTS: /minio-certs/public.crt
       KILN_GRYPE_PATH: /opt/kiln-tools/grype
       KILN_VULNERABILITY_DB_DIR: /opt/kiln-tools/vulnerability-db
     command:
@@ -332,7 +278,8 @@ services:
         ]
       interval: 10s
       timeout: 3s
-      start_period: 10s
+      # A new stack installs dependencies and Vite's first compile takes a while.
+      start_period: 300s
       retries: 6
     volumes:
       - .:/workspace
@@ -366,7 +313,6 @@ services:
         volume:
           nocopy: true
       - kiln-dev-pnpm-store:/root/.local/share/pnpm/store
-      - minio-certs:/minio-certs:ro
       - hearth-dev-tools:/opt/kiln-tools
     ports:
       - "127.0.0.1:${KILN_DEV_WEB_PORT:-3000}:3000"
@@ -374,65 +320,12 @@ services:
       io.kiln.installation: ${KILN_INSTALLATION_ID:-}
       io.kiln.resource: hearth
 
-  minio-certs:
-    image: alpine:3.21
-    restart: "no"
-    volumes:
-      - minio-certs:/certs
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        if [ ! -f /certs/public.crt ]; then
-          apk add --no-cache openssl
-          openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
-            -keyout /certs/private.key \
-            -out /certs/public.crt \
-            -subj "/CN=minio" \
-            -addext "subjectAltName=DNS:minio,DNS:localhost,IP:127.0.0.1"
-          chmod 644 /certs/public.crt
-          chmod 600 /certs/private.key
-        fi
-
-  minio:
-    image: minio/minio:RELEASE.2025-07-23T15-54-02Z
-    restart: "no"
-    depends_on:
-      minio-certs:
-        condition: service_completed_successfully
-    command:
-      ["server", "/data", "--address", ":9000", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: kiln
-      MINIO_ROOT_PASSWORD: kilnminiodevpassword
-      MINIO_REGION_NAME: us-east-1
-    volumes:
-      - minio-data:/data
-      - minio-certs:/root/.minio/certs:ro
-
-  minio-setup:
-    image: minio/mc:RELEASE.2025-07-21T05-28-08Z
-    restart: "no"
-    depends_on:
-      minio-certs:
-        condition: service_completed_successfully
-      minio:
-        condition: service_started
-    volumes:
-      - minio-certs:/certs:ro
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        i=0
-        until mc --insecure alias set kiln https://minio:9000 kiln kilnminiodevpassword; do
-          i=$$((i + 1))
-          if [ "$$i" -ge 30 ]; then exit 1; fi
-          sleep 1
-        done
-        mc --insecure mb --ignore-existing kiln/kiln-backups
+networks:
+  shared:
+    external: true
+    name: kiln-dev-shared
 
 volumes:
-  hearth-mysql:
   relay-data:
   relay-dev-node-modules:
   relay-dev-app-node-modules:
@@ -445,8 +338,6 @@ volumes:
   hearth-dev-contracts-node-modules:
   hearth-dev-telemetry-node-modules:
   hearth-dev-ui-node-modules:
-  minio-certs:
-  minio-data:
   kiln-dev-pnpm-store:
     external: true
     name: kiln-dev-pnpm-store

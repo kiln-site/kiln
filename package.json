@@ -12,6 +12,8 @@
     "dev:docker:list": "node scripts/dev-docker.mjs list",
     "dev:docker:logs": "node scripts/dev-docker.mjs logs",
     "dev:docker:refresh": "node scripts/dev-docker.mjs refresh",
+    "dev:docker:shared": "node scripts/dev-docker.mjs shared",
+    "dev:docker:s3": "node scripts/dev-docker.mjs s3",
     "dev:docker:url": "node scripts/dev-docker.mjs url",
     "dev:docker:test": "node scripts/dev-docker.mjs test",
     "dev": "vp run -r --parallel dev",

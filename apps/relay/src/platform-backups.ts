@@ -93,7 +93,12 @@ export async function createEncryptedPlatformBackup(
     mode: 0o600,
   })
 
-  const child = await startPlatformClient(config, container, PLATFORM_DUMP)
+  const child = await startPlatformClient(
+    config,
+    container,
+    PLATFORM_DUMP,
+    databaseName
+  )
   const stderr = collectProcessErrors(child)
   const sourceMeter = byteMeter((bytes) => {
     progress.completed = bytes
@@ -277,7 +282,13 @@ export async function restoreEncryptedPlatformBackup(
     Effect.result(
       Effect.acquireUseRelease(
         Effect.tryPromise({
-          try: () => startPlatformClient(config, container, PLATFORM_IMPORT),
+          try: () =>
+            startPlatformClient(
+              config,
+              container,
+              PLATFORM_IMPORT,
+              databaseName
+            ),
           catch: (cause) => cause,
         }),
         (child) => {
@@ -382,6 +393,15 @@ async function hearthDatabaseContainer(
   config: RelayConfig,
   installationId: string
 ): Promise<{ container: string; databaseName: string; labeled: boolean }> {
+  // Not labeled for this installation, so a backup that doesn't name its
+  // database can't restore here: it could recreate another Hearth's.
+  if (config.platformDatabase) {
+    return {
+      container: config.platformDatabase.container,
+      databaseName: config.platformDatabase.name,
+      labeled: false,
+    }
+  }
   const matching = await runningHearthContainers(
     config,
     installationId,
@@ -440,9 +460,16 @@ async function hearthApplicationIsRunning(
   config: RelayConfig,
   installationId: string
 ): Promise<boolean> {
+  const labeled = await runningHearthContainers(
+    config,
+    installationId,
+    "hearth"
+  )
+  // Other Hearths on a shared MySQL use their own databases, so only this
+  // installation's label says this one is running.
+  if (config.platformDatabase) return labeled.length > 0
   return (
-    (await runningHearthContainers(config, installationId, "hearth")).length >
-      0 ||
+    labeled.length > 0 ||
     // A Docker error fails the restore rather than read as none running.
     (await Effect.runPromise(
       provenHearthRunning(new DockerEngine(config.dockerSocket), config)
@@ -487,13 +514,20 @@ const PLATFORM_IMPORT =
 function startPlatformClient(
   config: RelayConfig,
   container: string,
-  script: string
+  script: string,
+  databaseName: string
 ): Promise<DockerExecProcess> {
   return Effect.runPromise(
     new DockerEngine(config.dockerSocket).execProcess(
       container,
       ["sh", "-ec", script],
-      { stdin: script === PLATFORM_IMPORT }
+      {
+        // A shared MySQL wasn't created for this database.
+        ...(config.platformDatabase && {
+          env: [`MYSQL_DATABASE=${databaseName}`],
+        }),
+        stdin: script === PLATFORM_IMPORT,
+      }
     )
   )
 }
