@@ -47,7 +47,7 @@ workload's. It starts a short-lived helper from its own image, which runs
 Syft and slims what it found, with:
 
 - the lowest CPU weight Docker gives (`CpuShares: 2`), at most one core, and
-  the lowest block I/O weight;
+  the lowest block I/O weight, on kernels that have one;
 - a 1 GiB memory cap and `OomScoreAdj: 1000`, so it's the first thing killed
   if the host runs short;
 - no network, and `no-new-privileges`.
