@@ -32,21 +32,12 @@ import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@workspace/ui/components/dialog"
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
-import { Input } from "@workspace/ui/components/input"
 import {
   Select,
   SelectContent,
@@ -75,12 +66,15 @@ import {
 } from "@/components/data-table"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
+  NewDatabaseDialog,
+  type NewDatabaseValues,
+} from "@/components/database/new-database-dialog"
+import {
   CredentialsDialog,
   DeleteDatabaseDialog,
   ImportDatabaseDialog,
   useDatabaseExport,
 } from "@/components/database/database-dialogs"
-import { DatabaseEngineChoice } from "@/components/database/database-engine-choice"
 import { DatabaseNetworkPicker } from "@/components/database/database-network"
 import {
   engineBadgeClasses,
@@ -216,9 +210,8 @@ export const DatabasesPage = React.memo(function DatabasesPage({
 
       {createOpen && data ? (
         <CreateDatabaseDialog
-          open
           relays={data.relays}
-          onOpenChange={setCreateOpen}
+          onClose={() => setCreateOpen(false)}
         />
       ) : null}
       {dialog?.kind === "credentials" ? (
@@ -774,38 +767,32 @@ function ActionIconButton({
 }
 
 function CreateDatabaseDialog({
-  open,
-  onOpenChange,
+  onClose,
   relays,
 }: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
+  onClose: () => void
   relays: Array<ManagedRelay>
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const availableRelays = relays.filter((relay) => relay.canCreate)
-  const [name, setName] = React.useState("")
-  const [engine, setEngine] = React.useState<DatabaseEngine>("postgres")
   const [relayId, setRelayId] = React.useState(
     () => availableRelays.at(0)?.id ?? ""
   )
   const relayLabelId = React.useId()
   const create = useMutation({
-    mutationFn: () =>
-      createManagedDatabase({
-        data: { engine, name: name.trim(), relayId },
-      }),
-    onSuccess: async (created) => {
+    mutationFn: (values: NewDatabaseValues) =>
+      createManagedDatabase({ data: { ...values, relayId } }),
+    onSuccess: async (created, { name }) => {
       await queryClient.invalidateQueries({
         queryKey: queryKeys.databases.all,
       })
       // A database the Relay provisions in the background opens on its
       // provisioning page instead.
       if (created.observedState !== "provisioning") {
-        showToast({ message: `${name.trim()} is ready`, type: "success" })
+        showToast({ message: `${name} is ready`, type: "success" })
       }
-      onOpenChange(false)
+      onClose()
       await navigate({
         params: { databaseId: created.id },
         to: "/db/$databaseId/info",
@@ -814,74 +801,37 @@ function CreateDatabaseDialog({
   })
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>Add database</DialogTitle>
-          <DialogDescription>
-            Hearth creates a private network, persistent volume, and generated
-            credentials. No host port is published.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <label className="block">
-            <span className="mb-2 block text-xs font-medium">Name</span>
-            <Input
-              autoFocus
-              maxLength={64}
-              placeholder="Production data"
-              value={name}
-              onChange={(event) => setName(event.currentTarget.value)}
-            />
-          </label>
-          <DatabaseEngineChoice value={engine} onChange={setEngine} />
-          <div>
-            <span id={relayLabelId} className="mb-2 block text-xs font-medium">
-              Relay
-            </span>
-            <Select value={relayId} onValueChange={setRelayId}>
-              <SelectTrigger
-                aria-labelledby={relayLabelId}
-                className="h-9 w-full px-3"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {availableRelays.map((relay) => (
-                  <SelectItem key={relay.id} value={relay.id}>
-                    {relay.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {create.error ? (
-            <p className="text-xs text-destructive">{create.error.message}</p>
-          ) : null}
-        </div>
-        <DialogFooter>
-          <Button
-            variant="ghost"
-            type="button"
-            onClick={() => onOpenChange(false)}
+    <NewDatabaseDialog
+      description="Hearth creates a private network, persistent volume, and generated password, and names anything you leave blank. No host port is published."
+      disabled={!relayId}
+      error={create.error?.message}
+      pending={create.isPending}
+      submitLabel="Create database"
+      title="Add database"
+      onClose={onClose}
+      onSubmit={create.mutate}
+    >
+      <div>
+        <span id={relayLabelId} className="mb-2 block text-xs font-medium">
+          Relay
+        </span>
+        <Select value={relayId} onValueChange={setRelayId}>
+          <SelectTrigger
+            aria-labelledby={relayLabelId}
+            className="h-9 w-full px-3"
           >
-            Cancel
-          </Button>
-          <Button
-            disabled={create.isPending || !name.trim() || !relayId}
-            type="button"
-            onClick={() => create.mutate()}
-          >
-            {create.isPending ? (
-              <LoaderCircle className="animate-spin" />
-            ) : (
-              <Plus />
-            )}
-            Create database
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {availableRelays.map((relay) => (
+              <SelectItem key={relay.id} value={relay.id}>
+                {relay.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </NewDatabaseDialog>
   )
 }
 

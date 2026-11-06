@@ -14,6 +14,7 @@ import {
   databaseRowsInputSchema,
   databaseRowsSchema,
   databaseIdSchema,
+  newDatabaseNamesShape,
   relayDatabaseNameSchema,
   relayIdSchema,
   relayDatabaseTerminalClaimSchema,
@@ -71,6 +72,7 @@ import {
 } from "@/server/managed-database-access"
 
 const createDatabaseInputSchema = z.strictObject({
+  ...newDatabaseNamesShape,
   engine: databaseEngineSchema,
   name: relayDatabaseNameSchema,
   relayId: relayIdSchema,

@@ -4,18 +4,12 @@ import type { DatabaseEngine } from "@workspace/contracts"
 import { ChevronsUpDown, Plus } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@workspace/ui/components/dialog"
-import { Input } from "@workspace/ui/components/input"
 
-import { DatabaseEngineChoice } from "@/components/database/database-engine-choice"
 import { engineLabel } from "@/components/database/database-presentation"
+import {
+  NewDatabaseDialog,
+  type NewDatabaseValues,
+} from "@/components/database/new-database-dialog"
 import {
   DrawerPopover,
   DrawerPopoverContent,
@@ -38,7 +32,7 @@ import type { getManagedDatabaseDirectory } from "@/server/databases"
 
 export type AppDatabaseDraft =
   | { kind: "none" }
-  | { engine: DatabaseEngine; kind: "new"; name: string }
+  | (NewDatabaseValues & { kind: "new" })
   | { engine: DatabaseEngine; id: string; kind: "existing"; name: string }
 
 export const noAppDatabase: AppDatabaseDraft = { kind: "none" }
@@ -49,11 +43,7 @@ export function appDatabaseInput(draft: AppDatabaseDraft, appName: string) {
     case "none":
       return undefined
     case "new":
-      return {
-        engine: draft.engine,
-        kind: "new" as const,
-        name: draft.name.trim() || appName,
-      }
+      return { ...draft, name: draft.name || appName }
     case "existing":
       return { id: draft.id, kind: "existing" as const }
   }
@@ -202,11 +192,17 @@ export const AppDatabaseFields = React.memo(function AppDatabaseFields({
         environment as <span className="font-mono">DB_*</span> variables.
       </p>
       {creating ? (
-        <NewAppDatabaseDialog
-          appName={appName}
-          draft={draft}
-          onChange={onChange}
+        <NewDatabaseDialog
+          description="Created with the app, on the same Relay."
+          initial={draft.kind === "new" ? draft : undefined}
+          nameFallback={appName || "Same as the app"}
+          submitLabel="Add database"
+          title="New database"
           onClose={() => setCreating(false)}
+          onSubmit={(values) => {
+            onChange({ ...values, kind: "new" })
+            setCreating(false)
+          }}
         />
       ) : null}
     </div>
@@ -257,69 +253,5 @@ function AppDatabaseSummary({
         </span>
       </span>
     </span>
-  )
-}
-
-function NewAppDatabaseDialog({
-  appName,
-  draft,
-  onChange,
-  onClose,
-}: {
-  appName: string
-  draft: AppDatabaseDraft
-  onChange: (draft: AppDatabaseDraft) => void
-  onClose: () => void
-}) {
-  const [engine, setEngine] = React.useState<DatabaseEngine>(
-    draft.kind === "new" ? draft.engine : "postgres"
-  )
-  const [name, setName] = React.useState(draft.kind === "new" ? draft.name : "")
-  const add = () => {
-    onChange({ engine, kind: "new", name })
-    onClose()
-  }
-
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose()
-      }}
-    >
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle>New database</DialogTitle>
-          <DialogDescription>
-            Created with the app, on the same Relay.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <label className="block">
-            <span className="mb-2 block text-xs font-medium">Name</span>
-            <Input
-              autoFocus
-              maxLength={120}
-              placeholder={appName || "Same as the app"}
-              value={name}
-              onChange={(event) => setName(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") add()
-              }}
-            />
-          </label>
-          <DatabaseEngineChoice value={engine} onChange={setEngine} />
-        </div>
-        <DialogFooter>
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="button" onClick={add}>
-            <Plus />
-            Add database
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }

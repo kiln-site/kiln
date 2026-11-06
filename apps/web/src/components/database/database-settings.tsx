@@ -1,6 +1,9 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import type { ResourceLimits } from "@workspace/contracts"
+import {
+  databaseEngineHasNamedDatabase,
+  type ResourceLimits,
+} from "@workspace/contracts"
 import {
   ArrowRight,
   Cable,
@@ -514,7 +517,7 @@ export function DatabaseConnectionSettings({
 }
 
 function hasNamedDatabase(database: Pick<ManagedDatabase, "engine">): boolean {
-  return database.engine !== "redis" && database.engine !== "valkey"
+  return databaseEngineHasNamedDatabase(database.engine)
 }
 
 function databaseConnectionUrl(

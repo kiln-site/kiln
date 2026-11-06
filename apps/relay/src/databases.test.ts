@@ -138,6 +138,46 @@ describe("managed database credentials and dumps", () => {
     }
   )
 
+  // MariaDB's login may set its own password, but not run ALTER USER.
+  it.each([
+    [
+      "mariadb",
+      "MYSQL_PWD",
+      `SET PASSWORD = PASSWORD('${nextPassword}');\n`,
+    ],
+    [
+      "mysql",
+      "MYSQL_PWD",
+      `ALTER USER 'kiln_user'@'%' IDENTIFIED BY '${nextPassword}';\n`,
+    ],
+    [
+      "postgres",
+      "PGPASSWORD",
+      `ALTER USER "kiln_user" WITH PASSWORD '${nextPassword}';\n`,
+    ],
+  ] as const)(
+    "rotates a %s password as its own login",
+    async (engine, environmentName, sql) => {
+      const harness = await relayHarness()
+      const id = "e".repeat(40)
+      await createDatabase(harness, id, engine)
+
+      await harness.databases.rotateCredentials({
+        currentPassword: password,
+        databaseId: id,
+        nextPassword,
+        username: "kiln_user",
+      })
+
+      const container = databaseContainer(id)
+      expect(container.executedSql.at(-1)).toBe(sql)
+      const client = container.processes.at(-1)
+      expect(client?.argv).toContain("kiln_user")
+      expect(client?.env).toEqual({ [environmentName]: password })
+      expect(client?.argv.join(" ")).not.toContain(password)
+    }
+  )
+
   it("exports a dump far past the old limit for download, keeping the last whole one when a dump fails", async () => {
     const harness = await relayHarness()
     const id = "7".repeat(40)
