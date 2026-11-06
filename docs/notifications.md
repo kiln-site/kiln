@@ -67,8 +67,10 @@ changes the toast on screen. On devices, a push closes the replaced one.
 
 ## Choosing what you hear
 
-Settings are per person, stored as one JSON setting. Each kind can reach the
-inbox and push. On top of that, two choices narrow what's about a resource:
+Settings are per person, stored as one JSON setting. Each kind has one menu
+listing `notificationChannels`, so a new channel adds a line to that list rather
+than a switch to every row. On top of that, two choices narrow what's about a
+resource:
 
 - **Whose instances**: everything you can access, what's yours or shared with
   you (leaving out what only a platform role reaches), or only what you own. A

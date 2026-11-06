@@ -5,17 +5,15 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import {
-  AppWindow,
-  BellOff,
-  BellRing,
-  HardDrive,
-  Rocket,
-  ShieldAlert,
-  UserPlus,
-} from "lucide-react"
+import { Bell, BellOff, BellRing, ChevronDown, Users } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
 import {
   Select,
   SelectContent,
@@ -25,7 +23,9 @@ import {
 } from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 import { Switch } from "@workspace/ui/components/switch"
+import { cn } from "@workspace/ui/lib/utils"
 
+import { InfoFact, InfoRailCard } from "@/components/info-page"
 import { PushNotificationsToggle } from "@/components/push-notifications-toggle"
 import { SettingsPage, SettingsPanel } from "@/components/settings-panel"
 import {
@@ -33,6 +33,7 @@ import {
   saveNotificationPreferencesMutationOptions,
 } from "@/lib/collections/notifications"
 import {
+  notificationChannels,
   notificationIdleMinuteOptions,
   notificationKindLabel,
   notificationPreferenceGroups,
@@ -47,17 +48,6 @@ import type { NotificationKind } from "@/lib/notifications"
 import { resourceTypeLabels } from "@/lib/notification-text"
 import type { SecurityNotificationSettings } from "@/lib/security"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
-
-const groupIcons = {
-  access: <UserPlus />,
-  apps: <AppWindow />,
-  kiln: <Rocket />,
-  resources: <HardDrive />,
-  security: <ShieldAlert />,
-} satisfies Record<
-  (typeof notificationPreferenceGroups)[number]["id"],
-  React.ReactNode
->
 
 function minutesLabel(minutes: number) {
   return minutes === 1 ? "1 minute" : `${minutes} minutes`
@@ -96,144 +86,179 @@ export const NotificationSettingsPage = React.memo(
     )
 
     return (
-      <SettingsPage className="lg:grid-cols-2 lg:items-start">
-        <SettingsPanel icon={<BellRing />} title="Delivery">
-          <ScopePreference value={preferences.scope} onChange={save} />
-          <PreferenceRow
-            label="Push to this device"
-            description="Sends notifications to this browser or installed app, even while Kiln is closed."
-          >
-            <PushNotificationsToggle />
-          </PreferenceRow>
-          <PreferenceRow
-            label="Skip push while I'm active"
-            description="A notification you see in Kiln isn't pushed to your devices too."
-          >
-            <Switch
-              aria-label="Skip push while I'm active"
-              checked={preferences.skipPushWhileActive}
-              onCheckedChange={(skipPushWhileActive) =>
-                save({ skipPushWhileActive })
-              }
-            />
-          </PreferenceRow>
-          <PreferenceRow
-            label="Away after"
-            description="With no input for this long, Kiln pushes even while it's open."
-          >
-            <Select
-              value={String(preferences.idleMinutes)}
-              disabled={!preferences.skipPushWhileActive}
-              onValueChange={(value) => save({ idleMinutes: Number(value) })}
-            >
-              <SelectTrigger aria-label="Away after" className="h-8 w-32">
-                <SelectValue>
-                  {minutesLabel(preferences.idleMinutes)}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {notificationIdleMinuteOptions.map((minutes) => (
-                  <SelectItem key={minutes} value={String(minutes)}>
-                    {minutesLabel(minutes)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </PreferenceRow>
+      // The list of what's heard fills the page, and what applies to all of it
+      // stays in view beside it, like an Info page's rail.
+      <SettingsPage
+        fill
+        className="max-w-none lg:grid-cols-[minmax(0,1fr)_21rem] lg:items-start"
+      >
+        <SettingsPanel
+          className="lg:max-h-full"
+          icon={<Bell />}
+          title="What you hear"
+        >
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            {notificationPreferenceGroups.map((group) =>
+              group.adminOnly && !platformAdmin ? null : (
+                <React.Fragment key={group.id}>
+                  <GroupLabel>{group.label}</GroupLabel>
+                  {group.kinds.map((entry) => (
+                    <React.Fragment key={entry.kind}>
+                      <KindRow
+                        choice={preferences.kinds[entry.kind]}
+                        description={entry.description}
+                        inboxRequired={"inboxRequired" in entry}
+                        kind={entry.kind}
+                        label={entry.label}
+                        onChange={setKind}
+                      />
+                      {entry.kind === "security.report" ? (
+                        <SecurityPreferences
+                          choice={preferences.security}
+                          disabled={!preferences.kinds[entry.kind].inbox}
+                          onChange={save}
+                        />
+                      ) : null}
+                    </React.Fragment>
+                  ))}
+                </React.Fragment>
+              )
+            )}
+          </div>
         </SettingsPanel>
-
-        {notificationPreferenceGroups.map((group) =>
-          group.adminOnly && !platformAdmin ? null : (
-            <SettingsPanel
-              key={group.id}
-              icon={groupIcons[group.id]}
-              title={group.label}
-              action={<ChannelHeadings />}
-            >
-              {group.kinds.map((entry) => (
-                <KindRow
-                  key={entry.kind}
-                  choice={preferences.kinds[entry.kind]}
-                  group={group.label}
-                  inboxRequired={"inboxRequired" in entry}
-                  kind={entry.kind}
-                  label={entry.label}
-                  onChange={setKind}
-                />
-              ))}
-              {group.id === "security" ? (
-                <SecurityPreferences
-                  choice={preferences.security}
-                  disabled={!preferences.kinds["security.report"].inbox}
-                  onChange={save}
-                />
-              ) : null}
-            </SettingsPanel>
-          )
-        )}
-        <CustomizedResources
-          resources={preferences.resources}
-          onChange={save}
-        />
+        <aside className="min-w-0 lg:max-h-full lg:overflow-y-auto">
+          <DeliveryCard
+            idleMinutes={preferences.idleMinutes}
+            skipPushWhileActive={preferences.skipPushWhileActive}
+            onChange={save}
+          />
+          <ScopeCard value={preferences.scope} onChange={save} />
+          <CustomizedCard resources={preferences.resources} onChange={save} />
+        </aside>
       </SettingsPage>
     )
   }
 )
 
-const channelColumn = "flex w-[4.5rem] shrink-0 justify-center"
-
-// The two switches' columns, above them in the panel's header.
-function ChannelHeadings() {
+function GroupLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="type-meta flex text-muted-foreground" aria-hidden>
-      <span className={channelColumn}>In Kiln</span>
-      <span className={channelColumn}>Push</span>
-    </div>
+    <h3 className="type-technical-label sticky top-0 z-10 border-b bg-muted px-4 py-1.5 text-muted-foreground">
+      {children}
+    </h3>
   )
 }
 
+function channelSummary(choice: NotificationKindPreference) {
+  const on = notificationChannels.filter(
+    ({ key }) => choice.inbox && choice[key]
+  )
+  return on.map(({ label }) => label).join(", ") || "Off"
+}
+
+// One row per notification, and one menu for wherever it goes, however many
+// channels there are.
 const KindRow = React.memo(function KindRow({
   choice,
-  group,
+  description,
   inboxRequired,
   kind,
   label,
   onChange,
 }: {
   choice: NotificationKindPreference
-  group: string
+  description: string
   inboxRequired: boolean
   kind: NotificationKind
   label: string
   onChange: (kind: NotificationKind, choice: NotificationKindPreference) => void
 }) {
+  const summary = channelSummary(choice)
   return (
-    <div className="flex min-h-12 items-center gap-3 border-b px-4 py-2.5 last:border-b-0">
-      <p className="min-w-0 flex-1 text-sm font-medium">{label}</p>
-      <div className="flex">
-        <span className={channelColumn}>
-          <Switch
-            aria-label={`${label} (${group}): show in Kiln`}
-            checked={choice.inbox}
-            disabled={inboxRequired}
-            onCheckedChange={(inbox) => onChange(kind, { ...choice, inbox })}
-          />
-        </span>
-        <span className={channelColumn}>
-          <Switch
-            aria-label={`${label} (${group}): push`}
-            checked={choice.inbox && choice.push}
-            disabled={!choice.inbox}
-            onCheckedChange={(push) => onChange(kind, { ...choice, push })}
-          />
-        </span>
-      </div>
-    </div>
+    <PreferenceRow label={label} description={description}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="outline"
+            className="w-44 shrink-0 justify-between font-normal"
+            aria-label={`${label}: ${summary}`}
+          >
+            <span className="truncate">{summary}</span>
+            <ChevronDown aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44">
+          {notificationChannels.map(({ key, label: channel }) => (
+            <DropdownMenuCheckboxItem
+              key={key}
+              checked={choice.inbox && choice[key]}
+              disabled={key === "inbox" ? inboxRequired : !choice.inbox}
+              // It stays open, to choose several.
+              onSelect={(event) => event.preventDefault()}
+              onCheckedChange={(on) =>
+                onChange(kind, { ...choice, [key]: on === true })
+              }
+            >
+              {channel}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </PreferenceRow>
   )
 })
 
-// Whose instances the person hears about.
-const ScopePreference = React.memo(function ScopePreference({
+const DeliveryCard = React.memo(function DeliveryCard({
+  idleMinutes,
+  onChange,
+  skipPushWhileActive,
+}: {
+  idleMinutes: number
+  onChange: (update: NotificationPreferencesUpdate) => void
+  skipPushWhileActive: boolean
+}) {
+  return (
+    <InfoRailCard
+      // Every row the same height, whatever its control.
+      className="[&_dl>div]:min-h-12"
+      icon={<BellRing />}
+      title="Delivery"
+    >
+      <InfoFact label="Push to this device">
+        <PushNotificationsToggle className="w-32" size="default" />
+      </InfoFact>
+      <InfoFact label="Skip push while active">
+        <Switch
+          aria-label="Skip push while active"
+          checked={skipPushWhileActive}
+          onCheckedChange={(skipPushWhileActive) =>
+            onChange({ skipPushWhileActive })
+          }
+        />
+      </InfoFact>
+      <InfoFact label="Away after">
+        <Select
+          value={String(idleMinutes)}
+          disabled={!skipPushWhileActive}
+          onValueChange={(value) => onChange({ idleMinutes: Number(value) })}
+        >
+          <SelectTrigger aria-label="Away after" className="h-8 w-32">
+            <SelectValue>{minutesLabel(idleMinutes)}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {notificationIdleMinuteOptions.map((minutes) => (
+              <SelectItem key={minutes} value={String(minutes)}>
+                {minutesLabel(minutes)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </InfoFact>
+    </InfoRailCard>
+  )
+})
+
+// Whose instances the person hears about, every choice in view.
+const ScopeCard = React.memo(function ScopeCard({
   onChange,
   value,
 }: {
@@ -241,33 +266,37 @@ const ScopePreference = React.memo(function ScopePreference({
   value: NotificationScope
 }) {
   return (
-    <PreferenceRow
-      label="Whose instances"
-      description="Hear about everything you can reach, or only what's yours."
-    >
-      <Select
-        value={value}
-        onValueChange={(scope) =>
-          onChange({ scope: scope as NotificationScope })
-        }
-      >
-        <SelectTrigger aria-label="Whose instances" className="h-8 w-56">
-          <SelectValue>{notificationScopeLabels[value]}</SelectValue>
-        </SelectTrigger>
-        <SelectContent>
-          {notificationScopes.map((scope) => (
-            <SelectItem key={scope} value={scope}>
-              {notificationScopeLabels[scope]}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </PreferenceRow>
+    <InfoRailCard icon={<Users />} title="Whose instances">
+      <div role="radiogroup" aria-label="Whose instances" className="-mx-3">
+        {notificationScopes.map((scope) => (
+          <label
+            key={scope}
+            className="flex min-h-10 w-full cursor-pointer items-center gap-2.5 border-b border-border/60 px-3 text-[0.8125rem] transition-colors last:border-b-0 hover:bg-accent/50 has-[:focus-visible]:bg-accent/50"
+          >
+            <input
+              type="radio"
+              name="notification-scope"
+              className="sr-only"
+              checked={scope === value}
+              onChange={() => onChange({ scope })}
+            />
+            <span
+              aria-hidden
+              className={cn(
+                "size-3 shrink-0 rounded-full border border-muted-foreground",
+                scope === value && "border-4 border-primary"
+              )}
+            />
+            {notificationScopeLabels[scope]}
+          </label>
+        ))}
+      </div>
+    </InfoRailCard>
   )
 })
 
 // What the person turned off about particular instances, to turn back on.
-const CustomizedResources = React.memo(function CustomizedResources({
+const CustomizedCard = React.memo(function CustomizedCard({
   onChange,
   resources,
 }: {
@@ -277,17 +306,22 @@ const CustomizedResources = React.memo(function CustomizedResources({
   const entries = Object.entries(resources)
   if (!entries.length) return null
   return (
-    <SettingsPanel icon={<BellOff />} title="Customized">
+    <InfoRailCard icon={<BellOff />} title="Customized">
       {entries.map(([key, resource]) => (
-        <PreferenceRow
+        <div
           key={key}
-          label={resource.name}
-          description={`${resourceTypeLabels[resource.type]} · ${Object.keys(
-            resource.kinds
-          )
-            .map((kind) => notificationKindLabel(kind as NotificationKind))
-            .join(", ")} off`}
+          className="flex min-h-10 items-center gap-3 border-b border-border/60 py-1.5 text-[0.8125rem] last:border-b-0"
         >
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-medium">{resource.name}</p>
+            <p className="type-meta truncate text-muted-foreground">
+              {resourceTypeLabels[resource.type]} ·{" "}
+              {Object.keys(resource.kinds)
+                .map((kind) => notificationKindLabel(kind as NotificationKind))
+                .join(", ")}{" "}
+              off
+            </p>
+          </div>
           <Button
             variant="outline"
             size="xs"
@@ -295,9 +329,9 @@ const CustomizedResources = React.memo(function CustomizedResources({
           >
             Reset
           </Button>
-        </PreferenceRow>
+        </div>
       ))}
-    </SettingsPanel>
+    </InfoRailCard>
   )
 })
 
@@ -326,7 +360,7 @@ const SecurityPreferences = React.memo(function SecurityPreferences({
     <>
       <PreferenceRow
         label="Least severe"
-        description="Vulnerabilities known to be exploited notify at any severity."
+        description="Ones known to be exploited notify at any severity."
       >
         <Select
           value={choice.severity}
@@ -359,7 +393,7 @@ const SecurityPreferences = React.memo(function SecurityPreferences({
       </PreferenceRow>
       <PreferenceRow
         label="Only when an update fixes it"
-        description="Leaves out vulnerabilities nobody has released a fix for yet."
+        description="Leaves out ones with no fix yet."
       >
         <Switch
           aria-label="Only when an update fixes it"

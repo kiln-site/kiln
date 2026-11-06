@@ -26,7 +26,13 @@ type PushState =
  * Screen, so there the button says how.
  */
 export const PushNotificationsToggle = React.memo(
-  function PushNotificationsToggle() {
+  function PushNotificationsToggle({
+    className,
+    size = "sm",
+  }: {
+    className?: string
+    size?: "default" | "sm"
+  }) {
     const [state, setState] = React.useState<PushState>({
       status: "checking",
     })
@@ -36,10 +42,9 @@ export const PushNotificationsToggle = React.memo(
     React.useEffect(() => {
       let cancelled = false
       const load = () =>
-        void recoverPromise(
-          loadPushState,
-          (): PushState => ({ status: "unsupported" })
-        ).then((next) => !cancelled && setState(next))
+        void recoverPromise(loadPushState, (): PushState => ({
+          status: "unsupported",
+        })).then((next) => !cancelled && setState(next))
       load()
       window.addEventListener(pushChangedEvent, load)
       return () => {
@@ -93,7 +98,8 @@ export const PushNotificationsToggle = React.memo(
     return (
       <Button
         variant="outline"
-        size="sm"
+        size={size}
+        className={className}
         disabled={state.status === "checking" || state.status === "busy"}
         onClick={() => {
           switch (state.status) {
@@ -141,8 +147,7 @@ async function loadPushState(): Promise<PushState> {
     data: { endpoint: subscription?.endpoint ?? null },
   })
   return {
-    status:
-      subscribed && Notification.permission === "granted" ? "on" : "off",
+    status: subscribed && Notification.permission === "granted" ? "on" : "off",
     publicKey,
   }
 }

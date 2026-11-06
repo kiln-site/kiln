@@ -2,16 +2,36 @@ import * as React from "react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
+/**
+ * `fill` fits the page to the screen on wide ones, for one that scrolls inside
+ * itself rather than as a whole.
+ */
 export function SettingsPage({
   children,
   className,
+  fill = false,
 }: {
   children: React.ReactNode
   className?: string
+  fill?: boolean
 }) {
   return (
-    <div className="mx-auto w-full max-w-[90rem] px-3 pt-4 pb-10 sm:px-5 sm:pt-5">
-      <div className={cn("grid max-w-5xl gap-4", className)}>{children}</div>
+    <div
+      data-settings-fill={fill || undefined}
+      className={cn(
+        "mx-auto w-full max-w-[90rem] px-3 pt-4 pb-10 sm:px-5 sm:pt-5",
+        fill && "lg:h-full lg:pb-5"
+      )}
+    >
+      <div
+        className={cn(
+          "grid max-w-5xl gap-4",
+          fill && "lg:h-full lg:grid-rows-[minmax(0,1fr)]",
+          className
+        )}
+      >
+        {children}
+      </div>
     </div>
   )
 }

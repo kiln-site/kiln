@@ -70,61 +70,101 @@ export interface NotificationPreferences {
   skipPushWhileActive: boolean
 }
 
+/**
+ * Where a notification can reach someone, in the order settings lists them.
+ * Each notification chooses among these in one menu, so a new channel adds a
+ * line here rather than a column to every row.
+ */
+export const notificationChannels = [
+  { key: "inbox", label: "In Kiln" },
+  { key: "push", label: "Push" },
+] as const satisfies ReadonlyArray<{
+  key: keyof NotificationKindPreference
+  label: string
+}>
+
 /** The kinds a person can choose about, in the order settings lists them. */
 export const notificationPreferenceGroups = [
   {
-    adminOnly: true,
-    id: "kiln",
-    kinds: [
-      { kind: "kiln.release", label: "Update available" },
-      { kind: "kiln.updated", label: "Updated" },
-    ],
-    label: "Kiln",
-  },
-  {
     adminOnly: false,
-    id: "apps",
+    id: "instances",
     kinds: [
-      { kind: "app.image-update", label: "Update available" },
-      { kind: "app.deployed", label: "Deployments" },
-    ],
-    label: "Apps",
-  },
-  {
-    adminOnly: false,
-    id: "security",
-    kinds: [{ kind: "security.report", label: "Vulnerability reports" }],
-    label: "Security",
-  },
-  {
-    adminOnly: false,
-    id: "resources",
-    kinds: [
-      { kind: "resource.disk-limit", label: "Disk limit warnings" },
-      { kind: "relay.updated", label: "Relay updates" },
+      {
+        description: "Someone else or Kiln deployed an App.",
+        kind: "app.deployed",
+        label: "Deployments",
+      },
+      {
+        description: "An App's image has a newer version.",
+        kind: "app.image-update",
+        label: "App updates available",
+      },
+      {
+        description: "A Relay moved to a newer version.",
+        kind: "relay.updated",
+        label: "Relay updates",
+      },
+      {
+        description: "A scan found new vulnerabilities.",
+        kind: "security.report",
+        label: "Vulnerability reports",
+      },
+      {
+        description: "A database outgrew its disk limit.",
+        kind: "resource.disk-limit",
+        label: "Disk limit warnings",
+      },
       // A finished move waits in the inbox to offer deleting the old server.
       {
+        description: "A move or copy you started ended.",
         inboxRequired: true,
         kind: "server.migration",
         label: "Game Server moves and copies",
       },
     ],
-    label: "Resources",
+    label: "Instances",
   },
   {
     adminOnly: false,
     id: "access",
     kinds: [
       // Invitations wait in the inbox for an answer, so they always arrive.
-      { inboxRequired: true, kind: "access.invited", label: "Invitations" },
-      { kind: "access.removed", label: "Access removed" },
+      {
+        description: "Someone invited you to an instance.",
+        inboxRequired: true,
+        kind: "access.invited",
+        label: "Invitations",
+      },
+      {
+        description: "Someone removed your access.",
+        kind: "access.removed",
+        label: "Access removed",
+      },
     ],
     label: "Access",
+  },
+  {
+    adminOnly: true,
+    id: "kiln",
+    kinds: [
+      {
+        description: "A new Kiln release is out.",
+        kind: "kiln.release",
+        label: "Update available",
+      },
+      {
+        description: "Kiln moved to a newer version.",
+        kind: "kiln.updated",
+        label: "Updated",
+      },
+    ],
+    label: "Kiln",
   },
 ] as const satisfies ReadonlyArray<{
   adminOnly: boolean
   id: string
   kinds: ReadonlyArray<{
+    description: string
     inboxRequired?: boolean
     kind: NotificationKind
     label: string
