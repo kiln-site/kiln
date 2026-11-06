@@ -212,8 +212,7 @@ Hearth creates a new database first, so one that can't be made leaves no app,
 then records the app with the connection's variables in its environment:
 `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, and `DB_NAME`, which Redis and
 Valkey don't have. They're an ordinary part of the environment, copied once:
-edit them like any other, and change `DB_USER` or `DB_PASS` after changing the
-database's credentials.
+edit them like any other, and change `DB_PASS` after rotating the password.
 
 The Relay saves the connection when the app's provisioning job runs, whether
 or not the database exists yet. A deployment waits while a database the app

@@ -26,7 +26,6 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import {
   DATABASE_DUMP_ACCEPT,
-  EditDatabaseCredentialsButton,
   ImportDatabaseDialog,
   RotateDatabasePasswordButton,
   useDatabaseExport,
@@ -182,27 +181,13 @@ export function DatabaseCredentialsSection({
             }
           />
           {canRotate ? (
-            <>
-              <RotateDatabasePasswordButton
-                database={database}
-                disabledReason={
-                  available
-                    ? undefined
-                    : "Reconnect this database's Relay first"
-                }
-                size="sm"
-              />
-              <EditDatabaseCredentialsButton
-                database={database}
-                disabledReason={
-                  available
-                    ? undefined
-                    : "Reconnect this database's Relay first"
-                }
-                size="sm"
-                username={values?.username}
-              />
-            </>
+            <RotateDatabasePasswordButton
+              database={database}
+              disabledReason={
+                available ? undefined : "Reconnect this database's Relay first"
+              }
+              size="sm"
+            />
           ) : null}
         </>
       }

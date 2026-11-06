@@ -238,16 +238,6 @@ export class FakeDocker {
    */
   readonly programFailures = new Map<string, string>()
   /**
-   * For a program whose result depends on what it's asked: what it prints,
-   * how it fails, or undefined to run as it otherwise would.
-   */
-  programAnswers:
-    | ((
-        argv: ReadonlyArray<string>,
-        input: string
-      ) => string | { readonly failure: string } | undefined)
-    | null = null
-  /**
    * Programs whose exec stream Docker breaks with an error frame (as it does
    * for an error it hits after answering) instead of their output; for a
    * one-off container (`run --rm -i`), its image.
@@ -336,7 +326,6 @@ export class FakeDocker {
     this.#repoDigests.clear()
     this.unhealthyImages.clear()
     this.programFailures.clear()
-    this.programAnswers = null
     this.streamErrors.clear()
     this.tailscale.controlPlaneReachable = true
     this.tailscale.machines.clear()
@@ -1523,9 +1512,6 @@ export class FakeDocker {
     const client = clientOf(argv)
     const failure = this.programFailures.get(client)
     if (failure !== undefined) throw new DockerFailure(failure)
-    const answer = this.programAnswers?.(argv, input.toString())
-    if (typeof answer === "string") return answer
-    if (answer) throw new DockerFailure(answer.failure)
     if (["mysqldump", "mariadb-dump", "pg_dump"].includes(client)) {
       return container.sqlDump
     }

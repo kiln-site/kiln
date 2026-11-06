@@ -3,7 +3,6 @@ import { describe, expect, it } from "vite-plus/test"
 import {
   databaseNameFieldSchema,
   databaseNameIssue,
-  databasePasswordSchema,
   databaseUsernameIssue,
   databaseUsernameSchema,
 } from "./database-login.js"
@@ -36,16 +35,5 @@ describe("database logins", () => {
     expect(databaseUsernameIssue("postgres", "default")).toBeNull()
     expect(databaseUsernameIssue("postgres", "postgres")).toBeNull()
     expect(databaseNameIssue("postgres", "mysql")).toBeNull()
-  })
-
-  it("takes any printable password, but none that spans lines", () => {
-    expect(databasePasswordSchema.safeParse(`p'a\\ss "w$rd`).success).toBe(true)
-    expect(databasePasswordSchema.safeParse("line\none-two").success).toBe(
-      false
-    )
-    expect(databasePasswordSchema.safeParse("short").success).toBe(false)
-    expect(databasePasswordSchema.safeParse("x".repeat(257)).success).toBe(
-      false
-    )
   })
 })

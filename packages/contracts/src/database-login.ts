@@ -7,17 +7,11 @@ type DatabaseEngine = "mariadb" | "mysql" | "postgres" | "redis" | "valkey"
 // users file, so they stay plain identifiers.
 const DATABASE_NAME_PATTERN = /^[a-z][a-z0-9_]{0,47}$/u
 const DATABASE_USERNAME_PATTERN = /^[a-z][a-z0-9_]{0,31}$/u
-// Printable ASCII, so a password can't span lines in an App's environment and
-// its length in characters is its length in bytes, as MySQL limits it.
-const DATABASE_PASSWORD_PATTERN = /^[\x20-\x7e]{8,256}$/u
 
 export const databaseNameFieldSchema = z.string().regex(DATABASE_NAME_PATTERN)
 export const databaseUsernameSchema = z
   .string()
   .regex(DATABASE_USERNAME_PATTERN)
-export const databasePasswordSchema = z
-  .string()
-  .regex(DATABASE_PASSWORD_PATTERN)
 
 /** What a new database may be given rather than have generated. */
 export const newDatabaseNamesShape = {
@@ -88,11 +82,4 @@ export function databaseUsernameIssue(
     (engine === "postgres" && username.startsWith("pg_"))
     ? `"${username}" is reserved by the database engine.`
     : null
-}
-
-/** Why this can't be a database's password, if it can't. */
-export function databasePasswordIssue(password: string): string | null {
-  return DATABASE_PASSWORD_PATTERN.test(password)
-    ? null
-    : "Use 8 to 256 letters, numbers, spaces, or symbols, without accents or emoji."
 }

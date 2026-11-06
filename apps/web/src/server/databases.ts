@@ -6,17 +6,14 @@ import {
   databaseEngineSupportsBrowsing,
   databaseEngineSupportsLogicalBackups,
   databaseEngineSchema,
-  databaseIdSchema,
   databaseMutateInputSchema,
   databaseMutateResultSchema,
   databaseOverviewSchema,
   databaseQueryInputSchema,
   databaseQueryResultSchema,
   databaseRowsInputSchema,
-  databasePasswordSchema,
   databaseRowsSchema,
-  databaseUsernameIssue,
-  databaseUsernameSchema,
+  databaseIdSchema,
   newDatabaseNamesShape,
   relayDatabaseNameSchema,
   relayIdSchema,
@@ -30,7 +27,7 @@ import {
   resourceLimitsInputSchema,
 } from "@workspace/contracts"
 import type { RelayManagedDatabase } from "@workspace/contracts"
-
+import { Effect, Result } from "effect"
 import { z } from "zod"
 
 import {
@@ -38,8 +35,8 @@ import {
   listManagedDatabaseRecordsEffect,
   loadManagedDatabaseCredentialEffect,
   renameManagedDatabaseRecordEffect,
+  rotateManagedDatabaseCredentialEffect,
 } from "@/effect/managed-databases"
-import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
   isPlatformAdmin,
@@ -56,6 +53,7 @@ import {
 } from "@/lib/resource-deletion.server"
 import { accessPermissions, grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
+import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { partKey, resourceKey, shared } from "@/operations/lanes"
 import { runOperationPromise } from "@/operations/operation"
@@ -86,15 +84,6 @@ const databaseInputSchema = z.strictObject({
 const databaseActionInputSchema = databaseInputSchema.extend({
   action: z.enum(["start", "stop", "restart"]),
 })
-const databaseCredentialsInputSchema = databaseInputSchema
-  .extend({
-    password: databasePasswordSchema.optional(),
-    username: databaseUsernameSchema.optional(),
-  })
-  .refine(
-    (input) => input.password !== undefined || input.username !== undefined,
-    "Choose a new username or password"
-  )
 const databaseLimitsInputSchema = databaseInputSchema.extend({
   limits: resourceLimitsInputSchema,
 })
@@ -370,58 +359,69 @@ export const updateManagedDatabaseLimits = createServerFn({ method: "POST" })
     })
   )
 
-// The change holds its own locks until it ends, so this holds none and waits
-// for it, for the person to hear how it went.
-const changeDatabaseCredentials = resourceOperation({
+// Reads the credentials it rotates once admitted, so a rotation never
+// starts from one another just replaced. It holds the database's
+// credentials, so another rotation, or anything that sends the password,
+// waits for it; a wipe holds the whole database.
+const rotateDatabasePassword = resourceOperation({
   kind: "database",
-  id: (input: z.infer<typeof databaseCredentialsInputSchema>) =>
-    input.databaseId,
+  id: (input: z.infer<typeof databaseInputSchema>) => input.databaseId,
   name: "database.credentials.rotate",
-  lock: null,
-  doing: "Changing this database's credentials",
+  lock: { part: "credentials" },
+  doing: "Changing this database's password",
   permission: () => "database.credentials.rotate",
   run: async (user, data) => {
-    await requiredRelay(data.relayId)
+    const relay = await requiredRelay(data.relayId)
     const credential = await requiredCredential(data.relayId, data.databaseId)
-    if (data.username !== undefined && data.username !== credential.username) {
-      const issue = databaseUsernameIssue(credential.engine, data.username)
-      if (issue) throw new Error(issue)
-    }
-    const { changeDatabaseLoginAndWait } =
-      await import("@/lib/database-credentials.server")
-    return runAppEffect(
-      "database.credentials.change",
-      changeDatabaseLoginAndWait(data, {
-        actorId: user.id,
-        authorize: promiseEffect(() =>
-          requireRelayPermission({
-            databaseId: data.databaseId,
-            permission: "database.credentials.rotate",
-            relayId: data.relayId,
-            user,
-          })
-        ),
-      })
+    const nextPassword = randomBytes(36).toString("base64url")
+    await databaseRpc(
+      relay,
+      "database.credentials.rotate",
+      {
+        currentPassword: credential.password,
+        databaseId: data.databaseId,
+        nextPassword,
+        username: credential.username,
+      },
+      180_000,
+      user.id
     )
+    const persisted = await promiseResult(() =>
+      runAppEffect(
+        "managedDatabases.credential.persistRotation",
+        rotateManagedDatabaseCredentialEffect(
+          data.relayId,
+          data.databaseId,
+          nextPassword
+        )
+      )
+    )
+    if (Result.isFailure(persisted)) {
+      await ignorePromise(() =>
+        databaseRpc(
+          relay,
+          "database.credentials.rotate",
+          {
+            currentPassword: nextPassword,
+            databaseId: data.databaseId,
+            nextPassword: credential.password,
+            username: credential.username,
+          },
+          180_000,
+          user.id
+        )
+      )
+      throw persisted.failure
+    }
+    publishDatabaseCredentialChange(relay.id, data.databaseId)
+    return { rotated: true }
   },
 })
 
 export const rotateManagedDatabasePassword = createServerFn({ method: "POST" })
   .validator(databaseInputSchema)
   .handler(async ({ data }) =>
-    runOperationPromise(
-      changeDatabaseCredentials,
-      { ...data, password: randomBytes(36).toString("base64url") },
-      { user: await requireEligibleResourceUser() }
-    )
-  )
-
-export const updateManagedDatabaseCredentials = createServerFn({
-  method: "POST",
-})
-  .validator(databaseCredentialsInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(changeDatabaseCredentials, data, {
+    runOperationPromise(rotateDatabasePassword, data, {
       user: await requireEligibleResourceUser(),
     })
   )
@@ -780,6 +780,18 @@ async function databaseOnRelay(
   return item.database?.provisioning ? "provisioning" : "running"
 }
 
+function publishDatabaseCredentialChange(
+  relayId: string,
+  databaseId: string
+): void {
+  publishRealtimeChange({
+    audience: { kind: "relays", relayIds: [relayId] },
+    scope: { databaseId, relayId },
+    topics: ["database-credentials"],
+    type: "hearth.invalidate",
+  })
+}
+
 function hasDatabasePermission(
   user: AuthenticatedUser,
   grants: ReadonlyArray<AccessGrant>,
@@ -796,5 +808,17 @@ function hasDatabasePermission(
         (grant.resourceType === "database" &&
           databaseId !== undefined &&
           grant.resourceId === databaseId))
+  )
+}
+
+function promiseResult<TResult>(run: () => Promise<TResult>) {
+  return Effect.runPromise(
+    Effect.result(Effect.tryPromise({ try: run, catch: (cause) => cause }))
+  )
+}
+
+async function ignorePromise(run: () => Promise<unknown>): Promise<void> {
+  await Effect.runPromise(
+    Effect.tryPromise({ try: run, catch: (cause) => cause }).pipe(Effect.ignore)
   )
 }

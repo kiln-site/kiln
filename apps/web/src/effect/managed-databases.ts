@@ -127,7 +127,7 @@ export const createManagedDatabaseRecordEffect = Effect.fn(
 }) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  const ciphertext = yield* encryptManagedDatabasePassword(input.password)
+  const ciphertext = yield* encryptPassword(input.password)
   yield* database.execute(
     "managed_databases_create",
     `INSERT INTO ${databaseTable("database")}
@@ -165,11 +165,9 @@ export const loadManagedDatabaseCredentialEffect = Effect.fn(
   )
   const row = rows.at(0)
   if (!row) return null
-  const decrypted = yield* decryptManagedDatabasePassword(
-    row.password_ciphertext
-  )
+  const decrypted = yield* decryptPassword(row.password_ciphertext)
   if (decrypted.needsRotation) {
-    const rotated = yield* encryptManagedDatabasePassword(decrypted.plaintext)
+    const rotated = yield* encryptPassword(decrypted.plaintext)
     const now = yield* Clock.currentTimeMillis
     yield* database.execute(
       "managed_database_credential_reencrypt",
@@ -188,20 +186,16 @@ export const loadManagedDatabaseCredentialEffect = Effect.fn(
 
 export const rotateManagedDatabaseCredentialEffect = Effect.fn(
   "managedDatabases.rotateCredential"
-)(function* (
-  relayId: string,
-  databaseId: string,
-  login: { password: string; username: string }
-) {
+)(function* (relayId: string, databaseId: string, password: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  const ciphertext = yield* encryptManagedDatabasePassword(login.password)
+  const ciphertext = yield* encryptPassword(password)
   const result = yield* database.execute(
     "managed_database_credential_rotate",
     `UPDATE ${databaseTable("database")}
-        SET password_ciphertext = ?, username = ?, updated_at = ?
+        SET password_ciphertext = ?, updated_at = ?
       WHERE relay_id = ? AND database_id = ?`,
-    [ciphertext, login.username, now, relayId, databaseId]
+    [ciphertext, now, relayId, databaseId]
   )
   if (result.affectedRows !== 1) {
     return yield* Effect.fail(new Error("Database record not found"))
@@ -266,7 +260,7 @@ function toRecord(row: ManagedDatabaseRow): ManagedDatabaseRecord {
   }
 }
 
-export function encryptManagedDatabasePassword(password: string) {
+function encryptPassword(password: string) {
   return Effect.try({
     try: () =>
       encryptWithKeyring(
@@ -282,7 +276,7 @@ export function encryptManagedDatabasePassword(password: string) {
   })
 }
 
-export function decryptManagedDatabasePassword(ciphertext: string) {
+function decryptPassword(ciphertext: string) {
   return Effect.try({
     try: () =>
       decryptWithKeyring(

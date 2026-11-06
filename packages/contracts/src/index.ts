@@ -26,7 +26,6 @@ import {
 } from "./database-browser.js"
 import {
   databaseNameFieldSchema,
-  databasePasswordSchema,
   databaseUsernameSchema,
 } from "./database-login.js"
 import {
@@ -215,7 +214,7 @@ export const relayManagedDatabaseSchema = z
   .object({
     containerId: z.string().nullable(),
     createdAt: z.string().datetime(),
-    databaseName: z.string().regex(/^[a-z][a-z0-9_]{0,47}$/u),
+    databaseName: databaseNameFieldSchema,
     engine: databaseEngineSchema,
     hostname: z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/u),
     id: databaseIdSchema,
@@ -250,7 +249,7 @@ export const relayCreateDatabaseSchema = z
     engine: databaseEngineSchema,
     id: databaseIdSchema,
     name: relayDatabaseNameSchema,
-    password: databasePasswordSchema,
+    password: z.string().min(24).max(256),
     username: databaseUsernameSchema,
   })
   .strict()
@@ -303,10 +302,9 @@ export type RelayResourceFreeze = z.infer<typeof relayResourceFreezeSchema>
 
 export const relayRotateDatabaseCredentialsSchema = z
   .object({
-    currentPassword: databasePasswordSchema,
+    currentPassword: z.string().min(24).max(256),
     databaseId: databaseIdSchema,
-    nextPassword: databasePasswordSchema,
-    nextUsername: databaseUsernameSchema,
+    nextPassword: z.string().min(24).max(256),
     username: databaseUsernameSchema,
   })
   .strict()
@@ -356,7 +354,7 @@ export const relayDatabaseNetworkImportResultSchema = z
 export const relayDatabaseExportSchema = z
   .object({
     databaseId: databaseIdSchema,
-    password: databasePasswordSchema,
+    password: z.string().min(24).max(256),
     username: databaseUsernameSchema,
   })
   .strict()

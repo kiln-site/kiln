@@ -4,14 +4,10 @@ import { useInstanceState } from "@/lib/instance-state"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
-  Check,
   CircleAlert,
   Copy,
   Eraser,
-  Eye,
-  EyeOff,
   LoaderCircle,
-  Pencil,
   RotateCw,
   Trash2,
   Upload,
@@ -32,12 +28,9 @@ import { showToast } from "@workspace/ui/components/sonner"
 import {
   databaseEngineSupportsLogicalBackups,
   databaseFileRootId,
-  databasePasswordIssue,
-  databaseUsernameIssue,
 } from "@workspace/contracts"
 
 import {
-  engineLabel,
   showDatabaseOperationError,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
@@ -45,7 +38,6 @@ import {
   DeleteConfirmationFields,
   useDeleteConfirmation,
 } from "@/components/delete-confirmation-fields"
-import { InstanceCard } from "@/components/instance-card"
 import { downloadRelayFile, uploadRelayFile } from "@/lib/relay-file-transfer"
 import {
   managedDatabaseCredentialQueryOptions,
@@ -56,7 +48,6 @@ import {
   exportManagedDatabase,
   importManagedDatabase,
   rotateManagedDatabasePassword,
-  updateManagedDatabaseCredentials,
   wipeManagedDatabase,
 } from "@/server/databases"
 
@@ -151,13 +142,7 @@ export function CredentialsDialog({
           state.observation.reachability === "connected" &&
           state.observation.inventory === "available" &&
           database.permissions.includes("database.credentials.rotate") ? (
-            <div className="flex flex-wrap gap-2">
-              <RotateDatabasePasswordButton database={database} />
-              <EditDatabaseCredentialsButton
-                database={database}
-                username={credential.data?.username}
-              />
-            </div>
+            <RotateDatabasePasswordButton database={database} />
           ) : (
             <span />
           )}
@@ -165,203 +150,6 @@ export function CredentialsDialog({
             Done
           </Button>
         </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// Sets the database's username or password by hand, for a login that has to
-// match something else. Rotating is the way to get a new generated password.
-export function EditDatabaseCredentialsButton({
-  database,
-  disabledReason,
-  size = "default",
-  username,
-}: {
-  database: Pick<ManagedDatabase, "engine" | "id" | "name" | "relayId">
-  disabledReason?: string
-  size?: "default" | "sm"
-  /** The current username, once it's loaded. */
-  username: string | undefined
-}) {
-  const [open, setOpen] = React.useState(false)
-  return (
-    <>
-      <Button
-        type="button"
-        size={size}
-        variant="outline"
-        disabled={Boolean(disabledReason) || username === undefined}
-        title={disabledReason}
-        onClick={() => setOpen(true)}
-      >
-        <Pencil />
-        Edit Credentials
-      </Button>
-      {open && username !== undefined ? (
-        <EditDatabaseCredentialsDialog
-          currentUsername={username}
-          database={database}
-          onOpenChange={setOpen}
-        />
-      ) : null}
-    </>
-  )
-}
-
-function EditDatabaseCredentialsDialog({
-  currentUsername,
-  database,
-  onOpenChange,
-}: {
-  currentUsername: string
-  database: Pick<ManagedDatabase, "engine" | "id" | "name" | "relayId">
-  onOpenChange: (open: boolean) => void
-}) {
-  const queryClient = useQueryClient()
-  const [username, setUsername] = React.useState(currentUsername)
-  const [password, setPassword] = React.useState("")
-  const [revealed, setRevealed] = React.useState(false)
-  const passwordId = React.useId()
-  const nextUsername = username.trim()
-  const renaming = nextUsername !== currentUsername
-  const usernameIssue = renaming
-    ? databaseUsernameIssue(database.engine, nextUsername)
-    : null
-  const passwordIssue = password ? databasePasswordIssue(password) : null
-  const update = useMutation({
-    mutationFn: () =>
-      updateManagedDatabaseCredentials({
-        data: {
-          databaseId: database.id,
-          relayId: database.relayId,
-          ...(password && { password }),
-          ...(renaming && { username: nextUsername }),
-        },
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.databases.credential(database.relayId, database.id),
-      })
-      showToast({ message: "Database credentials updated", type: "success" })
-      onOpenChange(false)
-    },
-  })
-  const changed = renaming || Boolean(password)
-  const canSave =
-    changed && !usernameIssue && !passwordIssue && !update.isPending
-  return (
-    <Dialog
-      open
-      onOpenChange={(nextOpen) => !update.isPending && onOpenChange(nextOpen)}
-    >
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Edit credentials</DialogTitle>
-          <DialogDescription>
-            Anything using the old credentials will need the new ones.
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          className="space-y-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (canSave) update.mutate()
-          }}
-        >
-          <div className="border border-border/75 bg-background/35 p-3">
-            <InstanceCard
-              instance={{
-                id: database.id,
-                kind: "database",
-                relayId: database.relayId,
-              }}
-              meta={engineLabel(database.engine)}
-              name={database.name}
-              showFavorite={false}
-            />
-          </div>
-          <label className="block">
-            <span className="mb-2 block text-xs font-medium">Username</span>
-            <Input
-              autoCapitalize="none"
-              autoComplete="off"
-              autoCorrect="off"
-              spellCheck={false}
-              aria-invalid={Boolean(usernameIssue)}
-              className="font-mono"
-              maxLength={32}
-              value={username}
-              onChange={(event) => setUsername(event.currentTarget.value)}
-            />
-            {usernameIssue ? (
-              <span className="mt-1.5 block text-xs text-destructive">
-                {usernameIssue}
-              </span>
-            ) : null}
-          </label>
-          <div>
-            <label
-              className="mb-2 block text-xs font-medium"
-              htmlFor={passwordId}
-            >
-              New password
-            </label>
-            <div className="relative">
-              <Input
-                id={passwordId}
-                autoComplete="new-password"
-                aria-invalid={Boolean(passwordIssue)}
-                className="pr-9 font-mono"
-                maxLength={256}
-                placeholder="Keep the current password"
-                type={revealed ? "text" : "password"}
-                value={password}
-                onChange={(event) => setPassword(event.currentTarget.value)}
-              />
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                className="absolute top-1/2 right-1 -translate-y-1/2"
-                aria-label={revealed ? "Hide password" : "Reveal password"}
-                aria-pressed={revealed}
-                onClick={() => setRevealed((current) => !current)}
-              >
-                {revealed ? <EyeOff /> : <Eye />}
-              </Button>
-            </div>
-            {passwordIssue ? (
-              <p className="mt-1.5 text-xs text-destructive">{passwordIssue}</p>
-            ) : null}
-          </div>
-          {renaming && database.engine === "postgres" ? (
-            <p className="text-xs text-muted-foreground">
-              Changing the username restarts the database.
-            </p>
-          ) : null}
-          {update.error ? (
-            <p className="text-xs text-destructive">{update.error.message}</p>
-          ) : null}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={update.isPending}
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={!canSave}>
-              {update.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Check />
-              )}
-              Save Credentials
-            </Button>
-          </DialogFooter>
-        </form>
       </DialogContent>
     </Dialog>
   )

@@ -27,12 +27,7 @@ export const resourceOperation = <
   readonly name: string
   readonly doing: string | ((input: Input) => string)
   readonly permission: (input: Input) => AccessPermission
-  /**
-   * Null for one that hands the change to a durable operation of its own,
-   * which holds the locks, and whose Relay commands are what's audited: this
-   * can end, as with a restart, while the change goes on.
-   */
-  readonly lock: LockPolicy | null | ((input: Input) => LockPolicy)
+  readonly lock: LockPolicy | ((input: Input) => LockPolicy)
   readonly alsoLocks?: (input: Input) => ReadonlyArray<LaneLock>
   readonly run: (user: AuthenticatedUser, input: Input) => Promise<A>
 }) =>
@@ -52,35 +47,20 @@ export const resourceOperation = <
           )
         )
       ),
-    locks: ({ input }) => {
-      const policy =
+    locks: ({ input }) => [
+      lockAs(
+        resourceKey(definition.kind, input.relayId, definition.id(input)),
         typeof definition.lock === "function"
           ? definition.lock(input)
           : definition.lock
-      return [
-        ...(policy === null
-          ? []
-          : [
-              lockAs(
-                resourceKey(
-                  definition.kind,
-                  input.relayId,
-                  definition.id(input)
-                ),
-                policy
-              ),
-            ]),
-        ...(definition.alsoLocks?.(input) ?? []),
-      ]
-    },
+      ),
+      ...(definition.alsoLocks?.(input) ?? []),
+    ],
     run: ({ context: user, input }) =>
       promiseEffect(() => definition.run(user, input)),
-    audit: ({ input }) =>
-      definition.lock === null
-        ? null
-        : {
-            id: definition.id(input),
-            kind: definition.kind,
-            relayId: input.relayId,
-          },
+    audit: ({ input }) => ({
+      id: definition.id(input),
+      kind: definition.kind,
+      relayId: input.relayId,
+    }),
   })
