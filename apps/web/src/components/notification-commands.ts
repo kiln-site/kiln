@@ -59,7 +59,6 @@ export function notificationCommands(
     href ? [link("open", label, href, true)] : []
   switch (content.kind) {
     case "kiln.updated":
-    case "relay.updated":
       return [link("changelog", "Changelog", "/infra/updates/changelog")]
     case "kiln.release":
       return [

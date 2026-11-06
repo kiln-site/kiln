@@ -9,6 +9,10 @@ import {
   replaceNotificationEffect,
 } from "@/effect/notifications"
 import { databaseTable } from "@/lib/database-config"
+import {
+  kilnReleaseTagUrl,
+  mergeKilnUpdates,
+} from "@/lib/kiln-update-notifications"
 import { isKilnReleaseVersion } from "@/lib/release-version"
 import { notificationAudienceEffect } from "@/lib/resource-audience.server"
 import { exclusive, partKey, relayKey } from "@/operations/lanes"
@@ -16,10 +20,10 @@ import { operation, runOperation } from "@/operations/operation"
 
 /**
  * Records the version a Relay connected with and, when it's newer than the
- * one recorded, tells those who can update the Relay. Each Relay has one such
- * notification, which keeps where the unread one started from. Reconnecting
- * on the same version does nothing, and the first version seen is only
- * recorded. They commit together, so an update is told once.
+ * one recorded, tells those who can update the Relay, as part of the one Kiln
+ * update notification each person has. Reconnecting on the same version does
+ * nothing, and the first version seen is only recorded. They commit together,
+ * so an update is told once.
  */
 export const recordRelayVersionEffect = Effect.fn(
   "notifications.recordRelayVersion"
@@ -48,7 +52,7 @@ export const recordRelayVersionEffect = Effect.fn(
           compareKilnReleaseVersions(version, previous) !== 1
         )
           return []
-        const resource = {
+        const relay = {
           id: relayId,
           name: row.name,
           relayId,
@@ -57,32 +61,22 @@ export const recordRelayVersionEffect = Effect.fn(
         const recipients = yield* notificationAudienceEffect(
           { relayId, resourceId: relayId, resourceType: "relay" },
           "relay.update",
-          "relay.updated"
+          "kiln.updated"
         )
         for (const userId of new Set(recipients))
           yield* replaceNotificationEffect(
             userId,
-            "relay.updated",
-            (unread) => {
-              const first = unread.find(
-                (notification) => notification.kind === "relay.updated"
-              )
-              return {
-                kind: "relay.updated",
-                previousVersion:
-                  first?.kind === "relay.updated"
-                    ? first.previousVersion
-                    : previous,
-                resource,
+            "kiln.updated",
+            (unread) =>
+              mergeKilnUpdates(unread, {
+                hearth: false,
+                kind: "kiln.updated",
+                previousVersion: previous,
+                relays: [relay],
+                url: kilnReleaseTagUrl(version),
                 version,
-              }
-            },
-            {
-              matches: (content) =>
-                content.kind === "relay.updated" &&
-                content.resource.id === relayId,
-              sourceKey: `relay.updated:${relayId}:${version}`,
-            }
+              }),
+            { sourceKey: `relay.updated:${relayId}:${version}` }
           )
         return recipients
       })

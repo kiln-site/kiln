@@ -16,15 +16,14 @@ The same kind of notification about the same instance is one row.
 matches, and folds in what the unread ones said, so the count starts over once
 someone has read it.
 
-| Notification     | While it's open                                            |
-| ---------------- | ---------------------------------------------------------- |
-| App deployed     | One per App, counting deployments and failures             |
-| Deploy failed    | The same row, until a later deployment succeeds            |
-| Disk limit       | Its usage stays current; it goes away once the data fits   |
-| Kiln updated     | One row, from the first unread version to the newest       |
-| Relay updated    | One per Relay, from the first unread version to the newest |
-| Update available | The newest replaces older ones; installing it clears it    |
-| Vulnerabilities  | One report across everything, see [Security](security.md)  |
+| Notification     | While it's open                                              |
+| ---------------- | ------------------------------------------------------------ |
+| App deployed     | One per App, counting deployments and failures               |
+| Deploy failed    | The same row, until a later deployment succeeds              |
+| Disk limit       | Its usage stays current; it goes away once the data fits     |
+| Kiln updated     | One row for Hearth and every Relay, oldest version to newest |
+| Update available | The newest replaces older ones; installing it clears it      |
+| Vulnerabilities  | One report across everything, see [Security](security.md)    |
 
 Invitations, removed access, and game server moves and copies never merge: each
 is its own event, and each can need its own answer.
@@ -34,8 +33,10 @@ off, keeps what they have. The exception is what it settles: a failed deployment
 goes away when their own next one works.
 
 A Relay says what version it runs when it connects, so a version newer than the
-one recorded is an update, however it got there. Those who can update the Relay
-hear of it. Each sample it sends tries again if that couldn't be recorded.
+one recorded is an update, however it got there. Each sample it sends tries
+again if that couldn't be recorded. It joins Hearth's update in one "Kiln has
+been updated" row: platform admins hear of Hearth, those who can update a Relay
+hear of it, and each person's row lists what they can update.
 
 A disk limit warning that's settled is cleared and gives up its source key,
 cleared copies included, so the next time the data outgrows the limit warns

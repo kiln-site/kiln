@@ -29,22 +29,18 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     url: releaseUrlSchema,
     version: z.string(),
   }),
-  // A newer update replaces it, keeping where the unread one started from.
+  // Kiln moved to a newer version: Hearth, unless `hearth` says otherwise, and
+  // `relays`. Each person has one, showing what they can update. A newer
+  // update replaces it, adding in what it said while it's unread.
   z.object({
+    hearth: z.boolean().optional(),
     kind: z.literal("kiln.updated"),
+    relays: z.array(notificationResourceSchema).optional(),
     // Release names, e.g. "v0.1.0 Nightly #17", when GitHub listed them.
     name: z.string().optional(),
     previousName: z.string().optional(),
     previousVersion: z.string(),
     url: releaseUrlSchema.nullable(),
-    version: z.string(),
-  }),
-  // A Relay came back on a newer version. A newer update replaces it, keeping
-  // where the unread one started from.
-  z.object({
-    kind: z.literal("relay.updated"),
-    previousVersion: z.string(),
-    resource: notificationResourceSchema,
     version: z.string(),
   }),
   z.object({
@@ -142,10 +138,29 @@ const legacyVulnerabilitiesSchema = z
     })
   )
 
+// Relay updates had a notification of their own, one per Relay. Ones still
+// stored read as a Kiln update of their Relay.
+const legacyRelayUpdatedSchema = z
+  .object({
+    kind: z.literal("relay.updated"),
+    previousVersion: z.string(),
+    resource: notificationResourceSchema,
+    version: z.string(),
+  })
+  .transform(({ previousVersion, resource, version }): NotificationContent => ({
+    hearth: false,
+    kind: "kiln.updated",
+    previousVersion,
+    relays: [resource],
+    url: null,
+    version,
+  }))
+
 /** A stored notification's content, including kinds a newer one replaced. */
 export const storedNotificationContentSchema = z.union([
   notificationContentSchema,
   legacyVulnerabilitiesSchema,
+  legacyRelayUpdatedSchema,
 ])
 
 /**
@@ -154,6 +169,7 @@ export const storedNotificationContentSchema = z.union([
 export const formerNotificationKinds: Partial<
   Record<NotificationKind, ReadonlyArray<string>>
 > = {
+  "kiln.updated": ["relay.updated"],
   "security.report": ["security.vulnerabilities"],
 }
 

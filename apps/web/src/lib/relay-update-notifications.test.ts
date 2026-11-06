@@ -6,13 +6,14 @@ import { vi } from "vite-plus/test"
 import {
   listNotificationsEffect,
   markNotificationsReadEffect,
+  notifyUsersEffect,
 } from "@/effect/notifications"
 import {
   recordConnectedRelayVersionEffect,
   recordRelayVersionEffect,
 } from "@/lib/relay-update-notifications"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertRelay, insertUser, selectRows } from "@/test/seed"
+import { insertRelay, insertRows, insertUser, selectRows } from "@/test/seed"
 
 const connected = vi.hoisted(() => ({ version: null as string | null }))
 
@@ -37,11 +38,18 @@ const seed = (version: string | null) =>
 
 const inbox = Effect.map(listNotificationsEffect("owner"), (notifications) =>
   notifications.flatMap(({ content }) =>
-    content.kind === "relay.updated"
+    content.kind === "kiln.updated"
       ? [[content.previousVersion, content.version]]
       : []
   )
 )
+
+const relayResource = {
+  id: relay.id,
+  name: relay.name,
+  relayId: relay.id,
+  type: "relay",
+} as const
 
 const recorded = Effect.map(
   selectRows<{ node_version: string | null }>("relay"),
@@ -91,6 +99,93 @@ describeMysql("Relay update notifications", () => {
         connected.version = null
         assert.isNull(yield* recordConnectedRelayVersionEffect(relay.id))
         assert.strictEqual(yield* recorded, "1.2.0")
+      })
+    )
+
+    it.effect("adds Relays and Hearth into one update while it's unread", () =>
+      Effect.gen(function* () {
+        yield* seed("1.0.0")
+        yield* insertRelay("relay-b", {
+          created_by: "owner",
+          name: "Sydney",
+          node_version: "1.0.0",
+        })
+        yield* TestClock.setTime(1_000)
+        yield* notifyUsersEffect(["owner"], "kiln.updated:1.1.0", {
+          kind: "kiln.updated",
+          name: "v1.1.0 Nightly",
+          previousName: "v0.9.0 Nightly",
+          previousVersion: "0.9.0",
+          url: null,
+          version: "1.1.0",
+        })
+        yield* TestClock.setTime(2_000)
+        yield* recordRelayVersionEffect(relay.id, "1.1.0")
+        yield* TestClock.setTime(3_000)
+        yield* recordRelayVersionEffect("relay-b", "1.1.0")
+
+        const [only, ...others] = yield* listNotificationsEffect("owner")
+        assert.deepStrictEqual(others, [])
+        // The URL names whichever repository this Kiln updates from.
+        assert.deepStrictEqual(
+          { ...only?.content, url: null },
+          {
+            hearth: true,
+            kind: "kiln.updated",
+            name: "v1.1.0 Nightly",
+            previousName: "v0.9.0 Nightly",
+            previousVersion: "0.9.0",
+            relays: [
+              relayResource,
+              {
+                ...relayResource,
+                id: "relay-b",
+                name: "Sydney",
+                relayId: "relay-b",
+              },
+            ],
+            url: null,
+            version: "1.1.0",
+          }
+        )
+      })
+    )
+
+    it.effect("shows someone only the Relays they can update", () =>
+      Effect.gen(function* () {
+        yield* seed("1.0.0")
+        yield* recordRelayVersionEffect(relay.id, "1.1.0")
+        const [only] = yield* listNotificationsEffect("owner")
+        assert.deepStrictEqual(
+          only?.content.kind === "kiln.updated"
+            ? [only.content.hearth, only.content.relays]
+            : null,
+          [false, [relayResource]]
+        )
+      })
+    )
+
+    it.effect("adds in a Relay update stored before they merged", () =>
+      Effect.gen(function* () {
+        yield* seed("1.0.0")
+        yield* TestClock.setTime(1_000)
+        yield* insertRows("notification", {
+          created_at: 1_000,
+          data: JSON.stringify({
+            previousVersion: "0.9.0",
+            resource: { ...relayResource, id: "relay-b", name: "Sydney" },
+            version: "1.0.0",
+          }),
+          id: "11111111-1111-4111-8111-111111111111",
+          kind: "relay.updated",
+          source_key: "relay.updated:relay-b:1.0.0",
+          user_id: "owner",
+        })
+        assert.deepStrictEqual(yield* inbox, [["0.9.0", "1.0.0"]])
+
+        yield* TestClock.setTime(2_000)
+        yield* recordRelayVersionEffect(relay.id, "1.1.0")
+        assert.deepStrictEqual(yield* inbox, [["0.9.0", "1.1.0"]])
       })
     )
 
