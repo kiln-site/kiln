@@ -1,7 +1,24 @@
 import { createHash, randomBytes } from "node:crypto"
+import { lookup } from "node:dns/promises"
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
+
+import {
+  cacheNamespace,
+  grantPattern,
+  sqlString,
+  stackResources,
+  withBoxLock,
+} from "./dev-shared.mjs"
+
+// Raise with `io.kiln.dev.shared.version` in compose.dev.shared.yaml.
+const SHARED_VERSION = "1"
+const MYSQL_CONTAINER = "kiln-dev-mysql"
+const CACHE_CONTAINER = "kiln-dev-cache"
+const MYSQL_VOLUME = "kiln-dev-mysql"
+const SHARED_PROJECT = "kiln-dev-shared"
+const RCLONE_IMAGE = "rclone/rclone:1.74"
 
 const command = process.argv[2] ?? "start"
 const initialDirectory = process.cwd()
@@ -26,7 +43,8 @@ const environmentFile = resolve(primaryRoot, ".env")
 const network = developmentNetwork()
 const orbstack = network === "orbstack"
 const webPort = developmentPort("KILN_DEV_WEB_PORT", 3000)
-const mysqlPort = developmentPort("KILN_DEV_MYSQL_PORT", 3306)
+// Not 3306, which a stack from before shared services may still hold.
+const mysqlPort = developmentPort("KILN_DEV_MYSQL_PORT", 3307)
 const sftpPort = developmentPort("KILN_DEV_SFTP_PORT", 2022)
 const hearthUrl = orbstack
   ? `https://${stack}.orb.local`
@@ -37,6 +55,8 @@ const composeFiles = [
   resolve(worktreeRoot, "compose.dev.yaml"),
   ...(orbstack ? [resolve(worktreeRoot, "compose.dev.orbstack.yaml")] : []),
 ]
+const sharedComposeFile = resolve(worktreeRoot, "compose.dev.shared.yaml")
+const resources = stackResources(stack)
 
 if (command === "setup") {
   setupEnvironment()
@@ -46,8 +66,12 @@ if (command === "setup") {
 }
 
 requireEnvironment()
+const settings = parseEnvironment(readFileSync(environmentFile, "utf8"))
 if (["start", "up", "down", "destroy", "refresh"].includes(command)) {
   requireProjectOwnership()
+}
+if (["start", "up", "refresh"].includes(command)) {
+  refuseLegacyStack()
 }
 if (["start", "up", "refresh"].includes(command)) {
   writeFileSync(projectFile, `${stack}\n`)
@@ -58,11 +82,21 @@ if (command === "start" || command === "up" || command === "refresh") {
 
 const composeEnvironment = {
   ...process.env,
+  CACHE_HOST: CACHE_CONTAINER,
+  CACHE_PASSWORD: "",
+  CACHE_PORT: "6379",
+  CACHE_TLS: "false",
+  CACHE_USERNAME: "",
+  DB_NAME: resources.database,
+  DB_PORT: "3306",
+  DB_USERNAME: resources.user,
   KILN_DEV_ENV_FILE: environmentFile,
   KILN_DEV_WEB_PORT: String(webPort),
   KILN_DEV_MYSQL_PORT: String(mysqlPort),
   KILN_DEV_SFTP_PORT: String(sftpPort),
   KILN_INSTALLATION_ID: stack,
+  KILN_RELAY_PLATFORM_DATABASE_CONTAINER: MYSQL_CONTAINER,
+  KILN_RELAY_PLATFORM_DATABASE_NAME: resources.database,
   KILN_RELAY_GAME_HOST: process.env.KILN_RELAY_GAME_HOST?.trim() || "localhost",
   KILN_RELAY_HOST: relayHost,
   KILN_RELAY_PORT: "4100",
@@ -79,58 +113,673 @@ const composeEnvironment = {
 
 switch (command) {
   case "start":
+    await prepareStack()
     printStack()
     compose(["up", "hearth"], composeEnvironment)
     break
   case "up":
+    await prepareStack()
     printStack()
     compose(["up", "--detach", "--wait", "hearth"], composeEnvironment)
+    warnOutsideSlice(stackContainers())
     console.log("\nDevelopment stack is ready.")
     break
   case "down":
     compose(["down"], composeEnvironment)
     break
   case "destroy":
-    destroyNamespacedContainers()
-    compose(["down"], composeEnvironment)
-    destroyNamespacedNetworks()
-    compose(["down", "--volumes", "--remove-orphans"], composeEnvironment)
+    await destroy()
     break
   case "logs":
     compose(["logs", "--follow", "hearth", "relay"], composeEnvironment)
     break
   case "refresh":
-    refresh()
+    await refresh()
     break
   case "url":
     console.log(hearthUrl)
     break
   case "test":
-    // Web tests, including the real-MySQL suites, against this stack's MySQL.
-    run(
-      process.execPath,
-      [
-        resolve(worktreeRoot, "scripts/verify.mjs"),
-        "hearth",
-        ...process.argv.slice(3),
-      ],
-      {
-        ...process.env,
-        KILN_TEST_MYSQL: "1",
-        DB_HOST: orbstack ? `mysql.${stack}.orb.local` : "127.0.0.1",
-        DB_PORT: orbstack ? "3306" : String(mysqlPort),
-        DB_NAME: process.env.KILN_TEST_DB_NAME ?? "kiln_test",
-        DB_USERNAME: "root",
-        DB_PASSWORD: "kiln-root",
-      },
-      worktreeRoot
-    )
+    await test()
     break
   case "list":
     run("docker", ["compose", "ls"], process.env)
     break
+  case "shared":
+    await shared(process.argv[3] ?? "status", process.argv.slice(4))
+    break
   default:
     fail(`Unknown development Docker command: ${command}`)
+}
+
+// Web tests, including the real-MySQL suites, on the box's MySQL. They run as
+// this stack's user, which can make its own test databases and no others, and
+// which destroy drops, so a run can't bring them back afterwards.
+async function test() {
+  await withBoxLock(() => {
+    ensureShared()
+    provisionStack()
+  })
+  const override = process.env.KILN_TEST_DB_NAME
+  run(
+    process.execPath,
+    [
+      resolve(worktreeRoot, "scripts/verify.mjs"),
+      "hearth",
+      ...process.argv.slice(3),
+    ],
+    {
+      ...process.env,
+      KILN_TEST_MYSQL: "1",
+      DB_HOST: "127.0.0.1",
+      DB_PORT: publishedMysqlPort(),
+      DB_NAME: override ?? resources.testDatabase,
+      DB_USERNAME: override ? "root" : resources.user,
+      DB_PASSWORD: override ? "kiln-root" : settings.get("DB_PASSWORD"),
+    },
+    worktreeRoot
+  )
+}
+
+// Reads where the box's MySQL is published, which is what the checkout that
+// started it chose.
+function publishedMysqlPort() {
+  const published = capture("docker", ["port", MYSQL_CONTAINER, "3306/tcp"])
+  return published.split("\n")[0]?.split(":").pop() ?? String(mysqlPort)
+}
+
+async function prepareStack() {
+  const s3Environment = await resolveS3Host()
+  Object.assign(composeEnvironment, s3Environment)
+  await withBoxLock(() => {
+    ensureShared()
+    provisionStack()
+  })
+  warnOutsideSlice([MYSQL_CONTAINER, CACHE_CONTAINER])
+}
+
+// Containers on a box without tailnet DNS can't resolve the S3 endpoint's
+// name themselves, so they get what this host resolves it to.
+async function resolveS3Host() {
+  const endpoint = settings.get("KILN_DEV_S3_ENDPOINT")
+  if (!endpoint) return {}
+  const host = new URL(endpoint).hostname
+  try {
+    const { address } = await lookup(host, { family: 4 })
+    return { KILN_DEV_S3_ADDRESS: address, KILN_DEV_S3_HOST: host }
+  } catch {
+    console.warn(`Could not resolve ${host}; backups to it won't work here.`)
+    return {}
+  }
+}
+
+function refuseLegacyStack() {
+  if (!volumeExists(`${stack}_hearth-mysql`)) return
+  fail(
+    `Stack ${stack} keeps its data in its own MySQL, from before shared services, which this revision can't run. Run pnpm dev:docker:destroy to delete it and start fresh, or stay on an older revision to keep it.`
+  )
+}
+
+function volumeExists(name) {
+  return (
+    spawnSync("docker", ["volume", "inspect", name], {
+      cwd: worktreeRoot,
+      env: process.env,
+    }).status === 0
+  )
+}
+
+function composeShared(arguments_) {
+  run(
+    "docker",
+    [
+      "compose",
+      "--env-file",
+      environmentFile,
+      "--project-name",
+      SHARED_PROJECT,
+      "--file",
+      sharedComposeFile,
+      ...arguments_,
+    ],
+    {
+      ...process.env,
+      KILN_DEV_MYSQL_PORT: String(mysqlPort),
+    }
+  )
+}
+
+function sharedContainerState(container) {
+  const result = spawnSync(
+    "docker",
+    [
+      "inspect",
+      "--format",
+      '{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}|{{index .Config.Labels "io.kiln.dev.shared.version"}}',
+      container,
+    ],
+    { cwd: worktreeRoot, encoding: "utf8", env: process.env }
+  )
+  if (result.status !== 0) return null
+  const [status, health, version] = result.stdout.trim().split("|")
+  return { health, status, version }
+}
+
+// Leaves healthy services alone: they carry every other stack on the box, and
+// this checkout may be on another revision. Call with the box lock held.
+function ensureShared() {
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const states = [MYSQL_CONTAINER, CACHE_CONTAINER].map(sharedContainerState)
+    const present = states.filter(Boolean)
+    for (const state of present) {
+      if (state.version !== SHARED_VERSION) {
+        fail(
+          `The box's shared services are version ${state.version || "unknown"}, and this checkout needs ${SHARED_VERSION}. Run pnpm dev:docker:shared up --recreate when no stack is busy; their data stays.`
+        )
+      }
+    }
+    if (
+      present.length === 2 &&
+      present.every((state) => state.health === "healthy")
+    ) {
+      return
+    }
+    if (present.some((state) => state.health === "unhealthy")) {
+      fail(
+        "The box's shared services are unhealthy. See pnpm dev:docker:shared status and their logs; they aren't recreated automatically."
+      )
+    }
+    if (present.some((state) => state.health === "starting")) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000)
+      continue
+    }
+    composeShared(["up", "--detach", "--wait", "--no-recreate"])
+  }
+  fail("Timed out waiting for the box's shared services.")
+}
+
+function mysql(statements) {
+  const result = spawnSync(
+    "docker",
+    [
+      "exec",
+      "--interactive",
+      "--env",
+      "MYSQL_PWD=kiln-root",
+      MYSQL_CONTAINER,
+      "mysql",
+      "--user=root",
+      "--batch",
+      "--skip-column-names",
+    ],
+    {
+      cwd: worktreeRoot,
+      encoding: "utf8",
+      env: process.env,
+      input: statements,
+    }
+  )
+  if (result.status !== 0) {
+    process.stderr.write(result.stderr ?? "")
+    fail("A statement on the box's MySQL failed.")
+  }
+  return result.stdout.trim()
+}
+
+// Rows on the MySQL they describe, so they can't disagree with it about what
+// exists. Everything teardown deletes is named here, never guessed from a
+// pattern.
+const REGISTRY = `
+CREATE DATABASE IF NOT EXISTS kiln_dev;
+CREATE TABLE IF NOT EXISTS kiln_dev.stacks (
+  stack VARCHAR(63) NOT NULL PRIMARY KEY,
+  app_database VARCHAR(64) NOT NULL,
+  app_user VARCHAR(32) NOT NULL,
+  test_database VARCHAR(64) NOT NULL,
+  checkout VARCHAR(1024) NOT NULL,
+  state ENUM('provisioning', 'ready', 'destroying') NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+`
+
+function parseRegistryRow(line) {
+  const [name, database, user, testDatabase, checkout, state] = line.split("\t")
+  return { checkout, database, name, state, testDatabase, user }
+}
+
+function registryRows() {
+  const rows = mysql(`${REGISTRY}
+    SELECT stack, app_database, app_user, test_database, checkout, state
+    FROM kiln_dev.stacks ORDER BY stack;`)
+  return rows ? rows.split("\n").map(parseRegistryRow) : []
+}
+
+function registryRow(name) {
+  return registryRows().find((row) => row.name === name) ?? null
+}
+
+// Reserves the stack before making anything, so a stop halfway leaves an
+// owner to resume it, and never takes over what it didn't make. Call with the
+// box lock held.
+function provisionStack() {
+  const checkout = resolve(worktreeRoot)
+  const row = registryRow(stack)
+  if (row?.state === "destroying") {
+    fail(`Stack ${stack} is being destroyed. Finish with pnpm dev:docker:destroy.`)
+  }
+  if (row && row.checkout !== checkout) {
+    fail(
+      `Stack ${stack} belongs to ${row.checkout}. Destroy it there, or run pnpm dev:docker:shared remove ${stack} if that checkout is gone.`
+    )
+  }
+  if (!row) {
+    const existing = mysql(`
+      SELECT schema_name FROM information_schema.schemata
+      WHERE schema_name = ${sqlString(resources.database)};
+      SELECT user FROM mysql.user WHERE user = ${sqlString(resources.user)};`)
+    if (existing) {
+      fail(
+        `${existing.split("\n").join(" and ")} already exist on the box's MySQL with no registered stack; refusing to adopt them.`
+      )
+    }
+    mysql(`INSERT INTO kiln_dev.stacks
+      (stack, app_database, app_user, test_database, checkout, state)
+      VALUES (${[stack, resources.database, resources.user, resources.testDatabase, checkout, "provisioning"].map(sqlString).join(", ")});`)
+  }
+  const user = `${sqlString(resources.user)}@'%'`
+  const password = sqlString(settings.get("DB_PASSWORD"))
+  mysql(`
+    CREATE DATABASE IF NOT EXISTS \`${resources.database}\`;
+    CREATE USER IF NOT EXISTS ${user} IDENTIFIED BY ${password};
+    ALTER USER ${user} IDENTIFIED BY ${password};
+    GRANT ALL ON \`${grantPattern(resources.database)}\`.* TO ${user};
+    GRANT ALL ON \`${grantPattern(resources.testDatabase)}%\`.* TO ${user};
+    UPDATE kiln_dev.stacks SET state = 'ready'
+    WHERE stack = ${sqlString(stack)};`)
+}
+
+// Deletes what the row names and nothing else: the user first, so a test run
+// still going can't recreate what follows.
+function dropStackData(row) {
+  const user = `${sqlString(row.user)}@'%'`
+  const sessions = mysql(`
+    SELECT id FROM information_schema.processlist
+    WHERE user = ${sqlString(row.user)};`)
+  mysql(`DROP USER IF EXISTS ${user};`)
+  for (const session of sessions.split("\n").filter(Boolean)) {
+    // A session may end by itself first.
+    spawnSync(
+      "docker",
+      [
+        "exec",
+        "--env",
+        "MYSQL_PWD=kiln-root",
+        MYSQL_CONTAINER,
+        "mysql",
+        "--user=root",
+        "--execute",
+        `KILL ${Number(session)}`,
+      ],
+      { cwd: worktreeRoot, env: process.env, stdio: "ignore" }
+    )
+  }
+  const databases = mysql(`
+    SELECT schema_name FROM information_schema.schemata
+    WHERE schema_name = ${sqlString(row.database)}
+      OR schema_name = ${sqlString(row.testDatabase)}
+      OR schema_name LIKE ${sqlString(`${grantPattern(row.testDatabase)}\\_%`)};`)
+  const drops = databases
+    .split("\n")
+    .filter(Boolean)
+    .map((name) => `DROP DATABASE IF EXISTS \`${name}\`;`)
+  if (drops.length > 0) mysql(drops.join("\n"))
+  dropCacheKeys(row.database)
+}
+
+function dropCacheKeys(database) {
+  const state = sharedContainerState(CACHE_CONTAINER)
+  // Its keys live in memory, so a stopped cache has none.
+  if (state?.status !== "running") return
+  const namespace = cacheNamespace({
+    database,
+    host: MYSQL_CONTAINER,
+    port: 3306,
+    tablePrefix: settings.get("DB_TABLE_PREFIX")?.trim() || "kiln_",
+  })
+  const script =
+    "local c='0' repeat local r=redis.call('SCAN',c,'MATCH',ARGV[1],'COUNT',1000) c=r[1] for _,k in ipairs(r[2]) do redis.call('UNLINK',k) end until c=='0'"
+  run(
+    "docker",
+    [
+      "exec",
+      CACHE_CONTAINER,
+      "sh",
+      "-ec",
+      'cli=$(command -v valkey-cli || command -v redis-cli); exec "$cli" -n "$0" EVAL "$1" 0 "$2"',
+      settings.get("CACHE_DATABASE")?.trim() || "0",
+      script,
+      `${namespace}:*`,
+    ],
+    process.env
+  )
+}
+
+// A stack's backups on the tailnet S3 endpoint, under the object prefix its
+// destination uses. Returns whether none are left.
+function purgeS3Prefix(name) {
+  const endpoint = settings.get("KILN_DEV_S3_ENDPOINT")
+  if (!endpoint) return true
+  const bucket = settings.get("KILN_DEV_S3_BUCKET") || "kiln-dev"
+  const prefix = [settings.get("KILN_DEV_S3_PREFIX"), "kiln", name]
+    .filter(Boolean)
+    .join("/")
+  const host = composeEnvironment.KILN_DEV_S3_HOST
+  const result = spawnSync(
+    "docker",
+    [
+      "run",
+      "--rm",
+      ...(host
+        ? ["--add-host", `${host}:${composeEnvironment.KILN_DEV_S3_ADDRESS}`]
+        : []),
+      "--env",
+      "RCLONE_CONFIG_S3_TYPE=s3",
+      "--env",
+      "RCLONE_CONFIG_S3_PROVIDER=Other",
+      "--env",
+      `RCLONE_CONFIG_S3_ENDPOINT=${endpoint}`,
+      "--env",
+      "RCLONE_CONFIG_S3_FORCE_PATH_STYLE=true",
+      "--env",
+      "RCLONE_CONFIG_S3_ACCESS_KEY_ID",
+      "--env",
+      "RCLONE_CONFIG_S3_SECRET_ACCESS_KEY",
+      RCLONE_IMAGE,
+      "--retries",
+      "2",
+      "delete",
+      `s3:${bucket}/${prefix}`,
+    ],
+    {
+      cwd: worktreeRoot,
+      env: {
+        ...process.env,
+        RCLONE_CONFIG_S3_ACCESS_KEY_ID: settings.get("KILN_DEV_S3_ACCESS_KEY"),
+        RCLONE_CONFIG_S3_SECRET_ACCESS_KEY: settings.get(
+          "KILN_DEV_S3_SECRET_KEY"
+        ),
+      },
+      stdio: "inherit",
+    }
+  )
+  if (result.status === 0) return true
+  console.error(`Could not purge s3://${bucket}/${prefix}.`)
+  return false
+}
+
+function removeVolumes(label) {
+  const volumes = capture("docker", [
+    "volume",
+    "ls",
+    "--filter",
+    `label=${label}`,
+    "--format",
+    "{{.Name}}",
+  ])
+    .split("\n")
+    .filter(Boolean)
+  if (volumes.length > 0) {
+    run("docker", ["volume", "remove", ...volumes], process.env)
+  }
+}
+
+// Stops what writes first and clears the registry row last, so any step that
+// fails leaves a rerun everything it needs to finish.
+async function destroy() {
+  const primary = process.argv.includes("--primary")
+  if (primary && namespace) fail("--primary only applies to the primary checkout.")
+  if (!primary) requireNamespaceForDestroy()
+  if (primary) refuseUnscopedWorkloads()
+
+  let row = null
+  await withBoxLock(() => {
+    // With no volume there's no registry, so no row to lose. Otherwise a
+    // MySQL that can't answer stops here, before anything is deleted.
+    if (!volumeExists(MYSQL_VOLUME)) return
+    ensureShared()
+    row = registryRow(stack)
+    if (row && row.checkout !== resolve(worktreeRoot)) {
+      fail(`Stack ${stack} belongs to ${row.checkout}. Destroy it there.`)
+    }
+    if (row) {
+      mysql(`UPDATE kiln_dev.stacks SET state = 'destroying'
+        WHERE stack = ${sqlString(stack)};`)
+    }
+  })
+  const unfinished = (code) => {
+    if (code !== 0 && row) {
+      console.error(
+        `Stack ${stack} isn't fully destroyed. Run pnpm dev:docker:destroy again to finish.`
+      )
+    }
+  }
+  process.on("exit", unfinished)
+
+  Object.assign(composeEnvironment, await resolveS3Host())
+  compose(["stop"], composeEnvironment)
+  if (namespace) destroyNamespacedContainers()
+  compose(["down"], composeEnvironment)
+  if (namespace) destroyNamespacedNetworks()
+  const purged = purgeS3Prefix(stack)
+  if (row) await withBoxLock(() => dropStackData(row))
+  compose(["down", "--volumes", "--remove-orphans"], composeEnvironment)
+  removeVolumes(`com.docker.compose.project=${stack}`)
+  if (namespace) removeVolumes(`kiln.relay.owner=${namespace}`)
+  if (!purged) process.exit(1)
+  if (row) {
+    await withBoxLock(() => {
+      mysql(`DELETE FROM kiln_dev.stacks WHERE stack = ${sqlString(stack)};`)
+    })
+  }
+  if (primary) {
+    console.log(
+      "The primary stack's data is gone. Its Relay's unscoped Docker resources were left alone."
+    )
+  }
+}
+
+// Unscoped workloads can only be managed through the Relay data this deletes,
+// and may be another Relay's on the same box.
+function refuseUnscopedWorkloads() {
+  const unscoped = capture("docker", [
+    "container",
+    "ls",
+    "--all",
+    "--filter",
+    "label=kiln.relay.managed=true",
+    "--format",
+    '{{.Names}}\t{{.Label "kiln.relay.owner"}}',
+  ])
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.split("\t"))
+    .filter(([, owner]) => !owner)
+    .map(([name]) => name)
+  if (unscoped.length > 0) {
+    fail(
+      `Refusing to delete the primary stack's Relay data while unscoped workloads exist, which only it may be able to manage: ${unscoped.join(", ")}.`
+    )
+  }
+}
+
+async function shared(action, arguments_) {
+  switch (action) {
+    case "up":
+      await withBoxLock(() => {
+        if (arguments_.includes("--recreate")) {
+          composeShared(["up", "--detach", "--wait", "--force-recreate"])
+        } else {
+          ensureShared()
+        }
+      })
+      break
+    case "status":
+      sharedStatus()
+      break
+    case "down":
+      await withBoxLock(() => {
+        const busy = runningStacks()
+        if (busy.length > 0 && !arguments_.includes("--force")) {
+          fail(`Stacks are using the shared services: ${busy.join(", ")}.`)
+        }
+        composeShared(["down"])
+      })
+      break
+    case "destroy":
+      await withBoxLock(() => {
+        ensureShared()
+        const rows = registryRows()
+        if (rows.length > 0) {
+          fail(
+            `Stacks still have data here: ${rows.map((row) => row.name).join(", ")}. Destroy them first.`
+          )
+        }
+        composeShared(["down", "--volumes", "--remove-orphans"])
+      })
+      break
+    case "remove":
+      await removeOrphan(arguments_[0])
+      break
+    default:
+      fail("Usage: pnpm dev:docker:shared <status|up|down|destroy|remove>")
+  }
+}
+
+function runningStacks() {
+  const running = capture("docker", [
+    "container",
+    "ls",
+    "--filter",
+    "label=io.kiln.resource=hearth",
+    "--format",
+    '{{.Label "com.docker.compose.project"}}',
+  ])
+  return running.split("\n").filter(Boolean)
+}
+
+// For a stack whose checkout was removed without destroying it.
+async function removeOrphan(name) {
+  if (!name) fail("Usage: pnpm dev:docker:shared remove <stack>")
+  let row = null
+  await withBoxLock(() => {
+    ensureShared()
+    row = registryRow(name)
+    if (!row) fail(`No stack named ${name} is registered here.`)
+    if (existsSync(row.checkout)) {
+      fail(`${row.checkout} still exists. Run pnpm dev:docker:destroy there.`)
+    }
+    const containers = capture("docker", [
+      "container",
+      "ls",
+      "--all",
+      "--filter",
+      `label=com.docker.compose.project=${name}`,
+      "--format",
+      "{{.Names}}",
+    ])
+    if (containers) {
+      fail(`Remove ${name}'s containers first:\n${containers}`)
+    }
+    mysql(`UPDATE kiln_dev.stacks SET state = 'destroying'
+      WHERE stack = ${sqlString(name)};`)
+  })
+  Object.assign(composeEnvironment, await resolveS3Host())
+  const purged = purgeS3Prefix(name)
+  await withBoxLock(() => dropStackData(row))
+  removeVolumes(`com.docker.compose.project=${name}`)
+  removeVolumes(`kiln.relay.owner=${name}`)
+  if (!purged) process.exit(1)
+  await withBoxLock(() => {
+    mysql(`DELETE FROM kiln_dev.stacks WHERE stack = ${sqlString(name)};`)
+  })
+}
+
+function sharedStatus() {
+  for (const container of [MYSQL_CONTAINER, CACHE_CONTAINER]) {
+    const state = sharedContainerState(container)
+    console.log(
+      state
+        ? `${container}: ${state.status}${state.health ? ` (${state.health})` : ""}, version ${state.version}, ${placement(container) ?? "cgroup unknown"}`
+        : `${container}: absent`
+    )
+  }
+  if (sharedContainerState(MYSQL_CONTAINER)?.health !== "healthy") return
+  const rows = registryRows()
+  const sizes = new Map(
+    mysql(`
+      SELECT table_schema, ROUND(SUM(data_length + index_length) / 1048576)
+      FROM information_schema.tables GROUP BY table_schema;`)
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.split("\t"))
+  )
+  console.log(`\n${rows.length} registered stack(s):`)
+  for (const row of rows) {
+    const gone = existsSync(row.checkout) ? "" : " (checkout gone)"
+    console.log(
+      `  ${row.name}: ${row.state}, ${row.database}, ${sizes.get(row.database) ?? 0} MiB, ${row.checkout}${gone}`
+    )
+  }
+  const known = new Set(rows.map((row) => row.database))
+  const owned = rows.map((row) => row.testDatabase)
+  const strays = mysql(`
+    SELECT schema_name FROM information_schema.schemata
+    WHERE schema_name LIKE 's\\_%' OR schema_name LIKE 't\\_%';`)
+    .split("\n")
+    .filter(Boolean)
+    .filter(
+      (name) =>
+        !known.has(name) && !owned.some((prefix) => name.startsWith(prefix))
+    )
+  if (strays.length > 0) {
+    console.log(`\nDatabases no stack owns: ${strays.join(", ")}`)
+  }
+}
+
+function stackContainers() {
+  return captureCompose(["ps", "--quiet"], composeEnvironment)
+    .split("\n")
+    .filter(Boolean)
+}
+
+// The cgroup a running container's main process is in, or null where the
+// Docker engine isn't on this kernel, as on macOS.
+function placement(container) {
+  const result = spawnSync(
+    "docker",
+    ["inspect", "--format", "{{.State.Pid}}", container],
+    { cwd: worktreeRoot, encoding: "utf8", env: process.env }
+  )
+  const path = `/proc/${result.stdout?.trim()}/cgroup`
+  if (result.status !== 0 || !existsSync(path)) return null
+  return readFileSync(path, "utf8").trim().split("::").pop()?.split("/")[1] ?? null
+}
+
+// Where this box keeps development containers: what KILN_DEV_CGROUP_PARENT
+// names, or the slice its Docker daemon defaults to.
+function warnOutsideSlice(containers) {
+  const expected =
+    process.env.KILN_DEV_CGROUP_PARENT?.trim() ||
+    (existsSync("/etc/systemd/system/dockerbudget.slice")
+      ? "dockerbudget.slice"
+      : "")
+  if (!expected) return
+  for (const container of containers) {
+    const actual = placement(container)
+    if (actual && actual !== expected) {
+      console.warn(`${container} is in ${actual}, not ${expected}.`)
+    }
+  }
 }
 
 function compose(arguments_, environment) {
@@ -152,7 +801,7 @@ function compose(arguments_, environment) {
 function requireNamespaceForDestroy() {
   if (!namespace) {
     fail(
-      "Refusing to destroy unscoped Relay resources from the primary worktree. Use dev:docker:down, or remove primary development data deliberately."
+      "Refusing to destroy unscoped Relay resources from the primary worktree. Use dev:docker:down, or dev:docker:destroy --primary to delete its data and leave those resources."
     )
   }
 }
@@ -214,8 +863,9 @@ function ensureSharedStore() {
   )
 }
 
-function refresh() {
-  const services = ["cache", "mysql", "relay", "hearth"]
+async function refresh() {
+  await prepareStack()
+  const services = ["relay", "hearth"]
   const running = services.every((service) =>
     captureCompose(["ps", "--quiet", service], composeEnvironment)
   )

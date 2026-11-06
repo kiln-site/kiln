@@ -1,0 +1,78 @@
+# One MySQL and one Valkey for every development stack on a Docker engine.
+# scripts/dev-docker.mjs starts them before a stack and gives each stack its
+# own database, user and cache namespace. See docs/development.md.
+name: kiln-dev-shared
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: kiln-dev-mysql
+    restart: unless-stopped
+    cgroup_parent: ${KILN_DEV_CGROUP_PARENT:-}
+    # Raised with SHARED_VERSION in scripts/dev-docker.mjs when these services
+    # change, so a stack on another revision reports them instead of
+    # recreating them under every other stack.
+    labels:
+      io.kiln.dev.shared.version: "1"
+    # 512 connections leaves room for about 20 Hearths at two pools of 10.
+    # Nothing in Hearth reads performance_schema, which costs 230 MiB here.
+    command:
+      - --skip-log-bin
+      - --innodb-flush-log-at-trx-commit=2
+      - --innodb-buffer-pool-size=256M
+      - --innodb-log-buffer-size=8M
+      - --max-connections=512
+      - --performance-schema=OFF
+      - --table-open-cache=1024
+      - --temptable-max-ram=64M
+    environment:
+      MYSQL_ROOT_PASSWORD: kiln-root
+      TZ: America/New_York
+    volumes:
+      - mysql:/var/lib/mysql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'mysqladmin ping -h 127.0.0.1 -uroot -p"$${MYSQL_ROOT_PASSWORD}"',
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    ports:
+      - "127.0.0.1:${KILN_DEV_MYSQL_PORT:-3307}:3306"
+
+  cache:
+    image: ${CACHE_IMAGE:-valkey/valkey:9.1.2-alpine}
+    container_name: kiln-dev-cache
+    restart: unless-stopped
+    cgroup_parent: ${KILN_DEV_CGROUP_PARENT:-}
+    labels:
+      io.kiln.dev.shared.version: "1"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        if command -v valkey-server >/dev/null; then
+          exec valkey-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru
+        fi
+        exec redis-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru
+    tmpfs:
+      - /data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "if command -v valkey-cli >/dev/null; then valkey-cli ping; else redis-cli ping; fi | grep -q PONG",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+networks:
+  default:
+    name: kiln-dev-shared
+
+volumes:
+  mysql:
+    name: kiln-dev-mysql

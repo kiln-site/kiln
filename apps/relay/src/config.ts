@@ -196,6 +196,11 @@ export interface RelayConfig {
   port: number
   platformBackupKey: string | null
   /**
+   * The database platform backups use when Hearth's sits on a MySQL it
+   * shares, as development stacks do, which no label or proof can name.
+   */
+  platformDatabase: { container: string; name: string } | null
+  /**
    * Hearth behind bundled Traefik, by the host people open it at; set from
    * the installation record once platform mode starts.
    */
@@ -364,6 +369,7 @@ export function loadConfig(
     nodeName: environment.KILN_RELAY_NAME?.trim() || "",
     port,
     platformBackupKey: optionalPlatformBackupKey(environment),
+    platformDatabase: platformDatabase(environment),
     platformEdge: null,
     platformProxy: mode === "platform" ? platformProxy(environment) : "none",
     publicPort,
@@ -540,6 +546,28 @@ function optionalInstallationId(environment: NodeJS.ProcessEnv): string | null {
     )
   }
   return value
+}
+
+function platformDatabase(
+  environment: NodeJS.ProcessEnv
+): RelayConfig["platformDatabase"] {
+  const container = optionalDockerIdentifier(
+    environment,
+    "KILN_RELAY_PLATFORM_DATABASE_CONTAINER"
+  )
+  const name = environment.KILN_RELAY_PLATFORM_DATABASE_NAME?.trim() || null
+  if (!container && !name) return null
+  if (!container || !name) {
+    throw new Error(
+      "KILN_RELAY_PLATFORM_DATABASE_CONTAINER and KILN_RELAY_PLATFORM_DATABASE_NAME must be set together"
+    )
+  }
+  if (!/^[A-Za-z0-9_]{1,64}$/u.test(name)) {
+    throw new Error(
+      "KILN_RELAY_PLATFORM_DATABASE_NAME must be at most 64 letters, numbers, or underscores"
+    )
+  }
+  return { container, name }
 }
 
 function optionalDockerIdentifier(
