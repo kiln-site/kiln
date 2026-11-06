@@ -52,7 +52,7 @@ import {
   type PersistedRelay,
 } from "@/lib/relay-registry"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { resourceAudienceEffect } from "@/lib/resource-audience.server"
+import { notificationAudienceEffect } from "@/lib/resource-audience.server"
 import {
   defaultSecurityNotificationSettings,
   severityAt,
@@ -436,9 +436,10 @@ const newsEffect = Effect.fnUntraced(function* (
   const news = new Map<string, Array<ResourceNews>>()
   for (const announcement of announcements) {
     const { resourceId, resourceType } = announcement
-    const recipients = yield* resourceAudienceEffect(
+    const recipients = yield* notificationAudienceEffect(
       { relayId, resourceId, resourceType },
-      securityNotifyPermissions[resourceType]
+      securityNotifyPermissions[resourceType],
+      "security.report"
     )
     // Whether it reaches their inbox and devices is the notification's own
     // choice; which vulnerabilities notify at all is the security one.

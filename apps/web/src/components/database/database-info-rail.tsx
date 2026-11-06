@@ -6,7 +6,10 @@ import {
   databaseRelayAvailable,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
-import { InstanceInfoRail, InfoContainerCard } from "@/components/resource-info-rail"
+import {
+  InstanceInfoRail,
+  InfoContainerCard,
+} from "@/components/resource-info-rail"
 import { formatBytes } from "@/lib/format-bytes"
 import { formatCpuLimit, formatMemoryLimit } from "@/lib/resource-limits"
 import { managedDatabaseContainerQueryOptions } from "@/lib/query-options"
@@ -18,9 +21,10 @@ export function DatabaseInfoRail({ database }: { database: ManagedDatabase }) {
     () => ({
       id: database.id,
       kind: "database" as const,
+      name: database.name,
       relayId: database.relayId,
     }),
-    [database.id, database.relayId]
+    [database.id, database.name, database.relayId]
   )
   return (
     <InstanceInfoRail

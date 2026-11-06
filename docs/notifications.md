@@ -59,3 +59,24 @@ of time order.
 
 A notification that replaces another keeps its toast, so another deployment
 changes the toast on screen. On devices, a push closes the replaced one.
+
+## Choosing what you hear
+
+Settings are per person, stored as one JSON setting. Each kind can reach the
+inbox and push. On top of that, two choices narrow what's about a resource:
+
+- **Whose instances**: everything you can access, what's yours or shared with
+  you (leaving out what only a platform role reaches), or only what you own. A
+  Relay's owner counts as sharing what runs on it.
+- **One resource**: the Notifications card at the bottom of its Info rail.
+  Settings lists what you've changed, to reset it.
+
+`notificationAudienceEffect` applies both, in place of `resourceAudienceEffect`,
+for everything sent about a resource. Someone it leaves out gets no row, so
+turning a kind back on hears of what's still announced, such as an update on
+offer. What they already have still settles: a failed deployment goes away when
+a later one works, even on an App they've muted. The defaults leave everyone
+hearing what they heard before.
+
+Invitations, access changes, and a game server's move or copy are addressed to
+one person about something they did or need to answer, so they always arrive.

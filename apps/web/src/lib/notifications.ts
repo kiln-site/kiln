@@ -154,6 +154,15 @@ export type InvitationOutcome = NonNullable<
   Extract<NotificationContent, { kind: "access.invited" }>["outcome"]
 >
 
+/** Names a resource in a person's notification settings. */
+export function notificationResourceKey({
+  id,
+  relayId,
+  type,
+}: Pick<NotificationResource, "id" | "relayId" | "type">) {
+  return `${type}:${relayId}:${id}`
+}
+
 export interface KilnNotification {
   content: NotificationContent
   createdAt: number

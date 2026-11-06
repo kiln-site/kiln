@@ -16,6 +16,9 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { AppDocumentDialog } from "@/components/app/app-config-dialogs"
 import { AppImageUpdatesFact } from "@/components/app/app-image-updates"
+import { ResourceNotificationsCard } from "@/components/resource-notifications-card"
+import { resourceNotificationKinds } from "@/lib/notification-preferences"
+import type { NotificationKind } from "@/lib/notifications"
 import {
   deploymentStatusPresentation,
   shortCommit,
@@ -52,6 +55,15 @@ import {
 // header.
 export function AppInfoRail({ app, routeId }: { app: App; routeId: string }) {
   const databases = app.savedDatabaseIds.length
+  const notificationResource = React.useMemo(
+    () => ({
+      id: app.id,
+      name: app.name,
+      relayId: app.relayId,
+      type: "app" as const,
+    }),
+    [app.id, app.name, app.relayId]
+  )
   return (
     <>
       <InfoRailGroup card>
@@ -88,9 +100,19 @@ export function AppInfoRail({ app, routeId }: { app: App; routeId: string }) {
       </InfoRailGroup>
       <AppOwner appId={app.id} relayId={app.relayId} />
       <AppDeploymentCard app={app} routeId={routeId} />
+      <ResourceNotificationsCard
+        kinds={
+          app.permissions.includes("app.manage")
+            ? resourceNotificationKinds.app
+            : noNotificationKinds
+        }
+        resource={notificationResource}
+      />
     </>
   )
 }
+
+const noNotificationKinds: ReadonlyArray<NotificationKind> = []
 
 // The app's variables, counted, opening the .env editor. Only those who
 // manage the app get its environment at all.
