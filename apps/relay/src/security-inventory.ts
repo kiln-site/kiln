@@ -330,64 +330,68 @@ export class SecurityInventory {
       | { readonly meta: InventoryMeta; readonly status: "ready" }
       | Exclude<RelaySecurityInventoryResponse, { status: "ready" }>
     > => {
-      const helper = await Effect.runPromise(
-        this.#engine.createContainer(helperName, {
-          Image: relay.Image,
-          // Node from the Relay's own image runs Syft, then slims its
-          // output, both within the helper's caps.
-          Entrypoint: [process.execPath],
-          Cmd: [
-            ...(development ? ["--import", "tsx"] : []),
-            `--max-old-space-size=${HELPER_HEAP_MEGABYTES}`,
-            entry,
-            "scan",
-            target.kind === "host"
-              ? `dir:${HOST_ROOT}`
-              : `docker:${target.imageId}`,
-            ...(target.kind === "host"
-              ? ["--override-default-catalogers", "os"]
-              : []),
-            "--source-name",
-            target.kind === "host"
-              ? this.#config.nodeName || "host"
-              : target.image || target.imageId,
-          ],
-          WorkingDir: process.cwd(),
-          Env: [
-            "SYFT_CHECK_FOR_APP_UPDATE=false",
-            // Packages, not every file's digest.
-            "SYFT_FILE_METADATA_SELECTION=none",
-            `DOCKER_HOST=unix://${this.#config.dockerSocket}`,
-            `KILN_SECURITY_HOST=${target.kind === "host" ? "1" : ""}`,
-            `KILN_SECURITY_MAX_BYTES=${relaySecurityInventoryMaxBytes}`,
-            `KILN_SECURITY_OUTPUT=${output}`,
-            `KILN_SECURITY_SYFT=${this.#config.syftPath}`,
-          ],
-          Healthcheck: { Test: ["NONE"] },
-          Labels: { [HELPER_LABEL]: "true", ...relayOwnerLabels(this.#config) },
-          HostConfig: {
-            AutoRemove: false,
-            BlkioWeight: 10,
-            CpuShares: 2,
-            Memory: HELPER_MEMORY_BYTES,
-            MemorySwap: HELPER_MEMORY_BYTES,
-            Mounts: source ?? [],
-            NanoCpus: 1_000_000_000,
-            NetworkMode: "none",
-            OomScoreAdj: 1000,
-            PidsLimit: 512,
-            SecurityOpt: [
-              "no-new-privileges",
-              // SELinux would keep the helper from reading host files.
-              ...(source && securityOptions.has("selinux")
-                ? ["label=disable"]
+      const create = (ioWeight: { readonly BlkioWeight?: number }) =>
+        Effect.runPromise(
+          this.#engine.createContainer(helperName, {
+            Image: relay.Image,
+            // Node from the Relay's own image runs Syft, then slims its
+            // output, both within the helper's caps.
+            Entrypoint: [process.execPath],
+            Cmd: [
+              ...(development ? ["--import", "tsx"] : []),
+              `--max-old-space-size=${HELPER_HEAP_MEGABYTES}`,
+              entry,
+              "scan",
+              target.kind === "host"
+                ? `dir:${HOST_ROOT}`
+                : `docker:${target.imageId}`,
+              ...(target.kind === "host"
+                ? ["--override-default-catalogers", "os"]
                 : []),
+              "--source-name",
+              target.kind === "host"
+                ? this.#config.nodeName || "host"
+                : target.image || target.imageId,
             ],
-            VolumesFrom: [relay.Id],
-          },
-        })
-      )
-      await Effect.runPromise(this.#engine.startContainer(helper.Id))
+            WorkingDir: process.cwd(),
+            Env: [
+              "SYFT_CHECK_FOR_APP_UPDATE=false",
+              // Packages, not every file's digest.
+              "SYFT_FILE_METADATA_SELECTION=none",
+              `DOCKER_HOST=unix://${this.#config.dockerSocket}`,
+              `KILN_SECURITY_HOST=${target.kind === "host" ? "1" : ""}`,
+              `KILN_SECURITY_MAX_BYTES=${relaySecurityInventoryMaxBytes}`,
+              `KILN_SECURITY_OUTPUT=${output}`,
+              `KILN_SECURITY_SYFT=${this.#config.syftPath}`,
+            ],
+            Healthcheck: { Test: ["NONE"] },
+            Labels: {
+              [HELPER_LABEL]: "true",
+              ...relayOwnerLabels(this.#config),
+            },
+            HostConfig: {
+              AutoRemove: false,
+              ...ioWeight,
+              CpuShares: 2,
+              Memory: HELPER_MEMORY_BYTES,
+              MemorySwap: HELPER_MEMORY_BYTES,
+              Mounts: source ?? [],
+              NanoCpus: 1_000_000_000,
+              NetworkMode: "none",
+              OomScoreAdj: 1000,
+              PidsLimit: 512,
+              SecurityOpt: [
+                "no-new-privileges",
+                // SELinux would keep the helper from reading host files.
+                ...(source && securityOptions.has("selinux")
+                  ? ["label=disable"]
+                  : []),
+              ],
+              VolumesFrom: [relay.Id],
+            },
+          })
+        )
+      const helper = await this.#startHelper(helperName, create)
       const exitCode = await Effect.runPromise(
         this.#engine.waitContainer(helper.Id, "not-running").pipe(
           Effect.timeoutOrElse({
@@ -419,6 +423,31 @@ export class SecurityInventory {
       return { meta, status: "ready" }
     }
     return Effect.runPromise(promiseEffect(scan).pipe(Effect.ensuring(cleanup)))
+  }
+
+  // Starts the helper with the lowest I/O weight. Some kernels have no
+  // `io.weight`, which Docker can't tell beforehand and refuses to start the
+  // container over; the weight is a courtesy, so it goes without one there.
+  async #startHelper(
+    name: string,
+    create: (ioWeight: {
+      readonly BlkioWeight?: number
+    }) => Promise<{ readonly Id: string }>
+  ): Promise<{ readonly Id: string }> {
+    const helper = await create({ BlkioWeight: 10 })
+    const refused = await recoverPromise(
+      async () => {
+        await Effect.runPromise(this.#engine.startContainer(helper.Id))
+        return null
+      },
+      (cause) => cause
+    )
+    if (refused === null) return helper
+    if (!/(io|blkio)\.weight/u.test(String(refused))) throw refused
+    await Effect.runPromise(this.#engine.removeContainer(name, { force: true }))
+    const unweighted = await create({})
+    await Effect.runPromise(this.#engine.startContainer(unweighted.Id))
+    return unweighted
   }
 
   // Each host path the OS catalogers read that exists, mounted read-only
