@@ -11,9 +11,10 @@ so a later announcement of the same event doesn't deliver it again.
 
 ## Merging
 
-One thing that keeps happening has one row. `replaceNotificationEffect` delivers
-the new event in place of the open rows it matches, and folds in what the
-unread ones said, so the count starts over once someone has read it.
+The same kind of notification about the same instance is one row.
+`replaceNotificationEffect` delivers the new event in place of the open rows it
+matches, and folds in what the unread ones said, so the count starts over once
+someone has read it.
 
 | Notification     | While it's open                                           |
 | ---------------- | --------------------------------------------------------- |
@@ -23,6 +24,9 @@ unread ones said, so the count starts over once someone has read it.
 | Kiln updated     | One row, from the first unread version to the newest      |
 | Update available | The newest replaces older ones; installing it clears it   |
 | Vulnerabilities  | One report across everything, see [Security](security.md) |
+
+Invitations, removed access, and game server moves and copies never merge: each
+is its own event, and each can need its own answer.
 
 Someone who won't hear of an event, because they started it or turned its kind
 off, keeps what they have. The exception is what it settles: a failed deployment
@@ -45,3 +49,13 @@ Opening a notification reads that notification alone, including one with no
 page of its own, which opens the inbox at itself. Pushes lead to
 `/notifications/<id>`, which reads it and then redirects, since a device can't
 tell Kiln it was tapped.
+
+## The list
+
+The inbox is one list, newest first. Merging is what keeps it short, so a row
+moves to the top when something new happens to it, and every row names its
+instance. Rows aren't gathered under their resource, which would pull them out
+of time order.
+
+A notification that replaces another keeps its toast, so another deployment
+changes the toast on screen. On devices, a push closes the replaced one.
