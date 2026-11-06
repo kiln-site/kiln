@@ -35,6 +35,8 @@ export function notificationTitle(content: NotificationContent): string {
       return "Your Kiln has an update available"
     case "kiln.updated":
       return "Your Kiln has been updated"
+    case "relay.updated":
+      return "Your Relay has been updated"
     case "access.invited": {
       const type = resourceTypeLabels[content.resource.type]
       switch (content.outcome) {
@@ -96,6 +98,8 @@ export function notificationDetail(
       return releaseName(content.name, content.version)
     case "kiln.updated":
       return `${releaseName(content.previousName, content.previousVersion)} to ${releaseName(content.name, content.version)}`
+    case "relay.updated":
+      return `${content.resource.name} - ${kilnReleaseLabel(content.previousVersion)} to ${kilnReleaseLabel(content.version)}`
     case "access.invited":
       return `${content.resource.name} - ${
         content.outcome === undefined ? "by" : "from"

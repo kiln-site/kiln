@@ -39,6 +39,14 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     url: releaseUrlSchema.nullable(),
     version: z.string(),
   }),
+  // A Relay came back on a newer version. A newer update replaces it, keeping
+  // where the unread one started from.
+  z.object({
+    kind: z.literal("relay.updated"),
+    previousVersion: z.string(),
+    resource: notificationResourceSchema,
+    version: z.string(),
+  }),
   z.object({
     actorName: z.string(),
     invitationId: z.string(),

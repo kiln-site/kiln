@@ -619,6 +619,8 @@ class RelayConnection {
   >()
   #hasPushedSnapshot = false
   #pushedSnapshot: RelaySnapshot | null = null
+  #recordedVersion: string | null = null
+  #recordingVersion = false
   #eventSequence = 0
   #features = new Set<string>()
   // The journal the Relay keeps this Hearth's changes in (`auth.ready`).
@@ -935,6 +937,37 @@ class RelayConnection {
   }
 
   // Lets browsers know when the Relay's pause changes.
+  // A Relay says what it runs as it connects and with each sample, so a
+  // version Hearth hasn't recorded means it was updated. One that couldn't be
+  // recorded is tried again by the next sample. Imported here, since its
+  // notification reads access, which reaches Relays through this module.
+  #noticeVersion(version: string): void {
+    if (version === this.#recordedVersion || this.#recordingVersion) return
+    this.#recordingVersion = true
+    const { id } = this.#relay
+    forkAppEffect(
+      "relay.recordVersion",
+      Effect.promise(() => import("@/lib/relay-update-notifications")).pipe(
+        Effect.flatMap(({ recordConnectedRelayVersionEffect }) =>
+          recordConnectedRelayVersionEffect(id)
+        ),
+        Effect.tap((recorded) =>
+          Effect.sync(() => {
+            this.#recordedVersion = recorded
+          })
+        ),
+        Effect.catchCause((cause) =>
+          Effect.logWarning(`Could not record Relay ${id}'s version`, cause)
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            this.#recordingVersion = false
+          })
+        )
+      )
+    )
+  }
+
   #noticePause(previous: RelaySnapshot | null): void {
     const was = previous?.relay?.paused === true
     const is = this.#pushedSnapshot?.relay?.paused === true
@@ -1668,6 +1701,7 @@ class RelayConnection {
             this.#pushedSnapshot = pushed
             this.#hasPushedSnapshot = true
             this.#noticePause(previousSnapshot)
+            this.#noticeVersion(pushed.node.version)
             if (!previousSnapshot) {
               this.#rememberBrowserOrigin(pushed)
               publishRealtimeChange({
@@ -1709,6 +1743,7 @@ class RelayConnection {
               previousSnapshot,
               delta
             )
+            if (node) this.#noticeVersion(node.version)
             // Most deltas are node samples; only the Relay's own part
             // carries certificates.
             if (delta.relay) {

@@ -56,6 +56,8 @@ export function notificationHref(
       return "/infra/updates"
     case "kiln.updated":
       return "/infra/updates/changelog"
+    case "relay.updated":
+      return notificationResourceHref(content.resource)
     case "access.invited":
       return content.outcome === "accepted"
         ? notificationResourceHref(content.resource)

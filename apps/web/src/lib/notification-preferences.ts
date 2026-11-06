@@ -41,7 +41,7 @@ export const resourceNotificationKinds = {
   app: ["app.deployed", "app.image-update", "security.report"],
   database: ["resource.disk-limit", "security.report"],
   instance: ["security.report"],
-  relay: ["security.report"],
+  relay: ["relay.updated", "security.report"],
 } as const satisfies Record<
   NotificationResource["type"],
   ReadonlyArray<NotificationKind>
@@ -101,6 +101,7 @@ export const notificationPreferenceGroups = [
     id: "resources",
     kinds: [
       { kind: "resource.disk-limit", label: "Disk limit warnings" },
+      { kind: "relay.updated", label: "Relay updates" },
       // A finished move waits in the inbox to offer deleting the old server.
       {
         inboxRequired: true,
@@ -154,6 +155,7 @@ const kindsWithRequiredInbox: ReadonlySet<NotificationKind> = new Set(
 const allKinds: ReadonlyArray<NotificationKind> = [
   "kiln.release",
   "kiln.updated",
+  "relay.updated",
   "access.invited",
   "access.removed",
   "resource.disk-limit",

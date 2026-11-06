@@ -186,6 +186,7 @@ function notificationToastType(content: NotificationContent): AppToastType {
     case "app.deployed":
       return content.status === "failed" ? "error" : "success"
     case "kiln.updated":
+    case "relay.updated":
       return "success"
     case "server.migration":
       return content.outcome === "completed"
@@ -203,6 +204,7 @@ function notificationToastType(content: NotificationContent): AppToastType {
 function notificationToastId(content: NotificationContent, id: string) {
   switch (content.kind) {
     case "app.deployed":
+    case "relay.updated":
       return `${content.kind}:${content.resource.relayId}:${content.resource.id}`
     case "kiln.updated":
       return content.kind
