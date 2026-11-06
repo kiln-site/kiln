@@ -42,7 +42,9 @@ const reservedDatabaseNames: Record<DatabaseEngine, ReadonlySet<string>> = {
 }
 
 const reservedUsernames: Record<DatabaseEngine, ReadonlySet<string>> = {
-  mariadb: new Set(["public", "root"]),
+  // MariaDB's image makes its own local `healthcheck` accounts, which would
+  // win over this login on the local connections Kiln uses.
+  mariadb: new Set(["healthcheck", "public", "root"]),
   mysql: new Set(["root"]),
   postgres: new Set([
     "current_role",

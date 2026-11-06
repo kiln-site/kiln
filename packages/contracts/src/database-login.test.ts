@@ -27,11 +27,13 @@ describe("database logins", () => {
   it("refuses names each engine keeps for itself", () => {
     expect(databaseUsernameIssue("mysql", "root")).not.toBeNull()
     expect(databaseUsernameIssue("mariadb", "root")).not.toBeNull()
+    expect(databaseUsernameIssue("mariadb", "healthcheck")).not.toBeNull()
     expect(databaseUsernameIssue("postgres", "pg_app")).not.toBeNull()
     expect(databaseUsernameIssue("redis", "default")).not.toBeNull()
     expect(databaseNameIssue("mysql", "mysql")).not.toBeNull()
     expect(databaseNameIssue("postgres", "postgres")).not.toBeNull()
     // Only reserved on the engines that use them.
+    expect(databaseUsernameIssue("mysql", "healthcheck")).toBeNull()
     expect(databaseUsernameIssue("postgres", "default")).toBeNull()
     expect(databaseUsernameIssue("postgres", "postgres")).toBeNull()
     expect(databaseNameIssue("postgres", "mysql")).toBeNull()
