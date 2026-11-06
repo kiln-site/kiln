@@ -149,7 +149,8 @@ peers reach it directly. Containers on S02 can't reach Serve, so they go through
 a small forwarder, and `dev:docker` picks that route for itself.
 
 To use it from a box, add the settings to the primary checkout's `.env`, then
-restart your stacks. Get them on S02 with `pnpm dev:docker:s3 env`, and add the
+run `pnpm dev:docker:down` and `pnpm dev:docker:up` in each stack, since
+`refresh` doesn't change a container's hosts. Get them on S02 with `pnpm dev:docker:s3 env`, and add the
 box's name as a prefix, since stack names repeat between boxes:
 
 ```sh
@@ -198,7 +199,8 @@ pnpm verify
 first failure. CI runs those same stages in separate jobs. The command uses
 the box's shared MySQL for Hearth tests, starting it if needed, and never
 silently skips database tests. Tests run as the stack's own user, in databases
-only it can reach, so several stacks can run them at once.
+only it can reach, so stacks' runs can't touch each other's data. Two full runs
+at once can still time out on a small box, for lack of CPU.
 
 | Command              | Checks                                                |
 | -------------------- | ----------------------------------------------------- |
