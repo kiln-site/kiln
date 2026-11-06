@@ -860,7 +860,11 @@ function configRow(context: RowContext, mount: AppMount): MountRow {
         // Kept on the node under its deployment, so its name is what shows.
         wanted: {
           ...wanted({ readOnly: mount.readOnly, source: null }),
-          sourceFile: appMountFileName(mount.id, source.content),
+          // Those who can't manage the app get its files without their
+          // contents, so there's nothing of theirs to compare.
+          ...(context.app.permissions.includes("app.manage") && {
+            sourceFile: appMountFileName(mount.id, source.content),
+          }),
         },
       }
   }

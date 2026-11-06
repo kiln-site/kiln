@@ -181,8 +181,13 @@ describe("Relay volumes", () => {
       run(volumes.appVolumeMountpoint("b".repeat(40), volumeId))
     ).rejects.toThrow("This App doesn't use that volume")
 
-    // What was known a moment ago doesn't outlast the App's use of it.
+    // What was known doesn't outlast the App's use of it, even when a read
+    // begun before the change finishes after it.
+    await run(volumes.writeAppReferences("hearth-a", appId, [volumeId]))
+    const reading = run(volumes.appVolumeMountpoint(appId, volumeId))
     await run(volumes.writeAppReferences("hearth-a", appId, []))
+    // Which way it goes depends on timing; what it leaves behind doesn't.
+    await reading.catch(() => null)
     await expect(
       run(volumes.appVolumeMountpoint(appId, volumeId))
     ).rejects.toThrow("This App doesn't use that volume")

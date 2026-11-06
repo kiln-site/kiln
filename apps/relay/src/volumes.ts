@@ -172,6 +172,9 @@ export class RelayVolumes {
     string,
     { expires: number; mountpoint: string }
   >()
+  // Moves on each time they're forgotten, so a read begun before then can't
+  // put back what it saw.
+  #appMountpointsEpoch = 0
 
   constructor(
     config: RelayConfig,
@@ -474,6 +477,7 @@ export class RelayVolumes {
       if (known && known.expires > Date.now()) {
         return Effect.succeed(known.mountpoint)
       }
+      const epoch = this.#appMountpointsEpoch
       return this.#inventory().pipe(
         Effect.flatMap(({ volumes }) => {
           const volume = volumes.find((candidate) => candidate.id === id)
@@ -490,13 +494,15 @@ export class RelayVolumes {
               })
             )
           }
-          if (this.#appMountpoints.size >= APP_MOUNTPOINT_MAX_ENTRIES) {
-            this.#appMountpoints.clear()
+          if (epoch === this.#appMountpointsEpoch) {
+            if (this.#appMountpoints.size >= APP_MOUNTPOINT_MAX_ENTRIES) {
+              this.#appMountpoints.clear()
+            }
+            this.#appMountpoints.set(key, {
+              expires: Date.now() + APP_MOUNTPOINT_TTL_MS,
+              mountpoint: volume.mountpoint,
+            })
           }
-          this.#appMountpoints.set(key, {
-            expires: Date.now() + APP_MOUNTPOINT_TTL_MS,
-            mountpoint: volume.mountpoint,
-          })
           return Effect.succeed(volume.mountpoint)
         }),
         Effect.withSpan("RelayVolumes.appVolumeMountpoint", {
@@ -506,9 +512,10 @@ export class RelayVolumes {
     })
   }
 
-  readonly #forgetAppMountpoints = Effect.sync(() =>
+  readonly #forgetAppMountpoints = Effect.sync(() => {
+    this.#appMountpointsEpoch += 1
     this.#appMountpoints.clear()
-  )
+  })
 
   /** Only volumes owned by the Compose project, excluding shared mounts. */
   ownedAppVolumeIds(appId: string) {

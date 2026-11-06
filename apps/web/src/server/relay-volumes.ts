@@ -99,7 +99,6 @@ export const getAppVolumes = createServerFn({ method: "GET" })
       return {
         filesAvailable: false,
         measuring: false,
-        protection: { ready: true, reason: null },
         referencesKnown: true,
         volumes: [],
       }
@@ -108,10 +107,10 @@ export const getAppVolumes = createServerFn({ method: "GET" })
       relayVolumesSchema.parse(
         await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
       )
+    // Only whether: why not names other Hearths, which are the Relay's.
     return {
       filesAvailable,
       measuring,
-      protection,
       referencesKnown: protection.ready,
       volumes: appVolumesOf(volumes, data.appId),
     }

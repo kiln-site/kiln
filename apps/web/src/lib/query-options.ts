@@ -911,7 +911,7 @@ export function appVolumesQueryOptions(relayId: string, appId: string) {
     refetchInterval: (query) =>
       query.state.data?.measuring
         ? 2_000
-        : query.state.data?.protection.ready === false
+        : query.state.data?.referencesKnown === false
           ? 10_000
           : false,
     retry: false,
