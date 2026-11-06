@@ -4,7 +4,9 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import {
   securitySeverityLabels,
+  securityVerdictLabels,
   type SecuritySeverity,
+  type SecurityVerdict,
   type SeverityCounts,
 } from "@/lib/security"
 
@@ -36,6 +38,35 @@ export const SeverityBadge = React.memo(function SeverityBadge({
       )}
     >
       {securitySeverityLabels[severity]}
+    </span>
+  )
+})
+
+const verdictClasses = {
+  clean:
+    "border-emerald-500/30 bg-emerald-500/10 text-emerald-300 light:text-emerald-700",
+  minor: severityClasses.low,
+  risky: severityClasses.high,
+  unsafe: severityClasses.critical,
+} satisfies Record<SecurityVerdict, string>
+
+/** Kiln's word on an image or host as a whole. */
+export const VerdictBadge = React.memo(function VerdictBadge({
+  className,
+  verdict,
+}: {
+  className?: string
+  verdict: SecurityVerdict
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex h-5 shrink-0 items-center rounded-md border px-1.5 text-[0.6875rem] font-medium",
+        verdictClasses[verdict],
+        className
+      )}
+    >
+      {securityVerdictLabels[verdict]}
     </span>
   )
 })

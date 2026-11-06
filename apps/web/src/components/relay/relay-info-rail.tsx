@@ -1,12 +1,14 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 
+import { InfoRailGroup } from "@/components/info-page"
 import { OwnerCard } from "@/components/owner-card"
 import {
   RelayNodeCard,
   useRelayNodeFacts,
 } from "@/components/relay/relay-node-card"
 import { RelayWorkloads } from "@/components/relay/relay-workloads"
+import { InfoRailSecurityLink } from "@/components/resource-security-link"
 import { ResourceNotificationsCard } from "@/components/resource-notifications-card"
 import { canAccessRelayPermission } from "@/lib/navigation-destinations"
 import { resourceNotificationKinds } from "@/lib/notification-preferences"
@@ -27,6 +29,13 @@ export function RelayInfoRail({
   return (
     <>
       <RelayWorkloads relayId={relay.id} routeId={routeId} />
+      <InfoRailGroup card>
+        <InfoRailSecurityLink
+          relayId={relay.id}
+          resourceId={relay.id}
+          resourceType="relay"
+        />
+      </InfoRailGroup>
       <RelayOwnerCard
         createdBy={relay.createdBy}
         ownerEmail={relay.ownerEmail}

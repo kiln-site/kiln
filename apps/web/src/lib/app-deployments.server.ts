@@ -1218,6 +1218,14 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
         )
       ),
     })
+    // What it runs now is checked for vulnerabilities at once, so a fix
+    // shows without waiting for the next sweep.
+    yield* Activity.make({
+      name: "scanSecurity",
+      execute: Effect.promise(() => import("@/lib/security-scans.server")).pipe(
+        Effect.map(({ scanRelaySoon }) => scanRelaySoon(record.relayId))
+      ),
+    })
   })
 
 // The payload as it's sent: the app's saved configuration, read now, and a

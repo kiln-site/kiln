@@ -16,6 +16,7 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import { AppDocumentDialog } from "@/components/app/app-config-dialogs"
 import { AppImageUpdatesFact } from "@/components/app/app-image-updates"
+import { InfoRailSecurityLink } from "@/components/resource-security-link"
 import { ResourceNotificationsCard } from "@/components/resource-notifications-card"
 import { resourceNotificationKinds } from "@/lib/notification-preferences"
 import type { NotificationKind } from "@/lib/notifications"
@@ -96,6 +97,11 @@ export function AppInfoRail({ app, routeId }: { app: App; routeId: string }) {
             Backups
           </InfoRailLink>
         ) : null}
+        <InfoRailSecurityLink
+          relayId={app.relayId}
+          resourceId={app.id}
+          resourceType="app"
+        />
         <AppEnvironmentRow app={app} routeId={routeId} />
       </InfoRailGroup>
       <AppOwner appId={app.id} relayId={app.relayId} />

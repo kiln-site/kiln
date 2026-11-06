@@ -1,11 +1,14 @@
 import type { AccessPermission } from "@workspace/contracts"
 
+import { loadAppImageUpdatesEffect } from "@/effect/app-image-updates"
+import { loadAppGitHubSourceEffect } from "@/effect/app-deployments"
+import { listRelayAppConfigsEffect } from "@/effect/managed-apps"
 import { runAppEffect } from "@/effect/runtime"
 import {
   loadSecurityFindingsEffect,
+  loadSecuritySummaryEffect,
   loadSecurityTargetsEffect,
   requestSecurityScanEffect,
-  resourceSecuritySummary,
   securityResourceNamesEffect,
 } from "@/effect/security"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
@@ -17,9 +20,14 @@ import {
   securityNotifyPermissions,
 } from "@/lib/security-scans.server"
 import {
+  groupSecurityFindings,
   parseSecurityScope,
   securityScopeKey,
+  securityVerdict,
   type ResourceSecuritySummary,
+  type SecurityFix,
+  type SecurityItem,
+  type SecurityPackage,
   type SecurityResource,
   type SecurityOverview,
   type SecurityTarget,
@@ -32,6 +40,11 @@ import {
   signedIn,
 } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
+
+// Rows read for one inventory's rollup: past any real image or host, and a
+// limit on one that isn't. Only so many of each package's are sent.
+const FINDINGS_READ = 20_000
+const FINDINGS_SHOWN_PER_PACKAGE = 40
 
 // Who sees what Kiln found in a resource: anyone who can see the resource.
 // The Relay's host and Kiln's own services are the Relay's.
@@ -63,6 +76,7 @@ async function securityAccess(user: AuthenticatedUser) {
     }).has(permission)
   return {
     relayIds,
+    holds,
     canScan: (target: Parameters<typeof holds>[0]) =>
       holds(target, securityNotifyPermissions[target.resourceType]),
     canView: (target: Parameters<typeof holds>[0]) =>
@@ -86,59 +100,225 @@ function inScope(
         parsed.resourceId === target.resourceId
 }
 
-async function visibleFindings(
-  user: AuthenticatedUser,
-  scope: string | null,
-  options: { limit?: number; own?: boolean } = {}
-) {
-  const access = await securityAccess(user)
-  const targets = (
-    await runAppEffect(
-      "security.loadTargets",
-      loadSecurityTargetsEffect(access.relayIds)
-    )
-  ).filter(
-    (target) =>
-      access.canView(target) && inScope(target, scope, options.own ?? false)
+type LoadedTarget = Awaited<ReturnType<typeof runSecurityTargets>>[number]
+
+function runSecurityTargets(relayIds: ReadonlyArray<string>) {
+  return runAppEffect(
+    "security.loadTargets",
+    loadSecurityTargetsEffect(relayIds)
   )
-  const inventories = new Map<
-    string,
-    { relayId: string; sbomKey: string; targetKeys: Array<string> }
-  >()
-  for (const target of targets) {
-    const key = `${target.relayId}/${target.sbomKey}`
-    const inventory = inventories.get(key) ?? {
-      relayId: target.relayId,
-      sbomKey: target.sbomKey,
-      targetKeys: [],
-    }
-    inventory.targetKeys.push(target.targetKey)
-    inventories.set(key, inventory)
-  }
-  const { findings, summary } = await runAppEffect(
-    "security.loadFindings",
-    loadSecurityFindingsEffect([...inventories.values()], options.limit)
-  )
-  return { access, findings, summary, targets }
 }
 
+// What the viewer may see in the scope. A scope is on one Relay, so only that
+// one is read: this runs for every resource page.
+async function visibleTargets(
+  user: AuthenticatedUser,
+  scope: string | null,
+  own = false
+) {
+  const access = await securityAccess(user)
+  const parsed = scope === null ? null : parseSecurityScope(scope)
+  const relayIds = parsed
+    ? access.relayIds.filter((id) => id === parsed.relayId)
+    : access.relayIds
+  const targets = (await runSecurityTargets(relayIds)).filter(
+    (target) => access.canView(target) && inScope(target, scope, own)
+  )
+  return { access, targets }
+}
+
+const uniqueInventories = (targets: ReadonlyArray<LoadedTarget>) => [
+  ...new Map(
+    targets.map((target) => [
+      `${target.relayId}/${target.sbomKey}`,
+      { relayId: target.relayId, sbomKey: target.sbomKey },
+    ])
+  ).values(),
+]
+
 export async function getSecurityOverviewHandler(input: {
+  own?: boolean
   scope: string | null
 }): Promise<SecurityOverview> {
   const user = await requireEligibleResourceUser()
-  const { access, findings, summary, targets } = await visibleFindings(
+  const { access, targets } = await visibleTargets(
     user,
-    input.scope
+    input.scope,
+    input.own ?? false
   )
+  const [summary, resources, fixes] = await Promise.all([
+    runAppEffect(
+      "security.loadSummary",
+      loadSecuritySummaryEffect(uniqueInventories(targets))
+    ),
+    securityResources(targets),
+    securityFixes(access, targets),
+  ])
   return {
-    findings,
-    resources: await securityResources(targets),
+    items: securityItems(targets, resources, fixes),
+    resources,
     summary,
     scannable: [
       ...new Set(targets.filter(access.canScan).map((target) => target.scope)),
     ],
-    targets: targets.map(({ sbomKey: _sbomKey, ...target }) => target),
   }
+}
+
+// `docker.io/library/nginx@sha256:…` as anyone would write it.
+function readableImage(image: string): string {
+  const [name = image] = image.split("@")
+  return name.replace(/^(?:docker\.io\/)?(?:library\/)?/u, "")
+}
+
+// One entry per image on each Relay, however many resources run it, and per
+// host. Another Relay's copy of an image is its own entry: Hearth can't verify
+// what a Relay says an image holds, so one can't speak for the other.
+function securityItems(
+  targets: ReadonlyArray<LoadedTarget>,
+  resources: ReadonlyArray<SecurityResource>,
+  fixes: ReadonlyMap<string, SecurityFix>
+): Array<SecurityItem> {
+  const named = new Map(resources.map((resource) => [resource.scope, resource]))
+  const items = new Map<string, SecurityItem>()
+  for (const target of targets) {
+    const host = target.sbomKey === "host"
+    const key = `${target.relayId}/${target.sbomKey}`
+    const item = items.get(key) ?? {
+      checkedAt: target.checkedAt,
+      counts: target.counts,
+      error: target.error,
+      fixable: target.fixable,
+      fixableCritical: target.fixableCritical,
+      inventory: { relayId: target.relayId, sbomKey: target.sbomKey },
+      key,
+      kind: host ? ("host" as const) : ("image" as const),
+      knownExploited: target.knownExploited,
+      name: host
+        ? (target.distro ?? "Host")
+        : readableImage(target.image ?? target.sbomKey),
+      packages: target.packages,
+      status: target.status,
+      uses: [],
+      verdict: target.status === "checked" ? securityVerdict(target) : null,
+    }
+    const resource = named.get(target.scope)
+    const fix = fixes.get(target.targetKey)
+    if (fix) {
+      // Docker names a deployed image by its digest; its app, as it was set.
+      if ("image" in fix && fix.image) item.name = fix.image
+      item.uses.push({
+        component:
+          target.component && target.component !== "app" && !host
+            ? target.component
+            : null,
+        fix,
+        name: resource?.name ?? target.resourceId.slice(0, 8),
+        relayId: target.relayId,
+        relayName: resource?.relayName ?? "Relay",
+        resourceId: target.resourceId,
+        resourceType: target.resourceType,
+        running: target.running,
+        scope: target.scope,
+      })
+    }
+    items.set(key, item)
+  }
+  return [...items.values()]
+}
+
+// What fixes each target, from what Hearth knows of where it came from. Apps
+// are read once per Relay, not per target.
+async function securityFixes(
+  access: Awaited<ReturnType<typeof securityAccess>>,
+  targets: ReadonlyArray<LoadedTarget>
+) {
+  const appRelays = [
+    ...new Set(
+      targets
+        .filter((target) => target.resourceType === "app")
+        .map((target) => target.relayId)
+    ),
+  ]
+  const apps = new Map(
+    (
+      await Promise.all(
+        appRelays.map((relayId) =>
+          runAppEffect(
+            "security.fixes.apps",
+            listRelayAppConfigsEffect(relayId)
+          )
+        )
+      )
+    )
+      .flat()
+      .map((app) => [app.appId, app])
+  )
+  const imageUpdates = await runAppEffect(
+    "security.fixes.imageUpdates",
+    loadAppImageUpdatesEffect(
+      [...apps.values()]
+        .filter((app) => app.config.sourceType === "image")
+        .map((app) => app.appId)
+    )
+  )
+  const githubApps = [...apps.values()].filter(
+    (app) => app.config.sourceType === "github"
+  )
+  const sources = new Map(
+    await Promise.all(
+      githubApps.map(
+        async (app) =>
+          [
+            app.appId,
+            await runAppEffect(
+              "security.fixes.github",
+              loadAppGitHubSourceEffect(app.appId)
+            ),
+          ] as const
+      )
+    )
+  )
+  const fixFor = (target: LoadedTarget): SecurityFix => {
+    switch (target.resourceType) {
+      case "relay":
+        return target.sbomKey === "host"
+          ? {
+              allowed: access.holds(target, "relay.terminal"),
+              kind: "host-packages",
+            }
+          : { kind: "kiln-update" }
+      case "database":
+        return { kind: "database" }
+      case "instance":
+        return { kind: "game-server" }
+      case "app": {
+        const app = apps.get(target.resourceId)
+        const allowed = access.holds(target, "app.manage")
+        const { sourceType } = app?.config ?? {}
+        if (sourceType === "image") {
+          const update = imageUpdates.get(target.resourceId)
+          const image = app?.config.image ?? target.image ?? ""
+          return update?.state === "available" && update.latestDigest
+            ? { allowed, image, kind: "deploy-update" }
+            : { allowed, image, kind: "change-version" }
+        }
+        const source = sources.get(target.resourceId)
+        return {
+          kind: "rebuild",
+          repository: source
+            ? { branch: source.branch, name: source.repository }
+            : null,
+          source:
+            sourceType === "compose"
+              ? "compose"
+              : source
+                ? "github"
+                : "dockerfile",
+        }
+      }
+    }
+  }
+  return new Map(targets.map((target) => [target.targetKey, fixFor(target)]))
 }
 
 // The resources the targets belong to, with their names, and their Relays,
@@ -193,12 +373,38 @@ export async function getResourceSecurityHandler(input: {
   if (!parseSecurityScope(input.scope)) return null
   // A Relay's page speaks for its host and Kiln's services, not everything
   // it runs.
-  const { findings, summary, targets } = await visibleFindings(
-    user,
-    input.scope,
-    { limit: 3, own: true }
+  const { targets } = await visibleTargets(user, input.scope, true)
+  const checked = targets.filter((target) => target.checkedAt !== null)
+  if (!checked.length) return null
+  const summary = await runAppEffect(
+    "security.loadSummary",
+    loadSecuritySummaryEffect(uniqueInventories(checked))
   )
-  return resourceSecuritySummary(targets, findings, summary)
+  return {
+    ...summary,
+    checkedAt: Math.min(...checked.map((target) => target.checkedAt ?? 0)),
+    verdict: securityVerdict(summary),
+  }
+}
+
+/** One inventory's packages, for someone who may see what runs it. */
+export async function getSecurityPackagesHandler(input: {
+  relayId: string
+  sbomKey: string
+}): Promise<Array<SecurityPackage>> {
+  const user = await requireEligibleResourceUser()
+  const access = await securityAccess(user)
+  const visible =
+    access.relayIds.includes(input.relayId) &&
+    (await runSecurityTargets([input.relayId])).some(
+      (target) => target.sbomKey === input.sbomKey && access.canView(target)
+    )
+  if (!visible) throw new Error("You can't see this image's vulnerabilities")
+  const findings = await runAppEffect(
+    "security.loadFindings",
+    loadSecurityFindingsEffect(input.relayId, input.sbomKey, FINDINGS_READ)
+  )
+  return groupSecurityFindings(findings, FINDINGS_SHOWN_PER_PACKAGE)
 }
 
 /**

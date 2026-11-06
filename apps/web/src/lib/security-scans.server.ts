@@ -188,14 +188,15 @@ const collectInventoryEffect = Effect.fn("Security.collectInventory")(
           }
     const now = yield* Clock.currentTimeMillis
     // An image's inventory never changes; the host's is wanted newer than
-    // the one Hearth has, or than a day old.
+    // the one Hearth has, than a day old, and than whatever asked for it: one
+    // the Relay collected before a package update doesn't show that update.
     const collectedAfter =
       target.kind === "image"
         ? null
-        : (inventory.collectedAt ??
-          (inventory.requested
-            ? now - 60_000
-            : now - HOST_INVENTORY_MAX_AGE_MS))
+        : Math.max(
+            inventory.collectedAt ?? now - HOST_INVENTORY_MAX_AGE_MS,
+            inventory.requestedAt ?? 0
+          )
     const read = (offset: number, after: number | null) =>
       Effect.tryPromise({
         try: (signal) =>

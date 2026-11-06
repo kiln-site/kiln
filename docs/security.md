@@ -1,44 +1,50 @@
 # Vulnerability checks
 
-Kiln checks the software it runs against known vulnerabilities and tells the
-people who can fix it. Kiln's **Security** page (`/kiln/security`, for platform
-administrators) shows what it found across every Relay host, Kiln service, game
-server, database, and app, narrowed with the instance picker. A resource's Info
-page warns anyone who can see it when what it runs has critical or high
-vulnerabilities, or ones known to be exploited.
+Kiln checks the software it runs against known vulnerabilities, says plainly
+whether each image and host is safe, and offers what fixes it. Kiln's
+**Security** page (`/kiln/security`, for platform administrators) lists every
+image and Relay host, worst first, narrowed with the instance picker. A
+resource's Info rail has a **Security** row with the same word on what it runs,
+for anyone who can see it. It never moves the page, and for administrators it
+opens the Security page with that instance selected.
 
-## How it works
+## Verdicts
 
-Kiln splits the work in two, so nothing is scanned twice and an unreachable
-Relay stays covered:
+An image on a Relay, counted once however many resources run it, or a host,
+gets one word
+(`securityVerdict`):
 
-1. **Inventory, on the Relay.** Each Relay inventories its host's OS packages
-   and every image its containers run with [Syft](https://github.com/anchore/syft),
-   producing an SBOM (a Syft JSON document). An image is identified by its
-   content-addressed ID, so each one is inventoried once; redeploying to a new
-   image inventories that image. The host's packages change outside Kiln, so
-   its inventory is collected again once a day, or when someone scans now.
-2. **Matching, in Hearth.** Hearth keeps every inventory in its database and
-   checks each against [Grype](https://github.com/anchore/grype)'s
-   vulnerability database: when it arrives, and all of them again whenever
-   that database changes, which Hearth looks for every six hours. Anchore
-   rebuilds it daily from distribution advisories (Debian, Ubuntu, Alpine,
-   Red Hat, and others), GitHub's advisories for language packages, NVD (which
-   catches software built from source, like PHP in the official `php`
-   images), CISA's known exploited list, and EPSS.
+| Verdict | When                                                     |
+| ------- | -------------------------------------------------------- |
+| Unsafe  | Anything known to be exploited, or a critical with a fix |
+| Risky   | A critical without a known fix, or anything high         |
+| Minor   | Only medium, low, or negligible                          |
+| Clean   | Nothing known                                            |
 
-Every 15 minutes Hearth asks each connected Relay what it runs, which costs
-the Relay one container listing, and asks for any inventory it lacks.
-The scan's helper drops the per-file listings Grype doesn't read, and a
-host's kernels other than the running one, before the Relay sends an
-inventory. Inventories
-reach Hearth in 512 KiB chunks over the control connection: a host's is a few
-hundred kilobytes gzipped, an image's tens. Hearth refuses one over 32 MiB
-unzipped, so a Relay can't run it out of memory.
+A critical without a known fix isn't unsafe, or an image already on its newest
+version would stay red with nothing anyone could do about it.
 
-Findings are kept per inventory with when each was first seen. Hearth keeps
-inventories per Relay rather than sharing one image's between Relays, since it
-can't verify what a Relay says an image holds.
+Opening one says what the resource is, where what it runs came from, what to
+move it to, and one button that says what it does. Below that are its
+vulnerabilities, rolled up by package since one update clears them all, with
+each package's CVEs a click further. They're read only then, so the page stays
+light however many a host has. The dialog keeps one size throughout.
+
+## Fixing
+
+What Kiln offers depends on where the software came from:
+
+| Where                 | Fix                                                                              |
+| --------------------- | -------------------------------------------------------------------------------- |
+| Image app, tag moved  | **Update and redeploy** deploys the image the tag names, as the app's Updates do |
+| Image app, otherwise  | A pointer to where its image is set                                              |
+| Built apps            | A hint: the change goes in its repository or file, then **Redeploy**             |
+| Relay host            | A pointer to its Terminal                                                        |
+| Kiln's own services   | A pointer to updating Kiln                                                       |
+| Database, game server | A hint: Kiln and Bricks choose these images                                      |
+
+When a deployment ends, whatever started it, Kiln inventories what the app runs
+now rather than waiting for the next sweep.
 
 ## Staying out of the way
 
@@ -91,8 +97,8 @@ covers whose instances you hear about and turning them off for one resource.
 Vulnerabilities known to be exploited notify either way. A vulnerability is
 reported once per resource while it stays, again when a fix comes out for it, and again if it goes away and comes back. People who aren't
 platform administrators can't open the Security page, so their report opens
-the resources it names instead; each resource's Info page says what it has and
-what fixes it.
+the resources it names instead, where the Info rail's Security row says what
+it has and what fixes it.
 
 ## Running it
 

@@ -15,9 +15,7 @@ import {
   emptySeverityCounts,
   securityScopeKey,
   severityAt,
-  type ResourceSecuritySummary,
   type SecurityFindingSummary,
-  type SecuritySummary,
   type SecurityTarget,
 } from "@/lib/security"
 
@@ -180,7 +178,8 @@ export const syncSecurityTargetsEffect = Effect.fn("security.syncTargets")(
 export interface DueInventory {
   readonly collectedAt: number | null
   readonly image: string | null
-  readonly requested: boolean
+  /** When someone or something asked for this one, if that's still wanted. */
+  readonly requestedAt: number | null
   readonly sbomKey: string
 }
 
@@ -197,21 +196,21 @@ export const dueInventoriesEffect = Effect.fn("security.dueInventories")(
       RowDataPacket & {
         collected_at: number | string | null
         image: string | null
-        requested: number
+        requested_at: number | string | null
         sbom_key: string
       }
     >(
       "security.dueInventories",
       `SELECT sbom_key, image, collected_at,
-              (requested_at IS NOT NULL
-                AND (collected_at IS NULL OR requested_at > collected_at))
-                AS requested
+              IF(collected_at IS NULL OR requested_at > collected_at,
+                requested_at, NULL) AS requested_at
          FROM ${databaseTable("security_sbom")}
         WHERE relay_id = ?
           AND ((requested_at IS NOT NULL
                  AND (collected_at IS NULL OR requested_at > collected_at)
                  AND (inventory_attempted_at IS NULL
-                   OR inventory_attempted_at < requested_at))
+                   OR inventory_attempted_at < requested_at
+                   OR inventory_attempted_at < ?))
             OR (document IS NULL
                  AND (inventory_attempted_at IS NULL
                    OR inventory_attempted_at < ?))
@@ -222,6 +221,7 @@ export const dueInventoriesEffect = Effect.fn("security.dueInventories")(
       [
         relayId,
         now - INVENTORY_RETRY_MS,
+        now - INVENTORY_RETRY_MS,
         HOST_SBOM,
         now - HOST_INVENTORY_MAX_AGE_MS,
         now - INVENTORY_RETRY_MS,
@@ -231,7 +231,7 @@ export const dueInventoriesEffect = Effect.fn("security.dueInventories")(
     return rows.map((row): DueInventory => ({
       collectedAt: row.collected_at === null ? null : Number(row.collected_at),
       image: row.image,
-      requested: Boolean(row.requested),
+      requestedAt: row.requested_at === null ? null : Number(row.requested_at),
       sbomKey: row.sbom_key,
     }))
   }
@@ -540,8 +540,6 @@ interface FindingRow extends RowDataPacket {
   package_name: string
   package_type: string
   package_version: string
-  relay_id: string
-  sbom_key: string
   severity: number
   url: string | null
   vulnerability_id: string
@@ -587,17 +585,24 @@ export const loadSecurityTargetsEffect = Effect.fn("security.loadTargets")(
     ])
     const summaries = new Map<
       string,
-      Pick<SecurityTarget, "counts" | "fixable" | "knownExploited">
+      Pick<
+        SecurityTarget,
+        "counts" | "fixable" | "fixableCritical" | "knownExploited"
+      >
     >()
     for (const row of counts) {
       const key = `${row.relay_id}/${row.sbom_key}`
       const summary = summaries.get(key) ?? {
         counts: emptySeverityCounts(),
         fixable: 0,
+        fixableCritical: 0,
         knownExploited: 0,
       }
-      summary.counts[severityAt(row.severity)] += Number(row.findings)
+      const severity = severityAt(row.severity)
+      summary.counts[severity] += Number(row.findings)
       summary.fixable += Number(row.fixable)
+      if (severity === "critical")
+        summary.fixableCritical += Number(row.fixable)
       summary.knownExploited += Number(row.known_exploited)
       summaries.set(key, summary)
     }
@@ -614,6 +619,7 @@ export const loadSecurityTargetsEffect = Effect.fn("security.loadTargets")(
           distro: row.distro,
           error: row.inventory_error ?? row.match_error,
           fixable: summary?.fixable ?? 0,
+          fixableCritical: summary?.fixableCritical ?? 0,
           image: row.image,
           knownExploited: summary?.knownExploited ?? 0,
           packages: row.package_count,
@@ -639,29 +645,17 @@ export const loadSecurityTargetsEffect = Effect.fn("security.loadTargets")(
   }
 )
 
-/**
- * The findings in these inventories, one per vulnerability and package in
- * each inventory, most urgent first: known exploited, then by severity, then by risk.
- */
-export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
+/** Counts every finding in these inventories once per vulnerability and package. */
+export const loadSecuritySummaryEffect = Effect.fn("security.loadSummary")(
   function* (
     inventories: ReadonlyArray<{
       readonly relayId: string
       readonly sbomKey: string
-      readonly targetKeys: ReadonlyArray<string>
-    }>,
-    // Only the most urgent, as a resource's page shows; all without one.
-    limit?: number
+    }>
   ) {
-    if (!inventories.length) {
-      return { findings: [], summary: emptySecuritySummary() }
-    }
+    const summary = emptySecuritySummary()
+    if (!inventories.length) return summary
     const database = yield* Database
-    const pairs = inventories.flatMap((inventory) => [
-      inventory.relayId,
-      inventory.sbomKey,
-    ])
-    const inPairs = `(f.relay_id, f.sbom_key) IN (${inventories.map(() => "(?, ?)").join(", ")})`
     const totals = yield* database.queryRows<
       RowDataPacket & {
         findings: number
@@ -670,7 +664,7 @@ export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
         severity: number
       }
     >(
-      "security.loadFindings.summary",
+      "security.loadSummary",
       `SELECT f.severity,
               COUNT(DISTINCT f.vulnerability_id, ${findingPackage}) AS findings,
               COUNT(DISTINCT CASE WHEN f.fix_state = 'fixed'
@@ -682,41 +676,46 @@ export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
          FROM ${databaseTable("security_finding")} f
          LEFT JOIN ${databaseTable("security_vulnerability")} v
            ON v.id = f.vulnerability_id
-        WHERE ${inPairs}
+        WHERE (f.relay_id, f.sbom_key) IN (${inventories.map(() => "(?, ?)").join(", ")})
         GROUP BY f.severity`,
-      pairs
+      inventories.flatMap((inventory) => [inventory.relayId, inventory.sbomKey])
     )
-    const summary = emptySecuritySummary()
     for (const row of totals) {
-      summary.counts[severityAt(row.severity)] += Number(row.findings)
+      const severity = severityAt(row.severity)
+      summary.counts[severity] += Number(row.findings)
       summary.fixable += Number(row.fixable)
+      if (severity === "critical")
+        summary.fixableCritical += Number(row.fixable)
       summary.knownExploited += Number(row.known_exploited)
     }
+    return summary
+  }
+)
+
+/**
+ * One inventory's findings, one per vulnerability and package, most urgent
+ * first: known exploited, then by severity, then by risk.
+ */
+export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
+  function* (relayId: string, sbomKey: string, limit: number) {
+    const database = yield* Database
     const rows = yield* database.queryRows<FindingRow>(
       "security.loadFindings",
-      `SELECT f.relay_id, f.sbom_key, f.vulnerability_id,
-              ${findingPackage} AS package_name, f.package_version, f.package_type, f.severity, f.fix_state,
+      `SELECT f.vulnerability_id, ${findingPackage} AS package_name,
+              f.package_version, f.package_type, f.severity, f.fix_state,
               f.fixed_version, f.first_seen_at, v.url, v.known_exploited
          FROM ${databaseTable("security_finding")} f
          LEFT JOIN ${databaseTable("security_vulnerability")} v
            ON v.id = f.vulnerability_id
-        WHERE (f.relay_id, f.sbom_key) IN (${inventories.map(() => "(?, ?)").join(", ")})
+        WHERE f.relay_id = ? AND f.sbom_key = ?
         ORDER BY COALESCE(v.known_exploited, 0) DESC, f.severity DESC,
-                 f.fix_state = 'fixed' DESC, f.risk DESC, f.vulnerability_id${
-                   limit === undefined ? "" : ` LIMIT ${Math.max(1, limit * 8)}`
-                 }`,
-      inventories.flatMap((inventory) => [inventory.relayId, inventory.sbomKey])
-    )
-    const targets = new Map(
-      inventories.map((inventory) => [
-        `${inventory.relayId}/${inventory.sbomKey}`,
-        inventory.targetKeys,
-      ])
+                 f.fix_state = 'fixed' DESC, f.risk DESC, f.vulnerability_id
+        LIMIT ${Math.max(1, limit * 4)}`,
+      [relayId, sbomKey]
     )
     const findings = new Map<string, SecurityFindingSummary>()
     for (const row of rows) {
-      // Per inventory, so each says what's installed and what fixes it there.
-      const key = `${row.relay_id}/${row.sbom_key}\u0000${row.vulnerability_id}\u0000${row.package_name}`
+      const key = `${row.vulnerability_id}\u0000${row.package_name}`
       const finding = findings.get(key) ?? {
         firstSeenAt: Number(row.first_seen_at),
         fixState: row.fix_state,
@@ -726,16 +725,11 @@ export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
         packageName: row.package_name,
         packageType: row.package_type,
         severity: severityAt(row.severity),
-        targets: [],
         url: row.url,
         vulnerabilityId: row.vulnerability_id,
       }
       if (!finding.installedVersions.includes(row.package_version)) {
         finding.installedVersions.push(row.package_version)
-      }
-      for (const target of targets.get(`${row.relay_id}/${row.sbom_key}`) ??
-        []) {
-        if (!finding.targets.includes(target)) finding.targets.push(target)
       }
       finding.firstSeenAt = Math.min(
         finding.firstSeenAt,
@@ -743,35 +737,9 @@ export const loadSecurityFindingsEffect = Effect.fn("security.loadFindings")(
       )
       findings.set(key, finding)
     }
-    const all = [...findings.values()]
-    return {
-      findings: limit === undefined ? all : all.slice(0, limit),
-      summary,
-    }
+    return [...findings.values()].slice(0, limit)
   }
 )
-
-/** What one resource's page says about its vulnerabilities. */
-export function resourceSecuritySummary(
-  targets: ReadonlyArray<SecurityTarget>,
-  findings: ReadonlyArray<SecurityFindingSummary>,
-  summary: SecuritySummary
-): ResourceSecuritySummary | null {
-  const checked = targets.filter((target) => target.checkedAt !== null)
-  if (!checked.length) return null
-  return {
-    checkedAt: Math.min(...checked.map((target) => target.checkedAt ?? 0)),
-    ...summary,
-    top: findings.slice(0, 3).map((finding) => ({
-      fixedVersion: finding.fixedVersion,
-      installedVersions: finding.installedVersions,
-      knownExploited: finding.knownExploited,
-      packageName: finding.packageName,
-      severity: finding.severity,
-      vulnerabilityId: finding.vulnerabilityId,
-    })),
-  }
-}
 
 // ------------------------------------------------------------- announcing
 
