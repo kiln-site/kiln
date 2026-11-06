@@ -408,7 +408,6 @@ const notificationIcons = {
   "access.removed": UserMinus,
   "kiln.release": Rocket,
   "kiln.updated": PackageCheck,
-  "relay.updated": PackageCheck,
   "resource.disk-limit": HardDrive,
   "app.image-update": PackagePlus,
   "app.deployed": CloudUpload,

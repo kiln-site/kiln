@@ -34,6 +34,23 @@ describe("notification preferences", () => {
     expect(preferences.skipPushWhileActive).toBe(false)
   })
 
+  it("carries a Relay's muted updates over to Kiln's", () => {
+    const preferences = normalizeNotificationPreferences({
+      kinds: { "relay.updated": { inbox: false, push: true } },
+      resources: {
+        "relay:relay-a:relay-a": {
+          kinds: { "relay.updated": false },
+          name: "Frankfurt",
+          type: "relay",
+        },
+      },
+    })
+    expect(preferences.kinds["kiln.updated"].inbox).toBe(false)
+    expect(preferences.resources["relay:relay-a:relay-a"]?.kinds).toEqual({
+      "kiln.updated": false,
+    })
+  })
+
   it("saves and resets one resource, leaving the rest", () => {
     const other = "database:relay-a:db-a"
     const stored = mergeNotificationPreferences(

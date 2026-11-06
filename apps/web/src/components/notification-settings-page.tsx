@@ -98,11 +98,11 @@ export const NotificationSettingsPage = React.memo(
           title="What you hear"
         >
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-            {notificationPreferenceGroups.map((group) =>
-              group.adminOnly && !platformAdmin ? null : (
-                <React.Fragment key={group.id}>
-                  <GroupLabel>{group.label}</GroupLabel>
-                  {group.kinds.map((entry) => (
+            {notificationPreferenceGroups.map((group) => (
+              <React.Fragment key={group.id}>
+                <GroupLabel>{group.label}</GroupLabel>
+                {group.kinds.map((entry) =>
+                  "adminOnly" in entry && !platformAdmin ? null : (
                     <React.Fragment key={entry.kind}>
                       <KindRow
                         choice={preferences.kinds[entry.kind]}
@@ -120,10 +120,10 @@ export const NotificationSettingsPage = React.memo(
                         />
                       ) : null}
                     </React.Fragment>
-                  ))}
-                </React.Fragment>
-              )
-            )}
+                  )
+                )}
+              </React.Fragment>
+            ))}
           </div>
         </SettingsPanel>
         <aside className="min-w-0 lg:max-h-full lg:overflow-y-auto">

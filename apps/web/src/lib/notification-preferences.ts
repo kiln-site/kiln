@@ -41,7 +41,7 @@ export const resourceNotificationKinds = {
   app: ["app.deployed", "app.image-update", "security.report"],
   database: ["resource.disk-limit", "security.report"],
   instance: ["security.report"],
-  relay: ["relay.updated", "security.report"],
+  relay: ["kiln.updated", "security.report"],
 } as const satisfies Record<
   NotificationResource["type"],
   ReadonlyArray<NotificationKind>
@@ -86,7 +86,6 @@ export const notificationChannels = [
 /** The kinds a person can choose about, in the order settings lists them. */
 export const notificationPreferenceGroups = [
   {
-    adminOnly: false,
     id: "instances",
     kinds: [
       {
@@ -98,11 +97,6 @@ export const notificationPreferenceGroups = [
         description: "An App's image has a newer version.",
         kind: "app.image-update",
         label: "App updates available",
-      },
-      {
-        description: "A Relay moved to a newer version.",
-        kind: "relay.updated",
-        label: "Relay updates",
       },
       {
         description: "A scan found new vulnerabilities.",
@@ -125,7 +119,6 @@ export const notificationPreferenceGroups = [
     label: "Instances",
   },
   {
-    adminOnly: false,
     id: "access",
     kinds: [
       // Invitations wait in the inbox for an answer, so they always arrive.
@@ -144,26 +137,26 @@ export const notificationPreferenceGroups = [
     label: "Access",
   },
   {
-    adminOnly: true,
     id: "kiln",
     kinds: [
       {
+        adminOnly: true,
         description: "A new Kiln release is out.",
         kind: "kiln.release",
         label: "Update available",
       },
       {
-        description: "Kiln moved to a newer version.",
+        description: "Hearth or a Relay moved to a newer version.",
         kind: "kiln.updated",
-        label: "Updated",
+        label: "Kiln updated",
       },
     ],
     label: "Kiln",
   },
 ] as const satisfies ReadonlyArray<{
-  adminOnly: boolean
   id: string
   kinds: ReadonlyArray<{
+    adminOnly?: boolean
     description: string
     inboxRequired?: boolean
     kind: NotificationKind
@@ -195,7 +188,6 @@ const kindsWithRequiredInbox: ReadonlySet<NotificationKind> = new Set(
 const allKinds: ReadonlyArray<NotificationKind> = [
   "kiln.release",
   "kiln.updated",
-  "relay.updated",
   "access.invited",
   "access.removed",
   "resource.disk-limit",
@@ -284,6 +276,20 @@ function readStored(value: unknown): StoredPreferences {
   }
 }
 
+// What's off for a resource, under the names kinds go by now.
+function currentResourceKinds(
+  kinds: NotificationResourcePreference["kinds"]
+): NotificationResourcePreference["kinds"] {
+  const current: Record<string, false> = { ...kinds }
+  for (const [kind, former] of Object.entries(formerNotificationKinds))
+    for (const name of former)
+      if (name in current) {
+        delete current[name]
+        current[kind] = false
+      }
+  return current
+}
+
 /** Choices for every kind, filling in defaults for what wasn't stored. */
 export function normalizeNotificationPreferences(
   value: unknown
@@ -302,7 +308,12 @@ export function normalizeNotificationPreferences(
   return {
     idleMinutes: stored.idleMinutes ?? defaultIdleMinutes,
     kinds,
-    resources: stored.resources ?? {},
+    resources: Object.fromEntries(
+      Object.entries(stored.resources ?? {}).map(([key, resource]) => [
+        key,
+        { ...resource, kinds: currentResourceKinds(resource.kinds) },
+      ])
+    ),
     scope: stored.scope ?? "all",
     security: { ...defaultSecurityNotificationSettings, ...stored.security },
     skipPushWhileActive: stored.skipPushWhileActive ?? true,

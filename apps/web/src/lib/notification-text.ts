@@ -22,6 +22,17 @@ function releaseName(name: string | undefined, version: string) {
   return name ?? kilnReleaseLabel(version)
 }
 
+// "Hearth and 3 Relays", "Frankfurt".
+function updatedParts({
+  hearth = true,
+  relays = [],
+}: Extract<NotificationContent, { kind: "kiln.updated" }>) {
+  const relayPart =
+    relays.length > 1 ? `${relays.length} Relays` : relays[0]?.name
+  if (!hearth) return relayPart ?? "Kiln"
+  return relayPart ? `Hearth and ${relayPart}` : "Hearth"
+}
+
 // "a Game Server", "an App".
 function withArticle(label: string) {
   return `${/^[AEIOU]/.test(label) ? "an" : "a"} ${label}`
@@ -34,9 +45,7 @@ export function notificationTitle(content: NotificationContent): string {
     case "kiln.release":
       return "Your Kiln has an update available"
     case "kiln.updated":
-      return "Your Kiln has been updated"
-    case "relay.updated":
-      return "Your Relay has been updated"
+      return "Kiln has been updated"
     case "access.invited": {
       const type = resourceTypeLabels[content.resource.type]
       switch (content.outcome) {
@@ -97,9 +106,7 @@ export function notificationDetail(
     case "kiln.release":
       return releaseName(content.name, content.version)
     case "kiln.updated":
-      return `${releaseName(content.previousName, content.previousVersion)} to ${releaseName(content.name, content.version)}`
-    case "relay.updated":
-      return `${content.resource.name} - ${kilnReleaseLabel(content.previousVersion)} to ${kilnReleaseLabel(content.version)}`
+      return `${releaseName(content.previousName, content.previousVersion)} to ${releaseName(content.name, content.version)} · ${updatedParts(content)}`
     case "access.invited":
       return `${content.resource.name} - ${
         content.outcome === undefined ? "by" : "from"

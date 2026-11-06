@@ -19,6 +19,7 @@ import {
 import { forkAppEffect } from "@/effect/runtime"
 import { databaseTable } from "@/lib/database-config"
 import { kilnGitRepository } from "@/lib/environment"
+import type { NotificationContent } from "@/lib/notifications"
 import {
   findKilnRelease,
   isKilnReleaseVersion,
@@ -34,8 +35,60 @@ const updateRequestSettingKey = "hearth.updateRequest"
 // How long after someone asks to update Hearth a newer start is theirs.
 const updateRequestWindowMs = 6 * 60 * 60_000
 
-function releaseTagUrl(version: string) {
+export function kilnReleaseTagUrl(version: string) {
   return `https://github.com/${kilnGitRepositorySlug(kilnGitRepository())}/releases/tag/v${version}`
+}
+
+type KilnUpdate = Extract<NotificationContent, { kind: "kiln.updated" }>
+
+/**
+ * Adds an update of Hearth or a Relay to the unread ones it replaces, so
+ * everything since someone last looked is one notification, from the oldest
+ * version to the newest.
+ */
+export function mergeKilnUpdates(
+  unread: ReadonlyArray<NotificationContent>,
+  update: KilnUpdate
+): KilnUpdate {
+  const updates = [
+    ...unread.flatMap((content) =>
+      content.kind === "kiln.updated" ? [content] : []
+    ),
+    update,
+  ]
+  const oldest = updates.reduce((found, candidate) =>
+    compareKilnReleaseVersions(
+      candidate.previousVersion,
+      found.previousVersion
+    ) === -1
+      ? candidate
+      : found
+  )
+  const newest = updates.reduce((found, candidate) =>
+    compareKilnReleaseVersions(candidate.version, found.version) === 1
+      ? candidate
+      : found
+  )
+  const relays = new Map(
+    updates.flatMap(({ relays = [] }) =>
+      relays.map((relay) => [relay.id, relay] as const)
+    )
+  )
+  return {
+    hearth: updates.some(({ hearth = true }) => hearth),
+    kind: "kiln.updated",
+    name: updates.find(
+      ({ name, version }) => name && version === newest.version
+    )?.name,
+    previousName: updates.find(
+      ({ previousName, previousVersion }) =>
+        previousName && previousVersion === oldest.previousVersion
+    )?.previousName,
+    previousVersion: oldest.previousVersion,
+    relays: [...relays.values()],
+    url: newest.url,
+    version: newest.version,
+  }
 }
 
 /**
@@ -113,26 +166,16 @@ export const recordStartedKilnVersionEffect = Effect.fn(
           yield* replaceNotificationEffect(
             admin,
             "kiln.updated",
-            (unread) => {
-              // Where the updates they haven't seen started from.
-              const first = unread.find(
-                (notification) => notification.kind === "kiln.updated"
-              )
-              return {
+            (unread) =>
+              mergeKilnUpdates(unread, {
+                hearth: true,
                 kind: "kiln.updated",
                 name: findKilnRelease(releases, currentVersion)?.name,
-                previousName:
-                  first?.kind === "kiln.updated"
-                    ? first.previousName
-                    : findKilnRelease(releases, previousVersion)?.name,
-                previousVersion:
-                  first?.kind === "kiln.updated"
-                    ? first.previousVersion
-                    : previousVersion,
-                url: releaseTagUrl(currentVersion),
+                previousName: findKilnRelease(releases, previousVersion)?.name,
+                previousVersion,
+                url: kilnReleaseTagUrl(currentVersion),
                 version: currentVersion,
-              }
-            },
+              }),
             { actorUserId, sourceKey: `kiln.updated:${currentVersion}` }
           )
         return admins
