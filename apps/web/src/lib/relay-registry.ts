@@ -1273,7 +1273,7 @@ export async function inspectPersistedRelay(
         `UPDATE ${databaseTable("relay")}
           SET last_connected_at = ?, last_error = NULL,
               managed_ember_count = ?, node_arch = ?,
-              node_platform = ?, node_version = ?, updated_at = ?
+              node_platform = ?, updated_at = ?
         WHERE id = ?`,
         [
           now,
@@ -1281,7 +1281,6 @@ export async function inspectPersistedRelay(
             .length,
           snapshot.node.arch,
           snapshot.node.platform,
-          snapshot.node.version,
           now,
           id,
         ]

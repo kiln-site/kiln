@@ -194,6 +194,7 @@ request is answered once.
 | `relay:<id>#docker-cleanup`         | A cleanup of its Docker someone asked for              |
 | `relay:<id>#authorization`          | What a Relay holds of who may do what                  |
 | `relay:<id>#database-connections`   | Apps' database connections handover                    |
+| `relay:<id>#version`                | The version Hearth has recorded for a Relay            |
 | `cloudflare-connection:<id>`        | A Cloudflare connection                                |
 | `hearth`                            | Hearth: its update, backups, services and database     |
 | `backup:<id>`                       | A backup: changing it, or restoring from it            |
