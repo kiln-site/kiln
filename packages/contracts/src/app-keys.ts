@@ -7,6 +7,11 @@ import { z } from "zod"
 // a server's ID, so the file browser, its caches, and its Relay operations
 // serve both.
 const APP_FILE_ROOT_PREFIX = "app:"
+// A volume an App owns or uses opens as a root of that App's own,
+// `app:<appId>:volume:<volume ID>`, so it takes the App's file permissions.
+// An App-owned volume's `/` is written `:`, since a root's ID travels in URLs.
+const APP_VOLUME_FILE_ROOT =
+  /^app:([a-f0-9]{40}):volume:([a-f0-9]{40}(?::[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127})?)$/u
 // A database's dumps travel as files under `database:<databaseId>`, a folder
 // the Relay keeps for them, so they go through the same transfers.
 const DATABASE_FILE_ROOT_PREFIX = "database:"
@@ -20,7 +25,9 @@ export const appServiceNameSchema = z
 // A Relay's host files use its fingerprint, scoped by the Relay connection.
 export const fileRootIdSchema = z
   .string()
-  .regex(/^(?:(?:app:)?[a-f0-9]{40}|[A-Za-z\d_-]{43})$/u)
+  .regex(
+    /^(?:(?:app:)?[a-f0-9]{40}|app:[a-f0-9]{40}:volume:[a-f0-9]{40}(?::[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127})?|[A-Za-z\d_-]{43})$/u
+  )
 export function isRelayFileRoot(id: string): boolean {
   return /^[A-Za-z\d_-]{43}$/u.test(id)
 }
@@ -29,8 +36,24 @@ export function appFileRootId(appId: string): string {
   return `${APP_FILE_ROOT_PREFIX}${appId}`
 }
 
+export function appVolumeFileRootId(appId: string, volumeId: string): string {
+  return `${APP_FILE_ROOT_PREFIX}${appId}:volume:${volumeId.replace("/", ":")}`
+}
+
+/** The App and volume of a volume's root; null for any other root. */
+export function appVolumeFromFileRoot(
+  id: string
+): { appId: string; volumeId: string } | null {
+  const match = APP_VOLUME_FILE_ROOT.exec(id)
+  if (!match) return null
+  return { appId: match[1]!, volumeId: match[2]!.replace(":", "/") }
+}
+
+// The App a root belongs to: its folder's, or one of its volumes'.
 export function appIdFromFileRoot(id: string): string | null {
   if (!id.startsWith(APP_FILE_ROOT_PREFIX)) return null
+  const volume = appVolumeFromFileRoot(id)
+  if (volume) return volume.appId
   const appId = id.slice(APP_FILE_ROOT_PREFIX.length)
   return resourceIdPattern.test(appId) ? appId : null
 }

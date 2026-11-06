@@ -10,6 +10,7 @@ import { Effect, Result, Schema, Scope } from "effect"
 
 import {
   appIdFromFileRoot,
+  appVolumeFromFileRoot,
   databaseIdFromFileRoot,
   isRelayFileRoot,
   relayBrowserRequestProofTranscript,
@@ -115,6 +116,8 @@ export interface BrowserFileTransferOptions {
   readonly hostFiles?: FileRootSource | undefined
   /** Apps' data directories, addressed as `app:<appId>`. */
   readonly appFiles?: FileRootSource | undefined
+  /** Volumes an App opens, addressed as `app:<appId>:volume:<id>`. */
+  readonly appVolumeFiles?: FileRootSource | undefined
   /** Databases' dump folders, addressed as `database:<databaseId>`. */
   readonly databaseFiles?: FileRootSource | undefined
   readonly gate: TransferGate
@@ -670,6 +673,9 @@ const resolveFileRoot = Effect.fn("RelayTransfer.resolveFileRoot")(function* (
         )
       : Effect.succeed(null)
   if (isRelayFileRoot(rootId)) return yield* source(options.hostFiles, rootId)
+  if (appVolumeFromFileRoot(rootId)) {
+    return yield* source(options.appVolumeFiles, rootId)
+  }
   const appId = appIdFromFileRoot(rootId)
   if (appId) return yield* source(options.appFiles, appId)
   const databaseId = databaseIdFromFileRoot(rootId)

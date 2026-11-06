@@ -397,6 +397,7 @@ function onlyUsedBy(volume: FakeVolume, appId: string): boolean {
 
 function listedVolumes() {
   return {
+    filesAvailable: false,
     measuring: false,
     protection: { ready: true, reason: null },
     uncovered: [],

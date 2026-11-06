@@ -5,6 +5,7 @@
  */
 import {
   appIdFromFileRoot,
+  appVolumeFromFileRoot,
   appTailscaleMember,
   databaseIdFromFileRoot,
   databaseTailscaleMember,
@@ -169,12 +170,26 @@ export function resourceLaneKey(kind: PowerResourceKind, id: string): string {
   return laneKeys.database(id)
 }
 
+/**
+ * A volume opened through an App: several Apps can share one, so its writers
+ * wait for each other, and it can't be deleted or restored meanwhile.
+ */
+function appVolumeFileLocks(appId: string, volumeId: string): Array<LaneLock> {
+  return [
+    ...appFileLocks(appId),
+    shared(laneKeys.volume(volumeId)),
+    exclusive(laneKeys.volumeFiles(volumeId)),
+  ]
+}
+
 /** Writes under a file root, which is a game server, an App, or the host. */
 export function fileRootWriteLocks(
   rootId: string,
   resolveInstance: InstanceResolver
 ): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> {
   if (isRelayFileRoot(rootId)) return [exclusive(laneKeys.hostFiles)]
+  const volume = appVolumeFromFileRoot(rootId)
+  if (volume) return appVolumeFileLocks(volume.appId, volume.volumeId)
   const appId = appIdFromFileRoot(rootId)
   if (appId) return appFileLocks(appId)
   return withInstance(resolveInstance(rootId), instanceFileLocks)
@@ -262,6 +277,13 @@ export function fileRootTransferLocks(rootId: string): Array<LaneLock> {
   // import, which reads the uploaded dump, waits for them.
   const databaseId = databaseIdFromFileRoot(rootId)
   if (databaseId) return databaseReadLocks(databaseId)
+  const volume = appVolumeFromFileRoot(rootId)
+  if (volume) {
+    return [
+      shared(laneKeys.app(volume.appId)),
+      shared(laneKeys.volume(volume.volumeId)),
+    ]
+  }
   const appId = appIdFromFileRoot(rootId)
   return [shared(appId ? laneKeys.app(appId) : laneKeys.instance(rootId))]
 }
@@ -274,6 +296,13 @@ export function fileRootTransferLocks(rootId: string): Array<LaneLock> {
  */
 export function fileRootCommitLocks(rootId: string): Array<LaneLock> {
   if (isRelayFileRoot(rootId) || databaseIdFromFileRoot(rootId)) return []
+  const volume = appVolumeFromFileRoot(rootId)
+  if (volume) {
+    return [
+      exclusive(laneKeys.appFiles(volume.appId)),
+      exclusive(laneKeys.volumeFiles(volume.volumeId)),
+    ]
+  }
   const appId = appIdFromFileRoot(rootId)
   return [
     exclusive(

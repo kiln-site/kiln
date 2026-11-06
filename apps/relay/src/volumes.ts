@@ -42,6 +42,10 @@ const COMPOSE_VOLUME_LABEL = "com.docker.compose.volume"
 // waits before the next.
 const SIZE_REFRESH_MS = 60_000
 const REFERENCE_PERMITS = 1_024
+// How long a volume an App may open stays known: browsing asks for every
+// file it touches, and each answer would otherwise list Docker.
+const APP_MOUNTPOINT_TTL_MS = 5_000
+const APP_MOUNTPOINT_MAX_ENTRIES = 256
 
 export class RelayVolumeError extends Schema.TaggedError<RelayVolumeError>()(
   "RelayVolumeError",
@@ -164,6 +168,13 @@ export class RelayVolumes {
   // before its database changed, no longer count.
   readonly #held = new Map<string, string>()
   #measuring: Promise<void> | null = null
+  readonly #appMountpoints = new Map<
+    string,
+    { expires: number; mountpoint: string }
+  >()
+  // Moves on each time they're forgotten, so a read begun before then can't
+  // put back what it saw.
+  #appMountpointsEpoch = 0
 
   constructor(
     config: RelayConfig,
@@ -374,7 +385,11 @@ export class RelayVolumes {
       const volume = yield* this.#deletable(id)
       yield* this.#engine.removeVolume(volume.Name)
       yield* this.#state.deleteVolumeName(id)
-    }).pipe(this.#references.shared, Effect.withSpan("RelayVolumes.delete"))
+    }).pipe(
+      Effect.tap(() => this.#forgetAppMountpoints),
+      this.#references.shared,
+      Effect.withSpan("RelayVolumes.delete")
+    )
   }
 
   /**
@@ -449,6 +464,58 @@ export class RelayVolumes {
       })
     )
   }
+
+  /**
+   * Where a volume an App owns or uses keeps its files on the host. Refused
+   * for any other volume, so an App's file access reaches only its own.
+   * Changing who uses a volume forgets what's known at once.
+   */
+  appVolumeMountpoint(appId: string, id: string) {
+    return Effect.suspend(() => {
+      const key = `${appId}:${id}`
+      const known = this.#appMountpoints.get(key)
+      if (known && known.expires > Date.now()) {
+        return Effect.succeed(known.mountpoint)
+      }
+      const epoch = this.#appMountpointsEpoch
+      return this.#inventory().pipe(
+        Effect.flatMap(({ volumes }) => {
+          const volume = volumes.find((candidate) => candidate.id === id)
+          if (
+            !volume?.mountpoint ||
+            !(
+              volume.owner?.appId === appId ||
+              volume.users.some((user) => user.appId === appId)
+            )
+          ) {
+            return Effect.fail(
+              new RelayVolumeError({
+                message: "This App doesn't use that volume",
+              })
+            )
+          }
+          if (epoch === this.#appMountpointsEpoch) {
+            if (this.#appMountpoints.size >= APP_MOUNTPOINT_MAX_ENTRIES) {
+              this.#appMountpoints.clear()
+            }
+            this.#appMountpoints.set(key, {
+              expires: Date.now() + APP_MOUNTPOINT_TTL_MS,
+              mountpoint: volume.mountpoint,
+            })
+          }
+          return Effect.succeed(volume.mountpoint)
+        }),
+        Effect.withSpan("RelayVolumes.appVolumeMountpoint", {
+          attributes: { "kiln.volume_id": id, "relay.app_id": appId },
+        })
+      )
+    })
+  }
+
+  readonly #forgetAppMountpoints = Effect.sync(() => {
+    this.#appMountpointsEpoch += 1
+    this.#appMountpoints.clear()
+  })
 
   /** Only volumes owned by the Compose project, excluding shared mounts. */
   ownedAppVolumeIds(appId: string) {
@@ -553,7 +620,10 @@ export class RelayVolumes {
         }
       }
       yield* this.#state.replaceAppVolumeReferences(clientId, appId, volumeIds)
-    }).pipe(Effect.withSpan("RelayVolumes.writeAppReferences"))
+    }).pipe(
+      Effect.tap(() => this.#forgetAppMountpoints),
+      Effect.withSpan("RelayVolumes.writeAppReferences")
+    )
   }
 
   /**
@@ -594,6 +664,7 @@ export class RelayVolumes {
       )
     }).pipe(
       this.#references.shared,
+      Effect.tap(() => this.#forgetAppMountpoints),
       Effect.withSpan("RelayVolumes.importAppReferences")
     )
   }
@@ -621,7 +692,9 @@ export class RelayVolumes {
    * deleted it said; other Hearths' records go when they next send theirs.
    */
   forgetApp(clientId: string, appId: string) {
-    return this.#state.deleteAppVolumeReferences(clientId, appId)
+    return this.#state
+      .deleteAppVolumeReferences(clientId, appId)
+      .pipe(Effect.tap(() => this.#forgetAppMountpoints))
   }
 
   /**

@@ -12,7 +12,7 @@ import { createServer as createHttpsServer } from "node:https"
 import { createHmac, randomBytes, randomUUID } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { hostname } from "node:os"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import { Cause, Effect, Predicate, Schema } from "effect"
 import { logException } from "@workspace/telemetry"
 
@@ -44,6 +44,7 @@ import {
   relayPrepareAppSchema,
   relayProvisionAppSchema,
   appIdFromFileRoot,
+  appVolumeFromFileRoot,
   databaseIdFromFileRoot,
   isRelayFileRoot,
   RelayTransferPullStartSchema,
@@ -769,6 +770,21 @@ async function hostFileRoot(id: string): Promise<FileRoot> {
   return { id, directory: "." }
 }
 const appDatabaseBrowser = new DatabaseBrowser(appFilesystem)
+// A volume opened through an App that owns or uses it. Its files are on the
+// host, so they read and save as the host's do, confined to the volume.
+async function appVolumeFileRoot(rootId: string): Promise<FileRoot> {
+  const volume = appVolumeFromFileRoot(rootId)
+  if (!volume) throw new Error("Volume not found")
+  if (!(await hostFiles.ready())) {
+    throw new Error("Mount this Relay's host files to open its volumes")
+  }
+  await apps.get(volume.appId)
+  const mountpoint = await runRelayEffect(
+    "relay.apps.volume.mountpoint",
+    volumes.appVolumeMountpoint(volume.appId, volume.volumeId)
+  )
+  return { directory: relative("/", mountpoint), id: rootId }
+}
 const databaseDumpFilesystem = new FilesystemDriver({
   ...config,
   rootDirectory: databases.dumpDirectory,
@@ -1031,6 +1047,10 @@ const transferRoot: TransferRootResolver = async (rootId) => {
       packLocks: transferPackLocks(rootId),
       root: await hostFileRoot(rootId),
     }
+  }
+  // A volume moves with the App that owns it, or stays with its Relay.
+  if (appVolumeFromFileRoot(rootId)) {
+    throw new Error("A volume's files can't be transferred between Relays")
   }
   const appId = appIdFromFileRoot(rootId)
   if (appId) {
@@ -1624,6 +1644,7 @@ const browserSocket = attachBrowserSocket({
     filesystem: appFilesystem,
     root: (appId) => apps.fileRoot(appId),
   },
+  appVolumeFiles: { filesystem: hostFilesystem, root: appVolumeFileRoot },
   databaseFiles: {
     filesystem: databaseDumpFilesystem,
     root: (databaseId) => databases.dumpFileRoot(databaseId),
@@ -2593,7 +2614,10 @@ async function executeControlRequest(
       })
     }
     case "relay.volumes.read":
-      return runRelayEffect("relay.volumes.read", volumes.list())
+      return {
+        ...(await runRelayEffect("relay.volumes.read", volumes.list())),
+        filesAvailable: await hostFiles.ready(),
+      }
     case "relay.docker.storage":
       return runRelayEffect("relay.docker.storage", dockerCleanup.storage())
     case "relay.docker.cleanup":
@@ -4605,7 +4629,14 @@ async function withFileTarget<T>(
 ): Promise<T> {
   const id = requiredString(payload, "instanceId")
   const appId = appIdFromFileRoot(id)
-  const kind = isRelayFileRoot(id) ? "relay" : appId ? "app" : "instance"
+  const appVolume = appVolumeFromFileRoot(id) !== null
+  const kind = isRelayFileRoot(id)
+    ? "relay"
+    : appVolume
+      ? "app-volume"
+      : appId
+        ? "app"
+        : "instance"
   // Every file operation first finds its root; a game server's is found by
   // looking up its container.
   const target = await traceRelayPromise(
@@ -4617,17 +4648,23 @@ async function withFileTarget<T>(
             filesystem: hostFilesystem,
             root: await hostFileRoot(id),
           }
-        : appId
+        : appVolume
           ? {
-              databaseBrowser: appDatabaseBrowser,
-              filesystem: appFilesystem,
-              root: await apps.fileRoot(appId),
+              databaseBrowser: hostDatabaseBrowser,
+              filesystem: hostFilesystem,
+              root: await appVolumeFileRoot(id),
             }
-          : {
-              databaseBrowser,
-              filesystem,
-              root: await requiredFileRoot(id),
-            },
+          : appId
+            ? {
+                databaseBrowser: appDatabaseBrowser,
+                filesystem: appFilesystem,
+                root: await apps.fileRoot(appId),
+              }
+            : {
+                databaseBrowser,
+                filesystem,
+                root: await requiredFileRoot(id),
+              },
     { "kiln.files.root": kind }
   )
   return run(target)

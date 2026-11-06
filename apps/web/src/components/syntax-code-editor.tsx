@@ -543,6 +543,8 @@ type SyntaxCodeEditorProps = {
   ariaLabel: string
   disabled: boolean
   fontSize: number
+  // Where the cursor opens, scrolled into view.
+  cursorAt?: number | undefined
   onChange: (value: string) => void
   onSearchOpenChange: (open: boolean) => void
   originalValue: string
@@ -565,6 +567,7 @@ export const SyntaxCodeEditor = React.forwardRef<
     ariaLabel,
     disabled,
     fontSize,
+    cursorAt,
     onChange,
     onSearchOpenChange,
     originalValue,
@@ -590,6 +593,7 @@ export const SyntaxCodeEditor = React.forwardRef<
   const initialAriaLabel = React.useRef(ariaLabel)
   const initialDisabled = React.useRef(disabled)
   const initialFontSize = React.useRef(fontSize)
+  const initialCursorAt = React.useRef(cursorAt)
   const initialPath = React.useRef(path)
   const initialPlaceholder = React.useRef(placeholder)
   const initialReadOnly = React.useRef(readOnly)
@@ -684,6 +688,17 @@ export const SyntaxCodeEditor = React.forwardRef<
     })
 
     view.current = nextView
+    if (initialCursorAt.current !== undefined) {
+      const anchor = Math.min(
+        initialCursorAt.current,
+        nextView.state.doc.length
+      )
+      nextView.dispatch({
+        effects: EditorView.scrollIntoView(anchor, { y: "center" }),
+        selection: { anchor },
+      })
+      nextView.focus()
+    }
     return () => {
       nextView.destroy()
       view.current = null

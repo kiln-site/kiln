@@ -68,6 +68,8 @@ export const laneKeys = {
   platform: "relay:platform",
   /** One of the Relay's Docker named volumes. */
   volume: (id: string) => `volume:${id}`,
+  /** Writes to a volume's files through an App that uses it. */
+  volumeFiles: (id: string) => `volume:${id}/files`,
   /**
    * Removing what Kiln left on Docker: leftover containers no resource owns
    * and, later, images. See docker-cleanup.ts.

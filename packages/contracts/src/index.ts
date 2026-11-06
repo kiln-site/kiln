@@ -771,6 +771,8 @@ export const relayUncoveredMountSchema = z.object({
   source: z.string(),
 })
 export const relayVolumesSchema = z.object({
+  // Whether the Relay can reach its host's files, and so volumes' contents.
+  filesAvailable: z.boolean(),
   // Whether Docker is measuring the volumes, so sizes are on their way.
   measuring: z.boolean(),
   // Whether every paired Hearth that can configure Apps has told the Relay
@@ -1006,6 +1008,21 @@ export const appMountSourceSchema = z.discriminatedUnion("type", [
     type: z.literal("file"),
   }),
 ])
+
+// The name a file mount has on the node, which says which version of it a
+// container has. It only tells versions apart, so a small hash will do; a
+// mount's ID has no dash, which sets one with this name apart from one
+// deployed before files carried it.
+export function appMountFileName(mountId: string, content: string): string {
+  let low = 0xdeadbeef
+  let high = 0x41c6ce57
+  for (let index = 0; index < content.length; index += 1) {
+    const code = content.charCodeAt(index)
+    low = Math.imul(low ^ code, 2_654_435_761)
+    high = Math.imul(high ^ code, 1_597_334_677)
+  }
+  return `${mountId}-${(low >>> 0).toString(36)}${(high >>> 0).toString(36)}`
+}
 
 export const appMountSchema = z.strictObject({
   // Stable across edits; a file mount is kept on the Relay under it.

@@ -71,6 +71,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       })),
     })
     return {
+      filesAvailable: false,
       measuring: false,
       protection: { ready: true, reason: null },
       uncovered: [],

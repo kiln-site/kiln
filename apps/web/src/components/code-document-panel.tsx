@@ -37,6 +37,7 @@ export function CodeDocumentPanel({
   className,
   content,
   edit,
+  cursorAt,
   footer,
   languagePath,
   noun,
@@ -48,6 +49,8 @@ export function CodeDocumentPanel({
 }: {
   className?: string
   content: string
+  // Where the cursor opens, such as at a definition being looked for.
+  cursorAt?: number | undefined
   edit?: {
     // The saved content, which changes are marked against.
     original: string
@@ -259,6 +262,7 @@ export function CodeDocumentPanel({
             ariaLabel={edit ? `Edit ${title}` : `View ${title}`}
             disabled={false}
             fontSize={edit ? 13 : 12}
+            cursorAt={cursorAt}
             onChange={edit?.onChange ?? ignoreEditorChange}
             onSearchOpenChange={ignoreSearchOpenChange}
             originalValue={edit?.original ?? content}

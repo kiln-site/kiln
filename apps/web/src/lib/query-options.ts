@@ -68,7 +68,7 @@ import {
   type InstanceFavorite,
 } from "@/lib/instance-favorites"
 import { getRelayResources } from "@/server/relay-host"
-import { getRelayVolumes } from "@/server/relay-volumes"
+import { getAppVolumes, getRelayVolumes } from "@/server/relay-volumes"
 import { getRelayDockerStorage } from "@/server/relay-docker"
 import { isDatabaseFilePath } from "@/lib/database-files"
 import { traceFileWork } from "@/lib/file-timing"
@@ -285,6 +285,9 @@ export const queryKeys = {
   relayProxy: (relayId: string) => ["relays", "proxy", relayId] as const,
   relayControlDial: (relayId: string) =>
     ["relays", "control-dial", relayId] as const,
+  // Under the Relay's, so whatever refreshes those refreshes these.
+  appVolumes: (relayId: string, appId: string) =>
+    ["relays", "volumes", relayId, "app", appId] as const,
   relayVolumes: (relayId: string) => ["relays", "volumes", relayId] as const,
   relayDockerStorage: (relayId: string) =>
     ["relays", "docker-storage", relayId] as const,
@@ -896,6 +899,22 @@ export function unfinishedRestoresQueryOptions() {
   return queryOptions({
     queryFn: () => getUnfinishedRestores(),
     queryKey: queryKeys.backups.unfinished,
+    staleTime: 30_000,
+  })
+}
+
+// What one App owns or uses, which takes only reading that App.
+export function appVolumesQueryOptions(relayId: string, appId: string) {
+  return queryOptions({
+    queryFn: () => getAppVolumes({ data: { appId, relayId } }),
+    queryKey: queryKeys.appVolumes(relayId, appId),
+    refetchInterval: (query) =>
+      query.state.data?.measuring
+        ? 2_000
+        : query.state.data?.referencesKnown === false
+          ? 10_000
+          : false,
+    retry: false,
     staleTime: 30_000,
   })
 }

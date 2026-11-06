@@ -13,12 +13,14 @@ import { warmFilePreviewModule } from "@/lib/workspace-module-preloads"
 export function ResourceFilesPage({
   instance,
   route,
+  rootPath,
   filePath,
   canWrite,
   connected,
 }: {
   instance: FileWorkspaceInstance
   route: { id: string; kind: "app" | "relay" }
+  rootPath?: string
   filePath?: string
   canWrite: boolean
   connected: boolean
@@ -52,6 +54,7 @@ export function ResourceFilesPage({
       key={`${instance.relayId}:${instance.id}`}
       instance={instance}
       route={route}
+      rootPath={rootPath}
       active
       routeFilePath={filePath}
       canShare={false}

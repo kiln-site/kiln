@@ -34,6 +34,7 @@ import type {
   ServiceResourceLimits,
 } from "@workspace/contracts"
 import {
+  appMountFileName,
   appServiceNameSchema,
   appVolumeId,
   CPU_LIMIT_MILLIS_PER_CORE,
@@ -3061,18 +3062,13 @@ export class AppDriver {
           break
         case "file":
           await mkdir(directory, { recursive: true })
-          await writeFile(join(directory, mount.id), source.content)
+          const file = appMountFileName(mount.id, source.content)
+          await writeFile(join(directory, file), source.content)
           mounts.push({
             kind: "file",
             readOnly,
             service,
-            source: join(
-              host,
-              "app-mounts",
-              input.appId,
-              deployment.id,
-              mount.id
-            ),
+            source: join(host, "app-mounts", input.appId, deployment.id, file),
             target,
             type: "bind",
           })

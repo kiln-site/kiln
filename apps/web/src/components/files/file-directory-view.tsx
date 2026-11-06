@@ -1,4 +1,4 @@
-import { appIdFromFileRoot } from "@workspace/contracts"
+import { appIdFromFileRoot, appVolumeFromFileRoot } from "@workspace/contracts"
 import { useFileRootPath } from "@/components/files/file-root-context"
 import { FilePageContent } from "@/components/files/file-page-content"
 import * as React from "react"
@@ -573,9 +573,11 @@ export function RootDirectoryList({
         ) : null}
         {!entries.length && directory.complete ? (
           <div className="grid min-h-32 place-items-center px-6 text-center text-xs text-muted-foreground">
-            {appIdFromFileRoot(fileIndex.instanceId)
-              ? "The App’s folder is empty."
-              : "The server root is empty."}{" "}
+            {appVolumeFromFileRoot(fileIndex.instanceId)
+              ? "This volume is empty."
+              : appIdFromFileRoot(fileIndex.instanceId)
+                ? "The App’s folder is empty."
+                : "The server root is empty."}{" "}
             Drop files anywhere on this page to upload.
           </div>
         ) : null}

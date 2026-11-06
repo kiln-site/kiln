@@ -154,6 +154,45 @@ describe("Relay volumes", () => {
     expect(fakeDocker.volumes.has(created.dockerName)).toBe(false)
   })
 
+  it("opens a volume only for an App that owns or uses it", async () => {
+    const harness = await relayHarness()
+    const volumes = await relayVolumes(harness)
+    await pairHearth(harness, "hearth-a")
+    await harness.apps.create({ id: appId, name: "Website" })
+    await run(volumes.create(volumeId, "Shared data"))
+    const otherVolume = "4e8b32d5".padEnd(40, "0")
+    await run(volumes.create(otherVolume, "Someone else's"))
+    await run(
+      volumes.importAppReferences(
+        "hearth-a",
+        connect(volumes, "hearth-a"),
+        [{ appId, volumeIds: [volumeId] }],
+        []
+      )
+    )
+
+    await expect(
+      run(volumes.appVolumeMountpoint(appId, volumeId))
+    ).resolves.toEqual(expect.any(String))
+    await expect(
+      run(volumes.appVolumeMountpoint(appId, otherVolume))
+    ).rejects.toThrow("This App doesn't use that volume")
+    await expect(
+      run(volumes.appVolumeMountpoint("b".repeat(40), volumeId))
+    ).rejects.toThrow("This App doesn't use that volume")
+
+    // What was known doesn't outlast the App's use of it, even when a read
+    // begun before the change finishes after it.
+    await run(volumes.writeAppReferences("hearth-a", appId, [volumeId]))
+    const reading = run(volumes.appVolumeMountpoint(appId, volumeId))
+    await run(volumes.writeAppReferences("hearth-a", appId, []))
+    // Which way it goes depends on timing; what it leaves behind doesn't.
+    await reading.catch(() => null)
+    await expect(
+      run(volumes.appVolumeMountpoint(appId, volumeId))
+    ).rejects.toThrow("This App doesn't use that volume")
+  })
+
   it("waits for every paired Hearth, even a read-only one, and forgets a revoked one", async () => {
     const harness = await relayHarness()
     const volumes = await relayVolumes(harness)

@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto"
 import { createServerFn } from "@tanstack/react-start"
 import { Effect } from "effect"
 import {
+  appIdSchema,
   RELAY_VOLUME_REFERENCES_PENDING,
   relayIdSchema,
   relayVolumeIdSchema,
@@ -38,6 +39,8 @@ import {
   runOperationPromise,
   signedIn,
 } from "@/operations/operation"
+import { appVolumesOf } from "@/lib/app-volumes"
+import { authorizedApp } from "@/server/app-access"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { databaseRpc, requiredRelay } from "@/server/managed-database-access"
 import { authorizedRelay } from "@/server/relay-access"
@@ -56,6 +59,7 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
     const { relay } = await authorizedRelay(data.relayId, "relay.read")
     if (!(await relayHasVolumes(relay.id))) {
       return {
+        filesAvailable: false,
         measuring: false,
         protection: { ready: true, reason: null, retrying: false },
         supported: false,
@@ -63,7 +67,7 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
         volumes: [],
       }
     }
-    const { measuring, protection, uncovered, volumes } =
+    const { filesAvailable, measuring, protection, uncovered, volumes } =
       relayVolumesSchema.parse(
         await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
       )
@@ -73,11 +77,42 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
     const retrying =
       !protection.ready && relayVolumeReferencesState(relay.id) === "retrying"
     return {
+      filesAvailable,
       measuring,
       protection: { ...protection, retrying },
       supported: true,
       uncovered,
       volumes,
+    }
+  })
+
+const appVolumesInputSchema = targetSchema.extend({ appId: appIdSchema })
+
+// The volumes one App owns or uses, for those who can read that App, who may
+// not be able to read its Relay. Whether the Relay knows yet which volumes
+// configurations name says whether one that's missing is really gone.
+export const getAppVolumes = createServerFn({ method: "GET" })
+  .validator(appVolumesInputSchema)
+  .handler(async ({ data }) => {
+    const { relay } = await authorizedApp(data, "app.read")
+    if (!(await relayHasVolumes(relay.id))) {
+      return {
+        filesAvailable: false,
+        measuring: false,
+        referencesKnown: true,
+        volumes: [],
+      }
+    }
+    const { filesAvailable, measuring, protection, volumes } =
+      relayVolumesSchema.parse(
+        await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
+      )
+    // Only whether: why not names other Hearths, which are the Relay's.
+    return {
+      filesAvailable,
+      measuring,
+      referencesKnown: protection.ready,
+      volumes: appVolumesOf(volumes, data.appId),
     }
   })
 
