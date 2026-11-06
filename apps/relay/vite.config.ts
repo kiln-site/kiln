@@ -98,6 +98,9 @@ export default defineConfig({
   },
   test: {
     include: ["src/**/*.test.ts"],
+    // Only catches hangs: tests here do real file and archive work, which a
+    // busy box slows many times over.
+    testTimeout: 60_000,
   },
 })
 

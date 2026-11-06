@@ -4,6 +4,7 @@ import { Effect, Schedule } from "effect"
 
 import { Database } from "@/effect/database"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { operationsAtRest } from "@/operations/test/at-rest"
 import { resetDatabase } from "@/test/database"
 import {
   insertInstance,
@@ -72,10 +73,7 @@ const allow = (
 export const operationsEnded = selectRows<{ state: string }>("operation").pipe(
   Effect.repeat({
     schedule: Schedule.spaced("100 millis"),
-    until: (rows) =>
-      rows.every((row) =>
-        ["cancelled", "failed", "interrupted", "succeeded"].includes(row.state)
-      ),
+    until: operationsAtRest,
   }),
   Effect.timeoutOption("15 seconds")
 )

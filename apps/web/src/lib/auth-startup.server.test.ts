@@ -11,6 +11,9 @@ import { insertRows, insertUser } from "@/test/seed"
 
 const origin = "http://localhost:3000"
 const password = "correct-horse-battery"
+// Building every table takes seconds alone, and minutes beside other schema
+// builds on the box's MySQL.
+const schemaBuildTimeout = 300_000
 // Drops every table, so it gets a database of its own. `@/lib/auth` connects
 // to it when imported, which each test does as Hearth's startup would.
 const database = `${process.env.DB_NAME}_auth_startup`
@@ -79,8 +82,7 @@ describeMysql("auth startup", () => {
           expect(response.status).toBe(200)
           expect(response.headers.getSetCookie().join()).toMatch(/session_token/)
         }),
-      // Building every table takes a while.
-      { timeout: 120_000 }
+      { timeout: schemaBuildTimeout }
     )
 
     it.effect(
@@ -100,7 +102,7 @@ describeMysql("auth startup", () => {
             expect(checkAuthSchema()).rejects.toThrow(/userAgent/)
           )
         }),
-      { timeout: 120_000 }
+      { timeout: schemaBuildTimeout }
     )
   })
 })

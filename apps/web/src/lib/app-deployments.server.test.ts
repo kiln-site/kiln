@@ -236,7 +236,7 @@ const until = (done: () => boolean) =>
   )
 
 describeMysql("App deployments", () => {
-  layer(Lanes, { timeout: 90_000 })((it) => {
+  layer(Lanes)((it) => {
     it.effect(
       "deploy one at a time per app, the next once the running one ends",
       () =>

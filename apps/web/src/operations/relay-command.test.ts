@@ -143,7 +143,7 @@ const runToEnd = (server: string) =>
   })
 
 describeMysql("Relay commands from durable operations", () => {
-  layer(Lanes, { timeout: 60_000 })((it) => {
+  layer(Lanes)((it) => {
     it.effect(
       "stops instead of sending a change again to a Relay whose state was rebuilt",
       () =>
@@ -159,8 +159,7 @@ describeMysql("Relay commands from durable operations", () => {
           assert.strictEqual(done?.state, "failed")
           assert.include(done?.error ?? "", "nobody can say")
           assert.deepStrictEqual(relay.applied, ["survival"])
-        }).pipe(TestClock.withLive),
-      30_000
+        }).pipe(TestClock.withLive)
     )
 
     it.effect(
@@ -176,8 +175,7 @@ describeMysql("Relay commands from durable operations", () => {
 
           assert.strictEqual(done?.state, "succeeded")
           assert.deepStrictEqual(relay.applied, ["withdrawn"])
-        }).pipe(TestClock.withLive),
-      30_000
+        }).pipe(TestClock.withLive)
     )
   })
 })

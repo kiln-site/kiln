@@ -57,7 +57,7 @@ const startMoveAndKillDuringCopy = (moveId: string) =>
   )
 
 describeMysql("operations engine", () => {
-  layer(TestDatabase, { timeout: 120_000 })((it) => {
+  layer(TestDatabase)((it) => {
     it.effect(
       "finishes a move whose Hearth died mid-step, without running its finished steps again",
       () =>

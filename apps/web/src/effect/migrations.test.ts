@@ -11,6 +11,10 @@ import { applyMigrations } from "./migrations"
 
 const migrationIds = migrations.map((migration) => migration.id)
 
+// Building every table takes seconds alone, and minutes beside other schema
+// builds on the box's MySQL.
+const schemaBuildTimeout = 300_000
+
 describeMysql("database migrations", () => {
   // Drops and rebuilds tables, so it gets a database of its own.
   layer(testDatabaseClient(`${process.env.DB_NAME}_migrations`))((it) => {
@@ -50,7 +54,7 @@ describeMysql("database migrations", () => {
           expect(yield* ledger).toEqual(migrationIds)
         }),
       // Building every table takes a while.
-      120_000
+      schemaBuildTimeout
     )
 
     it.effect(
@@ -116,7 +120,7 @@ describeMysql("database migrations", () => {
           `
           expect(Number(left?.count)).toBe(0)
         }),
-      120_000
+      schemaBuildTimeout
     )
 
     it.effect(
@@ -257,7 +261,7 @@ describeMysql("database migrations", () => {
           `
           expect(Number(column?.count)).toBe(0)
         }),
-      120_000
+      schemaBuildTimeout
     )
 
     it.effect(
@@ -350,7 +354,7 @@ describeMysql("database migrations", () => {
             },
           ])
         }),
-      120_000
+      schemaBuildTimeout
     )
   })
 })

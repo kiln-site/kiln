@@ -147,7 +147,7 @@ const until = <A, E, R>(
 
 describeMysql("Tailscale network deletion", () => {
   // Live clock: retries wait real time, and the engine keeps it.
-  layer(Cleanup, { excludeTestServices: true, timeout: 60_000 })((it) => {
+  layer(Cleanup, { excludeTestServices: true })((it) => {
     it.effect(
       "keeps the cleanup queued while Tailscale fails, then finishes on retry",
       () =>
@@ -176,8 +176,7 @@ describeMysql("Tailscale network deletion", () => {
           assert.isFalse(fake.tailnetDns.has(domain))
           assert.deepStrictEqual(yield* deploymentRows, [])
           assert.deepStrictEqual(yield* networkRows, [])
-        }),
-      30_000
+        })
     )
   })
 })

@@ -31,6 +31,7 @@ import {
   OperationsEngineService,
   type OperationsEngineContext,
 } from "@/operations/engine-service"
+import { operationsAtRest } from "@/operations/test/at-rest"
 import { startRelayTransfer } from "@/server/relay-transfers.server"
 import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -427,10 +428,7 @@ const stopHearth = (scope: Scope.Closeable) =>
 
 const operationsEnded = until(
   selectRows<{ state: string }>("operation"),
-  (rows) =>
-    rows.every((row) =>
-      ["cancelled", "failed", "interrupted", "succeeded"].includes(row.state)
-    )
+  operationsAtRest
 )
 
 // A fresh database with the mover, both Relays, and two game servers on the
@@ -552,7 +550,7 @@ const serverState = (relayId: string, id: string) =>
   relay.servers.get(serverKey(relayId, id))?.state ?? "gone"
 
 describeMysql("Server migrations", () => {
-  layer(TestDatabase, { timeout: 180_000 })((it) => {
+  layer(TestDatabase)((it) => {
     it.effect(
       "resumes a move an upgrade cut off with what that upgrade settled",
       () =>

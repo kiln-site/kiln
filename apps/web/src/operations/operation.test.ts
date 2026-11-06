@@ -62,7 +62,7 @@ const changeDns = operation<void>()({
 })
 
 describeMysql("Hearth operations", () => {
-  layer(TestDatabase, { timeout: 60_000 })((it) => {
+  layer(TestDatabase)((it) => {
     it.effect(
       "refuses a person's conflicting change with what's running, while Hearth's own waits",
       () =>

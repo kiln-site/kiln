@@ -149,9 +149,12 @@ const config = defineConfig(({ command, mode }) => {
       setupFiles: ["src/test/setup.ts"],
       // Worker threads start faster than forked processes.
       pool: "threads",
-      // Creating and migrating a fresh per-worker MySQL database takes longer
-      // than the default hook timeout.
-      hookTimeout: 60_000,
+      // These only catch hangs. Tests share the box's MySQL with every other
+      // stack and test run, so the same test can take many times as long
+      // while they're busy, and building a fresh per-worker database most of
+      // all.
+      testTimeout: 60_000,
+      hookTimeout: 300_000,
     },
   }
 })

@@ -86,7 +86,7 @@ const stopHearth = (scope: Scope.Closeable) =>
   Scope.close(scope, Exit.void).pipe(Effect.timeoutOption("10 seconds"))
 
 describeMysql("A deletion across a Hearth restart", () => {
-  layer(TestDatabase, { timeout: 120_000 })((it) => {
+  layer(TestDatabase)((it) => {
     it.effect(
       "takes an App's final backups across a restart, each once, then deletes it",
       () =>
