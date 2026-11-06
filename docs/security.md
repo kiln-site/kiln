@@ -83,14 +83,13 @@ goes to people who can act on it:
 | App                                | `app.manage`                   |
 
 Platform administrators hold all of them. In **Settings → Notifications**,
-the Security section turns these on or off in Kiln and for push like any other
-notification, and chooses the least severe vulnerability that notifies (high
-and above by default), whether only ones an update fixes do (on by default),
-and whose instances they come from.
-[Notifications](notifications.md#choosing-what-you-hear) covers those choices
-and turning them off for one resource. Vulnerabilities known to be exploited
-notify either way. A vulnerability is reported once per resource while it stays, again when a fix
-comes out for it, and again if it goes away and comes back. People who aren't
+**Vulnerability reports** chooses where these reach you like any other
+notification, and below it you choose the least severe vulnerability that
+notifies (high and above by default) and whether only ones an update fixes do
+(on by default). [Notifications](notifications.md#choosing-what-you-hear)
+covers whose instances you hear about and turning them off for one resource.
+Vulnerabilities known to be exploited notify either way. A vulnerability is
+reported once per resource while it stays, again when a fix comes out for it, and again if it goes away and comes back. People who aren't
 platform administrators can't open the Security page, so their report opens
 the resources it names instead; each resource's Info page says what it has and
 what fixes it.

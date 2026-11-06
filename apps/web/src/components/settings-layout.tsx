@@ -10,11 +10,14 @@ export const SettingsShell = React.memo(function SettingsShell({
   children: React.ReactNode
 }) {
   return (
-    <div className="min-h-full bg-background">
-      <header className="mx-auto w-full max-w-[90rem] px-3 pt-3 sm:px-5">
+    <div className="flex min-h-full flex-col bg-background lg:has-[[data-settings-fill]]:h-full">
+      <header className="mx-auto w-full max-w-[90rem] shrink-0 px-3 pt-3 sm:px-5">
         <SettingsNavigation />
       </header>
-      <div data-slot="settings-content" className="[contain:paint]">
+      <div
+        data-slot="settings-content"
+        className="min-h-0 flex-1 [contain:paint]"
+      >
         {children}
       </div>
     </div>
