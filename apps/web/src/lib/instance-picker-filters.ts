@@ -1,15 +1,29 @@
 import { Option, Result, Schema } from "effect"
+import type { ReactNode } from "react"
 
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import type { InstanceNameInstance } from "@/components/instance-name-presentation"
 
 export type InstancePickerKind = InstanceNameInstance["kind"]
 
-export interface InstancePickerItem {
+/** A volume, the one thing listed that isn't an instance. */
+export interface VolumePickerIdentity {
+  id: string
+  kind: "volume"
+  relayId: string
+}
+
+export type InstancePickerIdentity = InstanceNameInstance | VolumePickerIdentity
+
+export interface InstancePickerItem<
+  Identity extends InstancePickerIdentity = InstanceNameInstance,
+> {
+  /** Drawn in place of an instance's card, for what isn't an instance. */
+  card?: ReactNode
   disabled?: boolean
   /** Set by the picker from the user's favorites. */
   favorite?: boolean
-  identity: InstanceNameInstance
+  identity: Identity
   key: string
   meta: string
   name: string
@@ -19,13 +33,15 @@ export interface InstancePickerItem {
   status?: IdentityStatusPresentation
 }
 
+export type AnyInstancePickerItem = InstancePickerItem<InstancePickerIdentity>
+
 export type InstancePickerFilterGroup = "favorite" | "type"
 
 export interface InstancePickerFilter {
   group: InstancePickerFilterGroup
   id: string
   label: string
-  matches: (item: InstancePickerItem) => boolean
+  matches: (item: AnyInstancePickerItem) => boolean
 }
 
 export const favoriteInstancePickerFilter: InstancePickerFilter = {
@@ -72,7 +88,7 @@ export const defaultInstancePickerFilterIds: ReadonlyArray<string> = []
 
 /** Filters worth offering for this set of items. */
 export function availableInstancePickerFilters(
-  items: ReadonlyArray<InstancePickerItem>
+  items: ReadonlyArray<AnyInstancePickerItem>
 ): ReadonlyArray<InstancePickerFilter> {
   const kinds = new Set(items.map((item) => item.identity.kind))
   return instancePickerFilters.filter(
@@ -85,7 +101,7 @@ export function availableInstancePickerFilters(
  * Filters combine with OR inside a group and AND across groups, so
  * "Game Servers + Databases + Favorites" means favorite game servers or databases.
  */
-export function filterInstancePickerItems<T extends InstancePickerItem>(
+export function filterInstancePickerItems<T extends AnyInstancePickerItem>(
   items: ReadonlyArray<T>,
   activeFilters: ReadonlyArray<InstancePickerFilter>
 ): ReadonlyArray<T> {

@@ -65,6 +65,12 @@ export class HostFiles {
     }
   }
 
+  // Whether the host's files can be read now, without the fuller status's
+  // questions to Docker.
+  async ready(): Promise<boolean> {
+    return this.#config.hostAccess && (await this.#mounted())
+  }
+
   // Starts the helper, which stops this Relay once it has answered.
   async mount(): Promise<void> {
     if (!this.#config.hostAccess) throw new HostAccessDisabledError()

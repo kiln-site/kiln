@@ -56,6 +56,7 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
     const { relay } = await authorizedRelay(data.relayId, "relay.read")
     if (!(await relayHasVolumes(relay.id))) {
       return {
+        filesAvailable: false,
         measuring: false,
         protection: { ready: true, reason: null, retrying: false },
         supported: false,
@@ -63,7 +64,7 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
         volumes: [],
       }
     }
-    const { measuring, protection, uncovered, volumes } =
+    const { filesAvailable, measuring, protection, uncovered, volumes } =
       relayVolumesSchema.parse(
         await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
       )
@@ -73,6 +74,7 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
     const retrying =
       !protection.ready && relayVolumeReferencesState(relay.id) === "retrying"
     return {
+      filesAvailable,
       measuring,
       protection: { ...protection, retrying },
       supported: true,

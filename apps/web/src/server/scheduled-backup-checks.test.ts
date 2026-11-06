@@ -50,6 +50,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ) => {
     if (operation === "relay.volumes.read") {
       return {
+        filesAvailable: false,
         measuring: false,
         protection: { ready: true, reason: null },
         uncovered: [],

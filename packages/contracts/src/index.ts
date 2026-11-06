@@ -771,6 +771,8 @@ export const relayUncoveredMountSchema = z.object({
   source: z.string(),
 })
 export const relayVolumesSchema = z.object({
+  // Whether the Relay can reach its host's files, and so volumes' contents.
+  filesAvailable: z.boolean(),
   // Whether Docker is measuring the volumes, so sizes are on their way.
   measuring: z.boolean(),
   // Whether every paired Hearth that can configure Apps has told the Relay

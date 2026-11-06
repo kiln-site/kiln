@@ -450,6 +450,30 @@ export class RelayVolumes {
     )
   }
 
+  /**
+   * Where a volume an App owns or uses keeps its files on the host. Refused
+   * for any other volume, so an App's file access reaches only its own.
+   */
+  appVolumeMountpoint(appId: string, id: string) {
+    return this.#inventory().pipe(
+      Effect.flatMap(({ volumes }) => {
+        const volume = volumes.find((candidate) => candidate.id === id)
+        return volume?.mountpoint &&
+          (volume.owner?.appId === appId ||
+            volume.users.some((user) => user.appId === appId))
+          ? Effect.succeed(volume.mountpoint)
+          : Effect.fail(
+              new RelayVolumeError({
+                message: "This App doesn't use that volume",
+              })
+            )
+      }),
+      Effect.withSpan("RelayVolumes.appVolumeMountpoint", {
+        attributes: { "kiln.volume_id": id, "relay.app_id": appId },
+      })
+    )
+  }
+
   /** Only volumes owned by the Compose project, excluding shared mounts. */
   ownedAppVolumeIds(appId: string) {
     return this.#inventory().pipe(

@@ -288,11 +288,13 @@ function DataTableRowModel<TData extends RowData>({
           role="table"
           style={gridStyle}
         >
-          <MemoizedDataTableHead
-            columns={definition.columns}
-            scrollbarWidth={scrollbarWidth}
-            table={table}
-          />
+          {definition.hideHeader ? null : (
+            <MemoizedDataTableHead
+              columns={definition.columns}
+              scrollbarWidth={scrollbarWidth}
+              table={table}
+            />
+          )}
           {leadingBody}
           {hasBodyState ? (
             <DataTableStateBody

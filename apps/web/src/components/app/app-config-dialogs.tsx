@@ -43,7 +43,7 @@ import { deployApp, updateAppConfig } from "@/server/apps"
 // deploys when asked; changes otherwise apply on the next deploy.
 
 export type EditableAppConfig = AppConfig
-type SaveNext = "deploy" | "stay"
+export type SaveNext = "deploy" | "stay"
 
 export function useAppConfigSave(
   app: Pick<App, "id" | "permissions" | "relayId">,
@@ -157,6 +157,8 @@ export function AppDocumentDialog({
   app: Pick<App, "containers" | "id" | "permissions" | "relayId">
   canManage: boolean
   deploying: boolean
+  // Where the cursor opens, such as at a volume's definition.
+  cursorAt?: number | undefined
   kind: AppDocumentKind
   onOpenChange: (open: boolean) => void
   routeId: string
@@ -179,6 +181,7 @@ export function AppCodeDialog({
   configFor,
   deploying,
   document,
+  cursorAt,
   onOpenChange,
   routeId,
   saved,
@@ -187,6 +190,7 @@ export function AppCodeDialog({
   canManage: boolean
   configFor: (draft: string) => Partial<EditableAppConfig>
   deploying: boolean
+  cursorAt?: number | undefined
   document: {
     hint: string
     noun: string
@@ -265,6 +269,7 @@ export function AppCodeDialog({
                 }
               : undefined
           }
+          cursorAt={cursorAt}
           languagePath={document.path}
           noun={document.noun}
           title={document.path}

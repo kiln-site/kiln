@@ -160,6 +160,11 @@ export interface BrowserSocketOptions {
     readonly filesystem: FilesystemDriver
     readonly root: (appId: string) => Promise<FileRoot>
   }
+  // Serves volumes an App opens, addressed as `app:<appId>:volume:<id>`.
+  readonly appVolumeFiles?: {
+    readonly filesystem: FilesystemDriver
+    readonly root: (rootId: string) => Promise<FileRoot>
+  }
   // Serves databases' dump folders, addressed as `database:<databaseId>`.
   readonly databaseFiles?: {
     readonly filesystem: FilesystemDriver

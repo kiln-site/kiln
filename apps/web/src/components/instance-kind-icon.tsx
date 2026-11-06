@@ -1,5 +1,5 @@
 import type { ComponentType } from "react"
-import { Boxes, Database, RadioTower, Server } from "lucide-react"
+import { Boxes, Database, HardDrive, RadioTower, Server } from "lucide-react"
 import type { LucideProps } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -18,6 +18,16 @@ export const instanceKindTones = {
 } as const satisfies Record<InstanceKind, string>
 
 // The kind's colour wins over any colour in `className`, so every use matches.
+// A volume isn't an instance, but reads as a kind of its own wherever one shows.
+export function VolumeKindIcon({ className, ...props }: LucideProps) {
+  return (
+    <HardDrive
+      className={cn(className, "text-violet-600 dark:text-violet-300")}
+      {...props}
+    />
+  )
+}
+
 export function RelayKindIcon({ className, ...props }: LucideProps) {
   return (
     <RadioTower className={cn(className, instanceKindTones.relay)} {...props} />

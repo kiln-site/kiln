@@ -25,6 +25,7 @@ import {
 } from "@/components/delete-confirmation-fields"
 import { FinalBackupFields } from "@/components/final-backup-fields"
 import { queryKeys } from "@/lib/query-options"
+import { parseVolumeSpecs } from "@/lib/volume-spec"
 import {
   createRelayVolume,
   deleteRelayVolume,
@@ -37,15 +38,13 @@ function useRefreshVolumes(relayId: string) {
     queryClient.invalidateQueries({ queryKey: queryKeys.relayVolumes(relayId) })
 }
 
-export function CreateVolumeDialog({
+// What the New volume button opens, in place: a name is all a volume needs.
+export function CreateVolumeForm({
   relayId,
-  onClose,
-  onCreated,
+  onDone,
 }: {
   relayId: string
-  onClose: () => void
-  // Such as choosing it for what asked for it.
-  onCreated?: (volume: RelayVolume) => void
+  onDone: () => void
 }) {
   const refresh = useRefreshVolumes(relayId)
   const [name, setName] = React.useState("")
@@ -55,69 +54,58 @@ export function CreateVolumeDialog({
     onSuccess: async (volume) => {
       await refresh()
       showToast({ message: `${volume.name} created`, type: "success" })
-      onCreated?.(volume)
-      onClose()
+      onDone()
     },
   })
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !create.isPending) onClose()
+    <form
+      className="grid gap-3 p-3"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (trimmed && !create.isPending) create.mutate()
       }}
     >
-      <DialogContent className="sm:max-w-md">
-        <form
-          className="grid gap-5"
-          onSubmit={(event) => {
+      <label className="grid gap-1.5">
+        <span className="text-xs font-medium">Name</span>
+        <Input
+          autoFocus
+          maxLength={RELAY_VOLUME_NAME_MAX_LENGTH}
+          placeholder="Postgres data"
+          required
+          value={name}
+          onChange={(event) => setName(event.currentTarget.value)}
+          onPaste={(event) => {
+            // A line from a Compose file names its volume.
+            const [first] = parseVolumeSpecs(
+              event.clipboardData.getData("text")
+            )
+            if (first?.spec?.kind !== "volume") return
             event.preventDefault()
-            if (trimmed && !create.isPending) create.mutate()
+            setName(first.spec.name)
           }}
-        >
-          <DialogHeader>
-            <DialogTitle>New volume</DialogTitle>
-            <DialogDescription>
-              A Docker named volume on this Relay. Apps can mount it to keep
-              data across deployments, and share it with each other.
-            </DialogDescription>
-          </DialogHeader>
-          <label className="block">
-            <span className="mb-2 block text-xs font-medium">Name</span>
-            <Input
-              autoFocus
-              maxLength={RELAY_VOLUME_NAME_MAX_LENGTH}
-              placeholder="Postgres data"
-              required
-              value={name}
-              onChange={(event) => setName(event.currentTarget.value)}
-            />
-            <span className="type-meta mt-2 block text-muted-foreground">
-              Docker names it{" "}
-              <span className="font-mono text-foreground">
-                kiln-…-{relayVolumeSlug(trimmed)}
-              </span>
-              , which can't change; renaming changes only how Kiln shows it.
-            </span>
-          </label>
-          {create.error ? (
-            <p className="text-xs text-destructive">{create.error.message}</p>
-          ) : null}
-          <DialogFooter>
-            <Button type="button" variant="ghost" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button disabled={create.isPending || !trimmed} type="submit">
-              {create.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <Plus />
-              )}
-              Create volume
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+        />
+        <span className="type-meta text-muted-foreground">
+          Apps on this Relay can mount it. Docker names it{" "}
+          <span className="font-mono text-foreground">
+            kiln-…-{relayVolumeSlug(trimmed)}
+          </span>
+          , which can't change.
+        </span>
+      </label>
+      {create.error ? (
+        <p className="text-xs text-destructive">{create.error.message}</p>
+      ) : null}
+      <div className="flex justify-end">
+        <Button disabled={create.isPending || !trimmed} size="sm" type="submit">
+          {create.isPending ? (
+            <LoaderCircle className="animate-spin" />
+          ) : (
+            <Plus />
+          )}
+          Create volume
+        </Button>
+      </div>
+    </form>
   )
 }
 

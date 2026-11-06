@@ -23,6 +23,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       throw new Error("Relay is offline")
     }
     return {
+      filesAvailable: false,
       measuring: false,
       protection: { ready: true, reason: null },
       uncovered: [],

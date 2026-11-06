@@ -49,6 +49,8 @@ interface FileWorkspaceProps {
   instance: FileWorkspaceInstance
   // Where file paths live in the URL: a server's or an app's files route.
   route: { kind: "app" | "server" | "relay"; id: string }
+  // Where its files are shown to live, when it isn't the route's usual root.
+  rootPath?: string
   active: boolean
   routeFilePath?: string
   canShare: boolean
@@ -102,20 +104,26 @@ export function FileWorkspace(props: FileWorkspaceProps) {
       selectionStore.navigate(path)
       if (!props.active) return
 
-      void router.navigate({ ...location, resetScroll: false }).then(() => {
-        if (!path.endsWith("/") || window.location.pathname.endsWith("/")) {
-          return
-        }
-        const canonical = new URL(window.location.href)
-        canonical.pathname = `${canonical.pathname}/`
-        window.history.replaceState(window.history.state, "", canonical)
-      })
+      // Search keeps which root is open, such as one of an App's volumes.
+      const search = true as const
+      void router
+        .navigate({ ...location, resetScroll: false, search })
+        .then(() => {
+          if (!path.endsWith("/") || window.location.pathname.endsWith("/")) {
+            return
+          }
+          const canonical = new URL(window.location.href)
+          canonical.pathname = `${canonical.pathname}/`
+          window.history.replaceState(window.history.state, "", canonical)
+        })
     },
     [props.active, props.route.id, props.route.kind, router, selectionStore]
   )
 
   return (
-    <FileRootPathContext value={props.route.kind === "relay" ? "" : "/data"}>
+    <FileRootPathContext
+      value={props.rootPath ?? (props.route.kind === "relay" ? "" : "/data")}
+    >
       <StableFileWorkspaceSurface
         instance={props.instance}
         selectionStore={selectionStore}

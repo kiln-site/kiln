@@ -18,10 +18,13 @@ import type { AppGitHubSourceView } from "@/server/app-deployments.server"
 // branch has it now. The toolbar opens it on GitHub.
 export function AppGitHubFileDialog({
   app,
+  cursorAt,
   source,
   onOpenChange,
 }: {
   app: App
+  // Where the cursor opens, such as at a volume's definition.
+  cursorAt?: number | undefined
   source: AppGitHubSourceView
   onOpenChange: (open: boolean) => void
 }) {
@@ -40,6 +43,7 @@ export function AppGitHubFileDialog({
         {file.data ? (
           <CodeDocumentPanel
             content={file.data.content}
+            cursorAt={cursorAt}
             languagePath={source.path}
             noun={source.build === "compose" ? "Compose file" : "Dockerfile"}
             sourceLabel="View on GitHub"

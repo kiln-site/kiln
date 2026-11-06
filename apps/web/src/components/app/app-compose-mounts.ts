@@ -4,22 +4,22 @@ import type { AppConfig } from "@workspace/contracts"
 
 import type { App } from "@/components/app/app-presentation"
 import type { ComposeMount } from "@/lib/compose-mounts"
+import type { AppGitHubSourceView } from "@/server/app-deployments.server"
 import {
   appDeploymentSummaryQueryOptions,
   appGitHubSourceFileQueryOptions,
 } from "@/lib/query-options"
 
-export type ComposeMountsModule = typeof import("@/lib/compose-mounts")
-
 export interface AppComposeMounts {
   // Null until the file and its parser load, and for a file that doesn't
   // read as Compose.
   mounts: ReadonlyArray<ComposeMount> | null
-  module: ComposeMountsModule | undefined
-  // The Compose file's name, and whether its mounts are edited here: a
-  // repository's are changed in the repository.
+  // The Compose file's name, and whether it's edited here: a repository's
+  // is changed in the repository.
   path: string
   editable: boolean
+  // The repository file it reads, for opening it there.
+  github: AppGitHubSourceView | null
 }
 
 // What the app's Compose file mounts: the pasted one, or the one its
@@ -63,7 +63,7 @@ export function useAppComposeMounts(
   if (!pasted && github === null) return null
   return {
     editable: pasted,
-    module,
+    github,
     mounts,
     path: pasted ? "compose.yaml" : (github?.path ?? "compose.yaml"),
   }

@@ -78,6 +78,9 @@ export interface DataTableDefinition<TData extends RowData> {
   columns: Array<ColumnDef<typeof dataTableFeatures, TData, any>>
   getRowId: NonNullable<BoundDataTableOptions<TData>["getRowId"]>
   getRowClassName?: (row: Row<typeof dataTableFeatures, TData>) => string
+  // Leaves out the column headers, for rows that follow a table with the
+  // same columns.
+  hideHeader?: boolean
   model?: DataTableModelOptions<TData>
   search?: DataTableSearchDefinition<TData>
   virtualization?: true | DataTableVirtualizationOptions

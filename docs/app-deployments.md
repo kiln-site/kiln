@@ -138,14 +138,22 @@ reserves both copies' memory.
 The Relay manages two kinds of Docker named volume, each with an ID that
 backups and deletion name it by:
 
-- **Kiln volumes**, made on the Relay's Volumes page and mounted from an
-  app's Volumes section. A Kiln volume's ID is the one it was made with. No
+- **Kiln volumes**, made on the Relay's Volumes page or while adding one to
+  an app, and mounted from an app's Volumes section, which also reads a line
+  from a Compose file such as `site-data:/var/www/data:ro`. A Kiln volume's
+  ID is the one it was made with. No
   app owns one: any app's configuration may mount it.
 - **An app's Compose volumes**, those its Compose file declares. The app
   owns them, and their ID is the app's ID and the volume's key in the file,
   `<app ID>/<key>`. Compose labels each volume with its project and key, and
   the Relay reads the owner from those labels, so the ID holds whatever
   Docker name the file gives the volume.
+
+A volume an app owns or uses opens in that app's Files page, as a file root
+of its own, `app:<app ID>:volume:<volume ID>`. It takes the app's file
+permissions, and the Relay refuses any volume the app neither owns nor uses.
+Docker keeps volumes on the host, so this needs the Relay's host files
+mounted, as the Relay's own Files page does.
 
 A redeploy keeps an app's Compose volumes: Compose runs under the app's own
 project name and finds them again. A rolled deployment runs as a project of
