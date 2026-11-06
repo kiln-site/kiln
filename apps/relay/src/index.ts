@@ -60,6 +60,7 @@ import {
   relayAppDeploymentAbortSchema,
   relayAppDeploymentReadSchema,
   relayAppImageCheckSchema,
+  relayHostPackagesRequestSchema,
   relaySecurityInventoryRequestSchema,
   relayDeployAppSchema,
   relayDatabaseActionSchema,
@@ -236,6 +237,7 @@ import {
 } from "./platform-backups.js"
 import { FilesystemDriver, type FileRoot } from "./files.js"
 import { HostFiles } from "./host-files.js"
+import { HostPackages } from "./host-packages.js"
 import { SecurityInventory } from "./security-inventory.js"
 import {
   adoptInstallationId,
@@ -759,6 +761,7 @@ const hostFilesystem = new FilesystemDriver(
 )
 const hostFiles = new HostFiles(config)
 const securityInventory = new SecurityInventory(config)
+const hostPackages = new HostPackages(hostShell)
 const hostDatabaseBrowser = new DatabaseBrowser(hostFilesystem)
 async function hostFileRoot(id: string): Promise<FileRoot> {
   if (!config.hostAccess) throw new HostAccessDisabledError()
@@ -2410,11 +2413,23 @@ async function executeControlRequest(
         dataDirectory: await lifecycle.hostDataDirectory(),
       }
     case "relay.security.targets":
-      return securityInventory.targets()
+      return {
+        ...(await securityInventory.targets()),
+        hostPackagesUpdatedAt: await recoverPromise(
+          () => hostPackages.updatedAt(),
+          () => null
+        ),
+      }
     case "relay.security.inventory":
       return securityInventory.inventory(
         relaySecurityInventoryRequestSchema.parse(request.payload)
       )
+    case "relay.host.packages.read":
+      return hostPackages.read(
+        relayHostPackagesRequestSchema.parse(request.payload)
+      )
+    case "relay.host.packages.update":
+      return hostPackages.update()
     case "relay.host.files.mount":
       await hostFiles.mount()
       return { started: true }

@@ -119,7 +119,9 @@ export class SecurityInventory {
   }
 
   /** The host, and every container on it that's Kiln's, with its image. */
-  async targets(): Promise<RelaySecurityTargets> {
+  async targets(): Promise<
+    Omit<RelaySecurityTargets, "hostPackagesUpdatedAt">
+  > {
     const [listed, info, scanner] = await Promise.all([
       Effect.runPromise(this.#engine.listContainers({ all: true })),
       recoverPromise(

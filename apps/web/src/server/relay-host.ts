@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start"
 import {
+  relayControlDeadlineMs,
   relayHostAccessSchema,
+  relayHostPackagesSchema,
   relayHostTerminalClaimSchema,
   relayHostTerminalWriteSchema,
   relayIdSchema,
@@ -167,6 +169,60 @@ const rebootRelayHost = operation<z.infer<typeof restartHostSchema>>()({
     }),
   audit: ({ input }) => relayAudit(input.relayId),
 })
+
+// The host's package manager, for those with a root shell on it, who could
+// run it themselves. Refreshing asks what an update would change.
+export const getRelayHostPackages = createServerFn({ method: "GET" })
+  .validator(targetSchema.extend({ refresh: z.boolean() }))
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    await requireRelayPermission({
+      permission: "relay.terminal",
+      relayId: data.relayId,
+      user,
+    })
+    const relay = await requiredRelay(data.relayId)
+    return relayHostPackagesSchema.parse(
+      await databaseRpc(
+        relay,
+        "relay.host.packages.read",
+        { refresh: data.refresh },
+        relayControlDeadlineMs("relay.host.packages.read"),
+        user.id
+      )
+    )
+  })
+
+const updateHostPackagesProcess = operation<z.infer<typeof targetSchema>>()({
+  name: "relay.host.packages.update",
+  doing: "Updating this Relay's host packages",
+  authorize: ({ input, user }) =>
+    relayFor(user, input.relayId, "relay.terminal"),
+  // Only starting it: the host holds the run, however long it takes.
+  locks: ({ input }) => [
+    exclusive(partKey(relayKey(input.relayId), "host-packages")),
+  ],
+  run: ({ context: { relay, user } }) =>
+    promiseEffect(async () => {
+      await databaseRpc(
+        relay,
+        "relay.host.packages.update",
+        {},
+        relayControlDeadlineMs("relay.host.packages.update"),
+        user.id
+      )
+      return { updating: true }
+    }),
+  audit: ({ input }) => relayAudit(input.relayId),
+})
+
+export const updateRelayHostPackages = createServerFn({ method: "POST" })
+  .validator(targetSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(updateHostPackagesProcess, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 export const restartRelayHost = createServerFn({ method: "POST" })
   .validator(restartHostSchema)

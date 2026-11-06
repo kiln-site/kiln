@@ -175,6 +175,26 @@ export const syncSecurityTargetsEffect = Effect.fn("security.syncTargets")(
   }
 )
 
+/**
+ * Has the host inventoried again after its packages changed, unless that's
+ * already been done. Asked each sync, so someone who closed Kiln during the
+ * update still sees what it fixed.
+ */
+export const requestHostInventoryEffect = Effect.fn(
+  "security.requestHostInventory"
+)(function* (relayId: string, updatedAt: number) {
+  const database = yield* Database
+  yield* database.execute(
+    "security.requestHostInventory",
+    `UPDATE ${databaseTable("security_sbom")}
+        SET requested_at = ?
+      WHERE relay_id = ? AND sbom_key = ?
+        AND collected_at < ?
+        AND (requested_at IS NULL OR requested_at < ?)`,
+    [updatedAt, relayId, HOST_SBOM, updatedAt, updatedAt]
+  )
+})
+
 export interface DueInventory {
   readonly collectedAt: number | null
   readonly image: string | null

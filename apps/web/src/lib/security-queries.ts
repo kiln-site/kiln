@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query"
 
 import type { SecurityInventoryRef } from "@/lib/security"
+import { getRelayHostPackages } from "@/server/relay-host"
 import {
   getResourceSecurity,
   getSecurityImageVersions,
@@ -13,6 +14,8 @@ export const securityQueryKeys = {
   all: ["security"] as const,
   packages: (inventory: SecurityInventoryRef) =>
     ["security", "packages", inventory.relayId, inventory.sbomKey] as const,
+  hostPackages: (relayId: string, refresh: boolean) =>
+    ["security", "host-packages", relayId, refresh] as const,
   imageVersions: (appId: string) =>
     ["security", "image-versions", appId] as const,
   overview: (scope: string | null, own = false) =>
@@ -53,6 +56,18 @@ export function securityImageVersionsQueryOptions(
     refetchOnWindowFocus: false,
     retry: false,
     staleTime: 10 * 60_000,
+  })
+}
+
+/** How the host's last package update went, and whether one is running. */
+export function hostPackagesQueryOptions(relayId: string, refresh: boolean) {
+  return queryOptions({
+    queryKey: securityQueryKeys.hostPackages(relayId, refresh),
+    queryFn: ({ signal }) =>
+      getRelayHostPackages({ data: { refresh, relayId }, signal }),
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: refresh ? 60_000 : 0,
   })
 }
 

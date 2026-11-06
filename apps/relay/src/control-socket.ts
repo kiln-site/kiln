@@ -1786,8 +1786,10 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.platform.terminal.claim":
     case "relay.platform.terminal.restart":
       return "relay.terminal"
-    // A root shell on the host could reboot it anyway.
+    // A root shell on the host could reboot it anyway, or update it.
     case "relay.host.restart":
+    case "relay.host.packages.read":
+    case "relay.host.packages.update":
       return "relay.terminal"
     case "relay.database.read":
       return "relay.database.read"
