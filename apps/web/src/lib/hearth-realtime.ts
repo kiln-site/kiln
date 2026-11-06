@@ -200,7 +200,7 @@ function queryScopes(
     ]
   }
   if (topic === "relay-volumes" && scope) {
-    return [exact(queryKeys.relayVolumes(scope.relayId))]
+    return [prefix(queryKeys.relayVolumes(scope.relayId))]
   }
   if (topic === "relay-proxy" && scope) {
     return [

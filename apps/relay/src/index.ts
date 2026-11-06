@@ -770,15 +770,9 @@ async function hostFileRoot(id: string): Promise<FileRoot> {
   return { id, directory: "." }
 }
 const appDatabaseBrowser = new DatabaseBrowser(appFilesystem)
-// Each file operation finds its root, and a browsing session makes many, so
-// a volume's stays known for a moment rather than listing Docker every time.
-const APP_VOLUME_ROOT_TTL_MS = 15_000
-const appVolumeRoots = new Map<string, { expires: number; root: FileRoot }>()
 // A volume opened through an App that owns or uses it. Its files are on the
 // host, so they read and save as the host's do, confined to the volume.
 async function appVolumeFileRoot(rootId: string): Promise<FileRoot> {
-  const known = appVolumeRoots.get(rootId)
-  if (known && known.expires > Date.now()) return known.root
   const volume = appVolumeFromFileRoot(rootId)
   if (!volume) throw new Error("Volume not found")
   if (!(await hostFiles.ready())) {
@@ -789,13 +783,7 @@ async function appVolumeFileRoot(rootId: string): Promise<FileRoot> {
     "relay.apps.volume.mountpoint",
     volumes.appVolumeMountpoint(volume.appId, volume.volumeId)
   )
-  const root = { directory: relative("/", mountpoint), id: rootId }
-  if (appVolumeRoots.size >= 256) appVolumeRoots.clear()
-  appVolumeRoots.set(rootId, {
-    expires: Date.now() + APP_VOLUME_ROOT_TTL_MS,
-    root,
-  })
-  return root
+  return { directory: relative("/", mountpoint), id: rootId }
 }
 const databaseDumpFilesystem = new FilesystemDriver({
   ...config,

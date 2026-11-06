@@ -169,6 +169,7 @@ export function findVolumeByName(
 export function VolumePickerList({
   appId,
   canCreate,
+  loadError,
   loading,
   onChoose,
   onCreate,
@@ -183,6 +184,8 @@ export function VolumePickerList({
   // The App it's for, which marks what's already mounted there.
   appId?: string
   canCreate: boolean
+  // Why the Relay's volumes can't be listed, such as lacking access to them.
+  loadError?: string | undefined
   loading: boolean
   onChoose: (volume: RelayVolume) => void
   onCreate: (name: string) => void
@@ -264,11 +267,12 @@ export function VolumePickerList({
     <InstancePickerContent
       ariaLabel="Volumes"
       emptyMessage={
-        loading
+        loadError ??
+        (loading
           ? "Loading volumes…"
           : canCreate
             ? "No volumes yet. Type a name to create one."
-            : "No volumes on this Relay"
+            : "No volumes on this Relay")
       }
       favoritesFilter={false}
       filterBar={false}

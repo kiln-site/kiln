@@ -180,6 +180,12 @@ describe("Relay volumes", () => {
     await expect(
       run(volumes.appVolumeMountpoint("b".repeat(40), volumeId))
     ).rejects.toThrow("This App doesn't use that volume")
+
+    // What was known a moment ago doesn't outlast the App's use of it.
+    await run(volumes.writeAppReferences("hearth-a", appId, []))
+    await expect(
+      run(volumes.appVolumeMountpoint(appId, volumeId))
+    ).rejects.toThrow("This App doesn't use that volume")
   })
 
   it("waits for every paired Hearth, even a read-only one, and forgets a revoked one", async () => {

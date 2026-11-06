@@ -22,6 +22,8 @@ export interface WantedMount {
   // The service it's in, or null for every service.
   service: string | null
   source: string | null
+  // A file's name on the node, which changes with its contents.
+  sourceFile?: string | undefined
   target: string
 }
 
@@ -71,6 +73,11 @@ export function mountAwaitsDeploy(
         withoutTrailingSlash(running.source)
     ) {
       return true
+    }
+    if (wanted.sourceFile) {
+      const file = running.source.split("/").at(-1) ?? ""
+      // Without a dash, it was deployed before names carried a version.
+      if (file.includes("-") && file !== wanted.sourceFile) return true
     }
   }
   return false

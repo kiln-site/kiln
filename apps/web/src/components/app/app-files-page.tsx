@@ -14,7 +14,7 @@ import {
   VolumeFileRootBar,
   type VolumeFileRoot,
 } from "@/components/volumes/volume-file-roots"
-import { relayVolumesQueryOptions } from "@/lib/query-options"
+import { appVolumesQueryOptions } from "@/lib/query-options"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 
 // An app's folder on the Relay in the same file workspace servers use: a
@@ -42,7 +42,7 @@ export function AppFilesPage() {
     [app.id, routeId]
   )
   const { data: volumes = noVolumes } = useQuery({
-    ...relayVolumesQueryOptions(app.relayId),
+    ...appVolumesQueryOptions(app.relayId, app.id),
     refetchInterval: false,
     select: selectVolumes,
     staleTime: 5 * 60_000,

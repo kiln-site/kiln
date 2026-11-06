@@ -92,13 +92,11 @@ function newDraft(
   }
 }
 
-function mountDraft(mount: AppMount): MountDraft {
+function mountDraft(mount: AppMount, name: string): MountDraft {
   return {
     ...mount,
     source:
-      mount.source.type === "volume"
-        ? { ...mount.source, name: "" }
-        : mount.source,
+      mount.source.type === "volume" ? { ...mount.source, name } : mount.source,
   }
 }
 
@@ -279,6 +277,7 @@ export function AppVolumeAddPanel({
         <VolumePickerList
           appId={app.id}
           canCreate={mounts.canCreate}
+          loadError={mounts.volumes.error?.message}
           loading={mounts.volumes.isPending}
           relayId={app.relayId}
           volumes={mounts.choices}
@@ -410,6 +409,7 @@ export function AppVolumeDialog({
   compose,
   deploying,
   editing,
+  editingName,
   onOpenChange,
   routeId,
   saved,
@@ -419,11 +419,13 @@ export function AppVolumeDialog({
   compose: boolean
   deploying: boolean
   editing: AppMount
+  // What it's called, for those who can't list the Relay's volumes.
+  editingName: string
   onOpenChange: (open: boolean) => void
   routeId: string
   saved: ReadonlyArray<AppMount>
 }) {
-  const [initial] = React.useState(() => [mountDraft(editing)])
+  const [initial] = React.useState(() => [mountDraft(editing, editingName)])
   const mounts = useMountDrafts({
     app,
     editing,

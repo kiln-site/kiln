@@ -82,7 +82,13 @@ export function useAppConfigSave(
       }
       return { config: result.config, next }
     },
-    onSuccess: async ({ config, next }) => {
+    onSuccess: async ({ config, next }, { config: changed }) => {
+      // First, so a volume just added is known before a row shows it.
+      if (changed.mounts) {
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.appVolumes(app.relayId, app.id),
+        })
+      }
       queryClient.setQueryData(
         queryKeys.apps.config(app.relayId, app.id),
         (current: { environmentHidden: boolean } | undefined) => ({

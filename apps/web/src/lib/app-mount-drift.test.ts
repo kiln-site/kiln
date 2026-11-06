@@ -1,3 +1,4 @@
+import { appMountFileName } from "@workspace/contracts"
 import { describe, expect, it } from "vite-plus/test"
 
 import { mountAwaitsDeploy, mountsLeftBehind } from "@/lib/app-mount-drift"
@@ -63,6 +64,52 @@ describe("mountAwaitsDeploy", () => {
     expect(
       mountAwaitsDeploy(containers, { ...uploads, target: "${DATA}/x" })
     ).toBe(false)
+  })
+})
+
+describe("mountAwaitsDeploy for a file's contents", () => {
+  const deployed = appMountFileName("abcd1234", "first")
+  const containers = [
+    {
+      mounts: [
+        {
+          destination: "/app/config",
+          readOnly: true,
+          source: `/kiln/app-mounts/app/deployment/${deployed}`,
+          type: "bind",
+        },
+      ],
+      service: "app",
+    },
+  ]
+  const wanted = (content: string) => ({
+    readOnly: true,
+    service: null,
+    source: null,
+    sourceFile: appMountFileName("abcd1234", content),
+    target: "/app/config",
+  })
+
+  it("waits for changed contents and clears on what's deployed", () => {
+    expect(mountAwaitsDeploy(containers, wanted("first"))).toBe(false)
+    expect(mountAwaitsDeploy(containers, wanted("second"))).toBe(true)
+  })
+
+  it("can't tell for a file deployed before names carried a version", () => {
+    const older = [
+      {
+        mounts: [
+          {
+            destination: "/app/config",
+            readOnly: true,
+            source: "/kiln/app-mounts/app/deployment/abcd1234",
+            type: "bind",
+          },
+        ],
+        service: "app",
+      },
+    ]
+    expect(mountAwaitsDeploy(older, wanted("second"))).toBe(false)
   })
 })
 

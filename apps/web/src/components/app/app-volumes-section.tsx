@@ -1,6 +1,10 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import type { AppMount, RelayVolume } from "@workspace/contracts"
+import {
+  appMountFileName,
+  type AppMount,
+  type RelayVolume,
+} from "@workspace/contracts"
 import { sortFn_basic } from "@tanstack/react-table"
 import {
   Archive,
@@ -74,8 +78,7 @@ import type { DataTableSource } from "@/lib/data-table-source"
 import { grantsAllowBackup } from "@/lib/backup-target-permissions"
 import {
   accessCapabilitiesQueryOptions,
-  appBackupsQueryOptions,
-  relayVolumesQueryOptions,
+  appVolumesQueryOptions,
 } from "@/lib/query-options"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 
@@ -126,7 +129,7 @@ interface MountRow {
 type Dialog =
   // The Compose file, at a mount's definition if it's opened for one.
   | { kind: "compose"; mount: ComposeMount | null }
-  | { kind: "edit"; mount: AppMount }
+  | { kind: "edit"; mount: AppMount; name: string }
   | { entry: AppMount; kind: "file" }
   | { kind: "remove"; mount: AppMount; name: string }
   | null
@@ -166,20 +169,13 @@ export function AppVolumesSection({
   const composeVolumes = composeFile?.mounts?.some(
     (mount) => mount.kind === "volume" && mount.source
   )
-  const { data: relayVolumes } = useQuery({
-    ...relayVolumesQueryOptions(app.relayId),
+  const { data: appVolumes } = useQuery({
+    ...appVolumesQueryOptions(app.relayId, app.id),
     select: mountVolumeDetails,
     refetchInterval: false,
     staleTime: 5 * 60_000,
     enabled:
       composeVolumes || mounts.some((mount) => mount.source.type !== "file"),
-  })
-  const { data: ownedVolumes } = useQuery({
-    ...appBackupsQueryOptions(app.relayId, app.id),
-    select: appVolumeDetails,
-    refetchInterval: false,
-    staleTime: 5 * 60_000,
-    enabled: Boolean(composeVolumes),
   })
   const rows = React.useMemo((): Array<MountRow> => {
     const context: RowContext = {
@@ -197,8 +193,7 @@ export function AppVolumesSection({
       canReadFiles,
       canReadHost,
       composeFile,
-      filesAvailable: relayVolumes?.filesAvailable ?? false,
-      ownedVolumes,
+      filesAvailable: appVolumes?.filesAvailable ?? false,
       readable: (id) =>
         id &&
         capabilities &&
@@ -210,8 +205,9 @@ export function AppVolumesSection({
           ))
           ? id
           : null,
+      referencesKnown: appVolumes?.referencesKnown ?? false,
       routeId,
-      volumes: relayVolumes?.volumes,
+      volumes: appVolumes?.volumes,
     }
     return [
       ...mounts.map((mount) => configRow(context, mount)),
@@ -222,10 +218,9 @@ export function AppVolumesSection({
     canReadFiles,
     canReadHost,
     capabilities,
+    appVolumes,
     composeFile,
     mounts,
-    ownedVolumes,
-    relayVolumes,
     routeId,
   ])
   const empty = rows.length === 0
@@ -336,6 +331,7 @@ export function AppVolumesSection({
             compose={compose}
             deploying={deploying}
             editing={dialog.mount}
+            editingName={dialog.name}
             routeId={routeId}
             saved={mounts}
             onOpenChange={close}
@@ -671,7 +667,9 @@ function MountActions({
         <VolumeAction
           label={`Edit ${row.name}`}
           tooltip="Edit"
-          onClick={() => onDialog({ kind: "edit", mount: entry.mount })}
+          onClick={() =>
+            onDialog({ kind: "edit", mount: entry.mount, name: row.name })
+          }
           onWarm={warmDialogs}
         >
           <Pencil />
@@ -749,8 +747,9 @@ interface RowContext {
   canReadHost: boolean
   composeFile: AppComposeMounts | null
   filesAvailable: boolean
-  ownedVolumes: ReadonlyArray<{ id: string; name: string | null }> | undefined
   readable: (id: string | null | undefined) => string | null
+  // Whether a configured volume that isn't listed is really gone.
+  referencesKnown: boolean
   routeId: string
   volumes: ReadonlyArray<MountVolume> | undefined
 }
@@ -820,7 +819,8 @@ function configRow(context: RowContext, mount: AppMount): MountRow {
       const volume = context.volumes?.find(
         (candidate) => candidate.id === source.volumeId
       )
-      const missing = context.volumes !== undefined && !volume
+      const missing =
+        context.volumes !== undefined && context.referencesKnown && !volume
       return {
         ...base,
         ...volumeFiles(context, missing ? null : source.volumeId),
@@ -857,8 +857,11 @@ function configRow(context: RowContext, mount: AppMount): MountRow {
         icon: "file",
         name: fileName(mount.target),
         sizeBytes: null,
-        // Kept on the node under its deployment, so only its place shows.
-        wanted: wanted({ readOnly: mount.readOnly, source: null }),
+        // Kept on the node under its deployment, so its name is what shows.
+        wanted: {
+          ...wanted({ readOnly: mount.readOnly, source: null }),
+          sourceFile: appMountFileName(mount.id, source.content),
+        },
       }
   }
 }
@@ -874,9 +877,7 @@ function composeRow(context: RowContext, mount: ComposeMount): MountRow {
             candidate.owner.volume === mount.source
         )
       : undefined
-  const volumeId =
-    volume?.id ??
-    context.ownedVolumes?.find(({ name }) => name === mount.source)?.id
+  const volumeId = volume?.id
   const files =
     mount.kind === "volume"
       ? volumeFiles(context, volumeId)
@@ -923,7 +924,12 @@ function composeRow(context: RowContext, mount: ComposeMount): MountRow {
           ? mount.readOnly
           : null,
       service: mount.service,
-      source: mount.kind === "volume" ? mount.dockerName : null,
+      source:
+        mount.kind === "volume"
+          ? mount.dockerName
+          : mount.kind === "bind" && mount.source.startsWith("/")
+            ? mount.source
+            : null,
       target: mount.target,
     },
   }
@@ -938,15 +944,6 @@ function appFolderLink({ routeId }: RowContext, source: string): VolumeLink {
   }
 }
 
-// Select only identity: backup task updates must not repaint the Info table.
-function appVolumeDetails(data: {
-  targets: ReadonlyArray<{ id: string; kind: string; name: string | null }>
-}) {
-  return data.targets
-    .filter((target) => target.kind === "volume")
-    .map(({ id, name }) => ({ id, name }))
-}
-
 type MountVolume = Pick<
   RelayVolume,
   "dockerName" | "id" | "name" | "owner" | "sizeBytes"
@@ -955,10 +952,12 @@ type MountVolume = Pick<
 // Only what the rows show, so anything else about a volume can't repaint them.
 function mountVolumeDetails(data: {
   filesAvailable: boolean
+  referencesKnown: boolean
   volumes: ReadonlyArray<RelayVolume>
 }) {
   return {
     filesAvailable: data.filesAvailable,
+    referencesKnown: data.referencesKnown,
     volumes: data.volumes.map(
       ({ dockerName, id, name, owner, sizeBytes }): MountVolume => ({
         dockerName,
