@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { ArrowRight, LoaderCircle, RefreshCw } from "lucide-react"
+import { ArrowRight, LoaderCircle, PackageCheck, RefreshCw } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -16,11 +16,14 @@ import { cn } from "@workspace/ui/lib/utils"
 import { parseImageReference, type ImageTagSuggestion } from "@/lib/image-tags"
 import type { SecurityFix, SecurityItem, SecurityUse } from "@/lib/security"
 import {
+  hostPackagesQueryOptions,
   securityImageVersionsQueryOptions,
   securityQueryKeys,
 } from "@/lib/security-queries"
 import { deployAppImageUpdate } from "@/server/app-image-updates"
 import { deployApp, updateAppConfig } from "@/server/apps"
+import { updateRelayHostPackages } from "@/server/relay-host"
+import { scanSecurityNow } from "@/server/security"
 
 /** What a row's button says it leads to. */
 export function securityFixLabel(fix: SecurityFix): string {
@@ -29,9 +32,10 @@ export function securityFixLabel(fix: SecurityFix): string {
       return "Update"
     case "change-version":
       return "Update version"
+    case "host-packages":
+      return "Update packages"
     case "kiln-update":
       return "Update Kiln"
-    case "host-packages":
     case "rebuild":
     case "database":
     case "game-server":
@@ -76,7 +80,7 @@ export function SecurityFixPanel(props: FixProps) {
     case "rebuild":
       return <Rebuild key={key} {...props} fix={fix} />
     case "host-packages":
-      return <HostPackages key={key} {...props} />
+      return <HostPackages key={key} {...props} fix={fix} />
     case "kiln-update":
       return (
         <FixLayout
@@ -505,20 +509,196 @@ function Rebuild({
   )
 }
 
-// Kiln can't update a host itself, so it points at the shell that can.
-function HostPackages(props: FixProps) {
+const managerNames = {
+  apk: "apk",
+  apt: "APT",
+  dnf: "DNF",
+  yum: "YUM",
+  zypper: "Zypper",
+} as const
+
+const plural = (count: number, one: string) =>
+  `${count.toLocaleString()} ${one}${count === 1 ? "" : "s"}`
+
+// Asking what's new refreshes the host's package lists, so it waits for the
+// button, and what it finds is what the next press installs.
+function HostPackages({
+  fix,
+  ...props
+}: FixProps & { fix: Extract<SecurityFix, { kind: "host-packages" }> }) {
   const { use } = props
+  const queryClient = useQueryClient()
+  const [checking, setChecking] = React.useState(false)
+  const status = useQuery({
+    ...hostPackagesQueryOptions(use.relayId, false),
+    enabled: fix.allowed,
+    refetchInterval: (query) =>
+      query.state.data?.run.state === "running" ? 3_000 : false,
+  })
+  const review = useQuery({
+    ...hostPackagesQueryOptions(use.relayId, true),
+    enabled: checking,
+  })
+  const update = useMutation({
+    mutationFn: () =>
+      updateRelayHostPackages({ data: { relayId: use.relayId } }),
+    onError: failedToast,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: securityQueryKeys.hostPackages(use.relayId, false),
+      })
+      queryClient.removeQueries({
+        queryKey: securityQueryKeys.hostPackages(use.relayId, true),
+      })
+      setChecking(false)
+    },
+  })
+  const data = status.data
+  const state = data?.run.state
+  // Once a run this page watched ends, what's on the host is new.
+  const watched = React.useRef(false)
+  React.useEffect(() => {
+    if (state === "running") {
+      watched.current = true
+      return
+    }
+    if (!watched.current || !state) return
+    watched.current = false
+    if (state === "succeeded") {
+      showToast({ message: "Packages updated", type: "success" })
+      void scanSecurityNow({ data: { scope: use.scope } }).then(() =>
+        queryClient.invalidateQueries({ queryKey: securityQueryKeys.all })
+      )
+    }
+  }, [queryClient, state, use.scope])
+
+  if (!fix.allowed) {
+    return (
+      <FixLayout
+        {...props}
+        note="You can't update this host."
+        to={<NoChange value="Newer packages" />}
+      />
+    )
+  }
+  if (status.error) {
+    return (
+      <FixLayout
+        {...props}
+        note={status.error.message}
+        to={<NoChange value="Couldn't reach the host" />}
+      />
+    )
+  }
+  if (!data) {
+    return <FixLayout {...props} to={<ChangeTo loading value="Checking" />} />
+  }
+  if (!data.manager) {
+    return (
+      <FixLayout
+        {...props}
+        action={
+          <Button asChild size="sm" variant="outline">
+            <Link
+              params={{ relayId: use.relayId }}
+              to="/relay/$relayId/terminal"
+            >
+              Open Terminal
+            </Link>
+          </Button>
+        }
+        to={<NoChange value="Update from its Terminal" />}
+      />
+    )
+  }
+  const manager = managerNames[data.manager]
+  if (state === "running") {
+    return (
+      <FixLayout
+        {...props}
+        note={data.run.output.split("\n").at(-1) || "Starting"}
+        to={<ChangeTo loading value="Updating" />}
+      />
+    )
+  }
+  const updates = review.data?.updates ?? null
+  const held = review.data?.heldBack ?? []
+  if (checking && review.isFetching) {
+    return (
+      <FixLayout
+        {...props}
+        action={
+          <Button disabled size="sm" type="button">
+            <LoaderCircle className="animate-spin" />
+            Checking
+          </Button>
+        }
+        to={<ChangeTo loading value="Checking" />}
+      />
+    )
+  }
+  if (updates !== null) {
+    return (
+      <FixLayout
+        {...props}
+        action={
+          updates.length ? (
+            <Button
+              disabled={update.isPending}
+              size="sm"
+              type="button"
+              onClick={() => update.mutate()}
+            >
+              {update.isPending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : (
+                <PackageCheck />
+              )}
+              Install {plural(updates.length, "update")}
+            </Button>
+          ) : undefined
+        }
+        note={
+          updates.length
+            ? `${updates.join(", ")}${held.length ? ". Docker stays as it is." : ""}`
+            : held.length
+              ? "Only Docker has updates, which Kiln leaves alone."
+              : undefined
+        }
+        to={
+          updates.length ? (
+            <ChangeTo value={plural(updates.length, "update")} />
+          ) : (
+            <NoChange value="Up to date" />
+          )
+        }
+      />
+    )
+  }
   return (
     <FixLayout
       {...props}
       action={
-        <Button asChild size="sm" variant="outline">
-          <Link params={{ relayId: use.relayId }} to="/relay/$relayId/terminal">
-            Open Terminal
-          </Link>
+        <Button
+          size="sm"
+          type="button"
+          onClick={() => (checking ? void review.refetch() : setChecking(true))}
+        >
+          Check for updates
         </Button>
       }
-      to={<NoChange value="Update from its Terminal" />}
+      note={
+        state === "failed"
+          ? "The last update didn't finish."
+          : data.rebootRequired
+            ? "Restart the host to finish its last update."
+            : review.error
+              ? review.error.message
+              : checking
+                ? "The host couldn't check for updates."
+                : `Uses ${manager}. Containers keep running.`
+      }
+      to={<NoChange value="Newer packages" />}
     />
   )
 }

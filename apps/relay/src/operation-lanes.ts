@@ -45,6 +45,8 @@ export const laneKeys = {
   databaseLifecycle: (id: string) => `database:${id}/lifecycle`,
   /** The Relay host's own files, under the host file root. */
   hostFiles: "relay:host-files",
+  /** Starting an update of the host's OS packages. See host-packages.ts. */
+  hostPackages: "relay:host-packages",
   instance: (id: string) => `instance:${id}`,
   instanceFiles: (id: string) => `instance:${id}/files`,
   /** Power and console input: anything that changes the running process. */

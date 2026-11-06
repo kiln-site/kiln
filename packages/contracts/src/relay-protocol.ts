@@ -190,6 +190,8 @@ export const relayControlOperations = [
   "relay.installation.replace",
   "relay.security.targets",
   "relay.security.inventory",
+  "relay.host.packages.read",
+  "relay.host.packages.update",
   "browser.authorization.revise",
   "brick.catalog",
   "brick.recipe",
@@ -307,6 +309,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.update.apply",
   "relay.restart",
   "relay.host.restart",
+  "relay.host.packages.update",
   "relay.pairing.create",
   "relay.pairing.revoke",
   "relay.clients.update",
@@ -431,6 +434,7 @@ export function relayControlOperationChanges(
     case "relay.platform.database.read":
     case "relay.security.targets":
     case "relay.security.inventory":
+    case "relay.host.packages.read":
     case "brick.catalog":
     case "brick.recipe":
     case "database.list":
@@ -506,6 +510,7 @@ export function relayControlOperationChanges(
     case "relay.tailscale.stack.remove":
     case "relay.host.files.mount":
     case "relay.host.restart":
+    case "relay.host.packages.update":
     case "relay.proxy.write":
     case "relay.proxy.trial":
     case "relay.certificates.check":
@@ -603,7 +608,7 @@ const terminalInputOperations = new Set<RelayControlOperation>([
   "relay.terminal.attach",
   "relay.terminal.claim",
   "relay.terminal.restart",
-  "relay.terminal.write",  // A desktop stream takes the keyboard and mouse.
+  "relay.terminal.write", // A desktop stream takes the keyboard and mouse.
   "relay.desktop.attach",
 ])
 
@@ -659,6 +664,11 @@ export function relayControlDeadlineMs(
   // An inventory may first wait for the host to be less busy, then reads a
   // whole image through Docker at the lowest priority.
   if (operation === "relay.security.inventory") return 15 * 60_000
+  // Refreshing asks the host's package mirrors what's new.
+  if (operation === "relay.host.packages.read") return 120_000
+  // The shell helper may have to be pulled first; the update itself goes on
+  // without the Relay.
+  if (operation === "relay.host.packages.update") return 120_000
   if (operation === "instance.delete") return 360_000
   // Freezing stops the resource first, as a stop does.
   if (operation === "resource.freeze") return 240_000

@@ -52,6 +52,9 @@ export const relaySecurityTargetsSchema = z
         os: z.string().max(255).nullable(),
       })
       .strict(),
+    // When an update of the host's packages last finished, as far as the
+    // Relay can tell without starting anything, so its inventory is redone.
+    hostPackagesUpdatedAt: z.number().int().nonnegative().nullable(),
     // The inventory tool, or null when this Relay can't inventory.
     scanner: z.string().max(64).nullable(),
   })
@@ -125,3 +128,47 @@ export const relaySecurityInventoryResponseSchema = z.discriminatedUnion(
 export type RelaySecurityInventoryResponse = z.infer<
   typeof relaySecurityInventoryResponseSchema
 >
+
+export const relayHostPackageManagerSchema = z.enum([
+  "apt",
+  "dnf",
+  "yum",
+  "zypper",
+  "apk",
+])
+export type RelayHostPackageManager = z.infer<
+  typeof relayHostPackageManagerSchema
+>
+
+/** Asks the host what its package manager would update, not only how a run went. */
+export const relayHostPackagesRequestSchema = z
+  .object({ refresh: z.boolean() })
+  .strict()
+export type RelayHostPackagesRequest = z.infer<
+  typeof relayHostPackagesRequestSchema
+>
+
+/**
+ * The host's package manager, and how its last update through Kiln went.
+ * `updates` and `heldBack` are only known when refreshed: `updates` is what
+ * running one would change, `heldBack` the container engine's packages it
+ * leaves alone, since updating them restarts every container on the host.
+ */
+export const relayHostPackagesSchema = z
+  .object({
+    heldBack: z.array(z.string().max(255)).max(100).nullable(),
+    manager: relayHostPackageManagerSchema.nullable(),
+    rebootRequired: z.boolean(),
+    run: z
+      .object({
+        finishedAt: z.number().int().nonnegative().nullable(),
+        // The end of what the package manager printed.
+        output: z.string().max(16_384),
+        startedAt: z.number().int().nonnegative().nullable(),
+        state: z.enum(["idle", "running", "succeeded", "failed"]),
+      })
+      .strict(),
+    updates: z.array(z.string().max(255)).max(5_000).nullable(),
+  })
+  .strict()
+export type RelayHostPackages = z.infer<typeof relayHostPackagesSchema>

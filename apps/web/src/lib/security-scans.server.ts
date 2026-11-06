@@ -37,6 +37,7 @@ import {
   syncSecurityTargetsEffect,
   pendingSecurityAnnouncementsEffect,
   recordSecurityAnnouncementsEffect,
+  requestHostInventoryEffect,
   type AnnouncedFinding,
   type DueInventory,
   type SecurityAnnouncement,
@@ -136,6 +137,9 @@ const syncRelayEffect = Effect.fnUntraced(function* (relay: PersistedRelay) {
     catch: relayFailure("Could not list what the Relay runs"),
   }).pipe(Effect.map((answer) => relaySecurityTargetsSchema.parse(answer)))
   yield* syncSecurityTargetsEffect(relay.id, report)
+  if (report.hostPackagesUpdatedAt !== null) {
+    yield* requestHostInventoryEffect(relay.id, report.hostPackagesUpdatedAt)
+  }
   const due = yield* dueInventoriesEffect(relay.id)
   const deadline = (yield* Clock.currentTimeMillis) + collectBudgetMs
   let busy = false

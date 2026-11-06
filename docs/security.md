@@ -39,7 +39,7 @@ What Kiln offers depends on where the software came from:
 | Image app, tag moved  | **Update and redeploy** deploys the image the tag names, as the app's Updates do                                                                           |
 | Image app, otherwise  | Newer versions of the tag its registry lists, recommending the newest of its major version; **Update and redeploy** changes the app's image and deploys it |
 | Built apps            | A hint: the change goes in its repository or file, then **Redeploy**                                                                                       |
-| Relay host            | A pointer to its Terminal                                                                                                                                  |
+| Relay host            | **Check for updates**, then **Install** (see below)                                                                                                        |
 | Kiln's own services   | A pointer to updating Kiln                                                                                                                                 |
 | Database, game server | A hint: Kiln and Bricks choose these images                                                                                                                |
 
@@ -50,6 +50,62 @@ a version is compared, against tags of the same shape: `1.21.0-alpine` moves to
 `1.21.6-alpine`, never to `1.21` or `1.21.6`. A newer version isn't known to fix
 anything until it runs, so when a deployment ends, whatever started it, Kiln
 inventories what the app runs now rather than waiting for the next sweep.
+
+### Updating a host
+
+Updating a host needs `relay.terminal`, since a root shell could do the same, and
+`KILN_RELAY_HOST_ACCESS`. **Check for updates** asks the host what's new, so
+nobody confirms blind, then **Install** runs its own package manager as root: APT,
+DNF, YUM, Zypper, or apk. Other hosts are pointed at their Terminal.
+
+- It updates only what's installed, without adding or removing packages, and
+  keeps their configuration. A kernel APT holds back stays until someone
+  upgrades it.
+- It leaves the container engine alone (Docker, containerd, runc, Podman), since
+  updating that restarts every container on the host. The confirmation names
+  what it left out.
+- It restarts nothing. Kiln says when the host wants a reboot, which stays
+  someone's choice.
+- It runs detached on the host, under systemd where there is one, and keeps its
+  state in `/var/lib/kiln-host-packages`, so it survives the Relay restarting and
+  only one runs at a time.
+
+When it ends, the page collects the host's inventory again. So does the next
+sync, within 15 minutes, for anyone who closed the page: the Relay reports when
+an update last finished, without starting the host's helper to find out.
+
+## How it works
+
+Kiln splits the work in two, so nothing is scanned twice and an unreachable
+Relay stays covered:
+
+1. **Inventory, on the Relay.** Each Relay inventories its host's OS packages
+   and every image its containers run with [Syft](https://github.com/anchore/syft),
+   producing an SBOM (a Syft JSON document). An image is identified by its
+   content-addressed ID, so each one is inventoried once; redeploying to a new
+   image inventories that image. The host's packages change outside Kiln, so
+   its inventory is collected again once a day, or when someone scans now.
+2. **Matching, in Hearth.** Hearth keeps every inventory in its database and
+   checks each against [Grype](https://github.com/anchore/grype)'s
+   vulnerability database: when it arrives, and all of them again whenever
+   that database changes, which Hearth looks for every six hours. Anchore
+   rebuilds it daily from distribution advisories (Debian, Ubuntu, Alpine,
+   Red Hat, and others), GitHub's advisories for language packages, NVD (which
+   catches software built from source, like PHP in the official `php`
+   images), CISA's known exploited list, and EPSS.
+
+Every 15 minutes Hearth asks each connected Relay what it runs, which costs
+the Relay one container listing, and asks for any inventory it lacks.
+The scan's helper drops the per-file listings Grype doesn't read, and a
+host's kernels other than the running one, before the Relay sends an
+inventory. Inventories
+reach Hearth in 512 KiB chunks over the control connection: a host's is a few
+hundred kilobytes gzipped, an image's tens. Hearth refuses one over 32 MiB
+unzipped, so a Relay can't run it out of memory.
+
+Findings are kept per inventory with when each was first seen. Hearth keeps
+inventories per Relay rather than sharing one image's between Relays, since it
+can't verify what a Relay says an image holds.
 
 ## Staying out of the way
 

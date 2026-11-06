@@ -482,6 +482,8 @@ export function controlRequestLocks(
     // one at a time in their own helper.
     case "relay.security.targets":
     case "relay.security.inventory":
+    // Asks the package manager what's new, changing only its package lists.
+    case "relay.host.packages.read":
     case "relay.platform.logs":
     case "relay.platform.database.read":
     case "relay.installation.read":
@@ -561,6 +563,10 @@ export function controlRequestLocks(
     // Kiln's services and backups are found by the installation ID.
     case "relay.installation.replace":
       return [exclusive(laneKeys.platform)]
+
+    // The host holds the run itself, and answers that one is going.
+    case "relay.host.packages.update":
+      return [exclusive(laneKeys.hostPackages)]
 
     // Updates and restarts replace the Relay itself and reserve themselves.
     case "relay.update.apply":
