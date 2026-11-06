@@ -41,6 +41,11 @@ import {
   type EditableAppConfig,
   type SaveNext,
 } from "@/components/app/app-config-dialogs"
+import {
+  withMadeVolume,
+  type DraftSource,
+  type MountDraft,
+} from "@/components/app/app-mount-drafts"
 import { appServices, type App } from "@/components/app/app-presentation"
 import { useRelayPermission } from "@/components/relay/relay-settings"
 import { VolumeCard, volumeCardMeta } from "@/components/volumes/volume-card"
@@ -55,21 +60,6 @@ import { recoverPromise } from "@/effect/promise"
 import { queryKeys, relayVolumesQueryOptions } from "@/lib/query-options"
 import type { ParsedVolumeSpec, VolumeSpec } from "@/lib/volume-spec"
 import { createRelayVolume } from "@/server/relay-volumes"
-
-type DraftSource =
-  | { type: "file"; content: string }
-  | { type: "host"; path: string }
-  // A volume this doesn't have an ID for yet is made when it's saved, so
-  // cancelling leaves nothing behind.
-  | { name: string; type: "volume"; volumeId: string | null }
-
-interface MountDraft {
-  id: string
-  readOnly: boolean
-  service: string | null
-  source: DraftSource
-  target: string
-}
 
 // Every service, for a Compose app's mounts.
 const ALL_SERVICES = "*"
@@ -190,10 +180,7 @@ function useMountDrafts({
             made.get(name) ?? (await create.mutateAsync(name)).id ?? ""
           made.set(name, volumeId)
           // Saving again after a failure uses what this already made.
-          update(draft.id, (current) => ({
-            ...current,
-            source: { name, type: "volume", volumeId },
-          }))
+          setDrafts((current) => withMadeVolume(current, name, volumeId))
           resolved.push(draftMount(draft, volumeId))
         }
         if (made.size > 0) {
