@@ -1,5 +1,4 @@
 import * as React from "react"
-import { Link } from "@tanstack/react-router"
 import {
   keepPreviousData,
   useMutation,
@@ -7,53 +6,24 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import {
-  EllipsisVertical,
-  ExternalLink,
-  ListFilter,
-  LoaderCircle,
-  ScanSearch,
-  ShieldCheck,
-  Siren,
-  Wrench,
-} from "lucide-react"
+import { LoaderCircle, ScanSearch, ShieldCheck } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@workspace/ui/components/dropdown-menu"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
-import {
-  DataTableActionGroup,
-  DataTableEmptyState,
-  DataTableInlineActions,
-  DataTablePhoneMenuItems,
-  dataTableRowLinkClassName,
-  dataTableRowMenuTriggerClassName,
-} from "@/components/data-table"
+import { DataTableEmptyState } from "@/components/data-table"
 import { DataTable } from "@/components/data-table-view"
 import {
   DataTableToolbar,
   DataTableWorkspace,
 } from "@/components/data-table-workspace"
-import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import { InfraSyncButton } from "@/components/infra-sync-button"
 import { InstanceCard } from "@/components/instance-card"
 import { RelativeTime } from "@/components/relative-time"
-import { SeverityBadge, severityTone } from "@/components/security-severity"
+import { SecurityDialog } from "@/components/security-dialog"
+import { securityFixLabel } from "@/components/security-fix"
+import { VerdictBadge } from "@/components/security-severity"
 import {
   ServerScopePicker,
   type ServerPickerOption,
@@ -66,15 +36,16 @@ import {
 import { createDataTableSearchStore } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
 import {
-  securitySeverities,
-  securitySeverityLabels,
-  severityRank,
-  type SecuritySeverity,
-  type SecurityFindingSummary,
+  securityItemDetail,
+  securityItemInstance,
+  securityItemTitle,
+  securityVerdictReason,
+  securityVerdicts,
+  securityVerdictSentences,
+  type SecurityItem,
   type SecurityOverview,
   type SecurityResource,
   type SecurityScopeKind,
-  type SecurityTarget,
 } from "@/lib/security"
 import {
   securityOverviewQueryOptions,
@@ -82,12 +53,10 @@ import {
 } from "@/lib/security-queries"
 import { scanSecurityNow } from "@/server/security"
 
-type Target = SecurityOverview["targets"][number]
-
 /**
- * What Kiln knows is vulnerable in the software it runs: each Relay's host,
- * Kiln's services, and every game server, database, and app image, checked
- * against Grype's vulnerability data whenever it changes.
+ * Whether what Kiln runs is safe: each instance and Relay host, worst first,
+ * with one word on it and one way to fix it. What to do, and what's affected,
+ * are in the dialog each row opens.
  */
 export const SecurityPage = React.memo(function SecurityPage({
   onScopeChange,
@@ -106,49 +75,34 @@ export const SecurityPage = React.memo(function SecurityPage({
     placeholderData: keepPreviousData,
   })
   const overview = scope === null ? everything : (scoped ?? everything)
-  const resources = React.useMemo(
-    () =>
-      new Map(
-        everything.resources.map((resource) => [resource.scope, resource])
-      ),
-    [everything.resources]
-  )
+  const [selected, setSelected] = React.useState<string | null>(null)
+  // By key, so the dialog follows what a later check finds.
+  const selectedItem = overview.items.find((item) => item.key === selected)
+  const close = React.useCallback(() => setSelected(null), [])
 
-  // Laid out as an Info page: the vulnerabilities, and a rail of what's
-  // checked. Wide, both fill the page and their tables scroll; narrower,
-  // the rail stacks below and the page scrolls.
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto bg-card xl:overflow-hidden">
-      <div className="grid min-h-full xl:h-full xl:grid-cols-[minmax(0,1fr)_21rem]">
-        <div className="flex min-h-0 min-w-0 flex-col gap-4 px-5 py-6 sm:px-7">
-          <SecurityScopePicker
-            resources={everything.resources}
-            scannable={everything.scannable}
+    <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto bg-card px-5 py-6 sm:px-7">
+      <SecurityScopePicker
+        resources={everything.resources}
+        scannable={everything.scannable}
+        scope={scope}
+        onScopeChange={onScopeChange}
+      />
+      {overview.items.length === 0 ? (
+        <NothingChecked />
+      ) : (
+        <>
+          <Verdict overview={overview} />
+          <ItemsSection
+            items={overview.items}
             scope={scope}
-            onScopeChange={onScopeChange}
+            onSelect={setSelected}
           />
-          {overview.targets.length === 0 ? (
-            <NothingChecked />
-          ) : (
-            <>
-              <SecuritySummary overview={overview} />
-              <FindingsSection
-                overview={overview}
-                resources={resources}
-                scope={scope}
-              />
-            </>
-          )}
-        </div>
-        <aside className="flex min-h-0 min-w-0 flex-col border-t bg-background/30 px-4 py-6 xl:border-t-0 xl:border-l">
-          <TargetsRail
-            overview={overview}
-            resources={resources}
-            scannable={everything.scannable}
-            scope={scope}
-          />
-        </aside>
-      </div>
+        </>
+      )}
+      {selectedItem ? (
+        <SecurityDialog item={selectedItem} onClose={close} />
+      ) : null}
     </section>
   )
 })
@@ -263,30 +217,6 @@ function ScanNowButton({
   )
 }
 
-// Scans one instance, as its row in the rail offers.
-const TargetScanButton = React.memo(function TargetScanButton({
-  name,
-  scope,
-}: {
-  name: string
-  scope: string
-}) {
-  const { isPending, mutate } = useScanNow(scope)
-  return (
-    <Button
-      aria-label={`Scan ${name} now`}
-      disabled={isPending}
-      size="xs"
-      type="button"
-      variant="outline"
-      onClick={() => mutate()}
-    >
-      {isPending ? <LoaderCircle className="animate-spin" /> : <ScanSearch />}
-      Scan now
-    </Button>
-  )
-})
-
 function NothingChecked() {
   return (
     <section className="rounded-xl border border-dashed border-border/80 px-5 py-10 text-center">
@@ -301,342 +231,303 @@ function NothingChecked() {
   )
 }
 
-const SecuritySummary = React.memo(function SecuritySummary({
+// The page's answer in a sentence: what needs someone, and how much of it
+// Kiln can fix.
+const Verdict = React.memo(function Verdict({
   overview,
 }: {
   overview: SecurityOverview
 }) {
-  const { counts, fixable, knownExploited } = overview.summary
+  const { items } = overview
+  const unsafe = items.filter((item) => item.verdict === "unsafe").length
+  const risky = items.filter((item) => item.verdict === "risky").length
+  const unfinished = items.filter((item) => item.verdict === null).length
+  const checkedAt = Math.max(0, ...items.map((item) => item.checkedAt ?? 0))
+  const attention = unsafe + risky
+  const [only] = items
+  const headline =
+    items.length === 1 && only?.verdict
+      ? securityVerdictSentences[only.verdict]
+      : attention > 0
+        ? `${(unsafe || risky).toLocaleString()} of ${items.length.toLocaleString()} ${items.length === 1 ? "is" : "are"} ${unsafe > 0 ? "unsafe" : "risky"}`
+        : unfinished === items.length
+          ? "Kiln is still checking"
+          : "Nothing needs attention"
   return (
-    <section
-      aria-label="Vulnerabilities found"
-      className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-6"
-    >
-      {(["critical", "high", "medium", "low"] as const).map((severity) => (
-        <SummaryTile
-          key={severity}
-          label={securitySeverityLabels[severity]}
-          tone={counts[severity] > 0 ? severityTone(severity) : null}
-          value={counts[severity].toLocaleString()}
-        />
-      ))}
-      <SummaryTile
-        label="An update fixes"
-        tone={null}
-        value={fixable.toLocaleString()}
-      />
-      <SummaryTile
-        icon={<Siren className="size-3.5" />}
-        label="Known exploited"
-        tone={knownExploited > 0 ? severityTone("critical") : null}
-        value={knownExploited.toLocaleString()}
-      />
+    <section aria-label="Verdict" className="flex shrink-0 flex-col gap-0.5">
+      <h2
+        className={cn(
+          "text-lg font-semibold",
+          unsafe > 0
+            ? "text-red-300 light:text-red-700"
+            : risky > 0
+              ? "text-orange-300 light:text-orange-700"
+              : attention === 0 && unfinished < items.length
+                ? "text-emerald-300 light:text-emerald-700"
+                : ""
+        )}
+      >
+        {headline}
+      </h2>
+      <p className="type-meta text-muted-foreground">
+        {[
+          unsafe > 0 && risky > 0
+            ? `${risky.toLocaleString()} more risky`
+            : null,
+          overview.summary.fixable > 0
+            ? `${overview.summary.fixable.toLocaleString()} ${overview.summary.fixable === 1 ? "vulnerability has" : "vulnerabilities have"} a fix`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
+        {checkedAt > 0 ? (
+          <>
+            {unsafe > 0 || overview.summary.fixable > 0 ? " · " : ""}
+            {"checked "}
+            <RelativeTime timestamp={checkedAt} />
+          </>
+        ) : null}
+      </p>
     </section>
   )
 })
 
-function SummaryTile({
-  icon,
-  label,
-  tone,
-  value,
-}: {
-  icon?: React.ReactNode
-  label: string
-  tone: string | null
-  value: string
-}) {
+// Worst first; among equals, what's being exploited, then the most critical.
+function itemRank(item: SecurityItem): number {
+  const verdict =
+    item.verdict === null
+      ? securityVerdicts.length
+      : securityVerdicts.indexOf(item.verdict)
   return (
-    <div
-      className={cn(
-        "rounded-xl border border-border/75 bg-card/45 px-3 py-2",
-        tone
-      )}
-    >
-      <p className="type-meta flex items-center gap-1.5 opacity-85">
-        {icon}
-        {label}
-      </p>
-      <p className="text-xl font-semibold tabular-nums">{value}</p>
-    </div>
+    verdict * 1e9 -
+    item.knownExploited * 1e6 -
+    item.counts.critical * 1e3 -
+    item.counts.high
   )
 }
 
-function targetLabel(target: SecurityTarget): string {
-  // An app's services are named; its one service and a game server's or
-  // database's container are the resource itself.
-  if (target.resourceType !== "relay") {
-    return target.component && target.component !== "app"
-      ? target.component
-      : ""
-  }
-  return target.component === "host"
-    ? `Host${target.distro ? ` · ${target.distro}` : ""}`
-    : (target.component ?? "")
+const needsAttention = (item: SecurityItem) =>
+  item.verdict === "unsafe" || item.verdict === "risky"
+
+// The button a row offers: what fixes it, when there's one thing that does.
+function rowAction(item: SecurityItem): string {
+  if (item.verdict === null || !needsAttention(item)) return "View"
+  const kinds = new Set(item.uses.map((use) => use.fix.kind))
+  const [use] = item.uses
+  return kinds.size === 1 && use ? securityFixLabel(use.fix) : "Fix"
 }
 
-// One row per vulnerable package in each resource it's found in, so the
-// resource can be sorted on and named with its own identity card.
-interface FindingRowData {
-  finding: SecurityFindingSummary
-  id: string
-  resource: SecurityResource | null
-  target: Target
-}
+const columnHelper = createDataTableColumnHelper<SecurityItem>()
 
-const findingColumnHelper = createDataTableColumnHelper<FindingRowData>()
+// Opening a row is the one thing to do on this page, so the name and the
+// button both do.
+const SelectContext = React.createContext<(key: string) => void>(
+  () => undefined
+)
 
-const findingSearchFields = [
-  (row: FindingRowData) => row.finding.vulnerabilityId,
-  (row: FindingRowData) => row.finding.packageName,
-  (row: FindingRowData) => row.finding.fixedVersion,
-  (row: FindingRowData) => row.resource?.name,
-  (row: FindingRowData) => row.resource?.relayName,
-  (row: FindingRowData) => targetLabel(row.target),
-] as const
+// The instance by name, with what it runs beneath. A host is its Relay's, as
+// Kiln's own services are.
+const ItemName = React.memo(function ItemName({
+  item,
+}: {
+  item: SecurityItem
+}) {
+  const select = React.use(SelectContext)
+  return (
+    <button
+      className="group/item flex min-h-14 w-full min-w-0 items-center px-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+      type="button"
+      onClick={() => select(item.key)}
+    >
+      <InstanceCard
+        className="min-w-0 flex-1"
+        instance={securityItemInstance(item)}
+        meta={securityItemDetail(item)}
+        name={securityItemTitle(item)}
+        nameClassName="transition-colors group-hover/item:text-primary-ink"
+        showFavorite={false}
+      />
+    </button>
+  )
+})
 
-const findingTableDefinition = defineDataTable<FindingRowData>({
-  ariaLabel: "Vulnerabilities",
-  columns: findingColumnHelper.columns([
-    findingColumnHelper.accessor((row) => severityRank(row.finding.severity), {
-      id: "severity",
-      header: "Severity",
+const ItemAction = React.memo(function ItemAction({
+  item,
+}: {
+  item: SecurityItem
+}) {
+  const select = React.use(SelectContext)
+  const label = rowAction(item)
+  return (
+    <Button
+      aria-label={`${label}: ${item.name}`}
+      size="xs"
+      type="button"
+      variant={needsAttention(item) ? "default" : "outline"}
+      onClick={() => select(item.key)}
+    >
+      <span className="sm:hidden">{needsAttention(item) ? "Fix" : "View"}</span>
+      <span className="hidden sm:inline">{label}</span>
+    </Button>
+  )
+})
+
+const itemTableDefinition = defineDataTable<SecurityItem>({
+  ariaLabel: "Instances and hosts",
+  columns: columnHelper.columns([
+    columnHelper.accessor((item) => -itemRank(item), {
+      id: "verdict",
+      header: "Verdict",
       sortDescFirst: true,
-      // Known exploited ones lead their severity.
       sortFn: (left, right) =>
-        severityRank(left.original.finding.severity) -
-          severityRank(right.original.finding.severity) ||
-        Number(left.original.finding.knownExploited) -
-          Number(right.original.finding.knownExploited),
-      cell: ({ row }) => (
-        <SeverityBadge severity={row.original.finding.severity} />
-      ),
-      meta: dataTableColumnMeta({ width: "7.25rem" }),
+        itemRank(right.original) - itemRank(left.original),
+      cell: ({ row }) =>
+        row.original.verdict ? (
+          <VerdictBadge verdict={row.original.verdict} />
+        ) : (
+          <span className="type-meta text-muted-foreground">
+            {row.original.status === "failed" ? "Failed" : "Checking"}
+          </span>
+        ),
+      meta: dataTableColumnMeta({ width: { base: "5.75rem", sm: "6.5rem" } }),
     }),
-    findingColumnHelper.accessor((row) => row.resource?.name ?? "", {
-      id: "found-in",
-      header: "Found in",
+    columnHelper.accessor((item) => item.name, {
+      id: "instance",
+      header: "Instance",
       sortFn: "text",
-      cell: ({ row }) => (
-        <ResourceIdentityLink
-          resource={row.original.resource}
-          target={row.original.target}
-        />
-      ),
+      cell: ({ row }) => <ItemName item={row.original} />,
       meta: dataTableColumnMeta(
-        { width: "minmax(9rem,1.2fr)" },
+        { width: "minmax(11rem,1.4fr)" },
         { cellClassName: "p-0" }
       ),
     }),
-    findingColumnHelper.accessor((row) => row.finding.vulnerabilityId, {
-      id: "vulnerability",
-      header: "Vulnerability",
-      sortFn: "text",
-      cell: ({ row }) => <VulnerabilityLink finding={row.original.finding} />,
-      meta: dataTableColumnMeta({ width: "9.75rem" }),
-    }),
-    findingColumnHelper.accessor((row) => row.finding.packageName, {
-      id: "package",
-      header: "Package",
-      sortFn: "text",
-      cell: ({ row }) => (
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate font-medium">
-            {row.original.finding.packageName}
-          </span>
-          <span className="type-meta truncate font-mono text-muted-foreground">
-            {row.original.finding.installedVersions.join(", ")}
-          </span>
-        </span>
-      ),
-      meta: dataTableColumnMeta({
-        hideBelow: "md",
-        width: "minmax(7rem,1fr)",
-      }),
-    }),
-    findingColumnHelper.accessor((row) => row.finding.fixedVersion ?? "", {
-      id: "fix",
-      header: "Fix",
-      sortFn: "text",
-      cell: ({ row }) =>
-        row.original.finding.fixedVersion ? (
-          <span className="truncate font-mono text-[0.8125rem] text-emerald-300 light:text-emerald-700">
-            {row.original.finding.fixedVersion}
-          </span>
-        ) : (
-          <span className="type-meta text-muted-foreground">
-            {row.original.finding.fixState === "wont-fix"
-              ? "Won't be fixed"
-              : "No fix yet"}
-          </span>
-        ),
-      meta: dataTableColumnMeta({ hideBelow: "sm", width: "7rem" }),
-    }),
-    findingColumnHelper.accessor((row) => row.finding.firstSeenAt, {
-      id: "first-seen",
-      header: "First seen",
-      sortFn: (left, right) =>
-        left.original.finding.firstSeenAt - right.original.finding.firstSeenAt,
-      cell: ({ row }) => (
-        <span className="type-meta text-muted-foreground">
-          <RelativeTime timestamp={row.original.finding.firstSeenAt} />
-        </span>
-      ),
-      meta: dataTableColumnMeta({ hideBelow: "lg", width: "7.75rem" }),
-    }),
-    findingColumnHelper.display({
-      id: "actions",
-      header: () => <span className="sr-only">Actions</span>,
+    columnHelper.display({
+      id: "why",
+      header: "Why",
       enableSorting: false,
-      cell: ({ row }) => <FindingActions row={row.original} />,
+      cell: ({ row }) => (
+        <span className="type-meta truncate text-muted-foreground">
+          {row.original.verdict
+            ? securityVerdictReason(row.original)
+            : (row.original.error ?? "Waiting for its check")}
+        </span>
+      ),
+      meta: dataTableColumnMeta({ hideBelow: "md", width: "minmax(9rem,1fr)" }),
+    }),
+    columnHelper.display({
+      id: "fix",
+      header: () => <span className="sr-only">Fix</span>,
+      enableSorting: false,
+      cell: ({ row }) => <ItemAction item={row.original} />,
       meta: dataTableColumnMeta(
-        { width: { base: "3rem", md: "5.5rem" } },
-        { cellClassName: "px-1 sm:px-2", headerClassName: "px-1 sm:px-2" }
+        { width: { base: "3.75rem", sm: "11rem" } },
+        {
+          cellClassName: "justify-end px-1 sm:pr-3",
+          headerClassName: "px-1 sm:pr-3",
+        }
       ),
     }),
   ]),
-  getRowId: (row) => row.id,
-  // Most severe first, known exploited first within each severity.
-  model: { initialState: { sorting: [{ desc: true, id: "severity" }] } },
-  search: { fields: findingSearchFields },
+  getRowId: (item) => item.key,
+  model: { initialState: { sorting: [{ desc: true, id: "verdict" }] } },
+  search: {
+    fields: [
+      (item: SecurityItem) => item.name,
+      (item: SecurityItem) => securityItemTitle(item),
+      (item: SecurityItem) =>
+        item.uses.map((use) => `${use.name} ${use.relayName}`).join(" "),
+    ],
+  },
   virtualization: true,
 })
 
-const FindingsSection = React.memo(function FindingsSection({
-  overview,
-  resources,
+type ItemFilter = "all" | "attention"
+
+const ItemsSection = React.memo(function ItemsSection({
+  items,
+  onSelect,
   scope,
 }: {
-  overview: SecurityOverview
-  resources: ReadonlyMap<string, SecurityResource>
+  items: ReadonlyArray<SecurityItem>
+  onSelect: (key: string) => void
   scope: string | null
 }) {
   const [searchStore] = React.useState(createDataTableSearchStore)
-  const [severity, setSeverity] = React.useState<SeverityFilter>("all")
-  const rows = React.useMemo(() => {
-    const targets = new Map(
-      overview.targets.map((target) => [target.targetKey, target])
-    )
-    return overview.findings.flatMap((finding) => {
-      if (severity !== "all" && finding.severity !== severity) return []
-      const byResource = new Map<string, Target>()
-      for (const key of finding.targets) {
-        const target = targets.get(key)
-        if (target && !byResource.has(target.scope)) {
-          byResource.set(target.scope, target)
-        }
-      }
-      return [...byResource].map(([resourceScope, target]): FindingRowData => ({
-        finding,
-        id: `${finding.vulnerabilityId}\u0000${finding.packageName}\u0000${target.targetKey}`,
-        resource: resources.get(resourceScope) ?? null,
-        target,
-      }))
-    })
-  }, [overview.findings, overview.targets, resources, severity])
+  const attention = React.useMemo(() => items.filter(needsAttention), [items])
+  // Everything, once nothing needs attention, rather than an empty table.
+  const [chosen, setChosen] = React.useState<ItemFilter>("attention")
+  const filter = attention.length === 0 ? "all" : chosen
   const source = React.useMemo(
-    (): DataTableSource<FindingRowData> => ({
+    (): DataTableSource<SecurityItem> => ({
       body: { kind: "ready" },
       refreshing: false,
-      resetKey: `${scope ?? "all"}:${severity}`,
-      rows,
+      resetKey: `${scope ?? "all"}:${filter}`,
+      rows: filter === "all" ? [...items] : attention,
     }),
-    [rows, scope, severity]
+    [attention, filter, items, scope]
   )
-  const checked = overview.targets.some((target) => target.status === "checked")
   return (
-    <DataTableWorkspace
-      className="h-[min(44rem,75dvh)] flex-none xl:h-auto xl:min-h-[20rem] xl:flex-1"
-      toolbar={
-        <DataTableToolbar
-          controls={
-            <SeveritySelect value={severity} onValueChange={setSeverity} />
-          }
-          leading={<SecurityRefreshButton label="Refresh vulnerabilities" />}
-          search={{
-            ariaLabel: "Search vulnerabilities",
-            closeMobileWhenEmpty: true,
-            id: "security-search",
-            placeholder: "Search vulnerabilities",
-            store: searchStore,
-          }}
-        />
-      }
-    >
-      <DataTable
-        definition={findingTableDefinition}
-        emptyState={({ searchActive }) => (
-          <DataTableEmptyState
-            description={
-              searchActive || severity !== "all"
-                ? "Try a CVE, package, instance, or another severity."
-                : checked
-                  ? "Nothing Kiln has checked has a known vulnerability."
-                  : "Kiln is still checking what it inventoried."
+    <SelectContext.Provider value={onSelect}>
+      <DataTableWorkspace
+        className="min-h-[20rem] flex-1"
+        toolbar={
+          <DataTableToolbar
+            controls={
+              <div
+                aria-label="Show"
+                className="flex h-9 items-center rounded-md border p-0.5"
+                role="group"
+              >
+                {(
+                  [
+                    ["attention", `Needs attention (${attention.length})`],
+                    ["all", `All (${items.length})`],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    aria-pressed={filter === value}
+                    className={cn(
+                      "type-control-sm h-full rounded-sm px-2.5 transition-colors outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                      filter === value
+                        ? "bg-muted text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                    type="button"
+                    onClick={() => setChosen(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             }
-            icon={
-              <ShieldCheck className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
-            }
-            title={
-              searchActive || severity !== "all"
-                ? "No vulnerabilities match"
-                : "No known vulnerabilities"
-            }
+            leading={<SecurityRefreshButton label="Refresh" />}
+            search={{
+              ariaLabel: "Search instances and images",
+              closeMobileWhenEmpty: true,
+              id: "security-search",
+              placeholder: "Search instances and images",
+              store: searchStore,
+            }}
           />
-        )}
-        searchStore={searchStore}
-        source={source}
-      />
-    </DataTableWorkspace>
-  )
-})
-
-type SeverityFilter = SecuritySeverity | "all"
-
-const severityFilterOptions: ReadonlyArray<{
-  label: string
-  value: SeverityFilter
-}> = [
-  { label: "All severities", value: "all" },
-  ...[...securitySeverities].reverse().map((severity) => ({
-    label: securitySeverityLabels[severity],
-    value: severity,
-  })),
-]
-
-// Narrows the vulnerabilities to one severity.
-const SeveritySelect = React.memo(function SeveritySelect({
-  onValueChange,
-  value,
-}: {
-  onValueChange: (value: SeverityFilter) => void
-  value: SeverityFilter
-}) {
-  return (
-    <Select
-      value={value}
-      onValueChange={(next) => onValueChange(next as SeverityFilter)}
-    >
-      <SelectTrigger
-        aria-label="Filter by severity"
-        className="h-9 w-auto min-w-36 gap-1.5"
+        }
       >
-        <ListFilter className="size-4 text-muted-foreground" />
-        <SelectValue>
-          {
-            severityFilterOptions.find((option) => option.value === value)
-              ?.label
-          }
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent align="end">
-        {severityFilterOptions.map((option) => (
-          <SelectItem key={option.value} value={option.value}>
-            {option.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+        <DataTable
+          definition={itemTableDefinition}
+          emptyState={() => (
+            <DataTableEmptyState
+              description="Try an image, instance, or Relay."
+              icon={
+                <ShieldCheck className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
+              }
+              title="Nothing matches"
+            />
+          )}
+          searchStore={searchStore}
+          source={source}
+        />
+      </DataTableWorkspace>
+    </SelectContext.Provider>
   )
 })
 
@@ -652,319 +543,4 @@ const SecurityRefreshButton = React.memo(function SecurityRefreshButton({
     [queryClient]
   )
   return <InfraSyncButton label={label} sync={refresh} />
-})
-
-// The vulnerability's ID, linking to its advisory.
-const VulnerabilityLink = React.memo(function VulnerabilityLink({
-  finding,
-}: {
-  finding: SecurityFindingSummary
-}) {
-  if (!finding.url) {
-    return (
-      <span className="truncate font-mono text-[0.8125rem] font-medium">
-        {finding.vulnerabilityId}
-      </span>
-    )
-  }
-  return (
-    <a
-      className="inline-flex min-w-0 items-center gap-1 font-mono text-[0.8125rem] font-medium hover:text-primary-ink hover:underline"
-      href={finding.url}
-      rel="noreferrer"
-      target="_blank"
-    >
-      <span className="truncate">{finding.vulnerabilityId}</span>
-      <ExternalLink className="size-3 shrink-0 opacity-60" />
-    </a>
-  )
-})
-
-// The Info page of a target's resource, which says what fixes what it runs.
-const ResourceLink = React.forwardRef<
-  HTMLAnchorElement,
-  Omit<React.ComponentPropsWithoutRef<"a">, "href" | "target"> & {
-    inventory: Target
-  }
->(function ResourceLink({ inventory: target, ...props }, ref) {
-  switch (target.resourceType) {
-    case "app":
-      return (
-        <Link
-          ref={ref}
-          to="/app/$appId/info"
-          params={{ appId: target.resourceId }}
-          preload="intent"
-          {...props}
-        />
-      )
-    case "database":
-      return (
-        <Link
-          ref={ref}
-          to="/db/$databaseId/info"
-          params={{ databaseId: target.resourceId }}
-          preload="intent"
-          {...props}
-        />
-      )
-    case "instance":
-      return (
-        <Link
-          ref={ref}
-          to="/server/$serverId/info"
-          params={{ serverId: target.resourceId }}
-          preload="intent"
-          {...props}
-        />
-      )
-    case "relay":
-      return (
-        <Link
-          ref={ref}
-          to="/relay/$relayId/info"
-          params={{ relayId: target.relayId }}
-          preload="intent"
-          {...props}
-        />
-      )
-  }
-})
-
-// What a target is, named with its resource's identity card and live state,
-// opening the resource's Info page.
-const ResourceIdentityLink = React.memo(function ResourceIdentityLink({
-  resource,
-  target,
-}: {
-  resource: SecurityResource | null
-  target: Target
-}) {
-  const kind =
-    resource?.kind ??
-    (target.resourceType === "instance" ? "server" : target.resourceType)
-  return (
-    <ResourceLink
-      inventory={target}
-      className={cn(
-        dataTableRowLinkClassName,
-        "group/resource-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
-      )}
-    >
-      <InstanceCard
-        className="min-w-0 flex-1"
-        instance={{ id: target.resourceId, kind, relayId: target.relayId }}
-        meta={targetLabel(target) || resource?.relayName}
-        name={resource?.name ?? target.resourceId.slice(0, 8)}
-        nameClassName="transition-colors group-hover/resource-link:text-primary-ink"
-        showFavorite={false}
-      />
-    </ResourceLink>
-  )
-})
-
-const resourceIdLabels = {
-  app: "App ID",
-  database: "Database ID",
-  instance: "Server ID",
-  relay: "Relay ID",
-} satisfies Record<SecurityTarget["resourceType"], string>
-
-// Fix, which opens the resource's page for now, and a menu of what to copy.
-const FindingActions = React.memo(function FindingActions({
-  row,
-}: {
-  row: FindingRowData
-}) {
-  const { finding, target } = row
-  const name = row.resource?.name ?? target.resourceId.slice(0, 8)
-  const packageName = `${finding.packageName} ${finding.installedVersions.join(", ")}`
-  return (
-    <DataTableActionGroup>
-      <DataTableInlineActions>
-        <Button asChild size="xs" variant="outline">
-          <ResourceLink
-            aria-label={`Fix ${finding.vulnerabilityId} in ${name}`}
-            inventory={target}
-          >
-            <Wrench />
-            Fix
-          </ResourceLink>
-        </Button>
-      </DataTableInlineActions>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            aria-label={`More actions for ${finding.vulnerabilityId} in ${name}`}
-            className={dataTableRowMenuTriggerClassName}
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-          >
-            <EllipsisVertical />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-52">
-          <DataTablePhoneMenuItems>
-            <DropdownMenuItem asChild>
-              <ResourceLink inventory={target}>
-                <Wrench />
-                Fix
-              </ResourceLink>
-            </DropdownMenuItem>
-          </DataTablePhoneMenuItems>
-          {finding.url ? (
-            <DropdownMenuItem asChild>
-              <a href={finding.url} rel="noreferrer" target="_blank">
-                <ExternalLink />
-                Open advisory
-              </a>
-            </DropdownMenuItem>
-          ) : null}
-          <DropdownMenuSeparator />
-          {target.resourceType !== "relay" ? (
-            <CopyIdentifierMenuItem
-              label={resourceIdLabels[target.resourceType]}
-              value={target.resourceId}
-            />
-          ) : null}
-          <CopyIdentifierMenuItem label="Relay ID" value={target.relayId} />
-          <CopyIdentifierMenuItem
-            label="Vulnerability ID"
-            value={finding.vulnerabilityId}
-          />
-          <CopyIdentifierMenuItem label="Package" value={packageName} />
-          {finding.fixedVersion ? (
-            <CopyIdentifierMenuItem
-              label="Fixed version"
-              value={finding.fixedVersion}
-            />
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </DataTableActionGroup>
-  )
-})
-
-const targetColumnHelper = createDataTableColumnHelper<Target>()
-
-const targetSearchFields = [
-  (target: Target) => target.image,
-  (target: Target) => target.distro,
-  (target: Target) => targetLabel(target),
-] as const
-
-function targetTableDefinition(
-  resources: ReadonlyMap<string, SecurityResource>,
-  scannable: ReadonlySet<string>
-) {
-  const name = (target: Target) => resources.get(target.scope)?.name ?? ""
-  return defineDataTable<Target>({
-    ariaLabel: "What's checked",
-    columns: targetColumnHelper.columns([
-      targetColumnHelper.accessor(name, {
-        id: "instance",
-        header: "Instance",
-        sortFn: "text",
-        cell: ({ row }) => (
-          <ResourceIdentityLink
-            resource={resources.get(row.original.scope) ?? null}
-            target={row.original}
-          />
-        ),
-        meta: dataTableColumnMeta(
-          { width: "minmax(0,1fr)" },
-          { cellClassName: "p-0" }
-        ),
-      }),
-      targetColumnHelper.display({
-        id: "scan",
-        header: () => <span className="sr-only">Scan</span>,
-        enableSorting: false,
-        cell: ({ row }) =>
-          scannable.has(row.original.scope) ? (
-            <TargetScanButton
-              name={name(row.original)}
-              scope={row.original.scope}
-            />
-          ) : null,
-        meta: dataTableColumnMeta(
-          { width: "6.75rem" },
-          { cellClassName: "pl-0 pr-3", headerClassName: "pl-0 pr-3" }
-        ),
-      }),
-    ]),
-    getRowId: (target) => target.targetKey,
-    model: { initialState: { sorting: [{ desc: false, id: "instance" }] } },
-    search: {
-      fields: [(target: Target) => name(target), ...targetSearchFields],
-    },
-    virtualization: true,
-  })
-}
-
-// Every inventory in view, each with a way to scan it again.
-const TargetsRail = React.memo(function TargetsRail({
-  overview,
-  resources,
-  scannable,
-  scope,
-}: {
-  overview: SecurityOverview
-  resources: ReadonlyMap<string, SecurityResource>
-  scannable: ReadonlyArray<string>
-  scope: string | null
-}) {
-  const [searchStore] = React.useState(createDataTableSearchStore)
-  const definition = React.useMemo(
-    () => targetTableDefinition(resources, new Set(scannable)),
-    [resources, scannable]
-  )
-  const source = React.useMemo(
-    (): DataTableSource<Target> => ({
-      body: { kind: "ready" },
-      refreshing: false,
-      resetKey: scope ?? "all",
-      rows: overview.targets,
-    }),
-    [overview.targets, scope]
-  )
-  return (
-    <section className="flex min-h-0 flex-col xl:flex-1">
-      <DataTableWorkspace
-        className="h-[28rem] flex-none rounded-none bg-background/45 xl:h-auto xl:min-h-[16rem] xl:flex-1"
-        toolbar={
-          <DataTableToolbar
-            leading={<SecurityRefreshButton label="Refresh inventories" />}
-            search={{
-              ariaLabel: "Search inventories",
-              id: "security-target-search",
-              placeholder: "Search inventories",
-              store: searchStore,
-            }}
-          />
-        }
-      >
-        <DataTable
-          definition={definition}
-          emptyState={({ searchActive }) => (
-            <DataTableEmptyState
-              description={
-                searchActive
-                  ? "Try an instance, image, or Relay."
-                  : "Relays inventory what they run within a few minutes of connecting."
-              }
-              title={
-                searchActive
-                  ? "No inventories match"
-                  : "Nothing inventoried yet"
-              }
-            />
-          )}
-          searchStore={searchStore}
-          source={source}
-        />
-      </DataTableWorkspace>
-    </section>
-  )
 })

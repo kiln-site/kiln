@@ -19,7 +19,6 @@ import {
 } from "@/components/app/app-settings"
 import { AppVolumesSection } from "@/components/app/app-volumes-section"
 import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
-import { ResourceSecurityAlert } from "@/components/resource-security-alert"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import {
   InfoDangerAction,
@@ -60,11 +59,6 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
           name={app.name}
           relayId={app.relayId}
           resourceId={app.id}
-        />
-        <ResourceSecurityAlert
-          relayId={app.relayId}
-          resourceId={app.id}
-          resourceType="app"
         />
         {/* What the app is and what it runs, side by side when there's
             room. */}

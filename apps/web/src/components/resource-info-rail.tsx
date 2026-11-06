@@ -23,6 +23,7 @@ import {
 import { RelayKindIcon } from "@/components/instance-kind-icon"
 import { OwnerCard } from "@/components/owner-card"
 import { ResourceNotificationsCard } from "@/components/resource-notifications-card"
+import { InfoRailSecurityLink } from "@/components/resource-security-link"
 import { useCopyFeedback } from "@/components/workspace-header"
 import {
   canAccessActivity,
@@ -74,6 +75,11 @@ export function InstanceInfoRail({
         <InfoRailUsersLink resource={resource} />
         <InfoRailActivityLink resource={resource} />
         <InfoRailBackupsLink resource={resource} />
+        <InfoRailSecurityLink
+          relayId={resource.relayId}
+          resourceId={resource.id}
+          resourceType={resource.kind}
+        />
       </InfoRailGroup>
       <InfoRailOwner resource={resource} />
       {container}
