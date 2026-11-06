@@ -43,7 +43,7 @@ import {
   listPersistedRelaysEffect,
   type PersistedRelay,
 } from "@/lib/relay-registry"
-import { resourceAudienceEffect } from "@/lib/resource-audience.server"
+import { notificationAudienceEffect } from "@/lib/resource-audience.server"
 
 // Checks whether image apps' tags name newer images than the ones they
 // run, an hour apart, by asking each Relay about all of its image apps at
@@ -79,9 +79,10 @@ const announce = Effect.fnUntraced(function* (
   ) {
     return
   }
-  const recipients = yield* resourceAudienceEffect(
+  const recipients = yield* notificationAudienceEffect(
     { relayId: relay.id, resourceId: update.appId, resourceType: "app" },
-    "app.manage"
+    "app.manage",
+    "app.image-update"
   )
   const delivered = yield* notifyUsersEffect(
     recipients,

@@ -13,6 +13,11 @@ import {
   createAppRecordEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
+import { saveNotificationPreferencesEffect } from "@/effect/notification-preferences"
+import {
+  listNotificationsEffect,
+  notifyUsersEffect,
+} from "@/effect/notifications"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { databaseTableName } from "@/lib/database-config"
 import { operationsTablePrefix } from "@/operations/engine"
@@ -312,6 +317,55 @@ describeMysql("App deployments", () => {
               yield* sql`SELECT * FROM ${sql(`${operationsTablePrefix()}_${table}`)}`
             assert.isFalse(JSON.stringify(rows).includes("never-kept"), table)
           }
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    it.effect(
+      "clear a failure for someone who muted the App once it deploys",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.deployments.clear()
+          yield* insertRelay(relayId)
+          yield* insertUser("owner", { role: "admin" })
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* seedApp(sixth)
+          yield* notifyUsersEffect(["owner"], "app.deployed:earlier", {
+            deploymentId: "earlier",
+            kind: "app.deployed",
+            resource: {
+              id: sixth,
+              name: "Site",
+              relayId,
+              type: "app",
+            },
+            status: "failed",
+            update: false,
+          })
+          yield* saveNotificationPreferencesEffect("owner", {
+            resources: {
+              [`app:${relayId}:${sixth}`]: {
+                kinds: { "app.deployed": false },
+                name: "Site",
+                type: "app",
+              },
+            },
+          })
+
+          const id = yield* deploy(sixth)
+          yield* until(() => relay.deployments.has(sixth))
+          relay.deployments.set(sixth, {
+            id: relay.deployments.get(sixth)?.id ?? "",
+            state: "succeeded",
+          })
+          yield* ended(id)
+
+          assert.deepStrictEqual(yield* listNotificationsEffect("owner"), [])
         }).pipe(TestClock.withLive),
       60_000
     )

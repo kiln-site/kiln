@@ -16,7 +16,7 @@ import { promiseEffect } from "@/effect/promise"
 import { forkAppEffect } from "@/effect/runtime"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
-import { resourceAudienceEffect } from "@/lib/resource-audience.server"
+import { notificationAudienceEffect } from "@/lib/resource-audience.server"
 import type { ResourceScope } from "@/lib/resource-permissions"
 
 // Databases keep running past their disk limit. Hearth checks every Relay's
@@ -127,4 +127,4 @@ function diskLimitKeyPrefix(relayId: string) {
 }
 
 const databaseAudienceEffect = (scope: ResourceScope) =>
-  resourceAudienceEffect(scope, "database.read")
+  notificationAudienceEffect(scope, "database.read", "resource.disk-limit")

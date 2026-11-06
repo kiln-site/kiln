@@ -22,6 +22,7 @@ import {
 } from "@/components/info-page"
 import { RelayKindIcon } from "@/components/instance-kind-icon"
 import { OwnerCard } from "@/components/owner-card"
+import { ResourceNotificationsCard } from "@/components/resource-notifications-card"
 import { useCopyFeedback } from "@/components/workspace-header"
 import {
   canAccessActivity,
@@ -29,6 +30,7 @@ import {
   canAccessInstancePermission,
   type NavigationAccessCapabilities,
 } from "@/lib/navigation-destinations"
+import type { NotificationKind } from "@/lib/notifications"
 import {
   accessCapabilitiesQueryOptions,
   backupUsageQueryOptions,
@@ -50,6 +52,7 @@ export interface RailResource {
   // "instance" is a game server.
   kind: "database" | "instance"
   id: string
+  name: string
   relayId: string
 }
 
@@ -74,9 +77,52 @@ export function InstanceInfoRail({
       </InfoRailGroup>
       <InfoRailOwner resource={resource} />
       {container}
+      <InfoRailNotifications resource={resource} />
     </>
   )
 }
+
+// What this person can hear about it depends on what they can do with it.
+const InfoRailNotifications = React.memo(function InfoRailNotifications({
+  resource,
+}: {
+  resource: RailResource
+}) {
+  const { data: capabilities } = useQuery(accessCapabilitiesQueryOptions())
+  const { id, kind, name, relayId } = resource
+  const subject = React.useMemo(
+    () => ({ id, name, relayId, type: kind }),
+    [id, kind, name, relayId]
+  )
+  const kinds = React.useMemo((): ReadonlyArray<NotificationKind> => {
+    if (!capabilities) return []
+    if (kind === "instance")
+      return canAccessInstancePermission(
+        capabilities,
+        { id, relayId },
+        "instance.configuration.write"
+      )
+        ? ["security.report"]
+        : []
+    return [
+      ...(canAccessDatabasePermission(
+        capabilities,
+        { id, relayId },
+        "database.read"
+      )
+        ? (["resource.disk-limit"] as const)
+        : []),
+      ...(canAccessDatabasePermission(
+        capabilities,
+        { id, relayId },
+        "database.power"
+      )
+        ? (["security.report"] as const)
+        : []),
+    ]
+  }, [capabilities, id, kind, relayId])
+  return <ResourceNotificationsCard kinds={kinds} resource={subject} />
+})
 
 function railScope(resource: RailResource) {
   return {

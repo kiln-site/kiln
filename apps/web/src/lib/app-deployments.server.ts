@@ -52,6 +52,7 @@ import { loadAppConfigEffect } from "@/effect/managed-apps"
 import {
   publishNotificationChange,
   replaceNotificationEffect,
+  settleNotificationsEffect,
 } from "@/effect/notifications"
 import { promiseEffect } from "@/effect/promise"
 import {
@@ -78,7 +79,7 @@ import {
   listPersistedRelaysEffect,
   type PersistedRelay,
 } from "@/lib/relay-registry"
-import { resourceAudienceEffect } from "@/lib/resource-audience.server"
+import { notificationAudiencesEffect } from "@/lib/resource-audience.server"
 
 // Deploys apps and records each deployment. Every ask, whatever asked,
 // joins the app's one request, and one durable operation takes it up,
@@ -365,15 +366,16 @@ const announceDeploymentEffect = Effect.fnUntraced(
     status: AppDeploymentStatus
   ) {
     if (status !== "succeeded" && status !== "failed") return
-    const [app, recipients] = yield* Effect.all([
+    const [app, { audience, wanted: recipients }] = yield* Effect.all([
       loadAppConfigEffect(record.relayId, record.appId),
-      resourceAudienceEffect(
+      notificationAudiencesEffect(
         {
           relayId: record.relayId,
           resourceId: record.appId,
           resourceType: "app",
         },
-        "app.manage"
+        "app.manage",
+        "app.deployed"
       ),
     ])
     if (!app) return
@@ -387,6 +389,12 @@ const announceDeploymentEffect = Effect.fnUntraced(
       content.kind === "app.deployed" &&
       content.resource.relayId === record.relayId &&
       content.resource.id === record.appId
+    // A deployment that worked answers the one that didn't.
+    const settles = (content: NotificationContent) =>
+      status === "succeeded" &&
+      content.kind === "app.deployed" &&
+      content.status === "failed" &&
+      sameApp(content)
     const notified = new Set<string>()
     for (const userId of new Set(recipients)) {
       const changed = yield* replaceNotificationEffect(
@@ -403,18 +411,20 @@ const announceDeploymentEffect = Effect.fnUntraced(
         {
           actorUserId: record.triggeredBy,
           matches: sameApp,
-          // A deployment that worked answers the one that didn't.
-          settles: (content) =>
-            status === "succeeded" &&
-            content.kind === "app.deployed" &&
-            content.status === "failed" &&
-            sameApp(content),
+          settles,
           sourceKey: `app.deployed:${record.id}`,
         }
       )
       if (changed) notified.add(userId)
     }
-    publishNotificationChange([...notified])
+    // Who turned this off doesn't hear of it, but what they have still ended.
+    const leftOut = audience.filter((userId) => !recipients.includes(userId))
+    const settled = yield* settleNotificationsEffect(
+      leftOut,
+      "app.deployed",
+      settles
+    )
+    publishNotificationChange([...notified, ...settled])
     // The update it deployed is installed. Other deployments are settled
     // by the check that follows them.
     if (

@@ -46,7 +46,11 @@ import type {
   NotificationContent,
   NotificationResource,
 } from "@/lib/notifications"
-import { notificationDetail, notificationTitle } from "@/lib/notification-text"
+import {
+  notificationDetail,
+  notificationTitle,
+  resourceTypeLabels,
+} from "@/lib/notification-text"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
 export type NotificationListItem =
@@ -368,13 +372,6 @@ function OpenResourceMenu({
     </DropdownMenu>
   )
 }
-
-const resourceTypeLabels = {
-  app: "App",
-  database: "Database",
-  instance: "Game Server",
-  relay: "Relay",
-} satisfies Record<NotificationResource["type"], string>
 
 function selectPlatformAdmin(capabilities: { isPlatformAdmin: boolean }) {
   return capabilities.isPlatformAdmin

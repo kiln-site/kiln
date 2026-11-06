@@ -8,9 +8,10 @@ import type { QueryClient } from "@tanstack/react-query"
 import { queryCollectionOptions } from "@tanstack/query-db-collection"
 
 import { forkPromise } from "@/effect/promise"
-import type {
-  NotificationPreferences,
-  NotificationPreferencesUpdate,
+import {
+  mergeResourcePreferences,
+  type NotificationPreferences,
+  type NotificationPreferencesUpdate,
 } from "@/lib/notification-preferences"
 import type { InvitationOutcome, KilnNotification } from "@/lib/notifications"
 import { queryKeys } from "@/lib/query-options"
@@ -277,6 +278,11 @@ function applyPreferences(
   return {
     idleMinutes: update.idleMinutes ?? preferences.idleMinutes,
     kinds: { ...preferences.kinds, ...update.kinds },
+    resources: mergeResourcePreferences(
+      preferences.resources,
+      update.resources
+    ),
+    scope: update.scope ?? preferences.scope,
     security: { ...preferences.security, ...update.security },
     skipPushWhileActive:
       update.skipPushWhileActive ?? preferences.skipPushWhileActive,

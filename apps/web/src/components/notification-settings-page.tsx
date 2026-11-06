@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-query"
 import {
   AppWindow,
+  BellOff,
   BellRing,
   HardDrive,
   Rocket,
@@ -14,6 +15,7 @@ import {
   UserPlus,
 } from "lucide-react"
 
+import { Button } from "@workspace/ui/components/button"
 import {
   Select,
   SelectContent,
@@ -32,11 +34,17 @@ import {
 } from "@/lib/collections/notifications"
 import {
   notificationIdleMinuteOptions,
+  notificationKindLabel,
   notificationPreferenceGroups,
+  notificationScopeLabels,
+  notificationScopes,
   type NotificationKindPreference,
+  type NotificationPreferences,
   type NotificationPreferencesUpdate,
+  type NotificationScope,
 } from "@/lib/notification-preferences"
 import type { NotificationKind } from "@/lib/notifications"
+import { resourceTypeLabels } from "@/lib/notification-text"
 import type { SecurityNotificationSettings } from "@/lib/security"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
@@ -90,6 +98,7 @@ export const NotificationSettingsPage = React.memo(
     return (
       <SettingsPage className="lg:grid-cols-2 lg:items-start">
         <SettingsPanel icon={<BellRing />} title="Delivery">
+          <ScopePreference value={preferences.scope} onChange={save} />
           <PreferenceRow
             label="Push to this device"
             description="Sends notifications to this browser or installed app, even while Kiln is closed."
@@ -162,6 +171,10 @@ export const NotificationSettingsPage = React.memo(
             </SettingsPanel>
           )
         )}
+        <CustomizedResources
+          resources={preferences.resources}
+          onChange={save}
+        />
       </SettingsPage>
     )
   }
@@ -216,6 +229,75 @@ const KindRow = React.memo(function KindRow({
         </span>
       </div>
     </div>
+  )
+})
+
+// Whose instances the person hears about.
+const ScopePreference = React.memo(function ScopePreference({
+  onChange,
+  value,
+}: {
+  onChange: (update: NotificationPreferencesUpdate) => void
+  value: NotificationScope
+}) {
+  return (
+    <PreferenceRow
+      label="Whose instances"
+      description="Hear about everything you can reach, or only what's yours."
+    >
+      <Select
+        value={value}
+        onValueChange={(scope) =>
+          onChange({ scope: scope as NotificationScope })
+        }
+      >
+        <SelectTrigger aria-label="Whose instances" className="h-8 w-56">
+          <SelectValue>{notificationScopeLabels[value]}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {notificationScopes.map((scope) => (
+            <SelectItem key={scope} value={scope}>
+              {notificationScopeLabels[scope]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </PreferenceRow>
+  )
+})
+
+// What the person turned off about particular instances, to turn back on.
+const CustomizedResources = React.memo(function CustomizedResources({
+  onChange,
+  resources,
+}: {
+  onChange: (update: NotificationPreferencesUpdate) => void
+  resources: NotificationPreferences["resources"]
+}) {
+  const entries = Object.entries(resources)
+  if (!entries.length) return null
+  return (
+    <SettingsPanel icon={<BellOff />} title="Customized">
+      {entries.map(([key, resource]) => (
+        <PreferenceRow
+          key={key}
+          label={resource.name}
+          description={`${resourceTypeLabels[resource.type]} · ${Object.keys(
+            resource.kinds
+          )
+            .map((kind) => notificationKindLabel(kind as NotificationKind))
+            .join(", ")} off`}
+        >
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => onChange({ resources: { [key]: null } })}
+          >
+            Reset
+          </Button>
+        </PreferenceRow>
+      ))}
+    </SettingsPanel>
   )
 })
 

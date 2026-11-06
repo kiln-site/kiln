@@ -1,6 +1,9 @@
 import * as React from "react"
 
-import { InstanceInfoRail, InfoContainerCard } from "@/components/resource-info-rail"
+import {
+  InstanceInfoRail,
+  InfoContainerCard,
+} from "@/components/resource-info-rail"
 import {
   formatCpuLimit,
   formatDiskLimit,
@@ -24,9 +27,10 @@ export function ServerInfoRail({
     () => ({
       id: instance.id,
       kind: "instance" as const,
+      name: instance.name,
       relayId: instance.relayId,
     }),
-    [instance.id, instance.relayId]
+    [instance.id, instance.name, instance.relayId]
   )
   return (
     <InstanceInfoRail

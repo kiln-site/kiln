@@ -9,7 +9,7 @@ import { kilnReleaseLabel } from "@/lib/release-version"
 // What a notification says in a line or two, shared by the inbox and the
 // push notifications Hearth sends to devices.
 
-const resourceTypeLabels = {
+export const resourceTypeLabels = {
   app: "App",
   database: "Database",
   instance: "Game Server",

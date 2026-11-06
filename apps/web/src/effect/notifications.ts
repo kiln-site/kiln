@@ -208,6 +208,47 @@ export const replaceNotificationEffect = Effect.fn("notifications.replace")(
 )
 
 /**
+ * Clears the given users' open notifications of a kind that `settles` says are
+ * answered, for those an event won't reach, such as a failed deployment on an
+ * App someone has since muted. Answers whose inboxes changed.
+ */
+export const settleNotificationsEffect = Effect.fn("notifications.settle")(
+  function* (
+    userIds: ReadonlyArray<string>,
+    kind: NotificationKind,
+    settles: (content: NotificationContent) => boolean
+  ) {
+    if (!userIds.length) return []
+    const database = yield* Database
+    const table = databaseTable("notification")
+    const now = yield* Clock.currentTimeMillis
+    return yield* database.transaction("notifications.settle", (tx) =>
+      Effect.gen(function* () {
+        const rows = yield* tx.queryRows<NotificationRow & { user_id: string }>(
+          `SELECT id, user_id, kind, data, created_at, read_at FROM ${table}
+            WHERE kind = ? AND dismissed_at IS NULL
+              AND user_id IN (${userIds.map(() => "?").join(", ")})
+            FOR UPDATE`,
+          [kind, ...userIds]
+        )
+        const settled = rows.filter((row) =>
+          Option.exists(decodeNotificationContent(row.kind, row.data), settles)
+        )
+        if (!settled.length) return []
+        yield* tx.execute(
+          `UPDATE ${table}
+              SET dismissed_at = ?, read_at = COALESCE(read_at, ?),
+                  push_pending = NULL
+            WHERE id IN (${settled.map(() => "?").join(", ")})`,
+          [now, now, ...settled.map((row) => row.id)]
+        )
+        return [...new Set(settled.map((row) => row.user_id))]
+      })
+    )
+  }
+)
+
+/**
  * Clears notifications that no longer apply, as an update on offer once it's
  * installed, for everyone who has them. Answers whose inboxes changed, for
  * `publishNotificationChange`; their devices close the cleared ones.
