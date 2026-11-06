@@ -391,7 +391,9 @@ function provisionStack() {
   const checkout = resolve(worktreeRoot)
   const row = registryRow(stack)
   if (row?.state === "destroying") {
-    fail(`Stack ${stack} is being destroyed. Finish with pnpm dev:docker:destroy.`)
+    fail(
+      `Stack ${stack} is being destroyed. Finish with pnpm dev:docker:destroy.`
+    )
   }
   if (row && row.checkout !== checkout) {
     fail(
@@ -563,7 +565,8 @@ function removeVolumes(label) {
 // fails leaves a rerun everything it needs to finish.
 async function destroy() {
   const primary = process.argv.includes("--primary")
-  if (primary && namespace) fail("--primary only applies to the primary checkout.")
+  if (primary && namespace)
+    fail("--primary only applies to the primary checkout.")
   if (!primary) requireNamespaceForDestroy()
   if (primary) refuseUnscopedWorkloads()
 
@@ -681,8 +684,10 @@ async function shared(action, arguments_) {
   }
 }
 
+// Stacks from before shared services run too, with their own MySQL.
 function runningStacks() {
-  const running = capture("docker", [
+  const registered = new Set(registryRows().map((row) => row.name))
+  return capture("docker", [
     "container",
     "ls",
     "--filter",
@@ -690,7 +695,8 @@ function runningStacks() {
     "--format",
     '{{.Label "com.docker.compose.project"}}',
   ])
-  return running.split("\n").filter(Boolean)
+    .split("\n")
+    .filter((name) => registered.has(name))
 }
 
 // For a stack whose checkout was removed without destroying it.
@@ -848,7 +854,12 @@ function s3(action) {
       const { credentials, self } = composeS3(["up", "--detach", "--wait"])
       run(
         "tailscale",
-        ["serve", "--bg", `--https=${S3_PORT}`, `http://127.0.0.1:${S3_LOCAL_PORT}`],
+        [
+          "serve",
+          "--bg",
+          `--https=${S3_PORT}`,
+          `http://127.0.0.1:${S3_LOCAL_PORT}`,
+        ],
         process.env
       )
       run(
@@ -876,7 +887,9 @@ function s3(action) {
         ],
         process.env
       )
-      console.log(`\nS3 is ready. Add this to each box's .env:\n\n${s3Settings()}`)
+      console.log(
+        `\nS3 is ready. Add this to each box's .env:\n\n${s3Settings()}`
+      )
       break
     }
     case "env":
@@ -916,7 +929,9 @@ function placement(container) {
   )
   const path = `/proc/${result.stdout?.trim()}/cgroup`
   if (result.status !== 0 || !existsSync(path)) return null
-  return readFileSync(path, "utf8").trim().split("::").pop()?.split("/")[1] ?? null
+  return (
+    readFileSync(path, "utf8").trim().split("::").pop()?.split("/")[1] ?? null
+  )
 }
 
 // Where this box keeps development containers: what KILN_DEV_CGROUP_PARENT

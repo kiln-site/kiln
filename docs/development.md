@@ -49,17 +49,17 @@ to be unique across running stacks.
 
 ## Commands
 
-| Command                   | Purpose                                              |
-| ------------------------- | ---------------------------------------------------- |
-| `pnpm dev:docker`         | Start and follow Hearth logs                         |
-| `pnpm dev:docker:up`      | Start in the background and wait until healthy       |
-| `pnpm dev:docker:logs`    | Follow Hearth and Relay logs                         |
-| `pnpm dev:docker:refresh` | Restart Relay and Hearth                             |
-| `pnpm dev:docker:down`    | Stop, preserving data                                |
-| `pnpm dev:docker:destroy` | Delete a worktree's stack and everything it owns     |
-| `pnpm dev:docker:test`    | Run web tests on the box's MySQL                     |
-| `pnpm dev:docker:shared`  | Manage the box's shared MySQL and Valkey             |
-| `pnpm dev:docker:s3`      | Manage the tailnet's S3 endpoint                     |
+| Command                   | Purpose                                          |
+| ------------------------- | ------------------------------------------------ |
+| `pnpm dev:docker`         | Start and follow Hearth logs                     |
+| `pnpm dev:docker:up`      | Start in the background and wait until healthy   |
+| `pnpm dev:docker:logs`    | Follow Hearth and Relay logs                     |
+| `pnpm dev:docker:refresh` | Restart Relay and Hearth                         |
+| `pnpm dev:docker:down`    | Stop, preserving data                            |
+| `pnpm dev:docker:destroy` | Delete a worktree's stack and everything it owns |
+| `pnpm dev:docker:test`    | Run web tests on the box's MySQL                 |
+| `pnpm dev:docker:shared`  | Manage the box's shared MySQL and Valkey         |
+| `pnpm dev:docker:s3`      | Manage the tailnet's S3 endpoint                 |
 
 ## Shared services
 
@@ -79,14 +79,14 @@ Each Docker engine runs one MySQL (`kiln-dev-mysql`) and one Valkey
 every registered stack with its database and checkout, and any database no
 stack owns. The registry is the `kiln_dev.stacks` table on the same MySQL.
 
-| Command                                      | Purpose                                      |
-| -------------------------------------------- | -------------------------------------------- |
-| `pnpm dev:docker:shared status`              | Show services, stacks, and strays            |
-| `pnpm dev:docker:shared up`                  | Start them; a stack does this itself         |
-| `pnpm dev:docker:shared up --recreate`       | Recreate them after a version change         |
-| `pnpm dev:docker:shared down`                | Stop them, refusing while stacks run         |
-| `pnpm dev:docker:shared remove <stack>`      | Clear a stack whose checkout is gone         |
-| `pnpm dev:docker:shared destroy`             | Delete them, refusing while stacks have data |
+| Command                                 | Purpose                                      |
+| --------------------------------------- | -------------------------------------------- |
+| `pnpm dev:docker:shared status`         | Show services, stacks, and strays            |
+| `pnpm dev:docker:shared up`             | Start them; a stack does this itself         |
+| `pnpm dev:docker:shared up --recreate`  | Recreate them after a version change         |
+| `pnpm dev:docker:shared down`           | Stop them, refusing while stacks run         |
+| `pnpm dev:docker:shared remove <stack>` | Clear a stack whose checkout is gone         |
+| `pnpm dev:docker:shared destroy`        | Delete them, refusing while stacks have data |
 
 A stack never recreates healthy services, which every other stack on the box
 depends on. If it reports another version, `compose.dev.shared.yaml` changed:
@@ -164,14 +164,15 @@ KILN_DEV_S3_PREFIX=s01
 Then, as a platform administrator, add a destination in Hearth with the same
 values and these settings:
 
-| Field                 | Value                               |
-| --------------------- | ----------------------------------- |
-| Endpoint              | `KILN_DEV_S3_ENDPOINT`              |
-| Region                | `us-east-1`                         |
-| Bucket                | `kiln-dev`                          |
-| Object prefix         | `KILN_DEV_S3_PREFIX`                |
-| Path-style addressing | On                                  |
-| Allow private network | On: tailnet addresses are private   |
+| Field                | Value                             |
+| -------------------- | --------------------------------- |
+| Endpoint             | `KILN_DEV_S3_ENDPOINT`            |
+| Region               | `us-east-1`                       |
+| Bucket               | `kiln-dev`                        |
+| Object prefix        | `KILN_DEV_S3_PREFIX`              |
+| Path-style URLs      | On                                |
+| Private network      | On: tailnet addresses are private |
+| Platform destination | On: Kiln's own backups need it    |
 
 Backups land under `<prefix>/kiln/<stack>/`, which `dev:docker:destroy` deletes.
 
@@ -320,14 +321,14 @@ descriptions.
 After merge, run `pnpm dev:docker:destroy` before removing the worktree and
 merged branches, then update `main` with `git pull --ff-only`.
 
-| Layer                        | Removed by `dev:docker:destroy`                  |
-| ---------------------------- | ------------------------------------------------ |
-| Hearth and Relay             | Containers, Compose networks and volumes         |
-| What the Relay created       | Containers, networks and volumes it owns         |
-| Shared MySQL                 | The stack's database, test databases and user    |
-| Shared Valkey                | The stack's keys                                 |
-| S3 endpoint                  | Backups under `<prefix>/kiln/<stack>/`           |
-| Registry                     | The stack's row, last                            |
+| Layer                  | Removed by `dev:docker:destroy`               |
+| ---------------------- | --------------------------------------------- |
+| Hearth and Relay       | Containers, Compose networks and volumes      |
+| What the Relay created | Containers, networks and volumes it owns      |
+| Shared MySQL           | The stack's database, test databases and user |
+| Shared Valkey          | The stack's keys                              |
+| S3 endpoint            | Backups under `<prefix>/kiln/<stack>/`        |
+| Registry               | The stack's row, last                         |
 
 Destroy stops the stack's writers first and clears its registry row last. If a
 step fails it says so and exits non-zero; run it again to finish. A stack being
@@ -335,14 +336,14 @@ destroyed can't start. Destroy stops before deleting anything when it can't read
 the registry, and it deletes only names the registry records and Docker
 resources carrying the stack's labels.
 
-| Situation                    | What to do                                         |
-| ---------------------------- | -------------------------------------------------- |
-| Finished worktree            | `pnpm dev:docker:destroy`, then remove it          |
-| Keep data, free memory       | `pnpm dev:docker:down`                             |
-| Worktree already removed     | `pnpm dev:docker:shared remove <stack>`            |
-| Primary checkout             | `pnpm dev:docker:down`                             |
-| Reset the primary checkout   | `pnpm dev:docker:destroy --primary`                |
-| No stacks left on the box    | `pnpm dev:docker:shared destroy`                   |
+| Situation                  | What to do                                |
+| -------------------------- | ----------------------------------------- |
+| Finished worktree          | `pnpm dev:docker:destroy`, then remove it |
+| Keep data, free memory     | `pnpm dev:docker:down`                    |
+| Worktree already removed   | `pnpm dev:docker:shared remove <stack>`   |
+| Primary checkout           | `pnpm dev:docker:down`                    |
+| Reset the primary checkout | `pnpm dev:docker:destroy --primary`       |
+| No stacks left on the box  | `pnpm dev:docker:shared destroy`          |
 
 `shared remove` refuses while the checkout exists or the stack's containers do.
 Destroy refuses the primary checkout's unscoped Relay resources. `--primary`
