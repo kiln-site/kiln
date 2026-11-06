@@ -2,6 +2,7 @@ import { expect, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { SqlClient } from "effect/sql"
 
+import { databaseTableName } from "@/lib/database-config"
 import { migrations } from "@/migrations"
 import { explicitBackupDestinations } from "@/migrations/0054_explicit_backup_destinations"
 import { describeMysql, testDatabaseClient } from "@/test/database"
@@ -255,6 +256,99 @@ describeMysql("database migrations", () => {
                AND column_name = 'storage_id'
           `
           expect(Number(column?.count)).toBe(0)
+        }),
+      120_000
+    )
+
+    it.effect(
+      "merges deployments and Kiln updates people already have",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 54)
+          )
+          const table = sql(databaseTableName("notification"))
+          const app = {
+            resource: {
+              id: "app-a",
+              name: "Site",
+              relayId: "relay-a",
+              type: "app",
+            },
+            update: true,
+          }
+          const row = (
+            id: string,
+            kind: string,
+            data: object,
+            createdAt: number,
+            readAt: number | null
+          ) => ({
+            created_at: createdAt,
+            data: JSON.stringify(data),
+            id,
+            kind,
+            read_at: readAt,
+            source_key: `${kind}:${id}`,
+            user_id: "user-a",
+          })
+          yield* sql`INSERT INTO ${table} ${sql.insert([
+            row("a", "app.deployed", { ...app, status: "failed" }, 1, null),
+            row("b", "app.deployed", { ...app, status: "succeeded" }, 2, 5),
+            row("c", "app.deployed", { ...app, status: "succeeded" }, 3, null),
+            row("d", "app.deployed", { ...app, status: "succeeded" }, 4, 5),
+            row(
+              "e",
+              "kiln.updated",
+              { previousVersion: "1", version: "2" },
+              1,
+              5
+            ),
+            row(
+              "f",
+              "kiln.updated",
+              { previousVersion: "2", version: "3" },
+              2,
+              null
+            ),
+            row(
+              "g",
+              "kiln.updated",
+              { previousVersion: "3", version: "4" },
+              3,
+              null
+            ),
+          ])}`
+
+          yield* applyMigrations(migrations)
+
+          const rows = yield* sql<{
+            data: unknown
+            id: string
+            readAt: number | null
+          }>`
+          SELECT id, data, read_at AS readAt FROM ${table}
+           WHERE dismissed_at IS NULL ORDER BY id
+        `
+          const parsed = rows.map(({ data, id, readAt }) => ({
+            data: typeof data === "string" ? JSON.parse(data) : data,
+            id,
+            read: readAt !== null,
+          }))
+          expect(parsed).toEqual([
+            {
+              data: { ...app, count: 3, failures: 1, status: "succeeded" },
+              id: "d",
+              read: false,
+            },
+            {
+              data: { previousVersion: "2", version: "4" },
+              id: "g",
+              read: false,
+            },
+          ])
         }),
       120_000
     )

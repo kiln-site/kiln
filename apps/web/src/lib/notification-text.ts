@@ -61,12 +61,13 @@ export function notificationTitle(content: NotificationContent): string {
     }
     case "app.image-update":
       return "Your App has an update available"
-    case "app.deployed":
-      return content.status === "failed"
-        ? "Your App failed to deploy"
-        : content.update
-          ? "Your App has been updated"
-          : "Your App has been deployed"
+    case "app.deployed": {
+      if (content.status === "failed") return "Your App failed to deploy"
+      const times = (content.count ?? 1) > 1 ? ` ${content.count} times` : ""
+      return content.update
+        ? `Your App has been updated${times}`
+        : `Your App has been deployed${times}`
+    }
     case "security.report":
       return content.count === 1
         ? "1 new vulnerability found"
@@ -94,7 +95,7 @@ export function notificationDetail(
     case "kiln.release":
       return releaseName(content.name, content.version)
     case "kiln.updated":
-      return `to ${releaseName(content.name, content.version)}`
+      return `${releaseName(content.previousName, content.previousVersion)} to ${releaseName(content.name, content.version)}`
     case "access.invited":
       return `${content.resource.name} - ${
         content.outcome === undefined ? "by" : "from"
@@ -105,10 +106,14 @@ export function notificationDetail(
       return `${content.resource.name} - ${formatBytes(content.usedBytes)} of ${formatBytes(content.limitBytes)}`
     case "app.image-update":
       return `Image - ${content.image}`
-    case "app.deployed":
-      return content.status === "failed"
-        ? `${content.resource.name} couldn't deploy`
-        : `${content.resource.name} has deployed successfully`
+    case "app.deployed": {
+      const { count = 1, failures, resource, status } = content
+      if (failures && count > 1)
+        return `${resource.name} - ${failures} of ${count} failed`
+      return status === "failed"
+        ? `${resource.name} couldn't deploy`
+        : `${resource.name} has deployed successfully`
+    }
     case "security.report": {
       // "Up to critical in Survival and 2 more, 1 exploited".
       const { count, knownExploited, resources, severity } = content

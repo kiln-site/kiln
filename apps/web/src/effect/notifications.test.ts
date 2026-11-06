@@ -5,8 +5,13 @@ import { TestClock } from "effect/testing"
 import {
   clearNotificationsEffect,
   dismissNotificationEffect,
+  forgetNotificationsEffect,
   listNotificationsEffect,
+  markNotificationsReadEffect,
   notifyUsersEffect,
+  refreshDiskLimitUsageEffect,
+  replaceNotificationEffect,
+  sourceKeysEffect,
 } from "@/effect/notifications"
 import type { NotificationContent } from "@/lib/notifications"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -29,6 +34,50 @@ const removed: NotificationContent = {
     type: "instance",
   },
 }
+
+const deployed = (
+  id: string,
+  status: "failed" | "succeeded",
+  appId = "app-a"
+): Extract<NotificationContent, { kind: "app.deployed" }> => ({
+  deploymentId: id,
+  kind: "app.deployed",
+  resource: { id: appId, name: appId, relayId: "relay-a", type: "app" },
+  status,
+  update: false,
+})
+
+const isApp = (appId: string) => (content: NotificationContent) =>
+  content.kind === "app.deployed" && content.resource.id === appId
+
+// One deployment, adding up the unread ones it replaces.
+const deliverDeployment = (
+  userId: string,
+  id: string,
+  status: "failed" | "succeeded",
+  {
+    actorUserId,
+    appId = "app-a",
+  }: { actorUserId?: string; appId?: string } = {}
+) =>
+  replaceNotificationEffect(
+    userId,
+    "app.deployed",
+    (unread) => ({
+      ...deployed(id, status, appId),
+      count: unread.length + 1,
+    }),
+    {
+      actorUserId,
+      matches: isApp(appId),
+      settles: (content) =>
+        status === "succeeded" &&
+        isApp(appId)(content) &&
+        content.kind === "app.deployed" &&
+        content.status === "failed",
+      sourceKey: `app.deployed:${id}`,
+    }
+  )
 
 const contents = (userId: string) =>
   Effect.map(listNotificationsEffect(userId), (notifications) =>
@@ -70,6 +119,155 @@ describeMysql("notifications", () => {
         ])
         assert.deepStrictEqual(yield* contents("user-b"), [
           { content: release, read: false },
+        ])
+      })
+    )
+
+    it.effect("merges one resource's notifications into one row", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertUser("user-a")
+
+        yield* TestClock.setTime(1_000)
+        yield* deliverDeployment("user-a", "one", "succeeded")
+        yield* TestClock.setTime(2_000)
+        yield* deliverDeployment("user-a", "other", "succeeded", {
+          appId: "app-b",
+        })
+        yield* TestClock.setTime(3_000)
+        yield* deliverDeployment("user-a", "two", "succeeded")
+
+        assert.deepStrictEqual(yield* contents("user-a"), [
+          {
+            content: { ...deployed("two", "succeeded"), count: 2 },
+            read: false,
+          },
+          {
+            content: {
+              ...deployed("other", "succeeded", "app-b"),
+              count: 1,
+            },
+            read: false,
+          },
+        ])
+      })
+    )
+
+    it.effect("doesn't count a retried event twice", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertUser("user-a")
+
+        yield* TestClock.setTime(1_000)
+        yield* deliverDeployment("user-a", "one", "succeeded")
+        yield* TestClock.setTime(2_000)
+        yield* deliverDeployment("user-a", "two", "succeeded")
+        yield* TestClock.setTime(3_000)
+        const changed = yield* deliverDeployment("user-a", "one", "succeeded")
+
+        assert.isFalse(changed)
+        assert.deepStrictEqual(yield* contents("user-a"), [
+          {
+            content: { ...deployed("two", "succeeded"), count: 2 },
+            read: false,
+          },
+        ])
+      })
+    )
+
+    it.effect("starts counting over once the user has read it", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertUser("user-a")
+
+        yield* TestClock.setTime(1_000)
+        yield* deliverDeployment("user-a", "one", "succeeded")
+        yield* markNotificationsReadEffect("user-a", "all")
+        yield* TestClock.setTime(2_000)
+        yield* deliverDeployment("user-a", "two", "succeeded")
+
+        assert.deepStrictEqual(yield* contents("user-a"), [
+          {
+            content: { ...deployed("two", "succeeded"), count: 1 },
+            read: false,
+          },
+        ])
+      })
+    )
+
+    it.effect(
+      "lets someone's own fix settle what it fixed, and nothing else",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertUser("user-a")
+
+          yield* TestClock.setTime(1_000)
+          yield* deliverDeployment("user-a", "one", "failed")
+          yield* deliverDeployment("user-a", "other", "succeeded", {
+            appId: "app-b",
+          })
+          yield* TestClock.setTime(2_000)
+          yield* deliverDeployment("user-a", "two", "succeeded", {
+            actorUserId: "user-a",
+          })
+          yield* deliverDeployment("user-a", "three", "succeeded", {
+            actorUserId: "user-a",
+            appId: "app-b",
+          })
+
+          assert.deepStrictEqual(yield* contents("user-a"), [
+            {
+              content: {
+                ...deployed("other", "succeeded", "app-b"),
+                count: 1,
+              },
+              read: false,
+            },
+          ])
+        })
+    )
+
+    it.effect("warns again when a condition it forgot comes back", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertUser("user-a")
+        const warning: NotificationContent = {
+          kind: "resource.disk-limit",
+          limitBytes: 100,
+          resource: {
+            id: "db-a",
+            name: "main",
+            relayId: "relay-a",
+            type: "database",
+          },
+          usedBytes: 120,
+        }
+        const key = "resource.disk-limit:database:relay-a:db-a:100"
+
+        yield* TestClock.setTime(1_000)
+        yield* notifyUsersEffect(["user-a"], key, warning)
+        yield* refreshDiskLimitUsageEffect(key, 10_000_000_000)
+        assert.deepStrictEqual(yield* contents("user-a"), [
+          {
+            content: { ...warning, usedBytes: 10_000_000_000 },
+            read: false,
+          },
+        ])
+
+        // Cleared by the user, then fits: the next overflow is news.
+        const [notification] = yield* listNotificationsEffect("user-a")
+        yield* dismissNotificationEffect("user-a", notification?.id ?? "")
+        const told = yield* sourceKeysEffect(
+          "resource.disk-limit",
+          "resource.disk-limit:database:relay-a:"
+        )
+        assert.deepStrictEqual(told, [key])
+        yield* forgetNotificationsEffect("resource.disk-limit", told)
+        yield* notifyUsersEffect(["user-a"], key, warning)
+
+        assert.deepStrictEqual(yield* contents("user-a"), [
+          { content: warning, read: false },
         ])
       })
     )

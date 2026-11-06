@@ -29,6 +29,7 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     url: releaseUrlSchema,
     version: z.string(),
   }),
+  // A newer update replaces it, keeping where the unread one started from.
   z.object({
     kind: z.literal("kiln.updated"),
     // Release names, e.g. "v0.1.0 Nightly #17", when GitHub listed them.
@@ -54,7 +55,8 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     resource: notificationResourceSchema,
   }),
   // An instance's data outgrew its disk limit. Instances that keep running
-  // past it, such as databases, warn this way.
+  // past it, such as databases, warn this way. `usedBytes` stays current, and
+  // it goes away once the data fits again.
   z.object({
     kind: z.literal("resource.disk-limit"),
     limitBytes: z.number(),
@@ -70,9 +72,13 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     resource: notificationResourceSchema,
   }),
   // An app finished deploying when someone else, or Kiln itself, started
-  // it. `update` marks an image update, which says the app was updated.
+  // it. `update` marks an image update, which says the app was updated. The
+  // newest deployment replaces the App's last one, and `count` and `failures`
+  // add in what the replaced one said while it was unread.
   z.object({
+    count: z.number().int().positive().optional(),
     deploymentId: z.string(),
+    failures: z.number().int().positive().optional(),
     kind: z.literal("app.deployed"),
     resource: notificationResourceSchema,
     status: z.enum(["succeeded", "failed"]),
