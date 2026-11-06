@@ -1684,6 +1684,11 @@ function rotationSql(
   if (engine === "postgres") {
     return `ALTER USER "${username}" WITH PASSWORD '${escapedPassword}';\n`
   }
+  // MariaDB keeps ALTER USER for logins with CREATE USER, which this hasn't,
+  // and lets any login set its own password.
+  if (engine === "mariadb") {
+    return `SET PASSWORD = PASSWORD('${escapedPassword}');\n`
+  }
   return `ALTER USER '${username}'@'%' IDENTIFIED BY '${escapedPassword}';\n`
 }
 
