@@ -3,6 +3,7 @@ import { queryOptions } from "@tanstack/react-query"
 import type { SecurityInventoryRef } from "@/lib/security"
 import {
   getResourceSecurity,
+  getSecurityImageVersions,
   getSecurityOverview,
   getSecurityPackages,
 } from "@/server/security"
@@ -12,6 +13,8 @@ export const securityQueryKeys = {
   all: ["security"] as const,
   packages: (inventory: SecurityInventoryRef) =>
     ["security", "packages", inventory.relayId, inventory.sbomKey] as const,
+  imageVersions: (appId: string) =>
+    ["security", "image-versions", appId] as const,
   overview: (scope: string | null, own = false) =>
     ["security", "overview", scope, own] as const,
   resource: (scope: string) => ["security", "resource", scope] as const,
@@ -36,6 +39,20 @@ export function securityPackagesQueryOptions(inventory: SecurityInventoryRef) {
     queryFn: ({ signal }) => getSecurityPackages({ data: inventory, signal }),
     refetchOnWindowFocus: false,
     staleTime: 5 * 60_000,
+  })
+}
+
+export function securityImageVersionsQueryOptions(
+  relayId: string,
+  appId: string
+) {
+  return queryOptions({
+    queryKey: securityQueryKeys.imageVersions(appId),
+    queryFn: ({ signal }) =>
+      getSecurityImageVersions({ data: { appId, relayId }, signal }),
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: 10 * 60_000,
   })
 }
 

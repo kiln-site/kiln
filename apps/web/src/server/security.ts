@@ -1,12 +1,17 @@
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 
-import { securityImageIdSchema, relayIdSchema } from "@workspace/contracts"
+import {
+  securityImageIdSchema,
+  relayIdSchema,
+  appIdSchema,
+} from "@workspace/contracts"
 
 import { securityScopeSchema } from "@/lib/security"
 import {
   getResourceSecurityHandler,
   getSecurityPackagesHandler,
+  getSecurityImageVersionsHandler,
   getSecurityOverviewHandler,
   scanSecurityNowHandler,
 } from "@/server/security.server"
@@ -39,6 +44,11 @@ export const getSecurityPackages = createServerFn({ method: "GET" })
     })
   )
   .handler(({ data }) => getSecurityPackagesHandler(data))
+
+/** Newer versions of an image app's image, to move it to. */
+export const getSecurityImageVersions = createServerFn({ method: "GET" })
+  .validator(z.strictObject({ appId: appIdSchema, relayId: relayIdSchema }))
+  .handler(({ data }) => getSecurityImageVersionsHandler(data))
 
 export const scanSecurityNow = createServerFn({ method: "POST" })
   .validator(scopeInputSchema)
