@@ -170,7 +170,7 @@ const createApp = (
 const apps = selectRows<{ app_id: string }>("app")
 
 describeMysql("Creating an App with a database", () => {
-  layer(TestDatabase, { timeout: 60_000 })((it) => {
+  layer(TestDatabase)((it) => {
     it.effect("connects a new database, with its credentials to hand", () =>
       Effect.gen(function* () {
         yield* seed(["app.create", "database.create"])

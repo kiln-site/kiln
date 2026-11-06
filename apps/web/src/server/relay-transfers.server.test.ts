@@ -99,7 +99,7 @@ const Lanes = testOperationsEngine(Layer.empty).pipe(
 )
 
 describeMysql("Copying files between Relays", () => {
-  layer(Lanes, { timeout: 60_000 })((it) => {
+  layer(Lanes)((it) => {
     it.effect(
       "doesn't start a pull once the person lost access while it waited its turn",
       () =>
@@ -158,8 +158,7 @@ describeMysql("Copying files between Relays", () => {
             )
           }
           assert.deepStrictEqual(relayChanges, [])
-        }),
-      30_000
+        })
     )
   })
 })
