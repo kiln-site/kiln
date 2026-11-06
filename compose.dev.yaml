@@ -278,7 +278,8 @@ services:
         ]
       interval: 10s
       timeout: 3s
-      start_period: 10s
+      # A new stack installs dependencies and Vite's first compile takes a while.
+      start_period: 300s
       retries: 6
     volumes:
       - .:/workspace

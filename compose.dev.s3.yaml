@@ -1,0 +1,48 @@
+# The tailnet's one S3 endpoint for development backups, run on one box with
+# `pnpm dev:docker:s3 up`, which supplies the environment. Tailscale Serve
+# gives it a real certificate on the tailnet. See docs/development.md.
+name: kiln-dev-s3
+
+services:
+  # RustFS runs as this UID and can't take ownership of its data directory.
+  rustfs-data:
+    image: alpine:3.21
+    restart: "no"
+    cgroup_parent: ${KILN_DEV_CGROUP_PARENT:-}
+    command: ["chown", "-R", "10001:10001", "/data"]
+    volumes:
+      - ${KILN_DEV_S3_DATA:-kiln-dev-s3-data}:/data
+
+  rustfs:
+    image: rustfs/rustfs:1.0.4
+    container_name: kiln-dev-s3
+    restart: unless-stopped
+    cgroup_parent: ${KILN_DEV_CGROUP_PARENT:-}
+    depends_on:
+      rustfs-data:
+        condition: service_completed_successfully
+    environment:
+      RUSTFS_ACCESS_KEY: ${KILN_DEV_S3_ACCESS_KEY:?Run through pnpm dev:docker:s3}
+      RUSTFS_SECRET_KEY: ${KILN_DEV_S3_SECRET_KEY:?Run through pnpm dev:docker:s3}
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_VOLUMES: /data
+    volumes:
+      - ${KILN_DEV_S3_DATA:-kiln-dev-s3-data}:/data
+    ports:
+      - "127.0.0.1:${KILN_DEV_S3_LOCAL_PORT:-9100}:9000"
+
+  # Serve only answers on the tailnet interface, which containers on this box
+  # can't reach. Host processes can, so this carries them there unchanged,
+  # TLS included. Stacks here connect to it instead of the tailnet address.
+  same-box:
+    image: alpine/socat:1.8.0.3
+    restart: unless-stopped
+    cgroup_parent: ${KILN_DEV_CGROUP_PARENT:-}
+    network_mode: host
+    command:
+      - TCP-LISTEN:${KILN_DEV_S3_PORT:-8480},bind=${KILN_DEV_S3_BRIDGE_ADDRESS:?Run through pnpm dev:docker:s3},fork,reuseaddr
+      - TCP:${KILN_DEV_S3_TAILNET_ADDRESS:?Run through pnpm dev:docker:s3}:${KILN_DEV_S3_PORT:-8480}
+
+volumes:
+  kiln-dev-s3-data:
+    name: kiln-dev-s3-data

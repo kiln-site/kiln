@@ -1,7 +1,14 @@
 import { createHash, randomBytes } from "node:crypto"
 import { lookup } from "node:dns/promises"
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname, resolve } from "node:path"
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs"
+import { homedir, networkInterfaces } from "node:os"
+import { dirname, join, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 
 import {
@@ -19,6 +26,11 @@ const CACHE_CONTAINER = "kiln-dev-cache"
 const MYSQL_VOLUME = "kiln-dev-mysql"
 const SHARED_PROJECT = "kiln-dev-shared"
 const RCLONE_IMAGE = "rclone/rclone:1.74"
+// Credentials stay on the box running the endpoint, not in this checkout.
+const s3File = join(homedir(), ".config", "kiln-dev", "s3.env")
+const S3_PORT = "8480"
+const S3_LOCAL_PORT = "9100"
+const S3_BUCKET = "kiln-dev"
 
 // Rows on the MySQL they describe, so they can't disagree with it about what
 // exists. Everything teardown deletes is named here, never guessed from a
@@ -164,6 +176,9 @@ switch (command) {
   case "shared":
     await shared(process.argv[3] ?? "status", process.argv.slice(4))
     break
+  case "s3":
+    s3(process.argv[3] ?? "status")
+    break
   default:
     fail(`Unknown development Docker command: ${command}`)
 }
@@ -222,11 +237,22 @@ async function resolveS3Host() {
   const host = new URL(endpoint).hostname
   try {
     const { address } = await lookup(host, { family: 4 })
-    return { KILN_DEV_S3_ADDRESS: address, KILN_DEV_S3_HOST: host }
+    return {
+      KILN_DEV_S3_ADDRESS: isThisBox(address) ? "host-gateway" : address,
+      KILN_DEV_S3_HOST: host,
+    }
   } catch {
     console.warn(`Could not resolve ${host}; backups to it won't work here.`)
     return {}
   }
+}
+
+// The endpoint's own box answers on its tailnet address only to host
+// processes, so its containers use the forwarder on Docker's gateway.
+function isThisBox(address) {
+  return Object.values(networkInterfaces())
+    .flat()
+    .some((entry) => entry?.address === address)
 }
 
 function refuseLegacyStack() {
@@ -743,6 +769,134 @@ function sharedStatus() {
     )
   if (strays.length > 0) {
     console.log(`\nDatabases no stack owns: ${strays.join(", ")}`)
+  }
+}
+
+function s3Credentials() {
+  if (!existsSync(s3File)) {
+    mkdirSync(dirname(s3File), { mode: 0o700, recursive: true })
+    writeFileSync(
+      s3File,
+      [
+        `KILN_DEV_S3_ACCESS_KEY=${secret(15)}`,
+        `KILN_DEV_S3_SECRET_KEY=${secret(30)}`,
+        // Kept here so no later command points it at an empty volume.
+        `KILN_DEV_S3_DATA=${process.env.KILN_DEV_S3_DATA?.trim() ?? ""}`,
+        "",
+      ].join("\n"),
+      { mode: 0o600 }
+    )
+  }
+  return parseEnvironment(readFileSync(s3File, "utf8"))
+}
+
+function tailscaleSelf() {
+  const status = JSON.parse(capture("tailscale", ["status", "--json"]))
+  return {
+    address: status.Self.TailscaleIPs.find((ip) => ip.includes(".")),
+    host: status.Self.DNSName.replace(/\.$/u, ""),
+  }
+}
+
+function composeS3(arguments_) {
+  const credentials = s3Credentials()
+  const self = tailscaleSelf()
+  run(
+    "docker",
+    [
+      "compose",
+      "--project-name",
+      "kiln-dev-s3",
+      "--file",
+      resolve(worktreeRoot, "compose.dev.s3.yaml"),
+      ...arguments_,
+    ],
+    {
+      ...process.env,
+      KILN_DEV_S3_ACCESS_KEY: credentials.get("KILN_DEV_S3_ACCESS_KEY"),
+      KILN_DEV_S3_DATA: credentials.get("KILN_DEV_S3_DATA"),
+      KILN_DEV_S3_BRIDGE_ADDRESS: capture("docker", [
+        "network",
+        "inspect",
+        "bridge",
+        "--format",
+        "{{(index .IPAM.Config 0).Gateway}}",
+      ]),
+      KILN_DEV_S3_LOCAL_PORT: S3_LOCAL_PORT,
+      KILN_DEV_S3_PORT: S3_PORT,
+      KILN_DEV_S3_SECRET_KEY: credentials.get("KILN_DEV_S3_SECRET_KEY"),
+      KILN_DEV_S3_TAILNET_ADDRESS: self.address,
+    }
+  )
+  return { credentials, self }
+}
+
+// The settings every box's .env needs, to paste there.
+function s3Settings() {
+  const credentials = s3Credentials()
+  return [
+    `KILN_DEV_S3_ENDPOINT=https://${tailscaleSelf().host}:${S3_PORT}`,
+    `KILN_DEV_S3_BUCKET=${S3_BUCKET}`,
+    `KILN_DEV_S3_ACCESS_KEY=${credentials.get("KILN_DEV_S3_ACCESS_KEY")}`,
+    `KILN_DEV_S3_SECRET_KEY=${credentials.get("KILN_DEV_S3_SECRET_KEY")}`,
+  ].join("\n")
+}
+
+function s3(action) {
+  switch (action) {
+    case "up": {
+      const { credentials, self } = composeS3(["up", "--detach", "--wait"])
+      run(
+        "tailscale",
+        ["serve", "--bg", `--https=${S3_PORT}`, `http://127.0.0.1:${S3_LOCAL_PORT}`],
+        process.env
+      )
+      run(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "--network",
+          "host",
+          "--env",
+          "RCLONE_CONFIG_S3_TYPE=s3",
+          "--env",
+          "RCLONE_CONFIG_S3_PROVIDER=Other",
+          "--env",
+          `RCLONE_CONFIG_S3_ENDPOINT=https://${self.host}:${S3_PORT}`,
+          "--env",
+          "RCLONE_CONFIG_S3_FORCE_PATH_STYLE=true",
+          "--env",
+          `RCLONE_CONFIG_S3_ACCESS_KEY_ID=${credentials.get("KILN_DEV_S3_ACCESS_KEY")}`,
+          "--env",
+          `RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=${credentials.get("KILN_DEV_S3_SECRET_KEY")}`,
+          RCLONE_IMAGE,
+          "mkdir",
+          `s3:${S3_BUCKET}`,
+        ],
+        process.env
+      )
+      console.log(`\nS3 is ready. Add this to each box's .env:\n\n${s3Settings()}`)
+      break
+    }
+    case "env":
+      console.log(s3Settings())
+      break
+    case "status":
+      run(
+        "docker",
+        ["compose", "--project-name", "kiln-dev-s3", "ps"],
+        process.env
+      )
+      run("tailscale", ["serve", "status"], process.env)
+      break
+    case "down":
+      // Its data stays, on the volume or directory it was given.
+      composeS3(["down"])
+      run("tailscale", ["serve", `--https=${S3_PORT}`, "off"], process.env)
+      break
+    default:
+      fail("Usage: pnpm dev:docker:s3 <up|status|env|down>")
   }
 }
 
