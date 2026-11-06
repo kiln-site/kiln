@@ -206,10 +206,11 @@ export const NotificationRow = React.memo(function NotificationRow({
         notification={notification}
         onNavigate={onNavigate}
       />
+      {/* Always here, so every row's actions end at the same place. */}
       <Button
         variant="ghost"
         size="icon-xs"
-        className="relative -ml-2 shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+        className="relative -ml-1.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
         aria-label={`Clear "${title}"`}
         onClick={() => onDismiss(notification.id)}
       >

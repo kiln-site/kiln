@@ -105,7 +105,7 @@ export function notificationDetail(
     case "resource.disk-limit":
       return `${content.resource.name} - ${formatBytes(content.usedBytes)} of ${formatBytes(content.limitBytes)}`
     case "app.image-update":
-      return `Image - ${content.image}`
+      return `${content.resource.name} - ${content.image}`
     case "app.deployed": {
       const { count = 1, failures, resource, status } = content
       if (failures && count > 1)

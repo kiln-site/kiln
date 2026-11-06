@@ -198,6 +198,19 @@ function notificationToastType(content: NotificationContent): AppToastType {
   }
 }
 
+// What merges shows in one toast, so another deployment changes the toast
+// already there rather than stacking a new one on it.
+function notificationToastId(content: NotificationContent, id: string) {
+  switch (content.kind) {
+    case "app.deployed":
+      return `${content.kind}:${content.resource.relayId}:${content.resource.id}`
+    case "kiln.updated":
+      return content.kind
+    default:
+      return id
+  }
+}
+
 // The toast's buttons, the same a row offers. Using one reads that
 // notification alone; the rest stay unread. The toaster sits outside the app,
 // so these can't be components that read it.
@@ -264,8 +277,9 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
     const { queryKey } = notificationsQueryOptions()
     const hash = hashKey(queryKey)
     let seen: Set<string> | null = null
-    // Notification toasts on screen, until they close.
-    const showing = new Set<string>()
+    // Notification toasts on screen, until they close, and the toast each
+    // one shows in.
+    const showing = new Map<string, string>()
     let reconciledAt = 0
     let reload: ReturnType<typeof setTimeout> | undefined
     // Loads the inbox again once the margin has passed, so a notification
@@ -306,11 +320,15 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
         seen.add(notification.id)
         if (notification.readAt === null) arrived.push(notification)
       }
-      // Read or cleared elsewhere, so its toast has nothing left to say.
-      for (const id of showing) {
+      const replacing = new Set(
+        arrived.map(({ content, id }) => notificationToastId(content, id))
+      )
+      // Read or cleared elsewhere, so its toast has nothing left to say,
+      // unless the one replacing it is about to say something new there.
+      for (const [id, toastId] of showing) {
         if (unread.has(id)) continue
         showing.delete(id)
-        dismissToast(id)
+        if (!replacing.has(toastId)) dismissToast(toastId)
       }
       if (!arrived.length) return
       // The toaster shows the newest few on top, so of these, the newest
@@ -321,13 +339,14 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
         .map((notification) => notification.id)
       for (const notification of [...arrived].reverse()) {
         const { content, id } = notification
-        showing.add(id)
+        const toastId = notificationToastId(content, id)
+        showing.set(id, toastId)
         const closed = () => showing.delete(id)
         showToast({
           ...notificationToastButtons(queryClient, router, notification),
           description: notificationDetail(content) ?? undefined,
           duration: notificationToastDurationMs,
-          id,
+          id: toastId,
           message: notificationTitle(content),
           onAutoClose: closed,
           onDismiss: closed,
