@@ -8,12 +8,18 @@ import { pageTitle } from "@/lib/page-title"
 import { markNotificationsRead } from "@/server/notifications"
 
 export const Route = createFileRoute("/_app/notifications")({
-  // The notification the page opens at, from a click in the popover.
+  // The notification the page opens at, for one with no page of its own.
   validateSearch: z.object({ focus: z.uuid().optional() }),
-  // Opening the page is reading the inbox. A hover preload only warms the
-  // data; the router reruns this loader when the page actually opens.
-  loader: async ({ context, preload }) => {
-    const newIds = preload ? [] : await markNotificationsRead({ data: {} })
+  loaderDeps: ({ search }) => ({ focus: search.focus }),
+  // Opening the page is reading the inbox, and opening it at a notification
+  // is reading that one. A hover preload only warms the data; the router
+  // reruns this loader when the page actually opens.
+  loader: async ({ context, deps, preload }) => {
+    const newIds = preload
+      ? []
+      : await markNotificationsRead({
+          data: deps.focus ? { ids: [deps.focus] } : {},
+        })
     const options = notificationsQueryOptions()
     if (newIds.length) {
       await context.queryClient.invalidateQueries({

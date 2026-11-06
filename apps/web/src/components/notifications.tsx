@@ -33,16 +33,23 @@ import {
   notificationListItems,
   useNotificationClearing,
 } from "@/components/notification-list"
+import {
+  notificationCommands,
+  type NotificationCommand,
+} from "@/components/notification-commands"
 import { forkPromise } from "@/effect/promise"
 import {
+  markCachedNotificationRead,
   markCachedNotificationsRead,
   notificationPreferencesQueryOptions,
   notificationsCollectionOptions,
   notificationsPopoverLimit,
   notificationsQueryOptions,
 } from "@/lib/collections/notifications"
+import { notificationDestination } from "@/lib/notification-links"
 import { notificationDetail, notificationTitle } from "@/lib/notification-text"
 import type { KilnNotification, NotificationContent } from "@/lib/notifications"
+import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 import { isUserActive, startUserActivityTracking } from "@/lib/user-activity"
 import { acknowledgeNotificationsSeen } from "@/server/notifications"
 
@@ -191,6 +198,53 @@ function notificationToastType(content: NotificationContent): AppToastType {
   }
 }
 
+// The toast's buttons, the same a row offers. Using one reads that
+// notification alone; the rest stay unread. The toaster sits outside the app,
+// so these can't be components that read it.
+function notificationToastButtons(
+  queryClient: QueryClient,
+  router: { navigate: (options: { href: string }) => Promise<void> },
+  notification: KilnNotification
+) {
+  const navigate = (href: string) => void router.navigate({ href })
+  const platformAdmin =
+    queryClient.getQueryData(accessCapabilitiesQueryOptions().queryKey)
+      ?.isPlatformAdmin ?? false
+  const commands = notificationCommands(
+    { navigate, platformAdmin, queryClient },
+    notification
+  )
+  const destination = notificationDestination(notification, platformAdmin)
+  const primary = commands.find((command) => command.primary) ??
+    commands[0] ?? {
+      key: "open",
+      label: "Open",
+      run: () => navigate(destination),
+    }
+  const secondary = commands.find(
+    (command) => command !== primary && !command.link
+  )
+  const button = ({ label, run }: NotificationCommand) => ({
+    label,
+    onClick: () => {
+      markCachedNotificationRead(queryClient, notification.id)
+      forkPromise(
+        async () => run(),
+        (error) =>
+          showToast({
+            message:
+              error instanceof Error ? error.message : "Could not do that",
+            type: "error",
+          })
+      )
+    },
+  })
+  return {
+    action: button(primary),
+    ...(secondary && { cancel: button(secondary) }),
+  }
+}
+
 // Notification tags Hearth's pushes use: the notification's ID.
 const notificationTagPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -270,14 +324,7 @@ function useArrivingNotificationToasts(queryClient: QueryClient) {
         showing.add(id)
         const closed = () => showing.delete(id)
         showToast({
-          action: {
-            label: "View",
-            onClick: () =>
-              void router.navigate({
-                to: "/notifications",
-                search: { focus: id },
-              }),
-          },
+          ...notificationToastButtons(queryClient, router, notification),
           description: notificationDetail(content) ?? undefined,
           duration: notificationToastDurationMs,
           id,

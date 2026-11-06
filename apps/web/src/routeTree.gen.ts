@@ -71,6 +71,7 @@ import { Route as AppKilnOperationsRouteImport } from './routes/_app/kiln.operat
 import { Route as AppKilnSecurityRouteImport } from './routes/_app/kiln.security'
 import { Route as AppKilnTerminalRouteImport } from './routes/_app/kiln.terminal'
 import { Route as AppKilnViewerRouteImport } from './routes/_app/kiln.viewer'
+import { Route as AppNotificationsNotificationIdRouteImport } from './routes/_app.notifications_.$notificationId'
 import { Route as AppRelayRelayIdRouteImport } from './routes/_app/relay/$relayId'
 import { Route as AppServerServerIdRouteImport } from './routes/_app/server/$serverId'
 import { Route as AppSettingsIndexRouteImport } from './routes/_app.settings.index'
@@ -445,6 +446,12 @@ const AppKilnViewerRoute = AppKilnViewerRouteImport.update({
   path: '/viewer',
   getParentRoute: () => AppKilnRoute,
 } as any)
+const AppNotificationsNotificationIdRoute =
+  AppNotificationsNotificationIdRouteImport.update({
+    id: '/notifications_/$notificationId',
+    path: '/notifications/$notificationId',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppRelayRelayIdRoute = AppRelayRelayIdRouteImport.update({
   id: '/relay/$relayId',
   path: '/relay/$relayId',
@@ -835,6 +842,7 @@ export interface FileRoutesByFullPath {
   '/kiln/security': typeof AppKilnSecurityRoute
   '/kiln/terminal': typeof AppKilnTerminalRoute
   '/kiln/viewer': typeof AppKilnViewerRoute
+  '/notifications/$notificationId': typeof AppNotificationsNotificationIdRoute
   '/relay/$relayId': typeof AppRelayRelayIdRouteWithChildren
   '/server/$serverId': typeof AppServerServerIdRouteWithChildren
   '/settings/account': typeof AppSettingsAccountRoute
@@ -955,6 +963,7 @@ export interface FileRoutesByTo {
   '/kiln/security': typeof AppKilnSecurityRoute
   '/kiln/terminal': typeof AppKilnTerminalRoute
   '/kiln/viewer': typeof AppKilnViewerRoute
+  '/notifications/$notificationId': typeof AppNotificationsNotificationIdRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/appearance': typeof AppSettingsAppearanceRoute
   '/settings/billing': typeof AppSettingsBillingRoute
@@ -1082,6 +1091,7 @@ export interface FileRoutesById {
   '/_app/kiln/security': typeof AppKilnSecurityRoute
   '/_app/kiln/terminal': typeof AppKilnTerminalRoute
   '/_app/kiln/viewer': typeof AppKilnViewerRoute
+  '/_app/notifications_/$notificationId': typeof AppNotificationsNotificationIdRoute
   '/_app/relay/$relayId': typeof AppRelayRelayIdRouteWithChildren
   '/_app/server/$serverId': typeof AppServerServerIdRouteWithChildren
   '/_app/settings/account': typeof AppSettingsAccountRoute
@@ -1211,6 +1221,7 @@ export interface FileRouteTypes {
     | '/kiln/security'
     | '/kiln/terminal'
     | '/kiln/viewer'
+    | '/notifications/$notificationId'
     | '/relay/$relayId'
     | '/server/$serverId'
     | '/settings/account'
@@ -1331,6 +1342,7 @@ export interface FileRouteTypes {
     | '/kiln/security'
     | '/kiln/terminal'
     | '/kiln/viewer'
+    | '/notifications/$notificationId'
     | '/settings/account'
     | '/settings/appearance'
     | '/settings/billing'
@@ -1457,6 +1469,7 @@ export interface FileRouteTypes {
     | '/_app/kiln/security'
     | '/_app/kiln/terminal'
     | '/_app/kiln/viewer'
+    | '/_app/notifications_/$notificationId'
     | '/_app/relay/$relayId'
     | '/_app/server/$serverId'
     | '/_app/settings/account'
@@ -2005,6 +2018,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/kiln/viewer'
       preLoaderRoute: typeof AppKilnViewerRouteImport
       parentRoute: typeof AppKilnRoute
+    }
+    '/_app/notifications_/$notificationId': {
+      id: '/_app/notifications_/$notificationId'
+      path: '/notifications/$notificationId'
+      fullPath: '/notifications/$notificationId'
+      preLoaderRoute: typeof AppNotificationsNotificationIdRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/relay/$relayId': {
       id: '/_app/relay/$relayId'
@@ -2731,6 +2751,7 @@ interface AppRouteChildren {
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
   AppAppAppIdRoute: typeof AppAppAppIdRouteWithChildren
   AppDbDatabaseIdRoute: typeof AppDbDatabaseIdRouteWithChildren
+  AppNotificationsNotificationIdRoute: typeof AppNotificationsNotificationIdRoute
   AppRelayRelayIdRoute: typeof AppRelayRelayIdRouteWithChildren
   AppServerServerIdRoute: typeof AppServerServerIdRouteWithChildren
 }
@@ -2749,6 +2770,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppSettingsRoute: AppSettingsRouteWithChildren,
   AppAppAppIdRoute: AppAppAppIdRouteWithChildren,
   AppDbDatabaseIdRoute: AppDbDatabaseIdRouteWithChildren,
+  AppNotificationsNotificationIdRoute: AppNotificationsNotificationIdRoute,
   AppRelayRelayIdRoute: AppRelayRelayIdRouteWithChildren,
   AppServerServerIdRoute: AppServerServerIdRouteWithChildren,
 }

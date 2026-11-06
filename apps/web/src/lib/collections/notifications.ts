@@ -152,6 +152,19 @@ export function setCachedInvitationOutcome(
   )
 }
 
+/** Marks one notification read, for acting on it outside the inbox. */
+export function markCachedNotificationRead(
+  queryClient: QueryClient,
+  id: string
+) {
+  const observer = new MutationObserver(
+    queryClient,
+    markNotificationsReadMutationOptions(queryClient)
+  )
+  // A failure only rolls the read mark back; nothing to tell the user.
+  forkPromise(() => observer.mutate([id]))
+}
+
 /** How many of the newest notifications the popover lists. */
 export const notificationsPopoverLimit = 10
 

@@ -172,11 +172,6 @@ export function useResourceInvitationDecision(
         data: { id: invitationId, decision: value, force: false },
       }),
     onSuccess: (result) => {
-      queryClient.setQueryData(
-        myInvitationsQueryOptions().queryKey,
-        (previous: Array<ResourceInvitation> | undefined) =>
-          previous?.filter((item) => item.id !== invitationId)
-      )
       // Resolve from whatever the cache already holds. Awaiting a capability
       // fetch and a full fleet snapshot first left the accept button spinning
       // for the length of a Relay round trip; the refreshed data lands on the
@@ -187,29 +182,43 @@ export function useResourceInvitationDecision(
           ? acceptedInvitationHref(queryClient, result.scope)
           : null
       )
-      void queryClient.invalidateQueries({
-        queryKey: myInvitationsQueryOptions().queryKey,
-      })
-      void queryClient.invalidateQueries({
-        queryKey: accessCapabilitiesQueryOptions().queryKey,
-      })
-      void queryClient.invalidateQueries({
-        queryKey: ["resource-invitation", invitationId],
-      })
-      if (!result.accepted) return
-      void queryClient.invalidateQueries({
-        queryKey:
-          result.scope.resourceType === "database"
-            ? queryKeys.databases.directory
-            : queryKeys.relays,
-      })
-      if (result.scope.resourceType === "instance")
-        void queryClient.invalidateQueries({
-          queryKey: relayConnectionQueryOptions(queryClient).queryKey,
-        })
+      settleResourceInvitationDecision(queryClient, invitationId, result)
     },
     onError: (cause) => showToast({ type: "error", message: cause.message }),
   })
+}
+
+/** Refreshes what answering an invitation changed. */
+export function settleResourceInvitationDecision(
+  queryClient: QueryClient,
+  invitationId: string,
+  result: Awaited<ReturnType<typeof decideResourceInvitation>>
+) {
+  queryClient.setQueryData(
+    myInvitationsQueryOptions().queryKey,
+    (previous: Array<ResourceInvitation> | undefined) =>
+      previous?.filter((item) => item.id !== invitationId)
+  )
+  void queryClient.invalidateQueries({
+    queryKey: myInvitationsQueryOptions().queryKey,
+  })
+  void queryClient.invalidateQueries({
+    queryKey: accessCapabilitiesQueryOptions().queryKey,
+  })
+  void queryClient.invalidateQueries({
+    queryKey: ["resource-invitation", invitationId],
+  })
+  if (!result.accepted) return
+  void queryClient.invalidateQueries({
+    queryKey:
+      result.scope.resourceType === "database"
+        ? queryKeys.databases.directory
+        : queryKeys.relays,
+  })
+  if (result.scope.resourceType === "instance")
+    void queryClient.invalidateQueries({
+      queryKey: relayConnectionQueryOptions(queryClient).queryKey,
+    })
 }
 
 // Prefer the server's own workspace when the cached fleet snapshot can already
