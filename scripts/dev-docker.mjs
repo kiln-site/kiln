@@ -951,7 +951,13 @@ function s3(action) {
     case "status":
       run(
         "docker",
-        ["compose", "--project-name", "kiln-dev-s3", "ps"],
+        [
+          "container",
+          "ls",
+          "--all",
+          "--filter",
+          "label=com.docker.compose.project=kiln-dev-s3",
+        ],
         process.env
       )
       run("tailscale", ["serve", "status"], process.env)
