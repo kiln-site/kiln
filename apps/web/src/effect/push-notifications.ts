@@ -527,7 +527,7 @@ export const pushPendingNotificationsEffect = Effect.fn("notifications.push")(
                 body: notificationDetail(content.value) ?? undefined,
                 tag: row.id,
                 title: notificationTitle(content.value),
-                url: `/notifications?focus=${row.id}`,
+                url: `/notifications/${row.id}`,
               }),
               userId: row.user_id,
             },

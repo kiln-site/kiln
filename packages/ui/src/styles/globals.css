@@ -637,6 +637,14 @@ html {
 
 .kiln-toaster[data-sonner-toaster]
   [data-sonner-toast][data-styled="true"]
+  [data-cancel] {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.kiln-toaster[data-sonner-toaster]
+  [data-sonner-toast][data-styled="true"]
   [data-button]:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--ring) 55%, transparent);
 }

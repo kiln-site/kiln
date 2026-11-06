@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { useNavigate } from "@tanstack/react-router"
 import {
   ArrowRightLeft,
   ChevronDown,
@@ -29,27 +29,25 @@ import { cn } from "@workspace/ui/lib/utils"
 import { RelativeTime } from "@/components/relative-time"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import {
-  acceptedInvitationHref,
-  useResourceInvitationDecision,
-} from "@/components/resource-invitation-dialog"
-import { appRouteIdentifier } from "@/lib/app-route"
+  notificationCommands,
+  type NotificationCommand,
+} from "@/components/notification-commands"
 import {
   clearNotificationsMutationOptions,
   dismissNotificationMutationOptions,
-  notificationsQueryOptions,
-  setCachedInvitationOutcome,
+  markCachedNotificationRead,
 } from "@/lib/collections/notifications"
+import {
+  notificationDestination,
+  notificationResourceHref,
+} from "@/lib/notification-links"
 import type {
   KilnNotification,
   NotificationContent,
   NotificationResource,
 } from "@/lib/notifications"
 import { notificationDetail, notificationTitle } from "@/lib/notification-text"
-import {
-  accessCapabilitiesQueryOptions,
-  appDirectoryQueryOptions,
-} from "@/lib/query-options"
-import { securityScopeKey } from "@/lib/security"
+import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 
 export type NotificationListItem =
   | { key: string; kind: "group"; label: string }
@@ -107,9 +105,10 @@ export const NotificationGroupLabel = React.memo(
 
 /**
  * One notification in two lines: what happened, then when plus one detail.
- * Actions sit beside it, so a row never grows taller for them. In the popover
- * the row opens the notifications page at itself; the page has room for a
- * second line of title, and marks the notification it was opened at.
+ * Actions sit beside it, so a row never grows taller for them. The row opens
+ * what it's about, or the page at itself if it's about nothing that can be
+ * opened. The page has room for a second line of title, and marks the
+ * notification it was opened at.
  */
 export const NotificationRow = React.memo(function NotificationRow({
   className,
@@ -132,6 +131,10 @@ export const NotificationRow = React.memo(function NotificationRow({
   const Icon = notificationIcons[content.kind]
   const title = notificationTitle(content)
   const detail = notificationDetail(content)
+  const platformAdmin = usePlatformAdmin()
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const destination = notificationDestination(notification, platformAdmin)
 
   return (
     <article
@@ -144,17 +147,22 @@ export const NotificationRow = React.memo(function NotificationRow({
         className
       )}
     >
-      {variant === "popover" ? (
-        // Covers the row; the actions and time sit above it.
-        <Link
-          to="/notifications"
-          search={{ focus: notification.id }}
-          aria-label={title}
-          title={title}
-          className="absolute inset-0 focus-visible:outline-none"
-          onClick={onNavigate}
-        />
-      ) : null}
+      {/* Covers the row; the actions and time sit above it. A new tab goes
+          through the route that reads it, and this one reads it here, since
+          a row can arrive while the list is open. */}
+      <a
+        href={`/notifications/${notification.id}`}
+        aria-label={title}
+        title={title}
+        className="absolute inset-0 focus-visible:outline-none"
+        onClick={(event) => {
+          if (event.metaKey || event.ctrlKey || event.shiftKey) return
+          event.preventDefault()
+          markOpened(queryClient, notification)
+          onNavigate?.()
+          void navigate({ href: destination })
+        }}
+      />
       <span
         className={cn(
           "grid size-8 shrink-0 place-items-center rounded-md border border-border/70 bg-muted/40 text-muted-foreground",
@@ -195,8 +203,7 @@ export const NotificationRow = React.memo(function NotificationRow({
         </p>
       </div>
       <NotificationActions
-        notificationId={notification.id}
-        content={content}
+        notification={notification}
         onNavigate={onNavigate}
       />
       <Button
@@ -212,82 +219,91 @@ export const NotificationRow = React.memo(function NotificationRow({
   )
 })
 
+// Acting on a notification is reading it, this one alone.
+function markOpened(queryClient: QueryClient, notification: KilnNotification) {
+  if (notification.readAt === null)
+    markCachedNotificationRead(queryClient, notification.id)
+}
+
+function usePlatformAdmin() {
+  const { data = false } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: selectPlatformAdmin,
+  })
+  return data
+}
+
 function NotificationActions({
-  content,
-  notificationId,
+  notification,
   onNavigate,
 }: {
-  content: NotificationContent
-  notificationId: string
+  notification: KilnNotification
   onNavigate?: () => void
 }) {
-  switch (content.kind) {
-    case "kiln.updated":
-      return (
-        <div className="relative flex shrink-0 items-center gap-1.5">
-          <ChangelogLink onNavigate={onNavigate} />
-        </div>
-      )
-    case "kiln.release":
-      return (
-        <div className="relative flex shrink-0 items-center gap-1.5">
-          <ChangelogLink onNavigate={onNavigate} />
-          <UpdateKilnButton onNavigate={onNavigate} />
-        </div>
-      )
-    case "access.invited":
-      return content.outcome === undefined ? (
-        <InvitationActions
-          invitationId={content.invitationId}
-          notificationId={notificationId}
+  const queryClient = useQueryClient()
+  const routerNavigate = useNavigate()
+  const platformAdmin = usePlatformAdmin()
+  const { content } = notification
+  const commands = notificationCommands(
+    {
+      navigate: (href) => {
+        onNavigate?.()
+        void routerNavigate({ href })
+      },
+      platformAdmin,
+      queryClient,
+    },
+    notification
+  )
+  const { isPending, mutate, variables } = useMutation({
+    mutationFn: async (command: NotificationCommand) => {
+      markOpened(queryClient, notification)
+      return command.run()
+    },
+    onError: showNotificationFailure("do that"),
+  })
+  const reportedResources =
+    content.kind === "security.report" && !commands.length
+      ? content.resources
+      : null
+  const movedServer =
+    content.kind === "server.migration" &&
+    content.outcome === "completed" &&
+    content.mode === "migrate" &&
+    !content.sourceDeleted &&
+    !content.sourceDeleting
+      ? content.source
+      : null
+  if (!commands.length && !reportedResources) return null
+  return (
+    <div className="relative flex shrink-0 items-center gap-1.5">
+      {movedServer ? <DeleteMovedServerButton server={movedServer} /> : null}
+      {reportedResources ? (
+        <OpenResourceMenu
+          resources={reportedResources}
+          onNavigate={() => {
+            markOpened(queryClient, notification)
+            onNavigate?.()
+          }}
         />
-      ) : content.outcome === "accepted" ? (
-        <OpenResourceButton
-          resource={content.resource}
-          onNavigate={onNavigate}
-        />
-      ) : null
-    case "access.removed":
-      return null
-    case "resource.disk-limit":
-    case "app.image-update":
-    case "app.deployed":
-      return (
-        <OpenResourceButton
-          resource={content.resource}
-          onNavigate={onNavigate}
-        />
-      )
-    case "security.report":
-      return (
-        <SecurityReportButton
-          resources={content.resources}
-          onNavigate={onNavigate}
-        />
-      )
-    case "server.migration":
-      if (content.outcome !== "completed") {
-        return (
-          <OpenResourceButton
-            resource={content.source}
-            onNavigate={onNavigate}
-          />
-        )
-      }
-      return (
-        <div className="relative flex shrink-0 items-center gap-1.5">
-          {content.mode === "migrate" &&
-          !content.sourceDeleted &&
-          !content.sourceDeleting ? (
-            <DeleteMovedServerButton server={content.source} />
-          ) : null}
-          <OpenResourceButton
-            resource={content.destination}
-            onNavigate={onNavigate}
-          />
-        </div>
-      )
-  }
+      ) : null}
+      {commands.map((command) => (
+        <Button
+          key={command.key}
+          variant={
+            command.primary && commands.length > 1 ? "default" : "outline"
+          }
+          size="xs"
+          disabled={isPending}
+          onClick={() => mutate(command)}
+        >
+          {isPending && variables.key === command.key
+            ? (command.pendingLabel ?? command.label)
+            : command.label}
+        </Button>
+      ))}
+    </div>
+  )
 }
 
 // A finished move leaves the old server stopped where it was; deleting it
@@ -315,44 +331,6 @@ function DeleteMovedServerButton({ server }: { server: NotificationResource }) {
   )
 }
 
-// Opens Kiln's Security page, narrowed to the one resource a report is
-// about. The page is for platform administrators; anyone else opens one of
-// the resources, whose Info page says what it has.
-function SecurityReportButton({
-  onNavigate,
-  resources,
-}: {
-  onNavigate?: () => void
-  resources: ReadonlyArray<NotificationResource>
-}) {
-  const { data: platformAdmin = false } = useQuery({
-    ...accessCapabilitiesQueryOptions(),
-    select: selectPlatformAdmin,
-  })
-  const only = resources.length === 1 ? resources[0] : undefined
-  if (!platformAdmin)
-    return only ? (
-      <OpenResourceButton resource={only} onNavigate={onNavigate} />
-    ) : (
-      <OpenResourceMenu resources={resources} onNavigate={onNavigate} />
-    )
-  return (
-    <Button asChild variant="outline" size="xs" className="relative shrink-0">
-      <Link
-        to="/kiln/security"
-        search={
-          only
-            ? { scope: securityScopeKey(only.type, only.relayId, only.id) }
-            : {}
-        }
-        onClick={onNavigate}
-      >
-        Review
-      </Link>
-    </Button>
-  )
-}
-
 // Each resource a report names, for people the Security page isn't open to.
 function OpenResourceMenu({
   onNavigate,
@@ -361,7 +339,6 @@ function OpenResourceMenu({
   onNavigate?: () => void
   resources: ReadonlyArray<NotificationResource>
 }) {
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
   return (
     <DropdownMenu>
@@ -377,7 +354,7 @@ function OpenResourceMenu({
             key={`${resource.type}:${resource.relayId}:${resource.id}`}
             onSelect={() => {
               onNavigate?.()
-              void navigate({ href: resourceHref(queryClient, resource) })
+              void navigate({ href: notificationResourceHref(resource) })
             }}
           >
             {resource.name}
@@ -400,117 +377,6 @@ const resourceTypeLabels = {
 
 function selectPlatformAdmin(capabilities: { isPlatformAdmin: boolean }) {
   return capabilities.isPlatformAdmin
-}
-
-// Opens the Updates dialog's changelog.
-function ChangelogLink({ onNavigate }: { onNavigate?: () => void }) {
-  return (
-    <Button asChild variant="outline" size="xs">
-      <Link to="/infra/updates/changelog" onClick={onNavigate}>
-        Changelog
-      </Link>
-    </Button>
-  )
-}
-
-// Opens the Updates dialog, where the update is reviewed and started.
-function UpdateKilnButton({ onNavigate }: { onNavigate?: () => void }) {
-  return (
-    <Button asChild size="xs">
-      <Link to="/infra/updates" onClick={onNavigate}>
-        Update
-      </Link>
-    </Button>
-  )
-}
-
-function InvitationActions({
-  invitationId,
-  notificationId,
-}: {
-  invitationId: string
-  notificationId: string
-}) {
-  const queryClient = useQueryClient()
-  const { isPending, mutate, variables } = useResourceInvitationDecision(
-    invitationId,
-    (accepted) =>
-      setCachedInvitationOutcome(
-        queryClient,
-        notificationId,
-        accepted ? "accepted" : "declined"
-      )
-  )
-  // A failed answer usually means the invitation changed meanwhile; reload
-  // the inbox so the row shows what happened to it.
-  const answer = (decision: "accept" | "decline") =>
-    mutate(decision, {
-      onError: () =>
-        void queryClient.invalidateQueries({
-          queryKey: notificationsQueryOptions().queryKey,
-        }),
-    })
-  return (
-    <div className="relative flex shrink-0 items-center gap-1.5">
-      <Button
-        variant="outline"
-        size="xs"
-        disabled={isPending}
-        onClick={() => answer("decline")}
-      >
-        {isPending && variables === "decline" ? "Declining…" : "Decline"}
-      </Button>
-      <Button size="xs" disabled={isPending} onClick={() => answer("accept")}>
-        {isPending && variables === "accept" ? "Accepting…" : "Accept"}
-      </Button>
-    </div>
-  )
-}
-
-function OpenResourceButton({
-  onNavigate,
-  resource,
-}: {
-  onNavigate?: () => void
-  resource: NotificationResource
-}) {
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-  return (
-    <Button
-      variant="outline"
-      size="xs"
-      className="relative shrink-0"
-      onClick={() => {
-        onNavigate?.()
-        void navigate({ href: resourceHref(queryClient, resource) })
-      }}
-    >
-      Open
-    </Button>
-  )
-}
-
-function resourceHref(
-  queryClient: QueryClient,
-  resource: NotificationResource
-) {
-  return resource.type === "app"
-    ? appHref(queryClient, resource.id)
-    : acceptedInvitationHref(queryClient, {
-        relayId: resource.relayId,
-        resourceId: resource.id,
-        resourceType: resource.type,
-      })
-}
-
-// The app's own page, by its short ID when the cached directory can tell it
-// apart. The route resolves a full ID too, and falls back to the Apps list for
-// an app that's gone.
-function appHref(queryClient: QueryClient, appId: string) {
-  const apps = queryClient.getQueryData(appDirectoryQueryOptions().queryKey)
-  const routeId = apps ? appRouteIdentifier(apps, { id: appId }) : appId
-  return `/app/${encodeURIComponent(routeId)}`
 }
 
 function showNotificationFailure(action: string) {

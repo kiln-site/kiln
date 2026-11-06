@@ -31,3 +31,17 @@ goes away when their own next one works.
 A disk limit warning that's settled is cleared and gives up its source key,
 cleared copies included, so the next time the data outgrows the limit warns
 again. The row stays, since the next push closes it on a person's devices.
+
+## Actions
+
+`notificationHref` says where a notification leads, and `notificationCommands`
+what it offers beside that. The toast, the popover, the notifications page, and
+push all use them, so a notification does the same thing wherever it appears.
+Rows add the two commands that need more of the page: the confirmation for
+deleting a moved server, and the menu of resources in a report for people the
+Security page isn't open to.
+
+Opening a notification reads that notification alone, including one with no
+page of its own, which opens the inbox at itself. Pushes lead to
+`/notifications/<id>`, which reads it and then redirects, since a device can't
+tell Kiln it was tapped.
