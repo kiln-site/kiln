@@ -99,7 +99,7 @@ export function AccountClaimPage({
               <Input
                 name="email"
                 type="email"
-                autoComplete="email"
+                autoComplete="username"
                 value={email}
                 readOnly
                 className="h-11 bg-card/60 read-only:bg-muted/35 read-only:text-foreground/85"

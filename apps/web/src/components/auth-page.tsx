@@ -1,5 +1,6 @@
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { showToast } from "@workspace/ui/components/sonner"
+import { notALoginField } from "@/lib/not-a-login-field"
 import { requestAccountClaim, prepareAccountSignup } from "@/server/users"
 import * as React from "react"
 import { Effect } from "effect"
@@ -528,7 +529,7 @@ export function AuthPage({
                     id="setup-token"
                     name="setupToken"
                     type="password"
-                    autoComplete="off"
+                    {...notALoginField}
                     placeholder="From the installer"
                     required
                     className="h-11 bg-card/60 font-mono"
@@ -563,7 +564,9 @@ export function AuthPage({
                 id="email"
                 name="email"
                 type="email"
-                autoComplete={mode === "sign-in" ? "email webauthn" : "email"}
+                autoComplete={
+                  mode === "sign-in" ? "username webauthn" : "username"
+                }
                 placeholder="you@example.com"
                 defaultValue={lockedEmail ?? initialEmail}
                 readOnly={Boolean(lockedEmail)}

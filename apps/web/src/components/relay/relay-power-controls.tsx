@@ -37,6 +37,7 @@ import {
   RelayPauseDialog,
   useRelayPauseToggle,
 } from "@/components/relay/relay-actions"
+import { AccountUsernameField } from "@/components/account-username-field"
 import { relayHostAccessQueryOptions } from "@/components/relay/relay-host-access"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import { PowerActionButton } from "@/components/workspace-power-controls"
@@ -220,6 +221,10 @@ function RelayRestartDialog({
     select: ({ user }) =>
       target === "host" && !isDevelopmentBypassIdentity(user),
   })
+  const email = useRouteContext({
+    from: "/_app",
+    select: ({ user }) => user.email,
+  })
   const [password, setPassword] = React.useState("")
   const restart = useMutation({
     mutationFn: () =>
@@ -269,6 +274,7 @@ function RelayRestartDialog({
         <form className="grid gap-4" onSubmit={submit}>
           {passwordRequired ? (
             <div className="grid gap-1.5">
+              <AccountUsernameField email={email} />
               <label
                 htmlFor="restart-host-password"
                 className="type-technical-label text-muted-foreground"

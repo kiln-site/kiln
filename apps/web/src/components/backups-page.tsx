@@ -95,6 +95,7 @@ import {
 } from "@/components/backups/table-row"
 import { formatBytes } from "@/lib/format-bytes"
 import { BackupToolbar } from "@/components/backups/toolbar"
+import { notALoginField } from "@/lib/not-a-login-field"
 import { grantHasPermission } from "@/lib/permissions"
 import {
   backupTargetApp,
@@ -2129,7 +2130,12 @@ function BackupStorageEditor({
         </p>
       </div>
       <div className="grid gap-4 p-5 sm:grid-cols-2">
-        <StorageTextField label="Name" value={name} onChange={setName} />
+        <StorageTextField
+          label="Name"
+          notALogin
+          value={name}
+          onChange={setName}
+        />
         <StorageTextField
           disabled={locationLocked}
           label="Region"
@@ -2160,15 +2166,15 @@ function BackupStorageEditor({
           onChange={setObjectPrefix}
         />
         <StorageTextField
-          autoComplete="off"
           label="Access key ID"
+          notALogin
           placeholder={existing ? "Leave blank to keep current key" : ""}
           value={accessKeyId}
           onChange={setAccessKeyId}
         />
         <StorageTextField
-          autoComplete="new-password"
           label="Secret access key"
+          notALogin
           placeholder={existing ? "Leave blank to keep current key" : ""}
           type="password"
           value={secretAccessKey}
@@ -2234,17 +2240,18 @@ function BackupStorageEditor({
 }
 
 function StorageTextField({
-  autoComplete,
   disabled = false,
   label,
+  notALogin = false,
   onChange,
   placeholder,
   type = "text",
   value,
 }: {
-  autoComplete?: string
   disabled?: boolean
   label: string
+  /** Keep password managers out of a name or credential that isn't a login. */
+  notALogin?: boolean
   onChange: (value: string) => void
   placeholder?: string
   type?: React.HTMLInputTypeAttribute
@@ -2255,7 +2262,7 @@ function StorageTextField({
       <span className="mb-2 block text-xs font-medium">{label}</span>
       <Input
         aria-label={label}
-        autoComplete={autoComplete}
+        {...(notALogin ? notALoginField : null)}
         disabled={disabled}
         placeholder={placeholder}
         type={type}

@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useRouter } from "@tanstack/react-router"
 import { Effect } from "effect"
 import QRCode from "react-qr-code"
 import {
@@ -33,6 +34,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { AccountAvatar } from "@/components/account-avatar"
+import { AccountUsernameField } from "@/components/account-username-field"
 import { EditableIcon } from "@/components/icon-editor-dialog"
 import { RedactedText } from "@/components/redacted-text"
 import {
@@ -51,7 +53,7 @@ import {
 } from "@/lib/browser-accounts"
 import { DISPLAY_NAME_MAX_LENGTH, parseDisplayName } from "@/lib/display-name"
 import { isMinecraftUsername } from "@/lib/minecraft-profile"
-import { queryKeys } from "@/lib/query-options"
+import { authStateQueryOptions, queryKeys } from "@/lib/query-options"
 import { rotateSession } from "@/lib/session-rotation"
 import { getCliCredentials, revokeCliCredential } from "@/server/cli"
 import {
@@ -119,10 +121,14 @@ export function AccountSettingsPage({ user }: { user: AuthenticatedUser }) {
         <ProfileCard user={user} />
         <div className="grid items-stretch gap-4 lg:grid-cols-2">
           <SettingsPanel icon={<KeyRound />} title="Sign-in">
-            <PasswordRow />
-            <TwoFactorRow />
+            <PasswordRow email={user.email} />
+            <TwoFactorRow email={user.email} />
           </SettingsPanel>
-          {enabled ? <PasskeysPanel /> : <DisabledPasskeysPanel />}
+          {enabled ? (
+            <PasskeysPanel email={user.email} />
+          ) : (
+            <DisabledPasskeysPanel />
+          )}
         </div>
         <div className="grid items-stretch gap-4 lg:grid-cols-2">
           <SessionsPanel enabled={enabled} />
@@ -330,6 +336,7 @@ function DisplayNameAction({
 
 function EmailAddressAction({ currentEmail }: { currentEmail: string }) {
   const queryClient = useQueryClient()
+  const router = useRouter()
   const session = authClient.useSession()
   const [open, setOpen] = React.useState(false)
   const [email, setEmail] = React.useState(currentEmail)
@@ -409,6 +416,10 @@ function EmailAddressAction({ currentEmail }: { currentEmail: string }) {
     await Promise.all([
       session.refetch(),
       queryClient.invalidateQueries({ queryKey: browserAccountsQueryKey }),
+      // The route's user, which the rest of Hearth reads its email from.
+      queryClient
+        .fetchQuery({ ...authStateQueryOptions(), staleTime: 0 })
+        .then(() => router.invalidate()),
     ])
   }
 
@@ -519,7 +530,7 @@ function EmailAddressAction({ currentEmail }: { currentEmail: string }) {
   )
 }
 
-function PasswordRow() {
+function PasswordRow({ email }: { email: string }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = React.useState(false)
   const [currentPassword, setCurrentPassword] = React.useState("")
@@ -600,6 +611,7 @@ function PasswordRow() {
             </DialogDescription>
           </DialogHeader>
           <form className="grid gap-3" onSubmit={changePassword}>
+            <AccountUsernameField email={email} />
             <Field label="Current password" htmlFor="current-password">
               <Input
                 id="current-password"
@@ -659,7 +671,7 @@ function PasswordRow() {
   )
 }
 
-function TwoFactorRow() {
+function TwoFactorRow({ email }: { email: string }) {
   const session = authClient.useSession()
   const queryClient = useQueryClient()
   const [form, dispatchForm] = React.useReducer(
@@ -875,6 +887,7 @@ function TwoFactorRow() {
               className="grid gap-4"
               onSubmit={twoFactorEnabled ? disableTwoFactor : beginTwoFactor}
             >
+              <AccountUsernameField email={email} />
               <Field label="Current password" htmlFor="totp-password">
                 <Input
                   id="totp-password"
@@ -922,7 +935,7 @@ function TwoFactorRow() {
   )
 }
 
-function PasskeysPanel() {
+function PasskeysPanel({ email }: { email: string }) {
   const passkeys = authClient.useListPasskeys()
   const session = authClient.useSession()
   const queryClient = useQueryClient()
@@ -1082,6 +1095,7 @@ function PasskeysPanel() {
                 autoFocus
               />
             </Field>
+            <AccountUsernameField email={email} />
             <Field label="Current password" htmlFor="passkey-password">
               <Input
                 id="passkey-password"

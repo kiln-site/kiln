@@ -76,6 +76,7 @@ import {
 } from "@/lib/data-table"
 import type { DataTableSearchStore } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
+import { notALoginField } from "@/lib/not-a-login-field"
 import { queryKeys, tailscaleStacksQueryOptions } from "@/lib/query-options"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { defaultTailscaleHostname } from "@/lib/tailscale-selectors"
@@ -1273,6 +1274,7 @@ const JoinNetworkDialog = React.memo(function JoinNetworkDialog({
             <span className="mb-2 block text-xs font-medium">Hostname</span>
             <div className="flex items-center">
               <Input
+                {...notALoginField}
                 value={hostname}
                 onChange={(event) => setHostname(event.target.value)}
                 className="min-w-0 rounded-r-none font-mono"
@@ -1290,7 +1292,7 @@ const JoinNetworkDialog = React.memo(function JoinNetworkDialog({
               </span>
               <Input
                 type="password"
-                autoComplete="off"
+                {...notALoginField}
                 value={authKey}
                 onChange={(event) => setAuthKey(event.target.value)}
                 placeholder="tskey-auth-…"
