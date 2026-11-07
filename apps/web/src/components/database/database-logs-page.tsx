@@ -10,6 +10,7 @@ export function DatabaseLogsPage() {
       key={`${database.relayId}:${database.id}`}
       id={database.id}
       kind="database"
+      logName={database.name}
       relayAvailable={databaseRelayAvailable(database)}
       relayId={database.relayId}
     />

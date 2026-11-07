@@ -289,6 +289,23 @@ describe("deployment logs", () => {
       })
     ).toBeNull()
   })
+
+  it("streams a deployment by its id only while it's the latest", async () => {
+    const harness = await createdApp()
+    const first = await deploy(harness, {})
+    const second = await deploy(harness, { command: "serve --v2" })
+    const history = async (id: string) => {
+      const session = await harness.apps.consoleSession(
+        appId,
+        `deployment:${id}`,
+        () => Promise.reject(new Error("Not a container's stream"))
+      )
+      return session.history()
+    }
+
+    expect((await history(second.deployment!.id)).lines).not.toHaveLength(0)
+    expect((await history(first.deployment!.id)).lines).toEqual([])
+  })
 })
 
 describe("App volumes", () => {

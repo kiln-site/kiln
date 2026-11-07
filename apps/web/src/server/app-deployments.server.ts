@@ -488,23 +488,20 @@ export async function redeployAppDeploymentHandler(
 }
 
 /** A deployment's log, from its Relay while it keeps it. */
-export async function getAppDeploymentLogHandler(data: {
-  deploymentId: string
-}): Promise<{ log: RelayAppDeploymentLog; reason: string | null }> {
+export async function getAppDeploymentLogHandler(
+  user: AuthenticatedUser,
+  data: { appId: string; deploymentId: string }
+): Promise<{ log: RelayAppDeploymentLog; reason: string | null }> {
   const record = await recordFor(data.deploymentId)
-  const { relay, user } = await authorizedApp(record, "app.logs.read")
+  const { relay } = await authorizedAppFor(user, record, "app.logs.read")
+  // Its page names the app, so another's log can't pass as this one's. Only
+  // after authorizing, so this says nothing of an app the person can't read.
+  if (record.appId !== data.appId) throw new Error("Deployment not found")
   if (!record.relayDeploymentId) {
     return { log: null, reason: "The Relay refused this deployment" }
   }
-  const features = relayConnectionFeatures(relay.id)
-  if (!features.has(relayAppGitHubV1Feature)) {
-    return {
-      log: null,
-      reason:
-        features.size === 0
-          ? "The Relay is offline"
-          : "Update this Relay to read past logs",
-    }
+  if (relayConnectionFeatures(relay.id).size === 0) {
+    return { log: null, reason: "The Relay is offline" }
   }
   const log = relayAppDeploymentLogSchema.parse(
     await databaseRpc(

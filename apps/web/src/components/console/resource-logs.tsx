@@ -8,11 +8,17 @@ import {
   consoleToolbarClassName,
 } from "@/components/console/console-filters"
 import { ConsoleLogViewportController } from "@/components/console/console-log-viewport"
+import {
+  ConsoleShareMenu,
+  ConsoleTimeMenu,
+} from "@/components/console/console-logs-toolbar"
 import { ConsoleRetryButton } from "@/components/console/console-retry-button"
 import {
   createConsoleStreamStore,
   createConsoleUiStore,
+  type ConsoleStreamSnapshot,
   type ConsoleStreamStore,
+  type ConsoleTimeMode,
   type ConsoleUiStore,
 } from "@/components/console/console-stores"
 import {
@@ -22,7 +28,6 @@ import {
 import {
   ConsoleRedactButton,
   ConsoleSelectionControl,
-  ConsoleTimestampButton,
   ConsoleWrapButton,
 } from "@/components/console/console-toolbar-actions"
 import { useRelayConsoleStream } from "@/components/console/use-relay-console-stream"
@@ -34,40 +39,65 @@ type LogsResourceKind = Exclude<RelayBrowserResourceKind, "instance">
 // Relay's container output, followed live the same way. Key it by resource so
 // a different one starts a fresh session.
 export function ResourceLogsSession({
+  elapsedFrom,
   header,
   id,
   kind,
+  logName,
   relayAvailable,
   relayId,
+  saved,
+  shareHref,
   stream,
+  timeMode = "clock",
 }: {
+  // When the output began, for elapsed line times.
+  elapsedFrom?: string | null
   // Shown above the toolbar, for picking between a resource's outputs.
   header?: React.ReactNode
   id: string
   kind: LogsResourceKind
+  // Names a downloaded copy.
+  logName: string
   relayAvailable: boolean
   relayId: string
+  // Output that has ended, shown as it stands instead of following the stream.
+  saved?: ConsoleStreamSnapshot
+  // A link that keeps showing this log, when the page's own address wouldn't.
+  shareHref?: string
   // Which of the resource's outputs to follow, for kinds with more than one.
   stream?: string
+  timeMode?: ConsoleTimeMode
 }) {
-  const [uiStore] = React.useState(createConsoleUiStore)
+  const [uiStore] = React.useState(() => createConsoleUiStore({ timeMode }))
   const [streamStore] = React.useState(createConsoleStreamStore)
 
   return (
     <ConsoleCopyContext.Provider value={consoleCopy[kind]}>
       <section className="flex min-h-0 flex-1 flex-col bg-card">
-        <ResourceLogsStreamController
-          id={id}
-          kind={kind}
-          relayAvailable={relayAvailable}
-          relayId={relayId}
-          stream={stream}
-          streamStore={streamStore}
-        />
+        {saved ? (
+          <SavedLogsController saved={saved} streamStore={streamStore} />
+        ) : (
+          <ResourceLogsStreamController
+            id={id}
+            kind={kind}
+            relayAvailable={relayAvailable}
+            relayId={relayId}
+            stream={stream}
+            streamStore={streamStore}
+          />
+        )}
         {header}
-        <ResourceLogsToolbar streamStore={streamStore} uiStore={uiStore} />
+        <ResourceLogsToolbar
+          logName={logName}
+          shareHref={shareHref}
+          streamStore={streamStore}
+          uiStore={uiStore}
+        />
         <ConsoleLogViewportController
           active
+          appearance="logs"
+          elapsedFrom={elapsedFrom}
           streamStore={streamStore}
           uiStore={uiStore}
         />
@@ -76,10 +106,28 @@ export function ResourceLogsSession({
   )
 }
 
+function SavedLogsController({
+  saved,
+  streamStore,
+}: {
+  saved: ConsoleStreamSnapshot
+  streamStore: ConsoleStreamStore
+}) {
+  React.useLayoutEffect(
+    () => streamStore.setSnapshot(saved),
+    [saved, streamStore]
+  )
+  return null
+}
+
 const ResourceLogsToolbar = React.memo(function ResourceLogsToolbar({
+  logName,
+  shareHref,
   streamStore,
   uiStore,
 }: {
+  logName: string
+  shareHref: string | undefined
   streamStore: ConsoleStreamStore
   uiStore: ConsoleUiStore
 }) {
@@ -92,7 +140,13 @@ const ResourceLogsToolbar = React.memo(function ResourceLogsToolbar({
         <ConsoleSelectionControl active uiStore={uiStore} />
         <ConsoleRedactButton uiStore={uiStore} />
         <ConsoleWrapButton uiStore={uiStore} />
-        <ConsoleTimestampButton uiStore={uiStore} />
+        <ConsoleTimeMenu uiStore={uiStore} />
+        <ConsoleShareMenu
+          logName={logName}
+          shareHref={shareHref}
+          streamStore={streamStore}
+          uiStore={uiStore}
+        />
       </div>
     </div>
   )

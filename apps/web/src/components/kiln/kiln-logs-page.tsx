@@ -75,6 +75,7 @@ export function KilnLogsPage() {
       header={header}
       id={host.relayId}
       kind="platform"
+      logName={`kiln-${selected.target}`}
       relayAvailable={host.status !== null}
       relayId={host.relayId}
       stream={selected.target}

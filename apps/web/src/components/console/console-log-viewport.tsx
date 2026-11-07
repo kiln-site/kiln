@@ -7,6 +7,8 @@ import { Button } from "@workspace/ui/components/button"
 
 import {
   ConsoleLogRow,
+  consoleRowHeights,
+  type ConsoleAppearance,
   type ConsoleDisplayLine,
 } from "@/components/console/console-log-row"
 import type {
@@ -25,11 +27,17 @@ import { redactSensitiveTextWithRanges } from "@/lib/redaction"
 export const ConsoleLogViewportController = React.memo(
   function ConsoleLogViewportController({
     active,
+    appearance = "console",
+    elapsedFrom = null,
     loadTiming,
     streamStore,
     uiStore,
   }: {
     active: boolean
+    appearance?: ConsoleAppearance
+    // When the output began; otherwise elapsed time counts from its first
+    // line.
+    elapsedFrom?: string | null
     loadTiming?: ConsoleLoadTiming
     streamStore: ConsoleStreamStore
     uiStore: ConsoleUiStore
@@ -106,7 +114,9 @@ export const ConsoleLogViewportController = React.memo(
     return (
       <ConsoleLogViewport
         active={active}
+        appearance={appearance}
         consoleData={consoleData}
+        elapsedFrom={elapsedFrom}
         filteredLines={filteredLines}
         snapshot={snapshot}
         streamStore={streamStore}
@@ -156,7 +166,9 @@ function consoleLineService(
 
 interface ConsoleLogViewportProps {
   active: boolean
+  appearance: ConsoleAppearance
   consoleData: RelayConsole | null
+  elapsedFrom: string | null
   filteredLines: Array<ConsoleDisplayLine>
   snapshot: ConsoleStreamSnapshot
   streamStore: ConsoleStreamStore
@@ -165,7 +177,9 @@ interface ConsoleLogViewportProps {
 
 function ConsoleLogViewport({
   active,
+  appearance,
   consoleData,
+  elapsedFrom,
   filteredLines,
   snapshot,
   streamStore,
@@ -179,11 +193,16 @@ function ConsoleLogViewport({
     uiStore.getQuerySnapshot,
     uiStore.getQuerySnapshot
   )
-  const showTimestamps = React.useSyncExternalStore(
+  const timeMode = React.useSyncExternalStore(
     uiStore.subscribe,
-    uiStore.getShowTimestampsSnapshot,
-    uiStore.getShowTimestampsSnapshot
+    uiStore.getTimeModeSnapshot,
+    uiStore.getTimeModeSnapshot
   )
+  const firstTimestamp = consoleData?.lines[0]?.timestamp ?? null
+  const elapsedOrigin = React.useMemo(() => {
+    const origin = elapsedFrom ?? firstTimestamp
+    return origin ? Date.parse(origin) : null
+  }, [elapsedFrom, firstTimestamp])
   const wrapLines = React.useSyncExternalStore(
     uiStore.subscribe,
     uiStore.getWrapLinesSnapshot,
@@ -198,7 +217,7 @@ function ConsoleLogViewport({
   const rowVirtualizer = useVirtualizer({
     count: filteredLines.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 30,
+    estimateSize: () => consoleRowHeights[appearance],
     getItemKey,
     overscan: 18,
     anchorTo: "end",
@@ -264,12 +283,14 @@ function ConsoleLogViewport({
             return (
               <ConsoleLogRow
                 key={line.id}
+                appearance={appearance}
+                elapsedFrom={elapsedOrigin}
                 index={virtualRow.index}
                 line={line}
                 measureElement={measureRow}
                 query={query}
-                showTimestamps={showTimestamps}
                 start={virtualRow.start}
+                timeMode={timeMode}
                 uiStore={uiStore}
                 wrapLines={wrapLines}
               />

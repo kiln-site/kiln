@@ -19,6 +19,7 @@ import {
   notifyUsersEffect,
 } from "@/effect/notifications"
 import { disposeAppRuntime } from "@/effect/runtime"
+import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTableName } from "@/lib/database-config"
 import { operationsTablePrefix } from "@/operations/engine"
 import { readmitWaitingOperations } from "@/operations/durable"
@@ -629,6 +630,67 @@ describeMysql("App deployments", () => {
           )
         }).pipe(TestClock.withLive),
       60_000
+    )
+
+    it.effect("won't read a deployment's log as another app's", () =>
+      Effect.gen(function* () {
+        yield* resetDatabase
+        yield* insertRelay(relayId)
+        yield* insertUser("owner", { role: "admin" })
+        yield* insertUser("outsider")
+        yield* seedApp(first)
+        yield* seedApp(second)
+        const id = "22222222-3333-4444-8555-666666666666"
+        yield* insertAppDeploymentEffect({
+          appId: second,
+          branch: null,
+          commitAuthor: null,
+          commitMessage: null,
+          commitSha: null,
+          error: null,
+          finishedAt: new Date().toISOString(),
+          id,
+          imageDigest: null,
+          relayDeploymentId: "20261031090000",
+          relayId,
+          repository: null,
+          rolling: null,
+          sourceType: "image",
+          startedAt: new Date().toISOString(),
+          status: "succeeded",
+          trigger: "manual",
+          triggeredBy: null,
+        })
+
+        const { getAppDeploymentLogHandler } = yield* Effect.promise(
+          () => import("@/server/app-deployments.server")
+        )
+        const refusal = (userId: string, role: string, appId: string) =>
+          Effect.promise(() =>
+            getAppDeploymentLogHandler(
+              {
+                emailVerifiedAt: new Date().toISOString(),
+                id: userId,
+                role,
+              } as AuthenticatedUser,
+              { appId, deploymentId: id }
+            ).then(
+              () => null,
+              (error: Error) => error.message
+            )
+          )
+
+        assert.strictEqual(
+          yield* refusal("owner", "admin", first),
+          "Deployment not found"
+        )
+        // Someone who can't read the app learns nothing of which it is.
+        const outsider = yield* refusal("outsider", "user", second)
+        assert.isString(outsider)
+        assert.notStrictEqual(outsider, "Deployment not found")
+        assert.notStrictEqual(outsider, "Your account cannot access resources")
+        assert.strictEqual(yield* refusal("outsider", "user", first), outsider)
+      })
     )
   })
 })

@@ -11,6 +11,7 @@ export function RelayLogsPage() {
       key={relay.id}
       id={relay.id}
       kind="relay"
+      logName={relay.name}
       relayAvailable={connected}
       relayId={relay.id}
     />

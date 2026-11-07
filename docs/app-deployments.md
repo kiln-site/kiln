@@ -5,9 +5,11 @@ a GitHub repository. Each deployment is recorded in Hearth
 (`app_deployment`) and listed under **Infrastructure → Deployments**, across
 every Relay the person can read apps on. Scoped to one app, from the
 Deployment card on its Info rail, it's that app's history. The Relay keeps
-the logs of each app's 20 latest deployments; the list opens them. It keeps
-the images of each app's 5 newest successful deployments, and any build for
-a day; older ones are removed (see
+the logs of each app's 20 latest deployments. They open on the app's Logs
+page, which lists them beside its containers: the one the Relay is on is
+followed live, and any other reads the log the Relay saved. It keeps the
+images of each app's 5 newest successful deployments, and any build for a
+day; older ones are removed (see
 [Relay runtime](relay-runtime.md#docker-cleanup)). Deploying an older one
 again builds or pulls it again.
 

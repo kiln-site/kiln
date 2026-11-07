@@ -72,6 +72,25 @@ export const StatusIndicator = React.memo(function StatusIndicator({
   )
 })
 
+/** Just the dot, for rows too narrow for a label. */
+export function StatusDot({
+  status,
+}: {
+  status: Pick<IdentityStatusPresentation, "label" | "pulse" | "tone">
+}) {
+  return (
+    <span
+      aria-label={status.label}
+      role="img"
+      className={cn(
+        "size-1.5 shrink-0 rounded-full",
+        statusToneClasses[status.tone].dot,
+        status.pulse && "animate-pulse"
+      )}
+    />
+  )
+}
+
 const statusToneClasses: Record<
   IdentityStatusPresentation["tone"],
   { dot: string; text: string }

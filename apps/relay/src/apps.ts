@@ -125,9 +125,11 @@ const COMMIT_LABEL = "kiln.app.commit"
 const IMAGE_LABEL = "kiln.app.image"
 const IMAGE_DIGEST_LABEL = "kiln.app.image.digest"
 const COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
-// The console stream that follows an app's deployments; its services'
-// streams are `service:<name>`.
+// The console stream that follows an app's deployments; `deployment:<id>`
+// shows only that one while it's the latest, and its services' streams are
+// `service:<name>`.
 export const APP_DEPLOYMENT_STREAM = "deployment"
+const DEPLOYMENT_STREAM_PREFIX = `${APP_DEPLOYMENT_STREAM}:`
 const SERVICE_STREAM_PREFIX = "service:"
 const MAX_DEPLOYMENT_LINES = 5_000
 // Finished deployments' logs kept per app, newest first.
@@ -1012,6 +1014,13 @@ export class AppDriver {
     if (!stream || stream === APP_DEPLOYMENT_STREAM) {
       await this.#restoreDeployment(appId)
       return this.#deploymentSession(appId)
+    }
+    if (stream.startsWith(DEPLOYMENT_STREAM_PREFIX)) {
+      await this.#restoreDeployment(appId)
+      const id = stream.slice(DEPLOYMENT_STREAM_PREFIX.length)
+      return this.#deployments.get(appId)?.id === id
+        ? this.#deploymentSession(appId)
+        : this.#idleSession(appId)
     }
     if (!stream.startsWith(SERVICE_STREAM_PREFIX)) {
       throw new Error("Unknown app log stream")
@@ -2720,20 +2729,32 @@ export class AppDriver {
   ) {
     const parsed = parseConsoleLine(raw)
     if (!parsed) return
-    this.#log(appId, deployment, parsed.text, level ?? parsed.level)
+    this.#appendLine(appId, deployment, {
+      level: level ?? parsed.level,
+      ...(parsed.segments && { segments: parsed.segments }),
+      text: parsed.text,
+    })
   }
 
+  // One of Kiln's own steps, as opposed to the output of what it ran.
   #log(
     appId: string,
     deployment: Deployment,
     text: string,
     level: RelayConsoleLevel = "info"
   ) {
+    this.#appendLine(appId, deployment, { level, origin: "kiln", text })
+  }
+
+  #appendLine(
+    appId: string,
+    deployment: Deployment,
+    content: Omit<RelayConsoleLine, "id" | "timestamp">
+  ) {
     const index = deployment.dropped + deployment.lines.length
-    const line = {
+    const line: RelayConsoleLine = {
+      ...content,
       id: `${deployment.id}-${index}`,
-      level,
-      text,
       timestamp: new Date().toISOString(),
     }
     deployment.lines.push(line)
