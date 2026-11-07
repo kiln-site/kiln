@@ -56,6 +56,10 @@ export function DeleteConfirmationFields({
   disabled: boolean
 }) {
   const id = React.useId()
+  const email = useRouteContext({
+    from: "/_app",
+    select: ({ user }) => user.email,
+  })
   const typed = confirmation.input.confirmation
   return (
     <div className="grid gap-4">
@@ -89,7 +93,7 @@ export function DeleteConfirmationFields({
       </div>
       {confirmation.passwordRequired ? (
         <div className="grid gap-1.5">
-          <AccountUsernameField />
+          <AccountUsernameField email={email} />
           <label
             htmlFor={`${id}-password`}
             className="type-technical-label text-muted-foreground"
