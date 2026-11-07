@@ -3,6 +3,7 @@ import { useRouteContext } from "@tanstack/react-router"
 
 import { Input } from "@workspace/ui/components/input"
 
+import { AccountUsernameField } from "@/components/account-username-field"
 import {
   confirmationMatches,
   type DeleteConfirmation,
@@ -88,6 +89,7 @@ export function DeleteConfirmationFields({
       </div>
       {confirmation.passwordRequired ? (
         <div className="grid gap-1.5">
+          <AccountUsernameField />
           <label
             htmlFor={`${id}-password`}
             className="type-technical-label text-muted-foreground"

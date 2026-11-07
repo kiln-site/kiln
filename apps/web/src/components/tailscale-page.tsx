@@ -59,6 +59,7 @@ import {
   createDataTableSearchStore,
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
+import { notALoginField } from "@/lib/not-a-login-field"
 import { queryKeys, tailscaleStacksQueryOptions } from "@/lib/query-options"
 import {
   configureTailscaleIntegration,
@@ -608,6 +609,7 @@ const NetworkForm = React.memo(function NetworkForm({
           <label className="block">
             <span className="mb-2 block text-xs font-medium">Network name</span>
             <Input
+              {...notALoginField}
               value={name}
               onChange={(event) => setName(event.target.value)}
               maxLength={MAXIMUM_INSTANCE_NAME_LENGTH}
@@ -619,6 +621,7 @@ const NetworkForm = React.memo(function NetworkForm({
               Private domain
             </span>
             <Input
+              {...notALoginField}
               value={domain}
               onChange={(event) => setDomain(event.target.value)}
               placeholder=".kiln"
@@ -634,7 +637,7 @@ const NetworkForm = React.memo(function NetworkForm({
               onChange={(event) => setClientId(event.target.value)}
               autoCapitalize="none"
               autoCorrect="off"
-              autoComplete="off"
+              {...notALoginField}
               placeholder="kAbCdEfGh123CNTRL"
               className="font-mono"
             />
@@ -646,7 +649,7 @@ const NetworkForm = React.memo(function NetworkForm({
               onChange={(event) => setTag(event.target.value)}
               autoCapitalize="none"
               autoCorrect="off"
-              autoComplete="off"
+              {...notALoginField}
               placeholder="tag:kiln"
               className="font-mono"
             />
@@ -661,7 +664,7 @@ const NetworkForm = React.memo(function NetworkForm({
               onChange={(event) => setClientSecret(event.target.value)}
               autoCapitalize="none"
               autoCorrect="off"
-              autoComplete="off"
+              {...notALoginField}
               placeholder={
                 stack
                   ? "••••••••••••••••••••••••"

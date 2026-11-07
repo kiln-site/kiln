@@ -32,6 +32,7 @@ import {
 } from "@/components/instance-picker"
 import { InstanceCard } from "@/components/instance-card"
 import { timestampedBackupName } from "@/lib/backup-name"
+import { notALoginField } from "@/lib/not-a-login-field"
 
 export interface BackupConfigurationTarget {
   id: string
@@ -213,10 +214,7 @@ export function BackupConfigurationDialog({
             <Input
               autoFocus
               aria-label="Backup name"
-              autoComplete="off"
-              data-1p-ignore
-              data-bwignore
-              data-lpignore="true"
+              {...notALoginField}
               maxLength={120}
               value={name}
               onChange={(event) => setName(event.currentTarget.value)}

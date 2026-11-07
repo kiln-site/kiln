@@ -12,6 +12,7 @@ import {
 import { Textarea } from "@workspace/ui/components/textarea"
 
 import { usesLongStringBrickField } from "@/lib/brick-variables"
+import { notALoginField } from "@/lib/not-a-login-field"
 
 const NOT_SET_SELECT_VALUE = "not-set"
 const optionSelectValue = (index: number) => `option:${index}`
@@ -123,6 +124,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
         </Select>
       ) : usesLongStringBrickField(definition) ? (
         <Textarea
+          {...notALoginField}
           disabled={disabled}
           aria-labelledby={labelId}
           value={value === undefined ? "" : String(value)}
@@ -135,6 +137,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
         />
       ) : (
         <Input
+          {...notALoginField}
           disabled={disabled}
           aria-labelledby={labelId}
           type={

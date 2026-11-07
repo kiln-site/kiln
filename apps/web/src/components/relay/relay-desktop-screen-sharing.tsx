@@ -25,6 +25,7 @@ import {
 import { DesktopTrackpad } from "@/components/relay/relay-desktop-trackpad"
 import { decodesDesktopVideo } from "@/components/relay/relay-desktop-video-check"
 import { forkPromise } from "@/effect/promise"
+import { notALoginField } from "@/lib/not-a-login-field"
 
 // A Mac's desktop, through macOS's own Screen Sharing. noVNC plays it, in a
 // chunk only this page loads, and its WebSocket goes through Hearth to the
@@ -482,7 +483,7 @@ function SignInForm({
       </p>
       <Input
         aria-label="Mac account name"
-        autoComplete="off"
+        {...notALoginField}
         autoFocus={!account}
         defaultValue={account}
         list={suggestions}
@@ -492,8 +493,8 @@ function SignInForm({
       />
       <Input
         aria-label="Mac password"
-        // Off, so the browser never offers Kiln's own password for a Mac.
-        autoComplete="off"
+        // So password managers never offer Kiln's own login for a Mac.
+        {...notALoginField}
         autoFocus={Boolean(account)}
         name="password"
         placeholder="Password"

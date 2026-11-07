@@ -59,6 +59,7 @@ import {
   validateBlacklistPatterns,
   vanityLabelSchema,
 } from "@/lib/domain-schemas"
+import { notALoginField } from "@/lib/not-a-login-field"
 import { queryKeys, resourceWebHostnamesQueryOptions } from "@/lib/query-options"
 import {
   adoptWebHostnameRecord,
@@ -727,7 +728,7 @@ export function DomainConnectionDialog({
                   </label>
                 </div>
                 <Input
-                  autoComplete="off"
+                  {...notALoginField}
                   id="connection-name"
                   maxLength={64}
                   name="name"
@@ -754,7 +755,7 @@ export function DomainConnectionDialog({
                 </div>
                 <div className="flex items-center gap-2">
                   <Input
-                    autoComplete="new-password"
+                    {...notALoginField}
                     autoFocus={!saved}
                     className="min-w-0 flex-1 font-mono"
                     id="cloudflare-api-token"

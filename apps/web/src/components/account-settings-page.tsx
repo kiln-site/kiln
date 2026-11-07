@@ -33,6 +33,7 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { AccountAvatar } from "@/components/account-avatar"
+import { AccountUsernameField } from "@/components/account-username-field"
 import { EditableIcon } from "@/components/icon-editor-dialog"
 import { RedactedText } from "@/components/redacted-text"
 import {
@@ -600,6 +601,7 @@ function PasswordRow() {
             </DialogDescription>
           </DialogHeader>
           <form className="grid gap-3" onSubmit={changePassword}>
+            <AccountUsernameField />
             <Field label="Current password" htmlFor="current-password">
               <Input
                 id="current-password"
@@ -875,6 +877,7 @@ function TwoFactorRow() {
               className="grid gap-4"
               onSubmit={twoFactorEnabled ? disableTwoFactor : beginTwoFactor}
             >
+              <AccountUsernameField />
               <Field label="Current password" htmlFor="totp-password">
                 <Input
                   id="totp-password"
@@ -1082,6 +1085,7 @@ function PasskeysPanel() {
                 autoFocus
               />
             </Field>
+            <AccountUsernameField />
             <Field label="Current password" htmlFor="passkey-password">
               <Input
                 id="passkey-password"
