@@ -3171,6 +3171,9 @@ export const relayConsoleLineSchema = z.object({
   id: z.string().min(1),
   timestamp: z.string().datetime().nullable(),
   level: relayConsoleLevelSchema,
+  // A step Kiln itself reports in a deployment's log, rather than the output
+  // of what it ran.
+  origin: z.literal("kiln").optional(),
   service: z.enum(["tailscale", "coredns"]).optional(),
   text: z.string(),
   segments: z.array(relayConsoleSegmentSchema).optional(),

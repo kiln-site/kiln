@@ -29,6 +29,11 @@ const appInputSchema = z.strictObject({
 
 const deploymentInputSchema = z.strictObject({ deploymentId: z.uuid() })
 
+const deploymentLogInputSchema = z.strictObject({
+  appId: appIdSchema,
+  deploymentId: z.uuid(),
+})
+
 const cancelDeployInputSchema = appInputSchema.extend({
   operationId: z.uuid(),
 })
@@ -123,5 +128,7 @@ export const redeployAppDeployment = createServerFn({ method: "POST" })
   )
 
 export const getAppDeploymentLog = createServerFn({ method: "GET" })
-  .validator(deploymentInputSchema)
-  .handler(({ data }) => getAppDeploymentLogHandler(data))
+  .validator(deploymentLogInputSchema)
+  .handler(async ({ data }) =>
+    getAppDeploymentLogHandler(await requireEligibleResourceUser(), data)
+  )

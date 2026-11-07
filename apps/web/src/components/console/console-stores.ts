@@ -13,6 +13,10 @@ export const consoleLevels: Array<RelayConsoleLevel> = [
   "trace",
 ]
 
+// What the gutter beside each line shows: nothing, the time of day, or the
+// time since the output began.
+export type ConsoleTimeMode = "clock" | "elapsed" | "off"
+
 export const consoleServices = ["tailscale", "coredns"] as const
 export type ConsoleService = (typeof consoleServices)[number]
 
@@ -35,17 +39,17 @@ export interface ConsoleUiStore {
   getServicesSnapshot: () => Set<ConsoleService> | null
   getSelectedSnapshot: () => Set<string>
   getSelectedText: () => string
-  getShowTimestampsSnapshot: () => boolean
+  getTimeModeSnapshot: () => ConsoleTimeMode
   getWrapLinesSnapshot: () => boolean
   setFilteredLines: (lines: Array<RelayConsoleLine>) => void
   setQuery: (query: string) => void
+  setTimeMode: (mode: ConsoleTimeMode) => void
   subscribe: (listener: () => void) => () => void
   toggleLevel: (level: RelayConsoleLevel | "all") => void
   toggleRelay: (relayId: string, availableIds: Array<string>) => void
   toggleService: (service: ConsoleService | "all") => void
   toggleLine: (line: RelayConsoleLine, index: number, shift: boolean) => void
   toggleRedactSensitive: () => void
-  toggleShowTimestamps: () => void
   toggleWrapLines: () => void
 }
 
@@ -122,13 +126,15 @@ export function createConsoleStreamStore(): ConsoleStreamStore {
   }
 }
 
-export function createConsoleUiStore(): ConsoleUiStore {
+export function createConsoleUiStore({
+  timeMode: initialTimeMode = "off",
+}: { timeMode?: ConsoleTimeMode } = {}): ConsoleUiStore {
   let query = ""
   let levels = new Set(consoleLevels)
   let redactSensitive = true
   let relayIds: Set<string> | null = null
   let services: Set<ConsoleService> | null = null
-  let showTimestamps = false
+  let timeMode = initialTimeMode
   let wrapLines = true
   let selected = new Set<string>()
   let filteredLines: Array<RelayConsoleLine> = []
@@ -171,7 +177,7 @@ export function createConsoleUiStore(): ConsoleUiStore {
       }
       return lines.join("\n")
     },
-    getShowTimestampsSnapshot: () => showTimestamps,
+    getTimeModeSnapshot: () => timeMode,
     getWrapLinesSnapshot: () => wrapLines,
     setFilteredLines: (lines) => {
       filteredLines = lines
@@ -181,6 +187,11 @@ export function createConsoleUiStore(): ConsoleUiStore {
       if (query === nextQuery) return
       query = nextQuery
       updateFilterSnapshot()
+    },
+    setTimeMode: (mode) => {
+      if (timeMode === mode) return
+      timeMode = mode
+      notify()
     },
     subscribe: (listener) => {
       listeners.add(listener)
@@ -237,10 +248,6 @@ export function createConsoleUiStore(): ConsoleUiStore {
     toggleRedactSensitive: () => {
       redactSensitive = !redactSensitive
       updateFilterSnapshot()
-    },
-    toggleShowTimestamps: () => {
-      showTimestamps = !showTimestamps
-      notify()
     },
     toggleWrapLines: () => {
       wrapLines = !wrapLines

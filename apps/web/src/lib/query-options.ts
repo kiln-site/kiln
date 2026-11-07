@@ -215,8 +215,8 @@ export const queryKeys = {
   appDeployments: {
     list: (scope: { appId?: string; relayId?: string }) =>
       ["app-deployments", "list", scope] as const,
-    log: (deploymentId: string) =>
-      ["app-deployments", "log", deploymentId] as const,
+    log: (appId: string, deploymentId: string) =>
+      ["app-deployments", "log", appId, deploymentId] as const,
     summary: (relayId: string, appId: string) =>
       ["app-deployments", "summary", relayId, appId] as const,
     states: ["app-deployments", "states"] as const,
@@ -1185,11 +1185,17 @@ export function appGitHubSourceFileQueryOptions(
   })
 }
 
-export function appDeploymentLogQueryOptions(deploymentId: string) {
+export function appDeploymentLogQueryOptions(
+  appId: string,
+  deploymentId: string
+) {
   return queryOptions({
-    queryKey: queryKeys.appDeployments.log(deploymentId),
-    queryFn: () => getAppDeploymentLog({ data: { deploymentId } }),
+    queryKey: queryKeys.appDeployments.log(appId, deploymentId),
+    queryFn: () => getAppDeploymentLog({ data: { appId, deploymentId } }),
     retry: false,
+    // A finished log never changes; one that couldn't be read may come back.
+    staleTime: (query) =>
+      query.state.data?.log?.deployment.finishedAt ? Infinity : 0,
   })
 }
 

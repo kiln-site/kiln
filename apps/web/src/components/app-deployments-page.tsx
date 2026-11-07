@@ -17,13 +17,6 @@ import {
 
 import { Button } from "@workspace/ui/components/button"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@workspace/ui/components/dialog"
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -36,7 +29,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { cn } from "@workspace/ui/lib/utils"
 
 import {
   deploymentDuration,
@@ -82,10 +74,8 @@ import {
 } from "@/lib/data-table-search"
 import { useCursorDataTableSource } from "@/lib/data-table-source"
 import {
-  appDeploymentLogQueryOptions,
   appDeploymentsQueryOptions,
   appDirectoryQueryOptions,
-  queryKeys,
 } from "@/lib/query-options"
 import { redeployAppDeployment } from "@/server/app-deployments"
 import type { AppDeploymentView } from "@/server/app-deployments.server"
@@ -123,23 +113,14 @@ export const AppDeploymentsPage = React.memo(function AppDeploymentsPage({
   searchStore: DataTableSearchStore
   onScopeChange: (scope: AppDeploymentsScope) => void
 }) {
-  const [logFor, setLogFor] = React.useState<Deployment | null>(null)
-  const closeLog = React.useCallback(() => setLogFor(null), [])
   return (
     <WorkspacePage>
       <DeploymentsScopePicker scope={scope} onScopeChange={onScopeChange} />
       <DataTableWorkspace
         toolbar={<DeploymentsToolbar searchStore={searchStore} />}
       >
-        <DeploymentsTable
-          scope={scope}
-          searchStore={searchStore}
-          onOpenLog={setLogFor}
-        />
+        <DeploymentsTable scope={scope} searchStore={searchStore} />
       </DataTableWorkspace>
-      {logFor ? (
-        <DeploymentLogDialog deployment={logFor} onClose={closeLog} />
-      ) : null}
     </WorkspacePage>
   )
 })
@@ -241,11 +222,9 @@ const DeploymentsRefreshButton = React.memo(
 const DeploymentsTable = React.memo(function DeploymentsTable({
   scope,
   searchStore,
-  onOpenLog,
 }: {
   scope: AppDeploymentsScope
   searchStore: DataTableSearchStore
-  onOpenLog: (deployment: Deployment) => void
 }) {
   const query = useInfiniteQuery(appDeploymentsQueryOptions(scope))
   const source = useCursorDataTableSource({
@@ -326,7 +305,7 @@ const DeploymentsTable = React.memo(function DeploymentsTable({
         header: () => <span className="sr-only">Actions</span>,
         enableSorting: false,
         cell: ({ row }) => (
-          <DeploymentActions deployment={row.original} onOpenLog={onOpenLog} />
+          <DeploymentActions deployment={row.original} />
         ),
         meta: dataTableColumnMeta(
           { width: "4.5rem" },
@@ -340,7 +319,7 @@ const DeploymentsTable = React.memo(function DeploymentsTable({
       getRowId: deploymentKey,
       search: { fields: searchFields },
     })
-  }, [onOpenLog])
+  }, [])
   return (
     <DataTable
       definition={definition}
@@ -489,10 +468,8 @@ function DeploymentTrigger({ deployment }: { deployment: Deployment }) {
 
 const DeploymentActions = React.memo(function DeploymentActions({
   deployment,
-  onOpenLog,
 }: {
   deployment: Deployment
-  onOpenLog: (deployment: Deployment) => void
 }) {
   const queryClient = useQueryClient()
   const redeploy = useMutation({
@@ -517,14 +494,19 @@ const DeploymentActions = React.memo(function DeploymentActions({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
-              aria-label={`Log of ${deployment.appName}'s deployment`}
+              asChild
               className="text-muted-foreground hover:text-primary-ink"
               size="icon-sm"
-              type="button"
               variant="ghost"
-              onClick={() => onOpenLog(deployment)}
             >
-              <ScrollText />
+              <Link
+                aria-label={`Log of ${deployment.appName}'s deployment`}
+                params={{ appId: deployment.appId }}
+                search={{ deployment: deployment.id }}
+                to="/app/$appId/logs"
+              >
+                <ScrollText />
+              </Link>
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Log</TooltipContent>
@@ -584,98 +566,3 @@ const DeploymentActions = React.memo(function DeploymentActions({
     </DataTableActionGroup>
   )
 })
-
-// A deployment's log as its Relay kept it. A running one links to the live
-// log on the app's page.
-function DeploymentLogDialog({
-  deployment,
-  onClose,
-}: {
-  deployment: Deployment
-  onClose: () => void
-}) {
-  const log = useQuery(appDeploymentLogQueryOptions(deployment.id))
-  const queryClient = useQueryClient()
-  // A running deployment's log grows; reopening reads it again.
-  React.useEffect(
-    () => () => {
-      if (deployment.status === "running") {
-        queryClient.removeQueries({
-          queryKey: queryKeys.appDeployments.log(deployment.id),
-        })
-      }
-    },
-    [deployment.id, deployment.status, queryClient]
-  )
-  const lines = log.data?.log?.lines ?? []
-  return (
-    <Dialog open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="grid max-h-[min(92dvh,52rem)] grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden sm:max-w-4xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            {deployment.appName}
-            <StatusIndicator
-              status={deploymentStatusPresentation(deployment)}
-            />
-          </DialogTitle>
-          <DialogDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span>
-              <RelativeTime timestamp={Date.parse(deployment.startedAt)} />
-            </span>
-            {deployment.commitSha ? (
-              <span className="font-mono">
-                {shortCommit(deployment.commitSha)}{" "}
-                {deployment.commitMessage ?? ""}
-              </span>
-            ) : null}
-            {deployment.status === "running" ? (
-              <Link
-                to="/app/$appId/logs"
-                params={{ appId: deployment.appId }}
-                search={{ stream: "deployment" }}
-                className="text-primary-ink hover:underline"
-              >
-                Follow it live
-              </Link>
-            ) : null}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="min-h-0 overflow-auto border bg-muted/20 p-3 font-mono text-[11px] leading-relaxed">
-          {log.isPending ? (
-            <div className="grid h-24 place-items-center">
-              <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
-            </div>
-          ) : log.isError ? (
-            <p className="text-destructive">{log.error.message}</p>
-          ) : !log.data.log ? (
-            <p className="text-muted-foreground">
-              {log.data.reason ?? "This log is no longer kept"}
-            </p>
-          ) : (
-            <>
-              {log.data.log.dropped > 0 ? (
-                <p className="mb-1 text-muted-foreground">
-                  {log.data.log.dropped.toLocaleString()} earlier lines were
-                  dropped
-                </p>
-              ) : null}
-              {lines.map((line) => (
-                <div
-                  key={line.id}
-                  className={cn(
-                    "break-words whitespace-pre-wrap",
-                    line.level === "error" && "text-destructive",
-                    line.level === "warn" &&
-                      "text-amber-500 light:text-amber-700"
-                  )}
-                >
-                  {line.text}
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}

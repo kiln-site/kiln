@@ -59,13 +59,13 @@ export function deploymentDuration(deployment: {
   startedAt: string
 }): string | null {
   if (!deployment.finishedAt) return null
-  const seconds = Math.max(
-    0,
-    Math.round(
-      (Date.parse(deployment.finishedAt) - Date.parse(deployment.startedAt)) /
-        1_000
-    )
+  return formatDuration(
+    Date.parse(deployment.finishedAt) - Date.parse(deployment.startedAt)
   )
+}
+
+export function formatDuration(milliseconds: number): string {
+  const seconds = Math.max(0, Math.round(milliseconds / 1_000))
   if (seconds < 60) return `${seconds}s`
   const minutes = Math.floor(seconds / 60)
   return `${minutes}m ${seconds % 60}s`

@@ -157,11 +157,12 @@ export function ConsoleTimestampButton({
 }: {
   uiStore: ConsoleUiStore
 }) {
-  const showTimestamps = React.useSyncExternalStore(
-    uiStore.subscribe,
-    uiStore.getShowTimestampsSnapshot,
-    uiStore.getShowTimestampsSnapshot
-  )
+  const showTimestamps =
+    React.useSyncExternalStore(
+      uiStore.subscribe,
+      uiStore.getTimeModeSnapshot,
+      uiStore.getTimeModeSnapshot
+    ) !== "off"
   return (
     <ConsoleTooltip
       content={showTimestamps ? "Hide Timestamps" : "Show Timestamps"}
@@ -171,7 +172,7 @@ export function ConsoleTimestampButton({
         size="icon"
         className="size-8"
         aria-label={showTimestamps ? "Hide timestamps" : "Show timestamps"}
-        onClick={uiStore.toggleShowTimestamps}
+        onClick={() => uiStore.setTimeMode(showTimestamps ? "off" : "clock")}
       >
         <Clock3 />
       </Button>
