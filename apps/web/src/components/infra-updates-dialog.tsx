@@ -949,6 +949,7 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
     [confirmationError, pending, updateMutation.isPending]
   )
   const mutateUpdate = updateMutation.mutate
+  const mutateUpdateAsync = updateMutation.mutateAsync
   const resetUpdate = updateMutation.reset
 
   // After Hearth's update reloads the page, the Relays it held back update,
@@ -990,7 +991,6 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
             }
             if (targetHasUpdate(target, overview.releases)) {
               targets.push(target)
-              pending.delete(target.relayId)
             } else if (
               compareLatestReleaseVersion(
                 target.currentVersion,
@@ -1004,15 +1004,26 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
           for (const relayId of pending) {
             if (!listed.has(relayId)) pending.delete(relayId)
           }
+          // One request at a time: the updater follows a single request,
+          // and finishes its batch once that one settles.
+          if (targets.length > 0) {
+            while (current && updateMutationPendingRef.current) {
+              yield* Effect.sleep(500)
+            }
+            if (!current) return
+            yield* Effect.tryPromise(() =>
+              mutateUpdateAsync({
+                latestVersion: latest.version,
+                latestVersionName: latest.name,
+                targets,
+              })
+            ).pipe(Effect.ignore)
+            for (const { relayId } of targets) {
+              if (relayId) pending.delete(relayId)
+            }
+          }
           if (pending.size === 0) clearRelaysAfterHearth()
           else saveRelaysAfterHearth(saved.version, [...pending], saved.savedAt)
-          if (targets.length > 0) {
-            mutateUpdate({
-              latestVersion: latest.version,
-              latestVersionName: latest.name,
-              targets,
-            })
-          }
           if (pending.size > 0) yield* Effect.sleep(relaysAfterHearthPollMs)
         }
       })
@@ -1020,7 +1031,7 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
     return () => {
       current = false
     }
-  }, [mutateUpdate, queryClient])
+  }, [mutateUpdateAsync, queryClient])
   const pendingRef = React.useRef(pending)
   React.useEffect(() => {
     pendingRef.current = pending
