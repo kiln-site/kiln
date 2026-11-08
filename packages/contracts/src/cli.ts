@@ -14,6 +14,7 @@ import {
   MAXIMUM_INSTANCE_NAME_LENGTH,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
+import { instanceIdSchema } from "./instance-id.js"
 import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
 import {
   MINIMUM_CPU_LIMIT_MILLIS,
@@ -100,20 +101,19 @@ export const cliErrorResponseSchema = z
   })
   .strict()
 
-export const cliServerReferenceSchema = z
-  .string()
-  .regex(/^[A-Za-z\d_-]{43}:[a-f\d]{40}$/u)
+// A game server is named by its ID alone: instance IDs are unique across
+// every Relay.
+export const cliServerReferenceSchema = instanceIdSchema
 
 const cliStoredServerNameSchema = z.string().min(1).max(120)
 
 export const cliServerSchema = z
   .object({
     id: cliServerReferenceSchema,
-    instanceId: z.string().regex(/^[a-f\d]{40}$/u),
+    instanceId: instanceIdSchema,
     name: cliStoredServerNameSchema,
-    relayId: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
+    relayId: instanceIdSchema,
     relayName: z.string().min(1).max(120),
-    shortId: z.string().min(1).max(40),
     state: z.string().min(1).max(64),
   })
   .strict()
@@ -124,8 +124,8 @@ export const cliServersResponseSchema = z
 
 export const cliTargetSchema = z
   .object({
-    instanceId: z.string().regex(/^[a-f\d]{40}$/u),
-    relayId: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
+    instanceId: instanceIdSchema,
+    relayId: instanceIdSchema,
   })
   .strict()
 
@@ -167,7 +167,7 @@ export const cliRelaySchema = z
   .object({
     arch: z.string().min(1).nullable(),
     canProvisionServers: z.boolean().nullable(),
-    id: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
+    id: instanceIdSchema,
     name: z.string().min(1).max(120),
     platform: z.string().min(1).nullable(),
     serverCount: z.number().int().nonnegative().nullable(),
@@ -222,7 +222,7 @@ export const cliServerInfoResponseSchema = z
   .object({
     relay: z
       .object({
-        id: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
+        id: instanceIdSchema,
         name: z.string().min(1).max(120),
       })
       .strict(),
@@ -234,7 +234,7 @@ export const cliServerInfoResponseSchema = z
         desiredState: z.enum(["stopped", "running"]),
         diskLimitBytes: z.number().int().nonnegative(),
         game: z.string().min(1),
-        id: z.string().regex(/^[a-f\d]{40}$/u),
+        id: instanceIdSchema,
         implementation: z.string().min(1),
         javaVersion: z.string().min(1),
         memoryLimitBytes: z.number().int().nonnegative(),
@@ -244,7 +244,6 @@ export const cliServerInfoResponseSchema = z
         publicAddress: z.string().nullable(),
         lifecycle: z.array(relayInstanceLifecycleEventSchema),
         resources: cliServerResourceSchema.nullable(),
-        shortId: z.string().regex(/^[a-f\d]{8}$/u),
         version: z.string().min(1),
       })
       .strict(),
@@ -264,7 +263,7 @@ export const cliCreateServerRequestSchema = z
         MAXIMUM_INSTANCE_NAME_LENGTH,
         `Names must be ${MAXIMUM_INSTANCE_NAME_LENGTH} characters or fewer`
       ),
-    relayId: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
+    relayId: instanceIdSchema,
     start: z.boolean().default(true),
     variables: z
       .record(z.string().min(1).max(120), cliBrickVariableValueSchema)
@@ -329,7 +328,7 @@ export const cliBackupSchema = z
     filename: backupFilenameSchema.nullable(),
     id: backupIdSchema,
     name: z.string().min(1).max(120),
-    relayId: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
+    relayId: instanceIdSchema,
     status: backupStatusSchema,
     targetId: backupTargetSchema.shape.id,
     targetKind: backupTargetKindSchema,
@@ -358,7 +357,7 @@ export const cliBackupTargetsResponseSchema = z
 const cliCreateBackupBaseSchema = z.object({
   mode: backupModeSchema.optional(),
   name: z.string().trim().min(1).max(120),
-  relayId: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
+  relayId: instanceIdSchema,
   storageId: z.union([z.uuid(), z.null()]),
 })
 

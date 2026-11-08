@@ -6,6 +6,7 @@ import {
   MAXIMUM_INSTANCE_NAME_LENGTH,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
+import { instanceIdSchema } from "./instance-id.js"
 import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
 import {
   NO_RESOURCE_LIMITS,
@@ -67,8 +68,12 @@ export * from "./tailscale.js"
 export * from "./snbt.js"
 export * from "./database-browser.js"
 export * from "./app-keys.js"
+export * from "./instance-id.js"
 
-export const relayIdSchema = z.string().regex(/^[A-Za-z\d_-]{43}$/u)
+// A Relay's ID is an instance ID like any other's; its public-key
+// fingerprint, which authenticates it, is a separate value.
+export const relayIdSchema = instanceIdSchema
+export const relayFingerprintSchema = z.string().regex(/^[A-Za-z\d_-]{43}$/u)
 
 export const relayAuditQuerySchema = z
   .object({
@@ -168,7 +173,7 @@ export const databaseEngineSchema = z.enum([
   "valkey",
 ])
 
-export const databaseIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
+export const databaseIdSchema = instanceIdSchema
 
 export const relayDatabaseNameSchema = z.string().trim().min(1).max(120)
 
@@ -182,8 +187,7 @@ export const databaseConnectionMemberKindSchema = z.enum([
 
 export const databaseConnectionMemberSchema = z
   .object({
-    // Game servers, Apps, and databases all have 40-character IDs.
-    id: z.string().regex(/^[a-f0-9]{40}$/u),
+    id: instanceIdSchema,
     kind: databaseConnectionMemberKindSchema,
   })
   .strict()
@@ -198,7 +202,7 @@ export const relayDatabaseMemberSchema = z
     // game server, `database-<id>` for a database, and each App service's
     // alias.
     hostnames: z.array(z.string().min(1).max(253)),
-    id: z.string().regex(/^[a-f0-9]{40}$/u),
+    id: instanceIdSchema,
     kind: databaseConnectionMemberKindSchema,
     // Names it doesn't answer to yet: it takes them when its containers
     // join, or, for one that joined before members had names, when it next
@@ -235,7 +239,6 @@ export const relayManagedDatabaseSchema = z
     ]),
     /** Where its provisioning is, until the database exists. */
     provisioning: provisioningStateSchema.optional(),
-    shortId: z.string().regex(/^[a-f0-9]{8}$/u),
     /** When its container last started; null while it isn't running. */
     startedAt: z.string().datetime().nullable().default(null),
     status: z.string().min(1).max(280),
@@ -292,7 +295,7 @@ export const relayDeleteDatabaseSchema = z
 export const relayResourceFreezeSchema = z
   .object({
     deletionId: z.uuid(),
-    id: z.string().regex(/^[a-f0-9]{40}$/u),
+    id: instanceIdSchema,
     // A volume is a Kiln volume, by its ID; an App's own volumes go with it.
     kind: z.enum(["app", "database", "instance", "volume"]),
   })
@@ -333,7 +336,7 @@ export const relayDatabaseNetworkImportSchema = z
       .array(
         z
           .object({
-            appId: z.string().regex(/^[a-f0-9]{40}$/u),
+            appId: instanceIdSchema,
             databaseIds: z.array(databaseIdSchema).min(1).max(32),
           })
           .strict()
@@ -700,10 +703,10 @@ export const composeVolumeNameSchema = z
   .string()
   .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u)
   .max(128)
-const volumeAppIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
+const volumeAppIdSchema = instanceIdSchema
 export const appVolumeIdSchema = z
   .string()
-  .regex(/^[a-f0-9]{40}\/[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u)
+  .regex(/^[a-f0-9]{12}\/[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u)
   .max(169)
 export const relayManagedVolumeIdSchema = z.union([
   relayVolumeIdSchema,
@@ -912,7 +915,7 @@ export const hearthDatabaseTerminalOutputSchema = z.object({
 // Apps run any container workload: a Docker image, a Dockerfile, or a
 // Compose project. Hearth keeps each app's configuration; the Relay deploys
 // it and reports the containers it finds by their labels.
-export const appIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
+export const appIdSchema = instanceIdSchema
 
 export const appNameSchema = relayDatabaseNameSchema
 
@@ -1151,7 +1154,6 @@ export const relayAppSchema = z.object({
   provisioning: provisioningStateSchema.optional(),
   // Databases the Relay keeps it connected to, joined on every deploy.
   savedDatabaseIds: z.array(databaseIdSchema),
-  shortId: z.string().regex(/^[a-f0-9]{8}$/u),
   status: z.string().min(1).max(280),
 })
 
@@ -1592,16 +1594,16 @@ export const relayCreateInstanceSchema = z.object({
 
 export const relayPrepareInstanceSchema = relayCreateInstanceSchema.extend({
   idempotencyKey: z.uuid(),
-  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+  instanceId: instanceIdSchema,
 })
 
 export const relayProvisionInstanceSchema = z.object({
-  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+  instanceId: instanceIdSchema,
 })
 
 export const relayInstanceLimitsWriteSchema = z
   .object({
-    instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+    instanceId: instanceIdSchema,
     limits: resourceLimitsSchema,
   })
   .strict()
@@ -1646,7 +1648,7 @@ export const relayTailscaleInstallSchema = z
   })
   .strict()
 
-export const relayTailscaleStackIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
+export const relayTailscaleStackIdSchema = instanceIdSchema
 
 export const MAXIMUM_TAILSCALE_STACK_BINDINGS = 245
 
@@ -2305,8 +2307,7 @@ export const relayRemoveDatabaseConnectionSchema = z.object({
 })
 
 export const relayInstanceSchema = z.object({
-  id: z.string().regex(/^[a-f0-9]{40}$/u),
-  shortId: z.string().regex(/^[a-f0-9]{8}$/u),
+  id: instanceIdSchema,
   name: z.string().min(1),
   game: z.string().min(1),
   implementation: z.string().min(1),

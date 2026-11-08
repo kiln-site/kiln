@@ -1151,6 +1151,8 @@ export interface RelayPairingResponseContract {
   readonly expiresAt: number
   readonly nonce: string
   readonly relayFingerprint: string
+  /** The Relay's instance ID; its fingerprint only authenticates it. */
+  readonly relayId: string
   readonly relayName: string
   readonly relayPublicKeyPem: string
   readonly role: "custom" | "full_access" | "read_only"
@@ -1229,6 +1231,7 @@ export function relayPairingResponseTranscript(
     "response",
     response.clientId,
     response.relayFingerprint,
+    response.relayId,
     response.relayName,
     response.relayPublicKeyPem,
     response.role,

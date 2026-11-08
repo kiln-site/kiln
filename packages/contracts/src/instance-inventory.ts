@@ -1,4 +1,5 @@
 import { Schema } from "effect"
+import { InstanceId } from "./instance-id.js"
 import type { RelayApp, RelayManagedDatabase } from "./index.js"
 import {
   InstanceObservedStateSchema,
@@ -17,7 +18,7 @@ export const InstanceInventoryViewSchema = Schema.Literals([
 ])
 export type InstanceInventoryView = typeof InstanceInventoryViewSchema.Type
 
-const resourceId = Schema.String.check(Schema.isPattern(/^[a-f0-9]{40}$/u))
+const resourceId = InstanceId
 const relayId = InstanceReferenceSchema.fields.relayId
 const resource = <K extends "app" | "database" | "server">(kind: K) =>
   Schema.Struct({ kind: Schema.Literal(kind), relayId, id: resourceId })

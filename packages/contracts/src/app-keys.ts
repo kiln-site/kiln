@@ -1,5 +1,7 @@
 import { z } from "zod"
 
+import { INSTANCE_ID_PATTERN } from "./instance-id.js"
+
 // Apps share some of servers' machinery by taking the place of a server ID
 // with a key of their own.
 
@@ -9,27 +11,36 @@ import { z } from "zod"
 const APP_FILE_ROOT_PREFIX = "app:"
 // A volume an App owns or uses opens as a root of that App's own,
 // `app:<appId>:volume:<volume ID>`, so it takes the App's file permissions.
-// An App-owned volume's `/` is written `:`, since a root's ID travels in URLs.
+// An App-owned volume's ID is `<appId>/<key>`, its `/` written `:`, since a
+// root's ID travels in URLs; any other volume's is 40 hex characters.
 const APP_VOLUME_FILE_ROOT =
-  /^app:([a-f0-9]{40}):volume:([a-f0-9]{40}(?::[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127})?)$/u
+  /^app:([a-f0-9]{12}):volume:([a-f0-9]{40}|[a-f0-9]{12}:[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127})$/u
 // A database's dumps travel as files under `database:<databaseId>`, a folder
 // the Relay keeps for them, so they go through the same transfers.
 const DATABASE_FILE_ROOT_PREFIX = "database:"
-const resourceIdPattern = /^[a-f0-9]{40}$/u
+// A Relay's host files open as `relay:<relayId>`.
+const RELAY_FILE_ROOT_PREFIX = "relay:"
+const resourceIdPattern = INSTANCE_ID_PATTERN
 
 // A Compose service's name; image and Dockerfile apps have one service, `app`.
 export const appServiceNameSchema = z
   .string()
   .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/u)
 
-// A Relay's host files use its fingerprint, scoped by the Relay connection.
+// A game server's files open under its bare ID.
 export const fileRootIdSchema = z
   .string()
   .regex(
-    /^(?:(?:app:)?[a-f0-9]{40}|app:[a-f0-9]{40}:volume:[a-f0-9]{40}(?::[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127})?|[A-Za-z\d_-]{43})$/u
+    /^(?:(?:app:|database:|relay:)?[a-f0-9]{12}|app:[a-f0-9]{12}:volume:(?:[a-f0-9]{40}|[a-f0-9]{12}:[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}))$/u
   )
+export function relayFileRootId(relayId: string): string {
+  return `${RELAY_FILE_ROOT_PREFIX}${relayId}`
+}
 export function isRelayFileRoot(id: string): boolean {
-  return /^[A-Za-z\d_-]{43}$/u.test(id)
+  return (
+    id.startsWith(RELAY_FILE_ROOT_PREFIX) &&
+    resourceIdPattern.test(id.slice(RELAY_FILE_ROOT_PREFIX.length))
+  )
 }
 
 export function appFileRootId(appId: string): string {
@@ -81,15 +92,15 @@ export function isServerFileRoot(id: string): boolean {
 // Tailscale network members are named by kind: a game server as
 // `instance:<id>`, an App's service as `app:<appId>:<service>`, and a
 // database as `database:<id>`.
-const instanceMemberPattern = /^instance:([a-f0-9]{40})$/u
-const databaseMemberPattern = /^database:([a-f0-9]{40})$/u
+const instanceMemberPattern = /^instance:([a-f0-9]{12})$/u
+const databaseMemberPattern = /^database:([a-f0-9]{12})$/u
 const appMemberPattern =
-  /^app:([a-f0-9]{40}):([a-zA-Z0-9][a-zA-Z0-9_.-]{0,62})$/u
+  /^app:([a-f0-9]{12}):([a-zA-Z0-9][a-zA-Z0-9_.-]{0,62})$/u
 
 export const tailscaleMemberIdSchema = z
   .string()
   .regex(
-    /^(?:instance:[a-f0-9]{40}|database:[a-f0-9]{40}|app:[a-f0-9]{40}:[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62})$/u
+    /^(?:instance:[a-f0-9]{12}|database:[a-f0-9]{12}|app:[a-f0-9]{12}:[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62})$/u
   )
 
 export function instanceTailscaleMemberId(instanceId: string): string {
@@ -126,6 +137,6 @@ export function appTailscaleMember(
  * its bare ID. Only migrations read these.
  */
 export function legacyTailscaleMemberId(id: string): string | null {
-  if (/^[a-f0-9]{40}$/u.test(id)) return instanceTailscaleMemberId(id)
+  if (resourceIdPattern.test(id)) return instanceTailscaleMemberId(id)
   return tailscaleMemberIdSchema.safeParse(id).success ? id : null
 }
