@@ -1731,52 +1731,49 @@ export const listTargetBackupsEffect = Effect.fn("backups.targets")(function* (
     : []
   // Each target's newest restore, even on a backup something else ran on
   // since, so its outcome stays shown; whichever backup it restored, the
-  // target's own or another resource's.
-  const into = targets
-    .map(
-      () =>
-        "(COALESCE(latest.target_kind, backup.target_kind) = ? AND COALESCE(latest.target_id, backup.target_id) = ?)"
-    )
-    .join(" OR ")
-  const restoreRecords = yield* catalogRecordsWhere(
-    "backup.relay_id = ?",
-    [...targets.flatMap((target) => [target.kind, target.id]), relayId],
-    500,
-    `JOIN ${databaseTable("backup_task")} task ON task.id = (
-         SELECT latest.id
-           FROM ${databaseTable("backup_task")} latest
-          WHERE latest.backup_id = backup.id AND latest.task_kind = 'restore'
-            AND (${into})
-          ORDER BY latest.created_at DESC, latest.id DESC
-          LIMIT 1
-       )`
-  )
-  const destinations = new Map(
-    restoreRecords.length === 0
-      ? []
-      : (yield* (yield* Database).queryRows<
-          RowDataPacket & {
-            id: string
-            target_id: string | null
-            target_kind: BackupTargetKind | null
-          }
-        >(
-          "backup_restore_destinations",
-          `SELECT id, target_kind, target_id
-             FROM ${databaseTable("backup_task")}
-            WHERE id IN (${restoreRecords.map(() => "?").join(", ")})`,
-          restoreRecords.map((record) => record.taskId)
-        )).map((row) => [row.id, row])
+  // target's own or another resource's, and one backup restored into two
+  // targets shows on each.
+  const database = yield* Database
+  const newest = new Map<string, string>()
+  for (const row of yield* database.queryRows<
+    RowDataPacket & { id: string; target: string }
+  >(
+    "backup_target_restores",
+    `SELECT task.id,
+            CONCAT(COALESCE(task.target_kind, backup.target_kind), ':',
+                   COALESCE(task.target_id, backup.target_id)) AS target
+       FROM ${databaseTable("backup_task")} task
+       JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
+      WHERE backup.relay_id = ? AND backup.status <> 'deleted'
+        AND task.task_kind = 'restore'
+        AND (${targets
+          .map(
+            () =>
+              "(COALESCE(task.target_kind, backup.target_kind) = ? AND COALESCE(task.target_id, backup.target_id) = ?)"
+          )
+          .join(" OR ")})
+      ORDER BY task.created_at DESC, task.id DESC
+      LIMIT 500`,
+    [relayId, ...targets.flatMap((target) => [target.kind, target.id])]
+  )) {
+    if (!newest.has(row.target)) newest.set(row.target, row.id)
+  }
+  const taskTargets = new Map(
+    [...newest].map(([target, taskId]) => [taskId, target])
   )
   const restores = new Map<string, BackupCatalogRecord>()
-  for (const record of restoreRecords) {
-    const task = destinations.get(record.taskId)
-    const key =
-      task?.target_kind && task.target_id
-        ? `${task.target_kind}:${task.target_id}`
-        : `${record.targetKind}:${record.targetId}`
-    const previous = restores.get(key)
-    if (!previous || record.taskUpdatedAt > previous.taskUpdatedAt) {
+  if (taskTargets.size > 0) {
+    const ids = [...taskTargets.keys()]
+    for (const record of yield* catalogRecordsWhere(
+      "backup.relay_id = ?",
+      [...ids, relayId],
+      ids.length,
+      `JOIN ${databaseTable("backup_task")} task
+         ON task.backup_id = backup.id
+        AND task.id IN (${ids.map(() => "?").join(", ")})`
+    )) {
+      const key = taskTargets.get(record.taskId)
+      if (!key) continue
       // Shown as the target's, which it went into.
       const [kind, ...id] = key.split(":")
       restores.set(key, {
@@ -2391,7 +2388,7 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    return yield* database.transaction(
+    const reserve = database.transaction(
       "backup_reserve_restore",
       (transaction) =>
         Effect.gen(function* () {
@@ -2469,8 +2466,19 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
             })
           }
           // Restores into one resource queue behind each other, whichever
-          // backup each restores; ones from before restores could go
-          // elsewhere went into their backup's own resource.
+          // backup each restores, on its policy row, made first if it has
+          // none yet so two can't both find nothing to wait for; the check
+          // after it is a locking read, so it sees what the one before it
+          // committed rather than this transaction's older snapshot. Ones
+          // from before restores could go elsewhere went into their
+          // backup's own resource.
+          yield* transaction.execute(
+            `INSERT IGNORE INTO ${databaseTable("backup_policy")}
+              (relay_id, target_kind, target_id, exclude_patterns, created_at,
+               updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [backup.relay_id, destination.kind, destination.id, "[]", now, now]
+          )
           yield* transaction.queryRows<RowDataPacket>(
             `SELECT relay_id
                FROM ${databaseTable("backup_policy")}
@@ -2489,7 +2497,8 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
                   AND COALESCE(task.target_id, active_backup.target_id) = ?
                   AND task.task_kind = 'restore'
                   AND task.status IN ('queued', 'running')
-                LIMIT 1`,
+                LIMIT 1
+                LOCK IN SHARE MODE`,
               [backup.relay_id, destination.kind, destination.id]
             )
           if (conflictingTasks[0]) {
@@ -2557,6 +2566,9 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
           } satisfies BackupRestoreDispatch
         })
     )
+    // Two restores into a resource without a policy row both make it, and
+    // MySQL may end one of them for a deadlock: it runs once more.
+    return yield* reserve.pipe(Effect.catchIf(isDeadlock, () => reserve))
   }
 )
 

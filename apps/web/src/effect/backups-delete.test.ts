@@ -8,6 +8,7 @@ import {
   listDispatchableBackupTasksEffect,
   reconcileBackupTaskEffect,
   reserveBackupDeleteEffect,
+  reserveBackupRestoreEffect,
   reserveInstanceBackupEffect,
   settleUndispatchableBackupTaskEffect,
 } from "@/effect/backups"
@@ -381,6 +382,65 @@ describeMysql("deleting backups whatever their state", () => {
           const fromA = yield* finalBackupOf("instance-a")
           assert.instanceOf(fromA, BackupStorageError)
           assert.strictEqual(fromA.code, "reservation_failed")
+        })
+    )
+
+    it.effect(
+      "lets only one of several restores at once into a resource through",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          // Backups of other servers, going into one that has never been
+          // backed up, so nothing about it exists to wait on yet.
+          const sources = Array.from(
+            { length: 6 },
+            (_, index) => `22222222-2222-4222-8222-00000000000${index}`
+          )
+          for (const id of sources) {
+            yield* insertBackup(id, {
+              relay_id: relayId,
+              target_id: `instance-${id.slice(-1)}`,
+              bytes: 1024,
+              checksum_sha256: "0".repeat(64),
+            })
+            yield* insertRows("backup_artifact", {
+              id: `${id.slice(0, -2)}a${id.slice(-1)}`,
+              backup_id: id,
+              destination_key: "local",
+              status: "available",
+              bytes: 1024,
+              checksum_sha256: "0".repeat(64),
+              created_at: now,
+              updated_at: now,
+            })
+          }
+
+          const results = yield* Effect.all(
+            sources.map((id) =>
+              reserveBackupRestoreEffect({
+                backupId: id,
+                dependsOnTaskId: null,
+                requestedBy: "user-one",
+                target: { id: "instance-new", kind: "instance" },
+                taskId: crypto.randomUUID(),
+              }).pipe(Effect.result)
+            ),
+            { concurrency: "unbounded" }
+          )
+
+          assert.strictEqual(
+            results.filter((result) => result._tag === "Success").length,
+            1
+          )
+          const restores = (yield* selectRows<{
+            status: string
+            target_id: string | null
+            task_kind: string
+          }>("backup_task")).filter((row) => row.task_kind === "restore")
+          assert.deepStrictEqual(
+            restores.map((row) => row.target_id),
+            ["instance-new"]
+          )
         })
     )
   })
