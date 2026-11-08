@@ -13,7 +13,7 @@ export type FileViewerKind = TextViewerKind | FileContentViewerKind
 export type TextViewerKind = "text" | RenderedTextViewerKind
 
 /** Text files that can also be shown rendered, as a document or a table. */
-export type RenderedTextViewerKind = "csv" | "markdown"
+export type RenderedTextViewerKind = "csv" | "markdown" | "svg"
 
 /** The viewers that read a file their own way rather than as text. */
 export type FileContentViewerKind = "database" | "image"
@@ -21,6 +21,7 @@ export type FileContentViewerKind = "database" | "image"
 const textViewers: ReadonlySet<FileViewerKind> = new Set<TextViewerKind>([
   "csv",
   "markdown",
+  "svg",
   "text",
 ])
 
@@ -29,6 +30,7 @@ const viewersByExtension: ReadonlyArray<readonly [RegExp, FileViewerKind]> = [
   [/\.(?:db|sqlite|sqlite3|db3|s3db|sl3)$/iu, "database"],
   [/\.(?:md|markdown|mdown|mkd)$/iu, "markdown"],
   [/\.(?:csv|tsv|tab)$/iu, "csv"],
+  [/\.svg$/iu, "svg"],
   [/\.(?:apng|avif|bmp|gif|ico|jpe?g|png|webp)$/iu, "image"],
 ]
 

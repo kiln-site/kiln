@@ -41,6 +41,10 @@ const textViewImports: Record<
     import("@/components/files/markdown-preview").then(
       (module) => module.MarkdownPreview
     ),
+  svg: () =>
+    import("@/components/files/svg-preview").then(
+      (module) => module.SvgPreview
+    ),
 }
 
 export interface OnDemandComponent<TProps> {
