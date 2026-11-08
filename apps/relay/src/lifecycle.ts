@@ -65,7 +65,6 @@ import {
   relayTailscaleStackSchema,
 } from "@workspace/contracts"
 import type { BrickCatalog } from "./bricks.js"
-import { removeResticRepository } from "./backups.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
 import {
@@ -3514,11 +3513,12 @@ export class LifecycleDriver {
     await this.removeFromTailscale((memberId) => memberId === member)
     await this.#docker.forgetRecoveryState(instance.id)
     if (deleteData) {
+      // Its incremental snapshots' repository stays, so they can still be
+      // restored into another server until each is deleted.
       await rm(join(this.#config.rootDirectory, instance.directory), {
         recursive: true,
         force: true,
       })
-      await removeResticRepository(this.#config, instance.id)
     }
     // The server is gone; only rewriting CoreDNS without it waits for the
     // routes.
@@ -3532,7 +3532,6 @@ export class LifecycleDriver {
       recursive: true,
       force: true,
     })
-    await removeResticRepository(this.#config, id)
   }
 
   async #ensureNetwork(): Promise<void> {

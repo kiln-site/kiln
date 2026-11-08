@@ -236,6 +236,86 @@ describeMysql("backup authorization", () => {
     )
 
     it.effect(
+      "restoring into another server copies the backup there: it takes download on the backup and restore on that server",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          // The backup's own server is gone; another is restored into.
+          const backupId = yield* seedBackup
+          const otherId = "b".repeat(40)
+          relay.snapshot = relaySnapshotSchema.parse({
+            ...(relay.snapshot as object),
+            instances: [{ ...instance, id: otherId, shortId: "bbbbbbbb" }],
+          })
+          const restoreElsewhere = () =>
+            restoreInstanceBackupHandler(user, {
+              backupId,
+              safetyBackup: true,
+              targetId: otherId,
+            })
+
+          // Restoring the backup isn't enough to copy its data elsewhere.
+          yield* grant(instanceId, ["backup.restore"])
+          yield* grant(otherId, ["backup.restore", "backup.create"])
+          assert.include(
+            yield* rejection(restoreElsewhere),
+            "permission to download"
+          )
+          // Nor is downloading it, without restoring the other server.
+          yield* seed
+          const second = yield* seedBackup
+          const restoreSecond = () =>
+            restoreInstanceBackupHandler(user, {
+              backupId: second,
+              safetyBackup: true,
+              targetId: otherId,
+            })
+          yield* grant(instanceId, ["backup.download"])
+          yield* grant(otherId, ["backup.create"])
+          assert.include(yield* rejection(restoreSecond), "permission")
+          assert.strictEqual(yield* count("backup_task"), 1)
+
+          yield* seed
+          const third = yield* seedBackup
+          yield* grant(instanceId, ["backup.download"])
+          yield* grant(otherId, ["backup.create", "backup.restore"])
+          const result = yield* Effect.promise(() =>
+            restoreInstanceBackupHandler(user, {
+              backupId: third,
+              safetyBackup: true,
+              targetId: otherId,
+            })
+          )
+          const tasks = yield* selectRows<{
+            id: string
+            target_id: string | null
+          }>("backup_task")
+          assert.strictEqual(
+            tasks.find((task) => task.id === result.restoreTaskId)?.target_id,
+            otherId
+          )
+          // The safety backup is of the server restored into.
+          const backups = yield* selectRows<{ id: string; target_id: string }>(
+            "backup"
+          )
+          assert.strictEqual(
+            backups.find((backup) => backup.id === result.safetyBackupId)
+              ?.target_id,
+            otherId
+          )
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              relay.snapshot = relaySnapshotSchema.parse({
+                ...(relay.snapshot as object),
+                instances: [instance],
+              })
+            })
+          )
+        )
+    )
+
+    it.effect(
       "setting a server's retention needs backup.delete there, as it deletes backups",
       () =>
         Effect.gen(function* () {

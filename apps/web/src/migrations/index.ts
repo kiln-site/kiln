@@ -54,6 +54,7 @@ import { webHostnameProxy } from "./0053_web_hostname_proxy"
 import { explicitBackupDestinations } from "./0054_explicit_backup_destinations"
 import { notificationMerging } from "./0055_notification_merging"
 import { appVolumeFileRoots } from "./0056_app_volume_file_roots"
+import { backupRestoreDestinations } from "./0057_backup_restore_destinations"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -111,4 +112,5 @@ export const migrations: ReadonlyArray<Migration> = [
   explicitBackupDestinations,
   notificationMerging,
   appVolumeFileRoots,
+  backupRestoreDestinations,
 ]

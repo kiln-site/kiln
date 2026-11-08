@@ -90,7 +90,7 @@ const applyRetention = Effect.fn("backupMaintenance.applyRetention")(
         Effect.gen(function* () {
           // Fails when it's no longer deletable, such as mid-restore; a later
           // sweep looks again.
-          const input = yield* reserveBackupDeleteEffect({
+          const reservation = yield* reserveBackupDeleteEffect({
             backupId: backup.backupId,
             requestedBy: null,
             taskId: randomUUID(),
@@ -98,10 +98,12 @@ const applyRetention = Effect.fn("backupMaintenance.applyRetention")(
           started += 1
           publishBackupChange(relay.id, backup.backupId)
           // Undelivered, the delete waits queued; the Relay's next
-          // reconciliation sends it. Null when only the record went, its
-          // archive still shared with a linked backup.
-          if (input)
-            yield* promiseEffect(() => dispatchBackupTask(relay, input))
+          // reconciliation sends it. Retention only expires finished
+          // backups, so none waits on a create.
+          if (reservation.kind === "dispatch")
+            yield* promiseEffect(() =>
+              dispatchBackupTask(relay, reservation.dispatch)
+            )
         })
       ).pipe(
         Effect.catchCause((cause) =>

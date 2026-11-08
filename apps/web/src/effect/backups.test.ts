@@ -1,18 +1,14 @@
-import { afterEach, assert, beforeEach, expect, layer } from "@effect/vitest"
+import { afterEach, assert, beforeEach, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { TestClock } from "effect/testing"
 import { vi } from "vite-plus/test"
 
-import { encryptWithKeyring } from "../../keyring.mjs"
 import { BackupStorageError } from "@/effect/errors"
 import {
   linkInstanceBackupsEffect,
-  purgeInstanceBackupRepositoriesEffect,
   reserveBackupCopyEffect,
   reserveBackupDeleteEffect,
 } from "@/effect/backups"
-import { deleteS3BackupPrefix } from "@/backups/destinations/s3"
-import { betterAuthSecrets } from "@/lib/environment"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertBackup,
@@ -78,14 +74,6 @@ interface ArtifactTableRow {
   storage_id: string | null
 }
 
-interface RepositoryTableRow {
-  id: string
-  object_prefix: string | null
-  storage_id: string | null
-  storage_key: string
-  target_id: string
-}
-
 const byId = <T extends { id: string }>(rows: ReadonlyArray<T>) =>
   new Map(rows.map((row) => [row.id, row]))
 
@@ -93,7 +81,6 @@ const backups = selectRows<BackupTableRow>("backup").pipe(Effect.map(byId))
 const artifacts = selectRows<ArtifactTableRow>("backup_artifact").pipe(
   Effect.map(byId)
 )
-const repositories = selectRows<RepositoryTableRow>("backup_repository")
 
 const fresh = Effect.gen(function* () {
   yield* resetDatabase
@@ -114,114 +101,6 @@ const insertArtifact = (
     updated_at: now,
     ...row,
   })
-
-describeMysql("final deletion repository purge", () => {
-  layer(TestDatabase)((it) => {
-    const repositoryPrefix = "team/restic/instance-one/repository-one"
-
-    const seedRepositories = Effect.gen(function* () {
-      yield* fresh
-      const purpose = (field: string) =>
-        `kiln-backup-storage:${storageId}:${field}`
-      yield* insertBackupStorage(storageId, {
-        access_key_id_ciphertext: encryptWithKeyring(
-          "AKIAEXAMPLE",
-          betterAuthSecrets(),
-          purpose("access-key-id")
-        ),
-        secret_access_key_ciphertext: encryptWithKeyring(
-          "s3-secret",
-          betterAuthSecrets(),
-          purpose("secret-access-key")
-        ),
-      })
-      for (const [id, targetId] of [
-        ["repository-one", "instance-one"],
-        ["repository-other", "instance-two"],
-      ]) {
-        yield* insertRows("backup_repository", {
-          id,
-          relay_id: "relay-one",
-          target_kind: "instance",
-          target_id: targetId,
-          storage_id: storageId,
-          storage_key: storageId,
-          object_prefix:
-            id === "repository-one" ? repositoryPrefix : `team/${id}`,
-          password_ciphertext: "password",
-          created_at: now,
-        })
-      }
-      yield* insertBackup("incremental", {
-        backup_mode: "incremental",
-        artifact_kind: "restic_snapshot",
-        repository_id: "repository-one",
-        storage_id: storageId,
-      })
-      yield* insertArtifact("incremental-artifact", "incremental", {
-        destination_key: "restic",
-        storage_id: storageId,
-      })
-      yield* insertBackup("full")
-      yield* insertArtifact("full-artifact", "full")
-      yield* insertBackup("other-target", {
-        target_id: "instance-two",
-        backup_mode: "incremental",
-        artifact_kind: "restic_snapshot",
-        repository_id: "repository-other",
-        storage_id: storageId,
-      })
-    })
-
-    it.effect(
-      "purges remote data before deleting the incremental catalog",
-      () =>
-        Effect.gen(function* () {
-          yield* seedRepositories
-          vi.mocked(deleteS3BackupPrefix).mockClear()
-          vi.mocked(deleteS3BackupPrefix).mockReturnValue(Effect.void)
-
-          yield* purgeInstanceBackupRepositoriesEffect(
-            "relay-one",
-            "instance-one"
-          )
-
-          // Only this instance's repository is purged from the bucket.
-          expect(vi.mocked(deleteS3BackupPrefix).mock.calls).toEqual([
-            [
-              expect.objectContaining({
-                accessKeyId: "AKIAEXAMPLE",
-                bucket: "kiln-backups",
-                secretAccessKey: "s3-secret",
-              }),
-              repositoryPrefix,
-            ],
-          ])
-          const backupRows = yield* backups
-          assert.strictEqual(backupRows.get("incremental")?.status, "deleted")
-          assert.isNull(backupRows.get("incremental")?.repository_id ?? null)
-          assert.strictEqual(backupRows.get("full")?.status, "available")
-          assert.strictEqual(
-            backupRows.get("other-target")?.status,
-            "available"
-          )
-          const artifactRows = yield* artifacts
-          assert.strictEqual(
-            artifactRows.get("incremental-artifact")?.status,
-            "deleted"
-          )
-          assert.strictEqual(
-            artifactRows.get("full-artifact")?.status,
-            "available"
-          )
-          assert.deepStrictEqual(
-            (yield* repositories).map((row) => row.id),
-            ["repository-other"]
-          )
-        })
-    )
-  })
-})
 
 describeMysql("backup copy reservation", () => {
   layer(TestDatabase)((it) => {
@@ -336,7 +215,7 @@ describeMysql("linked backups", () => {
             requestedBy: "user-one",
             taskId: "delete-original",
           })
-          assert.isNull(original)
+          assert.deepStrictEqual(original, { kind: "removed" })
           assert.strictEqual(
             (yield* backups).get("s3-archive")?.status,
             "deleted"
@@ -353,12 +232,14 @@ describeMysql("linked backups", () => {
             requestedBy: "user-one",
             taskId: "delete-linked",
           })
-          assert.deepInclude(last, {
+          assert.strictEqual(last.kind, "dispatch")
+          const dispatch = last.kind === "dispatch" ? last.dispatch : null
+          assert.deepInclude(dispatch, {
             archive: { backupId: "s3-archive", targetId: "instance-one" },
             kind: "delete",
           })
           assert.strictEqual(
-            last?.artifacts[0]?.objectKey,
+            dispatch?.artifacts[0]?.objectKey,
             "kiln/s3-archive.zip"
           )
         })

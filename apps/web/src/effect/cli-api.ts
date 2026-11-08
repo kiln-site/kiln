@@ -43,6 +43,7 @@ import {
   relayRemoteFileUploadResultSchema,
   relayResourceLimitsV1Feature,
   relaySnapshotSchema,
+  type BackupTarget,
   type ResourceLimits,
   type ResourceLimitsInput,
 } from "@workspace/contracts"
@@ -87,6 +88,7 @@ import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import {
   dispatchBackupTask,
+  cancelCreateForDelete,
   reconcileRelayBackups,
 } from "@/lib/backup-reconciliation"
 import {
@@ -483,11 +485,22 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
   function* (principal: CliPrincipal, unknownInput: unknown) {
     yield* requireCliWrite(principal)
     const input = yield* parseInput(cliRestoreBackupRequestSchema, unknownInput)
+    const catalog = (yield* loadCliBackupCatalogEffect()).find(
+      (candidate) => candidate.id === input.backupId
+    )
+    const elsewhere =
+      input.targetId !== undefined && input.targetId !== catalog?.targetId
+    // Into another resource it copies the backup's data there, which takes
+    // permission to download it; into its own, to restore it.
     const { backup } = yield* loadCliBackupForAction(
       principal,
       input.backupId,
-      "backup.restore"
+      elsewhere ? "backup.download" : "backup.restore"
     )
+    const destination = {
+      id: input.targetId ?? backup.targetId,
+      kind: backup.targetKind,
+    }
     if (
       backup.status !== "available" ||
       (backup.targetKind !== "instance" && backup.targetKind !== "database") ||
@@ -506,8 +519,11 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
       )
     }
     const relay = yield* requiredRelay(backup.relayId)
+    if (elsewhere) {
+      yield* requireCliBackupPermission(principal, backup, "backup.restore", destination)
+    }
     if (input.safetyBackup) {
-      yield* requireCliBackupPermission(principal, backup, "backup.create")
+      yield* requireCliBackupPermission(principal, backup, "backup.create", destination)
     }
     if (backup.targetKind === "instance") {
       const snapshot = yield* relayRpcEffect(
@@ -517,7 +533,7 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
         principal
       ).pipe(Effect.flatMap(parseRelaySnapshot))
       const instance = snapshot.instances.find(
-        (candidate) => candidate.id === backup.targetId
+        (candidate) => candidate.id === destination.id
       )
       if (!instance)
         return yield* cliNotFound("The restore target was not found.")
@@ -537,7 +553,7 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
       if (
         !records.some(
           (record) =>
-            record.relayId === relay.id && record.databaseId === backup.targetId
+            record.relayId === relay.id && record.databaseId === destination.id
         )
       ) {
         return yield* cliNotFound("The restore target was not found.")
@@ -555,7 +571,7 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
                 storageIds: [null],
                 relayId: relay.id,
                 requestedMaxBytes: null,
-                targetId: backup.targetId,
+                targetId: destination.id,
                 taskId: randomUUID(),
               })
             : reserveDatabaseBackupEffect({
@@ -566,7 +582,7 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
                 storageIds: [null],
                 relayId: relay.id,
                 requestedMaxBytes: null,
-                targetId: backup.targetId,
+                targetId: destination.id,
                 taskId: randomUUID(),
               }),
           "Hearth could not reserve the safety backup."
@@ -577,6 +593,7 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
         backupId: backup.id,
         dependsOnTaskId: safety?.taskId ?? null,
         requestedBy: principal.user.id,
+        target: destination,
         taskId: randomUUID(),
       }),
       "Hearth could not reserve the restore."
@@ -613,7 +630,7 @@ export const deleteCliBackupEffect = Effect.fn("cli.api.backups.delete")(
       "backup.delete"
     )
     const relay = yield* requiredRelay(backup.relayId)
-    const dispatch = yield* mapCliBackupFailure(
+    const reservation = yield* mapCliBackupFailure(
       reserveBackupDeleteEffect({
         backupId: backup.id,
         requestedBy: principal.user.id,
@@ -622,10 +639,24 @@ export const deleteCliBackupEffect = Effect.fn("cli.api.backups.delete")(
       "Hearth could not reserve backup deletion."
     )
     yield* Effect.sync(() => publishBackupChange(relay.id, backup.id))
-    // Null when another backup still shares the archive: only the record goes.
-    const relayAccepted = dispatch
-      ? yield* enqueueCliBackupEffect(principal, relay, dispatch)
-      : true
+    // Only the record went: another backup still shares the archive, or
+    // nothing can read what it named any more. A backup still being made
+    // is deleted once its create, asked to stop, has ended.
+    const relayAccepted =
+      reservation.kind === "removed"
+        ? true
+        : reservation.kind === "waiting"
+          ? yield* Effect.tryPromise(() =>
+              cancelCreateForDelete(
+                relay,
+                reservation.createTaskId,
+                cliRelaySubject(principal)
+              )
+            ).pipe(
+              Effect.as(true),
+              Effect.catch(() => Effect.succeed(false))
+            )
+          : yield* enqueueCliBackupEffect(principal, relay, reservation.dispatch)
     return cliDeleteBackupResponseSchema.parse({
       backupId: backup.id,
       relayAccepted,
@@ -1414,12 +1445,14 @@ const requireCliBackupPermission = Effect.fn(
 )(function* (
   principal: CliPrincipal,
   backup: BackupCatalogRecord,
-  permission: AccessPermission
+  permission: AccessPermission,
+  // The resource it's checked on: the backup's own unless another is named.
+  target: BackupTarget = { id: backup.targetId, kind: backup.targetKind }
 ) {
   yield* requireRelayPermissionEffect({
-    ...(backup.targetKind === "instance"
-      ? { instanceId: backup.targetId }
-      : { databaseId: backup.targetId }),
+    ...(target.kind === "instance"
+      ? { instanceId: target.id }
+      : { databaseId: target.id }),
     permission,
     relayId: backup.relayId,
     user: principal.user,

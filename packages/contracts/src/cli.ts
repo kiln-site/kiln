@@ -389,7 +389,13 @@ export const cliBackupMutationResponseSchema = z
   .strict()
 
 export const cliRestoreBackupRequestSchema = z
-  .object({ backupId: backupIdSchema, safetyBackup: z.boolean().default(true) })
+  .object({
+    backupId: backupIdSchema,
+    safetyBackup: z.boolean().default(true),
+    // Another game server or database of the backup's kind on its Relay to
+    // restore into, as when its own is gone; omitted, its own.
+    targetId: z.string().regex(/^[a-f0-9]{40}$/u).optional(),
+  })
   .strict()
 
 export const cliRestoreBackupResponseSchema = z

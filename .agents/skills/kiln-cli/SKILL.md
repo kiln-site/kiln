@@ -291,7 +291,13 @@ logical import:
 ```sh
 kiln backup restore <backup-id>
 kiln backup restore <backup-id> --no-safety-backup
+kiln backup restore <backup-id> --to <relay-id>:<instance-id>
 ```
+
+`--to` restores into another game server or database of the backup's kind on
+the backup's Relay, as when the one it was taken of is gone. It takes
+permission to download the backup and to restore the destination, and the
+safety backup is of the destination.
 
 Download through a temporary signed URL without printing the URL itself. The
 backup filename is used when the local path is omitted. Incremental snapshots

@@ -366,7 +366,74 @@ a retention changes, and every ten minutes, when it also catalogs the
 backups Relays made on their own. Setting a retention takes `backup.delete`
 as well as `backup.create`.
 
+## Deleting backups
+
+Any backup can be deleted, whatever state it's in
+(`reserveBackupDeleteEffect`); only a restore from it, or a copy of it,
+holds it until that ends.
+
+- One still being made is marked deleting at once, and its delete task waits
+  on its create (`depends_on_task_id`): Hearth asks the Relay to cancel the
+  create, and sends the delete only once the create has ended, cancelled or
+  not, so the delete never runs before what it deletes is written. Each
+  reconciliation cancels any create its Relay still holds for a backup being
+  deleted, and cancels in Hearth one its Relay never received. A Relay
+  records a create that arrives after its backup's delete as cancelled and
+  never runs it, so one Hearth sent just before the delete can't write what
+  the delete removed.
+- One whose create finishes before the cancel reaches it still records what
+  it made, its artifacts, sizes, checksums and snapshot, while the backup
+  stays deleting, so a delete that then fails leaves a whole backup.
+- One already being deleted keeps its delete task, which is sent again;
+  a Relay takes a task ID once.
+- An incremental one whose repository Hearth no longer has, as releases that
+  purged a deleted server's repositories left behind, can't be read or
+  forgotten by anyone, so only its record goes.
+
+A delete that doesn't finish leaves each artifact as valid as it was: one
+being deleted is available again, a failed one stays failed, and the backup
+follows its artifacts.
+
+Every queued task is sent to its Relay on its own, so one Hearth can't send
+never holds up the rest. A task whose catalog record can't be made into a
+Relay task, as when its destination is gone or its repository's row is, is
+settled rather than tried on every pass: a delete whose repository is gone ends with
+the record removed, and anything else fails with why, its backup going back
+to the state it had.
+
+## Telemetry
+
+Each Relay task is a `Backups.<kind>` span, with steps beneath it:
+`Backups.archive`, `Backups.store` and `Backups.upload` for a full archive,
+`Backups.database.dump` and `Backups.database.import`, `Backups.restore.fetch`
+and `Backups.restore.files`, and a `Restic.command` span for every restic
+process. An incremental create records what restic said of its snapshot
+(`restic.bytes.added`, `restic.files.new`/`changed`/`unmodified`), and
+`relay.restic.snapshot.bytes` counts what each snapshot covered and what it
+newly stored, by storage kind. Progress writes are untraced. In Hearth, each
+reconciliation of a Relay's backups is a `Backups.reconcileRelay` span, and
+each task it sends a `Backups.dispatch`.
+
 ## Restore and deletion safety
+
+A backup restores into the resource it was taken of, or into another of the
+same kind on its Relay: a game server, a database, an App's folder, or a
+volume. That's how a backup of a resource since deleted is restored, and the
+restore dialog and `kiln backup restore --to` offer it. Restoring into
+another resource copies the backup's data there, so it takes `backup.download`
+on the backup, as linking it to a copy does, and permission to restore the
+resource it goes into; a safety backup is of that resource and takes
+`backup.create` there. Both are read from the catalog, so they don't need the
+backup's own resource to exist. The restore task records where it goes
+(`backup_task.target_kind`/`target_id`, null for the backup's own), its
+operation holds that resource, and restores into one resource queue behind
+each other whichever backup each restores. The Relay task's `target` is
+where it goes and `archive` the backup and resource it was made as, which the
+archive's manifest is checked against; a restore of an App's folder or a
+volume journals and fences the resource it goes into. A database dump's first
+bytes name the engine whose tool wrote it (`-- MySQL dump`, `-- MariaDB dump`,
+`-- PostgreSQL database dump`), and one of the other family is refused before
+anything is imported.
 
 Game-server restore requires the instance to be stopped. Hearth can enqueue a
 full safety backup first, kept on the Relay; restore is submitted only after
@@ -467,7 +534,10 @@ and its final backup dropped from reuse, before the resource is let go, so
 no retry starts meanwhile and none reuses a backup from before. Every
 attempt is recorded before its operation is admitted, and a reconciler admits
 any whose operation is missing, at startup and every half minute. Final backups stay in the catalog
-after the resource is gone, and retention never removes them. Relay-local
+after the resource is gone, and retention never removes them, nor does
+deleting the resource remove its other backups. Its grants go with it, so
+its backups are then seen and acted on by those with `backup.*` on the Relay
+and by platform administrators. Relay-local
 final backups remain tied to Relay availability. No other backup, restore,
 copy, or export of a resource can start while its deletion runs.
 
@@ -605,7 +675,8 @@ expire after five minutes and are swept on Relay startup.
 
 Delete runs `restic forget` for the cataloged snapshot, or — when a failed
 create never recorded a snapshot ID — forgets snapshots tagged
-`task:<createTaskId>`. A missing snapshot is treated as a successful forget.
+`task:<createTaskId>`. A missing snapshot, or a repository that's gone, is
+treated as a successful forget, and the latter queues no prune.
 The delete completes once the snapshot is forgotten, and in the same journal
 transaction Relay queues an internal `prune` task that Hearth never lists,
 unless one for that repository is already waiting. A prune waits while
@@ -621,6 +692,13 @@ Ordinary snapshot deletion never deletes the repository row; an empty repo is
 the dedup base for later backups and costs a few KiB. A prune whose
 repository was removed while it waited has nothing to do and succeeds.
 
+A create opens its repository with the lookup it needs anyway, the snapshots
+an interrupted attempt of the same task saved: a repository that doesn't
+exist yet (restic exit 10) is made then, and a wrong password (exit 12)
+fails the task. A command refused because the repository is locked (exit
+11) runs `restic unlock`, which removes only stale locks, such as one a
+restarted Relay left, and is tried once more; a live lock still fails it.
+
 restic writes a lock file before every command, reads included. When storage
 refuses that write, such as a bucket at its provider's storage cap or a
 read-only key, commands that only read the repository (snapshot lookups,
@@ -630,13 +708,21 @@ only writer to its repositories. Creates, forgets, and prunes still need the
 lock, so they fail until the storage accepts writes again.
 
 Pre-restore safety backups and final-deletion backups stay full zip archives
-so recovery does not depend on a mutable repository. When an instance is
-finally deleted, Hearth marks remaining incremental catalog rows deleted, nulls
-`repository_id`, purges each S3 repository prefix (current object versions
-only), and deletes the repository rows. Relay-side final deletion still
-removes only the local repository directory. Versioned buckets retain old
-object versions after DeleteObjects; configure a bucket lifecycle rule if that
-storage must not remain billable.
+so recovery does not depend on a mutable repository. Deleting a game server
+keeps its incremental backups and their repositories, Hearth's row with its
+password and the Relay's directory or S3 prefix alike, so each snapshot can
+still be restored into another server or downloaded until it's deleted as
+any backup is. A repository stays once its last snapshot is deleted and
+pruned; an empty one costs a few KiB. Releases before this kept nothing:
+they purged a deleted server's repositories and marked its incremental
+backups deleted.
+
+A restore or export reads the snapshot under the path it was taken from,
+the server's directory below the Relay's server root. Restoring into the
+server it was taken of uses that server's directory; restoring into another,
+or exporting one whose server is gone, reads the path from the snapshot
+itself (`restic snapshots`), and the repository from the server it was
+taken of, which the task's `archive` names.
 
 Destination deletion is two-phase: the row is marked `deleting` so new backups
 cannot select it, S3 repository prefixes are purged, then foreign keys on

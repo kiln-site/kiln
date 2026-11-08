@@ -38,7 +38,53 @@ const resticDuration = Metric.histogram("relay.restic.command.duration", {
   boundaries: [0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 900, 3600],
 })
 
+const snapshotBytes = Metric.histogram("relay.restic.snapshot.bytes", {
+  description:
+    "Data one incremental snapshot covered, and what it newly stored after deduplication and compression",
+  attributes: { unit: "By" },
+  boundaries: [
+    1024 ** 2,
+    16 * 1024 ** 2,
+    128 * 1024 ** 2,
+    1024 ** 3,
+    8 * 1024 ** 3,
+    64 * 1024 ** 3,
+    512 * 1024 ** 3,
+  ],
+})
+
 export type BackupTaskOutcome = "succeeded" | "failed" | "cancelled"
+
+/**
+ * Records how much one snapshot read and how much it stored, by kind:
+ * `processed` against `added` is how well deduplication works there.
+ */
+export function recordResticSnapshot(
+  relayId: string,
+  input: {
+    bytesAdded: number
+    bytesProcessed: number
+    storageKind: "local" | "s3"
+  }
+): Effect.Effect<void> {
+  const attributes = {
+    "relay.id": relayId,
+    "backup.storage.kind": input.storageKind,
+  }
+  return Effect.all(
+    [
+      Metric.update(
+        Metric.withAttributes(snapshotBytes, { ...attributes, kind: "processed" }),
+        input.bytesProcessed
+      ),
+      Metric.update(
+        Metric.withAttributes(snapshotBytes, { ...attributes, kind: "added" }),
+        input.bytesAdded
+      ),
+    ],
+    { discard: true }
+  )
+}
 
 type BackupStorage = {
   /** Where the backup's data lives. */

@@ -51,6 +51,11 @@ import { Switch } from "@workspace/ui/components/switch"
 import type { BackupTarget } from "@workspace/contracts"
 import { KilnRestoreDialog } from "@/components/backups/kiln-restore-dialog"
 import { ResourceRestoreDialog } from "@/components/backups/resource-backup-dialogs"
+import {
+  RestoreDestinationSelect,
+  useRestoreDestination,
+  type RestoreDestination,
+} from "@/components/backups/restore-destination"
 import { UnfinishedRestores } from "@/components/backups/unfinished-restores"
 import { BackupTargetSettings } from "@/components/backups/target-settings"
 import {
@@ -792,6 +797,44 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       volumeListing,
     ]
   )
+  // The game servers and databases a person may restore into, which a
+  // backup whose own is gone can go to; creating one there isn't needed
+  // unless the restore takes a safety backup, which Hearth checks.
+  const restoreTargets = React.useMemo(
+    (): Array<RestoreTarget> => [
+      ...backupScope.servers.flatMap((server) =>
+        hasBackupResourcePermission(
+          capabilities,
+          server.relayId,
+          "instance",
+          server.id,
+          "backup.restore"
+        )
+          ? [{ ...server, kind: "instance" as const }]
+          : []
+      ),
+      ...databases.flatMap((database) =>
+        database.supportsImportExport &&
+        hasBackupResourcePermission(
+          capabilities,
+          database.relayId,
+          "database",
+          database.id,
+          "backup.restore"
+        )
+          ? [
+              {
+                id: database.id,
+                kind: "database" as const,
+                name: database.name,
+                relayId: database.relayId,
+              },
+            ]
+          : []
+      ),
+    ],
+    [backupScope.servers, capabilities, databases]
+  )
   const targetNames = React.useMemo(() => {
     const names = new Map<string, string>()
     for (const server of backupScope.servers) {
@@ -905,6 +948,7 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
         selectedCreateTargetKey={selectedCreateTargetKey}
         storage={storage}
         storageNames={storageNames}
+        restoreTargets={restoreTargets}
         targetNames={targetNames}
         targets={createTargets}
       />
@@ -1136,6 +1180,7 @@ function captureBackupRunsBackgroundError(
 const BackupDialogHost = React.memo(function BackupDialogHost({
   deleteFeedbackStore,
   dialogStore,
+  restoreTargets,
   selectedCreateTargetKey,
   storage,
   storageNames,
@@ -1144,6 +1189,7 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
 }: {
   deleteFeedbackStore: BackupDeleteFeedbackStore
   dialogStore: BackupDialogStore
+  restoreTargets: ReadonlyArray<RestoreTarget>
   selectedCreateTargetKey?: string
   storage: Array<BackupStorage>
   storageNames: ReadonlyMap<string, string>
@@ -1197,8 +1243,12 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
     return (
       <RestoreBackupDialog
         backup={dialog.backup}
+        destinations={restoreDestinations(
+          dialog.backup,
+          restoreTargets,
+          targetNames
+        )}
         open
-        targetName={backupTargetName(dialog.backup, targetNames)}
         onOpenChange={close}
       />
     )
@@ -2377,26 +2427,65 @@ function DeleteBackupStorageDialog({
   )
 }
 
+// The game servers or databases on a backup's Relay it can be restored into.
+interface RestoreTarget {
+  id: string
+  kind: "database" | "instance"
+  name: string
+  relayId: string
+}
+
+// Its own while it exists, then the others of its kind on its Relay the
+// person may restore into; Hearth checks again.
+function restoreDestinations(
+  backup: Backup,
+  targets: ReadonlyArray<RestoreTarget>,
+  targetNames: ReadonlyMap<string, string>
+): Array<RestoreDestination> {
+  const ownName = targetNames.get(
+    targetKey(backup.targetKind, backup.relayId, backup.targetId)
+  )
+  const others = targets.flatMap((target) =>
+    target.kind === backup.targetKind &&
+    target.relayId === backup.relayId &&
+    target.id !== backup.targetId
+      ? [{ id: target.id, name: target.name }]
+      : []
+  )
+  return ownName === undefined
+    ? others
+    : [{ id: backup.targetId, name: ownName }, ...others]
+}
+
 function RestoreBackupDialog({
   backup,
+  destinations,
   onOpenChange,
   open,
-  targetName,
 }: {
   backup: Backup
+  destinations: ReadonlyArray<RestoreDestination>
   onOpenChange: (open: boolean) => void
   open: boolean
-  targetName: string
 }) {
   const queryClient = useQueryClient()
   const [safetyBackup, setSafetyBackup] = React.useState(true)
+  const { destination, elsewhere, ownExists, setDestination } =
+    useRestoreDestination(backup.targetId, destinations)
+  const targetName = destination?.name ?? "backup"
+  const kindLabel =
+    backup.targetKind === "database" ? "databases" : "game servers"
   const restore = useMutation({
-    mutationFn: () =>
-      backup.targetKind === "database"
-        ? restoreDatabaseBackup({ data: { backupId: backup.id, safetyBackup } })
-        : restoreInstanceBackup({
-            data: { backupId: backup.id, safetyBackup },
-          }),
+    mutationFn: () => {
+      const data = {
+        backupId: backup.id,
+        safetyBackup,
+        ...(elsewhere && destination ? { targetId: destination.id } : {}),
+      }
+      return backup.targetKind === "database"
+        ? restoreDatabaseBackup({ data })
+        : restoreInstanceBackup({ data })
+    },
     onSuccess: async (result) => {
       await resetActiveBackupRunsToFirstPage(queryClient)
       showToast({
@@ -2419,6 +2508,16 @@ function RestoreBackupDialog({
             stopped; managed databases remain running for logical import.
           </DialogDescription>
         </DialogHeader>
+        {!ownExists || destinations.length > 1 ? (
+          <RestoreDestinationSelect
+            destinations={destinations}
+            disabled={restore.isPending}
+            kindLabel={kindLabel}
+            ownId={backup.targetId}
+            value={destination?.id ?? null}
+            onChange={setDestination}
+          />
+        ) : null}
         <label className="flex items-center justify-between gap-4 rounded-lg border border-border/70 bg-background/35 p-3">
           <span>
             <span className="block text-xs font-semibold">Safety backup</span>
@@ -2445,7 +2544,7 @@ function RestoreBackupDialog({
             Cancel
           </Button>
           <Button
-            disabled={restore.isPending}
+            disabled={restore.isPending || !destination}
             type="button"
             onClick={() => restore.mutate()}
           >
@@ -2511,9 +2610,11 @@ function DeleteBackupDialog({
             {backup.relayPresent ? "Delete backup?" : "Forget backup?"}
           </DialogTitle>
           <DialogDescription>
-            {backup.relayPresent
-              ? `“${backup.name}” and its stored artifact will be permanently removed.`
-              : `The Relay for “${backup.name}” no longer belongs to Hearth.`}
+            {!backup.relayPresent
+              ? `The Relay for “${backup.name}” no longer belongs to Hearth.`
+              : backup.status === "queued" || backup.status === "running"
+                ? `“${backup.name}” is still being made. It will be stopped, then removed with anything it stored.`
+                : `“${backup.name}” and its stored artifact will be permanently removed.`}
           </DialogDescription>
         </DialogHeader>
         {!backup.relayPresent ? (
@@ -2812,7 +2913,10 @@ function hasBackupResourcePermission(
   relayId: string,
   resourceType: Exclude<BackupTargetKind, "platform">,
   resourceId: string,
-  permission: "backup.create" | "backup.download" = "backup.create"
+  permission:
+    | "backup.create"
+    | "backup.download"
+    | "backup.restore" = "backup.create"
 ): boolean {
   if (capabilities.isPlatformAdmin) return true
   return grantsAllowBackup(

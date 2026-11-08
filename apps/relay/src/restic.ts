@@ -43,6 +43,8 @@ const RESTIC_ENV_ALLOWLIST = [
 const RESTIC_EXIT_INCOMPLETE = 3
 const MAX_UNREADABLE_FILE_WARNINGS = 25
 export const RESTIC_EXIT_REPOSITORY_MISSING = 10
+// Another restic holds the repository's lock, or a stale one remains.
+const RESTIC_EXIT_LOCKED = 11
 const RESTIC_EXIT_WRONG_PASSWORD = 12
 
 export type ResticProgress = {
@@ -51,8 +53,14 @@ export type ResticProgress = {
 }
 
 export type ResticSnapshotSummary = {
+  /** New data the snapshot stored, after deduplication and compression. */
+  dataAdded: number | null
+  filesChanged: number | null
+  filesNew: number | null
+  filesUnmodified: number | null
   snapshotId: string
   totalBytesProcessed: number
+  totalFilesProcessed: number | null
   /** Files restic couldn't read, so the snapshot left out. */
   warnings: Array<string>
 }
@@ -91,11 +99,6 @@ export type ResticDriver = {
     password: string
     signal: AbortSignal
   }) => Promise<void>
-  catConfig: (input: {
-    location: ResticDriverLocation
-    password: string
-    signal: AbortSignal
-  }) => Promise<"exists" | "missing">
   dumpZip: (input: {
     destination: string
     location: ResticDriverLocation
@@ -109,11 +112,6 @@ export type ResticDriver = {
     password: string
     signal: AbortSignal
     snapshotId: string
-  }) => Promise<void>
-  init: (input: {
-    location: ResticDriverLocation
-    password: string
-    signal: AbortSignal
   }) => Promise<void>
   prune: (input: {
     location: ResticDriverLocation
@@ -129,6 +127,24 @@ export type ResticDriver = {
     signal: AbortSignal
     target: string
   }) => Promise<void>
+  /**
+   * Opens a repository to back up into: the snapshots an earlier attempt of
+   * the same task saved under `tag`, making the repository on its first
+   * backup. One command where a check, an init, and the lookup were three.
+   */
+  openForBackup: (input: {
+    location: ResticDriverLocation
+    password: string
+    signal: AbortSignal
+    tag: string
+  }) => Promise<Array<{ id: string }>>
+  /** The paths a snapshot was taken of, as restic recorded them. */
+  snapshotPaths: (input: {
+    location: ResticDriverLocation
+    password: string
+    signal: AbortSignal
+    snapshotId: string
+  }) => Promise<Array<string>>
   snapshotsByTag: (input: {
     location: ResticDriverLocation
     password: string
@@ -224,7 +240,17 @@ function summaryFromResticJson(
   const snapshotId = stringField(value, "snapshot_id")
   const totalBytesProcessed = integerField(value, "total_bytes_processed")
   if (!snapshotId || totalBytesProcessed === null) return null
-  return { snapshotId, totalBytesProcessed }
+  return {
+    dataAdded:
+      integerField(value, "data_added_packed") ??
+      integerField(value, "data_added"),
+    filesChanged: integerField(value, "files_changed"),
+    filesNew: integerField(value, "files_new"),
+    filesUnmodified: integerField(value, "files_unmodified"),
+    snapshotId,
+    totalBytesProcessed,
+    totalFilesProcessed: integerField(value, "total_files_processed"),
+  }
 }
 
 /**
@@ -295,22 +321,52 @@ export function createResticDriver(options?: {
         signal: input.signal,
         stdoutPipe: input.stdoutPipe,
       })
+    const attempt = () =>
+      input.readOnly ? readsWithoutLock(args, spawnCommand) : spawnCommand(args)
+    // A lock left by a restic that stopped mid-command, as when the Relay
+    // restarted, refuses every command until it's removed. `unlock` removes
+    // only stale locks, never a live one, so it runs once a command finds
+    // the repository locked, rather than before every command.
     const execute = async () => {
-      if (input.mutating && input.location.kind === "s3") {
-        await retryResticOperation(() =>
-          spawnResticCommand(spawnRestic, ["unlock"], {
-            cacheDirectory,
-            location: input.location,
-            password: input.password,
-            signal: input.signal,
-          })
-        )
+      const first = await resultOf(attempt)
+      if (Result.isSuccess(first)) return first.success
+      if (
+        !input.mutating ||
+        !(first.failure instanceof RelayBackupError) ||
+        first.failure.exitCode !== RESTIC_EXIT_LOCKED
+      ) {
+        throw first.failure
       }
-      return input.readOnly
-        ? readsWithoutLock(args, spawnCommand)
-        : spawnCommand(args)
+      await spawnResticCommand(spawnRestic, ["unlock"], {
+        cacheDirectory,
+        location: input.location,
+        password: input.password,
+        signal: input.signal,
+      })
+      return attempt()
     }
     return input.retryable ? retryResticOperation(execute) : execute()
+  }
+
+  const snapshotsByTag = async (input: {
+    location: ResticDriverLocation
+    password: string
+    signal: AbortSignal
+    tag: string
+  }) => {
+    const result = await run(["snapshots", "--json", "--tag", input.tag], {
+      location: input.location,
+      password: input.password,
+      readOnly: true,
+      retryable: true,
+      signal: input.signal,
+    })
+    const parsed = parseResticJsonLine(result.stdoutText)
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((entry) => {
+      const id = isRecord(entry) ? stringField(entry, "id") : null
+      return id ? [{ id }] : []
+    })
   }
 
   return {
@@ -363,37 +419,6 @@ export function createResticDriver(options?: {
         password: input.password,
         signal: input.signal,
       })
-    },
-    catConfig: async (input) => {
-      const result = await resultOf(() =>
-        run(["cat", "config"], {
-          location: input.location,
-          password: input.password,
-          readOnly: true,
-          retryable: true,
-          signal: input.signal,
-        })
-      )
-      if (Result.isSuccess(result)) return "exists"
-      const failure = result.failure
-      if (
-        failure instanceof RelayBackupError &&
-        failure.exitCode === RESTIC_EXIT_REPOSITORY_MISSING
-      ) {
-        return "missing"
-      }
-      if (
-        failure instanceof RelayBackupError &&
-        failure.exitCode === RESTIC_EXIT_WRONG_PASSWORD
-      ) {
-        throw resticError(
-          "restic_wrong_password",
-          "cat.config",
-          failure.reason,
-          failure.exitCode
-        )
-      }
-      throw failure
     },
     dumpZip: async (input) => {
       await mkdir(dirname(input.destination), { recursive: true, mode: 0o700 })
@@ -453,16 +478,6 @@ export function createResticDriver(options?: {
       if (isMissingSnapshotError(result.failure)) return
       throw result.failure
     },
-    init: async (input) => {
-      if (input.location.kind === "local") {
-        await mkdir(input.location.path, { recursive: true, mode: 0o700 })
-      }
-      await run(["init"], {
-        location: input.location,
-        password: input.password,
-        signal: input.signal,
-      })
-    },
     prune: async (input) => {
       await run(["prune", "--json"], {
         location: input.location,
@@ -492,8 +507,39 @@ export function createResticDriver(options?: {
         }
       )
     },
-    snapshotsByTag: async (input) => {
-      const result = await run(["snapshots", "--json", "--tag", input.tag], {
+    openForBackup: async (input) => {
+      const listed = await resultOf(() => snapshotsByTag(input))
+      if (Result.isSuccess(listed)) return listed.success
+      const failure = listed.failure
+      if (
+        failure instanceof RelayBackupError &&
+        failure.exitCode === RESTIC_EXIT_REPOSITORY_MISSING
+      ) {
+        if (input.location.kind === "local") {
+          await mkdir(input.location.path, { recursive: true, mode: 0o700 })
+        }
+        await run(["init"], {
+          location: input.location,
+          password: input.password,
+          signal: input.signal,
+        })
+        return []
+      }
+      if (
+        failure instanceof RelayBackupError &&
+        failure.exitCode === RESTIC_EXIT_WRONG_PASSWORD
+      ) {
+        throw resticError(
+          "restic_wrong_password",
+          "snapshots",
+          failure.reason,
+          failure.exitCode
+        )
+      }
+      throw failure
+    },
+    snapshotPaths: async (input) => {
+      const result = await run(["snapshots", "--json", input.snapshotId], {
         location: input.location,
         password: input.password,
         readOnly: true,
@@ -501,12 +547,20 @@ export function createResticDriver(options?: {
         signal: input.signal,
       })
       const parsed = parseResticJsonLine(result.stdoutText)
-      if (!Array.isArray(parsed)) return []
-      return parsed.flatMap((entry) => {
-        const id = isRecord(entry) ? stringField(entry, "id") : null
-        return id ? [{ id }] : []
-      })
+      const snapshot = Array.isArray(parsed) ? parsed[0] : null
+      const paths = isRecord(snapshot) ? snapshot.paths : null
+      if (!Array.isArray(paths)) {
+        throw resticError(
+          "restic_snapshot_missing",
+          "snapshots",
+          "restic has no snapshot with this ID"
+        )
+      }
+      return paths.filter(
+        (path): path is string => typeof path === "string" && path.length > 0
+      )
     },
+    snapshotsByTag,
     stats: async (input) => {
       const result = await run(
         ["stats", "--mode", "restore-size", "--json", input.snapshotId],
