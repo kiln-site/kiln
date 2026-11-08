@@ -1,7 +1,14 @@
 import { forkPromise, tapPromiseError } from "@/effect/promise"
 import { traceFileWork } from "@/lib/file-timing"
-import { warmFileViewerModule } from "@/lib/file-viewer-modules"
-import { fileViewerKind, fileViewerReadsText } from "@/lib/file-viewers"
+import {
+  warmFileTextViewModule,
+  warmFileViewerModule,
+} from "@/lib/file-viewer-modules"
+import {
+  fileViewerKind,
+  fileViewerReadsText,
+  fileViewerRendersText,
+} from "@/lib/file-viewers"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 
 type FileWorkspaceModule = typeof import("@/components/files/file-workspace")
@@ -44,6 +51,11 @@ export function warmFileWorkspaceModule() {
 export function warmFilePreviewModule(path: string) {
   if (!path || path.endsWith("/")) return
   const kind = fileViewerKind(path)
-  if (fileViewerReadsText(kind)) warmSyntaxCodeEditorModule()
-  else warmFileViewerModule(kind)
+  if (!fileViewerReadsText(kind)) {
+    warmFileViewerModule(kind)
+    return
+  }
+  // A file that renders opens rendered, with its editor ready behind it.
+  if (fileViewerRendersText(kind)) warmFileTextViewModule(kind)
+  warmSyntaxCodeEditorModule()
 }

@@ -1,11 +1,13 @@
 import type * as React from "react"
 
 import type { FileContentViewerProps } from "@/components/files/file-content-viewer"
+import type { FileTextViewProps } from "@/components/files/file-text-view"
 import { forkPromise, tapPromiseError } from "@/effect/promise"
 import { traceFileWork } from "@/lib/file-timing"
-import type { FileContentViewerKind } from "@/lib/file-viewers"
-
-type FileContentViewerComponent = React.ComponentType<FileContentViewerProps>
+import type {
+  FileContentViewerKind,
+  RenderedTextViewerKind,
+} from "@/lib/file-viewers"
 
 /**
  * Each viewer that reads a file its own way, loaded when a file needs it.
@@ -13,7 +15,7 @@ type FileContentViewerComponent = React.ComponentType<FileContentViewerProps>
  */
 const viewerImports: Record<
   FileContentViewerKind,
-  () => Promise<FileContentViewerComponent>
+  () => Promise<React.ComponentType<FileContentViewerProps>>
 > = {
   database: () =>
     import("@/components/files/file-database-viewer").then(
@@ -21,14 +23,31 @@ const viewerImports: Record<
     ),
 }
 
-export interface FileViewerModule {
-  readonly load: () => Promise<FileContentViewerComponent>
-  readonly loaded: () => FileContentViewerComponent | undefined
+/**
+ * The rendered view of each text file that has one, shown beside its
+ * source in the editor.
+ */
+const textViewImports: Record<
+  RenderedTextViewerKind,
+  () => Promise<React.ComponentType<FileTextViewProps>>
+> = {
+  markdown: () =>
+    import("@/components/files/markdown-preview").then(
+      (module) => module.MarkdownPreview
+    ),
 }
 
-function onDemandViewer(kind: FileContentViewerKind): FileViewerModule {
-  let pending: Promise<FileContentViewerComponent> | undefined
-  let component: FileContentViewerComponent | undefined
+export interface OnDemandComponent<TProps> {
+  readonly load: () => Promise<React.ComponentType<TProps>>
+  readonly loaded: () => React.ComponentType<TProps> | undefined
+}
+
+function onDemandComponent<TProps>(
+  kind: string,
+  importComponent: () => Promise<React.ComponentType<TProps>>
+): OnDemandComponent<TProps> {
+  let pending: Promise<React.ComponentType<TProps>> | undefined
+  let component: React.ComponentType<TProps> | undefined
   return {
     load: () => {
       pending ??= tapPromiseError(
@@ -36,7 +55,7 @@ function onDemandViewer(kind: FileContentViewerKind): FileViewerModule {
           traceFileWork(
             "viewer-module",
             { attributes: { "kiln.files.viewer": kind } },
-            viewerImports[kind]
+            importComponent
           ).then((loaded) => {
             component = loaded
             return loaded
@@ -52,17 +71,32 @@ function onDemandViewer(kind: FileContentViewerKind): FileViewerModule {
   }
 }
 
-const viewerModules = Object.fromEntries(
-  Object.keys(viewerImports).map((kind) => [
-    kind,
-    onDemandViewer(kind as FileContentViewerKind),
-  ])
-) as Record<FileContentViewerKind, FileViewerModule>
+function onDemandComponents<TKind extends string, TProps>(
+  imports: Record<TKind, () => Promise<React.ComponentType<TProps>>>
+) {
+  const entries = Object.entries(imports) as Array<
+    [TKind, () => Promise<React.ComponentType<TProps>>]
+  >
+  return Object.fromEntries(
+    entries.map(([kind, load]) => [kind, onDemandComponent(kind, load)])
+  ) as Record<TKind, OnDemandComponent<TProps>>
+}
+
+const viewerModules = onDemandComponents(viewerImports)
+const textViewModules = onDemandComponents(textViewImports)
 
 export function fileViewerModule(kind: FileContentViewerKind) {
   return viewerModules[kind]
 }
 
+export function fileTextViewModule(kind: RenderedTextViewerKind) {
+  return textViewModules[kind]
+}
+
 export function warmFileViewerModule(kind: FileContentViewerKind) {
   forkPromise(viewerModules[kind].load)
+}
+
+export function warmFileTextViewModule(kind: RenderedTextViewerKind) {
+  forkPromise(textViewModules[kind].load)
 }

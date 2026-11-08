@@ -20,6 +20,13 @@ import {
 import { EditorSearchBoundary } from "@/components/files/file-editor-search"
 import { FilePageContent } from "@/components/files/file-page-content"
 import { EditorResponsiveActions } from "@/components/files/file-editor-toolbar"
+import {
+  createFileTextViewStore,
+  FileTextView,
+  FileTextViewToggle,
+  type FileTextViewStore,
+  useFileTextViewMode,
+} from "@/components/files/file-text-view"
 import { directoryPath } from "@/components/files/file-tree-utils"
 import {
   createEditorSearchStore,
@@ -40,6 +47,11 @@ import {
   FileTreeRevealButton,
 } from "@/components/files/file-viewer-toolbar"
 import { fileLanguageForPath } from "@/lib/file-language"
+import {
+  fileViewerRendersText,
+  type RenderedTextViewerKind,
+  type TextViewerKind,
+} from "@/lib/file-viewers"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import {
   loadSyntaxCodeEditorModule,
@@ -55,24 +67,29 @@ function Editor({
   file,
   displayPath,
   instance,
+  kind,
   loading: queryLoading,
   error,
   canShare,
   canWrite,
   preferencesStore,
   treeCollapsed,
+  onOpenPath,
   onTreeExpand,
   onUploadFiles,
 }: {
   file: RelayFileContent
   displayPath: string
   instance: FileWorkspaceInstance
+  /** Which text viewer shows the file; some also render it. */
+  kind: TextViewerKind
   loading: boolean
   error: string | null
   canShare: boolean
   canWrite: boolean
   preferencesStore: FileEditorPreferencesStore
   treeCollapsed: boolean
+  onOpenPath: (path: string) => void
   onTreeExpand: () => void
   onUploadFiles: UploadFiles
 }) {
@@ -84,6 +101,8 @@ function Editor({
     createEditorSessionStore(file.content, file.modifiedAt)
   )
   const searchStore = React.useMemo(createEditorSearchStore, [])
+  const renderedKind = fileViewerRendersText(kind) ? kind : null
+  const [viewStore] = React.useState(createFileTextViewStore)
   const editorRef = React.useRef<SyntaxCodeEditorHandle>(null)
   const searchInputRef = React.useRef<HTMLInputElement>(null)
   const sectionRef = React.useRef<HTMLElement>(null)
@@ -176,6 +195,37 @@ function Editor({
     }
   }, [file.path, treeCollapsed])
 
+  const editorBody = (
+    <div className="editor-grid relative min-h-[360px] min-w-0 flex-1 overflow-hidden">
+      {editorModule ? (
+        <>
+          <StableEditorDocument
+            EditorComponent={editorModule.SyntaxCodeEditor}
+            editorRef={editorRef}
+            ariaLabel={`Edit ${formatName(file.path)}`}
+            path={file.path}
+            disabled={loading}
+            readOnly={file.readOnly || !canWrite}
+            preferencesStore={preferencesStore}
+            searchStore={searchStore}
+            sessionStore={sessionStore}
+          />
+          <FilePageContent path={displayPath} view="file" />
+        </>
+      ) : (
+        <SyntaxEditorLoadingState />
+      )}
+      {loading ? (
+        <div className="absolute inset-y-0 right-0 left-[var(--file-editor-gutter-width,3rem)] z-20 grid place-items-center bg-card/75 backdrop-blur-[2px]">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <LoaderCircle className="size-4 animate-spin text-primary-ink" />
+            Reading from Relay
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+
   return (
     <section
       ref={sectionRef}
@@ -205,6 +255,10 @@ function Editor({
                 readOnly={file.encoding === "gzip"}
               />
 
+              {renderedKind ? (
+                <FileTextViewToggle kind={renderedKind} store={viewStore} />
+              ) : null}
+
               <EditorResponsiveActions
                 canShare={canShare}
                 canWrite={canWrite}
@@ -229,37 +283,74 @@ function Editor({
         sessionStore={sessionStore}
       />
 
-      <div className="editor-grid relative min-h-[360px] min-w-0 flex-1 overflow-hidden">
-        {editorModule ? (
-          <>
-            <StableEditorDocument
-              EditorComponent={editorModule.SyntaxCodeEditor}
-              editorRef={editorRef}
-              ariaLabel={`Edit ${formatName(file.path)}`}
-              path={file.path}
-              disabled={loading}
-              readOnly={file.readOnly || !canWrite}
-              preferencesStore={preferencesStore}
-              searchStore={searchStore}
-              sessionStore={sessionStore}
-            />
-            <FilePageContent path={displayPath} view="file" />
-          </>
-        ) : (
-          <SyntaxEditorLoadingState />
-        )}
-        {loading ? (
-          <div className="absolute inset-y-0 right-0 left-[var(--file-editor-gutter-width,3rem)] z-20 grid place-items-center bg-card/75 backdrop-blur-[2px]">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <LoaderCircle className="size-4 animate-spin text-primary-ink" />
-              Reading from Relay
-            </div>
-          </div>
-        ) : null}
-      </div>
+      {renderedKind ? (
+        <RenderedTextBody
+          displayPath={displayPath}
+          instance={instance}
+          kind={renderedKind}
+          path={file.path}
+          sessionStore={sessionStore}
+          viewStore={viewStore}
+          onOpenPath={onOpenPath}
+        >
+          {editorBody}
+        </RenderedTextBody>
+      ) : (
+        editorBody
+      )}
 
       <EditorFooter error={error} file={file} sessionStore={sessionStore} />
     </section>
+  )
+}
+
+/**
+ * A text file's body when it can also be shown rendered: the rendered view,
+ * or the editor, which stays mounted while hidden so switching back keeps
+ * its place and history.
+ */
+function RenderedTextBody({
+  children,
+  kind,
+  viewStore,
+  ...props
+}: {
+  children: React.ReactNode
+  displayPath: string
+  instance: FileWorkspaceInstance
+  kind: RenderedTextViewerKind
+  onOpenPath: (path: string) => void
+  path: string
+  sessionStore: EditorSessionStore
+  viewStore: FileTextViewStore
+}) {
+  const mode = useFileTextViewMode(viewStore)
+  const searchOpen = React.useSyncExternalStore(
+    props.sessionStore.subscribe,
+    props.sessionStore.getSearchOpenSnapshot,
+    props.sessionStore.getSearchOpenSnapshot
+  )
+  // Searching searches the source, so it shows the source.
+  React.useEffect(() => {
+    if (searchOpen) viewStore.set("source")
+  }, [searchOpen, viewStore])
+  return (
+    <>
+      {mode === "rendered" ? (
+        <div className="relative flex min-h-[360px] min-w-0 flex-1 flex-col overflow-hidden">
+          <FileTextView kind={kind} {...props} />
+        </div>
+      ) : null}
+      <div
+        className={
+          mode === "rendered"
+            ? "hidden"
+            : "flex min-h-0 min-w-0 flex-1 flex-col"
+        }
+      >
+        {children}
+      </div>
+    </>
   )
 }
 
