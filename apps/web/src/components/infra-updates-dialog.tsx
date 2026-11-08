@@ -964,6 +964,13 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
     void Effect.runPromise(
       Effect.gen(function* () {
         while (current && pending.size > 0 && Date.now() < deadline) {
+          // One request at a time: the updater follows a single request,
+          // and finishes its batch once that one settles. Waiting here
+          // keeps to the deadline, and the next look is fresh.
+          if (updateMutationPendingRef.current) {
+            yield* Effect.sleep(1_000)
+            continue
+          }
           const result = yield* Effect.tryPromise(() =>
             queryClient.fetchQuery({
               ...updateOverviewQueryOptions(),
@@ -1004,13 +1011,7 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
           for (const relayId of pending) {
             if (!listed.has(relayId)) pending.delete(relayId)
           }
-          // One request at a time: the updater follows a single request,
-          // and finishes its batch once that one settles.
           if (targets.length > 0) {
-            while (current && updateMutationPendingRef.current) {
-              yield* Effect.sleep(500)
-            }
-            if (!current) return
             yield* Effect.tryPromise(() =>
               mutateUpdateAsync({
                 latestVersion: latest.version,
