@@ -116,7 +116,11 @@ interface Mapping {
 interface IdColumn {
   readonly table: string
   readonly column: string
-  readonly relayColumn?: string
+  /**
+   * The column naming the Relay its game servers are on, when not the
+   * row's `relay_id`; null when the row doesn't say.
+   */
+  readonly relayColumn?: string | null
   readonly kind:
     | InstanceIdKind
     | {
@@ -235,7 +239,13 @@ const instanceIdColumns: ReadonlyArray<IdColumn> = [
     column: "scope_id",
     kind: { column: "scope_kind", values: { instance: "server" } },
   },
-  { table: "backup", column: "linked_from_target_id", kind: "server" },
+  // The server a linked backup was made of may be on another Relay.
+  {
+    table: "backup",
+    column: "linked_from_target_id",
+    relayColumn: null,
+    kind: "server",
+  },
   {
     table: "backup_task",
     column: "target_id",
@@ -287,12 +297,14 @@ WHERE legacy_id IS NOT NULL`)
     const name = table(source.table)
     if (!(yield* columnExists(sql, name, source.column))) continue
     const relayColumn =
-      source.relayColumn ??
-      (source.kind === "relay" || source.column === "relay_id"
+      source.relayColumn === null
         ? null
-        : (yield* columnExists(sql, name, "relay_id"))
-          ? "relay_id"
-          : null)
+        : (source.relayColumn ??
+          (source.kind === "relay" || source.column === "relay_id"
+            ? null
+            : (yield* columnExists(sql, name, "relay_id"))
+              ? "relay_id"
+              : null))
     const kindColumn = typeof source.kind === "string" ? null : source.kind
     const rows = yield* sql.unsafe<{
       id: string | null
@@ -594,6 +606,7 @@ const rewriteTable = Effect.fn("migration.instanceIds.rewriteTable")(function* (
         source.column === column &&
         source.relayColumn !== undefined
     )?.relayColumn
+    if (declared === null) return null
     if (declared && names.has(declared)) return declared
     return names.has("relay_id") ? "relay_id" : null
   }
@@ -689,7 +702,62 @@ function rewriteValue(
       `file-activity:${id}/relay:${id}`
     )
   }
+  // A lock key names its resource's Relay itself (`instance:<relay>/<id>`),
+  // so its game server takes that Relay's new ID, whichever row it's in.
+  text = text.replace(
+    /\b(instance|app|database|volume):([A-Za-z0-9_-]{43})\/([a-f0-9]{40})(?![a-f0-9])/gu,
+    (match, kind: string, fingerprint: string, id: string) =>
+      mapping.relays.has(fingerprint)
+        ? `${kind}:${fingerprint}/${mapping.forRelay(fingerprint).rewrite(id)}`
+        : match
+  )
+  // So does an operation's input, as `{ relayId, instanceId }` objects such
+  // as a server migration's source and destination.
+  if (text.startsWith("{") || text.startsWith("[")) {
+    const scoped = scopedJson(text, mapping)
+    if (scoped !== null) text = scoped
+  }
   return rewriter.rewrite(text)
+}
+
+const SCOPED_KEYS = ["id", "instanceId", "resourceId", "targetId"]
+
+function scopedJson(text: string, mapping: Mapping): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  let changed = false
+  const visit = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(visit)
+    if (value === null || typeof value !== "object") return value
+    const object = value as Record<string, unknown>
+    const relay = object.relayId
+    const rewriter =
+      typeof relay === "string" && mapping.relays.has(relay)
+        ? mapping.forRelay(relay)
+        : null
+    const next: Record<string, unknown> = {}
+    for (const [key, field] of Object.entries(object)) {
+      if (
+        rewriter &&
+        SCOPED_KEYS.includes(key) &&
+        typeof field === "string" &&
+        isLegacyResourceId(field)
+      ) {
+        const rewritten = rewriter.rewrite(field)
+        if (rewritten !== field) changed = true
+        next[key] = rewritten
+      } else {
+        next[key] = visit(field)
+      }
+    }
+    return next
+  }
+  const result = visit(parsed)
+  return changed ? JSON.stringify(result) : null
 }
 
 const APP_CONFIG_PURPOSE = "kiln-app-config"

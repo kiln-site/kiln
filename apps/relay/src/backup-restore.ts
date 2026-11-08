@@ -247,8 +247,10 @@ async function extractBackupArchive(
               manifest.target.kind !== "instance" ||
               // An archive made before instance IDs names its server by
               // the old ID.
-              currentId(manifest.target.id) !==
-                currentId(input.archive?.targetId ?? input.target.id)
+              (currentId(manifest.target.id) !==
+                currentId(input.archive?.targetId ?? input.target.id) &&
+                (input.archive?.legacyTargetId === undefined ||
+                  manifest.target.id !== input.archive.legacyTargetId))
             ) {
               throw restoreError(
                 "manifest_mismatch",
