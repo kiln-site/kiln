@@ -198,6 +198,10 @@ const inactiveUpdateBatch = inactiveSystemUpdateBatch<
 type UpdateDialogViewStore = ReturnType<typeof createUpdateDialogViewStore>
 
 const updateFailureStorageKey = "kiln.system-update-failures"
+// How long the reloaded updater waits for held-back Relays to reconnect to
+// the new Hearth, and how often it looks.
+const relaysAfterHearthWaitMs = 3 * 60_000
+const relaysAfterHearthPollMs = 5_000
 const systemUpdateToastId = "system-update"
 const checkNoticeDuration = 5_000
 const minimumUpdateCheckDuration = 750
@@ -948,42 +952,71 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
   const resetUpdate = updateMutation.reset
 
   // After Hearth's update reloads the page, the Relays it held back update,
-  // now that Hearth runs their release.
+  // now that Hearth runs their release. They reconnect to the new Hearth for
+  // a while after it starts, so each is waited for until it can update.
   React.useEffect(() => {
     const saved = readRelaysAfterHearth()
     if (!saved) return
     let current = true
+    const pending = new Set(saved.relayIds)
+    const deadline = Date.now() + relaysAfterHearthWaitMs
     void Effect.runPromise(
-      Effect.tryPromise(() =>
-        queryClient.fetchQuery(updateOverviewQueryOptions())
-      ).pipe(Effect.option)
-    ).then((overview) => {
-      // Kept while Hearth hasn't reached their release, as when this page
-      // was reloaded before Hearth's update finished.
-      if (
-        !current ||
-        Option.isNone(overview) ||
-        overview.value.relaysWaitForHearth
-      ) {
-        return
-      }
-      clearRelaysAfterHearth()
-      const latest = overview.value.releases[0]
-      if (latest?.version !== saved.version) return
-      const relayIds = new Set(saved.relayIds)
-      const targets = updateTargets(overview.value).filter(
-        (target) =>
-          target.relayId !== null &&
-          relayIds.has(target.relayId) &&
-          targetHasUpdate(target, overview.value.releases)
-      )
-      if (targets.length === 0) return
-      mutateUpdate({
-        latestVersion: latest.version,
-        latestVersionName: latest.name,
-        targets,
+      Effect.gen(function* () {
+        while (current && pending.size > 0 && Date.now() < deadline) {
+          const result = yield* Effect.tryPromise(() =>
+            queryClient.fetchQuery({
+              ...updateOverviewQueryOptions(),
+              staleTime: 0,
+            })
+          ).pipe(Effect.option)
+          if (!current) return
+          // Hearth may not run their release yet, as when this page was
+          // reloaded before its update finished: they're kept for later.
+          if (Option.isNone(result) || result.value.relaysWaitForHearth) {
+            yield* Effect.sleep(relaysAfterHearthPollMs)
+            continue
+          }
+          const overview = result.value
+          const latest = overview.releases[0]
+          if (!latest || latest.version !== saved.version) {
+            clearRelaysAfterHearth()
+            return
+          }
+          const listed = new Set(overview.relays.map(({ relayId }) => relayId))
+          const targets: Array<UpdateTarget> = []
+          for (const target of updateTargets(overview)) {
+            if (target.relayId === null || !pending.has(target.relayId)) {
+              continue
+            }
+            if (targetHasUpdate(target, overview.releases)) {
+              targets.push(target)
+              pending.delete(target.relayId)
+            } else if (
+              compareLatestReleaseVersion(
+                target.currentVersion,
+                overview.releases
+              ) === 0
+            ) {
+              pending.delete(target.relayId)
+            }
+          }
+          // Removed meanwhile.
+          for (const relayId of pending) {
+            if (!listed.has(relayId)) pending.delete(relayId)
+          }
+          if (pending.size === 0) clearRelaysAfterHearth()
+          else saveRelaysAfterHearth(saved.version, [...pending], saved.savedAt)
+          if (targets.length > 0) {
+            mutateUpdate({
+              latestVersion: latest.version,
+              latestVersionName: latest.name,
+              targets,
+            })
+          }
+          if (pending.size > 0) yield* Effect.sleep(relaysAfterHearthPollMs)
+        }
       })
-    })
+    )
     return () => {
       current = false
     }

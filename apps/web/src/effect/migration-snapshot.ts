@@ -49,12 +49,14 @@ const hearthTables = Effect.fnUntraced(function* (sql: Sql) {
 })
 
 // Generated columns can't be written; none of Hearth's are, but a copy
-// shouldn't depend on that.
+// shouldn't depend on that. A column whose default is an expression, such as
+// CURRENT_TIMESTAMP, is written like any other: MySQL marks it
+// DEFAULT_GENERATED, so only a generation expression tells them apart.
 const writableColumns = Effect.fnUntraced(function* (sql: Sql, table: string) {
   const rows = yield* sql<{ name: string }>`
     SELECT column_name AS name FROM information_schema.columns
     WHERE table_schema = DATABASE() AND table_name = ${table}
-      AND extra NOT LIKE '%GENERATED%'
+      AND COALESCE(generation_expression, '') = ''
     ORDER BY ordinal_position
   `
   return rows.map((row) => quote(row.name)).join(", ")

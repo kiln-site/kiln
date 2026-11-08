@@ -91,6 +91,11 @@ const config = defineConfig(({ command, mode }) => {
       "import.meta.env.VITE_KILN_VERSION": JSON.stringify(
         process.env.KILN_VERSION?.trim() || release.releaseLine
       ),
+      // Release images pass their version; development and local builds
+      // report the bare release line instead.
+      "import.meta.env.VITE_KILN_RELEASE_BUILD": JSON.stringify(
+        Boolean(process.env.KILN_VERSION?.trim())
+      ),
       // Hearth's colors as hex for emails; see scripts/email-theme.ts.
       __KILN_EMAIL_THEME__: JSON.stringify(emailTheme(hearthStylesheet)),
       // Not under import.meta.env: that object reaches browser bundles.

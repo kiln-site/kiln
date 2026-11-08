@@ -318,6 +318,13 @@ describeMysql("database migrations", () => {
           notification("a", "app.deployed"),
           notification("b", "kiln.updated"),
         ])}`
+        // An expression default, as MySQL marks DEFAULT_GENERATED, keeps
+        // the value it was given.
+        yield* sql`CREATE TABLE kiln_dated (
+          id int PRIMARY KEY,
+          at timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+        )`
+        yield* sql`INSERT INTO kiln_dated VALUES (1, '2020-01-02 03:04:05.000')`
         return yield* database
       })
 

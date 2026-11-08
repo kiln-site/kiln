@@ -1,5 +1,5 @@
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start"
-import { isKilnNightlyVersion, relayIdSchema } from "@workspace/contracts"
+import { relayIdSchema } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
 
@@ -826,17 +826,17 @@ async function coLocatedRelay(
 /**
  * Whether Hearth runs an older release than the latest, which Relays update
  * to. A Relay ahead of Hearth may not connect to it: only a Relay behind it
- * is supported, for as long as Hearth takes to update it. A build that isn't
- * a release, such as development's bare release line, doesn't hold Relays
- * back.
+ * is supported, for as long as Hearth takes to update it. A development or
+ * local build isn't a release, so it doesn't hold Relays back.
  */
 function hearthBehindLatest(
   releases: Parameters<typeof compareLatestReleaseVersion>[1]
 ): boolean {
-  const version = import.meta.env.VITE_KILN_VERSION
-  const released =
-    isKilnNightlyVersion(version) || findKilnRelease(releases, version) !== null
-  return released && compareLatestReleaseVersion(version, releases) === 1
+  return (
+    import.meta.env.VITE_KILN_RELEASE_BUILD === true &&
+    compareLatestReleaseVersion(import.meta.env.VITE_KILN_VERSION, releases) ===
+      1
+  )
 }
 
 function immutableImage(component: { digest: string; image: string }): string {

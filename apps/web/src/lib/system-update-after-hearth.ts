@@ -23,12 +23,13 @@ const decode = Schema.decodeUnknownOption(
 
 export function saveRelaysAfterHearth(
   version: string,
-  relayIds: ReadonlyArray<string>
+  relayIds: ReadonlyArray<string>,
+  savedAt = Date.now()
 ): void {
   Result.try(() =>
     window.sessionStorage.setItem(
       storageKey,
-      JSON.stringify({ relayIds, savedAt: Date.now(), version })
+      JSON.stringify({ relayIds, savedAt, version })
     )
   )
 }
