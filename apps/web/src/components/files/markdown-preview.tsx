@@ -8,24 +8,13 @@ import remarkGfm from "remark-gfm"
 
 import { FilePageContent } from "@/components/files/file-page-content"
 import type { FileTextViewProps } from "@/components/files/file-text-view"
+import { imageTypeForPath } from "@/lib/file-media-types"
 import { remarkLimitTables } from "@/lib/markdown-limits"
 import {
   DocumentImagesContext,
   useDocumentImage,
   useDocumentImages,
 } from "@/components/files/markdown-images"
-
-const imageTypes: Record<string, string> = {
-  avif: "image/avif",
-  bmp: "image/bmp",
-  gif: "image/gif",
-  ico: "image/x-icon",
-  jpeg: "image/jpeg",
-  jpg: "image/jpeg",
-  png: "image/png",
-  svg: "image/svg+xml",
-  webp: "image/webp",
-}
 
 const remarkPlugins = [remarkGfm, remarkLimitTables]
 
@@ -246,7 +235,7 @@ function DocumentImage({
 }) {
   const target = src ? linkTarget(path, src) : null
   const own = target?.kind === "workspace" ? target.path : null
-  const type = own ? imageTypes[extensionOf(own)] : undefined
+  const type = own ? imageTypeForPath(own) : undefined
   const image = useDocumentImage(own && type ? own : null, type)
   if (own && type && image?.status === "ready") {
     return (
@@ -331,8 +320,4 @@ function linkTarget(documentPath: string, href: string): LinkTarget | null {
     kind: "workspace",
     path: segments.join("/") + (pathPart.endsWith("/") ? "/" : ""),
   }
-}
-
-function extensionOf(path: string) {
-  return path.slice(path.lastIndexOf(".") + 1).toLowerCase()
 }
