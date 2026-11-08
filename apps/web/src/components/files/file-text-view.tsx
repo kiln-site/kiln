@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Code2, Eye } from "lucide-react"
+import { Code2, Eye, Table2 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -28,6 +28,7 @@ const renderedViews: Record<
   RenderedTextViewerKind,
   { readonly icon: LucideIcon; readonly label: string }
 > = {
+  csv: { icon: Table2, label: "Table" },
   markdown: { icon: Eye, label: "Preview" },
 }
 

@@ -31,6 +31,8 @@ const textViewImports: Record<
   RenderedTextViewerKind,
   () => Promise<React.ComponentType<FileTextViewProps>>
 > = {
+  csv: () =>
+    import("@/components/files/csv-table").then((module) => module.CsvTable),
   markdown: () =>
     import("@/components/files/markdown-preview").then(
       (module) => module.MarkdownPreview
