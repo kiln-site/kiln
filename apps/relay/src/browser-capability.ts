@@ -22,6 +22,7 @@ import {
 } from "./browser-session-registry.js"
 import {
   BROWSER_ISSUED_AT_SKEW_MS,
+  BROWSER_PREVIEW_LEASE_MAX_MS,
   BROWSER_READ_LEASE_MAX_MS,
   BROWSER_WRITE_LEASE_MAX_MS,
 } from "./browser-security.js"
@@ -109,9 +110,12 @@ function validateCapabilityV2(
       action === "relay.files.upload" ||
       action === "database.dump.import"
   )
-  const maximumLease = writes
-    ? BROWSER_WRITE_LEASE_MAX_MS
-    : BROWSER_READ_LEASE_MAX_MS
+  const maximumLease =
+    capability.operation === "preview"
+      ? BROWSER_PREVIEW_LEASE_MAX_MS
+      : writes
+        ? BROWSER_WRITE_LEASE_MAX_MS
+        : BROWSER_READ_LEASE_MAX_MS
   if (
     !Number.isSafeInteger(capability.issuedAt) ||
     !Number.isSafeInteger(capability.expiresAt) ||
@@ -131,7 +135,8 @@ function validateCapabilityV2(
     capability.subject.length > 240 ||
     capability.capabilityId.length === 0 ||
     capability.capabilityId.length > 240 ||
-    (capability.operation === "file") !== (capability.path !== null) ||
+    (capability.operation === "file" || capability.operation === "preview") !==
+      (capability.path !== null) ||
     (capability.path?.length ?? 0) > 2_048
   ) {
     throw new Error("Browser capability v2 is invalid")
@@ -146,27 +151,32 @@ const browserCapabilityActions: Record<
   app: {
     console: [relayConsoleReadActions.app],
     file: ["app.files.download", "app.files.upload"],
+    preview: ["app.files.download"],
     resources: ["app.read"],
   },
   // A database's files are its dumps (`database:<databaseId>`).
   database: {
     console: [relayConsoleReadActions.database],
     file: ["database.dump.export", "database.dump.import"],
+    preview: ["database.dump.export"],
     resources: ["database.read"],
   },
   instance: {
     console: [relayConsoleReadActions.instance, "instance.console.write"],
     file: ["instance.files.download", "instance.files.upload"],
+    preview: ["instance.files.download"],
     resources: ["instance.read"],
   },
   relay: {
     console: [relayConsoleReadActions.relay],
     file: ["relay.files.download", "relay.files.upload"],
+    preview: ["relay.files.download"],
     resources: [],
   },
   platform: {
     console: [relayConsoleReadActions.platform],
     file: [],
+    preview: [],
     resources: [],
   },
 }

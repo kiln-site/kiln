@@ -181,6 +181,43 @@ it("spends nothing on a request without a credential Hearth signed for it", asyn
   expect(reached).toBe(0)
 })
 
+it("lets a preview link only read the file it names", async () => {
+  const paths: Array<string | undefined> = []
+  await relayListener((request, response) => {
+    paths.push(request.url)
+    response.end()
+  })
+  const link = (rootId: string, method = "GET") =>
+    new Request(
+      `https://kiln.example/api?path=clip.mp4&token=${signed({ instanceId: rootId })}`,
+      { method }
+    )
+
+  const played = await passRelayBrowserRequest(
+    relayId,
+    "previews/root",
+    link("root")
+  )
+  const elsewhere = await passRelayBrowserRequest(
+    relayId,
+    "previews/root",
+    link("other-root")
+  )
+  const written = await passRelayBrowserRequest(
+    relayId,
+    "previews/root",
+    link("root", "PUT")
+  )
+
+  expect(played.status).toBe(200)
+  expect(paths).toHaveLength(1)
+  expect(
+    paths[0]?.startsWith("/v1/browser/previews/root?path=clip.mp4&token=")
+  ).toBe(true)
+  expect(elsewhere.status).toBe(401)
+  expect(written.status).toBe(401)
+})
+
 it("passes a pull another Relay makes through Hearth on to the source", async () => {
   const paths: Array<string | undefined> = []
   await relayListener((request, response) => {

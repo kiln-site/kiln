@@ -66,6 +66,7 @@ import {
   sendJson,
   TransferRejected,
 } from "./http.js"
+import { previewAudits, serveFilePreview } from "./file-previews.js"
 import { serveTransfer, type TransferResult } from "./serve.js"
 
 const HTTP_PROOF_WINDOW_MS = 30_000
@@ -142,6 +143,39 @@ export function browserFileTransfers(
   // Proofs for v1 capabilities, which the Relay replays against in memory;
   // v2 proofs are reserved in its state.
   const legacyRequestProofs = new Map<string, number>()
+  const audits = previewAudits()
+
+  // Authentication, including reading a download's form, is bounded in how
+  // many run at once and how long each may take, before anyone is known.
+  const boundedAuthentication = <A, E, R>(
+    request: IncomingMessage,
+    work: Effect.Effect<A, E, R>
+  ) =>
+    Effect.suspend(() =>
+      pendingAuthentications >=
+      options.config.browserLimits.pendingFileAuthentications
+        ? reject(429, "Relay file authentication capacity reached")
+        : Effect.acquireUseRelease(
+            Effect.sync(() => {
+              pendingAuthentications += 1
+            }),
+            () =>
+              work.pipe(
+                Effect.timeoutOrElse({
+                  duration: FILE_AUTHENTICATION_TIMEOUT_MS,
+                  orElse: () =>
+                    Effect.suspend(() => {
+                      if (!request.destroyed) request.destroy()
+                      return reject(400, "Download request is invalid")
+                    }),
+                })
+              ),
+            () =>
+              Effect.sync(() => {
+                pendingAuthentications -= 1
+              })
+          )
+    )
   const pendingLegacyRequestProofs = new Set<string>()
   let pendingAuthentications = 0
 
@@ -389,57 +423,33 @@ export function browserFileTransfers(
         "kiln.file_root.id": rootId,
       })
 
-      // Authentication, including reading a download's form, is bounded in
-      // how many run at once and how long each may take.
-      if (
-        pendingAuthentications >=
-        options.config.browserLimits.pendingFileAuthentications
-      ) {
-        return yield* reject(429, "Relay file authentication capacity reached")
-      }
       const clientConfiguration = options.registry.clientConfiguration
-      const { authentication, form, path } = yield* Effect.acquireUseRelease(
-        Effect.sync(() => {
-          pendingAuthentications += 1
-        }),
-        () =>
-          Effect.gen(function* () {
-            const form =
-              method === "POST"
-                ? yield* readBrowserDownloadForm(request).pipe(
-                    Effect.catch((cause) =>
-                      reject(400, "Download request is invalid", cause)
-                    )
+      const { authentication, form, path } = yield* boundedAuthentication(
+        request,
+        Effect.gen(function* () {
+          const form =
+            method === "POST"
+              ? yield* readBrowserDownloadForm(request).pipe(
+                  Effect.catch((cause) =>
+                    reject(400, "Download request is invalid", cause)
                   )
-                : null
-            const path = form?.path ?? url.searchParams.get("path") ?? ""
-            const authentication = yield* authenticate({
-              credentials: form?.credentials,
-              instanceId: rootId,
-              method,
-              origin,
-              path,
-              request,
-            }).pipe(
-              Effect.catch((cause) =>
-                reject(401, "Browser capability is invalid", cause)
-              )
-            )
-            return { authentication, form, path }
+                )
+              : null
+          const path = form?.path ?? url.searchParams.get("path") ?? ""
+          const authentication = yield* authenticate({
+            credentials: form?.credentials,
+            instanceId: rootId,
+            method,
+            origin,
+            path,
+            request,
           }).pipe(
-            Effect.timeoutOrElse({
-              duration: FILE_AUTHENTICATION_TIMEOUT_MS,
-              orElse: () =>
-                Effect.suspend(() => {
-                  if (!request.destroyed) request.destroy()
-                  return reject(400, "Download request is invalid")
-                }),
-            })
-          ),
-        () =>
-          Effect.sync(() => {
-            pendingAuthentications -= 1
-          })
+            Effect.catch((cause) =>
+              reject(401, "Browser capability is invalid", cause)
+            )
+          )
+          return { authentication, form, path }
+        })
       )
       if (clientConfiguration !== options.registry.clientConfiguration) {
         return yield* reject(401, "Browser capability is invalid")
@@ -638,6 +648,31 @@ export function browserFileTransfers(
   return {
     handleRequest: async (request, response) => {
       const url = new URL(request.url ?? "/", "http://relay")
+      const preview = url.pathname.match(/^\/v1\/browser\/previews\/([^/]+)$/u)
+      if (preview) {
+        await runRelayRequest(
+          serveTransfer({
+            route: "browser.preview",
+            request,
+            response,
+            parent: traceParentSpan(url.searchParams.get("traceparent")),
+            headers: () => ({}),
+            program: serveFilePreview(
+              options,
+              {
+                audits,
+                authenticate: boundedAuthentication,
+                resolveRoot: (rootId) => resolveFileRoot(options, rootId),
+              },
+              request,
+              response,
+              url,
+              preview[1] ?? ""
+            ),
+          })
+        )
+        return true
+      }
       const match = url.pathname.match(/^\/v1\/browser\/files\/([^/]+)$/u)
       if (!match) return false
       const origin = request.headers.origin

@@ -8,6 +8,7 @@ same code in `apps/relay/src/transfers/`, whichever route it came in on.
 | Route                             | Used for                                                                                      | Authorized by                                                                                               |
 | --------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `/v1/browser/files/<root>`        | The Files tab's uploads and downloads, App files, host files, and database dump import/export | A capability Hearth signs for one path and action, and a proof from the browser key it names                |
+| `/v1/browser/previews/<root>`     | Playing audio and video in the Files tab, seeking with ranges                                 | A `preview` capability Hearth signs for one file, carried in the link; reads only, audio and video only     |
 | `/v1/browser/backups/<backupId>`  | Backup archive download links                                                                 | A link Hearth signs for one backup, valid until it expires                                                  |
 | `/v1/peer/transfers/<transferId>` | Another Relay pulling files copied to it (below)                                              | A grant Hearth signs for one artifact and one destination Relay, and a proof from that Relay's identity key |
 

@@ -3,6 +3,7 @@ import { createHash, randomUUID, sign } from "node:crypto"
 import {
   relayBrowserCapabilityV2Feature,
   relayBrowserLeaseRenewalV1Feature,
+  relayBrowserPreviewLeaseMs,
   relayConsoleReadActions,
   relayConsoleResourcesV1Feature,
   relayWorkloadUsageV1Feature,
@@ -283,43 +284,86 @@ export function issueFileCapabilityForRequest(input: {
   relayId: string
   optInV2: boolean
 }): Promise<IssuedBrowserCapability> {
-  // An app's data directory (`app:<appId>`) is transferred with the app's
-  // own file actions, and a database's dumps (`database:<databaseId>`) with
-  // its dump actions.
-  const host = isRelayFileRoot(input.instanceId)
-  const app = appIdFromFileRoot(input.instanceId) !== null
-  const database = databaseIdFromFileRoot(input.instanceId) !== null
-  const upload = input.action === "instance.files.upload"
   return runAppEffect(
     "file.capability.issue",
     prepareBrowserCapabilityEffect({
       actions: [
-        host
-          ? upload
-            ? "relay.files.upload"
-            : "relay.files.download"
-          : app
-            ? upload
-              ? "app.files.upload"
-              : "app.files.download"
-            : database
-              ? upload
-                ? "database.dump.import"
-                : "database.dump.export"
-              : input.action,
+        fileRootAction(
+          input.instanceId,
+          input.action === "instance.files.upload" ? "upload" : "download"
+        ),
       ],
       path: input.path,
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
       resolveBrowserMetadata: true,
-      resource: {
-        id: input.instanceId,
-        kind: host ? "relay" : app ? "app" : database ? "database" : "instance",
-      },
+      resource: fileRootResource(input.instanceId),
       identity: authenticatedIdentityEffect(input.authenticate),
       optInV2: input.optInV2,
     }).pipe(Effect.map((prepared) => prepared.capability))
   )
+}
+
+/**
+ * A link the browser's own media player can follow to read one file, as
+ * for a video it seeks through. It is a download capability that needs no
+ * request proof, so it is only ever for reading, and it lasts as long as a
+ * file is likely to stay open.
+ */
+export function issueFilePreviewCapabilityForRequest(input: {
+  authenticate: () => Promise<AuthenticatedRealtimeIdentity>
+  instanceId: string
+  path: string
+  publicKeyJwk: BrowserPublicKey
+  relayId: string
+}): Promise<IssuedBrowserCapability> {
+  return runAppEffect(
+    "file.preview.capability.issue",
+    prepareBrowserCapabilityEffect({
+      actions: [fileRootAction(input.instanceId, "download")],
+      operation: "preview",
+      optInV2: true,
+      path: input.path,
+      publicKeyJwk: input.publicKeyJwk,
+      relayId: input.relayId,
+      resolveBrowserMetadata: true,
+      resource: fileRootResource(input.instanceId),
+      identity: authenticatedIdentityEffect(input.authenticate),
+    }).pipe(Effect.map((prepared) => prepared.capability))
+  )
+}
+
+// An app's data directory (`app:<appId>`) is transferred with the app's own
+// file actions, a database's dumps (`database:<databaseId>`) with its dump
+// actions, and the host's files with the Relay's.
+function fileRootAction(
+  rootId: string,
+  direction: "download" | "upload"
+): BrowserAction {
+  const upload = direction === "upload"
+  if (isRelayFileRoot(rootId)) {
+    return upload ? "relay.files.upload" : "relay.files.download"
+  }
+  if (appIdFromFileRoot(rootId) !== null) {
+    return upload ? "app.files.upload" : "app.files.download"
+  }
+  if (databaseIdFromFileRoot(rootId) !== null) {
+    return upload ? "database.dump.import" : "database.dump.export"
+  }
+  return upload ? "instance.files.upload" : "instance.files.download"
+}
+
+function fileRootResource(rootId: string): RelayConsoleResource {
+  return {
+    id: rootId,
+    kind: isRelayFileRoot(rootId)
+      ? "relay"
+      : appIdFromFileRoot(rootId) !== null
+        ? "app"
+        : databaseIdFromFileRoot(rootId) !== null
+          ? "database"
+          : "instance",
+  }
 }
 
 const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
@@ -334,6 +378,8 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
     resolveBrowserMetadata: boolean
     resource: RelayConsoleResource
     identity: Effect.Effect<AuthenticatedRealtimeIdentity, unknown>
+    /** Set for a preview link; other operations follow from the actions. */
+    operation?: "preview"
     optInV2?: boolean
   }) {
     const [userResult, materialResult] = yield* Effect.all(
@@ -356,27 +402,33 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
     }
     const material = materialResult.success
 
-    const operation: RelayBrowserOperationKind = input.actions.some(
-      (action) =>
-        action.startsWith("instance.files.") ||
-        action.startsWith("app.files.") ||
-        action.startsWith("relay.files.") ||
-        action.startsWith("database.dump.")
-    )
-      ? "file"
-      : input.actions.some((action) => resourceUsageActions.has(action))
-        ? "resources"
-        : "console"
+    const operation: RelayBrowserOperationKind =
+      input.operation ??
+      (input.actions.some(
+        (action) =>
+          action.startsWith("instance.files.") ||
+          action.startsWith("app.files.") ||
+          action.startsWith("relay.files.") ||
+          action.startsWith("database.dump.")
+      )
+        ? "file"
+        : input.actions.some((action) => resourceUsageActions.has(action))
+          ? "resources"
+          : "console")
     const features = yield* Effect.promise(async () => {
       const { relayConnectionFeatures } = await import("@/lib/relay-connection")
       return relayConnectionFeatures(material.relay.id)
     })
-    const version = resourceVersion(
-      input.resource,
-      negotiatedVersion(operation, input.optInV2 ?? false, features),
-      features,
-      operation
-    )
+    // Previews are new: every Relay that can be reached takes them as v2.
+    const version =
+      operation === "preview"
+        ? 2
+        : resourceVersion(
+            input.resource,
+            negotiatedVersion(operation, input.optInV2 ?? false, features),
+            features,
+            operation
+          )
     if (version === 2 && identity.sessionId.length === 0) {
       return yield* Effect.fail(
         new Error(`${operation} capability v2 requires a login session`)
@@ -579,7 +631,13 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
           actions: input.actions,
           audience: input.relay.id,
           capabilityId: randomUUID(),
-          expiresAt: now + (version === 2 && mutation ? 30_000 : 60_000),
+          expiresAt:
+            now +
+            (input.operation === "preview"
+              ? relayBrowserPreviewLeaseMs
+              : version === 2 && mutation
+                ? 30_000
+                : 60_000),
           instanceId: input.resource.id,
           issuedAt: now,
           issuer: input.credentials.clientId,
@@ -636,7 +694,7 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
 )
 
 function negotiatedVersion(
-  kind: RelayBrowserOperationKind,
+  kind: Exclude<RelayBrowserOperationKind, "preview">,
   optInV2: boolean,
   features: ReadonlySet<string>
 ): 1 | 2 {
