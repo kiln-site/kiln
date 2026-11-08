@@ -16,7 +16,7 @@ export type TextViewerKind = "text" | RenderedTextViewerKind
 export type RenderedTextViewerKind = "csv" | "markdown" | "svg"
 
 /** The viewers that read a file their own way rather than as text. */
-export type FileContentViewerKind = "database" | "image" | "pdf"
+export type FileContentViewerKind = "database" | "image" | "pdf" | "video"
 
 const textViewers: ReadonlySet<FileViewerKind> = new Set<TextViewerKind>([
   "csv",
@@ -33,6 +33,8 @@ const viewersByExtension: ReadonlyArray<readonly [RegExp, FileViewerKind]> = [
   [/\.svg$/iu, "svg"],
   [/\.(?:apng|avif|bmp|gif|ico|jpe?g|png|webp)$/iu, "image"],
   [/\.pdf$/iu, "pdf"],
+  // As the Relay serves previews; browsers play what they can of these.
+  [/\.(?:m4v|mov|mp4|ogv|webm)$/iu, "video"],
 ]
 
 export function fileViewerKind(path: string): FileViewerKind {
