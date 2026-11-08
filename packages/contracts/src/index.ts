@@ -69,6 +69,7 @@ export * from "./snbt.js"
 export * from "./database-browser.js"
 export * from "./app-keys.js"
 export * from "./instance-id.js"
+export * from "./instance-id-migration.js"
 
 // A Relay's ID is an instance ID like any other's; its public-key
 // fingerprint, which authenticates it, is a separate value.
@@ -1601,6 +1602,15 @@ export const relayProvisionInstanceSchema = z.object({
   instanceId: instanceIdSchema,
 })
 
+// Claiming a game server's provisioning names the deployment Hearth
+// recorded its install as, which names the install's log on the Relay.
+export const relayClaimInstanceProvisioningSchema =
+  relayProvisionInstanceSchema.extend({ deploymentId: z.uuid() })
+
+export const relayServerDeploymentReadSchema = z
+  .object({ deploymentId: z.uuid(), instanceId: instanceIdSchema })
+  .strict()
+
 export const relayInstanceLimitsWriteSchema = z
   .object({
     instanceId: instanceIdSchema,
@@ -1615,6 +1625,9 @@ export const relayUpdateInstanceStartupSchema = z
     recipe: brickSourceSchema.optional(),
     recipeDefinition: brickRecipeSchema.optional(),
     reinstall: z.boolean().optional(),
+    // The deployment Hearth recorded a reinstall or change of Brick as,
+    // which names its log on the Relay. Absent for other startup changes.
+    deploymentId: z.uuid().optional(),
     tailscale: relayInstanceTailscaleSchema.optional(),
     variables: brickVariableValuesSchema.optional(),
     start: z.boolean().default(true),
@@ -3190,6 +3203,21 @@ export const relayAppDeploymentLogSchema = z
   })
   .nullable()
 
+// A game server's install, reinstall, or change of Brick, as its Relay
+// logged it. Null when the Relay doesn't keep that deployment.
+export const relayServerDeploymentLogSchema = z
+  .object({
+    deployment: z.object({
+      error: z.string().max(2_000).nullable(),
+      finishedAt: z.string().datetime().nullable(),
+      id: z.uuid(),
+      startedAt: z.string().datetime(),
+      state: appDeploymentStateSchema,
+    }),
+    lines: z.array(relayConsoleLineSchema),
+  })
+  .nullable()
+
 export const relayConsoleSchema = z.object({
   instanceId: z.string().min(1),
   lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
@@ -3494,6 +3522,9 @@ export type RelayProvisionInstance = z.infer<
 >
 export type RelayInstanceProvisioning = z.infer<
   typeof relayInstanceProvisioningSchema
+>
+export type RelayServerDeploymentLog = z.infer<
+  typeof relayServerDeploymentLogSchema
 >
 export type ProvisioningKind = z.infer<typeof provisioningKindSchema>
 export type ProvisioningPhase = z.infer<typeof provisioningPhaseSchema>

@@ -13,10 +13,10 @@ import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
 
 afterAll(() => disposeAppRuntime())
 
-const relayId = "r".repeat(43)
-const otherRelayId = "o".repeat(43)
-const appId = "a".repeat(40)
-const orphanedId = "b".repeat(40)
+const relayId = "1".repeat(12)
+const otherRelayId = "5".repeat(12)
+const appId = "a".repeat(12)
+const orphanedId = "b".repeat(12)
 const target = (id: string) => ({ appId: id, relayId })
 
 const sessionUser = (id: string): AuthenticatedUser => ({

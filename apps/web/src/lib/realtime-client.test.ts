@@ -26,27 +26,18 @@ import {
 const epoch = "00000000-0000-4000-8000-000000000001"
 const alpha = {
   connectAddress: "play.example.test",
-  id: "a".repeat(40),
+  id: "a".repeat(12),
   name: "Alpha",
   publicHost: "127.0.0.1",
   publicPort: 25_565,
-  relayId: "relay-a",
+  relayId: "1".repeat(12),
   relayName: "Relay A",
   relayStatus: "connected",
-  routeId: "relay-a-aaaaaaaa",
-  shortId: "a".repeat(8),
-} as FleetInstance
-const beta = {
-  ...alpha,
-  id: "b".repeat(40),
-  name: "Beta",
-  routeId: "relay-a-bbbbbbbb",
-  shortId: "b".repeat(8),
 } as FleetInstance
 const node = {
   id: "node-a",
   name: "Relay node",
-  relayId: "relay-a",
+  relayId: "1".repeat(12),
   relayName: "Relay A",
   relayStatus: "connected",
 } as FleetNode
@@ -97,7 +88,7 @@ describe("game server pages", () => {
   const relayAState = {
     browserOrigin: "https://relay-a.example.test",
     consoleTransport: "direct",
-    id: "relay-a",
+    id: "1".repeat(12),
     name: "Relay A",
     status: "connected",
     updating: false,
@@ -106,7 +97,6 @@ describe("game server pages", () => {
   function foundPage(instance: FleetInstance): ServerWorkspace {
     return {
       relay: relayAState,
-      routeIdentifier: instance.shortId,
       snapshot: { instances: [instance], nodes: [node] },
       status: "found",
     } as ServerWorkspace
@@ -129,18 +119,17 @@ describe("game server pages", () => {
     return reads
   }
 
-  it("does not open a server whose short ID another server took during the read", async () => {
+  it("reads a missing server again when it appears during the read", async () => {
     const clients = fleet()
     const reads = stagedPageReads()
-    const twin = { ...beta, shortId: alpha.shortId } as FleetInstance
-    const navigation = ensureServerWorkspace(clients.queryClient, alpha.shortId)
+    const navigation = ensureServerWorkspace(clients.queryClient, alpha.id)
     await vi.waitFor(() => expect(reads).toHaveLength(1))
 
-    applyEvent(clients, instancesDelta([twin]))
-    reads[0]!.answer(foundPage(alpha))
+    applyEvent(clients, instancesDelta([alpha]))
+    reads[0]!.answer({ status: "not-found" })
     await vi.waitFor(() => expect(reads).toHaveLength(2))
-    reads[1]!.answer({ status: "ambiguous" })
+    reads[1]!.answer(foundPage(alpha))
 
-    await expect(navigation).resolves.toEqual({ status: "ambiguous" })
+    await expect(navigation).resolves.toMatchObject({ status: "found" })
   })
 })

@@ -4,8 +4,6 @@ import type { App } from "@/components/app/app-presentation"
 
 export interface AppWorkspaceApp {
   app: App
-  // The route segment for this app, for links between its pages.
-  routeId: string
 }
 
 // Keep context identity outside the Fast Refresh boundary for workspace UI.

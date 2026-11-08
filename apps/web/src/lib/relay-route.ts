@@ -1,18 +1,11 @@
 import type { getRelays } from "@/server/relays"
-import {
-  resolveShortIdRoute,
-  shortIdRouteIdentifier,
-  shortIdRouteSelection,
-} from "@/lib/short-id-route"
+import { instanceSelection } from "@/lib/instance-selection"
 
 export type RelayDirectoryEntry = Awaited<ReturnType<typeof getRelays>>[number]
 
-export const resolveRelayRoute = resolveShortIdRoute
-export const relayRouteIdentifier = shortIdRouteIdentifier
-
-const relaySelection = shortIdRouteSelection("relay")
-export const relaySelectionRouteId = relaySelection.toSelection
-export const relayRouteIdFromSelection = relaySelection.fromSelection
+const relaySelection = instanceSelection("relay")
+export const relaySelectionValue = relaySelection.toSelection
+export const relayIdFromSelection = relaySelection.fromSelection
 
 // The scheme's default port goes unsaid, and any other port stands alone
 // without the scheme.

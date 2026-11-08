@@ -32,7 +32,8 @@ import {
   defaultBrickInstanceName,
   defaultProvisioningBrickVariables,
 } from "@/lib/brick-variables"
-import { relayFleetInstance, relayInstanceRouteId } from "@/lib/relay-fleet"
+import { randomIdempotencyKey } from "@/lib/idempotency-key"
+import { relayFleetInstance } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import {
   brickCatalogQueryOptions,
@@ -182,12 +183,7 @@ const AddServerForm = React.memo(function AddServerForm({
       onClose()
       await navigate({
         to: "/server/$serverId/startup",
-        params: {
-          serverId: relayInstanceRouteId(
-            variables.data.relayId,
-            instance.shortId
-          ),
-        },
+        params: { serverId: instance.id },
       })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
@@ -505,16 +501,6 @@ function normalizeArchitecture(architecture: string): string {
     default:
       return architecture.trim().toLowerCase()
   }
-}
-
-function randomIdempotencyKey(): string {
-  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
-  bytes[6] = (bytes[6]! & 0x0f) | 0x40
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80
-  const hex = Array.from(bytes, (value) =>
-    value.toString(16).padStart(2, "0")
-  ).join("")
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 function displayArchitecture(architecture: string | null): string {

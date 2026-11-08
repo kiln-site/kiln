@@ -65,7 +65,7 @@ export function backupLinks(options: BackupLinkOptions): BackupLinks {
         const now = Date.now()
         if (
           payload.backupId !== backupId ||
-          payload.audience !== options.identity.fingerprint ||
+          payload.audience !== options.identity.id ||
           payload.expiresAt <= now ||
           payload.issuedAt > now + 5_000 ||
           payload.expiresAt - payload.issuedAt > MAX_TOKEN_LIFETIME_MS

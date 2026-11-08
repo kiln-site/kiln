@@ -6,7 +6,7 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertRows } from "@/test/seed"
 
 const now = Date.UTC(2026, 8, 1)
-const relayOne = "r".repeat(43)
+const relayOne = "1".repeat(12)
 
 const insertManagedDatabase = (
   relayId: string,

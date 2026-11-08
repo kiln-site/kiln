@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto"
 
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { Effect } from "effect"
+import { relayFileRootId } from "@workspace/contracts"
 
 const fakes = vi.hoisted(() => ({
   decryptCredentials: vi.fn(),
@@ -72,8 +73,9 @@ const relay = {
   createdAt: "2026-01-01T00:00:00.000Z",
   createdBy: "user-one",
   enabled: true,
+  fingerprint: "F".repeat(43),
   hostname: "relay.example.com",
-  id: "relay-one",
+  id: "1".repeat(12),
   issuerGeneration: 1,
   lastConnectedAt: null,
   lastError: null,
@@ -110,7 +112,7 @@ const material = {
     clientId: "client-one",
     clientPrivateKeyCiphertext: "encrypted-private-key",
     clientPublicKeyPem: credentials.clientPublicKeyPem,
-    relayId: "relay-one",
+    relayId: "1".repeat(12),
     relayPublicKeyPem: credentials.relayPublicKeyPem,
   },
   relay,
@@ -143,7 +145,7 @@ beforeEach(() => {
 
 describe("Relay capability issuance orchestration", () => {
   describe("host file capabilities", () => {
-    const hostId = "H".repeat(43)
+    const hostId = "7".repeat(12)
     let granted: string[]
     beforeEach(() => {
       granted = ["relay.files.read"]
@@ -166,7 +168,7 @@ describe("Relay capability issuance orchestration", () => {
     })
     const issue = (
       action: "instance.files.download" | "instance.files.upload",
-      instanceId = hostId
+      instanceId = relayFileRootId(hostId)
     ) =>
       issueFileCapabilityForRequest({
         action,
@@ -184,12 +186,12 @@ describe("Relay capability issuance orchestration", () => {
         )
       ).toMatchObject({
         actions: ["relay.files.download"],
-        instanceId: hostId,
+        instanceId: relayFileRootId(hostId),
         resourceKind: "relay",
         operation: "file",
       })
       await expect(
-        issue("instance.files.download", "J".repeat(43))
+        issue("instance.files.download", relayFileRootId("8".repeat(12)))
       ).rejects.toThrow()
       await expect(issue("instance.files.upload")).rejects.toThrow()
       granted = ["instance.files.read", "app.files.read"]
@@ -214,9 +216,9 @@ describe("Relay capability issuance orchestration", () => {
         authenticate: () =>
           Promise.resolve({ sessionId: "session-one", user: current }),
         publicKeyJwk,
-        relayId: "relay-one",
+        relayId: "1".repeat(12),
         requests: [{ kind: "console", optInV2: true, write: false }],
-        resource: { id: "relay-one", kind: "platform", stream: "hearth" },
+        resource: { id: "1".repeat(12), kind: "platform", stream: "hearth" },
       })
 
     it("refuses them to anyone but platform administrators, whatever they hold on the Relay", async () => {
@@ -238,7 +240,7 @@ describe("Relay capability issuance orchestration", () => {
       issueBrowserCapabilitiesForRequest({
         authenticate: () => Promise.resolve({ sessionId: "session-one", user }),
         publicKeyJwk,
-        relayId: "relay-one",
+        relayId: "1".repeat(12),
         requests: [{ kind: "console", optInV2: true, write: true }],
         resource: { id: "instance-one", kind: "instance" },
       })

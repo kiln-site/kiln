@@ -12,6 +12,7 @@ import type {
   RelayAppDeploymentImage,
   RelayDockerImageRecord,
 } from "./effect/state.js"
+import { currentId } from "./instance-keys.js"
 import { kilnComponent, type KilnComponent } from "./update-container.js"
 
 /** The label on images an App's Dockerfile builds (apps.ts). */
@@ -110,6 +111,8 @@ export function removableImages(
       continue
     }
     const appId = labels[APP_IMAGE_LABEL]
+      ? currentId(labels[APP_IMAGE_LABEL])
+      : undefined
     if (appId && apps.has(appId)) {
       if (legacy.has(image.Id)) continue
       // A build Docker took from its cache keeps the first one's time, so
@@ -210,7 +213,8 @@ function legacyBuilds(
   const recorded = new Set(facts.deployments.map((record) => record.appId))
   const builds = new Map<string, Array<DockerImageSummary>>()
   for (const image of facts.images) {
-    const appId = image.Labels?.[APP_IMAGE_LABEL]
+    const label = image.Labels?.[APP_IMAGE_LABEL]
+    const appId = label ? currentId(label) : undefined
     if (!appId || !apps.has(appId) || recorded.has(appId)) continue
     if (recordedImages.has(image.Id)) continue
     builds.set(appId, [...(builds.get(appId) ?? []), image])

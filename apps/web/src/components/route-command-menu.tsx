@@ -45,7 +45,7 @@ import {
 interface RouteCommandMenuProviderProps {
   capabilities: NavigationAccessCapabilities
   children: React.ReactNode
-  initialSelectedInstanceRouteId: string | null
+  initialSelectedInstance: string | null
   relayConfigured: boolean
 }
 
@@ -73,7 +73,6 @@ const accessRoute: NavigationDestination = {
 
 function serverRoutes(
   instance: SidebarInstance,
-  routeId: string,
   capabilities: NavigationAccessCapabilities
 ) {
   const serverKeywords = [
@@ -87,7 +86,7 @@ function serverRoutes(
       icon: destination.icon,
       keywords: [...serverKeywords, ...destination.keywords],
       label: destination.label,
-      to: serverDestinationHref(destination, routeId),
+      to: serverDestinationHref(destination, instance.id),
     })
   ) satisfies Array<NavigationDestination>
 }
@@ -105,27 +104,20 @@ function isApplePlatform() {
 export function RouteCommandMenuProvider({
   capabilities,
   children,
-  initialSelectedInstanceRouteId,
+  initialSelectedInstance,
   relayConfigured,
 }: RouteCommandMenuProviderProps) {
   const navigate = useNavigate()
   const [open, setOpen] = React.useState(false)
   const { data: navigation } = useSidebarServerNavigation(
-    initialSelectedInstanceRouteId,
+    initialSelectedInstance,
     relayConfigured
   )
   const selectedInstance = navigation?.instance ?? null
-  const selectedInstanceRouteIdentifier = navigation?.routeId ?? null
   const selectedServerRoutes = React.useMemo(
     () =>
-      selectedInstance && selectedInstanceRouteIdentifier
-        ? serverRoutes(
-            selectedInstance,
-            selectedInstanceRouteIdentifier,
-            capabilities
-          )
-        : [],
-    [capabilities, selectedInstance, selectedInstanceRouteIdentifier]
+      selectedInstance ? serverRoutes(selectedInstance, capabilities) : [],
+    [capabilities, selectedInstance]
   )
   const infrastructureRoutes =
     accessibleInfrastructureDestinations(capabilities)

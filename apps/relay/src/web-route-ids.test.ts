@@ -2,8 +2,8 @@ import { describe, expect, it } from "vite-plus/test"
 
 import { assignRelayWebRouteIds } from "./web-route-ids.js"
 
-const instanceId = "a".repeat(40)
-const otherInstanceId = "b".repeat(40)
+const instanceId = "a".repeat(12)
+const otherInstanceId = "b".repeat(12)
 const route = {
   hostname: "map.example.com",
   name: "Live Map",

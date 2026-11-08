@@ -4,8 +4,6 @@ import type { ManagedDatabase } from "@/components/database/database-presentatio
 
 export interface DatabaseWorkspaceDatabase {
   database: ManagedDatabase
-  // The route segment for this database, for links between its pages.
-  routeId: string
 }
 
 // Keep context identity outside the Fast Refresh boundary for workspace UI.

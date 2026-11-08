@@ -1,7 +1,7 @@
 export const selectedInstanceCookieName = "selected_instance_id"
 export const uiPreferenceCookieMaxAge = 60 * 60 * 24 * 7
 
-export function readSelectedInstanceRouteId(): string | null {
+export function readSelectedInstance(): string | null {
   if (typeof document === "undefined") return null
 
   return (
@@ -13,8 +13,8 @@ export function readSelectedInstanceRouteId(): string | null {
   )
 }
 
-export function persistSelectedInstanceRouteId(routeId: string) {
-  if (readSelectedInstanceRouteId() === routeId) return
+export function persistSelectedInstance(selection: string) {
+  if (readSelectedInstance() === selection) return
 
-  document.cookie = `${selectedInstanceCookieName}=${routeId}; path=/; max-age=${uiPreferenceCookieMaxAge}; SameSite=Lax`
+  document.cookie = `${selectedInstanceCookieName}=${selection}; path=/; max-age=${uiPreferenceCookieMaxAge}; SameSite=Lax`
 }

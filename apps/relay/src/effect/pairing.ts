@@ -353,6 +353,7 @@ const signPairingResponse = Effect.fn("RelayPairing.signResponse")(
       expiresAt: input.now + 60_000,
       nonce: input.nonce,
       relayFingerprint: input.identity.fingerprint,
+      relayId: input.identity.id,
       relayName: input.identity.name,
       relayPublicKeyPem: input.identity.publicKeyPem,
       role: input.client.role,
@@ -555,6 +556,7 @@ export const joinEnvelope = Effect.fnUntraced(function* (input: {
   return {
     ...envelope,
     relayBuild: input.relayBuild,
+    relayId: input.identity.id,
   } satisfies RelayJoinEnvelope
 })
 

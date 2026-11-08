@@ -19,12 +19,13 @@ import {
   type ProvisioningAdapter,
   ProvisioningManager,
 } from "./provisioning.js"
+import { ServerDeploymentLogs } from "./server-deployment-logs.js"
 import { serverProvisioning } from "./server-provisioning.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, type RelayHarness } from "./test/relay.js"
 
-const newServerId = "a".repeat(40)
-const deletedServerId = "b".repeat(40)
+const newServerId = "a".repeat(12)
+const deletedServerId = "b".repeat(12)
 const image = "example.test/paper:latest"
 
 const recipe = brickRecipeSchema.parse({
@@ -97,6 +98,9 @@ async function serverWorker(harness: RelayHarness) {
         app: unused("app"),
         database: unused("database"),
         server: serverProvisioning({
+          deploymentLogs: new ServerDeploymentLogs(
+            harness.config.dataDirectory
+          ),
           lifecycle: harness.lifecycle,
           refreshSnapshot: async () => {
             const job = await Effect.runPromise(
@@ -236,7 +240,7 @@ describe("game server provisioning", () => {
       address: "10.0.0.2",
       dnsPort: 5353,
     }
-    const otherServerId = "c".repeat(40)
+    const otherServerId = "c".repeat(12)
     await harness.seedServer({
       id: otherServerId,
       labels: {
@@ -358,7 +362,7 @@ describe("game server provisioning", () => {
       )
     const ports = (instance: {
       ports: ReadonlyArray<{ externalPort: number }>
-    }) => instance.ports.map((port) => port.externalPort).sort()
+    }) => instance.ports.map((port) => port.externalPort).sort((a, b) => a - b)
     expect(ports(await create(newServerId, "Lobby"))).toEqual([30_000, 30_001])
 
     // Its startup change moves it to an image that isn't here yet.

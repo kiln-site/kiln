@@ -2458,19 +2458,19 @@ async function copyToClipboard(value: string) {
 
 // The game server's Tailscale networks, as a member of each.
 function GameServerTailscale({
-  instance: { id, name, relayId, relayName, shortId },
+  instance: { id, name, relayId, relayName },
 }: {
-  instance: Omit<TailscaleMember, "memberId"> & { id: string }
+  instance: Omit<TailscaleMember, "memberId">
 }) {
   const member = React.useMemo(
     () => ({
+      id,
       memberId: instanceTailscaleMemberId(id),
       name,
       relayId,
       relayName,
-      shortId,
     }),
-    [id, name, relayId, relayName, shortId]
+    [id, name, relayId, relayName]
   )
   return <TailscaleMembershipSection member={member} />
 }

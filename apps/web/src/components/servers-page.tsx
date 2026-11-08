@@ -115,7 +115,7 @@ const serverReference = (server: ServerDirectory) => ({
 const serverTableItemCache = new WeakMap<ServerDirectory, ServerTableItem>()
 
 interface ServerTableItem {
-  routeIdentifier: string
+  serverId: string
   server: InfraServer
 }
 
@@ -123,8 +123,6 @@ const serverTableColumnHelper = createDataTableColumnHelper<ServerTableItem>()
 const serverTableSearchFields = [
   ({ server }: ServerTableItem) => server.name,
   ({ server }: ServerTableItem) => server.id,
-  ({ server }: ServerTableItem) => server.shortId,
-  ({ server }: ServerTableItem) => server.routeId,
   ({ server }: ServerTableItem) => server.game,
   ({ server }: ServerTableItem) => server.implementation,
   ({ server }: ServerTableItem) => server.version,
@@ -413,12 +411,12 @@ const ServerDataTable = React.memo(function ServerDataTable({
         header: "Server",
         sortFn: "text",
         cell: ({ row }) => {
-          const { routeIdentifier, server } = row.original
+          const { serverId, server } = row.original
           return (
             <div className="flex w-full min-w-0 items-center">
               <Link
                 to="/server/$serverId/console"
-                params={{ serverId: routeIdentifier }}
+                params={{ serverId }}
                 preload="intent"
                 className={cn(
                   dataTableRowLinkClassName,
@@ -439,7 +437,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
                   meta={
                     [server.game, server.implementation]
                       .filter(Boolean)
-                      .join(" · ") || server.shortId
+                      .join(" · ") || server.id
                   }
                   metaClassName="font-mono"
                   iconFavorite
@@ -515,12 +513,12 @@ const ServerDataTable = React.memo(function ServerDataTable({
         header: () => <span className="sr-only">Actions</span>,
         enableSorting: false,
         cell: ({ row }) => {
-          const { routeIdentifier, server } = row.original
+          const { serverId, server } = row.original
           return (
             <ServerActions
               canDelete={canDeleteServer(deleteAccess, server)}
               onDelete={onDelete}
-              routeIdentifier={routeIdentifier}
+              serverId={serverId}
               server={server}
             />
           )
@@ -581,12 +579,12 @@ const ServerDataTable = React.memo(function ServerDataTable({
 const ServerActions = React.memo(function ServerActions({
   canDelete,
   onDelete,
-  routeIdentifier,
+  serverId,
   server,
 }: {
   canDelete: boolean
   onDelete: (target: ServerDeleteTarget) => void
-  routeIdentifier: string
+  serverId: string
   server: InfraServer
 }) {
   const deleteEnabled =
@@ -608,14 +606,14 @@ const ServerActions = React.memo(function ServerActions({
         <ServerActionLink
           icon={TerminalSquare}
           label={`Open ${server.name} console`}
-          routeIdentifier={routeIdentifier}
+          serverId={serverId}
           tab="console"
           tooltip="Console"
         />
         <ServerActionLink
           icon={Folder}
           label={`Open ${server.name} files`}
-          routeIdentifier={routeIdentifier}
+          serverId={serverId}
           tab="files"
           tooltip="Files"
         />
@@ -659,17 +657,14 @@ const ServerActions = React.memo(function ServerActions({
         >
           <DataTablePhoneMenuItems>
             <DropdownMenuItem asChild>
-              <Link
-                to="/server/$serverId/console"
-                params={{ serverId: routeIdentifier }}
-              >
+              <Link to="/server/$serverId/console" params={{ serverId }}>
                 <TerminalSquare /> Console
               </Link>
             </DropdownMenuItem>
             <DropdownMenuItem asChild>
               <Link
                 to="/server/$serverId/files/$"
-                params={{ serverId: routeIdentifier, _splat: "" }}
+                params={{ serverId, _splat: "" }}
               >
                 <Folder /> Files
               </Link>
@@ -707,13 +702,13 @@ const ServerActions = React.memo(function ServerActions({
 const ServerActionLink = React.memo(function ServerActionLink({
   icon: Icon,
   label,
-  routeIdentifier,
+  serverId,
   tab,
   tooltip,
 }: {
   icon: typeof TerminalSquare
   label: string
-  routeIdentifier: string
+  serverId: string
   tab: "console" | "files"
   tooltip: string
 }) {
@@ -721,7 +716,7 @@ const ServerActionLink = React.memo(function ServerActionLink({
     tab === "files" ? (
       <Link
         to="/server/$serverId/files/$"
-        params={{ serverId: routeIdentifier, _splat: "" }}
+        params={{ serverId, _splat: "" }}
         preload="intent"
         aria-label={label}
       >
@@ -730,7 +725,7 @@ const ServerActionLink = React.memo(function ServerActionLink({
     ) : (
       <Link
         to={`/server/$serverId/${tab}`}
-        params={{ serverId: routeIdentifier }}
+        params={{ serverId }}
         preload="intent"
         aria-label={label}
       >
@@ -793,7 +788,7 @@ function EmptyServerTable({
       description={
         <span className="block max-w-sm">
           {searchActive
-            ? "Try a game server name, short ID, Relay, address, game, implementation, or version."
+            ? "Try a game server name, ID, Relay, address, game, implementation, or version."
             : awaitingFirstRelay
               ? "Pair a Relay to start hosting game servers."
               : canProvision
@@ -828,21 +823,10 @@ function serverTableItemFavorite({
 function createServerTableItems(
   servers: Array<InfraServer>
 ): Array<ServerTableItem> {
-  const shortIdCounts = new Map<string, number>()
-  for (const server of servers) {
-    shortIdCounts.set(
-      server.shortId,
-      (shortIdCounts.get(server.shortId) ?? 0) + 1
-    )
-  }
-
   return servers.map((server) => {
-    const routeIdentifier =
-      shortIdCounts.get(server.shortId) === 1 ? server.shortId : server.routeId
     const cached = serverTableItemCache.get(server)
-    if (cached?.routeIdentifier === routeIdentifier) return cached
-
-    const item = { routeIdentifier, server }
+    if (cached) return cached
+    const item = { serverId: server.id, server }
     serverTableItemCache.set(server, item)
     return item
   })

@@ -26,7 +26,7 @@ import type { UiPreferences } from "@/lib/query-options"
 function selectAppFramePreferences(preferences: UiPreferences) {
   return {
     appearance: preferences.appearance,
-    selectedInstanceRouteId: preferences.selectedInstanceRouteId,
+    selectedInstance: preferences.selectedInstance,
     sidebarOpen: preferences.sidebarOpen,
   }
 }
@@ -53,9 +53,7 @@ export const AppFrame = React.memo(function AppFrame({
           <PushNotificationsPrompt />
           <MobileSidebarNavigationDismiss />
           <AppSidebar
-            initialSelectedInstanceRouteId={
-              uiPreferences.selectedInstanceRouteId
-            }
+            initialSelectedInstance={uiPreferences.selectedInstance}
           />
           <SidebarInset className="h-dvh min-w-0 overflow-hidden">
             <div

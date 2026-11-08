@@ -100,6 +100,7 @@ import {
 } from "@/components/data-table-workspace"
 import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
+import { randomIdempotencyKey } from "@/lib/idempotency-key"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { infraDatabasesCollectionOptions } from "@/lib/collections/infra-directories"
 import { InfraSyncButton } from "@/components/infra-sync-button"
@@ -154,7 +155,6 @@ const databaseTableColumnHelper =
 const databaseTableSearchFields = [
   (row: DatabaseDirectoryRow) => row.name,
   (row: DatabaseDirectoryRow) => row.id,
-  (row: DatabaseDirectoryRow) => row.shortId,
   (row: DatabaseDirectoryRow) => row.relayId,
   (row: DatabaseDirectoryRow) => row.relayName,
   (row: DatabaseDirectoryRow) => row.engine,
@@ -386,8 +386,6 @@ const DatabaseTable = React.memo(function DatabaseTable({
             <div className="flex w-full min-w-0 items-center gap-1">
               <Link
                 to="/db/$databaseId"
-                // The full ID always resolves; the route shortens it when
-                // no other database shares its short ID.
                 params={{ databaseId: database.id }}
                 preload="intent"
                 className={cn(
@@ -405,7 +403,7 @@ const DatabaseTable = React.memo(function DatabaseTable({
                   }}
                   name={database.name}
                   nameClassName="transition-colors group-hover/database-link:text-primary-ink"
-                  meta={database.shortId}
+                  meta={database.id}
                   metaClassName="font-mono"
                   iconFavorite
                   iconFavoriteClassName="md:hidden"
@@ -780,9 +778,22 @@ function CreateDatabaseDialog({
     () => availableRelays.at(0)?.id ?? ""
   )
   const relayLabelId = React.useId()
+  // Trying the same create again reuses its key, so it reuses its ID.
+  const attemptRef = React.useRef<{
+    fingerprint: string
+    idempotencyKey: string
+  } | null>(null)
   const create = useMutation({
-    mutationFn: (values: NewDatabaseValues) =>
-      createManagedDatabase({ data: { ...values, relayId } }),
+    mutationFn: (values: NewDatabaseValues) => {
+      const input = { ...values, relayId }
+      const fingerprint = JSON.stringify(input)
+      const idempotencyKey =
+        attemptRef.current?.fingerprint === fingerprint
+          ? attemptRef.current.idempotencyKey
+          : randomIdempotencyKey()
+      attemptRef.current = { fingerprint, idempotencyKey }
+      return createManagedDatabase({ data: { ...input, idempotencyKey } })
+    },
     onSuccess: async (created, { name }) => {
       await queryClient.invalidateQueries({
         queryKey: queryKeys.databases.all,

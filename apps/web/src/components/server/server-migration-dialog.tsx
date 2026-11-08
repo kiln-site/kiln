@@ -394,7 +394,7 @@ function MigrationForm({
             }}
             meta={
               usedBytes === null
-                ? server.id.slice(0, 8)
+                ? server.id
                 : `${formatBytes(usedBytes)} of files`
             }
             name={server.name}

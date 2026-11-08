@@ -50,9 +50,9 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
 
 afterAll(() => disposeAppRuntime())
 
-const relayId = "r".repeat(43)
-const appId = "a".repeat(40)
-const otherAppId = "b".repeat(40)
+const relayId = "1".repeat(12)
+const appId = "a".repeat(12)
+const otherAppId = "b".repeat(12)
 const target: ScheduleTarget = {
   id: appId,
   kind: "app",

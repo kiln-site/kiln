@@ -43,10 +43,6 @@ import {
   WorkspaceMetaSeparator,
 } from "@/components/workspace-header"
 import { WorkspacePowerControls } from "@/components/workspace-power-controls"
-import {
-  databaseRouteIdentifier,
-  resolveDatabaseRoute,
-} from "@/lib/database-route"
 import type { ServerAction } from "@/lib/instance-power-state"
 import { databaseDestinations } from "@/lib/navigation-destinations"
 import { managedDatabaseDirectoryQueryOptions } from "@/lib/query-options"
@@ -54,8 +50,8 @@ import { runManagedDatabaseAction } from "@/server/databases"
 
 export const DatabaseWorkspaceShell = React.memo(
   function DatabaseWorkspaceShell({ children }: { children: React.ReactNode }) {
-    const routeId = useWorkspaceRouteParam("databaseId")
-    const workspace = useDatabaseWorkspaceQuery(routeId)
+    const databaseId = useWorkspaceRouteParam("databaseId")
+    const workspace = useDatabaseWorkspaceQuery(databaseId)
 
     return (
       <WorkspaceFrame
@@ -69,7 +65,9 @@ export const DatabaseWorkspaceShell = React.memo(
             noun={{ one: "database", other: "databases" }}
             workspace={workspace}
           >
-            <DatabaseProvisioningBoundary>{children}</DatabaseProvisioningBoundary>
+            <DatabaseProvisioningBoundary>
+              {children}
+            </DatabaseProvisioningBoundary>
           </ResourceWorkspaceBoundary>
         </div>
       </WorkspaceFrame>
@@ -132,7 +130,7 @@ function DeleteFailedDatabase({ database }: { database: ManagedDatabase }) {
 }
 
 function useDatabaseWorkspaceQuery(
-  routeId: string | undefined
+  databaseId: string | undefined
 ): ResourceWorkspaceQuery<DatabaseWorkspaceDatabase> {
   const select = React.useMemo(
     () =>
@@ -143,15 +141,10 @@ function useDatabaseWorkspaceQuery(
           >
         >
       ) => {
-        const resolution = resolveDatabaseRoute(rows, routeId)
-        return resolution.status === "found"
-          ? {
-              directory: resolution.resource,
-              routeId: databaseRouteIdentifier(rows, resolution.resource),
-            }
-          : null
+        const directory = rows.find((row) => row.id === databaseId)
+        return directory ? { directory } : null
       },
-    [routeId]
+    [databaseId]
   )
   const directory = useQuery({
     ...managedDatabaseDirectoryQueryOptions(),
@@ -201,7 +194,6 @@ function useDatabaseWorkspaceQuery(
         relayUpdating: observation?.updating ?? false,
         status: instanceStatePresentation(state).label,
       },
-      routeId: selected.routeId,
     }
   }, [selected, inventory.isPending, inventory.data, state])
   return useResourceWorkspaceQuery({
@@ -249,11 +241,7 @@ const DatabaseWorkspaceHeader = React.memo(function DatabaseWorkspaceHeader({
             <WorkspaceMetaSeparator />
           </span>
           <span className="hidden shrink-0 items-center gap-1.5 @[40rem]:inline-flex">
-            <WorkspaceIdCopyButton
-              id={database.id}
-              label="database ID"
-              shortId={database.shortId}
-            />
+            <WorkspaceIdCopyButton id={database.id} label="database ID" />
             <WorkspaceMetaSeparator />
           </span>
           <WorkspaceCopyValueButton
@@ -295,11 +283,13 @@ function DatabasePowerControls({
 }) {
   const { database } = workspace
   const queryClient = useQueryClient()
-  const { data: deletion } = useQuery(resourceDeletionQueryOptions({
-    kind: "database",
-    relayId: database.relayId,
-    resourceId: database.id,
-  }))
+  const { data: deletion } = useQuery(
+    resourceDeletionQueryOptions({
+      kind: "database",
+      relayId: database.relayId,
+      resourceId: database.id,
+    })
+  )
   const canPower = !deletion && database.permissions.includes("database.power")
   const powerPermissions = React.useMemo(
     () => ({ kill: false, restart: canPower, start: canPower, stop: canPower }),

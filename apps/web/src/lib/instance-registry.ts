@@ -4,6 +4,7 @@ import { Clock, Effect, Schedule, Semaphore } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
+import { claimInstanceIdEffect } from "@/effect/instance-ids"
 import { runAppEffect } from "@/effect/runtime"
 import {
   instanceDirectoryMetadata,
@@ -421,14 +422,32 @@ export const updateInstanceDirectoryEffect = Effect.fn(
   )
 })
 
+/**
+ * Reserves the IDs of game servers a Relay chose itself, in Hearth's instance
+ * directory, so no other instance is given one. An ID already reserved for a
+ * game server is left as it is. One that another kind of instance holds
+ * can't be taken; the server is still recorded, and the clash logged.
+ */
+const claimServerIdsEffect = Effect.fn("instances.registry.claimIds")(
+  function* (ids: ReadonlyArray<string>) {
+    yield* Effect.forEach(
+      ids,
+      (id) =>
+        claimInstanceIdEffect("server", id).pipe(
+          Effect.catchTag("InstanceIdTakenError", (error) =>
+            Effect.logWarning(error.message)
+          )
+        ),
+      { concurrency: 8, discard: true }
+    )
+  }
+)
+
 /** Records a server Hearth created outside the provisioning flow. */
 export const recordCreatedInstanceEffect = Effect.fn(
   "instances.registry.recordCreated"
-)(function* (
-  relayId: string,
-  instance: DirectoryInstance,
-  ownerId: string
-) {
+)(function* (relayId: string, instance: DirectoryInstance, ownerId: string) {
+  yield* claimServerIdsEffect([instance.id])
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const displaced = yield* lifecycleWrite(relayId, { created: instance.id })(
@@ -484,6 +503,7 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
             ...lifecycle.created,
           ]),
         ]
+        yield* claimServerIdsEffect(listed.map((instance) => instance.id))
         // A server Hearth didn't make goes to the Relay's owner as a stand-in.
         const [relay] = listed.length
           ? yield* database.queryRows<RelayOwnerRow>(

@@ -9,7 +9,7 @@ import {
   isServerFileRoot,
 } from "./app-keys.js"
 
-const appId = "a".repeat(40)
+const appId = "a".repeat(12)
 const volumeId = "b".repeat(40)
 
 // A root's ID is how a Relay decides whose files a request reaches and which

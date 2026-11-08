@@ -89,10 +89,7 @@ import {
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
-import {
-  activityQueryOptions,
-} from "@/lib/query-options"
-import { relayInstanceRouteId } from "@/lib/relay-fleet"
+import { activityQueryOptions } from "@/lib/query-options"
 import type { ActivityData, ActivityEntry } from "@/server/activity"
 
 export interface ActivityFilters {
@@ -1520,9 +1517,7 @@ const ActivityWhere = React.memo(function ActivityWhere({
       return (
         <Link
           to="/server/$serverId/console"
-          params={{
-            serverId: relayInstanceRouteId(relay.id, target.id.slice(0, 8)),
-          }}
+          params={{ serverId: target.id }}
           preload="intent"
           className={className}
         >

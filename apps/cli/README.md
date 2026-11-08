@@ -155,24 +155,24 @@ kiln relay info <relay-id>
 kiln activity list --limit 200
 kiln servers list
 kiln servers create <relay-id> paper --name survival --memory 4GiB --disk 25GiB
-kiln server info <relay-id>:<instance-id>
-kiln server startup <relay-id>:<instance-id> --memory 6GiB --java-version 25
-kiln server brick <relay-id>:<instance-id> fabric --game-version 1.21.11
-kiln server power <relay-id>:<instance-id> restart
-kiln server logs <relay-id>:<instance-id> --follow
-kiln server console <relay-id>:<instance-id> "say deploy complete"
-kiln files list <relay-id>:<instance-id> .
-kiln files read <relay-id>:<instance-id> server.properties
-kiln files write <relay-id>:<instance-id> server.properties ./server.properties
-kiln files download <relay-id>:<instance-id> logs/latest.log ./latest.log
-kiln files upload <relay-id>:<instance-id> ./plugins/example.jar plugins/example.jar
-kiln files upload <relay-id>:<instance-id> https://example.com/example.jar plugins/example.jar
+kiln server info <server-id>
+kiln server startup <server-id> --memory 6GiB --java-version 25
+kiln server brick <server-id> fabric --game-version 1.21.11
+kiln server power <server-id> restart
+kiln server logs <server-id> --follow
+kiln server console <server-id> "say deploy complete"
+kiln files list <server-id> .
+kiln files read <server-id> server.properties
+kiln files write <server-id> server.properties ./server.properties
+kiln files download <server-id> logs/latest.log ./latest.log
+kiln files upload <server-id> ./plugins/example.jar plugins/example.jar
+kiln files upload <server-id> https://example.com/example.jar plugins/example.jar
 kiln backups list --limit 200
-kiln backups create server <relay-id>:<instance-id> --storage local --name "Before update"
-kiln backups create server <relay-id>:<instance-id> --storage <destination-uuid>
-kiln backups create server <relay-id>:<instance-id> --storage local --mode full
+kiln backups create server <server-id> --storage local --name "Before update"
+kiln backups create server <server-id> --storage <destination-uuid>
+kiln backups create server <server-id> --storage local --mode full
 kiln backup download <backup-id>
-kiln server delete <relay-id>:<instance-id> --confirm "<server name>" --storage local
+kiln server delete <server-id> --confirm "<server name>" --storage local
 ```
 
 Deleting a server asks for its exact name with `--confirm` and your account

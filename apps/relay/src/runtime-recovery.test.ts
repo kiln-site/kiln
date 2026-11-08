@@ -117,7 +117,7 @@ describe("runtime recovery", () => {
           KILN_RELAY_CRASH_RETRY_LIMIT: "2",
           KILN_RELAY_CRASH_STABILITY_SECONDS: "300",
         })
-        const instanceId = "1".repeat(40)
+        const instanceId = "1".repeat(12)
         const container = server(instanceId, false)
         const firstStartedAt = "2026-08-06T12:00:00.000Z"
         const firstStartedAtMs = Date.parse(firstStartedAt)
@@ -204,7 +204,7 @@ describe("runtime recovery", () => {
           { KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "5" },
           lanes
         )
-        const instanceId = "9".repeat(40)
+        const instanceId = "9".repeat(12)
         const container = server(instanceId, false)
         const startedAt = "2026-08-06T12:00:00.000Z"
         const startedAtMs = Date.parse(startedAt)
@@ -253,7 +253,7 @@ describe("runtime recovery", () => {
           const manager = yield* makeManager({
             KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "0",
           })
-          const instanceId = "c".repeat(40)
+          const instanceId = "c".repeat(12)
           const container = server(instanceId, false)
           const start = fakeDocker.hold({
             command: "start",

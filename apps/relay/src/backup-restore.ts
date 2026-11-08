@@ -31,6 +31,7 @@ import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { RelayBackupError } from "./effect/errors.js"
 import { isPublicRemoteAddress, secureRemoteLookup } from "./source-policy.js"
+import { currentId } from "./instance-keys.js"
 
 const ARCHIVE_MANIFEST_PATH = ".kiln-backup/manifest.json"
 const MAX_ARCHIVE_ENTRIES = 100_000
@@ -244,8 +245,10 @@ async function extractBackupArchive(
               manifest.backupId !==
                 (input.archive?.backupId ?? input.backupId) ||
               manifest.target.kind !== "instance" ||
-              manifest.target.id !==
-                (input.archive?.targetId ?? input.target.id)
+              // An archive made before instance IDs names its server by
+              // the old ID.
+              currentId(manifest.target.id) !==
+                currentId(input.archive?.targetId ?? input.target.id)
             ) {
               throw restoreError(
                 "manifest_mismatch",

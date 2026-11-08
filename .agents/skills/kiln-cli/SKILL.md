@@ -141,15 +141,16 @@ Discover targets instead of guessing identifiers:
 kiln servers list
 ```
 
-Copy the entire value from the `ID` column. Every server command requires this
-combined reference:
+Copy the value from the `ID` column: the server's instance ID, 12 lowercase
+hex characters. Every server command takes it alone:
 
 ```text
-<relay-id>:<instance-id>
+<instance-id>
 ```
 
-The relay ID and instance ID are both required. Do not pass the instance ID by
-itself, a short ID, or the display name.
+Instance IDs are unique across every Relay, so the CLI finds the Relay that
+runs the server itself. Don't pass a Relay ID with it, part of an ID, or the
+display name.
 
 ## Relays and activity
 
@@ -159,7 +160,8 @@ List only the Relays available to the authenticated account:
 kiln relays list
 ```
 
-Copy the complete Relay ID from that output when another command requires it.
+Copy the Relay ID (12 lowercase hex characters) from that output when another
+command requires it.
 Inspect safe Relay/node metadata and resource capacity with:
 
 ```sh
@@ -266,7 +268,8 @@ gets a line with the reason. When the cause is known, such as a storage
 provider's cap being reached, the line says what happened and where to fix it,
 followed by the Relay's own message.
 
-Create a manual backup with a reference from `backups targets`. Server backups
+Create a manual backup with a reference from `backups targets`: a game
+server's or database's ID, or for the platform, its Relay's ID. Server backups
 default to incremental restic snapshots stored on the Relay or an S3
 destination. Pass `--mode full` for a portable zip, which can also use local or
 S3 storage; `--mode` applies only to server backups. Incremental mode accepts
@@ -275,10 +278,10 @@ Relay or a destination's UUID; pass one `--storage` value at most. A backup
 without `--name` is named `CLI backup`.
 
 ```sh
-kiln backups create server <relay-id>:<instance-id> --storage local --name "Before update"
-kiln backups create server <relay-id>:<instance-id> --storage <destination-uuid>
-kiln backups create server <relay-id>:<instance-id> --mode full --storage local
-kiln backups create database <relay-id>:<database-id> --storage local --name "Before migration"
+kiln backups create server <instance-id> --storage local --name "Before update"
+kiln backups create server <instance-id> --storage <destination-uuid>
+kiln backups create server <instance-id> --mode full --storage local
+kiln backups create database <database-id> --storage local --name "Before migration"
 kiln backups create platform <relay-id> --storage local --name "Before Hearth update"
 ```
 

@@ -1649,7 +1649,7 @@ const HistoryRelay = React.memo(function HistoryRelay({
     >
       <InstanceCard
         instance={{ id: relayId, kind: "relay", relayId }}
-        meta={relayId.slice(0, 8)}
+        meta={relayId}
         metaClassName="font-mono"
         name={relayName}
         nameClassName="transition-colors group-hover/relay-link:text-primary-ink"
@@ -1846,11 +1846,10 @@ function historyTargetPickerItem(
   }
 }
 
-// Each workspace route takes a full ID and redirects to its short form. A
-// game server's Relay-qualified ID names it even where short IDs collide.
+// Each workspace route takes the instance's ID.
 function historyTargetHref(identity: InstancePickerItem["identity"]) {
   if (identity.kind === "server") {
-    return `/server/${encodeURIComponent(`${identity.relayId}-${identity.id}`)}`
+    return `/server/${encodeURIComponent(identity.id)}`
   }
   if (identity.kind === "database") {
     return `/db/${encodeURIComponent(identity.id)}`
@@ -2121,7 +2120,8 @@ function TargetRunAudit({
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-semibold">{run.target.name}</p>
           <p className="type-meta truncate font-mono text-muted-foreground">
-            {run.target.kind === "app" ? "App" : run.target.kind} · {run.target.id}
+            {run.target.kind === "app" ? "App" : run.target.kind} ·{" "}
+            {run.target.id}
           </p>
         </div>
         <span className="type-meta text-muted-foreground">
@@ -3086,9 +3086,7 @@ const ActionEditor = React.memo(function ActionEditor({
     selectedActionTargets.every((target) => target.kind === "app")
   const changeAction = React.useCallback(
     (next: ScheduleActionDraft) =>
-      onChange(
-        namingNewTargets(action, next, selectedOptions, permissionKey)
-      ),
+      onChange(namingNewTargets(action, next, selectedOptions, permissionKey)),
     [action, onChange, permissionKey, selectedOptions]
   )
   const appServiceOptions = useAppServices(commandApps)
@@ -3320,7 +3318,9 @@ const ActionEditor = React.memo(function ActionEditor({
           singleDestination
           storage={storage}
           submitLabel="Save backup"
-          targets={selectedOptions.filter(isBackupOption).map(scheduleBackupTarget)}
+          targets={selectedOptions
+            .filter(isBackupOption)
+            .map(scheduleBackupTarget)}
           title="Configure Backup"
         />
       ) : null}
@@ -3349,7 +3349,9 @@ function NamedRestrictedTargetsNote({
   const databases = targets.filter(
     (target) => shell(target) && target.kind === "database"
   )
-  const apps = targets.filter((target) => shell(target) && target.kind === "app")
+  const apps = targets.filter(
+    (target) => shell(target) && target.kind === "app"
+  )
   const others = targets.filter((target) => !shell(target))
   return (
     <p className="type-meta rounded-md border border-amber-400/30 bg-amber-400/5 px-2.5 py-2 text-pretty text-amber-300 light:text-amber-700">
@@ -3472,7 +3474,7 @@ function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
     meta: option.available
       ? option.kind === "relay"
         ? `On ${option.relayName}`
-        : `${option.relayName} · ${option.id.slice(0, 8)}`
+        : `${option.relayName} · ${option.id}`
       : `Unavailable · ${kind} · ${option.relayName}`,
     name: option.kind === "relay" ? "Kiln" : option.name,
     searchText: `${kind} ${option.relayName} ${option.id}`,
@@ -3645,7 +3647,10 @@ const CommandEditorField = React.memo(function CommandEditorField({
   services: Readonly<Record<string, string>> | undefined
   targetKinds: ReadonlyArray<ScheduleTarget["kind"]>
   value: string
-  onChange: (value: string, services: Record<string, string> | undefined) => void
+  onChange: (
+    value: string,
+    services: Record<string, string> | undefined
+  ) => void
 }) {
   const [open, setOpen] = React.useState(false)
   const [draft, setDraft] = React.useState(value)

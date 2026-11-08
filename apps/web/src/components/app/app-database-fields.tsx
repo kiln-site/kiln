@@ -64,7 +64,7 @@ const databaseItem = (
 ): InstancePickerItem => ({
   identity: { id: database.id, kind: "database", relayId: database.relayId },
   key: database.id,
-  meta: `${engineLabel(database.engine)} · ${database.shortId}`,
+  meta: `${engineLabel(database.engine)} · ${database.id}`,
   name: database.name,
   searchText: `${database.id} ${database.engine}`,
 })

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto"
 
 import {
-  builtinTailscaleBrickId,
   relayProxyConfigurationSchema,
   relayProxyConfigurationV1Feature,
   relaySnapshotSchema,
@@ -41,11 +40,9 @@ import { publishDomainChange } from "@/lib/domain-realtime.server"
 import { domainInZone, validateBlacklistPatterns } from "@/lib/domain-schemas"
 import { kilnRootDomain } from "@/lib/environment"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
-import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
 import { relayJsonEffect } from "@/lib/relay-client"
-import { shortIdRouteIdentifier } from "@/lib/short-id-route"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { resourceAccess } from "@/server/domain-resource-access.server"
 import { outsideOperation } from "@/operations/current"
@@ -159,11 +156,7 @@ export async function getDomainSettingsHandler() {
           brickId: server?.brickId,
           game: server?.game,
           implementation: server?.implementation,
-          name: server?.name ?? assignment.instanceId.slice(0, 8),
-          routeId: resources.serverRoute(
-            assignment.relayId,
-            assignment.instanceId
-          ),
+          name: server?.name ?? assignment.instanceId,
         },
         srvActive: domainHasActiveSrvRecord(assignment),
         status: assignment.status,
@@ -194,8 +187,7 @@ export async function getDomainSettingsHandler() {
         canManage,
         certificate: pendingWebCertificate(row, row.hostname),
         connectionName: connectionNames.get(row.connectionId) ?? null,
-        existingRecord:
-          row.status === "external" ? row.existingRecord : null,
+        existingRecord: row.status === "external" ? row.existingRecord : null,
         generated: row.generated,
         hostname: row.hostname,
         id: row.id,
@@ -341,33 +333,14 @@ function resourceDirectory(
   const servers = new Map(
     directory.map((record) => [serverKey(record.relayId, record.id), record])
   )
-  // Match the Game Servers table: a short ID routes on its own unless another
-  // game server shares it.
-  const shortIdCounts = new Map<string, number>()
-  for (const record of directory) {
-    if (record.brickId === builtinTailscaleBrickId) continue
-    const shortId = record.id.slice(0, 8)
-    shortIdCounts.set(shortId, (shortIdCounts.get(shortId) ?? 0) + 1)
-  }
-  const appIds = apps.map((app) => ({ id: app.appId }))
   const appsByKey = new Map(
     apps.map((app) => [serverKey(app.relayId, app.appId), app])
   )
   const server = (relayId: string, instanceId: string) =>
     servers.get(serverKey(relayId, instanceId))
-  const serverRoute = (relayId: string, instanceId: string) => {
-    const shortId = instanceId.slice(0, 8)
-    // Otherwise the Relay-qualified full ID, which names exactly one server
-    // even where short IDs collide or the server is missing from the
-    // directory.
-    return server(relayId, instanceId) && shortIdCounts.get(shortId) === 1
-      ? shortId
-      : relayInstanceRouteId(relayId, instanceId)
-  }
   return {
     relayName: (relayId: string) => relayNames.get(relayId) ?? "Unknown Relay",
     server,
-    serverRoute,
     webResource(
       resourceType: "app" | "instance",
       relayId: string,
@@ -378,8 +351,7 @@ function resourceDirectory(
         return {
           id: resourceId,
           kind: "app",
-          name: app?.name ?? resourceId.slice(0, 8),
-          routeId: shortIdRouteIdentifier(appIds, { id: resourceId }),
+          name: app?.name ?? resourceId,
         }
       }
       const record = server(relayId, resourceId)
@@ -388,8 +360,7 @@ function resourceDirectory(
         id: resourceId,
         implementation: record?.implementation,
         kind: "server",
-        name: record?.name ?? resourceId.slice(0, 8),
-        routeId: serverRoute(relayId, resourceId),
+        name: record?.name ?? resourceId,
       }
     },
   }

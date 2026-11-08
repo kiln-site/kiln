@@ -18,14 +18,7 @@ type WorkloadList = "/infra/apps" | "/infra/databases" | "/infra/servers"
 
 // What runs on a Relay, a row for each kind. Each opens its list, searched to
 // this Relay.
-export function RelayWorkloads({
-  relayId,
-  routeId,
-}: {
-  relayId: string
-  // The Relay's short ID; every list searches Relay IDs.
-  routeId: string
-}) {
+export function RelayWorkloads({ relayId }: { relayId: string }) {
   const { data: access } = useQuery({
     ...accessCapabilitiesQueryOptions(),
     select: selectWorkloadAccess,
@@ -36,12 +29,12 @@ export function RelayWorkloads({
   return (
     <InfoRailGroup card>
       {access.servers ? (
-        <ServerCount relayId={relayId} search={routeId} />
+        <ServerCount relayId={relayId} search={relayId} />
       ) : null}
       {access.databases ? (
-        <DatabaseCount relayId={relayId} search={routeId} />
+        <DatabaseCount relayId={relayId} search={relayId} />
       ) : null}
-      {access.apps ? <AppCount relayId={relayId} search={routeId} /> : null}
+      {access.apps ? <AppCount relayId={relayId} search={relayId} /> : null}
     </InfoRailGroup>
   )
 }

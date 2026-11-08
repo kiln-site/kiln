@@ -1,4 +1,6 @@
 import {
+  instanceIdSchema,
+  relayIdSchema,
   relayInstanceNameSchema,
   resourceLimitsSchema,
 } from "@workspace/contracts"
@@ -41,8 +43,8 @@ export type ServerMigrationOptions = z.infer<
 >
 
 export const serverReferenceSchema = z.object({
-  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
-  relayId: z.string().min(1).max(64),
+  instanceId: instanceIdSchema,
+  relayId: relayIdSchema,
 })
 
 export const startServerMigrationInputSchema = serverReferenceSchema.extend({
@@ -52,7 +54,7 @@ export const startServerMigrationInputSchema = serverReferenceSchema.extend({
    * migration stores.
    */
   confirmation: deleteConfirmationSchema.optional(),
-  destinationRelayId: z.string().min(1).max(64),
+  destinationRelayId: relayIdSchema,
   mode: z.enum(["duplicate", "migrate"]),
   name: relayInstanceNameSchema,
   options: serverMigrationOptionsSchema,

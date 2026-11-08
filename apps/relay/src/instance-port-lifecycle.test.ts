@@ -11,8 +11,8 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { relayHarness } from "./test/relay.js"
 
-const first = "a".repeat(40)
-const second = "b".repeat(40)
+const first = "a".repeat(12)
+const second = "b".repeat(12)
 
 describe("instance port lifecycle", () => {
   it("expires abandoned leases, enforces lease ownership, and lets one concurrent reservation win", async () => {

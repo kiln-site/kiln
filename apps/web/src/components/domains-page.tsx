@@ -84,7 +84,6 @@ import {
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
-import { appRouteIdentifier } from "@/lib/app-route"
 import {
   appDirectoryQueryOptions,
   domainSettingsQueryOptions,
@@ -92,7 +91,6 @@ import {
   queryKeys,
   serverDirectoryQueryOptions,
 } from "@/lib/query-options"
-import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import {
   resyncDomainAssignments,
   type ManagedDomainOverview,
@@ -208,8 +206,6 @@ interface DomainScope {
 /** A game server or app to scope to, with where its domains are managed. */
 type ScopeOption = ServerPickerOption<"app" | "server"> & {
   kind: "app" | "server"
-  /** The `/server/$serverId` or `/app/$appId` param. */
-  routeId: string
 }
 
 export const DomainsPage = React.memo(function DomainsPage({
@@ -395,15 +391,13 @@ function useScopeOptions(): Array<ScopeOption> {
         name: server.name,
         relayId: server.relayId,
         relayName: server.relayName,
-        routeId: relayInstanceRouteId(server.relayId, server.id),
       })),
-      ...(apps ?? []).map((app, _index, all): ScopeOption => ({
+      ...(apps ?? []).map((app): ScopeOption => ({
         id: app.id,
         kind: "app",
         name: app.name,
         relayId: app.relayId,
         relayName: app.relayName,
-        routeId: appRouteIdentifier(all, app),
       })),
     ],
     [apps, servers]
@@ -744,7 +738,7 @@ function ManageDomainsButton({ target }: { target: ScopeOption }) {
       {target.kind === "app" ? (
         <Link
           to="/app/$appId/network"
-          params={{ appId: target.routeId }}
+          params={{ appId: target.id }}
           preload="intent"
         >
           {content}
@@ -752,7 +746,7 @@ function ManageDomainsButton({ target }: { target: ScopeOption }) {
       ) : (
         <Link
           to="/server/$serverId/network"
-          params={{ serverId: target.routeId }}
+          params={{ serverId: target.id }}
           preload="intent"
         >
           {content}
@@ -1068,7 +1062,7 @@ const DomainServerCell = React.memo(function DomainServerCell({
   return (
     <Link
       to="/server/$serverId/console"
-      params={{ serverId: server.routeId }}
+      params={{ serverId: domain.instanceId }}
       preload="intent"
       className="group/server-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
     >
@@ -1083,7 +1077,7 @@ const DomainServerCell = React.memo(function DomainServerCell({
         }}
         meta={
           [server.game, server.implementation].filter(Boolean).join(" · ") ||
-          domain.instanceId.slice(0, 8)
+          domain.instanceId
         }
         metaClassName="font-mono"
         name={server.name}
@@ -1144,7 +1138,7 @@ const HostnameResourceCell = React.memo(function HostnameResourceCell({
   return resource.kind === "app" ? (
     <Link
       to="/app/$appId/network"
-      params={{ appId: resource.routeId }}
+      params={{ appId: resource.id }}
       preload="intent"
       className={className}
     >
@@ -1153,7 +1147,7 @@ const HostnameResourceCell = React.memo(function HostnameResourceCell({
   ) : (
     <Link
       to="/server/$serverId/network"
-      params={{ serverId: resource.routeId }}
+      params={{ serverId: resource.id }}
       preload="intent"
       className={className}
     >
@@ -1335,7 +1329,7 @@ function ResourceNetworkLink({
     <Link
       {...props}
       to="/app/$appId/network"
-      params={{ appId: resource.routeId }}
+      params={{ appId: resource.id }}
       preload="intent"
     >
       {children}
@@ -1344,7 +1338,7 @@ function ResourceNetworkLink({
     <Link
       {...props}
       to="/server/$serverId/network"
-      params={{ serverId: resource.routeId }}
+      params={{ serverId: resource.id }}
       preload="intent"
     >
       {children}

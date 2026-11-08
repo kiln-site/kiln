@@ -5,8 +5,8 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness } from "./test/relay.js"
 
-const first = "a".repeat(40)
-const second = "b".repeat(40)
+const first = "a".repeat(12)
+const second = "b".repeat(12)
 
 describe("game server file roots", () => {
   it("resolves each server to its own directory, never another Relay's", async () => {
@@ -32,10 +32,6 @@ describe("game server file roots", () => {
       directory: second,
       id: second,
     })
-    // Short ids and names resolve as before.
-    await expect(
-      harness.docker.findFileRoot(second.slice(0, 8))
-    ).resolves.toMatchObject({ directory: second, id: second })
   })
 
   it("refuses an id two containers share, whatever its case", async () => {

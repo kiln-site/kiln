@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import {
   appIdFromFileRoot,
   isRelayFileRoot,
+  relayFileRootId,
   projectRelayInstanceOverview,
   relayFileActivitySchema,
   relayFileContentSchema,
@@ -111,7 +112,6 @@ import { relayConsoleTransport } from "@/lib/relay-console-route"
 import type { RelayEndpoint } from "@/lib/relay-client"
 import {
   relayFleetInstance,
-  relayInstanceRouteId,
   type RelayFleetSnapshot,
   type RelayReachability,
 } from "@/lib/relay-fleet"
@@ -127,10 +127,6 @@ import {
   relayConnectionSnapshot,
   relayConnectionState,
 } from "@/lib/relay-connection"
-import {
-  relayInstanceRouteIdentifier,
-  resolveRelayInstance,
-} from "@/lib/relay-selectors"
 import { updateInstanceSourceName } from "@/lib/instance-registry"
 import { dnsKey } from "@/lib/dns-operations"
 import { filePinsKey, fileRootKey } from "@/lib/file-lanes"
@@ -375,10 +371,9 @@ export const getFreshRelayInstance = createServerFn({ method: "GET" })
 
 /**
  * One game server's page: the server and its node, in the fleet snapshot's
- * shape, and its Relay's connection. The route resolves against every game
- * server the reader can see, as with the fleet, so ambiguous and canonical
- * identifiers match it. Connected Relays answer from the state they push to
- * Hearth, without a Relay round trip.
+ * shape, and its Relay's connection, found by the server's instance ID among
+ * every game server the reader can see. Connected Relays answer from the
+ * state they push to Hearth, without a Relay round trip.
  */
 export const getServerWorkspace = createServerFn({ method: "GET" })
   .validator(serverWorkspaceInputSchema)
@@ -430,18 +425,10 @@ async function readServerWorkspace(user: AuthenticatedUser, serverId: string) {
             })
       })
   )
-  const instances = entries.flatMap(({ relay, snapshot }) =>
-    (snapshot?.instances ?? []).map((instance) => ({
-      ...instance,
-      relayId: relay.id,
-      routeId: relayInstanceRouteId(relay.id, instance.shortId),
-    }))
+  // An instance ID is unique across every Relay, so it names one server.
+  const entry = entries.find(({ snapshot }) =>
+    snapshot?.instances.some((instance) => instance.id === serverId)
   )
-  const resolution = resolveRelayInstance(instances, serverId)
-  if (resolution.status === "ambiguous") return { status: "ambiguous" as const }
-  if (resolution.status === "not-found") return { status: "not-found" as const }
-  const { instance } = resolution
-  const entry = entries.find(({ relay }) => relay.id === instance.relayId)
   if (!entry?.snapshot) return { status: "not-found" as const }
   const snapshot = await mergeRelaySnapshots([
     {
@@ -449,7 +436,7 @@ async function readServerWorkspace(user: AuthenticatedUser, serverId: string) {
       snapshot: {
         ...entry.snapshot,
         instances: entry.snapshot.instances.filter(
-          (candidate) => candidate.id === instance.id
+          (candidate) => candidate.id === serverId
         ),
       },
     },
@@ -457,8 +444,6 @@ async function readServerWorkspace(user: AuthenticatedUser, serverId: string) {
   return {
     status: "found" as const,
     relay: publicRelayState(entry),
-    // Null when the short ID is shared and no Relay-qualified ID is unique.
-    routeIdentifier: relayInstanceRouteIdentifier(instances, instance) ?? null,
     snapshot,
   }
 }
@@ -1881,7 +1866,8 @@ async function checkFilePermission(
   permission: FilePermission
 ) {
   if (isRelayFileRoot(instanceId)) {
-    if (instanceId !== relayId) throw new Error("Relay not found")
+    if (instanceId !== relayFileRootId(relayId))
+      throw new Error("Relay not found")
     await requireRelayPermission({
       user,
       relayId,
@@ -2066,13 +2052,9 @@ async function mergeRelaySnapshots(
       relayUpdating: isRelayUpdating(relay.id),
     }))
   )
-  const routedInstances = instances.map((instance) => ({
-    ...instance,
-    routeId: relayInstanceRouteId(instance.relayId, instance.shortId),
-  }))
   const managedInstances = await runAppEffect(
     "domains.assignments.apply",
-    applyManagedDomainAddressesEffect(routedInstances)
+    applyManagedDomainAddressesEffect(instances)
   )
   return {
     nodes: entries.flatMap(({ relay, snapshot, status }) =>

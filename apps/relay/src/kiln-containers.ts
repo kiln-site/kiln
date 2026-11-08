@@ -11,6 +11,7 @@ import type { RelaySecurityContainer } from "@workspace/contracts"
 import type { RelayConfig } from "./config.js"
 import { containerName } from "./docker-engine.js"
 import { PLATFORM_ROLE_LABEL } from "./platform.js"
+import { currentId } from "./instance-keys.js"
 import { relayOwnsLabels, relayResourceNames } from "./relay-resources.js"
 
 export type KilnContainerOwner = Pick<
@@ -38,7 +39,10 @@ export function kilnContainerOwner(
   if (name === self || container.Id.startsWith(self)) return relay("Relay")
   const labels = container.Labels ?? {}
   if (!relayOwnsLabels(config, labels)) return null
+  // Labels from before 12-character IDs carry old ones.
   const appId = labels["kiln.app.id"]
+    ? currentId(labels["kiln.app.id"])
+    : undefined
   if (appId) {
     return {
       component: labels["kiln.app.service"] ?? null,
@@ -46,6 +50,8 @@ export function kilnContainerOwner(
     }
   }
   const databaseId = labels["kiln.database.id"]
+    ? currentId(labels["kiln.database.id"])
+    : undefined
   if (databaseId) {
     return { component: null, resource: { id: databaseId, type: "database" } }
   }
@@ -53,7 +59,7 @@ export function kilnContainerOwner(
   if (serverId && labels["kiln.relay.managed"] === "true") {
     return {
       component: null,
-      resource: { id: serverId.toLowerCase(), type: "instance" },
+      resource: { id: currentId(serverId.toLowerCase()), type: "instance" },
     }
   }
   const names = relayResourceNames(config)

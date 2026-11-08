@@ -75,7 +75,7 @@ export const DemoHeader = React.memo(function DemoHeader({
                 <span className="text-border">/</span>
               </span>
               <span className="hidden shrink-0 items-center gap-1.5 @[40rem]:inline-flex">
-                <span className="font-mono">{demoServer.shortId}</span>
+                <span className="font-mono">{demoServer.id}</span>
                 <span className="text-border">/</span>
               </span>
               <AddressButton />

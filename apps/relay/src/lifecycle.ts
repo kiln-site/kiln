@@ -113,6 +113,11 @@ import type { RelayStoredWebRoute } from "./effect/state.js"
 import type { WebCertificates } from "./web-certificates.js"
 import { RelayPortAllocationError } from "./effect/errors.js"
 import {
+  instanceIdFrom,
+  physicalKey,
+  physicalShortKey,
+} from "./instance-keys.js"
+import {
   activeTailscaleStackBindings,
   allocateTailscaleStackSubnet,
   assignTailscaleBindingAddresses,
@@ -387,10 +392,11 @@ interface AllocationRequest {
   holds?: ResourceLimits
 }
 
-/** A new game server's ID, chosen before its create is admitted. */
-export function newInstanceId(): string {
-  return randomBytes(20).toString("hex")
-}
+/**
+ * A new game server's ID, chosen before its create is admitted; Hearth
+ * claims it in its instance directory.
+ */
+export { newInstanceId } from "@workspace/contracts"
 
 export class LifecycleDriver {
   readonly #bricks: BrickCatalog
@@ -684,14 +690,13 @@ export class LifecycleDriver {
       }
     )
     const stacks = await Promise.all(
-      entries
-        .filter(
-          (entry) => entry.isDirectory() && /^[a-f0-9]{40}$/u.test(entry.name)
-        )
-        .map(async (entry) => {
-          const config = await this.#readTailscaleStackConfig(entry.name)
-          return config ? this.#tailscaleStack(config) : null
-        })
+      entries.map(async (entry) => {
+        const id = entry.isDirectory()
+          ? tailscaleStackDirectoryId(entry.name)
+          : null
+        const config = id ? await this.#readTailscaleStackConfig(id) : null
+        return config ? this.#tailscaleStack(config) : null
+      })
     )
     return stacks
       .filter((stack): stack is RelayTailscaleStack => stack !== null)
@@ -1114,11 +1119,11 @@ export class LifecycleDriver {
         this.#config.dataDirectory,
         "infrastructure",
         "tailscale-stacks",
-        id
+        physicalKey(id)
       ),
       { force: true, recursive: true }
     )
-    await rm(join(this.#config.rootDirectory, id), {
+    await rm(join(this.#config.rootDirectory, physicalKey(id)), {
       force: true,
       recursive: true,
     })
@@ -1140,11 +1145,15 @@ export class LifecycleDriver {
   }
 
   #tailscaleStackRemovalMarker(id: string): string {
-    return join(this.#config.rootDirectory, id, ".removing")
+    return join(this.#config.rootDirectory, physicalKey(id), ".removing")
   }
 
   #tailscaleStackRemovalSnapshot(id: string): string {
-    return join(this.#config.rootDirectory, id, ".removing-stack.json")
+    return join(
+      this.#config.rootDirectory,
+      physicalKey(id),
+      ".removing-stack.json"
+    )
   }
 
   async #tailscaleStackRemovalPending(id: string): Promise<boolean> {
@@ -2506,7 +2515,7 @@ export class LifecycleDriver {
       javaVersion: resolved.runtimeName,
       limits: gameServerLimits(input, resolved.memory),
       managedByRelay: true,
-      name: input.name ?? `kiln-${id.slice(0, 8)}`,
+      name: input.name ?? `kiln-${id}`,
       observedState: "provisioning",
       ports: [],
       provisioning: {
@@ -2518,7 +2527,6 @@ export class LifecycleDriver {
       recovery: null,
       resources: null,
       service: this.#resources.instanceContainer(id),
-      shortId: id.slice(0, 8),
       stateReason: null,
       status: "Waiting for Hearth",
       tailscale: input.tailscale ?? { enabled: false },
@@ -2605,7 +2613,9 @@ export class LifecycleDriver {
 
   async reconfigureInstance(
     instanceId: string,
-    input: RelayUpdateInstanceStartup
+    input: RelayUpdateInstanceStartup,
+    /** Reports each phase of a reinstall or change of Brick, for its log. */
+    onPhase?: (phase: ProvisioningWorkPhase) => Promise<void>
   ): Promise<RelayInstance> {
     const inspected = await this.#docker.inspectInstances()
     const existing = inspected.find((item) => item.id === instanceId)
@@ -2670,6 +2680,7 @@ export class LifecycleDriver {
       },
       async () => {
         if (forcePull) {
+          await onPhase?.("pulling_image")
           await runLifecycle(
             this.#engine.pullImage(resolved.image, { timeout: 300_000 })
           )
@@ -2704,6 +2715,7 @@ export class LifecycleDriver {
                   })
                 ),
               skipImagePull: forcePull,
+              ...(onPhase ? { onPhase } : {}),
               start,
               tailscale,
               variables,
@@ -2788,7 +2800,7 @@ export class LifecycleDriver {
         checkExistingUsage: !input.prepareDirectory,
         currentDiskLimitBytes: input.grandfatheredDiskLimitBytes,
         currentMemoryLimitBytes: input.grandfatheredMemoryLimitBytes,
-        directory: join(this.#config.rootDirectory, input.id),
+        directory: join(this.#config.rootDirectory, physicalKey(input.id)),
         id: input.id,
         limits,
       },
@@ -2810,17 +2822,17 @@ export class LifecycleDriver {
         }
 
         const id = input.id
-        const defaultInstanceName = `kiln-${id.slice(0, 8)}`
+        const defaultInstanceName = `kiln-${physicalShortKey(id)}`
         const containerName = this.#resources.instanceContainer(id)
         const version = Object.hasOwn(resolved.values, "version")
           ? String(resolved.values.version)
           : "custom"
         const image = resolved.image
-        const directory = join(this.#config.rootDirectory, id)
+        const directory = join(this.#config.rootDirectory, physicalKey(id))
         const hostDirectory = join(
           await this.#hostDataDirectory(),
           "instances",
-          id
+          physicalKey(id)
         )
         const primaryPort = definition.network.ports.find(
           (port) => port.name === definition.network.primaryPort
@@ -2958,7 +2970,9 @@ export class LifecycleDriver {
           const labels: Record<string, string> = {
             "kiln.relay.managed": "true",
             "kiln.relay.owned": "true",
-            "kiln.server.id": id,
+            // Named after its physical key, as everything of it is
+            // (instance-keys.ts); read back as its ID.
+            "kiln.server.id": physicalKey(id),
             "kiln.brick.id": definition.metadata.id,
             "kiln.brick.format": definition.format,
             "kiln.brick.source": input.recipe,
@@ -2973,7 +2987,7 @@ export class LifecycleDriver {
             "kiln.instance.java": resolved.runtimeName,
             "kiln.instance.game": definition.metadata.game,
             "kiln.instance.public-host": this.#config.gameHost,
-            "kiln.instance.directory": id,
+            "kiln.instance.directory": physicalKey(id),
             // Older Relays read these, with 0 for no limit.
             "kiln.instance.memory-bytes": String(limits.memoryBytes ?? 0),
             "kiln.instance.disk-bytes": String(limits.diskBytes ?? 0),
@@ -3528,7 +3542,7 @@ export class LifecycleDriver {
   async deletePreparedInstance(id: string, deleteData: boolean): Promise<void> {
     await this.#docker.forgetRecoveryState(id)
     if (!deleteData) return
-    await rm(join(this.#config.rootDirectory, id), {
+    await rm(join(this.#config.rootDirectory, physicalKey(id)), {
       recursive: true,
       force: true,
     })
@@ -4125,7 +4139,8 @@ export class LifecycleDriver {
     )
     let migrated = 0
     for (const entry of entries) {
-      if (!entry.isDirectory() || !/^[a-f0-9]{40}$/u.test(entry.name)) continue
+      if (!entry.isDirectory() || !tailscaleStackDirectoryId(entry.name))
+        continue
       for (const [path, schema] of [
         [
           join(this.#config.rootDirectory, entry.name, "stack.json"),
@@ -4182,7 +4197,7 @@ export class LifecycleDriver {
         relayTailscaleStackConfigSchema.parse(
           JSON.parse(
             await readFile(
-              join(this.#config.rootDirectory, id, "stack.json"),
+              join(this.#config.rootDirectory, physicalKey(id), "stack.json"),
               "utf8"
             )
           )
@@ -4204,11 +4219,12 @@ export class LifecycleDriver {
       }
     )
     const configs = await Promise.all(
-      entries
-        .filter(
-          (entry) => entry.isDirectory() && /^[a-f0-9]{40}$/u.test(entry.name)
-        )
-        .map((entry) => this.#readTailscaleStackConfig(entry.name))
+      entries.map((entry) => {
+        const id = entry.isDirectory()
+          ? tailscaleStackDirectoryId(entry.name)
+          : null
+        return id ? this.#readTailscaleStackConfig(id) : Promise.resolve(null)
+      })
     )
     const found = configs.filter(
       (config): config is RelayTailscaleStackConfig => config !== null
@@ -4230,7 +4246,7 @@ export class LifecycleDriver {
   async #writeTailscaleStackConfig(
     config: RelayTailscaleStackConfig
   ): Promise<void> {
-    const directory = join(this.#config.rootDirectory, config.id)
+    const directory = join(this.#config.rootDirectory, physicalKey(config.id))
     await mkdir(directory, { recursive: true, mode: 0o700 })
     await writeFile(
       join(directory, "stack.json"),
@@ -4248,7 +4264,8 @@ export class LifecycleDriver {
     const labels = await this.#networkLabels(name)
     if (labels) {
       if (
-        labels["kiln.relay.network"] !== `tailscale:${config.id}` ||
+        labels["kiln.relay.network"] !==
+          `tailscale:${physicalKey(config.id)}` ||
         !relayOwnsLabels(this.#config, labels)
       ) {
         throw new Error(
@@ -4260,7 +4277,7 @@ export class LifecycleDriver {
     await runLifecycle(
       this.#engine.createNetwork({
         labels: {
-          "kiln.relay.network": `tailscale:${config.id}`,
+          "kiln.relay.network": `tailscale:${physicalKey(config.id)}`,
           ...relayOwnerLabels(this.#config),
         },
         name,
@@ -4330,7 +4347,7 @@ export class LifecycleDriver {
       this.#config.dataDirectory,
       "infrastructure",
       "tailscale-stacks",
-      config.id,
+      physicalKey(config.id),
       "state"
     )
     await mkdir(stateDirectory, { recursive: true, mode: 0o700 })
@@ -4384,8 +4401,8 @@ export class LifecycleDriver {
     const hostRoot = await this.#hostDataDirectory()
     return {
       binds: [
-        `${join(hostRoot, "instances", config.id)}:/config`,
-        `${join(hostRoot, "infrastructure", "tailscale-stacks", config.id, "state")}:/var/lib/tailscale`,
+        `${join(hostRoot, "instances", physicalKey(config.id))}:/config`,
+        `${join(hostRoot, "infrastructure", "tailscale-stacks", physicalKey(config.id), "state")}:/var/lib/tailscale`,
       ],
       capAdd: ["CAP_NET_ADMIN", "CAP_NET_RAW"],
       devices: ["/dev/net/tun"],
@@ -4403,7 +4420,7 @@ export class LifecycleDriver {
       labels: {
         "kiln.relay.managed": "true",
         "kiln.relay.owned": "true",
-        "kiln.server.id": config.id,
+        "kiln.server.id": physicalKey(config.id),
         "kiln.brick.id": builtinTailscaleBrickId,
         "kiln.brick.format": "kiln.brick/v1",
         "kiln.brick.source": builtinTailscaleBrickSource,
@@ -4415,7 +4432,7 @@ export class LifecycleDriver {
         "kiln.instance.java": "Tailscale + CoreDNS",
         "kiln.instance.game": "Networking",
         "kiln.instance.hostname": `${config.hostname}.${config.domain}`,
-        "kiln.instance.directory": config.id,
+        "kiln.instance.directory": physicalKey(config.id),
         "kiln.instance.memory-bytes": String(TAILSCALE_STACK_MEMORY_BYTES),
         "kiln.instance.disk-bytes": String(TAILSCALE_STACK_DISK_BYTES),
         "kiln.instance.mount": "/config",
@@ -4590,7 +4607,7 @@ export class LifecycleDriver {
     await this.#removeOwnedNetwork(
       this.#resources.tailscaleStackNetwork(attempted.id)
     )
-    await rm(join(this.#config.rootDirectory, attempted.id), {
+    await rm(join(this.#config.rootDirectory, physicalKey(attempted.id)), {
       force: true,
       recursive: true,
     })
@@ -4600,7 +4617,7 @@ export class LifecycleDriver {
         this.#config.dataDirectory,
         "infrastructure",
         "tailscale-stacks",
-        attempted.id
+        physicalKey(attempted.id)
       ),
       { force: true, recursive: true }
     )
@@ -4619,7 +4636,11 @@ export class LifecycleDriver {
       `${JSON.stringify({ id: config.id, records }, null, 2)}\n`,
       { mode: 0o600 }
     )
-    const path = join(this.#config.rootDirectory, config.id, "Corefile")
+    const path = join(
+      this.#config.rootDirectory,
+      physicalKey(config.id),
+      "Corefile"
+    )
     await writeFile(
       path,
       tailscaleStackCoreDnsConfiguration(config.domain, records),
@@ -4629,7 +4650,7 @@ export class LifecycleDriver {
     const hostPath = join(
       await this.#hostDataDirectory(),
       "instances",
-      config.id,
+      physicalKey(config.id),
       "Corefile"
     )
     await this.#replaceContainer(
@@ -4662,7 +4683,7 @@ export class LifecycleDriver {
   }
 
   #tailscaleStackDnsRecordsPath(id: string): string {
-    return join(this.#config.rootDirectory, id, "dns-records.json")
+    return join(this.#config.rootDirectory, physicalKey(id), "dns-records.json")
   }
 
   async #tailscaleStackIdentityExists(id: string): Promise<boolean> {
@@ -4673,7 +4694,7 @@ export class LifecycleDriver {
             this.#config.dataDirectory,
             "infrastructure",
             "tailscale-stacks",
-            id,
+            physicalKey(id),
             "state",
             "tailscaled.state"
           )
@@ -4725,7 +4746,11 @@ export class LifecycleDriver {
             tailscaleStackCoreDnsRecords(
               config.domain,
               await readFile(
-                join(this.#config.rootDirectory, config.id, "Corefile"),
+                join(
+                  this.#config.rootDirectory,
+                  physicalKey(config.id),
+                  "Corefile"
+                ),
                 "utf8"
               )
             )
@@ -5414,4 +5439,14 @@ function allocatesPort(
   protocol: "tcp" | "udp"
 ): boolean {
   return allocatedPorts(instance, protocol).includes(port)
+}
+
+// The Tailscale network a folder of the instances directory may hold: one
+// named after its ID, or after its old one before 12-character IDs
+// (instance-keys.ts). Game servers' folders share the directory, so only
+// one holding a `stack.json` is a network.
+function tailscaleStackDirectoryId(name: string): string | null {
+  return /^(?:[a-f0-9]{40}|[a-f0-9]{12})$/u.test(name)
+    ? instanceIdFrom(name)
+    : null
 }

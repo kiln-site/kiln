@@ -24,7 +24,7 @@ import {
   subscribeRealtimeChanges,
   type RealtimeSourceEvent,
 } from "@/lib/realtime-source.server"
-import { relayInstanceRouteId, type RelayReachability } from "@/lib/relay-fleet"
+import { type RelayReachability } from "@/lib/relay-fleet"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
 import { projectRelayInstanceOverview } from "@workspace/contracts"
 import type { RelayInstance, RelayNode } from "@workspace/contracts"
@@ -541,7 +541,6 @@ function fleetInstance(
     relayName: relay.name,
     relayStatus: reachability(relay.id),
     relayUpdating: isRelayUpdating(relay.id),
-    routeId: relayInstanceRouteId(relay.id, instance.shortId),
   }
 }
 

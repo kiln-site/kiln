@@ -59,15 +59,15 @@ vi.mock("@/lib/authorization-delivery", async (importOriginal) => ({
   },
 }))
 
-const relayId = "r".repeat(43)
-const otherRelayId = "s".repeat(43)
-const databaseId = "d".repeat(40)
-const otherDatabaseId = "e".repeat(40)
+const relayId = "1".repeat(12)
+const otherRelayId = "2".repeat(12)
+const databaseId = "d".repeat(12)
+const otherDatabaseId = "e".repeat(12)
 const now = 1_700_000_000_000
 const sharedSchedule = "11111111-1111-4111-8111-111111111111"
 const aloneSchedule = "22222222-2222-4222-8222-222222222222"
 const crossRelaySchedule = "33333333-3333-4333-8333-333333333333"
-const remoteDatabaseId = "f".repeat(40)
+const remoteDatabaseId = "f".repeat(12)
 const keyOf = (relay: string, id: string) => `${relay}:database:${id}`
 
 const disabledCache = Layer.succeed(AppCache)({

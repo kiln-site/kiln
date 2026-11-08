@@ -98,7 +98,7 @@ export function peerTransferRoute(
     const { grant } = credentials
     if (
       grant.transferId !== transferId ||
-      grant.audience !== options.identity.fingerprint ||
+      grant.audience !== options.identity.id ||
       grant.expiresAt <= now ||
       grant.issuedAt > now + 5_000 ||
       grant.expiresAt - grant.issuedAt > MAX_GRANT_LIFETIME_MS
@@ -140,7 +140,7 @@ export function peerTransferRoute(
         null,
         Buffer.from(
           relayPeerTransferProofTranscript({
-            audience: options.identity.fingerprint,
+            audience: options.identity.id,
             method,
             nonce: credentials.nonce,
             range: request.headers.range ?? "",

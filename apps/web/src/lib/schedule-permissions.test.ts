@@ -69,7 +69,7 @@ describe("schedule authorization", () => {
 
   it("schedules an App's commands and power only with the authority its terminal and power take", () => {
     const app: ScheduleTarget = {
-      id: "a".repeat(40),
+      id: "a".repeat(12),
       kind: "app",
       name: "Website",
       relayId: "relay-a",

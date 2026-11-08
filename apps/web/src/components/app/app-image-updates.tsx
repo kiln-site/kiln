@@ -95,11 +95,9 @@ function updateStatus(updates: AppImageUpdates): {
 /** The Deployment card's Updates row, which opens the dialog. */
 export const AppImageUpdatesFact = React.memo(function AppImageUpdatesFact({
   app,
-  routeId,
   updates,
 }: {
   app: Pick<App, "id" | "name" | "permissions" | "relayId">
-  routeId: string
   updates: AppImageUpdates
 }) {
   const [open, setOpen] = React.useState(false)
@@ -129,7 +127,6 @@ export const AppImageUpdatesFact = React.memo(function AppImageUpdatesFact({
       {open ? (
         <AppImageUpdatesDialog
           app={app}
-          routeId={routeId}
           updates={updates}
           onOpenChange={setOpen}
         />
@@ -141,12 +138,10 @@ export const AppImageUpdatesFact = React.memo(function AppImageUpdatesFact({
 function AppImageUpdatesDialog({
   app,
   onOpenChange,
-  routeId,
   updates,
 }: {
   app: Pick<App, "id" | "name" | "permissions" | "relayId">
   onOpenChange: (open: boolean) => void
-  routeId: string
   updates: AppImageUpdates
 }) {
   const queryClient = useQueryClient()
@@ -207,7 +202,7 @@ function AppImageUpdatesDialog({
       // Follow the deployment as it happens.
       if (app.permissions.includes("app.logs.read")) {
         await navigate({
-          params: { appId: routeId },
+          params: { appId: app.id },
           search: { stream: "deployment" },
           to: "/app/$appId/logs",
         })

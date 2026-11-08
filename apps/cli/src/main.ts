@@ -29,6 +29,7 @@ import {
   cliSftpResponseSchema,
   DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
   MAXIMUM_INSTANCE_NAME_LENGTH,
+  databaseIdSchema,
   formatRelayInstanceStateReason,
   relayIdSchema,
   relayFileContentSchema,
@@ -309,7 +310,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
             targetKind: "platform",
           }
         : targetKind.data === "server"
-          ? yield* parseServerReferenceEffect(rest[1]).pipe(
+          ? yield* resolveServerEffect(session, rest[1]).pipe(
               Effect.map((target) => ({
                 ...common,
                 relayId: target.relayId,
@@ -319,7 +320,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
             )
           : {
               ...common,
-              ...(yield* parseBackupTargetReferenceEffect(rest[1])),
+              ...(yield* resolveDatabaseBackupTargetEffect(session, rest[1])),
               targetKind: "database",
             }
     const result = yield* apiJsonEffect(
@@ -459,13 +460,11 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
         CLI_LONG_OPERATION_TIMEOUT_MS
       )
     )
-    writeLine(
-      `Created ${result.server.name} (${result.relayId}:${result.server.id}).`
-    )
+    writeLine(`Created ${result.server.name} (${result.server.id}).`)
     return
   }
   if (group === "server" && action === "info") {
-    const target = yield* parseServerReferenceEffect(rest[0])
+    const target = yield* resolveServerEffect(session, rest[0])
     const result = yield* apiJsonEffect(
       session,
       `/api/cli/v1/server/info?${targetQuery(target)}`,
@@ -475,7 +474,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
     return
   }
   if (group === "server" && (action === "startup" || action === "brick")) {
-    const target = yield* parseServerReferenceEffect(rest[0])
+    const target = yield* resolveServerEffect(session, rest[0])
     const startup = yield* startupOptionsEffect(args)
     const brick = action === "brick" ? rest[1] : args.brick
     if (
@@ -509,7 +508,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
     return
   }
   if (group === "server" && action === "delete") {
-    const target = yield* parseServerReferenceEffect(rest[0])
+    const target = yield* resolveServerEffect(session, rest[0])
     // What deleting asks in the browser too: its name, and the password.
     if (!args.confirm) {
       return yield* invalidUsage(
@@ -534,16 +533,16 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
         CLI_LONG_OPERATION_TIMEOUT_MS
       )
     )
-    writeLine(`Deleted ${result.relayId}:${result.instanceId}.`)
+    writeLine(`Deleted ${result.instanceId}.`)
     return
   }
   if (group === "server" && action === "power") {
     const [serverReference, powerAction] = rest
-    const target = yield* parseServerReferenceEffect(serverReference)
+    const target = yield* resolveServerEffect(session, serverReference)
     const parsedAction = cliPowerActionSchema.safeParse(powerAction)
     if (!parsedAction.success) {
       return yield* invalidUsage(
-        "Usage: kiln server power <relayId:instanceId> <start|stop|restart|kill>"
+        "Usage: kiln server power <server> <start|stop|restart|kill>"
       )
     }
     const result = yield* apiJsonEffect(
@@ -561,7 +560,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
   }
   if (group === "server" && action === "console") {
     const [serverReference, ...commandParts] = rest
-    const target = yield* parseServerReferenceEffect(serverReference)
+    const target = yield* resolveServerEffect(session, serverReference)
     const command = commandParts.length
       ? commandParts.join(" ")
       : (yield* readStdinEffect()).trim()
@@ -576,7 +575,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
     return
   }
   if (group === "server" && action === "logs") {
-    const target = yield* parseServerReferenceEffect(rest[0])
+    const target = yield* resolveServerEffect(session, rest[0])
     yield* logsEffect(args, session, target)
     return
   }
@@ -771,7 +770,7 @@ const filesEffect = Effect.fn("cli.files")(function* (
   action: string | undefined,
   rest: Array<string>
 ) {
-  const target = yield* parseServerReferenceEffect(rest[0])
+  const target = yield* resolveServerEffect(session, rest[0])
   if (action === "list") {
     const query = targetQuery(target)
     query.set("path", rest[1] || ".")
@@ -1011,7 +1010,7 @@ function writeServerInfo(
 ): void {
   const server = result.server
   writeLine(`Name: ${server.name}`)
-  writeLine(`ID: ${result.relay.id}:${server.id}`)
+  writeLine(`ID: ${server.id}`)
   writeLine(`Relay: ${result.relay.name}`)
   writeLine(`State: ${server.observedState} (desired ${server.desiredState})`)
   if (server.stateReason) {
@@ -1034,40 +1033,65 @@ function writeServerInfo(
   }
 }
 
-const parseServerReferenceEffect = Effect.fn("cli.serverReference.parse")(
-  function* (value: string | undefined) {
-    const parsed = cliServerReferenceSchema.safeParse(value)
-    if (!parsed.success) {
-      return yield* commandError({
-        code: "invalid_arguments",
-        exitCode: 2,
-        message:
-          "Server references use relayId:instanceId. Run `kiln servers list` to discover them.",
-      })
-    }
-    const separator = parsed.data.indexOf(":")
-    return {
-      instanceId: parsed.data.slice(separator + 1),
-      relayId: parsed.data.slice(0, separator),
-    }
-  }
-)
-
-const parseBackupTargetReferenceEffect = Effect.fn(
-  "cli.backupTargetReference.parse"
-)(function* (value: string | undefined) {
-  const separator = value?.indexOf(":") ?? -1
-  const targetId = separator > 0 ? value?.slice(separator + 1) : undefined
-  const parsedTarget = z.string().min(1).max(120).safeParse(targetId)
-  if (!value || separator < 1 || !parsedTarget.success) {
+// A game server is named by its ID alone: instance IDs are unique across
+// every Relay, so the server list says which Relay runs it.
+const resolveServerEffect = Effect.fn("cli.server.resolve")(function* (
+  session: KilnSession,
+  value: string | undefined
+) {
+  const parsed = cliServerReferenceSchema.safeParse(value)
+  if (!parsed.success) {
     return yield* commandError({
       code: "invalid_arguments",
       exitCode: 2,
-      message: "Backup target references use relayId:targetId.",
+      message:
+        "A game server's ID is required. Run `kiln servers list` to discover it.",
     })
   }
-  const relayId = yield* parseRelayIdEffect(value.slice(0, separator))
-  return { relayId, targetId: parsedTarget.data }
+  const { servers } = yield* apiJsonEffect(
+    session,
+    "/api/cli/v1/servers",
+    cliServersResponseSchema
+  )
+  const server = servers.find((candidate) => candidate.id === parsed.data)
+  if (!server) {
+    return yield* commandError({
+      code: "not_found",
+      message: `No game server ${parsed.data} is visible to you. Run \`kiln servers list\`.`,
+    })
+  }
+  return { instanceId: server.instanceId, relayId: server.relayId }
+})
+
+// A database backup target is named by the database's ID alone.
+const resolveDatabaseBackupTargetEffect = Effect.fn(
+  "cli.backupTarget.database.resolve"
+)(function* (session: KilnSession, value: string | undefined) {
+  const parsed = databaseIdSchema.safeParse(value)
+  if (!parsed.success) {
+    return yield* commandError({
+      code: "invalid_arguments",
+      exitCode: 2,
+      message:
+        "A database's ID is required. Run `kiln backups targets` to discover it.",
+    })
+  }
+  const { targets } = yield* apiJsonEffect(
+    session,
+    "/api/cli/v1/backup-targets",
+    cliBackupTargetsResponseSchema
+  )
+  const target = targets.find(
+    (candidate) =>
+      candidate.kind === "database" && candidate.reference === parsed.data
+  )
+  if (!target) {
+    return yield* commandError({
+      code: "not_found",
+      message: `No database ${parsed.data} you can back up. Run \`kiln backups targets\`.`,
+    })
+  }
+  return { relayId: target.relayId, targetId: target.reference }
 })
 
 const parseBackupIdEffect = Effect.fn("cli.backupId.parse")(function* (

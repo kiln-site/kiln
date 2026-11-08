@@ -32,19 +32,13 @@ import { appConfigQueryOptions } from "@/lib/query-options"
 // the actions that change it, and a rail summing up where it runs, who owns
 // it, and its deployment. An app opens here.
 export function AppInfoPage() {
-  const { app, routeId } = useAppWorkspace()
+  const { app } = useAppWorkspace()
   // Another app is a fresh page, so an open dialog's draft and the selected
   // container can't carry over to it.
-  return (
-    <AppInfoContent
-      key={`${app.relayId}:${app.id}`}
-      app={app}
-      routeId={routeId}
-    />
-  )
+  return <AppInfoContent key={`${app.relayId}:${app.id}`} app={app} />
 }
 
-function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
+function AppInfoContent({ app }: { app: App }) {
   const config = useQuery(appConfigQueryOptions(app.relayId, app.id))
   const [selection] = React.useState(createAppContainerSelection)
   const canManage =
@@ -52,7 +46,7 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
 
   return (
     <AppContainerSelectionContext.Provider value={selection}>
-      <InfoPage rail={<AppInfoRail app={app} routeId={routeId} />}>
+      <InfoPage rail={<AppInfoRail app={app} />}>
         <ResourceDeletionAlert
           canDelete={app.permissions.includes("app.delete")}
           kind="app"
@@ -73,7 +67,6 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
                 app={app}
                 canManage={canManage}
                 config={config.data.config}
-                routeId={routeId}
               />
             ) : (
               <InfoSection icon={<ToyBrick />} title="Brick" content>
@@ -90,7 +83,7 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
             )}
           </div>
         </div>
-        <AppContainerSection app={app} routeId={routeId} />
+        <AppContainerSection app={app} />
         {config.data ? (
           <AppLimitsSection app={app} config={config.data.config} />
         ) : null}
@@ -99,14 +92,9 @@ function AppInfoContent({ app, routeId }: { app: App; routeId: string }) {
             app={app}
             canManage={canManage}
             config={config.data.config}
-            routeId={routeId}
           />
         ) : null}
-        <AppWebRouteSettings
-          app={app}
-          canManage={canManage}
-          routeId={routeId}
-        />
+        <AppWebRouteSettings app={app} canManage={canManage} />
         {app.permissions.includes("app.delete") ? (
           <AppDangerZone app={app} />
         ) : null}

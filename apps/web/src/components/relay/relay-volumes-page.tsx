@@ -122,7 +122,7 @@ const volumeSearchFields = [
 // those Apps' Compose files declare, and the Relay's own data volume. Only
 // those Kiln made can be renamed or deleted here.
 export function RelayVolumesPage() {
-  const { relay, routeId } = useRelayWorkspace()
+  const { relay } = useRelayWorkspace()
   const canManage = useRelayPermission(relay.id, "relay.configure")
   // A stopped backup stops and starts the Apps that use the volume.
   const canManageApps = useRelayPermission(relay.id, "app.manage")
@@ -151,7 +151,6 @@ export function RelayVolumesPage() {
           canManage={canManage}
           relayId={relay.id}
           relayName={relay.name}
-          routeId={routeId}
           searchStore={searchStore}
           onDialog={setDialog}
         />
@@ -425,7 +424,7 @@ function appName(
   appNames: ReadonlyMap<string, string> | undefined,
   appId: string
 ): string {
-  return appNames?.get(appId) ?? `App ${appId.slice(0, 8)}`
+  return appNames?.get(appId) ?? `App ${appId}`
 }
 
 function VolumesTable({
@@ -433,7 +432,6 @@ function VolumesTable({
   canManage,
   relayId,
   relayName,
-  routeId,
   searchStore,
   onDialog,
 }: {
@@ -441,7 +439,6 @@ function VolumesTable({
   canManage: boolean
   relayId: string
   relayName: string
-  routeId: string
   searchStore: DataTableSearchStore
   onDialog: (dialog: VolumeDialog) => void
 }) {
@@ -528,7 +525,7 @@ function VolumesTable({
             canBrowse={canBrowse}
             canManage={canManage}
             protectionPending={protectionPending}
-            routeId={routeId}
+            relayId={relayId}
             volume={row.original}
             onDialog={onDialog}
           />
@@ -566,7 +563,6 @@ function VolumesTable({
     protectionPending,
     relayId,
     relayName,
-    routeId,
   ])
 
   const supported = volumes.data?.supported !== false
@@ -684,7 +680,7 @@ const VolumeActions = React.memo(function VolumeActions({
   canBrowse,
   canManage,
   protectionPending,
-  routeId,
+  relayId,
   volume,
   onDialog,
 }: {
@@ -692,7 +688,7 @@ const VolumeActions = React.memo(function VolumeActions({
   canBrowse: boolean
   canManage: boolean
   protectionPending: string | null
-  routeId: string
+  relayId: string
   volume: RelayVolume
   onDialog: (dialog: VolumeDialog) => void
 }) {
@@ -732,7 +728,7 @@ const VolumeActions = React.memo(function VolumeActions({
             ? {
                 params: {
                   _splat: `${volume.mountpoint.replace(/^\/+/u, "")}/`,
-                  relayId: routeId,
+                  relayId,
                 },
                 to: "/relay/$relayId/files/$",
               }

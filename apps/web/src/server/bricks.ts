@@ -6,6 +6,7 @@ import {
   brickIdExceedsRecommendedLength,
   brickSchema,
   brickSourceSchema,
+  instanceIdSchema,
   relayCreateInstanceSchema,
   relayInstanceNameSchema,
   relayInstanceSchema,
@@ -37,10 +38,11 @@ import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { listMcJarVersionsEffect } from "@/effect/mcjarfiles"
 import { provisionServer } from "@/lib/server-provisioning.server"
+import { asServerDeployment } from "@/lib/server-deployments.server"
 import { runAppEffect } from "@/effect/runtime"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
-import { promiseEffect } from "@/effect/promise"
-import { provisioningInstanceId } from "@/lib/provisioning.server"
+import { promiseEffect, recoverPromise } from "@/effect/promise"
+import { reserveServerInstanceIdEffect } from "@/lib/provisioning.server"
 import { dnsKey } from "@/lib/dns-operations"
 import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
 import {
@@ -90,7 +92,7 @@ export const hearthCreateInstanceInputSchema = relayCreateInstanceSchema
   .strict()
 const recipeInputSchema = relayInputSchema.extend({ source: brickSourceSchema })
 const instanceInputSchema = relayInputSchema.extend({
-  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+  instanceId: instanceIdSchema,
 })
 export const hearthUpdateInstanceStartupInputSchema =
   relayUpdateInstanceStartupSchema
@@ -204,11 +206,11 @@ export const getBrickVersions = createServerFn({ method: "GET" })
     )
   })
 
-// Holds the game server it creates, by the ID its idempotency key gives
-// it, and its Relay shared, so the Relay isn't removed meanwhile. The Relay
+// Holds the game server it creates, by the ID reserved for its request,
+// and its Relay shared, so the Relay isn't removed meanwhile. The Relay
 // is read once admitted, so one removed since can't gain the server.
 const createInstance = operation<
-  z.infer<typeof hearthCreateInstanceInputSchema>
+  z.infer<typeof hearthCreateInstanceInputSchema> & { instanceId: string }
 >()({
   name: "instance.create",
   doing: "Creating this game server",
@@ -226,18 +228,14 @@ const createInstance = operation<
     ),
   locks: ({ input }) => [
     exclusive(
-      resourceKey(
-        "instance",
-        input.relayId,
-        provisioningInstanceId(input.idempotencyKey)
-      )
+      resourceKey("instance", input.relayId, input.instanceId)
     ),
     shared(relayKey(input.relayId)),
   ],
   run: ({ context: user, input }) =>
     promiseEffect(() => createInstanceHandler(user, input)),
   audit: ({ input }) => ({
-    id: provisioningInstanceId(input.idempotencyKey),
+    id: input.instanceId,
     kind: "instance",
     relayId: input.relayId,
   }),
@@ -245,15 +243,25 @@ const createInstance = operation<
 
 export const createBrickInstance = createServerFn({ method: "POST" })
   .validator(hearthCreateInstanceInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(createInstance, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    // Reserved once, outside the operation, for the person's request.
+    const instanceId = await runAppEffect(
+      "instance.create.reserveId",
+      reserveServerInstanceIdEffect(`${user.id}:${data.idempotencyKey}`)
+    )
+    return runOperationPromise(
+      createInstance,
+      { ...data, instanceId },
+      { user }
+    )
+  })
 
 async function createInstanceHandler(
   user: AuthenticatedUser,
-  data: z.infer<typeof hearthCreateInstanceInputSchema>
+  data: z.infer<typeof hearthCreateInstanceInputSchema> & {
+    instanceId: string
+  }
 ) {
   const relay = await requiredRelay(data.relayId)
   await requireRelayProvisionAccess(user, relay)
@@ -261,7 +269,13 @@ async function createInstanceHandler(
     user,
     data.recipe
   )
-  const { idempotencyKey, limits, relayId: _, ...createInput } = data
+  const {
+    idempotencyKey,
+    instanceId,
+    limits,
+    relayId: _,
+    ...createInput
+  } = data
   const input = relayCreateInstanceSchema.parse({
     ...createInput,
     ...relayResourceLimitsRequest(
@@ -278,6 +292,7 @@ async function createInstanceHandler(
   return provisionServer({
     create: input,
     idempotencyKey,
+    instanceId,
     ownerId: user.id,
     relay,
     requestedBy: user.id,
@@ -422,26 +437,49 @@ async function updateInstanceStartupHandler(
   const powerPermission = startupPowerPermission(existing, data)
   if (powerPermission) authorization.require(powerPermission)
   const {
+    deploymentId: _untrustedDeploymentId,
     diskLimitBytes: _diskLimitBytes,
     limits: _limits,
     recipeDefinition: _untrustedRecipeDefinition,
     ...trustedData
   } = data
-  const input = relayUpdateInstanceStartupSchema.parse({
-    ...trustedData,
-    ...(recipeDefinition ? { recipeDefinition } : {}),
-  })
-  const instance = relayInstanceSchema.parse(
-    await requestRelay(
+  const apply = (deploymentId?: string) =>
+    requestRelay(
       relay,
       `/v1/instances/${encodeURIComponent(data.instanceId)}/startup`,
       {
         method: "PUT",
-        body: JSON.stringify(input),
+        body: JSON.stringify(
+          relayUpdateInstanceStartupSchema.parse({
+            ...trustedData,
+            ...(recipeDefinition ? { recipeDefinition } : {}),
+            ...(deploymentId ? { deploymentId } : {}),
+          })
+        ),
       },
       360_000,
       user.id
     )
+  // A reinstall or change of Brick is a deployment; other startup changes
+  // aren't.
+  const instance = relayInstanceSchema.parse(
+    data.reinstall || recipeDefinition
+      ? await asServerDeployment(
+          {
+            ...(recipeDefinition
+              ? {
+                  brickId: recipeDefinition.metadata.id,
+                  brickName: recipeDefinition.metadata.name,
+                }
+              : await currentBrick(relay, existing)),
+            instanceId: data.instanceId,
+            relayId: relay.id,
+            trigger: data.reinstall ? "reinstall" : "brick",
+            userId: user.id,
+          },
+          apply
+        )
+      : await apply()
   )
   await provisionInstanceDomainBestEffort(instance, relay.id)
   await runAppEffect(
@@ -454,6 +492,21 @@ async function updateInstanceStartupHandler(
     type: "instance.upsert",
   })
   return instance
+}
+
+// The Brick a reinstall installs again, as its deployment names it.
+async function currentBrick(
+  relay: PersistedRelay,
+  instance: z.infer<typeof relayInstanceSchema>
+) {
+  const brick = await recoverPromise(
+    async () => (await loadInstanceRecipe(relay, instance)).brick.metadata,
+    () => null
+  )
+  return {
+    brickId: brick?.id ?? instance.brickId ?? null,
+    brickName: brick?.name ?? null,
+  }
 }
 
 function recipePreview(brick: z.infer<typeof brickSchema>) {

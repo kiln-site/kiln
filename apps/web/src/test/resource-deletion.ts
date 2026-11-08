@@ -17,9 +17,9 @@ import {
 // What deletion tests share: a fake Relay, and a game server on it that
 // its owner may delete; Apps and volumes are added as a test needs them.
 
-export const relayId = "r".repeat(43)
-export const serverId = "a".repeat(40)
-export const appId = "e".repeat(40)
+export const relayId = "d".repeat(12)
+export const serverId = "a".repeat(12)
+export const appId = "e".repeat(12)
 export const volumeId = "f".repeat(40)
 const at = 1_767_225_600_000
 
@@ -442,7 +442,6 @@ function snapshot(relayId: string) {
       name: "Survival",
       observedState: "stopped",
       service: "survival",
-      shortId: id.slice(0, 8),
       status: "stopped",
       version: "1.21",
     })),

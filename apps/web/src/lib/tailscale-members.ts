@@ -33,7 +33,7 @@ export function tailscaleMemberProblem(
         record.appId === app.appId && record.relayId === binding.relayId
     )
       ? null
-      : `App ${app.appId.slice(0, 8)} is unavailable`
+      : `App ${app.appId} is unavailable`
   }
   const databaseId = databaseTailscaleMember(binding.memberId)
   if (databaseId) {
@@ -42,7 +42,7 @@ export function tailscaleMemberProblem(
         record.databaseId === databaseId && record.relayId === binding.relayId
     )
       ? null
-      : `Database ${databaseId.slice(0, 8)} is unavailable`
+      : `Database ${databaseId} is unavailable`
   }
   const instanceId = instanceTailscaleMember(binding.memberId)
   const instance = records.instances.find(

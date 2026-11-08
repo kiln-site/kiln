@@ -80,6 +80,7 @@ import {
   type PersistedRelay,
 } from "@/lib/relay-registry"
 import { notificationAudiencesEffect } from "@/lib/resource-audience.server"
+import { settleStaleServerDeploymentsEffect } from "@/lib/server-deployments.server"
 
 // Deploys apps and records each deployment. Every ask, whatever asked,
 // joins the app's one request, and one durable operation takes it up,
@@ -1389,7 +1390,8 @@ export const appDeployKey = (relayId: string, appId: string) =>
 
 /**
  * Every minute: settles a deployment recorded as running that nothing
- * follows, as one from before deployments ran in lanes, and checks the
+ * follows, as one from before deployments ran in lanes or a game server's
+ * that a Hearth restart cut off, and checks the
  * branches of apps whose source GitHub can't push to, asking those whose
  * branch moved past what they last deployed.
  */
@@ -1404,6 +1406,8 @@ export function startAppDeploymentPolling(): void {
         }
         yield* checkAppDeploymentEffect(record).pipe(Effect.ignore)
       }
+      // A game server's deployment a Hearth restart cut off.
+      yield* settleStaleServerDeploymentsEffect().pipe(Effect.ignore)
       const sources = yield* loadAutoDeployGitHubSourcesEffect({
         polled: true,
       })

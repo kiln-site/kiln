@@ -27,11 +27,6 @@
       "types": "./dist/schedules.d.ts",
       "development": "./src/schedules.ts",
       "default": "./dist/schedules.js"
-    },
-    "./instance-id-migration": {
-      "types": "./dist/instance-id-migration.d.ts",
-      "development": "./src/instance-id-migration.ts",
-      "default": "./dist/instance-id-migration.js"
     }
   }
 }

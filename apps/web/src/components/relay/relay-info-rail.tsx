@@ -18,17 +18,11 @@ import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
 // What the Relay is at a glance: what runs on it, who owns it, and the node
 // under it. Its name and status are in the header.
-export function RelayInfoRail({
-  relay,
-  routeId,
-}: {
-  relay: RelayDirectoryEntry
-  routeId: string
-}) {
+export function RelayInfoRail({ relay }: { relay: RelayDirectoryEntry }) {
   const node = useRelayNodeFacts(relay.id)
   return (
     <>
-      <RelayWorkloads relayId={relay.id} routeId={routeId} />
+      <RelayWorkloads relayId={relay.id} />
       <InfoRailGroup card>
         <InfoRailSecurityLink
           relayId={relay.id}

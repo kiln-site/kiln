@@ -55,50 +55,50 @@ const seed = Effect.gen(function* () {
   yield* insertUser("invitee")
   yield* insertUser("someone-else")
   for (const id of [
-    "relay-invited",
-    "relay-accepted",
-    "relay-declined",
-    "relay-expired",
-    "relay-cancelled",
-    "relay-revoked",
-    "relay-grant-revoked",
-    "relay-disabled",
-    "relay-server-only",
-    "relay-not-mine",
+    "r-invited",
+    "r-accepted",
+    "r-declined",
+    "r-expired",
+    "r-cancelled",
+    "r-revoked",
+    "r-grant-rev",
+    "r-disabled",
+    "r-srv-only",
+    "r-not-mine",
   ]) {
     yield* insertRelay(id, {
       created_by: "owner",
-      enabled: id !== "relay-disabled",
+      enabled: id !== "r-disabled",
       port: 8443,
       use_tls: true,
     })
   }
-  yield* invite({ relayId: "relay-invited" })
+  yield* invite({ relayId: "r-invited" })
   yield* invite({
-    relayId: "relay-accepted",
+    relayId: "r-accepted",
     invitation: { accepted_at: now - 500 },
   })
   yield* invite({
-    relayId: "relay-declined",
+    relayId: "r-declined",
     invitation: { declined_at: now - 500 },
   })
   yield* invite({
-    relayId: "relay-expired",
+    relayId: "r-expired",
     invitation: { expires_at: now - 1 },
   })
   // Cancelling sets revoked_at too; either alone must hide the invitation.
   yield* invite({
-    relayId: "relay-cancelled",
+    relayId: "r-cancelled",
     invitation: { cancelled_at: now - 500 },
   })
   yield* invite({
-    relayId: "relay-revoked",
+    relayId: "r-revoked",
     invitation: { revoked_at: now - 500 },
   })
-  yield* invite({ relayId: "relay-grant-revoked", grantState: "revoked" })
-  yield* invite({ relayId: "relay-disabled" })
-  yield* invite({ relayId: "relay-server-only", resourceType: "instance" })
-  yield* invite({ relayId: "relay-not-mine", userId: "someone-else" })
+  yield* invite({ relayId: "r-grant-rev", grantState: "revoked" })
+  yield* invite({ relayId: "r-disabled" })
+  yield* invite({ relayId: "r-srv-only", resourceType: "instance" })
+  yield* invite({ relayId: "r-not-mine", userId: "someone-else" })
 })
 
 describeMysql("Invited Relays", () => {
@@ -114,8 +114,8 @@ describeMysql("Invited Relays", () => {
           assert.deepStrictEqual(relays, [
             {
               createdBy: "owner",
-              hostname: "relay-invited.relay.test",
-              id: "relay-invited",
+              hostname: "r-invited.relay.test",
+              id: "r-invited",
               memory: undefined,
               ownerEmail: "owner.private@example.test",
               ownerName: "Notch",
@@ -133,10 +133,10 @@ describeMysql("Invited Relays", () => {
           email: "unnamed.private@example.test",
           name: "",
         })
-        yield* insertRelay("relay-unnamed-owner", {
+        yield* insertRelay("r-unnamed", {
           created_by: "unnamed-owner",
         })
-        yield* invite({ relayId: "relay-unnamed-owner" })
+        yield* invite({ relayId: "r-unnamed" })
 
         // Without details, as for Mojang lookups, no email or name derived
         // from one appears.
@@ -145,7 +145,7 @@ describeMysql("Invited Relays", () => {
           "private"
         )
         const unnamed = (yield* listInvitedRelaysEffect("invitee", true)).find(
-          (relay) => relay.id === "relay-unnamed-owner"
+          (relay) => relay.id === "r-unnamed"
         )
         assert.strictEqual(unnamed?.ownerEmail, "unnamed.private@example.test")
       })

@@ -10,8 +10,8 @@ import { safeCliBrickSource } from "@/effect/cli-api"
 describe("CLI response and URL boundaries", () => {
   it("rejects insecure URLs and paths that escape the server root", () => {
     const target = {
-      instanceId: "a".repeat(40),
-      relayId: "r".repeat(43),
+      instanceId: "a".repeat(12),
+      relayId: "1".repeat(12),
     }
     assert.isFalse(
       cliRemoteFileUploadRequestSchema.safeParse({
@@ -43,7 +43,7 @@ describe("CLI response and URL boundaries", () => {
 
   it("keeps server variables and internal runtime fields out of metadata", () => {
     const response = {
-      relay: { id: "r".repeat(43), name: "Relay" },
+      relay: { id: "1".repeat(12), name: "Relay" },
       server: {
         brickId: "paper",
         brickSource: "https://example.com/paper.yml",
@@ -51,7 +51,7 @@ describe("CLI response and URL boundaries", () => {
         desiredState: "running",
         diskLimitBytes: 1024,
         game: "Minecraft",
-        id: "a".repeat(40),
+        id: "a".repeat(12),
         implementation: "paper",
         javaVersion: "21",
         memoryLimitBytes: 1024,
@@ -66,7 +66,6 @@ describe("CLI response and URL boundaries", () => {
         publicAddress: "play.example.com:25565",
         lifecycle: [],
         resources: null,
-        shortId: "a".repeat(8),
         version: "1.21.11",
       },
     }

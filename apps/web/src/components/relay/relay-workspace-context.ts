@@ -4,8 +4,6 @@ import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
 export interface RelayWorkspaceRelay {
   relay: RelayDirectoryEntry
-  // The route segment for this Relay, for links between its pages.
-  routeId: string
 }
 
 // Keep context identity outside the Fast Refresh boundary for workspace UI.

@@ -30,7 +30,6 @@ import {
   accessibleDestinationsForServer,
   serverDestinationHref,
 } from "@/lib/navigation-destinations"
-import { relayInstanceRouteIdentifier } from "@/lib/relay-selectors"
 import { utcTimestamp } from "@/components/access-format"
 import {
   myInvitationsQueryOptions,
@@ -248,9 +247,7 @@ export function acceptedInvitationHref(
         instance,
         capabilities
       )[0]
-      const routeId = relayInstanceRouteIdentifier(snapshot.instances, instance)
-      if (destination && routeId)
-        return serverDestinationHref(destination, routeId)
+      if (destination) return serverDestinationHref(destination, instance.id)
     }
   }
   const section =

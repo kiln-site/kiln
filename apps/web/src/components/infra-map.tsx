@@ -417,7 +417,6 @@ function overviewInstances(directory: Directory): Array<OverviewInstance> {
       relayId: server.relayId,
       name: server.name,
       meta: server.connectAddress || server.game,
-      routeId: server.routeId,
       tailscale: server.tailscale,
     })),
     ...directory.apps.map((app): OverviewInstance => ({
@@ -426,8 +425,7 @@ function overviewInstances(directory: Directory): Array<OverviewInstance> {
       id: app.id,
       relayId: app.relayId,
       name: app.name,
-      meta: app.shortId,
-      routeId: app.id,
+      meta: app.id,
     })),
     ...directory.databases.map((database): OverviewInstance => ({
       key: instanceKey("database", database.relayId, database.id),
@@ -435,8 +433,7 @@ function overviewInstances(directory: Directory): Array<OverviewInstance> {
       id: database.id,
       relayId: database.relayId,
       name: database.name,
-      meta: `${engineLabel(database.engine)} · ${database.shortId}`,
-      routeId: database.id,
+      meta: `${engineLabel(database.engine)} · ${database.id}`,
     })),
   ]
 }

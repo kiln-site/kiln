@@ -20,7 +20,10 @@ import type { WebSocket } from "ws"
 import { forkPromise } from "@/effect/promise"
 import { reportAppError } from "@/effect/runtime"
 import { adoptRelayControlSocket } from "@/lib/relay-connection"
-import { loadPersistedRelay } from "@/lib/relay-registry"
+import {
+  loadPersistedRelay,
+  loadPersistedRelayByFingerprint,
+} from "@/lib/relay-registry"
 import {
   acceptRelayTunnel,
   relayTunnelAwaited,
@@ -173,7 +176,11 @@ function greet(socket: WebSocket): void {
     // It still waits, and counts, until its challenge is checked.
     forkPromise(
       async () => {
-        const relay = await loadPersistedRelay(challenge.value.relayId)
+        // One not yet updated to instance IDs still names itself by its
+        // fingerprint; it connects so Hearth can update it.
+        const relay =
+          (await loadPersistedRelay(challenge.value.relayId)) ??
+          (await loadPersistedRelayByFingerprint(challenge.value.relayId))
         if (!relay) {
           settle()
           socket.close(

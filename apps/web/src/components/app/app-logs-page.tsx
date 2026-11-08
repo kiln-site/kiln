@@ -111,7 +111,7 @@ function isLive(deployment: Deployment, live: LiveDeployments) {
 // An app's output in one place: its containers, followed live, and the log of
 // each deployment the Relay kept, the latest followed live too.
 export function AppLogsPage() {
-  const { app, routeId } = useAppWorkspace()
+  const { app } = useAppWorkspace()
   const { deployment: requestedDeployment, stream: requested } = useSearch({
     from: "/_app/app/$appId/logs",
   })
@@ -133,7 +133,6 @@ export function AppLogsPage() {
     <AppLogsPicker
       deployments={deployments ?? []}
       live={live}
-      routeId={routeId}
       services={services}
       source={source}
     />
@@ -146,7 +145,6 @@ export function AppLogsPage() {
         deployments={deployments ?? []}
         live={live}
         relayId={app.relayId}
-        routeId={routeId}
         services={services}
         source={source}
       />
@@ -214,7 +212,7 @@ function DeploymentLogs({
   pending: boolean
   picker: React.ReactNode
 }) {
-  const { app, routeId } = useAppWorkspace()
+  const { app } = useAppWorkspace()
   const router = useRouter()
   const relayDeployment = app.deployment ?? null
   const deployment =
@@ -242,7 +240,7 @@ function DeploymentLogs({
   )
   const shareHref = deployment
     ? router.buildLocation({
-        params: { appId: routeId },
+        params: { appId: app.id },
         search: { deployment: deployment.id },
         to: "/app/$appId/logs",
       }).href
@@ -545,7 +543,6 @@ const AppLogsRail = React.memo(function AppLogsRail({
   deployments,
   live,
   relayId,
-  routeId,
   services,
   source,
 }: {
@@ -553,10 +550,10 @@ const AppLogsRail = React.memo(function AppLogsRail({
   deployments: ReadonlyArray<Deployment>
   live: LiveDeployments
   relayId: string
-  routeId: string
   services: ReadonlyArray<Service>
   source: LogSource
 }) {
+  const { app } = useAppWorkspace()
   const panelRef = React.useRef<HTMLElement>(null)
   const runtime = source.kind === "service"
   const firstService = services[0]?.name
@@ -572,7 +569,7 @@ const AppLogsRail = React.memo(function AppLogsRail({
           aria-disabled={firstService === undefined}
           className={cn(railTabClassName, runtime && railTabActiveClassName)}
           disabled={firstService === undefined}
-          params={{ appId: routeId }}
+          params={{ appId: app.id }}
           search={{ stream: `${SERVICE_PREFIX}${firstService}` }}
           to="/app/$appId/logs"
         >
@@ -582,7 +579,7 @@ const AppLogsRail = React.memo(function AppLogsRail({
         <Link
           replace
           className={cn(railTabClassName, !runtime && railTabActiveClassName)}
-          params={{ appId: routeId }}
+          params={{ appId: app.id }}
           search={{ stream: DEPLOYMENT_STREAM }}
           to="/app/$appId/logs"
         >
@@ -599,7 +596,6 @@ const AppLogsRail = React.memo(function AppLogsRail({
               <LogRailRow
                 key={service.name}
                 current={source.name === service.name}
-                routeId={routeId}
                 search={{ stream: `${SERVICE_PREFIX}${service.name}` }}
                 status={service.status}
                 title={service.name}
@@ -615,7 +611,6 @@ const AppLogsRail = React.memo(function AppLogsRail({
                   (source.id === null && deployment.id === newest)
                 }
                 live={isLive(deployment, live)}
-                routeId={routeId}
                 search={{ deployment: deployment.id }}
                 status={deploymentStatusPresentation(deployment)}
                 title={deploymentTitle(deployment)}
@@ -656,7 +651,6 @@ function LogRailRow({
   children,
   current,
   live = false,
-  routeId,
   search,
   status,
   title,
@@ -664,17 +658,17 @@ function LogRailRow({
   children: React.ReactNode
   current: boolean
   live?: boolean
-  routeId: string
   search: { deployment: string } | { stream: string }
   status: IdentityStatusPresentation
   title: string
 }) {
+  const { app } = useAppWorkspace()
   return (
     <Link
       replace
       aria-current={current ? "true" : undefined}
       className="flex w-full gap-2 px-3 py-1.5 text-left text-xs text-foreground/85 outline-none hover:bg-accent/45 focus-visible:bg-accent/55 aria-[current]:bg-primary/12 aria-[current]:font-medium aria-[current]:text-primary-ink"
-      params={{ appId: routeId }}
+      params={{ appId: app.id }}
       search={search}
       title={title}
       to="/app/$appId/logs"
@@ -716,16 +710,15 @@ const railTabActiveClassName =
 function AppLogsPicker({
   deployments,
   live,
-  routeId,
   services,
   source,
 }: {
   deployments: ReadonlyArray<Deployment>
   live: LiveDeployments
-  routeId: string
   services: ReadonlyArray<Service>
   source: LogSource
 }) {
+  const { app } = useAppWorkspace()
   const navigate = useNavigate()
   const value =
     source.kind === "service"
@@ -740,7 +733,7 @@ function AppLogsPicker({
       : null
   function select(next: string) {
     void navigate({
-      params: { appId: routeId },
+      params: { appId: app.id },
       replace: true,
       search: next.startsWith(SERVICE_PREFIX)
         ? { stream: next }

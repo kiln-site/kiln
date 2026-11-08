@@ -92,8 +92,8 @@ vi.mock("@/effect/tailscale-api", async (importOriginal) => {
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
 
-const networkId = "a".repeat(40)
-const relayId = "b".repeat(43)
+const networkId = "a".repeat(12)
+const relayId = "b".repeat(12)
 const domain = "private.test"
 const hostname = "private-network"
 const stack = `${relayId}/${networkId}`
@@ -202,7 +202,6 @@ function deployment(): PersistedTailscaleDeployment {
       name: "Private Network",
       observedState: "running",
       service: "kiln-ts-aaaaaaaa",
-      shortId: networkId.slice(0, 8),
       status: "Up",
       version: "stable",
     },

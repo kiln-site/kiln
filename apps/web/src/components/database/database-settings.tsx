@@ -273,7 +273,6 @@ export function DatabaseDataSection({
   canRestore,
   canView,
   database,
-  routeId,
 }: {
   available: boolean
   canExport: boolean
@@ -281,7 +280,6 @@ export function DatabaseDataSection({
   canRestore: boolean
   canView: boolean
   database: ManagedDatabase
-  routeId: string
 }) {
   const exportDump = useDatabaseExport(database)
   const unavailableReason = available
@@ -315,7 +313,7 @@ export function DatabaseDataSection({
           {canView ? (
             <InfoSectionLink
               to="/db/$databaseId/viewer"
-              params={{ databaseId: routeId }}
+              params={{ databaseId: database.id }}
             >
               View Data
             </InfoSectionLink>
@@ -479,11 +477,9 @@ export function SqlImportDropZone({
 export function DatabaseConnectionSettings({
   canViewNetwork,
   database,
-  routeId,
 }: {
   canViewNetwork: boolean
   database: ManagedDatabase
-  routeId: string
 }) {
   const connected = database.members.length
   return (
@@ -494,7 +490,7 @@ export function DatabaseConnectionSettings({
         canViewNetwork ? (
           <InfoSectionLink
             to="/db/$databaseId/network"
-            params={{ databaseId: routeId }}
+            params={{ databaseId: database.id }}
           >
             Network
           </InfoSectionLink>

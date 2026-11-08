@@ -12,7 +12,7 @@ import { tryRelayPublicRoute } from "@/server/relay-public-route.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, selectRows } from "@/test/seed"
 
-const relayId = "r".repeat(43)
+const relayId = "1".repeat(12)
 const relayHost = "203.0.113.7"
 
 // The Relay and the public route are the network boundaries: the Relay takes

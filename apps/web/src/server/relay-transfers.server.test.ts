@@ -53,9 +53,9 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
 
 afterAll(() => disposeAppRuntime())
 
-const relayId = "r".repeat(43)
-const sourceId = "a1".repeat(20)
-const destinationId = "b2".repeat(20)
+const relayId = "1".repeat(12)
+const sourceId = "a1".repeat(6)
+const destinationId = "b2".repeat(6)
 const user = {
   email: "mover@example.test",
   emailVerified: true,

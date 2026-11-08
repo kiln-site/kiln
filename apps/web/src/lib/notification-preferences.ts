@@ -1,4 +1,5 @@
 import { Predicate } from "effect"
+import { INSTANCE_ID_SOURCE } from "@workspace/contracts"
 import { z } from "zod"
 
 import {
@@ -214,11 +215,15 @@ const resourcePreferenceSchema = z.object({
   type: z.enum(["app", "database", "instance", "relay"]),
 })
 
-// However long `notificationResourceKey` gets; this is one person's setting.
+// `<type>:<relayId>:<id>`, as `notificationResourceKey` makes it.
 const resourceKeySchema = z
   .string()
-  .max(160)
-  .regex(/^(app|database|instance|relay):[^:]+:[^:]+$/)
+  .regex(
+    new RegExp(
+      `^(app|database|instance|relay):${INSTANCE_ID_SOURCE}:${INSTANCE_ID_SOURCE}$`,
+      "u"
+    )
+  )
 
 // Enough for anyone, and a limit on what one setting can grow to.
 const resourcePreferenceLimit = 500

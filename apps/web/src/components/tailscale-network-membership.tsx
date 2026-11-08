@@ -443,7 +443,7 @@ export const TailscaleConnectMembersPopover = React.memo(
 // `appTailscaleMemberId`, `databaseTailscaleMemberId`).
 export type TailscaleMember = Pick<
   InstanceWorkspaceInstance,
-  "name" | "relayId" | "relayName" | "shortId"
+  "id" | "name" | "relayId" | "relayName"
 > & { memberId: string }
 
 export function TailscaleMembershipSection({
@@ -735,7 +735,7 @@ const TailscaleMembersTable = React.memo(function TailscaleMembersTable({
         description={
           <span className="block max-w-sm">
             {searchActive
-              ? "Try a name, short ID, Relay, or hostname."
+              ? "Try a name, ID, Relay, or hostname."
               : "Connect a game server, App service, or database to reach it through this tailnet."}
           </span>
         }
@@ -794,13 +794,13 @@ const MemberInstance = React.memo(function MemberInstance({
   )
   const className =
     "group/member-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
-  if (!member.routeId) return <div className={className}>{card}</div>
+  if (!member.linked) return <div className={className}>{card}</div>
   switch (member.kind) {
     case "server":
       return (
         <Link
           to="/server/$serverId/console"
-          params={{ serverId: member.routeId }}
+          params={{ serverId: member.id }}
           preload="intent"
           className={className}
         >
@@ -811,7 +811,7 @@ const MemberInstance = React.memo(function MemberInstance({
       return (
         <Link
           to="/app/$appId/network"
-          params={{ appId: member.routeId }}
+          params={{ appId: member.id }}
           preload="intent"
           className={className}
         >
@@ -822,7 +822,7 @@ const MemberInstance = React.memo(function MemberInstance({
       return (
         <Link
           to="/db/$databaseId/network"
-          params={{ databaseId: member.routeId }}
+          params={{ databaseId: member.id }}
           preload="intent"
           className={className}
         >
@@ -849,7 +849,7 @@ const MemberRelay = React.memo(function MemberRelay({
           kind: "relay",
           relayId: server.relayId,
         }}
-        meta={server.relayId.slice(0, 8)}
+        meta={server.relayId}
         metaClassName="font-mono"
         name={server.relayName}
         nameAccessory={
@@ -1510,14 +1510,14 @@ function findBinding(
 
 function uniqueHostname(
   stack: TailscaleStackOverview,
-  server: { name: string; shortId: string }
+  server: { id: string; name: string }
 ): string {
   const base = defaultTailscaleHostname(server)
   const hostnames = new Set(
     stack.bindings.map((binding) => binding.hostname.toLowerCase())
   )
   if (!hostnames.has(base.toLowerCase())) return base
-  const suffix = server.shortId.toLowerCase().replace(/[^a-z0-9-]/gu, "")
+  const suffix = server.id.toLowerCase().replace(/[^a-z0-9-]/gu, "")
   const candidate = `${base}-${suffix}`
   if (!hostnames.has(candidate)) return candidate
   for (let index = 2; index < 1_000; index += 1) {
@@ -1574,7 +1574,7 @@ const memberIdLabels = {
 
 function memberSearchText(row: TailscaleMemberRow) {
   const { member } = row
-  return `${member.name} ${member.shortId} ${member.meta} ${member.relayName} ${memberHostname(row)} ${memberStatus(row).label}`
+  return `${member.name} ${member.id} ${member.meta} ${member.relayName} ${memberHostname(row)} ${memberStatus(row).label}`
 }
 
 const cleanupRetryFormatter = new Intl.DateTimeFormat(undefined, {

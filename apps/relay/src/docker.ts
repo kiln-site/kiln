@@ -52,6 +52,7 @@ import {
   brickReadinessSchema,
   brickVariableValuesSchema,
   DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
+  isInstanceId,
   relayInstanceLifecycleEventTime as lifecycleEventTime,
   relayInstanceTailscaleSchema,
 } from "@workspace/contracts"
@@ -88,6 +89,7 @@ import {
 } from "./console-parsing.js"
 import { procNetTcpHasListener } from "./docker-port-parsing.js"
 import { legacyDiskLimitAssignments } from "./resource-quotas.js"
+import { instanceIdFrom } from "./instance-keys.js"
 import { containerPower } from "./resource-power.js"
 import {
   containerCpuAndMemory,
@@ -773,30 +775,24 @@ export class DockerDriver {
   }
 
   /**
-   * Where a game server's files live. Inspects only its container when
-   * addressed by its full id, rather than every server the way
-   * `findInstance` does. Other ids, and a fleet whose labels discovery would
-   * reject as ambiguous, fall back to it.
+   * Where a game server's files live. Inspects only its container, rather
+   * than every server the way `findInstance` does. A fleet whose labels
+   * discovery would reject as ambiguous falls back to it.
    */
   async findFileRoot(
     id: string
   ): Promise<Pick<RelayInstanceConfig, "directory" | "id"> | null> {
-    if (/^[a-f0-9]{40}$/u.test(id)) {
+    if (isInstanceId(id)) {
       const serverIdLabel = this.#config.serverIdLabel
       const containers = await this.#inspectManaged((owned) => {
         // Checked as discovery does, from the listing's labels: ids compare
-        // case-insensitively and must be unique in full and in short.
+        // case-insensitively, an old one as its new one, and must be unique.
         const ids = owned.map((container) =>
-          container.Labels?.[serverIdLabel]?.toLowerCase()
+          instanceIdFrom(container.Labels?.[serverIdLabel])
         )
-        const valid = ids.filter(
-          (value): value is string =>
-            value !== undefined && /^[a-f0-9]{40}$/u.test(value)
-        )
+        const valid = ids.filter((value): value is string => value !== null)
         const unambiguous =
-          valid.length === ids.length &&
-          new Set(valid).size === valid.length &&
-          new Set(valid.map((value) => value.slice(0, 8))).size === valid.length
+          valid.length === ids.length && new Set(valid).size === valid.length
         const match = owned[ids.indexOf(id)]
         return unambiguous && match ? [match.Id] : []
       })
@@ -2513,19 +2509,12 @@ export class DockerDriver {
         ) ?? DEFAULT_INSTANCE_DISK_LIMIT_BYTES
       ),
     }))
-    const fullIds = new Set<string>()
-    const shortIds = new Set<string>()
+    const ids = new Set<string>()
     for (const { config } of discovered) {
-      if (fullIds.has(config.id)) {
+      if (ids.has(config.id)) {
         throw new Error(`Duplicate kiln.server.id ${config.id}`)
       }
-      if (shortIds.has(config.shortId)) {
-        throw new Error(
-          `The first 8 characters of kiln.server.id must be unique; ${config.shortId} is duplicated`
-        )
-      }
-      fullIds.add(config.id)
-      shortIds.add(config.shortId)
+      ids.add(config.id)
     }
     return discovered
   }
@@ -2550,8 +2539,12 @@ export class DockerDriver {
     const directory = resolve(serverMount.Source)
     const owned = labels["kiln.relay.owned"] === "true"
     const ownedDirectory = labels["kiln.instance.directory"]
+    // A folder named after its ID, or after its old one before 12-character
+    // IDs, which it keeps.
     const usesOwnedDirectory = Boolean(
-      owned && ownedDirectory && /^[a-f0-9]{40}$/iu.test(ownedDirectory)
+      owned &&
+      ownedDirectory &&
+      /^(?:[a-f0-9]{40}|[a-f0-9]{12})$/iu.test(ownedDirectory)
     )
     let relativeDirectory =
       usesOwnedDirectory && ownedDirectory
@@ -2618,13 +2611,16 @@ export class DockerDriver {
       labels["kiln.instance.java"] ??
       container.Config.Image.split(":").at(-1) ??
       "Unknown"
-    const rawId = container.Config.Labels?.[this.#config.serverIdLabel]
-    if (!rawId || !/^[a-f0-9]{40}$/iu.test(rawId)) {
+    // A server from before 12-character IDs carries its old one, which
+    // stands for its new one (instance-keys.ts).
+    const id = instanceIdFrom(
+      container.Config.Labels?.[this.#config.serverIdLabel]
+    )
+    if (!id) {
       throw new Error(
-        `${container.Name} must have a ${this.#config.serverIdLabel} label containing 40 hexadecimal characters`
+        `${container.Name} must have a ${this.#config.serverIdLabel} label containing 12 hexadecimal characters`
       )
     }
-    const id = rawId.toLowerCase()
     return {
       brickFormat: labels["kiln.brick.format"],
       brickId: validBrickId,
@@ -2669,7 +2665,6 @@ export class DockerDriver {
       ports,
       publicHost,
       publicPort,
-      shortId: id.slice(0, 8),
       service,
       tailscale,
       variables: parseBrickVariablesLabel(labels["kiln.brick.variables"]),
@@ -2852,7 +2847,7 @@ function encodeVarInt(value: number): Buffer {
 }
 
 function matchesInstanceId(instance: RelayInstanceConfig, id: string): boolean {
-  return instance.id === id || instance.shortId === id || instance.name === id
+  return instance.id === id
 }
 
 function parseBrickVariablesLabel(

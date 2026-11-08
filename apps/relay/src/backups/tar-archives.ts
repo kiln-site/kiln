@@ -31,6 +31,7 @@ import {
   type TarRestoreStep,
   tarRestoreStagingName,
 } from "./tar-restore-steps.js"
+import { currentId } from "../instance-keys.js"
 
 /**
  * Backs up and restores what Docker mounts: a volume, or an App's folder as
@@ -143,7 +144,7 @@ export async function restoreTarBackup(options: {
     manifest.backupId !== options.backupId ||
     options.madeOf.kind !== options.target.kind ||
     manifest.target.kind !== options.madeOf.kind ||
-    manifest.target.id !== options.madeOf.id
+    currentTargetId(manifest.target.id) !== options.madeOf.id
   ) {
     throw tarError(
       "manifest_mismatch",
@@ -1074,4 +1075,13 @@ function errorMessage(cause: unknown): string {
 
 function tarError(code: string, operation: string, reason: string) {
   return RelayBackupError.make({ code, operation, reason })
+}
+
+// An archive made before instance IDs names its App, or the App owning its
+// volume (`<appId>/<key>`), by the App's old ID.
+function currentTargetId(id: string): string {
+  const slash = id.indexOf("/")
+  return slash === -1
+    ? currentId(id)
+    : `${currentId(id.slice(0, slash))}${id.slice(slash)}`
 }

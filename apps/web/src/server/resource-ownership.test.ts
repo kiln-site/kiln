@@ -16,7 +16,7 @@ import {
 } from "@/test/seed"
 
 const now = Date.UTC(2026, 9, 22)
-const relayId = "r".repeat(43)
+const relayId = "1".repeat(12)
 const verified = { manuallyVerifiedAt: new Date("2026-09-08T00:00:00Z") }
 
 const insertDatabase = (
@@ -87,10 +87,10 @@ describeMysql("resource ownership", () => {
           yield* resetDatabase
           yield* insertUser("owner", verified)
           yield* insertRelay(relayId, { created_by: "someone" })
-          const ownDatabase = "a".repeat(40)
-          const otherDatabase = "b".repeat(40)
-          const ownApp = "c".repeat(40)
-          const otherApp = "d".repeat(40)
+          const ownDatabase = "a".repeat(12)
+          const otherDatabase = "b".repeat(12)
+          const ownApp = "c".repeat(12)
+          const otherApp = "d".repeat(12)
           yield* insertDatabase(ownDatabase, { owner_id: "owner" })
           yield* insertDatabase(otherDatabase, { owner_id: "someone" })
           yield* insertApp(ownApp, { owner_id: "owner" })
@@ -174,7 +174,7 @@ describeMysql("resource ownership", () => {
           yield* insertUser("outsider", verified)
           yield* insertUser("recipient", verified)
           yield* insertRelay(relayId, { created_by: "someone" })
-          const databaseId = "a".repeat(40)
+          const databaseId = "a".repeat(12)
           yield* insertDatabase(databaseId, { owner_id: "owner" })
           yield* insertGrant({
             userId: "recipient",

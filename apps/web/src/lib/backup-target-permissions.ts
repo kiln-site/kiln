@@ -1,4 +1,4 @@
-import type { BackupTargetKind } from "@workspace/contracts"
+import { INSTANCE_ID_SOURCE, type BackupTargetKind } from "@workspace/contracts"
 
 import { grantHasPermission, type AccessPermission } from "@/lib/permissions"
 
@@ -34,6 +34,9 @@ const appPermissions: Record<BackupAction, AccessPermission> = {
   "backup.restore": "app.files.write",
 }
 
+// An App's own volume is `<appId>/<key>`.
+const appVolumeOwnerPattern = new RegExp(`^(${INSTANCE_ID_SOURCE})/`, "u")
+
 /** The App whose permissions a target's backups follow, if any. */
 export function backupTargetApp(target: {
   id: string
@@ -41,7 +44,7 @@ export function backupTargetApp(target: {
 }): string | null {
   if (target.kind === "app") return target.id
   if (target.kind !== "volume") return null
-  return /^([a-f0-9]{40})\//u.exec(target.id)?.[1] ?? null
+  return appVolumeOwnerPattern.exec(target.id)?.[1] ?? null
 }
 
 /** The App permission a backup action on an App's target takes. */

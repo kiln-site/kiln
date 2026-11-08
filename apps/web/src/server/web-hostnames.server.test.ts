@@ -48,8 +48,8 @@ vi.mock("@/lib/access-control", async (importOriginal) => ({
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
 
 const relayId = "relay-one"
-const appId = "a".repeat(40)
-const instanceId = "b".repeat(40)
+const appId = "a".repeat(12)
+const instanceId = "b".repeat(12)
 const owner: DomainActor = { admin: false, id: "owner" }
 const collaborator: DomainActor = { admin: false, id: "collaborator" }
 const admin: DomainActor = { admin: true, id: "admin" }
@@ -422,7 +422,8 @@ describeMysql("web route hostnames", () => {
             "TXT shop.owner.example v=spf1 -all",
           ])
           // What Kiln shows for it is read again.
-          const reread = yield* loadWebHostnameByNameEffect("shop.owner.example")
+          const reread =
+            yield* loadWebHostnameByNameEffect("shop.owner.example")
           assert.equal(reread?.existingRecord?.content, "new.elsewhere.example")
           cloudflare.edit(recordId, { content: "otel.elsewhere.example" })
           assert.deepEqual(yield* hostnameRows, {

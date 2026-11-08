@@ -75,7 +75,7 @@ const pushedSnapshot = {
   },
   relay: {
     browserOrigin: "https://relay.example.com",
-    id: "r".repeat(43),
+    id: "0123456789ab",
     name: "Relay test node",
     proxyMode: "hearth",
     sftp: {
@@ -150,7 +150,7 @@ effectIt.effect(
           const action = relayRpc(
             endpoint,
             "instance.action",
-            { action: "stop", instanceId: "a".repeat(40) },
+            { action: "stop", instanceId: "a".repeat(12) },
             30_000
           )
           yield* Effect.promise(() =>
@@ -216,7 +216,7 @@ effectIt.effect(
           const lost = relayRpc(
             endpoint,
             "instance.action",
-            { action: "stop", instanceId: "e".repeat(40) },
+            { action: "stop", instanceId: "e".repeat(12) },
             30_000
           )
           yield* Effect.promise(() =>
@@ -306,6 +306,7 @@ async function setupRelayServer(
   vi.mocked(loadRelayCredentials).mockResolvedValue({
     caCertificatePem: null,
     clientId: "hearth-client",
+    relayFingerprint: null,
     relayName: "Test Relay",
     sendInstallationId: true,
     clientPrivateKeyPem: clientKeys.privateKey

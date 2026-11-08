@@ -303,9 +303,7 @@ function useKnownRouteServer(pending: boolean) {
   const serverId = useRouteServerId()
   return React.useMemo(
     () =>
-      pending && serverId
-        ? knownServer(queryClient, serverId)?.server
-        : undefined,
+      pending && serverId ? knownServer(queryClient, serverId) : undefined,
     [pending, queryClient, serverId]
   )
 }
@@ -429,7 +427,7 @@ function InstanceIdentity({
   error: string | null
   instance: Pick<
     InstanceWorkspaceInstance,
-    "connectAddress" | "id" | "implementation" | "name" | "shortId" | "version"
+    "connectAddress" | "id" | "implementation" | "name" | "version"
   >
   // The server's own read carries its live state; the directory does not.
   statusConfirmed: boolean
@@ -448,11 +446,7 @@ function InstanceIdentity({
         <WorkspaceMetaSeparator />
       </span>
       <span className="hidden shrink-0 items-center gap-1.5 @[40rem]:inline-flex">
-        <WorkspaceIdCopyButton
-          id={instance.id}
-          label="server ID"
-          shortId={instance.shortId}
-        />
+        <WorkspaceIdCopyButton id={instance.id} label="server ID" />
         <WorkspaceMetaSeparator />
       </span>
       <InstanceAddressControl address={instance.connectAddress} />

@@ -45,21 +45,25 @@ function instance(
     relayId,
     name,
     meta,
-    routeId: name,
   }
 }
 
 export const demoInstances: ReadonlyArray<OverviewInstance> = [
   instance("server", "fsn1-dedicated", "velocity-proxy", "mc.kiln.site"),
-  instance("app", "fsn1-dedicated", "community-site", "a81f3e09"),
-  instance("app", "fsn1-dedicated", "status-page", "6c02d7b4"),
-  instance("database", "fsn1-dedicated", "postgres", "PostgreSQL · 0d9a33f1"),
+  instance("app", "fsn1-dedicated", "community-site", "a81f3e09c6d2"),
+  instance("app", "fsn1-dedicated", "status-page", "6c02d7b4e915"),
+  instance(
+    "database",
+    "fsn1-dedicated",
+    "postgres",
+    "PostgreSQL · 0d9a33f1b8e4"
+  ),
   instance("server", "garage-nuc", "palworld", "pal.kiln.site:8211"),
-  instance("app", "garage-nuc", "discord-bot", "f4471a6e"),
-  instance("database", "garage-nuc", "redis", "Redis · 93ce12a7"),
+  instance("app", "garage-nuc", "discord-bot", "f4471a6e02c9"),
+  instance("database", "garage-nuc", "redis", "Redis · 93ce12a75d10"),
   instance("server", "home-lab", "survival-smp", "survival.tail2c7e.ts.net"),
   instance("server", "home-lab", "creative", "creative.tail2c7e.ts.net"),
-  instance("database", "home-lab", "luckperms-db", "MariaDB · 4be1c0d2"),
+  instance("database", "home-lab", "luckperms-db", "MariaDB · 4be1c0d27a3f"),
 ]
 
 const online: IdentityStatusPresentation = { label: "Online", tone: "success" }

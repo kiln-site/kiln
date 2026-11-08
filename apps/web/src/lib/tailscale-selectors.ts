@@ -10,8 +10,6 @@ export type TailscaleServer = Pick<
   | "name"
   | "relayId"
   | "relayName"
-  | "routeId"
-  | "shortId"
   | "version"
 > & {
   tailscaleSupported: boolean
@@ -47,8 +45,6 @@ export function selectTailscaleServers(
               name: instance.name,
               relayId: instance.relayId,
               relayName: instance.relayName,
-              routeId: instance.routeId,
-              shortId: instance.shortId,
               version: instance.version,
               tailscaleSupported: supportedRelayIds.has(instance.relayId),
             },
@@ -58,13 +54,13 @@ export function selectTailscaleServers(
 }
 
 export function defaultTailscaleHostname(
-  server: Pick<TailscaleServer, "name" | "shortId">
+  server: Pick<TailscaleServer, "id" | "name">
 ): string {
   const slug = server.name
     .toLowerCase()
     .replace(/[^a-z0-9]+/gu, "-")
     .replace(/^-+|-+$/gu, "")
-  return slug || server.shortId
+  return slug || server.id
 }
 
 export function tailscaleServerKey(

@@ -1,6 +1,8 @@
 import {
+  appIdSchema,
   backupTargetKindSchema,
   backupTargetSchema,
+  relayIdSchema,
   type BackupTargetKind,
 } from "@workspace/contracts"
 import { z } from "zod"
@@ -19,7 +21,7 @@ const backupRunTargetKindSchema = backupTargetKindSchema
 export const backupRunScopeSchema = z.union([
   z.strictObject({
     kind: backupRunTargetKindSchema,
-    relayId: z.string().min(1).max(43),
+    relayId: relayIdSchema,
     targetId: backupTargetSchema.shape.id,
   }),
   z.strictObject({ kind: backupRunTargetKindSchema }),
@@ -27,8 +29,8 @@ export const backupRunScopeSchema = z.union([
 
 /** What one App owns or uses: its folder, its own volumes, and Kiln volumes. */
 export const backupRunAppSchema = z.strictObject({
-  appId: z.string().regex(/^[a-f0-9]{40}$/u),
-  relayId: z.string().min(1).max(43),
+  appId: appIdSchema,
+  relayId: relayIdSchema,
 })
 
 export const backupRunsQuerySchema = z.strictObject({

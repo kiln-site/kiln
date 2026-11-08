@@ -13,10 +13,10 @@ const { source, ...recipeDefinition } = builtinTailscaleBrick
 describe("Hearth Brick mutation inputs", () => {
   it("rejects browser-supplied recipes during startup updates", () => {
     const parsed = hearthUpdateInstanceStartupInputSchema.safeParse({
-      instanceId: "b".repeat(40),
+      instanceId: "b".repeat(12),
       recipe: source,
       recipeDefinition,
-      relayId: "a".repeat(43),
+      relayId: "a".repeat(12),
       variables: {},
     })
 

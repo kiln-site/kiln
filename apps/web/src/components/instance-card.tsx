@@ -92,7 +92,7 @@ const InstanceCardView = React.memo(function InstanceCardView({
   showFavorite = true,
   showStatus = true,
   nameAccessory,
-  meta = instance.id.slice(0, 8),
+  meta = instance.id,
   state = { phase: "checking" },
   status,
   ...props

@@ -23,7 +23,6 @@ import {
   useServerRelay,
   useServerSnapshot,
 } from "@/lib/use-server-workspace"
-import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import type { TailscaleStackOverview } from "@/server/tailscale"
 
 const emptyTailscaleStacks: Array<TailscaleStackOverview> = []
@@ -136,8 +135,8 @@ function TailscaleConsoleStreamSource({
     streamStore.getRetrySnapshot
   )
   // Each deployment is its own server on its Relay; read that one alone, by
-  // its exact Relay-qualified ID.
-  const serverId = relayInstanceRouteId(relayId, instanceId)
+  // its instance ID.
+  const serverId = instanceId
   const selectRuntime = React.useMemo(
     () => selectInstanceConsoleRuntime(instanceId, relayId),
     [instanceId, relayId]

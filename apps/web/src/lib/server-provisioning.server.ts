@@ -8,6 +8,7 @@
 import { Effect } from "effect"
 import { z } from "zod"
 import {
+  instanceIdSchema,
   relayCreateInstanceSchema,
   relayInstanceSchema,
 } from "@workspace/contracts"
@@ -22,29 +23,32 @@ import {
 import {
   claimPreparedProvisioning,
   compensatePreparedProvisioning,
-  provisioningInstanceId,
 } from "@/lib/provisioning.server"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { beginServerInstall } from "@/lib/server-deployments.server"
+import { deleteInstanceDeploymentsEffect } from "@/effect/app-deployments"
+import { runAppEffect } from "@/effect/runtime"
 import { requestRelay } from "@/server/bricks.server"
 
 const cancelProvisioningResultSchema = z.object({
   cancelled: z.boolean(),
-  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+  instanceId: instanceIdSchema,
 })
 
 export async function provisionServer(input: {
   readonly relay: PersistedRelay
   readonly create: z.output<typeof relayCreateInstanceSchema>
   readonly idempotencyKey: string
+  /** Reserved for the request (`reserveServerInstanceIdEffect`). */
+  readonly instanceId: string
   /** Who owns the new server. */
   readonly ownerId: string
   /** On whose behalf the Relay is asked, for its audit. */
   readonly requestedBy: string
 }): Promise<z.output<typeof relayInstanceSchema>> {
-  const { idempotencyKey, ownerId, relay, requestedBy } = input
-  const instanceId = provisioningInstanceId(idempotencyKey)
+  const { idempotencyKey, instanceId, ownerId, relay, requestedBy } = input
   const cancelProvisioning = () =>
     requestRelay(
       relay,
@@ -83,6 +87,16 @@ export async function provisionServer(input: {
       )
     )
   )
+  // Its install is a deployment, recorded before the Relay can start it;
+  // the Relay keeps its log under the same ID.
+  const deploymentId = await beginServerInstall({
+    brickId:
+      input.create.recipeDefinition?.metadata.id ?? instance.brickId ?? null,
+    brickName: input.create.recipeDefinition?.metadata.name ?? null,
+    instanceId: instance.id,
+    relayId: relay.id,
+    userId: requestedBy,
+  })
   await claimPreparedProvisioning({
     cancel: cancelProvisioning,
     unconfirmed: "Retry the unchanged request to resume the same server.",
@@ -90,11 +104,18 @@ export async function provisionServer(input: {
       requestRelay(
         relay,
         `/v1/instances/${encodeURIComponent(instance.id)}/provision`,
-        { method: "POST" },
+        { method: "POST", body: JSON.stringify({ deploymentId }) },
         30_000,
         requestedBy
       ),
-    unregister,
+    // A server that never was has no deployments.
+    unregister: async () => {
+      await unregister()
+      await runAppEffect(
+        "deployments.deleteInstance",
+        deleteInstanceDeploymentsEffect("server", instance.id)
+      )
+    },
   })
   forkAppEffect(
     "relay.snapshot.invalidate",

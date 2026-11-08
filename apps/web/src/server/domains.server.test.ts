@@ -22,7 +22,7 @@ import {
 } from "./domains.server"
 
 const relayId = "relay-one"
-const instanceId = "b".repeat(40)
+const instanceId = "b".repeat(12)
 
 const disabledCache = Layer.succeed(AppCache)({
   backend: "disabled",
@@ -269,7 +269,7 @@ describeMysql("renaming a game server's domain", () => {
             hostname: "play.kiln.site",
             id: "00000000-0000-4000-8000-0000000000ac",
             relayId,
-            resourceId: "a".repeat(40),
+            resourceId: "a".repeat(12),
             resourceType: "app",
             vanityDomain: "kiln.site",
             zoneId: "zone-id",
@@ -417,7 +417,6 @@ function testInstance() {
     publicHost: "new-relay.example.com",
     publicPort: 32_002,
     service: "test-server",
-    shortId: "bbbbbbbb",
     status: "running",
     version: "1.21.11",
   })
@@ -426,7 +425,6 @@ function testInstance() {
     relayId,
     relayName: "Relay one",
     relayStatus: "connected" as const,
-    routeId: `${relayId}-${instance.shortId}`,
   }
 }
 

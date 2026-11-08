@@ -11,12 +11,11 @@ import { resourceHistoryStore } from "@/lib/resource-history-store"
 import { createRandom } from "~/components/demos/server-log"
 
 export const demoServer = {
-  id: "survival-smp",
+  id: "7c41e2a9d03b",
   relayId: "home-lab",
   name: "survival-smp",
   implementation: "Paper",
   version: "1.21.4",
-  shortId: "7c41e2a9",
   address: "play.kiln.site",
 } as const
 

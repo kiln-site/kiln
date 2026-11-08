@@ -169,7 +169,7 @@ describe("Relay control socket", () => {
 
   it("keeps host files behind their own grants", async () => {
     const relay = await startRelay()
-    const hostId = "H".repeat(43)
+    const hostId = "relay:0123456789ab"
     for (const actions of [
       ["instance.files.list", "instance.files.read", "instance.files.write"],
       ["app.files.read", "app.files.write"],
@@ -226,7 +226,7 @@ describe("Relay control socket", () => {
     })
     const server = sendRequest(socket, "relay.certificates.check", {
       hostname: "play.example.com",
-      owner: { id: "a".repeat(40), kind: "server" },
+      owner: { id: "a".repeat(12), kind: "server" },
     })
     expect(await inbox.next()).toMatchObject({
       code: "forbidden",
@@ -242,7 +242,7 @@ describe("Relay control socket", () => {
     const hearth = await relay.pair({ role: "custom", actions: ["app.create"] })
     const { inbox, socket } = await relay.connect(hearth)
     const app = {
-      id: "a".repeat(40),
+      id: "a".repeat(12),
       idempotencyKey: randomUUID(),
       name: "Blog",
     }
@@ -256,7 +256,7 @@ describe("Relay control socket", () => {
     })
     const connected = sendRequest(socket, "app.provision.prepare", {
       ...app,
-      databaseIds: ["d".repeat(40)],
+      databaseIds: ["d".repeat(12)],
     })
     expect(await inbox.next()).toMatchObject({
       code: "forbidden",
@@ -267,7 +267,7 @@ describe("Relay control socket", () => {
 
   describe("operation IDs", () => {
     const features = [relaySnapshotDeltaFeature]
-    const instanceId = "d".repeat(40)
+    const instanceId = "d".repeat(12)
 
     it("keeps no reply in its journal, only how the change went", async () => {
       const relay = await startRelay({
@@ -328,7 +328,7 @@ describe("Relay control socket", () => {
   })
 
   describe("a request that waited its turn", () => {
-    const databaseId = "d".repeat(40)
+    const databaseId = "d".repeat(12)
 
     it("changes nothing for a client revoked, or stripped of the action, while it waited", async () => {
       const { container, hold, relay } = await relayWithDatabase()
@@ -644,6 +644,7 @@ async function startRelay(
       ),
     identity: {
       fingerprint: fingerprint(relayKeys.public),
+      id: "0123456789ab",
       name: "Test Relay",
       privateKeyPem: relayKeys.private,
       publicKeyPem: relayKeys.public,

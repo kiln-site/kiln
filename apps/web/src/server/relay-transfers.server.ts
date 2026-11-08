@@ -12,6 +12,7 @@ import {
   appIdFromFileRoot,
   databaseIdFromFileRoot,
   isRelayFileRoot,
+  relayFileRootId,
   relayPeerTransfersV1Feature,
   RelayTransferPullSchema,
   RelayTransferSourceSchema,
@@ -526,7 +527,7 @@ function requireRootPermission(
   access: "read" | "write"
 ) {
   if (isRelayFileRoot(rootId)) {
-    if (rootId !== relayId) {
+    if (rootId !== relayFileRootId(relayId)) {
       return Effect.fail(new RelayTransferError({ message: "Relay not found" }))
     }
     return requireRelayPermissionEffect({

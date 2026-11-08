@@ -4,6 +4,7 @@ import {
   appIdSchema,
   appRepositoryPathSchema,
   githubRepositoryNameSchema,
+  instanceIdSchema,
   relayIdSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
@@ -16,6 +17,8 @@ import {
   getAppDeploymentsHandler,
   getAppDeploymentSummaryHandler,
   getAppGitHubSourceFileHandler,
+  getDeploymentsHandler,
+  getServerDeploymentLogHandler,
   redeployAppDeploymentHandler,
   saveAppGitHubSourceHandler,
 } from "@/server/app-deployments.server"
@@ -54,6 +57,22 @@ const deploymentsInputSchema = z.strictObject({
   relayId: relayIdSchema.optional(),
 })
 
+const allDeploymentsInputSchema = z.strictObject({
+  // One App's or game server's, one Relay's, or every one the person reads.
+  before: z
+    .strictObject({ id: z.uuid(), startedAt: z.iso.datetime() })
+    .optional(),
+  instance: z
+    .strictObject({ id: instanceIdSchema, kind: z.enum(["app", "server"]) })
+    .optional(),
+  relayId: relayIdSchema.optional(),
+})
+
+const serverDeploymentLogInputSchema = z.strictObject({
+  deploymentId: z.uuid(),
+  instanceId: instanceIdSchema,
+})
+
 const saveSourceInputSchema = appInputSchema.extend({
   autoDeploy: z.boolean(),
   branch: branchSchema,
@@ -68,6 +87,11 @@ const saveSourceInputSchema = appInputSchema.extend({
 export const getAppDeployments = createServerFn({ method: "GET" })
   .validator(deploymentsInputSchema)
   .handler(({ data }) => getAppDeploymentsHandler(data))
+
+// App and game server deployments together, for the Deployments page.
+export const getDeployments = createServerFn({ method: "GET" })
+  .validator(allDeploymentsInputSchema)
+  .handler(({ data }) => getDeploymentsHandler(data))
 
 // Which apps have a deploy waiting its turn or running, for their buttons.
 export const getAppDeployStates = createServerFn({ method: "GET" }).handler(
@@ -131,4 +155,10 @@ export const getAppDeploymentLog = createServerFn({ method: "GET" })
   .validator(deploymentLogInputSchema)
   .handler(async ({ data }) =>
     getAppDeploymentLogHandler(await requireEligibleResourceUser(), data)
+  )
+
+export const getServerDeploymentLog = createServerFn({ method: "GET" })
+  .validator(serverDeploymentLogInputSchema)
+  .handler(async ({ data }) =>
+    getServerDeploymentLogHandler(await requireEligibleResourceUser(), data)
   )

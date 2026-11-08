@@ -287,6 +287,7 @@ export const relayControlOperations = [
   "instance.console.complete",
   "instance.logs.share",
   "instance.logs.latest",
+  "instance.deployment.read",
   "instance.network.ports.reserve",
   "instance.network.ports.release",
   "instance.network.ports.write",
@@ -465,6 +466,7 @@ export function relayControlOperationChanges(
     case "instance.files.database.read":
     case "instance.console.history":
     case "instance.logs.latest":
+    case "instance.deployment.read":
     case "instance.network.routes.read":
     case "relay.terminal.attach":
     case "relay.terminal.heartbeat":

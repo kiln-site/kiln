@@ -2,6 +2,7 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 
 import { UnfinishedRestoreNotice } from "@/components/backups/resource-backup-dialogs"
+import { backupTargetApp } from "@/lib/backup-target-permissions"
 import {
   appDirectoryQueryOptions,
   unfinishedRestoresQueryOptions,
@@ -17,12 +18,12 @@ export const UnfinishedRestores = React.memo(function UnfinishedRestores() {
   const apps = useQuery(appDirectoryQueryOptions())
   if (!restores.data?.length) return null
   const appName = (appId: string) =>
-    apps.data?.find((app) => app.id === appId)?.name ?? appId.slice(0, 8)
+    apps.data?.find((app) => app.id === appId)?.name ?? appId
   return (
     <div className="mb-3 grid gap-2">
       {restores.data.map((restore) => {
         const { target } = restore
-        const owner = /^([a-f0-9]{40})\//u.exec(target.id)?.[1]
+        const owner = backupTargetApp(target)
         const targetName =
           target.kind === "app"
             ? `${appName(target.id)}’s folder`

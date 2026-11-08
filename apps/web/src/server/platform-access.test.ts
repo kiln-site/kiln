@@ -16,7 +16,7 @@ import {
 } from "@/test/seed"
 
 const now = Date.UTC(2026, 7, 23, 12)
-const relayId = "r".repeat(43)
+const relayId = "1".repeat(12)
 
 const insertMember = (id: string, role: string, status = "enabled") =>
   insertUser(id, { role, status, emailVerifiedAt: new Date(now - 60_000) })

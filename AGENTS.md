@@ -27,6 +27,9 @@ User-facing name, then what the code calls it:
 - Never call a Relay or its host a "server" in copy; say "Relay" or "node".
 - "Instance" in copy means any managed resource (game server, database, app),
   as in "All instances".
+- Every instance, Relays included, has one 12-character ID, reserved in
+  Hearth's instance directory and never shortened. A Relay's fingerprint only
+  authenticates it. See [Instance IDs](docs/instance-ids.md).
 
 <!-- intent-skills:start -->
 

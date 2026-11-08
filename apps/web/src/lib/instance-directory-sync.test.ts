@@ -13,9 +13,9 @@ import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertInstance, insertRelay } from "@/test/seed"
 
-const relayId = "r".repeat(43)
+const relayId = "1".repeat(12)
 const server: DirectoryInstance = {
-  id: "a".repeat(40),
+  id: "a".repeat(12),
   name: "Before",
   game: "Minecraft",
   implementation: "Paper",

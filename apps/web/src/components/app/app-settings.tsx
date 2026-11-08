@@ -173,12 +173,10 @@ export function AppSourceSettings({
   app,
   canManage,
   config,
-  routeId,
 }: {
   app: App
   canManage: boolean
   config: EditableAppConfig
-  routeId: string
 }) {
   const [configuring, setConfiguring] = React.useState(false)
   const deploying =
@@ -210,7 +208,6 @@ export function AppSourceSettings({
             <AppSourceDialog
               app={app}
               deploying={deploying}
-              routeId={routeId}
               saved={config}
               onOpenChange={setConfiguring}
             />
@@ -240,7 +237,6 @@ export function AppSourceSettings({
                 app={app}
                 canManage={canManage}
                 kind={config.sourceType}
-                routeId={routeId}
                 saved={config[config.sourceType]}
                 size="xs"
               >
@@ -358,7 +354,6 @@ function AppDocumentButton({
   canManage,
   children,
   kind,
-  routeId,
   saved,
   size = "sm",
 }: {
@@ -366,7 +361,6 @@ function AppDocumentButton({
   canManage: boolean
   children?: React.ReactNode
   kind: AppDocumentKind
-  routeId: string
   saved: string
   size?: "sm" | "xs"
 }) {
@@ -397,7 +391,6 @@ function AppDocumentButton({
           canManage={canManage}
           deploying={app.deployment?.state === "running"}
           kind={kind}
-          routeId={routeId}
           saved={saved}
           onOpenChange={setOpen}
         />
@@ -411,11 +404,9 @@ function AppDocumentButton({
 export function AppWebRouteSettings({
   app,
   canManage,
-  routeId,
 }: {
   app: App
   canManage: boolean
-  routeId: string
 }) {
   const state = useQuery(appWebRoutesQueryOptions(app.relayId, app.id))
   const routes = state.data?.routes ?? []
@@ -440,7 +431,7 @@ export function AppWebRouteSettings({
           {canManage && state.data?.status === "pending_restart" ? (
             <DeployToApplyButton app={app} />
           ) : null}
-          <InfoSectionLink to="/app/$appId/network" params={{ appId: routeId }}>
+          <InfoSectionLink to="/app/$appId/network" params={{ appId: app.id }}>
             {canManage ? "Manage" : "Network"}
           </InfoSectionLink>
         </>

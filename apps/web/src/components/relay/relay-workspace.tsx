@@ -33,20 +33,15 @@ import {
   accessCapabilitiesQueryOptions,
   relaysQueryOptions,
 } from "@/lib/query-options"
-import {
-  relayAddress,
-  relayRouteIdentifier,
-  resolveRelayRoute,
-  type RelayDirectoryEntry,
-} from "@/lib/relay-route"
+import { relayAddress, type RelayDirectoryEntry } from "@/lib/relay-route"
 
 export const RelayWorkspaceShell = React.memo(function RelayWorkspaceShell({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const routeId = useWorkspaceRouteParam("relayId")
-  const workspace = useRelayWorkspaceQuery(routeId)
+  const relayId = useWorkspaceRouteParam("relayId")
+  const workspace = useRelayWorkspaceQuery(relayId)
 
   return (
     <WorkspaceFrame header={<RelayWorkspaceHeader workspace={workspace} />}>
@@ -66,19 +61,14 @@ export const RelayWorkspaceShell = React.memo(function RelayWorkspaceShell({
 })
 
 function useRelayWorkspaceQuery(
-  routeId: string | undefined
+  relayId: string | undefined
 ): ResourceWorkspaceQuery<RelayWorkspaceRelay> {
   const select = React.useMemo(
     () => (relays: Array<RelayDirectoryEntry>) => {
-      const resolution = resolveRelayRoute(relays, routeId)
-      return resolution.status === "found"
-        ? {
-            relay: resolution.resource,
-            routeId: relayRouteIdentifier(relays, resolution.resource),
-          }
-        : null
+      const relay = relays.find((candidate) => candidate.id === relayId)
+      return relay ? { relay } : null
     },
-    [routeId]
+    [relayId]
   )
   return useResourceWorkspaceQuery(
     useQuery({ ...relaysQueryOptions(), select })
@@ -108,11 +98,7 @@ const RelayWorkspaceHeader = React.memo(function RelayWorkspaceHeader({
         >
           <RelayStatusLabel relay={relay} />
           <span className="hidden shrink-0 items-center gap-1.5 @[40rem]:inline-flex">
-            <WorkspaceIdCopyButton
-              id={relay.id}
-              label="Relay ID"
-              shortId={relay.id.slice(0, 8)}
-            />
+            <WorkspaceIdCopyButton id={relay.id} label="Relay ID" />
             <WorkspaceMetaSeparator />
           </span>
           <WorkspaceCopyValueButton

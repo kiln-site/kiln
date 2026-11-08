@@ -96,28 +96,21 @@ import type { KilnPlatformHost } from "@/server/platform"
 import { disableDevelopmentBypass } from "@/server/auth"
 import { engineLabel } from "@/components/database/database-presentation"
 import {
-  databaseRouteIdFromSelection,
-  databaseRouteIdentifier,
-  databaseSelectionRouteId,
-  resolveDatabaseRoute,
+  databaseIdFromSelection,
+  databaseSelectionValue,
   type ManagedDatabaseDirectoryEntry,
 } from "@/lib/database-route"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
 import {
-  appRouteIdFromSelection,
-  appRouteIdentifier,
-  appSelectionRouteId,
-  resolveAppRoute,
+  appIdFromSelection,
+  appSelectionValue,
   type AppDirectoryEntry,
 } from "@/lib/app-route"
 import {
-  relayRouteIdFromSelection,
-  relayRouteIdentifier,
-  relaySelectionRouteId,
-  resolveRelayRoute,
+  relayIdFromSelection,
+  relaySelectionValue,
   type RelayDirectoryEntry,
 } from "@/lib/relay-route"
-import { relayInstanceRouteIdentifier } from "@/lib/relay-selectors"
 import type { SidebarInstance } from "@/lib/relay-selectors"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
 import type { GlobalSection } from "@/lib/route-sections"
@@ -141,8 +134,8 @@ import {
   type ServerDestinationId,
 } from "@/lib/navigation-destinations"
 import {
-  persistSelectedInstanceRouteId,
-  readSelectedInstanceRouteId,
+  persistSelectedInstance,
+  readSelectedInstance,
 } from "@/lib/ui-preference-cookies"
 import { useSidebarServerNavigation } from "@/lib/use-server-navigation"
 import { warmFileWorkspaceModule } from "@/lib/workspace-module-preloads"
@@ -152,14 +145,14 @@ export type InstanceTab = ServerDestinationId
 interface AppSidebarViewProps {
   capabilities: NavigationAccessCapabilities
   user: AuthenticatedUser
-  initialSelectedInstanceRouteId: string | null
+  initialSelectedInstance: string | null
   relayConfigured: boolean
 }
 
 export const AppSidebar = React.memo(function AppSidebar({
-  initialSelectedInstanceRouteId,
+  initialSelectedInstance,
 }: {
-  initialSelectedInstanceRouteId: string | null
+  initialSelectedInstance: string | null
 }) {
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
@@ -169,7 +162,7 @@ export const AppSidebar = React.memo(function AppSidebar({
   return (
     <AppSidebarView
       capabilities={capabilities}
-      initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+      initialSelectedInstance={initialSelectedInstance}
       relayConfigured={relayConfigured}
       user={capabilities.user}
     />
@@ -179,13 +172,13 @@ export const AppSidebar = React.memo(function AppSidebar({
 const AppSidebarView = React.memo(function AppSidebarView({
   capabilities,
   user,
-  initialSelectedInstanceRouteId,
+  initialSelectedInstance,
   relayConfigured,
 }: AppSidebarViewProps) {
   return (
     <RouteCommandMenuProvider
       capabilities={capabilities}
-      initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+      initialSelectedInstance={initialSelectedInstance}
       relayConfigured={relayConfigured}
     >
       <Sidebar collapsible="icon" className="border-sidebar-border/80">
@@ -216,13 +209,13 @@ const AppSidebarView = React.memo(function AppSidebarView({
         <SidebarContent>
           <InfrastructureNavigation
             capabilities={capabilities}
-            initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+            initialSelectedInstance={initialSelectedInstance}
             relayConfigured={relayConfigured}
           />
 
           <SidebarInstanceNavigation
             capabilities={capabilities}
-            initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+            initialSelectedInstance={initialSelectedInstance}
             relayConfigured={relayConfigured}
           />
         </SidebarContent>
@@ -243,11 +236,11 @@ function HeaderNotificationsBell() {
 
 function InfrastructureNavigation({
   capabilities,
-  initialSelectedInstanceRouteId,
+  initialSelectedInstance,
   relayConfigured,
 }: {
   capabilities: NavigationAccessCapabilities
-  initialSelectedInstanceRouteId: string | null
+  initialSelectedInstance: string | null
   relayConfigured: boolean
 }) {
   const destinations = accessibleInfrastructureDestinations(capabilities)
@@ -277,7 +270,7 @@ function InfrastructureNavigation({
           ) : null}
           {showServers ? (
             <ServersNavigationItem
-              initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+              initialSelectedInstance={initialSelectedInstance}
               relayConfigured={relayConfigured}
             />
           ) : null}
@@ -407,10 +400,10 @@ const AppCount = React.memo(function AppCount({
 })
 
 function ServersNavigationItem({
-  initialSelectedInstanceRouteId,
+  initialSelectedInstance,
   relayConfigured,
 }: {
-  initialSelectedInstanceRouteId: string | null
+  initialSelectedInstance: string | null
   relayConfigured: boolean
 }) {
   return (
@@ -428,7 +421,7 @@ function ServersNavigationItem({
       </SidebarMenuButton>
       <SidebarMenuBadge className="text-sidebar-muted-foreground">
         <InfrastructureInstanceCount
-          initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+          initialSelectedInstance={initialSelectedInstance}
           relayConfigured={relayConfigured}
         />
       </SidebarMenuBadge>
@@ -438,14 +431,14 @@ function ServersNavigationItem({
 
 const InfrastructureInstanceCount = React.memo(
   function InfrastructureInstanceCount({
-    initialSelectedInstanceRouteId,
+    initialSelectedInstance,
     relayConfigured,
   }: {
-    initialSelectedInstanceRouteId: string | null
+    initialSelectedInstance: string | null
     relayConfigured: boolean
   }) {
     const { data } = useSidebarServerNavigation(
-      initialSelectedInstanceRouteId,
+      initialSelectedInstance,
       relayConfigured
     )
 
@@ -455,11 +448,11 @@ const InfrastructureInstanceCount = React.memo(
 
 function SidebarInstanceNavigation({
   capabilities,
-  initialSelectedInstanceRouteId,
+  initialSelectedInstance,
   relayConfigured,
 }: {
   capabilities: NavigationAccessCapabilities
-  initialSelectedInstanceRouteId: string | null
+  initialSelectedInstance: string | null
   relayConfigured: boolean
 }) {
   // "server", a database selection ("db:<id>"), an app selection
@@ -479,21 +472,19 @@ function SidebarInstanceNavigation({
             serverId?: string
           }
         | undefined
-      if (params?.databaseId) return databaseSelectionRouteId(params.databaseId)
-      if (params?.appId) return appSelectionRouteId(params.appId)
-      if (params?.relayId) return relaySelectionRouteId(params.relayId)
+      if (params?.databaseId) return databaseSelectionValue(params.databaseId)
+      if (params?.appId) return appSelectionValue(params.appId)
+      if (params?.relayId) return relaySelectionValue(params.relayId)
       return params?.serverId ? "server" : null
     },
   })
   const selection =
     routeSelection === "server"
       ? null
-      : (routeSelection ??
-        readSelectedInstanceRouteId() ??
-        initialSelectedInstanceRouteId)
-  const databaseRouteId = databaseRouteIdFromSelection(selection)
-  const appRouteId = appRouteIdFromSelection(selection)
-  const relayRouteId = relayRouteIdFromSelection(selection)
+      : (routeSelection ?? readSelectedInstance() ?? initialSelectedInstance)
+  const databaseId = databaseIdFromSelection(selection)
+  const appId = appIdFromSelection(selection)
+  const relayId = relayIdFromSelection(selection)
   const destinations = accessibleInfrastructureDestinations(capabilities)
   const showDatabases =
     relayConfigured &&
@@ -511,14 +502,14 @@ function SidebarInstanceNavigation({
     <SidebarRelayNavigation
       capabilities={capabilities}
       fallback={kilnFallback}
-      relayRouteId={null}
+      relayId={null}
     />
   ) : (
     kilnFallback
   )
   const appFallback = showApps ? (
     <SidebarAppNavigation
-      appRouteId={null}
+      appId={null}
       capabilities={capabilities}
       fallback={relayFallback}
     />
@@ -528,7 +519,7 @@ function SidebarInstanceNavigation({
   const databaseFallback = showDatabases ? (
     <SidebarDatabaseNavigation
       capabilities={capabilities}
-      databaseRouteId={null}
+      databaseId={null}
       fallback={appFallback}
     />
   ) : (
@@ -538,7 +529,7 @@ function SidebarInstanceNavigation({
     <SidebarServerNavigation
       capabilities={capabilities}
       emptyFallback={databaseFallback}
-      initialSelectedInstanceRouteId={initialSelectedInstanceRouteId}
+      initialSelectedInstance={initialSelectedInstance}
       relayConfigured={relayConfigured}
     />
   )
@@ -546,23 +537,23 @@ function SidebarInstanceNavigation({
   if (kilnRoute) {
     return <SidebarKilnNavigation capabilities={capabilities} followServices />
   }
-  return databaseRouteId ? (
+  return databaseId ? (
     <SidebarDatabaseNavigation
       capabilities={capabilities}
-      databaseRouteId={databaseRouteId}
+      databaseId={databaseId}
       fallback={serverNavigation}
     />
-  ) : appRouteId ? (
+  ) : appId ? (
     <SidebarAppNavigation
-      appRouteId={appRouteId}
+      appId={appId}
       capabilities={capabilities}
       fallback={serverNavigation}
     />
-  ) : relayRouteId ? (
+  ) : relayId ? (
     <SidebarRelayNavigation
       capabilities={capabilities}
       fallback={serverNavigation}
-      relayRouteId={relayRouteId}
+      relayId={relayId}
     />
   ) : (
     serverNavigation
@@ -619,43 +610,31 @@ function SidebarKilnNavigation({
 }
 
 function SidebarAppNavigation({
-  appRouteId,
+  appId,
   capabilities,
   fallback,
 }: {
   // null selects the first app, for users without servers or databases.
-  appRouteId: string | null
+  appId: string | null
   capabilities: NavigationAccessCapabilities
   fallback: React.ReactNode
 }) {
   const select = React.useMemo(
-    () => (apps: Array<AppDirectoryEntry>) => {
-      const resolution = resolveAppRoute(apps, appRouteId)
-      const app =
-        resolution.status === "found"
-          ? resolution.resource
-          : appRouteId === null
-            ? apps[0]
-            : undefined
-      return app ? { app, routeId: appRouteIdentifier(apps, app) } : null
-    },
-    [appRouteId]
+    () => (apps: Array<AppDirectoryEntry>) =>
+      (appId === null ? apps[0] : apps.find((app) => app.id === appId)) ?? null,
+    [appId]
   )
   const query = useQuery({ ...appDirectoryQueryOptions(), select })
-  if (!query.data) return query.isPending ? null : fallback
-  const { app, routeId } = query.data
+  const app = query.data
+  if (!app) return query.isPending ? null : fallback
 
   return (
     <SidebarResourceGroup
       capabilities={capabilities}
       selection={{ kind: "app", app }}
-      selectionRouteId={appSelectionRouteId(routeId)}
+      selectionValue={appSelectionValue(app.id)}
     >
-      <AppTabNavigation
-        app={app}
-        capabilities={capabilities}
-        routeId={routeId}
-      />
+      <AppTabNavigation app={app} capabilities={capabilities} />
     </SidebarResourceGroup>
   )
 }
@@ -665,17 +644,17 @@ function SidebarResourceGroup({
   capabilities,
   children,
   selection,
-  selectionRouteId,
+  selectionValue,
 }: {
   capabilities: NavigationAccessCapabilities
   children: React.ReactNode
   selection: InstanceSelection
   // Remembered so the sidebar reopens on this resource.
-  selectionRouteId: string
+  selectionValue: string
 }) {
   return (
     <>
-      <RememberSelectedInstance instanceRouteId={selectionRouteId} />
+      <RememberSelectedInstance selection={selectionValue} />
       <SidebarSeparator />
       <SidebarGroup>
         <SidebarGroupContent>
@@ -695,18 +674,16 @@ function SidebarResourceGroup({
 const AppTabNavigation = React.memo(function AppTabNavigation({
   app,
   capabilities,
-  routeId,
 }: {
   app: AppDirectoryEntry
   capabilities: NavigationAccessCapabilities
-  routeId: string
 }) {
   return accessibleDestinationsForApp(app, capabilities).map((item) => (
     <SidebarMenuItem key={item.id}>
       <SidebarMenuButton asChild tooltip={item.label}>
         <Link
           to={appTabRoute(item.id)}
-          params={{ appId: routeId }}
+          params={{ appId: app.id }}
           activeOptions={{ exact: item.id !== "files" }}
           activeProps={{ "data-active": true }}
           preload="intent"
@@ -736,44 +713,32 @@ function appTabRoute(tab: AppDestinationId) {
 
 function SidebarDatabaseNavigation({
   capabilities,
-  databaseRouteId,
+  databaseId,
   fallback,
 }: {
   capabilities: NavigationAccessCapabilities
   // null selects the first database, for users without servers.
-  databaseRouteId: string | null
+  databaseId: string | null
   fallback: React.ReactNode
 }) {
   const select = React.useMemo(
-    () => (databases: Array<ManagedDatabaseDirectoryEntry>) => {
-      const resolution = resolveDatabaseRoute(databases, databaseRouteId)
-      const database =
-        resolution.status === "found"
-          ? resolution.resource
-          : databaseRouteId === null
-            ? databases[0]
-            : undefined
-      return database
-        ? { database, routeId: databaseRouteIdentifier(databases, database) }
-        : null
-    },
-    [databaseRouteId]
+    () => (databases: Array<ManagedDatabaseDirectoryEntry>) =>
+      (databaseId === null
+        ? databases[0]
+        : databases.find((database) => database.id === databaseId)) ?? null,
+    [databaseId]
   )
   const query = useQuery({ ...managedDatabaseDirectoryQueryOptions(), select })
-  if (!query.data) return query.isPending ? null : fallback
-  const { database, routeId } = query.data
+  const database = query.data
+  if (!database) return query.isPending ? null : fallback
 
   return (
     <SidebarResourceGroup
       capabilities={capabilities}
       selection={{ kind: "database", database }}
-      selectionRouteId={databaseSelectionRouteId(routeId)}
+      selectionValue={databaseSelectionValue(database.id)}
     >
-      <DatabaseTabNavigation
-        capabilities={capabilities}
-        database={database}
-        routeId={routeId}
-      />
+      <DatabaseTabNavigation capabilities={capabilities} database={database} />
     </SidebarResourceGroup>
   )
 }
@@ -781,48 +746,35 @@ function SidebarDatabaseNavigation({
 function SidebarRelayNavigation({
   capabilities,
   fallback,
-  relayRouteId,
+  relayId,
 }: {
   capabilities: NavigationAccessCapabilities
   fallback: React.ReactNode
   // null selects the first Relay with a page the user can open, for users
   // with no other instances.
-  relayRouteId: string | null
+  relayId: string | null
 }) {
   const select = React.useMemo(
-    () => (relays: Array<RelayDirectoryEntry>) => {
-      const resolution = resolveRelayRoute(relays, relayRouteId)
-      const relay =
-        resolution.status === "found"
-          ? resolution.resource
-          : relayRouteId === null
-            ? relays.find(
-                (candidate) =>
-                  accessibleDestinationsForRelay(candidate, capabilities)
-                    .length > 0
-              )
-            : undefined
-      return relay
-        ? { relay, routeId: relayRouteIdentifier(relays, relay) }
-        : null
-    },
-    [capabilities, relayRouteId]
+    () => (relays: Array<RelayDirectoryEntry>) =>
+      (relayId === null
+        ? relays.find(
+            (candidate) =>
+              accessibleDestinationsForRelay(candidate, capabilities).length > 0
+          )
+        : relays.find((relay) => relay.id === relayId)) ?? null,
+    [capabilities, relayId]
   )
   const query = useQuery({ ...relaysQueryOptions(), select })
-  if (!query.data) return query.isPending ? null : fallback
-  const { relay, routeId } = query.data
+  const relay = query.data
+  if (!relay) return query.isPending ? null : fallback
 
   return (
     <SidebarResourceGroup
       capabilities={capabilities}
       selection={{ kind: "relay", relay }}
-      selectionRouteId={relaySelectionRouteId(routeId)}
+      selectionValue={relaySelectionValue(relay.id)}
     >
-      <RelayTabNavigation
-        capabilities={capabilities}
-        relay={relay}
-        routeId={routeId}
-      />
+      <RelayTabNavigation capabilities={capabilities} relay={relay} />
     </SidebarResourceGroup>
   )
 }
@@ -830,18 +782,16 @@ function SidebarRelayNavigation({
 const RelayTabNavigation = React.memo(function RelayTabNavigation({
   capabilities,
   relay,
-  routeId,
 }: {
   capabilities: NavigationAccessCapabilities
   relay: RelayDirectoryEntry
-  routeId: string
 }) {
   return accessibleDestinationsForRelay(relay, capabilities).map((item) => (
     <SidebarMenuItem key={item.id}>
       <SidebarMenuButton asChild tooltip={item.label}>
         <Link
           to={relayTabRoute(item.id)}
-          params={{ relayId: routeId }}
+          params={{ relayId: relay.id }}
           activeOptions={{ exact: true }}
           activeProps={{ "data-active": true }}
           preload="intent"
@@ -874,11 +824,9 @@ function relayTabRoute(tab: RelayDestinationId) {
 const DatabaseTabNavigation = React.memo(function DatabaseTabNavigation({
   capabilities,
   database,
-  routeId,
 }: {
   capabilities: NavigationAccessCapabilities
   database: ManagedDatabaseDirectoryEntry
-  routeId: string
 }) {
   return accessibleDestinationsForDatabase(database, capabilities).map(
     (item) => (
@@ -896,7 +844,7 @@ const DatabaseTabNavigation = React.memo(function DatabaseTabNavigation({
                       ? "/db/$databaseId/network"
                       : "/db/$databaseId/info"
             }
-            params={{ databaseId: routeId }}
+            params={{ databaseId: database.id }}
             activeOptions={{ exact: true }}
             activeProps={{ "data-active": true }}
             preload="intent"
@@ -913,48 +861,39 @@ const DatabaseTabNavigation = React.memo(function DatabaseTabNavigation({
 function SidebarServerNavigation({
   capabilities,
   emptyFallback,
-  initialSelectedInstanceRouteId,
+  initialSelectedInstance,
   relayConfigured,
 }: {
   capabilities: NavigationAccessCapabilities
   // Shown once the fleet loads without servers.
   emptyFallback: React.ReactNode
-  initialSelectedInstanceRouteId: string | null
+  initialSelectedInstance: string | null
   relayConfigured: boolean
 }) {
-  const { data, isPending, selectedRouteId, serverId } =
-    useSidebarServerNavigation(initialSelectedInstanceRouteId, relayConfigured)
+  const { data, isPending } = useSidebarServerNavigation(
+    initialSelectedInstance,
+    relayConfigured
+  )
   if (!data || data.serverCount === 0) return isPending ? null : emptyFallback
-  const { instance, routeId: instanceRouteId } = data
+  const { instance } = data
 
   return (
     <>
-      {instanceRouteId ? (
-        <RememberSelectedInstance instanceRouteId={instanceRouteId} />
-      ) : null}
+      {instance ? <RememberSelectedInstance selection={instance.id} /> : null}
       <SidebarSeparator />
       <InstanceNavigation
         capabilities={capabilities}
         instance={instance}
-        instanceRouteId={instanceRouteId}
         serverCount={data.serverCount}
-        unresolvedServerId={
-          serverId ??
-          (data.ambiguous ? (selectedRouteId ?? undefined) : undefined)
-        }
       />
     </>
   )
 }
 
-function RememberSelectedInstance({
-  instanceRouteId,
-}: {
-  instanceRouteId: string
-}) {
+function RememberSelectedInstance({ selection }: { selection: string }) {
   React.useEffect(() => {
-    persistSelectedInstanceRouteId(instanceRouteId)
-  }, [instanceRouteId])
+    persistSelectedInstance(selection)
+  }, [selection])
 
   return null
 }
@@ -962,15 +901,11 @@ function RememberSelectedInstance({
 const InstanceNavigation = React.memo(function InstanceNavigation({
   capabilities,
   instance,
-  instanceRouteId,
   serverCount,
-  unresolvedServerId,
 }: {
   capabilities: NavigationAccessCapabilities
   instance: SidebarInstance | null
-  instanceRouteId: string | null
   serverCount: number
-  unresolvedServerId: string | undefined
 }) {
   const navigate = useNavigate()
 
@@ -1029,18 +964,12 @@ const InstanceNavigation = React.memo(function InstanceNavigation({
           <InstanceTabNavigation
             capabilities={capabilities}
             instance={instance}
-            instanceRouteId={instanceRouteId}
-            unresolvedServerId={unresolvedServerId}
           />
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>
   )
 })
-
-function ambiguousServerHref(shortId: string) {
-  return `/infra/servers?search=${encodeURIComponent(shortId)}`
-}
 
 type InstanceSelection =
   | { kind: "server"; instance: SidebarInstance }
@@ -1102,98 +1031,70 @@ const InstanceSelector = React.memo(function InstanceSelector({
         return
       }
       if (item.identity.kind === "database") {
-        const databases = queryClient.getQueryData(
-          managedDatabaseDirectoryQueryOptions().queryKey
-        )
-        const routeId = databases
-          ? databaseRouteIdentifier(databases, item.identity)
-          : item.identity.id
+        const databaseId = item.identity.id
         const tab = databaseTabFromPathname(window.location.pathname)
         void navigate(
           tab === "terminal"
             ? {
                 to: "/db/$databaseId/terminal",
-                params: { databaseId: routeId },
+                params: { databaseId },
               }
             : tab === "logs"
               ? {
                   to: "/db/$databaseId/logs",
-                  params: { databaseId: routeId },
+                  params: { databaseId },
                 }
               : tab === "viewer"
                 ? {
                     to: "/db/$databaseId/viewer",
-                    params: { databaseId: routeId },
+                    params: { databaseId },
                   }
                 : tab === "network"
                   ? {
                       to: "/db/$databaseId/network",
-                      params: { databaseId: routeId },
+                      params: { databaseId },
                     }
                   : tab === "info"
                     ? {
                         to: "/db/$databaseId/info",
-                        params: { databaseId: routeId },
+                        params: { databaseId },
                       }
-                    : { to: "/db/$databaseId", params: { databaseId: routeId } }
+                    : { to: "/db/$databaseId", params: { databaseId } }
         )
         return
       }
       if (item.identity.kind === "app") {
-        const apps = queryClient.getQueryData(
-          appDirectoryQueryOptions().queryKey
-        )
-        const routeId = apps
-          ? appRouteIdentifier(apps, item.identity)
-          : item.identity.id
+        const appId = item.identity.id
         const tab = appTabFromPathname(window.location.pathname)
         void navigate(
           tab
-            ? { to: appTabRoute(tab), params: { appId: routeId } }
-            : { to: "/app/$appId", params: { appId: routeId } }
+            ? { to: appTabRoute(tab), params: { appId } }
+            : { to: "/app/$appId", params: { appId } }
         )
         return
       }
       if (item.identity.kind === "relay") {
-        const relays = queryClient.getQueryData(relaysQueryOptions().queryKey)
-        const routeId = relays
-          ? relayRouteIdentifier(relays, { id: item.identity.relayId })
-          : item.identity.relayId
+        const relayId = item.identity.relayId
         const tab = relayTabFromPathname(window.location.pathname)
         void navigate(
           tab
-            ? { to: relayTabRoute(tab), params: { relayId: routeId } }
-            : { to: "/relay/$relayId", params: { relayId: routeId } }
+            ? { to: relayTabRoute(tab), params: { relayId } }
+            : { to: "/relay/$relayId", params: { relayId } }
         )
         return
       }
-      const instances = queryClient.getQueryData(
-        serverDirectoryQueryOptions().queryKey
-      )
-      if (!instances) return
-      const selected = instances.find(
-        (candidate) =>
-          candidate.id === item.identity.id &&
-          candidate.relayId === item.identity.relayId
-      )
-      if (!selected) return
-      const routeIdentifier = relayInstanceRouteIdentifier(instances, selected)
-      if (!routeIdentifier) {
-        void navigate({ href: ambiguousServerHref(selected.shortId) })
-        return
-      }
-
+      const serverId = item.identity.id
       const tab = instanceTabFromPathname(window.location.pathname) ?? "console"
       if (navigateToTab) {
-        navigateToTab(tab, routeIdentifier)
+        navigateToTab(tab, serverId)
         return
       }
       void navigate({
         to: "/server/$serverId/console",
-        params: { serverId: routeIdentifier },
+        params: { serverId },
       })
     },
-    [closePicker, navigate, navigateToTab, queryClient]
+    [closePicker, navigate, navigateToTab]
   )
   const selectedKey =
     selection.kind === "server"
@@ -1277,7 +1178,7 @@ const InstanceSelector = React.memo(function InstanceSelector({
                   relayId: selection.app.relayId,
                 }}
                 label="Switch app."
-                meta={`${selection.app.shortId} · ${selection.app.relayName}`}
+                meta={`${selection.app.id} · ${selection.app.relayName}`}
                 name={selection.app.name}
               />
             ) : selection.kind === "relay" ? (
@@ -1398,7 +1299,7 @@ function SelectorRelayName({ relay }: { relay: RelayDirectoryEntry }) {
         relayId: relay.id,
       }}
       label="Switch Relay."
-      meta={`${relay.nodeArch ?? "unknown"} · ${relay.id.slice(0, 8)}`}
+      meta={`${relay.nodeArch ?? "unknown"} · ${relay.id}`}
       name={relay.name}
     />
   )
@@ -1541,9 +1442,9 @@ function selectSidebarServerPickerItems(
       relayId: instance.relayId,
     },
     key: sidebarPickerKey("server", instance.relayId, instance.id),
-    meta: `${instance.implementation} ${instance.version} · ${instance.shortId}`,
+    meta: `${instance.implementation} ${instance.version} · ${instance.id}`,
     name: instance.name,
-    searchText: `${instance.routeId} ${instance.relayName}`,
+    searchText: `${instance.id} ${instance.relayName}`,
   }))
 }
 
@@ -1554,9 +1455,7 @@ function selectSidebarRelayPickerItems(
     identity: { id: relay.id, kind: "relay", relayId: relay.id },
     key: sidebarPickerKey("relay", relay.id, relay.id),
     meta: `${relay.nodeArch ?? "unknown"} · ${
-      relay.nodeVersion
-        ? kilnReleaseLabel(relay.nodeVersion)
-        : relay.id.slice(0, 8)
+      relay.nodeVersion ? kilnReleaseLabel(relay.nodeVersion) : relay.id
     }`,
     name: relay.name,
     searchText: `${relay.id} ${relay.nodeVersion ?? ""}`,
@@ -1569,7 +1468,7 @@ function selectSidebarDatabasePickerItems(
   return databases.map((database) => ({
     identity: { id: database.id, kind: "database", relayId: database.relayId },
     key: sidebarPickerKey("database", database.relayId, database.id),
-    meta: `${engineLabel(database.engine)} · ${database.shortId}`,
+    meta: `${engineLabel(database.engine)} · ${database.id}`,
     name: database.name,
     searchText: `${database.id} ${database.relayName}`,
   }))
@@ -1581,7 +1480,7 @@ function selectSidebarAppPickerItems(
   return apps.map((app) => ({
     identity: { id: app.id, kind: "app", relayId: app.relayId },
     key: sidebarPickerKey("app", app.relayId, app.id),
-    meta: `App · ${app.shortId}`,
+    meta: `App · ${app.id}`,
     name: app.name,
     searchText: `${app.id} ${app.relayName}`,
   }))
@@ -1590,13 +1489,9 @@ function selectSidebarAppPickerItems(
 const InstanceTabNavigation = React.memo(function InstanceTabNavigation({
   capabilities,
   instance,
-  instanceRouteId,
-  unresolvedServerId,
 }: {
   capabilities: NavigationAccessCapabilities
   instance: SidebarInstance | null
-  instanceRouteId: string | null
-  unresolvedServerId: string | undefined
 }) {
   const items = instance
     ? accessibleDestinationsForServer(instance, capabilities)
@@ -1605,8 +1500,7 @@ const InstanceTabNavigation = React.memo(function InstanceTabNavigation({
     <InstanceTabNavigationItem
       key={item.id}
       item={item}
-      instanceRouteId={instanceRouteId}
-      unresolvedServerId={unresolvedServerId}
+      serverId={instance?.id ?? null}
     />
   ))
 })
@@ -1614,12 +1508,10 @@ const InstanceTabNavigation = React.memo(function InstanceTabNavigation({
 const InstanceTabNavigationItem = React.memo(
   function InstanceTabNavigationItem({
     item,
-    instanceRouteId,
-    unresolvedServerId,
+    serverId,
   }: {
     item: ServerDestination
-    instanceRouteId: string | null
-    unresolvedServerId: string | undefined
+    serverId: string | null
   }) {
     const content = (
       <>
@@ -1631,10 +1523,9 @@ const InstanceTabNavigationItem = React.memo(
     return (
       <SidebarMenuItem>
         <SidebarMenuButton asChild tooltip={item.label}>
-          {!instanceRouteId ? (
+          {!serverId ? (
             <Link
               to="/infra/servers"
-              search={unresolvedServerId ? { search: unresolvedServerId } : {}}
               activeOptions={{ exact: true, includeSearch: false }}
             >
               {content}
@@ -1642,7 +1533,7 @@ const InstanceTabNavigationItem = React.memo(
           ) : item.id === "console" ? (
             <Link
               to="/server/$serverId/console"
-              params={{ serverId: instanceRouteId }}
+              params={{ serverId }}
               activeOptions={{ exact: true }}
               activeProps={{ "data-active": true }}
               // Warming on hover keeps the console quick to open without
@@ -1654,7 +1545,7 @@ const InstanceTabNavigationItem = React.memo(
           ) : item.id === "files" ? (
             <Link
               to="/server/$serverId/files/$"
-              params={{ serverId: instanceRouteId, _splat: "" }}
+              params={{ serverId, _splat: "" }}
               activeProps={{ "data-active": true }}
               preload="intent"
               onFocus={warmFileWorkspaceModule}
@@ -1666,7 +1557,7 @@ const InstanceTabNavigationItem = React.memo(
           ) : item.id === "network" ? (
             <Link
               to="/server/$serverId/network"
-              params={{ serverId: instanceRouteId }}
+              params={{ serverId }}
               activeOptions={{ exact: true }}
               activeProps={{ "data-active": true }}
               preload="intent"
@@ -1676,7 +1567,7 @@ const InstanceTabNavigationItem = React.memo(
           ) : item.id === "startup" ? (
             <Link
               to="/server/$serverId/startup"
-              params={{ serverId: instanceRouteId }}
+              params={{ serverId }}
               activeOptions={{ exact: true }}
               activeProps={{ "data-active": true }}
               preload="intent"
@@ -1686,7 +1577,7 @@ const InstanceTabNavigationItem = React.memo(
           ) : (
             <Link
               to="/server/$serverId/info"
-              params={{ serverId: instanceRouteId }}
+              params={{ serverId }}
               activeOptions={{ exact: true }}
               activeProps={{ "data-active": true }}
               preload="intent"

@@ -5,7 +5,7 @@ import {
   webRouteRecoveryLabels,
 } from "./web-route-labels.js"
 
-const instanceId = "a".repeat(40)
+const instanceId = "a".repeat(12)
 
 /** Recovers routes from one container's labels on an empty Relay. */
 function recoverFromLabels(labels: Record<string, string>) {

@@ -41,7 +41,7 @@ import { traceRelayEffect, traceRelayPromise } from "./effect/runtime.js"
 import { collectProcessErrors } from "./database-backups.js"
 import type { FileRoot } from "./files.js"
 import {
-  databaseMemberAlias,
+  databaseMemberAliases,
   type DatabaseConnections,
 } from "./database-connections.js"
 import type { RelayConfig } from "./config.js"
@@ -60,6 +60,7 @@ import {
   type DockerExecProcess,
   streamIntoProcess,
 } from "./docker-engine.js"
+import { instanceIdFrom, physicalKey } from "./instance-keys.js"
 import { provisioningStatus } from "./provisioning.js"
 import {
   relayOwnerLabel,
@@ -182,7 +183,7 @@ function databaseRecoveryLabels(
     "kiln.database.database-name": input.databaseName,
     "kiln.database.engine": input.engine,
     "kiln.database.hostname": databaseHostname(input.id),
-    "kiln.database.id": input.id,
+    "kiln.database.id": physicalKey(input.id),
     "kiln.database.image": spec.image,
     "kiln.database.name": input.name,
     "kiln.database.network": databaseResourceName(config, input.id, "network"),
@@ -253,7 +254,7 @@ export class DatabaseDriver {
     const done = await promiseResult(() => this.#tailscaleAddresses(databaseId))
     if (Result.isFailure(done)) {
       console.warn(
-        `Database ${databaseId.slice(0, 8)} couldn't take its place on its Tailscale networks:`,
+        `Database ${databaseId} couldn't take its place on its Tailscale networks:`,
         done.failure
       )
     }
@@ -312,7 +313,6 @@ export class DatabaseDriver {
       name: input.name,
       observedState: "provisioning",
       provisioning: { attempt: 0, error: null, phase: "awaiting_claim" },
-      shortId: input.id.slice(0, 8),
       status: provisioningStatus("awaiting_claim", "database"),
       supportsImportExport: databaseEngineSupportsLogicalBackups(input.engine),
     })
@@ -332,7 +332,7 @@ export class DatabaseDriver {
         )
         const byId = new Map(
           containers.map((container) => [
-            requiredLabel(container.Config.Labels ?? {}, "kiln.database.id"),
+            databaseIdOf(container.Config.Labels ?? {}),
             container,
           ])
         )
@@ -504,7 +504,7 @@ export class DatabaseDriver {
           labels,
           mounts: [{ source: volume, target: spec.dataMount, type: "volume" }],
           name: container,
-          network: { aliases: [databaseHostname(input.id)], name: network },
+          network: { aliases: databaseHostnames(input.id), name: network },
           restart: "unless-stopped",
           ...this.#docker.allocations.workloadSpec(),
         })
@@ -600,7 +600,7 @@ export class DatabaseDriver {
     limits: ResourceLimits
   ): Promise<void> {
     const labels = container.Config.Labels ?? {}
-    const id = requiredLabel(labels, "kiln.database.id")
+    const id = databaseIdOf(labels)
     const engine = databaseEngineSchema.parse(
       requiredLabel(labels, "kiln.database.engine")
     )
@@ -649,7 +649,7 @@ export class DatabaseDriver {
           ],
           name,
           network: {
-            aliases: [databaseHostname(id)],
+            aliases: databaseHostnames(id),
             name: requiredLabel(labels, "kiln.database.network"),
           },
           restart: "unless-stopped",
@@ -751,7 +751,9 @@ export class DatabaseDriver {
             yield* restore
             continue
           }
-          const databaseId = replacement.Labels?.["kiln.database.id"]
+          const databaseId = instanceIdFrom(
+            replacement.Labels?.["kiln.database.id"]
+          )
           if (databaseId) yield* reconnect(databaseId, replacement.Id)
           // As an uninterrupted change would: the replacement of a running
           // database must be ready, started if the restart caught it first.
@@ -883,7 +885,7 @@ export class DatabaseDriver {
     if (input.deleteData && volume) {
       await Effect.runPromise(engine.removeVolume(volume))
     }
-    await rm(join(this.dumpDirectory, input.databaseId), {
+    await rm(join(this.dumpDirectory, physicalKey(input.databaseId)), {
       force: true,
       recursive: true,
     })
@@ -973,12 +975,15 @@ export class DatabaseDriver {
   async dumpFileRoot(databaseId: string): Promise<FileRoot> {
     await this.#dumpable(databaseId)
     await this.#dumpFolder(databaseId)
-    return { directory: databaseId, id: databaseFileRootId(databaseId) }
+    return {
+      directory: physicalKey(databaseId),
+      id: databaseFileRootId(databaseId),
+    }
   }
 
   // Dumps hold all of a database's data, so only the Relay may read them.
   async #dumpFolder(databaseId: string): Promise<string> {
-    const folder = join(this.dumpDirectory, databaseId)
+    const folder = join(this.dumpDirectory, physicalKey(databaseId))
     await mkdir(folder, { mode: 0o700, recursive: true })
     return folder
   }
@@ -1042,7 +1047,11 @@ export class DatabaseDriver {
    */
   async importDump(input: RelayDatabaseImport) {
     const database = await this.#dumpable(input.databaseId)
-    const dump = join(this.dumpDirectory, database.id, input.fileName)
+    const dump = join(
+      this.dumpDirectory,
+      physicalKey(database.id),
+      input.fileName
+    )
     // Each upload is run once, so it goes however its import ends.
     await removingAfter(dump, async () => {
       const custom = (await readDumpHead(dump)).equals(
@@ -1140,7 +1149,8 @@ export class DatabaseDriver {
 
   async #container(id: string): Promise<DatabaseContainerInspect> {
     const container = (await this.#discover()).find(
-      (candidate) => candidate.Config.Labels?.["kiln.database.id"] === id
+      (candidate) =>
+        instanceIdFrom(candidate.Config.Labels?.["kiln.database.id"]) === id
     )
     if (!container) throw new Error("Database not found")
     return container
@@ -1162,7 +1172,10 @@ export class DatabaseDriver {
           listed.flatMap((container) =>
             relayOwnsLabels(config, container.Labels) &&
             !container.Names.some((name) => name.includes(REPLACED_MARKER)) &&
-            (!ids || ids.includes(container.Labels?.["kiln.database.id"] ?? ""))
+            (!ids ||
+              ids.includes(
+                instanceIdFrom(container.Labels?.["kiln.database.id"]) ?? ""
+              ))
               ? [container.Id]
               : []
           )
@@ -1228,7 +1241,7 @@ export class DatabaseDriver {
     signal?: AbortSignal
   ): Promise<RelayManagedDatabase> {
     const labels = container.Config.Labels ?? {}
-    const id = requiredLabel(labels, "kiln.database.id")
+    const id = databaseIdOf(labels)
     const engine = databaseEngineSchema.parse(
       requiredLabel(labels, "kiln.database.engine")
     )
@@ -1255,7 +1268,9 @@ export class DatabaseDriver {
       createdAt: requiredLabel(labels, "kiln.database.created-at"),
       databaseName: requiredLabel(labels, "kiln.database.database-name"),
       engine,
-      hostname: requiredLabel(labels, "kiln.database.hostname"),
+      // Its name by its ID; one from before 12-character IDs answers to the
+      // name its label recorded too.
+      hostname: databaseHostname(id),
       id,
       image: labels["kiln.database.image"] ?? container.Config.Image,
       internalPort: engineSpecs[engine].internalPort,
@@ -1270,7 +1285,6 @@ export class DatabaseDriver {
         ) ?? null,
       name: requiredLabel(labels, "kiln.database.name"),
       observedState,
-      shortId: id.slice(0, 8),
       startedAt:
         container.State.Running && container.State.StartedAt
           ? new Date(container.State.StartedAt).toISOString()
@@ -1313,41 +1327,38 @@ export class DatabaseDriver {
       member(saved.kind, saved.id).saved = true
     }
     const resources = relayResourceNames(this.#config)
-    // Each attached member container, with the name it should have there.
+    // Each attached member container, with the names it should have there.
     const named: Array<{
       container: string
-      name: string | null
+      names: ReadonlyArray<string>
       to: RelayDatabaseMember
     }> = []
     for (const candidate of attached) {
       if (candidate.Id === ownContainer) continue
       const labels = candidate.Labels ?? {}
-      const instanceId = labels[this.#config.serverIdLabel]?.toLowerCase()
-      const appId = labels["kiln.app.id"]
-      const otherDatabase = labels["kiln.database.id"]
+      const instanceId = instanceIdFrom(labels[this.#config.serverIdLabel])
+      const appId = instanceIdFrom(labels["kiln.app.id"])
+      const otherDatabase = instanceIdFrom(labels["kiln.database.id"])
       let to: RelayDatabaseMember | null = null
-      let name: string | null = null
-      if (instanceId?.match(/^[a-f0-9]{40}$/u)) {
+      let names: ReadonlyArray<string> = []
+      if (instanceId) {
         to = member("instance", instanceId)
-        name = databaseMemberAlias(to)
-      } else if (
-        labels[DATABASE_KIND_LABEL] === "app" &&
-        appId?.match(/^[a-f0-9]{40}$/u)
-      ) {
+        names = databaseMemberAliases(to)
+      } else if (labels[DATABASE_KIND_LABEL] === "app" && appId) {
         to = member("app", appId)
         const service = labels["kiln.app.service"]
-        name = service ? resources.appAlias(appId, service) : null
+        names = service ? resources.appAliases(appId, service) : []
       } else if (
         labels[DATABASE_KIND_LABEL] === DATABASE_KIND &&
-        otherDatabase?.match(/^[a-f0-9]{40}$/u) &&
+        otherDatabase &&
         otherDatabase !== databaseId
       ) {
         to = member("database", otherDatabase)
-        name = databaseMemberAlias(to)
+        names = databaseMemberAliases(to)
       }
       if (!to) continue
       to.attached = true
-      named.push({ container: candidate.Id, name, to })
+      named.push({ container: candidate.Id, names, to })
     }
     const inspected = new Map(
       named.length === 0
@@ -1363,18 +1374,19 @@ export class DatabaseDriver {
             container.NetworkSettings?.Networks?.[network]?.Aliases ?? [],
           ])
     )
-    for (const { container, name, to } of named) {
-      if (!name) continue
-      if (inspected.get(container)?.includes(name)) {
-        if (!to.hostnames.includes(name)) to.hostnames.push(name)
-      } else if (!to.pendingHostnames.includes(name)) {
-        to.pendingHostnames.push(name)
+    for (const { container, names, to } of named) {
+      for (const name of names) {
+        if (inspected.get(container)?.includes(name)) {
+          if (!to.hostnames.includes(name)) to.hostnames.push(name)
+        } else if (!to.pendingHostnames.includes(name)) {
+          to.pendingHostnames.push(name)
+        }
       }
     }
     for (const found of members.values()) {
-      // Not on the network now, it joins under its name.
-      const alias = databaseMemberAlias(found)
-      if (!found.attached && alias) found.pendingHostnames.push(alias)
+      // Not on the network now, it joins under its names.
+      if (!found.attached)
+        found.pendingHostnames.push(...databaseMemberAliases(found))
       found.pendingHostnames = found.pendingHostnames.filter(
         (name) => !found.hostnames.includes(name)
       )
@@ -1402,12 +1414,13 @@ export class DatabaseDriver {
     suffix: "data" | "network",
     preferredName?: string
   ): Promise<string | null> {
-    const fullName = databaseResourceName(this.#config, databaseId, suffix)
-    const legacyName = databaseResourceName(
-      this.#config,
-      databaseId.slice(0, 8),
-      suffix
-    )
+    const key = physicalKey(databaseId)
+    const fullName = databaseResourceName(this.#config, key, suffix)
+    // The oldest databases' were named after an old ID's first 8.
+    const legacyName =
+      key === databaseId
+        ? null
+        : databaseResourceName(this.#config, key.slice(0, 8), suffix)
     const candidates = [preferredName, fullName, legacyName].flatMap(
       (name, index, names) =>
         name && names.indexOf(name) === index ? [name] : []
@@ -1430,7 +1443,7 @@ export class DatabaseDriver {
       const labels = stringLabels(inspected.success.Labels)
       if (
         labels[DATABASE_KIND_LABEL] === DATABASE_KIND &&
-        labels["kiln.database.id"] === databaseId &&
+        instanceIdFrom(labels["kiln.database.id"]) === databaseId &&
         labels[`kiln.database.${kind}`] === name &&
         relayOwnsLabels(this.#config, labels)
       ) {
@@ -1455,11 +1468,29 @@ export function databaseNetworkName(
   config: Pick<RelayConfig, "resourceNamespace">,
   id: string
 ): string {
-  return databaseResourceName(config, id, "network")
+  return databaseResourceName(config, physicalKey(id), "network")
 }
 
 function databaseHostname(id: string): string {
   return `database-${id}`
+}
+
+// Every name it answers to on its network: by its ID, and for a database
+// from before 12-character IDs, by its old one, which Apps' configurations
+// saved then may still use.
+function databaseHostnames(id: string): Array<string> {
+  return databaseMemberAliases({ id, kind: "database" })
+}
+
+// Its ID, from its labels: one from before 12-character IDs carries its old
+// ID, which is its new one's physical key.
+function databaseIdOf(
+  labels: Readonly<Record<string, string | undefined>>
+): string {
+  const id = instanceIdFrom(requiredLabel(labels, "kiln.database.id"))
+  if (!id)
+    throw new Error("Database recovery label kiln.database.id is invalid")
+  return id
 }
 
 function requiredContainerId(

@@ -23,11 +23,11 @@ vi.mock("@/lib/realtime-source.server", () => ({
 
 import { writeDatabaseConnection } from "./database-connections.server"
 
-const relayId = "r".repeat(43)
-const database = "d".repeat(40)
-const otherDatabase = "e".repeat(40)
-const app = "a".repeat(40)
-const server = "b".repeat(40)
+const relayId = "1".repeat(12)
+const database = "d".repeat(12)
+const otherDatabase = "e".repeat(12)
+const app = "a".repeat(12)
+const server = "b".repeat(12)
 
 const sessionUser = (id: string): AuthenticatedUser => ({
   email: `${id}@example.test`,
@@ -117,7 +117,6 @@ const relayDatabase = (members: ReadonlyArray<DatabaseConnectionMember>) => ({
   })),
   name: "Main",
   observedState: "running",
-  shortId: database.slice(0, 8),
   status: "Ready",
   supportsImportExport: true,
 })
@@ -200,7 +199,6 @@ describeMysql("database connections in Hearth", () => {
                   members: [],
                   name: "Main",
                   observedState: "running",
-                  shortId: database.slice(0, 8),
                   status: "Ready",
                   supportsImportExport: true,
                 }
@@ -252,7 +250,7 @@ describeMysql("database connections in Hearth", () => {
     it.effect("answers with only the members the person may read", () =>
       Effect.gen(function* () {
         yield* seed
-        const hidden = "c".repeat(40)
+        const hidden = "c".repeat(12)
         yield* insertUser("one-server")
         yield* grant("one-server", ["database.network.write"], {
           resourceId: database,

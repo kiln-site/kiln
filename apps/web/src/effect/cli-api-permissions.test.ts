@@ -70,8 +70,8 @@ import {
   createCliBackupEffect,
   updateCliServerStartupEffect,
 } from "@/effect/cli-api"
-const relayId = "r".repeat(43),
-  instanceId = "a".repeat(40)
+const relayId = "1".repeat(12),
+  instanceId = "a".repeat(12)
 const principal: CliPrincipal = {
   credentialId: "62d3fa60-eec3-4767-943d-c6ec159c5322",
   mode: "full_access",
@@ -115,7 +115,6 @@ const recipe = {
 }
 const instance = relayInstanceSchema.parse({
   id: instanceId,
-  shortId: "aaaaaaaa",
   name: "Survival",
   service: "survival",
   directory: "/data/survival",

@@ -52,8 +52,8 @@ afterAll(async () => {
 })
 
 const at = Date.UTC(2026, 0, 1)
-const relayId = "r".repeat(43)
-const instanceId = "a".repeat(40)
+const relayId = "1".repeat(12)
+const instanceId = "a".repeat(12)
 
 const user: AuthenticatedUser = {
   email: "member@example.test",
@@ -69,7 +69,6 @@ const user: AuthenticatedUser = {
 
 const instance = relayInstanceSchema.parse({
   id: instanceId,
-  shortId: instanceId.slice(0, 8),
   name: "Survival",
   service: "server",
   directory: "/data/server",

@@ -75,8 +75,7 @@ export const getUiPreferences = createServerFn({ method: "GET" }).handler(
       sidebarOpen: sidebarCookie !== "false",
       fileTreeCollapsed: fileTreeCollapsedCookie === "true",
       fileTreeWidth,
-      selectedInstanceRouteId:
-        readCookie(cookies, selectedInstanceCookieName) ?? null,
+      selectedInstance: readCookie(cookies, selectedInstanceCookieName) ?? null,
       appearance,
       appearanceDefault: platformDefault ?? defaultAppearance,
       canManageAppearanceDefault: hasPlatformPermission(

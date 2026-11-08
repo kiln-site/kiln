@@ -273,7 +273,7 @@ export const LiveInstanceCard = React.memo(function LiveInstanceCard({
       {instance.kind === "server" ? (
         <Link
           to="/server/$serverId"
-          params={{ serverId: instance.routeId }}
+          params={{ serverId: instance.id }}
           preload="intent"
           className={instanceCardClass}
           style={style}
@@ -283,7 +283,7 @@ export const LiveInstanceCard = React.memo(function LiveInstanceCard({
       ) : instance.kind === "app" ? (
         <Link
           to="/app/$appId"
-          params={{ appId: instance.routeId }}
+          params={{ appId: instance.id }}
           preload="intent"
           className={instanceCardClass}
           style={style}
@@ -293,7 +293,7 @@ export const LiveInstanceCard = React.memo(function LiveInstanceCard({
       ) : (
         <Link
           to="/db/$databaseId"
-          params={{ databaseId: instance.routeId }}
+          params={{ databaseId: instance.id }}
           preload="intent"
           className={instanceCardClass}
           style={style}

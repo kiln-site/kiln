@@ -532,9 +532,7 @@ const SyncDestination = React.memo(function SyncDestination({
     )
   const className =
     "group/destination-link flex max-w-full min-w-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-  // Opens the synced folder. Each route takes a full ID and redirects to its
-  // short form; a game server's Relay-qualified ID names it even where short
-  // IDs collide.
+  // Opens the synced folder.
   if (target.kind === "relay") {
     return (
       <Link
@@ -560,7 +558,7 @@ const SyncDestination = React.memo(function SyncDestination({
   return (
     <Link
       to="/server/$serverId/files/$"
-      params={{ serverId: `${target.relayId}-${target.id}`, _splat: files }}
+      params={{ serverId: target.id, _splat: files }}
       className={className}
     >
       {card}

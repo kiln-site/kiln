@@ -54,7 +54,7 @@ import {
 // What the app is at a glance: the Relay it runs on, the databases it
 // reaches, and its environment, who owns it, and its deployment. Its name and status are in the
 // header.
-export function AppInfoRail({ app, routeId }: { app: App; routeId: string }) {
+export function AppInfoRail({ app }: { app: App }) {
   const databases = app.savedDatabaseIds.length
   const notificationResource = React.useMemo(
     () => ({
@@ -71,7 +71,7 @@ export function AppInfoRail({ app, routeId }: { app: App; routeId: string }) {
         <InfoRailRelayLink name={app.relayName} relayId={app.relayId} />
         <InfoRailLink
           to="/app/$appId/network"
-          params={{ appId: routeId }}
+          params={{ appId: app.id }}
           leading={<DatabaseKindIcon />}
           detail={
             <span
@@ -102,10 +102,10 @@ export function AppInfoRail({ app, routeId }: { app: App; routeId: string }) {
           resourceId={app.id}
           resourceType="app"
         />
-        <AppEnvironmentRow app={app} routeId={routeId} />
+        <AppEnvironmentRow app={app} />
       </InfoRailGroup>
       <AppOwner appId={app.id} relayId={app.relayId} />
-      <AppDeploymentCard app={app} routeId={routeId} />
+      <AppDeploymentCard app={app} />
       <ResourceNotificationsCard
         kinds={
           app.permissions.includes("app.manage")
@@ -124,10 +124,8 @@ const noNotificationKinds: ReadonlyArray<NotificationKind> = []
 // manage the app get its environment at all.
 const AppEnvironmentRow = React.memo(function AppEnvironmentRow({
   app,
-  routeId,
 }: {
   app: App
-  routeId: string
 }) {
   const [open, setOpen] = React.useState(false)
   const { data } = useQuery({
@@ -178,7 +176,6 @@ const AppEnvironmentRow = React.memo(function AppEnvironmentRow({
           }
           deploying={app.deployment?.state === "running"}
           kind="environment"
-          routeId={routeId}
           saved={data.environment}
           onOpenChange={setOpen}
         />
@@ -260,10 +257,8 @@ const AppOwner = React.memo(function AppOwner({
 // deployments and their logs.
 const AppDeploymentCard = React.memo(function AppDeploymentCard({
   app,
-  routeId,
 }: {
   app: App
-  routeId: string
 }) {
   const { data: summary } = useQuery(
     appDeploymentSummaryQueryOptions(app.relayId, app.id)
@@ -300,7 +295,7 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
           {canReadLogs ? (
             <Link
               to="/app/$appId/logs"
-              params={{ appId: routeId }}
+              params={{ appId: app.id }}
               search={{ stream: "deployment" }}
               className={railFooterLinkClassName}
             >
@@ -374,11 +369,7 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
         </InfoFact>
       ) : null}
       {summary?.imageUpdates ? (
-        <AppImageUpdatesFact
-          app={app}
-          routeId={routeId}
-          updates={summary.imageUpdates}
-        />
+        <AppImageUpdatesFact app={app} updates={summary.imageUpdates} />
       ) : null}
       <InfoFact
         label={latest?.status === "running" ? "Started" : "Last deploy"}

@@ -12,6 +12,7 @@ import {
   appIdFromFileRoot,
   databaseIdFromFileRoot,
   isRelayFileRoot,
+  relayFileRootId,
   relayDatabaseDumpFilesV1Feature,
   relayHostFilesV1Feature,
   relayFileRequestReplayV1Feature,
@@ -453,11 +454,14 @@ const authorizeBrowserCapabilityEffect = Effect.fn(
   relayId: string
   resource: RelayConsoleResource
 }) {
-  // A Relay's own output, and Kiln's services on its host, are only ever
-  // the Relay the capability is for.
+  // A Relay's own output and host files (`relay:<relayId>`), and Kiln's
+  // services on its host, are only ever the Relay the capability is for.
   if (
-    (input.resource.kind === "relay" || input.resource.kind === "platform") &&
-    input.resource.id !== input.relayId
+    (input.resource.kind === "platform" &&
+      input.resource.id !== input.relayId) ||
+    (input.resource.kind === "relay" &&
+      input.resource.id !== input.relayId &&
+      input.resource.id !== relayFileRootId(input.relayId))
   ) {
     return yield* Effect.fail(new Error("Relay not found"))
   }

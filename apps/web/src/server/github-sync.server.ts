@@ -192,7 +192,7 @@ export async function getGitHubSyncOverviewHandler(user: AuthenticatedUser) {
     ) ?? {
       id: sync.resourceId,
       kind,
-      name: sync.resourceId.slice(0, 8),
+      name: sync.resourceId,
       relayId: sync.relayId,
       relayName: relayNames.get(sync.relayId) ?? "Unknown Relay",
     }

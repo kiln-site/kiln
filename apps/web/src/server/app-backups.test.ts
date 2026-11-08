@@ -16,9 +16,9 @@ import {
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows, selectRows } from "@/test/seed"
 
-const relayId = "r".repeat(43)
-const appId = "a".repeat(40)
-const otherAppId = "b".repeat(40)
+const relayId = "1".repeat(12)
+const appId = "a".repeat(12)
+const otherAppId = "b".repeat(12)
 const kilnVolumeId = "c".repeat(40)
 const taskId = "0b7c9d2e-4f1a-4c3b-9d8e-7f6a5b4c3d2e"
 

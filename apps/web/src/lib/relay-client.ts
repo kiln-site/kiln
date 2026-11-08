@@ -284,7 +284,7 @@ function relayControlRequest(path: string, init?: RequestInit) {
   if (resource === "provision" && method === "POST") {
     return {
       operation: "instance.provision.claim" as const,
-      payload: { instanceId },
+      payload: { ...body, instanceId },
     }
   }
   if (resource === "provision" && method === "DELETE") {

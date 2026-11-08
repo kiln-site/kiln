@@ -54,7 +54,6 @@ export interface OverviewInstance {
   relayId: string
   name: string
   meta: string
-  routeId: string
   /** A game server on a tailnet. */
   tailscale?: boolean
 }

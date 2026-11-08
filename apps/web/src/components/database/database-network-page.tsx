@@ -73,7 +73,7 @@ export function DatabaseNetworkPage() {
 // address when its container is replaced. Managing Tailscale is for
 // platform admins.
 function DatabaseTailscale({
-  database: { id, name, relayId, relayName, shortId },
+  database: { id, name, relayId, relayName },
 }: {
   database: ManagedDatabase
 }) {
@@ -83,13 +83,13 @@ function DatabaseTailscale({
   })
   const member = React.useMemo(
     () => ({
+      id,
       memberId: databaseTailscaleMemberId(id),
       name,
       relayId,
       relayName,
-      shortId,
     }),
-    [id, name, relayId, relayName, shortId]
+    [id, name, relayId, relayName]
   )
   if (!isPlatformAdmin) return null
   return (
@@ -229,12 +229,11 @@ function MemberName({
     />
   ) : (
     <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-      {kindNames[member.kind]} {member.id.slice(0, 8)}
+      {kindNames[member.kind]} {member.id}
       {reach ? ` · ${reach}` : ""}
     </span>
   )
-  const routeId = candidate?.routeId
-  if (!routeId) return name
+  if (!candidate) return name
   const className =
     "flex min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
   switch (member.kind) {
@@ -242,7 +241,7 @@ function MemberName({
       return (
         <Link
           to="/server/$serverId/console"
-          params={{ serverId: routeId }}
+          params={{ serverId: member.id }}
           preload="intent"
           className={className}
         >
@@ -253,7 +252,7 @@ function MemberName({
       return (
         <Link
           to="/app/$appId/network"
-          params={{ appId: routeId }}
+          params={{ appId: member.id }}
           preload="intent"
           className={className}
         >
@@ -264,7 +263,7 @@ function MemberName({
       return (
         <Link
           to="/db/$databaseId/network"
-          params={{ databaseId: routeId }}
+          params={{ databaseId: member.id }}
           preload="intent"
           className={className}
         >

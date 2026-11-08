@@ -9,8 +9,8 @@ import { readInfraServerDirectory } from "@/server/infra-directory.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
 
-const relayId = "r".repeat(43),
-  id = "a".repeat(40)
+const relayId = "1".repeat(12),
+  id = "a".repeat(12)
 const user: AuthenticatedUser = {
   id: "server-reader",
   name: "Reader",
@@ -50,15 +50,15 @@ describeMysql("Game Server directory", () => {
           yield* resetDatabase
           yield* insertUser(user.id)
           yield* insertRelay(relayId)
-          yield* insertRelay("s".repeat(43))
+          yield* insertRelay("2".repeat(12))
           yield* registerPreparedInstanceEffect(relayId, server(id), "owner")
           yield* registerPreparedInstanceEffect(
             relayId,
-            server("b".repeat(40)),
+            server("b".repeat(12)),
             "owner"
           )
           yield* registerPreparedInstanceEffect(
-            "s".repeat(43),
+            "2".repeat(12),
             server(id),
             "owner"
           )

@@ -12,7 +12,7 @@ import {
   writeTarRestoreJournal,
 } from "./tar-restore-journal.js"
 
-const appId = "a".repeat(40)
+const appId = "a".repeat(12)
 const userId = "b".repeat(40)
 const directories: Array<string> = []
 
@@ -41,7 +41,7 @@ it("fences what an unfinished swap left, an App's own volume and its folder incl
     phase: "clearing",
     root: null,
     source: { kind: "bind", path: "/srv/apps/c" },
-    target: { id: "c".repeat(40), kind: "app" },
+    target: { id: "c".repeat(12), kind: "app" },
     taskId: "1b7c9d2e-4f1a-4c3b-9d8e-7f6a5b4c3d2e",
     version: 1,
   })
@@ -51,7 +51,7 @@ it("fences what an unfinished swap left, an App's own volume and its folder incl
     phase: "staging",
     root: null,
     source: { kind: "bind", path: "/srv/apps/d" },
-    target: { id: "d".repeat(40), kind: "app" },
+    target: { id: "d".repeat(12), kind: "app" },
     taskId: "2b7c9d2e-4f1a-4c3b-9d8e-7f6a5b4c3d2e",
     version: 1,
   })
@@ -66,7 +66,7 @@ it("fences what an unfinished swap left, an App's own volume and its folder incl
   )
   expect(
     fences.refusal("app.files.write", [
-      shared(laneKeys.appFiles("c".repeat(40))),
+      shared(laneKeys.appFiles("c".repeat(12))),
     ])
   ).toContain("the restore must finish first")
   expect(
@@ -74,7 +74,7 @@ it("fences what an unfinished swap left, an App's own volume and its folder incl
       exclusive(laneKeys.volume(volumeId)),
     ])
   ).toBeNull()
-  expect(fences.refusal("app.action", appLifecycleLocks("d".repeat(40)))).toBe(
+  expect(fences.refusal("app.action", appLifecycleLocks("d".repeat(12)))).toBe(
     null
   )
   expect(

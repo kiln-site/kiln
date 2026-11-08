@@ -28,7 +28,7 @@ describe("Tailscale deployment orchestration", () => {
         current: [],
         desired: [target("relay-a")],
         domain: "test",
-        id: "a".repeat(40),
+        id: "a".repeat(12),
         name: "Test network",
         operations: {
           apply: async () => colliding,
@@ -57,7 +57,7 @@ describe("Tailscale deployment orchestration", () => {
         current,
         desired: [target("relay-a"), target("relay-b")],
         domain: "test",
-        id: "a".repeat(40),
+        id: "a".repeat(12),
         name: "Test network",
         operations: {
           apply: async (desired, input) => {
@@ -112,7 +112,7 @@ function deployment(
     ],
     domain: "test",
     hostname: `network-${relayId}`,
-    id: "a".repeat(40),
+    id: "a".repeat(12),
     name: "Test network",
     relayId,
     relayName: relayId,

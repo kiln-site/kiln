@@ -92,7 +92,7 @@ describeMysql("A deletion across a Hearth restart", () => {
       () =>
         Effect.gen(function* () {
           const { service, startHearth } = yield* hearths
-          const otherApp = "c".repeat(40)
+          const otherApp = "c".repeat(12)
           yield* seed
           yield* seedApp([
             // Its own, which only it uses: backed up, then deleted with it.

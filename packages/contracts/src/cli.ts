@@ -345,7 +345,10 @@ export const cliBackupTargetSchema = z
   .object({
     kind: z.enum(["server", "database", "platform"]),
     name: z.string().min(1).max(120),
-    reference: z.string().min(1).max(256),
+    // The target's own ID: a game server's or database's, or for the
+    // platform, its Relay's.
+    reference: instanceIdSchema,
+    relayId: instanceIdSchema,
     relayName: z.string().min(1).max(120),
   })
   .strict()

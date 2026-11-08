@@ -8,6 +8,9 @@ import { chmod, mkdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import {
   DEFAULT_RELAY_NAME,
+  InstanceId,
+  migratedInstanceId,
+  newInstanceId,
   truncateInitialRelayName,
 } from "@workspace/contracts"
 import { Effect, Schema } from "effect"
@@ -17,17 +20,30 @@ import { writeFileAtomic as atomicWriteFile } from "./atomic-file.js"
 import type { RelayConfig } from "../config.js"
 
 export interface RelayIdentity {
+  // Its instance ID, which Hearth and everything else know it by.
+  readonly id: string
+  // Its public key's fingerprint, which only authenticates it: pairing and
+  // signatures.
   readonly fingerprint: string
   readonly name: string
   readonly privateKeyPem: string
   readonly publicKeyPem: string
 }
 
-const StoredRelayIdentitySchema = Schema.Struct({
-  name: Schema.String,
-  publicKeyPem: Schema.String,
-  version: Schema.Literal(1),
-})
+const StoredRelayIdentitySchema = Schema.Union([
+  Schema.Struct({
+    id: InstanceId,
+    name: Schema.String,
+    publicKeyPem: Schema.String,
+    version: Schema.Literal(2),
+  }),
+  // From before 12-character instance IDs, when its fingerprint was its ID.
+  Schema.Struct({
+    name: Schema.String,
+    publicKeyPem: Schema.String,
+    version: Schema.Literal(1),
+  }),
+])
 
 export const loadOrCreateRelayIdentity = Effect.fn(
   "RelayIdentity.loadOrCreate"
@@ -46,10 +62,24 @@ export const loadOrCreateRelayIdentity = Effect.fn(
       () => createIdentity(config.nodeName, identityPath, privateKeyPath)
     )
   )
-
+  const relayFingerprint = fingerprint(loaded.publicKeyPem)
+  if (loaded.id !== null) {
+    return { ...loaded, id: loaded.id, fingerprint: relayFingerprint }
+  }
+  // A Relay from before 12-character instance IDs takes the one its
+  // fingerprint maps to, as Hearth computes it too, and keeps it.
+  const id = yield* Effect.promise(() =>
+    migratedInstanceId({ kind: "relay", fingerprint: relayFingerprint })
+  )
+  yield* writeIdentity(identityPath, {
+    id,
+    name: loaded.name,
+    publicKeyPem: loaded.publicKeyPem,
+  })
   return {
     ...loaded,
-    fingerprint: fingerprint(loaded.publicKeyPem),
+    id,
+    fingerprint: relayFingerprint,
   } satisfies RelayIdentity
 })
 
@@ -73,11 +103,11 @@ export const renameRelayIdentity = Effect.fn("RelayIdentity.rename")(function* (
     "identity",
     "identity.json"
   )
-  yield* writeFileAtomic(
-    identityPath,
-    `${JSON.stringify({ name, publicKeyPem: identity.publicKeyPem, version: 1 })}\n`,
-    0o600
-  )
+  yield* writeIdentity(identityPath, {
+    id: identity.id,
+    name,
+    publicKeyPem: identity.publicKeyPem,
+  })
   return { ...identity, name } satisfies RelayIdentity
 })
 
@@ -131,6 +161,7 @@ const loadExisting = Effect.fn("RelayIdentity.loadExisting")(function* (
   yield* tryPromise("protect_private_key", () => chmod(privateKeyPath, 0o600))
 
   return {
+    id: stored.version === 2 ? stored.id : null,
     name: stored.name,
     privateKeyPem: files[1],
     publicKeyPem: stored.publicKeyPem,
@@ -152,18 +183,31 @@ const createIdentity = Effect.fn("RelayIdentity.create")(function* (
       RelayIdentityError.make({ operation: "generate_identity", cause }),
   })
   const name = normalizeName(configuredName)
+  const id = newInstanceId()
   yield* writeFileAtomic(privateKeyPath, keys.privateKey, 0o600)
-  yield* writeFileAtomic(
-    identityPath,
-    `${JSON.stringify({ name, publicKeyPem: keys.publicKey, version: 1 })}\n`,
-    0o600
-  )
+  yield* writeIdentity(identityPath, {
+    id,
+    name,
+    publicKeyPem: keys.publicKey,
+  })
   return {
+    id: id as string | null,
     name,
     privateKeyPem: keys.privateKey,
     publicKeyPem: keys.publicKey,
   }
 })
+
+function writeIdentity(
+  identityPath: string,
+  identity: { id: string; name: string; publicKeyPem: string }
+) {
+  return writeFileAtomic(
+    identityPath,
+    `${JSON.stringify({ ...identity, version: 2 })}\n`,
+    0o600
+  )
+}
 
 export function fingerprint(publicKeyPem: string): string {
   return createHash("sha256")

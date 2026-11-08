@@ -22,7 +22,7 @@ import {
   type RelayHarness,
 } from "./test/relay.js"
 
-const appId = "d".repeat(40)
+const appId = "d".repeat(12)
 
 // Where the last deployment left the fake clock, so the next one starts
 // a second later with its own deployment ID.

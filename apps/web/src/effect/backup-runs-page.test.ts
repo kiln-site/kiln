@@ -57,8 +57,8 @@ describeMysql("backup runs page", () => {
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
-          const website = "a".repeat(40)
-          const worker = "b".repeat(40)
+          const website = "a".repeat(12)
+          const worker = "b".repeat(12)
           const shared = "c".repeat(40)
           const tar = { artifact_kind: "tar_archive", relay_id: "relay-a" }
           yield* insertCatalogBackup("website", {

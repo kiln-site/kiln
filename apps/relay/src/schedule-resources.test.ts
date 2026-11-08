@@ -64,7 +64,7 @@ function stopWaitStart(
 describe("schedules and power", () => {
   it("lets a person's database stop during a schedule stand", async () => {
     const harness = await relayHarness()
-    const id = "d".repeat(40)
+    const id = "d".repeat(12)
     await harness.databases.create(
       relayCreateDatabaseSchema.parse({
         databaseName: "kiln_app",
@@ -119,7 +119,7 @@ describe("schedules and power", () => {
 
   it("leaves a database being deleted alone, recording each step as not run", async () => {
     const harness = await relayHarness()
-    const id = "d".repeat(40)
+    const id = "d".repeat(12)
     await harness.databases.create(
       relayCreateDatabaseSchema.parse({
         databaseName: "kiln_app",

@@ -8,7 +8,6 @@ export interface FleetRelayInstance extends RelayInstance {
   relayName: string
   relayStatus: RelayReachability
   relayUpdating?: boolean
-  routeId: string
 }
 
 export interface FleetRelayNode extends RelayNode {
@@ -23,10 +22,6 @@ export interface RelayFleetSnapshot {
   nodes: Array<FleetRelayNode>
 }
 
-export function relayInstanceRouteId(relayId: string, shortId: string): string {
-  return `${relayId}-${shortId}`
-}
-
 export function relayFleetInstance(
   instance: RelayInstance,
   relay: { id: string; name: string },
@@ -37,6 +32,5 @@ export function relayFleetInstance(
     relayId: relay.id,
     relayName: relay.name,
     relayStatus,
-    routeId: relayInstanceRouteId(relay.id, instance.shortId),
   }
 }

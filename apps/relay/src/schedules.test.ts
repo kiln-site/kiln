@@ -174,7 +174,7 @@ describe("Relay schedule persistence", () => {
 })
 
 describe("Relay schedule commands in containers", () => {
-  const databaseId = "d".repeat(40)
+  const databaseId = "d".repeat(12)
   const databaseKey = `relay-a:database:${databaseId}`
   const databaseCommands: RelayScheduleProjection = {
     ...projection,

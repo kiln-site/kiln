@@ -17,11 +17,10 @@ export type RelayConnectionSummary =
 /** A game server as navigation shows it: identity only, never live state. */
 export type SidebarInstance = Pick<
   RelayInstance,
-  "brickId" | "id" | "implementation" | "name" | "shortId" | "version"
+  "brickId" | "id" | "implementation" | "name" | "version"
 > & {
   relayId: string
   relayName: string
-  routeId: string
 }
 
 export type ServerListInstance = Pick<
@@ -34,14 +33,12 @@ export type ServerListInstance = Pick<
   | "name"
   | "observedState"
   | "provisioning"
-  | "shortId"
   | "version"
 > & {
   relayId: string
   relayName: string
   relayStatus: "connected" | "unreachable"
   relayUpdating?: boolean
-  routeId: string
 }
 
 export type InstanceWorkspaceInstance = Pick<
@@ -58,21 +55,19 @@ export type InstanceWorkspaceInstance = Pick<
   | "ports"
   | "publicHost"
   | "service"
-  | "shortId"
   | "status"
   | "provisioning"
   | "version"
 > & {
   relayId: string
   relayName: string
-  routeId: string
 }
 
 // What the file workspace needs of what it browses: a server, or an app's
 // data directory (whose `id` is its file root, `app:<appId>`).
 export type FileWorkspaceInstance = Pick<
   InstanceWorkspaceInstance,
-  "id" | "implementation" | "name" | "relayId" | "shortId" | "version"
+  "id" | "implementation" | "name" | "relayId" | "version"
 > & { observedState?: RelayInstance["observedState"] }
 
 export type InstanceRuntime = Pick<
@@ -101,9 +96,8 @@ export type InstanceSettingsInstance = Pick<
   | "publicHost"
   | "publicPort"
   | "service"
-  | "shortId"
   | "version"
-> & { relayId: string; routeId: string }
+> & { relayId: string }
 
 export type RelayNodeSummary = Pick<RelayNode, "id" | "name">
 
@@ -165,8 +159,6 @@ function sidebarInstance(
     name: instance.name,
     relayId: instance.relayId,
     relayName: instance.relayName,
-    routeId: instance.routeId,
-    shortId: instance.shortId,
     version: instance.version,
   }
 }
@@ -228,9 +220,7 @@ export function selectInstanceWorkspaceInstance(identifier: string) {
       publicHost: instance.publicHost,
       relayId: instance.relayId,
       relayName: instance.relayName,
-      routeId: instance.routeId,
       service: instance.service,
-      shortId: instance.shortId,
       status: instance.status,
       provisioning: instance.provisioning,
       version: instance.version,
@@ -287,9 +277,7 @@ export function selectInstanceSettings(instanceId: string, relayId?: string) {
         publicHost: instance.publicHost,
         publicPort: instance.publicPort,
         relayId: instance.relayId,
-        routeId: instance.routeId,
         service: instance.service,
-        shortId: instance.shortId,
         version: instance.version,
       },
       node: (() => {
@@ -386,91 +374,13 @@ export function selectInstanceContainerRunning(
     )
 }
 
-export function findRelayInstance<
-  T extends { id: string; name: string; routeId?: string; shortId: string },
->(instances: Array<T>, identifier: string | null | undefined): T | undefined {
-  const resolution = resolveRelayInstance(instances, identifier)
-  return resolution.status === "found" ? resolution.instance : undefined
-}
-
-export type RelayInstanceResolution<T> =
-  | { status: "ambiguous" }
-  | { status: "found"; instance: T }
-  | { status: "not-found" }
-
-export function resolveRelayInstance<
-  T extends { id: string; name: string; routeId?: string; shortId: string },
->(
-  instances: Array<T>,
-  identifier: string | null | undefined
-): RelayInstanceResolution<T> {
-  if (!identifier) return { status: "not-found" }
-  if (/^[a-f0-9]{8}$/u.test(identifier)) {
-    return resolveRelayInstanceMatches(
-      instances.filter((instance) => instance.shortId === identifier)
-    )
-  }
-
-  // A Relay-qualified full ID names one server exactly, even where two on a
-  // Relay share a short ID.
-  const routeIdMatches = instances.filter(
-    (instance) =>
-      instance.routeId === identifier ||
-      (instance.routeId !== undefined &&
-        identifier ===
-          instance.routeId.slice(0, -instance.shortId.length) + instance.id)
-  )
-  if (routeIdMatches.length > 0) {
-    return resolveRelayInstanceMatches(routeIdMatches)
-  }
-
-  const idMatches = instances.filter((instance) => instance.id === identifier)
-  if (idMatches.length > 0) return resolveRelayInstanceMatches(idMatches)
-
-  return resolveRelayInstanceMatches(
-    instances.filter((instance) => instance.name === identifier)
-  )
-}
-
-export function resolveCanonicalRelayInstance<
-  T extends { id: string; name: string; routeId?: string; shortId: string },
->(
-  instances: Array<T>,
-  identifier: string | null | undefined
-): RelayInstanceResolution<T> {
-  const resolution = resolveRelayInstance(instances, identifier)
-  if (resolution.status !== "found") return resolution
-
-  return relayInstanceRouteIdentifier(instances, resolution.instance)
-    ? resolution
-    : { status: "ambiguous" }
-}
-
-export function relayInstanceRouteIdentifier<
-  T extends { id: string; name: string; routeId?: string; shortId: string },
->(instances: Array<T>, instance: T): string | undefined {
-  const shortIdResolution = resolveRelayInstance(instances, instance.shortId)
-  if (shortIdResolution.status === "found") return instance.shortId
-  if (!instance.routeId) return undefined
-
-  const routeIdResolution = resolveRelayInstance(instances, instance.routeId)
-  return routeIdResolution.status === "found" ? instance.routeId : undefined
-}
-
-export function findFirstCanonicalRelayInstance<
-  T extends { id: string; name: string; routeId?: string; shortId: string },
->(instances: Array<T>): T | undefined {
-  return instances.find((instance) =>
-    relayInstanceRouteIdentifier(instances, instance)
-  )
-}
-
-function resolveRelayInstanceMatches<T>(
-  matches: Array<T>
-): RelayInstanceResolution<T> {
-  if (matches.length === 0) return { status: "not-found" }
-  const instance = matches[0]
-  return matches.length === 1 && instance
-    ? { status: "found", instance }
-    : { status: "ambiguous" }
+/**
+ * The game server an ID names. An instance ID is unique across every Relay,
+ * so it names one server however many Relays the fleet has.
+ */
+export function findRelayInstance<T extends { id: string }>(
+  instances: ReadonlyArray<T>,
+  id: string | null | undefined
+): T | undefined {
+  return id ? instances.find((instance) => instance.id === id) : undefined
 }

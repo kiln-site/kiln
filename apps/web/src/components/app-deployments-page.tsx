@@ -74,34 +74,70 @@ import {
 } from "@/lib/data-table-search"
 import { useCursorDataTableSource } from "@/lib/data-table-source"
 import {
-  appDeploymentsQueryOptions,
   appDirectoryQueryOptions,
+  deploymentsQueryOptions,
+  serverDirectoryQueryOptions,
+  type DeploymentsScope,
 } from "@/lib/query-options"
 import { redeployAppDeployment } from "@/server/app-deployments"
-import type { AppDeploymentView } from "@/server/app-deployments.server"
+import type {
+  DeploymentView,
+  ServerDeploymentView,
+} from "@/server/app-deployments.server"
 
-// Every app's deployments, newest first, across the Relays the person can
-// read. Scoped to one app, this is that app's history.
+const ServerDeploymentLogDialog = React.lazy(() =>
+  import("@/components/server-deployment-log-dialog").then((module) => ({
+    default: module.ServerDeploymentLogDialog,
+  }))
+)
 
-type Deployment = AppDeploymentView
-type ScopeKind = "app" | "relay"
+// Every App's deployments and every game server's installs, reinstalls,
+// and changes of Brick, newest first, across the Relays the person can
+// read. Scoped to one App or game server, this is its history.
 
-export interface AppDeploymentsScope {
-  appId?: string
-  relayId?: string
+type Deployment = DeploymentView
+type AppDeployment = Extract<Deployment, { kind: "app" }>
+type ScopeKind = "app" | "relay" | "server"
+
+export type AppDeploymentsScope = DeploymentsScope
+
+const serverTriggerLabels: Record<ServerDeploymentView["trigger"], string> = {
+  brick: "Brick change",
+  install: "Install",
+  reinstall: "Reinstall",
+}
+
+function triggerLabel(deployment: Deployment): string {
+  return deployment.kind === "server"
+    ? serverTriggerLabels[deployment.trigger]
+    : deploymentTriggerLabels[deployment.trigger]
+}
+
+function instanceName(deployment: Deployment): string {
+  return deployment.kind === "server"
+    ? deployment.serverName
+    : deployment.appName
+}
+
+function statusOf(deployment: Deployment) {
+  return deploymentStatusPresentation(
+    deployment.kind === "server" ? { ...deployment, rolling: null } : deployment
+  )
 }
 
 const columnHelper = createDataTableColumnHelper<Deployment>()
 const searchFields = [
-  (row: Deployment) => row.appName,
+  instanceName,
   (row: Deployment) => row.relayName,
-  (row: Deployment) => row.commitMessage ?? "",
-  (row: Deployment) => row.commitSha ?? "",
-  (row: Deployment) => row.repository ?? "",
-  (row: Deployment) => row.branch ?? "",
+  (row: Deployment) =>
+    row.kind === "server" ? (row.brickName ?? row.brickId ?? "") : "",
+  (row: Deployment) => (row.kind === "app" ? (row.commitMessage ?? "") : ""),
+  (row: Deployment) => (row.kind === "app" ? (row.commitSha ?? "") : ""),
+  (row: Deployment) => (row.kind === "app" ? (row.repository ?? "") : ""),
+  (row: Deployment) => (row.kind === "app" ? (row.branch ?? "") : ""),
   (row: Deployment) => row.triggeredByName ?? "",
-  (row: Deployment) => deploymentTriggerLabels[row.trigger],
-  (row: Deployment) => deploymentStatusPresentation(row).label,
+  triggerLabel,
+  (row: Deployment) => statusOf(row).label,
 ] as const
 
 export const AppDeploymentsPage = React.memo(function AppDeploymentsPage({
@@ -133,8 +169,12 @@ const DeploymentsScopePicker = React.memo(function DeploymentsScopePicker({
   onScopeChange: (scope: AppDeploymentsScope) => void
 }) {
   const { data: apps = [] } = useQuery(appDirectoryQueryOptions())
+  const { data: servers = [] } = useQuery(serverDirectoryQueryOptions())
   const options = React.useMemo((): Array<ServerPickerOption<ScopeKind>> => {
-    const relays = new Map(apps.map((app) => [app.relayId, app.relayName]))
+    const relays = new Map([
+      ...apps.map((app) => [app.relayId, app.relayName] as const),
+      ...servers.map((server) => [server.relayId, server.relayName] as const),
+    ])
     return [
       ...[...relays].map(([id, name]) => ({
         id,
@@ -142,6 +182,13 @@ const DeploymentsScopePicker = React.memo(function DeploymentsScopePicker({
         name,
         relayId: id,
         relayName: name,
+      })),
+      ...servers.map((server) => ({
+        id: server.id,
+        kind: "server" as const,
+        name: server.name,
+        relayId: server.relayId,
+        relayName: server.relayName,
       })),
       ...apps.map((app) => ({
         id: app.id,
@@ -151,36 +198,41 @@ const DeploymentsScopePicker = React.memo(function DeploymentsScopePicker({
         relayName: app.relayName,
       })),
     ]
-  }, [apps])
+  }, [apps, servers])
   const selected = React.useMemo(
     () =>
       options.find((option) =>
-        scope.appId
-          ? option.kind === "app" &&
-            option.id === scope.appId &&
-            option.relayId === scope.relayId
+        scope.instance
+          ? option.kind === scope.instance.kind &&
+            option.id === scope.instance.id
           : option.kind === "relay" && option.id === scope.relayId
       ) ?? null,
-    [options, scope.appId, scope.relayId]
+    [options, scope.instance, scope.relayId]
   )
   const select = React.useCallback(
     (option: ServerPickerOption<ScopeKind> | null) =>
       onScopeChange(
         !option
           ? {}
-          : option.kind === "app"
-            ? { appId: option.id, relayId: option.relayId }
-            : { relayId: option.relayId }
+          : option.kind === "relay"
+            ? { relayId: option.relayId }
+            : {
+                instance: {
+                  id: option.id,
+                  kind: option.kind === "app" ? "app" : "server",
+                },
+                relayId: option.relayId,
+              }
       ),
     [onScopeChange]
   )
   return (
     <ServerScopePicker<ScopeKind>
-      allLabel="All Apps"
-      ariaLabel="Apps and Relays"
+      allLabel="All instances"
+      ariaLabel="Apps, game servers, and Relays"
       changeLabel="Change scope"
-      chooseLabel="Choose app"
-      emptyMessage="No Apps found."
+      chooseLabel="Choose app or game server"
+      emptyMessage="No Apps or game servers found."
       selectedServer={selected}
       servers={options}
       onSelect={select}
@@ -226,23 +278,19 @@ const DeploymentsTable = React.memo(function DeploymentsTable({
   scope: AppDeploymentsScope
   searchStore: DataTableSearchStore
 }) {
-  const query = useInfiniteQuery(appDeploymentsQueryOptions(scope))
+  const query = useInfiniteQuery(deploymentsQueryOptions(scope))
   const source = useCursorDataTableSource({
     getRowKey: deploymentKey,
     query,
-    resetKey: `${scope.relayId ?? ""}:${scope.appId ?? ""}`,
+    resetKey: `${scope.relayId ?? ""}:${scope.instance?.kind ?? ""}:${scope.instance?.id ?? ""}`,
   })
   const definition = React.useMemo(() => {
     const columns = columnHelper.columns([
-      columnHelper.accessor((row) => deploymentStatusPresentation(row).label, {
+      columnHelper.accessor((row) => statusOf(row).label, {
         id: "status",
         header: () => <span className="sr-only sm:not-sr-only">Status</span>,
         sortFn: "text",
-        cell: ({ row }) => (
-          <StatusIndicator
-            status={deploymentStatusPresentation(row.original)}
-          />
-        ),
+        cell: ({ row }) => <StatusIndicator status={statusOf(row.original)} />,
         meta: dataTableColumnMeta(
           { width: { base: "2.5rem", sm: statusColumnWidth } },
           {
@@ -252,24 +300,35 @@ const DeploymentsTable = React.memo(function DeploymentsTable({
           }
         ),
       }),
-      columnHelper.accessor((row) => row.appName, {
+      columnHelper.accessor(instanceName, {
         id: "app",
-        header: "App",
+        header: "Instance",
         sortFn: "text",
-        cell: ({ row }) => <DeploymentApp deployment={row.original} />,
+        cell: ({ row }) => <DeploymentInstance deployment={row.original} />,
         meta: dataTableColumnMeta(
           { width: "minmax(11rem,1fr)" },
           { cellClassName: "p-0" }
         ),
       }),
-      columnHelper.accessor((row) => row.commitMessage ?? "", {
-        id: "commit",
-        header: "Commit",
-        sortFn: "text",
-        cell: ({ row }) => <DeploymentCommit deployment={row.original} />,
-        meta: dataTableColumnMeta({ width: "minmax(12rem,1.4fr)" }),
-      }),
-      columnHelper.accessor((row) => deploymentTriggerLabels[row.trigger], {
+      columnHelper.accessor(
+        (row) =>
+          row.kind === "server"
+            ? (row.brickName ?? row.brickId ?? "")
+            : (row.commitMessage ?? ""),
+        {
+          id: "commit",
+          header: "Source",
+          sortFn: "text",
+          cell: ({ row }) =>
+            row.original.kind === "server" ? (
+              <DeploymentBrick deployment={row.original} />
+            ) : (
+              <DeploymentCommit deployment={row.original} />
+            ),
+          meta: dataTableColumnMeta({ width: "minmax(12rem,1.4fr)" }),
+        }
+      ),
+      columnHelper.accessor(triggerLabel, {
         id: "trigger",
         header: "Trigger",
         sortFn: "text",
@@ -304,9 +363,12 @@ const DeploymentsTable = React.memo(function DeploymentsTable({
         id: "actions",
         header: () => <span className="sr-only">Actions</span>,
         enableSorting: false,
-        cell: ({ row }) => (
-          <DeploymentActions deployment={row.original} />
-        ),
+        cell: ({ row }) =>
+          row.original.kind === "server" ? (
+            <ServerDeploymentActions deployment={row.original} />
+          ) : (
+            <DeploymentActions deployment={row.original} />
+          ),
         meta: dataTableColumnMeta(
           { width: "4.5rem" },
           { cellClassName: "px-1 sm:px-2", headerClassName: "px-1 sm:px-2" }
@@ -344,10 +406,10 @@ function EmptyDeploymentTable({ searchActive }: { searchActive: boolean }) {
       description={
         <span className="block max-w-sm">
           {searchActive
-            ? "Try an app, commit, branch, or who deployed it."
+            ? "Try an app, game server, commit, Brick, or who deployed it."
             : awaitingFirstRelay
-              ? "Pair a Relay and deploy an app to see its deployments here."
-              : "Each time an app deploys, by hand or from a push to GitHub, it shows here."}
+              ? "Pair a Relay and deploy an app or create a game server to see its deployments here."
+              : "Each time an app deploys, or a game server is installed, reinstalled, or changes its Brick, it shows here."}
         </span>
       }
       icon={
@@ -364,11 +426,37 @@ function deploymentKey(deployment: Deployment): string {
   return deployment.id
 }
 
-const DeploymentApp = React.memo(function DeploymentApp({
+const DeploymentInstance = React.memo(function DeploymentInstance({
   deployment,
 }: {
   deployment: Deployment
 }) {
+  if (deployment.kind === "server") {
+    return (
+      <Link
+        to="/server/$serverId"
+        params={{ serverId: deployment.instanceId }}
+        preload="intent"
+        className="group/app-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+      >
+        <InstanceCard
+          className="min-w-0 flex-1"
+          instance={{
+            ...(deployment.brickId && { brickId: deployment.brickId }),
+            id: deployment.instanceId,
+            kind: "server",
+            relayId: deployment.relayId,
+          }}
+          meta={deployment.relayName}
+          metaClassName="font-mono"
+          name={deployment.serverName}
+          nameClassName="transition-colors group-hover/app-link:text-primary-ink"
+          showFavorite={false}
+          showStatus={false}
+        />
+      </Link>
+    )
+  }
   return (
     <Link
       to="/app/$appId/info"
@@ -394,10 +482,25 @@ const DeploymentApp = React.memo(function DeploymentApp({
   )
 })
 
+function DeploymentBrick({ deployment }: { deployment: ServerDeploymentView }) {
+  return (
+    <span className="flex min-w-0 flex-col gap-0.5">
+      <span className="truncate text-[0.8125rem]">
+        {deployment.brickName ?? deployment.brickId ?? "Brick"}
+      </span>
+      {deployment.brickId ? (
+        <span className="type-meta truncate font-mono text-muted-foreground">
+          {deployment.brickId}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
 const DeploymentCommit = React.memo(function DeploymentCommit({
   deployment,
 }: {
-  deployment: Deployment
+  deployment: AppDeployment
 }) {
   if (!deployment.commitSha) {
     return (
@@ -451,25 +554,87 @@ const DeploymentCommit = React.memo(function DeploymentCommit({
 function DeploymentTrigger({ deployment }: { deployment: Deployment }) {
   return (
     <span className="flex min-w-0 flex-col gap-0.5">
-      <span className="text-[0.8125rem]">
-        {deploymentTriggerLabels[deployment.trigger]}
-      </span>
+      <span className="text-[0.8125rem]">{triggerLabel(deployment)}</span>
       <span className="type-meta truncate text-muted-foreground">
         {deployment.triggeredByName ??
-          (deployment.commitAuthor
-            ? `by ${deployment.commitAuthor}`
-            : deployment.trigger === "update"
-              ? "Kiln"
-              : "GitHub")}
+          (deployment.kind === "server"
+            ? "Kiln"
+            : deployment.commitAuthor
+              ? `by ${deployment.commitAuthor}`
+              : deployment.trigger === "update"
+                ? "Kiln"
+                : "GitHub")}
       </span>
     </span>
   )
 }
 
+const ServerDeploymentActions = React.memo(function ServerDeploymentActions({
+  deployment,
+}: {
+  deployment: ServerDeploymentView
+}) {
+  const [logOpen, setLogOpen] = React.useState(false)
+  return (
+    <DataTableActionGroup>
+      {deployment.canReadLogs ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label={`Log of ${deployment.serverName}'s deployment`}
+              className="text-muted-foreground hover:text-primary-ink"
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+              onClick={() => setLogOpen(true)}
+            >
+              <ScrollText />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Log</TooltipContent>
+        </Tooltip>
+      ) : null}
+      {logOpen ? (
+        <React.Suspense fallback={null}>
+          <ServerDeploymentLogDialog
+            deployment={deployment}
+            open={logOpen}
+            onOpenChange={setLogOpen}
+          />
+        </React.Suspense>
+      ) : null}
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                aria-label={`More actions for ${deployment.serverName}'s deployment`}
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              >
+                <EllipsisVertical />
+              </Button>
+            </DropdownMenuTrigger>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">More actions</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="end" className="min-w-48">
+          <CopyIdentifierMenuItem label="Deployment ID" value={deployment.id} />
+          <CopyIdentifierMenuItem
+            label="Game server ID"
+            value={deployment.instanceId}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </DataTableActionGroup>
+  )
+})
+
 const DeploymentActions = React.memo(function DeploymentActions({
   deployment,
 }: {
-  deployment: Deployment
+  deployment: AppDeployment
 }) {
   const queryClient = useQueryClient()
   const redeploy = useMutation({

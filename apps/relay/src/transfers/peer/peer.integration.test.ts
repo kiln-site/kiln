@@ -6,7 +6,10 @@ import { join } from "node:path"
 import { Effect, ManagedRuntime, Schedule } from "effect"
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
-import type { RelayPeerTransferGrant } from "@workspace/contracts"
+import {
+  newInstanceId,
+  type RelayPeerTransferGrant,
+} from "@workspace/contracts"
 
 import { fingerprint, type RelayIdentity } from "../../effect/identity.js"
 import { makeRelayStateLayer, RelayStateStore } from "../../effect/state.js"
@@ -43,9 +46,9 @@ describeLinux("transfers between Relays", () => {
     const refused = await Effect.runPromise(
       Effect.scoped(
         fetchArtifactRange({
-          audience: source.identity.fingerprint,
+          audience: source.identity.id,
           endpoint: { caCertificatePem: null, url: source.url },
-          grant: source.grant(artifact, named.identity.fingerprint),
+          grant: source.grant(artifact, named.identity.id),
           identity: other,
           offset: 0,
           transferId: artifact.transferId,
@@ -160,7 +163,7 @@ async function startSource() {
     url: `http://127.0.0.1:${address.port}`,
     grant: (artifact: ReadyArtifact, peer: string) => {
       const grant: RelayPeerTransferGrant = {
-        audience: identity.fingerprint,
+        audience: identity.id,
         expiresAt: Date.now() + 60_000,
         issuedAt: Date.now(),
         issuer,
@@ -222,7 +225,7 @@ async function startDestination() {
       await Effect.runPromise(
         pulls.start({
           endpoints: [{ caCertificatePem: null, url: source.url }],
-          grant: source.grant(artifact, identity.fingerprint),
+          grant: source.grant(artifact, identity.id),
           target: { path: target.path, rootId: "instance-1" },
           transferId: artifact.transferId,
         })
@@ -263,6 +266,7 @@ function relayIdentity(): RelayIdentity {
   })
   return {
     fingerprint: fingerprint(keys.publicKey),
+    id: newInstanceId(),
     name: "Relay",
     privateKeyPem: keys.privateKey,
     publicKeyPem: keys.publicKey,

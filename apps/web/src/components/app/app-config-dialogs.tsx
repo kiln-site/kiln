@@ -46,8 +46,7 @@ export type EditableAppConfig = AppConfig
 export type SaveNext = "deploy" | "stay"
 
 export function useAppConfigSave(
-  app: Pick<App, "id" | "permissions" | "relayId">,
-  routeId: string
+  app: Pick<App, "id" | "permissions" | "relayId">
 ) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -116,7 +115,7 @@ export function useAppConfigSave(
       // Follow the deployment as it happens.
       if (next === "deploy" && app.permissions.includes("app.logs.read")) {
         await navigate({
-          params: { appId: routeId },
+          params: { appId: app.id },
           search: { stream: "deployment" },
           to: "/app/$appId/logs",
         })
@@ -167,7 +166,6 @@ export function AppDocumentDialog({
   cursorAt?: number | undefined
   kind: AppDocumentKind
   onOpenChange: (open: boolean) => void
-  routeId: string
   saved: string
 }) {
   return (
@@ -189,7 +187,6 @@ export function AppCodeDialog({
   document,
   cursorAt,
   onOpenChange,
-  routeId,
   saved,
 }: {
   app: Pick<App, "containers" | "id" | "permissions" | "relayId">
@@ -207,11 +204,10 @@ export function AppCodeDialog({
     >["wrapPreference"]
   }
   onOpenChange: (open: boolean) => void
-  routeId: string
   saved: string
 }) {
   const [draft, setDraft] = React.useState(saved)
-  const save = useAppConfigSave(app, routeId)
+  const save = useAppConfigSave(app)
   const submit = async (next: SaveNext) => {
     // The mutation reports failures; the dialog stays open for them.
     const done = await recoverPromise(
@@ -308,13 +304,11 @@ export function AppSourceDialog({
   app,
   deploying,
   onOpenChange,
-  routeId,
   saved,
 }: {
   app: Pick<App, "id" | "permissions" | "relayId">
   deploying: boolean
   onOpenChange: (open: boolean) => void
-  routeId: string
   saved: EditableAppConfig
 }) {
   const initial = React.useMemo<SourceDraft>(
@@ -344,7 +338,7 @@ export function AppSourceDialog({
   }, [summary.data?.savedSource])
   const [github, setGitHub] = React.useState<GitHubSourceDraft | null>(null)
   const githubDraft = github ?? savedGitHub ?? emptyGitHubSourceDraft()
-  const save = useAppConfigSave(app, routeId)
+  const save = useAppConfigSave(app)
   const dirty =
     draft.command !== initial.command ||
     draft.image !== initial.image ||

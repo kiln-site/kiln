@@ -1,9 +1,10 @@
 # App deployments
 
 An app deploys from a Docker image, a pasted Dockerfile or Compose file, or
-a GitHub repository. Each deployment is recorded in Hearth
-(`app_deployment`) and listed under **Infrastructure → Deployments**, across
-every Relay the person can read apps on. Scoped to one app, from the
+a GitHub repository. Each deployment is recorded in Hearth (`deployment`)
+and listed under **Infrastructure → Deployments**, across every Relay the
+person can read apps on, beside game servers' deployments (see
+[Game server deployments](#game-server-deployments)). Scoped to one app, from the
 Deployment card on its Info rail, it's that app's history. The Relay keeps
 the logs of each app's 20 latest deployments. They open on the app's Logs
 page, which lists them beside its containers: the one the Relay is on is
@@ -279,3 +280,31 @@ ends as **Unknown**. A Hearth restart resumes a deployment's operation where
 it left off; every minute Hearth also settles a running record that no
 operation follows. A poll that fails to prepare its ask is logged, not
 recorded. Each app keeps its 200 latest records.
+
+## Game server deployments
+
+A game server's first install, whether a create or a copy provisions it,
+each reinstall, and each change of its Brick are deployments too, recorded
+in the same table by the server's instance ID and listed on the
+Deployments page for whoever can read the server, naming the Brick it
+installed. Starting, stopping, restarting, crash recovery, and saving
+startup settings without a reinstall or a new Brick aren't.
+
+Hearth records an install as running before it claims the server's
+provisioning job, sending the deployment's ID with the claim; a create
+retried while it runs resumes the same one. The post-provisioning worker,
+which watches the Relay's snapshot, ends it: succeeded once the server's
+provisioning clears, failed with its error once it fails. A reinstall or
+change of Brick is recorded before Hearth sends the startup change, with
+the deployment's ID in it, and ends as the Relay answers. A Hearth restart
+mid-way leaves a record running; the minute sweep ends it as **Unknown**
+once nothing can still follow it: a reinstall or change of Brick after 15
+minutes, an install after 10 minutes without a post-provisioning job, or a
+day with one.
+
+The Relay logs each phase and how it ended under the deployment's ID, in
+`server-deployments/<server>/<deployment>.json` in its data directory,
+keeping each server's 20 latest and removing them with the server. A
+deployment's log opens from its row for whoever can read the server's logs
+(`instance.deployment.read`, which takes `instance.logs.read`). Deleting a
+game server or App removes its deployment records.

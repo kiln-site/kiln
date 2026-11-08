@@ -14,6 +14,11 @@ import {
   type RelayStoredDatabaseConnection,
 } from "./effect/state.js"
 import { recoverPromise } from "./effect/promise.js"
+import {
+  instanceIdFrom,
+  legacyInstanceId,
+  physicalKey,
+} from "./instance-keys.js"
 import { relayOwnsLabels } from "./relay-resources.js"
 
 export const DATABASE_CONNECTION_LABEL_PREFIX = "kiln.instance.databases."
@@ -65,10 +70,11 @@ function decodeDatabaseConnectionLabels(
       label === VERSION_LABEL
     )
       continue
+    // Labels written before 12-character IDs carry old ones.
     const databaseId = databaseIdSchema.safeParse(
-      label.slice(DATABASE_CONNECTION_LABEL_PREFIX.length)
+      instanceIdFrom(label.slice(DATABASE_CONNECTION_LABEL_PREFIX.length))
     )
-    const relayId = relayIdSchema.safeParse(value)
+    const relayId = relayIdSchema.safeParse(instanceIdFrom(value))
     if (!databaseId.success || !relayId.success) {
       warnings.push(`Invalid database connection label: ${label}`)
       continue
@@ -85,10 +91,10 @@ export interface DatabaseConnectionIssue {
 
 /**
  * A container of a member that joins its databases' networks, under the
- * alias it answers to there, if any.
+ * aliases it answers to there, if any.
  */
 export interface DatabaseConnectionTarget {
-  readonly alias?: string
+  readonly aliases?: ReadonlyArray<string>
   readonly container: string
 }
 
@@ -105,22 +111,27 @@ const memberKey = (member: DatabaseConnectionMember) =>
   `${member.kind}:${member.id}`
 
 /**
- * The name a game server or database answers to on the networks of the
+ * The names a game server or database answers to on the networks of the
  * databases it's connected to, by its full ID so no two share one: the
  * name a database has on its own network, and its game server
- * counterpart. An App's services keep their names on the App's network.
+ * counterpart. One from before 12-character IDs answers to the name its
+ * old ID gave it too, which configurations may still use. An App's
+ * services keep their names on the App's network.
  */
-export function databaseMemberAlias(
+export function databaseMemberAliases(
   member: DatabaseConnectionMember
-): string | null {
-  switch (member.kind) {
-    case "instance":
-      return `server-${member.id}`
-    case "database":
-      return `database-${member.id}`
-    case "app":
-      return null
-  }
+): Array<string> {
+  const prefix =
+    member.kind === "instance"
+      ? "server"
+      : member.kind === "database"
+        ? "database"
+        : null
+  if (!prefix) return []
+  const legacy = legacyInstanceId(member.id)
+  return legacy
+    ? [`${prefix}-${member.id}`, `${prefix}-${legacy}`]
+    : [`${prefix}-${member.id}`]
 }
 
 /**
@@ -176,10 +187,11 @@ export class DatabaseConnections {
     const prefix = this.config.resourceNamespace
       ? `${this.config.resourceNamespace}-kiln-db-`
       : "kiln-db-"
-    return network.startsWith(prefix) &&
-      /^[a-f0-9]{40}-network$/u.test(network.slice(prefix.length))
-      ? network.slice(prefix.length, prefix.length + 40)
-      : null
+    if (!network.startsWith(prefix)) return null
+    const key = /^([a-f0-9]{40}|[a-f0-9]{12})-network$/u.exec(
+      network.slice(prefix.length)
+    )?.[1]
+    return key ? instanceIdFrom(key) : null
   }
 
   readonly #docker: DockerEngine
@@ -301,7 +313,7 @@ export class DatabaseConnections {
       return true
     const networks = await Effect.runPromise(
       this.#docker.listNetworks({
-        filters: { label: [`kiln.database.id=${databaseId}`] },
+        filters: { label: [`kiln.database.id=${physicalKey(databaseId)}`] },
       })
     )
     if (networks.some(({ Labels }) => relayOwnsLabels(this.config, Labels)))
@@ -462,7 +474,7 @@ export class DatabaseConnections {
     options: { readonly repairNames?: boolean } = {}
   ): Promise<Array<DatabaseConnectionIssue>> {
     const issues: Array<DatabaseConnectionIssue> = []
-    const alias = databaseMemberAlias(member)
+    const aliases = databaseMemberAliases(member)
     // Database attachments are optional to the container lifecycle. Report
     // discovery/inspection failures too, without discarding the saved intent.
     await recoverPromise(
@@ -484,7 +496,7 @@ export class DatabaseConnections {
         }
         if (networks.size === 0) return
         for (const target of targets) {
-          const name = target.alias ?? alias
+          const names = target.aliases ?? aliases
           const container = await Effect.runPromise(
             this.#docker.inspectContainer(target.container)
           )
@@ -497,8 +509,9 @@ export class DatabaseConnections {
               connect &&
               joined &&
               options.repairNames === true &&
-              name !== null &&
-              !(attached[network]?.Aliases ?? []).includes(name)
+              names.some(
+                (name) => !(attached[network]?.Aliases ?? []).includes(name)
+              )
             if (!unnamed && connect === joined) continue
             await recoverPromise(
               () =>
@@ -515,7 +528,7 @@ export class DatabaseConnections {
                           this.#docker.connectNetwork(
                             network,
                             target.container,
-                            { aliases: name ? [name] : [] }
+                            { aliases: [...names] }
                           )
                         )
                       )
@@ -541,7 +554,7 @@ export class DatabaseConnections {
     this.#issues.set(memberKey(member), issues)
     for (const issue of issues)
       console.warn(
-        `${member.kind} ${member.id.slice(0, 8)}: ${issue.databaseId ?? "databases"}: ${issue.message}`
+        `${member.kind} ${member.id}: ${issue.databaseId ?? "databases"}: ${issue.message}`
       )
     return issues
   }
@@ -560,7 +573,7 @@ export class DatabaseConnections {
     for (const network of networks) {
       if (!relayOwnsLabels(this.config, network.Labels)) continue
       const id = databaseIdSchema.safeParse(
-        network.Labels?.["kiln.database.id"]
+        instanceIdFrom(network.Labels?.["kiln.database.id"])
       )
       if (
         !id.success ||

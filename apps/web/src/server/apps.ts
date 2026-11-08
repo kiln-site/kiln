@@ -89,6 +89,7 @@ const createAppInputSchema = z.strictObject({
       z.strictObject({ id: databaseIdSchema, kind: z.literal("existing") }),
     ])
     .optional(),
+  idempotencyKey: z.uuid(),
   name: appNameSchema,
   relayId: relayIdSchema,
 })
@@ -149,7 +150,6 @@ export const getAppDirectory = createServerFn({ method: "GET" }).handler(
           name: record.name,
           relayId: record.relayId,
           relayName,
-          shortId: record.appId.slice(0, 8),
         },
       ]
     })
@@ -174,11 +174,14 @@ export const getAppOwner = createServerFn({ method: "GET" })
 
 export const createApp = createServerFn({ method: "POST" })
   .validator(createAppInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(createAppOperation, withNewAppIds(data), {
-      user: await requireEligibleResourceUser(),
-    })
-  )
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    return runOperationPromise(
+      createAppOperation,
+      await withNewAppIds(data, user.id),
+      { user }
+    )
+  })
 
 // A host mount it adds also needs relay.files.write, which the run checks.
 const changeAppConfig = resourceOperation({

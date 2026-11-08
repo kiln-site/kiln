@@ -227,7 +227,7 @@ export function browserFileTransfers(
             parsed,
             client,
             input.origin,
-            options.identity.fingerprint,
+            options.identity.id,
             requiredAction
           )
           if (
@@ -256,7 +256,7 @@ export function browserFileTransfers(
                 method: input.method,
                 nonce,
                 path: input.path,
-                relayId: options.identity.fingerprint,
+                relayId: options.identity.id,
                 requestedAt,
               })
             ),
