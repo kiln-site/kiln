@@ -21,6 +21,10 @@ const viewerImports: Record<
     import("@/components/files/file-database-viewer").then(
       (module) => module.FileDatabaseViewer
     ),
+  image: () =>
+    import("@/components/files/image-viewer").then(
+      (module) => module.ImageViewer
+    ),
 }
 
 /**
