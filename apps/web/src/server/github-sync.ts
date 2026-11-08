@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start"
-import { relayIdSchema } from "@workspace/contracts"
+import { instanceIdSchema, relayIdSchema } from "@workspace/contracts"
 import { z } from "zod"
 
 import { runOperationPromise } from "@/operations/operation"
@@ -84,7 +84,7 @@ const saveSyncInputSchema = z.object({
   sourcePath: folderSchema,
   target: z.object({
     // A game server's or app's ID, or a Relay's own for its host files.
-    id: z.string().regex(/^(?:[a-f0-9]{40}|[A-Za-z\d_-]{43})$/u),
+    id: instanceIdSchema,
     kind: z.enum(["app", "relay", "server"]),
     relayId: relayIdSchema,
   }),

@@ -1,9 +1,11 @@
+import { instanceIdSchema, relayIdSchema } from "@workspace/contracts"
 import { z } from "zod"
 
+// Kiln's own favorite names "kiln" for its ID and Relay.
 export const instanceFavoriteSchema = z.strictObject({
-  id: z.string().min(1).max(64),
+  id: z.union([instanceIdSchema, z.literal("kiln")]),
   kind: z.enum(["server", "database", "relay", "app", "kiln"]),
-  relayId: z.string().min(1).max(43),
+  relayId: z.union([relayIdSchema, z.literal("kiln")]),
 })
 
 /**

@@ -72,10 +72,8 @@ export function useRelayPermission(
 
 export function RelayGeneralSettings({
   relay,
-  routeId,
 }: {
   relay: RelayDirectoryEntry
-  routeId: string
 }) {
   return (
     <InfoSection
@@ -83,7 +81,7 @@ export function RelayGeneralSettings({
       title="Relay"
       action={
         <>
-          <RelayDatabaseButton relay={relay} routeId={routeId} />
+          <RelayDatabaseButton relay={relay} />
           <InstanceFavoriteButton
             id={relay.id}
             kind="relay"
@@ -130,20 +128,14 @@ export function RelayGeneralSettings({
 
 // Opens the Relay's own SQLite database in its host files, where it's pinned
 // by default.
-function RelayDatabaseButton({
-  relay,
-  routeId,
-}: {
-  relay: RelayDirectoryEntry
-  routeId: string
-}) {
+function RelayDatabaseButton({ relay }: { relay: RelayDirectoryEntry }) {
   const files = useRelayHostFiles(relay)
   if (!files?.database) return null
   return (
     <Button asChild size="sm" variant="outline">
       <Link
         to="/relay/$relayId/files/$"
-        params={{ relayId: routeId, _splat: files.database }}
+        params={{ relayId: relay.id, _splat: files.database }}
       >
         <Database />
         Database

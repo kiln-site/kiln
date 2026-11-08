@@ -39,10 +39,7 @@ import {
   resourceOwnerQueryOptions,
   resourceUserCountQueryOptions,
 } from "@/lib/query-options"
-import {
-  relayRouteIdentifier,
-  type RelayDirectoryEntry,
-} from "@/lib/relay-route"
+import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
 // The Info rail of an instance that runs on a Relay, a game server or a
 // database (an app's rail reuses its Relay link): links to its Relay, who can reach it, its activity, and its
@@ -239,9 +236,7 @@ export function InfoRailRelayLink({
   const select = React.useCallback(
     (relays: Array<RelayDirectoryEntry>) => {
       const relay = relays.find((candidate) => candidate.id === relayId)
-      return relay
-        ? { name: relay.name, routeId: relayRouteIdentifier(relays, relay) }
-        : null
+      return relay ? { name: relay.name, id: relay.id } : null
     },
     [relayId]
   )
@@ -257,7 +252,7 @@ export function InfoRailRelayLink({
   return (
     <InfoRailLink
       to="/relay/$relayId/info"
-      params={{ relayId: data.routeId }}
+      params={{ relayId: data.id }}
       action={copyId}
       leading={<RelayKindIcon />}
     >

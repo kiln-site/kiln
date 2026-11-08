@@ -10,6 +10,7 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { vi } from "vite-plus/test"
 import {
+  newInstanceId,
   type RelayJoinEnvelope,
   relayJoinAnnouncementTranscript,
   relayJoinResponseTranscript,
@@ -51,6 +52,7 @@ function relayEnvelope(
         createPublicKey(publicKey).export({ format: "der", type: "spki" })
       )
       .digest("base64url"),
+    relayId: newInstanceId(),
     relayName: "Relay",
     relayPublicKeyPem: publicKey,
     ...overrides,

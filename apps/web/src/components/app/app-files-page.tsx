@@ -22,7 +22,7 @@ import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 // Its containers don't mount it. Its volumes open in the same workspace,
 // each as a root of its own.
 export function AppFilesPage() {
-  const { app, routeId } = useAppWorkspace()
+  const { app } = useAppWorkspace()
   const filePath = useMatch({
     from: "/_app/app/$appId/files/$",
     shouldThrow: false,
@@ -38,8 +38,8 @@ export function AppFilesPage() {
       filesAvailable: boolean
       volumes: ReadonlyArray<RelayVolume>
     }): ReadonlyArray<VolumeFileRoot & { path: string }> =>
-      data.filesAvailable ? appFileRoots(data.volumes, app.id, routeId) : [],
-    [app.id, routeId]
+      data.filesAvailable ? appFileRoots(data.volumes, app.id) : [],
+    [app.id]
   )
   const { data: volumes = noVolumes } = useQuery({
     ...appVolumesQueryOptions(app.relayId, app.id),
@@ -57,29 +57,20 @@ export function AppFilesPage() {
       name: current?.name ?? app.name,
       observedState: app.observedState,
       relayId: app.relayId,
-      shortId: app.shortId,
       version: "",
     }),
-    [
-      app.id,
-      app.name,
-      app.observedState,
-      app.relayId,
-      app.shortId,
-      current?.name,
-      volumeId,
-    ]
+    [app.id, app.name, app.observedState, app.relayId, current?.name, volumeId]
   )
   const route = React.useMemo(
-    () => ({ id: routeId, kind: "app" as const }),
-    [routeId]
+    () => ({ id: app.id, kind: "app" as const }),
+    [app.id]
   )
   const home = React.useMemo(
     () => ({
-      link: { params: { appId: routeId }, to: "/app/$appId/files" } as const,
+      link: { params: { appId: app.id }, to: "/app/$appId/files" } as const,
       name: "App folder",
     }),
-    [routeId]
+    [app.id]
   )
 
   return (
@@ -108,8 +99,7 @@ const noVolumes: ReadonlyArray<VolumeFileRoot & { path: string }> = []
 // The volumes the app owns or uses, each with where the app mounts it.
 function appFileRoots(
   volumes: ReadonlyArray<RelayVolume>,
-  appId: string,
-  routeId: string
+  appId: string
 ): ReadonlyArray<VolumeFileRoot & { path: string }> {
   return volumes.flatMap((volume) =>
     volume.id !== null &&
@@ -122,7 +112,7 @@ function appFileRoots(
             key: volume.id,
             kind: volume.kind,
             link: {
-              params: { appId: routeId },
+              params: { appId },
               search: { volume: volume.id },
               to: "/app/$appId/files",
             } as const,

@@ -34,8 +34,6 @@ import {
   InstancePickerContent,
   type InstancePickerItem,
 } from "@/components/instance-picker"
-import { appRouteIdentifier } from "@/lib/app-route"
-import { databaseRouteIdentifier } from "@/lib/database-route"
 import { canAccessInstancePermission } from "@/lib/navigation-destinations"
 import {
   accessCapabilitiesQueryOptions,
@@ -43,7 +41,6 @@ import {
   managedDatabaseDirectoryQueryOptions,
   relaySnapshotQueryOptions,
 } from "@/lib/query-options"
-import { relayInstanceRouteIdentifier } from "@/lib/relay-selectors"
 import { updateManagedDatabaseNetwork } from "@/server/databases"
 
 type NetworkDatabase = Pick<
@@ -61,8 +58,6 @@ export interface DatabaseMemberCandidate {
   canChange: boolean
   item: InstancePickerItem
   member: DatabaseConnectionMember
-  /** Its page's route ID, when known. */
-  routeId: string | null
 }
 
 const kindOrder: Record<DatabaseConnectionMemberKind, number> = {
@@ -90,10 +85,8 @@ export function useDatabaseMemberCandidates(
   const { data: databases } = useQuery(managedDatabaseDirectoryQueryOptions())
   return React.useMemo(() => {
     const candidates: Array<DatabaseMemberCandidate> = []
-    const relayInstances = (instances ?? []).filter(
-      (instance) => instance.relayId === database.relayId
-    )
-    for (const instance of relayInstances) {
+    for (const instance of instances ?? []) {
+      if (instance.relayId !== database.relayId) continue
       candidates.push({
         canChange: canAccessInstancePermission(
           capabilities,
@@ -111,12 +104,11 @@ export function useDatabaseMemberCandidates(
             relayId: instance.relayId,
           },
           key: databaseMemberKey({ id: instance.id, kind: "instance" }),
-          meta: `${instance.implementation} ${instance.version} · ${instance.shortId}`,
+          meta: `${instance.implementation} ${instance.version} · ${instance.id}`,
           name: instance.name,
           searchText: `${instance.id} ${instance.relayName}`,
         },
         member: { id: instance.id, kind: "instance" },
-        routeId: relayInstanceRouteIdentifier(relayInstances, instance) ?? null,
       })
     }
     for (const app of apps ?? []) {
@@ -126,12 +118,11 @@ export function useDatabaseMemberCandidates(
         item: {
           identity: { id: app.id, kind: "app", relayId: app.relayId },
           key: databaseMemberKey({ id: app.id, kind: "app" }),
-          meta: `App · ${app.shortId}`,
+          meta: `App · ${app.id}`,
           name: app.name,
           searchText: app.id,
         },
         member: { id: app.id, kind: "app" },
-        routeId: appRouteIdentifier(apps ?? [], app),
       })
     }
     for (const other of databases ?? []) {
@@ -142,12 +133,11 @@ export function useDatabaseMemberCandidates(
         item: {
           identity: { id: other.id, kind: "database", relayId: other.relayId },
           key: databaseMemberKey({ id: other.id, kind: "database" }),
-          meta: `${engineLabel(other.engine)} · ${other.shortId}`,
+          meta: `${engineLabel(other.engine)} · ${other.id}`,
           name: other.name,
           searchText: other.id,
         },
         member: { id: other.id, kind: "database" },
-        routeId: databaseRouteIdentifier(databases ?? [], other),
       })
     }
     candidates.sort(

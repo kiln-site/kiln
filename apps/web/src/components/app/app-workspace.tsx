@@ -51,7 +51,6 @@ import { WorkspaceFrame } from "@/components/workspace-frame"
 import { WorkloadResourceMeters } from "@/components/workload-resource-meters"
 import { WorkspacePowerControls } from "@/components/workspace-power-controls"
 import { recoverPromise } from "@/effect/promise"
-import { appRouteIdentifier, resolveAppRoute } from "@/lib/app-route"
 import type { ServerAction } from "@/lib/instance-power-state"
 import { appDestinations } from "@/lib/navigation-destinations"
 import {
@@ -68,8 +67,8 @@ export const AppWorkspaceShell = React.memo(function AppWorkspaceShell({
 }: {
   children: React.ReactNode
 }) {
-  const routeId = useWorkspaceRouteParam("appId")
-  const workspace = useAppWorkspaceQuery(routeId)
+  const appId = useWorkspaceRouteParam("appId")
+  const workspace = useAppWorkspaceQuery(appId)
 
   return (
     <WorkspaceFrame header={<AppWorkspaceHeader workspace={workspace} />}>
@@ -137,7 +136,7 @@ function DeleteFailedApp({ app }: { app: App }) {
 }
 
 function useAppWorkspaceQuery(
-  routeId: string | undefined
+  appId: string | undefined
 ): ResourceWorkspaceQuery<AppWorkspaceApp> {
   const select = React.useMemo(
     () =>
@@ -146,15 +145,10 @@ function useAppWorkspaceQuery(
           ReturnType<typeof import("@/server/apps").getAppDirectory>
         >
       ) => {
-        const resolution = resolveAppRoute(rows, routeId)
-        return resolution.status === "found"
-          ? {
-              directory: resolution.resource,
-              routeId: appRouteIdentifier(rows, resolution.resource),
-            }
-          : null
+        const directory = rows.find((row) => row.id === appId)
+        return directory ? { directory } : null
       },
-    [routeId]
+    [appId]
   )
   const hydrated = useHydrated()
   const directory = useQuery({ ...appDirectoryQueryOptions(), select })
@@ -191,7 +185,7 @@ function useAppWorkspaceQuery(
           containers: [],
           dataDirectory: "",
           deployment: null,
-          hostname: `app-${directory.shortId}`,
+          hostname: `app-${directory.id}`,
           network: "",
           observedState: "failed" as const,
           savedDatabaseIds: [],
@@ -209,7 +203,6 @@ function useAppWorkspaceQuery(
         status: instanceStatePresentation(state).label,
         latestObservation: value?.observation,
       },
-      routeId: selected.routeId,
     }
   }, [selected, inventoryPending, inventory.data, state])
   return useResourceWorkspaceQuery({
@@ -251,11 +244,7 @@ const AppWorkspaceHeader = React.memo(function AppWorkspaceHeader({
             <WorkspaceMetaSeparator />
           </span>
           <span className="hidden shrink-0 items-center gap-1.5 @[40rem]:inline-flex">
-            <WorkspaceIdCopyButton
-              id={app.id}
-              label="app ID"
-              shortId={app.shortId}
-            />
+            <WorkspaceIdCopyButton id={app.id} label="app ID" />
             <WorkspaceMetaSeparator />
           </span>
           <AppHeaderAddress app={app} />
@@ -330,7 +319,7 @@ function AppPowerControls({
   onError: (error: string | null) => void
   workspace: AppWorkspaceApp
 }) {
-  const { app, routeId } = workspace
+  const { app } = workspace
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { data: deletion } = useQuery(
@@ -395,7 +384,7 @@ function AppPowerControls({
       // Follow the deployment as it happens.
       if (app.permissions.includes("app.logs.read")) {
         await navigate({
-          params: { appId: routeId },
+          params: { appId: app.id },
           search: { stream: "deployment" },
           to: "/app/$appId/logs",
         })

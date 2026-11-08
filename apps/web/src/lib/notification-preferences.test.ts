@@ -6,7 +6,7 @@ import {
   notificationPreferencesUpdateSchema,
 } from "@/lib/notification-preferences"
 
-const key = "app:relay-a:app-a"
+const key = `app:${"1".repeat(12)}:${"a".repeat(12)}`
 const muted = {
   kinds: { "app.deployed": false as const },
   name: "Site",

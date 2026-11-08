@@ -4,9 +4,11 @@ import type { RelayStateStore } from "./effect/state.js"
 import type { LifecycleDriver } from "./lifecycle.js"
 import { instanceReplaceLocks } from "./operation-plans.js"
 import { type ProvisioningAdapter, provisioningStatus } from "./provisioning.js"
+import type { ServerDeploymentLogs } from "./server-deployment-logs.js"
 
 /** How a game server provisions: its container, from its Brick. */
 export function serverProvisioning(options: {
+  deploymentLogs: ServerDeploymentLogs
   lifecycle: LifecycleDriver
   /** Sends Hearth the Relay's snapshot, where game servers' placeholders are. */
   refreshSnapshot: () => Promise<unknown>
@@ -26,18 +28,23 @@ export function serverProvisioning(options: {
       provisioning: state,
       status: provisioningStatus(state.phase, "server"),
     }),
-    provision: async (job, onPhase) => {
-      const instance = await options.lifecycle.createInstanceWithId(
-        job.instanceId,
-        job.input,
-        onPhase
-      )
-      await Effect.runPromise(
-        options.state.setInstanceName(
+    // Hearth records the install as a deployment, which this logs.
+    provision: (job, onPhase) =>
+      options.deploymentLogs.install(job.instanceId, async (logPhase) => {
+        const instance = await options.lifecycle.createInstanceWithId(
           job.instanceId,
-          job.input.name ?? instance.name
+          job.input,
+          async (phase) => {
+            await onPhase(phase)
+            await logPhase(phase)
+          }
         )
-      )
-    },
+        await Effect.runPromise(
+          options.state.setInstanceName(
+            job.instanceId,
+            job.input.name ?? instance.name
+          )
+        )
+      }),
   }
 }

@@ -82,7 +82,7 @@ export const listInstanceDirectoryEffect = Effect.fn(
       {
         id: row.instance_id,
         relayId: row.relay_id,
-        name: row.name ?? row.instance_id.slice(0, 8),
+        name: row.name ?? row.instance_id,
         ...metadata,
         brickId: metadata.brickId ?? undefined,
       },

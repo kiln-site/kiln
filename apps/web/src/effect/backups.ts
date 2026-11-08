@@ -139,6 +139,8 @@ interface BackupRow extends RowDataPacket {
   id: string
   linked_from_backup_id: string | null
   linked_from_target_id: string | null
+  /** Its old ID, from before 12-character instance IDs. */
+  linked_from_legacy_id?: string | null
   name: string
   reason: "final_delete" | "manual" | "pre_restore" | "scheduled"
   relay_id: string
@@ -228,6 +230,8 @@ interface DispatchableBackupRow extends RowDataPacket {
   exclude_patterns: unknown
   linked_from_backup_id: string | null
   linked_from_target_id: string | null
+  /** Its old ID, from before 12-character instance IDs. */
+  linked_from_legacy_id?: string | null
   object_key: string | null
   reason: BackupCreateTaskInput["reason"]
   repository_id: string | null
@@ -1302,7 +1306,10 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
             // What a delete left behind keeps the backup: available while a
             // complete copy remains, failed while only failed ones do.
             const [remaining] = yield* transaction.queryRows<
-              RowDataPacket & { available: number | string; kept: number | string }
+              RowDataPacket & {
+                available: number | string
+                kept: number | string
+              }
             >(
               `SELECT COUNT(*) AS kept,
                       COALESCE(SUM(status IN ('available', 'deleting')), 0) AS available
@@ -1493,6 +1500,7 @@ const backupCatalogColumns = `backup.id, backup.relay_id, backup.target_kind, ba
             backup.checksum_sha256, backup.restic_snapshot_id, backup.warnings,
             backup.created_by, backup.storage_id, backup.object_key,
             backup.linked_from_backup_id, backup.linked_from_target_id,
+            (SELECT legacy.legacy_id FROM ${databaseTable("instance_id")} legacy WHERE legacy.id = backup.linked_from_target_id) AS linked_from_legacy_id,
             backup.consistency, backup.batch_id,
             backup.completed_at AS completed_at_ms,
             backup.created_at AS created_at_ms,
@@ -2153,6 +2161,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
             task.target_id AS task_target_id,
             backup.storage_id, backup.object_key,
             backup.linked_from_backup_id, backup.linked_from_target_id,
+            (SELECT legacy.legacy_id FROM ${databaseTable("instance_id")} legacy WHERE legacy.id = backup.linked_from_target_id) AS linked_from_legacy_id,
             backup.consistency, backup.batch_id,
             (
               SELECT COUNT(*)
@@ -2256,7 +2265,9 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
         "backup artifact bytes"
       )
       if (!artifact || bytes === null || !artifact.checksum_sha256) {
-        return undispatchable("The backup is missing restore integrity metadata")
+        return undispatchable(
+          "The backup is missing restore integrity metadata"
+        )
       }
       return {
         ...restoreIdentity,
@@ -2343,12 +2354,18 @@ function stoppedBatch(
 // checks the archive it shares with the backup it was made as.
 function linkedArchive(row: {
   linked_from_backup_id: string | null
+  linked_from_legacy_id?: string | null
   linked_from_target_id: string | null
 }) {
   return row.linked_from_backup_id && row.linked_from_target_id
     ? {
         archive: {
           backupId: row.linked_from_backup_id,
+          // An archive made before 12-character instance IDs names its
+          // server by the old ID, which another Relay can't translate.
+          ...(row.linked_from_legacy_id
+            ? { legacyTargetId: row.linked_from_legacy_id }
+            : {}),
           targetId: row.linked_from_target_id,
         },
       }
@@ -2361,6 +2378,7 @@ function linkedArchive(row: {
 function restoreArchive(
   row: {
     linked_from_backup_id: string | null
+    linked_from_legacy_id?: string | null
     linked_from_target_id: string | null
     target_id: string
   },
@@ -2398,7 +2416,8 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
                     backup.bytes, backup.checksum_sha256, backup.backup_mode,
                     backup.artifact_kind, backup.restic_snapshot_id,
                     backup.repository_id, backup.linked_from_backup_id,
-                    backup.linked_from_target_id
+                    backup.linked_from_target_id,
+                    (SELECT legacy.legacy_id FROM ${databaseTable("instance_id")} legacy WHERE legacy.id = backup.linked_from_target_id) AS linked_from_legacy_id
                FROM ${databaseTable("backup")} backup
               WHERE backup.id = ? AND backup.status = 'available'
                 AND (
@@ -2462,7 +2481,8 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
             return yield* BackupStorageError.make({
               code: "restore_target_mismatch",
               operation: "backup.restore",
-              reason: "A backup can only be restored into the same kind of resource",
+              reason:
+                "A backup can only be restored into the same kind of resource",
             })
           }
           // Restores into one resource queue behind each other, whichever
@@ -2657,6 +2677,7 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
                   backup.restic_snapshot_id, backup.backup_mode, backup.status,
                   backup.repository_id, backup.linked_from_backup_id,
                   backup.linked_from_target_id,
+                  (SELECT legacy.legacy_id FROM ${databaseTable("instance_id")} legacy WHERE legacy.id = backup.linked_from_target_id) AS linked_from_legacy_id,
                   EXISTS (
                     SELECT 1 FROM ${databaseTable("backup_repository")} repository
                      WHERE repository.id = backup.repository_id
@@ -2686,7 +2707,9 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
         )
         const active = (task: BackupTaskStateRow) =>
           task.status === "queued" || task.status === "running"
-        if (tasks.some((task) => task.task_kind === "restore" && active(task))) {
+        if (
+          tasks.some((task) => task.task_kind === "restore" && active(task))
+        ) {
           return yield* BackupStorageError.make({
             code: "restore_in_progress",
             operation: "backup.delete",
@@ -2717,7 +2740,10 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
           .find((task) => task.task_kind === "delete" && active(task))
         // Without its repository Hearth has no password to read or forget
         // the snapshot with, and never will: the record is all that's left.
-        if (backup.backup_mode === "incremental" && !backup.repository_present) {
+        if (
+          backup.backup_mode === "incremental" &&
+          !backup.repository_present
+        ) {
           yield* removeBackupRecord(transaction, {
             backupId: input.backupId,
             now,
@@ -2916,10 +2942,12 @@ export const settleUndispatchableBackupTaskEffect = Effect.fn(
   })
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  return yield* database.transaction("backup_settle_undispatchable", (transaction) =>
-    Effect.gen(function* () {
-      const [task] = yield* transaction.queryRows<UndispatchedTaskRow>(
-        `SELECT task.backup_id, task.task_kind, task.status,
+  return yield* database.transaction(
+    "backup_settle_undispatchable",
+    (transaction) =>
+      Effect.gen(function* () {
+        const [task] = yield* transaction.queryRows<UndispatchedTaskRow>(
+          `SELECT task.backup_id, task.task_kind, task.status,
                 backup.status AS backup_status, backup.backup_mode,
                 EXISTS (
                   SELECT 1 FROM ${databaseTable("backup_repository")} repository
@@ -2929,59 +2957,59 @@ export const settleUndispatchableBackupTaskEffect = Effect.fn(
            JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
           WHERE task.id = ?
           FOR UPDATE`,
-        [input.taskId]
-      )
-      // Taken by the Relay meanwhile, or already settled.
-      if (!task || task.status !== "queued") return "unchanged" as const
-      if (
-        task.task_kind === "delete" &&
-        task.backup_status === "deleting" &&
-        task.backup_mode === "incremental" &&
-        !task.repository_present
-      ) {
-        yield* removeBackupRecord(transaction, {
-          backupId: task.backup_id,
-          now,
-          requestedBy: null,
-          taskId: input.taskId,
-        })
-        return "removed" as const
-      }
-      yield* transaction.execute(
-        `UPDATE ${databaseTable("backup_task")}
+          [input.taskId]
+        )
+        // Taken by the Relay meanwhile, or already settled.
+        if (!task || task.status !== "queued") return "unchanged" as const
+        if (
+          task.task_kind === "delete" &&
+          task.backup_status === "deleting" &&
+          task.backup_mode === "incremental" &&
+          !task.repository_present
+        ) {
+          yield* removeBackupRecord(transaction, {
+            backupId: task.backup_id,
+            now,
+            requestedBy: null,
+            taskId: input.taskId,
+          })
+          return "removed" as const
+        }
+        yield* transaction.execute(
+          `UPDATE ${databaseTable("backup_task")}
             SET status = 'failed', error = ?, error_code = ?, finished_at = ?,
                 updated_at = ?
           WHERE id = ?`,
-        [input.reason.slice(0, 4_096), input.code, now, now, input.taskId]
-      )
-      if (
-        task.task_kind === "create" &&
-        (task.backup_status === "queued" || task.backup_status === "running")
-      ) {
-        yield* transaction.execute(
-          `UPDATE ${databaseTable("backup")}
+          [input.reason.slice(0, 4_096), input.code, now, now, input.taskId]
+        )
+        if (
+          task.task_kind === "create" &&
+          (task.backup_status === "queued" || task.backup_status === "running")
+        ) {
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("backup")}
               SET status = 'failed', completed_at = ?, updated_at = ?
             WHERE id = ?`,
-          [now, now, task.backup_id]
-        )
-        yield* transaction.execute(
-          `UPDATE ${databaseTable("backup_artifact")}
+            [now, now, task.backup_id]
+          )
+          yield* transaction.execute(
+            `UPDATE ${databaseTable("backup_artifact")}
               SET status = 'failed', error = ?, error_code = ?,
                   completed_at = ?, updated_at = ?
             WHERE backup_id = ? AND status IN ('queued', 'running')`,
-          [input.reason, input.code, now, now, task.backup_id]
-        )
-      }
-      if (task.task_kind === "delete" && task.backup_status === "deleting") {
-        yield* restoreStatusAfterFailedDelete(transaction, {
-          backupId: task.backup_id,
-          code: input.code,
-          now,
-          reason: input.reason,
-        })
-      }
-      return "failed" as const
-    })
+            [input.reason, input.code, now, now, task.backup_id]
+          )
+        }
+        if (task.task_kind === "delete" && task.backup_status === "deleting") {
+          yield* restoreStatusAfterFailedDelete(transaction, {
+            backupId: task.backup_id,
+            code: input.code,
+            now,
+            reason: input.reason,
+          })
+        }
+        return "failed" as const
+      })
   )
 })
 
@@ -2990,7 +3018,12 @@ export const settleUndispatchableBackupTaskEffect = Effect.fn(
 // failed. The backup follows its artifacts.
 const restoreStatusAfterFailedDelete = Effect.fnUntraced(function* (
   transaction: DatabaseTransaction,
-  input: { backupId: string; code: string | null; now: number; reason: string | null }
+  input: {
+    backupId: string
+    code: string | null
+    now: number
+    reason: string | null
+  }
 ) {
   yield* transaction.execute(
     `UPDATE ${databaseTable("backup_artifact")}

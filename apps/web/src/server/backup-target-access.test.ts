@@ -66,8 +66,8 @@ vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 afterAll(() => disposeAppRuntime())
 
 const at = Date.UTC(2026, 0, 1)
-const relayId = "r".repeat(43)
-const appId = "a".repeat(40)
+const relayId = "1".repeat(12)
+const appId = "a".repeat(12)
 const kilnVolumeId = "c".repeat(40)
 
 const user: AuthenticatedUser = {

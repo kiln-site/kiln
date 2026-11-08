@@ -37,7 +37,7 @@ import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
 // The database's details, each section with the actions that change it, and
 // a rail summing up where it runs and who can reach it.
 export function DatabaseInfoPage() {
-  const { database, routeId } = useDatabaseWorkspace()
+  const { database } = useDatabaseWorkspace()
   const can = (permission: ManagedDatabase["permissions"][number]) =>
     database.permissions.includes(permission)
   const available = databaseRelayAvailable(database)
@@ -79,7 +79,6 @@ export function DatabaseInfoPage() {
           canRestore={canRestore}
           canView={canView}
           database={database}
-          routeId={routeId}
         />
       ) : null}
       <DatabaseLimitsSection
@@ -90,7 +89,6 @@ export function DatabaseInfoPage() {
       <DatabaseConnectionSettings
         canViewNetwork={can("database.network.read")}
         database={database}
-        routeId={routeId}
       />
       {can("database.delete") ? (
         <DatabaseDangerZone

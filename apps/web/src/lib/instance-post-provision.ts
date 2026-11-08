@@ -14,6 +14,7 @@ import { databaseTable } from "@/lib/database-config"
 import { relayRpc } from "@/lib/relay-connection"
 import { startPollingWorker, type WorkerPass } from "@/lib/polling-worker"
 import { listPersistedRelays } from "@/lib/relay-registry"
+import { finishServerInstall } from "@/lib/server-deployments.server"
 import { provisionInstanceDomain } from "@/server/domains.server"
 
 interface PostProvisionRow extends RowDataPacket {
@@ -105,12 +106,23 @@ async function processRows(
             return
           }
           if (instance.provisioning) {
+            // Its install, recorded as a deployment, ends as it failed.
+            if (instance.provisioning.phase === "failed") {
+              await finishServerInstall(relay.id, row.instance_id, {
+                error: instance.provisioning.error ?? "Provisioning failed",
+                status: "failed",
+              })
+            }
             await postpone(
               row,
               instance.provisioning.phase === "failed" ? 60 : 5
             )
             return
           }
+          await finishServerInstall(relay.id, row.instance_id, {
+            error: null,
+            status: "succeeded",
+          })
           await provisionInstanceDomain(instance, relay.id)
           await complete(row)
         }).pipe(Effect.catch((cause) => promiseEffect(() => defer(row, cause))))

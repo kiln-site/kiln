@@ -1,5 +1,9 @@
 import { createServerFn } from "@tanstack/react-start"
-import { appIdSchema, relayIdSchema } from "@workspace/contracts"
+import {
+  appIdSchema,
+  instanceIdSchema,
+  relayIdSchema,
+} from "@workspace/contracts"
 import { z } from "zod"
 
 import {
@@ -59,7 +63,7 @@ const discoverDomainsInputSchema = z.object({
 })
 
 const instanceDomainInputSchema = z.object({
-  instanceId: z.string().regex(/^[a-f0-9]{40}$/u),
+  instanceId: instanceIdSchema,
   relayId: relayIdSchema,
 })
 
@@ -82,7 +86,7 @@ const removeInstanceDomainInputSchema = z.object({ id: domainIdSchema })
 const resourceWebHostnamesInputSchema = z.discriminatedUnion("resourceType", [
   z.object({
     relayId: relayIdSchema,
-    resourceId: z.string().regex(/^[a-f0-9]{40}$/u),
+    resourceId: instanceIdSchema,
     resourceType: z.literal("instance"),
   }),
   z.object({
@@ -170,8 +174,6 @@ export interface ManagedDomainOverview {
     game: string | undefined
     implementation: string | undefined
     name: string
-    /** The `/server/$serverId` param, as the Game Servers table links it. */
-    routeId: string
   }
   srvActive: boolean
   status: "active" | "error" | "pending" | "removing"
@@ -218,8 +220,6 @@ export interface WebHostnameOverview {
         id: string
         kind: "app"
         name: string
-        /** The `/app/$appId` param. */
-        routeId: string
       }
     | {
         brickId: string | undefined
@@ -227,8 +227,6 @@ export interface WebHostnameOverview {
         implementation: string | undefined
         kind: "server"
         name: string
-        /** The `/server/$serverId` param. */
-        routeId: string
       }
   /** What its certificate waits for; null once it has one. */
   certificate: WebHostnameCertificate | null

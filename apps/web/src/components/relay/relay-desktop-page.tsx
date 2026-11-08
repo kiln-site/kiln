@@ -806,7 +806,7 @@ function DesktopPlaceholder({
   terminal?: boolean
   title: string
 }) {
-  const { routeId } = useRelayWorkspace()
+  const { relay } = useRelayWorkspace()
   return (
     <div className="grid min-h-0 flex-1 place-items-center overflow-y-auto bg-card p-6 text-center">
       <div className="flex max-w-sm flex-col items-center">
@@ -819,7 +819,7 @@ function DesktopPlaceholder({
         </p>
         {terminal ? (
           <Button asChild className="mt-4" size="sm">
-            <Link params={{ relayId: routeId }} to="/relay/$relayId/terminal">
+            <Link params={{ relayId: relay.id }} to="/relay/$relayId/terminal">
               <TerminalSquare />
               Open terminal
             </Link>

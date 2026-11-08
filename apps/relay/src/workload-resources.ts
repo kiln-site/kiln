@@ -20,6 +20,7 @@ import { Effect } from "effect"
 
 import type { RelayConfig } from "./config.js"
 import type { DockerEngine } from "./docker-engine.js"
+import { instanceIdFrom } from "./instance-keys.js"
 import { APP_SERVICE, relayOwnsLabels } from "./relay-resources.js"
 import { containerResourceLimits } from "./resource-limits.js"
 import {
@@ -156,12 +157,13 @@ export class WorkloadResources {
     const labels = container.Labels ?? {}
     if (!relayOwnsLabels(this.#config, labels)) return []
     const kind = labels["kiln.resource.kind"]
-    const id =
+    const id = instanceIdFrom(
       kind === "app"
         ? labels["kiln.app.id"]
         : kind === "database"
           ? labels["kiln.database.id"]
           : undefined
+    )
     if (!id || (kind !== "app" && kind !== "database")) return []
     return [
       {

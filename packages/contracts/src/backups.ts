@@ -530,6 +530,15 @@ export const backupResticSourceSchema = z
 export const backupArchiveIdentitySchema = z
   .object({
     backupId: backupIdSchema,
+    /**
+     * The server's old ID, for an archive made before 12-character instance
+     * IDs, which names it so in its manifest: Hearth knows every old ID,
+     * while a Relay knows only its own.
+     */
+    legacyTargetId: z
+      .string()
+      .regex(/^[a-f0-9]{40}$/u)
+      .optional(),
     targetId: backupTargetSchema.shape.id,
   })
   .strict()

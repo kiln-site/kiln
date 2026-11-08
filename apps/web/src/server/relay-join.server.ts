@@ -66,6 +66,7 @@ import {
   decryptPrivateKey,
   encryptPrivateKey,
   findPersistedRelayRow,
+  findPersistedRelayRowByFingerprint,
   inspectPersistedRelay,
   listPersistedRelays,
   pairingResponseSchema,
@@ -323,7 +324,9 @@ const joinView = Effect.fn("relayJoin.view")(function* (row: RelayJoinRow) {
       ? yield* promiseEffect(listPersistedRelays)
       : []
   const existing = envelope
-    ? (relays.find((relay) => relay.id === envelope.relayFingerprint) ?? null)
+    ? (relays.find(
+        (relay) => relay.fingerprint === envelope.relayFingerprint
+      ) ?? null)
     : null
   const unreachable =
     envelope && row.state === "announced"
@@ -390,7 +393,7 @@ function relayAtAddress(
   return (
     relays.find(
       (relay) =>
-        relay.id !== envelope.relayFingerprint &&
+        relay.fingerprint !== envelope.relayFingerprint &&
         relay.hostname === control.hostname &&
         relay.port === port
     ) ?? null
@@ -956,7 +959,7 @@ export const confirmRelayJoinEffect = Effect.fn("relayJoin.confirm")(
             )
           }
           const existing = yield* promiseEffect(() =>
-            findPersistedRelayRow(envelope.relayFingerprint)
+            findPersistedRelayRowByFingerprint(envelope.relayFingerprint)
           )
           if (
             existing &&
@@ -1151,7 +1154,7 @@ const driveJoin = Effect.fnUntraced(function* (
         return yield* inLanes(
           "relay.join.step",
           "Pairing this Relay",
-          envelope ? [exclusive(relayKey(envelope.relayFingerprint))] : [],
+          envelope ? [exclusive(relayKey(envelope.relayId))] : [],
           joinStep(row, generation, untilChange)
         ).pipe(
           Effect.as("next" as const),
@@ -1270,6 +1273,11 @@ const pairJoinedRelay = Effect.fn("relayJoin.pair")(function* (
     return
   }
   verifyPairingResponse(envelope, nonce, response)
+  if (response.relayId !== envelope.relayId) {
+    return yield* Effect.fail(
+      new Error("The Relay answered with a different ID than it announced")
+    )
+  }
   if (response.clientId !== publicKeyFingerprint(row.client_public_key)) {
     return yield* Effect.fail(
       new Error("Relay paired an unexpected Hearth client identity")
@@ -1296,7 +1304,7 @@ const pairJoinedRelay = Effect.fn("relayJoin.pair")(function* (
               SET progress = 'saved', paired_relay_id = ?,
                   client_private_key_ciphertext = NULL, updated_at = ?
             WHERE id = ? AND claim_generation = ? AND state = 'confirming'`,
-          [envelope.relayFingerprint, Date.now(), row.id, generation]
+          [envelope.relayId, Date.now(), row.id, generation]
         )
         if (saved.affectedRows === 0)
           return yield* Effect.fail(new StaleClaim())
@@ -1313,8 +1321,9 @@ const pairJoinedRelay = Effect.fn("relayJoin.pair")(function* (
     createdBy: intent.createdBy,
     creatorUserId: intent.creatorUserId,
     expectedExisting: existing !== null,
+    fingerprint: envelope.relayFingerprint,
     hostname: control.hostname,
-    id: envelope.relayFingerprint,
+    id: envelope.relayId,
     name,
     port: Number(control.port || 443),
     relayCaCertificate: envelope.caCertificatePem,
@@ -1327,9 +1336,9 @@ const pairJoinedRelay = Effect.fn("relayJoin.pair")(function* (
     const { closeRelayConnection } = yield* promiseEffect(
       () => import("@/lib/relay-connection")
     )
-    closeRelayConnection(envelope.relayFingerprint)
+    closeRelayConnection(envelope.relayId)
   }
-  publishRelayCollectionChange(envelope.relayFingerprint, [intent.createdBy])
+  publishRelayCollectionChange(envelope.relayId, [intent.createdBy])
 })
 
 // Hearth's signed pairing request for a join's Relay, with the join's key.
@@ -1408,19 +1417,19 @@ const connectJoinedRelay = Effect.fn("relayJoin.connect")(function* (
   intent: RelayJoinIntent,
   generation: number
 ) {
-  yield* Effect.annotateCurrentSpan("relay.id", envelope.relayFingerprint)
+  yield* Effect.annotateCurrentSpan("relay.id", envelope.relayId)
   // Whether Hearth can reach the Relay itself, asked while it connects.
   const reach = pairsThroughAnnouncements(row)
     ? yield* Effect.forkChild(joinReach(row.id, envelope))
     : null
-  const observed = yield* readInstallation(envelope.relayFingerprint)
+  const observed = yield* readInstallation(envelope.relayId)
   // The client this one replaces can't do anything without its key, which
   // Hearth no longer has; revoke it anyway.
   if (
     intent.previousClientId &&
     intent.previousClientId !== publicKeyFingerprint(row.client_public_key)
   ) {
-    yield* relayCall(envelope.relayFingerprint, "relay.clients.revoke", {
+    yield* relayCall(envelope.relayId, "relay.clients.revoke", {
       clientId: intent.previousClientId,
     }).pipe(
       Effect.withSpan("relayJoin.revokePreviousClient"),
@@ -1432,13 +1441,13 @@ const connectJoinedRelay = Effect.fn("relayJoin.connect")(function* (
       )
     )
   }
-  yield* promiseEffect(() =>
-    inspectPersistedRelay(envelope.relayFingerprint)
-  ).pipe(Effect.ignore)
+  yield* promiseEffect(() => inspectPersistedRelay(envelope.relayId)).pipe(
+    Effect.ignore
+  )
   // Browsers can't reach a Relay Hearth can't, so its consoles and
   // transfers go through Hearth.
   if (reach && (yield* Fiber.join(reach)) !== null) {
-    yield* useHearthForBrowsers(envelope.relayFingerprint).pipe(
+    yield* useHearthForBrowsers(envelope.relayId).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning(
           "Couldn't send the Relay's browser traffic through Hearth",
@@ -1490,7 +1499,7 @@ const applyInstallation = Effect.fn("relayJoin.applyInstallation")(function* (
       generation,
       "paired",
       false,
-      envelope.relayFingerprint
+      envelope.relayId
     )
   }
   if (observed?.id === intent.targetInstallationId) {
@@ -1499,7 +1508,7 @@ const applyInstallation = Effect.fn("relayJoin.applyInstallation")(function* (
       generation,
       "paired",
       true,
-      envelope.relayFingerprint
+      envelope.relayId
     )
   }
   if (
@@ -1524,7 +1533,7 @@ const recoverInstallation = Effect.fn("relayJoin.recoverInstallation")(
     generation: number
   ) {
     const lookup = Schema.decodeUnknownSync(RelayOperationLookupSchema)(
-      yield* relayCall(envelope.relayFingerprint, "operation.get", {
+      yield* relayCall(envelope.relayId, "operation.get", {
         operationId: intent.installationOperationId,
       })
     )
@@ -1535,7 +1544,7 @@ const recoverInstallation = Effect.fn("relayJoin.recoverInstallation")(
           generation,
           "paired",
           true,
-          envelope.relayFingerprint
+          envelope.relayId
         )
       case "running":
         yield* Effect.sleep("2 seconds")
@@ -1543,14 +1552,14 @@ const recoverInstallation = Effect.fn("relayJoin.recoverInstallation")(
       case "failed":
       case "interrupted":
       case "unknown": {
-        const current = yield* readInstallation(envelope.relayFingerprint)
+        const current = yield* readInstallation(envelope.relayId)
         return current.id === intent.targetInstallationId
           ? yield* finishJoin(
               row.id,
               generation,
               "paired",
               true,
-              envelope.relayFingerprint
+              envelope.relayId
             )
           : yield* needsReview(row.id, generation, current)
       }
@@ -1566,7 +1575,7 @@ const replaceInstallation = Effect.fnUntraced(function* (
     () => import("@/lib/relay-connection")
   )
   const relay = (yield* promiseEffect(listPersistedRelays)).find(
-    (candidate) => candidate.id === envelope.relayFingerprint
+    (candidate) => candidate.id === envelope.relayId
   )
   if (!relay) return yield* Effect.fail(new Error("The Relay isn't saved"))
   yield* promiseEffect(() =>

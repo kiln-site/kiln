@@ -84,13 +84,9 @@ export function kilnImageRepository(
   repository?: string
 ): string {
   if (
-    ![
-      "hearth",
-      "relay",
-      "bricks-java",
-      "bricks-steamcmd",
-      "desktop",
-    ].includes(component)
+    !["hearth", "relay", "bricks-java", "bricks-steamcmd", "desktop"].includes(
+      component
+    )
   ) {
     throw new Error("Unknown Kiln image component")
   }

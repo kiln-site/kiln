@@ -13,8 +13,8 @@ import { controlRequestLocks } from "./operation-plans.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, type RelayHarness } from "./test/relay.js"
 
-const server = "a".repeat(40)
-const other = "b".repeat(40)
+const server = "a".repeat(12)
+const other = "b".repeat(12)
 const GIBIBYTE = 1024 ** 3
 
 const saved: ResourceLimits = {

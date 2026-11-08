@@ -56,7 +56,9 @@ export async function requireGlobalDestinationAccess(
 
 // Kiln's own pages, like the platform's settings, are for platform
 // administrators.
-export async function requireKilnAccess(queryClient: QueryClient): Promise<void> {
+export async function requireKilnAccess(
+  queryClient: QueryClient
+): Promise<void> {
   const capabilities = await routeAccessCapabilities(queryClient)
   if (capabilities.isPlatformAdmin) return
   throw redirect({ href: firstAccessibleAppHref(capabilities), replace: true })
@@ -94,7 +96,7 @@ export async function requireServerDestinationAccess(
   queryClient: QueryClient,
   instance: { brickId: string | undefined; id: string; relayId: string } | null,
   destinationId: ServerDestinationId,
-  routeId: string
+  instanceId: string
 ): Promise<void> {
   if (!instance) return
   const capabilities = await routeAccessCapabilities(queryClient)
@@ -105,7 +107,7 @@ export async function requireServerDestinationAccess(
   const fallback = destinations[0]
   if (fallback) {
     throw redirect({
-      href: serverDestinationHref(fallback, routeId),
+      href: serverDestinationHref(fallback, instanceId),
       replace: true,
     })
   }
@@ -115,11 +117,11 @@ export async function requireServerDestinationAccess(
 export async function redirectToFirstAccessibleServerDestination(
   queryClient: QueryClient,
   instance: { brickId: string | undefined; id: string; relayId: string } | null,
-  routeId: string
+  instanceId: string
 ): Promise<never> {
   if (!instance) {
     throw redirect({
-      href: `/server/${encodeURIComponent(routeId)}/console`,
+      href: `/server/${encodeURIComponent(instanceId)}/console`,
       replace: true,
     })
   }
@@ -127,7 +129,7 @@ export async function redirectToFirstAccessibleServerDestination(
   const destination = accessibleDestinationsForServer(instance, capabilities)[0]
   if (destination) {
     throw redirect({
-      href: serverDestinationHref(destination, routeId),
+      href: serverDestinationHref(destination, instanceId),
       replace: true,
     })
   }
@@ -163,12 +165,12 @@ export function requireDatabaseDestinationAccess(
   queryClient: QueryClient,
   database: RouteDatabase,
   destinationId: DatabaseDestinationId,
-  routeId: string
+  instanceId: string
 ): Promise<void> {
   return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForDatabase(database, capabilities),
-    (destination) => databaseDestinationHref(destination, routeId),
+    (destination) => databaseDestinationHref(destination, instanceId),
     destinationId
   )
 }
@@ -176,12 +178,12 @@ export function requireDatabaseDestinationAccess(
 export function redirectToFirstAccessibleDatabaseDestination(
   queryClient: QueryClient,
   database: RouteDatabase,
-  routeId: string
+  instanceId: string
 ): Promise<void> {
   return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForDatabase(database, capabilities),
-    (destination) => databaseDestinationHref(destination, routeId)
+    (destination) => databaseDestinationHref(destination, instanceId)
   )
 }
 
@@ -189,12 +191,12 @@ export function requireAppDestinationAccess(
   queryClient: QueryClient,
   app: { id: string; relayId: string },
   destinationId: AppDestinationId,
-  routeId: string
+  instanceId: string
 ): Promise<void> {
   return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForApp(app, capabilities),
-    (destination) => appDestinationHref(destination, routeId),
+    (destination) => appDestinationHref(destination, instanceId),
     destinationId
   )
 }
@@ -202,12 +204,12 @@ export function requireAppDestinationAccess(
 export function redirectToFirstAccessibleAppDestination(
   queryClient: QueryClient,
   app: { id: string; relayId: string },
-  routeId: string
+  instanceId: string
 ): Promise<void> {
   return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForApp(app, capabilities),
-    (destination) => appDestinationHref(destination, routeId)
+    (destination) => appDestinationHref(destination, instanceId)
   )
 }
 
@@ -215,12 +217,12 @@ export function requireRelayDestinationAccess(
   queryClient: QueryClient,
   relay: { id: string },
   destinationId: RelayDestinationId,
-  routeId: string
+  instanceId: string
 ): Promise<void> {
   return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForRelay(relay, capabilities),
-    (destination) => relayDestinationHref(destination, routeId),
+    (destination) => relayDestinationHref(destination, instanceId),
     destinationId
   )
 }
@@ -228,11 +230,11 @@ export function requireRelayDestinationAccess(
 export function redirectToFirstAccessibleRelayDestination(
   queryClient: QueryClient,
   relay: { id: string },
-  routeId: string
+  instanceId: string
 ): Promise<void> {
   return requireResourceDestination(
     queryClient,
     (capabilities) => accessibleDestinationsForRelay(relay, capabilities),
-    (destination) => relayDestinationHref(destination, routeId)
+    (destination) => relayDestinationHref(destination, instanceId)
   )
 }

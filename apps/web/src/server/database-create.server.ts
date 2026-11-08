@@ -35,8 +35,11 @@ export interface CreateDatabaseInput {
   /** Generated when left out. Ignored by an engine with no named databases. */
   databaseName?: string
   engine: DatabaseEngine
-  /** Settled by the operation creating it with something else. */
-  id?: string
+  /**
+   * Reserved before the operation runs (`reserveInstanceId`), so a retry and
+   * every turn the operation takes name the same database.
+   */
+  id: string
   name: string
   relayId: string
   /** Generated when left out. */
@@ -45,7 +48,7 @@ export interface CreateDatabaseInput {
 
 const cancelledSchema = z.object({ cancelled: z.boolean() })
 
-// Holds the database it creates, by the ID it settles first, and its Relay
+// Holds the database it creates, by its reserved ID, and its Relay
 // shared, so the Relay isn't removed meanwhile. The Relay is read once
 // admitted, so one removed since can't gain the database.
 export const createDatabase = operation<CreateDatabaseInput>()({
@@ -62,10 +65,7 @@ export const createDatabase = operation<CreateDatabaseInput>()({
           })
         )
       ),
-      Effect.map((person) => ({
-        id: input.id ?? randomBytes(20).toString("hex"),
-        user: person,
-      }))
+      Effect.map((person) => ({ id: input.id, user: person }))
     ),
   locks: ({ context, input }) => [
     exclusive(resourceKey("database", input.relayId, context.id)),
@@ -99,7 +99,7 @@ async function createDatabaseHandler(
   const password = randomBytes(36).toString("base64url")
   const databaseName =
     (databaseEngineHasNamedDatabase(data.engine) ? data.databaseName : null) ??
-    `kiln_${id.slice(0, 12)}`
+    `kiln_${id}`
   const issue =
     databaseNameIssue(data.engine, databaseName) ??
     databaseUsernameIssue(data.engine, username)

@@ -15,6 +15,7 @@ const pairedRelay = {
   createdBy: "creator",
   creatorUserId: "creator",
   expectedExisting: false,
+  fingerprint: "relay-fingerprint",
   hostname: "relay.example.com",
   id: "relay-id",
   name: "Relay",

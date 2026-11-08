@@ -1,4 +1,5 @@
 import {
+  instanceIdSchema,
   relayIdSchema,
   relayInstanceSchema,
   relayNodeSchema,
@@ -12,7 +13,6 @@ export const fleetInstanceSchema = relayInstanceSchema.extend({
   relayName: z.string().min(1),
   relayStatus: z.enum(["connected", "unreachable"]),
   relayUpdating: z.boolean().optional(),
-  routeId: z.string().min(1),
 })
 
 export const fleetNodeSchema = relayNodeSchema.extend({
@@ -29,10 +29,7 @@ const sequencedEventSchema = z.object({
 
 const hearthScopeSchema = z.object({
   backupId: z.uuid().optional(),
-  databaseId: z
-    .string()
-    .regex(/^[a-f0-9]{40}$/u)
-    .optional(),
+  databaseId: instanceIdSchema.optional(),
   instanceId: relayInstanceSchema.shape.id.optional(),
   relayId: relayIdSchema,
 })

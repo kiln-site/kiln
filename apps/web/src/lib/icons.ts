@@ -1,6 +1,7 @@
 import {
   appIdSchema,
   databaseIdSchema,
+  instanceIdSchema,
   relayIdSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
@@ -14,7 +15,7 @@ export const iconSubjectSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("server"),
     relayId: relayIdSchema,
-    id: z.string().regex(/^[a-f0-9]{40}$/u),
+    id: instanceIdSchema,
   }),
   z.strictObject({
     kind: z.literal("app"),

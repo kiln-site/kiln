@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto"
+import { createHash } from "node:crypto"
 
 import { createServerFn } from "@tanstack/react-start"
 import {
@@ -42,6 +42,7 @@ import {
   type TailscaleNetworkDefinition,
   type TailscaleOAuthCredential,
 } from "@/effect/tailscale-networks"
+import { reserveInstanceId } from "@/effect/instance-ids"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
 import { runAppEffect } from "@/effect/runtime"
@@ -187,15 +188,14 @@ const createTailscaleNetworkOperation = operation<
 
 export const createTailscaleNetwork = createServerFn({ method: "POST" })
   .validator(createTailscaleNetworkSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    return runOperationPromise(
       createTailscaleNetworkOperation,
-      { ...data, id: randomBytes(32).toString("hex").slice(0, 40) },
-      {
-        user: await requireEligibleResourceUser(),
-      }
+      { ...data, id: await reserveInstanceId("tailscale") },
+      { user }
     )
-  )
+  })
 
 async function createTailscaleNetworkHandler(
   user: AuthenticatedUser,

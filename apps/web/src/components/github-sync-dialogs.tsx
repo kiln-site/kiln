@@ -613,7 +613,7 @@ function TargetPicker({
         meta:
           target.kind === "relay"
             ? "Host files"
-            : `${target.relayName} · ${target.id.slice(0, 8)}`,
+            : `${target.relayName} · ${target.id}`,
         name: target.name,
         searchText: `${targetKindLabel[target.kind]} ${target.relayName} ${target.id}`,
       })),

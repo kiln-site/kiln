@@ -8,7 +8,7 @@ import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 import { WORKLOAD_SLICE_LABEL } from "./docker-container-spec.js"
 
 const SLICE = "kilnworkloads.slice"
-const id = "a".repeat(40)
+const id = "a".repeat(12)
 
 async function seeded() {
   const harness = await relayHarness()
@@ -53,8 +53,9 @@ describe("moving workloads into the slice", () => {
   it("moves a running game server on an asked-for restart", async () => {
     const { harness, instance } = await seeded()
     harness.docker.allocations.setWorkloadLimit(SLICE, 1024 ** 3)
-    fakeDocker.container(harness.resources.instanceContainer(id))!.state.running =
-      true
+    fakeDocker.container(
+      harness.resources.instanceContainer(id)
+    )!.state.running = true
 
     await harness.lifecycle.runInstanceAction(instance, "restart", [])
 
@@ -77,7 +78,7 @@ describe("moving workloads into the slice", () => {
 
   it("doesn't call a replaced database placed when it isn't", async () => {
     const harness = await relayHarness()
-    const databaseId = "d".repeat(40)
+    const databaseId = "d".repeat(12)
     const allocations = harness.docker.allocations
     allocations.setWorkloadLimit(SLICE, 1024 ** 3)
     await harness.databases.create(

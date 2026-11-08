@@ -287,6 +287,7 @@ export const relayControlOperations = [
   "instance.console.complete",
   "instance.logs.share",
   "instance.logs.latest",
+  "instance.deployment.read",
   "instance.network.ports.reserve",
   "instance.network.ports.release",
   "instance.network.ports.write",
@@ -465,6 +466,7 @@ export function relayControlOperationChanges(
     case "instance.files.database.read":
     case "instance.console.history":
     case "instance.logs.latest":
+    case "instance.deployment.read":
     case "instance.network.routes.read":
     case "relay.terminal.attach":
     case "relay.terminal.heartbeat":
@@ -1151,6 +1153,8 @@ export interface RelayPairingResponseContract {
   readonly expiresAt: number
   readonly nonce: string
   readonly relayFingerprint: string
+  /** The Relay's instance ID; its fingerprint only authenticates it. */
+  readonly relayId: string
   readonly relayName: string
   readonly relayPublicKeyPem: string
   readonly role: "custom" | "full_access" | "read_only"
@@ -1229,6 +1233,7 @@ export function relayPairingResponseTranscript(
     "response",
     response.clientId,
     response.relayFingerprint,
+    response.relayId,
     response.relayName,
     response.relayPublicKeyPem,
     response.role,

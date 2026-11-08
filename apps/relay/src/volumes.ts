@@ -21,6 +21,7 @@ import type {
 } from "./docker-engine.js"
 import type { RelayStateStore } from "./effect/state.js"
 import { traceRelayEffect } from "./effect/runtime.js"
+import { instanceIdFrom, physicalKey } from "./instance-keys.js"
 import {
   relayOwnerLabels,
   relayOwnsLabels,
@@ -76,10 +77,14 @@ export function appVolumeOwner(
   const base = relayResourceNames(config).appComposeProject("")
   if (!project.startsWith(base)) return null
   // `<base><App ID>`, or `<base><App ID>-<deployment>` for a rolled one.
-  const match = /^([a-f0-9]{40})(-\d{14})?$/u.exec(project.slice(base.length))
-  if (!match) return null
+  // An App from before 12-character IDs keeps its old ID's project.
+  const match = /^([a-f0-9]{40}|[a-f0-9]{12})(-\d{14})?$/u.exec(
+    project.slice(base.length)
+  )
+  const appId = instanceIdFrom(match?.[1])
+  if (!match || !appId) return null
   return {
-    appId: match[1]!,
+    appId,
     rolled: match[2] !== undefined,
     volume: volume.data,
   }
@@ -838,8 +843,8 @@ export class RelayVolumes {
         const apps = new Set(
           networks.flatMap((network) =>
             relayOwnsLabels(this.#config, network.Labels) &&
-            network.Labels?.[APP_ID_LABEL]
-              ? [network.Labels[APP_ID_LABEL]]
+            instanceIdFrom(network.Labels?.[APP_ID_LABEL])
+              ? [instanceIdFrom(network.Labels?.[APP_ID_LABEL])!]
               : []
           )
         )
@@ -957,17 +962,16 @@ function uncoveredMounts(
   const uncovered: Array<RelayUncoveredMount> = []
   for (const container of containers) {
     const labels = container.Labels ?? {}
-    const appId = labels[APP_ID_LABEL]
+    const appId = instanceIdFrom(labels[APP_ID_LABEL])
     if (
       labels[KIND_LABEL] !== "app" ||
       !appId ||
-      !/^[a-f0-9]{40}$/u.test(appId) ||
       !relayOwnsLabels(config, labels)
     ) {
       continue
     }
     const kept = ["apps", "app-mounts", "app-sources"].map((folder) =>
-      join(host, folder, appId)
+      join(host, folder, physicalKey(appId))
     )
     for (const mount of container.Mounts ?? []) {
       let kind: RelayUncoveredMount["kind"]
@@ -1042,13 +1046,20 @@ function containerResource(
     return { kind: "relay", resourceId: null }
   }
   if (labels[KIND_LABEL] === "app") {
-    return { kind: "app", resourceId: labels[APP_ID_LABEL] ?? null }
+    return { kind: "app", resourceId: instanceIdFrom(labels[APP_ID_LABEL]) }
   }
   if (labels[KIND_LABEL] === "database") {
-    return { kind: "database", resourceId: labels["kiln.database.id"] ?? null }
+    return {
+      kind: "database",
+      resourceId: instanceIdFrom(labels["kiln.database.id"]),
+    }
   }
   if (labels["kiln.server.id"]) {
-    return { kind: "instance", resourceId: labels["kiln.server.id"] }
+    return {
+      kind: "instance",
+      resourceId:
+        instanceIdFrom(labels["kiln.server.id"]) ?? labels["kiln.server.id"],
+    }
   }
   return { kind: "other", resourceId: null }
 }

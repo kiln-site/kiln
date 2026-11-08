@@ -163,12 +163,7 @@ export function BackupConfigurationDialog({
     return effectiveMode === "incremental" || singleDestination
       ? usable.slice(0, 1)
       : usable
-  }, [
-    availableStorage,
-    destinationKeys,
-    effectiveMode,
-    singleDestination,
-  ])
+  }, [availableStorage, destinationKeys, effectiveMode, singleDestination])
   const selectedDestinations = React.useMemo(
     () => new Set(destinationKeysInUse),
     [destinationKeysInUse]
@@ -606,8 +601,7 @@ function backupTargetItem(
       relayId: target.relayId,
     },
     key: target.key,
-    meta:
-      target.description ?? `${target.relayName} · ${target.id.slice(0, 8)}`,
+    meta: target.description ?? `${target.relayName} · ${target.id}`,
     name: target.name,
     searchText: `${target.id} ${target.relayName}`,
   }

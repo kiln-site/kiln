@@ -10,7 +10,7 @@ import {
 } from "../operation-lanes.js"
 import { operation, runOperation } from "./operation.js"
 
-const serverId = "a".repeat(40)
+const serverId = "a".repeat(12)
 const timer = { kind: "timer" } as const
 
 describe("Relay operations", () => {

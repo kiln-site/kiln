@@ -25,7 +25,7 @@ export const getInfraServerDirectory = createServerFn({
 const serverNavigationInput = Schema.decodeUnknownSync(
   Schema.Union([
     Schema.Struct({ serverId: Schema.String }),
-    Schema.Struct({ selectedRouteId: Schema.NullOr(Schema.String) }),
+    Schema.Struct({ selectedServerId: Schema.NullOr(Schema.String) }),
   ])
 )
 

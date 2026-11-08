@@ -1380,7 +1380,7 @@ export function FileTreePanel({
   return (
     <aside
       ref={panelRef}
-      id={`file-tree-${instance.shortId}`}
+      id={`file-tree-${instance.id}`}
       data-file-tree-panel
       data-mobile-file-drawer
       data-state={mobileOpen ? "open" : "closed"}
@@ -1444,7 +1444,7 @@ export function FileTreePanel({
           size="icon-sm"
           className="shrink-0 shadow-none md:hidden"
           aria-label="Browse files"
-          aria-controls={`file-tree-${instance.shortId}`}
+          aria-controls={`file-tree-${instance.id}`}
           aria-expanded={mobileOpen}
           onClick={() => onMobileOpenChange(!mobileOpen)}
         >
@@ -1526,7 +1526,7 @@ export function FileTreePanel({
                 size="icon-sm"
                 className="hidden md:inline-flex"
                 aria-label="Collapse file tree"
-                aria-controls={`file-tree-${instance.shortId}`}
+                aria-controls={`file-tree-${instance.id}`}
                 onClick={() => onCollapsedChange(true)}
               >
                 <PanelLeftClose className="size-[18px]" />

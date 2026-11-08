@@ -28,14 +28,13 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       diskUsedBytes,
       engine: "postgres",
       hostname: "database",
-      id: "d".repeat(40),
+      id: "d".repeat(12),
       image: "postgres:17",
       internalPort: 5432,
       limits: { diskBytes: 100 },
       members: [],
       name: "Main",
       observedState: "running",
-      shortId: "dddddddd",
       status: "Running",
       supportsImportExport: true,
     }))
@@ -59,7 +58,7 @@ const usage = Effect.map(listNotificationsEffect("admin"), (notifications) =>
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   yield* insertUser("admin", { role: "admin" })
-  yield* insertRelay("r".repeat(43))
+  yield* insertRelay("1".repeat(12))
 })
 
 describeMysql("disk limit warnings", () => {

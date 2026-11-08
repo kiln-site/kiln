@@ -86,7 +86,7 @@ async function openStream() {
     relay,
     rows: 24,
     signal: page.signal,
-    target: databaseTerminalTarget(relay, "e".repeat(40), user),
+    target: databaseTerminalTarget(relay, "e".repeat(12), user),
     user,
   }).getReader()
   const decoder = new TextDecoder()

@@ -23,6 +23,7 @@ import type { RelayAuthChallenge, RelayDialBinding } from "@workspace/contracts"
 vi.mock("@/lib/relay-registry", () => ({
   listPersistedRelays: vi.fn(async () => []),
   loadPersistedRelay: vi.fn(),
+  loadPersistedRelayByFingerprint: vi.fn(async () => null),
   loadRelayCredentials: vi.fn(),
 }))
 vi.mock("@/lib/sftp-authorization", () => ({
@@ -84,6 +85,7 @@ beforeEach(async () => {
   vi.mocked(loadRelayCredentials).mockResolvedValue({
     caCertificatePem: null,
     clientId,
+    relayFingerprint: null,
     clientPrivateKeyPem: clientKeys.privateKey
       .export({ format: "pem", type: "pkcs8" })
       .toString(),

@@ -7,6 +7,7 @@ import type { ResticRepositoryLocation } from "@workspace/contracts"
 
 import type { RelayConfig } from "../../../config.js"
 import { promiseEffect } from "../../../effect/promise.js"
+import { physicalKey } from "../../../instance-keys.js"
 import {
   defineBackupDestination,
   type ResticLocalDriverLocation,
@@ -27,7 +28,14 @@ export function resticRepositoryPath(
   config: RelayConfig,
   targetId: string
 ): string {
-  return resolve(config.dataDirectory, "restic", "instance", targetId)
+  // Named after the target's physical key, so one from before 12-character
+  // IDs keeps its repository; an App-owned volume's is under its App's.
+  return resolve(
+    config.dataDirectory,
+    "restic",
+    "instance",
+    targetId.replace(/^[^/]+/u, (owner) => physicalKey(owner))
+  )
 }
 
 export function localResticDriverLocation(

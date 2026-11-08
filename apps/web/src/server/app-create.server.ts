@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 
 import { relayAppSchema } from "@workspace/contracts"
 import { Effect } from "effect"
@@ -9,6 +9,7 @@ import {
   createAppRecordEffect,
   deleteAppRecordEffect,
 } from "@/effect/managed-apps"
+import { reserveInstanceIdEffect } from "@/effect/instance-ids"
 import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
@@ -52,6 +53,8 @@ export interface CreateAppInput {
         "databaseName" | "engine" | "name" | "username"
       > & { kind: "new" })
     | { id: string; kind: "existing" }
+  // The same for every try of one create, so a retry gets the same IDs.
+  idempotencyKey: string
   name: string
   relayId: string
 }
@@ -63,17 +66,28 @@ interface CreateAppIds {
 }
 
 // Settled once, not in `authorize`, which runs again after a wait: new IDs
-// would be new lanes, and it would keep taking its turn again.
-export const withNewAppIds = (input: CreateAppInput) => ({
-  ...input,
-  databaseId:
-    input.database?.kind === "existing"
-      ? input.database.id
-      : input.database
-        ? randomBytes(20).toString("hex")
-        : null,
-  id: randomBytes(20).toString("hex"),
-})
+// would be new lanes, and it would keep taking its turn again. Reserved for
+// the person's request, so retrying the same create reserves nothing new.
+export const withNewAppIdsEffect = Effect.fn("apps.create.reserveIds")(
+  function* (input: CreateAppInput, userId: string) {
+    const requestKey = `app.create:${userId}:${input.idempotencyKey}`
+    const id = yield* reserveInstanceIdEffect("app", requestKey)
+    const databaseId =
+      input.database?.kind === "existing"
+        ? input.database.id
+        : input.database
+          ? yield* reserveInstanceIdEffect("database", `${requestKey}:database`)
+          : null
+    return { ...input, databaseId, id } satisfies CreateAppInput & CreateAppIds
+  }
+)
+
+export function withNewAppIds(input: CreateAppInput, userId: string) {
+  return runAppEffect(
+    "apps.create.reserveIds",
+    withNewAppIdsEffect(input, userId)
+  )
+}
 
 const cancelledSchema = z.object({ cancelled: z.boolean() })
 
@@ -235,7 +249,6 @@ async function createAppHandler(
   return {
     id: placeholder.id,
     relayId: relay.id,
-    shortId: placeholder.shortId,
   }
 }
 

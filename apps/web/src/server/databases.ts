@@ -60,6 +60,7 @@ import { runOperationPromise } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { connectDatabase } from "@/server/database-connections.server"
 import { createDatabase } from "@/server/database-create.server"
+import { reserveInstanceId } from "@/effect/instance-ids"
 import { resourceOperation } from "@/server/resource-operation.server"
 import {
   authorizedDatabase,
@@ -74,6 +75,8 @@ import {
 const createDatabaseInputSchema = z.strictObject({
   ...newDatabaseNamesShape,
   engine: databaseEngineSchema,
+  // The same for every try of one create, so a retry gets the same ID.
+  idempotencyKey: z.uuid(),
   name: relayDatabaseNameSchema,
   relayId: relayIdSchema,
 })
@@ -168,7 +171,6 @@ export const getManagedDatabaseDirectory = createServerFn({
         name: record.name,
         relayId: record.relayId,
         relayName,
-        shortId: record.databaseId.slice(0, 8),
         supportsImportExport: record.supportsImportExport,
       },
     ]
@@ -285,11 +287,14 @@ export const renameManagedDatabase = createServerFn({ method: "POST" })
 
 export const createManagedDatabase = createServerFn({ method: "POST" })
   .validator(createDatabaseInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(createDatabase, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
+  .handler(async ({ data: { idempotencyKey, ...data } }) => {
+    const user = await requireEligibleResourceUser()
+    const id = await reserveInstanceId(
+      "database",
+      `database.create:${user.id}:${idempotencyKey}`
+    )
+    return runOperationPromise(createDatabase, { ...data, id }, { user })
+  })
 
 const powerDatabase = resourceOperation({
   kind: "database",

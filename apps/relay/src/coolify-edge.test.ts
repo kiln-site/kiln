@@ -8,7 +8,7 @@ import { exclusive, laneKeys } from "./operation-lanes.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness } from "./test/relay.js"
 
-const serverId = "a".repeat(40)
+const serverId = "a".repeat(12)
 const route: RelayStoredWebRoute = {
   hostname: "map.example.com",
   id: "b00d4423",

@@ -85,6 +85,12 @@ import {
   shared,
   type OperationLanes,
 } from "./operation-lanes.js"
+import {
+  currentId,
+  instanceIdFrom,
+  physicalKey,
+  physicalShortKey,
+} from "./instance-keys.js"
 import { appLifecycleLocks } from "./operation-plans.js"
 import { provisioningStatus } from "./provisioning.js"
 import { containerPower } from "./resource-power.js"
@@ -302,7 +308,7 @@ export class AppDriver {
       if (containers.length === 0 && !(await this.#networks()).includes(appId))
         return null
       return containers.filter(joinsNetworks).map((container) => ({
-        alias: this.#serviceAlias(appId, container.service),
+        aliases: this.#serviceAliases(appId, container.service),
         container: container.id,
       }))
     })
@@ -362,7 +368,6 @@ export class AppDriver {
       network: this.#networkName(input.id),
       observedState: "provisioning",
       provisioning: { attempt: 0, error: null, phase: "awaiting_claim" },
-      shortId: input.id.slice(0, 8),
       status: provisioningStatus("awaiting_claim", "app"),
     })
   }
@@ -934,7 +939,9 @@ export class AppDriver {
     // the app's removal.
     await docker(
       engine
-        .listImages({ filters: { label: [`${ID_LABEL}=${input.appId}`] } })
+        .listImages({
+          filters: { label: [`${ID_LABEL}=${physicalKey(input.appId)}`] },
+        })
         .pipe(
           Effect.flatMap((images) =>
             Effect.forEach(
@@ -972,10 +979,10 @@ export class AppDriver {
       force: true,
       recursive: true,
     })
-    await rm(join(this.#config.dataDirectory, "app-sources", input.appId), {
-      force: true,
-      recursive: true,
-    })
+    await rm(
+      join(this.#config.dataDirectory, "app-sources", physicalKey(input.appId)),
+      { force: true, recursive: true }
+    )
     this.#deployments.delete(input.appId)
     this.#wake(input.appId)
     return { appId: input.appId, deleted: true }
@@ -997,7 +1004,7 @@ export class AppDriver {
   async fileRoot(appId: string): Promise<AppFileRoot> {
     await this.get(appId)
     await mkdir(this.#appDirectory(appId), { recursive: true })
-    return { directory: appId, id: appId }
+    return { directory: physicalKey(appId), id: appId }
   }
 
   // An app's console output: the log of its latest deployment, or one of
@@ -1491,7 +1498,11 @@ export class AppDriver {
   }
 
   #deploymentDirectory(appId: string): string {
-    return join(this.#config.dataDirectory, "app-deployments", appId)
+    return join(
+      this.#config.dataDirectory,
+      "app-deployments",
+      physicalKey(appId)
+    )
   }
 
   // The commit a GitHub deployment builds, unpacked in the Relay's data
@@ -1504,7 +1515,7 @@ export class AppDriver {
     const github = input.github!
     const directory = checkoutDirectory(
       this.#config.dataDirectory,
-      input.appId,
+      physicalKey(input.appId),
       deployment.id
     )
     this.#log(
@@ -1531,7 +1542,11 @@ export class AppDriver {
   // whose services may bind files from them, whichever deployment left
   // them running; removes every other, a Dockerfile's once it's built.
   async #cleanCheckouts(appId: string) {
-    const root = join(this.#config.dataDirectory, "app-sources", appId)
+    const root = join(
+      this.#config.dataDirectory,
+      "app-sources",
+      physicalKey(appId)
+    )
     await Effect.runPromise(
       promiseEffect(async () => {
         const inUse = new Set(
@@ -1634,7 +1649,7 @@ export class AppDriver {
     deployment: Deployment,
     checkout: string | null
   ) {
-    const tag = `kiln-app-${input.appId}:${deployment.id}`
+    const tag = `kiln-app-${physicalKey(input.appId)}:${deployment.id}`
     let dockerfile = this.#dockerfilePath(input.appId)
     let context = this.#appDirectory(input.appId)
     if (checkout && input.github) {
@@ -1706,6 +1721,7 @@ export class AppDriver {
     const previous = await this.#appContainers(input.appId)
     const name = this.#containerName(input.appId, null, deployment.id)
     const hostname = this.#hostname(input.appId)
+    const aliases = this.#serviceAliases(input.appId, APP_SERVICE)
     const environment = this.#environment(input.appId, deployment, config)
     const databases = await this.#connectableDatabases(input.appId, deployment)
     const routes = await this.#networking.routes(input.appId)
@@ -1763,7 +1779,7 @@ export class AppDriver {
         // on its network only once it's healthy, so bundled Traefik sends it
         // nothing before then.
         network: {
-          aliases: rolling ? [] : [hostname],
+          aliases: rolling ? [] : aliases,
           name: this.#networkName(input.appId),
         },
         ports: config.ports.map((port) => ({
@@ -1779,16 +1795,14 @@ export class AppDriver {
       ...databases,
       ...(routes.network ? [routes.network] : []),
     ]) {
-      await docker(
-        this.#engine.connectNetwork(network, name, { aliases: [hostname] })
-      )
+      await docker(this.#engine.connectNetwork(network, name, { aliases }))
     }
     // Tailscale members keep their address, which the new container takes
     // once the previous one stops.
     for (const membership of tailscale) {
       await docker(
         this.#engine.connectNetwork(membership.network, name, {
-          aliases: [hostname],
+          aliases,
           ipv4Address: membership.address,
         })
       )
@@ -1799,7 +1813,7 @@ export class AppDriver {
       return
     }
     await this.#rollingOver(input.appId, deployment, previous, start, () =>
-      this.#takeAlias(this.#networkName(input.appId), name, hostname)
+      this.#takeAlias(this.#networkName(input.appId), name, aliases)
     )
   }
 
@@ -1856,10 +1870,14 @@ export class AppDriver {
   }
 
   // Gives a running container a name on a network it joined without it.
-  async #takeAlias(network: string, container: string, alias: string) {
+  async #takeAlias(
+    network: string,
+    container: string,
+    aliases: ReadonlyArray<string>
+  ) {
     await docker(this.#engine.disconnectNetwork(network, container))
     await docker(
-      this.#engine.connectNetwork(network, container, { aliases: [alias] })
+      this.#engine.connectNetwork(network, container, { aliases: [...aliases] })
     )
   }
 
@@ -2052,7 +2070,7 @@ export class AppDriver {
       this.#log(input.appId, deployment, text, level)
     const base = this.#composeProject(input.appId)
     const directory = this.#appDirectory(input.appId)
-    const hostDirectory = join(host, "apps", input.appId)
+    const hostDirectory = join(host, "apps", physicalKey(input.appId))
     // A pasted Compose file's relative paths are in the app's own folder on
     // the Relay; a repository's in its own folder of the checkout, so its
     // builds and binds read the repository's files.
@@ -2067,14 +2085,21 @@ export class AppDriver {
       file = await readFile(found, "utf8")
       projectDirectory = join(checkout, dirname(input.github.path))
       binds.push({
-        host: join(host, "app-sources", input.appId, deployment.id),
+        host: join(
+          host,
+          "app-sources",
+          physicalKey(input.appId),
+          deployment.id
+        ),
         relay: checkout,
       })
     }
     const environment = {
       ...process.env,
       ...this.#environment(input.appId, deployment, input.config),
-      KILN_APP_ID: input.appId,
+      // For interpolating names in the Compose file, so it's what the App's
+      // resources are named after (instance-keys.ts).
+      KILN_APP_ID: physicalKey(input.appId),
     }
     // The standalone Compose binary, which `docker compose` runs.
     const composeArguments = (project: string) => [
@@ -2385,9 +2410,10 @@ export class AppDriver {
                     this.#networkName(input.appId),
                     container.name,
                     {
-                      aliases: [
-                        this.#serviceAlias(input.appId, container.service),
-                      ],
+                      aliases: this.#serviceAliases(
+                        input.appId,
+                        container.service
+                      ),
                     }
                   )
                 )
@@ -2533,13 +2559,13 @@ export class AppDriver {
               ? {}
               : {
                   kiln_app: {
-                    aliases: [this.#serviceAlias(options.appId, name)],
+                    aliases: this.#serviceAliases(options.appId, name),
                   },
                 }),
             ...Object.fromEntries(
               joined.map((network) => [
                 network,
-                { aliases: [this.#serviceAlias(options.appId, name)] },
+                { aliases: this.#serviceAliases(options.appId, name) },
               ])
             ),
             ...Object.fromEntries(
@@ -2548,7 +2574,7 @@ export class AppDriver {
                 .map((membership) => [
                   membership.network,
                   {
-                    aliases: [this.#serviceAlias(options.appId, name)],
+                    aliases: this.#serviceAliases(options.appId, name),
                     ipv4_address: membership.address,
                   },
                 ])
@@ -2646,12 +2672,12 @@ export class AppDriver {
     const networks = await this.#databaseNetworks(databaseIds)
     for (const id of databaseIds) {
       if (networks.has(id)) {
-        this.#log(appId, deployment, `Connecting database ${id.slice(0, 8)}`)
+        this.#log(appId, deployment, `Connecting database ${id}`)
       } else {
         this.#log(
           appId,
           deployment,
-          `Database ${id.slice(0, 8)} has no network now; it joins on a later deploy`,
+          `Database ${id} has no network now; it joins on a later deploy`,
           "warn"
         )
       }
@@ -2824,8 +2850,9 @@ export class AppDriver {
       ...new Set(
         containers.flatMap((container) =>
           container.networks.flatMap((network) => {
+            // A migrated database's network keeps its old ID's name.
             const match = this.#isDatabaseNetwork(network)
-              ? network.slice(prefix.length, prefix.length + 40)
+              ? currentId(network.slice(prefix.length, -"-network".length))
               : null
             return match ? [match] : []
           })
@@ -2860,13 +2887,12 @@ export class AppDriver {
           state: container.state,
           status: container.status,
         })),
-      dataDirectory: join(host, "apps", id),
+      dataDirectory: join(host, "apps", physicalKey(id)),
       deployment: deployment ? deploymentSummary(deployment) : null,
       hostname: this.#hostname(id),
       id,
       network: this.#networkName(id),
       observedState,
-      shortId: id.slice(0, 8),
       status,
     })
   }
@@ -2889,7 +2915,9 @@ export class AppDriver {
           all: true,
           filters: {
             label: [
-              appId ? `${ID_LABEL}=${appId}` : `${KIND_LABEL}=${APP_KIND}`,
+              appId
+                ? `${ID_LABEL}=${physicalKey(appId)}`
+                : `${KIND_LABEL}=${APP_KIND}`,
             ],
           },
         })
@@ -2900,7 +2928,10 @@ export class AppDriver {
                 .filter(
                   (container) =>
                     relayOwnsLabels(this.#config, container.Labels) &&
-                    (!ids || ids.includes(container.Labels?.[ID_LABEL] ?? ""))
+                    (!ids ||
+                      ids.includes(
+                        instanceIdFrom(container.Labels?.[ID_LABEL]) ?? ""
+                      ))
                 )
                 .map((container) => container.Id)
             )
@@ -2913,10 +2944,10 @@ export class AppDriver {
 
   #appContainer(container: ContainerInspect): Array<AppContainer> {
     const labels = container.Config.Labels ?? {}
-    const id = labels[ID_LABEL]
+    const id = instanceIdFrom(labels[ID_LABEL])
     if (
       labels[KIND_LABEL] !== APP_KIND ||
-      !id?.match(/^[a-f0-9]{40}$/u) ||
+      !id ||
       !relayOwnsLabels(this.#config, labels)
     ) {
       return []
@@ -2977,11 +3008,8 @@ export class AppDriver {
       signal
     )
     return networks.flatMap(({ Labels: labels }) => {
-      const id = labels?.[ID_LABEL]
-      return id?.match(/^[a-f0-9]{40}$/u) &&
-        relayOwnsLabels(this.#config, labels)
-        ? [id]
-        : []
+      const id = instanceIdFrom(labels?.[ID_LABEL])
+      return id && relayOwnsLabels(this.#config, labels) ? [id] : []
     })
   }
 
@@ -2991,9 +3019,10 @@ export class AppDriver {
       : ""
   }
 
-  // kiln-<shortid>-<time>, or kiln-<shortid>-<service>-<time> for Compose.
+  // kiln-<id>-<time>, or kiln-<id>-<service>-<time> for Compose; an App
+  // from before 12-character IDs keeps its old ID's first 8 characters.
   #containerName(appId: string, service: string | null, stamp: string) {
-    return `${this.#prefix()}kiln-${appId.slice(0, 8)}${service ? `-${service}` : ""}-${stamp}`
+    return `${this.#prefix()}kiln-${physicalShortKey(appId)}${service ? `-${service}` : ""}-${stamp}`
   }
 
   #networkName(appId: string): string {
@@ -3005,11 +3034,13 @@ export class AppDriver {
   }
 
   #hostname(appId: string): string {
-    return `app-${appId.slice(0, 8)}`
+    return `app-${physicalShortKey(appId)}`
   }
 
-  #serviceAlias(appId: string, service: string): string {
-    return this.#resources.appAlias(appId, service)
+  // Its names on a network; one from before 12-character IDs answers to
+  // its old name and its new one.
+  #serviceAliases(appId: string, service: string): Array<string> {
+    return this.#resources.appAliases(appId, service)
   }
 
   #databaseNetworkPrefix(): string {
@@ -3020,22 +3051,28 @@ export class AppDriver {
     const prefix = this.#databaseNetworkPrefix()
     return (
       network.startsWith(prefix) &&
-      /^[a-f0-9]{40}-network$/u.test(network.slice(prefix.length))
+      /^(?:[a-f0-9]{40}|[a-f0-9]{12})-network$/u.test(
+        network.slice(prefix.length)
+      )
     )
   }
 
   #appDirectory(appId: string): string {
-    return join(this.rootDirectory, appId)
+    return join(this.rootDirectory, physicalKey(appId))
   }
 
   #dockerfilePath(appId: string): string {
-    return join(this.#config.dataDirectory, "app-builds", `${appId}.Dockerfile`)
+    return join(
+      this.#config.dataDirectory,
+      "app-builds",
+      `${physicalKey(appId)}.Dockerfile`
+    )
   }
 
   // Where the files an app's config mounts are written, apart from its data
   // directory so the app can't reach them there.
   #mountDirectory(appId: string): string {
-    return join(this.#config.dataDirectory, "app-mounts", appId)
+    return join(this.#config.dataDirectory, "app-mounts", physicalKey(appId))
   }
 
   // The config's mounts as Docker takes them: volumes by their Docker name,
@@ -3089,7 +3126,13 @@ export class AppDriver {
             kind: "file",
             readOnly,
             service,
-            source: join(host, "app-mounts", input.appId, deployment.id, file),
+            source: join(
+              host,
+              "app-mounts",
+              physicalKey(input.appId),
+              deployment.id,
+              file
+            ),
             target,
             type: "bind",
           })
@@ -3101,7 +3144,7 @@ export class AppDriver {
 
   #resourceLabels(appId: string): Record<string, string> {
     const labels: Record<string, string> = {
-      [ID_LABEL]: appId,
+      [ID_LABEL]: physicalKey(appId),
       [KIND_LABEL]: APP_KIND,
       "kiln.relay.owned": "true",
     }
@@ -3116,7 +3159,7 @@ export class AppDriver {
   // Whose build it is, so a cleanup on a host with another Relay leaves
   // that one's alone (docker-cleanup.ts).
   #imageLabels(appId: string): Record<string, string> {
-    return { [ID_LABEL]: appId, ...relayOwnerLabels(this.#config) }
+    return { [ID_LABEL]: physicalKey(appId), ...relayOwnerLabels(this.#config) }
   }
 
   #containerLabels(

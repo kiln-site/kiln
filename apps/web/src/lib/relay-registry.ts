@@ -22,6 +22,8 @@ import {
   relayPairingResponseTranscript,
   relayBootstrapDiscoveryTranscript,
   relayBootstrapEnrollmentTranscript,
+  relayFingerprintSchema,
+  relayIdSchema,
   relaySnapshotSchema,
 } from "@workspace/contracts"
 import type {
@@ -67,6 +69,8 @@ export interface PersistedRelay {
   createdAt: string
   createdBy: string | null
   enabled: boolean
+  /** Its public-key fingerprint, which authenticates it; not its ID. */
+  fingerprint: string | null
   hostname: string
   id: string
   issuerGeneration: number
@@ -153,6 +157,7 @@ export interface RelayRow extends RowDataPacket {
   created_at: number
   created_by: string | null
   enabled: number
+  fingerprint: string | null
   hostname: string
   id: string
   issuer_generation: string | number
@@ -184,7 +189,7 @@ const pairingEnvelopeSchema = z.object({
     })
     .optional(),
   invitationId: z.uuid(),
-  relayFingerprint: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
+  relayFingerprint: relayFingerprintSchema,
   relayName: z.string().trim().min(1).max(120),
   relayPublicKeyPem: z.string().min(80).max(2_048),
   token: z.string().min(32).max(512),
@@ -193,10 +198,11 @@ const pairingEnvelopeSchema = z.object({
 
 export const pairingResponseSchema = z.object({
   actions: z.array(z.string().min(1).max(120)).max(128),
-  clientId: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
+  clientId: relayFingerprintSchema,
   expiresAt: z.number().int().positive(),
   nonce: z.string().min(16).max(128),
-  relayFingerprint: z.string().regex(/^[A-Za-z\d_-]{43}$/u),
+  relayFingerprint: relayFingerprintSchema,
+  relayId: relayIdSchema,
   relayName: z.string().trim().min(1).max(120),
   relayPublicKeyPem: z.string().min(80).max(2_048),
   role: z.enum(["custom", "full_access", "read_only"]),
@@ -258,7 +264,7 @@ export async function findPersistedRelayRow(
   id: string
 ): Promise<RelayRow | null> {
   const [rows] = await databasePool.query<Array<RelayRow>>(
-    `SELECT id, name, hostname, port, use_tls, browser_origin,
+    `SELECT id, fingerprint, name, hostname, port, use_tls, browser_origin,
             client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
             node_arch, node_platform, node_version, control_dial,
@@ -272,11 +278,37 @@ export async function findPersistedRelayRow(
   return rows[0] ?? null
 }
 
+/** The saved Relay a public-key fingerprint authenticates, if any. */
+export async function loadPersistedRelayByFingerprint(
+  fingerprint: string
+): Promise<PersistedRelay | null> {
+  const row = await findPersistedRelayRowByFingerprint(fingerprint)
+  return row ? toPersistedRelay(row) : null
+}
+
+export async function findPersistedRelayRowByFingerprint(
+  fingerprint: string
+): Promise<RelayRow | null> {
+  const [rows] = await databasePool.query<Array<RelayRow>>(
+    `SELECT id, fingerprint, name, hostname, port, use_tls, browser_origin,
+            client_id, client_role, client_actions, issuer_generation, enabled,
+            last_connected_at, last_error, managed_ember_count,
+            node_arch, node_platform, node_version, control_dial,
+            relay_public_key, relay_ca_certificate,
+            client_public_key, client_private_key_ciphertext, created_by, created_at
+       FROM ${databaseTable("relay")}
+      WHERE fingerprint = ?
+      LIMIT 1`,
+    [fingerprint]
+  )
+  return rows[0] ?? null
+}
+
 export const listPersistedRelaysEffect = Effect.fn("relays.list")(function* () {
   const database = yield* Database
   const rows = yield* database.queryRows<RelayRow>(
     "relays_list",
-    `SELECT id, name, hostname, port, use_tls, browser_origin,
+    `SELECT id, fingerprint, name, hostname, port, use_tls, browser_origin,
             client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
             node_arch, node_platform, node_version, control_dial,
@@ -294,7 +326,7 @@ export const loadEnabledRelayForIssuanceEffect = Effect.fn(
   const database = yield* Database
   const rows = yield* database.queryRows<RelayRow>(
     "relay_issuance",
-    `SELECT id, name, hostname, port, use_tls, browser_origin,
+    `SELECT id, fingerprint, name, hostname, port, use_tls, browser_origin,
             client_id, client_role, client_actions, issuer_generation, enabled,
             last_connected_at, last_error, managed_ember_count,
             node_arch, node_platform, node_version, control_dial,
@@ -386,7 +418,9 @@ export async function pairPersistedRelay(
 
 export async function previewPairingUri(pairingUri: string) {
   const envelope = decodePairingUri(pairingUri)
-  const existing = await findPersistedRelayRow(envelope.relayFingerprint)
+  const existing = await findPersistedRelayRowByFingerprint(
+    envelope.relayFingerprint
+  )
   return {
     browserOrigin: envelope.browserOrigin,
     controlEndpoint: envelope.controlEndpoint,
@@ -736,7 +770,9 @@ async function pairWithEnvelope(
     throw new Error("Development Relay endpoints must use matching protocols")
   }
 
-  const existing = await findPersistedRelayRow(envelope.relayFingerprint)
+  const existing = await findPersistedRelayRowByFingerprint(
+    envelope.relayFingerprint
+  )
   if (existing && existing.relay_public_key !== envelope.relayPublicKeyPem) {
     throw new Error(
       "The saved Relay identity does not match this pairing invitation"
@@ -749,7 +785,8 @@ async function pairWithEnvelope(
   // still has its old one here.
   const [holders] = await databasePool.query<Array<RelayRow>>(
     `SELECT name FROM ${databaseTable("relay")}
-      WHERE hostname = ? AND port = ? AND id <> ?
+      WHERE hostname = ? AND port = ?
+        AND (fingerprint IS NULL OR fingerprint <> ?)
       LIMIT 1`,
     [
       controlEndpoint.hostname,
@@ -762,7 +799,7 @@ async function pairWithEnvelope(
       `${holders[0].name} is already at this Relay's address; remove it first`
     )
   }
-  // A Relay keeps this fingerprint when its SQLite state is rebuilt. Reuse
+  // A Relay keeps its identity when its SQLite state is rebuilt. Reuse
   // Hearth's client identity so Relay can enroll it again without replacing
   // Hearth's Relay row and cascading away instance activity or pins.
   const keys = existing
@@ -828,6 +865,11 @@ async function pairWithEnvelope(
   if (existing && response.clientId !== existing.client_id) {
     throw new Error("Relay repair returned a different Hearth client identity")
   }
+  // Its ID, which it signed with its key.
+  const relayId = response.relayId
+  if (existing && existing.id !== relayId) {
+    throw new Error("The Relay answered with a different ID than Hearth saved")
+  }
 
   const initialName = existing
     ? response.relayName
@@ -848,8 +890,9 @@ async function pairWithEnvelope(
       createdBy: subject ?? null,
       creatorUserId,
       expectedExisting: existing !== null,
+      fingerprint: envelope.relayFingerprint,
       hostname: controlEndpoint.hostname,
-      id: envelope.relayFingerprint,
+      id: relayId,
       name: initialName,
       port: effectivePort(controlEndpoint),
       relayCaCertificate: envelope.caCertificatePem,
@@ -860,7 +903,7 @@ async function pairWithEnvelope(
   )
   if (existing) {
     const { closeRelayConnection } = await import("@/lib/relay-connection")
-    closeRelayConnection(envelope.relayFingerprint)
+    closeRelayConnection(relayId)
   }
   return Effect.runPromise(
     registryOperation(async () => {
@@ -868,12 +911,12 @@ async function pairWithEnvelope(
         await renamePersistedRelay(
           {
             name: initialName,
-            relayId: envelope.relayFingerprint,
+            relayId,
           },
           subject
         )
       }
-      const checked = await inspectPersistedRelay(envelope.relayFingerprint)
+      const checked = await inspectPersistedRelay(relayId)
       publishRelayCollectionChange(
         checked.id,
         creatorUserId ? [creatorUserId] : []
@@ -883,9 +926,9 @@ async function pairWithEnvelope(
       Effect.catch((cause) =>
         (existing
           ? Effect.void
-          : registryOperation(() =>
-              deletePersistedRelay(envelope.relayFingerprint)
-            ).pipe(Effect.asVoid)
+          : registryOperation(() => deletePersistedRelay(relayId)).pipe(
+              Effect.asVoid
+            )
         ).pipe(Effect.flatMap(() => Effect.fail(cause)))
       )
     )
@@ -911,7 +954,10 @@ export function persistPairedRelayEffect(input: {
   createdBy: string | null
   creatorUserId: string | null
   expectedExisting: boolean
+  /** Its public-key fingerprint, which authenticates it. */
+  fingerprint: string
   hostname: string
+  /** Its instance ID, which it chose and signed. */
   id: string
   name: string
   port: number
@@ -956,10 +1002,28 @@ export function persistPairedRelayEffect(input: {
           )
         }
 
+        // Its ID is reserved like any instance's; one another instance
+        // holds refuses the pairing.
+        yield* transaction.execute(
+          `INSERT IGNORE INTO ${databaseTable("instance_id")}
+             (id, kind, request_key, created_at)
+           VALUES (?, 'relay', NULL, ?)`,
+          [input.id, now]
+        )
+        const holders = yield* transaction.queryRows<
+          RowDataPacket & { kind: string }
+        >(`SELECT kind FROM ${databaseTable("instance_id")} WHERE id = ?`, [
+          input.id,
+        ])
+        if (holders[0]?.kind !== "relay") {
+          return yield* Effect.fail(
+            new Error("Another instance already has this Relay's ID")
+          )
+        }
         if (persisted) {
           yield* transaction.execute(
             `UPDATE ${databaseTable("relay")}
-                  SET name = ?, hostname = ?, port = ?, use_tls = ?,
+                  SET fingerprint = ?, name = ?, hostname = ?, port = ?, use_tls = ?,
                       browser_origin = ?, relay_public_key = ?,
                       relay_ca_certificate = ?, client_id = ?,
                       client_public_key = ?, client_private_key_ciphertext = ?,
@@ -970,6 +1034,7 @@ export function persistPairedRelayEffect(input: {
                       last_error = NULL, updated_at = ?
                 WHERE id = ?`,
             [
+              input.fingerprint,
               input.name,
               input.hostname,
               input.port,
@@ -991,14 +1056,15 @@ export function persistPairedRelayEffect(input: {
         } else {
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("relay")} (
-                id, name, hostname, port, use_tls, browser_origin,
+                id, fingerprint, name, hostname, port, use_tls, browser_origin,
                 relay_public_key, relay_ca_certificate,
                 client_id, client_public_key, client_private_key_ciphertext,
                 client_role, client_actions, enabled, created_by,
                 send_installation_id, control_dial, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?, ?, ?)`,
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?, ?, ?)`,
             [
               input.id,
+              input.fingerprint,
               input.name,
               input.hostname,
               input.port,
@@ -1155,6 +1221,13 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
           `DELETE FROM ${databaseTable("access_grant")} WHERE relay_id = ?`,
           [id]
         )
+        // Deployments name their instance and Relay without a foreign key,
+        // so they don't go with the Relay's Apps and game servers on their
+        // own.
+        yield* transaction.execute(
+          `DELETE FROM ${databaseTable("deployment")} WHERE relay_id = ?`,
+          [id]
+        )
         // A join still adding this Relay can't finish without it: it ends,
         // its worker stops at its next write, and the Relay may join again.
         yield* transaction.execute(
@@ -1162,7 +1235,9 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
               SET state = 'revoked', claimed_fingerprint = NULL,
                   lease_until = NULL, claim_generation = claim_generation + 1,
                   client_private_key_ciphertext = NULL, updated_at = ?
-            WHERE claimed_fingerprint = ?
+            WHERE claimed_fingerprint IN (
+                    SELECT fingerprint FROM ${databaseTable("relay")} WHERE id = ?
+                  )
               AND state IN ('confirming', 'needs_review')`,
           [now, id]
         )
@@ -1348,6 +1423,11 @@ export function loadRelayCredentials(
  * which a Relay with none saves as its own.
  */
 export type RelayConnectionCredentials = RelayCredentials & {
+  /**
+   * Its public-key fingerprint. A Relay not yet updated to instance IDs
+   * still names itself by it; Hearth accepts that only so it can update it.
+   */
+  relayFingerprint: string | null
   relayName: string
   sendInstallationId: boolean
 }
@@ -1357,7 +1437,7 @@ export const loadRelayCredentialsEffect = Effect.fn("relays.credentials")(
     const database = yield* Database
     const rows = yield* database.queryRows<RelayRow>(
       "relay_credentials",
-      `SELECT id, name, hostname, port, use_tls, browser_origin,
+      `SELECT id, fingerprint, name, hostname, port, use_tls, browser_origin,
               client_id, client_role, client_actions, issuer_generation, enabled,
               last_connected_at, last_error, managed_ember_count,
               node_arch, node_platform, node_version, control_dial,
@@ -1378,6 +1458,7 @@ export const loadRelayCredentialsEffect = Effect.fn("relays.credentials")(
     }
     return {
       ...(yield* decryptRelayCredentialsEffect(encryptedRelayCredentials(row))),
+      relayFingerprint: row.fingerprint,
       relayName: row.name,
       sendInstallationId: Boolean(row.send_installation_id),
     } satisfies RelayConnectionCredentials
@@ -1630,6 +1711,7 @@ function toPersistedRelay(row: RelayRow): PersistedRelay {
     createdAt: new Date(row.created_at).toISOString(),
     createdBy: row.created_by,
     enabled: Boolean(row.enabled),
+    fingerprint: row.fingerprint,
     hostname: row.hostname,
     id: row.id,
     issuerGeneration: Number(row.issuer_generation),

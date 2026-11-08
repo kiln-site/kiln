@@ -224,7 +224,7 @@ export function tailscaleStackCoreDnsRecords(
       ]
     })
   return relayTailscaleStackDnsSchema.parse({
-    id: "0".repeat(40),
+    id: "0".repeat(12),
     records,
   }).records
 }

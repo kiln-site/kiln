@@ -38,7 +38,7 @@ import { backupLinks } from "./backup-links.js"
 import { TransferGate } from "./gate.js"
 
 const origin = "https://hearth.test"
-const relayId = "relay-transfer-test"
+const relayId = "0123456789ab"
 const issuer = "hearth-transfer-test"
 const instanceId = "instance-1"
 const backupId = "6f1e2a4c-7b39-4d2e-9a51-3c8b0f7d2e10"
@@ -225,7 +225,7 @@ async function startRelay(options: { instanceExists?: boolean } = {}) {
     })
   )
   const config = testRelayConfig(dataDirectory)
-  const identity = { fingerprint: relayId } as RelayIdentity
+  const identity = { id: relayId } as RelayIdentity
   const gate = new TransferGate()
   const backups = backupLinks({ config, gate, identity, state })
   const filesystem = new FilesystemDriver(config)

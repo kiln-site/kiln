@@ -12,10 +12,10 @@ import { relayWebRoutesHandler } from "@/server/relay-web-routes.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows } from "@/test/seed"
 
-const relayId = "r".repeat(43)
-const serverId = "a".repeat(40)
-const siblingId = "b".repeat(40)
-const appId = "c".repeat(40)
+const relayId = "1".repeat(12)
+const serverId = "a".repeat(12)
+const siblingId = "b".repeat(12)
+const appId = "c".repeat(12)
 
 const route = (
   id: string,

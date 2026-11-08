@@ -21,10 +21,7 @@ import {
   kilnPlatformQueryOptions,
   relaysQueryOptions,
 } from "@/lib/query-options"
-import {
-  relayRouteIdentifier,
-  type RelayDirectoryEntry,
-} from "@/lib/relay-route"
+import type { RelayDirectoryEntry } from "@/lib/relay-route"
 import {
   queueTerminalInput,
   relayTerminalInputKey,
@@ -123,7 +120,7 @@ export function KilnRestoreDialog({
           {relay && managed === "relay" ? (
             <Button asChild type="button">
               <Link
-                params={{ relayId: relay.routeId }}
+                params={{ relayId: relay.id }}
                 to="/relay/$relayId/terminal"
                 onClick={() =>
                   queueTerminalInput(
@@ -167,9 +164,7 @@ function useRelayRoute(relayId: string) {
   const select = React.useCallback(
     (relays: Array<RelayDirectoryEntry>) => {
       const relay = relays.find((candidate) => candidate.id === relayId)
-      return relay
-        ? { name: relay.name, routeId: relayRouteIdentifier(relays, relay) }
-        : null
+      return relay ? { name: relay.name, id: relay.id } : null
     },
     [relayId]
   )

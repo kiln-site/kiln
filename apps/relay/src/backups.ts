@@ -27,6 +27,7 @@ import ZipStream from "zip-stream"
 
 import {
   backupArtifactFilename,
+  INSTANCE_ID_SOURCE,
   type BackupArchiveCreateTaskResult,
   type BackupArchiveManifest,
   type BackupCreateTaskInput,
@@ -56,7 +57,7 @@ import {
 } from "./database-backups.js"
 import { createEncryptedPlatformBackup } from "./platform-backups.js"
 import { RelayBackupError } from "./effect/errors.js"
-import { promiseEffect, recoverPromise } from "./effect/promise.js"
+import { promiseEffect } from "./effect/promise.js"
 import { RelayStateStore, type ScheduledBackupPrune } from "./effect/state.js"
 import {
   exclusive,
@@ -511,18 +512,9 @@ export class BackupManager {
                     // A task that timed out or was cancelled while it waited
                     // its turn mustn't start, a restore least of all.
                     precondition: () => !controller.signal.aborted,
-                    // A task may name its game server by short ID or name.
                     locks: backupTaskLocks(
                       task.input,
-                      (reference) =>
-                        /^[a-f0-9]{40}$/u.test(reference)
-                          ? reference
-                          : recoverPromise(
-                              async () =>
-                                (await this.#findInstance(reference))?.id ??
-                                reference,
-                              () => reference
-                            ),
+                      (reference) => reference,
                       () => volumeApps
                     ),
                   },
@@ -1143,7 +1135,7 @@ export class BackupManager {
   // The Apps whose lifecycles a volume's stopped backup or restore holds:
   // its owner, and every App that uses it.
   #volumeApps(volumeId: string) {
-    const owner = /^([a-f0-9]{40})\//u.exec(volumeId)?.[1]
+    const owner = APP_OWNED_VOLUME_OWNER.exec(volumeId)?.[1]
     return Effect.gen({ self: this }, function* () {
       const volume = this.#volumes
         ? yield* this.#volumes.find(volumeId).pipe(
@@ -1258,7 +1250,7 @@ export class BackupManager {
           unstarted.push(entry)
           warnings.push(
             backupWarning(
-              `App ${entry.appId.slice(0, 8)} couldn't be started again after the backup: ${backupErrorMessage(started.failure)}`
+              `App ${entry.appId} couldn't be started again after the backup: ${backupErrorMessage(started.failure)}`
             )
           )
         }
@@ -4187,5 +4179,8 @@ function isSkippableFilesystemChange(cause: unknown): boolean {
 function finalBackupOwner(target: BackupTarget): string | null {
   if (target.kind === "app") return target.id
   if (target.kind !== "volume") return null
-  return /^([a-f0-9]{40})\//u.exec(target.id)?.[1] ?? null
+  return APP_OWNED_VOLUME_OWNER.exec(target.id)?.[1] ?? null
 }
+
+// An App-owned volume's ID is `<appId>/<key>`.
+const APP_OWNED_VOLUME_OWNER = new RegExp(`^(${INSTANCE_ID_SOURCE})/`, "u")

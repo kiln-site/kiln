@@ -7,7 +7,6 @@ import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
 import { builtinTailscaleBrickId } from "@workspace/contracts"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
-import { relayInstanceRouteId } from "@/lib/relay-fleet"
 import {
   loadManagedDomainAddressesEffect,
   managedAddressForInstance,
@@ -60,8 +59,6 @@ export const readInfraServerDirectory = Effect.fn("Infra.directory.servers")(
           // On a tailnet, where its connect address is the tailnet one.
           tailscale: tailscaleEnabled,
           relayName,
-          shortId: record.id.slice(0, 8),
-          routeId: relayInstanceRouteId(record.relayId, record.id.slice(0, 8)),
         },
       ]
     })

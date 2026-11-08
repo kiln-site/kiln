@@ -94,8 +94,8 @@ const failBackup = (backupId: string) =>
 
 describeMysql("Deleting a game server or database", () => {
   layer(Lanes)((it) => {
-    const network = "e".repeat(40)
-    const peer = `instance:${"f".repeat(40)}`
+    const network = "e".repeat(12)
+    const peer = `instance:${"f".repeat(12)}`
 
     it.effect(
       "writes its Tailscale network's DNS without it, then deletes it and takes it off the network",
@@ -104,8 +104,8 @@ describeMysql("Deleting a game server or database", () => {
           yield* seed
           yield* seedNetwork(network, [`instance:${serverId}`, peer])
           // A Relay the network isn't on doesn't answer, and needn't.
-          yield* insertRelay("u".repeat(43))
-          relay.unreachable.add("u".repeat(43))
+          yield* insertRelay("3".repeat(12))
+          relay.unreachable.add("3".repeat(12))
 
           yield* deleteServer()
           const done = yield* until(serverId, ["completed", "failed"])
@@ -124,7 +124,7 @@ describeMysql("Deleting a game server or database", () => {
       "deletes nothing while a Relay its Tailscale network is on is paused",
       () =>
         Effect.gen(function* () {
-          const paused = "p".repeat(43)
+          const paused = "4".repeat(12)
           yield* seed
           yield* insertRelay(paused, { enabled: false })
           yield* seedNetwork(network, [`instance:${serverId}`, peer], [paused])
@@ -190,7 +190,7 @@ describeMysql("Deleting a game server or database", () => {
       "keeps an App's volume its deletion didn't plan to take, though nothing else uses it any more",
       () =>
         Effect.gen(function* () {
-          const otherApp = "c".repeat(40)
+          const otherApp = "c".repeat(12)
           yield* seed
           yield* seedApp([
             {

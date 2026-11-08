@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 
+import { deleteInstanceDeploymentsEffect } from "@/effect/app-deployments"
 import { setInstanceDomainOptOutEffect } from "@/effect/domains"
 import { deleteResourceGitHubSyncsEffect } from "@/effect/github-sync"
 import { removeIconsEffect } from "@/effect/icons"
@@ -86,6 +87,12 @@ export const cleanUpDeletedResourceEffect = Effect.fn(
     relayId,
   })
   yield* removeIconsEffect({ kind: kind === "instance" ? "server" : kind, relayId, id })
+  if (kind !== "database") {
+    yield* deleteInstanceDeploymentsEffect(
+      kind === "instance" ? "server" : "app",
+      id
+    )
+  }
   // The Relay has removed it, so its directory record goes too. Live
   // snapshots never remove records on their own.
   yield* kind === "instance"

@@ -106,17 +106,17 @@ vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
 afterAll(() => disposeAppRuntime())
 
-const relayId = "r".repeat(43)
-const first = "a".repeat(40)
-const second = "b".repeat(40)
+const relayId = "0123456789ab"
+const first = "a".repeat(12)
+const second = "b".repeat(12)
 // Apart from the others, whose deployments a test may leave running.
-const third = "c".repeat(40)
-const fourth = "d".repeat(40)
-const fifth = "e".repeat(40)
-const sixth = "f".repeat(40)
-const seventh = "7".repeat(40)
-const eighth = "8".repeat(40)
-const ninth = "9".repeat(40)
+const third = "c".repeat(12)
+const fourth = "d".repeat(12)
+const fifth = "e".repeat(12)
+const sixth = "f".repeat(12)
+const seventh = "7".repeat(12)
+const eighth = "8".repeat(12)
+const ninth = "9".repeat(12)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -142,7 +142,6 @@ function relayApp(id: string) {
     network: `kiln-app-${id.slice(0, 8)}`,
     observedState: "running",
     savedDatabaseIds: relay.connections.get(id) ?? [],
-    shortId: id.slice(0, 8),
     status: "Running",
   }
 }
@@ -161,7 +160,6 @@ function relayDatabase(id: string, phase: string) {
     name: "Main",
     observedState: "provisioning",
     provisioning: { attempt: 0, error: null, phase },
-    shortId: id.slice(0, 8),
     status: "Preparing database",
     supportsImportExport: true,
   }
@@ -419,7 +417,7 @@ describeMysql("App deployments", () => {
             relay_id: relayId,
           })
           yield* seedApp(ninth)
-          const database = "b".repeat(40)
+          const database = "b".repeat(12)
           relay.connections.set(ninth, [database])
           relay.provisioning.set(database, "pulling_image")
 
@@ -576,7 +574,7 @@ describeMysql("App deployments", () => {
           () => import("@/lib/app-deployments.server")
         )
         const id = yield* askAppDeploymentEffect({
-          appId: "8".repeat(40),
+          appId: "8".repeat(12),
           relayId: "z".repeat(43),
           trigger: "manual",
         })

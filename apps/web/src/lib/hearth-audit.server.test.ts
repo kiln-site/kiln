@@ -10,8 +10,8 @@ import {
 } from "@/lib/hearth-audit.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 
-const relayId = "r".repeat(43)
-const instanceId = "a".repeat(40)
+const relayId = "1".repeat(12)
+const instanceId = "a".repeat(12)
 
 describeMysql("Hearth audit", () => {
   layer(TestDatabase)((it) => {

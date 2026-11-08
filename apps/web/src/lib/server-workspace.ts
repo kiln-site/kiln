@@ -8,10 +8,7 @@ import {
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import { queryKeys } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
-import {
-  relayInstanceRouteIdentifier,
-  resolveRelayInstance,
-} from "@/lib/relay-selectors"
+import { findRelayInstance } from "@/lib/relay-selectors"
 import type {
   getInfraServerDirectory,
   getServerNavigation,
@@ -34,9 +31,8 @@ type SnapshotUpdate = (
 type RelayState = Pick<ServerWorkspaceRelay, "id" | "status" | "updating">
 type ServerInstance = RelayFleetSnapshot["instances"][number]
 
-// What a change does to the set of servers a route can name.
+// What a change does to the set of servers in the fleet.
 interface ServerChanges {
-  removesServers?: boolean
   upserted?: ReadonlyArray<ServerInstance>
 }
 
@@ -47,16 +43,14 @@ interface ServerChanges {
  * read began is applied to it again, in order. Each change writes a whole
  * server, a deletion, or a Relay status, so applying one twice is harmless.
  *
- * A gap cannot be replayed, and neither can a change that makes a page's
- * route mean something else, such as another server taking its short ID.
- * Those mark the page as needing resolution. Only a read that began after the
+ * A gap cannot be replayed, and neither can a change that brings back the
+ * server a missing page names. Those mark the page as needing resolution. Only a read that began after the
  * mark clears it, and a page still marked after its read is read again.
  */
 type Change =
   | { sequence: number; type: "gap" }
   | {
       apply: (workspace: FoundServerWorkspace) => ServerWorkspace
-      removesServers: boolean
       sequence: number
       type: "change"
       upserted: ReadonlyArray<ServerInstance>
@@ -113,8 +107,7 @@ export function serverWorkspaceQueryOptions(serverId: string) {
 
 /**
  * Whether a navigation to `serverId` can use its cached answer as is: one
- * that found the server, names it by an ID, and has not been marked for
- * resolution.
+ * that found the server and has not been marked for resolution.
  */
 export function serverWorkspaceReusable(
   queryClient: QueryClient,
@@ -130,7 +123,7 @@ export function serverWorkspaceReusable(
     query !== undefined &&
     instance !== undefined &&
     !readState(queryClient).unresolvedSince.has(query.queryHash) &&
-    namesById(serverId, instance)
+    instance.id === serverId
   )
 }
 
@@ -148,35 +141,22 @@ export type KnownServer = Pick<
   | "implementation"
   | "name"
   | "relayId"
-  | "routeId"
-  | "shortId"
   | "version"
 >
 
 /**
  * The game server `serverId` names, when this page already knows it from the
- * directory or the sidebar's navigation, with its canonical route ID. A page
- * can open on this before its own read arrives; the read then confirms it.
- * Undefined unless exactly one server matches.
+ * directory or the sidebar's navigation. A page can open on this before its
+ * own read arrives; the read then confirms it.
  */
 export function knownServer(
   queryClient: QueryClient,
   serverId: string
-): { routeIdentifier: string; server: KnownServer } | undefined {
+): KnownServer | undefined {
   const directory = queryClient.getQueryData<Array<DirectoryServer>>(
     queryKeys.servers.directory
   )
-  if (directory) {
-    const resolution = resolveRelayInstance(directory, serverId)
-    if (resolution.status !== "found") return undefined
-    const routeIdentifier = relayInstanceRouteIdentifier(
-      directory,
-      resolution.instance
-    )
-    return routeIdentifier
-      ? { routeIdentifier, server: resolution.instance }
-      : undefined
-  }
+  if (directory) return findRelayInstance(directory, serverId)
   for (const [
     ,
     navigation,
@@ -184,23 +164,15 @@ export function knownServer(
     queryKey: queryKeys.servers.navigation,
   })) {
     const server = navigation?.instance
-    if (
-      server &&
-      navigation.routeId &&
-      !navigation.ambiguous &&
-      namesById(serverId, server)
-    )
-      return { routeIdentifier: navigation.routeId, server }
+    if (server?.id === serverId) return server
   }
   return undefined
 }
 
 /**
  * The server a navigation to `serverId` opens. A cached answer is kept current
- * by pushed changes, so it is reused when `serverId` names that server by an
- * ID and nothing has marked its route for resolution. A name may now mean
- * another server, and an answer that was missing or ambiguous may have
- * changed, so those are read again.
+ * by pushed changes, so it is reused unless something has marked it for
+ * resolution; a missing answer is read again, since the server may now exist.
  */
 export async function ensureServerWorkspace(
   queryClient: QueryClient,
@@ -303,13 +275,12 @@ export async function recheckServerWorkspaces(
 function applyChange(
   queryClient: QueryClient,
   apply: (workspace: FoundServerWorkspace) => ServerWorkspace,
-  { removesServers = false, upserted = [] }: ServerChanges
+  { upserted = [] }: ServerChanges
 ) {
   const state = readState(queryClient)
   state.sequence += 1
   const change: Change = {
     apply,
-    removesServers,
     sequence: state.sequence,
     type: "change",
     upserted,
@@ -320,13 +291,9 @@ function applyChange(
     if (!workspace) continue
     const serverId = String(query.queryKey[2])
     const next = workspace.status === "found" ? apply(workspace) : workspace
-    // A missing page whose server returns, or a route that now names
-    // another server, resolves again. A read in flight answers for the old
-    // meaning, so it reads again once stored.
-    if (
-      changesResolution(serverId, workspace, change) ||
-      renamedAway(serverId, next)
-    ) {
+    // A missing page whose server appears resolves again. A read in flight
+    // answers from before, so it reads again once stored.
+    if (changesResolution(serverId, workspace, change)) {
       state.unresolvedSince.set(query.queryHash, state.sequence)
       void queryClient.invalidateQueries(
         { exact: true, queryKey: query.queryKey },
@@ -337,8 +304,8 @@ function applyChange(
   }
 }
 
-// Replays what a stored read missed, and resolves it again if its route may
-// now mean something else.
+// Replays what a stored read missed, and resolves it again if its server
+// may have appeared.
 function watchStoredReads(queryClient: QueryClient, state: ReadState) {
   queryClient.getQueryCache().subscribe((event) => {
     const { query } = event
@@ -367,11 +334,8 @@ function watchStoredReads(queryClient: QueryClient, state: ReadState) {
       if (!workspace) break
       if (changesResolution(serverId, workspace, change))
         state.unresolvedSince.set(query.queryHash, change.sequence)
-      if (change.type === "change" && workspace.status === "found") {
+      if (change.type === "change" && workspace.status === "found")
         workspace = change.apply(workspace)
-        if (renamedAway(serverId, workspace))
-          state.unresolvedSince.set(query.queryHash, change.sequence)
-      }
     }
     if (workspace !== query.state.data)
       queryClient.setQueryData(query.queryKey, workspace)
@@ -388,67 +352,19 @@ function watchStoredReads(queryClient: QueryClient, state: ReadState) {
 }
 
 // Whether a change a stored answer missed may change what its route names.
-// After a gap, anything may have. A found server's route is ambiguous once
-// another server alone would match its identifier: a shared short ID, the
-// same short ID on its Relay, its full ID on another Relay, or its name; a
-// Relay-qualified full ID matches no other. A server found by name may also
-// be renamed away (checked after the change applies). A missing answer
-// changes when a server its identifier names appears. An ambiguous answer is
-// rare and changes with any server's arrival, rename, or removal.
+// After a gap, anything may have. An instance ID names one server for good,
+// so a found answer stays found until its server goes; a missing answer
+// changes when the server it names appears.
 function changesResolution(
   serverId: string,
   workspace: ServerWorkspace,
   change: Change
 ): boolean {
   if (change.type === "gap") return true
-  if (workspace.status === "ambiguous")
-    return change.removesServers || change.upserted.length > 0
-  if (workspace.status === "not-found")
-    return (
-      resolveRelayInstance([...change.upserted], serverId).status !==
-      "not-found"
-    )
-  const [current] = workspace.snapshot.instances
-  return change.upserted.some(
-    (instance) =>
-      !sameServer(instance, current) &&
-      resolveRelayInstance([instance], serverId).status !== "not-found"
-  )
-}
-
-// A server found by name that no longer has that name.
-function renamedAway(serverId: string, workspace: ServerWorkspace) {
   return (
-    workspace.status === "found" &&
-    foundByName(serverId, workspace) &&
-    workspace.snapshot.instances[0]?.name !== serverId
+    workspace.status === "not-found" &&
+    change.upserted.some((instance) => instance.id === serverId)
   )
-}
-
-function foundByName(serverId: string, workspace: FoundServerWorkspace) {
-  const [instance] = workspace.snapshot.instances
-  return instance !== undefined && !namesById(serverId, instance)
-}
-
-// Whether `serverId` is one of the server's IDs: short, Relay-qualified
-// short or full, or full.
-function namesById(
-  serverId: string,
-  instance: Pick<ServerInstance, "id" | "relayId" | "routeId" | "shortId">
-) {
-  return (
-    serverId === instance.shortId ||
-    serverId === instance.routeId ||
-    serverId === instance.id ||
-    serverId === `${instance.relayId}-${instance.id}`
-  )
-}
-
-function sameServer(
-  instance: ServerInstance,
-  other: ServerInstance | undefined
-) {
-  return instance.id === other?.id && instance.relayId === other.relayId
 }
 
 function unresolved(queryClient: QueryClient, queryKey: QueryKey) {

@@ -19,7 +19,7 @@ import {
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 
-const databaseId = "d".repeat(40)
+const databaseId = "d".repeat(12)
 const dump =
   "CREATE TABLE players (name text);\nINSERT INTO players VALUES ('alex');\n"
 

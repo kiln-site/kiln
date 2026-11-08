@@ -108,7 +108,7 @@ const exists = (path: string) =>
 describe("Tailscale stack removal", () => {
   it("preserves the machine identity when logout fails and logs out on retry", async () => {
     const harness = await relayHarness()
-    const id = "b".repeat(40)
+    const id = "b".repeat(12)
     const directory = await preparedRemoval(harness, stackConfig(id))
     const container = stackContainer(harness, id, true)
     fakeDocker.addNetwork({
@@ -152,7 +152,7 @@ describe("Tailscale stack forwarding", () => {
   const bound = "10.165.57.10"
 
   async function runningStack(harness: RelayHarness) {
-    const id = "c".repeat(40)
+    const id = "c".repeat(12)
     const directory = join(harness.config.rootDirectory, id)
     await mkdir(directory, { recursive: true })
     await writeFile(
@@ -164,13 +164,13 @@ describe("Tailscale stack forwarding", () => {
               address: bound,
               enabled: true,
               hostname: "paper",
-              memberId: `instance:${"d".repeat(40)}`,
+              memberId: `instance:${"d".repeat(12)}`,
             },
             {
               address: "10.165.57.11",
               enabled: false,
               hostname: "paused",
-              memberId: `instance:${"e".repeat(40)}`,
+              memberId: `instance:${"e".repeat(12)}`,
             },
           ],
           subnet: "10.165.57.0/24",
@@ -221,7 +221,7 @@ describe("Tailscale stack forwarding", () => {
       harness.lanes
         .admit({
           label: "relay.tailscale.stack.apply",
-          locks: [exclusive(laneKeys.instance("c".repeat(40)))],
+          locks: [exclusive(laneKeys.instance("c".repeat(12)))],
         })
         .run(
           Effect.promise(() => {
@@ -248,11 +248,11 @@ const deletion = "11111111-1111-4111-8111-111111111111"
 const quiet = async () => {}
 
 describe("Tailscale network members", () => {
-  const stackId = "f".repeat(40)
-  const serverId = "a".repeat(40)
-  const otherServerId = "1".repeat(40)
-  const appId = "e".repeat(40)
-  const databaseId = "d".repeat(40)
+  const stackId = "f".repeat(12)
+  const serverId = "a".repeat(12)
+  const otherServerId = "1".repeat(12)
+  const appId = "e".repeat(12)
+  const databaseId = "d".repeat(12)
   const binding = (memberId: string, hostname: string, host: number) => ({
     address: `10.165.60.${host}`,
     enabled: true,
@@ -395,7 +395,7 @@ describe("Tailscale network members", () => {
   it("reports which members are frozen and whether a removal is pending", async () => {
     const harness = await relayHarness()
     await savedStack(harness, members, hearthRecords)
-    const removing = stackConfig("b".repeat(40), { subnet: "10.165.62.0/24" })
+    const removing = stackConfig("b".repeat(12), { subnet: "10.165.62.0/24" })
     await preparedRemoval(harness, removing)
     await harness.freezes.freeze(
       { deletionId: deletion, id: appId, kind: "app" },
@@ -421,9 +421,9 @@ describe("Tailscale network members", () => {
 })
 
 describe("Tailscale forwarding repair", () => {
-  const stackId = "9".repeat(40)
-  const serverId = "a".repeat(40)
-  const otherServerId = "1".repeat(40)
+  const stackId = "9".repeat(12)
+  const serverId = "a".repeat(12)
+  const otherServerId = "1".repeat(12)
   const binding = (
     memberId: string,
     hostname: string,

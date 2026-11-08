@@ -63,9 +63,9 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   },
 }))
 
-const relayId = "r".repeat(43)
-const appId = "a".repeat(40)
-const otherAppId = "b".repeat(40)
+const relayId = "1".repeat(12)
+const appId = "a".repeat(12)
+const otherAppId = "b".repeat(12)
 const media = "1".repeat(40)
 const uploads = "2".repeat(40)
 const gone = "3".repeat(40)

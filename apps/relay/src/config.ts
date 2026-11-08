@@ -39,7 +39,6 @@ export interface RelayInstanceConfig {
   hostDirectory?: string
   game: string
   id: string
-  shortId: string
   implementation: string
   javaVersion: string
   limits: ResourceLimits

@@ -32,8 +32,8 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
 afterAll(() => disposeAppRuntime())
 
 const at = Date.UTC(2026, 0, 1)
-const relayId = "r".repeat(43)
-const otherRelayId = "s".repeat(43)
+const relayId = "1".repeat(12)
+const otherRelayId = "2".repeat(12)
 
 const member: AuthenticatedUser = {
   email: "member@example.test",
@@ -48,8 +48,7 @@ const member: AuthenticatedUser = {
 }
 
 const instance = relayInstanceSchema.parse({
-  id: "a".repeat(40),
-  shortId: "aaaaaaaa",
+  id: "a".repeat(12),
   name: "Own server",
   service: "server",
   directory: "/data/server",
@@ -73,7 +72,7 @@ const snapshotWith = (server: typeof instance) =>
       server,
       {
         ...instance,
-        id: "b".repeat(40),
+        id: "b".repeat(12),
         limits: { diskBytes: 2 * 1024 ** 3, memoryBytes: 2 * 1024 ** 3 },
       },
     ],
@@ -163,7 +162,7 @@ describeMysql("resource limits", () => {
           "relay.read",
         ])
 
-        const room = yield* capacity("c".repeat(40), "app")
+        const room = yield* capacity("c".repeat(12), "app")
         assert.strictEqual(room?.assignableMemoryBytes, 5 * 1024 ** 3)
       })
     )
@@ -184,7 +183,7 @@ describeMysql("resource limits", () => {
           },
         })
 
-        const room = yield* capacity("c".repeat(40), "app")
+        const room = yield* capacity("c".repeat(12), "app")
         assert.strictEqual(room?.assignableMemoryBytes, 3 * 1024 ** 3)
       })
     )

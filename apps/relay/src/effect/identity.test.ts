@@ -31,6 +31,7 @@ describe("Relay identity", () => {
         )
 
         assert.strictEqual(initial.fingerprint, restarted.fingerprint)
+        assert.strictEqual(initial.id, restarted.id)
         assert.strictEqual(renamed.name, "Legacy Relay Name")
         assert.strictEqual(restarted.name, "Legacy Relay Name")
         assert.strictEqual(initial.privateKeyPem, restarted.privateKeyPem)

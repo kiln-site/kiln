@@ -84,10 +84,10 @@ afterAll(async () => {
 })
 
 const at = 1_767_225_600_000
-const oldRelay = "o".repeat(43)
-const newRelay = "n".repeat(43)
-const survival = "a1".repeat(20)
-const creative = "c3".repeat(20)
+const oldRelay = "01".repeat(6)
+const newRelay = "02".repeat(6)
+const survival = "a1".repeat(6)
+const creative = "c3".repeat(6)
 
 const mover = {
   email: "mover@example.test",
@@ -172,7 +172,6 @@ function instanceOf(relayId: string, id: string) {
     name: server.name,
     observedState: server.state,
     service: "survival",
-    shortId: id.slice(0, 8),
     status: server.state,
     variables: {},
     version: "1.21",
@@ -922,7 +921,7 @@ describeMysql("Server migrations", () => {
           // A move copying its files, its old server stopped for it, and
           // its copy made.
           const copying = randomUUID()
-          const copy = "b2".repeat(20)
+          const copy = "b2".repeat(6)
           relay.servers.set(serverKey(oldRelay, survival), {
             name: "Survival",
             provisioning: false,
@@ -946,7 +945,7 @@ describeMysql("Server migrations", () => {
           const handedOver = randomUUID()
           yield* insertLegacy({
             deleteSource: true,
-            destination: "d4".repeat(20),
+            destination: "d4".repeat(6),
             error: "Relay connection closed",
             id: handedOver,
             source: creative,

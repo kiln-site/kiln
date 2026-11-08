@@ -85,8 +85,6 @@ function applyRealtimeEvent(input: ApplyRealtimeEventInput): void {
     queryClient,
     (snapshot) => applyRealtimeSnapshotEvent(snapshot, event),
     {
-      removesServers:
-        event.type === "instances.delta" && event.deleted.length > 0,
       upserted: event.type === "instances.delta" ? event.upserted : undefined,
       relay:
         event.type === "relay.status"
@@ -357,13 +355,8 @@ export function applyDeletedInstance(
         instance.id !== deleted.instanceId ||
         instance.relayId !== deleted.relayId
     )
-  updateRelaySnapshots(
-    queryClient,
-    (snapshot) =>
-      snapshot
-        ? { ...snapshot, instances: remove(snapshot.instances) }
-        : snapshot,
-    { removesServers: true }
+  updateRelaySnapshots(queryClient, (snapshot) =>
+    snapshot ? { ...snapshot, instances: remove(snapshot.instances) } : snapshot
   )
   queryClient.setQueryData<RelayConnection>(
     queryKeys.relay.connection,

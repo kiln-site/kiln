@@ -19,9 +19,9 @@ import {
 
 afterAll(() => disposeAppRuntime())
 
-const relayId = "r".repeat(43)
-const ownedId = "a".repeat(40)
-const unownedId = "b".repeat(40)
+const relayId = "1".repeat(12)
+const ownedId = "a".repeat(12)
+const unownedId = "b".repeat(12)
 const scope = (resourceId: string) =>
   ({ relayId, resourceId, resourceType: "instance" }) as const
 

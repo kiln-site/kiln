@@ -540,6 +540,7 @@ export function controlRequestLocks(
     case "instance.console.history":
     case "instance.logs.share":
     case "instance.logs.latest":
+    case "instance.deployment.read":
     case "instance.network.routes.read":
     // Port leases are their own reservation, with their own lock.
     case "instance.network.ports.reserve":

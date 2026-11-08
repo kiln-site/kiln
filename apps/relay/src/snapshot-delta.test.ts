@@ -8,13 +8,11 @@ import {
 } from "./snapshot-delta.js"
 
 const instanceA = {
-  id: "a".repeat(40),
-  shortId: "a".repeat(8),
+  id: "a".repeat(12),
   name: "Alpha",
 } as RelaySnapshot["instances"][number]
 const instanceB = {
-  id: "b".repeat(40),
-  shortId: "b".repeat(8),
+  id: "b".repeat(12),
   name: "Beta",
 } as RelaySnapshot["instances"][number]
 const node = {

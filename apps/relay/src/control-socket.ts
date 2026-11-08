@@ -465,7 +465,7 @@ function authenticateSocket(
     ...(dial ? { dial } : {}),
     expiresAt: Date.now() + relayAuthenticationWindowMs,
     nonce: randomBytes(32).toString("base64url"),
-    relayId: options.identity.fingerprint,
+    relayId: options.identity.id,
     sessionId: randomUUID(),
     type: "auth.challenge" as const,
     v: 1 as const,
@@ -602,9 +602,7 @@ function authenticateSocket(
       return
     }
     if (inFlight.size >= MAX_IN_FLIGHT_REQUESTS) {
-      Effect.runFork(
-        countRelayRefusal(options.identity.fingerprint, "in_flight_limit")
-      )
+      Effect.runFork(countRelayRefusal(options.identity.id, "in_flight_limit"))
       sendError(
         socket,
         message.id,
@@ -1045,7 +1043,7 @@ function authenticateSocket(
           )
           // Too many changes were already waiting in the lanes.
           return failure.code === "too_many_requests"
-            ? countRelayRefusal(options.identity.fingerprint, "lanes_full")
+            ? countRelayRefusal(options.identity.id, "lanes_full")
             : Effect.void
         })
       )
@@ -2059,6 +2057,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "instance.logs.share":
       return "instance.logs.share"
     case "instance.logs.latest":
+    case "instance.deployment.read":
       return "instance.logs.read"
     case "instance.network.ports.reserve":
     case "instance.network.ports.release":

@@ -554,8 +554,6 @@ function RelayTable({
             <div className="flex w-full min-w-0 items-center gap-1">
               <Link
                 to="/relay/$relayId"
-                // The full ID always resolves; the route shortens it when no
-                // other Relay shares its short ID.
                 params={{ relayId: relay.id }}
                 preload="intent"
                 className={cn(
@@ -570,7 +568,7 @@ function RelayTable({
                   meta={
                     <span title={relay.id}>
                       {relay.nodeArch ?? "unknown"} <span aria-hidden>•</span>{" "}
-                      {shortRelayId(relay.id)}
+                      {relay.id}
                     </span>
                   }
                   metaClassName="font-mono"
@@ -592,7 +590,7 @@ function RelayTable({
         meta: dataTableColumnMeta({
           width: {
             base: "minmax(0,1fr)",
-            // Fit the icon, architecture, and short ID; long names truncate.
+            // Fit the icon, architecture, and ID; long names truncate.
             lg: "12rem",
           },
         }),
@@ -1280,10 +1278,6 @@ function relayFavorite(relay: RelayTableItem): InstanceFavorite {
 
 function relayRowKey(relay: RelayTableItem): string {
   return relay.id
-}
-
-function shortRelayId(id: string): string {
-  return id.slice(0, 7)
 }
 
 function relayProxyMode(value: FormDataEntryValue | null) {

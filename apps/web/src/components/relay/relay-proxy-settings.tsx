@@ -68,13 +68,7 @@ function RelayPublicRouteFact({ relay }: { relay: RelayDirectoryEntry }) {
 
 // How the Relay publishes web domains: its proxy's settings and whether it's
 // healthy. The bundled Traefik's details only show in that mode.
-export function RelayProxySettings({
-  relay,
-  routeId,
-}: {
-  relay: RelayDirectoryEntry
-  routeId: string
-}) {
+export function RelayProxySettings({ relay }: { relay: RelayDirectoryEntry }) {
   const { connected } = useRelayLiveStatus(relay)
   const { data: proxy, error } = useQuery({
     ...relayProxyQueryOptions(relay.id),
@@ -131,7 +125,7 @@ export function RelayProxySettings({
               {settings.traefikImage}
             </span>
           </InfoFact>
-          <TraefikConfigLink relay={relay} routeId={routeId} />
+          <TraefikConfigLink relay={relay} />
           <InfoFact label="Certificate email">
             <InfoDetails
               title="Certificate email"
@@ -168,13 +162,7 @@ export function RelayProxySettings({
 
 // Opens the bundled Traefik's config in the Relay's host files, where it's
 // pinned by default and the routes file sits beside it.
-function TraefikConfigLink({
-  relay,
-  routeId,
-}: {
-  relay: RelayDirectoryEntry
-  routeId: string
-}) {
+function TraefikConfigLink({ relay }: { relay: RelayDirectoryEntry }) {
   const files = useRelayHostFiles(relay)
   if (!files?.traefikConfig) return null
   return (
@@ -182,7 +170,7 @@ function TraefikConfigLink({
       <Link
         to="/relay/$relayId/files/$"
         params={{
-          relayId: routeId,
+          relayId: relay.id,
           _splat: files.traefikConfig,
         }}
         className="group flex min-w-0 items-center gap-1.5 font-mono text-xs transition-colors hover:text-primary-ink"

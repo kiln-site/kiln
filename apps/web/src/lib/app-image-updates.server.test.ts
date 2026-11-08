@@ -24,8 +24,8 @@ import { insertRelay, insertUser } from "@/test/seed"
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
-const relayId = "r".repeat(43)
-const appId = "a".repeat(40)
+const relayId = "1".repeat(12)
+const appId = "a".repeat(12)
 const image = "ghcr.io/kiln-site/marketing:latest"
 const digest = (n: number) => `sha256:${String(n).repeat(64)}`
 

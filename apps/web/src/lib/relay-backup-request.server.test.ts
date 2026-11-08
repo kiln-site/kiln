@@ -19,7 +19,7 @@ vi.mock("@/lib/relay-tunnel.server", () => ({
 
 const relay = {
   hostname: "203.0.113.7",
-  id: "r".repeat(43),
+  id: "1".repeat(12),
   port: 4100,
   useTls: true,
 } as unknown as PersistedRelay

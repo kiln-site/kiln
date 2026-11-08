@@ -28,7 +28,7 @@ const invitation = (
 })
 
 const network = (id: string) => ({
-  id: id.padEnd(40, "0"),
+  id: id.padEnd(12, "0"),
   name: id,
   domain: `${id}.ts.net`,
   deletion_requested_at: 1,
@@ -40,7 +40,7 @@ const network = (id: string) => ({
 })
 
 const deployment = (networkId: string, relayId: string) => ({
-  network_id: networkId.padEnd(40, "0"),
+  network_id: networkId.padEnd(12, "0"),
   relay_id: relayId,
   deployment: "{}",
   cleanup_next_attempt_at: 0,

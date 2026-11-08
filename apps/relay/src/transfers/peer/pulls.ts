@@ -124,7 +124,7 @@ export class TransferPulls {
       const grant = yield* decodeGrant(input.grant)
       if (
         grant.transferId !== input.transferId ||
-        grant.peer !== this.#options.identity.fingerprint
+        grant.peer !== this.#options.identity.id
       ) {
         return yield* Effect.fail(
           new Error("The transfer grant is for another Relay or transfer")

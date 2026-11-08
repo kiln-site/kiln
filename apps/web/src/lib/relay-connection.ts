@@ -270,8 +270,14 @@ function checkRelayChallenge(
   ) {
     throw new Error("Relay challenge isn't for this connection")
   }
+  // A Relay not yet updated to instance IDs names itself by its
+  // fingerprint, and connects only so Hearth can update it.
+  const named =
+    challenge.relayId === relayId ||
+    (credentials.relayFingerprint !== null &&
+      challenge.relayId === credentials.relayFingerprint)
   if (
-    challenge.relayId !== relayId ||
+    !named ||
     !verify(
       null,
       Buffer.from(relayAuthChallengeTranscript(challenge)),

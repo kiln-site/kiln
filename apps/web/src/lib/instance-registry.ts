@@ -4,6 +4,7 @@ import { Clock, Effect, Schedule, Semaphore } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
+import { claimInstanceIdEffect } from "@/effect/instance-ids"
 import { runAppEffect } from "@/effect/runtime"
 import {
   instanceDirectoryMetadata,
@@ -199,6 +200,7 @@ export const reservePreparedInstanceEffect = Effect.fn(
   instance: Pick<RelayInstance, "id">,
   ownerId: string
 ) {
+  yield* requireServerIdEffect(relayId, instance.id)
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const displaced = yield* database.transaction(
@@ -421,14 +423,45 @@ export const updateInstanceDirectoryEffect = Effect.fn(
   )
 })
 
+/**
+ * Reserves the IDs of a Relay's game servers in Hearth's instance directory,
+ * bound to that Relay, so no other instance is given one. Returns the IDs
+ * another instance already holds — another Relay's game server, or another
+ * kind — which Hearth doesn't record for this Relay: a Relay can't pass a
+ * server off as one it doesn't run.
+ */
+const claimServerIdsEffect = Effect.fn("instances.registry.claimIds")(
+  function* (relayId: string, ids: ReadonlyArray<string>) {
+    const refused = new Set<string>()
+    yield* Effect.forEach(
+      ids,
+      (id) =>
+        claimInstanceIdEffect("server", id, relayId).pipe(
+          Effect.catchTag("InstanceIdTakenError", (error) =>
+            Effect.sync(() => refused.add(id)).pipe(
+              Effect.andThen(
+                Effect.logWarning(error.message, { "relay.id": relayId })
+              )
+            )
+          )
+        ),
+      { concurrency: 8, discard: true }
+    )
+    return refused
+  }
+)
+
+const requireServerIdEffect = Effect.fn("instances.registry.requireId")(
+  function* (relayId: string, id: string) {
+    yield* claimInstanceIdEffect("server", id, relayId)
+  }
+)
+
 /** Records a server Hearth created outside the provisioning flow. */
 export const recordCreatedInstanceEffect = Effect.fn(
   "instances.registry.recordCreated"
-)(function* (
-  relayId: string,
-  instance: DirectoryInstance,
-  ownerId: string
-) {
+)(function* (relayId: string, instance: DirectoryInstance, ownerId: string) {
+  yield* requireServerIdEffect(relayId, instance.id)
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const displaced = yield* lifecycleWrite(relayId, { created: instance.id })(
@@ -474,8 +507,13 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
     yield* lifecycle.writes.withPermit(
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis
+        const refused = yield* claimServerIdsEffect(
+          relayId,
+          instances.map((instance) => instance.id)
+        )
         const listed = instances.filter(
-          (instance) => !lifecycle.deleted.has(instance.id)
+          (instance) =>
+            !lifecycle.deleted.has(instance.id) && !refused.has(instance.id)
         )
         // Keep what the snapshot lists and what Hearth itself created.
         const kept = [

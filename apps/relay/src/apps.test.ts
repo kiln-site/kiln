@@ -25,7 +25,7 @@ import {
   type RelayHarness,
 } from "./test/relay.js"
 
-const appId = "c".repeat(40)
+const appId = "c".repeat(12)
 
 afterEach(() => {
   vi.useRealTimers()
@@ -136,7 +136,7 @@ function appContainers(id = appId) {
 }
 
 describe("an App created with a database", () => {
-  const databaseId = "d".repeat(40)
+  const databaseId = "d".repeat(12)
   const addDatabaseNetwork = (name: string) =>
     fakeDocker.addNetwork({
       internal: true,
@@ -417,7 +417,7 @@ describe("App volumes", () => {
   it("deletes only the volumes its own Compose project made that its deletion names, never one another App mounts", async () => {
     const removeCompose = await composeConfigCommand()
     const harness = await createdApp()
-    const otherId = "d".repeat(40)
+    const otherId = "d".repeat(12)
     await harness.apps.create({ id: otherId, name: "Other app" })
     const kilnId = "3f9a21c4".padEnd(40, "0")
     const kilnVolume = `${TEST_NAMESPACE}-kiln-3f9a21c4-media`

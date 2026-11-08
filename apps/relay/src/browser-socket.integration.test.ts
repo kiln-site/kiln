@@ -23,7 +23,7 @@ import type { FilesystemDriver } from "./files.js"
 import { OperationLanes } from "./operation-lanes.js"
 
 const origin = "https://hearth.test"
-const relayId = "relay-test-fingerprint"
+const relayId = "0123456789ab"
 // A server and a database can share an ID; their consoles stay apart.
 const sharedId = "resource-test"
 const openResources: Array<() => Promise<void>> = []
@@ -254,7 +254,7 @@ async function startRelay(
     ),
     docker: {} as DockerDriver,
     filesystem: {} as FilesystemDriver,
-    identity: { fingerprint: relayId } as RelayIdentity,
+    identity: { id: relayId } as RelayIdentity,
     lanes: new OperationLanes(),
     onConsoleStop: () => undefined,
     runEffect: (effect) => Effect.runPromise(effect),

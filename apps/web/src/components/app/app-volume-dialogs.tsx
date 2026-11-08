@@ -117,7 +117,6 @@ function useMountDrafts({
   editing,
   initial,
   onDone,
-  routeId,
   saved,
 }: {
   app: App
@@ -125,7 +124,6 @@ function useMountDrafts({
   editing: AppMount | null
   initial: ReadonlyArray<MountDraft>
   onDone: () => void
-  routeId: string
   saved: ReadonlyArray<AppMount>
 }) {
   const [drafts, setDrafts] = React.useState(initial)
@@ -135,7 +133,7 @@ function useMountDrafts({
     [volumes.data?.volumes]
   )
   const canCreate = useRelayPermission(app.relayId, "relay.configure")
-  const save = useAppConfigSave(app, routeId)
+  const save = useAppConfigSave(app)
   const queryClient = useQueryClient()
   const create = useMutation({
     mutationFn: (name: string) =>
@@ -229,7 +227,6 @@ export function AppVolumeAddPanel({
   compose,
   deploying,
   onDone,
-  routeId,
   saved,
 }: {
   app: App
@@ -237,7 +234,6 @@ export function AppVolumeAddPanel({
   compose: boolean
   deploying: boolean
   onDone: () => void
-  routeId: string
   saved: ReadonlyArray<AppMount>
 }) {
   const mounts = useMountDrafts({
@@ -245,7 +241,6 @@ export function AppVolumeAddPanel({
     editing: null,
     initial: noDrafts,
     onDone,
-    routeId,
     saved,
   })
   const { drafts, pending, problem, setDrafts, submit } = mounts
@@ -398,7 +393,6 @@ export function AppVolumeDialog({
   editing,
   editingName,
   onOpenChange,
-  routeId,
   saved,
 }: {
   app: App
@@ -409,7 +403,6 @@ export function AppVolumeDialog({
   // What it's called, for those who can't list the Relay's volumes.
   editingName: string
   onOpenChange: (open: boolean) => void
-  routeId: string
   saved: ReadonlyArray<AppMount>
 }) {
   const [initial] = React.useState(() => [mountDraft(editing, editingName)])
@@ -418,7 +411,6 @@ export function AppVolumeDialog({
     editing,
     initial,
     onDone: () => onOpenChange(false),
-    routeId,
     saved,
   })
   const { drafts, pending, problem, setDrafts, submit } = mounts
@@ -788,7 +780,6 @@ export function AppVolumeRemoveDialog({
   description,
   name,
   onOpenChange,
-  routeId,
 }: {
   app: App
   config: Partial<EditableAppConfig>
@@ -796,9 +787,8 @@ export function AppVolumeRemoveDialog({
   description: string
   name: string
   onOpenChange: (open: boolean) => void
-  routeId: string
 }) {
-  const save = useAppConfigSave(app, routeId)
+  const save = useAppConfigSave(app)
   const pending = save.isPending ? save.variables.next : null
   const submit = async (next: SaveNext) => {
     const done = await recoverPromise(

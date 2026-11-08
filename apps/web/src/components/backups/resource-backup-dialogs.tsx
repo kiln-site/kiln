@@ -159,7 +159,7 @@ export function ResourceRestoreDialog({
   const apps = useQuery({ ...appDirectoryQueryOptions(), enabled: open })
   const appName = React.useCallback(
     (appId: string) =>
-      apps.data?.find((app) => app.id === appId)?.name ?? appId.slice(0, 8),
+      apps.data?.find((app) => app.id === appId)?.name ?? appId,
     [apps.data]
   )
   // The App folders or volumes on its Relay it can go into: its own while

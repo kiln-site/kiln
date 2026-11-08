@@ -32,7 +32,7 @@ const allowFileAccess = async () => [
 describeLinux("Relay SFTP server", () => {
   it("stops writing through a handle opened before the server was replaced", async () => {
     const dataDirectory = await temporaryDirectory()
-    const instanceId = "c".repeat(40)
+    const instanceId = "c".repeat(12)
     const instanceDirectory = resolve(dataDirectory, "instances", instanceId)
     await mkdir(instanceDirectory, { recursive: true })
     const instance = testInstance({ id: instanceId })
@@ -105,7 +105,7 @@ describeLinux("Relay SFTP server", () => {
 
   it("never lets a save that checks the file is unchanged replace an SFTP write", async () => {
     const dataDirectory = await temporaryDirectory()
-    const instanceId = "d".repeat(40)
+    const instanceId = "d".repeat(12)
     const instanceDirectory = resolve(dataDirectory, "instances", instanceId)
     const path = resolve(instanceDirectory, "server.properties")
     await mkdir(instanceDirectory, { recursive: true })
@@ -197,7 +197,7 @@ describeLinux("Relay SFTP server", () => {
 
   it("intersects file operations with the paired Hearth grant", async () => {
     const dataDirectory = await temporaryDirectory()
-    const instanceId = "b".repeat(40)
+    const instanceId = "b".repeat(12)
     const instanceDirectory = resolve(dataDirectory, "instances", instanceId)
     await mkdir(instanceDirectory, { recursive: true })
     await writeFile(resolve(instanceDirectory, "readable.txt"), "read only")
@@ -266,7 +266,7 @@ describeLinux("Relay SFTP server", () => {
       instances: [
         {
           actions: ["instance.files.list", "instance.files.read"],
-          id: "a".repeat(40),
+          id: "a".repeat(12),
         },
       ],
       userId: "user-test",

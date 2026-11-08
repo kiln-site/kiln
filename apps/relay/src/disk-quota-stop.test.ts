@@ -7,7 +7,7 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { relayHarness } from "./test/relay.js"
 
-const id = "e".repeat(40)
+const id = "e".repeat(12)
 
 describe("disk quota enforcement", () => {
   it("keeps a server stopped after stopping it for exceeding its quota", async () => {

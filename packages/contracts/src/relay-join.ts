@@ -1,5 +1,7 @@
 import { Schema } from "effect"
 
+import { InstanceId } from "./instance-id.js"
+
 // Joining: a new Relay pairs with a Hearth from one link, copied out of
 // Hearth's Add Relay dialog into the Relay's install command.
 //
@@ -85,6 +87,9 @@ export const RelayJoinEnvelopeSchema = Schema.Struct({
   invitationId: Schema.String.check(Schema.isPattern(JOIN_ID)),
   relayBuild: Schema.String.check(Schema.isMaxLength(120)),
   relayFingerprint: Schema.String.check(Schema.isPattern(FINGERPRINT)),
+  // Its instance ID, which Hearth saves it under; the fingerprint is what
+  // authenticates it.
+  relayId: InstanceId,
   relayName: Schema.String.check(
     Schema.isMinLength(1),
     Schema.isMaxLength(120)
@@ -147,6 +152,7 @@ export const RelayJoinPairingResponseSchema = Schema.Struct({
   expiresAt: Schema.Number,
   nonce: Schema.String.check(Schema.isMaxLength(128)),
   relayFingerprint: Schema.String.check(Schema.isPattern(FINGERPRINT)),
+  relayId: InstanceId,
   relayName: Schema.String.check(Schema.isMaxLength(120)),
   relayPublicKeyPem: PEM,
   role: Schema.Literals(["custom", "full_access", "read_only"]),
@@ -224,6 +230,7 @@ export function relayJoinAnnouncementTranscript(
     envelope.invitationId,
     envelope.relayBuild,
     envelope.relayFingerprint,
+    envelope.relayId,
     envelope.relayName,
     envelope.relayPublicKeyPem,
   ])

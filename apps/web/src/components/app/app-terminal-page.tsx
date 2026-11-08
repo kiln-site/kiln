@@ -33,7 +33,7 @@ const TerminalSession = React.lazy(async () => {
 // A full shell in one of the app's services, kept on the Relay like a
 // database's terminal.
 export function AppTerminalPage() {
-  const { app, routeId } = useAppWorkspace()
+  const { app } = useAppWorkspace()
   const navigate = useNavigate()
   const requested = useSearch({
     from: "/_app/app/$appId/terminal",
@@ -48,12 +48,12 @@ export function AppTerminalPage() {
   const selectService = React.useCallback(
     (next: string) =>
       void navigate({
-        params: { appId: routeId },
+        params: { appId: app.id },
         replace: true,
         search: { service: next },
         to: "/app/$appId/terminal",
       }),
-    [navigate, routeId]
+    [navigate, app.id]
   )
   const serviceSelect =
     services.length > 1 && service ? (

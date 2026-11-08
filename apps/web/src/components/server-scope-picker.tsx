@@ -273,8 +273,8 @@ function serverScopePickerItem(
       : server.platform
         ? `On ${server.relayName}`
         : kind === "relay"
-          ? server.relayId.slice(0, 8)
-          : `${server.relayName} · ${server.id.slice(0, 8)}`,
+          ? server.relayId
+          : `${server.relayName} · ${server.id}`,
     name: server.name,
     searchText: `${server.id} ${server.relayName} ${server.relayId}`,
   }

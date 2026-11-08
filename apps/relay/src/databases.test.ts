@@ -53,7 +53,7 @@ const volumeOf = (id: string) => `${TEST_NAMESPACE}-kiln-db-${id}-data`
 describe("managed database recovery metadata", () => {
   it("labels databases for recovery without putting credentials in labels", async () => {
     const harness = await relayHarness()
-    const id = "d".repeat(40)
+    const id = "d".repeat(12)
 
     await createDatabase(harness, id)
 
@@ -81,7 +81,7 @@ describe("managed database recovery metadata", () => {
 
   it("puts back a database a restart caught set aside", async () => {
     const harness = await relayHarness()
-    const id = "d".repeat(40)
+    const id = "d".repeat(12)
     await createDatabase(harness, id)
     const original = databaseContainer(id)
     const engine = new DockerEngine(harness.config.dockerSocket)
@@ -116,7 +116,7 @@ describe("managed database credentials and dumps", () => {
     "rotates %s credentials without exposing passwords to process arguments",
     async (engine, environmentName) => {
       const harness = await relayHarness()
-      const id = "e".repeat(40)
+      const id = "e".repeat(12)
       await createDatabase(harness, id, engine)
 
       await harness.databases.rotateCredentials({
@@ -140,11 +140,7 @@ describe("managed database credentials and dumps", () => {
 
   // MariaDB's login may set its own password, but not run ALTER USER.
   it.each([
-    [
-      "mariadb",
-      "MYSQL_PWD",
-      `SET PASSWORD = PASSWORD('${nextPassword}');\n`,
-    ],
+    ["mariadb", "MYSQL_PWD", `SET PASSWORD = PASSWORD('${nextPassword}');\n`],
     [
       "mysql",
       "MYSQL_PWD",
@@ -159,7 +155,7 @@ describe("managed database credentials and dumps", () => {
     "rotates a %s password as its own login",
     async (engine, environmentName, sql) => {
       const harness = await relayHarness()
-      const id = "e".repeat(40)
+      const id = "e".repeat(12)
       await createDatabase(harness, id, engine)
 
       await harness.databases.rotateCredentials({
@@ -180,7 +176,7 @@ describe("managed database credentials and dumps", () => {
 
   it("exports a dump far past the old limit for download, keeping the last whole one when a dump fails", async () => {
     const harness = await relayHarness()
-    const id = "7".repeat(40)
+    const id = "7".repeat(12)
     await createDatabase(harness, id)
     const container = databaseContainer(id)
     container.sqlDump = "-- PostgreSQL database dump\n".repeat(50_000)

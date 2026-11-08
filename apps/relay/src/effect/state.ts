@@ -43,6 +43,10 @@ import {
   makeRelayScheduleState,
   type RelayScheduleState,
 } from "./schedule-state.js"
+import {
+  makeRelayInstanceIdState,
+  type RelayInstanceIdState,
+} from "./instance-id-state.js"
 
 export type RelayClientRole = "custom" | "full_access" | "read_only"
 
@@ -521,6 +525,7 @@ export class RelayStateStore extends Context.Service<
   RelayStateStore,
   {
     readonly schedules: RelayScheduleState
+    readonly instanceIds: RelayInstanceIdState
     readonly listDatabaseConnections: () => Effect.Effect<
       ReadonlyArray<RelayStoredDatabaseConnection>,
       RelayStateError
@@ -1812,6 +1817,17 @@ const migrations = SqliteMigrator.fromRecord({
       ON relay_backup_tasks (backup_id, kind)
     `
   }),
+  // The old ID of each instance from before 12-character IDs, whose Docker
+  // resources and folders keep the names it gave them (instance-keys.ts).
+  "38_instance_legacy_ids": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`CREATE TABLE IF NOT EXISTS relay_instance_legacy_ids (
+      id TEXT PRIMARY KEY NOT NULL,
+      kind TEXT NOT NULL
+        CHECK (kind IN ('relay', 'server', 'app', 'database', 'tailscale')),
+      legacy_id TEXT NOT NULL UNIQUE
+    ) STRICT`
+  }),
 })
 
 // The App IDs a Hearth still owes, as stored; anything unreadable owes
@@ -2487,6 +2503,7 @@ const makeRelayStateStore = Effect.gen(function* () {
 
   return RelayStateStore.of({
     schedules: makeRelayScheduleState(sql),
+    instanceIds: makeRelayInstanceIdState(sql),
     listDatabaseConnections: () =>
       run(
         "list_database_connections",

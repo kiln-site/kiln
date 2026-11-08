@@ -10,10 +10,10 @@ import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 
-const instanceId = "a".repeat(40)
-const databaseId = "b".repeat(40)
-const relayId = "relay-with_hyphens".padEnd(43, "x")
-const remoteRelayId = "r".repeat(43)
+const instanceId = "a".repeat(12)
+const databaseId = "b".repeat(12)
+const relayId = "0123456789ab"
+const remoteRelayId = "ba9876543210"
 const network = "owned-database-network"
 
 type Reference = { databaseId: string; relayId: string }
@@ -50,7 +50,7 @@ async function setup() {
   const harness = await relayHarness()
   harness.config.nodeId = relayId
   databaseNetwork(network, databaseId)
-  databaseNetwork("foreign-network", "f".repeat(40), "another-relay")
+  databaseNetwork("foreign-network", "f".repeat(12), "another-relay")
   const server = fakeDocker.addContainer({ name: "server", running: true })
   return { harness, manager: harness.databaseConnections, server }
 }
@@ -67,7 +67,7 @@ const snapshot = (
 describe("database connection recovery", () => {
   it("writes the versioned label format and recovers it on another Relay state", async () => {
     const { harness, manager } = await setup()
-    const remote = { databaseId: "d".repeat(40), relayId: remoteRelayId }
+    const remote = { databaseId: "d".repeat(12), relayId: remoteRelayId }
     await manager.set(member(instanceId), databaseId, true)
     await manager.set(
       member(instanceId),
@@ -80,7 +80,7 @@ describe("database connection recovery", () => {
     expect(labels).toEqual(connectionLabels([{ databaseId, relayId }, remote]))
 
     const other = await relayHarness()
-    other.config.nodeId = "o".repeat(43)
+    other.config.nodeId = "00000000000f"
     await other.databaseConnections.initialize([snapshot({ labels })])
     expect(await other.databaseConnections.labels(instanceId)).toEqual(labels)
     expect(harness.config.nodeId).toBe(relayId)

@@ -190,12 +190,11 @@ export const listCliServersEffect = Effect.fn("cli.api.servers.list")(
       servers: snapshots.flatMap(({ instances, relay }) =>
         instances.map((instance) =>
           cliServerSchema.parse({
-            id: `${relay.id}:${instance.id}`,
+            id: instance.id,
             instanceId: instance.id,
             name: instance.name,
             relayId: relay.id,
             relayName: relay.name,
-            shortId: instance.shortId,
             state: instance.observedState,
           })
         )
@@ -390,7 +389,8 @@ export const listCliBackupTargetsEffect = Effect.fn("cli.api.backups.targets")(
               {
                 kind: "server",
                 name: server.name,
-                reference: server.id,
+                reference: server.instanceId,
+                relayId: server.relayId,
                 relayName: server.relayName,
               },
             ]
@@ -404,7 +404,8 @@ export const listCliBackupTargetsEffect = Effect.fn("cli.api.backups.targets")(
               {
                 kind: "database",
                 name: record.name,
-                reference: `${record.relayId}:${record.databaseId}`,
+                reference: record.databaseId,
+                relayId: record.relayId,
                 relayName: relayNames.get(record.relayId) ?? record.relayId,
               },
             ]
@@ -418,6 +419,7 @@ export const listCliBackupTargetsEffect = Effect.fn("cli.api.backups.targets")(
                     kind: "platform",
                     name: "Kiln platform",
                     reference: relay.id,
+                    relayId: relay.id,
                     relayName: relay.name,
                   },
                 ]
@@ -432,10 +434,7 @@ export const listCliBackupTargetsEffect = Effect.fn("cli.api.backups.targets")(
 export const createCliBackupEffect = Effect.fn("cli.api.backups.create")(
   function* (principal: CliPrincipal, unknownInput: unknown) {
     yield* requireCliWrite(principal)
-    const input = yield* parseInput(
-      cliCreateBackupRequestSchema,
-      unknownInput
-    )
+    const input = yield* parseInput(cliCreateBackupRequestSchema, unknownInput)
     const relay = yield* authorizeCliBackupCreateTarget(principal, input)
     yield* validateCliBackupStorage(principal, input)
     const backupId = randomUUID()
@@ -1812,7 +1811,6 @@ function cliServerMetadata(instance: z.infer<typeof relayInstanceSchema>) {
           storageUsedBytes: instance.resources.storage.usedBytes,
         }
       : null,
-    shortId: instance.shortId,
     version: instance.version,
   }
 }

@@ -1,9 +1,5 @@
 import { redirect } from "@tanstack/react-router"
 
-import {
-  findFirstCanonicalRelayInstance,
-  relayInstanceRouteIdentifier,
-} from "@/lib/relay-selectors"
 import { getRelayConnectionState } from "@/server/relay"
 import { getAuthState } from "@/server/auth"
 
@@ -33,24 +29,13 @@ export async function redirectLegacyPage(
       replace: true,
     })
   }
-  const instance = findFirstCanonicalRelayInstance(
-    connection.snapshot.instances
-  )
+  const [instance] = connection.snapshot.instances
   if (!instance) {
-    throw redirect({ to: "/infra/servers", replace: true })
-  }
-  const routeIdentifier = relayInstanceRouteIdentifier(
-    connection.snapshot.instances,
-    instance
-  )
-  if (!routeIdentifier) {
     throw redirect({ to: "/infra/servers", replace: true })
   }
   throw redirect({
     to: `/server/$serverId/${page}`,
-    params: {
-      serverId: routeIdentifier,
-    },
+    params: { serverId: instance.id },
     replace: true,
   })
 }

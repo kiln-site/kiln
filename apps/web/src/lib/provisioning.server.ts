@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 
+import { reserveInstanceIdEffect } from "@/effect/instance-ids"
 import { promiseEffect } from "@/effect/promise"
 
 // Hearth's half of provisioning any kind of instance on a Relay: it prepares
@@ -34,10 +35,12 @@ export function abandonPreparedProvisioning(
   )
 }
 
-/** The instance ID a retried request with the same key provisions again. */
-export function provisioningInstanceId(idempotencyKey: string): string {
-  const hex = idempotencyKey.replaceAll("-", "")
-  return `${hex}${hex.slice(0, 8)}`
+/**
+ * Reserves the instance ID a new game server gets. A retried request with
+ * the same key gets the same ID, so it provisions the same server again.
+ */
+export function reserveServerInstanceIdEffect(requestKey: string) {
+  return reserveInstanceIdEffect("server", `server.create:${requestKey}`)
 }
 
 /**

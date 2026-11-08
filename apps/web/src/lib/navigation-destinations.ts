@@ -53,6 +53,7 @@ export interface NavigationDestination {
 export type InfrastructureDestinationAccess =
   | "app-read"
   | "database-read"
+  | "deployments"
   | "domains"
   | "instance-read"
   | "manage-relays"
@@ -146,7 +147,7 @@ export const infrastructureDestinations = [
     to: "/infra/sources",
   },
   {
-    access: "app-read",
+    access: "deployments",
     group: "network",
     icon: Rocket,
     keywords: ["infrastructure", "deploys", "github", "commits", "releases"],
@@ -447,9 +448,9 @@ export function canAccessDatabasePermission(
 
 export function databaseDestinationHref(
   destination: DatabaseDestination,
-  routeId: string
+  instanceId: string
 ): string {
-  return destination.to.replace("$databaseId", encodeURIComponent(routeId))
+  return destination.to.replace("$databaseId", encodeURIComponent(instanceId))
 }
 
 export type AppDestinationId =
@@ -546,9 +547,9 @@ export function accessibleDestinationsForApp(
 
 export function appDestinationHref(
   destination: AppDestination,
-  routeId: string
+  instanceId: string
 ): string {
-  return destination.to.replace("$appId", encodeURIComponent(routeId))
+  return destination.to.replace("$appId", encodeURIComponent(instanceId))
 }
 
 export type RelayDestinationId =
@@ -742,9 +743,9 @@ export function accessibleDestinationsForRelay(
 
 export function relayDestinationHref(
   destination: RelayDestination,
-  routeId: string
+  instanceId: string
 ): string {
-  return destination.to.replace("$relayId", encodeURIComponent(routeId))
+  return destination.to.replace("$relayId", encodeURIComponent(instanceId))
 }
 
 export function accessibleInfrastructureDestinations(
@@ -789,6 +790,13 @@ export function canAccessInfrastructureDestination(
       hasScopedPermission(capabilities, "instance.create", ["relay"]) ||
       hasScopedPermission(capabilities, "app.read", ["relay", "app"]) ||
       hasScopedPermission(capabilities, "app.create", ["relay"])
+    )
+  }
+  if (destination.access === "deployments") {
+    // App deployments and game servers' installs and reinstalls.
+    return (
+      hasScopedPermission(capabilities, "app.read", ["relay", "app"]) ||
+      hasScopedPermission(capabilities, "instance.read", ["instance", "relay"])
     )
   }
   // Each list also opens for people who can only create there; its create
@@ -918,9 +926,9 @@ function hasScopedPermission(
 
 export function serverDestinationHref(
   destination: ServerDestination,
-  routeId: string
+  instanceId: string
 ): string {
-  const serverId = encodeURIComponent(routeId)
+  const serverId = encodeURIComponent(instanceId)
   return destination.to.replace("$serverId", serverId).replace(/\/\$$/u, "/")
 }
 

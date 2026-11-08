@@ -19,12 +19,12 @@ import type { RelayDirectoryEntry } from "@/lib/relay-route"
 // The Relay's settings, edited in place, with a rail summing up what it is,
 // what runs on it, and the machine under it.
 export function RelayInfoPage() {
-  const { relay, routeId } = useRelayWorkspace()
+  const { relay } = useRelayWorkspace()
 
   return (
-    <InfoPage rail={<RelayInfoRail relay={relay} routeId={routeId} />}>
-      <RelayGeneralSettings relay={relay} routeId={routeId} />
-      <RelayProxySettings relay={relay} routeId={routeId} />
+    <InfoPage rail={<RelayInfoRail relay={relay} />}>
+      <RelayGeneralSettings relay={relay} />
+      <RelayProxySettings relay={relay} />
       <RelayDockerStorageSection relay={relay} />
       <RelayDangerZone relay={relay} />
     </InfoPage>

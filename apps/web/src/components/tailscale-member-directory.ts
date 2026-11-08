@@ -10,8 +10,6 @@ import {
 
 import { engineLabel } from "@/components/database/database-presentation"
 import type { InstanceNameInstance } from "@/components/instance-name-presentation"
-import { appRouteIdentifier } from "@/lib/app-route"
-import { databaseRouteIdentifier } from "@/lib/database-route"
 import {
   appDirectoryQueryOptions,
   managedDatabaseDirectoryQueryOptions,
@@ -28,6 +26,8 @@ import {
  * it: a game server, an App's service, or a database.
  */
 export interface TailscaleMemberListing {
+  /** Its instance ID. */
+  readonly id: string
   readonly identity: InstanceNameInstance
   readonly kind: "app" | "database" | "server"
   /** `instance:<id>`, `app:<id>:<service>`, or `database:<id>`. */
@@ -37,9 +37,8 @@ export interface TailscaleMemberListing {
   readonly name: string
   readonly relayId: string
   readonly relayName: string
-  /** Its page's route ID, when it's known here. */
-  readonly routeId: string | null
-  readonly shortId: string
+  /** Whether its page is known here, so it can link to it. */
+  readonly linked: boolean
   /** Whether its Relay can change its Tailscale memberships. */
   readonly tailscaleSupported: boolean
 }
@@ -79,6 +78,7 @@ export function useTailscaleMemberDirectory() {
     for (const server of fleetData?.servers ?? []) {
       const memberId = instanceTailscaleMemberId(server.id)
       joinable.set(tailscaleMemberKey(server.relayId, memberId), {
+        id: server.id,
         identity: {
           brickId: server.brickId,
           id: server.id,
@@ -90,18 +90,18 @@ export function useTailscaleMemberDirectory() {
         memberId,
         meta:
           [server.implementation, server.version].filter(Boolean).join(" ") ||
-          server.shortId,
+          server.id,
         name: server.name,
         relayId: server.relayId,
         relayName: server.relayName,
-        routeId: server.routeId,
-        shortId: server.shortId,
+        linked: true,
         tailscaleSupported: server.tailscaleSupported,
       })
     }
     for (const database of databaseData ?? []) {
       const memberId = databaseTailscaleMemberId(database.id)
       joinable.set(tailscaleMemberKey(database.relayId, memberId), {
+        id: database.id,
         identity: {
           id: database.id,
           kind: "database",
@@ -109,12 +109,11 @@ export function useTailscaleMemberDirectory() {
         },
         kind: "database",
         memberId,
-        meta: `${engineLabel(database.engine)} · ${database.shortId}`,
+        meta: `${engineLabel(database.engine)} · ${database.id}`,
         name: database.name,
         relayId: database.relayId,
         relayName: database.relayName,
-        routeId: databaseRouteIdentifier(databaseData ?? [], database),
-        shortId: database.shortId,
+        linked: true,
         tailscaleSupported: supported.has(database.relayId),
       })
     }
@@ -139,6 +138,7 @@ export function useTailscaleMemberDirectory() {
         const app = appsById.get(service.appId)
         return {
           ...common,
+          id: service.appId,
           identity: {
             id: service.appId,
             kind: "app",
@@ -147,24 +147,23 @@ export function useTailscaleMemberDirectory() {
           kind: "app",
           memberId: binding.memberId,
           meta: `App service ${service.service}`,
-          name: app?.name ?? `App ${service.appId.slice(0, 8)}`,
-          routeId: app ? appRouteIdentifier(appData ?? [], app) : null,
-          shortId: service.appId.slice(0, 8),
+          name: app?.name ?? `App ${service.appId}`,
+          linked: app !== undefined,
         }
       }
       const databaseId = databaseTailscaleMember(binding.memberId)
       const id = databaseId ?? instanceTailscaleMember(binding.memberId) ?? ""
       return {
         ...common,
+        id,
         identity: databaseId
           ? { id, kind: "database", relayId: binding.relayId }
           : { id, kind: "server", relayId: binding.relayId },
         kind: databaseId ? "database" : "server",
         memberId: binding.memberId,
         meta: "Not visible here",
-        name: `${databaseId ? "Database" : "Game server"} ${id.slice(0, 8)}`,
-        routeId: null,
-        shortId: id.slice(0, 8),
+        name: `${databaseId ? "Database" : "Game server"} ${id}`,
+        linked: false,
       }
     }
     return {

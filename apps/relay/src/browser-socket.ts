@@ -53,11 +53,7 @@ import type { FileRoot, FilesystemDriver } from "./files.js"
 import type { LaneTicket, OperationLanes } from "./operation-lanes.js"
 import { instanceLifecycleLocks } from "./operation-plans.js"
 import type { RelayIdentity } from "./effect/identity.js"
-import {
-  ensuringPromise,
-  forkPromise,
-  recoverPromise,
-} from "./effect/promise.js"
+import { ensuringPromise, forkPromise } from "./effect/promise.js"
 import type { RelayStateStore } from "./effect/state.js"
 import type { RelaySnapshotSample } from "./snapshot-hub.js"
 import type { RelayConfig } from "./config.js"
@@ -365,7 +361,7 @@ function authenticateBrowser(
     // subscription, right behind their auth instead of waiting for it.
     features: [BROWSER_EARLY_MESSAGES_FEATURE],
     nonce: randomBytes(32).toString("base64url"),
-    relayId: options.identity.fingerprint,
+    relayId: options.identity.id,
     sessionId: randomUUID(),
     type: "auth.challenge",
     v: 1,
@@ -625,13 +621,7 @@ function authenticateBrowser(
     // stays in order with power changes and other consoles.
     const ticket = options.lanes.admit({
       label: "browser.console",
-      locks: /^[a-f0-9]{40}$/u.test(instanceId)
-        ? instanceLifecycleLocks(instanceId)
-        : recoverPromise(
-            async () =>
-              (await options.docker.findInstance(instanceId))?.id ?? instanceId,
-            () => instanceId
-          ).then(instanceLifecycleLocks),
+      locks: instanceLifecycleLocks(instanceId),
     })
     consoleTickets.add(ticket)
     forkPromise(
@@ -659,13 +649,7 @@ function authenticateBrowser(
       options.state.findClientById(parsed.payload.issuer)
     )
     if (!client) throw new Error("Capability issuer was revoked")
-    validateCapability(
-      parsed,
-      client,
-      origin,
-      options.identity.fingerprint,
-      null
-    )
+    validateCapability(parsed, client, origin, options.identity.id, null)
     if (
       browserKeyThumbprint(auth.publicKeyJwk) !== parsed.payload.keyThumbprint
     ) {
@@ -769,13 +753,7 @@ function authenticateBrowser(
       options.state.findClientById(parsed.payload.issuer)
     )
     if (!client) throw new Error("Capability issuer was revoked")
-    validateCapability(
-      parsed,
-      client,
-      origin,
-      options.identity.fingerprint,
-      null
-    )
+    validateCapability(parsed, client, origin, options.identity.id, null)
     const validProof = verify(
       "sha256",
       Buffer.from(
@@ -784,7 +762,7 @@ function authenticateBrowser(
             capabilityId: parsed.payload.capabilityId,
             expiresAt: renewal.nonceExpiresAt,
             nonce: renewal.nonce,
-            relayId: options.identity.fingerprint,
+            relayId: options.identity.id,
             sessionId: renewal.sessionId,
           },
           socket.protocol === relayBrowserConsoleProtocol

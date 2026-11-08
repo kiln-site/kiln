@@ -180,13 +180,13 @@ function volumeMountItems(
             ? {
                 identity: { id, kind: "database", relayId } as const,
                 key: `database:${id}`,
-                name: `Database ${id.slice(0, 8)}`,
+                name: `Database ${id}`,
               }
             : mount.kind === "instance" && id
               ? {
                   identity: { id, kind: "server", relayId } as const,
                   key: `server:${id}`,
-                  name: `Game server ${id.slice(0, 8)}`,
+                  name: `Game server ${id}`,
                 }
               : null
     // Containers Kiln doesn't run only count toward the total.
@@ -223,10 +223,10 @@ function volumeMountItems(
   })
 }
 
-// Each workspace route takes a full ID and redirects to its short form.
+// Each workspace route takes the instance's ID.
 function mountHref(identity: InstancePickerItem["identity"]): string {
   if (identity.kind === "server") {
-    return `/server/${encodeURIComponent(`${identity.relayId}-${identity.id}`)}`
+    return `/server/${encodeURIComponent(identity.id)}`
   }
   if (identity.kind === "database") {
     return `/db/${encodeURIComponent(identity.id)}`
@@ -239,5 +239,5 @@ function appName(
   appNames: ReadonlyMap<string, string> | undefined,
   appId: string
 ): string {
-  return appNames?.get(appId) ?? `App ${appId.slice(0, 8)}`
+  return appNames?.get(appId) ?? `App ${appId}`
 }

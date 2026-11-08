@@ -307,11 +307,11 @@ function AppTailscale({ app, compose }: { app: App; compose: boolean }) {
         <TailscaleMembershipSection
           key={service}
           member={{
+            id: app.id,
             memberId: appTailscaleMemberId(app.id, service),
             name: members.length > 1 ? `${service}-${app.name}` : app.name,
             relayId: app.relayId,
             relayName: app.relayName,
-            shortId: app.shortId,
           }}
           noun={members.length > 1 ? "service" : "app"}
           title={
@@ -654,9 +654,7 @@ function ConnectedDatabases({
                       {database.name}
                     </Link>
                   ) : (
-                    <span className="text-sm font-medium">
-                      {id.slice(0, 8)}
-                    </span>
+                    <span className="text-sm font-medium">{id}</span>
                   )}
                   <span className="type-meta block font-mono text-muted-foreground">
                     {database

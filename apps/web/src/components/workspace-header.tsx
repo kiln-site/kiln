@@ -86,12 +86,10 @@ export function WorkspaceMetaSeparator() {
 export function WorkspaceIdCopyButton({
   id,
   label,
-  shortId,
 }: {
   id: string
   // Lowercase noun, for example "server ID".
   label: string
-  shortId: string
 }) {
   const { copied, copy } = useCopyFeedback(id)
 
@@ -101,14 +99,14 @@ export function WorkspaceIdCopyButton({
         <button
           type="button"
           className={`shrink-0 font-mono transition-colors ${copied ? "text-emerald-400" : "hover:text-foreground"}`}
-          aria-label={`Copy full ${label} ${id}`}
+          aria-label={`Copy ${label} ${id}`}
           onClick={() => void copy()}
         >
-          {shortId}
+          {id}
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" sideOffset={6}>
-        {copied ? `Full ${label} copied` : `Copy full ${label}`}
+        {copied ? `${capitalize(label)} copied` : `Copy ${label}`}
       </TooltipContent>
     </Tooltip>
   )
@@ -245,4 +243,8 @@ async function copyToClipboard(value: string) {
       )
     )
   )
+}
+
+function capitalize(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1)
 }

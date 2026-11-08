@@ -46,7 +46,7 @@ import {
   backupShowsArchivedLocalArtifact,
   backupTaskUploadProgressPercent,
 } from "@/lib/backup-progress-presentation"
-import { relayInstanceRouteId } from "@/lib/relay-fleet"
+import { backupTargetApp } from "@/lib/backup-target-permissions"
 import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
 import {
   cancelBackup,
@@ -952,7 +952,7 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
           ? "transition-colors group-hover/target-link:text-primary-ink"
           : "text-muted-foreground"
       }
-      meta={`${target.kindLabel} · ${target.id.slice(0, 8)}`}
+      meta={`${target.kindLabel} · ${targetKind === "volume" ? target.id.slice(0, 8) : target.id}`}
       metaClassName="font-mono"
     />
   )
@@ -1003,9 +1003,7 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
     return (
       <Link
         className={className}
-        params={{
-          serverId: relayInstanceRouteId(relayId, targetId.slice(0, 8)),
-        }}
+        params={{ serverId: targetId }}
         preload="intent"
         to="/server/$serverId/console"
       >
@@ -1029,11 +1027,9 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
 
   // App targets open their App's Info page; Kiln volumes open the Relay.
   const owner =
-    targetKind === "app"
-      ? targetId
-      : targetKind === "volume"
-        ? /^([a-f0-9]{40})\//u.exec(targetId)?.[1]
-        : undefined
+    targetKind === "app" || targetKind === "volume"
+      ? backupTargetApp({ id: targetId, kind: targetKind })
+      : null
   if (owner) {
     return (
       <Link
@@ -1263,15 +1259,17 @@ function backupTargetPresentation(
     }
   }
   // An App's own volume is named by the App and its name in Compose.
-  const ownVolume =
+  const owner =
     backup.targetKind === "volume"
-      ? /^[a-f0-9]{40}\/(.+)$/u.exec(backup.targetId)?.[1]
-      : undefined
-  const shortId = ownVolume ?? backup.targetId.slice(0, 8)
+      ? backupTargetApp({ id: backup.targetId, kind: "volume" })
+      : null
+  const shownId = owner
+    ? backup.targetId.slice(owner.length + 1)
+    : backup.targetId
   return {
     id: backup.targetId,
     kindLabel: targetKindLabels[backup.targetKind],
-    name: targetName === backup.targetId ? shortId : targetName,
+    name: targetName === backup.targetId ? shownId : targetName,
   }
 }
 

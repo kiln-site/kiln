@@ -55,10 +55,7 @@ import {
   relaySnapshotQueryOptions,
   relaysQueryOptions,
 } from "@/lib/query-options"
-import {
-  relayRouteIdentifier,
-  type RelayDirectoryEntry,
-} from "@/lib/relay-route"
+import type { RelayDirectoryEntry } from "@/lib/relay-route"
 import { kilnFavorite } from "@/lib/instance-favorites"
 import { selectSidebarInstanceCount } from "@/lib/relay-selectors"
 import {
@@ -333,7 +330,7 @@ function KilnCommandsSection({
                 <Link
                   aria-label={`Run ${command.label.toLowerCase()} in ${relay.name}'s terminal`}
                   className="type-control-sm ml-1.5 flex h-7 shrink-0 items-center gap-1 border-l border-border/60 pl-3 text-muted-foreground transition-colors outline-none hover:text-primary-ink focus-visible:text-primary-ink"
-                  params={{ relayId: relay.routeId }}
+                  params={{ relayId: relay.id }}
                   to="/relay/$relayId/terminal"
                   onClick={() =>
                     queueTerminalInput(relayTerminalInputKey(relayId), line)
@@ -359,7 +356,7 @@ function useRelayEntry(relayId: string) {
         ? {
             entry: relay,
             name: relay.name,
-            routeId: relayRouteIdentifier(relays, relay),
+            id: relay.id,
           }
         : null
     },

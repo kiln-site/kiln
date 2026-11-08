@@ -100,6 +100,7 @@ import {
 } from "@/components/instance-favorite"
 import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
+import { randomIdempotencyKey } from "@/lib/idempotency-key"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { infraAppsCollectionOptions } from "@/lib/collections/infra-directories"
 import { InfraSyncButton } from "@/components/infra-sync-button"
@@ -151,7 +152,6 @@ const appTableColumnHelper = createDataTableColumnHelper<AppDirectoryRow>()
 const appTableSearchFields = [
   (row: AppDirectoryRow) => row.name,
   (row: AppDirectoryRow) => row.id,
-  (row: AppDirectoryRow) => row.shortId,
   (row: AppDirectoryRow) => row.relayId,
   (row: AppDirectoryRow) => row.relayName,
   (row: AppDirectoryRow) => row.instanceStatus,
@@ -342,8 +342,6 @@ const AppTable = React.memo(function AppTable({
           return (
             <Link
               to="/app/$appId"
-              // The full ID always resolves; the route shortens it when no
-              // other app shares its short ID.
               params={{ appId: app.id }}
               preload="intent"
               className={cn(
@@ -357,7 +355,7 @@ const AppTable = React.memo(function AppTable({
                 instance={{ id: app.id, kind: "app", relayId: app.relayId }}
                 name={app.name}
                 nameClassName="transition-colors group-hover/app-link:text-primary-ink"
-                meta={app.shortId}
+                meta={app.id}
                 metaClassName="font-mono"
                 iconFavorite
                 iconFavoriteClassName="md:hidden"
@@ -726,15 +724,25 @@ function CreateAppDialog({
   const [database, setDatabase] =
     React.useState<AppDatabaseDraft>(noAppDatabase)
   const relayLabelId = React.useId()
+  // Trying the same create again reuses its key, so it reuses its IDs.
+  const attemptRef = React.useRef<{
+    fingerprint: string
+    idempotencyKey: string
+  } | null>(null)
   const create = useMutation({
     mutationFn: async () => {
-      const created = await createApp({
-        data: {
-          database: appDatabaseInput(database, name.trim()),
-          name: name.trim(),
-          relayId,
-        },
-      })
+      const input = {
+        database: appDatabaseInput(database, name.trim()),
+        name: name.trim(),
+        relayId,
+      }
+      const fingerprint = JSON.stringify(input)
+      const idempotencyKey =
+        attemptRef.current?.fingerprint === fingerprint
+          ? attemptRef.current.idempotencyKey
+          : randomIdempotencyKey()
+      attemptRef.current = { fingerprint, idempotencyKey }
+      const created = await createApp({ data: { ...input, idempotencyKey } })
       if (kind !== "github") return { created, sourceError: null }
       // The app exists by now; a source it can't save is set on its page.
       const saved = await recoverPromise(

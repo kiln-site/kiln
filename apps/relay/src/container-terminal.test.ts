@@ -15,7 +15,7 @@ import {
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, type RelayHarness } from "./test/relay.js"
 
-const databaseId = "e".repeat(40)
+const databaseId = "e".repeat(12)
 const password = "correct-horse-battery-staple-1"
 const credentials = { password, username: "kiln_user" }
 const alice = "hearth:alice"

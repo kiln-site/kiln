@@ -152,12 +152,10 @@ export function AppVolumesSection({
   app,
   canManage,
   config,
-  routeId,
 }: {
   app: App
   canManage: boolean
   config: EditableAppConfig
-  routeId: string
 }) {
   const [dialog, setDialog] = React.useState<Dialog>(null)
   const compose = useAppRunsCompose(app)
@@ -205,8 +203,8 @@ export function AppVolumesSection({
           ))
           ? id
           : null,
+      appId: app.id,
       referencesKnown: appVolumes?.referencesKnown ?? false,
-      routeId,
       volumes: appVolumes?.volumes,
     }
     return [
@@ -221,7 +219,6 @@ export function AppVolumesSection({
     appVolumes,
     composeFile,
     mounts,
-    routeId,
   ])
   const empty = rows.length === 0
   const configRows = React.useMemo(
@@ -260,7 +257,7 @@ export function AppVolumesSection({
   const close = React.useCallback((open: boolean) => {
     if (!open) setDialog(null)
   }, [])
-  const addProps = { app, compose, deploying, routeId, saved: mounts }
+  const addProps = { app, compose, deploying, saved: mounts }
   return (
     <InfoSection
       icon={<HardDrive />}
@@ -332,7 +329,6 @@ export function AppVolumesSection({
             deploying={deploying}
             editing={dialog.mount}
             editingName={dialog.name}
-            routeId={routeId}
             saved={mounts}
             onOpenChange={close}
           />
@@ -350,7 +346,6 @@ export function AppVolumesSection({
                 : "The app stops mounting it on its next deploy. Its data stays, and you can add it back."
             }
             name={dialog.name}
-            routeId={routeId}
             onOpenChange={close}
           />
         ) : null}
@@ -370,7 +365,6 @@ export function AppVolumesSection({
             deploying={deploying}
             cursorAt={dialog.mount?.range?.to}
             kind="compose"
-            routeId={routeId}
             saved={config.compose}
             onOpenChange={close}
           />
@@ -394,7 +388,6 @@ export function AppVolumesSection({
             path: fileName(dialog.entry.target),
             placeholder: "",
           }}
-          routeId={routeId}
           saved={dialog.entry.source.content}
           onOpenChange={close}
         />
@@ -750,16 +743,13 @@ interface RowContext {
   readable: (id: string | null | undefined) => string | null
   // Whether a configured volume that isn't listed is really gone.
   referencesKnown: boolean
-  routeId: string
+  appId: string
   volumes: ReadonlyArray<MountVolume> | undefined
 }
 
-function volumeFilesLink(
-  { routeId }: RowContext,
-  volumeId: string
-): VolumeLink {
+function volumeFilesLink({ appId }: RowContext, volumeId: string): VolumeLink {
   return {
-    params: { appId: routeId },
+    params: { appId },
     search: { volume: volumeId },
     to: "/app/$appId/files",
   }
@@ -940,10 +930,10 @@ function composeRow(context: RowContext, mount: ComposeMount): MountRow {
 }
 
 // A Compose file's relative path is under the app's folder on the node.
-function appFolderLink({ routeId }: RowContext, source: string): VolumeLink {
+function appFolderLink({ appId }: RowContext, source: string): VolumeLink {
   const path = source.replace(/^\.\/?/u, "").replace(/\/+$/u, "")
   return {
-    params: { _splat: path ? `${path}/` : "", appId: routeId },
+    params: { _splat: path ? `${path}/` : "", appId },
     to: "/app/$appId/files/$",
   }
 }

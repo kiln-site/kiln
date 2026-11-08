@@ -2,8 +2,10 @@ import {
   appConfigSchema,
   relayAppDeploymentLogSchema,
   relayAppGitHubV1Feature,
+  relayServerDeploymentLogSchema,
   type AppGitHubBuild,
   type RelayAppDeploymentLog,
+  type RelayServerDeploymentLog,
 } from "@workspace/contracts"
 
 import {
@@ -15,13 +17,17 @@ import {
 } from "@/effect/app-image-updates"
 import {
   latestAppDeploymentsEffect,
-  listAppDeploymentsEffect,
+  listDeploymentsEffect,
   loadAppDeploymentEffect,
+  loadDeploymentEffect,
   loadRunningAppDeploymentsEffect,
   loadAppGitHubSourceEffect,
   saveAppGitHubSourceEffect,
   type AppDeploymentRecord,
   type AppGitHubSource,
+  type DeploymentKind,
+  type DeploymentRecord,
+  type ServerDeploymentRecord,
 } from "@/effect/app-deployments"
 import {
   getGitHubFileEffect,
@@ -38,7 +44,11 @@ import {
 } from "@/effect/managed-apps"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
-import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
+import {
+  isPlatformAdmin,
+  listUserGrants,
+  requireRelayPermission,
+} from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   appDeployKey,
@@ -54,6 +64,9 @@ import { publishGitHubSyncChange } from "@/lib/github-sync.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayConnectionFeatures } from "@/lib/relay-connection"
 import { listPersistedRelays } from "@/lib/relay-registry"
+import { effectiveScopePermissions } from "@/lib/resource-permissions"
+import { readInfraServerDirectory } from "@/server/infra-directory.server"
+import { requiredRelay } from "@/server/managed-database-access"
 import {
   authorizedApp,
   authorizedAppFor,
@@ -91,16 +104,77 @@ export interface AppGitHubSourceView {
   repositoryUrl: string
 }
 
+/** A game server's install, reinstall, or change of Brick, as listed. */
+export interface ServerDeploymentView extends ServerDeploymentRecord {
+  kind: "server"
+  /** Who may read its log on the Relay. */
+  canReadLogs: boolean
+  relayName: string
+  serverName: string
+  /** The person who asked, by name. */
+  triggeredByName: string | null
+}
+
+/** A deployment of either kind, as the Deployments page lists them. */
+export type DeploymentView =
+  | ({ kind: "app" } & AppDeploymentView)
+  | ServerDeploymentView
+
+/** One App's deployments, one Relay's Apps', or every App the person reads. */
 export async function getAppDeploymentsHandler(data: {
   appId?: string
   before?: { id: string; startedAt: string }
   relayId?: string
 }) {
   const user = await requireEligibleResourceUser()
-  const [relays, grants, apps] = await Promise.all([
+  const page = await listDeployments(
+    user,
+    {
+      before: data.before,
+      instance: data.appId ? { id: data.appId, kind: "app" } : undefined,
+      relayId: data.relayId,
+    },
+    ["app"]
+  )
+  return {
+    items: page.items.flatMap((item): Array<AppDeploymentView> =>
+      item.kind === "app" ? [item] : []
+    ),
+    nextCursor: page.nextCursor,
+  }
+}
+
+/**
+ * Deployments of every App and game server the person can read, or one
+ * Relay's, or one instance's history.
+ */
+export async function getDeploymentsHandler(data: {
+  before?: { id: string; startedAt: string }
+  instance?: { id: string; kind: DeploymentKind }
+  relayId?: string
+}) {
+  const user = await requireEligibleResourceUser()
+  return listDeployments(user, data, ["app", "server"])
+}
+
+async function listDeployments(
+  user: AuthenticatedUser,
+  data: {
+    before?: { id: string; startedAt: string }
+    instance?: { id: string; kind: DeploymentKind }
+    relayId?: string
+  },
+  kinds: ReadonlyArray<DeploymentKind>
+) {
+  const [relays, grants, apps, servers] = await Promise.all([
     listPersistedRelays(),
     isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
-    runAppEffect("apps.directory", listAppRecordsEffect()),
+    kinds.includes("app")
+      ? runAppEffect("apps.directory", listAppRecordsEffect())
+      : Promise.resolve([]),
+    kinds.includes("server")
+      ? runAppEffect("Infra.directory.servers", readInfraServerDirectory(user))
+      : Promise.resolve([]),
   ])
   const relayNames = new Map(
     relays
@@ -111,23 +185,44 @@ export async function getAppDeploymentsHandler(data: {
   )
   // Every app on a Relay the person reads apps on, and the apps they own
   // elsewhere.
-  const relayIds = [...relayNames.keys()].filter((relayId) =>
+  const appRelayIds = [...relayNames.keys()].filter((relayId) =>
     hasAppPermission(user, grants, { relayId }, "app.read")
   )
+  // Each game server the person reads, which its directory lists.
+  const readableServers = new Map(
+    servers.flatMap((server) =>
+      relayNames.has(server.relayId) ? [[server.id, server] as const] : []
+    )
+  )
   const records = await runAppEffect(
-    "apps.deployments.list",
-    listAppDeploymentsEffect({
-      appId: data.appId,
-      appIds: apps.flatMap((app) =>
-        relayNames.has(app.relayId) &&
-        !relayIds.includes(app.relayId) &&
-        hasAppPermission(user, grants, app, "app.read")
-          ? [app.appId]
-          : []
-      ),
+    "deployments.list",
+    listDeploymentsEffect({
       before: data.before,
+      instance: data.instance,
       limit: deploymentPageSize + 1,
-      relayIds,
+      reachable: {
+        ...(kinds.includes("app") && {
+          app: {
+            instances: apps.flatMap((app) =>
+              relayNames.has(app.relayId) &&
+              !appRelayIds.includes(app.relayId) &&
+              hasAppPermission(user, grants, app, "app.read")
+                ? [{ id: app.appId, relayId: app.relayId }]
+                : []
+            ),
+            relayIds: appRelayIds,
+          },
+        }),
+        ...(kinds.includes("server") && {
+          server: {
+            instances: [...readableServers.values()].map((server) => ({
+              id: server.id,
+              relayId: server.relayId,
+            })),
+            relayIds: [],
+          },
+        }),
+      },
     })
   )
   const page = records.slice(0, deploymentPageSize)
@@ -139,21 +234,42 @@ export async function getAppDeploymentsHandler(data: {
       false
     )
   )
+  const triggeredByName = (record: DeploymentRecord, index: number) =>
+    record.triggeredBy
+      ? record.triggeredBy === user.id
+        ? (user.name ?? user.email)
+        : (people[index]?.ownerName ?? "Deleted user")
+      : null
   const last = page.at(-1)
   return {
-    items: page.map((record, index): AppDeploymentView => ({
-      ...record,
-      appName: appNames.get(record.appId) ?? record.appId.slice(0, 8),
-      canManage: hasAppPermission(user, grants, record, "app.manage"),
-      canReadLogs: hasAppPermission(user, grants, record, "app.logs.read"),
-      commitUrl: commitUrl(record),
-      relayName: relayNames.get(record.relayId) ?? "Relay",
-      triggeredByName: record.triggeredBy
-        ? record.triggeredBy === user.id
-          ? (user.name ?? user.email)
-          : (people[index]?.ownerName ?? "Deleted user")
-        : null,
-    })),
+    items: page.map((record, index): DeploymentView => {
+      const relayName = relayNames.get(record.relayId) ?? "Relay"
+      if (record.kind === "server") {
+        return {
+          ...record,
+          canReadLogs:
+            isPlatformAdmin(user) ||
+            effectiveScopePermissions(grants, {
+              relayId: record.relayId,
+              resourceId: record.instanceId,
+              resourceType: "instance",
+            }).has("instance.logs.read"),
+          relayName,
+          serverName:
+            readableServers.get(record.instanceId)?.name ?? record.instanceId,
+          triggeredByName: triggeredByName(record, index),
+        }
+      }
+      return {
+        ...record,
+        appName: appNames.get(record.appId) ?? record.appId,
+        canManage: hasAppPermission(user, grants, record, "app.manage"),
+        canReadLogs: hasAppPermission(user, grants, record, "app.logs.read"),
+        commitUrl: commitUrl(record),
+        relayName,
+        triggeredByName: triggeredByName(record, index),
+      }
+    }),
     nextCursor:
       records.length > deploymentPageSize && last
         ? { id: last.id, startedAt: last.startedAt }
@@ -515,6 +631,50 @@ export async function getAppDeploymentLogHandler(
   return {
     log,
     reason: log ? null : "The Relay keeps only each app's 20 latest logs",
+  }
+}
+
+/**
+ * A game server deployment's log, from its Relay while it keeps it, for
+ * whoever can read the server's logs.
+ */
+export async function getServerDeploymentLogHandler(
+  user: AuthenticatedUser,
+  data: { deploymentId: string; instanceId: string }
+): Promise<{ log: RelayServerDeploymentLog; reason: string | null }> {
+  const record = await runAppEffect(
+    "deployments.load",
+    loadDeploymentEffect(data.deploymentId)
+  )
+  // Not found alike whether it's missing, another kind, or another server's,
+  // so this says nothing of a server the person can't read.
+  if (record?.kind !== "server" || record.instanceId !== data.instanceId) {
+    throw new Error("Deployment not found")
+  }
+  await requireRelayPermission({
+    instanceId: record.instanceId,
+    permission: "instance.logs.read",
+    relayId: record.relayId,
+    user,
+  })
+  const relay = await requiredRelay(record.relayId)
+  if (relayConnectionFeatures(relay.id).size === 0) {
+    return { log: null, reason: "The Relay is offline" }
+  }
+  const log = relayServerDeploymentLogSchema.parse(
+    await databaseRpc(
+      relay,
+      "instance.deployment.read",
+      { deploymentId: record.id, instanceId: record.instanceId },
+      15_000,
+      user.id
+    )
+  )
+  return {
+    log,
+    reason: log
+      ? null
+      : "The Relay keeps only each game server's 20 latest deployment logs",
   }
 }
 

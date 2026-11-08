@@ -226,8 +226,7 @@ function routeVerdict(
 ): "missing" | "moved" | "open" {
   if (workspace.status !== "found") return "missing"
   const [instance] = workspace.snapshot.instances
-  const canonical =
-    serverId === workspace.routeIdentifier || serverId === instance?.routeId
+  const canonical = instance?.id === serverId
   const sameServer =
     !opened ||
     opened.verified ||

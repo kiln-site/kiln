@@ -176,7 +176,7 @@ export function InvitationPage({
                   ? invitationLabel
                   : `${
                       preview.instanceId
-                        ? `Instance · ${preview.instanceId.slice(0, 10)}`
+                        ? `Instance · ${preview.instanceId}`
                         : "Entire Relay"
                     } · ${invitationLabel}`}
               </span>

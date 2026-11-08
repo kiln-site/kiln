@@ -63,7 +63,7 @@ import {
   type ServerMigrationOptions,
 } from "@/lib/server-migration-input"
 import { checkMigrationRoom } from "@/lib/server-migration-room.server"
-import { provisioningInstanceId } from "@/lib/provisioning.server"
+import { reserveServerInstanceIdEffect } from "@/lib/provisioning.server"
 import { provisionServer } from "@/lib/server-provisioning.server"
 import { currentActingUser } from "@/operations/acting-user"
 import {
@@ -320,13 +320,15 @@ export const startServerMigrationEffect = Effect.fn("serverMigrations.start")(
     }
   }) {
     const createKey = randomUUID()
+    // Reserved before the migration starts, so every run of it provisions
+    // the same copy.
+    const destinationId = yield* reserveServerInstanceIdEffect(createKey)
     const migration: ServerMigrationInput = {
       actor: input.actor,
       backupStorageIds: input.backupStorageIds,
       createKey,
       destination: {
-        // The ID provisioning gives it, retried or not.
-        instanceId: provisioningInstanceId(createKey),
+        instanceId: destinationId,
         name: input.destinationName,
         relayId: input.destinationRelayId,
       },
@@ -822,6 +824,7 @@ const createDestination = (
       provisionServer({
         create,
         idempotencyKey: input.createKey,
+        instanceId: input.destination.instanceId,
         ownerId: actor.id,
         relay: destination,
         requestedBy: actor.id,

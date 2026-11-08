@@ -28,7 +28,7 @@ const route: RelayStoredWebRoute = {
   hostname: "shop.example.com",
   httpsRedirect: true,
   id: "b00d4423",
-  instanceId: "a".repeat(40),
+  instanceId: "a".repeat(12),
   name: "Shop",
   path: null,
   primary: true,
@@ -39,7 +39,7 @@ const route: RelayStoredWebRoute = {
 }
 
 const routerName = "kiln-route-b00d4423"
-const owner = { id: "a".repeat(40), kind: "server" as const }
+const owner = { id: "a".repeat(12), kind: "server" as const }
 const minute = 60_000
 
 describe("bundled Traefik certificates", () => {
@@ -110,7 +110,7 @@ describe("bundled Traefik certificates", () => {
       {
         failed: true,
         hostname: "shop.example.com",
-        owner: { id: "a".repeat(40), kind: "server" },
+        owner: { id: "a".repeat(12), kind: "server" },
         waitingFor: "dns",
       },
     ])
@@ -175,7 +175,7 @@ describe("bundled Traefik certificates", () => {
     await expect(
       certificates.check({
         hostname: "shop.example.com",
-        owner: { id: "b".repeat(40), kind: "server" },
+        owner: { id: "b".repeat(12), kind: "server" },
       })
     ).rejects.toThrow("No route of this game server serves shop.example.com")
     expect(traefik()).toBe(before)

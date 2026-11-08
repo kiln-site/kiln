@@ -3,8 +3,8 @@ import { describe, expect, it } from "vite-plus/test"
 
 import { appVolumesOf } from "@/lib/app-volumes"
 
-const app = "a".repeat(40)
-const other = "b".repeat(40)
+const app = "a".repeat(12)
+const other = "b".repeat(12)
 
 const mount = (resourceId: string): RelayVolume["mounts"][number] => ({
   container: `container-${resourceId}`,

@@ -3,6 +3,7 @@ import { getRequest } from "@tanstack/react-start/server"
 import { z } from "zod"
 
 import {
+  appIdSchema,
   backupConsistencySchema,
   backupTargetSchema,
   relayIdSchema,
@@ -100,8 +101,6 @@ const resourceBackupInputSchema = z.strictObject({
   storageIds: z.array(z.uuid().nullable()).min(1).max(16),
   target: backupTargetSchema.extend({ kind: z.enum(["app", "volume"]) }),
 })
-
-const appIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
 
 const appBackupsInputSchema = z.strictObject({
   appId: appIdSchema,

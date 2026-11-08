@@ -26,15 +26,15 @@ describeMysql("infra directory visibility", () => {
         Effect.gen(function* () {
           yield* resetDatabase
           yield* insertUser(user.id)
-          const relayId = "r".repeat(43)
+          const relayId = "1".repeat(12)
           yield* insertRelay(relayId)
-          yield* insertRelay("s".repeat(43))
+          yield* insertRelay("2".repeat(12))
           yield* insertGrant({
             id: "scoped-reader",
             userId: user.id,
             relayId,
             resourceType: "database",
-            resourceId: "a".repeat(40),
+            resourceId: "a".repeat(12),
           })
           yield* insertRows("access_selection", {
             access_id: "scoped-reader",

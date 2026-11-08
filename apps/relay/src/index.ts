@@ -47,6 +47,7 @@ import {
   appVolumeFromFileRoot,
   databaseIdFromFileRoot,
   isRelayFileRoot,
+  relayFileRootId,
   RelayTransferPullStartSchema,
   RelayTransferReferenceSchema,
   RelayTransferSpaceRequestSchema,
@@ -95,6 +96,8 @@ import {
   relayCreateInstanceSchema,
   relayPrepareInstanceSchema,
   relayProvisionInstanceSchema,
+  relayClaimInstanceProvisioningSchema,
+  relayServerDeploymentReadSchema,
   relayInstanceActionSchema,
   relayInstanceNameSchema,
   relayInstanceSchema,
@@ -321,6 +324,7 @@ import {
   hostProvisioningCapacity,
   ProvisioningManager,
 } from "./provisioning.js"
+import { ServerDeploymentLogs } from "./server-deployment-logs.js"
 import { appProvisioning } from "./app-provisioning.js"
 import { databaseProvisioning } from "./database-provisioning.js"
 import { serverProvisioning } from "./server-provisioning.js"
@@ -347,6 +351,7 @@ import {
   type PlatformPassResult,
 } from "./platform.js"
 import { ScheduleManager } from "./schedules.js"
+import { migrateInstanceIds } from "./instance-id-migration.js"
 import {
   webRoutesForHearth,
   webRoutesFromHearth,
@@ -395,6 +400,14 @@ const startupCore = await runRelayEffect(
     return { identity, journalId, state }
   })
 )
+// Before anything reads Docker or admits work: the move to 12-character
+// instance IDs, once, and the old IDs migrated instances keep their names by.
+await migrateInstanceIds({
+  config,
+  engine: new DockerEngine(config.dockerSocket),
+  identity: startupCore.identity,
+  state: startupCore.state,
+})
 const cliArguments = process.argv.slice(2)
 // Before pairing, so the bootstrap invitation expects the token the
 // installed Hearth is given.
@@ -412,9 +425,10 @@ if (platformStartup.refused && cliArguments.length === 0) {
   console.error(platformStartup.refused)
 }
 let relayIdentity = startupCore.identity
-config.nodeId = relayIdentity.fingerprint
+config.nodeId = relayIdentity.id
 config.nodeName = relayIdentity.name
 const bricks = new BrickCatalog(config.brickCatalogUrl, config.dataDirectory)
+const serverDeploymentLogs = new ServerDeploymentLogs(config.dataDirectory)
 // Resources being deleted refuse every change but their final backup and
 // their deletion, from the first operation admitted.
 const resourceFreezes = await runRelayEffect(
@@ -766,7 +780,8 @@ const hostPackages = new HostPackages(hostShell)
 const hostDatabaseBrowser = new DatabaseBrowser(hostFilesystem)
 async function hostFileRoot(id: string): Promise<FileRoot> {
   if (!config.hostAccess) throw new HostAccessDisabledError()
-  if (id !== relayIdentity.fingerprint) throw new Error("Relay not found")
+  if (id !== relayFileRootId(relayIdentity.id))
+    throw new Error("Relay not found")
   return { id, directory: "." }
 }
 const appDatabaseBrowser = new DatabaseBrowser(appFilesystem)
@@ -979,6 +994,7 @@ const provisioningManager = await runRelayEffect(
       app: appProvisioning(apps),
       database: databaseProvisioning(databases),
       server: serverProvisioning({
+        deploymentLogs: serverDeploymentLogs,
         lifecycle,
         refreshSnapshot: () => snapshotHub.refresh(),
         state: startupCore.state,
@@ -1163,8 +1179,8 @@ const scheduleManager = await ScheduleManager.make({
   listAppIds: async () => new Set((await apps.list()).map(({ id }) => id)),
   listDatabaseIds: async () =>
     new Set((await databases.list()).map((database) => database.id)),
-  platformTargetId: () => config.installationId ?? relayIdentity.fingerprint,
-  relayId: relayIdentity.fingerprint,
+  platformTargetId: () => config.installationId ?? relayIdentity.id,
+  relayId: relayIdentity.id,
   reportError: (message, cause) => {
     reportRelayError(
       cause instanceof Error ? cause : new Error(message, { cause }),
@@ -1530,7 +1546,7 @@ async function renameRelay(name: string) {
     renameRelayIdentity(config, relayIdentity, name)
   )
   config.nodeName = relayIdentity.name
-  config.nodeId = relayIdentity.fingerprint
+  config.nodeId = relayIdentity.id
 }
 
 const controlSocket = attachControlSocket({
@@ -1803,7 +1819,7 @@ const sftpServer = await Effect.runPromise(
 )
 startingSftpServer = null
 console.log(
-  `Relay ${relayIdentity.fingerprint} (${relayIdentity.name}) listening on ${activeTls ? "https" : "http"}://${config.host}:${config.port}`
+  `Relay ${relayIdentity.id} (${relayIdentity.name}) listening on ${activeTls ? "https" : "http"}://${config.host}:${config.port}`
 )
 console.log(
   `Discovering ${config.managedLabel} containers in ${config.rootDirectory}`
@@ -2217,7 +2233,7 @@ async function relaySnapshot() {
     relay: {
       browserOrigin: config.browserOrigin,
       certificates: lifecycle.certificates.pending(),
-      id: relayIdentity.fingerprint,
+      id: relayIdentity.id,
       name: relayIdentity.name,
       paused: lanes.paused,
       ...(platformStartup.state
@@ -3531,7 +3547,9 @@ async function executeControlRequest(
       )
     }
     case "instance.provision.claim": {
-      const { instanceId } = relayProvisionInstanceSchema.parse(request.payload)
+      const { deploymentId, instanceId } =
+        relayClaimInstanceProvisioningSchema.parse(request.payload)
+      serverDeploymentLogs.expectInstall(instanceId, deploymentId)
       return runRelayEffect(
         "relay.instance.provision.claim",
         provisioningManager.claim("server", instanceId)
@@ -3553,7 +3571,15 @@ async function executeControlRequest(
           (candidate) => candidate.id === instanceId
         ) ?? relayInstanceSchema.parse(await requiredInstance(payload))
       return retainingInstance(existing, async () => {
-        const instance = await lifecycle.reconfigureInstance(instanceId, input)
+        // A reinstall or change of Brick is a deployment Hearth names.
+        const instance = await serverDeploymentLogs.run(
+          instanceId,
+          input.deploymentId,
+          input.reinstall
+            ? "Reinstalling the game server"
+            : "Changing the game server's Brick",
+          (onPhase) => lifecycle.reconfigureInstance(instanceId, input, onPhase)
+        )
         return relayInstanceWithStoredName(instance)
       })
     }
@@ -3617,6 +3643,7 @@ async function executeControlRequest(
         )
         await docker.setPendingLimits(instanceId, null)
         await resourceFreezes.forget("instance", instanceId)
+        await serverDeploymentLogs.remove(instanceId)
         return { deleted: true, instanceId }
       }
       await lifecycle.deleteInstance(instanceId, payload.deleteData === true)
@@ -3643,13 +3670,14 @@ async function executeControlRequest(
         )
       })
       await resourceFreezes.forget("instance", instanceId)
+      await serverDeploymentLogs.remove(instanceId)
       return { deleted: true, instanceId }
     }
     case "instance.action": {
       const input = relayInstanceActionSchema.parse(payload)
       return power.requested(
         "instance",
-        await resolveInstanceReference(requiredString(payload, "instanceId")),
+        resolveInstanceReference(requiredString(payload, "instanceId")),
         input.action
       )
     }
@@ -3885,6 +3913,11 @@ async function executeControlRequest(
         "mclogs.upload",
         uploadConsoleLogToMclogs(config.mclogsApiUrl, log, input)
       )
+    }
+    case "instance.deployment.read": {
+      const { deploymentId, instanceId } =
+        relayServerDeploymentReadSchema.parse(payload)
+      return serverDeploymentLogs.read(instanceId, deploymentId)
     }
     case "instance.logs.latest":
       return runRelayEffect(
@@ -4228,7 +4261,7 @@ async function executeControlRequest(
       await appendRelayAudit("relay.renamed", client.id, request.id, {
         name: relayIdentity.name,
       })
-      return { id: relayIdentity.fingerprint, name: relayIdentity.name }
+      return { id: relayIdentity.id, name: relayIdentity.name }
     }
     case "sftp.authorization.resolve":
       throw new Error(`${request.operation} is not available yet`)
@@ -4945,14 +4978,10 @@ function inLane<T>(
   return Effect.runPromise(lanes.run(admission, relayOperation(mutate)))
 }
 
-// Requests carry a game server's full ID; a short ID or name is looked up,
-// and a reference that matches nothing locks as itself and fails later.
-function resolveInstanceReference(reference: string): string | Promise<string> {
-  if (/^[a-f0-9]{40}$/u.test(reference)) return reference
-  return recoverPromise(
-    async () => (await docker.findInstance(reference))?.id ?? reference,
-    () => reference
-  )
+// Requests carry a game server's ID; one that matches nothing locks as
+// itself and fails later.
+function resolveInstanceReference(reference: string): string {
+  return reference
 }
 
 function normalizedRequestOperation(request: IncomingMessage): string {

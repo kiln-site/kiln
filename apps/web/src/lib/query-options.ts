@@ -121,6 +121,8 @@ import {
   getAppDeployStates,
   getAppDeploymentSummary,
   getAppGitHubSourceFile,
+  getDeployments,
+  getServerDeploymentLog,
 } from "@/server/app-deployments"
 import {
   getAppConfig,
@@ -217,6 +219,11 @@ export const queryKeys = {
       ["app-deployments", "list", scope] as const,
     log: (appId: string, deploymentId: string) =>
       ["app-deployments", "log", appId, deploymentId] as const,
+    // App and game server deployments together.
+    all: (scope: DeploymentsScope) =>
+      ["app-deployments", "all", scope] as const,
+    serverLog: (instanceId: string, deploymentId: string) =>
+      ["app-deployments", "server-log", instanceId, deploymentId] as const,
     summary: (relayId: string, appId: string) =>
       ["app-deployments", "summary", relayId, appId] as const,
     states: ["app-deployments", "states"] as const,
@@ -366,7 +373,6 @@ function mergeRelaySnapshotInstance(
       : updated.connectAddress,
     relayName: current.relayName,
     relayStatus: current.relayStatus,
-    routeId: current.routeId,
   }
 }
 
@@ -639,7 +645,7 @@ export function serverNavigationQueryOptions(input: ServerNavigationInput) {
     queryKey: [
       ...queryKeys.servers.navigation,
       "serverId" in input ? input.serverId : null,
-      "selectedRouteId" in input ? input.selectedRouteId : null,
+      "selectedServerId" in input ? input.selectedServerId : null,
     ],
     queryFn: ({ signal }) => getServerNavigation({ data: input, signal }),
     refetchOnWindowFocus: false,
@@ -1192,6 +1198,39 @@ export function appDeploymentLogQueryOptions(
   return queryOptions({
     queryKey: queryKeys.appDeployments.log(appId, deploymentId),
     queryFn: () => getAppDeploymentLog({ data: { appId, deploymentId } }),
+    retry: false,
+    // A finished log never changes; one that couldn't be read may come back.
+    staleTime: (query) =>
+      query.state.data?.log?.deployment.finishedAt ? Infinity : 0,
+  })
+}
+
+/** One App's or game server's deployments, one Relay's, or all. */
+export interface DeploymentsScope {
+  instance?: { id: string; kind: "app" | "server" }
+  relayId?: string
+}
+
+export function deploymentsQueryOptions(scope: DeploymentsScope) {
+  return infiniteQueryOptions({
+    queryKey: queryKeys.appDeployments.all(scope),
+    queryFn: ({ pageParam }) =>
+      getDeployments({
+        data: { ...scope, ...(pageParam && { before: pageParam }) },
+      }),
+    initialPageParam: null as { id: string; startedAt: string } | null,
+    getNextPageParam: (page) => page.nextCursor,
+  })
+}
+
+export function serverDeploymentLogQueryOptions(
+  instanceId: string,
+  deploymentId: string
+) {
+  return queryOptions({
+    queryKey: queryKeys.appDeployments.serverLog(instanceId, deploymentId),
+    queryFn: () =>
+      getServerDeploymentLog({ data: { deploymentId, instanceId } }),
     retry: false,
     // A finished log never changes; one that couldn't be read may come back.
     staleTime: (query) =>

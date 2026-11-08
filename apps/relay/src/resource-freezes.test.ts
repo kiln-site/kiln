@@ -11,9 +11,9 @@ import {
 } from "./operation-plans.js"
 import { relayHarness, type RelayHarness } from "./test/relay.js"
 
-const serverId = "a".repeat(40)
-const otherServerId = "b".repeat(40)
-const appId = "e".repeat(40)
+const serverId = "a".repeat(12)
+const otherServerId = "b".repeat(12)
+const appId = "e".repeat(12)
 const deletion = "11111111-1111-4111-8111-111111111111"
 const otherDeletion = "22222222-2222-4222-8222-222222222222"
 const resolve = (reference: string) => reference

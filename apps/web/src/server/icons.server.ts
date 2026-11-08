@@ -1,4 +1,8 @@
-import { appIdFromFileRoot, isRelayFileRoot } from "@workspace/contracts"
+import {
+  appIdFromFileRoot,
+  isRelayFileRoot,
+  relayFileRootId,
+} from "@workspace/contracts"
 
 import { listIconIndexEffect } from "@/effect/icons"
 import { runAppEffect } from "@/effect/runtime"
@@ -129,7 +133,7 @@ export async function requireFileRootRead(
   rootId: string
 ) {
   if (isRelayFileRoot(rootId)) {
-    if (rootId !== relayId) throw new Error("Relay not found")
+    if (rootId !== relayFileRootId(relayId)) throw new Error("Relay not found")
     await requireRelayPermission({
       user,
       relayId,

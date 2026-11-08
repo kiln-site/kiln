@@ -14,8 +14,8 @@ import {
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
 
-const relayId = "r".repeat(43),
-  id = "a".repeat(40)
+const relayId = "1".repeat(12),
+  id = "a".repeat(12)
 const user: AuthenticatedUser = {
   id: "inventory-reader",
   name: "Reader",
@@ -55,7 +55,7 @@ describeMysql("scoped instance inventory", () => {
           yield* resetDatabase
           yield* insertUser(user.id)
           yield* insertRelay(relayId)
-          yield* insertRelay("s".repeat(43))
+          yield* insertRelay("2".repeat(12))
           yield* insertGrant({
             id: "inventory-grant",
             userId: user.id,
@@ -70,8 +70,8 @@ describeMysql("scoped instance inventory", () => {
           })
           const requests: Array<InstanceInventoryRequest> = [
             { kind: "server" as const, relayId, id },
-            { kind: "server" as const, relayId, id: "b".repeat(40) },
-            { kind: "server" as const, relayId: "s".repeat(43), id },
+            { kind: "server" as const, relayId, id: "b".repeat(12) },
+            { kind: "server" as const, relayId: "2".repeat(12), id },
             { kind: "database" as const, relayId, id },
             { kind: "app" as const, relayId, id },
             { kind: "relay" as const, relayId, id: relayId },
@@ -99,7 +99,7 @@ describeMysql("scoped instance inventory", () => {
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
-          const readable = "b".repeat(40)
+          const readable = "b".repeat(12)
           const member = (
             kind: "app" | "database" | "instance",
             id: string
@@ -113,9 +113,9 @@ describeMysql("scoped instance inventory", () => {
           })
           const members = [
             member("instance", readable),
-            member("instance", "c".repeat(40)),
-            member("app", "d".repeat(40)),
-            member("database", "e".repeat(40)),
+            member("instance", "c".repeat(12)),
+            member("app", "d".repeat(12)),
+            member("database", "e".repeat(12)),
           ]
           yield* insertRelay(relayId)
           const grant = (
@@ -189,7 +189,6 @@ describeMysql("scoped instance inventory", () => {
                       members,
                       name: "Main",
                       observedState: "running",
-                      shortId: id.slice(0, 8),
                       startedAt: null,
                       status: "Ready",
                       supportsImportExport: true,

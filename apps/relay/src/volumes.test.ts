@@ -12,7 +12,7 @@ import {
 import { RelayVolumes } from "./volumes.js"
 
 const volumeId = "3f9a21c4".padEnd(40, "0")
-const appId = "a".repeat(40)
+const appId = "a".repeat(12)
 
 async function relayVolumes(harness?: RelayHarness) {
   const relay = harness ?? (await relayHarness())
@@ -178,7 +178,7 @@ describe("Relay volumes", () => {
       run(volumes.appVolumeMountpoint(appId, otherVolume))
     ).rejects.toThrow("This App doesn't use that volume")
     await expect(
-      run(volumes.appVolumeMountpoint("b".repeat(40), volumeId))
+      run(volumes.appVolumeMountpoint("b".repeat(12), volumeId))
     ).rejects.toThrow("This App doesn't use that volume")
 
     // What was known doesn't outlast the App's use of it, even when a read

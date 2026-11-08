@@ -10,7 +10,7 @@ import {
 
 describe("S3 backup storage", () => {
   it("keeps an App's volume's ID one key segment, so it can't nest under another target", () => {
-    const appId = "a".repeat(40)
+    const appId = "a".repeat(12)
     const key = backupObjectKey({
       artifactKind: "tar_archive",
       backupId: "abcdef01-0000-4000-8000-000000000001",

@@ -7,7 +7,7 @@ import { recoveryRouteLabels } from "./traefik.js"
 const route: RelayStoredWebRoute = {
   hostname: "donutsmp.example.com",
   id: "b00d4423",
-  instanceId: "a".repeat(40),
+  instanceId: "a".repeat(12),
   name: "Live Map",
   path: "/map",
   stripPrefix: true,

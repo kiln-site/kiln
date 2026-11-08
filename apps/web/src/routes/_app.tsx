@@ -47,7 +47,7 @@ export const Route = createFileRoute("/_app")({
         .then((preferences) =>
           context.queryClient.ensureQueryData(
             serverNavigationQueryOptions({
-              selectedRouteId: preferences.selectedInstanceRouteId,
+              selectedServerId: preferences.selectedInstance,
             })
           )
         ),

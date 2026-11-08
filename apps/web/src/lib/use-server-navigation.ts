@@ -12,7 +12,7 @@ import {
   type ServerNavigationInput,
 } from "@/lib/server-navigation"
 import type { SidebarInstance } from "@/lib/relay-selectors"
-import { readSelectedInstanceRouteId } from "@/lib/ui-preference-cookies"
+import { readSelectedInstance } from "@/lib/ui-preference-cookies"
 
 /**
  * The game server the sidebar and command menu open. Pages load a small
@@ -24,15 +24,15 @@ export function useServerNavigation(
   enabled: boolean
 ): { data: ServerNavigation<SidebarInstance> | undefined; isPending: boolean } {
   const serverId = "serverId" in input ? input.serverId : null
-  const selectedRouteId =
-    "selectedRouteId" in input ? input.selectedRouteId : null
+  const selectedServerId =
+    "selectedServerId" in input ? input.selectedServerId : null
   const select = React.useMemo(
     () => (instances: Array<SidebarInstance>) =>
       resolveServerNavigation(
         instances,
-        serverId === null ? { selectedRouteId } : { serverId }
+        serverId === null ? { selectedServerId } : { serverId }
       ),
-    [serverId, selectedRouteId]
+    [serverId, selectedServerId]
   )
   const directory = useQuery({
     ...serverDirectoryQueryOptions(),
@@ -52,7 +52,7 @@ export function useServerNavigation(
 
 /** Server navigation for the current route and remembered selection. */
 export function useSidebarServerNavigation(
-  initialSelectedInstanceRouteId: string | null,
+  initialSelectedInstance: string | null,
   enabled: boolean
 ) {
   const serverId = useRouterState({
@@ -60,11 +60,11 @@ export function useSidebarServerNavigation(
       (state.matches.at(-1)?.params as { serverId?: string } | undefined)
         ?.serverId,
   })
-  const selectedRouteId =
-    serverId ?? readSelectedInstanceRouteId() ?? initialSelectedInstanceRouteId
+  const selectedServerId =
+    serverId ?? readSelectedInstance() ?? initialSelectedInstance
   const navigation = useServerNavigation(
-    serverId ? { serverId } : { selectedRouteId },
+    serverId ? { serverId } : { selectedServerId },
     enabled
   )
-  return { ...navigation, selectedRouteId, serverId }
+  return { ...navigation, serverId }
 }

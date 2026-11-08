@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useMatch } from "@tanstack/react-router"
-import type { RelayVolume } from "@workspace/contracts"
+import { relayFileRootId, type RelayVolume } from "@workspace/contracts"
 
 import { ResourceFilesPage } from "@/components/files/resource-files-page"
 import {
@@ -24,7 +24,7 @@ import { warmFileWorkspaceModule } from "@/lib/workspace-module-preloads"
 
 export function RelayFilesPage() {
   React.useEffect(warmFileWorkspaceModule, [])
-  const { relay, routeId } = useRelayWorkspace()
+  const { relay } = useRelayWorkspace()
   const { connected } = useRelayLiveStatus(relay)
   const filePath = useMatch({
     from: "/_app/relay/$relayId/files/$",
@@ -38,10 +38,9 @@ export function RelayFilesPage() {
   })
   const instance = React.useMemo<FileWorkspaceInstance>(
     () => ({
-      id: relay.id,
+      id: relayFileRootId(relay.id),
       name: relay.name,
       relayId: relay.id,
-      shortId: relay.id.slice(0, 8),
       implementation: "",
       version: "",
       observedState: "running",
@@ -49,13 +48,13 @@ export function RelayFilesPage() {
     [relay.id, relay.name]
   )
   const route = React.useMemo(
-    () => ({ kind: "relay" as const, id: routeId }),
-    [routeId]
+    () => ({ kind: "relay" as const, id: relay.id }),
+    [relay.id]
   )
   const selectVolumes = React.useCallback(
     (data: { volumes: ReadonlyArray<RelayVolume> }) =>
-      hostVolumeRoots(data.volumes, routeId),
-    [routeId]
+      hostVolumeRoots(data.volumes, relay.id),
+    [relay.id]
   )
   const { data: volumes = noVolumes } = useQuery({
     ...relayVolumesQueryOptions(relay.id),
@@ -66,12 +65,12 @@ export function RelayFilesPage() {
   const home = React.useMemo(
     () => ({
       link: {
-        params: { relayId: routeId },
+        params: { relayId: relay.id },
         to: "/relay/$relayId/files",
       } as const,
       name: "Host files",
     }),
-    [routeId]
+    [relay.id]
   )
   const openPath = `/${filePath ?? ""}/`.replace(/\/+/gu, "/")
   const current = volumes.find((volume) =>
@@ -107,7 +106,7 @@ const noVolumes: ReadonlyArray<VolumeFileRoot> = []
 // A Relay's volumes are folders in its host files, keyed by where they are.
 function hostVolumeRoots(
   volumes: ReadonlyArray<RelayVolume>,
-  routeId: string
+  relayId: string
 ): ReadonlyArray<VolumeFileRoot> {
   return volumes.flatMap((volume) =>
     volume.mountpoint
@@ -120,7 +119,7 @@ function hostVolumeRoots(
             link: {
               params: {
                 _splat: `${volume.mountpoint.replace(/^\/+/u, "")}/`,
-                relayId: routeId,
+                relayId,
               },
               to: "/relay/$relayId/files/$",
             } as const,

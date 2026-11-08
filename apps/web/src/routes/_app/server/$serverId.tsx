@@ -2,13 +2,7 @@ import {
   myInvitationsQueryOptions,
   invitationInfrastructureHref,
 } from "@/lib/resource-invitation-query"
-import { relayInstanceRouteId } from "@/lib/relay-fleet"
-import {
-  Outlet,
-  createFileRoute,
-  redirect,
-  type ParsedLocation,
-} from "@tanstack/react-router"
+import { Outlet, createFileRoute, redirect } from "@tanstack/react-router"
 
 import {
   serverDirectoryQueryOptions,
@@ -22,9 +16,11 @@ import {
   type KnownServer,
 } from "@/lib/server-workspace"
 
+// A game server's page is named by its instance ID alone. Instance IDs are
+// unique across every Relay, so the route finds the server wherever it runs.
 export const Route = createFileRoute("/_app/server/$serverId")({
   staleTime: Infinity,
-  beforeLoad: async ({ context, location, params }) => {
+  beforeLoad: async ({ context, params }) => {
     if (params.serverId === "unavailable")
       return { instance: null, serverVerified: true }
     const { queryClient } = context
@@ -40,33 +36,19 @@ export const Route = createFileRoute("/_app/server/$serverId")({
           serverNavigationQueryOptions({ serverId: params.serverId })
         )
 
-    // A server this page already knows, opened for the first time by its
-    // canonical ID, opens at once: the page reads its own server in the
-    // background, and the route resolves again if that read disagrees. A link
-    // that would redirect waits for Hearth's answer, since a cached one may
-    // send it to the wrong server.
+    // A server this page already knows, opened for the first time, opens at
+    // once: the page reads its own server in the background, and the route
+    // resolves again if that read disagrees.
     const known =
       queryClient.getQueryData(
         serverWorkspaceQueryOptions(params.serverId).queryKey
       ) === undefined
         ? knownServer(queryClient, params.serverId)
         : undefined
-    if (
-      known &&
-      (params.serverId === known.routeIdentifier ||
-        params.serverId === known.server.routeId)
-    ) {
+    if (known) {
       forkPromise(() => ensureServerWorkspace(queryClient, params.serverId))
       if (navigation) forkPromise(() => navigation)
-      return {
-        ...openedServer(
-          location,
-          params.serverId,
-          known.server,
-          known.routeIdentifier
-        ),
-        serverVerified: false,
-      }
+      return { ...openedServer(known), serverVerified: false }
     }
 
     const [workspace] = await Promise.all([
@@ -74,26 +56,18 @@ export const Route = createFileRoute("/_app/server/$serverId")({
       navigation,
     ])
 
-    if (workspace.status === "ambiguous") {
-      throw redirectToServerList(params.serverId)
-    }
     if (workspace.status === "not-found") {
       const invitations = await queryClient.ensureQueryData(
         myInvitationsQueryOptions()
       )
-      const matches = invitations.filter(
-        (invitation) =>
-          invitation.scope.resourceType === "instance" &&
-          (invitation.scope.resourceId === params.serverId ||
-            invitation.scope.resourceId.slice(0, 8) === params.serverId ||
-            relayInstanceRouteId(
-              invitation.scope.relayId,
-              invitation.scope.resourceId.slice(0, 8)
-            ) === params.serverId)
+      const invitation = invitations.find(
+        (candidate) =>
+          candidate.scope.resourceType === "instance" &&
+          candidate.scope.resourceId === params.serverId
       )
-      if (matches.length === 1)
+      if (invitation)
         throw redirect({
-          href: invitationInfrastructureHref(matches[0]!),
+          href: invitationInfrastructureHref(invitation),
           replace: true,
         })
 
@@ -101,43 +75,15 @@ export const Route = createFileRoute("/_app/server/$serverId")({
     }
     const [instance] = workspace.snapshot.instances
     if (!instance) throw redirect({ to: "/infra/servers", replace: true })
-    if (!workspace.routeIdentifier) {
-      throw redirectToServerList(instance.shortId)
-    }
-    return {
-      ...openedServer(
-        location,
-        params.serverId,
-        instance,
-        workspace.routeIdentifier
-      ),
-      serverVerified: true,
-    }
+    return { ...openedServer(instance), serverVerified: true }
   },
   component: Outlet,
 })
 
-// The route's context for a resolved server, after redirecting a link that
-// does not use its canonical ID.
 function openedServer(
-  location: ParsedLocation,
-  serverId: string,
-  server: Pick<KnownServer, "id" | "relayId" | "routeId"> &
-    Partial<Pick<KnownServer, "brickId">>,
-  routeIdentifier: string
+  server: Pick<KnownServer, "id" | "relayId"> &
+    Partial<Pick<KnownServer, "brickId">>
 ) {
-  // Relay-qualified links are already unambiguous. Rewriting one while its
-  // client transition is resolving can start a second transition for the
-  // same instance and lock the router.
-  const alreadyRelayQualified = serverId === server.routeId
-  if (!alreadyRelayQualified && serverId !== routeIdentifier) {
-    const segments = location.pathname.split("/")
-    segments[2] = encodeURIComponent(routeIdentifier)
-    throw redirect({
-      href: `${segments.join("/")}${location.searchStr}${location.hash ? `#${location.hash}` : ""}`,
-      replace: true,
-    })
-  }
   return {
     instance: {
       brickId: server.brickId,
@@ -145,11 +91,4 @@ function openedServer(
       relayId: server.relayId,
     },
   }
-}
-
-function redirectToServerList(shortId: string) {
-  return redirect({
-    href: `/infra/servers?search=${encodeURIComponent(shortId)}`,
-    replace: true,
-  })
 }

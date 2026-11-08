@@ -326,8 +326,8 @@ export async function getActivityForUser(
 
   // What an event acted on. Apps and Relays can take a game server's place:
   // an app runs as a Relay instance, its files are `app:<id>`, and its
-  // Tailscale members `app:<id>:<service>`; a Relay's host files use its
-  // fingerprint. A game server wins over a database it was linked to.
+  // Tailscale members `app:<id>:<service>`; a Relay's host files are
+  // `relay:<id>`. A game server wins over a database it was linked to.
   const activityTarget = (relayId: string, record: RelayAuditRecord) => {
     const recordedId = auditInstanceId(record)
     const instanceAppId = recordedId
@@ -344,9 +344,7 @@ export async function getActivityForUser(
       return {
         id: appId,
         kind: "app" as const,
-        name:
-          appNames.get(instanceKey(relayId, appId)) ??
-          `App ${appId.slice(0, 8)}`,
+        name: appNames.get(instanceKey(relayId, appId)) ?? `App ${appId}`,
       }
     }
     if (instanceId) {
@@ -355,7 +353,7 @@ export async function getActivityForUser(
         kind: "server" as const,
         name:
           instanceByKey.get(instanceKey(relayId, instanceId))?.displayName ??
-          `Server ${instanceId.slice(0, 8)}`,
+          `Server ${instanceId}`,
       }
     }
     const databaseId = auditDatabaseId(record)
@@ -365,7 +363,7 @@ export async function getActivityForUser(
         kind: "database" as const,
         name:
           databaseNames.get(instanceKey(relayId, databaseId)) ??
-          `Database ${databaseId.slice(0, 8)}`,
+          `Database ${databaseId}`,
       }
     }
     return null
@@ -415,7 +413,7 @@ export async function getActivityForUser(
               kind: "server" as const,
               name:
                 instanceByKey.get(instanceKey(copy.relayId, copy.instanceId))
-                  ?.displayName ?? `Server ${copy.instanceId.slice(0, 8)}`,
+                  ?.displayName ?? `Server ${copy.instanceId}`,
             }
           : activityTarget(relay.id, record),
         type: activityTypeForAudit(record),

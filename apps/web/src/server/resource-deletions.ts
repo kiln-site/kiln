@@ -1,4 +1,4 @@
-import { relayIdSchema } from "@workspace/contracts"
+import { INSTANCE_ID_SOURCE, relayIdSchema } from "@workspace/contracts"
 import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 
@@ -16,8 +16,11 @@ import {
 const targetSchema = z.strictObject({
   kind: z.enum(["instance", "database", "app", "volume"]),
   relayId: relayIdSchema,
-  // Each has a 40-hex ID; an App's own volumes go with it.
-  resourceId: z.string().regex(/^[a-f0-9]{40}$/u),
+  // An instance ID, or a Kiln volume's 40-hex ID; an App's own volumes go
+  // with it.
+  resourceId: z
+    .string()
+    .regex(new RegExp(`^(?:${INSTANCE_ID_SOURCE}|[a-f0-9]{40})$`, "u")),
 })
 
 export const getResourceDeletion = createServerFn({ method: "GET" })

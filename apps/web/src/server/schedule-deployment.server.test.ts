@@ -38,10 +38,10 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
 
 afterAll(() => disposeAppRuntime())
 
-const relayA = "a".repeat(43)
-const relayB = "b".repeat(43)
-const appA = { id: "1".repeat(40), kind: "app", name: "Shop", relayId: relayA }
-const appB = { id: "2".repeat(40), kind: "app", name: "Blog", relayId: relayB }
+const relayA = "a".repeat(12)
+const relayB = "b".repeat(12)
+const appA = { id: "1".repeat(12), kind: "app", name: "Shop", relayId: relayA }
+const appB = { id: "2".repeat(12), kind: "app", name: "Blog", relayId: relayB }
 const keyA = `${relayA}:app:${appA.id}`
 
 describeMysql("schedule deployment", () => {

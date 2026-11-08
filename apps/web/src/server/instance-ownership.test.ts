@@ -14,8 +14,8 @@ import {
 } from "@/test/seed"
 
 const now = Date.UTC(2026, 8, 9)
-const relayId = "r".repeat(43)
-const instanceId = "a".repeat(40)
+const relayId = "1".repeat(12)
+const instanceId = "a".repeat(12)
 const input = {
   relayId,
   resourceType: "instance" as const,

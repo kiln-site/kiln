@@ -34,13 +34,7 @@ const startedAtFormatter = new Intl.DateTimeFormat(undefined, {
 
 // One container at a time, paged through in its header: what it runs. The
 // page's service tags select one too.
-export function AppContainerSection({
-  app,
-  routeId,
-}: {
-  app: App
-  routeId: string
-}) {
+export function AppContainerSection({ app }: { app: App }) {
   const containers = React.useMemo(() => appContainers(app), [app])
   const { select, selected } = useSelectedAppContainer()
   const [labelsOpen, setLabelsOpen] = React.useState(false)
@@ -93,7 +87,7 @@ export function AppContainerSection({
           {app.permissions.includes("app.logs.read") ? (
             <Link
               to="/app/$appId/logs"
-              params={{ appId: routeId }}
+              params={{ appId: app.id }}
               search={{ stream: `service:${container.service}` }}
               className={cn(buttonVariants({ size: "sm", variant: "outline" }))}
             >

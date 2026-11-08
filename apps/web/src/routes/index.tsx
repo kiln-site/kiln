@@ -1,5 +1,5 @@
-import { databaseRouteIdFromSelection } from "@/lib/database-route"
-import { relayRouteIdFromSelection } from "@/lib/relay-route"
+import { databaseIdFromSelection } from "@/lib/database-route"
+import { relayIdFromSelection } from "@/lib/relay-route"
 import { firstAccessibleAppHref } from "@/lib/navigation-destinations"
 import { isAccountEnabled, isAccountVerified } from "@/lib/account-policy"
 import { createFileRoute, redirect } from "@tanstack/react-router"
@@ -14,11 +14,7 @@ import {
   relayReachabilityQueryOptions,
   serverDirectoryQueryOptions,
 } from "@/lib/query-options"
-import {
-  relayInstanceRouteIdentifier,
-  resolveCanonicalRelayInstance,
-  resolveRelayInstance,
-} from "@/lib/relay-selectors"
+import { findRelayInstance } from "@/lib/relay-selectors"
 import { getInvitationPreview } from "@/server/access"
 import { getAuthState } from "@/server/auth"
 import {
@@ -43,7 +39,9 @@ export const Route = createFileRoute("/")({
     // A sign-in abandoned at two-factor, or a revoked session, can leave
     // other accounts signed in on this browser with none active.
     if (!state.user && (await resumeBrowserAccountSession())) {
-      throw redirect({ href: search.redirect?.startsWith("/") ? search.redirect : "/" })
+      throw redirect({
+        href: search.redirect?.startsWith("/") ? search.redirect : "/",
+      })
     }
     if (state.user && search.addAccount && !state.user.isDevelopmentBypass) {
       await rememberActiveBrowserAccountSession()
@@ -96,8 +94,8 @@ export const Route = createFileRoute("/")({
       context.queryClient.ensureQueryData(serverDirectoryQueryOptions()),
       getUiPreferences(),
     ])
-    const rememberedDatabase = databaseRouteIdFromSelection(
-      uiPreferences.selectedInstanceRouteId
+    const rememberedDatabase = databaseIdFromSelection(
+      uiPreferences.selectedInstance
     )
     if (rememberedDatabase) {
       throw redirect({
@@ -105,9 +103,7 @@ export const Route = createFileRoute("/")({
         params: { databaseId: rememberedDatabase },
       })
     }
-    const rememberedRelay = relayRouteIdFromSelection(
-      uiPreferences.selectedInstanceRouteId
-    )
+    const rememberedRelay = relayIdFromSelection(uiPreferences.selectedInstance)
     if (rememberedRelay) {
       throw redirect({
         to: "/relay/$relayId",
@@ -124,39 +120,14 @@ export const Route = createFileRoute("/")({
       }
       throw redirect({ href: firstAccessibleAppHref(capabilities) })
     }
-    const rememberedResolution = resolveCanonicalRelayInstance(
+    const rememberedInstance = findRelayInstance(
       instances,
-      uiPreferences.selectedInstanceRouteId
+      uiPreferences.selectedInstance
     )
-    const rememberedAliasResolution = resolveRelayInstance(
-      instances,
-      uiPreferences.selectedInstanceRouteId
-    )
-    const rememberedInstance =
-      rememberedResolution.status === "found"
-        ? rememberedResolution.instance
-        : null
-    const rememberedRouteIdentifier = rememberedInstance
-      ? relayInstanceRouteIdentifier(instances, rememberedInstance)
-      : null
-    if (!rememberedInstance || !rememberedRouteIdentifier) {
-      const collisionSearch =
-        rememberedResolution.status === "ambiguous"
-          ? rememberedAliasResolution.status === "found"
-            ? rememberedAliasResolution.instance.shortId
-            : uiPreferences.selectedInstanceRouteId
-          : null
-      throw redirect({
-        href: collisionSearch
-          ? `/infra/servers?search=${encodeURIComponent(collisionSearch)}`
-          : "/infra/servers",
-      })
-    }
+    if (!rememberedInstance) throw redirect({ to: "/infra/servers" })
     throw redirect({
       to: "/server/$serverId/console",
-      params: {
-        serverId: rememberedRouteIdentifier,
-      },
+      params: { serverId: rememberedInstance.id },
     })
   },
   head: ({ match }) => ({

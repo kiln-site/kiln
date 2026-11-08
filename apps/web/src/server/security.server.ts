@@ -219,7 +219,7 @@ function securityItems(
             ? target.component
             : null,
         fix,
-        name: resource?.name ?? target.resourceId.slice(0, 8),
+        name: resource?.name ?? target.resourceId,
         relayId: target.relayId,
         relayName: resource?.relayName ?? "Relay",
         resourceId: target.resourceId,
@@ -361,9 +361,7 @@ async function securityResources(
       resources.set(scope, {
         id: resource.id,
         kind: resource.type === "instance" ? "server" : resource.type,
-        name:
-          relayNames?.get(`${resource.type}:${resource.id}`) ??
-          resource.id.slice(0, 8),
+        name: relayNames?.get(`${resource.type}:${resource.id}`) ?? resource.id,
         relayId: target.relayId,
         relayName,
         scope,

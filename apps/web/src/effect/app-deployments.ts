@@ -7,8 +7,9 @@ import { invalidateScheduleDeploymentsEffect } from "@/effect/schedule-invalidat
 import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 
-// Where apps deploy from on GitHub, and Hearth's record of every app's
-// deployments across its Relays. The Relay keeps each deployment's log.
+// Where apps deploy from on GitHub, and Hearth's record of every
+// deployment across its Relays: each App deployment, and each game server's
+// install, reinstall, and change of Brick. The Relay keeps their logs.
 
 export type AppDeploymentTrigger =
   | "manual"
@@ -17,6 +18,9 @@ export type AppDeploymentTrigger =
   | "redeploy"
   | "update"
 export type AppDeploymentStatus = "failed" | "running" | "succeeded" | "unknown"
+/** A game server's first install, a reinstall, or a change of its Brick. */
+export type ServerDeploymentTrigger = "brick" | "install" | "reinstall"
+export type DeploymentKind = "app" | "server"
 
 /** The repository an app builds, and how. */
 export interface AppGitHubSource {
@@ -58,6 +62,30 @@ export interface AppDeploymentRecord {
   triggeredBy: string | null
 }
 
+/** A game server's install, reinstall, or change of Brick. */
+export interface ServerDeploymentRecord {
+  /** The Brick it installed; null when the Relay didn't say. */
+  brickId: string | null
+  brickName: string | null
+  error: string | null
+  finishedAt: string | null
+  /** Hearth's ID, which also names its log on the Relay. */
+  id: string
+  /** The game server's instance ID. */
+  instanceId: string
+  relayId: string
+  startedAt: string
+  status: AppDeploymentStatus
+  trigger: ServerDeploymentTrigger
+  /** The person who asked. */
+  triggeredBy: string | null
+}
+
+/** A deployment of either kind, as the Deployments page lists them. */
+export type DeploymentRecord =
+  | ({ kind: "app" } & AppDeploymentRecord)
+  | ({ kind: "server" } & ServerDeploymentRecord)
+
 interface SourceRow extends RowDataPacket {
   app_id: string
   relay_id: string
@@ -72,7 +100,8 @@ interface SourceRow extends RowDataPacket {
 }
 
 interface DeploymentRow extends RowDataPacket {
-  app_id: string
+  brick_id: string | null
+  brick_name: string | null
   branch: string | null
   commit_author: string | null
   commit_message: string | null
@@ -81,14 +110,16 @@ interface DeploymentRow extends RowDataPacket {
   finished_at: number | string | null
   id: string
   image_digest: string | null
+  instance_id: string
+  instance_kind: DeploymentKind
   relay_deployment_id: string | null
   relay_id: string
   repository: string | null
   rolling: boolean | number | null
-  source_type: AppSourceType
+  source_type: AppSourceType | null
   started_at: number | string
   status: AppDeploymentStatus
-  trigger: AppDeploymentTrigger
+  trigger: AppDeploymentTrigger | ServerDeploymentTrigger
   triggered_by: string | null
 }
 
@@ -102,13 +133,17 @@ function sourceTable() {
     JOIN ${databaseTable("app")} app ON app.app_id = source.app_id`
 }
 
-const deploymentColumns = `id, app_id, relay_id, relay_deployment_id,
-  source_type, \`trigger\`, triggered_by, repository, branch, commit_sha,
-  commit_message, commit_author, image_digest, status, rolling, error,
-  started_at, finished_at`
+const deploymentColumns = `id, instance_kind, instance_id, relay_id,
+  relay_deployment_id, source_type, brick_id, brick_name, \`trigger\`,
+  triggered_by, repository, branch, commit_sha, commit_message, commit_author,
+  image_digest, status, rolling, error, started_at, finished_at`
 
-// Deployments kept per app, newest first.
-const deploymentsKeptPerApp = 200
+// Deployments kept per instance, newest first.
+const deploymentsKeptPerInstance = 200
+
+function deploymentTable() {
+  return databaseTable("deployment")
+}
 
 export const loadAppGitHubSourceEffect = Effect.fn("apps.github.source")(
   function* (appId: string) {
@@ -218,12 +253,12 @@ export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
     const database = yield* Database
     yield* database.execute(
       "apps.deployment.insert",
-      `INSERT INTO ${databaseTable("app_deployment")}
-         (id, app_id, relay_id, relay_deployment_id, source_type, \`trigger\`,
-          triggered_by, repository, branch, commit_sha, commit_message,
-          commit_author, image_digest, status, rolling, error, started_at,
-          finished_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO ${deploymentTable()}
+         (id, instance_kind, instance_id, relay_id, relay_deployment_id,
+          source_type, \`trigger\`, triggered_by, repository, branch,
+          commit_sha, commit_message, commit_author, image_digest, status,
+          rolling, error, started_at, finished_at)
+       VALUES (?, 'app', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE id = id`,
       [
         record.id,
@@ -246,23 +281,147 @@ export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
         record.finishedAt === null ? null : Date.parse(record.finishedAt),
       ]
     )
-    // The oldest past what each app keeps.
-    yield* database.execute(
-      "apps.deployment.prune",
-      `DELETE FROM ${databaseTable("app_deployment")}
-        WHERE app_id = ?
-          AND id NOT IN (
-            SELECT id FROM (
-              SELECT id FROM ${databaseTable("app_deployment")}
-               WHERE app_id = ?
-               ORDER BY started_at DESC, id DESC
-               LIMIT ${deploymentsKeptPerApp}
-            ) kept
-          )`,
-      [record.appId, record.appId]
-    )
+    yield* pruneDeploymentsEffect("app", record.appId)
   }
 )
+
+/**
+ * Records a game server's install, reinstall, or change of Brick as
+ * running, once: recording it again changes nothing.
+ */
+export const insertServerDeploymentEffect = Effect.fn(
+  "servers.deployment.insert"
+)(function* (
+  record: Pick<
+    ServerDeploymentRecord,
+    | "brickId"
+    | "brickName"
+    | "id"
+    | "instanceId"
+    | "relayId"
+    | "trigger"
+    | "triggeredBy"
+  >
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "servers.deployment.insert",
+    `INSERT INTO ${deploymentTable()}
+       (id, instance_kind, instance_id, relay_id, brick_id, brick_name,
+        \`trigger\`, triggered_by, status, started_at)
+     VALUES (?, 'server', ?, ?, ?, ?, ?, ?, 'running', ?)
+     ON DUPLICATE KEY UPDATE id = id`,
+    [
+      record.id,
+      record.instanceId,
+      record.relayId,
+      record.brickId?.slice(0, 64) ?? null,
+      record.brickName?.slice(0, 255) ?? null,
+      record.trigger,
+      record.triggeredBy,
+      now,
+    ]
+  )
+  yield* pruneDeploymentsEffect("server", record.instanceId)
+})
+
+// The oldest past what each instance keeps.
+const pruneDeploymentsEffect = Effect.fnUntraced(function* (
+  kind: DeploymentKind,
+  instanceId: string
+) {
+  const database = yield* Database
+  yield* database.execute(
+    "deployments.prune",
+    `DELETE FROM ${deploymentTable()}
+      WHERE instance_kind = ? AND instance_id = ?
+        AND id NOT IN (
+          SELECT id FROM (
+            SELECT id FROM ${deploymentTable()}
+             WHERE instance_kind = ? AND instance_id = ?
+             ORDER BY started_at DESC, id DESC
+             LIMIT ${deploymentsKeptPerInstance}
+          ) kept
+        )`,
+    [kind, instanceId, kind, instanceId]
+  )
+})
+
+/**
+ * Records how a game server's deployment ended. False if it had already
+ * ended, so two watchers can't both report it.
+ */
+export const finishServerDeploymentEffect = Effect.fn(
+  "servers.deployment.finish"
+)(function* (
+  id: string,
+  outcome: {
+    error: string | null
+    status: Exclude<AppDeploymentStatus, "running">
+  }
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const result = yield* database.execute(
+    "servers.deployment.finish",
+    `UPDATE ${deploymentTable()}
+        SET status = ?, error = ?, finished_at = ?
+      WHERE id = ? AND instance_kind = 'server' AND status = 'running'`,
+    [outcome.status, outcome.error?.slice(0, 2_000) ?? null, now, id]
+  )
+  return result.affectedRows === 1
+})
+
+/** A game server's install still running, which a retried create resumes. */
+export const loadRunningServerInstallEffect = Effect.fn(
+  "servers.deployment.runningInstall"
+)(function* (instanceId: string) {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<DeploymentRow>(
+    "servers.deployment.runningInstall",
+    `SELECT ${deploymentColumns}
+       FROM ${deploymentTable()}
+      WHERE instance_kind = 'server' AND instance_id = ?
+        AND \`trigger\` = 'install' AND status = 'running'
+      ORDER BY started_at DESC, id DESC
+      LIMIT 1`,
+    [instanceId]
+  )
+  const record = row ? toRecord(row) : null
+  return record?.kind === "server" ? record : null
+})
+
+/** Game server deployments recorded as running, oldest first. */
+export const loadRunningServerDeploymentsEffect = Effect.fn(
+  "servers.deployments.running"
+)(function* () {
+  const database = yield* Database
+  const rows = yield* database.queryRows<DeploymentRow>(
+    "servers.deployments.running",
+    `SELECT ${deploymentColumns}
+       FROM ${deploymentTable()}
+      WHERE instance_kind = 'server' AND status = 'running'
+      ORDER BY started_at ASC`
+  )
+  return rows.flatMap((row) => {
+    const record = toRecord(row)
+    return record.kind === "server" ? [record] : []
+  })
+})
+
+/** Forgets a deleted App's or game server's deployments. */
+export const deleteInstanceDeploymentsEffect = Effect.fn(
+  "deployments.deleteInstance"
+)(function* (kind: DeploymentKind, instanceId: string) {
+  const database = yield* Database
+  yield* database.execute(
+    "deployments.deleteInstance",
+    `DELETE FROM ${deploymentTable()}
+      WHERE instance_kind = ? AND instance_id = ?`,
+    [kind, instanceId]
+  )
+})
 
 /** Records the ID a deployment's Relay gave it, which names its log there. */
 export const recordRelayDeploymentEffect = Effect.fn("apps.deployment.relayId")(
@@ -270,9 +429,9 @@ export const recordRelayDeploymentEffect = Effect.fn("apps.deployment.relayId")(
     const database = yield* Database
     yield* database.execute(
       "apps.deployment.relayId",
-      `UPDATE ${databaseTable("app_deployment")}
+      `UPDATE ${deploymentTable()}
         SET relay_deployment_id = ?
-      WHERE id = ?`,
+      WHERE id = ? AND instance_kind = 'app'`,
       [relayDeploymentId, id]
     )
   }
@@ -298,15 +457,16 @@ export const finishAppDeploymentEffect = Effect.fn("apps.deployment.finish")(
       (transaction) =>
         Effect.gen(function* () {
           const [record] = yield* transaction.queryRows<
-            RowDataPacket & { app_id: string; relay_id: string }
+            RowDataPacket & { instance_id: string; relay_id: string }
           >(
-            `SELECT app_id, relay_id FROM ${databaseTable("app_deployment")} WHERE id = ? FOR UPDATE`,
+            `SELECT instance_id, relay_id FROM ${deploymentTable()}
+              WHERE id = ? AND instance_kind = 'app' FOR UPDATE`,
             [id]
           )
           const result = yield* transaction.execute(
-            `UPDATE ${databaseTable("app_deployment")}
+            `UPDATE ${deploymentTable()}
           SET status = ?, error = ?, rolling = ?, finished_at = ?
-        WHERE id = ? AND status = 'running'`,
+        WHERE id = ? AND instance_kind = 'app' AND status = 'running'`,
             [
               outcome.status,
               outcome.error?.slice(0, 2_000) ?? null,
@@ -320,7 +480,7 @@ export const finishAppDeploymentEffect = Effect.fn("apps.deployment.finish")(
             yield* invalidateScheduleDeploymentsEffect(transaction, {
               backupOnly: true,
               relayId: record.relay_id,
-              target: { id: record.app_id, kind: "app" },
+              target: { id: record.instance_id, kind: "app" },
             })
           }
           return result.affectedRows === 1
@@ -335,45 +495,83 @@ export const loadAppDeploymentEffect = Effect.fn("apps.deployment.load")(
     const [row] = yield* database.queryRows<DeploymentRow>(
       "apps.deployment.load",
       `SELECT ${deploymentColumns}
-         FROM ${databaseTable("app_deployment")}
+         FROM ${deploymentTable()}
         WHERE id = ?
         LIMIT 1`,
       [id]
     )
-    return row ? toDeployment(row) : null
+    const record = row ? toRecord(row) : null
+    return record?.kind === "app" ? record : null
   }
 )
 
+/** A deployment of either kind. */
+export const loadDeploymentEffect = Effect.fn("deployments.load")(function* (
+  id: string
+) {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<DeploymentRow>(
+    "deployments.load",
+    `SELECT ${deploymentColumns}
+       FROM ${deploymentTable()}
+      WHERE id = ?
+      LIMIT 1`,
+    [id]
+  )
+  return row ? toRecord(row) : null
+})
+
+/** Which of one kind's deployments a person may see. */
+export interface ReachableDeployments {
+  /** Every one on these Relays. */
+  relayIds: ReadonlyArray<string>
+  /**
+   * And these instances', each on its own Relay: an instance's deployments
+   * are only ever read with the Relay that runs it.
+   */
+  instances: ReadonlyArray<{ readonly id: string; readonly relayId: string }>
+}
+
 /**
- * Deployments newest first, of one app or some Relays' apps, before a
- * cursor from the previous page.
+ * Deployments newest first, of the Apps and game servers a person may see,
+ * or of one of them, before a cursor from the previous page.
  */
-export const listAppDeploymentsEffect = Effect.fn("apps.deployments.list")(
+export const listDeploymentsEffect = Effect.fn("deployments.list")(
   function* (input: {
-    appId?: string
     before?: { id: string; startedAt: string }
+    /** Only this instance's. */
+    instance?: { id: string; kind: DeploymentKind }
     limit: number
-    /** Every app on these Relays. */
-    relayIds: ReadonlyArray<string>
-    /** And these apps, wherever they are. */
-    appIds?: ReadonlyArray<string>
+    reachable: Partial<Record<DeploymentKind, ReachableDeployments>>
   }) {
-    const appIds = input.appIds ?? []
-    if (input.relayIds.length === 0 && appIds.length === 0) return []
+    const parameters: Array<number | string> = []
+    const reachable = (["app", "server"] as const).flatMap((kind) => {
+      const scope = input.reachable[kind]
+      if (!scope) return []
+      if (input.instance && input.instance.kind !== kind) return []
+      const within = [
+        ...(scope.relayIds.length
+          ? [`relay_id IN (${scope.relayIds.map(() => "?").join(", ")})`]
+          : []),
+        ...scope.instances.map(() => "(relay_id = ? AND instance_id = ?)"),
+      ]
+      if (within.length === 0) return []
+      parameters.push(
+        kind,
+        ...scope.relayIds,
+        ...scope.instances.flatMap((instance) => [
+          instance.relayId,
+          instance.id,
+        ])
+      )
+      return [`(instance_kind = ? AND (${within.join(" OR ")}))`]
+    })
+    if (reachable.length === 0) return []
     const database = yield* Database
-    const reachable = [
-      ...(input.relayIds.length
-        ? [`relay_id IN (${input.relayIds.map(() => "?").join(", ")})`]
-        : []),
-      ...(appIds.length
-        ? [`app_id IN (${appIds.map(() => "?").join(", ")})`]
-        : []),
-    ]
     const conditions = [`(${reachable.join(" OR ")})`]
-    const parameters: Array<number | string> = [...input.relayIds, ...appIds]
-    if (input.appId) {
-      conditions.push("app_id = ?")
-      parameters.push(input.appId)
+    if (input.instance) {
+      conditions.push("instance_kind = ? AND instance_id = ?")
+      parameters.push(input.instance.kind, input.instance.id)
     }
     if (input.before) {
       const startedAt = Date.parse(input.before.startedAt)
@@ -381,15 +579,15 @@ export const listAppDeploymentsEffect = Effect.fn("apps.deployments.list")(
       parameters.push(startedAt, startedAt, input.before.id)
     }
     const rows = yield* database.queryRows<DeploymentRow>(
-      "apps.deployments.list",
+      "deployments.list",
       `SELECT ${deploymentColumns}
-         FROM ${databaseTable("app_deployment")}
-        WHERE ${conditions.join(" AND ")}
-        ORDER BY started_at DESC, id DESC
-        LIMIT ${Math.max(1, Math.min(input.limit, 500))}`,
+       FROM ${deploymentTable()}
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY started_at DESC, id DESC
+      LIMIT ${Math.max(1, Math.min(input.limit, 500))}`,
       parameters
     )
-    return rows.map(toDeployment)
+    return rows.map(toRecord)
   }
 )
 
@@ -405,8 +603,8 @@ export const latestAppDeploymentsEffect = Effect.fn("apps.deployments.latest")(
       database.queryRows<DeploymentRow>(
         "apps.deployments.latest",
         `SELECT ${deploymentColumns}
-           FROM ${databaseTable("app_deployment")}
-          WHERE app_id = ? ${where}
+           FROM ${deploymentTable()}
+          WHERE instance_kind = 'app' AND instance_id = ? ${where}
           ORDER BY started_at DESC, id DESC
           LIMIT 1`,
         [appId]
@@ -417,9 +615,9 @@ export const latestAppDeploymentsEffect = Effect.fn("apps.deployments.latest")(
       select("AND `trigger` <> 'redeploy'"),
     ])
     return {
-      head: head ? toDeployment(head) : null,
-      latest: latest ? toDeployment(latest) : null,
-      succeeded: succeeded ? toDeployment(succeeded) : null,
+      head: head ? toAppDeployment(head) : null,
+      latest: latest ? toAppDeployment(latest) : null,
+      succeeded: succeeded ? toAppDeployment(succeeded) : null,
     }
   }
 )
@@ -431,10 +629,10 @@ export const loadRunningAppDeploymentsEffect = Effect.fn(
   const rows = yield* database.queryRows<DeploymentRow>(
     "apps.deployments.running",
     `SELECT ${deploymentColumns}
-       FROM ${databaseTable("app_deployment")}
-      WHERE status = 'running'`
+       FROM ${deploymentTable()}
+      WHERE instance_kind = 'app' AND status = 'running'`
   )
-  return rows.map(toDeployment)
+  return rows.map(toAppDeployment)
 })
 
 function toSource(row: SourceRow): AppGitHubSource {
@@ -452,9 +650,33 @@ function toSource(row: SourceRow): AppGitHubSource {
   }
 }
 
-function toDeployment(row: DeploymentRow): AppDeploymentRecord {
+function toRecord(row: DeploymentRow): DeploymentRecord {
+  if (row.instance_kind === "server") {
+    return {
+      brickId: row.brick_id,
+      brickName: row.brick_name,
+      error: row.error,
+      finishedAt: instant(row.finished_at),
+      id: row.id,
+      instanceId: row.instance_id,
+      kind: "server",
+      relayId: row.relay_id,
+      startedAt: new Date(Number(row.started_at)).toISOString(),
+      status: row.status,
+      trigger: row.trigger as ServerDeploymentTrigger,
+      triggeredBy: row.triggered_by,
+    }
+  }
+  return { kind: "app", ...toAppDeployment(row) }
+}
+
+function instant(value: number | string | null): string | null {
+  return value === null ? null : new Date(Number(value)).toISOString()
+}
+
+function toAppDeployment(row: DeploymentRow): AppDeploymentRecord {
   return {
-    appId: row.app_id,
+    appId: row.instance_id,
     branch: row.branch,
     commitAuthor: row.commit_author,
     commitMessage: row.commit_message,
@@ -470,10 +692,11 @@ function toDeployment(row: DeploymentRow): AppDeploymentRecord {
     relayId: row.relay_id,
     repository: row.repository,
     rolling: row.rolling === null ? null : Boolean(row.rolling),
-    sourceType: row.source_type,
+    // Every App deployment names its source.
+    sourceType: row.source_type ?? "image",
     startedAt: new Date(Number(row.started_at)).toISOString(),
     status: row.status,
-    trigger: row.trigger,
+    trigger: row.trigger as AppDeploymentTrigger,
     triggeredBy: row.triggered_by,
   }
 }

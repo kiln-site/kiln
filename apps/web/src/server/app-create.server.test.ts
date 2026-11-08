@@ -48,12 +48,11 @@ vi.mock("@/lib/relay-connection", () => ({
           containers: [],
           dataDirectory: `/srv/kiln/apps/${String(payload.id)}`,
           deployment: null,
-          hostname: `app-${String(payload.id).slice(0, 8)}`,
+          hostname: `app-${String(payload.id)}`,
           id: payload.id,
-          network: `kiln-app-${String(payload.id).slice(0, 8)}`,
+          network: `kiln-app-${String(payload.id)}`,
           observedState: "provisioning",
           savedDatabaseIds: [],
-          shortId: String(payload.id).slice(0, 8),
           status: "Waiting for Hearth",
         }
       case "database.provision.prepare":
@@ -70,7 +69,6 @@ vi.mock("@/lib/relay-connection", () => ({
           members: [],
           name: payload.name,
           observedState: "provisioning",
-          shortId: String(payload.id).slice(0, 8),
           status: "Waiting for Hearth",
           supportsImportExport: true,
         }
@@ -88,13 +86,13 @@ vi.mock("@/server/web-hostname-access.server", () => ({
 
 import {
   createAppOperation,
-  withNewAppIds,
+  withNewAppIdsEffect,
   type CreateAppInput,
 } from "./app-create.server"
 
-const relayId = "r".repeat(43)
-const otherRelayId = "s".repeat(43)
-const database = "d".repeat(40)
+const relayId = "1".repeat(12)
+const otherRelayId = "2".repeat(12)
+const database = "d".repeat(12)
 
 const person = (id: string): AuthenticatedUser => ({
   email: `${id}@example.test`,
@@ -161,10 +159,18 @@ const seed = (permissions: ReadonlyArray<AccessPermission>) =>
 const createApp = (
   input: Pick<CreateAppInput, "database"> & { name?: string }
 ) =>
-  runOperation(
-    createAppOperation,
-    withNewAppIds({ name: "Blog", relayId, ...input }),
-    { user: person("alice") }
+  withNewAppIdsEffect(
+    {
+      idempotencyKey: crypto.randomUUID(),
+      name: "Blog",
+      relayId,
+      ...input,
+    },
+    "alice"
+  ).pipe(
+    Effect.flatMap((ids) =>
+      runOperation(createAppOperation, ids, { user: person("alice") })
+    )
   )
 
 const apps = selectRows<{ app_id: string }>("app")
@@ -236,6 +242,7 @@ describeMysql("Creating an App with a database", () => {
           {
             databaseName: "shop_data",
             engine: "postgres",
+            id: "e".repeat(12),
             name: "Shop",
             relayId,
             username: "shop_owner",
@@ -258,7 +265,13 @@ describeMysql("Creating an App with a database", () => {
 
         const error = yield* runOperation(
           createDatabase,
-          { engine: "mysql", name: "Shop", relayId, username: "root" },
+          {
+            engine: "mysql",
+            id: "e".repeat(12),
+            name: "Shop",
+            relayId,
+            username: "root",
+          },
           { user: person("alice") }
         ).pipe(Effect.flip)
 
@@ -349,7 +362,7 @@ describeMysql("Creating an App with a database", () => {
           "database.credentials.read",
           "database.network.write",
         ])
-        const elsewhere = "e".repeat(40)
+        const elsewhere = "f".repeat(12)
         yield* insertRelay(otherRelayId, { enabled: 1 })
         yield* seedDatabase(elsewhere, otherRelayId, "Elsewhere")
 

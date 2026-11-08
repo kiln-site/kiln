@@ -459,7 +459,7 @@ const newsEffect = Effect.fnUntraced(function* (
         id: resourceId,
         name:
           names.get(`${resourceType}:${resourceId}`) ??
-          (resourceType === "relay" ? "Relay" : resourceId.slice(0, 8)),
+          (resourceType === "relay" ? "Relay" : resourceId),
         relayId,
         type: resourceType,
       }

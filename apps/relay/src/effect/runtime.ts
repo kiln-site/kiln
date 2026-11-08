@@ -25,8 +25,8 @@ export function initializeRelayRuntime(config: RelayConfig): void {
   if (runtime) return
   // The installation ID and Relay name are the ones saved when the Relay
   // starts; changes to either are reported from the next start. Relays of one
-  // installation are told apart by their ID, the fingerprint Hearth knows
-  // them by, which never changes.
+  // installation are told apart by their instance ID, which Hearth knows
+  // them by and never changes.
   const telemetry = Layer.unwrap(
     Effect.gen(function* () {
       const installationId = config.installationIdConfigured
@@ -51,7 +51,7 @@ export function initializeRelayRuntime(config: RelayConfig): void {
               : {}),
             ...(identity
               ? {
-                  "service.instance.id": identity.fingerprint,
+                  "service.instance.id": identity.id,
                   "kiln.relay.name": identity.name,
                 }
               : {}),
