@@ -37,6 +37,7 @@ import {
   relayConsoleCommandResultSchema,
   relayConsoleSchema,
   relayConsoleStreamEventSchema,
+  instanceIdSchema,
 } from "@workspace/contracts"
 import { Effect, Result } from "effect"
 import { z } from "zod"
@@ -338,12 +339,14 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
   }
   if (group === "backup" && action === "restore") {
     const backupId = yield* parseBackupIdEffect(rest[0])
-    // Another game server or database on the backup's Relay, by its
-    // `relayId:id` reference or bare ID.
-    const targetId = args.to?.split(":").at(-1)
-    if (targetId !== undefined && !/^[a-f0-9]{40}$/u.test(targetId)) {
+    // Another game server or database on the backup's Relay, by its ID.
+    const targetId = args.to
+    if (
+      targetId !== undefined &&
+      !instanceIdSchema.safeParse(targetId).success
+    ) {
       return yield* invalidUsage(
-        "--to takes a server or database reference, such as <relay-id>:<instance-id>."
+        "--to takes a game server's or database's ID, such as a7c39f204bd1."
       )
     }
     const result = yield* apiJsonEffect(
@@ -1310,7 +1313,7 @@ Options:
       --profile <id>  Use a named profile
       --storage <local|id>
                        Choose where a backup goes
-      --to <relay-id>:<id>
+      --to <id>
                        Restore into another server or database on the
                        backup's Relay, as when its own is gone
       --token <token> Use a token without saving it

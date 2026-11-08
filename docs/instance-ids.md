@@ -39,7 +39,7 @@ SHA-256 over its kind and old identity (`migratedInstanceId` in
 `packages/contracts/src/instance-id-migration.ts`), so Hearth and every Relay
 compute the same new ID on their own.
 
-- Hearth's migration `0057_instance_ids` reserves the new IDs beside the old
+- Hearth's migration `0058_instance_ids` reserves the new IDs beside the old
   ones (refusing to continue if two coincided), rewrites every old ID in every
   table in one transaction — ID columns, JSON, lock keys, file roots,
   settings, notifications, encrypted App configurations — and shrinks the ID

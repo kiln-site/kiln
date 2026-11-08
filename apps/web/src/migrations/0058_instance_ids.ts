@@ -36,7 +36,7 @@ import { betterAuthSecrets } from "@/lib/environment"
  * carries on where it stopped.
  */
 export const instanceIds: Migration = {
-  id: 57,
+  id: 58,
   name: "instance_ids",
   run: Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
@@ -236,6 +236,11 @@ const instanceIdColumns: ReadonlyArray<IdColumn> = [
     kind: { column: "scope_kind", values: { instance: "server" } },
   },
   { table: "backup", column: "linked_from_target_id", kind: "server" },
+  {
+    table: "backup_task",
+    column: "target_id",
+    kind: { column: "target_kind", values: resourceKinds },
+  },
   {
     table: "backup_download_share",
     column: "target_id",

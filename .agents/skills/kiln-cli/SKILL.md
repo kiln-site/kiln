@@ -294,7 +294,7 @@ logical import:
 ```sh
 kiln backup restore <backup-id>
 kiln backup restore <backup-id> --no-safety-backup
-kiln backup restore <backup-id> --to <relay-id>:<instance-id>
+kiln backup restore <backup-id> --to <instance-id>
 ```
 
 `--to` restores into another game server or database of the backup's kind on

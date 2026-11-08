@@ -241,10 +241,10 @@ describeMysql("backup authorization", () => {
           yield* seed
           // The backup's own server is gone; another is restored into.
           const backupId = yield* seedBackup
-          const otherId = "b".repeat(40)
+          const otherId = "b".repeat(12)
           relay.snapshot = relaySnapshotSchema.parse({
             ...(relay.snapshot as object),
-            instances: [{ ...instance, id: otherId, shortId: "bbbbbbbb" }],
+            instances: [{ ...instance, id: otherId }],
           })
           const restoreElsewhere = () =>
             restoreInstanceBackupHandler(user, {

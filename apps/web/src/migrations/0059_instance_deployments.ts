@@ -11,7 +11,7 @@ import { databaseTableName } from "@/lib/database-config"
 // A game server's deployment names the Brick it installed and has no
 // source type.
 export const instanceDeployments: Migration = {
-  id: 58,
+  id: 59,
   name: "instance_deployments",
   run: Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
