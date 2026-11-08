@@ -25,6 +25,8 @@ const viewerImports: Record<
     import("@/components/files/image-viewer").then(
       (module) => module.ImageViewer
     ),
+  pdf: () =>
+    import("@/components/files/pdf-viewer").then((module) => module.PdfViewer),
 }
 
 /**
