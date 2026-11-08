@@ -27,6 +27,10 @@ const viewerImports: Record<
     ),
   pdf: () =>
     import("@/components/files/pdf-viewer").then((module) => module.PdfViewer),
+  video: () =>
+    import("@/components/files/video-viewer").then(
+      (module) => module.VideoViewer
+    ),
 }
 
 /**
