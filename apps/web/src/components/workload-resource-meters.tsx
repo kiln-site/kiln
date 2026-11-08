@@ -1,8 +1,9 @@
 import * as React from "react"
 import { Effect, Queue, Stream } from "effect"
-import type {
-  RelayWorkloadResourceKind,
-  RelayWorkloadUsageEvent,
+import {
+  CPU_LIMIT_MILLIS_PER_CORE,
+  type RelayWorkloadResourceKind,
+  type RelayWorkloadUsageEvent,
 } from "@workspace/contracts"
 
 import {
@@ -14,6 +15,7 @@ import {
 } from "@workspace/ui/components/select"
 
 import {
+  InlineResourceMeter,
   ResourceMeter,
   ResourceMeterStrip,
   UptimeMeter,
@@ -24,6 +26,7 @@ import {
   relayBrowserAuthorizationChanges,
   shouldWaitForRelayBrowserAuthorization,
 } from "@/lib/authenticated-relay-socket"
+import { formatBytes } from "@/lib/format-bytes"
 import { openRelayWorkloadUsageStream } from "@/lib/relay-resource-stream"
 import {
   resourceHistoryStore,
@@ -133,6 +136,88 @@ function WorkloadResourceMeter({
     unavailable: running ? "Sampling" : "Stopped",
   })
   return <ResourceMeter resource={resource} historyStore={historyStore} />
+}
+
+/**
+ * One App service's CPU or memory on a line, against its limit or, with
+ * none, saying so. The header's meters follow the usage; this reads what
+ * they record, and renders only when its own samples change.
+ */
+export const WorkloadUsageMeter = React.memo(function WorkloadUsageMeter({
+  id,
+  kind,
+  limit,
+  relayId,
+  resourceId,
+  running,
+  service,
+}: {
+  id: string
+  kind: RelayWorkloadResourceKind
+  // Memory in bytes or CPU in millicores; null when it has none.
+  limit: number | null
+  relayId: string
+  resourceId: "cpu" | "memory"
+  running: boolean
+  service: string | null
+}) {
+  const historyStore = React.useMemo(
+    () => workloadHistoryStore(relayId, kind, id, service),
+    [id, kind, relayId, service]
+  )
+  const resources = React.useSyncExternalStore(
+    historyStore.subscribe,
+    historyStore.getCurrentSnapshot,
+    () => null
+  )
+  const resource = resourceItem(resources, resourceId, {
+    unavailable: running ? "Sampling" : "Stopped",
+  })
+  const sample = running ? resources : null
+  const used = !sample
+    ? running
+      ? "—"
+      : "Stopped"
+    : resourceId === "memory"
+      ? formatBytes(sample.memory.usedBytes)
+      : `${formatCpuPercent(sample.cpu.percent)}%`
+  // Against no more than the Relay measured: it caps several containers'
+  // limits added up at what the node has.
+  const of =
+    limit === null
+      ? "no limit"
+      : resourceId === "memory"
+        ? formatBytes(
+            sample ? Math.min(limit, sample.memory.totalBytes) : limit
+          )
+        : `${formatCpuPercent(
+            Math.min(
+              (limit / CPU_LIMIT_MILLIS_PER_CORE) * 100,
+              sample?.cpu.capacityPercent ?? Number.POSITIVE_INFINITY
+            )
+          )}%`
+  return (
+    <InlineResourceMeter
+      historyStore={historyStore}
+      resource={resource}
+      value={
+        <>
+          <span className="text-foreground">{used}</span>
+          {sample ? (
+            <span className="text-muted-foreground/80">
+              {limit === null ? " · " : " / "}
+              {of}
+            </span>
+          ) : null}
+        </>
+      }
+    />
+  )
+})
+
+// Percent of one core, as the CPU limit slider sets it.
+function formatCpuPercent(percent: number): string {
+  return percent < 10 ? percent.toFixed(1) : percent.toFixed(0)
 }
 
 // The resource's own, or one App service's, kept apart from game servers'.

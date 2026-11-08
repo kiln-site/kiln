@@ -6,7 +6,6 @@ import {
   type AppConfig,
   type ResourceLimits,
 } from "@workspace/contracts"
-import { Gauge } from "lucide-react"
 
 import {
   appContainers,
@@ -14,53 +13,46 @@ import {
   appServices,
   type App,
 } from "@/components/app/app-presentation"
-import { useSelectedAppContainer } from "@/components/app/app-container-selection"
-import { DeployToApplyButton } from "@/components/app/app-settings"
-import { InfoPager, InfoSection } from "@/components/info-page"
 import {
-  ResourceLimitsSection,
+  ResourceLimitsDialog,
   type ResourceLimitsGroup,
 } from "@/components/resource-limits/resource-limits-section"
 import { appConfigQueryOptions, queryKeys } from "@/lib/query-options"
-import { StatusIndicator } from "@/components/status-indicator"
 import type { ResourceLimitField } from "@/lib/resource-limits"
 import { updateAppLimits } from "@/server/apps"
 
 // An app's services share its data, so each has its own memory and CPU and
-// there's no disk limit to set. One shows at a time, paged through like the
-// Container section, and the two stay on the same service.
+// there's no disk limit to set. The dialog opens on the service the
+// Container section shows, and saves every service's limits.
 const SERVICE_FIELDS: ReadonlyArray<ResourceLimitField> = [
   "memoryGiB",
   "cpuCores",
 ]
 
-const PENDING_DEPLOY = {
-  detail: "Deploy this app to remove the limits taken off its services.",
-  label: "Pending deploy",
-  tone: "warning",
-} as const
-
-export function AppLimitsSection({
+export function AppLimitsDialog({
   app,
   config,
+  onOpenChange,
+  service,
 }: {
   app: App
   config: AppConfig
+  onOpenChange: (open: boolean) => void
+  // The service whose limits show, or none for every service, as before an
+  // app's first deploy.
+  service: string | null
 }) {
   const queryClient = useQueryClient()
-  const canManage = app.permissions.includes("app.manage")
   const available = appRelayAvailable(app)
-  const pending = deployPending(app, config)
   const services = limitedServices(app, config).join("\n")
   const { serviceLimits } = config
-  const { select, selected } = useSelectedAppContainer()
   const groups = React.useMemo<ReadonlyArray<ResourceLimitsGroup>>(() => {
     const names = services === "" ? [] : services.split("\n")
-    return names.map((service) => ({
+    return names.map((name) => ({
       fields: SERVICE_FIELDS,
-      key: service,
-      ...(names.length > 1 ? { label: service } : {}),
-      limits: { ...NO_RESOURCE_LIMITS, ...serviceLimits[service] },
+      key: name,
+      ...(names.length > 1 ? { label: name } : {}),
+      limits: { ...NO_RESOURCE_LIMITS, ...serviceLimits[name] },
     }))
   }, [serviceLimits, services])
   const save = React.useCallback(
@@ -72,8 +64,8 @@ export function AppLimitsSection({
           serviceLimits: {
             ...serviceLimits,
             ...Object.fromEntries(
-              Object.entries(limits).map(([service, value]) => [
-                service,
+              Object.entries(limits).map(([name, value]) => [
+                name,
                 { cpuMillis: value.cpuMillis, memoryBytes: value.memoryBytes },
               ])
             ),
@@ -89,51 +81,24 @@ export function AppLimitsSection({
     },
     [app.id, app.relayId, queryClient, serviceLimits]
   )
-  const shownIndex = Math.max(
-    groups.findIndex((group) => group.key === selected?.service),
-    0
-  )
-  const step = (offset: number) => {
-    const next = groups[(shownIndex + offset + groups.length) % groups.length]
-    if (next) select({ service: next.key })
-  }
-  if (groups.length === 0) {
-    return (
-      <InfoSection content icon={<Gauge />} title="Resource limits">
-        <p className="type-support text-muted-foreground">
-          Deploy the app to set limits for its services.
-        </p>
-      </InfoSection>
-    )
-  }
   return (
-    <ResourceLimitsSection
-      action={
-        pending && canManage && available ? (
-          <DeployToApplyButton app={app} />
-        ) : null
-      }
+    <ResourceLimitsDialog
       disabledReason={
         available ? undefined : "Reconnect this App's Relay first"
       }
-      editable={canManage}
+      editable={app.permissions.includes("app.manage")}
       groups={groups}
-      hint="Changing memory or CPU applies at once. Removing a limit applies the next time the app deploys."
-      shownGroup={groups[shownIndex]?.key}
-      status={
-        <>
-          {groups.length > 1 ? (
-            <InfoPager
-              count={groups.length}
-              index={shownIndex}
-              noun="service"
-              onStep={step}
-            />
-          ) : null}
-          {pending ? <StatusIndicator status={PENDING_DEPLOY} /> : null}
-        </>
+      hint="Memory and CPU change at once. A limit taken off applies the next time the app deploys."
+      shownGroup={
+        service === null
+          ? undefined
+          : groups.some((group) => group.key === service)
+            ? service
+            : groups[0]?.key
       }
       target={{ id: app.id, kind: "app", relayId: app.relayId }}
+      title="Resource limits"
+      onOpenChange={onOpenChange}
       onSave={save}
     />
   )
@@ -141,7 +106,10 @@ export function AppLimitsSection({
 
 // Docker can't take a limit off a running container, so a limit removed
 // stays on it until the next deploy.
-function deployPending(app: App, { serviceLimits }: AppConfig): boolean {
+export function appLimitsPendingDeploy(
+  app: App,
+  { serviceLimits }: AppConfig
+): boolean {
   return appContainers(app).some(({ limits, service }) => {
     const saved = serviceLimits[service]
     return (

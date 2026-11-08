@@ -5,6 +5,14 @@ import { Gauge, LoaderCircle } from "lucide-react"
 import { resourceLimitsEqual, type ResourceLimits } from "@workspace/contracts"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
 import { showToast } from "@workspace/ui/components/sonner"
 
 import { InfoSection } from "@/components/info-page"
@@ -60,7 +68,78 @@ type SectionProps = {
 // every kind of instance. Saving sends every group's limits; `onSave`
 // applies them.
 export function ResourceLimitsSection(props: SectionProps) {
-  const { action, disabledReason, editable, groups, status, target } = props
+  const { action, status } = props
+  const capacity = useLimitsCapacity(props)
+  return (
+    <InfoSection
+      action={action}
+      content
+      icon={<Gauge />}
+      status={status}
+      title="Resource limits"
+    >
+      <ResourceLimitsForm
+        {...props}
+        {...capacity}
+        key={draftKey(props.groups)}
+      />
+    </InfoSection>
+  )
+}
+
+/**
+ * The same limits in a dialog, opened from where their usage shows, such as
+ * an App's container. Saving closes it.
+ */
+export function ResourceLimitsDialog({
+  onOpenChange,
+  title,
+  ...props
+}: Omit<SectionProps, "action" | "status"> & {
+  onOpenChange: (open: boolean) => void
+  title: string
+}) {
+  const capacity = useLimitsCapacity(props)
+  // Kept here, since saving can remount the form below with the limits it
+  // saved before the save ends.
+  const [saving, setSaving] = React.useState(false)
+  // A save ending after this dialog closed mustn't close the next one. Set
+  // on mount too, since React may mount it twice in development.
+  const open = React.useRef(false)
+  React.useEffect(() => {
+    open.current = true
+    return () => {
+      open.current = false
+    }
+  }, [])
+  const close = React.useCallback(() => {
+    if (open.current) onOpenChange(false)
+  }, [onOpenChange])
+  return (
+    <Dialog open onOpenChange={(next) => !saving && onOpenChange(next)}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>
+            {props.disabledReason ?? props.hint}
+          </DialogDescription>
+        </DialogHeader>
+        <ResourceLimitsForm
+          {...props}
+          {...capacity}
+          key={draftKey(props.groups)}
+          dialog={{ close, onSaving: setSaving, saving }}
+        />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function useLimitsCapacity({
+  disabledReason,
+  editable,
+  target,
+}: Pick<SectionProps, "disabledReason" | "editable" | "target">) {
   const capacityOptions = resourceLimitsCapacityQueryOptions(
     target.relayId,
     target.kind,
@@ -70,34 +149,27 @@ export function ResourceLimitsSection(props: SectionProps) {
     ...capacityOptions,
     enabled: editable && disabledReason === undefined,
   })
-  return (
-    <InfoSection
-      action={action}
-      content
-      icon={<Gauge />}
-      status={status}
-      title="Resource limits"
-    >
-      {/* New limits from the Relay start a fresh draft. */}
-      <ResourceLimitsForm
-        {...props}
-        key={groups
-          .map(
-            ({ key, limits }) =>
-              `${key}:${limits.cpuMillis}:${limits.memoryBytes}:${limits.diskBytes}`
-          )
-          .join("|")}
-        capacity={capacity}
-        capacityKey={capacityOptions.queryKey}
-        loadingCapacity={isLoading}
-      />
-    </InfoSection>
-  )
+  return {
+    capacity,
+    capacityKey: capacityOptions.queryKey,
+    loadingCapacity: isLoading,
+  }
+}
+
+// New limits from the Relay start a fresh draft.
+function draftKey(groups: ReadonlyArray<ResourceLimitsGroup>): string {
+  return groups
+    .map(
+      ({ key, limits }) =>
+        `${key}:${limits.cpuMillis}:${limits.memoryBytes}:${limits.diskBytes}`
+    )
+    .join("|")
 }
 
 function ResourceLimitsForm({
   capacity,
   capacityKey,
+  dialog,
   disabledReason,
   diskFloorBytes,
   editable,
@@ -106,9 +178,15 @@ function ResourceLimitsForm({
   loadingCapacity,
   onSave,
   shownGroup,
-}: SectionProps & {
+}: Omit<SectionProps, "action" | "status"> & {
   capacity: ResourceLimitsCapacity | null
   capacityKey: ReadonlyArray<unknown>
+  // In a dialog, which closes once saved and stays open while saving.
+  dialog?: {
+    close: () => void
+    onSaving: (saving: boolean) => void
+    saving: boolean
+  }
   loadingCapacity: boolean
 }) {
   const queryClient = useQueryClient()
@@ -136,7 +214,8 @@ function ResourceLimitsForm({
         ? `${problem.group.label}: ${problem.result.error}`
         : problem.result.error
       : null
-  const disabled = !editable || disabledReason !== undefined || pending
+  const saving = pending || (dialog?.saving ?? false)
+  const disabled = !editable || disabledReason !== undefined || saving
 
   const setGroup = React.useCallback(
     (key: string, update: React.SetStateAction<ResourceLimitsDraft>) => {
@@ -163,6 +242,7 @@ function ResourceLimitsForm({
     }
     setSaveError(null)
     setPending(true)
+    dialog?.onSaving(true)
     await Effect.runPromise(
       Effect.tryPromise({
         try: () => onSave(limits),
@@ -178,9 +258,15 @@ function ResourceLimitsForm({
           onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: capacityKey })
             showToast({ message: "Resource limits saved", type: "success" })
+            dialog?.close()
           },
         }),
-        Effect.ensuring(Effect.sync(() => setPending(false)))
+        Effect.ensuring(
+          Effect.sync(() => {
+            setPending(false)
+            dialog?.onSaving(false)
+          })
+        )
       )
     )
   }
@@ -207,37 +293,59 @@ function ResourceLimitsForm({
           {saveError ?? problemText}
         </p>
       ) : null}
-      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
-        <p className="type-support mr-auto min-w-0 flex-1 basis-64 text-muted-foreground">
-          {disabledReason ?? hint}
-        </p>
-        {editable ? (
-          <div className="flex shrink-0 items-center gap-1.5">
-            {changed ? (
-              <Button
-                disabled={pending}
-                size="sm"
-                type="button"
-                variant="ghost"
-                onClick={() => {
-                  setSaveError(null)
-                  setDrafts(savedDrafts(groups))
-                }}
-              >
-                Reset
-              </Button>
-            ) : null}
+      {dialog ? (
+        <DialogFooter>
+          <Button
+            disabled={saving}
+            type="button"
+            variant="outline"
+            onClick={dialog.close}
+          >
+            Cancel
+          </Button>
+          {editable ? (
             <Button
               disabled={disabled || !changed || problem !== undefined}
-              size="sm"
               type="submit"
             >
-              {pending ? <LoaderCircle className="animate-spin" /> : null}
+              {saving ? <LoaderCircle className="animate-spin" /> : null}
               Save limits
             </Button>
-          </div>
-        ) : null}
-      </div>
+          ) : null}
+        </DialogFooter>
+      ) : (
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+          <p className="type-support mr-auto min-w-0 flex-1 basis-64 text-muted-foreground">
+            {disabledReason ?? hint}
+          </p>
+          {editable ? (
+            <div className="flex shrink-0 items-center gap-1.5">
+              {changed ? (
+                <Button
+                  disabled={pending}
+                  size="sm"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    setSaveError(null)
+                    setDrafts(savedDrafts(groups))
+                  }}
+                >
+                  Reset
+                </Button>
+              ) : null}
+              <Button
+                disabled={disabled || !changed || problem !== undefined}
+                size="sm"
+                type="submit"
+              >
+                {pending ? <LoaderCircle className="animate-spin" /> : null}
+                Save limits
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      )}
     </form>
   )
 }

@@ -186,7 +186,12 @@ export const InstanceFavoriteToggle = React.memo(
     kind,
     name,
     relayId,
-  }: InstanceFavorite & { name: string }) {
+    variant = "ghost",
+  }: InstanceFavorite & {
+    name: string
+    // Outlined where it stands as a button of its own, as on an Info page.
+    variant?: "ghost" | "outline"
+  }) {
     const favorite = React.useMemo(
       () => ({ id, kind, relayId }),
       [id, kind, relayId]
@@ -226,7 +231,7 @@ export const InstanceFavoriteToggle = React.memo(
           <Button
             type="button"
             size="icon-sm"
-            variant="ghost"
+            variant={variant}
             aria-label={
               starred
                 ? confirming

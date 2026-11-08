@@ -225,6 +225,36 @@ export function ResourceMeter({
   )
 }
 
+// One usage meter on a line, for an Info section rather than a header: its
+// label, a slim bar, and a value, with the same history on hover.
+export function InlineResourceMeter({
+  historyStore,
+  resource,
+  value,
+}: {
+  historyStore: ResourceHistoryStore
+  resource: ResourceItem
+  // In place of the percentage, such as "34 MiB / 512 MiB".
+  value?: React.ReactNode
+}) {
+  return (
+    <ResourceHistoryPopover resource={resource} historyStore={historyStore}>
+      <button
+        type="button"
+        className="group grid min-w-0 grid-cols-[2.25rem_minmax(0,1fr)_auto] items-center gap-2.5 py-1 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      >
+        <span className="type-meta font-mono font-medium tracking-[0.065em] text-muted-foreground transition-colors group-hover:text-foreground">
+          {resource.label}
+        </span>
+        <ResourceBar resource={resource} className="h-1.5" />
+        <span className="min-w-[8.5rem] truncate text-right font-mono text-xs text-muted-foreground tabular-nums">
+          {value ?? resource.displayValue}
+        </span>
+      </button>
+    </ResourceHistoryPopover>
+  )
+}
+
 // Time since `startedAt` while running, with the start time on hover.
 export function UptimeMeter({
   label,

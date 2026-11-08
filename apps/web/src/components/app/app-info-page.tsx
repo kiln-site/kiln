@@ -1,7 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { LoaderCircle, ToyBrick } from "lucide-react"
 
 import { DeleteAppDialog } from "@/components/app/app-dialogs"
 import {
@@ -10,13 +9,9 @@ import {
 } from "@/components/app/app-container-selection"
 import { AppContainerSection } from "@/components/app/app-container-section"
 import { AppInfoRail } from "@/components/app/app-info-rail"
-import { AppLimitsSection } from "@/components/app/app-limits-section"
 import { appRelayAvailable, type App } from "@/components/app/app-presentation"
-import {
-  AppGeneralSettings,
-  AppSourceSettings,
-  AppWebRouteSettings,
-} from "@/components/app/app-settings"
+import { AppProfile } from "@/components/app/app-profile"
+import { AppWebRouteSettings } from "@/components/app/app-settings"
 import { AppVolumesSection } from "@/components/app/app-volumes-section"
 import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
@@ -24,13 +19,13 @@ import {
   InfoDangerAction,
   InfoDangerZone,
   InfoPage,
-  InfoSection,
 } from "@/components/info-page"
 import { appConfigQueryOptions } from "@/lib/query-options"
 
-// The app's details, its containers, and what it runs, each section with
-// the actions that change it, and a rail summing up where it runs, who owns
-// it, and its deployment. An app opens here.
+// What the app is and runs, its containers with their usage, its volumes
+// and domains, each section with the actions that change it, and a rail
+// summing up where it runs, who owns it, and its deployment. An app opens
+// here.
 export function AppInfoPage() {
   const { app } = useAppWorkspace()
   // Another app is a fresh page, so an open dialog's draft and the selected
@@ -54,39 +49,8 @@ function AppInfoContent({ app }: { app: App }) {
           relayId={app.relayId}
           resourceId={app.id}
         />
-        {/* What the app is and what it runs, side by side when there's
-            room. */}
-        <div className="@container">
-          <div className="grid gap-4 @2xl:grid-cols-2">
-            <AppGeneralSettings
-              app={app}
-              canRename={app.permissions.includes("app.manage")}
-            />
-            {config.data ? (
-              <AppSourceSettings
-                app={app}
-                canManage={canManage}
-                config={config.data.config}
-              />
-            ) : (
-              <InfoSection icon={<ToyBrick />} title="Brick" content>
-                {config.isError ? (
-                  <p className="text-xs text-destructive">
-                    {config.error.message}
-                  </p>
-                ) : (
-                  <div className="grid h-16 place-items-center">
-                    <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
-                  </div>
-                )}
-              </InfoSection>
-            )}
-          </div>
-        </div>
-        <AppContainerSection app={app} />
-        {config.data ? (
-          <AppLimitsSection app={app} config={config.data.config} />
-        ) : null}
+        <AppProfile app={app} canManage={canManage} />
+        <AppContainerSection app={app} config={config.data?.config} />
         {config.data ? (
           <AppVolumesSection
             app={app}

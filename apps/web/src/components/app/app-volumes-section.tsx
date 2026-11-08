@@ -268,23 +268,16 @@ export function AppVolumesSection({
           {pending && canManage && appRelayAvailable(app) ? (
             <DeployToApplyButton app={app} />
           ) : null}
-          {canManage && !empty ? (
-            <AddVolumeButton {...addProps} align="end" variant="outline" />
-          ) : null}
+          {canManage ? <AddVolumeButton {...addProps} /> : null}
         </>
       }
       content={empty ? true : "flush"}
     >
       {empty ? (
-        <div className="flex flex-col items-center gap-3 py-5 text-center">
-          <p className="max-w-md text-[0.8125rem] text-muted-foreground">
-            Nothing here is kept when the app redeploys. Add a volume for data
-            that should stay, like uploads or settings.
-          </p>
-          {canManage ? (
-            <AddVolumeButton {...addProps} align="center" variant="default" />
-          ) : null}
-        </div>
+        <p className="text-[0.8125rem] text-muted-foreground">
+          Nothing is kept when the app redeploys. Add a volume for data that
+          should stay, like uploads or settings.
+        </p>
       ) : (
         // Their rows are all there is, so these tables aren't scroll areas of
         // their own: over them, the wheel scrolls the page.
@@ -398,14 +391,9 @@ export function AppVolumesSection({
 
 // Opens the picker where it's pressed. What's chosen goes on in the same
 // popover, and closing it drops whatever wasn't added.
-function AddVolumeButton({
-  align,
-  variant,
-  ...panel
-}: Omit<React.ComponentProps<typeof AppVolumeAddPanel>, "onDone"> & {
-  align: "center" | "end"
-  variant: "default" | "outline"
-}) {
+function AddVolumeButton(
+  panel: Omit<React.ComponentProps<typeof AppVolumeAddPanel>, "onDone">
+) {
   const [open, setOpen] = React.useState(false)
   const close = React.useCallback(() => setOpen(false), [])
   return (
@@ -415,7 +403,7 @@ function AddVolumeButton({
           aria-expanded={open}
           size="sm"
           type="button"
-          variant={variant}
+          variant="outline"
           onFocus={() => void loadVolumeDialogs()}
           onPointerEnter={() => void loadVolumeDialogs()}
         >
@@ -425,7 +413,7 @@ function AddVolumeButton({
       </DrawerPopoverTrigger>
       <DrawerPopoverContent
         title="Add volume"
-        align={align}
+        align="end"
         className="w-[26rem] max-w-[calc(100vw-1rem)] overflow-hidden p-0"
       >
         <React.Suspense
