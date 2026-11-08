@@ -1,7 +1,7 @@
 import {
   appTailscaleMember,
   databaseTailscaleMember,
-  instanceTailscaleMember,
+  serverTailscaleMember,
   relayTailscaleStackStatesSchema,
   type RelayTailscaleStackState,
 } from "@workspace/contracts"
@@ -92,7 +92,7 @@ export async function writeTailscaleNetworkDns(
 /** The networks a resource is a member of, as its Relay holds them. */
 export async function tailscaleNetworksOf(resource: {
   readonly id: string
-  readonly kind: "app" | "database" | "instance" | "volume"
+  readonly kind: "app" | "database" | "server" | "volume"
   readonly relayId: string
 }): Promise<Array<string>> {
   if (resource.kind === "volume") return []
@@ -121,8 +121,8 @@ function isMemberOf(
       return appTailscaleMember(memberId)?.appId === resource.id
     case "database":
       return databaseTailscaleMember(memberId) === resource.id
-    case "instance":
-      return instanceTailscaleMember(memberId) === resource.id
+    case "server":
+      return serverTailscaleMember(memberId) === resource.id
     default:
       return false
   }

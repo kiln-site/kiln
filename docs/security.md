@@ -145,7 +145,7 @@ goes to people who can act on it:
 | Resource                           | Permission                     |
 | ---------------------------------- | ------------------------------ |
 | A Relay's host and Kiln's services | `relay.update`                 |
-| Game server                        | `instance.configuration.write` |
+| Game server                        | `server.configuration.write` |
 | Database                           | `database.power`               |
 | App                                | `app.manage`                   |
 

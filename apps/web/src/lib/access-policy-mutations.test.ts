@@ -20,7 +20,7 @@ import {
 
 const scope: ResourceScope = {
   relayId: "relay",
-  resourceType: "instance",
+  resourceType: "server",
   resourceId: "server",
 }
 
@@ -29,17 +29,17 @@ describe("delegation boundaries", () => {
     expect(() =>
       assertDelegation(
         new Set(["access.manage"]),
-        ["instance.files.read"],
-        ["instance.files.read", "instance.delete"]
+        ["server.files.read"],
+        ["server.files.read", "server.delete"]
       )
     ).not.toThrow()
     expect(() =>
       assertDelegation(
         new Set(["access.manage"]),
-        ["instance.files.read", "instance.files.write"],
-        ["instance.files.read", "instance.delete"]
+        ["server.files.read", "server.files.write"],
+        ["server.files.read", "server.delete"]
       )
-    ).toThrow("instance.files.write")
+    ).toThrow("server.files.write")
   })
 })
 
@@ -81,11 +81,11 @@ describeMysql("preset scope", () => {
           yield* insertRows("preset_selection", {
             preset_id: id,
             selection_kind: "permission",
-            selection_key: "instance.delete",
+            selection_key: "server.delete",
           })
         }
 
-        expect(yield* resolvePresets(["same"])).toContain("instance.delete")
+        expect(yield* resolvePresets(["same"])).toContain("server.delete")
         for (const id of ["other-relay", "other-server", "database"]) {
           const error = yield* Effect.flip(resolvePresets(["same", id]))
           expect(error.message).toContain(
@@ -122,7 +122,7 @@ describeMysql("copying a server's access", () => {
           yield* insertRows("permission_preset", {
             id: "source-preset",
             relay_id: "relay",
-            resource_type: "instance",
+            resource_type: "server",
             resource_id: "source",
             name: "Moderators",
             created_at: 0,
@@ -131,20 +131,20 @@ describeMysql("copying a server's access", () => {
           yield* insertRows("preset_selection", {
             preset_id: "source-preset",
             selection_kind: "permission",
-            selection_key: "instance.console.write",
+            selection_key: "server.console.write",
           })
           const member = "member-grant"
           yield* insertGrant({
             id: member,
             relayId: "relay",
             resourceId: "source",
-            resourceType: "instance",
+            resourceType: "server",
             userId: "member",
           })
           yield* insertRows("access_selection", {
             access_id: member,
             selection_kind: "permission",
-            selection_key: "instance.files.read",
+            selection_key: "server.files.read",
           })
           yield* insertRows("access_preset", {
             id: "member-preset",
@@ -156,14 +156,14 @@ describeMysql("copying a server's access", () => {
           yield* insertGrant({
             relayId: "relay",
             resourceId: "source",
-            resourceType: "instance",
+            resourceType: "server",
             userId: "copy-owner",
           })
           // An unanswered invitation's link can't be copied.
           yield* insertGrant({
             relayId: "relay",
             resourceId: "source",
-            resourceType: "instance",
+            resourceType: "server",
             state: "pending",
             userId: "invited",
           })
@@ -201,7 +201,7 @@ describeMysql("copying a server's access", () => {
             selections
               .filter((selection) => selection.access_id === grantId)
               .map((selection) => selection.selection_key)
-          ).toEqual(["instance.files.read"])
+          ).toEqual(["server.files.read"])
           const assigned = (yield* selectRows<{
             access_id: string
             preset_id: string
@@ -217,7 +217,7 @@ describeMysql("copying a server's access", () => {
           // The preset is copied to the copy, never shared with the source.
           expect(preset?.resource_id).toBe("copy")
           expect(presetSelections.map((row) => row.selection_key)).toEqual([
-            "instance.console.write",
+            "server.console.write",
           ])
           expect(preset?.id).not.toBe("source-preset")
         })

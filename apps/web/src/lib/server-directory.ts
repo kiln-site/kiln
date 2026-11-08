@@ -1,4 +1,4 @@
-import type { RelayInstance } from "@workspace/contracts"
+import type { RelayServer } from "@workspace/contracts"
 import { Effect, Option, Schema } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
@@ -17,8 +17,8 @@ const Metadata = Schema.Struct({
 })
 const MetadataJson = Schema.fromJsonString(Metadata)
 
-export type DirectoryInstance = Pick<
-  RelayInstance,
+export type ServerDirectoryEntry = Pick<
+  RelayServer,
   | "id"
   | "name"
   | "brickId"
@@ -31,7 +31,7 @@ export type DirectoryInstance = Pick<
   | "tailscale"
 >
 
-export function instanceDirectoryMetadata(instance: DirectoryInstance) {
+export function serverDirectoryMetadata(instance: ServerDirectoryEntry) {
   return Schema.encodeSync(MetadataJson)({
     brickId: instance.brickId ?? null,
     game: instance.game,
@@ -62,30 +62,30 @@ const decodeMetadata = Schema.decodeUnknownOption(MetadataJson)
  * records from before the directory existed stay hidden until a snapshot
  * fills them in, since nothing identifies their kind yet.
  */
-export const listInstanceDirectoryEffect = Effect.fn(
-  "instances.directory.list"
-)(function* () {
-  const database = yield* Database
-  const rows = yield* database.queryRows<DirectoryRow>(
-    "instances.directory.list",
-    `SELECT relay_id, instance_id, COALESCE(display_name, source_name) AS name,
+export const listServerDirectoryEffect = Effect.fn("instances.directory.list")(
+  function* () {
+    const database = yield* Database
+    const rows = yield* database.queryRows<DirectoryRow>(
+      "instances.directory.list",
+      `SELECT relay_id, instance_id, COALESCE(display_name, source_name) AS name,
             CAST(directory_metadata AS CHAR) AS metadata
-       FROM ${databaseTable("instance")}
+       FROM ${databaseTable("server")}
       WHERE directory_metadata IS NOT NULL
       ORDER BY created_at, instance_id`
-  )
-  return rows.flatMap((row) => {
-    // One unreadable record must not hide every other game server.
-    const metadata = Option.getOrUndefined(decodeMetadata(row.metadata))
-    if (!metadata) return []
-    return [
-      {
-        id: row.instance_id,
-        relayId: row.relay_id,
-        name: row.name ?? row.instance_id,
-        ...metadata,
-        brickId: metadata.brickId ?? undefined,
-      },
-    ]
-  })
-})
+    )
+    return rows.flatMap((row) => {
+      // One unreadable record must not hide every other game server.
+      const metadata = Option.getOrUndefined(decodeMetadata(row.metadata))
+      if (!metadata) return []
+      return [
+        {
+          id: row.instance_id,
+          relayId: row.relay_id,
+          name: row.name ?? row.instance_id,
+          ...metadata,
+          brickId: metadata.brickId ?? undefined,
+        },
+      ]
+    })
+  }
+)

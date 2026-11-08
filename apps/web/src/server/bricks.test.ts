@@ -40,19 +40,19 @@ describe("Startup granular authority", () => {
         { desiredState: "running", observedState: "running" },
         { start: true }
       )
-    ).toBe("instance.power.restart")
+    ).toBe("server.power.restart")
     expect(
       startupPowerPermission(
         { desiredState: "running", observedState: "running" },
         { start: false, reinstall: true }
       )
-    ).toBe("instance.power.restart")
+    ).toBe("server.power.restart")
     expect(
       startupPowerPermission(
         { desiredState: "running", observedState: "running" },
         { start: false }
       )
-    ).toBe("instance.power.stop")
+    ).toBe("server.power.stop")
     expect(
       startupPowerPermission(
         { desiredState: "stopped", observedState: "stopped" },
@@ -64,7 +64,7 @@ describe("Startup granular authority", () => {
         { desiredState: "stopped", observedState: "stopped" },
         { start: true }
       )
-    ).toBe("instance.power.start")
+    ).toBe("server.power.start")
   })
   it("detects changed resource variables, omitted defaults, and recipe limits without treating unrelated variables as limits", () => {
     const recipe = {

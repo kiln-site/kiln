@@ -80,7 +80,7 @@ class ScheduledBackupWaitError extends Data.TaggedError(
 
 export interface ScheduleManagerOptions {
   readonly enqueueBackup: (input: BackupTaskInput) => Promise<RelayBackupTask>
-  readonly findInstance: (instanceId: string) => Promise<object | null>
+  readonly findServer: (instanceId: string) => Promise<object | null>
   readonly forkEffect?: (
     name: string,
     effect: Effect.Effect<void, never>
@@ -683,7 +683,7 @@ export class ScheduleManager {
     // unknown first: a restart before it ends leaves it that way, and the
     // interrupted occurrence never runs again.
     const inContainer =
-      action.type === "console_command" && state.target.kind !== "instance"
+      action.type === "console_command" && state.target.kind !== "server"
     if (inContainer) {
       state.inFlight = attempt({
         action,
@@ -805,8 +805,8 @@ export class ScheduleManager {
 
   async #targetExists(target: ScheduleTarget) {
     if (target.kind === "relay") return target.id === this.#options.relayId
-    if (target.kind === "instance") {
-      return (await this.#options.findInstance(target.id)) !== null
+    if (target.kind === "server") {
+      return (await this.#options.findServer(target.id)) !== null
     }
     if (target.kind === "app") {
       return (await this.#options.listAppIds()).has(target.id)
@@ -823,7 +823,7 @@ export class ScheduleManager {
     signal?: AbortSignal
   ): Promise<ContainerCommandResult | undefined> {
     if (action.type === "console_command") {
-      if (target.kind === "instance") {
+      if (target.kind === "server") {
         await this.#options.sendConsoleCommand(target.id, action.command)
         return
       }
@@ -886,7 +886,7 @@ export class ScheduleManager {
       const artifactKind =
         action.mode === "incremental"
           ? ("restic_snapshot" as const)
-          : targetKind === "instance"
+          : targetKind === "server"
             ? ("archive" as const)
             : targetKind === "database"
               ? ("database_dump" as const)
@@ -903,7 +903,7 @@ export class ScheduleManager {
         catalog: {
           name: resolveScheduleBackupName(action.name, {
             backupId,
-            instanceId: target.kind === "instance" ? target.id : "",
+            instanceId: target.kind === "server" ? target.id : "",
             runId,
             scheduleId: schedule.id,
             scheduleName: schedule.name,

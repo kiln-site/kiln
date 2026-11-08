@@ -54,8 +54,8 @@ export function githubSyncTargetAccess(
       }
     : {
         fileRootId: target.id,
-        read: "instance.files.read",
+        read: "server.files.read",
         scope: { instanceId: target.id, relayId: target.relayId },
-        write: "instance.files.write",
+        write: "server.files.write",
       }
 }

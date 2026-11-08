@@ -3,7 +3,7 @@ import { withRenderedAccount } from "@/lib/browser-accounts"
 
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { recheckServerWorkspaces } from "@/lib/server-workspace"
-import type { RelayInstancesCollection } from "@/lib/collections/relay-instances"
+import type { RelayServersCollection } from "@/lib/collections/relay-servers"
 import {
   authStateQueryOptions,
   type RelayConnection,
@@ -13,7 +13,7 @@ import {
   type HearthRealtimeScope,
   hearthRealtimeTopics,
 } from "@/lib/hearth-realtime-topics"
-import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
+import { reconcilePendingPowerSnapshot } from "@/lib/server-power-state"
 import {
   applyRecoveredRelayConnection,
   applyRealtimeEventSafely,
@@ -47,7 +47,7 @@ const maximumRecoveryRetryDelayMs = 30_000
  */
 export function startRealtimeSync(
   queryClient: QueryClient,
-  instances: RelayInstancesCollection
+  instances: RelayServersCollection
 ): () => void {
   let source: EventSource | null = null
   let closed = false

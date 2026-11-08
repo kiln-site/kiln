@@ -32,7 +32,7 @@ import { makeRelayStateLayer, RelayStateStore } from "../effect/state.js"
 import { FilesystemDriver } from "../files.js"
 import { OperationLanes } from "../operation-lanes.js"
 import { controlRequestLocks } from "../operation-plans.js"
-import { testInstance, testRelayConfig } from "../test/fixtures.js"
+import { testServer, testRelayConfig } from "../test/fixtures.js"
 import { holdNextCommit } from "../test/held-commit.js"
 import { backupLinks } from "./backup-links.js"
 import { TransferGate } from "./gate.js"
@@ -66,7 +66,7 @@ describe("browser file transfers", () => {
   it("refuses an upload under a download capability", async () => {
     const relay = await startRelay()
     const request = await relay.signedRequest({
-      action: "instance.files.download",
+      action: "server.files.download",
       method: "PUT",
       path: "plugins/evil.jar",
     })
@@ -95,14 +95,14 @@ describe("browser file transfers", () => {
       // Someone saves the file they opened, as Hearth's editor does.
       const opened = Math.floor((await stat(path)).mtimeMs)
       const commit = holdNextCommit()
-      const instance = testInstance({ id: instanceId, directory: instanceId })
+      const instance = testServer({ id: instanceId, directory: instanceId })
       const saved = Effect.runPromise(
         relay.lanes.run(
           {
-            label: "instance.files.put",
+            label: "server.files.put",
             locks:
               controlRequestLocks(
-                "instance.files.put",
+                "server.files.put",
                 { instanceId },
                 (id) => id,
                 () => []
@@ -244,9 +244,7 @@ describe("file preview links", () => {
 
     const response = await send(relay.port, {
       method: "GET",
-      path: previewPath(
-        relay.previewToken({ action: "instance.files.upload" })
-      ),
+      path: previewPath(relay.previewToken({ action: "server.files.upload" })),
     })
 
     expect(response.status).toBe(401)
@@ -489,10 +487,10 @@ async function startRelay(
     },
     consoleSources: {} as ConsoleSources,
     docker: {
-      findInstance: (id: string) =>
+      findServer: (id: string) =>
         Promise.resolve(
           options.instanceExists !== false && id === instanceId
-            ? testInstance({ id, directory: instanceId })
+            ? testServer({ id, directory: instanceId })
             : null
         ),
     } as unknown as DockerDriver,
@@ -547,7 +545,7 @@ async function startRelay(
     ) => {
       const issuedAt = Date.now()
       return signToken(issuerKeys.privateKey, {
-        actions: [input.action ?? "instance.files.download"],
+        actions: [input.action ?? "server.files.download"],
         audience: relayId,
         authorizationRevision: authority.minimumRevision,
         capabilityId: `preview-${randomBytes(6).toString("hex")}`,
@@ -629,8 +627,8 @@ async function startRelay(
         actions: [
           input.action ??
             (input.method === "PUT"
-              ? "instance.files.upload"
-              : "instance.files.download"),
+              ? "server.files.upload"
+              : "server.files.download"),
         ],
         audience: relayId,
         authorizationRevision: authority.minimumRevision,

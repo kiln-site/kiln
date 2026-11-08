@@ -51,8 +51,8 @@ describe("Relay pairing", () => {
         const request = signedPairingRequest(invitation, hearthKeys)
         const response = yield* pairHearth({ identity, request, state })
         assert.strictEqual(response.role, "read_only")
-        assert.isFalse(response.actions.includes("instance.power.start"))
-        assert.isTrue(response.actions.includes("instance.console.read"))
+        assert.isFalse(response.actions.includes("server.power.start"))
+        assert.isTrue(response.actions.includes("server.console.read"))
         assert.isTrue(
           verify(
             null,
@@ -89,7 +89,7 @@ describe("Relay pairing", () => {
         assert.strictEqual(repaired.role, "full_access")
         assert.isTrue(
           (yield* state.findClientById(repaired.clientId))?.actions.includes(
-            "instance.power.start"
+            "server.power.start"
           )
         )
       })

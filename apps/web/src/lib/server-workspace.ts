@@ -5,10 +5,10 @@ import {
   type QueryKey,
 } from "@tanstack/react-query"
 
-import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
+import { reconcilePendingPowerSnapshot } from "@/lib/server-power-state"
 import { queryKeys } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
-import { findRelayInstance } from "@/lib/relay-selectors"
+import { findRelayServer } from "@/lib/relay-selectors"
 import type {
   getInfraServerDirectory,
   getServerNavigation,
@@ -156,7 +156,7 @@ export function knownServer(
   const directory = queryClient.getQueryData<Array<DirectoryServer>>(
     queryKeys.servers.directory
   )
-  if (directory) return findRelayInstance(directory, serverId)
+  if (directory) return findRelayServer(directory, serverId)
   for (const [
     ,
     navigation,
@@ -438,7 +438,7 @@ function withRelayStatus(
 }
 
 /** A game server as this session last saw it, in the fleet or on its page. */
-export function cachedRelayInstance(
+export function cachedRelayServer(
   queryClient: QueryClient,
   relayId: string,
   instanceId: string

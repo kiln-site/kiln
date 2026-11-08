@@ -13,10 +13,10 @@ Both make a new game server with its own ID from the old one:
 The dialog asks for neither a backup first nor deleting the old server.
 The start request still takes both (`backup`, and `deleteSource` for a
 move: a final full backup, then deletion, as deleting a server with a final
-backup does, needing `instance.delete` and `backup.create`).
+backup does, needing `server.delete` and `backup.create`).
 
-Copying needs the old server's `instance.files.read` and
-`instance.configuration.read`, and `instance.create` on the Relay the copy
+Copying needs the old server's `server.files.read` and
+`server.configuration.read`, and `server.create` on the Relay the copy
 goes to. Each option needs its own permission on the old server, checked
 when the copy starts.
 
@@ -39,8 +39,8 @@ parts come and why any can't.
 | Backup first       | Optional  | Optional | A full backup to a chosen destination, finished before the source is stopped or copied. Needs `backup.create`. Not offered by the dialog.                                                                                                                                                         |
 
 A duplicate can stop the old server while its files copy, then start it
-again; a move always stops it. Stopping needs `instance.power.stop`, and a
-duplicate that stops it also `instance.power.start`, whether or not it runs
+again; a move always stops it. Stopping needs `server.power.stop`, and a
+duplicate that stops it also `server.power.start`, whether or not it runs
 when the copy starts. A copy whose owner isn't the person moving
 it passes to the old server's owner when the move finishes.
 

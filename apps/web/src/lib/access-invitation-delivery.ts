@@ -102,7 +102,7 @@ interface InvitationRow extends RowDataPacket {
   expires_at: number
   inviter_name: string | null
   resource_name: string | null
-  resource_type: "database" | "instance" | "relay" | null
+  resource_type: "database" | "server" | "relay" | null
   revoked_at: number | null
 }
 
@@ -124,7 +124,7 @@ const sendInvitation = (
          JOIN ${databaseTable("access_grant")} g ON g.id = i.access_id
          JOIN ${databaseTable("relay")} r ON r.id = i.relay_id
          LEFT JOIN ${databaseTable("user")} u ON u.id = i.invited_by
-         LEFT JOIN ${databaseTable("instance")} s
+         LEFT JOIN ${databaseTable("server")} s
            ON s.relay_id = i.relay_id AND s.instance_id = i.instance_id
          LEFT JOIN ${databaseTable("database")} d ON d.database_id = i.database_id
         WHERE i.id = ?`,

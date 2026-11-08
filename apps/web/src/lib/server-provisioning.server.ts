@@ -9,17 +9,17 @@ import { Effect } from "effect"
 import { z } from "zod"
 import {
   instanceIdSchema,
-  relayCreateInstanceSchema,
-  relayInstanceSchema,
+  relayCreateServerSchema,
+  relayServerSchema,
 } from "@workspace/contracts"
 
 import { promiseEffect } from "@/effect/promise"
 import { forkAppEffect } from "@/effect/runtime"
 import {
-  registerPreparedInstance,
-  reservePreparedInstance,
-  unregisterInstance,
-} from "@/lib/instance-registry"
+  registerPreparedServer,
+  reservePreparedServer,
+  unregisterServer,
+} from "@/lib/server-registry"
 import {
   claimPreparedProvisioning,
   compensatePreparedProvisioning,
@@ -39,7 +39,7 @@ const cancelProvisioningResultSchema = z.object({
 
 export async function provisionServer(input: {
   readonly relay: PersistedRelay
-  readonly create: z.output<typeof relayCreateInstanceSchema>
+  readonly create: z.output<typeof relayCreateServerSchema>
   readonly idempotencyKey: string
   /** Reserved for the request (`reserveServerInstanceIdEffect`). */
   readonly instanceId: string
@@ -47,7 +47,7 @@ export async function provisionServer(input: {
   readonly ownerId: string
   /** On whose behalf the Relay is asked, for its audit. */
   readonly requestedBy: string
-}): Promise<z.output<typeof relayInstanceSchema>> {
+}): Promise<z.output<typeof relayServerSchema>> {
   const { idempotencyKey, instanceId, ownerId, relay, requestedBy } = input
   const cancelProvisioning = () =>
     requestRelay(
@@ -57,8 +57,8 @@ export async function provisionServer(input: {
       30_000,
       requestedBy
     ).then((result) => cancelProvisioningResultSchema.parse(result).cancelled)
-  const unregister = () => unregisterInstance(relay.id, instanceId)
-  await reservePreparedInstance(relay.id, { id: instanceId }, ownerId)
+  const unregister = () => unregisterServer(relay.id, instanceId)
+  await reservePreparedServer(relay.id, { id: instanceId }, ownerId)
   const instance = await Effect.runPromise(
     promiseEffect(() =>
       requestRelay(
@@ -72,7 +72,7 @@ export async function provisionServer(input: {
         requestedBy
       )
     ).pipe(
-      Effect.map(relayInstanceSchema.parse),
+      Effect.map(relayServerSchema.parse),
       Effect.tapError(() =>
         compensatePreparedProvisioning(cancelProvisioning, unregister)
       )
@@ -80,7 +80,7 @@ export async function provisionServer(input: {
   )
   await Effect.runPromise(
     promiseEffect(() =>
-      registerPreparedInstance(relay.id, instance, ownerId)
+      registerPreparedServer(relay.id, instance, ownerId)
     ).pipe(
       Effect.tapError(() =>
         compensatePreparedProvisioning(cancelProvisioning, unregister)
@@ -125,7 +125,7 @@ export async function provisionServer(input: {
     directoryChanged: true,
     instance,
     relayId: relay.id,
-    type: "instance.upsert",
+    type: "server.upsert",
   })
   return instance
 }

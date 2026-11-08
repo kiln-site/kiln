@@ -63,7 +63,7 @@ export const backupFilenameSchema = z
 // ID: a Kiln volume's, or `<App ID>/<key>` for one an App's Compose project
 // declares.
 export const backupTargetKindSchema = z.enum([
-  "instance",
+  "server",
   "database",
   "platform",
   "app",
@@ -464,10 +464,10 @@ function refineResticCreateInput(
         path: ["artifactKind"],
       })
     }
-    if (input.target.kind !== "instance") {
+    if (input.target.kind !== "server") {
       context.addIssue({
         code: "custom",
-        message: "Restic backups are only supported for instance targets",
+        message: "Restic backups are only supported for game server targets",
         path: ["target", "kind"],
       })
     }
@@ -705,9 +705,20 @@ const backupArchiveManifestV1Schema = z
     createdAt: z.string().datetime(),
     formatVersion: z.literal(1),
     mode: z.literal("full"),
-    target: backupTargetSchema.refine((target) => target.kind === "instance", {
-      message: "Archive manifests require an instance target",
-    }),
+    // Archives made before game servers were `server` name theirs
+    // `instance`, and still restore.
+    target: z.preprocess(
+      (target) =>
+        target !== null &&
+        typeof target === "object" &&
+        "kind" in target &&
+        target.kind === "instance"
+          ? { ...target, kind: "server" }
+          : target,
+      backupTargetSchema.refine((target) => target.kind === "server", {
+        message: "Archive manifests require a game server target",
+      })
+    ),
   })
   .strict()
 

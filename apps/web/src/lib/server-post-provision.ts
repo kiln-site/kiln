@@ -27,21 +27,18 @@ interface NextAttemptRow extends RowDataPacket {
   next_attempt_at: number | string | null
 }
 
-export function scheduleInstancePostProvisionProcessing(): void {
-  startPollingWorker(
-    "Instances.postProvision",
-    processInstancePostProvisionJobs
-  )
+export function scheduleServerPostProvisionProcessing(): void {
+  startPollingWorker("Instances.postProvision", processServerPostProvisionJobs)
 }
 
-async function processInstancePostProvisionJobs(): Promise<WorkerPass> {
+async function processServerPostProvisionJobs(): Promise<WorkerPass> {
   const nextAttemptAt = await runAppEffectUntraced(
     Effect.gen(function* () {
       const database = yield* Database
       const [row] = yield* database.queryRows<NextAttemptRow>(
         "instances.postProvision.nextAttempt",
         `SELECT MIN(next_attempt_at) AS next_attempt_at
-           FROM ${databaseTable("instance_post_provision")}`
+           FROM ${databaseTable("server_post_provision")}`
       )
       return row?.next_attempt_at == null ? null : Number(row.next_attempt_at)
     })
@@ -62,7 +59,7 @@ async function processDueJobs(span: Tracer.Span): Promise<void> {
       return yield* database.queryRows<PostProvisionRow>(
         "instances.postProvision.list",
         `SELECT relay_id, instance_id, attempts
-           FROM ${databaseTable("instance_post_provision")}
+           FROM ${databaseTable("server_post_provision")}
           WHERE next_attempt_at <= ?
           ORDER BY next_attempt_at ASC, created_at ASC
           LIMIT 10`,
@@ -70,7 +67,7 @@ async function processDueJobs(span: Tracer.Span): Promise<void> {
       )
     })
   )
-  span.attribute("instance.count", rows.length)
+  span.attribute("server.count", rows.length)
   if (rows.length > 0) await processRows(rows)
 }
 
@@ -139,7 +136,7 @@ async function complete(row: PostProvisionRow): Promise<void> {
       const database = yield* Database
       yield* database.execute(
         "instances.postProvision.complete",
-        `DELETE FROM ${databaseTable("instance_post_provision")}
+        `DELETE FROM ${databaseTable("server_post_provision")}
           WHERE relay_id = ? AND instance_id = ?`,
         [row.relay_id, row.instance_id]
       )
@@ -161,7 +158,7 @@ async function postpone(row: PostProvisionRow, delaySeconds: number) {
       const now = yield* Clock.currentTimeMillis
       yield* database.execute(
         "instances.postProvision.postpone",
-        `UPDATE ${databaseTable("instance_post_provision")}
+        `UPDATE ${databaseTable("server_post_provision")}
             SET next_attempt_at = ?,
                 updated_at = ?
           WHERE relay_id = ? AND instance_id = ?`,
@@ -184,7 +181,7 @@ async function defer(row: PostProvisionRow, cause: unknown): Promise<void> {
       const now = yield* Clock.currentTimeMillis
       yield* database.execute(
         "instances.postProvision.defer",
-        `UPDATE ${databaseTable("instance_post_provision")}
+        `UPDATE ${databaseTable("server_post_provision")}
             SET attempts = ?,
                 next_attempt_at = ?,
                 last_error = ?,

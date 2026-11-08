@@ -24,14 +24,14 @@ import { brickRecipeSchema } from "@workspace/contracts"
 
 import {
   recoverInterruptedRestores,
-  restorePortableInstanceBackup,
+  restorePortableServerBackup,
 } from "./backup-restore.js"
 import { BackupManager } from "./backups.js"
 import { backupArchivePath } from "./backups/destinations/index.js"
 import { BrickCatalog, brickSnapshotDirectory } from "./bricks.js"
-import type { RelayConfig, RelayInstanceConfig } from "./config.js"
+import type { RelayConfig, RelayServerConfig } from "./config.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
-import { testInstance, testRelayConfig } from "./test/fixtures.js"
+import { testServer, testRelayConfig } from "./test/fixtures.js"
 import { OperationLanes } from "./operation-lanes.js"
 
 describe("Relay archive restores", () => {
@@ -42,7 +42,7 @@ describe("Relay archive restores", () => {
           writeFile(resolve(root, "server.txt"), "old")
         )
         const subdomain = `${"a".repeat(60)}.${"b".repeat(59)}`
-        const instance = testInstance({
+        const instance = testServer({
           brickSource: "https://kiln.test/bricks/paper.yml",
           brickSnapshotSha256: yield* Effect.promise(() =>
             new BrickCatalog(
@@ -76,7 +76,7 @@ describe("Relay archive restores", () => {
             checksumSha256: created.checksumSha256,
             kind: "local",
           },
-          target: { id: "instance-1", kind: "instance" },
+          target: { id: "instance-1", kind: "server" },
           taskId: "20000000-0000-4000-8000-000000000006",
         })
 
@@ -171,7 +171,7 @@ describe("Relay archive restores", () => {
 
       const restored = yield* Effect.exit(
         Effect.tryPromise(() =>
-          restorePortableInstanceBackup(
+          restorePortableServerBackup(
             config,
             {
               backupId: input.backupId,
@@ -184,7 +184,7 @@ describe("Relay archive restores", () => {
               target: input.target,
               taskId: "20000000-0000-4000-8000-000000000008",
             },
-            testInstance(),
+            testServer(),
             () => undefined
           )
         )
@@ -225,14 +225,14 @@ function scratchDirectory(prefix: string) {
 
 function backupManager(
   config: RelayConfig,
-  findInstance: () => Promise<RelayInstanceConfig | null> = async () =>
-    testInstance(),
+  findServer: () => Promise<RelayServerConfig | null> = async () =>
+    testServer(),
   lanes = new OperationLanes()
 ) {
   return BackupManager.make({
     config,
-    findInstance,
-    isInstanceStopped: async () => true,
+    findServer,
+    isServerStopped: async () => true,
     lanes,
   })
 }
@@ -333,7 +333,7 @@ function backupInput(
     maxBytes: 100 * 1024 * 1024,
     mode: "full",
     reason: "manual",
-    target: { id: "instance-1", kind: "instance" },
+    target: { id: "instance-1", kind: "server" },
     taskId: `10000000-0000-4000-8000-${suffix}`,
   }
 }

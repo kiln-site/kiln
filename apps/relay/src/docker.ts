@@ -13,7 +13,7 @@ import {
   type DatabaseConnectionSnapshot,
 } from "./database-connections.js"
 import { LaneRejectedError, type OperationLanes } from "./operation-lanes.js"
-import { instanceLifecycleLocks } from "./operation-plans.js"
+import { serverLifecycleLocks } from "./operation-plans.js"
 import { WORKLOAD_SLICE_LABEL } from "./docker-container-spec.js"
 import {
   DockerEngine,
@@ -37,10 +37,10 @@ import type {
   RelayConsoleCompletion,
   RelayConsoleLine,
   RelayDesiredState,
-  RelayInstanceRecovery,
-  RelayInstance,
-  RelayInstanceLifecycleEvent,
-  RelayInstanceLifecycleState,
+  RelayServerRecovery,
+  RelayServer,
+  RelayServerLifecycleEvent,
+  RelayServerLifecycleState,
   RelayInstanceResources,
   RelaySftpPublicationStatus,
   ResourceLimits,
@@ -53,11 +53,11 @@ import {
   brickVariableValuesSchema,
   DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
   isInstanceId,
-  relayInstanceLifecycleEventTime as lifecycleEventTime,
-  relayInstanceTailscaleSchema,
+  relayServerLifecycleEventTime as lifecycleEventTime,
+  relayServerTailscaleSchema,
 } from "@workspace/contracts"
 
-import type { RelayConfig, RelayInstanceConfig } from "./config.js"
+import type { RelayConfig, RelayServerConfig } from "./config.js"
 import {
   relayOwnsLabels,
   relayResourceNames,
@@ -74,11 +74,11 @@ import {
 import {
   INSTANCE_STARTUP_READINESS_TIMEOUT_MS,
   INSTANCE_STOP_TIMEOUT_SECONDS,
-  instanceStateReason,
-  observedInstancePowerState,
-  type InstancePowerAction,
-  type InstancePowerTransition,
-  type ObservedInstancePowerState,
+  serverStateReason,
+  observedServerPowerState,
+  type ServerPowerAction,
+  type ServerPowerTransition,
+  type ObservedServerPowerState,
 } from "./power-state.js"
 import {
   matchingReadyLogLine,
@@ -182,8 +182,8 @@ interface DockerRecreateInspect {
   }
 }
 
-interface DiscoveredInstance {
-  config: RelayInstanceConfig
+interface DiscoveredServer {
+  config: RelayServerConfig
   container: DockerInspect
 }
 
@@ -347,7 +347,7 @@ function publicConnectAddress(host: string, port: number): string {
   return `${formattedHost}:${port}`
 }
 
-function instancePublicHost(input: {
+function serverPublicHost(input: {
   discoveredPublicIp?: string | null
   gameHost: string
   instanceHost?: string
@@ -361,7 +361,7 @@ function instancePublicHost(input: {
   )
 }
 
-function instanceConnectAddress(input: {
+function serverConnectAddress(input: {
   discoveredPublicIp?: string | null
   gameHost?: string
   publicPort?: number
@@ -389,7 +389,7 @@ interface DiskUsageCacheEntry {
   usedBytes: number | null
 }
 
-interface InstanceReadiness {
+interface ServerReadiness {
   ready: boolean
   readyAt?: string
 }
@@ -441,14 +441,14 @@ export class DockerDriver {
   // Servers with a quota stop waiting for or holding their lane.
   readonly #quotaStops = new Set<string>()
   readonly #engine: DockerEngine
-  readonly #powerTransitions = new Map<string, InstancePowerTransition>()
+  readonly #powerTransitions = new Map<string, ServerPowerTransition>()
   readonly #runtimeRecovery: RuntimeRecoveryManager
   readonly #lifecycleSessions = new Map<string, RelayStoredLifecycleSession>()
   #lifecycleSessionsInitialization: Promise<void> | null = null
   readonly #diskUsageSemaphore = Semaphore.makeUnsafe(1)
   #relayStartedAt: Promise<string | null> | undefined
   #relaySftpPublication: Promise<RelaySftpPublication> | undefined
-  readonly #resourceSamples = new ResourceSamples("instance")
+  readonly #resourceSamples = new ResourceSamples("server")
   readonly #relayResourceSamples = new ResourceSamples("relay")
   readonly #relayDiskUsage = initialDiskUsageCacheEntry()
   #relayProcessCpu: { at: number; usage: NodeJS.CpuUsage } | null = null
@@ -473,8 +473,8 @@ export class DockerDriver {
     this.#resources = relayResourceNames(config)
     this.#runtimeRecovery = runtimeRecovery
     this.#state = state
-    databaseConnections.useMembers("instance", async (id) => {
-      const instance = await this.findInstance(id)
+    databaseConnections.useMembers("server", async (id) => {
+      const instance = await this.findServer(id)
       return instance ? [{ container: instance.service }] : null
     })
     // Recovery starts a server through Docker itself, joining it to its
@@ -485,7 +485,7 @@ export class DockerDriver {
         await runEffect(this.#engine.inspectContainer(container))
       ).State.Running
       await databaseConnections.reconcile(
-        { id, kind: "instance" },
+        { id, kind: "server" },
         [{ container }],
         { repairNames: !running }
       )
@@ -524,7 +524,7 @@ export class DockerDriver {
   /** Every instance's limits; other kinds of instance register theirs. */
   readonly allocations: ResourceAllocations
 
-  async inspectInstances(): Promise<Array<RelayInstance>> {
+  async inspectServers(): Promise<Array<RelayServer>> {
     await this.#initializeLifecycleSessions()
     const discovered = await this.#discover()
     const lifecycleSessionUpdates: Array<Promise<void>> = []
@@ -612,7 +612,7 @@ export class DockerDriver {
           brickReadiness !== undefined &&
           !lifecycleEventTime(lifecycleSession?.events ?? [], "ready")
             ? "historical"
-            : instanceReadinessProbe({
+            : serverReadinessProbe({
                 hasHealthCheck: container.State.Health !== undefined,
                 hasLogReadiness: brickReadiness !== undefined,
                 running: container.State.Running,
@@ -620,7 +620,7 @@ export class DockerDriver {
                 transitionAction: transition?.action,
               })
         if (!readinessProbe) return
-        const result = await this.#instanceReady(
+        const result = await this.#serverReady(
           config,
           container,
           readinessProbe,
@@ -640,7 +640,7 @@ export class DockerDriver {
           )
           const transition = this.#powerTransitions.get(config.id)
           const ready =
-            observedInstancePowerState(
+            observedServerPowerState(
               container.State,
               transition,
               now,
@@ -683,13 +683,13 @@ export class DockerDriver {
           : container.State.Running
             ? "running"
             : "stopped"
-      const inspectedPowerState = observedInstancePowerState(
+      const inspectedPowerState = observedServerPowerState(
         container.State,
         transition,
         now,
         readiness.get(config.id)
       )
-      const powerState: ObservedInstancePowerState = recoveryState?.recovery
+      const powerState: ObservedServerPowerState = recoveryState?.recovery
         ? {
             observedState:
               recoveryState.recovery.phase === "failed" ? "failed" : "starting",
@@ -729,7 +729,7 @@ export class DockerDriver {
         containerId: container.Id.slice(0, 12),
         desiredState,
         observedState: powerState.observedState,
-        stateReason: instanceStateReason(
+        stateReason: serverStateReason(
           container.State,
           powerState.observedState,
           readiness.get(config.id),
@@ -737,10 +737,10 @@ export class DockerDriver {
           desiredState
         ),
         savedDatabaseConnections: this.databaseConnections
-          .saved({ id: config.id, kind: "instance" })
+          .saved({ id: config.id, kind: "server" })
           .map(({ databaseId, relayId }) => ({ databaseId, relayId })),
         databaseConnectionWarnings: this.databaseConnections
-          .issues({ id: config.id, kind: "instance" })
+          .issues({ id: config.id, kind: "server" })
           .map(
             (issue) =>
               `${issue.databaseId ?? "Database connections"}: ${issue.message}`
@@ -776,12 +776,12 @@ export class DockerDriver {
 
   /**
    * Where a game server's files live. Inspects only its container, rather
-   * than every server the way `findInstance` does. A fleet whose labels
+   * than every server the way `findServer` does. A fleet whose labels
    * discovery would reject as ambiguous falls back to it.
    */
   async findFileRoot(
     id: string
-  ): Promise<Pick<RelayInstanceConfig, "directory" | "id"> | null> {
+  ): Promise<Pick<RelayServerConfig, "directory" | "id"> | null> {
     if (isInstanceId(id)) {
       const serverIdLabel = this.#config.serverIdLabel
       const containers = await this.#inspectManaged((owned) => {
@@ -799,19 +799,19 @@ export class DockerDriver {
       const [container] = containers
       if (containers.length === 1 && container) {
         // The disk limit is the fleet's to assign, and isn't needed here.
-        const config = this.#instanceConfig(
+        const config = this.#serverConfig(
           container,
           DEFAULT_INSTANCE_DISK_LIMIT_BYTES
         )
         if (config.id === id) return { directory: config.directory, id }
       }
     }
-    return this.findInstance(id)
+    return this.findServer(id)
   }
 
-  async findInstance(id: string): Promise<RelayInstanceConfig | null> {
+  async findServer(id: string): Promise<RelayServerConfig | null> {
     const found = (await this.#discover()).find((item) =>
-      matchesInstanceId(item.config, id)
+      matchesServerId(item.config, id)
     )
     return found?.config ?? null
   }
@@ -869,7 +869,7 @@ export class DockerDriver {
       this.#deleteLifecycleSession(instanceId),
       this.databaseConnections.forgetMember({
         id: instanceId,
-        kind: "instance",
+        kind: "server",
       }),
     ])
   }
@@ -896,14 +896,14 @@ export class DockerDriver {
   }
 
   async runAction(
-    instance: RelayInstanceConfig,
-    action: InstancePowerAction
-  ): Promise<RelayInstance> {
+    instance: RelayServerConfig,
+    action: ServerPowerAction
+  ): Promise<RelayServer> {
     const discovered = await this.#findDiscovered(instance.id)
     // The databases it's connected to, joined before it starts. Only while
     // it's stopped does an attachment without its name there join again
     // with it: a running server keeps its connections until it stops.
-    const member = { id: instance.id, kind: "instance" } as const
+    const member = { id: instance.id, kind: "server" } as const
     const connectDatabases = (repairNames: boolean) =>
       promiseEffect(() =>
         this.databaseConnections.reconcile(
@@ -924,7 +924,7 @@ export class DockerDriver {
           this.#runtimeRecovery.recordPowerAction(instance.id, action)
         )
       : null
-    const transition: InstancePowerTransition = {
+    const transition: ServerPowerTransition = {
       action,
       commandCompleted: false,
       initialStartedAt: discovered.container.State.Running
@@ -957,7 +957,7 @@ export class DockerDriver {
             if (instance.managedByRelay) {
               yield* engine.setRestartPolicy(container, "no")
             }
-            const power = (step: InstancePowerAction) =>
+            const power = (step: ServerPowerAction) =>
               containerPower(
                 engine,
                 container,
@@ -1015,20 +1015,20 @@ export class DockerDriver {
       })
     }
 
-    const current = await this.inspectInstances()
+    const current = await this.inspectServers()
     const updated = current.find((item) => item.id === instance.id)
     if (!updated) throw new Error(`Instance ${instance.id} disappeared`)
     return updated
   }
 
-  async recreateOwnedInstance(
-    instance: RelayInstanceConfig,
+  async recreateOwnedServer(
+    instance: RelayServerConfig,
     routeLabels: Readonly<Record<string, string>>,
     edgeNetwork: string | null,
     action: "start" | "restart" | "stop",
     portConfiguration?: DockerPortConfiguration,
     limits?: ResourceLimits
-  ): Promise<RelayInstance> {
+  ): Promise<RelayServer> {
     if (!instance.managedByRelay) {
       throw new Error("Relay can only recreate containers it created")
     }
@@ -1101,7 +1101,7 @@ export class DockerDriver {
     const previousRecovery = await runEffect(
       runtimeRecovery.recordPowerAction(instance.id, action)
     )
-    const transition: InstancePowerTransition = {
+    const transition: ServerPowerTransition = {
       action,
       commandCompleted: false,
       initialStartedAt: current.State.Running ? current.State.StartedAt : null,
@@ -1200,7 +1200,7 @@ export class DockerDriver {
           )
         }
         await this.databaseConnections.reconcile(
-          { id: instance.id, kind: "instance" },
+          { id: instance.id, kind: "server" },
           [{ container: instance.service }]
         )
         if (action !== "stop") {
@@ -1248,14 +1248,14 @@ export class DockerDriver {
     // tried again later.
     await runEffect(
       this.cleanup.removeContainer(current.Id, {
-        owner: { id: instance.id, kind: "instance" },
+        owner: { id: instance.id, kind: "server" },
         reason: portConfiguration
           ? "replaced to apply port allocations"
           : "replaced to apply web routes",
       })
     )
 
-    const updated = (await this.inspectInstances()).find(
+    const updated = (await this.inspectServers()).find(
       (item) => item.id === instance.id
     )
     if (!updated) throw new Error(`Instance ${instance.id} disappeared`)
@@ -1263,7 +1263,7 @@ export class DockerDriver {
   }
 
   async console(
-    instance: RelayInstanceConfig,
+    instance: RelayServerConfig,
     limit = 2_000
   ): Promise<RelayConsole> {
     const session = await this.consoleSession(instance.id)
@@ -1396,7 +1396,7 @@ export class DockerDriver {
     }
   }
 
-  async consoleLog(instance: RelayInstanceConfig): Promise<DockerConsoleLog> {
+  async consoleLog(instance: RelayServerConfig): Promise<DockerConsoleLog> {
     const discovered = await this.#findDiscovered(instance.id)
     const targets = await this.#consoleTargets(instance, discovered)
     const results = await Promise.all(
@@ -1438,7 +1438,7 @@ export class DockerDriver {
   }
 
   streamConsole(
-    instance: RelayInstanceConfig,
+    instance: RelayServerConfig,
     signal: AbortSignal,
     limit = 200
   ): AsyncIterable<RelayConsoleLine> {
@@ -1518,7 +1518,7 @@ export class DockerDriver {
    * stopped.
    */
   async sendCommand(
-    instance: RelayInstanceConfig,
+    instance: RelayServerConfig,
     input: string
   ): Promise<{ readonly intentionalStop: boolean }> {
     const stopCommands = await this.#consoleStopCommands(instance)
@@ -1551,7 +1551,7 @@ export class DockerDriver {
   }
 
   async #consoleStopCommands(
-    instance: RelayInstanceConfig
+    instance: RelayServerConfig
   ): Promise<ReadonlyArray<string>> {
     const bricks = this.#bricks
     return runEffect(
@@ -1567,7 +1567,7 @@ export class DockerDriver {
   }
 
   async completeCommand(
-    instance: RelayInstanceConfig,
+    instance: RelayServerConfig,
     input: string,
     cursor: number
   ): Promise<RelayConsoleCompletion> {
@@ -1881,12 +1881,12 @@ export class DockerDriver {
     })
   }
 
-  async #instanceReady(
-    instance: RelayInstanceConfig,
+  async #serverReady(
+    instance: RelayServerConfig,
     container: DockerInspect,
-    probe: InstanceReadinessProbe,
+    probe: ServerReadinessProbe,
     brickReadiness: BrickReadiness | undefined
-  ): Promise<InstanceReadiness | undefined> {
+  ): Promise<ServerReadiness | undefined> {
     if (brickReadiness) {
       return this.#startupLogReady(brickReadiness, container, probe)
     }
@@ -1897,8 +1897,8 @@ export class DockerDriver {
   async #startupLogReady(
     readiness: BrickReadiness,
     container: DockerInspect,
-    probe: InstanceReadinessProbe
-  ): Promise<InstanceReadiness | undefined> {
+    probe: ServerReadinessProbe
+  ): Promise<ServerReadiness | undefined> {
     const historical = probe === "historical"
     const logWindow = historical
       ? historicalReadinessLogWindow(container.State.StartedAt)
@@ -1932,7 +1932,7 @@ export class DockerDriver {
   }
 
   async #primaryPortReady(
-    instance: RelayInstanceConfig,
+    instance: RelayServerConfig,
     container: DockerInspect
   ): Promise<boolean | undefined> {
     const protocol =
@@ -1987,7 +1987,7 @@ export class DockerDriver {
   async #recordStoppingSession(
     instanceId: string,
     container: DockerInspect,
-    transition: InstancePowerTransition
+    transition: ServerPowerTransition
   ): Promise<void> {
     const session = observedLifecycleSession({
       container,
@@ -2022,7 +2022,7 @@ export class DockerDriver {
   }
 
   async #brickReadiness(
-    instance: RelayInstanceConfig
+    instance: RelayServerConfig
   ): Promise<BrickReadiness | undefined> {
     if (instance.brickReadiness) return instance.brickReadiness
     const cached = this.#brickReadinessCache.get(instance.id)
@@ -2052,7 +2052,7 @@ export class DockerDriver {
     return readiness
   }
 
-  #resourcesFor(instance: DiscoveredInstance): RelayInstanceResources | null {
+  #resourcesFor(instance: DiscoveredServer): RelayInstanceResources | null {
     return this.#resourceSamples.observe(
       instance.config.id,
       instance.container.State.Running ? instance.container.Id : null,
@@ -2061,7 +2061,7 @@ export class DockerDriver {
   }
 
   async #sampleResources(
-    instance: DiscoveredInstance,
+    instance: DiscoveredServer,
     previous: RelayInstanceResources | null
   ): Promise<RelayInstanceResources> {
     const directory = resolve(
@@ -2239,7 +2239,7 @@ export class DockerDriver {
     )
   }
 
-  #directoryUsageFor(instance: DiscoveredInstance): number | null {
+  #directoryUsageFor(instance: DiscoveredServer): number | null {
     const now = Date.now()
     const cached =
       this.#diskUsageCache.get(instance.config.id) ??
@@ -2258,9 +2258,9 @@ export class DockerDriver {
       const lanes = this.#lanes
       const runtimeRecovery = this.#runtimeRecovery
       const exceeded = (
-        current: DiscoveredInstance | null,
+        current: DiscoveredServer | null,
         usedBytes: number
-      ): current is DiscoveredInstance =>
+      ): current is DiscoveredServer =>
         current !== null &&
         diskQuotaExceeded(
           usedBytes,
@@ -2335,7 +2335,7 @@ export class DockerDriver {
             .run(
               {
                 label: "quota.stop",
-                locks: instanceLifecycleLocks(instanceId),
+                locks: serverLifecycleLocks(instanceId),
               },
               stopOverQuota
             )
@@ -2383,17 +2383,17 @@ export class DockerDriver {
   async #findDiscovered(
     id: string,
     signal?: AbortSignal
-  ): Promise<DiscoveredInstance> {
+  ): Promise<DiscoveredServer> {
     const found = (await this.#discover(signal)).find((item) =>
-      matchesInstanceId(item.config, id)
+      matchesServerId(item.config, id)
     )
     if (!found) throw new Error(`Instance ${id} is no longer managed by Kiln`)
     return found
   }
 
   async #consoleTargets(
-    instance: RelayInstanceConfig,
-    discovered: DiscoveredInstance,
+    instance: RelayServerConfig,
+    discovered: DiscoveredServer,
     signal?: AbortSignal
   ): Promise<Array<ConsoleTarget>> {
     if (instance.brickId !== builtinTailscaleBrickId) {
@@ -2459,7 +2459,7 @@ export class DockerDriver {
     )
   }
 
-  async #discover(signal?: AbortSignal): Promise<Array<DiscoveredInstance>> {
+  async #discover(signal?: AbortSignal): Promise<Array<DiscoveredServer>> {
     const containers = await this.#inspectManaged(
       (owned) => owned.map((container) => container.Id),
       signal
@@ -2500,7 +2500,7 @@ export class DockerDriver {
     )
     const discovered = containers.map((container) => ({
       container,
-      config: this.#instanceConfig(
+      config: this.#serverConfig(
         container,
         diskLimits.get(
           container.Config.Labels?.[
@@ -2519,10 +2519,10 @@ export class DockerDriver {
     return discovered
   }
 
-  #instanceConfig(
+  #serverConfig(
     container: DockerInspect,
     diskLimitBytes: number
-  ): RelayInstanceConfig {
+  ): RelayServerConfig {
     const labels = container.Config.Labels ?? {}
     const configuredMount = labels["kiln.instance.mount"]
     const serverMount = container.Mounts.find(
@@ -2588,13 +2588,13 @@ export class DockerDriver {
     const publicPort = primaryAllocation?.externalPort
     const effectivePrimaryPort = primaryAllocation?.internalPort
     const effectivePrimaryProtocol = primaryAllocation?.protocol
-    const publicHost = instancePublicHost({
+    const publicHost = serverPublicHost({
       discoveredPublicIp: this.#config.discoveredPublicIp,
       gameHost: this.#config.gameHost,
       instanceHost: labels["kiln.instance.public-host"],
       relayHost: this.#config.advertisedHost,
     })
-    const tailscale = relayInstanceTailscaleSchema.parse({
+    const tailscale = relayServerTailscaleSchema.parse({
       enabled: labels["kiln.instance.tailscale-enabled"] === "true",
       subdomain: labels["kiln.instance.tailscale-subdomain"],
     })
@@ -2644,7 +2644,7 @@ export class DockerDriver {
       )
         ? labels["kiln.brick.snapshot-sha256"]
         : undefined,
-      connectAddress: instanceConnectAddress({
+      connectAddress: serverConnectAddress({
         discoveredPublicIp: this.#config.discoveredPublicIp,
         gameHost: publicHost,
         publicPort,
@@ -2677,7 +2677,7 @@ export class DockerDriver {
 
 function normalizedBrickNetworkMode(
   mode: string | undefined
-): RelayInstanceConfig["brickNetworkMode"] {
+): RelayServerConfig["brickNetworkMode"] {
   if (mode === "minecraft-proxy") return "minecraft-backend"
   return mode === "direct" || mode === "minecraft-backend" ? mode : undefined
 }
@@ -2846,7 +2846,7 @@ function encodeVarInt(value: number): Buffer {
   return Buffer.from(bytes)
 }
 
-function matchesInstanceId(instance: RelayInstanceConfig, id: string): boolean {
+function matchesServerId(instance: RelayServerConfig, id: string): boolean {
   return instance.id === id
 }
 
@@ -2941,10 +2941,10 @@ function observedLifecycleSession({
   readonly instanceId: string
   readonly now: number
   readonly observedReadyAt: string | undefined
-  readonly observedState: RelayInstance["observedState"]
+  readonly observedState: RelayServer["observedState"]
   readonly previous: RelayStoredLifecycleSession | undefined
-  readonly recovery: RelayInstanceRecovery | null
-  readonly transition: InstancePowerTransition | undefined
+  readonly recovery: RelayServerRecovery | null
+  readonly transition: ServerPowerTransition | undefined
 }): RelayStoredLifecycleSession | null {
   const startedAt = consoleStartedAt(container)
   if (!startedAt) return null
@@ -3029,10 +3029,10 @@ function sameLifecycleSession(
 }
 
 function addLifecycleEvent(
-  events: Array<RelayInstanceLifecycleEvent>,
-  state: RelayInstanceLifecycleState,
+  events: Array<RelayServerLifecycleEvent>,
+  state: RelayServerLifecycleState,
   time: string | null
-): Array<RelayInstanceLifecycleEvent> {
+): Array<RelayServerLifecycleEvent> {
   return !time || lifecycleEventTime(events, state)
     ? events
     : [...events, { state, time }]
@@ -3051,9 +3051,9 @@ function historicalReadinessLogWindow(
   }
 }
 
-type InstanceReadinessProbe = "historical" | "live"
+type ServerReadinessProbe = "historical" | "live"
 
-function instanceReadinessProbe({
+function serverReadinessProbe({
   hasHealthCheck,
   hasLogReadiness,
   running,
@@ -3064,8 +3064,8 @@ function instanceReadinessProbe({
   hasLogReadiness: boolean
   running: boolean
   startedRecently: boolean
-  transitionAction: InstancePowerAction | undefined
-}): InstanceReadinessProbe | null {
+  transitionAction: ServerPowerAction | undefined
+}): ServerReadinessProbe | null {
   if (
     !running ||
     hasHealthCheck ||
@@ -3209,7 +3209,7 @@ function promiseEffect<A>(run: () => Promise<A>): Effect.Effect<A, unknown> {
 }
 
 function recoveryStatus(
-  recovery: RelayInstanceRecovery | null | undefined,
+  recovery: RelayServerRecovery | null | undefined,
   now: number
 ): string | null {
   if (!recovery) return null

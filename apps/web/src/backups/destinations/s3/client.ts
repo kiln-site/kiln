@@ -207,6 +207,8 @@ export function resticRepositoryObjectPrefix(input: {
     resticPrefixSegment(input.installationId),
     resticPrefixSegment(input.relayId),
     "restic",
+    // Where game servers' repositories have always been kept; each stores
+    // its prefix, so this names new ones the same way.
     "instance",
     resticPrefixSegment(input.targetId),
     resticPrefixSegment(input.repositoryId),

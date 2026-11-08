@@ -557,7 +557,7 @@ function requireRootPermission(
   }
   return requireRelayPermissionEffect({
     instanceId: rootId,
-    permission: `instance.files.${access}` satisfies AccessPermission,
+    permission: `server.files.${access}` satisfies AccessPermission,
     relayId,
     user,
   })
@@ -585,7 +585,7 @@ function clientTransferAction(
 ): string {
   if (isRelayFileRoot(rootId)) return `relay.files.${direction}`
   if (appIdFromFileRoot(rootId) !== null) return `app.files.${direction}`
-  return `instance.files.${direction}`
+  return `server.files.${direction}`
 }
 
 // A grant for the destination to fetch one artifact from the source, signed

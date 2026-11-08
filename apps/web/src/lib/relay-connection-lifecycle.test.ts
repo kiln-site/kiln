@@ -149,7 +149,7 @@ effectIt.effect(
         Effect.gen(function* () {
           const action = relayRpc(
             endpoint,
-            "instance.action",
+            "server.action",
             { action: "stop", instanceId: "a".repeat(12) },
             30_000
           )
@@ -159,7 +159,7 @@ effectIt.effect(
                 const check = () =>
                   requests.some(
                     (r) =>
-                      r.type === "request" && r.operation === "instance.action"
+                      r.type === "request" && r.operation === "server.action"
                   )
                     ? resolve()
                     : setImmediate(check)
@@ -169,7 +169,7 @@ effectIt.effect(
           )
           const sent = requests.find(
             (r): r is RelayControlRequestMessage =>
-              r.type === "request" && r.operation === "instance.action"
+              r.type === "request" && r.operation === "server.action"
           )!
           applied = sent.operationId
           // The Relay applies the stop, but the reply is lost with the
@@ -189,12 +189,12 @@ effectIt.effect(
           // It was looked up, never sent again.
           expect(
             requests.filter(
-              (r) => r.type === "request" && r.operation === "instance.action"
+              (r) => r.type === "request" && r.operation === "server.action"
             )
           ).toHaveLength(1)
         }),
       (message) => {
-        if (message.operation === "instance.action") return noAnswer
+        if (message.operation === "server.action") return noAnswer
         if (message.operation === "operation.get") {
           const { operationId } = message.payload as { operationId: string }
           return operationId === applied
@@ -215,7 +215,7 @@ effectIt.effect(
         Effect.gen(function* () {
           const lost = relayRpc(
             endpoint,
-            "instance.action",
+            "server.action",
             { action: "stop", instanceId: "e".repeat(12) },
             30_000
           )
@@ -225,7 +225,7 @@ effectIt.effect(
                 const check = () =>
                   requests.some(
                     (r) =>
-                      r.type === "request" && r.operation === "instance.action"
+                      r.type === "request" && r.operation === "server.action"
                   )
                     ? resolve()
                     : setImmediate(check)
@@ -246,7 +246,7 @@ effectIt.effect(
           expect(forgotten.message).not.toContain("It didn't run")
         }),
       (message) => {
-        if (message.operation === "instance.action") return noAnswer
+        if (message.operation === "server.action") return noAnswer
         if (message.operation === "operation.get") return { status: "unknown" }
         return { eligible: true }
       }

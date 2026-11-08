@@ -1,5 +1,5 @@
-import type { RelayInstance, RelayObservedState } from "@workspace/contracts"
-import { relayInstanceLifecycleEventTime } from "@workspace/contracts"
+import type { RelayServer, RelayObservedState } from "@workspace/contracts"
+import { relayServerLifecycleEventTime } from "@workspace/contracts"
 
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 
@@ -35,7 +35,7 @@ export function finishPendingPowerAction(relayId: string, instanceId: string) {
   pendingPowerActions.delete(powerActionKey(relayId, instanceId))
 }
 
-export function reconcilePendingPowerInstance<T extends RelayInstance>(
+export function reconcilePendingPowerServer<T extends RelayServer>(
   relayId: string,
   instance: T
 ): T {
@@ -46,12 +46,12 @@ export function reconcilePendingPowerInstance<T extends RelayInstance>(
   const reconciled = reconcilePendingPowerState(
     pending,
     instance.observedState,
-    relayInstanceLifecycleEventTime(instance.lifecycle, "started")
+    relayServerLifecycleEventTime(instance.lifecycle, "started")
   )
   const terminalConfirmed =
     isTerminalPowerPhase(pending.phase) &&
     instance.observedState === pending.phase &&
-    relayInstanceLifecycleEventTime(instance.lifecycle, "started") ===
+    relayServerLifecycleEventTime(instance.lifecycle, "started") ===
       pending.terminalStartedAt
   if (terminalConfirmed) {
     pendingPowerActions.delete(key)
@@ -68,7 +68,7 @@ export function reconcilePendingPowerSnapshot(
 ): RelayFleetSnapshot {
   let changed = false
   const instances = snapshot.instances.map((instance) => {
-    const reconciled = reconcilePendingPowerInstance(instance.relayId, instance)
+    const reconciled = reconcilePendingPowerServer(instance.relayId, instance)
     if (reconciled !== instance) changed = true
     return reconciled
   })

@@ -27,7 +27,7 @@ import { Kbd } from "@workspace/ui/components/kbd"
 import { BackupIcon } from "@/components/backup-icon"
 import { filterRoutes } from "@/components/route-command-filter"
 import { useSidebarServerNavigation } from "@/lib/use-server-navigation"
-import type { SidebarInstance } from "@/lib/relay-selectors"
+import type { SidebarServer } from "@/lib/relay-selectors"
 import {
   accessibleDestinationsForServer,
   accessibleInfrastructureDestinations,
@@ -72,7 +72,7 @@ const accessRoute: NavigationDestination = {
 }
 
 function serverRoutes(
-  instance: SidebarInstance,
+  instance: SidebarServer,
   capabilities: NavigationAccessCapabilities
 ) {
   const serverKeywords = [

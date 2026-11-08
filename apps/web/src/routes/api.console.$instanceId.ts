@@ -12,7 +12,7 @@ const encoder = new TextEncoder()
 const resourceKindSchema = z
   .enum(relayBrowserResourceKinds)
   .nullable()
-  .transform((kind) => kind ?? "instance")
+  .transform((kind) => kind ?? "server")
 
 export const Route = createFileRoute("/api/console/$instanceId")({
   server: {

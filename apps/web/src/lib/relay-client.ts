@@ -255,10 +255,10 @@ function relayControlRequest(path: string, init?: RequestInit) {
     }
   }
   if (url.pathname === "/v1/instances" && method === "POST") {
-    return { operation: "instance.create" as const, payload: body }
+    return { operation: "server.create" as const, payload: body }
   }
   if (url.pathname === "/v1/instance-provisioning" && method === "POST") {
-    return { operation: "instance.provision.prepare" as const, payload: body }
+    return { operation: "server.provision.prepare" as const, payload: body }
   }
   const match = url.pathname.match(
     /^\/v1\/instances\/([^/]+)(?:\/(tree|directory|directory-sizes|file-search|file-stat|file|file-mutations|file-database|actions|resources|console|console-completions|console-share|latest-log|ports|web-routes|database-connections|startup|provision))?$/u
@@ -268,7 +268,7 @@ function relayControlRequest(path: string, init?: RequestInit) {
   const resource = match[2]
   if (!resource && method === "DELETE") {
     return {
-      operation: "instance.delete" as const,
+      operation: "server.delete" as const,
       payload: {
         deleteData: url.searchParams.get("deleteData") === "true",
         instanceId,
@@ -277,38 +277,38 @@ function relayControlRequest(path: string, init?: RequestInit) {
   }
   if (!resource && method === "PUT") {
     return {
-      operation: "instance.rename" as const,
+      operation: "server.rename" as const,
       payload: { instanceId, name: body.name },
     }
   }
   if (resource === "provision" && method === "POST") {
     return {
-      operation: "instance.provision.claim" as const,
+      operation: "server.provision.claim" as const,
       payload: { ...body, instanceId },
     }
   }
   if (resource === "provision" && method === "DELETE") {
     return {
-      operation: "instance.provision.cancel" as const,
+      operation: "server.provision.cancel" as const,
       payload: { instanceId },
     }
   }
   if (resource === "startup" && method === "PUT") {
     return {
-      operation: "instance.startup.write" as const,
+      operation: "server.startup.write" as const,
       payload: { ...body, instanceId },
     }
   }
   if (resource === "tree" && method === "GET") {
     return {
-      operation: "instance.files.list" as const,
+      operation: "server.files.list" as const,
       payload: { instanceId },
     }
   }
   if (resource === "directory" && method === "GET") {
     const cursor = url.searchParams.get("cursor")
     return {
-      operation: "instance.files.directory.list" as const,
+      operation: "server.files.directory.list" as const,
       payload: {
         ...(cursor ? { cursor } : {}),
         instanceId,
@@ -318,14 +318,14 @@ function relayControlRequest(path: string, init?: RequestInit) {
   }
   if (resource === "directory-sizes" && method === "POST") {
     return {
-      operation: "instance.files.directory.sizes" as const,
+      operation: "server.files.directory.sizes" as const,
       payload: { ...body, instanceId },
     }
   }
   if (resource === "file-search" && method === "GET") {
     const cursor = url.searchParams.get("cursor")
     return {
-      operation: "instance.files.search" as const,
+      operation: "server.files.search" as const,
       payload: {
         ...(cursor ? { cursor } : {}),
         instanceId,
@@ -335,7 +335,7 @@ function relayControlRequest(path: string, init?: RequestInit) {
   }
   if (resource === "file-stat" && method === "GET") {
     return {
-      operation: "instance.files.stat" as const,
+      operation: "server.files.stat" as const,
       payload: {
         instanceId,
         path: url.searchParams.get("path") ?? "",
@@ -344,7 +344,7 @@ function relayControlRequest(path: string, init?: RequestInit) {
   }
   if (resource === "resources" && method === "GET") {
     return {
-      operation: "instance.resources.read" as const,
+      operation: "server.resources.read" as const,
       payload: { instanceId },
     }
   }
@@ -355,36 +355,36 @@ function relayControlRequest(path: string, init?: RequestInit) {
       path: url.searchParams.get("path") ?? "",
     }
     return method === "PUT"
-      ? { operation: "instance.files.write" as const, payload }
-      : { operation: "instance.files.read" as const, payload }
+      ? { operation: "server.files.write" as const, payload }
+      : { operation: "server.files.read" as const, payload }
   }
   if (resource === "file-database" && method === "POST") {
     const payload = { ...body, instanceId }
     return url.searchParams.get("mode") === "write"
-      ? { operation: "instance.files.database.write" as const, payload }
-      : { operation: "instance.files.database.read" as const, payload }
+      ? { operation: "server.files.database.write" as const, payload }
+      : { operation: "server.files.database.read" as const, payload }
   }
   if (resource === "file-mutations" && method === "POST") {
     return {
-      operation: "instance.files.mutate.result" as const,
+      operation: "server.files.mutate.result" as const,
       payload: { ...body, instanceId },
     }
   }
   if (resource === "actions" && method === "POST") {
     return {
-      operation: "instance.action" as const,
+      operation: "server.action" as const,
       payload: { ...body, instanceId },
     }
   }
   if (resource === "console") {
     if (method === "POST") {
       return {
-        operation: "instance.console.write" as const,
+        operation: "server.console.write" as const,
         payload: { ...body, instanceId },
       }
     }
     return {
-      operation: "instance.console.history" as const,
+      operation: "server.console.history" as const,
       payload: {
         instanceId,
         limit: Number(url.searchParams.get("limit") ?? 2_000),
@@ -393,54 +393,54 @@ function relayControlRequest(path: string, init?: RequestInit) {
   }
   if (resource === "console-completions" && method === "POST") {
     return {
-      operation: "instance.console.complete" as const,
+      operation: "server.console.complete" as const,
       payload: { ...body, instanceId },
     }
   }
   if (resource === "latest-log" && method === "GET") {
     return {
-      operation: "instance.logs.latest" as const,
+      operation: "server.logs.latest" as const,
       payload: { instanceId },
     }
   }
   if (resource === "console-share" && method === "POST") {
     return {
-      operation: "instance.logs.share" as const,
+      operation: "server.logs.share" as const,
       payload: { ...body, instanceId },
     }
   }
   if (resource === "ports" && method === "PUT") {
     return {
-      operation: "instance.network.ports.write" as const,
+      operation: "server.network.ports.write" as const,
       payload: { instanceId, ports: body.ports },
     }
   }
   if (resource === "ports" && method === "POST") {
     return {
-      operation: "instance.network.ports.reserve" as const,
+      operation: "server.network.ports.reserve" as const,
       payload: { ...body, instanceId },
     }
   }
   if (resource === "ports" && method === "DELETE") {
     return {
-      operation: "instance.network.ports.release" as const,
+      operation: "server.network.ports.release" as const,
       payload: { ...body, instanceId },
     }
   }
   if (resource === "database-connections" && method === "DELETE") {
     return {
-      operation: "instance.network.databases.remove" as const,
+      operation: "server.network.databases.remove" as const,
       payload: { ...body, instanceId },
     }
   }
   if (resource === "web-routes") {
     return method === "PUT"
       ? {
-          operation: "instance.network.routes.write" as const,
+          operation: "server.network.routes.write" as const,
           payload: { instanceId, routes: body.routes },
         }
       : {
-          operation: "instance.network.routes.read" as const,
+          operation: "server.network.routes.read" as const,
           payload: { instanceId },
         }
   }

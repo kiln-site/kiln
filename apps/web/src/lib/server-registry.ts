@@ -1,4 +1,4 @@
-import type { RelayInstance } from "@workspace/contracts"
+import type { RelayServer } from "@workspace/contracts"
 import { Clock, Effect, Schedule, Semaphore } from "effect"
 
 import type { RowDataPacket } from "mysql2/promise"
@@ -7,21 +7,21 @@ import { Database, type DatabaseTransaction } from "@/effect/database"
 import { claimInstanceIdEffect } from "@/effect/instance-ids"
 import { runAppEffect } from "@/effect/runtime"
 import {
-  instanceDirectoryMetadata,
-  type DirectoryInstance,
-} from "@/lib/instance-directory"
+  serverDirectoryMetadata,
+  type ServerDirectoryEntry,
+} from "@/lib/server-directory"
 import { advanceAuthorizationRevisionEffect } from "@/lib/authorization-revision"
 import { databaseTable } from "@/lib/database-config"
 import { wakePollingWorker } from "@/lib/polling-worker"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
-export function backfillInstanceSourceNames(
+export function backfillServerSourceNames(
   relayId: string,
-  instances: ReadonlyArray<DirectoryInstance>
+  instances: ReadonlyArray<ServerDirectoryEntry>
 ): Promise<void> {
   return runAppEffect(
     "instances.registry.backfillSourceNames",
-    backfillInstanceSourceNamesEffect(relayId, instances)
+    backfillServerSourceNamesEffect(relayId, instances)
   )
 }
 
@@ -71,31 +71,31 @@ function publishDirectoryChange(relayId: string) {
   return Effect.sync(() =>
     publishRealtimeChange({
       type: "hearth.invalidate",
-      topics: ["instance-directory"],
+      topics: ["server-directory"],
       audience: { kind: "relays", relayIds: [relayId] },
       scope: { relayId },
     })
   )
 }
 
-export function registerPreparedInstance(
+export function registerPreparedServer(
   relayId: string,
-  instance: DirectoryInstance,
+  instance: ServerDirectoryEntry,
   ownerId: string
 ): Promise<void> {
   return runAppEffect(
     "instances.registry.registerPrepared",
-    registerPreparedInstanceEffect(relayId, instance, ownerId)
+    registerPreparedServerEffect(relayId, instance, ownerId)
   )
 }
 
-export function updateInstanceSourceName(
+export function updateServerSourceName(
   relayId: string,
-  instance: Pick<RelayInstance, "id" | "name">
+  instance: Pick<RelayServer, "id" | "name">
 ): Promise<void> {
   return runAppEffect(
     "instances.registry.updateSourceName",
-    updateInstanceSourceNameEffect(relayId, instance)
+    updateServerSourceNameEffect(relayId, instance)
   )
 }
 
@@ -105,7 +105,7 @@ export function updateInstanceSourceName(
  * owner recorded provisionally until Hearth learned who made it. An owner
  * chosen since, like a transfer's recipient, stays.
  */
-export const claimInstanceOwner = `owner_id = IF(owner_id IS NULL OR owner_provisional, VALUES(owner_id), owner_id),
+export const claimServerOwner = `owner_id = IF(owner_id IS NULL OR owner_provisional, VALUES(owner_id), owner_id),
        owner_provisional = IF(owner_id <=> VALUES(owner_id), 0, owner_provisional)`
 
 interface RelayOwnerRow extends RowDataPacket {
@@ -118,12 +118,12 @@ interface InstanceOwnerRow extends RowDataPacket {
 }
 
 /**
- * Runs `claim`, an upsert with `claimInstanceOwner`, in `transaction`. A
+ * Runs `claim`, an upsert with `claimServerOwner`, in `transaction`. A
  * provisional owner it displaces loses the authority they held, so their
  * Relays hear of it once `transaction` commits: pass the result to
  * `wakeDisplacedOwnerDelivery` after it does.
  */
-export function claimInstanceOwnerEffect<E, R>(
+export function claimServerOwnerEffect<E, R>(
   transaction: DatabaseTransaction,
   scope: { instanceId: string; ownerId: string; relayId: string },
   claim: Effect.Effect<unknown, E, R>
@@ -139,14 +139,14 @@ export function claimInstanceOwnerEffect<E, R>(
     // between them, and never upgrade a shared lock.
     const now = yield* Clock.currentTimeMillis
     yield* transaction.execute(
-      `INSERT INTO ${databaseTable("instance")}
+      `INSERT INTO ${databaseTable("server")}
          (relay_id, instance_id, display_name, created_at, updated_at)
        VALUES (?, ?, NULL, ?, ?)
        ON DUPLICATE KEY UPDATE relay_id = relay_id`,
       [scope.relayId, scope.instanceId, now, now]
     )
     const [before] = yield* transaction.queryRows<InstanceOwnerRow>(
-      `SELECT owner_id, owner_provisional FROM ${databaseTable("instance")}
+      `SELECT owner_id, owner_provisional FROM ${databaseTable("server")}
         WHERE relay_id = ? AND instance_id = ? FOR UPDATE`,
       [scope.relayId, scope.instanceId]
     )
@@ -162,7 +162,7 @@ export function claimInstanceOwnerEffect<E, R>(
         targets: [
           {
             relayId: scope.relayId,
-            scope: { instanceId: scope.instanceId, kind: "instance" },
+            scope: { instanceId: scope.instanceId, kind: "server" },
           },
         ],
         userId: displaced,
@@ -182,22 +182,22 @@ export function wakeDisplacedOwnerDelivery(displaced: boolean) {
     : Effect.void
 }
 
-export function reservePreparedInstance(
+export function reservePreparedServer(
   relayId: string,
-  instance: Pick<RelayInstance, "id">,
+  instance: Pick<RelayServer, "id">,
   ownerId: string
 ): Promise<void> {
   return runAppEffect(
     "instances.registry.reservePrepared",
-    reservePreparedInstanceEffect(relayId, instance, ownerId)
+    reservePreparedServerEffect(relayId, instance, ownerId)
   )
 }
 
-export const reservePreparedInstanceEffect = Effect.fn(
+export const reservePreparedServerEffect = Effect.fn(
   "instances.registry.reservePrepared"
 )(function* (
   relayId: string,
-  instance: Pick<RelayInstance, "id">,
+  instance: Pick<RelayServer, "id">,
   ownerId: string
 ) {
   yield* requireServerIdEffect(relayId, instance.id)
@@ -206,16 +206,16 @@ export const reservePreparedInstanceEffect = Effect.fn(
   const displaced = yield* database.transaction(
     "instances.registry.reservePrepared",
     (tx) =>
-      claimInstanceOwnerEffect(
+      claimServerOwnerEffect(
         tx,
         { instanceId: instance.id, ownerId, relayId },
         tx.execute(
-          `INSERT INTO ${databaseTable("instance")}
+          `INSERT INTO ${databaseTable("server")}
              (relay_id, instance_id, display_name, owner_id,
               provisioning_reserved_until, created_at, updated_at)
            VALUES (?, ?, NULL, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
-             ${claimInstanceOwner},
+             ${claimServerOwner},
              provisioning_reserved_until = VALUES(provisioning_reserved_until),
              updated_at = VALUES(updated_at)`,
           [relayId, instance.id, ownerId, now + 2 * 60_000, now, now]
@@ -225,33 +225,33 @@ export const reservePreparedInstanceEffect = Effect.fn(
   yield* wakeDisplacedOwnerDelivery(displaced)
 })
 
-export const registerPreparedInstanceEffect = Effect.fn(
+export const registerPreparedServerEffect = Effect.fn(
   "instances.registry.registerPrepared"
-)(function* (relayId: string, instance: DirectoryInstance, ownerId: string) {
+)(function* (relayId: string, instance: ServerDirectoryEntry, ownerId: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const displaced = yield* lifecycleWrite(relayId, { created: instance.id })(
     database.transaction("instances.registry.registerPrepared", (tx) =>
       Effect.gen(function* () {
-        const displaced = yield* claimInstanceOwnerEffect(
+        const displaced = yield* claimServerOwnerEffect(
           tx,
           { instanceId: instance.id, ownerId, relayId },
           tx.execute(
-            `INSERT INTO ${databaseTable("instance")}
+            `INSERT INTO ${databaseTable("server")}
              (relay_id, instance_id, display_name, source_name, directory_metadata, owner_id,
               created_at, updated_at)
            VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              source_name = VALUES(source_name),
              directory_metadata = VALUES(directory_metadata),
-             ${claimInstanceOwner},
+             ${claimServerOwner},
              provisioning_reserved_until = NULL,
              updated_at = VALUES(updated_at)`,
             [
               relayId,
               instance.id,
               instance.name.slice(0, 255),
-              instanceDirectoryMetadata(instance),
+              serverDirectoryMetadata(instance),
               ownerId,
               now,
               now,
@@ -259,7 +259,7 @@ export const registerPreparedInstanceEffect = Effect.fn(
           )
         )
         yield* tx.execute(
-          `INSERT INTO ${databaseTable("instance_post_provision")}
+          `INSERT INTO ${databaseTable("server_post_provision")}
            (relay_id, instance_id, next_attempt_at, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
@@ -276,14 +276,14 @@ export const registerPreparedInstanceEffect = Effect.fn(
   yield* Effect.sync(() => wakePollingWorker("Instances.postProvision"))
 })
 
-export const unregisterInstanceEffect = Effect.fn(
+export const unregisterServerEffect = Effect.fn(
   "instances.registry.unregister"
 )(function* (relayId: string, instanceId: string) {
   const database = yield* Database
   yield* lifecycleWrite(relayId, { deleted: instanceId })(
     database.execute(
       "instances.registry.unregister",
-      `DELETE FROM ${databaseTable("instance")}
+      `DELETE FROM ${databaseTable("server")}
         WHERE relay_id = ? AND instance_id = ?`,
       [relayId, instanceId]
     )
@@ -291,16 +291,16 @@ export const unregisterInstanceEffect = Effect.fn(
   yield* publishDirectoryChange(relayId)
 })
 
-export function unregisterInstance(relayId: string, instanceId: string) {
+export function unregisterServer(relayId: string, instanceId: string) {
   return runAppEffect(
     "instances.registry.unregister",
-    unregisterInstanceEffect(relayId, instanceId)
+    unregisterServerEffect(relayId, instanceId)
   )
 }
 
-export const backfillInstanceSourceNamesEffect = Effect.fn(
+export const backfillServerSourceNamesEffect = Effect.fn(
   "instances.registry.backfillSourceNames"
-)(function* (relayId: string, instances: ReadonlyArray<DirectoryInstance>) {
+)(function* (relayId: string, instances: ReadonlyArray<ServerDirectoryEntry>) {
   if (instances.length === 0) return
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -311,7 +311,7 @@ export const backfillInstanceSourceNamesEffect = Effect.fn(
   // existing records; Hearth's create and delete paths own which exist.
   yield* database.execute(
     "instances.registry.backfillSourceNames",
-    `UPDATE ${databaseTable("instance")} AS existing_instance
+    `UPDATE ${databaseTable("server")} AS existing_instance
        JOIN (${values}) AS incoming
          ON existing_instance.instance_id = incoming.instance_id
         AND existing_instance.relay_id = ?
@@ -322,7 +322,7 @@ export const backfillInstanceSourceNamesEffect = Effect.fn(
       ...instances.flatMap((instance) => [
         instance.id,
         instance.name.slice(0, 255),
-        instanceDirectoryMetadata(instance),
+        serverDirectoryMetadata(instance),
       ]),
       relayId,
       now,
@@ -330,14 +330,14 @@ export const backfillInstanceSourceNamesEffect = Effect.fn(
   )
 })
 
-export const updateInstanceSourceNameEffect = Effect.fn(
+export const updateServerSourceNameEffect = Effect.fn(
   "instances.registry.updateSourceName"
-)(function* (relayId: string, instance: Pick<RelayInstance, "id" | "name">) {
+)(function* (relayId: string, instance: Pick<RelayServer, "id" | "name">) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "instances.registry.updateSourceName",
-    `UPDATE ${databaseTable("instance")}
+    `UPDATE ${databaseTable("server")}
        SET source_name = ?, updated_at = ?
      WHERE relay_id = ? AND instance_id = ?`,
     [instance.name.slice(0, 255), now, relayId, instance.id]
@@ -349,14 +349,14 @@ export const updateInstanceSourceNameEffect = Effect.fn(
 // server, goes on new rows provisionally and leaves existing owners alone.
 // Otherwise the owner is the person who just created the server, who claims
 // it.
-function upsertInstancesStatement(
+function upsertServersStatement(
   relayId: string,
-  instances: ReadonlyArray<DirectoryInstance>,
+  instances: ReadonlyArray<ServerDirectoryEntry>,
   now: number,
   owner: { id: string | null; standIn: boolean }
 ) {
   return [
-    `INSERT INTO ${databaseTable("instance")}
+    `INSERT INTO ${databaseTable("server")}
        (relay_id, instance_id, display_name, source_name, directory_metadata,
         owner_id, owner_provisional, created_at, updated_at)
      VALUES ${instances.map(() => "(?, ?, NULL, ?, ?, ?, ?, ?, ?)").join(", ")}
@@ -367,14 +367,14 @@ function upsertInstancesStatement(
          owner.standIn
            ? `owner_provisional = IF(owner_id IS NULL, 1, owner_provisional),
        owner_id = COALESCE(owner_id, VALUES(owner_id))`
-           : claimInstanceOwner
+           : claimServerOwner
        },
        updated_at = VALUES(updated_at)`,
     instances.flatMap((instance) => [
       relayId,
       instance.id,
       instance.name.slice(0, 255),
-      instanceDirectoryMetadata(instance),
+      serverDirectoryMetadata(instance),
       owner.id,
       owner.standIn ? 1 : 0,
       now,
@@ -389,12 +389,12 @@ function upsertInstancesStatement(
  * creates one and removes the record when it deletes one, so a snapshot read
  * before a deletion cannot bring the server back.
  */
-export const updateInstanceDirectoryEffect = Effect.fn(
+export const updateServerDirectoryEffect = Effect.fn(
   "instances.directory.update"
-)(function* (relayId: string, instances: ReadonlyArray<DirectoryInstance>) {
+)(function* (relayId: string, instances: ReadonlyArray<ServerDirectoryEntry>) {
   yield* Effect.annotateCurrentSpan({
     "relay.id": relayId,
-    "instance.count": instances.length,
+    "server.count": instances.length,
   })
   if (instances.length === 0) return
   const database = yield* Database
@@ -404,7 +404,7 @@ export const updateInstanceDirectoryEffect = Effect.fn(
     .join(" UNION ALL ")
   yield* database.execute(
     "instances.directory.update",
-    `UPDATE ${databaseTable("instance")} AS existing_instance
+    `UPDATE ${databaseTable("server")} AS existing_instance
        JOIN (${incoming}) AS incoming
          ON existing_instance.instance_id = incoming.instance_id
         AND existing_instance.relay_id = ?
@@ -415,7 +415,7 @@ export const updateInstanceDirectoryEffect = Effect.fn(
       ...instances.flatMap((instance) => [
         instance.id,
         instance.name.slice(0, 255),
-        instanceDirectoryMetadata(instance),
+        serverDirectoryMetadata(instance),
       ]),
       relayId,
       now,
@@ -458,19 +458,19 @@ const requireServerIdEffect = Effect.fn("instances.registry.requireId")(
 )
 
 /** Records a server Hearth created outside the provisioning flow. */
-export const recordCreatedInstanceEffect = Effect.fn(
+export const recordCreatedServerEffect = Effect.fn(
   "instances.registry.recordCreated"
-)(function* (relayId: string, instance: DirectoryInstance, ownerId: string) {
+)(function* (relayId: string, instance: ServerDirectoryEntry, ownerId: string) {
   yield* requireServerIdEffect(relayId, instance.id)
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const displaced = yield* lifecycleWrite(relayId, { created: instance.id })(
     database.transaction("instances.registry.recordCreated", (tx) =>
-      claimInstanceOwnerEffect(
+      claimServerOwnerEffect(
         tx,
         { instanceId: instance.id, ownerId, relayId },
         tx.execute(
-          ...upsertInstancesStatement(relayId, [instance], now, {
+          ...upsertServersStatement(relayId, [instance], now, {
             id: ownerId,
             standIn: false,
           })
@@ -483,10 +483,10 @@ export const recordCreatedInstanceEffect = Effect.fn(
 })
 
 /** Removes the record of a server its Relay has deleted. */
-export const removeDeletedInstanceEffect = Effect.fn(
+export const removeDeletedServerEffect = Effect.fn(
   "instances.registry.removeDeleted"
 )(function* (relayId: string, instanceId: string) {
-  yield* unregisterInstanceEffect(relayId, instanceId).pipe(
+  yield* unregisterServerEffect(relayId, instanceId).pipe(
     Effect.retry(Schedule.exponential(100).pipe(Schedule.upTo({ times: 3 })))
   )
 })
@@ -496,11 +496,11 @@ export const removeDeletedInstanceEffect = Effect.fn(
  * snapshot was read moments before this commits, so servers Hearth created
  * or deleted on the Relay in between keep their outcome.
  */
-export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
-  function* (relayId: string, instances: ReadonlyArray<DirectoryInstance>) {
+export const syncServerRegistryEffect = Effect.fn("instances.registry.sync")(
+  function* (relayId: string, instances: ReadonlyArray<ServerDirectoryEntry>) {
     yield* Effect.annotateCurrentSpan({
       "relay.id": relayId,
-      "instance.count": instances.length,
+      "server.count": instances.length,
     })
     const database = yield* Database
     const lifecycle = relayLifecycle(relayId)
@@ -534,13 +534,13 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
           Effect.gen(function* () {
             if (listed.length)
               yield* transaction.execute(
-                ...upsertInstancesStatement(relayId, listed, now, {
+                ...upsertServersStatement(relayId, listed, now, {
                   id: relay?.created_by ?? null,
                   standIn: true,
                 })
               )
             yield* transaction.execute(
-              `DELETE FROM ${databaseTable("instance")}
+              `DELETE FROM ${databaseTable("server")}
                 WHERE relay_id = ?
                   ${kept.length ? `AND instance_id NOT IN (${kept.map(() => "?").join(", ")})` : ""}
                   AND (
@@ -556,12 +556,12 @@ export const syncInstanceRegistryEffect = Effect.fn("instances.registry.sync")(
   }
 )
 
-export function syncInstanceRegistry(
+export function syncServerRegistry(
   relayId: string,
-  instances: ReadonlyArray<DirectoryInstance>
+  instances: ReadonlyArray<ServerDirectoryEntry>
 ): Promise<void> {
   return runAppEffect(
     "instances.registry.sync",
-    syncInstanceRegistryEffect(relayId, instances)
+    syncServerRegistryEffect(relayId, instances)
   )
 }

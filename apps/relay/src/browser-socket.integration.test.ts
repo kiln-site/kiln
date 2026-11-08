@@ -99,7 +99,7 @@ describe("relay browser socket integration", () => {
   })
 
   it("refuses database consoles to a Hearth the Relay doesn't let read them", async () => {
-    const relay = await startRelay({ actions: ["instance.console.read"] })
+    const relay = await startRelay({ actions: ["server.console.read"] })
     const result = await attemptAuthentication(relay, {
       capability: databaseCapability,
     })
@@ -177,7 +177,7 @@ async function startRelay(
     .digest("base64url")
   const client = {
     actions: clientGrant.actions ?? [
-      "instance.console.read",
+      "server.console.read",
       "database.logs.read",
     ],
     createdAt: Date.now(),
@@ -424,7 +424,7 @@ function capability(input: {
 }): RelayBrowserCapabilityV2 {
   const issuedAt = Date.now()
   return {
-    actions: ["instance.console.read"],
+    actions: ["server.console.read"],
     audience: relayId,
     authorizationRevision: input.revision,
     capabilityId: input.capabilityId,

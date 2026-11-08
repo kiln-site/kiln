@@ -87,7 +87,7 @@ const resourceWebHostnamesInputSchema = z.discriminatedUnion("resourceType", [
   z.object({
     relayId: relayIdSchema,
     resourceId: instanceIdSchema,
-    resourceType: z.literal("instance"),
+    resourceType: z.literal("server"),
   }),
   z.object({
     relayId: relayIdSchema,

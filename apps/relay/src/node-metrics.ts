@@ -499,7 +499,7 @@ function groupOf(
   const owner = kilnContainerOwner(config, summary)
   if (!owner) return "other"
   switch (owner.resource.type) {
-    case "instance":
+    case "server":
       return "game_server"
     case "app":
       return "app"

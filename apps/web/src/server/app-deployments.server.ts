@@ -252,8 +252,8 @@ async function listDeployments(
             effectiveScopePermissions(grants, {
               relayId: record.relayId,
               resourceId: record.instanceId,
-              resourceType: "instance",
-            }).has("instance.logs.read"),
+              resourceType: "server",
+            }).has("server.logs.read"),
           relayName,
           serverName:
             readableServers.get(record.instanceId)?.name ?? record.instanceId,
@@ -653,7 +653,7 @@ export async function getServerDeploymentLogHandler(
   }
   await requireRelayPermission({
     instanceId: record.instanceId,
-    permission: "instance.logs.read",
+    permission: "server.logs.read",
     relayId: record.relayId,
     user,
   })
@@ -664,7 +664,7 @@ export async function getServerDeploymentLogHandler(
   const log = relayServerDeploymentLogSchema.parse(
     await databaseRpc(
       relay,
-      "instance.deployment.read",
+      "server.deployment.read",
       { deploymentId: record.id, instanceId: record.instanceId },
       15_000,
       user.id

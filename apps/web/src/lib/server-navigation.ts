@@ -1,4 +1,4 @@
-import { findRelayInstance } from "@/lib/relay-selectors"
+import { findRelayServer } from "@/lib/relay-selectors"
 
 /**
  * Which game server the sidebar and command menu open: the one in the URL,
@@ -19,7 +19,7 @@ export function resolveServerNavigation<T extends { id: string }>(
 ): ServerNavigation<T> {
   const instance =
     "serverId" in input
-      ? findRelayInstance(instances, input.serverId)
-      : (findRelayInstance(instances, input.selectedServerId) ?? instances[0])
+      ? findRelayServer(instances, input.serverId)
+      : (findRelayServer(instances, input.selectedServerId) ?? instances[0])
   return { instance: instance ?? null, serverCount: instances.length }
 }

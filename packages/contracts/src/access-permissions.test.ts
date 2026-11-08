@@ -11,26 +11,26 @@ describe("permission catalog boundaries", () => {
   it("expands transitive implications without unrelated authority", () => {
     const permissions = expandPermissionSelections(
       [
-        { kind: "permission", key: "instance.power.stop" },
-        { kind: "permission", key: "instance.files.write" },
+        { kind: "permission", key: "server.power.stop" },
+        { kind: "permission", key: "server.files.write" },
         { kind: "permission", key: "access.invite" },
       ],
-      "instance"
+      "server"
     )
     expect(permissions).toEqual(
       expect.arrayContaining([
-        "instance.read",
-        "instance.power.stop",
-        "instance.power.start",
-        "instance.files.read",
+        "server.read",
+        "server.power.stop",
+        "server.power.start",
+        "server.files.read",
         "access.read",
         "preset.read",
         "preset.create",
       ])
     )
     for (const key of [
-      "instance.power.kill",
-      "instance.files.delete",
+      "server.power.kill",
+      "server.files.delete",
       "preset.manage",
       "access.manage",
       "relay.read",
@@ -57,17 +57,17 @@ describe("permission catalog boundaries", () => {
       ).toBe(false)
     }
     const child = expandPermissionSelections(
-      [{ kind: "collection", key: "instance.all" }],
+      [{ kind: "collection", key: "server.all" }],
       "relay"
     )
     expect(child).not.toContain("relay.configure")
     expect(child).not.toContain("database.read")
-    expect(child).not.toContain("instance.create")
+    expect(child).not.toContain("server.create")
     // Collections carry granular keys only; compatibility umbrellas stay out.
-    expect(child).not.toContain("instance.power")
-    expect(child).not.toContain("instance.settings")
-    expect(child).toContain("instance.power.kill")
-    expect(child).toContain("instance.configuration.write")
+    expect(child).not.toContain("server.power")
+    expect(child).not.toContain("server.settings")
+    expect(child).toContain("server.power.kill")
+    expect(child).toContain("server.configuration.write")
     // Any Relay-scope assignment reveals the Relay it was granted on.
     expect(child).toContain("relay.read")
   })

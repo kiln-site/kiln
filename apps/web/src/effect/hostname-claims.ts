@@ -9,7 +9,7 @@ import { databaseTable } from "@/lib/database-config"
 export interface HostnameOwner {
   readonly relayId: string
   readonly resourceId: string
-  readonly resourceType: "app" | "instance"
+  readonly resourceType: "app" | "server"
 }
 
 interface ClaimRow extends RowDataPacket {
@@ -94,8 +94,8 @@ export const releaseUnusedHostnamesEffect = Effect.fn("hostnameClaims.release")(
           SELECT 1 FROM ${databaseTable("web_hostname")} used
            WHERE used.hostname = claim.hostname)
         AND NOT EXISTS (
-          SELECT 1 FROM ${databaseTable("instance_domain")} used
-           WHERE claim.resource_type = 'instance'
+          SELECT 1 FROM ${databaseTable("server_domain")} used
+           WHERE claim.resource_type = 'server'
              AND used.relay_id = claim.relay_id
              AND used.instance_id = claim.resource_id
              AND (CONCAT(used.vanity_label, '.', used.domain) = claim.hostname

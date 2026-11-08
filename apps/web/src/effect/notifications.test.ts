@@ -31,7 +31,7 @@ const removed: NotificationContent = {
     id: "inst-a",
     name: "Survival",
     relayId: "relay-a",
-    type: "instance",
+    type: "server",
   },
 }
 

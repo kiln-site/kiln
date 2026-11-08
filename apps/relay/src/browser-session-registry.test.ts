@@ -71,13 +71,13 @@ describe("browser session registry", () => {
       [
         {
           minimumRevision: 3,
-          scope: { instanceId: "instance-a", kind: "instance" },
+          scope: { instanceId: "instance-a", kind: "server" },
           subject: "user-a",
         },
       ],
       1
     )
-    expect(registry.isActive(active, "instance.console.read")).toBe(false)
+    expect(registry.isActive(active, "server.console.read")).toBe(false)
     expect(active.close).toHaveBeenCalledWith(4403, expect.any(String))
 
     const renewed = socket()
@@ -91,7 +91,7 @@ describe("browser session registry", () => {
         { nonce: "nonce", nonceExpiresAt: Date.now() + 30_000 }
       ).accepted
     ).toBe(true)
-    expect(registry.isActive(renewed, "instance.console.read")).toBe(true)
+    expect(registry.isActive(renewed, "server.console.read")).toBe(true)
     registry.close()
   })
 
@@ -136,7 +136,7 @@ function authority(
   overrides: Partial<BrowserSessionAuthority> = {}
 ): BrowserSessionAuthority {
   return {
-    actions: new Set(["instance.console.read"]),
+    actions: new Set(["server.console.read"]),
     expiresAt: Date.now() + 30_000,
     instanceId: "instance-a",
     issuer: "hearth-a",
@@ -144,7 +144,7 @@ function authority(
     keyThumbprint: "thumbprint-a",
     loginSessionId: "login-session-a",
     operation: "console",
-    resourceKind: "instance",
+    resourceKind: "server",
     origin: "https://hearth.test",
     revision: 1,
     subject: "user-a",

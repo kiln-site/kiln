@@ -1342,7 +1342,7 @@ export class DatabaseDriver {
       let to: RelayDatabaseMember | null = null
       let names: ReadonlyArray<string> = []
       if (instanceId) {
-        to = member("instance", instanceId)
+        to = member("server", instanceId)
         names = databaseMemberAliases(to)
       } else if (labels[DATABASE_KIND_LABEL] === "app" && appId) {
         to = member("app", appId)
@@ -1878,11 +1878,11 @@ function withProvisioning(
 const memberNotFound = {
   app: "App not found on this Relay",
   database: "Database not found on this Relay",
-  instance: "Server not found on this Relay",
+  server: "Server not found on this Relay",
 } as const
 
 const memberStillRunning = {
   app: "Your app was not stopped.",
   database: "Your database was not stopped.",
-  instance: "Your server was not stopped.",
+  server: "Your server was not stopped.",
 } as const

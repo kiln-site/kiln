@@ -92,11 +92,11 @@ export function closeLanes(): Effect.Effect<void> {
 export const lanesOpen = Effect.suspend(() => Deferred.await(state.ready))
 
 /**
- * A resource's lane key, such as `instance:<relay>/<id>`. A change to the
+ * A resource's lane key, such as `server:<relay>/<id>`. A change to the
  * whole resource, such as deleting it, takes it exclusively.
  */
 export const resourceKey = (
-  kind: "app" | "database" | "instance" | "volume",
+  kind: "app" | "database" | "server" | "volume",
   relayId: string,
   id: string
 ) => `${kind}:${relayId}/${id}`
@@ -115,7 +115,7 @@ export const hearthKey = "hearth"
  * invitations and owner.
  */
 export const accessKey = (
-  kind: "app" | "database" | "instance" | "relay",
+  kind: "app" | "database" | "server" | "relay",
   relayId: string,
   id: string
 ) =>
@@ -136,7 +136,7 @@ export const emailKey = (email: string) =>
 
 /**
  * A part of something with a key of its own, such as a game server's DNS
- * (`instance:<relay>/<id>#dns`). Taking a part also takes the whole shared,
+ * (`server:<relay>/<id>#dns`). Taking a part also takes the whole shared,
  * so taking the whole exclusively waits for, or turns away, every part.
  */
 export const partKey = (whole: string, part: string) => `${whole}#${part}`

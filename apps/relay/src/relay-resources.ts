@@ -28,7 +28,7 @@ export interface RelayResourceNames {
   coreDnsContainer: string
   edgeNetwork: string
   gameNetwork: string
-  instanceContainer(instanceId: string): string
+  serverContainer(instanceId: string): string
   limboContainer: string
   relayEdgeAlias: string
   relayEdgeNetwork: string
@@ -63,7 +63,7 @@ export function relayResourceNames(
     coreDnsContainer: name("kiln-coredns"),
     edgeNetwork: name("kiln-edge"),
     gameNetwork: name("kiln-minecraft"),
-    instanceContainer: (instanceId) =>
+    serverContainer: (instanceId) =>
       name(`kiln-${physicalShortKey(instanceId)}`),
     limboContainer: name("kiln-limbo"),
     relayEdgeAlias: "kiln-relay",

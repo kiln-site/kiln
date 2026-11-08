@@ -39,10 +39,10 @@ const target = (resourceId: string, sbomKey: string) => ({
   observed_at: 1,
   relay_id: relayId,
   resource_id: resourceId,
-  resource_type: "instance",
+  resource_type: "server",
   running: 1,
   sbom_key: sbomKey,
-  target_key: `instance:${resourceId}`,
+  target_key: `server:${resourceId}`,
 })
 
 const seed = Effect.gen(function* () {
@@ -60,12 +60,12 @@ const seed = Effect.gen(function* () {
       id,
       relayId,
       resourceId,
-      resourceType: "instance",
+      resourceType: "server",
       userId,
     })
     yield* insertRows("access_selection", {
       access_id: id,
-      selection_key: "instance.read",
+      selection_key: "server.read",
       selection_kind: "permission",
     })
   }
@@ -185,12 +185,12 @@ describeMysql("what people may see of a resource's vulnerabilities", () => {
           id: grant,
           relayId: otherRelay,
           resourceId: "server-c",
-          resourceType: "instance",
+          resourceType: "server",
           userId: "viewer",
         })
         yield* insertRows("access_selection", {
           access_id: grant,
-          selection_key: "instance.read",
+          selection_key: "server.read",
           selection_kind: "permission",
         })
         // The same image, which this Relay says holds nothing.

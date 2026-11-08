@@ -18,7 +18,7 @@ import type {
 } from "@/components/console/console-stores"
 import { usePageContentSkipped } from "@/lib/page-timing"
 import { createConsoleLoadTiming } from "@/lib/console-performance"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { WorkspaceServer } from "@/lib/relay-selectors"
 
 export function ConsoleWorkspace({
   instance,
@@ -26,7 +26,7 @@ export function ConsoleWorkspace({
   canShare,
   canWrite,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
   active: boolean
   canShare: boolean
   canWrite: boolean
@@ -48,7 +48,7 @@ function ConsoleWorkspaceSession({
   canShare,
   canWrite,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
   active: boolean
   canShare: boolean
   canWrite: boolean

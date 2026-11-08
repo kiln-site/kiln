@@ -25,13 +25,13 @@ describe("disk quota enforcement", () => {
 
     // The first sample records the server as running and starts measuring
     // its directory, which stops it once the scan sees it over quota.
-    await harness.docker.inspectInstances()
+    await harness.docker.inspectServers()
     await vi.waitFor(() => expect(container.state.running).toBe(false), {
       timeout: 5_000,
     })
 
     // Crash recovery must not treat the quota stop as a crash.
-    const [stopped] = await harness.docker.inspectInstances()
+    const [stopped] = await harness.docker.inspectServers()
     expect(stopped).toMatchObject({
       desiredState: "stopped",
       observedState: "stopped",

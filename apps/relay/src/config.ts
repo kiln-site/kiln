@@ -8,9 +8,9 @@ import { ramInBytes } from "./docker-container-spec.js"
 
 import type {
   BrickReadiness,
-  RelayInstancePortAllocation,
-  RelayInstancePortProtocol,
-  RelayInstanceTailscale,
+  RelayServerPortAllocation,
+  RelayServerPortProtocol,
+  RelayServerTailscale,
   RelayJoinLink,
   ResourceLimits,
 } from "@workspace/contracts"
@@ -22,13 +22,13 @@ import {
   resolveKilnGitRepository,
 } from "@workspace/contracts"
 
-export interface RelayInstanceConfig {
+export interface RelayServerConfig {
   brickFormat?: string
   brickId?: string
   brickConsoleStopCommands?: ReadonlyArray<string>
   brickNetworkMode?: "direct" | "minecraft-backend"
   brickPrimaryPort?: number
-  brickPrimaryPortProtocol?: RelayInstancePortProtocol
+  brickPrimaryPortProtocol?: RelayServerPortProtocol
   brickReadiness?: BrickReadiness
   brickSupportsSrv?: boolean
   brickSource?: string
@@ -43,11 +43,11 @@ export interface RelayInstanceConfig {
   javaVersion: string
   limits: ResourceLimits
   name: string
-  ports: Array<RelayInstancePortAllocation>
+  ports: Array<RelayServerPortAllocation>
   publicHost?: string
   publicPort?: number
   service: string
-  tailscale: RelayInstanceTailscale
+  tailscale: RelayServerTailscale
   variables?: Record<string, boolean | number | string>
   version: string
   managedByRelay: boolean

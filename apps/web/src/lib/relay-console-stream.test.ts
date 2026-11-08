@@ -53,7 +53,7 @@ describe("Relay console connection setup", () => {
       Effect.result(
         openRelayConsoleStream(
           "relay-one",
-          { id: "instance-one", kind: "instance" },
+          { id: "instance-one", kind: "server" },
           "https://relay.example.com"
         ).pipe(Stream.runDrain)
       )
@@ -84,7 +84,7 @@ describe("Relay console prewarm", () => {
   const openConsole = (write = false) =>
     openRelayConsoleStream(
       "relay-one",
-      { id: "instance-one", kind: "instance" },
+      { id: "instance-one", kind: "server" },
       "https://relay.example.com",
       null,
       undefined,
@@ -121,7 +121,7 @@ describe("Relay console kept connection", () => {
   ) =>
     openRelayConsoleStream(
       "relay-one",
-      { id: "instance-one", kind: "instance" },
+      { id: "instance-one", kind: "server" },
       browserOrigin
     )
 

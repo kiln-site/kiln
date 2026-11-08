@@ -1308,7 +1308,7 @@ function scheduleHistoryTarget(
 ): HistoryTarget {
   return {
     id: target.kind === "relay" ? target.relayId : target.id,
-    kind: target.kind === "instance" ? "server" : target.kind,
+    kind: target.kind,
     name: target.kind === "relay" ? "Kiln" : target.name,
     platform: target.kind === "relay",
     relayId: target.relayId,
@@ -3450,7 +3450,7 @@ const ScheduleActionTargetsButton = React.memo(
 // A Relay target is Kiln itself, backed up on that Relay.
 function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
   const kind =
-    option.kind === "instance"
+    option.kind === "server"
       ? "Game Server"
       : option.kind === "database"
         ? "Database"
@@ -3459,7 +3459,7 @@ function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
           : "Kiln"
   return {
     identity:
-      option.kind === "instance"
+      option.kind === "server"
         ? { id: option.id, kind: "server", relayId: option.relayId }
         : option.kind === "database" || option.kind === "app"
           ? { id: option.id, kind: option.kind, relayId: option.relayId }
@@ -3661,7 +3661,7 @@ const CommandEditorField = React.memo(function CommandEditorField({
     setOpen(true)
   }, [services, value])
   const unchosen = apps.some((app) => !services?.[targetKey(app)])
-  const consoles = targetKinds.includes("instance")
+  const consoles = targetKinds.includes("server")
   const shells = targetKinds.some(
     (kind) => kind === "app" || kind === "database"
   )
@@ -3924,7 +3924,7 @@ function TargetIcon({
   kind: ScheduleTarget["kind"]
   className?: string
 }) {
-  const Icon = kind === "instance" ? ServerKindIcon : instanceKindIcons[kind]
+  const Icon = kind === "server" ? ServerKindIcon : instanceKindIcons[kind]
   return <Icon className={className} aria-hidden="true" />
 }
 
@@ -3990,7 +3990,7 @@ function scheduleOptionsWithInstanceNames(
     ])
   )
   return options.map((option) => {
-    if (option.kind !== "instance") return option
+    if (option.kind !== "server") return option
     const instance = instancesById.get(`${option.relayId}:${option.id}`)
     return instance
       ? { ...option, name: instance.name, relayName: instance.relayName }
@@ -4369,8 +4369,7 @@ function scheduleTargetMatchesScope(
   target: ScheduleTarget,
   scope: ScheduleScope
 ) {
-  const scopeKind = scope.kind ?? "server"
-  const kind = scopeKind === "server" ? "instance" : scopeKind
+  const kind = scope.kind ?? "server"
   if (!("id" in scope)) return target.kind === kind
   return (
     target.kind === kind &&

@@ -64,7 +64,7 @@ import type {
   CopyBackupInput,
   DatabaseBackupInput,
   RenameBackupInput,
-  InstanceBackupInput,
+  ServerBackupInput,
   PlatformBackupInput,
   ResourceBackupInput,
 } from "@/server/backups"
@@ -93,8 +93,8 @@ const permitted = (
     Effect.tap((person) => promiseEffect(() => check(person)))
   )
 
-export const backUpInstance = operation<InstanceBackupInput>()({
-  name: "backup.instance.create",
+export const backUpServer = operation<ServerBackupInput>()({
+  name: "backup.server.create",
   doing: "Backing up this game server",
   authorize: ({ input, user }) =>
     permitted(user, (person) =>
@@ -107,7 +107,7 @@ export const backUpInstance = operation<InstanceBackupInput>()({
     ),
   locks: ({ input }) => [
     shared(
-      backupTargetKey(input.relayId, { id: input.instanceId, kind: "instance" })
+      backupTargetKey(input.relayId, { id: input.instanceId, kind: "server" })
     ),
     ...destinations(input.storageIds),
   ],
@@ -117,7 +117,7 @@ export const backUpInstance = operation<InstanceBackupInput>()({
     ),
   audit: ({ input }) => ({
     id: input.instanceId,
-    kind: "instance",
+    kind: "server",
     relayId: input.relayId,
   }),
 })
@@ -286,8 +286,8 @@ const restoreOperation = <A>(
         : null,
   })
 
-export const restoreInstance = restoreOperation(
-  "backup.instance.restore",
+export const restoreServer = restoreOperation(
+  "backup.server.restore",
   "Restoring this game server",
   restoreInstanceBackupHandler
 )

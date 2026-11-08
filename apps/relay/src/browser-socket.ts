@@ -4,14 +4,14 @@ import type { Tracer } from "effect"
 import { WebSocket, WebSocketServer } from "ws"
 
 import {
-  projectRelayInstanceOverview,
+  projectRelayServerOverview,
   RelayBrowserRenewSchema,
   relayBrowserProofTranscript,
   relayBrowserConsoleProtocol,
   relayBrowserConsoleProtocols,
   relayBrowserMaxFrameBytes,
   relayBrowserProtocol,
-  relayInstanceLifecycleEventTime as lifecycleEventTime,
+  relayServerLifecycleEventTime as lifecycleEventTime,
 } from "@workspace/contracts"
 import type {
   RelayBrowserAuthorizationRevision,
@@ -19,8 +19,8 @@ import type {
   RelayConsole,
   RelayConsoleResource,
   RelayConsoleLine,
-  RelayInstance,
-  RelayInstanceLifecycleEvent,
+  RelayServer,
+  RelayServerLifecycleEvent,
   RelayInstanceResources,
   RelayWorkloadResourceKind,
   RelayWorkloadUsage,
@@ -51,7 +51,7 @@ import {
 import type { ConsoleSource, ConsoleSources } from "./console-sources.js"
 import type { FileRoot, FilesystemDriver } from "./files.js"
 import type { LaneTicket, OperationLanes } from "./operation-lanes.js"
-import { instanceLifecycleLocks } from "./operation-plans.js"
+import { serverLifecycleLocks } from "./operation-plans.js"
 import type { RelayIdentity } from "./effect/identity.js"
 import { ensuringPromise, forkPromise } from "./effect/promise.js"
 import type { RelayStateStore } from "./effect/state.js"
@@ -536,10 +536,10 @@ function authenticateBrowser(
     if (Option.isSome(consoleWrite)) {
       const request = consoleWrite.value
       if (
-        capabilityResourceKind(capability) !== "instance" ||
+        capabilityResourceKind(capability) !== "server" ||
         request.instanceId !== capability.instanceId ||
         (capability.version === 2 && capability.operation !== "console") ||
-        !registry.isActive(socket, "instance.console.write")
+        !registry.isActive(socket, "server.console.write")
       ) {
         socket.close(4403, "Console capability does not allow writes")
         return
@@ -557,7 +557,7 @@ function authenticateBrowser(
             capability!,
             outbox,
             ticket,
-            () => registry.isActive(socket, "instance.console.write")
+            () => registry.isActive(socket, "server.console.write")
           )
       )
       return
@@ -566,10 +566,10 @@ function authenticateBrowser(
     if (Option.isSome(consoleCompletion)) {
       const request = consoleCompletion.value
       if (
-        capabilityResourceKind(capability) !== "instance" ||
+        capabilityResourceKind(capability) !== "server" ||
         request.instanceId !== capability.instanceId ||
         (capability.version === 2 && capability.operation !== "console") ||
-        !registry.isActive(socket, "instance.console.write")
+        !registry.isActive(socket, "server.console.write")
       ) {
         socket.close(4403, "Console capability does not allow completion")
         return
@@ -586,7 +586,7 @@ function authenticateBrowser(
             options.docker,
             outbox,
             ticket,
-            () => registry.isActive(socket, "instance.console.write")
+            () => registry.isActive(socket, "server.console.write")
           )
       )
       return
@@ -612,7 +612,7 @@ function authenticateBrowser(
       outbox.send(
         JSON.stringify({ code, message, requestId, type: "operation.error" }),
         "priority",
-        "instance.console.write"
+        "server.console.write"
       )
       return
     }
@@ -621,7 +621,7 @@ function authenticateBrowser(
     // stays in order with power changes and other consoles.
     const ticket = options.lanes.admit({
       label: "browser.console",
-      locks: instanceLifecycleLocks(instanceId),
+      locks: serverLifecycleLocks(instanceId),
     })
     consoleTickets.add(ticket)
     forkPromise(
@@ -831,9 +831,7 @@ async function executeConsoleWrite(
           "Execute browser console write",
           "relay.browser.console.write",
           async () => {
-            const instance = await options.docker.findInstance(
-              request.instanceId
-            )
+            const instance = await options.docker.findServer(request.instanceId)
             if (!instance) throw new Error("Instance not found")
             if (!authorize()) throw new Error("Browser authorization changed")
             const input = relayConsoleCommandSchema.parse({
@@ -853,7 +851,7 @@ async function executeConsoleWrite(
                 type: "operation.result",
               }),
               "priority",
-              "instance.console.write"
+              "server.console.write"
             )
           }
         )
@@ -869,7 +867,7 @@ async function executeConsoleWrite(
                 type: "operation.error",
               }),
               "priority",
-              "instance.console.write"
+              "server.console.write"
             )
           })
         )
@@ -889,7 +887,7 @@ async function auditBrowserConsoleWrite(
           clientId: capability.issuer,
           details: {
             instanceId,
-            permission: "instance.console.write",
+            permission: "server.console.write",
             subject: capability.subject,
           },
           event: "browser.console.write",
@@ -923,7 +921,7 @@ async function executeConsoleCompletion(
           "Execute browser console completion",
           "relay.browser.console.complete",
           async () => {
-            const instance = await docker.findInstance(request.instanceId)
+            const instance = await docker.findServer(request.instanceId)
             if (!instance) throw new Error("Instance not found")
             if (!authorize()) throw new Error("Browser authorization changed")
             const input = relayConsoleCompletionInputSchema.parse(request)
@@ -940,7 +938,7 @@ async function executeConsoleCompletion(
                 type: "operation.result",
               }),
               "priority",
-              "instance.console.write"
+              "server.console.write"
             )
           }
         )
@@ -956,7 +954,7 @@ async function executeConsoleCompletion(
                 type: "operation.error",
               }),
               "priority",
-              "instance.console.write"
+              "server.console.write"
             )
           })
         )
@@ -1122,13 +1120,13 @@ class ConsoleHubRegistry {
   }
 }
 
-type ResourceUsageKind = "app" | "database" | "instance"
+type ResourceUsageKind = "app" | "database" | "server"
 
 // The action that reads each kind's usage.
 const resourceReadActions = {
   app: "app.read",
   database: "database.read",
-  instance: "instance.read",
+  server: "server.read",
 } as const satisfies Record<ResourceUsageKind, string>
 
 function isResourceUsageKind(kind: string): kind is ResourceUsageKind {
@@ -1208,21 +1206,17 @@ class ResourceHubRegistry {
       group.sockets.push(subscriber)
       groups.set(key, group)
     }
-    let instances: ReadonlyMap<string, RelayInstance> | null = null
+    let instances: ReadonlyMap<string, RelayServer> | null = null
     for (const { sockets, subscription } of groups.values()) {
       let events: {
         live: string
         withHistory: () => ReadonlyArray<string>
       } | null
-      if (subscription.kind === "instance") {
+      if (subscription.kind === "server") {
         instances ??= new Map(
           sample.snapshot.instances.map((instance) => [instance.id, instance])
         )
-        events = this.#instanceEvents(
-          instances,
-          subscription.id,
-          sample.sequence
-        )
+        events = this.#serverEvents(instances, subscription.id, sample.sequence)
       } else {
         events = this.#workloadEvents(
           subscription.kind,
@@ -1265,14 +1259,14 @@ class ResourceHubRegistry {
     Effect.runFork(send)
   }
 
-  #instanceEvents(
-    instances: ReadonlyMap<string, RelayInstance>,
+  #serverEvents(
+    instances: ReadonlyMap<string, RelayServer>,
     instanceId: string,
     sequence: number
   ) {
     const current = instances.get(instanceId)
     if (!current) return null
-    const instance = projectRelayInstanceOverview(current)
+    const instance = projectRelayServerOverview(current)
     const event = (history: ReadonlyArray<RelayInstanceResources>) =>
       JSON.stringify({ history, instance, sequence, type: "resource" })
     return {
@@ -1347,7 +1341,7 @@ class ConsoleHub {
   #session = 0
   #nextSession: DockerConsoleSession | null
   #sessionFloor: string | null = null
-  #sessionLifecycle: Array<RelayInstanceLifecycleEvent> | undefined
+  #sessionLifecycle: Array<RelayServerLifecycleEvent> | undefined
   #streamFiber: Fiber.Fiber<void, never> | null = null
   #transitionStartedAt: string | null = null
   #truncated = false

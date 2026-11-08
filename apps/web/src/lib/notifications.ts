@@ -6,7 +6,7 @@ const notificationResourceSchema = z.object({
   id: z.string(),
   name: z.string(),
   relayId: z.string(),
-  type: z.enum(["relay", "instance", "database", "app"]),
+  type: z.enum(["relay", "server", "database", "app"]),
 })
 
 const severitySchema = z.enum([

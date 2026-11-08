@@ -198,7 +198,7 @@ export const ResourceDeletionAlert = React.memo(function ResourceDeletionAlert({
 const subjects: Record<ResourceDeletionTarget["kind"], string> = {
   app: "App",
   database: "database",
-  instance: "game server",
+  server: "game server",
   volume: "volume",
 }
 

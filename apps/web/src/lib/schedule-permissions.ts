@@ -19,10 +19,10 @@ type ScheduleActionPermissionInput =
   | Pick<SchedulePowerAction, "action" | "type">
 
 const instancePowerPermissions = [
-  "instance.power.start",
-  "instance.power.stop",
-  "instance.power.restart",
-  "instance.power.kill",
+  "server.power.start",
+  "server.power.stop",
+  "server.power.restart",
+  "server.power.kill",
 ] as const satisfies ReadonlyArray<AccessPermission>
 
 export function scheduleActionPermission(
@@ -31,7 +31,7 @@ export function scheduleActionPermission(
 ): AccessPermission | null {
   if (action.type === "wait") return null
   if (action.type === "console_command") {
-    if (target.kind === "instance") return "instance.console.write"
+    if (target.kind === "server") return "server.console.write"
     // A shell in a database's container reaches past what the database
     // grants, so it takes a terminal on its Relay.
     if (target.kind === "database") return "relay.terminal"
@@ -40,7 +40,7 @@ export function scheduleActionPermission(
     return null
   }
   if (action.type === "power") {
-    if (target.kind === "instance") return `instance.power.${action.action}`
+    if (target.kind === "server") return `server.power.${action.action}`
     if (target.kind === "database") return "database.power"
     // As starting or stopping it by hand does.
     if (target.kind === "app") return "app.manage"
@@ -62,7 +62,7 @@ export function scheduleActionOptionPermissions(
   target: Pick<ScheduleTarget, "kind">
 ): ReadonlyArray<AccessPermission> {
   if (type === "power") {
-    if (target.kind === "instance") return instancePowerPermissions
+    if (target.kind === "server") return instancePowerPermissions
     if (target.kind === "app") return ["app.manage"]
     return target.kind === "database" ? ["database.power"] : []
   }

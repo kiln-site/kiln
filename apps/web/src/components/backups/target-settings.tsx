@@ -352,5 +352,5 @@ function gibibytes(bytes: number): number {
 // so their backups can leave paths out; a database's dump and Kiln's
 // bundle can't.
 function excludable(kind: BackupTarget["kind"]): boolean {
-  return kind === "instance" || kind === "app" || kind === "volume"
+  return kind === "server" || kind === "app" || kind === "volume"
 }

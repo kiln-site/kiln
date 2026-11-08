@@ -42,10 +42,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   }
 })
 
-import { restorePortableInstanceBackup } from "./backup-restore.js"
+import { restorePortableServerBackup } from "./backup-restore.js"
 import { BackupManager } from "./backups.js"
 import { makeRelayStateLayer } from "./effect/state.js"
-import { testInstance, testRelayConfig } from "./test/fixtures.js"
+import { testServer, testRelayConfig } from "./test/fixtures.js"
 import { OperationLanes } from "./operation-lanes.js"
 
 const testDirectory = mkdtempSync(
@@ -61,15 +61,15 @@ describe("Relay backup restore cleanup", () => {
   it.effect("keeps an installed restore when rollback cleanup fails", () =>
     Effect.gen(function* () {
       const config = testRelayConfig(testDirectory)
-      const instance = testInstance()
+      const instance = testServer()
       const root = resolve(config.rootDirectory, instance.directory)
       yield* Effect.promise(() => mkdir(root, { recursive: true }))
       yield* Effect.promise(() => writeFile(resolve(root, "server.txt"), "old"))
       const create = backupInput()
       const manager = yield* BackupManager.make({
         config,
-        findInstance: async () => instance,
-        isInstanceStopped: async () => true,
+        findServer: async () => instance,
+        isServerStopped: async () => true,
         lanes: new OperationLanes(),
       })
       yield* manager.enqueue(create)
@@ -99,7 +99,7 @@ describe("Relay backup restore cleanup", () => {
       const outcome = yield* Effect.exit(
         Effect.tryPromise({
           try: () =>
-            restorePortableInstanceBackup(
+            restorePortableServerBackup(
               config,
               restore,
               instance,
@@ -139,7 +139,7 @@ function backupInput(): BackupCreateTaskInput & { kind: "create" } {
     maxBytes: 100 * 1024 * 1024,
     mode: "full",
     reason: "manual",
-    target: { id: "instance-1", kind: "instance" },
+    target: { id: "instance-1", kind: "server" },
     taskId: "10000000-0000-4000-8000-000000000009",
   }
 }

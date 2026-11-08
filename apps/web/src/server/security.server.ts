@@ -58,7 +58,7 @@ const FINDINGS_SHOWN_PER_PACKAGE = 40
 const viewPermissions = {
   app: "app.read",
   database: "database.read",
-  instance: "instance.read",
+  server: "server.read",
   relay: "relay.read",
 } as const satisfies Record<SecurityTarget["resourceType"], AccessPermission>
 
@@ -296,7 +296,7 @@ async function securityFixes(
           : { kind: "kiln-update" }
       case "database":
         return { kind: "database" }
-      case "instance":
+      case "server":
         return { kind: "game-server" }
       case "app": {
         const app = apps.get(target.resourceId)
@@ -360,7 +360,7 @@ async function securityResources(
       if (resources.has(scope)) continue
       resources.set(scope, {
         id: resource.id,
-        kind: resource.type === "instance" ? "server" : resource.type,
+        kind: resource.type,
         name: relayNames?.get(`${resource.type}:${resource.id}`) ?? resource.id,
         relayId: target.relayId,
         relayName,

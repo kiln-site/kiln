@@ -49,9 +49,9 @@ import { databasePool } from "@/lib/database"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets, kilnPublicUrl } from "@/lib/environment"
 import {
-  backfillInstanceSourceNames,
-  syncInstanceRegistry,
-} from "@/lib/instance-registry"
+  backfillServerSourceNames,
+  syncServerRegistry,
+} from "@/lib/server-registry"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
@@ -708,12 +708,12 @@ export async function maintainPersistedRelayConnections(): Promise<void> {
       // own create and delete paths add and remove records, and the live
       // directory worker only refreshes them.
       if (Result.isSuccess(freshSnapshot)) {
-        await syncInstanceRegistry(relay.id, freshSnapshot.success.instances)
+        await syncServerRegistry(relay.id, freshSnapshot.success.instances)
         return
       }
       const fallback = await cachedRelaySnapshotFallback(relay.id)
       if (fallback) {
-        await backfillInstanceSourceNames(relay.id, fallback.instances)
+        await backfillServerSourceNames(relay.id, fallback.instances)
       }
     })
   )

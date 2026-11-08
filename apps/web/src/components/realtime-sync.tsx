@@ -2,7 +2,7 @@ import * as React from "react"
 import { useDbClient } from "@tanstack/react-db"
 import { useQueryClient } from "@tanstack/react-query"
 
-import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
+import { getRelayServersCollection } from "@/lib/collections/relay-servers"
 import { startRealtimeSync } from "@/lib/realtime-sync"
 
 export const RealtimeSync = React.memo(function RealtimeSync() {
@@ -12,7 +12,7 @@ export const RealtimeSync = React.memo(function RealtimeSync() {
   // The cleanup closes EventSource and clears every retry/watchdog timer;
   // async work also observes `closed` before applying results.
   React.useEffect(
-    () => startRealtimeSync(queryClient, getRelayInstancesCollection(dbClient)),
+    () => startRealtimeSync(queryClient, getRelayServersCollection(dbClient)),
     [dbClient, queryClient]
   )
 

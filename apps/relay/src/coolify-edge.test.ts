@@ -72,7 +72,7 @@ it("skips Coolify's upkeep while a route change holds the routes", async () => {
   const changed = Deferred.makeUnsafe<void>()
   const change = Effect.runFork(
     relay.harness.lanes.run(
-      { label: "instance.routes.write", locks: [exclusive(laneKeys.routes)] },
+      { label: "server.routes.write", locks: [exclusive(laneKeys.routes)] },
       Deferred.await(changed)
     )
   )

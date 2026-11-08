@@ -26,7 +26,7 @@ import type { RelayConfig } from "./config.js"
 import type { ControlSocketServer } from "./control-socket.js"
 import type { DockerDriver } from "./docker.js"
 import { laneKeys, type OperationLanes } from "./operation-lanes.js"
-import { instanceFileLocks } from "./operation-plans.js"
+import { serverFileLocks } from "./operation-plans.js"
 
 const DEVELOPMENT_PASSWORD = "dev123"
 const MAX_OPEN_HANDLES = 128
@@ -86,7 +86,7 @@ export async function attachSftpServer(options: {
   clientActions: (clientId: string) => Promise<ReadonlyArray<string>>
   config: RelayConfig
   control: Pick<ControlSocketServer, "requestClients">
-  docker: Pick<DockerDriver, "findInstance">
+  docker: Pick<DockerDriver, "findServer">
   /** Every change waits in these, with Hearth's requests and restores. */
   lanes: OperationLanes
 }): Promise<SftpServerHandle> {
@@ -409,7 +409,7 @@ function authorizeUsername(
             return sftpOperation(() => clientActions(response.clientId)).pipe(
               Effect.map((actions) => {
                 const clientGrant = new Set(actions)
-                if (!clientGrant.has("instance.sftp.connect")) return null
+                if (!clientGrant.has("server.sftp.connect")) return null
                 const grants = new Map<string, Set<string>>()
                 for (const item of payload.instances as Array<unknown>) {
                   const grant = record(item)
@@ -421,7 +421,7 @@ function authorizeUsername(
                     (action): action is string =>
                       typeof action === "string" && clientGrant.has(action)
                   )
-                  if (!allowed.includes("instance.files.list")) continue
+                  if (!allowed.includes("server.files.list")) continue
                   const current = grants.get(grant.id) ?? new Set<string>()
                   for (const action of allowed) current.add(action)
                   grants.set(grant.id, current)
@@ -460,7 +460,7 @@ function sameGrants(
 }
 
 function resolveGrants(
-  options: { config: RelayConfig; docker: Pick<DockerDriver, "findInstance"> },
+  options: { config: RelayConfig; docker: Pick<DockerDriver, "findServer"> },
   grants: ReadonlyArray<SftpGrant>
 ): Promise<ReadonlyArray<ResolvedGrant>> {
   return Effect.runPromise(
@@ -469,7 +469,7 @@ function resolveGrants(
         Effect.forEach(
           grants,
           (grant) =>
-            sftpOperation(() => options.docker.findInstance(grant.id)).pipe(
+            sftpOperation(() => options.docker.findServer(grant.id)).pipe(
               Effect.flatMap((instance) =>
                 instance
                   ? sftpOperation(() =>
@@ -518,13 +518,13 @@ function serveSftp(
     Effect.runPromise(
       changes.withPermit(
         lanes.run(
-          { label, locks: instanceFileLocks(grantId) },
+          { label, locks: serverFileLocks(grantId) },
           sftpOperation(run)
         )
       )
     )
   const generation = (grantId: string) =>
-    lanes.exclusiveGeneration(laneKeys.instance(grantId))
+    lanes.exclusiveGeneration(laneKeys.server(grantId))
   const requireCurrent = (resource: OpenFile) => {
     if (generation(resource.grantId) !== resource.generation) {
       throw new Error("The server was replaced; reopen the file")
@@ -547,7 +547,7 @@ function serveSftp(
   const statPath = (requestId: number, requestedPath: string) => {
     void respond(requestId, async () => {
       const target = await resolvePath(grants, requestedPath, true)
-      if (target.grant) requireAction(target.grant, "instance.files.list")
+      if (target.grant) requireAction(target.grant, "server.files.list")
       if (!target.physicalPath) {
         stream.attrs(requestId, virtualDirectoryAttributes())
         return
@@ -572,7 +572,7 @@ function serveSftp(
     void respond(requestId, async () => {
       ensureHandleCapacity(handles)
       const target = await resolvePath(grants, requestedPath, true)
-      if (target.grant) requireAction(target.grant, "instance.files.list")
+      if (target.grant) requireAction(target.grant, "server.files.list")
       const entries = target.physicalPath
         ? await physicalDirectoryEntries(
             target.grant!.root,
@@ -616,11 +616,11 @@ function serveSftp(
         !(flags & OPEN_MODE.CREAT)
       )
       if (!target.grant || !target.physicalPath) throw missingPath()
-      if (readable) requireAction(target.grant, "instance.files.read")
+      if (readable) requireAction(target.grant, "server.files.read")
       if (flags & OPEN_MODE.CREAT)
-        requireAction(target.grant, "instance.files.create")
+        requireAction(target.grant, "server.files.create")
       if (writable || flags & OPEN_MODE.TRUNC)
-        requireAction(target.grant, "instance.files.write")
+        requireAction(target.grant, "server.files.write")
       const grant = target.grant
       const physicalPath = target.physicalPath
       const openFile = async () => {
@@ -706,26 +706,20 @@ function serveSftp(
   })
 
   stream.on("REMOVE", (requestId, requestedPath) => {
-    void mutate(
-      requestId,
-      requestedPath,
-      "instance.files.delete",
-      async (path) => unlink(path)
+    void mutate(requestId, requestedPath, "server.files.delete", async (path) =>
+      unlink(path)
     )
   })
   stream.on("RMDIR", (requestId, requestedPath) => {
-    void mutate(
-      requestId,
-      requestedPath,
-      "instance.files.delete",
-      async (path) => rmdir(path)
+    void mutate(requestId, requestedPath, "server.files.delete", async (path) =>
+      rmdir(path)
     )
   })
   stream.on("MKDIR", (requestId, requestedPath, inputAttributes) => {
     void mutate(
       requestId,
       requestedPath,
-      "instance.files.create",
+      "server.files.create",
       async (path) =>
         mkdir(path, { mode: sanitizeMode(inputAttributes.mode, 0o755) }),
       false
@@ -743,8 +737,8 @@ function serveSftp(
         !destination.physicalPath
       )
         throw permissionDenied()
-      requireAction(source.grant, "instance.files.rename")
-      requireAction(destination.grant, "instance.files.rename")
+      requireAction(source.grant, "server.files.rename")
+      requireAction(destination.grant, "server.files.rename")
       const sourceGrant = source.grant
       const sourcePath = source.physicalPath
       const destinationGrant = destination.grant
@@ -771,7 +765,7 @@ function serveSftp(
         inputAttributes.mode === undefined
       )
         throw permissionDenied()
-      requireAction(target.grant, "instance.files.chmod")
+      requireAction(target.grant, "server.files.chmod")
       const grant = target.grant
       const physicalPath = target.physicalPath
       const mode = inputAttributes.mode
@@ -799,7 +793,7 @@ function serveSftp(
         inputAttributes.mode === undefined
       )
         throw permissionDenied()
-      if (!resource.actions.includes("instance.files.chmod"))
+      if (!resource.actions.includes("server.files.chmod"))
         throw permissionDenied()
       const mode = inputAttributes.mode
       await inLane(resource.grantId, "sftp.chmod", async () => {

@@ -40,7 +40,7 @@ const records = [
     id: "server-a-event",
     details: {
       instanceId: "server-a",
-      operation: "instance.rename",
+      operation: "server.rename",
       subject: "actor-a",
     },
   },
@@ -48,7 +48,7 @@ const records = [
     id: "server-b-event",
     details: {
       instanceId: "server-b",
-      operation: "instance.rename",
+      operation: "server.rename",
       subject: "actor-b",
     },
   },
@@ -62,7 +62,7 @@ const records = [
 
 interface TestGrant {
   permissions: ReadonlyArray<string>
-  resourceType?: "relay" | "instance" | "database"
+  resourceType?: "relay" | "server" | "database"
   resourceId?: string
   relayId?: string
 }
@@ -112,7 +112,7 @@ describeMysql("Activity permission boundary", () => {
     for (const [label, grants, ids, actors] of [
       [
         "Relay instance reader",
-        [{ permissions: ["instance.read"] }],
+        [{ permissions: ["server.read"] }],
         ["server-a-event", "server-b-event"],
         ["actor-a", "actor-b"],
       ],
@@ -120,8 +120,8 @@ describeMysql("Activity permission boundary", () => {
         "child instance reader",
         [
           {
-            permissions: ["instance.read"],
-            resourceType: "instance",
+            permissions: ["server.read"],
+            resourceType: "server",
             resourceId: "server-a",
           },
         ],
@@ -157,8 +157,8 @@ describeMysql("Activity permission boundary", () => {
           yield* seed([
             { permissions: ["relay.audit.read"] },
             {
-              permissions: ["instance.read"],
-              resourceType: "instance",
+              permissions: ["server.read"],
+              resourceType: "server",
               resourceId: "server-a",
               relayId: "relay-b",
             },

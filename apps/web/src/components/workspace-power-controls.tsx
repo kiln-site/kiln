@@ -24,7 +24,7 @@ import {
 import {
   isPowerControlLocked,
   type ServerAction,
-} from "@/lib/instance-power-state"
+} from "@/lib/server-power-state"
 
 // Takes the place of Start and Stop, which stay in the actions menu, for kinds
 // whose main action is something else, like an app's Redeploy.

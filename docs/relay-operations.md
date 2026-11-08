@@ -28,10 +28,10 @@ it exclusive, which waits for every part.
 
 | Key                                                | Taken by                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `instance:<id>`                                    | Shared by every change to a game server; exclusive to replace it (restore, reinstall, delete)                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `instance:<id>/lifecycle`                          | Exclusive to power actions, console input, crash recovery, the disk-quota stop, and container recreation for ports, routes, and database connections                                                                                                                                                                                                                                                                                                                                                                                      |
-| `instance:<id>/files`                              | Exclusive to Hearth file writes, SFTP changes, and putting a browser upload in place                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `instance:<id>/metadata`                           | Exclusive to renames                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `server:<id>`                                    | Shared by every change to a game server; exclusive to replace it (restore, reinstall, delete)                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `server:<id>/lifecycle`                          | Exclusive to power actions, console input, crash recovery, the disk-quota stop, and container recreation for ports, routes, and database connections                                                                                                                                                                                                                                                                                                                                                                                      |
+| `server:<id>/files`                              | Exclusive to Hearth file writes, SFTP changes, and putting a browser upload in place                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `server:<id>/metadata`                           | Exclusive to renames                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `app:<id>`, `app:<id>/lifecycle`, `app:<id>/files` | The same shape for Apps; a deployment's build, connecting the App to a database, and a scheduled command hold the lifecycle lock                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `app:<id>/volumes`                                 | Exclusive to recording which Kiln volumes an App's configuration mounts, apart from its lifecycle so saving a configuration never waits behind a deployment                                                                                                                                                                                                                                                                                                                                                                               |
 | `database:<id>`                                    | Exclusive to database changes, connecting a member to it, and connecting it to another; shared by power, commands, dumps, backups, and Hearth's handover of Apps' connections                                                                                                                                                                                                                                                                                                                                                             |
@@ -67,7 +67,7 @@ only to someone who may read it and the database's network. Deleting a
 database forgets every connection to it and its own; deleting a game server
 or an App forgets its own. A client needs the database's
 `database.network.write` and the member's own permission
-(`instance.network.write`, `app.manage`, or the member database's
+(`server.network.write`, `app.manage`, or the member database's
 `database.network.write`).
 
 Hearth hands over the connections it used to keep in Apps' configs
@@ -78,7 +78,7 @@ has, and never one someone connected or disconnected on it: every such
 change leaves a record (`relay_database_connection_choices`), so a handover
 repeated, or sent by another Hearth, overrules nobody.
 
-A Tailscale network's members are named by kind: `instance:<id>` for a game
+A Tailscale network's members are named by kind: `server:<id>` for a game
 server, `app:<id>:<service>` for an App's service, and `database:<id>` for a
 database, which keeps its address when its container is replaced. Every
 member takes its addresses again as it starts, a game server's crash
@@ -132,7 +132,7 @@ list or settings read before another's change landed. Networking and
 Tailscale settings writes, Tailscale's install, and port writes hold the
 routes for the whole change. A game server's create, provisioning, startup
 change, and deletion hold only the server as they arrive, and take the
-routes in a nested step (`instance.dns`) for the part that reads them: a
+routes in a nested step (`server.dns`) for the part that reads them: a
 create or startup change downloads its image first, and a deletion stops
 and removes the container and its data first, so route and port changes,
 other creates and deletions, and game server starts don't wait for that.
@@ -145,7 +145,7 @@ included, is in what it reads. A start that recreates a game server with
 its first game port refreshes CoreDNS too, holding the routes only shared:
 whatever changes what it reads rewrites CoreDNS holding them exclusively
 afterwards, so the last file written is current. A direct create
-(`instance.create`) chooses the new server's ID as its request arrives, so
+(`server.create`) chooses the new server's ID as its request arrives, so
 it waits in that server's lane like a provisioning job.
 
 ### How work is admitted
@@ -354,7 +354,7 @@ was sent is backed up from the next time Hearth sends it.
 
 Every Kiln writer to a game server's or an App's files takes its files lock
 for the moment it changes them, so a save that checks the file is unchanged
-(`instance.files.put`) either sees another writer's change and reports a
+(`server.files.put`) either sees another writer's change and reports a
 conflict, or lands before it. Each SFTP change (opening a file to write,
 writing, renaming, removing, making or removing a folder, or changing a
 mode) takes the lock for that one request, and a session's changes take

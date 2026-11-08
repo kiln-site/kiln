@@ -1,6 +1,6 @@
 import type {
-  RelayInstanceRecovery,
-  RelayInstanceStateReason,
+  RelayServerRecovery,
+  RelayServerStateReason,
   RelayDesiredState,
   RelayObservedState,
 } from "@workspace/contracts"
@@ -9,7 +9,7 @@ const INSTANCE_STARTUP_STABILITY_MS = 15_000
 export const INSTANCE_STARTUP_READINESS_TIMEOUT_MS = 120_000
 export const INSTANCE_STOP_TIMEOUT_SECONDS = 60
 
-export type InstancePowerAction = "start" | "stop" | "restart" | "kill"
+export type ServerPowerAction = "start" | "stop" | "restart" | "kill"
 
 export interface ContainerPowerState {
   ExitCode: number
@@ -23,24 +23,24 @@ export interface ContainerPowerState {
   Status: string
 }
 
-export interface InstancePowerTransition {
-  action: InstancePowerAction
+export interface ServerPowerTransition {
+  action: ServerPowerAction
   commandCompleted: boolean
   initialStartedAt: string | null
   requestedAt: number
 }
 
-export interface ObservedInstancePowerState {
+export interface ObservedServerPowerState {
   observedState: RelayObservedState
   transitionComplete: boolean
 }
 
-export function observedInstancePowerState(
+export function observedServerPowerState(
   state: ContainerPowerState,
-  transition: InstancePowerTransition | undefined,
+  transition: ServerPowerTransition | undefined,
   now = Date.now(),
   ready?: boolean
-): ObservedInstancePowerState {
+): ObservedServerPowerState {
   if (!transition) {
     return {
       observedState: observedContainerState(state, now, ready),
@@ -103,13 +103,13 @@ export function observedInstancePowerState(
     : { observedState: "starting", transitionComplete: false }
 }
 
-export function instanceStateReason(
+export function serverStateReason(
   state: ContainerPowerState,
   observedState: RelayObservedState,
   ready?: boolean,
-  recovery?: RelayInstanceRecovery | null,
+  recovery?: RelayServerRecovery | null,
   desiredState?: RelayDesiredState
-): RelayInstanceStateReason | null {
+): RelayServerStateReason | null {
   if (recovery) {
     return {
       code: "automatic_recovery",

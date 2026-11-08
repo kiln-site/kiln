@@ -414,7 +414,7 @@ export const BackupsPage = React.memo(function BackupsPage({
   const availableTargetKeys = React.useMemo(() => {
     const keys = new Set<string>()
     for (const server of topology.servers) {
-      keys.add(targetKey("instance", server.relayId, server.id))
+      keys.add(targetKey("server", server.relayId, server.id))
     }
     for (const database of databases) {
       keys.add(targetKey("database", database.relayId, database.id))
@@ -425,7 +425,7 @@ export const BackupsPage = React.memo(function BackupsPage({
   const targetInstances = React.useMemo(() => {
     const instances = new Map<string, BackupTargetIdentity>()
     for (const server of topology.servers) {
-      instances.set(targetKey("instance", server.relayId, server.id), {
+      instances.set(targetKey("server", server.relayId, server.id), {
         ...server,
         kind: "server",
       })
@@ -495,7 +495,7 @@ export const BackupsPage = React.memo(function BackupsPage({
         hasBackupResourcePermission(
           capabilities,
           server.relayId,
-          "instance",
+          "server",
           server.id
         )
       ) ||
@@ -806,11 +806,11 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
         hasBackupResourcePermission(
           capabilities,
           server.relayId,
-          "instance",
+          "server",
           server.id,
           "backup.restore"
         )
-          ? [{ ...server, kind: "instance" as const }]
+          ? [{ ...server, kind: "server" as const }]
           : []
       ),
       ...databases.flatMap((database) =>
@@ -838,7 +838,7 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
   const targetNames = React.useMemo(() => {
     const names = new Map<string, string>()
     for (const server of backupScope.servers) {
-      names.set(targetKey("instance", server.relayId, server.id), server.name)
+      names.set(targetKey("server", server.relayId, server.id), server.name)
     }
     for (const database of databases) {
       names.set(
@@ -1565,7 +1565,7 @@ function CreateBackupDialog({
           destination === "local" ? null : destination
         ),
       }
-      if (target.kind === "instance") {
+      if (target.kind === "server") {
         return createInstanceBackup({
           data: {
             ...data,
@@ -2430,7 +2430,7 @@ function DeleteBackupStorageDialog({
 // The game servers or databases on a backup's Relay it can be restored into.
 interface RestoreTarget {
   id: string
-  kind: "database" | "instance"
+  kind: "database" | "server"
   name: string
   relayId: string
 }
@@ -2721,7 +2721,7 @@ function backupPolicyTarget(target: BackupScopeOption): BackupTarget {
   const kind = target.kind ?? "server"
   return {
     id: target.id,
-    kind: kind === "server" ? "instance" : kind === "relay" ? "platform" : kind,
+    kind: kind === "relay" ? "platform" : kind,
   }
 }
 
@@ -2734,7 +2734,7 @@ function selectedBackupCreateTargetKey(selected: BackupScopeOption): string {
     return targetKey("platform", selected.relayId, "kiln")
   }
   return targetKey(
-    kind === "app" ? "app" : "instance",
+    kind === "app" ? "app" : "server",
     selected.relayId,
     selected.id
   )
@@ -2861,14 +2861,14 @@ function availableCreateTargets({
       hasBackupResourcePermission(
         capabilities,
         server.relayId,
-        "instance",
+        "server",
         server.id
       )
     ) {
       targets.push({
         id: server.id,
-        key: targetKey("instance", server.relayId, server.id),
-        kind: "instance",
+        key: targetKey("server", server.relayId, server.id),
+        kind: "server",
         name: server.name,
         relayId: server.relayId,
         relayName: server.relayName,
@@ -2932,5 +2932,5 @@ function backupRunTargetKind(
   if (kind === "database") return "database"
   if (kind === "app") return "app"
   if (kind === "relay") return "platform"
-  return "instance"
+  return "server"
 }

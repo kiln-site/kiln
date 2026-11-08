@@ -35,18 +35,18 @@ const recoveryStateReasonSchema = z
   })
   .strict()
 
-export const relayInstanceStateReasonSchema = z.union([
+export const relayServerStateReasonSchema = z.union([
   stateReasonWithoutDetailsSchema,
   processExitStateReasonSchema,
   recoveryStateReasonSchema,
 ])
 
-export type RelayInstanceStateReason = z.infer<
-  typeof relayInstanceStateReasonSchema
+export type RelayServerStateReason = z.infer<
+  typeof relayServerStateReasonSchema
 >
 
-export function formatRelayInstanceStateReason(
-  reason: RelayInstanceStateReason
+export function formatRelayServerStateReason(
+  reason: RelayServerStateReason
 ): string {
   switch (reason.code) {
     case "waiting_for_readiness":
@@ -71,7 +71,7 @@ export function formatRelayInstanceStateReason(
 }
 
 function formatAutomaticRecoveryReason(
-  reason: Extract<RelayInstanceStateReason, { code: "automatic_recovery" }>
+  reason: Extract<RelayServerStateReason, { code: "automatic_recovery" }>
 ): string {
   const phase =
     reason.phase === "pending"

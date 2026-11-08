@@ -156,19 +156,19 @@ export const ServersPage = React.memo(function ServersPage({
     capabilities.grants.some(
       (grant) =>
         grant.resourceType === "relay" &&
-        grantHasPermission(grant, "instance.create")
+        grantHasPermission(grant, "server.create")
     )
   const deleteAccess = React.useMemo<ServerDeleteAccess>(() => {
     const instances = new Set<string>()
     const relays = new Set<string>()
     for (const grant of capabilities.grants) {
-      if (!grantHasPermission(grant, "instance.delete")) continue
+      if (!grantHasPermission(grant, "server.delete")) continue
       if (
         grant.resourceType === "relay" &&
         grant.resourceId === grant.relayId
       ) {
         relays.add(grant.relayId)
-      } else if (grant.resourceType === "instance") {
+      } else if (grant.resourceType === "server") {
         instances.add(`${grant.relayId}:${grant.resourceId}`)
       }
     }
@@ -446,7 +446,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
                 />
               </Link>
               <PendingResourceInvitationBadge
-                resourceType="instance"
+                resourceType="server"
                 relayId={server.relayId}
                 resourceId={server.id}
               />
@@ -549,7 +549,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
         <PendingResourceInvitations
           cells={serverPendingCells}
           columns={definition.columns}
-          resourceType="instance"
+          resourceType="server"
           visibleResourceKeys={visibleResourceKeys}
           searchStore={searchStore}
         />

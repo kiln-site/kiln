@@ -70,11 +70,11 @@ type BrowserAction =
   | "database.dump.import"
   | "database.logs.read"
   | "database.read"
-  | "instance.console.read"
-  | "instance.console.write"
-  | "instance.files.download"
-  | "instance.files.upload"
-  | "instance.read"
+  | "server.console.read"
+  | "server.console.write"
+  | "server.files.download"
+  | "server.files.upload"
+  | "server.read"
   | "relay.logs.read"
   | "relay.files.download"
   | "relay.files.upload"
@@ -233,7 +233,7 @@ export function prepareConsoleCapabilityForUser(input: {
   return runAppEffect(
     "console.capability.prepareProxy",
     prepareBrowserCapabilityEffect({
-      actions: ["instance.console.read"],
+      actions: ["server.console.read"],
       authorizationSession: {
         id: input.credentialId,
         kind: "cli_credential",
@@ -243,7 +243,7 @@ export function prepareConsoleCapabilityForUser(input: {
       publicKeyJwk: input.publicKeyJwk,
       relayId: input.relayId,
       resolveBrowserMetadata: false,
-      resource: { id: input.instanceId, kind: "instance" },
+      resource: { id: input.instanceId, kind: "server" },
       identity: Effect.succeed({
         sessionId: `cli:${input.credentialId}`,
         user: input.user,
@@ -276,7 +276,7 @@ export function prepareConsoleCapabilityForIdentity(input: {
 }
 
 export function issueFileCapabilityForRequest(input: {
-  action: "instance.files.download" | "instance.files.upload"
+  action: "server.files.download" | "server.files.upload"
   authenticate: () => Promise<AuthenticatedRealtimeIdentity>
   instanceId: string
   path: string
@@ -290,7 +290,7 @@ export function issueFileCapabilityForRequest(input: {
       actions: [
         fileRootAction(
           input.instanceId,
-          input.action === "instance.files.upload" ? "upload" : "download"
+          input.action === "server.files.upload" ? "upload" : "download"
         ),
       ],
       path: input.path,
@@ -350,7 +350,7 @@ function fileRootAction(
   if (databaseIdFromFileRoot(rootId) !== null) {
     return upload ? "database.dump.import" : "database.dump.export"
   }
-  return upload ? "instance.files.upload" : "instance.files.download"
+  return upload ? "server.files.upload" : "server.files.download"
 }
 
 function fileRootResource(rootId: string): RelayConsoleResource {
@@ -362,7 +362,7 @@ function fileRootResource(rootId: string): RelayConsoleResource {
         ? "app"
         : databaseIdFromFileRoot(rootId) !== null
           ? "database"
-          : "instance",
+          : "server",
   }
 }
 
@@ -406,7 +406,7 @@ const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(
       input.operation ??
       (input.actions.some(
         (action) =>
-          action.startsWith("instance.files.") ||
+          action.startsWith("server.files.") ||
           action.startsWith("app.files.") ||
           action.startsWith("relay.files.") ||
           action.startsWith("database.dump.")
@@ -621,8 +621,8 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
         const version = input.version ?? 1
         const mutation = input.actions.some(
           (action) =>
-            action === "instance.console.write" ||
-            action === "instance.files.upload" ||
+            action === "server.console.write" ||
+            action === "server.files.upload" ||
             action === "app.files.upload" ||
             action === "relay.files.upload" ||
             action === "database.dump.import"
@@ -655,7 +655,7 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
                 ),
                 operation: requiredV2Field(input.operation, "operation"),
                 // Servers leave it out, for Relays that predate other kinds.
-                ...(input.resource.kind === "instance"
+                ...(input.resource.kind === "server"
                   ? {}
                   : { resourceKind: input.resource.kind }),
               }
@@ -737,13 +737,13 @@ function resourceVersion(
 
   if (
     operation === "resources" &&
-    resource.kind !== "instance" &&
+    resource.kind !== "server" &&
     (version !== 2 || !features.has(relayWorkloadUsageV1Feature))
   ) {
     throw new Error("Update this Relay to see live usage.")
   }
   if (
-    resource.kind !== "instance" &&
+    resource.kind !== "server" &&
     (version !== 2 ||
       !features.has(relayConsoleResourcesV1Feature) ||
       (resource.kind === "app" && !features.has(relayAppsV1Feature)) ||
@@ -759,7 +759,7 @@ function resourceVersion(
 const resourceUsageReadActions = {
   app: "app.read",
   database: "database.read",
-  instance: "instance.read",
+  instance: "server.read",
 } as const
 const resourceUsageActions: ReadonlySet<string> = new Set(
   Object.values(resourceUsageReadActions)
@@ -777,22 +777,22 @@ function browserActions(
   ) {
     return [resourceUsageReadActions[resource.kind]]
   }
-  if (resource.kind !== "instance") {
+  if (resource.kind !== "server") {
     if (request.kind !== "console" || request.write) {
       throw new Error(`A ${resource.kind} only has console output to read`)
     }
     return [relayConsoleReadActions[resource.kind]]
   }
-  if (request.kind === "resources") return ["instance.read"]
+  if (request.kind === "resources") return ["server.read"]
   return request.write
-    ? ["instance.console.read", "instance.console.write"]
-    : ["instance.console.read"]
+    ? ["server.console.read", "server.console.write"]
+    : ["server.console.read"]
 }
 
 // The grant scope a resource's permissions are checked in.
 function resourceScope(resource: RelayConsoleResource) {
   switch (resource.kind) {
-    case "instance":
+    case "server":
       return { instanceId: resource.id }
     // A database's dumps are addressed by its dump folder
     // (`database:<databaseId>`).
@@ -834,10 +834,10 @@ function authenticatedIdentityEffect(
 
 function permissionForBrowserAction(action: BrowserAction): AccessPermission {
   switch (action) {
-    case "instance.files.download":
-      return "instance.files.read"
-    case "instance.files.upload":
-      return "instance.files.write"
+    case "server.files.download":
+      return "server.files.read"
+    case "server.files.upload":
+      return "server.files.write"
     case "relay.files.download":
       return "relay.files.read"
     case "relay.files.upload":

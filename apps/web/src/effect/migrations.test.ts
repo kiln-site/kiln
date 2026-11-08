@@ -7,6 +7,7 @@ import { databaseTableName } from "@/lib/database-config"
 import { migrations } from "@/migrations"
 import { explicitBackupDestinations } from "@/migrations/0054_explicit_backup_destinations"
 import { instanceIds } from "@/migrations/0058_instance_ids"
+import { serverNaming } from "@/migrations/0060_server_naming"
 import { describeMysql, testDatabaseClient } from "@/test/database"
 
 import { applyMigrations } from "./migrations"
@@ -407,28 +408,30 @@ describeMysql("database migrations", () => {
               (relay_id, instance_id, created_at, updated_at)
             VALUES (${relay}, ${server}, 0, 0)`
         })
-      const migratedNetwork = Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient
-        const [deployment] = yield* sql<{
-          deployment: unknown
-          network_id: string
-        }>`SELECT network_id, deployment
+      // Game servers' table is `kiln_server` once every migration has run.
+      const migratedNetwork = (serverTable: string) =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          const [deployment] = yield* sql<{
+            deployment: unknown
+            network_id: string
+          }>`SELECT network_id, deployment
             FROM kiln_tailscale_network_deployment`
-        const [instance] = yield* sql<{ instance_id: string }>`
-          SELECT instance_id FROM kiln_instance`
-        const [network] = yield* sql<{ id: string }>`
+          const [instance] = yield* sql<{ instance_id: string }>`
+          SELECT instance_id FROM ${sql(serverTable)}`
+          const [network] = yield* sql<{ id: string }>`
           SELECT id FROM kiln_tailscale_network`
-        const parsed =
-          typeof deployment?.deployment === "string"
-            ? JSON.parse(deployment.deployment)
-            : deployment?.deployment
-        return {
-          deploymentId: parsed?.id,
-          deploymentNetwork: deployment?.network_id,
-          instance: instance?.instance_id,
-          network: network?.id,
-        }
-      })
+          const parsed =
+            typeof deployment?.deployment === "string"
+              ? JSON.parse(deployment.deployment)
+              : deployment?.deployment
+          return {
+            deploymentId: parsed?.id,
+            deploymentNetwork: deployment?.network_id,
+            instance: instance?.instance_id,
+            network: network?.id,
+          }
+        })
 
       it.effect(
         "keeps the network's ID everywhere",
@@ -447,7 +450,7 @@ describeMysql("database migrations", () => {
 
             yield* applyMigrations(migrations)
 
-            expect(yield* migratedNetwork).toEqual({
+            expect(yield* migratedNetwork("kiln_server")).toEqual({
               deploymentId: network,
               deploymentNetwork: network,
               instance: network,
@@ -486,7 +489,7 @@ describeMysql("database migrations", () => {
 
             yield* instanceIds.run
 
-            expect(yield* migratedNetwork).toEqual({
+            expect(yield* migratedNetwork("kiln_instance")).toEqual({
               deploymentId: network,
               deploymentNetwork: network,
               instance: network,
@@ -591,6 +594,155 @@ describeMysql("database migrations", () => {
               read: false,
             },
           ])
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
+      "calls game servers `server` in every record, by the field they're in",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 59)
+          )
+          const relay = "a1".repeat(6)
+          const server = "b2".repeat(6)
+          const json = (value: unknown) =>
+            typeof value === "string" ? JSON.parse(value) : value
+          yield* sql`SET FOREIGN_KEY_CHECKS = 0`
+          yield* sql`INSERT INTO kiln_relay
+              (id, name, hostname, browser_origin, relay_public_key, client_id,
+               client_public_key, client_private_key_ciphertext, client_role,
+               client_actions, created_at, updated_at)
+            VALUES (${relay}, 'Q02', 'q02.test', 'https://q02.test', 'key',
+                    ${"c".repeat(43)}, 'key', 'x', 'custom',
+                    ${JSON.stringify(["relay.read", "instance.files.write"])},
+                    0, 0)`
+          yield* sql`INSERT INTO kiln_instance
+              (relay_id, instance_id, created_at, updated_at)
+            VALUES (${relay}, ${server}, 0, 0)`
+          yield* sql`INSERT INTO kiln_access_grant
+              (id, user_id, relay_id, resource_type, resource_id, created_at,
+               updated_at)
+            VALUES ('grant', 'user', ${relay}, 'instance', ${server}, 0, 0)`
+          yield* sql`INSERT INTO kiln_access_selection
+              (access_id, selection_kind, selection_key)
+            VALUES ('grant', 'permission', 'instance.files.write'),
+                   ('grant', 'collection', 'instance.console.all')`
+          yield* sql`INSERT INTO kiln_operation
+              (id, kind, version, state, input, locks, created_at, updated_at)
+            VALUES ('deletion', 'resource.delete', 1, 'running',
+              ${JSON.stringify({ kind: "instance", name: "instance", resourceId: server })},
+              ${JSON.stringify([{ key: `instance:${relay}/${server}`, mode: "exclusive" }])},
+              0, 0)`
+          yield* sql`INSERT INTO kiln_setting
+              (id, user_id, setting_key, setting_value, created_at, updated_at)
+            VALUES ('setting', 'user', 'notifications', ${JSON.stringify({
+              resources: {
+                [`instance:${relay}:${server}`]: {
+                  kinds: { "security.report": false },
+                  name: "instance",
+                  type: "instance",
+                },
+              },
+            })}, 0, 0)`
+          yield* sql`INSERT INTO kiln_tailscale_network_deployment
+              (network_id, relay_id, deployment, cleanup_next_attempt_at,
+               observed_at, updated_at)
+            VALUES (${"c3".repeat(6)}, ${relay}, ${JSON.stringify({
+              bindings: [{ memberId: `instance:${server}` }],
+            })}, 0, 0, 0)`
+          yield* sql`INSERT INTO kiln_schedule_action
+              (id, schedule_id, position, action_type, action_config,
+               created_at)
+            VALUES ('action', 'schedule', 0, 'console_command',
+              ${JSON.stringify({ command: "instance:reload", type: "console_command" })},
+              0)`
+          yield* sql`INSERT INTO kiln_audit_event
+              (id, occurred_at, actor_kind, action, target_kind, target_id,
+               outcome)
+            VALUES ('restore', 0, 'user', 'backup.instance.restore', 'instance',
+                    ${server}, 'succeeded')`
+          yield* sql`INSERT INTO kiln_security_target
+              (relay_id, target_key, resource_type, resource_id, sbom_key,
+               observed_at, inventory_since)
+            VALUES (${relay}, ${`instance:${server}`}, 'instance', ${server},
+                    'sbom', 0, 0)`
+          yield* sql`SET FOREIGN_KEY_CHECKS = 1`
+
+          yield* applyMigrations(migrations)
+          // Again, as after a crash: what's done stays done.
+          yield* serverNaming.run
+
+          const [relayRow] = yield* sql<{ client_actions: unknown }>`
+            SELECT client_actions FROM kiln_relay`
+          expect(json(relayRow?.client_actions)).toEqual([
+            "relay.read",
+            "server.files.write",
+          ])
+          expect(yield* sql`SELECT instance_id FROM kiln_server`).toEqual([
+            { instance_id: server },
+          ])
+          expect(
+            yield* sql`SELECT resource_type FROM kiln_access_grant`
+          ).toEqual([{ resource_type: "server" }])
+          expect(
+            yield* sql`SELECT selection_key FROM kiln_access_selection
+              ORDER BY selection_key`
+          ).toEqual([
+            { selection_key: "server.console.all" },
+            { selection_key: "server.files.write" },
+          ])
+          const [operation] = yield* sql<{ input: unknown; locks: unknown }>`
+            SELECT input, locks FROM kiln_operation`
+          expect(json(operation?.input)).toEqual({
+            kind: "server",
+            name: "instance",
+            resourceId: server,
+          })
+          expect(json(operation?.locks)).toEqual([
+            { key: `server:${relay}/${server}`, mode: "exclusive" },
+          ])
+          const [setting] = yield* sql<{ setting_value: unknown }>`
+            SELECT setting_value FROM kiln_setting
+             WHERE setting_key = 'notifications'`
+          expect(json(setting?.setting_value)).toEqual({
+            resources: {
+              [`server:${relay}:${server}`]: {
+                kinds: { "security.report": false },
+                name: "instance",
+                type: "server",
+              },
+            },
+          })
+          const [deployment] = yield* sql<{ deployment: unknown }>`
+            SELECT deployment FROM kiln_tailscale_network_deployment`
+          expect(json(deployment?.deployment)).toEqual({
+            bindings: [{ memberId: `server:${server}` }],
+          })
+          const [action] = yield* sql<{ action_config: unknown }>`
+            SELECT action_config FROM kiln_schedule_action`
+          expect(json(action?.action_config)).toEqual({
+            command: "instance:reload",
+            type: "console_command",
+          })
+          expect(
+            yield* sql`SELECT action, target_kind FROM kiln_audit_event`
+          ).toEqual([
+            { action: "backup.server.restore", target_kind: "server" },
+          ])
+          expect(
+            yield* sql`SELECT target_key, resource_type FROM kiln_security_target`
+          ).toEqual([
+            { resource_type: "server", target_key: `server:${server}` },
+          ])
+          const [leftover] = yield* sql<{ count: number }>`
+            SELECT COUNT(*) AS count FROM information_schema.columns
+             WHERE table_schema = DATABASE() AND data_type = 'enum'
+               AND column_type LIKE '%''instance''%'`
+          expect(Number(leftover?.count)).toBe(0)
         }),
       schemaBuildTimeout
     )

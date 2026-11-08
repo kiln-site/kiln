@@ -42,7 +42,7 @@ const storage = (id: string, ownerUserId: string | null) => ({
 const selection = {
   relayId: "relay-one",
   targetId: "instance-one",
-  targetKind: "instance" as const,
+  targetKind: "server" as const,
   user,
 }
 
@@ -61,7 +61,7 @@ const seed = (permission: string | null) =>
       id: "grant",
       userId: user.id,
       relayId: "relay-one",
-      resourceType: "instance",
+      resourceType: "server",
       resourceId: "instance-one",
     })
     yield* insertRows("access_selection", {

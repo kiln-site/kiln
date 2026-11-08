@@ -2,7 +2,7 @@ import {
   appTailscaleMember,
   builtinTailscaleBrickId,
   databaseTailscaleMember,
-  instanceTailscaleMember,
+  serverTailscaleMember,
 } from "@workspace/contracts"
 
 /** What Hearth knows of a Relay's resources, to check a network's members. */
@@ -44,7 +44,7 @@ export function tailscaleMemberProblem(
       ? null
       : `Database ${databaseId} is unavailable`
   }
-  const instanceId = instanceTailscaleMember(binding.memberId)
+  const instanceId = serverTailscaleMember(binding.memberId)
   const instance = records.instances.find(
     (candidate) => candidate.id === instanceId
   )

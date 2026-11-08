@@ -22,7 +22,7 @@ export const addInstanceDomain = operation<CreateInstanceDomainInput>()({
   // What it changes, as lane keys.
   locks: ({ input }) => [exclusive(dnsKey(input))],
   run: ({ input, user, context }) => createInstanceDomainEffect(...),
-  audit: ({ input }) => ({ kind: "instance", id: input.instanceId, relayId: input.relayId }),
+  audit: ({ input }) => ({ kind: "server", id: input.instanceId, relayId: input.relayId }),
   publish: ({ input }) => publishDomainChange(input),
 })
 ```
@@ -127,8 +127,8 @@ lanes; Hearth's lanes order what Hearth does.
 
 ### Lane keys
 
-A key names a whole (`instance:<relay>/<id>`) or a part of one, after `#`
-(`instance:<relay>/<id>#dns`). Taking a part also takes its whole shared,
+A key names a whole (`server:<relay>/<id>`) or a part of one, after `#`
+(`server:<relay>/<id>#dns`). Taking a part also takes its whole shared,
 so taking the whole exclusively, as deleting it does, waits for or turns
 away every part.
 
@@ -175,10 +175,10 @@ request is answered once.
 
 | Key                                 | Changes                                                |
 | ----------------------------------- | ------------------------------------------------------ |
-| `instance:<relay>/<id>`             | A game server; `app:`, `database:`, `volume:` likewise |
-| `instance:<relay>/<id>#dns`         | Its DNS records and web routes                         |
-| `instance:<relay>/<id>#icon`        | Its icon; `user-icon:<id>#picture` a person's picture  |
-| `instance:<relay>/<id>#power`       | Starting, stopping or restarting it                    |
+| `server:<relay>/<id>`             | A game server; `app:`, `database:`, `volume:` likewise |
+| `server:<relay>/<id>#dns`         | Its DNS records and web routes                         |
+| `server:<relay>/<id>#icon`        | Its icon; `user-icon:<id>#picture` a person's picture  |
+| `server:<relay>/<id>#power`       | Starting, stopping or restarting it                    |
 | `#config`, `#name`, `#ports`        | Its startup, its name, its ports                       |
 | `user:<id>`                         | An account and its access                              |
 | `user:<id>#session:<id>`            | One of its browser sessions, signing it out            |
@@ -210,7 +210,7 @@ request is answered once.
 | `user-settings:<id>#notifications`  | A person's notification settings                       |
 | `platform-appearance#default`       | The appearance new people start with                   |
 | `server-migration:<id>`             | A game server's copy; `#task` cancelling it            |
-| `instance:<relay>/<id>#migration`   | Copying it, one copy at a time                         |
+| `server:<relay>/<id>#migration`   | Copying it, one copy at a time                         |
 
 A game server's move holds it whole until the move ends; a duplicate
 holds it shared and its `#migration`, and its `#power` and `#dns` when it

@@ -45,7 +45,7 @@ const seedSync = Effect.gen(function* () {
     id: syncId,
     connection_id: connectionId,
     relay_id: "relay-one",
-    resource_kind: "instance",
+    resource_kind: "server",
     resource_id: "instance-one",
     repository_id: settings.repositoryId,
     repository: settings.repository,

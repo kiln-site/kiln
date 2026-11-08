@@ -189,7 +189,7 @@ function ScopeIcon({ type }: { type?: ResourceScope["resourceType"] }) {
       ? RelayKindIcon
       : type === "database"
         ? DatabaseKindIcon
-        : type === "instance"
+        : type === "server"
           ? ServerKindIcon
           : Layers
   return <Icon className="size-5" />
@@ -241,7 +241,7 @@ const AccessScopeControls = memo(function AccessScopeControls({
       titleAccessory={
         scope ? (
           <Badge variant="outline">
-            {scope.resourceType === "instance"
+            {scope.resourceType === "server"
               ? "Game Server"
               : scope.resourceType === "relay"
                 ? "Relay"
@@ -435,7 +435,7 @@ function ResourceAccessPanel({
             <DialogTitle>Transfer ownership?</DialogTitle>
             <DialogDescription>
               {transferTarget?.name} will become the only owner of this{" "}
-              {scope.resourceType === "instance"
+              {scope.resourceType === "server"
                 ? "game server"
                 : scope.resourceType === "database"
                   ? "database"

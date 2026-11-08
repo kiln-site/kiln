@@ -61,7 +61,7 @@ export interface DatabaseMemberCandidate {
 }
 
 const kindOrder: Record<DatabaseConnectionMemberKind, number> = {
-  instance: 0,
+  server: 0,
   app: 1,
   database: 2,
 }
@@ -91,7 +91,7 @@ export function useDatabaseMemberCandidates(
         canChange: canAccessInstancePermission(
           capabilities,
           instance,
-          "instance.network.write"
+          "server.network.write"
         ),
         item: {
           identity: {
@@ -103,12 +103,12 @@ export function useDatabaseMemberCandidates(
             observedState: instance.observedState,
             relayId: instance.relayId,
           },
-          key: databaseMemberKey({ id: instance.id, kind: "instance" }),
+          key: databaseMemberKey({ id: instance.id, kind: "server" }),
           meta: `${instance.implementation} ${instance.version} · ${instance.id}`,
           name: instance.name,
           searchText: `${instance.id} ${instance.relayName}`,
         },
-        member: { id: instance.id, kind: "instance" },
+        member: { id: instance.id, kind: "server" },
       })
     }
     for (const app of apps ?? []) {

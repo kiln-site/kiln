@@ -18,7 +18,7 @@ import { databaseTable } from "@/lib/database-config"
 // one row transition, so a retry and a cancel asked at once are decided by
 // whichever commits first, and the other is refused.
 
-export type ResourceDeletionKind = "instance" | "database" | "app" | "volume"
+export type ResourceDeletionKind = "server" | "database" | "app" | "volume"
 
 export type ResourceDeletionStatus =
   | "pending"
@@ -279,7 +279,7 @@ export const requestResourceDeletionRowEffect = Effect.fn(
         let backupId: string | null = null
         if (
           existing.status === "failed" &&
-          existing.resource_kind === "instance" &&
+          existing.resource_kind === "server" &&
           input.finalBackup &&
           existing.backup_id
         ) {
@@ -501,7 +501,7 @@ export const refuseResourcesBeingDeleted = Effect.fnUntraced(function* (
   )
   for (const resource of ordered) {
     if (
-      resource.kind !== "instance" &&
+      resource.kind !== "server" &&
       resource.kind !== "database" &&
       resource.kind !== "app"
     )

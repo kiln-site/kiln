@@ -53,7 +53,7 @@ paired with the Relay under. It is at most 16,384 characters.
 | `issuerGeneration`                      | The pairing's generation.                                                                                           |
 | `capabilityId`, `issuedAt`, `expiresAt` | A random ID and the capability's lifetime.                                                                          |
 
-A capability that grants a write (`instance.console.write`, any
+A capability that grants a write (`server.console.write`, any
 `*.files.upload`, or `database.dump.import`) lasts at most 30 seconds. Any
 other capability lasts at most 60. The Relay refuses a capability that runs
 longer than its maximum, is issued more than 5 seconds ahead of its clock, or
@@ -110,7 +110,7 @@ as the desired floor for each affected Relay and scope:
 
 | Scope           | Raised by                                                                                                                          |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `instance`      | Grant or ownership changes on one game server, or its deletion. Sent to that game server's Relay.                                  |
+| `server`        | Grant or ownership changes on one game server, or its deletion. Sent to that game server's Relay.                                  |
 | `subject_relay` | Changes on an App or database, sent to its Relay. Account status, verification, profile, or deletion, sent to every enabled Relay. |
 | `login_session` | A revoked login session or CLI credential. Sent to every enabled Relay.                                                            |
 
@@ -149,9 +149,9 @@ when their capabilities expire: within a minute, or 10 for preview links.
 
 | Surface                                     | Channel                      | Actions                                                  |
 | ------------------------------------------- | ---------------------------- | -------------------------------------------------------- |
-| Game server console, commands, completion   | Console socket               | `instance.console.read`, `instance.console.write`        |
+| Game server console, commands, completion   | Console socket               | `server.console.read`, `server.console.write`        |
 | App, database, Relay, and Kiln service logs | Console socket               | `app.logs.read`, `database.logs.read`, `relay.logs.read` |
-| Game server, App, and database usage        | Resource socket              | `instance.read`, `app.read`, `database.read`             |
+| Game server, App, and database usage        | Resource socket              | `server.read`, `app.read`, `database.read`             |
 | Files, App data, host files, database dumps | HTTP `/v1/browser/files/...` | `*.files.download`, `*.files.upload`, `database.dump.*`  |
 | Audio and video in the Files tab            | HTTP `/v1/browser/previews/...` | `*.files.download`, `database.dump.export`            |
 

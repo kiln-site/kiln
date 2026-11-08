@@ -18,7 +18,7 @@ const network = "owned-database-network"
 
 type Reference = { databaseId: string; relayId: string }
 
-const member = (id: string) => ({ id, kind: "instance" as const })
+const member = (id: string) => ({ id, kind: "server" as const })
 
 /** The container label format other Relay versions read and write. */
 function connectionLabels(references: ReadonlyArray<Reference>) {
@@ -94,7 +94,7 @@ describe("database connection recovery", () => {
         harness.state.listMemberDatabaseConnections(member(instanceId))
       )
     ).toEqual([
-      { databaseId, memberId: instanceId, memberKind: "instance", relayId },
+      { databaseId, memberId: instanceId, memberKind: "server", relayId },
     ])
     await manager.set(member(instanceId), databaseId, false)
 

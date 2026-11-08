@@ -946,7 +946,7 @@ export const securityResourceNamesEffect = Effect.fn("security.resourceNames")(
       database.queryRows<RowDataPacket & { id: string; name: string | null }>(
         "security.resourceNames.instance",
         `SELECT instance_id AS id, COALESCE(display_name, source_name) AS name
-           FROM ${databaseTable("instance")} WHERE relay_id = ?`,
+           FROM ${databaseTable("server")} WHERE relay_id = ?`,
         [relayId]
       ),
       database.queryRows<RowDataPacket & { id: string; name: string }>(
@@ -965,7 +965,7 @@ export const securityResourceNamesEffect = Effect.fn("security.resourceNames")(
     const names = new Map<string, string>()
     for (const row of relays) names.set(`relay:${row.id}`, row.name)
     for (const row of instances) {
-      if (row.name) names.set(`instance:${row.id}`, row.name)
+      if (row.name) names.set(`server:${row.id}`, row.name)
     }
     for (const row of databases) names.set(`database:${row.id}`, row.name)
     for (const row of apps) names.set(`app:${row.id}`, row.name)

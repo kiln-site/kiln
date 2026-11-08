@@ -12,7 +12,7 @@ import {
 
 /**
  * Text names for permission selections, as typed in the permission editor:
- * `instance.files.write`, `instance.files.*` for a block, `*` for everything.
+ * `server.files.write`, `server.files.*` for a block, `*` for everything.
  * They only exist in the browser; storage keeps the catalog's selection keys.
  */
 export function permissionNode(selection: PermissionSelection): string {
@@ -43,7 +43,7 @@ const scopeCollectionCopy: Record<
     "All Relay permissions",
     "Every Relay permission, including host access and ones Kiln adds later.",
   ],
-  "instance.all": [
+  "server.all": [
     "All game server permissions",
     "Every game server permission, including ones Kiln adds later.",
   ],

@@ -27,7 +27,7 @@ export interface RelayWebRoute {
 /**
  * Every web route a Relay's proxy serves that the user may see, for the
  * infrastructure map. Each route needs the permission its resource's own
- * routes need: `instance.network.read` on a game server, `app.read` on the
+ * routes need: `server.network.read` on a game server, `app.read` on the
  * Relay's apps. Null from Relays that predate the read.
  */
 export async function relayWebRoutesHandler(
@@ -54,9 +54,9 @@ export async function relayWebRoutesHandler(
       ? hasAppPermission(user, grants, { appId: owner.id, relayId }, "app.read")
       : effectiveScopePermissions(grants, {
           relayId,
-          resourceType: "instance",
+          resourceType: "server",
           resourceId: owner.id,
-        }).has("instance.network.read"))
+        }).has("server.network.read"))
   return routes.flatMap(({ hostname, id, owner, path, primary, redirect }) =>
     canRead(owner)
       ? [

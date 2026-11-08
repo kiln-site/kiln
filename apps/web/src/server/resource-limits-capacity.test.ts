@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { assert, layer } from "@effect/vitest"
 import {
   builtinTailscaleBrick,
-  relayInstanceSchema,
+  relayServerSchema,
   relayResourceLimitsV1Feature,
   relaySnapshotSchema,
 } from "@workspace/contracts"
@@ -47,7 +47,7 @@ const member: AuthenticatedUser = {
   twoFactorEnabled: false,
 }
 
-const instance = relayInstanceSchema.parse({
+const instance = relayServerSchema.parse({
   id: "a".repeat(12),
   name: "Own server",
   service: "server",
@@ -91,7 +91,7 @@ const snapshotWith = (server: typeof instance) =>
   })
 
 const grant = (
-  target: { relayId: string; resourceType: "relay" | "instance" },
+  target: { relayId: string; resourceType: "relay" | "server" },
   permissions: ReadonlyArray<AccessPermission>
 ) =>
   Effect.gen(function* () {
@@ -131,7 +131,7 @@ describeMysql("resource limits", () => {
     it.effect("does not reuse relay.read from another Relay", () =>
       Effect.gen(function* () {
         yield* seed
-        yield* grant({ relayId, resourceType: "instance" }, ["instance.read"])
+        yield* grant({ relayId, resourceType: "server" }, ["server.read"])
         yield* grant({ relayId: otherRelayId, resourceType: "relay" }, [
           "relay.read",
         ])
@@ -144,7 +144,7 @@ describeMysql("resource limits", () => {
       Effect.gen(function* () {
         yield* seed
         yield* grant({ relayId, resourceType: "relay" }, [
-          "instance.read",
+          "server.read",
           "relay.read",
         ])
 

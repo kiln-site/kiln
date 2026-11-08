@@ -76,8 +76,8 @@ function backups(harness: RelayHarness, volumes: RelayVolumes) {
       },
       config: harness.config,
       fences: fencesOf.get(harness)!,
-      findInstance: async () => null,
-      isInstanceStopped: async () => true,
+      findServer: async () => null,
+      isServerStopped: async () => true,
       lanes: harness.lanes,
       volumes,
     }).pipe(Effect.provideService(RelayStateStore, harness.state))

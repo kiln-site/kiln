@@ -36,7 +36,7 @@ export function backupTargetKey(
   return app
     ? resourceKey("app", relayId, app)
     : resourceKey(
-        target.kind as "database" | "instance" | "volume",
+        target.kind as "database" | "server" | "volume",
         relayId,
         target.id
       )

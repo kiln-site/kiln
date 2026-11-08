@@ -251,7 +251,7 @@ const seed = Effect.gen(function* () {
 const server = {
   relayId,
   resourceId: instanceId,
-  resourceType: "instance",
+  resourceType: "server",
 } as const
 
 // Saving a resource's routes, as its network page does: hostnames are

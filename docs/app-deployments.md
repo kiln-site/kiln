@@ -306,5 +306,5 @@ The Relay logs each phase and how it ended under the deployment's ID, in
 `server-deployments/<server>/<deployment>.json` in its data directory,
 keeping each server's 20 latest and removing them with the server. A
 deployment's log opens from its row for whoever can read the server's logs
-(`instance.deployment.read`, which takes `instance.logs.read`). Deleting a
+(`server.deployment.read`, which takes `server.logs.read`). Deleting a
 game server or App removes its deployment records.

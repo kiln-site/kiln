@@ -578,8 +578,8 @@ const authorizeRelayFileRequest = Effect.fn("RelayTransfer.authorize")(
           data: {
             action:
               method === "PUT"
-                ? "instance.files.upload"
-                : "instance.files.download",
+                ? "server.files.upload"
+                : "server.files.download",
             instanceId: input.instanceId,
             optInV2: true,
             path: input.path,

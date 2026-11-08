@@ -51,7 +51,7 @@ afterAll(() => disposeAppRuntime())
 const relayA = "a".repeat(12)
 const serverA = {
   id: "1".repeat(12),
-  kind: "instance",
+  kind: "server",
   name: "Survival",
   relayId: relayA,
 }
@@ -142,7 +142,7 @@ describeMysql("periodic schedule removal", () => {
               yield* insertRows("schedule_target", {
                 schedule_id: id,
                 relay_id: otherRelay,
-                target_kind: "instance",
+                target_kind: "server",
                 target_id: "2".repeat(12),
                 target_name: "Other",
                 created_at: 1000,

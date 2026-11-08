@@ -68,7 +68,7 @@ export const insertInstance = (
   instanceId: string,
   row: Row = {}
 ) =>
-  insertRows("instance", {
+  insertRows("server", {
     relay_id: relayId,
     instance_id: instanceId,
     created_at: seededAt,
@@ -79,7 +79,7 @@ export const insertInstance = (
 export const insertGrant = (grant: {
   readonly userId: string
   readonly relayId: string
-  readonly resourceType: "relay" | "instance" | "database"
+  readonly resourceType: "relay" | "server" | "database"
   readonly resourceId: string
   readonly role?: "owner" | "admin" | "operator" | "viewer" | null
   readonly state?: "pending" | "active" | "revoked"
@@ -101,7 +101,7 @@ export const insertBackup = (id: string, row: Row = {}) =>
   insertRows("backup", {
     id,
     relay_id: "relay-one",
-    target_kind: "instance",
+    target_kind: "server",
     target_id: "instance-one",
     artifact_kind: "archive",
     reason: "manual",

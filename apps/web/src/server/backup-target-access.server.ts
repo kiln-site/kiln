@@ -29,7 +29,7 @@ const actionVerbs: Record<BackupAction, string> = {
 const kindNames: Record<BackupTargetKind, string> = {
   app: "this App",
   database: "this database",
-  instance: "this game server",
+  server: "this game server",
   platform: "Kiln",
   volume: "this volume",
 }

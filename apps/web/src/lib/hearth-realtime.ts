@@ -86,7 +86,7 @@ const hearthRealtimeQueryScopes = {
   "server-migrations": [prefix(["server-migrations"])],
   "file-activity": [prefix(["file-activity"])],
   "github-sync": [prefix(["github-sync"])],
-  "instance-directory": [
+  "server-directory": [
     exact(queryKeys.servers.directory),
     prefix(queryKeys.servers.navigation),
     exact(queryKeys.schedules.options),

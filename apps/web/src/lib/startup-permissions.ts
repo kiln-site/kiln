@@ -1,16 +1,16 @@
 import type {
   BrickRecipe,
   BrickVariableValue,
-  RelayInstance,
+  RelayServer,
 } from "@workspace/contracts"
 
 export function startupPowerPermission(
-  existing: Pick<RelayInstance, "desiredState" | "observedState">,
+  existing: Pick<RelayServer, "desiredState" | "observedState">,
   input: { start: boolean; reinstall?: boolean }
 ):
-  | "instance.power.start"
-  | "instance.power.stop"
-  | "instance.power.restart"
+  | "server.power.start"
+  | "server.power.stop"
+  | "server.power.restart"
   | null {
   const running =
     existing.desiredState === "running" ||
@@ -20,10 +20,10 @@ export function startupPowerPermission(
     : input.start
   return running
     ? start
-      ? "instance.power.restart"
-      : "instance.power.stop"
+      ? "server.power.restart"
+      : "server.power.stop"
     : start
-      ? "instance.power.start"
+      ? "server.power.start"
       : null
 }
 

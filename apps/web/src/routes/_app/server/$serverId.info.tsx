@@ -2,14 +2,14 @@ import * as React from "react"
 import { createFileRoute } from "@tanstack/react-router"
 
 import {
-  useInstanceIdentity,
-  useInstancePermissions,
-  useInstanceRelayConnected,
-} from "@/components/instance-workspace-context"
+  useServerIdentity,
+  useServerPermissions,
+  useServerRelayConnected,
+} from "@/components/server-workspace-context"
 import { ServerInfoPage } from "@/components/server/server-info-page"
 import { pageTitle } from "@/lib/page-title"
 import { useServerSnapshot } from "@/lib/use-server-workspace"
-import { selectInstanceSettings } from "@/lib/relay-selectors"
+import { selectServerSettings } from "@/lib/relay-selectors"
 import { requireServerDestinationAccess } from "@/lib/route-access"
 
 export const Route = createFileRoute("/_app/server/$serverId/info")({
@@ -27,12 +27,11 @@ export const Route = createFileRoute("/_app/server/$serverId/info")({
 
 function InfoRoute() {
   const navigate = Route.useNavigate()
-  const workspaceInstance = useInstanceIdentity()
-  const permissions = useInstancePermissions()
-  const relayConnected = useInstanceRelayConnected()
+  const workspaceInstance = useServerIdentity()
+  const permissions = useServerPermissions()
+  const relayConnected = useServerRelayConnected()
   const selectInfo = React.useMemo(
-    () =>
-      selectInstanceSettings(workspaceInstance.id, workspaceInstance.relayId),
+    () => selectServerSettings(workspaceInstance.id, workspaceInstance.relayId),
     [workspaceInstance.id, workspaceInstance.relayId]
   )
   const { data } = useServerSnapshot(selectInfo)

@@ -147,7 +147,7 @@ export function SecurityResourceLink({
           {...props}
         />
       )
-    case "instance":
+    case "server":
       return (
         <Link
           className={className}

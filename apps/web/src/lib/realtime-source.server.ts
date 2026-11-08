@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { randomUUID } from "node:crypto"
 
-import type { RelayInstance, RelaySnapshotDelta } from "@workspace/contracts"
+import type { RelayServer, RelaySnapshotDelta } from "@workspace/contracts"
 import { Result } from "effect"
 
 import type {
@@ -43,10 +43,10 @@ export type RealtimeSourceChange =
   | {
       directoryChanged?: boolean
       relayId: string
-      type: "instance.upsert"
-      instance: RelayInstance
+      type: "server.upsert"
+      instance: RelayServer
     }
-  | { relayId: string; type: "instance.delete"; instanceId: string }
+  | { relayId: string; type: "server.delete"; instanceId: string }
 
 export type RealtimeSourceEvent = RealtimeSourceChange & {
   epoch: string
@@ -131,14 +131,14 @@ export function realtimeSourceEventRefreshesHearth(event: {
 }): boolean {
   if (
     event.type === "hearth.invalidate" ||
-    event.type === "instance.delete" ||
+    event.type === "server.delete" ||
     // Database inventory follows Relay reachability and update state.
     event.type === "relay.state"
   ) {
     return true
   }
   return (
-    (event.type === "instance.upsert" ||
+    (event.type === "server.upsert" ||
       event.type === "relay.snapshot.delta") &&
     event.directoryChanged === true
   )

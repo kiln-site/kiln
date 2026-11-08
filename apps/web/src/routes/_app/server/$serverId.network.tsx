@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 
-import { InstanceNetworkPage } from "@/components/instance-network-page"
+import { ServerNetworkPage } from "@/components/server-network-page"
 import { pageTitle } from "@/lib/page-title"
 import {
   accessCapabilitiesQueryOptions,
@@ -43,5 +43,5 @@ export const Route = createFileRoute("/_app/server/$serverId/network")({
 function NetworkRoute() {
   const { edit } = Route.useSearch()
 
-  return <InstanceNetworkPage editGamePort={edit === "game-port"} />
+  return <ServerNetworkPage editGamePort={edit === "game-port"} />
 }

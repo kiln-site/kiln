@@ -66,7 +66,7 @@ export const instanceDeletionNameEffect = Effect.fn("deletion.instanceName")(
       }
     >(
       "deletion.instanceName",
-      `SELECT display_name, source_name FROM ${databaseTable("instance")}
+      `SELECT display_name, source_name FROM ${databaseTable("server")}
         WHERE relay_id = ? AND instance_id = ? LIMIT 1`,
       [relay.id, instanceId]
     )

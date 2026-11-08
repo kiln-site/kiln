@@ -83,7 +83,7 @@ const grantServer = (
       id,
       relayId,
       resourceId: instanceId,
-      resourceType: "instance",
+      resourceType: "server",
       state: "active",
       userId,
     })
@@ -135,11 +135,11 @@ const seed = Effect.gen(function* () {
   }
   yield* grant("databases-only", ["database.network.write"])
   yield* grant("apps-only", ["app.manage"])
-  yield* grant("servers-only", ["instance.network.write"])
+  yield* grant("servers-only", ["server.network.write"])
   yield* grant("everything", [
     "database.network.write",
     "app.manage",
-    "instance.network.write",
+    "server.network.write",
   ])
   yield* grant("one-database", ["database.network.write"], {
     resourceId: database,
@@ -205,7 +205,7 @@ describeMysql("database connections in Hearth", () => {
               : { imported: 0 }
           )
           const toApp = { id: app, kind: "app" } as const
-          const toServer = { id: server, kind: "instance" } as const
+          const toServer = { id: server, kind: "server" } as const
           const toDatabase = { id: otherDatabase, kind: "database" } as const
           const refused = "You do not have permission to perform this action"
 
@@ -257,13 +257,13 @@ describeMysql("database connections in Hearth", () => {
           resourceType: "database",
         })
         yield* grantServer("one-server", server, [
-          "instance.network.write",
-          "instance.read",
+          "server.network.write",
+          "server.read",
         ])
         relay.rpc.mockResolvedValue(
           relayDatabase([
-            { id: server, kind: "instance" },
-            { id: hidden, kind: "instance" },
+            { id: server, kind: "server" },
+            { id: hidden, kind: "server" },
             { id: app, kind: "app" },
             { id: otherDatabase, kind: "database" },
           ])
@@ -273,7 +273,7 @@ describeMysql("database connections in Hearth", () => {
           writeDatabaseConnection(sessionUser("one-server"), {
             connected: true,
             databaseId: database,
-            member: { id: server, kind: "instance" },
+            member: { id: server, kind: "server" },
             relayId,
           })
         )

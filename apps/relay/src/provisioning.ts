@@ -59,7 +59,7 @@ const BUSY_RECHECK = "5 seconds"
 /** How one kind of instance provisions. */
 export interface ProvisioningAdapter<Kind extends RelayProvisioningKind> {
   readonly kind: Kind
-  /** Names the lane work, as in `instance.provision`. */
+  /** Names the lane work, as in `server.provision`. */
   readonly label: string
   /** What a job holds for the whole create. */
   readonly locks: (job: RelayProvisioningJob<Kind>) => ReadonlyArray<LaneLock>

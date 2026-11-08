@@ -11,14 +11,14 @@ describe("machine file mutation ceiling", () => {
     const action = fileMutationAction("delete")!
     expect(
       isActionAllowed(
-        actionsForRole("custom", ["instance.files.write"]),
+        actionsForRole("custom", ["server.files.write"]),
         action
       )
     ).toBe(false)
     expect(isActionAllowed(actionsForRole("read_only"), action)).toBe(false)
     expect(
       isActionAllowed(
-        actionsForRole("custom", ["instance.files.delete"]),
+        actionsForRole("custom", ["server.files.delete"]),
         action
       )
     ).toBe(true)

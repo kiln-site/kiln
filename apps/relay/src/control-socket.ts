@@ -1568,21 +1568,21 @@ function auditDetailsForRequest(
     details.databaseId = payload.id
   }
   if (
-    (request.operation === "instance.action" ||
+    (request.operation === "server.action" ||
       request.operation === "app.action") &&
     typeof payload.action === "string"
   ) {
     details.action = payload.action
   }
   if (
-    request.operation === "instance.startup.write" &&
+    request.operation === "server.startup.write" &&
     payload.reinstall === true
   ) {
     details.reinstall = true
   }
   if (
-    (request.operation === "instance.create" ||
-      request.operation === "instance.provision.prepare") &&
+    (request.operation === "server.create" ||
+      request.operation === "server.provision.prepare") &&
     result &&
     typeof result === "object" &&
     !Array.isArray(result)
@@ -1640,13 +1640,13 @@ function authenticationVerifier(options: {
 
 function appFileAction(operation: RelayControlOperation): RelayAction {
   switch (operation) {
-    case "instance.files.list":
-    case "instance.files.directory.list":
-    case "instance.files.directory.sizes":
-    case "instance.files.search":
-    case "instance.files.stat":
-    case "instance.files.read":
-    case "instance.files.database.read":
+    case "server.files.list":
+    case "server.files.directory.list":
+    case "server.files.directory.sizes":
+    case "server.files.search":
+    case "server.files.stat":
+    case "server.files.read":
+    case "server.files.database.read":
       return "app.files.read"
     default:
       return "app.files.write"
@@ -1668,8 +1668,8 @@ function memberActionsForRequest(
           ? (request.payload as Record<string, unknown>).member
           : undefined
       switch (objectString(member, "kind")) {
-        case "instance":
-          return ["instance.network.write"]
+        case "server":
+          return ["server.network.write"]
         case "app":
           return ["app.manage"]
         case "database":
@@ -1710,7 +1710,7 @@ const anyClientOperations = new Set<RelayControlOperation>([
 
 function actionForRequest(request: RelayControlRequest): RelayAction | null {
   if (
-    request.operation.startsWith("instance.files.") &&
+    request.operation.startsWith("server.files.") &&
     isRelayFileRoot(objectString(request.payload, "instanceId") ?? "")
   ) {
     const action = appFileAction(request.operation)
@@ -1720,7 +1720,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
   }
   // An app's data directory is served by the same file operations.
   if (
-    request.operation.startsWith("instance.files.") &&
+    request.operation.startsWith("server.files.") &&
     appIdFromFileRoot(objectString(request.payload, "instanceId") ?? "")
   ) {
     return appFileAction(request.operation)
@@ -1747,22 +1747,22 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.audit.list":
       return "relay.audit.read"
     case "relay.networking.read":
-      return "instance.network.read"
+      return "server.network.read"
     case "relay.networking.write":
       return "relay.configure"
     case "relay.tailscale.read":
     case "relay.tailscale.stack.list":
     case "relay.tailscale.stack.state":
-      return "instance.network.read"
+      return "server.network.read"
     case "relay.tailscale.install":
     case "relay.tailscale.write":
       return "relay.configure"
     case "relay.tailscale.stack.apply":
-      return "instance.create"
+      return "server.create"
     case "relay.tailscale.stack.dns":
-      return "instance.network.write"
+      return "server.network.write"
     case "relay.tailscale.stack.remove":
-      return "instance.delete"
+      return "server.delete"
     case "relay.terminal.attach":
     case "relay.terminal.heartbeat":
     case "relay.terminal.detach":
@@ -1799,7 +1799,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.host.files.mount":
       return "relay.files.mount"
     case "relay.proxy.config.read":
-      return "instance.network.read"
+      return "server.network.read"
     case "relay.proxy.write":
     case "relay.proxy.trial":
       return "relay.configure"
@@ -1810,7 +1810,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return kind === "app"
         ? "app.manage"
         : kind === "server"
-          ? "instance.network.write"
+          ? "server.network.write"
           : null
     }
     case "relay.volumes.read":
@@ -1918,8 +1918,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "resource.freeze":
     case "resource.unfreeze": {
       const kind = objectString(request.payload, "kind")
-      return kind === "instance"
-        ? "instance.delete"
+      return kind === "server"
+        ? "server.delete"
         : kind === "database"
           ? "database.delete"
           : kind === "app"
@@ -1995,81 +1995,81 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "schedule.write"
     case "schedule.overview":
       return "schedule.read"
-    case "instance.create":
-    case "instance.provision.prepare":
-    case "instance.provision.claim":
-    case "instance.startup.write":
-    case "instance.limits.write":
-      return "instance.create"
-    case "instance.provision.cancel":
-      return "instance.delete"
-    case "instance.resources.read":
-      return "instance.read"
-    case "instance.rename":
-      return "instance.rename"
-    case "instance.delete":
-      return "instance.delete"
-    case "instance.action": {
+    case "server.create":
+    case "server.provision.prepare":
+    case "server.provision.claim":
+    case "server.startup.write":
+    case "server.limits.write":
+      return "server.create"
+    case "server.provision.cancel":
+      return "server.delete"
+    case "server.resources.read":
+      return "server.read"
+    case "server.rename":
+      return "server.rename"
+    case "server.delete":
+      return "server.delete"
+    case "server.action": {
       const action = objectString(request.payload, "action")
-      if (action === "start") return "instance.power.start"
-      if (action === "stop") return "instance.power.stop"
-      if (action === "restart") return "instance.power.restart"
-      if (action === "kill") return "instance.power.kill"
+      if (action === "start") return "server.power.start"
+      if (action === "stop") return "server.power.stop"
+      if (action === "restart") return "server.power.restart"
+      if (action === "kill") return "server.power.kill"
       return null
     }
-    case "instance.files.list":
-    case "instance.files.directory.list":
-    case "instance.files.directory.sizes":
-    case "instance.files.search":
-      return "instance.files.list"
-    case "instance.files.stat":
-      return "instance.files.read"
-    case "instance.files.read":
-      return "instance.files.read"
-    case "instance.files.write":
-    case "instance.files.put":
-      return "instance.files.write"
-    case "instance.files.mutate":
-    case "instance.files.mutate.result":
+    case "server.files.list":
+    case "server.files.directory.list":
+    case "server.files.directory.sizes":
+    case "server.files.search":
+      return "server.files.list"
+    case "server.files.stat":
+      return "server.files.read"
+    case "server.files.read":
+      return "server.files.read"
+    case "server.files.write":
+    case "server.files.put":
+      return "server.files.write"
+    case "server.files.mutate":
+    case "server.files.mutate.result":
       return fileMutationAction(objectString(request.payload, "operation"))
-    case "instance.files.upload-url":
-      return "instance.files.upload-url"
-    case "instance.files.database.read":
-      return "instance.files.read"
+    case "server.files.upload-url":
+      return "server.files.upload-url"
+    case "server.files.database.read":
+      return "server.files.read"
     // An icon is read like a file under its root. One inside an app's
     // container takes reading the app's files; the Relay returns only
     // images from either.
-    case "instance.icon.read": {
+    case "server.icon.read": {
       if (objectString(request.payload, "appId")) return "app.files.read"
       const root = objectString(request.payload, "instanceId") ?? ""
       if (isRelayFileRoot(root)) return "relay.files.read"
       if (appIdFromFileRoot(root)) return "app.files.read"
-      return "instance.files.read"
+      return "server.files.read"
     }
-    case "instance.files.database.write":
-      return "instance.files.write"
-    case "instance.console.history":
-      return "instance.console.read"
-    case "instance.console.write":
-      return "instance.console.write"
-    case "instance.console.complete":
-      return "instance.console.read"
-    case "instance.logs.share":
-      return "instance.logs.share"
-    case "instance.logs.latest":
-    case "instance.deployment.read":
-      return "instance.logs.read"
-    case "instance.network.ports.reserve":
-    case "instance.network.ports.release":
-    case "instance.network.ports.write":
-      return "instance.network.write"
-    case "instance.network.routes.read":
-      return "instance.network.read"
-    case "instance.network.databases.remove":
-    case "instance.network.routes.write":
-      return "instance.network.write"
+    case "server.files.database.write":
+      return "server.files.write"
+    case "server.console.history":
+      return "server.console.read"
+    case "server.console.write":
+      return "server.console.write"
+    case "server.console.complete":
+      return "server.console.read"
+    case "server.logs.share":
+      return "server.logs.share"
+    case "server.logs.latest":
+    case "server.deployment.read":
+      return "server.logs.read"
+    case "server.network.ports.reserve":
+    case "server.network.ports.release":
+    case "server.network.ports.write":
+      return "server.network.write"
+    case "server.network.routes.read":
+      return "server.network.read"
+    case "server.network.databases.remove":
+    case "server.network.routes.write":
+      return "server.network.write"
     case "sftp.authorization.resolve":
-      return "instance.sftp.connect"
+      return "server.sftp.connect"
   }
   return null
 }

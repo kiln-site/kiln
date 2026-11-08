@@ -53,7 +53,7 @@ export function instanceScope(
   relayId: string,
   instanceId: string
 ): ResourceScope {
-  return { relayId, resourceId: instanceId, resourceType: "instance" }
+  return { relayId, resourceId: instanceId, resourceType: "server" }
 }
 
 export function relayScope(relayId: string): ResourceScope {

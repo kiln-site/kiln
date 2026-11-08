@@ -2,9 +2,9 @@ import { createFileRoute } from "@tanstack/react-router"
 
 import { ConsoleWorkspace } from "@/components/console/console-workspace"
 import {
-  useInstanceIdentity,
-  useInstancePermissions,
-} from "@/components/instance-workspace-context"
+  useServerIdentity,
+  useServerPermissions,
+} from "@/components/server-workspace-context"
 import { forkPromise } from "@/effect/promise"
 import { canAccessInstancePermission } from "@/lib/navigation-destinations"
 import { pageTitle } from "@/lib/page-title"
@@ -56,7 +56,7 @@ export const Route = createFileRoute("/_app/server/$serverId/console")({
         write: canAccessInstancePermission(
           capabilities,
           { id: server.id, relayId: server.relayId },
-          "instance.console.write"
+          "server.console.write"
         ),
       })
     })
@@ -67,8 +67,8 @@ export const Route = createFileRoute("/_app/server/$serverId/console")({
 })
 
 function ConsoleRoute() {
-  const instance = useInstanceIdentity()
-  const permissions = useInstancePermissions()
+  const instance = useServerIdentity()
+  const permissions = useServerPermissions()
   return (
     <ConsoleWorkspace
       key={instance.id}

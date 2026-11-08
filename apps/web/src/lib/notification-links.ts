@@ -11,7 +11,7 @@ import { securityScopeKey } from "@/lib/security"
 const resourcePaths = {
   app: "app",
   database: "db",
-  instance: "server",
+  server: "server",
   relay: "relay",
 } satisfies Record<NotificationResource["type"], string>
 

@@ -59,7 +59,7 @@ async function advanceUntil(assertion: () => void | Promise<void>, stepMs = 0) {
 
 async function manager(
   overrides: Partial<{
-    findInstance: (instanceId: string) => Promise<object | null>
+    findServer: (instanceId: string) => Promise<object | null>
     sendConsoleCommand: (instanceId: string, command: string) => Promise<void>
     listDatabaseIds: ScheduleManagerOptions["listDatabaseIds"]
     runContainerCommand: ScheduleManagerOptions["runContainerCommand"]
@@ -72,7 +72,7 @@ async function manager(
     enqueueBackup: async () => {
       throw new Error("not used")
     },
-    findInstance: overrides.findInstance ?? (async () => null),
+    findServer: overrides.findServer ?? (async () => null),
     getBackup: async () => null,
     listAppOwnedVolumeIds: async () => [],
     listAppIds: async () => new Set(),
@@ -122,7 +122,7 @@ const projection: RelayScheduleProjection = {
   targets: [
     {
       id: "server-a",
-      kind: "instance",
+      kind: "server",
       name: "Server A",
       relayId: "relay-a",
     },
@@ -145,7 +145,7 @@ describe("Relay schedule persistence", () => {
   it("records an occurrence that fell due while the Relay was down as missed", async () => {
     const commands: Array<string> = []
     const { restart, schedules } = await manager({
-      findInstance: async () => ({}),
+      findServer: async () => ({}),
       sendConsoleCommand: async (_instanceId, command) => {
         commands.push(command)
       },
@@ -216,7 +216,7 @@ describe("Relay schedule commands in containers", () => {
     const containerCommands: Array<string> = []
     const power: Array<string> = []
     const { schedules } = await manager({
-      findInstance: async () => ({}),
+      findServer: async () => ({}),
       listDatabaseIds: async () => new Set([databaseId]),
       runContainerCommand: async (_target, command) => {
         containerCommands.push(command)
@@ -249,7 +249,7 @@ describe("Relay schedule commands in containers", () => {
       expect((await latestRun(schedules))?.status).toBe("succeeded")
     )
     expect(consoleCommands).toEqual(["server-a:say hello"])
-    expect(power).toEqual(["instance:server-a:kill"])
+    expect(power).toEqual(["server:server-a:kill"])
     expect(containerCommands).toEqual([])
     expect((await latestRun(schedules))?.targetRuns[1]).toMatchObject({
       attempts: [{ status: "skipped_policy" }, { status: "skipped_policy" }],

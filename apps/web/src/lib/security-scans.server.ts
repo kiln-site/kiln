@@ -107,7 +107,7 @@ const wake = (globalThis.kilnSecurityWake ??= Effect.runSync(
 export const securityNotifyPermissions = {
   app: "app.manage",
   database: "database.power",
-  instance: "instance.configuration.write",
+  server: "server.configuration.write",
   relay: "relay.update",
 } as const satisfies Record<
   SecurityAnnouncement["resourceType"],

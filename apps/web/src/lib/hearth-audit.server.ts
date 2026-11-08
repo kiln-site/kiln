@@ -91,7 +91,7 @@ export function relayChangeTarget(
     return { id: nested.id, kind: nested.kind }
   }
   const [area] = operation.split(".")
-  if (area === "instance") {
+  if (area === "server") {
     // File operations take a file root: a game server's, an App's, or the
     // Relay's own host files.
     const id = field("instanceId")
@@ -99,7 +99,7 @@ export function relayChangeTarget(
       const appId = appIdFromFileRoot(id)
       if (appId) return { id: appId, kind: "app" }
       if (isRelayFileRoot(id)) return { id: relayId, kind: "relay" }
-      return { id, kind: "instance" }
+      return { id, kind: "server" }
     }
   }
   if (area === "app") {

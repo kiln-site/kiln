@@ -99,7 +99,7 @@ const ensureActivityInstanceEffect = Effect.fn("files.activity.ensureInstance")(
     const database = yield* Database
     yield* database.execute(
       "file_activity_ensure_instance",
-      `INSERT IGNORE INTO ${databaseTable("instance")}
+      `INSERT IGNORE INTO ${databaseTable("server")}
          (relay_id, instance_id, display_name, created_at, updated_at)
        VALUES (?, ?, NULL, ?, ?)`,
       [relayId, instanceId, now, now]

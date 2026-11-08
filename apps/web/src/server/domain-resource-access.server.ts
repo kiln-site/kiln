@@ -7,7 +7,7 @@ import {
 import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
+import { listServerDirectoryEffect } from "@/lib/server-directory"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import { hasAppPermission } from "@/server/app-access"
 
@@ -33,8 +33,8 @@ export async function resourceAccess(user: AuthenticatedUser) {
       effectiveScopePermissions(grants, {
         relayId,
         resourceId: instanceId,
-        resourceType: "instance",
-      }).has(write ? "instance.network.write" : "instance.network.read"),
+        resourceType: "server",
+      }).has(write ? "server.network.write" : "server.network.read"),
   }
 }
 
@@ -71,7 +71,7 @@ const holderNameEffect = Effect.fnUntraced(function* (
     )
   }
   if (!access.instance(holder.relayId, holder.resourceId, false)) return null
-  const directory = yield* listInstanceDirectoryEffect()
+  const directory = yield* listServerDirectoryEffect()
   return (
     directory.find(
       (record) =>

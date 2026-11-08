@@ -389,7 +389,7 @@ async function inviteResourceAccessHandler(
               accessId,
               recipient.id,
               target.relayId,
-              target.resourceType === "instance" ? target.resourceId : null,
+              target.resourceType === "server" ? target.resourceId : null,
               target.resourceType === "database" ? target.resourceId : null,
               actor.id,
               expiresAt,
@@ -455,7 +455,7 @@ const invitationSelect = `SELECT i.*, g.resource_type, g.resource_id, COALESCE(s
   LEFT JOIN ${databaseTable("user")} u ON u.id = i.invited_by
   LEFT JOIN ${databaseTable("access_grant")} g ON g.id = i.access_id
   LEFT JOIN ${databaseTable("relay")} r ON r.id = i.relay_id
-  LEFT JOIN ${databaseTable("instance")} s ON s.relay_id = i.relay_id AND s.instance_id = i.instance_id
+  LEFT JOIN ${databaseTable("server")} s ON s.relay_id = i.relay_id AND s.instance_id = i.instance_id
   LEFT JOIN ${databaseTable("database")} d ON d.database_id = i.database_id`
 function invitationView(row: InvitationRow) {
   return {
@@ -1376,11 +1376,11 @@ export const getAccessResources = createServerFn({ method: "GET" })
         }
         if (grant.resourceType === "relay") {
           entry.relay ||= grant.permissions.includes("relay.read")
-          entry.allInstances ||= grant.permissions.includes("instance.read")
+          entry.allInstances ||= grant.permissions.includes("server.read")
           entry.allDatabases ||= grant.permissions.includes("database.read")
         } else if (
-          grant.resourceType === "instance" &&
-          grant.permissions.includes("instance.read")
+          grant.resourceType === "server" &&
+          grant.permissions.includes("server.read")
         )
           entry.instances.add(grant.resourceId)
         else if (
@@ -1396,7 +1396,7 @@ export const getAccessResources = createServerFn({ method: "GET" })
           allowedValues.push(relayId)
         }
         for (const [kind, all, ids] of [
-          ["instance", entry.allInstances, entry.instances],
+          ["server", entry.allInstances, entry.instances],
           ["database", entry.allDatabases, entry.databases],
         ] as const) {
           if (all) {
@@ -1417,7 +1417,7 @@ export const getAccessResources = createServerFn({ method: "GET" })
     const [resources] = await databasePool.query<Array<ResourceRow>>(
       `SELECT relay_id, resource_type, resource_id, name, relay_name FROM (
     SELECT id AS relay_id, 'relay' AS resource_type, id AS resource_id, name, created_by AS owner_id, name AS relay_name FROM ${databaseTable("relay")} WHERE enabled = TRUE
-    UNION ALL SELECT i.relay_id, 'instance', i.instance_id, COALESCE(i.display_name, i.source_name, i.instance_id), i.owner_id, r.name FROM ${databaseTable("instance")} i JOIN ${databaseTable("relay")} r ON r.id = i.relay_id AND r.enabled = TRUE
+    UNION ALL SELECT i.relay_id, 'server', i.instance_id, COALESCE(i.display_name, i.source_name, i.instance_id), i.owner_id, r.name FROM ${databaseTable("server")} i JOIN ${databaseTable("relay")} r ON r.id = i.relay_id AND r.enabled = TRUE
     UNION ALL SELECT d.relay_id, 'database', d.database_id, d.name, d.owner_id, r.name FROM ${databaseTable("database")} d JOIN ${databaseTable("relay")} r ON r.id = d.relay_id AND r.enabled = TRUE
     ) resources WHERE (name LIKE ? OR resource_id LIKE ? OR relay_id LIKE ?)${accessFilter} ORDER BY name, resource_id LIMIT ? OFFSET ?`,
       [

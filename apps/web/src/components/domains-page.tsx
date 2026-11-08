@@ -1043,7 +1043,7 @@ function webResourceRef(hostname: WebHostnameOverview) {
     resourceType:
       hostname.resource.kind === "app"
         ? ("app" as const)
-        : ("instance" as const),
+        : ("server" as const),
   }
 }
 

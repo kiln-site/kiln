@@ -59,7 +59,7 @@ export function kilnContainerOwner(
   if (serverId && labels["kiln.relay.managed"] === "true") {
     return {
       component: null,
-      resource: { id: currentId(serverId.toLowerCase()), type: "instance" },
+      resource: { id: currentId(serverId.toLowerCase()), type: "server" },
     }
   }
   const names = relayResourceNames(config)

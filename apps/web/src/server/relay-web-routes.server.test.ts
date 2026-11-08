@@ -68,7 +68,7 @@ const user: AuthenticatedUser = {
 }
 
 const grant = (
-  resourceType: "instance" | "relay",
+  resourceType: "server" | "relay",
   resourceId: string,
   permissions: ReadonlyArray<AccessPermission>
 ) =>
@@ -106,7 +106,7 @@ describeMysql("Relay web routes on the infrastructure map", () => {
       Effect.gen(function* () {
         yield* seed
         yield* grant("relay", relayId, ["relay.read"])
-        yield* grant("instance", serverId, ["instance.network.read"])
+        yield* grant("server", serverId, ["server.network.read"])
 
         assert.deepStrictEqual(yield* hostnames, ["map.example.test"])
       })
@@ -115,7 +115,7 @@ describeMysql("Relay web routes on the infrastructure map", () => {
     it.effect("routes stay hidden without reading the Relay", () =>
       Effect.gen(function* () {
         yield* seed
-        yield* grant("instance", serverId, ["instance.network.read"])
+        yield* grant("server", serverId, ["server.network.read"])
 
         const rejected = yield* Effect.tryPromise(() =>
           relayWebRoutesHandler(user, relayId)

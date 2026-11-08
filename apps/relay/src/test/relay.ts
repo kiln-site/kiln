@@ -16,9 +16,9 @@ import { pathToFileURL } from "node:url"
 import {
   appTailscaleMember,
   databaseTailscaleMemberId,
-  instanceTailscaleMemberId,
+  serverTailscaleMemberId,
   type RelayApp,
-  type RelayInstance,
+  type RelayServer,
   type RelayManagedDatabase,
 } from "@workspace/contracts"
 import { Effect, ManagedRuntime } from "effect"
@@ -65,7 +65,7 @@ export interface RelayDrivers {
   readonly power: ResourcePower<{
     app: RelayApp
     database: RelayManagedDatabase
-    instance: RelayInstance
+    server: RelayServer
   }>
   readonly runtimeRecovery: RuntimeRecoveryManager
 }
@@ -202,7 +202,7 @@ export async function relayHarness(
       databases.containerOf(databaseId)
     )
     runtimeRecovery.useTailscaleAddresses((instanceId) =>
-      lifecycle.reattachTailscaleMember(instanceTailscaleMemberId(instanceId))
+      lifecycle.reattachTailscaleMember(serverTailscaleMemberId(instanceId))
     )
     databases.useTailscaleAddresses((databaseId) =>
       lifecycle.reattachTailscaleMember(databaseTailscaleMemberId(databaseId))
@@ -229,17 +229,17 @@ export async function relayHarness(
           app: (appId, action) => apps.action({ action, appId }),
           database: (databaseId, action) =>
             databases.action({ action, databaseId }),
-          instance: async (instanceId, action) => {
-            const instance = await docker.findInstance(instanceId)
-            if (!instance) throw new Error("Instance not found")
+          server: async (serverId, action) => {
+            const server = await docker.findServer(serverId)
+            if (!server) throw new Error("Server not found")
             const [routes, pendingPrimaryPort] = await Effect.runPromise(
               Effect.all([
-                state.listInstanceRoutes(instanceId),
-                state.getPendingPrimaryPort(instanceId),
+                state.listInstanceRoutes(serverId),
+                state.getPendingPrimaryPort(serverId),
               ])
             )
-            return lifecycle.runInstanceAction(
-              instance,
+            return lifecycle.runServerAction(
+              server,
               action,
               routes,
               pendingPrimaryPort
@@ -282,7 +282,7 @@ export async function relayHarness(
       return fakeDocker.addContainer({
         memoryBytes: 512 * 1024 ** 2,
         mounts: [{ destination: "/server", source: directory, type: "bind" }],
-        name: resources.instanceContainer(id),
+        name: resources.serverContainer(id),
         networks: [resources.gameNetwork],
         ...seed,
         labels: {
@@ -311,7 +311,7 @@ export async function scheduleWorker(harness: RelayHarness) {
     enqueueBackup: async () => {
       throw new Error("not used")
     },
-    findInstance: (instanceId) => harness.docker.findInstance(instanceId),
+    findServer: (instanceId) => harness.docker.findServer(instanceId),
     getBackup: async () => null,
     isPaused: () => harness.lanes.paused,
     listAppOwnedVolumeIds: (appId) =>

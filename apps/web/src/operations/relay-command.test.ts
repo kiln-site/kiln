@@ -116,7 +116,7 @@ const start = durableOperation({
   run: ({ server }) =>
     relayCommand({
       name: "start",
-      operation: "instance.action",
+      operation: "server.action",
       payload: { action: "start", instanceId: server },
       relayId: "relay-one",
       success: Schema.Struct({ started: Schema.String }),

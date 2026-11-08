@@ -1,14 +1,14 @@
 import {
   instanceIdSchema,
   relayIdSchema,
-  relayInstanceSchema,
+  relayServerSchema,
   relayNodeSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
 import { hearthRealtimeTopicSchema } from "@/lib/hearth-realtime-topics"
 
-export const fleetInstanceSchema = relayInstanceSchema.extend({
+export const fleetInstanceSchema = relayServerSchema.extend({
   relayId: relayIdSchema,
   relayName: z.string().min(1),
   relayStatus: z.enum(["connected", "unreachable"]),
@@ -30,7 +30,7 @@ const sequencedEventSchema = z.object({
 const hearthScopeSchema = z.object({
   backupId: z.uuid().optional(),
   databaseId: instanceIdSchema.optional(),
-  instanceId: relayInstanceSchema.shape.id.optional(),
+  instanceId: relayServerSchema.shape.id.optional(),
   relayId: relayIdSchema,
 })
 
@@ -49,7 +49,7 @@ export const realtimeClientEventSchema = z.discriminatedUnion("type", [
   sequencedEventSchema.extend({
     deleted: z.array(
       z.object({
-        instanceId: relayInstanceSchema.shape.id,
+        instanceId: relayServerSchema.shape.id,
         relayId: relayIdSchema,
       })
     ),

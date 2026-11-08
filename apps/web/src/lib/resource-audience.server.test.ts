@@ -16,7 +16,7 @@ const relayId = "relay-a"
 const scope = {
   relayId,
   resourceId: "server-a",
-  resourceType: "instance",
+  resourceType: "server",
 } as const
 
 const seed = Effect.gen(function* () {
@@ -30,19 +30,19 @@ const seed = Effect.gen(function* () {
     id: "11111111-1111-4111-8111-111111111111",
     relayId,
     resourceId: "server-a",
-    resourceType: "instance",
+    resourceType: "server",
     userId: "granted",
   })
   yield* insertRows("access_selection", {
     access_id: "11111111-1111-4111-8111-111111111111",
-    selection_key: "instance.configuration.write",
+    selection_key: "server.configuration.write",
     selection_kind: "permission",
   })
 })
 
 const audience = notificationAudienceEffect(
   scope,
-  "instance.configuration.write",
+  "server.configuration.write",
   "security.report"
 ).pipe(Effect.map((ids) => [...ids].sort()))
 
@@ -81,10 +81,10 @@ describeMysql("notification audience", () => {
         yield* seed
         yield* saveNotificationPreferencesEffect("granted", {
           resources: {
-            [`instance:${relayId}:server-a`]: {
+            [`server:${relayId}:server-a`]: {
               kinds: { "security.report": false },
               name: "Survival",
-              type: "instance",
+              type: "server",
             },
           },
         })

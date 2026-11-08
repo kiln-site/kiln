@@ -2,7 +2,7 @@ import { Effect } from "effect"
 
 import type { RelayStateStore } from "./effect/state.js"
 import type { LifecycleDriver } from "./lifecycle.js"
-import { instanceReplaceLocks } from "./operation-plans.js"
+import { serverReplaceLocks } from "./operation-plans.js"
 import { type ProvisioningAdapter, provisioningStatus } from "./provisioning.js"
 import type { ServerDeploymentLogs } from "./server-deployment-logs.js"
 
@@ -17,11 +17,11 @@ export function serverProvisioning(options: {
   return {
     kind: "server",
     announce: options.refreshSnapshot,
-    label: "instance.provision",
+    label: "server.provision",
     // The create takes the routes itself, once its image is downloaded, for
     // what every game server shares: the game network, the Relay's CoreDNS,
     // and their private hostnames.
-    locks: (job) => instanceReplaceLocks(job.instanceId),
+    locks: (job) => serverReplaceLocks(job.instanceId),
     withState: (placeholder, state) => ({
       ...placeholder,
       observedState: state.phase === "failed" ? "failed" : "provisioning",
@@ -31,7 +31,7 @@ export function serverProvisioning(options: {
     // Hearth records the install as a deployment, which this logs.
     provision: (job, onPhase) =>
       options.deploymentLogs.install(job.instanceId, async (logPhase) => {
-        const instance = await options.lifecycle.createInstanceWithId(
+        const instance = await options.lifecycle.createServerWithId(
           job.instanceId,
           job.input,
           async (phase) => {
@@ -40,7 +40,7 @@ export function serverProvisioning(options: {
           }
         )
         await Effect.runPromise(
-          options.state.setInstanceName(
+          options.state.setServerName(
             job.instanceId,
             job.input.name ?? instance.name
           )

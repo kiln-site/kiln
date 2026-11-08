@@ -213,7 +213,7 @@ describeMysql("backup runs page", () => {
         const allowedScopes = [
           {
             relayId: "relay-a",
-            resourceType: "instance" as const,
+            resourceType: "server" as const,
             resourceId: "inst-a",
           },
           {
@@ -223,7 +223,7 @@ describeMysql("backup runs page", () => {
           },
           {
             relayId: "relay-b",
-            resourceType: "instance" as const,
+            resourceType: "server" as const,
             resourceId: "inst-x",
           },
         ]
@@ -238,7 +238,7 @@ describeMysql("backup runs page", () => {
           yield* pageIds({
             isAdmin: false,
             allowedScopes,
-            scope: { kind: "instance", relayId: "relay-a", targetId: "inst-b" },
+            scope: { kind: "server", relayId: "relay-a", targetId: "inst-b" },
           }),
           []
         )
@@ -247,7 +247,7 @@ describeMysql("backup runs page", () => {
           yield* pageIds({
             isAdmin: false,
             allowedScopes,
-            scope: { kind: "instance" },
+            scope: { kind: "server" },
           }),
           ["a-inst-a", "b-inst"]
         )

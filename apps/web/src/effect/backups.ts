@@ -175,7 +175,7 @@ export interface BackupCatalogPageInput {
   /** Where the user may read backups of game servers, databases, and Kiln volumes. */
   allowedScopes: ReadonlyArray<{
     relayId: string
-    resourceType: "relay" | "instance" | "database"
+    resourceType: "relay" | "server" | "database"
     resourceId: string
   }>
   /**
@@ -408,7 +408,7 @@ export interface BackupExportDispatch {
   kind: "export"
   repositoryPassword?: string
   snapshotId: string
-  target: { id: string; kind: "instance" }
+  target: { id: string; kind: "server" }
   taskId: string
   ttlMs: number
 }
@@ -576,7 +576,7 @@ const reserveBackupCreateIn = Effect.fnUntraced(function* (
   const mode =
     input.reason === "pre_restore" ||
     input.reason === "final_delete" ||
-    input.targetKind !== "instance"
+    input.targetKind !== "server"
       ? "full"
       : (input.mode ?? "incremental")
   const artifactKind =
@@ -821,7 +821,7 @@ export const reserveInstanceBackupEffect = Effect.fn("backups.reserve")(
       ...input,
       artifactKind: "archive",
       exclude: [],
-      targetKind: "instance",
+      targetKind: "server",
     })
 )
 
@@ -1558,7 +1558,7 @@ END)`
 
 const backupTargetSortSql = `(CASE backup.target_kind
   WHEN 'platform' THEN COALESCE(relay.name, '')
-  WHEN 'instance' THEN COALESCE(instance.source_name, '')
+  WHEN 'server' THEN COALESCE(instance.source_name, '')
   WHEN 'database' THEN COALESCE(managed_database.name, '')
   ELSE ''
 END)`
@@ -2016,8 +2016,8 @@ export const listBackupCatalogPageEffect = Effect.fn("backups.page")(function* (
          ${latestBackupTaskJoin}
          LEFT JOIN ${databaseTable("relay")} relay
            ON relay.id = backup.relay_id
-         LEFT JOIN ${databaseTable("instance")} instance
-           ON backup.target_kind = 'instance'
+         LEFT JOIN ${databaseTable("server")} instance
+           ON backup.target_kind = 'server'
           AND instance.relay_id = backup.relay_id
           AND instance.instance_id = backup.target_id
          LEFT JOIN ${databaseTable("database")} managed_database
@@ -2182,12 +2182,12 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
       WHERE backup.relay_id = ?
         AND (
           (backup.backup_mode = 'full'
-            AND ((backup.target_kind = 'instance' AND backup.artifact_kind = 'archive')
+            AND ((backup.target_kind = 'server' AND backup.artifact_kind = 'archive')
               OR (backup.target_kind = 'database' AND backup.artifact_kind = 'database_dump')
               OR (backup.target_kind = 'platform' AND backup.artifact_kind = 'platform_bundle')
               OR (backup.target_kind IN ('app', 'volume') AND backup.artifact_kind = 'tar_archive')))
           OR (backup.backup_mode = 'incremental'
-            AND backup.target_kind = 'instance'
+            AND backup.target_kind = 'server'
             AND backup.artifact_kind = 'restic_snapshot')
         )
         AND ((task.task_kind = 'create' AND backup.status = 'queued')
@@ -2290,7 +2290,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
         backupId: row.backup_id,
         kind: "export",
         snapshotId: row.restic_snapshot_id,
-        target: { id: row.target_id, kind: "instance" },
+        target: { id: row.target_id, kind: "server" },
         taskId: row.task_id,
         ttlMs: clampBackupExportTtlMs(
           // Export tasks store the requested TTL (ms) in reserved_bytes.
@@ -2422,11 +2422,11 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
               WHERE backup.id = ? AND backup.status = 'available'
                 AND (
                   (backup.backup_mode = 'full'
-                    AND ((backup.target_kind = 'instance' AND backup.artifact_kind = 'archive')
+                    AND ((backup.target_kind = 'server' AND backup.artifact_kind = 'archive')
                       OR (backup.target_kind = 'database' AND backup.artifact_kind = 'database_dump')
                       OR (backup.target_kind IN ('app', 'volume') AND backup.artifact_kind = 'tar_archive')))
                   OR (backup.backup_mode = 'incremental'
-                    AND backup.target_kind = 'instance'
+                    AND backup.target_kind = 'server'
                     AND backup.artifact_kind = 'restic_snapshot'
                     AND backup.restic_snapshot_id IS NOT NULL)
                 )
@@ -3331,7 +3331,7 @@ export const reserveBackupExportEffect = Effect.fn("backups.reserveExport")(
           backupId: backup.id,
           kind: "export",
           snapshotId,
-          target: { id: backup.target_id, kind: "instance" },
+          target: { id: backup.target_id, kind: "server" },
           taskId,
           ttlMs,
         })
@@ -3451,7 +3451,7 @@ export const ensureBackupRepositoryEffect = Effect.fn(
           relayId: input.relayId,
           storageId: input.storageId,
           targetId: input.targetId,
-          targetKind: "instance",
+          targetKind: "server",
         })
         return {
           id: repository.id,
@@ -4380,13 +4380,13 @@ export const linkInstanceBackupsEffect = Effect.fn("backups.link")(
                 COALESCE(source.linked_from_target_id, source.target_id)
                   AS archive_target_id
            FROM ${databaseTable("backup")} source
-          WHERE source.relay_id = ? AND source.target_kind = 'instance'
+          WHERE source.relay_id = ? AND source.target_kind = 'server'
             AND source.target_id = ?
             AND source.backup_mode = 'full' AND source.artifact_kind = 'archive'
             AND source.status = 'available'
             AND NOT EXISTS (
               SELECT 1 FROM ${databaseTable("backup")} linked
-               WHERE linked.relay_id = ? AND linked.target_kind = 'instance'
+               WHERE linked.relay_id = ? AND linked.target_kind = 'server'
                  AND linked.target_id = ?
                  AND linked.linked_from_backup_id
                    = COALESCE(source.linked_from_backup_id, source.id)
@@ -4421,7 +4421,7 @@ export const linkInstanceBackupsEffect = Effect.fn("backups.link")(
               checksum_sha256, warnings, created_by, started_at, completed_at,
               created_at, updated_at, linked_from_backup_id,
               linked_from_target_id)
-           SELECT ?, ?, 'instance', ?, ?, artifact_kind, backup_mode, reason,
+           SELECT ?, ?, 'server', ?, ?, artifact_kind, backup_mode, reason,
                   'available', name, ?, ?, bytes, checksum_sha256, warnings,
                   created_by, started_at, completed_at, created_at, ?, ?, ?
              FROM ${databaseTable("backup")} WHERE id = ?`,
@@ -4496,7 +4496,7 @@ export const countLinkableInstanceBackupsEffect = Effect.fn(
                      AND artifact.storage_id IS NOT NULL
                 )) AS anywhere
        FROM ${databaseTable("backup")} backup
-      WHERE backup.relay_id = ? AND backup.target_kind = 'instance'
+      WHERE backup.relay_id = ? AND backup.target_kind = 'server'
         AND backup.target_id = ? AND backup.status = 'available'`,
     [relayId, instanceId]
   )

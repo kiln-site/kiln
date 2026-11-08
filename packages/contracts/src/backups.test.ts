@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test"
 import { backupArchiveManifestSchema } from "./backups.js"
 
 describe("backup contracts", () => {
-  it("keeps v1 archive manifests readable", () => {
+  it("keeps v1 archive manifests from before game servers were servers readable", () => {
     expect(
       backupArchiveManifestSchema.safeParse({
         artifactKind: "archive",
@@ -12,7 +12,7 @@ describe("backup contracts", () => {
         formatVersion: 1,
         mode: "full",
         target: { id: "instance-1", kind: "instance" },
-      }).success
-    ).toBe(true)
+      }).data?.target
+    ).toEqual({ id: "instance-1", kind: "server" })
   })
 })

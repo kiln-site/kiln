@@ -4,7 +4,7 @@ import {
   appIdFromFileRoot,
   isRelayFileRoot,
   relayFileRootId,
-  projectRelayInstanceOverview,
+  projectRelayServerOverview,
   relayFileActivitySchema,
   relayFileContentSchema,
   relayDirectoryPageInputSchema,
@@ -21,18 +21,18 @@ import {
   relayConsoleCommandSchema,
   relayConsoleCompletionInputSchema,
   relayConsoleCompletionSchema,
-  relayInstanceActionSchema,
+  relayServerActionSchema,
   relayInstanceNameSchema,
-  relayInstancePortLeaseReleaseSchema,
-  relayInstancePortLeaseRequestSchema,
-  relayInstancePortLeaseSchema,
-  relayInstancePortInputsSchema,
-  relayInstanceResourceSnapshotSchema,
+  relayServerPortLeaseReleaseSchema,
+  relayServerPortLeaseRequestSchema,
+  relayServerPortLeaseSchema,
+  relayServerPortInputsSchema,
+  relayServerResourceSnapshotSchema,
   relayInstanceWebRouteInputsSchema,
   relayInstanceWebRouteStateSchema,
   relayMclogsUploadResultSchema,
   relayIdSchema,
-  relayInstanceSchema,
+  relayServerSchema,
   relayRemoveDatabaseConnectionSchema,
   relayControlDeadlineMs,
   relaySaveFileInputSchema,
@@ -111,7 +111,7 @@ import {
 import { relayConsoleTransport } from "@/lib/relay-console-route"
 import type { RelayEndpoint } from "@/lib/relay-client"
 import {
-  relayFleetInstance,
+  relayFleetServer,
   type RelayFleetSnapshot,
   type RelayReachability,
 } from "@/lib/relay-fleet"
@@ -127,7 +127,7 @@ import {
   relayConnectionSnapshot,
   relayConnectionState,
 } from "@/lib/relay-connection"
-import { updateInstanceSourceName } from "@/lib/instance-registry"
+import { updateServerSourceName } from "@/lib/server-registry"
 import { dnsKey } from "@/lib/dns-operations"
 import { filePinsKey, fileRootKey } from "@/lib/file-lanes"
 import { exclusive, resourceKey, shared } from "@/operations/lanes"
@@ -222,7 +222,7 @@ const fileMutationInputSchema = z.intersection(
 )
 
 const actionInputSchema = instanceInputSchema.extend(
-  relayInstanceActionSchema.shape
+  relayServerActionSchema.shape
 )
 
 const webRoutesInputSchema = instanceInputSchema.extend({
@@ -231,15 +231,15 @@ const webRoutesInputSchema = instanceInputSchema.extend({
 })
 
 const portsInputSchema = instanceInputSchema.extend({
-  ports: relayInstancePortInputsSchema,
+  ports: relayServerPortInputsSchema,
 })
 
 const portLeaseInputSchema = instanceInputSchema.extend(
-  relayInstancePortLeaseRequestSchema.omit({ overridePortRange: true }).shape
+  relayServerPortLeaseRequestSchema.omit({ overridePortRange: true }).shape
 )
 
 const portLeaseReleaseInputSchema = instanceInputSchema.extend(
-  relayInstancePortLeaseReleaseSchema.shape
+  relayServerPortLeaseReleaseSchema.shape
 )
 
 const consoleCommandInputSchema = instanceInputSchema.extend(
@@ -348,14 +348,14 @@ export const getFreshRelayConnectionState = createServerFn({
   })
 })
 
-export const getFreshRelayInstance = createServerFn({ method: "GET" })
+export const getFreshRelayServer = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await instanceRelayAccess(data.relayId)
     await requireRelayPermission({
       user,
       relayId: relay.id,
-      permission: "instance.read",
+      permission: "server.read",
       instanceId: data.instanceId,
     })
     const instance = (await freshRelaySnapshot(relay)).instances.find(
@@ -364,7 +364,7 @@ export const getFreshRelayInstance = createServerFn({ method: "GET" })
     if (!instance) return null
     const [managed] = await runAppEffect(
       "domains.assignments.applyInstance",
-      applyManagedDomainAddressesEffect([relayFleetInstance(instance, relay)])
+      applyManagedDomainAddressesEffect([relayFleetServer(instance, relay)])
     )
     return managed ?? null
   })
@@ -448,7 +448,7 @@ async function readServerWorkspace(user: AuthenticatedUser, serverId: string) {
   }
 }
 
-export const getRelayInstances = createServerFn({ method: "GET" }).handler(
+export const getRelayServers = createServerFn({ method: "GET" }).handler(
   async () => {
     const user = await requireEligibleResourceUser()
     return (await authorizedFleetSnapshot(user, true)).instances
@@ -503,16 +503,16 @@ const instanceDnsKey = (input: { instanceId: string; relayId: string }) =>
   dnsKey({
     relayId: input.relayId,
     resourceId: input.instanceId,
-    resourceType: "instance",
+    resourceType: "server",
   })
 
 const renameInstance = resourceOperation({
-  kind: "instance",
+  kind: "server",
   id: (input: z.infer<typeof instanceNameInputSchema>) => input.instanceId,
-  name: "instance.rename",
+  name: "server.rename",
   lock: { part: "name" },
   doing: "Renaming this game server",
-  permission: () => "instance.configuration.write",
+  permission: () => "server.configuration.write",
   run: renameInstanceHandler,
 })
 
@@ -537,7 +537,7 @@ async function renameInstanceHandler(
   )
   if (!instance) throw new Error("Instance not found")
 
-  const renamed = relayInstanceSchema.parse(
+  const renamed = relayServerSchema.parse(
     await relayRequestRaw(
       relay,
       `/v1/instances/${encodeURIComponent(instance.id)}`,
@@ -549,7 +549,7 @@ async function renameInstanceHandler(
       user.id
     )
   )
-  await updateInstanceSourceName(relay.id, renamed)
+  await updateServerSourceName(relay.id, renamed)
   await runAppEffect(
     "relay.snapshot.invalidate",
     invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
@@ -557,9 +557,9 @@ async function renameInstanceHandler(
   publishRealtimeChange({
     instance: renamed,
     relayId: relay.id,
-    type: "instance.upsert",
+    type: "server.upsert",
   })
-  return { ...projectRelayInstanceOverview(renamed), relayId: relay.id }
+  return { ...projectRelayServerOverview(renamed), relayId: relay.id }
 }
 
 export const deleteInstance = createServerFn({ method: "POST" })
@@ -571,7 +571,7 @@ export const deleteInstance = createServerFn({ method: "POST" })
       scope: instanceScope(relay.id, data.instanceId),
       user,
     })
-    authorization.require("instance.delete")
+    authorization.require("server.delete")
     await requireDeleteConfirmation({
       confirmation: data.confirmation,
       name: await instanceDeletionName(relay, data.instanceId),
@@ -584,7 +584,7 @@ export const deleteInstance = createServerFn({ method: "POST" })
     // on in the background if it outlasts this request.
     const deletion = await requestResourceDeletion({
       finalBackup: data.createBackup,
-      kind: "instance",
+      kind: "server",
       relayId: relay.id,
       resourceId: data.instanceId,
       storageId: data.storageId,
@@ -610,7 +610,7 @@ export const sendRelayConsoleCommand = createServerFn({ method: "POST" })
         headers: { "Content-Type": "application/json" },
         method: "POST",
       },
-      "instance.console.write",
+      "server.console.write",
       data.instanceId,
       data.relayId
     )
@@ -627,7 +627,7 @@ export const completeRelayConsoleCommand = createServerFn({ method: "POST" })
         headers: { "Content-Type": "application/json" },
         method: "POST",
       },
-      "instance.console.read",
+      "server.console.read",
       data.instanceId,
       data.relayId
     )
@@ -639,13 +639,13 @@ const removeDatabaseConnectionInputSchema =
 
 // Holds the database it disconnects from shared, so its deletion waits.
 const disconnectInstanceDatabase = resourceOperation({
-  kind: "instance",
+  kind: "server",
   id: (input: z.infer<typeof removeDatabaseConnectionInputSchema>) =>
     input.instanceId,
-  name: "instance.database.disconnect",
+  name: "server.database.disconnect",
   lock: "shared",
   doing: "Changing this game server's database connections",
-  permission: () => "instance.network.write",
+  permission: () => "server.network.write",
   alsoLocks: (input) => [
     shared(resourceKey("database", input.databaseRelayId, input.databaseId)),
   ],
@@ -666,7 +666,7 @@ async function removeInstanceDatabaseConnectionHandler(
   user: AuthenticatedUser,
   data: z.infer<typeof removeDatabaseConnectionInputSchema>
 ) {
-  const value = await relayInstanceRequest(
+  const value = await relayServerRequest(
     user,
     data.relayId,
     `/v1/instances/${encodeURIComponent(data.instanceId)}/database-connections`,
@@ -685,7 +685,7 @@ async function removeInstanceDatabaseConnectionHandler(
     scope: { relayId: data.relayId },
     topics: ["databases"],
   })
-  return { ...relayInstanceSchema.parse(value), relayId: data.relayId }
+  return { ...relayServerSchema.parse(value), relayId: data.relayId }
 }
 
 export const getInstanceWebRoutes = createServerFn({ method: "GET" })
@@ -694,7 +694,7 @@ export const getInstanceWebRoutes = createServerFn({ method: "GET" })
     const value = await relayRequest(
       `/v1/instances/${encodeURIComponent(data.instanceId)}/web-routes`,
       undefined,
-      "instance.network.read",
+      "server.network.read",
       data.instanceId,
       data.relayId
     )
@@ -707,14 +707,14 @@ export const getRelayInstanceResources = createServerFn({ method: "GET" })
     const value = await relayRequest(
       `/v1/instances/${encodeURIComponent(data.instanceId)}/resources`,
       undefined,
-      "instance.read",
+      "server.read",
       data.instanceId,
       data.relayId
     )
-    const snapshot = relayInstanceResourceSnapshotSchema.parse(value)
+    const snapshot = relayServerResourceSnapshotSchema.parse(value)
     return {
       ...snapshot,
-      instance: projectRelayInstanceOverview(snapshot.instance),
+      instance: projectRelayServerOverview(snapshot.instance),
     }
   })
 
@@ -731,7 +731,7 @@ const saveInstanceWebRoutes = operation<
         promiseEffect(() =>
           requireRelayPermission({
             instanceId: input.instanceId,
-            permission: "instance.network.write",
+            permission: "server.network.write",
             relayId: input.relayId,
             user: person,
           })
@@ -743,7 +743,7 @@ const saveInstanceWebRoutes = operation<
       dnsKey({
         relayId: input.relayId,
         resourceId: input.instanceId,
-        resourceType: "instance",
+        resourceType: "server",
       })
     ),
   ],
@@ -751,7 +751,7 @@ const saveInstanceWebRoutes = operation<
     promiseEffect(() => updateInstanceWebRoutesHandler(user, input)),
   audit: ({ input }) => ({
     id: input.instanceId,
-    kind: "instance",
+    kind: "server",
     relayId: input.relayId,
   }),
 })
@@ -774,7 +774,7 @@ async function updateInstanceWebRoutesHandler(
   const resource = {
     relayId: data.relayId,
     resourceId: data.instanceId,
-    resourceType: "instance" as const,
+    resourceType: "server" as const,
   }
   const { saveClaimingWebRouteHostnames, syncWebRouteHostnames } =
     await import("@/server/web-hostname-access.server")
@@ -814,9 +814,9 @@ async function updateInstanceWebRoutesHandler(
 }
 
 const changeInstancePorts = resourceOperation({
-  kind: "instance",
+  kind: "server",
   id: (input: z.infer<typeof portsInputSchema>) => input.instanceId,
-  name: "instance.ports.update",
+  name: "server.ports.update",
   lock: { part: "ports" },
   // A new public port moves its domains' address.
   alsoLocks: (input) => [exclusive(instanceDnsKey(input))],
@@ -837,7 +837,7 @@ async function updateInstancePortsHandler(
   user: AuthenticatedUser,
   data: z.infer<typeof portsInputSchema>
 ) {
-  const value = await relayInstanceRequest(
+  const value = await relayServerRequest(
     user,
     data.relayId,
     `/v1/instances/${encodeURIComponent(data.instanceId)}/ports`,
@@ -848,7 +848,7 @@ async function updateInstancePortsHandler(
     },
     240_000
   )
-  const instance = relayInstanceSchema.parse(value)
+  const instance = relayServerSchema.parse(value)
   await syncInstanceDomainAfterPortUpdateBestEffort(
     instance,
     data.relayId,
@@ -861,21 +861,21 @@ async function updateInstancePortsHandler(
   publishRealtimeChange({
     instance,
     relayId: data.relayId,
-    type: "instance.upsert",
+    type: "server.upsert",
   })
-  return { ...projectRelayInstanceOverview(instance), relayId: data.relayId }
+  return { ...projectRelayServerOverview(instance), relayId: data.relayId }
 }
 
 const leaseInstancePort = resourceOperation({
-  kind: "instance",
+  kind: "server",
   id: (input: z.infer<typeof portLeaseInputSchema>) => input.instanceId,
-  name: "instance.port.reserve",
+  name: "server.port.reserve",
   lock: "shared",
   doing: "Changing this game server's ports",
   permission: (input) =>
     input.externalPort === undefined
-      ? "instance.network.write"
-      : "instance.network.public-port.write",
+      ? "server.network.write"
+      : "server.network.public-port.write",
   run: reserveInstancePortHandler,
 })
 
@@ -912,18 +912,18 @@ async function reserveInstancePortHandler(
     user.id
   )
   const value = await response.json()
-  return relayInstancePortLeaseSchema.parse(value)
+  return relayServerPortLeaseSchema.parse(value)
 }
 
 const releaseInstancePortLease = resourceOperation({
-  kind: "instance",
+  kind: "server",
   id: (input: z.infer<typeof portLeaseReleaseInputSchema>) => input.instanceId,
-  name: "instance.port.release",
+  name: "server.port.release",
   lock: "shared",
   doing: "Changing this game server's ports",
-  permission: () => "instance.network.write",
+  permission: () => "server.network.write",
   run: async (user, data) => {
-    await relayInstanceRequest(
+    await relayServerRequest(
       user,
       data.relayId,
       `/v1/instances/${encodeURIComponent(data.instanceId)}/ports`,
@@ -953,7 +953,7 @@ export const getRelayTree = createServerFn({ method: "GET" })
       user,
       relay.id,
       data.instanceId,
-      "instance.files.read"
+      "server.files.read"
     )
     return runAppEffect(
       "relay.tree",
@@ -976,7 +976,7 @@ export const getRelayDirectoryPage = createServerFn({ method: "GET" })
       user,
       relay.id,
       data.instanceId,
-      "instance.files.read"
+      "server.files.read"
     )
     const search = new URLSearchParams({ path: data.path })
     if (data.cursor) search.set("cursor", data.cursor)
@@ -998,7 +998,7 @@ export const getRelayDirectorySizes = createServerFn({ method: "POST" })
       user,
       relay.id,
       data.instanceId,
-      "instance.files.read"
+      "server.files.read"
     )
     const input = relayDirectorySizesInputSchema.parse({
       instanceId: data.instanceId,
@@ -1023,7 +1023,7 @@ export const getRelayFileEntry = createServerFn({ method: "GET" })
       user,
       relay.id,
       data.instanceId,
-      "instance.files.read"
+      "server.files.read"
     )
     const search = new URLSearchParams({ path: data.path })
     return runAppEffect(
@@ -1044,7 +1044,7 @@ export const searchRelayFiles = createServerFn({ method: "GET" })
       user,
       relay.id,
       data.instanceId,
-      "instance.files.read"
+      "server.files.read"
     )
     const search = new URLSearchParams({ query: data.query })
     if (data.cursor) search.set("cursor", data.cursor)
@@ -1066,7 +1066,7 @@ export const getRelayFile = createServerFn({ method: "GET" })
       user,
       relay.id,
       data.instanceId,
-      "instance.files.read"
+      "server.files.read"
     )
     return traceAppPromise("relay.file", async () => {
       const response = await relayFetch(
@@ -1104,7 +1104,7 @@ const recordFileView = operation<z.infer<typeof fileInputSchema>>()({
   name: "files.view",
   doing: "Opening a file here",
   authorize: ({ input, user }) =>
-    fileRootAccess(input, user, "instance.files.read"),
+    fileRootAccess(input, user, "server.files.read"),
   locks: ({ input }) => [shared(fileRootKey(input.relayId, input.instanceId))],
   run: ({ context: { relay }, input }) =>
     promiseEffect(async () => {
@@ -1127,9 +1127,9 @@ export const recordRelayFileView = createServerFn({ method: "POST" })
   )
 
 type FilePermission =
-  | "instance.files.delete"
-  | "instance.files.read"
-  | "instance.files.write"
+  | "server.files.delete"
+  | "server.files.read"
+  | "server.files.write"
 
 /**
  * A change to the files of a game server, an App's folder or a Relay's host
@@ -1172,14 +1172,14 @@ const fileOperation = <
         ? { id: input.relayId, kind: "relay", relayId: input.relayId }
         : appId
           ? { id: appId, kind: "app", relayId: input.relayId }
-          : { id: input.instanceId, kind: "instance", relayId: input.relayId }
+          : { id: input.instanceId, kind: "server", relayId: input.relayId }
     },
   })
 
 const saveFile = fileOperation({
   name: "files.save",
   doing: "Saving a file here",
-  permission: () => "instance.files.write",
+  permission: () => "server.files.write",
   run: saveFileHandler,
 })
 
@@ -1225,7 +1225,7 @@ async function relayDatabaseRequest(
     user,
     relay.id,
     data.instanceId,
-    write ? "instance.files.write" : "instance.files.read"
+    write ? "server.files.write" : "server.files.read"
   )
   const response = await relayFetch(
     relay,
@@ -1279,7 +1279,7 @@ export const getRelayDatabaseRows = createServerFn({ method: "POST" })
 const changeSqliteFile = fileOperation({
   name: "files.sqlite.write",
   doing: "Changing a database file here",
-  permission: () => "instance.files.write",
+  permission: () => "server.files.write",
   run: (
     user,
     data: z.infer<typeof fileInputSchema> & { request: DatabaseWriteRequest }
@@ -1313,8 +1313,8 @@ const changeFiles = fileOperation({
   doing: "Changing files here",
   permission: (input: z.infer<typeof fileMutationInputSchema>) =>
     input.operation === "delete"
-      ? "instance.files.delete"
-      : "instance.files.write",
+      ? "server.files.delete"
+      : "server.files.write",
   run: changeFilesHandler,
 })
 
@@ -1358,7 +1358,7 @@ export const getRelayFileActivity = createServerFn({ method: "GET" })
       user,
       relay.id,
       data.instanceId,
-      "instance.files.read"
+      "server.files.read"
     )
     return relayFileActivitySchema.parse(
       await listFileActivity(relay.id, data.instanceId)
@@ -1371,7 +1371,7 @@ const pinFile = operation<z.infer<typeof filePinInputSchema>>()({
   name: "files.pin",
   doing: "Changing the pinned files here",
   authorize: ({ input, user }) =>
-    fileRootAccess(input, user, "instance.files.write"),
+    fileRootAccess(input, user, "server.files.write"),
   locks: ({ input }) => [
     shared(fileRootKey(input.relayId, input.instanceId)),
     exclusive(filePinsKey(input.relayId, input.instanceId)),
@@ -1436,14 +1436,14 @@ export const updateRelayFilePin = createServerFn({ method: "POST" })
   )
 
 const powerInstance = resourceOperation({
-  kind: "instance",
+  kind: "server",
   id: (input: z.infer<typeof actionInputSchema>) => input.instanceId,
-  name: "instance.power",
+  name: "server.power",
   lock: { part: "power" },
   // Starting it provisions its domains.
   alsoLocks: (input) => [exclusive(instanceDnsKey(input))],
   doing: "Changing this game server's power",
-  permission: (input) => `instance.power.${input.action}`,
+  permission: (input) => `server.power.${input.action}`,
   run: performInstanceActionHandler,
 })
 
@@ -1465,10 +1465,10 @@ async function performInstanceActionHandler(
     relay,
     `/v1/instances/${encodeURIComponent(instanceId)}/actions`,
     { method: "POST", body: JSON.stringify({ action }) },
-    relayControlDeadlineMs("instance.action"),
+    relayControlDeadlineMs("server.action"),
     user.id
   )
-  const instance = relayInstanceSchema.parse(await response.json())
+  const instance = relayServerSchema.parse(await response.json())
   if (action === "start" || action === "restart") {
     await provisionInstanceDomainBestEffort(instance, relay.id)
   }
@@ -1479,9 +1479,9 @@ async function performInstanceActionHandler(
   publishRealtimeChange({
     instance,
     relayId: relay.id,
-    type: "instance.upsert",
+    type: "server.upsert",
   })
-  return { ...projectRelayInstanceOverview(instance), relayId: relay.id }
+  return { ...projectRelayServerOverview(instance), relayId: relay.id }
 }
 
 // Publishing a game server's logs to mclo.gs changes nothing of Kiln's, but
@@ -1497,7 +1497,7 @@ const mayShareLogs = (
         const relay = await instanceRelay(input.relayId)
         await requireRelayPermission({
           instanceId: input.instanceId,
-          permission: "instance.logs.share",
+          permission: "server.logs.share",
           relayId: relay.id,
           user: person,
         })
@@ -1511,13 +1511,13 @@ const shareAudit = (input: {
   readonly relayId: string
 }) => ({
   id: input.instanceId,
-  kind: "instance" as const,
+  kind: "server" as const,
   relayId: input.relayId,
 })
 
 // The log is the person's own upload, so it holds nothing of the server's.
 const shareLog = operation<z.infer<typeof mclogsUploadInputSchema>>()({
-  name: "instance.logs.share",
+  name: "server.logs.share",
   doing: "Sharing this game server's logs",
   authorize: ({ input, user }) => mayShareLogs(input, user),
   locks: () => [],
@@ -1533,11 +1533,11 @@ export const uploadToMclogs = createServerFn({ method: "POST" })
 
 // The Relay reads the server's console, so it holds the server shared.
 const shareConsoleLog = operation<z.infer<typeof consoleShareInputSchema>>()({
-  name: "instance.console.share",
+  name: "server.console.share",
   doing: "Sharing this game server's console",
   authorize: ({ input, user }) => mayShareLogs(input, user),
   locks: ({ input }) => [
-    shared(resourceKey("instance", input.relayId, input.instanceId)),
+    shared(resourceKey("server", input.relayId, input.instanceId)),
   ],
   run: ({ context: { person, relay }, input }) =>
     promiseEffect(async () => {
@@ -1590,7 +1590,7 @@ const uploadLogEffect = Effect.fn("mclogs.upload")(function* (
           source: "Kiln",
           metadata: [
             {
-              key: "instance",
+              key: "server",
               label: "Instance",
               value: data.instanceId,
               visible: true,
@@ -1765,7 +1765,7 @@ function authorizeRelaySnapshot(
     grants
   )
   const instances = snapshot.instances.flatMap((item) =>
-    allowed.has(item.id) ? [projectRelayInstanceOverview(item)] : []
+    allowed.has(item.id) ? [projectRelayServerOverview(item)] : []
   )
   return {
     ...snapshot,
@@ -1872,7 +1872,7 @@ async function checkFilePermission(
       user,
       relayId,
       permission:
-        permission === "instance.files.read"
+        permission === "server.files.read"
           ? "relay.files.read"
           : "relay.files.write",
     })
@@ -1883,7 +1883,7 @@ async function checkFilePermission(
     await requireRelayPermission({
       appId,
       permission:
-        permission === "instance.files.read"
+        permission === "server.files.read"
           ? "app.files.read"
           : "app.files.write",
       relayId,
@@ -1930,7 +1930,7 @@ function instanceRelay(relayId: string) {
 
 // A request to a game server's Relay for an operation that has checked the
 // person may make it.
-async function relayInstanceRequest(
+async function relayServerRequest(
   user: AuthenticatedUser,
   relayId: string,
   path: string,

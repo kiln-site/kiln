@@ -45,7 +45,7 @@ const inAuthorizationLane = <A>(
 interface PendingDeliveryRow extends RowDataPacket {
   desired_revision: string
   scope_id: string
-  scope_kind: "instance" | "login_session" | "subject_relay"
+  scope_kind: "server" | "login_session" | "subject_relay"
   subject_id: string
 }
 
@@ -81,7 +81,7 @@ const reviseResultSchema = z.object({
       minimumRevision: z.number().int().nonnegative(),
       scope: z.discriminatedUnion("kind", [
         z.object({ kind: z.literal("subject_relay") }),
-        z.object({ instanceId: z.string(), kind: z.literal("instance") }),
+        z.object({ instanceId: z.string(), kind: z.literal("server") }),
         z.object({
           kind: z.literal("login_session"),
           loginSessionId: z.string(),
@@ -510,7 +510,7 @@ function safeRevision(value: string): number {
 
 function decodeScope(row: PendingDeliveryRow) {
   switch (row.scope_kind) {
-    case "instance":
+    case "server":
       return { instanceId: row.scope_id, kind: row.scope_kind } as const
     case "login_session":
       return { kind: row.scope_kind, loginSessionId: row.scope_id } as const
@@ -522,11 +522,11 @@ function decodeScope(row: PendingDeliveryRow) {
 function encodeScope(
   scope:
     | { kind: "subject_relay" }
-    | { instanceId: string; kind: "instance" }
+    | { instanceId: string; kind: "server" }
     | { kind: "login_session"; loginSessionId: string }
 ): [string, string] {
   switch (scope.kind) {
-    case "instance":
+    case "server":
       return [scope.kind, scope.instanceId]
     case "login_session":
       return [scope.kind, scope.loginSessionId]

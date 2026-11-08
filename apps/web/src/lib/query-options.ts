@@ -8,7 +8,7 @@ import type {
   RelayPlatformTarget,
   RelayConsoleResource,
   RelayFileEntry,
-  RelayInstance,
+  RelayServer,
 } from "@workspace/contracts"
 
 import type { BackupTarget } from "@workspace/contracts"
@@ -72,7 +72,7 @@ import { getAppVolumes, getRelayVolumes } from "@/server/relay-volumes"
 import { getRelayDockerStorage } from "@/server/relay-docker"
 import { fileViewerKind, fileViewerReadsText } from "@/lib/file-viewers"
 import { traceFileWork } from "@/lib/file-timing"
-import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
+import { reconcilePendingPowerSnapshot } from "@/lib/server-power-state"
 import { systemUpdateOverviewRefetchPolicy } from "@/lib/system-update-presence"
 import {
   getRelayConnectionState,
@@ -181,7 +181,7 @@ export const queryKeys = {
   domains: {
     hostnames: (
       relayId: string,
-      resourceType: "app" | "instance",
+      resourceType: "app" | "server",
       resourceId: string
     ) => ["domains", "hostnames", relayId, resourceType, resourceId] as const,
     instance: (relayId: string, instanceId: string) =>
@@ -345,7 +345,7 @@ export function scheduleOptionsQueryOptions() {
 
 export function replaceRelaySnapshotInstance(
   snapshot: RelayFleetSnapshot | undefined,
-  updated: RelayInstance & { relayId: string }
+  updated: RelayServer & { relayId: string }
 ): RelayFleetSnapshot | undefined {
   return snapshot
     ? {
@@ -361,7 +361,7 @@ export function replaceRelaySnapshotInstance(
 
 function mergeRelaySnapshotInstance(
   current: RelayFleetSnapshot["instances"][number],
-  updated: RelayInstance & { relayId: string }
+  updated: RelayServer & { relayId: string }
 ): RelayFleetSnapshot["instances"][number] {
   const endpointUnchanged =
     current.publicHost === updated.publicHost &&
@@ -423,7 +423,7 @@ export function backupStorageQueryOptions() {
 export function resourceUserCountQueryOptions(scope: {
   relayId: string
   resourceId: string
-  resourceType: "database" | "instance" | "relay"
+  resourceType: "database" | "server" | "relay"
 }) {
   return queryOptions({
     queryKey: [
@@ -445,7 +445,7 @@ export function resourceUserCountQueryOptions(scope: {
 export function resourceOwnerQueryOptions(scope: {
   relayId: string
   resourceId: string
-  resourceType: "database" | "instance" | "relay"
+  resourceType: "database" | "server" | "relay"
 }) {
   return queryOptions({
     queryKey: [
@@ -1308,7 +1308,7 @@ export function hearthEdgeQueryOptions() {
  */
 export function resourceWebHostnamesQueryOptions(
   relayId: string,
-  resourceType: "app" | "instance",
+  resourceType: "app" | "server",
   resourceId: string
 ) {
   return queryOptions({

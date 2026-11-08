@@ -1,16 +1,16 @@
 import type {
   RelayConsoleLine,
-  RelayInstanceLifecycleEvent,
-  RelayInstanceLifecycleState,
-  RelayInstanceRecovery,
-  RelayInstanceStateReason,
+  RelayServerLifecycleEvent,
+  RelayServerLifecycleState,
+  RelayServerRecovery,
+  RelayServerStateReason,
   RelayObservedState,
 } from "@workspace/contracts"
 
 export const CONSOLE_STARTUP_REASON_DELAY_MS = 60_000
 
 export function consoleRuntimeReasonDelayRemaining(
-  reason: RelayInstanceStateReason,
+  reason: RelayServerStateReason,
   startedAt: string | null,
   now = Date.now()
 ): number {
@@ -22,9 +22,9 @@ export function consoleRuntimeReasonDelayRemaining(
 }
 
 export function initialConsoleStateLines(
-  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>,
+  lifecycle: ReadonlyArray<RelayServerLifecycleEvent>,
   state: RelayObservedState | undefined,
-  recovery: RelayInstanceRecovery | null = null
+  recovery: RelayServerRecovery | null = null
 ): Array<RelayConsoleLine> {
   const recoveryLines = recovery ? [consoleRecoveryLine(recovery, null)] : []
   const lines = lifecycle.map((event) =>
@@ -38,9 +38,9 @@ export function initialConsoleStateLines(
 
 export function mergeConsoleStateLines(
   lines: ReadonlyArray<RelayConsoleLine>,
-  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>,
+  lifecycle: ReadonlyArray<RelayServerLifecycleEvent>,
   state: RelayObservedState | undefined,
-  recovery: RelayInstanceRecovery | null = null
+  recovery: RelayServerRecovery | null = null
 ): Array<RelayConsoleLine> {
   return [
     ...initialConsoleStateLines(lifecycle, state, recovery),
@@ -50,9 +50,9 @@ export function mergeConsoleStateLines(
 
 export function reconcileConsoleLifecycleLines(
   lines: ReadonlyArray<RelayConsoleLine>,
-  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>,
+  lifecycle: ReadonlyArray<RelayServerLifecycleEvent>,
   state: RelayObservedState | undefined,
-  recovery: RelayInstanceRecovery | null = null
+  recovery: RelayServerRecovery | null = null
 ): Array<RelayConsoleLine> {
   return mergeConsoleStateLines(
     lines.filter(
@@ -98,14 +98,14 @@ export function consoleSessionAcceptedAheadOfRuntime(
 }
 
 export function shouldAwaitConsoleRecoverySession(
-  recoveryPhase: RelayInstanceRecovery["phase"] | undefined,
+  recoveryPhase: RelayServerRecovery["phase"] | undefined,
   sessionAcceptedAheadOfRuntime: boolean
 ): boolean {
   return recoveryPhase === "pending" && !sessionAcceptedAheadOfRuntime
 }
 
 export function consoleRecoveryLine(
-  recovery: RelayInstanceRecovery,
+  recovery: RelayServerRecovery,
   timestamp: string | null
 ): RelayConsoleLine {
   const text = recoveryMessage(recovery)
@@ -259,7 +259,7 @@ function exactUtcTimestamp(
 }
 
 function lifecycleObservedState(
-  state: RelayInstanceLifecycleState
+  state: RelayServerLifecycleState
 ): RelayObservedState {
   if (state === "started") return "starting"
   if (state === "ready") return "running"
@@ -271,7 +271,7 @@ function linePosition(line: RelayConsoleLine): number {
   return isConsoleStateLine(line) || isConsoleRecoveryLine(line) ? 1 : 0
 }
 
-function recoveryMessage(recovery: RelayInstanceRecovery): string {
+function recoveryMessage(recovery: RelayServerRecovery): string {
   if (recovery.phase === "failed") {
     const cause =
       recovery.reason === "out_of_memory"

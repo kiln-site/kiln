@@ -330,8 +330,8 @@ export class BrowserSessionRegistry {
       { kind: "subject_relay" },
       // Hearth revises other kinds of resource for the person across the
       // Relay, which the scope above covers.
-      ...(authority.resourceKind === "instance"
-        ? ([{ instanceId: authority.instanceId, kind: "instance" }] as const)
+      ...(authority.resourceKind === "server"
+        ? ([{ instanceId: authority.instanceId, kind: "server" }] as const)
         : []),
       ...(authority.loginSessionId
         ? ([
@@ -429,7 +429,7 @@ export function authorityFromCapability(
     loginSessionId: capability.loginSessionId,
     operation: capability.operation,
     origin: capability.origin,
-    resourceKind: capability.resourceKind ?? "instance",
+    resourceKind: capability.resourceKind ?? "server",
     revision: capability.authorizationRevision,
     subject: capability.subject,
     version: 2,
@@ -468,7 +468,7 @@ function floorKey(
   scope: RelayBrowserAuthorizationRevision["scope"]
 ): string {
   const id =
-    scope.kind === "instance"
+    scope.kind === "server"
       ? scope.instanceId
       : scope.kind === "login_session"
         ? scope.loginSessionId

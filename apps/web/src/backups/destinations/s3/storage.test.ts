@@ -60,7 +60,7 @@ const insertRepository = (id: string, row: Record<string, string> = {}) =>
   insertRows("backup_repository", {
     id,
     relay_id: "relay-one",
-    target_kind: "instance",
+    target_kind: "server",
     target_id: "instance-one",
     storage_id: storageId,
     storage_key: storageId,
@@ -131,7 +131,7 @@ describeMysql("backup storage deletion", () => {
           yield* insertRows("resource_deletion", {
             id: "00000000-0000-4000-8000-0000000000de",
             relay_id: "relay-one",
-            resource_kind: "instance",
+            resource_kind: "server",
             resource_id: "instance-one",
             final_backup: true,
             backup_id: "final-backup",

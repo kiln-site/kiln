@@ -13,8 +13,8 @@ import {
   replaceRelaySnapshotInstance,
 } from "@/lib/query-options"
 import {
-  selectInstanceLimitsState,
-  type InstanceSettingsInstance,
+  selectServerLimitsState,
+  type SettingsServer,
 } from "@/lib/relay-selectors"
 import {
   invalidateRelaySnapshots,
@@ -47,13 +47,13 @@ export function ServerLimitsSection({
 }: {
   canRestart: boolean
   editable: boolean
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
   relayConnected: boolean
 }) {
   const { id, limits, pendingLimits, relayId } = instance
   const queryClient = useQueryClient()
   const selectState = React.useMemo(
-    () => selectInstanceLimitsState(id, relayId),
+    () => selectServerLimitsState(id, relayId),
     [id, relayId]
   )
   const { data: state } = useServerSnapshot(selectState)

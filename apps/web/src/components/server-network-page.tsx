@@ -22,15 +22,15 @@ import {
   Trash2,
 } from "lucide-react"
 import {
-  instanceTailscaleMemberId,
-  relayInstancePortInputSchema,
+  serverTailscaleMemberId,
+  relayServerPortInputSchema,
 } from "@workspace/contracts"
 import type {
-  RelayInstancePendingPrimaryPort,
-  RelayInstancePortAllocation,
-  RelayInstancePortInput,
-  RelayInstancePortLease,
-  RelayInstancePortProtocol,
+  RelayServerPendingPrimaryPort,
+  RelayServerPortAllocation,
+  RelayServerPortInput,
+  RelayServerPortLease,
+  RelayServerPortProtocol,
   RelayInstanceWebRouteInput,
   RelayInstanceWebRouteState,
 } from "@workspace/contracts"
@@ -62,10 +62,10 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import {
-  useInstanceIdentity,
-  useInstancePermissions,
-  useInstanceRelayConnected,
-} from "@/components/instance-workspace-context"
+  useServerIdentity,
+  useServerPermissions,
+  useServerRelayConnected,
+} from "@/components/server-workspace-context"
 import { ServerDomainsSection } from "@/components/server-domains-section"
 import {
   TailscaleMembershipSection,
@@ -95,7 +95,7 @@ import {
   updateRelaySnapshots,
 } from "@/lib/server-workspace"
 import { useServerSnapshot } from "@/lib/use-server-workspace"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { WorkspaceServer } from "@/lib/relay-selectors"
 import {
   performRelayAction,
   removeInstanceDatabaseConnection,
@@ -105,12 +105,12 @@ import {
   updateInstanceWebRoutes,
 } from "@/server/relay"
 
-export function InstanceNetworkPage({
+export function ServerNetworkPage({
   editGamePort = false,
 }: {
   editGamePort?: boolean
 }) {
-  const instance = useInstanceIdentity()
+  const instance = useServerIdentity()
   const { data: isPlatformAdmin } = useSuspenseQuery({
     ...accessCapabilitiesQueryOptions(),
     select: (capabilities) => capabilities.isPlatformAdmin,
@@ -141,14 +141,14 @@ function WebRoutesNetworkPage({
   editGamePort: boolean
   showTailscale: boolean
 }) {
-  const instance = useInstanceIdentity()
-  const permissions = useInstancePermissions()
-  const relayConnected = useInstanceRelayConnected()
+  const instance = useServerIdentity()
+  const permissions = useServerPermissions()
+  const relayConnected = useServerRelayConnected()
   const dnsResource = React.useMemo(
     () => ({
       relayId: instance.relayId,
       resourceId: instance.id,
-      resourceType: "instance" as const,
+      resourceType: "server" as const,
     }),
     [instance.id, instance.relayId]
   )
@@ -274,7 +274,7 @@ function WebRoutesNetworkPage({
 const noDatabaseWarnings: ReadonlyArray<string> = []
 
 function DatabaseConnectionWarnings() {
-  const instance = useInstanceIdentity()
+  const instance = useServerIdentity()
   const select = React.useCallback(
     (snapshot: RelayFleetSnapshot) =>
       snapshot.instances.find(
@@ -310,9 +310,9 @@ const noSavedDatabaseConnections: NonNullable<
 > = []
 
 function SavedDatabaseConnections() {
-  const instance = useInstanceIdentity()
-  const permissions = useInstancePermissions()
-  const relayConnected = useInstanceRelayConnected()
+  const instance = useServerIdentity()
+  const permissions = useServerPermissions()
+  const relayConnected = useServerRelayConnected()
   const queryClient = useQueryClient()
   const select = React.useCallback(
     (snapshot: RelayFleetSnapshot) =>
@@ -396,7 +396,7 @@ function SavedDatabaseConnections() {
 
 type RouteDialogState =
   | { mode: "add" }
-  | { allocation: RelayInstancePortAllocation; mode: "edit-port" }
+  | { allocation: RelayServerPortAllocation; mode: "edit-port" }
   | { mode: "recover-primary" }
   | null
 
@@ -404,13 +404,13 @@ type PendingNetworkRoute = {
   internalPort: number
   kind: "port"
   name: string
-  protocol: RelayInstancePortProtocol
+  protocol: RelayServerPortProtocol
   publicPort?: number
 }
 
 type AddedNetworkRoute =
   | {
-      allocation: RelayInstancePortAllocation
+      allocation: RelayServerPortAllocation
       clientId: string
       kind: "port"
       status: "ready"
@@ -423,7 +423,7 @@ type AddedNetworkRoute =
     }
 
 type RouteRemovalState = {
-  allocation: RelayInstancePortAllocation
+  allocation: RelayServerPortAllocation
   kind: "port"
   placement: { source: "added" } | { index: number; source: "server" }
   phase: "confirming" | "removing"
@@ -447,7 +447,7 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
   canPublicPortWrite: boolean
   canWrite: boolean
   editGamePort: boolean
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
   relayConnected: boolean
   restarting: boolean
   onRestart: () => void
@@ -483,7 +483,7 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
     })
   }, [editGamePort, navigate])
   const update = useMutation({
-    mutationFn: (ports: Array<RelayInstancePortInput>) =>
+    mutationFn: (ports: Array<RelayServerPortInput>) =>
       updateInstancePorts({
         data: {
           instanceId: instance.id,
@@ -527,7 +527,7 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
     [instance.ports]
   )
   const applyPort = React.useCallback(
-    async (port: RelayInstancePortInput) => {
+    async (port: RelayServerPortInput) => {
       const ports =
         dialog?.mode === "edit-port"
           ? portInputs.map((existing) =>
@@ -541,7 +541,7 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
     [dialog, portInputs, update]
   )
   const addPort = React.useCallback(
-    async (port: RelayInstancePortInput) => {
+    async (port: RelayServerPortInput) => {
       setAddedRoutes((current) =>
         current.map((route) =>
           route.kind === "port" && route.status === "pending"
@@ -602,7 +602,7 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
     [portInputs, update]
   )
   const removePort = React.useCallback(
-    (allocation: RelayInstancePortAllocation) => {
+    (allocation: RelayServerPortAllocation) => {
       if (allocation.kind !== "custom" || disabled) return
       const added = addedRoutes.some(
         (route) =>
@@ -630,7 +630,7 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
     [addedRoutes, disabled, instance.ports]
   )
   const editPort = React.useCallback(
-    (allocation: RelayInstancePortAllocation) => {
+    (allocation: RelayServerPortAllocation) => {
       update.reset()
       setDialog({ allocation, mode: "edit-port" })
     },
@@ -817,13 +817,13 @@ const ConfiguredRoutesTable = React.memo(function ConfiguredRoutesTable({
   canRestart: boolean
   canWrite: boolean
   disabled: boolean
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
   restarting: boolean
   removal: RouteRemovalState | null
   removedRouteKeys: ReadonlySet<string>
-  onEditPort: (allocation: RelayInstancePortAllocation) => void
+  onEditPort: (allocation: RelayServerPortAllocation) => void
   onRecoverPrimaryPort: () => void
-  onRemovePort: (allocation: RelayInstancePortAllocation) => void
+  onRemovePort: (allocation: RelayServerPortAllocation) => void
   onRestart: () => void
 }) {
   const primaryPort = instance.ports.find(
@@ -1082,13 +1082,13 @@ const PortRouteRow = React.memo(function PortRouteRow({
   onEdit,
   onRemove,
 }: {
-  allocation: RelayInstancePortAllocation
+  allocation: RelayServerPortAllocation
   canWrite: boolean
   deleting?: boolean
   disabled: boolean
   publicHost?: string
-  onEdit: (allocation: RelayInstancePortAllocation) => void
-  onRemove: (allocation: RelayInstancePortAllocation) => void
+  onEdit: (allocation: RelayServerPortAllocation) => void
+  onRemove: (allocation: RelayServerPortAllocation) => void
 }) {
   const address = publicHost
     ? formatHostPort(publicHost, allocation.externalPort)
@@ -1181,9 +1181,9 @@ function AddedRouteRow({
   canWrite: boolean
   deleting: boolean
   disabled: boolean
-  instance: InstanceWorkspaceInstance
-  onEditPort: (allocation: RelayInstancePortAllocation) => void
-  onRemovePort: (allocation: RelayInstancePortAllocation) => void
+  instance: WorkspaceServer
+  onEditPort: (allocation: RelayServerPortAllocation) => void
+  onRemovePort: (allocation: RelayServerPortAllocation) => void
 }) {
   if (addedRoute.kind === "port") {
     const details =
@@ -1542,19 +1542,19 @@ function usePortLease({
   enabled: boolean
   initialPort?: number
   instanceId: string
-  protocol: RelayInstancePortProtocol
+  protocol: RelayServerPortProtocol
   relayId: string
 }) {
   const [error, setError] = React.useState<string | null>(null)
-  const [lease, setLease] = React.useState<RelayInstancePortLease | null>(null)
+  const [lease, setLease] = React.useState<RelayServerPortLease | null>(null)
   const [pending, setPending] = React.useState(enabled)
   const [portValue, setPortValueState] = React.useState("")
   const [sealed, setSealed] = React.useState(false)
   const generation = React.useRef(0)
-  const leasePromiseRef = React.useRef<Promise<RelayInstancePortLease> | null>(
+  const leasePromiseRef = React.useRef<Promise<RelayServerPortLease> | null>(
     null
   )
-  const leaseRef = React.useRef<RelayInstancePortLease | null>(null)
+  const leaseRef = React.useRef<RelayServerPortLease | null>(null)
   const portDirty = React.useRef(false)
   const portValueRef = React.useRef("")
   const sealedRef = React.useRef(false)
@@ -1848,8 +1848,8 @@ function ProtocolSelect({
   value,
   onChange,
 }: {
-  value: RelayInstancePortProtocol
-  onChange: (protocol: RelayInstancePortProtocol) => void
+  value: RelayServerPortProtocol
+  onChange: (protocol: RelayServerPortProtocol) => void
 }) {
   return (
     <Select
@@ -1857,7 +1857,7 @@ function ProtocolSelect({
       value={value}
       onValueChange={(nextValue) => {
         const parsed =
-          relayInstancePortInputSchema.shape.protocol.safeParse(nextValue)
+          relayServerPortInputSchema.shape.protocol.safeParse(nextValue)
         if (parsed.success) onChange(parsed.data)
       }}
     >
@@ -1892,13 +1892,13 @@ function AddPortDialog({
   onBeginSubmit: (route: PendingNetworkRoute) => void
   onCancelSubmit: () => void
   onOpenChange: (open: boolean) => void
-  onSubmitPort: (port: RelayInstancePortInput) => Promise<void>
+  onSubmitPort: (port: RelayServerPortInput) => Promise<void>
 }) {
   const [validationError, setValidationError] = React.useState<string | null>(
     null
   )
   const [protocol, setProtocol] =
-    React.useState<RelayInstancePortProtocol>("tcp")
+    React.useState<RelayServerPortProtocol>("tcp")
   const [internalPort, setInternalPort] = React.useState<string | null>(null)
   const [submitted, setSubmitted] = React.useState(false)
   const portLease = usePortLease({
@@ -1927,7 +1927,7 @@ function AddPortDialog({
         <form
           action={(form) => {
             void (async () => {
-              const draft = relayInstancePortInputSchema.safeParse({
+              const draft = relayServerPortInputSchema.safeParse({
                 internalPort: Number(form.get("internalPort")),
                 name: String(form.get("name") ?? ""),
                 protocol,
@@ -1960,7 +1960,7 @@ function AddPortDialog({
                 }
               )
               if (!lease) return
-              const parsed = relayInstancePortInputSchema.safeParse({
+              const parsed = relayServerPortInputSchema.safeParse({
                 externalPort: lease.externalPort,
                 internalPort: draft.data.internalPort,
                 leaseId: lease.id,
@@ -2074,24 +2074,24 @@ function PortAllocationDialog({
   onOpenChange,
   onSubmit,
 }: {
-  allocation: RelayInstancePortAllocation | null
+  allocation: RelayServerPortAllocation | null
   canEditPublicPort: boolean
   error: string | null
   instanceId: string
   open: boolean
   pending: boolean
-  pendingPrimaryPort: RelayInstancePendingPrimaryPort | null
+  pendingPrimaryPort: RelayServerPendingPrimaryPort | null
   relayId: string
   recoveringPrimary?: boolean
   onOpenChange: (open: boolean) => void
-  onSubmit: (port: RelayInstancePortInput) => Promise<void>
+  onSubmit: (port: RelayServerPortInput) => Promise<void>
 }) {
   const [validationError, setValidationError] = React.useState<string | null>(
     null
   )
   const editing = allocation !== null || recoveringPrimary
   const isDefaultServer = recoveringPrimary || allocation?.kind === "primary"
-  const [protocol, setProtocol] = React.useState<RelayInstancePortProtocol>(
+  const [protocol, setProtocol] = React.useState<RelayServerPortProtocol>(
     allocation?.protocol ?? pendingPrimaryPort?.protocol ?? "tcp"
   )
   const [internalPort, setInternalPort] = React.useState(
@@ -2142,7 +2142,7 @@ function PortAllocationDialog({
             (recoveringPrimary ? "primary" : "new")
           }
           action={async (form) => {
-            const parsed = relayInstancePortInputSchema.safeParse({
+            const parsed = relayServerPortInputSchema.safeParse({
               id: allocation?.id ?? (recoveringPrimary ? "primary" : undefined),
               internalPort: Number(form.get("internalPort")),
               name: isDefaultServer
@@ -2430,7 +2430,7 @@ function formatHostPort(host: string, port: number): string {
   return `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`
 }
 
-function formatPortProtocol(protocol: RelayInstancePortProtocol): string {
+function formatPortProtocol(protocol: RelayServerPortProtocol): string {
   return protocol === "both" ? "TCP + UDP" : protocol.toUpperCase()
 }
 
@@ -2465,7 +2465,7 @@ function GameServerTailscale({
   const member = React.useMemo(
     () => ({
       id,
-      memberId: instanceTailscaleMemberId(id),
+      memberId: serverTailscaleMemberId(id),
       name,
       relayId,
       relayName,

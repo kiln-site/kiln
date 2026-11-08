@@ -2,7 +2,7 @@ import {
   relayConsoleReadActions,
   relayPlatformTargetSchema,
   type RelayBrowserResourceKind,
-  type RelayInstanceLifecycleEvent,
+  type RelayServerLifecycleEvent,
 } from "@workspace/contracts"
 
 import type { AppDriver } from "./apps.js"
@@ -26,7 +26,7 @@ export interface ConsoleSource {
   // once the old run's output ends.
   readonly lifecycle?: (
     sample: RelaySnapshotSample
-  ) => ReadonlyArray<RelayInstanceLifecycleEvent> | undefined
+  ) => ReadonlyArray<RelayServerLifecycleEvent> | undefined
 }
 
 export type ConsoleSources = (
@@ -53,12 +53,12 @@ export function consoleSources(
 ): ConsoleSources {
   return (kind, id, stream) => {
     switch (kind) {
-      case "instance":
+      case "server":
         return {
           lifecycle: (sample) =>
             sample.snapshot.instances.find((instance) => instance.id === id)
               ?.lifecycle,
-          readAction: relayConsoleReadActions.instance,
+          readAction: relayConsoleReadActions.server,
           session: (signal) => docker.consoleSession(id, signal),
         }
       case "database":

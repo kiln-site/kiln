@@ -22,7 +22,7 @@ export const resourceOperation = <
   Input extends { readonly relayId: string },
   A,
 >(definition: {
-  readonly kind: "app" | "database" | "instance"
+  readonly kind: "app" | "database" | "server"
   readonly id: (input: Input) => string
   readonly name: string
   readonly doing: string | ((input: Input) => string)

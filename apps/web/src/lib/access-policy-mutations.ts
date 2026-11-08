@@ -115,8 +115,8 @@ export function lockAccessScopeEffect(
       return relays[0]
     }
     const rows = yield* transaction.queryRows<TargetRow>(
-      scope.resourceType === "instance"
-        ? `SELECT COALESCE(display_name, source_name) AS name, owner_id FROM ${databaseTable("instance")} WHERE relay_id = ? AND instance_id = ? FOR UPDATE`
+      scope.resourceType === "server"
+        ? `SELECT COALESCE(display_name, source_name) AS name, owner_id FROM ${databaseTable("server")} WHERE relay_id = ? AND instance_id = ? FOR UPDATE`
         : scope.resourceType === "database"
           ? `SELECT name, engine, owner_id FROM ${databaseTable("database")} WHERE relay_id = ? AND database_id = ? FOR UPDATE`
           : `SELECT name, owner_id FROM ${databaseTable("app")} WHERE relay_id = ? AND app_id = ? FOR UPDATE`,
@@ -312,8 +312,8 @@ export function advanceScopeAccessEffect(
       {
         relayId: scope.relayId,
         scope:
-          scope.resourceType === "instance"
-            ? { kind: "instance", instanceId: scope.resourceId }
+          scope.resourceType === "server"
+            ? { kind: "server", instanceId: scope.resourceId }
             : { kind: "subject_relay" },
       },
     ],
@@ -419,12 +419,12 @@ export function copyInstanceAccessEffect(input: {
   const fromScope: ResourceScope = {
     relayId: input.from.relayId,
     resourceId: input.from.instanceId,
-    resourceType: "instance",
+    resourceType: "server",
   }
   const toScope: ResourceScope = {
     relayId: input.to.relayId,
     resourceId: input.to.instanceId,
-    resourceType: "instance",
+    resourceType: "server",
   }
   return accessPolicyTransaction("access.copyInstance", (transaction) =>
     Effect.gen(function* () {
@@ -443,7 +443,7 @@ export function copyInstanceAccessEffect(input: {
       const target = fromFirst ? second : first
       const presets = yield* transaction.queryRows<CopiedPresetRow>(
         `SELECT id, name FROM ${databaseTable("permission_preset")}
-          WHERE relay_id = ? AND resource_type = 'instance' AND resource_id = ?`,
+          WHERE relay_id = ? AND resource_type = 'server' AND resource_id = ?`,
         [fromScope.relayId, fromScope.resourceId]
       )
       const presetIds = new Map<string, string>()
@@ -456,7 +456,7 @@ export function copyInstanceAccessEffect(input: {
           `INSERT IGNORE INTO ${databaseTable("permission_preset")}
              (id, relay_id, resource_type, resource_id, name, created_by,
               updated_by, created_at, updated_at)
-           VALUES (?, ?, 'instance', ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, 'server', ?, ?, ?, ?, ?, ?)`,
           [
             id,
             toScope.relayId,
@@ -479,7 +479,7 @@ export function copyInstanceAccessEffect(input: {
       }
       const grants = yield* transaction.queryRows<CopiedGrantRow>(
         `SELECT id, user_id, role FROM ${databaseTable("access_grant")}
-          WHERE relay_id = ? AND resource_type = 'instance'
+          WHERE relay_id = ? AND resource_type = 'server'
             AND resource_id = ? AND state = 'active'`,
         [fromScope.relayId, fromScope.resourceId]
       )
@@ -491,7 +491,7 @@ export function copyInstanceAccessEffect(input: {
           `INSERT IGNORE INTO ${databaseTable("access_grant")}
              (id, user_id, relay_id, resource_type, resource_id, role, state,
               granted_by, created_at, updated_at)
-           VALUES (?, ?, ?, 'instance', ?, ?, 'active', ?, ?, ?)`,
+           VALUES (?, ?, ?, 'server', ?, ?, 'active', ?, ?, ?)`,
           [
             id,
             grant.user_id,

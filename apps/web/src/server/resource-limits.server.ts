@@ -1,5 +1,5 @@
 import {
-  relayInstanceSchema,
+  relayServerSchema,
   relaySnapshotSchema,
   type ResourceLimits,
 } from "@workspace/contracts"
@@ -52,10 +52,10 @@ export async function saveInstanceLimits(
   data: { instanceId: string; limits: ResourceLimits; relayId: string }
 ) {
   const relay = await requiredRelay(data.relayId)
-  const instance = relayInstanceSchema.parse(
+  const instance = relayServerSchema.parse(
     await databaseRpc(
       relay,
-      "instance.limits.write",
+      "server.limits.write",
       { instanceId: data.instanceId, limits: data.limits },
       240_000,
       user.id
@@ -68,7 +68,7 @@ export async function saveInstanceLimits(
   publishRealtimeChange({
     instance,
     relayId: relay.id,
-    type: "instance.upsert",
+    type: "server.upsert",
   })
   return instance
 }
@@ -80,6 +80,6 @@ function readPermission(id: string, kind: "app" | "database" | "server") {
     case "database":
       return { databaseId: id, permission: "database.read" } as const
     case "server":
-      return { instanceId: id, permission: "instance.read" } as const
+      return { instanceId: id, permission: "server.read" } as const
   }
 }

@@ -51,7 +51,7 @@ const deliveries = Effect.map(
 
 const instanceTarget = {
   relayId: "relay-one",
-  scope: { instanceId: "instance-one", kind: "instance" },
+  scope: { instanceId: "instance-one", kind: "server" },
 } satisfies AuthorizationDeliveryTarget
 
 describeMysql("authorization revisions", () => {
@@ -70,7 +70,7 @@ describeMysql("authorization revisions", () => {
           yield* insertRows("authorization_delivery", {
             relay_id: "relay-one",
             subject_id: "user-one",
-            scope_kind: "instance",
+            scope_kind: "server",
             scope_id: "instance-one",
             desired_revision: 5,
             acknowledged_revision: 3,
@@ -84,7 +84,7 @@ describeMysql("authorization revisions", () => {
           expect(yield* deliveries).toEqual([
             {
               relayId: "relay-one",
-              scope: "instance:instance-one",
+              scope: "server:instance-one",
               desired: 9,
               acknowledged: 3,
             },

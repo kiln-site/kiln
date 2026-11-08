@@ -9,10 +9,10 @@ import {
 import { LazyFileWorkspace } from "@/components/files/lazy-file-workspace"
 import {
   useFileTreePreferences,
-  useInstanceIdentity,
-  useInstancePermissions,
-  useInstanceRelayConnected,
-} from "@/components/instance-workspace-context"
+  useServerIdentity,
+  useServerPermissions,
+  useServerRelayConnected,
+} from "@/components/server-workspace-context"
 import { pageTitle } from "@/lib/page-title"
 import { requireServerDestinationAccess } from "@/lib/route-access"
 import { filePageLocation, startFilePageReads } from "@/lib/file-page-reads"
@@ -64,9 +64,9 @@ function FilesRoute() {
   }, [filePath])
 
   const fileTreePreferences = useFileTreePreferences()
-  const instance = useInstanceIdentity()
-  const permissions = useInstancePermissions()
-  const relayConnected = useInstanceRelayConnected()
+  const instance = useServerIdentity()
+  const permissions = useServerPermissions()
+  const relayConnected = useServerRelayConnected()
 
   return (
     <LazyFileWorkspace

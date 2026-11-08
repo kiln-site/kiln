@@ -397,7 +397,7 @@ export const saveDomainConnectionEffect = Effect.fn("domains.connection.save")(
         >(
           // A domain a rename is moving onto counts as used too.
           `SELECT zone.domain
-             FROM ${databaseTable("instance_domain")} assignment
+             FROM ${databaseTable("server_domain")} assignment
              JOIN ${databaseTable("domain_zone")} zone
                ON zone.domain = assignment.domain
                OR zone.domain = assignment.next_domain
@@ -529,7 +529,7 @@ export const requireConnectionUnusedEffect = Effect.fn(
   const database = yield* Database
   const [used] = yield* database.queryRows<RowDataPacket & { total: number }>(
     "domains.connection.requireUnused",
-    `SELECT COUNT(*) AS total FROM ${databaseTable("instance_domain")}
+    `SELECT COUNT(*) AS total FROM ${databaseTable("server_domain")}
       WHERE ${connectionDomainsMatch}`,
     [id, id, id]
   )
@@ -588,7 +588,7 @@ export const deleteDomainConnectionEffect = Effect.fn(
       const [used] = yield* transaction.queryRows<
         RowDataPacket & { total: number }
       >(
-        `SELECT COUNT(*) AS total FROM ${databaseTable("instance_domain")}
+        `SELECT COUNT(*) AS total FROM ${databaseTable("server_domain")}
           WHERE ${connectionDomainsMatch}
           LOCK IN SHARE MODE`,
         [id, id, id]
@@ -702,7 +702,7 @@ export const deleteInstanceDomainAssignmentEffect = Effect.fn(
     Effect.gen(function* () {
       yield* database.execute(
         "domains.assignment.delete",
-        `DELETE FROM ${databaseTable("instance_domain")} WHERE id = ?`,
+        `DELETE FROM ${databaseTable("server_domain")} WHERE id = ?`,
         [assignment.id]
       )
       yield* releaseUnusedHostnamesEffect(
@@ -714,7 +714,7 @@ export const deleteInstanceDomainAssignmentEffect = Effect.fn(
   )
 })
 
-export const deleteRelayInstanceDomainAssignmentsEffect = Effect.fn(
+export const deleteRelayServerDomainAssignmentsEffect = Effect.fn(
   "domains.assignments.deleteRelay"
 )(function* (relayId: string) {
   const database = yield* Database
@@ -722,7 +722,7 @@ export const deleteRelayInstanceDomainAssignmentsEffect = Effect.fn(
     Effect.gen(function* () {
       yield* database.execute(
         "domains.assignments.deleteRelay",
-        `DELETE FROM ${databaseTable("instance_domain")} WHERE relay_id = ?`,
+        `DELETE FROM ${databaseTable("server_domain")} WHERE relay_id = ?`,
         [relayId]
       )
       yield* releaseUnusedHostnamesEffect({ relayId })
@@ -730,7 +730,7 @@ export const deleteRelayInstanceDomainAssignmentsEffect = Effect.fn(
   )
   yield* database.execute(
     "domains.optOuts.deleteRelay",
-    `DELETE FROM ${databaseTable("instance_domain_opt_out")} WHERE relay_id = ?`,
+    `DELETE FROM ${databaseTable("server_domain_opt_out")} WHERE relay_id = ?`,
     [relayId]
   )
 })
@@ -740,14 +740,14 @@ export const deleteRelayInstanceDomainAssignmentsEffect = Effect.fn(
  * are deleted, so any delete that fails is finished by the DNS worker. Its
  * opt-outs go with it.
  */
-export const markRelayInstanceDomainsRemovingEffect = Effect.fn(
+export const markRelayServerDomainsRemovingEffect = Effect.fn(
   "domains.assignments.markRelayRemoving"
 )(function* (relayId: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignments.markRelayRemoving",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
         SET status = 'removing', is_primary = 0, attempts = 0,
             next_attempt_at = NULL, updated_at = ?
       WHERE relay_id = ?`,
@@ -755,7 +755,7 @@ export const markRelayInstanceDomainsRemovingEffect = Effect.fn(
   )
   yield* database.execute(
     "domains.optOuts.deleteRelay",
-    `DELETE FROM ${databaseTable("instance_domain_opt_out")} WHERE relay_id = ?`,
+    `DELETE FROM ${databaseTable("server_domain_opt_out")} WHERE relay_id = ?`,
     [relayId]
   )
 })
@@ -777,7 +777,7 @@ export const reassignInstanceDomainsEffect = Effect.fn(
       const moving = yield* database.queryRows<InstanceDomainRow>(
         "domains.assignments.reassign",
         `SELECT assignment.*, NULL AS zone_id
-           FROM ${databaseTable("instance_domain")} assignment
+           FROM ${databaseTable("server_domain")} assignment
           WHERE relay_id = ? AND instance_id = ? AND status <> 'removing'
           FOR UPDATE`,
         [from.relayId, from.instanceId]
@@ -785,7 +785,7 @@ export const reassignInstanceDomainsEffect = Effect.fn(
       if (moving.length === 0) return 0
       yield* database.execute(
         "domains.assignments.reassign",
-        `UPDATE ${databaseTable("instance_domain")}
+        `UPDATE ${databaseTable("server_domain")}
             SET relay_id = ?, instance_id = ?, attempts = 0,
                 next_attempt_at = NULL
           WHERE relay_id = ? AND instance_id = ? AND status <> 'removing'`,
@@ -801,7 +801,7 @@ export const reassignInstanceDomainsEffect = Effect.fn(
         `UPDATE ${databaseTable("web_hostname")}
             SET relay_id = ?, resource_id = ?, attempts = 0,
                 next_attempt_at = NULL
-          WHERE relay_id = ? AND resource_type = 'instance'
+          WHERE relay_id = ? AND resource_type = 'server'
             AND resource_id = ? AND status <> 'removing'
             AND hostname IN (${names.map(() => "?").join(", ")})`,
         [to.relayId, to.instanceId, from.relayId, from.instanceId, ...names]
@@ -810,12 +810,12 @@ export const reassignInstanceDomainsEffect = Effect.fn(
         {
           relayId: from.relayId,
           resourceId: from.instanceId,
-          resourceType: "instance",
+          resourceType: "server",
         },
         {
           relayId: to.relayId,
           resourceId: to.instanceId,
-          resourceType: "instance",
+          resourceType: "server",
         },
         names
       )
@@ -829,7 +829,7 @@ export const loadInstanceDomainOptOutEffect = Effect.fn("domains.optOut.load")(
     const database = yield* Database
     const rows = yield* database.queryRows<RowDataPacket>(
       "domains.optOut.load",
-      `SELECT 1 FROM ${databaseTable("instance_domain_opt_out")}
+      `SELECT 1 FROM ${databaseTable("server_domain_opt_out")}
       WHERE relay_id = ? AND instance_id = ?
       LIMIT 1`,
       [relayId, instanceId]
@@ -844,7 +844,7 @@ export const setInstanceDomainOptOutEffect = Effect.fn("domains.optOut.set")(
     if (!optedOut) {
       yield* database.execute(
         "domains.optOut.clear",
-        `DELETE FROM ${databaseTable("instance_domain_opt_out")}
+        `DELETE FROM ${databaseTable("server_domain_opt_out")}
           WHERE relay_id = ? AND instance_id = ?`,
         [relayId, instanceId]
       )
@@ -853,7 +853,7 @@ export const setInstanceDomainOptOutEffect = Effect.fn("domains.optOut.set")(
     const now = yield* Clock.currentTimeMillis
     yield* database.execute(
       "domains.optOut.save",
-      `INSERT IGNORE INTO ${databaseTable("instance_domain_opt_out")}
+      `INSERT IGNORE INTO ${databaseTable("server_domain_opt_out")}
          (relay_id, instance_id, created_at)
        VALUES (?, ?, ?)`,
       [relayId, instanceId, now]
@@ -861,7 +861,7 @@ export const setInstanceDomainOptOutEffect = Effect.fn("domains.optOut.set")(
   }
 )
 
-export const loadRelayInstanceDomainAssignmentsEffect = Effect.fn(
+export const loadRelayServerDomainAssignmentsEffect = Effect.fn(
   "domains.assignments.relay"
 )(function* (relayId: string) {
   const database = yield* Database
@@ -934,7 +934,7 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
         {
           relayId: input.relayId,
           resourceId: input.instanceId,
-          resourceType: "instance",
+          resourceType: "server",
         },
         [`${input.vanityLabel}.${input.domain}`]
       )
@@ -943,7 +943,7 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
       // this insert finds nothing.
       const result = yield* database.execute(
         "domains.assignment.insert",
-        `INSERT INTO ${databaseTable("instance_domain")}
+        `INSERT INTO ${databaseTable("server_domain")}
            (id, relay_id, instance_id, is_primary, integration_id,
             vanity_label, domain, public_host, public_port, supports_srv,
             srv_service, srv_protocol, status, last_error, created_at,
@@ -1019,7 +1019,7 @@ export const reserveInstanceDomainAssignmentEffect = Effect.fn(
         `${input.vanityLabel}.${input.domain}`,
       ])
       yield* transaction.execute(
-        `UPDATE ${databaseTable("instance_domain")}
+        `UPDATE ${databaseTable("server_domain")}
             SET vanity_label = ?,
                 domain = ?,
                 next_vanity_label = NULL,
@@ -1101,7 +1101,7 @@ export const beginInstanceDomainRenameEffect = Effect.fn(
       ])
       yield* database.execute(
         "domains.assignment.beginRename",
-        `UPDATE ${databaseTable("instance_domain")}
+        `UPDATE ${databaseTable("server_domain")}
             SET next_vanity_label = ?, next_domain = ?, attempts = 0,
                 next_attempt_at = NULL, updated_at = ?
           WHERE id = ?`,
@@ -1126,7 +1126,7 @@ export const finishInstanceDomainRenameEffect = Effect.fn(
       if (!current.next) return
       yield* database.execute(
         "domains.assignment.finishRename",
-        `UPDATE ${databaseTable("instance_domain")}
+        `UPDATE ${databaseTable("server_domain")}
             SET vanity_label = next_vanity_label, domain = next_domain,
                 next_vanity_label = NULL, next_domain = NULL,
                 last_error = NULL, attempts = 0, next_attempt_at = NULL,
@@ -1146,7 +1146,7 @@ const lockAssignmentEffect = Effect.fnUntraced(function* (id: string) {
   const [row] = yield* database.queryRows<InstanceDomainRow>(
     "domains.assignment.lock",
     `SELECT assignment.*, NULL AS zone_id
-       FROM ${databaseTable("instance_domain")} assignment
+       FROM ${databaseTable("server_domain")} assignment
       WHERE id = ?
       FOR UPDATE`,
     [id]
@@ -1170,7 +1170,7 @@ export const markInstanceDomainRemovingEffect = Effect.fn(
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.markRemoving",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
         SET status = 'removing', is_primary = 0, attempts = 0,
             next_attempt_at = NULL, updated_at = ?
       WHERE id = ?`,
@@ -1186,7 +1186,7 @@ export const clearInstanceDomainRecordsEffect = Effect.fn(
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.clearRecords",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
         SET address_record_id = NULL,
             address_record_type = NULL,
             srv_record_id = NULL,
@@ -1209,7 +1209,7 @@ export const activateInstanceDomainAssignmentEffect = Effect.fn(
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.activate",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
         SET address_record_id = ?,
             address_record_type = ?,
             srv_record_id = ?,
@@ -1237,7 +1237,7 @@ export const setInstanceDomainPrimaryEffect = Effect.fn(
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.setPrimary",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
         SET is_primary = (id = ?), updated_at = ?
       WHERE relay_id = ? AND instance_id = ?`,
     [input.id, now, input.relayId, input.instanceId]
@@ -1260,7 +1260,7 @@ export const updateInstanceDomainEndpointEffect = Effect.fn(
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.updateEndpoint",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
         SET public_host = ?,
             public_port = ?,
             address_record_type = ?,
@@ -1299,7 +1299,7 @@ export const updateInstanceDomainAddressRecordEffect = Effect.fn(
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.updateAddressRecord",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
         SET address_record_id = ?,
             address_record_type = ?,
             last_error = NULL,
@@ -1316,7 +1316,7 @@ export const recordInstanceDomainSyncErrorEffect = Effect.fn(
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.recordSyncError",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
         SET last_error = ?, updated_at = ?
       WHERE id = ?`,
     [message.slice(0, 512), now, id]
@@ -1331,7 +1331,7 @@ export const clearInstanceDomainErrorEffect = Effect.fn(
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.clearError",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
         SET last_error = NULL, attempts = 0, next_attempt_at = NULL,
             updated_at = ?
       WHERE id = ? AND status = 'active' AND next_domain IS NULL`,
@@ -1346,7 +1346,7 @@ export const recordInstanceDomainErrorEffect = Effect.fn(
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "domains.assignment.recordError",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
         SET status = 'error', last_error = ?, updated_at = ?
       WHERE id = ? AND status <> 'removing'`,
     [message.slice(0, 512), now, id]
@@ -1362,7 +1362,7 @@ const instanceDomainSelect = `SELECT assignment.id, assignment.relay_id,
        assignment.address_record_id, assignment.address_record_type,
        assignment.srv_record_id, assignment.status, assignment.last_error,
        zone.zone_id
-  FROM ${databaseTable("instance_domain")} assignment
+  FROM ${databaseTable("server_domain")} assignment
   LEFT JOIN ${databaseTable("domain_zone")} zone
     ON zone.domain = assignment.domain`
 
@@ -1374,7 +1374,7 @@ export function assignmentOwner(assignment: {
   return {
     relayId: assignment.relayId,
     resourceId: assignment.instanceId,
-    resourceType: "instance" as const,
+    resourceType: "server" as const,
   }
 }
 
@@ -1403,7 +1403,7 @@ export const listDueInstanceDomainsEffect = Effect.fn(
   >(
     "domains.assignments.due",
     `SELECT DISTINCT relay_id, instance_id
-       FROM ${databaseTable("instance_domain")}
+       FROM ${databaseTable("server_domain")}
       WHERE ${assignmentNeedsWork}
         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
       LIMIT 25`,
@@ -1425,7 +1425,7 @@ export const nextInstanceDomainAttemptEffect = Effect.fn(
   >(
     "domains.assignments.next",
     `SELECT MIN(COALESCE(next_attempt_at, 0)) AS next
-       FROM ${databaseTable("instance_domain")}
+       FROM ${databaseTable("server_domain")}
       WHERE ${assignmentNeedsWork}`
   )
   return row?.next === null || row?.next === undefined ? null : Number(row.next)
@@ -1438,7 +1438,7 @@ export const retryInstanceDomainsNowEffect = Effect.fn(
   const database = yield* Database
   yield* database.execute(
     "domains.assignments.retryNow",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
         SET next_attempt_at = NULL
       WHERE ${assignmentNeedsWork}`
   )
@@ -1454,7 +1454,7 @@ export const deferInstanceDomainsEffect = Effect.fn(
   const database = yield* Database
   yield* database.execute(
     "domains.assignments.defer",
-    `UPDATE ${databaseTable("instance_domain")}
+    `UPDATE ${databaseTable("server_domain")}
           SET next_attempt_at = ? + LEAST(3600000, 30000 * POW(2, attempts)),
               attempts = LEAST(attempts + 1, 60)
         WHERE relay_id = ? AND instance_id = ? AND ${assignmentNeedsWork}`,

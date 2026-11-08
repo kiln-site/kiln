@@ -10,11 +10,11 @@ import {
 } from "@workspace/ui/components/popover"
 
 import { useConsoleCommand } from "@/components/console/use-console-command"
-import { useInstanceRelayConnected } from "@/components/instance-workspace-context"
+import { useServerRelayConnected } from "@/components/server-workspace-context"
 import { useServerSnapshot } from "@/lib/use-server-workspace"
 import {
-  selectInstanceContainerRunning,
-  type InstanceWorkspaceInstance,
+  selectServerContainerRunning,
+  type WorkspaceServer,
 } from "@/lib/relay-selectors"
 
 export const ConsoleCommandBar = React.memo(function ConsoleCommandBar({
@@ -24,11 +24,11 @@ export const ConsoleCommandBar = React.memo(function ConsoleCommandBar({
 }: {
   active: boolean
   canWrite: boolean
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
 }) {
-  const relayConnected = useInstanceRelayConnected()
+  const relayConnected = useServerRelayConnected()
   const selectContainerRunning = React.useMemo(
-    () => selectInstanceContainerRunning(instance.id, instance.relayId),
+    () => selectServerContainerRunning(instance.id, instance.relayId),
     [instance.id, instance.relayId]
   )
   const { data: containerRunning = false } = useServerSnapshot(

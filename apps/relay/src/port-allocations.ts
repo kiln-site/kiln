@@ -1,13 +1,13 @@
 import {
   relayInstanceCustomRouteLabelSchema,
-  relayInstancePortIdSchema,
-  relayInstancePortMetadataListSchema,
+  relayServerPortIdSchema,
+  relayServerPortMetadataListSchema,
 } from "@workspace/contracts"
 import { Option, Schema } from "effect"
 import type {
-  RelayInstancePortAllocation,
-  RelayInstancePortMetadata,
-  RelayInstancePortProtocol,
+  RelayServerPortAllocation,
+  RelayServerPortMetadata,
+  RelayServerPortProtocol,
 } from "@workspace/contracts"
 
 export const INSTANCE_CUSTOM_ROUTE_LABEL_PREFIX = "kiln.instance.custom-routes."
@@ -26,18 +26,18 @@ type PortBindings = Readonly<
   >
 >
 
-interface RecoverablePortMetadata extends RelayInstancePortMetadata {
+interface RecoverablePortMetadata extends RelayServerPortMetadata {
   labelledPublicPort?: number
 }
 
 export function portProtocols(
-  protocol: RelayInstancePortProtocol
+  protocol: RelayServerPortProtocol
 ): ReadonlyArray<"tcp" | "udp"> {
   return protocol === "both" ? ["tcp", "udp"] : [protocol]
 }
 
 export function portAllocationContainerLabels(
-  allocations: ReadonlyArray<RelayInstancePortAllocation>
+  allocations: ReadonlyArray<RelayServerPortAllocation>
 ): Record<string, string> {
   const primary = allocations.find(
     (allocation) => allocation.kind === "primary"
@@ -79,7 +79,7 @@ export function portLabelsRequireRestart(
 }
 
 export function dockerPortBindingsForAllocations(
-  allocations: ReadonlyArray<RelayInstancePortAllocation>
+  allocations: ReadonlyArray<RelayServerPortAllocation>
 ): Record<string, Array<{ HostIp: string; HostPort: string }>> {
   return Object.fromEntries(
     allocations.flatMap((allocation) =>
@@ -99,12 +99,12 @@ export function dockerPortBindingsForAllocations(
 export function discoverPortAllocations(input: {
   bindings: PortBindings | undefined
   labels: Readonly<Record<string, string | undefined>>
-}): Array<RelayInstancePortAllocation> {
+}): Array<RelayServerPortAllocation> {
   const configured = recoverablePortMetadata(input.labels)
   if (configured.length === 0) return []
 
   return configured
-    .flatMap((allocation): Array<RelayInstancePortAllocation> => {
+    .flatMap((allocation): Array<RelayServerPortAllocation> => {
       const externalPort =
         discoverPublishedPort(
           input.bindings,
@@ -152,7 +152,7 @@ function recoverablePortMetadata(
   const routes = Object.entries(labels)
     .filter(([label]) => label.startsWith(INSTANCE_CUSTOM_ROUTE_LABEL_PREFIX))
     .flatMap(([label, value]): Array<RecoverablePortMetadata> => {
-      const id = relayInstancePortIdSchema.safeParse(
+      const id = relayServerPortIdSchema.safeParse(
         label.slice(INSTANCE_CUSTOM_ROUTE_LABEL_PREFIX.length)
       )
       if (!id.success || id.data === "primary" || value === undefined) return []
@@ -210,14 +210,14 @@ function parseLegacyPortMetadata(
 ): Array<RecoverablePortMetadata> {
   if (!label) return []
   const value = Option.getOrUndefined(decodeJsonOption(label))
-  const parsed = relayInstancePortMetadataListSchema.safeParse(value)
+  const parsed = relayServerPortMetadataListSchema.safeParse(value)
   return parsed.success ? parsed.data : []
 }
 
 function discoverPublishedPort(
   bindings: PortBindings | undefined,
   internalPort: number,
-  protocol: RelayInstancePortProtocol
+  protocol: RelayServerPortProtocol
 ): number | undefined {
   const published = portProtocols(protocol).map((candidate) =>
     bindingPublicPort(bindings?.[`${internalPort}/${candidate}`])

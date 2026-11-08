@@ -21,14 +21,14 @@ import { recoverPromise, tapPromiseError } from "./effect/promise.js"
 import { reportRelayError } from "./effect/runtime.js"
 import type {
   BrickRecipe,
-  RelayCreateInstance,
-  RelayInstance,
-  RelayInstancePendingPrimaryPort,
-  RelayInstancePortAllocation,
-  RelayInstancePortInput,
-  RelayInstancePortLease,
-  RelayInstancePortLeaseRequest,
-  RelayInstanceTailscale,
+  RelayCreateServer,
+  RelayServer,
+  RelayServerPendingPrimaryPort,
+  RelayServerPortAllocation,
+  RelayServerPortInput,
+  RelayServerPortLease,
+  RelayServerPortLeaseRequest,
+  RelayServerTailscale,
   RelayInstanceWebRoute,
   RelayInstanceWebRouteState,
   RelayNetworking,
@@ -41,7 +41,7 @@ import type {
   RelayTailscaleStackConfig,
   RelayTailscaleStackDns,
   RelayTailscaleStackState,
-  RelayUpdateInstanceStartup,
+  RelayUpdateServerStartup,
   ProvisioningWorkPhase,
   ResourceLimits,
   ResourceLimitsInput,
@@ -49,12 +49,12 @@ import type {
 import {
   appTailscaleMember,
   databaseTailscaleMember,
-  instanceTailscaleMember,
-  instanceTailscaleMemberId,
+  serverTailscaleMember,
+  serverTailscaleMemberId,
   builtinTailscaleBrickId,
   builtinTailscaleBrickSource,
   relayProxySettingsSchema,
-  relayInstanceSchema,
+  relayServerSchema,
   resolveResourceLimits,
   resourceLimitsEqual,
   relayTailscaleOverviewSchema,
@@ -65,7 +65,7 @@ import {
   relayTailscaleStackSchema,
 } from "@workspace/contracts"
 import type { BrickCatalog } from "./bricks.js"
-import type { RelayConfig, RelayInstanceConfig } from "./config.js"
+import type { RelayConfig, RelayServerConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
 import {
   type ContainerSpec,
@@ -158,7 +158,7 @@ interface PortLeaseRecord {
   externalPort: number
   id: string
   instanceId: string
-  protocol: RelayInstancePortAllocation["protocol"]
+  protocol: RelayServerPortAllocation["protocol"]
 }
 
 function portOperation<TResult>(
@@ -315,9 +315,9 @@ function gameServerLimits(
   }
 }
 
-function resolveInstanceStartupReconfigure(
-  existing: RelayInstance,
-  input: RelayUpdateInstanceStartup
+function resolveServerStartupReconfigure(
+  existing: RelayServer,
+  input: RelayUpdateServerStartup
 ): {
   forcePull: boolean
   limits: ResourceLimits
@@ -325,8 +325,8 @@ function resolveInstanceStartupReconfigure(
   recipeDefinition?: BrickRecipe
   snapshotSha256?: string
   start: boolean
-  tailscale: RelayInstanceTailscale
-  variables: NonNullable<RelayInstance["variables"]>
+  tailscale: RelayServerTailscale
+  variables: NonNullable<RelayServer["variables"]>
 } {
   const reinstall = input.reinstall === true
   const recipe = reinstall
@@ -581,7 +581,7 @@ export class LifecycleDriver {
     const settings = relayTailscaleSettingsSchema.parse(input)
     const previous = await this.tailscaleSettings()
     if (previous && previous.domain !== settings.domain) {
-      const connectedInstances = (await this.#docker.inspectInstances()).filter(
+      const connectedInstances = (await this.#docker.inspectServers()).filter(
         (instance) => instance.managedByRelay && instance.tailscale.enabled
       )
       if (connectedInstances.length > 0) {
@@ -822,7 +822,7 @@ export class LifecycleDriver {
     )
     const existing = await this.#readTailscaleStackConfig(input.id)
     this.#assertTailscaleStackPlanned(existing, planned)
-    const instances = await this.#docker.inspectInstances()
+    const instances = await this.#docker.inspectServers()
     for (const binding of input.bindings) {
       const app = appTailscaleMember(binding.memberId)
       if (app) {
@@ -838,7 +838,7 @@ export class LifecycleDriver {
         }
         continue
       }
-      const instanceId = instanceTailscaleMember(binding.memberId)
+      const instanceId = serverTailscaleMember(binding.memberId)
       const instance = instances.find(
         (candidate) => candidate.id === instanceId
       )
@@ -1865,7 +1865,7 @@ export class LifecycleDriver {
       }
     }
 
-    const instance = await this.#docker.findInstance(instanceId)
+    const instance = await this.#docker.findServer(instanceId)
     if (!instance) throw new Error("Instance not found")
     const profile = this.#externalTraefikProfile(settings)
     const desiredLabels = traefikRouteLabels(
@@ -1934,12 +1934,12 @@ export class LifecycleDriver {
     }
   }
 
-  async runInstanceAction(
-    instance: RelayInstanceConfig,
+  async runServerAction(
+    instance: RelayServerConfig,
     action: "start" | "stop" | "restart" | "kill",
     routes: ReadonlyArray<RelayInstanceWebRoute>,
-    pendingPrimaryPort: RelayInstancePendingPrimaryPort | null = null
-  ): Promise<RelayInstance> {
+    pendingPrimaryPort: RelayServerPendingPrimaryPort | null = null
+  ): Promise<RelayServer> {
     if (instance.brickId === builtinTailscaleBrickId) {
       if (action === "start" || action === "restart") {
         await this.#assertTailscaleStackRemovalNotPending(instance.id, action)
@@ -1999,7 +1999,7 @@ export class LifecycleDriver {
         (allocation) => allocation.kind === "primary"
       )
       const inspected = pendingPrimaryPort
-        ? await this.#docker.inspectInstances()
+        ? await this.#docker.inspectServers()
         : null
       const pendingExternalPort =
         pendingPrimaryPort && !hasPrimary && inspected
@@ -2062,7 +2062,7 @@ export class LifecycleDriver {
             if (usesExternalEdge && routes.length > 0) {
               await this.#ensureEdgeNetwork()
             }
-            const updated = await this.#docker.recreateOwnedInstance(
+            const updated = await this.#docker.recreateOwnedServer(
               instance,
               desiredLabels,
               usesExternalEdge && routes.length > 0
@@ -2074,7 +2074,7 @@ export class LifecycleDriver {
             )
             if (limits) await this.#docker.setPendingLimits(instance.id, null)
             await this.reattachTailscaleMember(
-              instanceTailscaleMemberId(instance.id)
+              serverTailscaleMemberId(instance.id)
             )
             if (pendingExternalPort) {
               const networking = await this.networking()
@@ -2116,12 +2116,12 @@ export class LifecycleDriver {
     )
   }
 
-  async updateInstancePorts(
+  async updateServerPorts(
     instanceId: string,
-    requested: ReadonlyArray<RelayInstancePortInput>,
+    requested: ReadonlyArray<RelayServerPortInput>,
     routes: ReadonlyArray<RelayInstanceWebRoute>
-  ): Promise<RelayInstance> {
-    const inspected = await this.#docker.inspectInstances()
+  ): Promise<RelayServer> {
+    const inspected = await this.#docker.inspectServers()
     const instance = inspected.find((candidate) => candidate.id === instanceId)
     if (!instance) throw new Error("Instance not found")
     if (!instance.managedByRelay) {
@@ -2187,9 +2187,9 @@ export class LifecycleDriver {
 
     const pending: Array<{
       port: number
-      protocol: RelayInstancePortAllocation["protocol"]
+      protocol: RelayServerPortAllocation["protocol"]
     }> = []
-    const allocations: Array<RelayInstancePortAllocation> = []
+    const allocations: Array<RelayServerPortAllocation> = []
     return runLifecycle(
       lifecycleOperation(async () => {
         for (const input of requested) {
@@ -2284,7 +2284,7 @@ export class LifecycleDriver {
           await this.#ensureEdgeNetwork()
         }
         const limits = await this.#pendingLimitsThatFit(instance)
-        const updated = await this.#docker.recreateOwnedInstance(
+        const updated = await this.#docker.recreateOwnedServer(
           instance,
           routeLabels,
           usesExternalEdge && routes.length > 0
@@ -2301,9 +2301,7 @@ export class LifecycleDriver {
           limits
         )
         if (limits) await this.#docker.setPendingLimits(instance.id, null)
-        await this.reattachTailscaleMember(
-          instanceTailscaleMemberId(instance.id)
-        )
+        await this.reattachTailscaleMember(serverTailscaleMemberId(instance.id))
         const networking = await this.networking()
         if (networking?.enabled) {
           await this.#refreshCoreDnsConfiguration(networking)
@@ -2324,16 +2322,16 @@ export class LifecycleDriver {
     )
   }
 
-  reserveInstancePortEffect(
+  reserveServerPortEffect(
     instanceId: string,
-    input: RelayInstancePortLeaseRequest
+    input: RelayServerPortLeaseRequest
   ) {
     let reserved: Pick<PortLeaseRecord, "externalPort" | "protocol"> | undefined
     const criticalSection = Effect.gen({ self: this }, function* () {
       const now = Date.now()
       this.#pruneExpiredPortLeases(now)
-      const inspected = yield* portOperation("lease.inspectInstances", () =>
-        this.#docker.inspectInstances()
+      const inspected = yield* portOperation("lease.inspectServers", () =>
+        this.#docker.inspectServers()
       )
       const instance = inspected.find(
         (candidate) => candidate.id === instanceId
@@ -2399,7 +2397,7 @@ export class LifecycleDriver {
         externalPort: lease.externalPort,
         id: lease.id,
         protocol: lease.protocol,
-      } satisfies RelayInstancePortLease
+      } satisfies RelayServerPortLease
     }).pipe(
       Effect.onError(() =>
         Effect.sync(() => {
@@ -2421,7 +2419,7 @@ export class LifecycleDriver {
       .pipe(Effect.withSpan("relay.ports.reserve"))
   }
 
-  releaseInstancePortEffect(instanceId: string, leaseId: string) {
+  releaseServerPortEffect(instanceId: string, leaseId: string) {
     return this.#gamePortSemaphore
       .withPermit(
         Effect.sync(() => {
@@ -2445,10 +2443,10 @@ export class LifecycleDriver {
       .pipe(Effect.withSpan("relay.ports.release"))
   }
 
-  async prepareInstance(
+  async prepareServer(
     id: string,
-    input: RelayCreateInstance
-  ): Promise<RelayInstance> {
+    input: RelayCreateServer
+  ): Promise<RelayServer> {
     if (input.recipe === builtinTailscaleBrickSource) {
       throw new Error(
         "Create Tailscale from the Tailscale page so Hearth can place its node deployments"
@@ -2496,7 +2494,7 @@ export class LifecycleDriver {
     const version = Object.hasOwn(resolved.values, "version")
       ? String(resolved.values.version)
       : "custom"
-    return relayInstanceSchema.parse({
+    return relayServerSchema.parse({
       brickFormat: definition.format,
       brickId: definition.metadata.id,
       brickNetworkMode: definition.network.mode,
@@ -2526,7 +2524,7 @@ export class LifecycleDriver {
       publicHost: this.#config.gameHost,
       recovery: null,
       resources: null,
-      service: this.#resources.instanceContainer(id),
+      service: this.#resources.serverContainer(id),
       stateReason: null,
       status: "Waiting for Hearth",
       tailscale: input.tailscale ?? { enabled: false },
@@ -2535,17 +2533,17 @@ export class LifecycleDriver {
     })
   }
 
-  async createInstanceWithId(
+  async createServerWithId(
     id: string,
-    input: RelayCreateInstance,
+    input: RelayCreateServer,
     onPhase?: (phase: ProvisioningWorkPhase) => Promise<void>
-  ): Promise<RelayInstance> {
+  ): Promise<RelayServer> {
     if (input.recipe === builtinTailscaleBrickSource) {
       throw new Error(
         "Create Tailscale from the Tailscale page so Hearth can place its node deployments"
       )
     }
-    return this.#provisionManagedInstance({
+    return this.#provisionManagedServer({
       grandfatheredDiskLimitBytes: null,
       grandfatheredMemoryLimitBytes: null,
       id,
@@ -2563,7 +2561,7 @@ export class LifecycleDriver {
   // Limits saved for a container being replaced anyway. A disk limit its
   // files have since outgrown keeps waiting, for the start that says so.
   async #pendingLimitsThatFit(
-    instance: RelayInstanceConfig
+    instance: RelayServerConfig
   ): Promise<ResourceLimits | undefined> {
     const limits = await this.#docker.pendingLimits(instance.id)
     if (!limits) return undefined
@@ -2581,8 +2579,8 @@ export class LifecycleDriver {
    * alone. They're checked and their capacity held from here, so the restart
    * can't fail for want of room.
    */
-  async setInstanceLimits(
-    instance: RelayInstanceConfig,
+  async setServerLimits(
+    instance: RelayServerConfig,
     limits: ResourceLimits
   ): Promise<void> {
     if (!instance.managedByRelay) {
@@ -2611,13 +2609,13 @@ export class LifecycleDriver {
     )
   }
 
-  async reconfigureInstance(
+  async reconfigureServer(
     instanceId: string,
-    input: RelayUpdateInstanceStartup,
+    input: RelayUpdateServerStartup,
     /** Reports each phase of a reinstall or change of Brick, for its log. */
     onPhase?: (phase: ProvisioningWorkPhase) => Promise<void>
-  ): Promise<RelayInstance> {
-    const inspected = await this.#docker.inspectInstances()
+  ): Promise<RelayServer> {
+    const inspected = await this.#docker.inspectServers()
     const existing = inspected.find((item) => item.id === instanceId)
     if (!existing) throw new Error("Instance not found")
     if (!existing.managedByRelay) {
@@ -2642,7 +2640,7 @@ export class LifecycleDriver {
       start,
       tailscale,
       variables,
-    } = resolveInstanceStartupReconfigure(
+    } = resolveServerStartupReconfigure(
       {
         ...existing,
         limits:
@@ -2696,7 +2694,7 @@ export class LifecycleDriver {
         )
         return runLifecycle(
           lifecycleOperation(async () => {
-            const reconfigured = await this.#provisionManagedInstance({
+            const reconfigured = await this.#provisionManagedServer({
               grandfatheredDiskLimitBytes: existing.limits.diskBytes,
               grandfatheredMemoryLimitBytes: existing.limits.memoryBytes,
               id: existing.id,
@@ -2723,7 +2721,7 @@ export class LifecycleDriver {
             // The new container joins its Tailscale networks where the old one
             // was.
             await this.reattachTailscaleMember(
-              instanceTailscaleMemberId(existing.id)
+              serverTailscaleMemberId(existing.id)
             )
             await this.#docker.setPendingLimits(existing.id, null)
             return reconfigured
@@ -2741,17 +2739,17 @@ export class LifecycleDriver {
     )
   }
 
-  async #provisionManagedInstance(input: {
+  async #provisionManagedServer(input: {
     grandfatheredDiskLimitBytes: number | null
     grandfatheredMemoryLimitBytes: number | null
     id: string
     /** Limits to apply, or a create request to take them from. */
     limits:
       | ResourceLimits
-      | Pick<RelayCreateInstance, "diskLimitBytes" | "limits">
+      | Pick<RelayCreateServer, "diskLimitBytes" | "limits">
     onPhase?: (phase: ProvisioningWorkPhase) => Promise<void>
     prepareDirectory: boolean
-    ports?: ReadonlyArray<RelayInstancePortAllocation>
+    ports?: ReadonlyArray<RelayServerPortAllocation>
     recipe: string
     recipeDefinition?: BrickRecipe
     /**
@@ -2762,9 +2760,9 @@ export class LifecycleDriver {
     snapshotSha256?: string
     skipImagePull?: boolean
     start: boolean
-    tailscale: RelayInstanceTailscale
-    variables: RelayCreateInstance["variables"]
-  }): Promise<RelayInstance> {
+    tailscale: RelayServerTailscale
+    variables: RelayCreateServer["variables"]
+  }): Promise<RelayServer> {
     await input.onPhase?.("preparing")
     const definition =
       input.recipeDefinition ??
@@ -2790,7 +2788,7 @@ export class LifecycleDriver {
     // Checked before the image download too, so a server that can't join
     // Tailscale fails before it, not after.
     await this.#tailscaleHostname(
-      await this.#docker.inspectInstances(),
+      await this.#docker.inspectServers(),
       input.tailscale,
       input.id
     )
@@ -2823,7 +2821,7 @@ export class LifecycleDriver {
 
         const id = input.id
         const defaultInstanceName = `kiln-${physicalShortKey(id)}`
-        const containerName = this.#resources.instanceContainer(id)
+        const containerName = this.#resources.serverContainer(id)
         const version = Object.hasOwn(resolved.values, "version")
           ? String(resolved.values.version)
           : "custom"
@@ -2892,7 +2890,7 @@ export class LifecycleDriver {
         await input.onPhase?.("creating_container")
         await this.#holdingRoutes(id, async () => {
           await input.replacing?.()
-          const existing = await this.#docker.inspectInstances()
+          const existing = await this.#docker.inspectServers()
           const { hostname, networking } = await this.#tailscaleHostname(
             existing,
             input.tailscale,
@@ -2927,10 +2925,11 @@ export class LifecycleDriver {
 
           const reservedPorts: Array<{
             port: number
-            protocol: RelayInstancePortAllocation["protocol"]
+            protocol: RelayServerPortAllocation["protocol"]
           }> = []
-          const portAllocations: Array<RelayInstancePortAllocation> =
-            input.ports ? [...input.ports] : []
+          const portAllocations: Array<RelayServerPortAllocation> = input.ports
+            ? [...input.ports]
+            : []
           if (portAllocations.length === 0) {
             const publishedPorts =
               definition.network.mode === "direct"
@@ -3092,10 +3091,9 @@ export class LifecycleDriver {
                   )
                 )
               }
-              await this.databaseConnections.reconcile(
-                { id, kind: "instance" },
-                [{ container: containerName }]
-              )
+              await this.databaseConnections.reconcile({ id, kind: "server" }, [
+                { container: containerName },
+              ])
               if (input.start) {
                 await runLifecycle(
                   this.#engine.startContainer(containerName, {
@@ -3139,7 +3137,7 @@ export class LifecycleDriver {
           )
         })
 
-        const created = (await this.#docker.inspectInstances()).find(
+        const created = (await this.#docker.inspectServers()).find(
           (instance) => instance.id === id
         )
         if (!created)
@@ -3155,8 +3153,8 @@ export class LifecycleDriver {
   // servers already using its Tailscale address, and the networking
   // settings it's named under.
   async #tailscaleHostname(
-    existing: ReadonlyArray<RelayInstance>,
-    tailscale: RelayInstanceTailscale,
+    existing: ReadonlyArray<RelayServer>,
+    tailscale: RelayServerTailscale,
     // The server taking the address, which may still hold it.
     instanceId: string
   ): Promise<{ hostname: string | null; networking: RelayNetworking | null }> {
@@ -3208,7 +3206,7 @@ export class LifecycleDriver {
     return runLifecycle(
       this.#lanes
         .runNested(
-          { label: "instance.dns", locks: [exclusive(laneKeys.routes)] },
+          { label: "server.dns", locks: [exclusive(laneKeys.routes)] },
           lifecycleOperation(run)
         )
         .pipe(
@@ -3229,8 +3227,8 @@ export class LifecycleDriver {
 
   async #reserveGamePort(
     instanceId: string,
-    protocol: RelayInstancePortAllocation["protocol"],
-    existing: ReadonlyArray<RelayInstance>
+    protocol: RelayServerPortAllocation["protocol"],
+    existing: ReadonlyArray<RelayServer>
   ): Promise<number> {
     return this.#withGamePortLock(() => {
       this.#pruneExpiredPortLeases(Date.now())
@@ -3242,7 +3240,7 @@ export class LifecycleDriver {
     port: number,
     protocols: ReadonlyArray<"tcp" | "udp">,
     // The other game servers, whose ports stay theirs while they're stopped.
-    others: ReadonlyArray<RelayInstance>
+    others: ReadonlyArray<RelayServer>
   ): Promise<void> {
     await this.#withGamePortLock(async () => {
       for (const protocol of protocols) {
@@ -3268,8 +3266,8 @@ export class LifecycleDriver {
 
   async #claimPortLease(
     instanceId: string,
-    input: RelayInstancePortInput,
-    existing: ReadonlyArray<RelayInstance>
+    input: RelayServerPortInput,
+    existing: ReadonlyArray<RelayServer>
   ): Promise<number> {
     if (input.externalPort === undefined || input.leaseId === undefined) {
       return this.#reserveGamePort(instanceId, input.protocol, existing)
@@ -3303,8 +3301,8 @@ export class LifecycleDriver {
 
   async #reserveGamePortUnlocked(
     instanceId: string,
-    protocol: RelayInstancePortAllocation["protocol"],
-    existing: ReadonlyArray<RelayInstance>,
+    protocol: RelayServerPortAllocation["protocol"],
+    existing: ReadonlyArray<RelayServer>,
     requestedPort?: number,
     overridePortRange = false
   ): Promise<number> {
@@ -3462,7 +3460,7 @@ export class LifecycleDriver {
     return runLifecycle(
       this.#lanes.runNested(
         {
-          label: "instance.allocations",
+          label: "server.allocations",
           locks: [exclusive(laneKeys.allocations)],
         },
         lifecycleOperation(async () => {
@@ -3495,9 +3493,9 @@ export class LifecycleDriver {
    * Tailscale networks. A server already gone still leaves its networks, so
    * a deletion sent again finishes.
    */
-  async deleteInstance(id: string, deleteData: boolean): Promise<void> {
-    const member = instanceTailscaleMemberId(id)
-    const instance = await this.#docker.findInstance(id)
+  async deleteServer(id: string, deleteData: boolean): Promise<void> {
+    const member = serverTailscaleMemberId(id)
+    const instance = await this.#docker.findServer(id)
     if (!instance) {
       await this.removeFromTailscale((memberId) => memberId === member)
       throw new Error("Instance not found")
@@ -3539,7 +3537,7 @@ export class LifecycleDriver {
     await this.#holdingRoutes(id, () => this.#refreshDns())
   }
 
-  async deletePreparedInstance(id: string, deleteData: boolean): Promise<void> {
+  async deletePreparedServer(id: string, deleteData: boolean): Promise<void> {
     await this.#docker.forgetRecoveryState(id)
     if (!deleteData) return
     await rm(join(this.#config.rootDirectory, physicalKey(id)), {
@@ -3568,7 +3566,7 @@ export class LifecycleDriver {
       mkdir(coreDns, { recursive: true }),
       mkdir(limbo, { recursive: true }),
     ])
-    const instances = await this.#docker.inspectInstances()
+    const instances = await this.#docker.inspectServers()
     await writeFile(
       join(coreDns, "Corefile"),
       coreDnsConfiguration(networking, this.#dnsHostnames(instances))
@@ -3779,7 +3777,7 @@ export class LifecycleDriver {
     }
 
     const routedInstances = new Set(routes.map((route) => route.instanceId))
-    const instances = await this.#docker.inspectInstances()
+    const instances = await this.#docker.inspectServers()
     await Promise.all(
       instances
         .filter((instance) => instance.managedByRelay)
@@ -3918,7 +3916,7 @@ export class LifecycleDriver {
   }
 
   async #disableExternalEdge(settings: RelayProxySettings): Promise<void> {
-    const instances = await this.#docker.inspectInstances()
+    const instances = await this.#docker.inspectServers()
     const proxy = await this.#externalTraefikContainer(settings)
     // Apps join the edge network for their routes too.
     const apps = await recoverPromise(
@@ -3986,7 +3984,7 @@ export class LifecycleDriver {
   async #refreshCoreDnsConfiguration(
     networking: RelayNetworking
   ): Promise<void> {
-    const instances = await this.#docker.inspectInstances()
+    const instances = await this.#docker.inspectServers()
     await writeFile(
       join(this.#config.dataDirectory, "infrastructure", "coredns", "Corefile"),
       coreDnsConfiguration(networking, this.#dnsHostnames(instances))
@@ -3998,7 +3996,7 @@ export class LifecycleDriver {
     )
   }
 
-  #dnsHostnames(instances: Array<RelayInstance>): Array<string> {
+  #dnsHostnames(instances: Array<RelayServer>): Array<string> {
     return instances
       .filter((instance) => instance.managedByRelay)
       .map((instance) => instance.connectAddress.split(":")[0] ?? "")
@@ -4070,7 +4068,7 @@ export class LifecycleDriver {
     )
     const coreDns = join(infrastructure, "coredns")
     await mkdir(coreDns, { recursive: true })
-    const instances = await this.#docker.inspectInstances()
+    const instances = await this.#docker.inspectServers()
     const hostnames = instances
       .filter(
         (instance) => instance.managedByRelay && instance.tailscale.enabled
@@ -4291,8 +4289,8 @@ export class LifecycleDriver {
     if (app) return this.#lanes.isFrozen("app", app.appId)
     const databaseId = databaseTailscaleMember(memberId)
     if (databaseId) return this.#lanes.isFrozen("database", databaseId)
-    const instanceId = instanceTailscaleMember(memberId)
-    return instanceId !== null && this.#lanes.isFrozen("instance", instanceId)
+    const instanceId = serverTailscaleMember(memberId)
+    return instanceId !== null && this.#lanes.isFrozen("server", instanceId)
   }
 
   async #reconcileTailscaleStackBindings(
@@ -4489,7 +4487,7 @@ export class LifecycleDriver {
 
   readonly #repairStackFirewall = operation<string>()({
     name: "relay.tailscale.stack.firewall",
-    locks: ({ input: stackId }) => [exclusive(laneKeys.instance(stackId))],
+    locks: ({ input: stackId }) => [exclusive(laneKeys.server(stackId))],
     onlyIfFree: true,
     carriesOnWhilePaused: true,
     run: ({ input: stackId }) =>
@@ -4816,7 +4814,7 @@ export class LifecycleDriver {
       }
       return tailscaleStackPendingRemoval(config, snapshot)
     }
-    const instance = (await this.#docker.inspectInstances()).find(
+    const instance = (await this.#docker.inspectServers()).find(
       (candidate) => candidate.id === config.id
     )
     if (!instance) {
@@ -5067,9 +5065,9 @@ export class LifecycleDriver {
         ? this.#databaseContainer(databaseId)
         : null
     }
-    const instanceId = instanceTailscaleMember(memberId)
+    const instanceId = serverTailscaleMember(memberId)
     if (!instanceId) return null
-    return (await this.#docker.findInstance(instanceId))?.service ?? null
+    return (await this.#docker.findServer(instanceId))?.service ?? null
   }
 
   // Every enabled membership whose member matches, with the network and the
@@ -5150,7 +5148,7 @@ export class LifecycleDriver {
         this.#lanes.runNested(
           {
             label: "tailscale.member.remove",
-            locks: [exclusive(laneKeys.instance(candidate.id))],
+            locks: [exclusive(laneKeys.server(candidate.id))],
           },
           lifecycleOperation(async () => {
             const previous = await this.#readTailscaleStackConfig(candidate.id)
@@ -5414,7 +5412,7 @@ function appServiceRoutes<
 // The public ports a game server is allocated for `protocol`, whether or not
 // it's running: its primary one and every other allocation.
 function allocatedPorts(
-  instance: RelayInstance,
+  instance: RelayServer,
   protocol: "tcp" | "udp"
 ): Array<number> {
   const ports = instance.ports
@@ -5434,7 +5432,7 @@ function allocatedPorts(
 }
 
 function allocatesPort(
-  instance: RelayInstance,
+  instance: RelayServer,
   port: number,
   protocol: "tcp" | "udp"
 ): boolean {

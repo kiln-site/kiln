@@ -31,13 +31,13 @@ describe("activity", () => {
     expect(
       scopeAllowsAudit(
         scope,
-        audit({ instanceId: "server-b", operation: "instance.rename" })
+        audit({ instanceId: "server-b", operation: "server.rename" })
       )
     ).toBe(false)
     expect(
       scopeAllowsAudit(
         scope,
-        audit({ instanceId: "server-a", operation: "instance.rename" })
+        audit({ instanceId: "server-a", operation: "server.rename" })
       )
     ).toBe(true)
   })

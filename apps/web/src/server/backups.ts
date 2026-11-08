@@ -19,7 +19,7 @@ import { requireEligibleResourceUser } from "@/server/auth"
 import {
   backUpApp,
   backUpDatabase,
-  backUpInstance,
+  backUpServer,
   backUpPlatform,
   backUpResource,
   cancelBackup as cancelBackupOperation,
@@ -31,7 +31,7 @@ import {
   renameBackup as renameBackupOperation,
   resolveRestore,
   restoreDatabase,
-  restoreInstance,
+  restoreServer,
   restoreResource,
   syncBackups,
 } from "@/server/backup-operations.server"
@@ -43,7 +43,7 @@ import {
   getBackupRunsPageHandler,
 } from "@/server/backups.server"
 
-const instanceBackupInputSchema = z.strictObject({
+const serverBackupInputSchema = z.strictObject({
   instanceId: z.string().min(1).max(120),
   maxBytes: z
     .number()
@@ -196,7 +196,7 @@ const backupPolicyInputSchema = z.strictObject({
   target: backupTargetSchema,
 })
 
-export type InstanceBackupInput = z.infer<typeof instanceBackupInputSchema>
+export type ServerBackupInput = z.infer<typeof serverBackupInputSchema>
 export type DatabaseBackupInput = z.infer<typeof databaseBackupInputSchema>
 export type PlatformBackupInput = z.infer<typeof platformBackupInputSchema>
 export type ResourceBackupInput = z.infer<typeof resourceBackupInputSchema>
@@ -215,9 +215,9 @@ export type BackupPolicyInput = z.infer<typeof backupPolicyInputSchema>
 // ./backups.server.
 
 export const createInstanceBackup = createServerFn({ method: "POST" })
-  .validator(instanceBackupInputSchema)
+  .validator(serverBackupInputSchema)
   .handler(async ({ data }) =>
-    runOperationPromise(backUpInstance, data, {
+    runOperationPromise(backUpServer, data, {
       user: await requireEligibleResourceUser(),
     })
   )
@@ -371,7 +371,7 @@ export const getBackupExportState = createServerFn({ method: "GET" })
 export const restoreInstanceBackup = createServerFn({ method: "POST" })
   .validator(backupRestoreInputSchema)
   .handler(async ({ data }) =>
-    runOperationPromise(restoreInstance, data, {
+    runOperationPromise(restoreServer, data, {
       user: await requireEligibleResourceUser(),
     })
   )

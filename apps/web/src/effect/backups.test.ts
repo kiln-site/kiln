@@ -113,7 +113,7 @@ describeMysql("backup copy reservation", () => {
       sourceArtifactId: "source-artifact",
       storageId,
       targetId: "instance-one",
-      targetKind: "instance" as const,
+      targetKind: "server" as const,
     }
 
     const seedSource = (ownerUserId: string | null) =>

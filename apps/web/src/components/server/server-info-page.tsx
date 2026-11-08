@@ -23,10 +23,7 @@ import {
   ServerGeneralSettings,
   ServerProvisioningSection,
 } from "@/components/server/server-settings"
-import type {
-  InstanceSettingsInstance,
-  RelayNodeSummary,
-} from "@/lib/relay-selectors"
+import type { SettingsServer, RelayNodeSummary } from "@/lib/relay-selectors"
 import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { serverMigrationPreviewQueryOptions } from "@/lib/server-migration-queries"
@@ -41,7 +38,7 @@ export function ServerInfoPage({
   permissions,
   relayConnected,
 }: {
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
   node: RelayNodeSummary
   onDeleted: () => Promise<void> | void
   permissions: {
@@ -62,7 +59,7 @@ export function ServerInfoPage({
       <ResourceDeletionAlert
         canDelete={permissions.deleteServer}
         name={instance.name}
-        kind="instance"
+        kind="server"
         relayId={instance.relayId}
         resourceId={instance.id}
       />
@@ -113,7 +110,7 @@ function ServerDangerZone({
   onDeleted,
   relayConnected,
 }: {
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
   onDeleted: () => Promise<void> | void
   relayConnected: boolean
 }) {
@@ -151,7 +148,7 @@ function ServerMigrationSection({
   instance,
   relayConnected,
 }: {
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
   relayConnected: boolean
 }) {
   const [mode, setMode] = React.useState<ServerMigrationMode | null>(null)

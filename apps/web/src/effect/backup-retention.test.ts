@@ -11,7 +11,7 @@ const day = 24 * 60 * 60_000
 const insertPolicy = (row: Record<string, number | string | null>) =>
   insertRows("backup_policy", {
     relay_id: "relay-one",
-    target_kind: "instance",
+    target_kind: "server",
     target_id: "instance-one",
     exclude_patterns: "[]",
     created_at: now,

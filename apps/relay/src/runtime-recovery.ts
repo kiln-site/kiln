@@ -1,20 +1,17 @@
 import { Clock, Effect, Semaphore } from "effect"
 import type {
   RelayDesiredState,
-  RelayInstanceRecovery,
+  RelayServerRecovery,
 } from "@workspace/contracts"
 
 import { reportRelayError } from "./effect/runtime.js"
 import type { RelayConfig } from "./config.js"
 import { DockerEngine } from "./docker-engine.js"
 import { LaneRejectedError, type OperationLanes } from "./operation-lanes.js"
-import {
-  instanceLifecycleLocks,
-  instanceStartLocks,
-} from "./operation-plans.js"
+import { serverLifecycleLocks, serverStartLocks } from "./operation-plans.js"
 import {
   INSTANCE_STOP_TIMEOUT_SECONDS,
-  type InstancePowerAction,
+  type ServerPowerAction,
 } from "./power-state.js"
 import type {
   RelayRuntimeRecoveryRecord,
@@ -42,7 +39,7 @@ export interface RuntimeRecoveryObservation {
 
 export interface RuntimeRecoverySnapshot {
   readonly desiredState: RelayDesiredState
-  readonly recovery: RelayInstanceRecovery | null
+  readonly recovery: RelayServerRecovery | null
 }
 
 export class RuntimeRecoveryManager {
@@ -163,7 +160,7 @@ export class RuntimeRecoveryManager {
 
   recordPowerAction(
     instanceId: string,
-    action: InstancePowerAction
+    action: ServerPowerAction
   ): Effect.Effect<RelayRuntimeRecoveryRecord | null, unknown> {
     return this.#lock(instanceId)
       .withPermit(
@@ -547,7 +544,7 @@ export class RuntimeRecoveryManager {
       .run(
         {
           label: "recovery.start",
-          locks: instanceStartLocks(observation.instanceId),
+          locks: serverStartLocks(observation.instanceId),
           precondition: stillWanted,
         },
         Effect.tryPromise({
@@ -760,7 +757,7 @@ export class RuntimeRecoveryManager {
       .run(
         {
           label: "recovery.stop",
-          locks: instanceLifecycleLocks(observation.instanceId),
+          locks: serverLifecycleLocks(observation.instanceId),
         },
         stop
       )
@@ -1000,7 +997,7 @@ function recoverySnapshot(
 
 function recoveryReason(
   observation: RuntimeRecoveryObservation
-): RelayInstanceRecovery["reason"] {
+): RelayServerRecovery["reason"] {
   if (observation.oomKilled) return "out_of_memory"
   return observation.exitCode === 0 ? "clean_exit" : "process_exit"
 }

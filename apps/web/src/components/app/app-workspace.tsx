@@ -51,7 +51,7 @@ import { WorkspaceFrame } from "@/components/workspace-frame"
 import { WorkloadResourceMeters } from "@/components/workload-resource-meters"
 import { WorkspacePowerControls } from "@/components/workspace-power-controls"
 import { recoverPromise } from "@/effect/promise"
-import type { ServerAction } from "@/lib/instance-power-state"
+import type { ServerAction } from "@/lib/server-power-state"
 import { appDestinations } from "@/lib/navigation-destinations"
 import {
   appConfigQueryOptions,

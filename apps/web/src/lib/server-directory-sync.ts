@@ -3,10 +3,10 @@ import { Cause, Context, Effect, Fiber, Queue, Schedule } from "effect"
 
 import { forkAppWorker } from "@/effect/runtime"
 import {
-  instanceDirectoryMetadata,
-  type DirectoryInstance,
-} from "@/lib/instance-directory"
-import { updateInstanceDirectoryEffect } from "@/lib/instance-registry"
+  serverDirectoryMetadata,
+  type ServerDirectoryEntry,
+} from "@/lib/server-directory"
+import { updateServerDirectoryEffect } from "@/lib/server-registry"
 import {
   relayConnectionIds,
   relayConnectionInstances,
@@ -17,15 +17,15 @@ import {
 } from "@/lib/realtime-source.server"
 
 /** Authenticated Relay snapshots, and a signal when one changes. */
-export class InstanceDirectorySource extends Context.Service<
-  InstanceDirectorySource,
+export class ServerDirectorySource extends Context.Service<
+  ServerDirectorySource,
   {
     readonly instances: (
       relayId: string
-    ) => ReadonlyArray<DirectoryInstance> | null
+    ) => ReadonlyArray<ServerDirectoryEntry> | null
     readonly subscribe: (changed: (relayId: string) => void) => () => void
   }
->()("hearth/InstanceDirectorySource") {}
+>()("hearth/ServerDirectorySource") {}
 
 const retryDelay = "5 seconds"
 
@@ -33,8 +33,8 @@ const retryDelay = "5 seconds"
 // snapshot when work starts. It only refreshes records Hearth already holds;
 // Hearth's create and delete paths and the startup reconciliation own which
 // records exist.
-export const syncInstanceDirectories = Effect.gen(function* () {
-  const source = yield* InstanceDirectorySource
+export const syncServerDirectories = Effect.gen(function* () {
+  const source = yield* ServerDirectorySource
   const wake = yield* Queue.sliding<void>(1)
   yield* Effect.addFinalizer(() => Queue.shutdown(wake))
   const pending = new Set<string>()
@@ -55,18 +55,18 @@ export const syncInstanceDirectories = Effect.gen(function* () {
         .map((instance) => [
           instance.id,
           instance.name,
-          instanceDirectoryMetadata(instance),
+          serverDirectoryMetadata(instance),
         ])
         .sort(([left], [right]) => left!.localeCompare(right!))
     )
     if (committed.get(relayId) === signature) return
-    yield* updateInstanceDirectoryEffect(relayId, instances).pipe(
+    yield* updateServerDirectoryEffect(relayId, instances).pipe(
       Effect.retry(Schedule.exponential(100).pipe(Schedule.upTo({ times: 3 })))
     )
     committed.set(relayId, signature)
     publishRealtimeChange({
       type: "hearth.invalidate",
-      topics: ["instance-directory"],
+      topics: ["server-directory"],
       audience: { kind: "relays", relayIds: [relayId] },
       scope: { relayId },
     })
@@ -101,10 +101,10 @@ declare global {
   var kilnInstanceDirectoryWorker: Fiber.Fiber<void> | undefined
 }
 
-export function startInstanceDirectorySync() {
+export function startServerDirectorySync() {
   globalThis.kilnInstanceDirectoryWorker ??= forkAppWorker(
-    syncInstanceDirectories.pipe(
-      Effect.provideService(InstanceDirectorySource, {
+    syncServerDirectories.pipe(
+      Effect.provideService(ServerDirectorySource, {
         instances: relayConnectionInstances,
         subscribe: (changed) => {
           const unsubscribe = subscribeRealtimeChanges((event) => {
@@ -112,7 +112,7 @@ export function startInstanceDirectorySync() {
               event.type === "relay.snapshot.reset" ||
               event.type === "relay.snapshot.delta" ||
               event.type === "relay.state" ||
-              event.type === "instance.upsert"
+              event.type === "server.upsert"
             )
               changed(event.relayId)
           })
@@ -128,11 +128,11 @@ export function startInstanceDirectorySync() {
 }
 
 /** Runtime disposal does not interrupt forked workers, so stop it first. */
-export function stopInstanceDirectorySync(): Promise<void> {
+export function stopServerDirectorySync(): Promise<void> {
   const worker = globalThis.kilnInstanceDirectoryWorker
   globalThis.kilnInstanceDirectoryWorker = undefined
   return worker ? Effect.runPromise(Fiber.interrupt(worker)) : Promise.resolve()
 }
 
 // In development, a reloaded module starts a worker running its new code.
-if (import.meta.hot) import.meta.hot.dispose(() => stopInstanceDirectorySync())
+if (import.meta.hot) import.meta.hot.dispose(() => stopServerDirectorySync())

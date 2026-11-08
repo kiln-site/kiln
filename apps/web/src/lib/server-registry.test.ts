@@ -4,19 +4,19 @@ import { SqlClient } from "effect/sql"
 import * as TestClock from "effect/testing/TestClock"
 
 import {
-  registerPreparedInstanceEffect,
-  recordCreatedInstanceEffect,
-  reservePreparedInstanceEffect,
-  syncInstanceRegistryEffect,
-} from "@/lib/instance-registry"
+  registerPreparedServerEffect,
+  recordCreatedServerEffect,
+  reservePreparedServerEffect,
+  syncServerRegistryEffect,
+} from "@/lib/server-registry"
 import { databaseTableName } from "@/lib/database-config"
-import type { DirectoryInstance } from "@/lib/instance-directory"
+import type { ServerDirectoryEntry } from "@/lib/server-directory"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, selectRows } from "@/test/seed"
 
 const server = (
-  value: Pick<DirectoryInstance, "id" | "name">
-): DirectoryInstance => ({
+  value: Pick<ServerDirectoryEntry, "id" | "name">
+): ServerDirectoryEntry => ({
   ...value,
   brickId: "minecraft-paper",
   game: "Minecraft",
@@ -34,7 +34,7 @@ interface InstanceRow {
   provisioning_reserved_until: number | null
 }
 
-const instances = Effect.map(selectRows<InstanceRow>("instance"), (rows) =>
+const instances = Effect.map(selectRows<InstanceRow>("server"), (rows) =>
   Object.fromEntries(
     rows.map((row) => [
       row.instance_id,
@@ -61,18 +61,18 @@ describeMysql("instance registry", () => {
       () =>
         Effect.gen(function* () {
           yield* seedRelay
-          yield* reservePreparedInstanceEffect(
+          yield* reservePreparedServerEffect(
             "relay-one",
             { id: "instance-one" },
             "user-one"
           )
-          yield* registerPreparedInstanceEffect(
+          yield* registerPreparedServerEffect(
             "relay-one",
             server({ id: "instance-one", name: "Survival" }),
             "user-one"
           )
           // A later registration never takes ownership away.
-          yield* registerPreparedInstanceEffect(
+          yield* registerPreparedServerEffect(
             "relay-one",
             server({ id: "instance-one", name: "Survival" }),
             "user-two"
@@ -87,7 +87,7 @@ describeMysql("instance registry", () => {
             },
           })
           const queued = yield* selectRows<{ instance_id: string }>(
-            "instance_post_provision"
+            "server_post_provision"
           )
           assert.deepEqual(
             queued.map((row) => row.instance_id),
@@ -105,13 +105,13 @@ describeMysql("instance registry", () => {
           const created = server({ id: "cli-server", name: "From the CLI" })
           // A snapshot read after the create lands first: the Relay's owner
           // holds it until Hearth records who made it.
-          yield* syncInstanceRegistryEffect("relay-race", [created])
+          yield* syncServerRegistryEffect("relay-race", [created])
           assert.strictEqual(
             (yield* instances)["cli-server"]?.ownerId,
             "relay-owner"
           )
 
-          yield* recordCreatedInstanceEffect("relay-race", created, "user-one")
+          yield* recordCreatedServerEffect("relay-race", created, "user-one")
 
           assert.strictEqual(
             (yield* instances)["cli-server"]?.ownerId,
@@ -139,14 +139,14 @@ describeMysql("instance registry", () => {
           yield* resetDatabase
           yield* insertRelay("relay-race", { created_by: "relay-owner" })
           const created = server({ id: "cli-server", name: "From the CLI" })
-          yield* syncInstanceRegistryEffect("relay-race", [created])
+          yield* syncServerRegistryEffect("relay-race", [created])
           const sql = yield* SqlClient.SqlClient
           // As a transfer writes it.
-          yield* sql`UPDATE ${sql(databaseTableName("instance"))} SET owner_id = 'recipient', owner_provisional = 0 WHERE instance_id = 'cli-server'`
+          yield* sql`UPDATE ${sql(databaseTableName("server"))} SET owner_id = 'recipient', owner_provisional = 0 WHERE instance_id = 'cli-server'`
 
-          yield* recordCreatedInstanceEffect("relay-race", created, "user-one")
+          yield* recordCreatedServerEffect("relay-race", created, "user-one")
           // A retried record changes nothing either.
-          yield* recordCreatedInstanceEffect("relay-race", created, "user-one")
+          yield* recordCreatedServerEffect("relay-race", created, "user-one")
 
           assert.strictEqual(
             (yield* instances)["cli-server"]?.ownerId,

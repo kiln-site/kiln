@@ -38,7 +38,7 @@ import { hostPortAddress } from "@/lib/domain-address"
 import { provisioningFailureDiagnostics } from "@/lib/provisioning-diagnostics"
 import { instanceRecipeQueryOptions } from "@/lib/query-options"
 import { applyUpdatedInstance } from "@/lib/realtime-client"
-import type { InstanceSettingsInstance } from "@/lib/relay-selectors"
+import type { SettingsServer } from "@/lib/relay-selectors"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 import { updateInstanceName, uploadToMclogs } from "@/server/relay"
 
@@ -51,7 +51,7 @@ export function ServerGeneralSettings({
   relayConnected,
 }: {
   canRename: boolean
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
   relayConnected: boolean
 }) {
   const editor = React.useMemo(
@@ -116,7 +116,7 @@ export function ServerConnectionSettings({
   instance,
 }: {
   canViewNetwork: boolean
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
 }) {
   // The raw address is the Relay's host and the game port; a configured one,
   // such as a domain, is what the Relay advertises instead.
@@ -184,7 +184,7 @@ export function ServerBrickSettings({
 }: {
   canShare: boolean
   canViewStartup: boolean
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
 }) {
   const provisioning = Boolean(instance.provisioning)
   return (
@@ -237,7 +237,7 @@ export function ServerBrickSettings({
 export function ServerProvisioningSection({
   instance,
 }: {
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
 }) {
   const provisioning = instance.provisioning
   if (!provisioning) return null
@@ -277,11 +277,7 @@ export function ServerProvisioningSection({
   )
 }
 
-function CopyDiagnosticsButton({
-  instance,
-}: {
-  instance: InstanceSettingsInstance
-}) {
+function CopyDiagnosticsButton({ instance }: { instance: SettingsServer }) {
   const provisioning = instance.provisioning
   if (!provisioning) return null
   const diagnostics = provisioningFailureDiagnostics({
@@ -329,7 +325,7 @@ function BrickRecipeButton({
   instance,
 }: {
   canShare: boolean
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
 }) {
   const [open, setOpen] = React.useState(false)
   return (
@@ -365,7 +361,7 @@ function BrickRecipeDialogBody({
   instance,
 }: {
   canShare: boolean
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
 }) {
   const recipeQuery = useQuery(
     instanceRecipeQueryOptions(instance.relayId, instance.id)
@@ -421,7 +417,7 @@ function ServerRenameButton({
   instance,
   relayConnected,
 }: {
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
   relayConnected: boolean
 }) {
   const queryClient = useQueryClient()

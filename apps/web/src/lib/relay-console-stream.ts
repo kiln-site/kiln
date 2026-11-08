@@ -210,7 +210,7 @@ function openDirectRelayConsoleStream(
       const { inbox, socket } = connection
 
       // Commands and completions go to servers only.
-      if (resource.kind === "instance") {
+      if (resource.kind === "server") {
         yield* Effect.acquireRelease(
           Effect.sync(() =>
             registerRelayConsoleOperationClient(relayId, resource.id, {
@@ -467,7 +467,7 @@ export function prewarmRelayConsole(input: {
   const connection = Effect.runFork(
     connectDirectRelayConsole(
       input.relayId,
-      { id: input.instanceId, kind: "instance" },
+      { id: input.instanceId, kind: "server" },
       input.browserOrigin,
       { parentSpan: () => span },
       input.write
@@ -633,7 +633,7 @@ function prewarmedConsoleInstance(
   relayId: string,
   resource: RelayConsoleResource
 ): string | undefined {
-  return resource.kind === "instance" && !resource.stream
+  return resource.kind === "server" && !resource.stream
     ? `${relayId}:${resource.id}`
     : undefined
 }
@@ -684,7 +684,7 @@ function hearthConsoleStreamUrl(
   resource: RelayConsoleResource
 ): string {
   const search = new URLSearchParams({ relayId })
-  if (resource.kind !== "instance") search.set("kind", resource.kind)
+  if (resource.kind !== "server") search.set("kind", resource.kind)
   if (resource.stream) search.set("stream", resource.stream)
   return withRenderedAccount(
     `/api/console/${encodeURIComponent(resource.id)}?${search}`

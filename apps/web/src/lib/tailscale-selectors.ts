@@ -1,9 +1,9 @@
 import { builtinTailscaleBrickId } from "@workspace/contracts"
 
-import type { FleetRelayInstance, RelayFleetSnapshot } from "@/lib/relay-fleet"
+import type { FleetRelayServer, RelayFleetSnapshot } from "@/lib/relay-fleet"
 
 export type TailscaleServer = Pick<
-  FleetRelayInstance,
+  FleetRelayServer,
   | "brickId"
   | "id"
   | "implementation"

@@ -102,13 +102,13 @@ revocation, and expiration still invalidate credentials.
 
 Power commands check the specific action. File writes, deletion, and chmod use
 separate permissions; write includes read. Changing only resource limits
-(`--memory`, `--cpu`, `--disk`) requires `instance.limits.write`; it does not
+(`--memory`, `--cpu`, `--disk`) requires `server.limits.write`; it does not
 require configuration-write permission.
 Use `--no-start` on a stopped server when no power permission is granted;
 reconfiguring a running server requires the corresponding stop/restart permission.
 Changing a Brick or non-resource startup variables requires
-`instance.configuration.write`. Resource limits require
-`instance.limits.write`; changes affecting both require both permissions.
+`server.configuration.write`. Resource limits require
+`server.limits.write`; changes affecting both require both permissions.
 Creating a backup in a user-owned destination
 also requires `backup.download`, because it exports the backup contents. A read-only CLI credential never gains write
 access from a more permissive preset.
@@ -233,7 +233,7 @@ asks for the account password without echoing it; pipe it with `--password-stdin
 there's no terminal. A wrong name or password deletes nothing. After five
 wrong passwords in 15 minutes, the account's password checks are refused
 (`rate_limited`) until the oldest ages out; don't retry in a loop. Deletion
-requires full CLI access and the `instance.delete` and `backup.create`
+requires full CLI access and the `server.delete` and `backup.create`
 permissions: the server is frozen and backed up in full first, then deleted.
 A deletion that outlasts the request carries on in the background; one that
 stops, such as when the final backup fails, deletes nothing and shows on the
@@ -254,7 +254,7 @@ List visible backups and copy the complete UUID from the `ID` column:
 kiln backups list --limit 200
 ```
 
-The `TARGET` column is `kind:id`: `instance`, `database`, `platform`, `app`
+The `TARGET` column is `kind:id`: `server` (a game server), `database`, `platform`, `app`
 (an App's folder), or `volume`, whose ID is a Kiln volume's or
 `<App ID>/<name>` for one an App's Compose project declares, up to 200
 characters. The CLI lists App and volume backups but doesn't create or
@@ -360,8 +360,8 @@ with `json:` for numbers or booleans, such as `slots=json:20` or
 `debug=json:true`. `--game-version` sets `version` and `--java-version` sets
 `java_version`, overriding a `--variable` for the same name. `--no-start`
 leaves the reconfigured server stopped. Startup changes require full CLI
-access, read access to the configuration and `instance.configuration.write`,
-plus `instance.limits.write` to change limits and power permission to start
+access, read access to the configuration and `server.configuration.write`,
+plus `server.limits.write` to change limits and power permission to start
 it.
 
 ## Remote path rules
@@ -440,7 +440,7 @@ HTTPS only, follow at most five HTTPS redirects, reject credentials embedded in
 URLs, block private/loopback/link-local/reserved destinations (including after
 DNS resolution and redirects), enforce the 20 GiB transfer limit, and replace
 the destination atomically. They require full CLI access,
-`instance.files.write` in Hearth, and `instance.files.upload-url` in the Relay
+`server.files.write` in Hearth, and `server.files.upload-url` in the Relay
 client policy.
 
 After a mutation, verify with the least expensive read operation, such as
@@ -505,7 +505,7 @@ Interpret the result narrowly:
   verification. General file reads do not use the same transfer path.
 - If a local SFTP upload works but an HTTPS upload fails, inspect the URL,
   redirect chain, public DNS resolution, Relay egress, remote HTTP status, and
-  the Relay client's `instance.files.upload-url` action.
+  the Relay client's `server.files.upload-url` action.
 - If all file operations fail, check the profile URL, credential access,
   server reference, Relay availability, and root-relative path first.
 - If a root file is not found, retry the path without `/` or `/data/`.

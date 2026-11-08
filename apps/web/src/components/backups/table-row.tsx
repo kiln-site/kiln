@@ -416,7 +416,7 @@ export const BackupRowActions = React.memo(function BackupRowActions({
     !backupSourceIsActive(backup) &&
     (targetAvailable || backup.targetKind !== "platform") &&
     // Kiln's restore runs on its Relay's host; the dialog says how.
-    (backup.targetKind === "instance" ||
+    (backup.targetKind === "server" ||
       backup.targetKind === "database" ||
       (backup.targetKind === "platform" &&
         backup.artifactKind === "platform_bundle") ||
@@ -999,7 +999,7 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
   const className =
     "group/target-link flex min-h-14 min-w-0 flex-1 items-center px-3 py-2.5 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
 
-  if (targetKind === "instance") {
+  if (targetKind === "server") {
     return (
       <Link
         className={className}
@@ -1297,7 +1297,7 @@ export function backupTargetAvailable(
 const targetKindLabels: Record<Backup["targetKind"], string> = {
   app: "App",
   database: "Database",
-  instance: "Game Server",
+  server: "Game Server",
   platform: "Kiln",
   volume: "Volume",
 }

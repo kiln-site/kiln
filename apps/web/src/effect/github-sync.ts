@@ -47,7 +47,7 @@ export type GitHubSyncStatus =
   | "queued"
   | "running"
   | "success"
-export type GitHubSyncResourceKind = "app" | "instance" | "relay"
+export type GitHubSyncResourceKind = "app" | "server" | "relay"
 
 /** A file Kiln wrote, as it left it. */
 export interface GitHubSyncedFile {
@@ -517,7 +517,7 @@ export const deleteGitHubSyncEffect = Effect.fn("github.sync.delete")(
 /** Removes the syncs into a deleted game server or App, with their runs. */
 export const deleteResourceGitHubSyncsEffect = Effect.fn(
   "github.sync.deleteResource"
-)(function* (relayId: string, kind: "app" | "instance", resourceId: string) {
+)(function* (relayId: string, kind: "app" | "server", resourceId: string) {
   const database = yield* Database
   yield* database.execute(
     "github.sync.deleteResource",

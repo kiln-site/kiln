@@ -6,7 +6,7 @@ import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 
 export type AuthorizationScope =
-  | { instanceId: string; kind: "instance" }
+  | { instanceId: string; kind: "server" }
   | { kind: "login_session"; loginSessionId: string }
   | { kind: "subject_relay" }
 
@@ -155,7 +155,7 @@ function deduplicateTargets(
 
 function encodeScope(scope: AuthorizationScope): [string, string] {
   switch (scope.kind) {
-    case "instance":
+    case "server":
       return [scope.kind, scope.instanceId]
     case "login_session":
       return [scope.kind, scope.loginSessionId]

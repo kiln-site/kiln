@@ -42,7 +42,7 @@ export const relayResourcesV1Feature = "relay-resources-v1"
 // Hearth reads `errorCode` on backup tasks and their artifact outcomes, so
 // the Relay may send it.
 export const relayBackupFailureCodesV1Feature = "backup-failure-codes-v1"
-// The Relay answers `instance.files.put`, creating or replacing one file.
+// The Relay answers `server.files.put`, creating or replacing one file.
 export const relayFilePutV1Feature = "files-put-v1"
 // The Relay applies memory, CPU, and disk limits from a request's `limits`,
 // where `null` means no limit.
@@ -96,7 +96,7 @@ export const relaySecurityInventoryV1Feature = "security-inventory-v1"
 // label, and redirects to another URL. Older Relays need a name and a port
 // on every route.
 export const relayWebRouteOptionsV1Feature = "web-route-options-v1"
-// The Relay answers `instance.icon.read` with a small image's bytes, from a
+// The Relay answers `server.icon.read` with a small image's bytes, from a
 // file root or from inside one of an app's containers.
 export const relayIconReadV1Feature = "icon-read-v1"
 // The Relay opens its control connection to Hearth when Hearth asks it to
@@ -258,42 +258,42 @@ export const relayControlOperations = [
   "schedule.run",
   "schedule.remove",
   "schedule.overview",
-  "instance.create",
-  "instance.provision.prepare",
-  "instance.provision.claim",
-  "instance.provision.cancel",
-  "instance.startup.write",
-  "instance.rename",
-  "instance.limits.write",
-  "instance.delete",
-  "instance.action",
-  "instance.resources.read",
-  "instance.files.list",
-  "instance.files.directory.list",
-  "instance.files.directory.sizes",
-  "instance.files.search",
-  "instance.files.stat",
-  "instance.files.read",
-  "instance.icon.read",
-  "instance.files.write",
-  "instance.files.put",
-  "instance.files.upload-url",
-  "instance.files.mutate",
-  "instance.files.mutate.result",
-  "instance.files.database.read",
-  "instance.files.database.write",
-  "instance.console.history",
-  "instance.console.write",
-  "instance.console.complete",
-  "instance.logs.share",
-  "instance.logs.latest",
-  "instance.deployment.read",
-  "instance.network.ports.reserve",
-  "instance.network.ports.release",
-  "instance.network.ports.write",
-  "instance.network.routes.read",
-  "instance.network.routes.write",
-  "instance.network.databases.remove",
+  "server.create",
+  "server.provision.prepare",
+  "server.provision.claim",
+  "server.provision.cancel",
+  "server.startup.write",
+  "server.rename",
+  "server.limits.write",
+  "server.delete",
+  "server.action",
+  "server.resources.read",
+  "server.files.list",
+  "server.files.directory.list",
+  "server.files.directory.sizes",
+  "server.files.search",
+  "server.files.stat",
+  "server.files.read",
+  "server.icon.read",
+  "server.files.write",
+  "server.files.put",
+  "server.files.upload-url",
+  "server.files.mutate",
+  "server.files.mutate.result",
+  "server.files.database.read",
+  "server.files.database.write",
+  "server.console.history",
+  "server.console.write",
+  "server.console.complete",
+  "server.logs.share",
+  "server.logs.latest",
+  "server.deployment.read",
+  "server.network.ports.reserve",
+  "server.network.ports.release",
+  "server.network.ports.write",
+  "server.network.routes.read",
+  "server.network.routes.write",
+  "server.network.databases.remove",
   "hearth.database.terminal.output",
   "sftp.authorization.resolve",
   "operation.get",
@@ -336,24 +336,24 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.platform.terminal.restart",
   "relay.platform.database.write",
   "relay.installation.replace",
-  "instance.create",
-  "instance.provision.prepare",
-  "instance.provision.claim",
-  "instance.provision.cancel",
-  "instance.startup.write",
-  "instance.rename",
-  "instance.limits.write",
-  "instance.delete",
-  "instance.action",
-  "instance.files.write",
-  "instance.files.put",
-  "instance.files.upload-url",
-  "instance.files.mutate",
-  "instance.files.database.write",
-  "instance.console.write",
-  "instance.network.ports.write",
-  "instance.network.routes.write",
-  "instance.network.databases.remove",
+  "server.create",
+  "server.provision.prepare",
+  "server.provision.claim",
+  "server.provision.cancel",
+  "server.startup.write",
+  "server.rename",
+  "server.limits.write",
+  "server.delete",
+  "server.action",
+  "server.files.write",
+  "server.files.put",
+  "server.files.upload-url",
+  "server.files.mutate",
+  "server.files.database.write",
+  "server.console.write",
+  "server.network.ports.write",
+  "server.network.routes.write",
+  "server.network.databases.remove",
   "database.create",
   "database.provision.prepare",
   "database.provision.claim",
@@ -455,19 +455,19 @@ export function relayControlOperationChanges(
     case "transfer.pull.get":
     case "transfer.space":
     case "schedule.overview":
-    case "instance.resources.read":
-    case "instance.files.list":
-    case "instance.files.directory.list":
-    case "instance.files.directory.sizes":
-    case "instance.files.search":
-    case "instance.files.stat":
-    case "instance.files.read":
-    case "instance.icon.read":
-    case "instance.files.database.read":
-    case "instance.console.history":
-    case "instance.logs.latest":
-    case "instance.deployment.read":
-    case "instance.network.routes.read":
+    case "server.resources.read":
+    case "server.files.list":
+    case "server.files.directory.list":
+    case "server.files.directory.sizes":
+    case "server.files.search":
+    case "server.files.stat":
+    case "server.files.read":
+    case "server.icon.read":
+    case "server.files.database.read":
+    case "server.console.history":
+    case "server.logs.latest":
+    case "server.deployment.read":
+    case "server.network.routes.read":
     case "relay.terminal.attach":
     case "relay.terminal.heartbeat":
     case "relay.terminal.detach":
@@ -564,29 +564,29 @@ export function relayControlOperationChanges(
     case "schedule.apply":
     case "schedule.run":
     case "schedule.remove":
-    case "instance.create":
-    case "instance.provision.prepare":
-    case "instance.provision.claim":
-    case "instance.provision.cancel":
-    case "instance.startup.write":
-    case "instance.rename":
-    case "instance.limits.write":
-    case "instance.delete":
-    case "instance.action":
-    case "instance.files.write":
-    case "instance.files.put":
-    case "instance.files.upload-url":
-    case "instance.files.mutate":
-    case "instance.files.mutate.result":
-    case "instance.files.database.write":
-    case "instance.console.write":
-    case "instance.console.complete":
-    case "instance.logs.share":
-    case "instance.network.ports.reserve":
-    case "instance.network.ports.release":
-    case "instance.network.ports.write":
-    case "instance.network.routes.write":
-    case "instance.network.databases.remove":
+    case "server.create":
+    case "server.provision.prepare":
+    case "server.provision.claim":
+    case "server.provision.cancel":
+    case "server.startup.write":
+    case "server.rename":
+    case "server.limits.write":
+    case "server.delete":
+    case "server.action":
+    case "server.files.write":
+    case "server.files.put":
+    case "server.files.upload-url":
+    case "server.files.mutate":
+    case "server.files.mutate.result":
+    case "server.files.database.write":
+    case "server.console.write":
+    case "server.console.complete":
+    case "server.logs.share":
+    case "server.network.ports.reserve":
+    case "server.network.ports.release":
+    case "server.network.ports.write":
+    case "server.network.routes.write":
+    case "server.network.databases.remove":
     case "resource.freeze":
     case "resource.unfreeze":
       return true
@@ -671,11 +671,11 @@ export function relayControlDeadlineMs(
   // The shell helper may have to be pulled first; the update itself goes on
   // without the Relay.
   if (operation === "relay.host.packages.update") return 120_000
-  if (operation === "instance.delete") return 360_000
+  if (operation === "server.delete") return 360_000
   // Freezing stops the resource first, as a stop does.
   if (operation === "resource.freeze") return 240_000
   // Waits its turn behind a restart in progress.
-  if (operation === "instance.limits.write") return 240_000
+  if (operation === "server.limits.write") return 240_000
   if (operation === "database.create") return 360_000
   if (operation === "database.delete") return 180_000
   if (operation === "app.delete") return 180_000
@@ -700,7 +700,7 @@ export function relayControlDeadlineMs(
   if (operation === "transfer.space") return 120_000
   if (operation === "database.wipe") return 120_000
   if (operation === "database.dump.import") return 60 * 60_000
-  if (operation === "instance.action") return 180_000
+  if (operation === "server.action") return 180_000
   if (
     operation === "schedule.apply" ||
     operation === "schedule.run" ||
@@ -708,18 +708,18 @@ export function relayControlDeadlineMs(
   ) {
     return 30_000
   }
-  if (operation === "instance.logs.share") return 60_000
+  if (operation === "server.logs.share") return 60_000
   // The CLI saves files of up to the control frame limit.
-  if (operation === "instance.files.write") return 180_000
+  if (operation === "server.files.write") return 180_000
   if (
-    operation === "instance.create" ||
-    operation === "instance.startup.write" ||
-    operation === "instance.files.upload-url"
+    operation === "server.create" ||
+    operation === "server.startup.write" ||
+    operation === "server.files.upload-url"
   ) {
     return 360_000
   }
-  return operation === "instance.network.ports.write" ||
-    operation === "instance.network.routes.write" ||
+  return operation === "server.network.ports.write" ||
+    operation === "server.network.routes.write" ||
     operation === "app.network.routes.write"
     ? 240_000
     : 30_000
@@ -841,7 +841,7 @@ export const relayBrowserPreviewLeaseMs = 10 * 60_000
 // the resource's ID (a Relay's own ID for `relay` and `platform`, Kiln's
 // services on its host); capabilities without `resourceKind` are for servers.
 export const relayBrowserResourceKinds = [
-  "instance",
+  "server",
   "database",
   "app",
   "relay",
@@ -869,7 +869,7 @@ export interface RelayConsoleResource {
 export const relayConsoleReadActions = {
   app: "app.logs.read",
   database: "database.logs.read",
-  instance: "instance.console.read",
+  server: "server.console.read",
   // Hearth issues these only to platform administrators.
   platform: "relay.logs.read",
   relay: "relay.logs.read",
@@ -928,7 +928,7 @@ export const RelayBrowserAuthorizationScopeSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("subject_relay") }),
   Schema.Struct({
     instanceId: Schema.String,
-    kind: Schema.Literal("instance"),
+    kind: Schema.Literal("server"),
   }),
   Schema.Struct({
     kind: Schema.Literal("login_session"),

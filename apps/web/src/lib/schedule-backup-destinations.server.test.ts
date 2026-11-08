@@ -25,7 +25,7 @@ const storageId = "a01d9771-607d-4c22-b492-fb49c36a8a32"
 const target: ScheduleTarget = {
   id: "server-a",
   relayId: "relay-a",
-  kind: "instance",
+  kind: "server",
   name: "Server A",
 }
 const otherTarget: ScheduleTarget = {

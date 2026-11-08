@@ -5,7 +5,7 @@ import {
   relayLinkedBackupsV1Feature,
   relayInstanceWebRouteStateSchema,
   relaySnapshotSchema,
-  type RelayInstance,
+  type RelayServer,
   type ResourceLimits,
 } from "@workspace/contracts"
 import { Effect } from "effect"
@@ -144,7 +144,7 @@ export async function previewServerMigrationHandler(
           scope: relayScope(candidate.id),
           user,
         })
-      ).allows("instance.create")
+      ).allows("server.create")
       if (!allowed) return null
       const [problems, takenNames, space] = await Promise.all([
         runAppEffect(
@@ -179,7 +179,7 @@ export async function previewServerMigrationHandler(
       } satisfies ServerMigrationDestination
     })
   )
-  const allowNetwork = authorization.allows("instance.network.read")
+  const allowNetwork = authorization.allows("server.network.read")
   const [domains, webRoutes, accessCount, backups] = await Promise.all([
     runAppEffect(
       "serverMigrations.preview.domains",
@@ -208,14 +208,14 @@ export async function previewServerMigrationHandler(
       backup: authorization.allows("backup.create"),
       copyAccess: authorization.allows("access.read"),
       delete:
-        authorization.allows("instance.delete") &&
+        authorization.allows("server.delete") &&
         authorization.allows("backup.create"),
       linkBackups: authorization.allows("backup.download"),
-      network: authorization.allows("instance.network.write"),
+      network: authorization.allows("server.network.write"),
       power:
-        authorization.allows("instance.power.stop") &&
-        authorization.allows("instance.power.start"),
-      stop: authorization.allows("instance.power.stop"),
+        authorization.allows("server.power.stop") &&
+        authorization.allows("server.power.start"),
+      stop: authorization.allows("server.power.stop"),
     },
     destinations: destinations.filter((item) => item !== null),
     room: sourceRoom
@@ -291,7 +291,7 @@ export async function startServerMigrationHandler(
     relayId: relay.id,
     storageIds: backupStorageIds,
     targetId: instance.id,
-    targetKind: "instance",
+    targetKind: "server",
     user,
   })
   // Deleting the old server backs it up first, to a destination they may use.
@@ -306,7 +306,7 @@ export async function startServerMigrationHandler(
       relayId: relay.id,
       storageIds: [options.deleteSource.storageId],
       targetId: instance.id,
-      targetKind: "instance",
+      targetKind: "server",
       user,
     })
   }
@@ -392,8 +392,8 @@ async function authorizeSource(
     scope: instanceScope(relay.id, data.instanceId),
     user,
   })
-  authorization.require("instance.files.read")
-  authorization.require("instance.configuration.read")
+  authorization.require("server.files.read")
+  authorization.require("server.configuration.read")
   const instance = await sourceInstance(relay, data.instanceId, user)
   return { authorization, instance, relay }
 }
@@ -402,7 +402,7 @@ async function sourceInstance(
   relay: PersistedRelay,
   instanceId: string,
   user: AuthenticatedUser
-): Promise<RelayInstance> {
+): Promise<RelayServer> {
   const { relayRpc } = await import("@/lib/relay-connection")
   const snapshot = relaySnapshotSchema.parse(
     await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
@@ -422,7 +422,7 @@ async function webRouteHostnames(
     () =>
       relayRpc(
         relay,
-        "instance.network.routes.read",
+        "server.network.routes.read",
         { instanceId },
         15_000,
         user.id
@@ -451,7 +451,7 @@ async function serverNames(
       () => []
     ),
     databasePool.query<Array<RowDataPacket & { display_name: string }>>(
-      `SELECT display_name FROM ${databaseTable("instance")}
+      `SELECT display_name FROM ${databaseTable("server")}
         WHERE relay_id = ? AND display_name IS NOT NULL`,
       [relay.id]
     ),
@@ -469,10 +469,10 @@ async function countAccess(relayId: string, instanceId: string) {
     Array<RowDataPacket & { count: number }>
   >(
     `SELECT COUNT(*) AS count FROM ${databaseTable("access_grant")} AS grant_row
-       JOIN ${databaseTable("instance")} AS instance_row
+       JOIN ${databaseTable("server")} AS instance_row
          ON instance_row.relay_id = grant_row.relay_id
         AND instance_row.instance_id = grant_row.resource_id
-      WHERE grant_row.relay_id = ? AND grant_row.resource_type = 'instance'
+      WHERE grant_row.relay_id = ? AND grant_row.resource_type = 'server'
         AND grant_row.resource_id = ? AND grant_row.state = 'active'
         AND grant_row.user_id <> COALESCE(instance_row.owner_id, '')`,
     [relayId, instanceId]

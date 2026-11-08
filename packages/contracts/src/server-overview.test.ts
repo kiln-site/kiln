@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test"
-import { projectRelayInstanceOverview, relayInstanceSchema } from "./index"
+import { projectRelayServerOverview, relayServerSchema } from "./index"
 
-const instance = relayInstanceSchema.parse({
+const instance = relayServerSchema.parse({
   connectAddress: "server.test",
   containerId: null,
   desiredState: "running",
@@ -22,17 +22,17 @@ const instance = relayInstanceSchema.parse({
 
 describe("public instance projection", () => {
   it("removes configuration and embedded source secrets without mutating cached instances", () => {
-    const projected = projectRelayInstanceOverview(instance)
+    const projected = projectRelayServerOverview(instance)
     expect(projected).not.toHaveProperty("variables")
     expect(projected.brickSource).toBe("https://example.com/recipe.yaml")
     expect(projected.resources).toBe(instance.resources)
     expect(projected.lifecycle).toBe(instance.lifecycle)
     expect(instance.variables?.password).toBe("startup-secret")
-    expect(relayInstanceSchema.safeParse(projected).success).toBe(true)
+    expect(relayServerSchema.safeParse(projected).success).toBe(true)
   })
   it("omits malformed source values instead of exposing them", () => {
     expect(
-      projectRelayInstanceOverview({ ...instance, brickSource: "secret token" })
+      projectRelayServerOverview({ ...instance, brickSource: "secret token" })
     ).not.toHaveProperty("brickSource")
   })
 })

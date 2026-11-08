@@ -34,10 +34,10 @@ import { BrickVariableField } from "@/components/brick-variable-fields"
 import { MinecraftJavaVersionFields } from "@/components/minecraft-java-version-fields"
 import { BrickIcon } from "@/components/brick-icon"
 import {
-  useInstanceIdentity,
-  useInstancePermissions,
-  useInstanceRelayConnected,
-} from "@/components/instance-workspace-context"
+  useServerIdentity,
+  useServerPermissions,
+  useServerRelayConnected,
+} from "@/components/server-workspace-context"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 import {
   canPairMinecraftJavaVersionFields,
@@ -95,9 +95,9 @@ interface StartupEditing {
 }
 
 export function StartupWorkspace() {
-  const instance = useInstanceIdentity()
-  const permissions = useInstancePermissions()
-  const relayConnected = useInstanceRelayConnected()
+  const instance = useServerIdentity()
+  const permissions = useServerPermissions()
+  const relayConnected = useServerRelayConnected()
   const startupQuery = useQuery(
     instanceStartupQueryOptions(instance.relayId, instance.id)
   )

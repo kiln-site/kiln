@@ -128,7 +128,7 @@ export const scheduleActionSchema = z.discriminatedUnion("type", [
 export type ScheduleAction = z.infer<typeof scheduleActionSchema>
 
 export const scheduleTargetKindSchema = z.enum([
-  "instance",
+  "server",
   "database",
   "app",
   "relay",
@@ -331,7 +331,7 @@ const relayScheduleBackupExecutionSchema = z
      */
     appId: z.string().min(1).max(120).optional(),
     targetId: z.string().min(1).max(120),
-    targetKind: z.enum(["instance", "database", "relay", "app", "volume"]),
+    targetKind: z.enum(["server", "database", "relay", "app", "volume"]),
   })
   .strict()
 
@@ -546,7 +546,7 @@ export function scheduleActionSupportsTarget(
   if (action.type === "console_command") return target.kind !== "relay"
   if (action.type === "power") return target.kind !== "relay"
   // An App's folder and owned volumes are archives, never restic snapshots.
-  if (action.mode === "incremental") return target.kind === "instance"
+  if (action.mode === "incremental") return target.kind === "server"
   return true
 }
 

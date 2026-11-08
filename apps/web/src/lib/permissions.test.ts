@@ -6,17 +6,17 @@ describe("public port permissions", () => {
   it("protects replacements without blocking new allocations", () => {
     expect(
       instancePortsWritePermission([{ externalPort: 32_124, id: "primary" }])
-    ).toBe("instance.network.public-port.write")
+    ).toBe("server.network.public-port.write")
     expect(
       instancePortsWritePermission([
         { externalPort: 32_124, id: "custom-allocation" },
       ])
-    ).toBe("instance.network.public-port.write")
+    ).toBe("server.network.public-port.write")
     expect(instancePortsWritePermission([{ externalPort: 32_124 }])).toBe(
-      "instance.network.write"
+      "server.network.write"
     )
     expect(instancePortsWritePermission([{ id: "primary" }])).toBe(
-      "instance.network.write"
+      "server.network.write"
     )
   })
 })

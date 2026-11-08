@@ -38,7 +38,7 @@ import {
 afterAll(() => disposeAppRuntime())
 
 const person = { id: "person-one", name: "Sam" } as AuthenticatedUser
-const server = resourceKey("instance", "relay-one", "alpha")
+const server = resourceKey("server", "relay-one", "alpha")
 const serverDns = partKey(server, "dns")
 
 // An operation that runs until the test lets it end.
@@ -92,7 +92,7 @@ describeMysql("Hearth operations", () => {
             operation<void>()({
               doing: "Changing another server",
               locks: () => [
-                exclusive(resourceKey("instance", "relay-one", "beta")),
+                exclusive(resourceKey("server", "relay-one", "beta")),
               ],
               name: "test.other",
               run: () => Effect.succeed("ran"),
@@ -429,7 +429,7 @@ describeMysql("Hearth operations", () => {
             input: {
               attempt: 1,
               deletionId: "deletion-one",
-              kind: "instance",
+              kind: "server",
               relayId: "relay-one",
               resourceId: "alpha",
             },

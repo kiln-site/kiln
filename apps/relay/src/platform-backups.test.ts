@@ -210,8 +210,8 @@ describe("Kiln platform backups deployed by Coolify", () => {
         },
         config: harness.config,
         fences: await TarRestoreFences.load(harness.config),
-        findInstance: async () => null,
-        isInstanceStopped: async () => true,
+        findServer: async () => null,
+        isServerStopped: async () => true,
         lanes: harness.lanes,
         volumes: harness.volumes,
       }).pipe(Effect.provideService(RelayStateStore, harness.state))

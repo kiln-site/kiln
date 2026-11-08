@@ -440,7 +440,7 @@ const refuseProxiedServerAddressEffect = Effect.fnUntraced(function* (
   input: ClaimInput,
   proxy: WebHostnameProxyChange
 ) {
-  if (input.resource.resourceType !== "instance") return
+  if (input.resource.resourceType !== "server") return
   for (const hostname of proxy.hostnames) {
     if (yield* webHostnameCoveredEffect({ ...input.resource, hostname })) {
       return yield* DomainConfigurationError.make({

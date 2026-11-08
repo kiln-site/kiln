@@ -1,10 +1,10 @@
 import { Result } from "effect"
-import type { RelayInstance } from "./index.js"
+import type { RelayServer } from "./index.js"
 
 /** Overview and resource streams never carry startup secrets. Configuration has its own guarded endpoint. */
-export function projectRelayInstanceOverview<T extends RelayInstance>(
+export function projectRelayServerOverview<T extends RelayServer>(
   instance: T
-): Omit<T, "variables" | "brickSource"> & Pick<RelayInstance, "brickSource"> {
+): Omit<T, "variables" | "brickSource"> & Pick<RelayServer, "brickSource"> {
   const { variables: _variables, brickSource, ...overview } = instance
   const source = publicBrickSource(brickSource)
   return source === undefined ? overview : { ...overview, brickSource: source }

@@ -27,7 +27,7 @@ import {
 } from "@workspace/contracts"
 
 import { brickSnapshotDirectory, saveBrickSnapshot } from "./bricks.js"
-import type { RelayConfig, RelayInstanceConfig } from "./config.js"
+import type { RelayConfig, RelayServerConfig } from "./config.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { RelayBackupError } from "./effect/errors.js"
 import { isPublicRemoteAddress, secureRemoteLookup } from "./source-policy.js"
@@ -58,13 +58,13 @@ export interface RestorePaths {
   staging: string
 }
 
-export async function restorePortableInstanceBackup(
+export async function restorePortableServerBackup(
   config: RelayConfig,
   input: BackupRestoreTaskInput & { kind: "restore" },
-  instance: RelayInstanceConfig,
+  instance: RelayServerConfig,
   beginInstall: RestoreInstallGate
 ): Promise<{ warnings: Array<string> }> {
-  const prepared = await prepareInstanceRestoreStaging(
+  const prepared = await prepareServerRestoreStaging(
     config,
     instance.directory,
     input.taskId
@@ -86,7 +86,7 @@ export async function restorePortableInstanceBackup(
           input,
           instance
         )
-        await installPreparedInstanceRestore(prepared, beginInstall)
+        await installPreparedServerRestore(prepared, beginInstall)
         return { warnings }
       },
       catch: (cause) => cause,
@@ -104,11 +104,11 @@ export async function restorePortableInstanceBackup(
   )
 }
 
-export async function prepareInstanceRestoreStaging(
+export async function prepareServerRestoreStaging(
   config: RelayConfig,
   instanceDirectory: string,
   taskId: string
-): Promise<PreparedInstanceRestore> {
+): Promise<PreparedServerRestore> {
   const configuredRoot = await realpathRequired(config.rootDirectory)
   const instanceRoot = resolve(configuredRoot, instanceDirectory)
   requireContained(configuredRoot, instanceRoot, "restore.path")
@@ -136,8 +136,8 @@ export async function prepareInstanceRestoreStaging(
 export type RestoreInstallGate = () => void
 
 /** Swaps the restored files in for the server's own. */
-export async function installPreparedInstanceRestore(
-  prepared: PreparedInstanceRestore,
+export async function installPreparedServerRestore(
+  prepared: PreparedServerRestore,
   beginInstall: RestoreInstallGate
 ): Promise<void> {
   beginInstall()
@@ -163,7 +163,7 @@ export async function installPreparedInstanceRestore(
   await unlink(prepared.paths.journal)
 }
 
-export type PreparedInstanceRestore = {
+export type PreparedServerRestore = {
   journal: RestoreJournal
   paths: RestorePaths
 }
@@ -194,7 +194,7 @@ async function extractBackupArchive(
   archivePath: string,
   stagingRoot: string,
   input: BackupRestoreTaskInput,
-  instance: RelayInstanceConfig
+  instance: RelayServerConfig
 ): Promise<Array<string>> {
   const zip = await openPromise(archivePath, {
     autoClose: false,
@@ -244,7 +244,7 @@ async function extractBackupArchive(
             if (
               manifest.backupId !==
                 (input.archive?.backupId ?? input.backupId) ||
-              manifest.target.kind !== "instance" ||
+              manifest.target.kind !== "server" ||
               // An archive made before instance IDs names its server by
               // the old ID.
               (currentId(manifest.target.id) !==

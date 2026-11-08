@@ -199,7 +199,7 @@ const nested = <Input, A, E, R>(
 
 /**
  * The locks of `wanted` that what's already held doesn't cover: one held as
- * strongly, or a part (`instance:<id>/lifecycle`) of a whole held
+ * strongly, or a part (`server:<id>/lifecycle`) of a whole held
  * exclusively, which nothing else can hold any part of.
  */
 function uncovered(

@@ -55,31 +55,31 @@ export const relayActions = [
   "backup.delete",
   "schedule.read",
   "schedule.write",
-  "instance.read",
-  "instance.create",
-  "instance.delete",
-  "instance.rename",
-  "instance.power.start",
-  "instance.power.stop",
-  "instance.power.restart",
-  "instance.power.kill",
-  "instance.console.read",
-  "instance.console.write",
-  "instance.sftp.connect",
-  "instance.files.list",
-  "instance.files.read",
-  "instance.files.create",
-  "instance.files.write",
-  "instance.files.delete",
-  "instance.files.rename",
-  "instance.files.chmod",
-  "instance.files.download",
-  "instance.files.upload",
-  "instance.files.upload-url",
-  "instance.network.read",
-  "instance.network.write",
-  "instance.logs.read",
-  "instance.logs.share",
+  "server.read",
+  "server.create",
+  "server.delete",
+  "server.rename",
+  "server.power.start",
+  "server.power.stop",
+  "server.power.restart",
+  "server.power.kill",
+  "server.console.read",
+  "server.console.write",
+  "server.sftp.connect",
+  "server.files.list",
+  "server.files.read",
+  "server.files.create",
+  "server.files.write",
+  "server.files.delete",
+  "server.files.rename",
+  "server.files.chmod",
+  "server.files.download",
+  "server.files.upload",
+  "server.files.upload-url",
+  "server.network.read",
+  "server.network.write",
+  "server.logs.read",
+  "server.logs.share",
 ] as const
 
 export type RelayAction = (typeof relayActions)[number]
@@ -114,13 +114,13 @@ export function fileMutationAction(
 ): RelayAction | null {
   switch (operation) {
     case "delete":
-      return "instance.files.delete"
+      return "server.files.delete"
     case "rename":
-      return "instance.files.rename"
+      return "server.files.rename"
     case "duplicate":
     case "archive":
     case "unarchive":
-      return "instance.files.write"
+      return "server.files.write"
     default:
       return null
   }
@@ -145,5 +145,5 @@ export function fileTransferAction(
   if (appIdFromFileRoot(rootId) !== null) {
     return upload ? "app.files.upload" : "app.files.download"
   }
-  return upload ? "instance.files.upload" : "instance.files.download"
+  return upload ? "server.files.upload" : "server.files.download"
 }

@@ -41,7 +41,7 @@ export const notificationScopeLabels = {
 export const resourceNotificationKinds = {
   app: ["app.deployed", "app.image-update", "security.report"],
   database: ["resource.disk-limit", "security.report"],
-  instance: ["security.report"],
+  server: ["security.report"],
   relay: ["kiln.updated", "security.report"],
 } as const satisfies Record<
   NotificationResource["type"],
@@ -212,7 +212,7 @@ const scopeSchema = z.enum(notificationScopes)
 const resourcePreferenceSchema = z.object({
   kinds: z.record(z.string(), z.literal(false)),
   name: z.string().min(1).max(191),
-  type: z.enum(["app", "database", "instance", "relay"]),
+  type: z.enum(["app", "database", "server", "relay"]),
 })
 
 // `<type>:<relayId>:<id>`, as `notificationResourceKey` makes it.
@@ -220,7 +220,7 @@ const resourceKeySchema = z
   .string()
   .regex(
     new RegExp(
-      `^(app|database|instance|relay):${INSTANCE_ID_SOURCE}:${INSTANCE_ID_SOURCE}$`,
+      `^(app|database|server|relay):${INSTANCE_ID_SOURCE}:${INSTANCE_ID_SOURCE}$`,
       "u"
     )
   )

@@ -1056,7 +1056,7 @@ function containerResource(
   }
   if (labels["kiln.server.id"]) {
     return {
-      kind: "instance",
+      kind: "server",
       resourceId:
         instanceIdFrom(labels["kiln.server.id"]) ?? labels["kiln.server.id"],
     }

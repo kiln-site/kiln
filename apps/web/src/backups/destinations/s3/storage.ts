@@ -317,10 +317,10 @@ export const deleteBackupStorageEffect = Effect.fn("backupStorage.delete")(
                  FROM ${databaseTable("resource_deletion")} deletion
                  JOIN ${databaseTable("backup_repository")} repository
                    ON repository.relay_id = deletion.relay_id
-                  AND repository.target_kind = 'instance'
+                  AND repository.target_kind = 'server'
                   AND repository.target_id = deletion.resource_id
                 WHERE repository.storage_id = ?
-                  AND deletion.resource_kind = 'instance'
+                  AND deletion.resource_kind = 'server'
                   AND deletion.status IN ('pending', 'backing_up', 'deleting', 'cancelling')
                 LIMIT 1
                 FOR UPDATE`,

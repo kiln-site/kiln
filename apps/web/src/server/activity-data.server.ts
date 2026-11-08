@@ -83,13 +83,13 @@ export async function getActivityForUser(
     )
     const relayGrants = grants.filter(
       (grant) =>
-        grant.relayId === relay.id && grantHasPermission(grant, "instance.read")
+        grant.relayId === relay.id && grantHasPermission(grant, "server.read")
     )
     const allInstances =
       relayAudit || relayGrants.some((grant) => grant.resourceType === "relay")
     const instanceIds = new Set(
       relayGrants.flatMap((grant) =>
-        grant.resourceType === "instance" ? [grant.resourceId] : []
+        grant.resourceType === "server" ? [grant.resourceId] : []
       )
     )
     if (allInstances || instanceIds.size > 0) {
@@ -529,7 +529,7 @@ async function listActivityInstances(
   if (relayIds.length === 0) return []
   const [rows] = await databasePool.query<Array<InstanceRow>>(
     `SELECT relay_id, instance_id, display_name
-       FROM ${databaseTable("instance")}
+       FROM ${databaseTable("server")}
       WHERE relay_id IN (?)
       ORDER BY display_name ASC, instance_id ASC`,
     [relayIds]

@@ -68,8 +68,8 @@ export function auditInstanceCreatorId(
   instanceId: string
 ): string | null {
   if (
-    (audit.details.operation !== "instance.create" &&
-      audit.details.operation !== "instance.provision.prepare") ||
+    (audit.details.operation !== "server.create" &&
+      audit.details.operation !== "server.provision.prepare") ||
     auditInstanceId(audit) !== instanceId
   ) {
     return null
@@ -107,7 +107,7 @@ export function activityTypeForAudit(audit: RelayAuditRecord): ActivityType {
   const operation = auditOperation(audit)
   if (
     audit.event === "browser.console.write" ||
-    operation === "instance.console.write"
+    operation === "server.console.write"
   ) {
     return "console"
   }
@@ -115,26 +115,23 @@ export function activityTypeForAudit(audit: RelayAuditRecord): ActivityType {
     audit.event.startsWith("browser.file.") ||
     audit.event === "peer.transfer.download" ||
     operation?.startsWith("transfer.") ||
-    operation === "instance.files.write" ||
-    operation === "instance.files.put" ||
-    operation === "instance.files.database.write" ||
-    operation === "instance.files.upload-url"
+    operation === "server.files.write" ||
+    operation === "server.files.put" ||
+    operation === "server.files.database.write" ||
+    operation === "server.files.upload-url"
   ) {
     return "files"
   }
-  if (operation === "instance.action") return "power"
+  if (operation === "server.action") return "power"
   if (
-    operation?.startsWith("instance.network.") ||
+    operation?.startsWith("server.network.") ||
     operation?.startsWith("relay.networking.") ||
     operation?.startsWith("relay.proxy.") ||
     operation?.startsWith("relay.tailscale.")
   ) {
     return "network"
   }
-  if (
-    operation?.startsWith("instance.") ||
-    audit.event.startsWith("instance.")
-  ) {
+  if (operation?.startsWith("server.") || audit.event.startsWith("server.")) {
     return "server"
   }
   if (
@@ -179,7 +176,7 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
   if (audit.event === "client.revoked") return "Revoked a Hearth client"
   if (audit.event === "relay.renamed") return "Renamed a Relay"
 
-  if (operation === "instance.action") {
+  if (operation === "server.action") {
     const action = audit.details.action
     if (action === "start") return "Started a game server"
     if (action === "restart") return "Restarted a game server"
@@ -187,24 +184,24 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
     if (action === "kill") return "Killed a game server process"
     return "Changed a game server power state"
   }
-  if (operation === "instance.create") return "Created a game server"
-  if (operation === "instance.delete") return "Deleted a game server"
-  if (operation === "instance.rename") return "Renamed a game server"
-  if (operation === "instance.startup.write") {
+  if (operation === "server.create") return "Created a game server"
+  if (operation === "server.delete") return "Deleted a game server"
+  if (operation === "server.rename") return "Renamed a game server"
+  if (operation === "server.startup.write") {
     return audit.details.reinstall === true
       ? "Reinstalled a game server Brick"
       : "Updated game server startup settings"
   }
   if (
-    operation === "instance.files.write" ||
-    operation === "instance.files.put"
+    operation === "server.files.write" ||
+    operation === "server.files.put"
   ) {
     return "Saved a game server file"
   }
-  if (operation === "instance.files.database.write") {
+  if (operation === "server.files.database.write") {
     return "Edited a game server database"
   }
-  if (operation === "instance.files.upload-url") {
+  if (operation === "server.files.upload-url") {
     return "Downloaded a URL to a game server"
   }
   if (operation === "transfer.source.prepare") {
@@ -219,13 +216,13 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
   ) {
     return "Ended a copy between Relays"
   }
-  if (operation === "instance.console.write") return "Sent a console command"
-  if (operation === "instance.network.ports.write") {
+  if (operation === "server.console.write") return "Sent a console command"
+  if (operation === "server.network.ports.write") {
     return "Updated game server port allocations"
   }
-  if (operation === "instance.network.databases.remove")
+  if (operation === "server.network.databases.remove")
     return "Removed a saved database connection"
-  if (operation === "instance.network.routes.write") {
+  if (operation === "server.network.routes.write") {
     return "Updated game server network routes"
   }
   if (operation === "relay.rename") return "Renamed a Relay"
@@ -277,16 +274,16 @@ export function activityPermissionForAudit(
   }
 
   if (audit.event === "browser.console.write") {
-    return "instance.console.write"
+    return "server.console.write"
   }
   if (audit.event === "browser.file.upload") {
-    return "instance.files.upload"
+    return "server.files.upload"
   }
   if (audit.event === "browser.file.download") {
-    return "instance.files.download"
+    return "server.files.download"
   }
   if (audit.event === "peer.transfer.download") {
-    return "instance.files.download"
+    return "server.files.download"
   }
   if (audit.event === "system.update_started") return "relay.update"
   if (audit.event === "invitation.created") return "relay.pairing.create"
@@ -300,13 +297,13 @@ export function activityPermissionForAudit(
     operation === "transfer.source.prepare" ||
     operation === "transfer.source.discard"
   ) {
-    return "instance.files.download"
+    return "server.files.download"
   }
   if (
     operation === "transfer.pull.start" ||
     operation === "transfer.pull.cancel"
   ) {
-    return "instance.files.upload"
+    return "server.files.upload"
   }
   if (operation === "relay.update.apply") return "relay.update"
   if (operation === "relay.restart") return "relay.update"
@@ -323,40 +320,40 @@ export function activityPermissionForAudit(
   ) {
     return "relay.configure"
   }
-  if (operation === "relay.tailscale.stack.apply") return "instance.create"
+  if (operation === "relay.tailscale.stack.apply") return "server.create"
   if (operation === "relay.tailscale.stack.dns") {
-    return "instance.network.write"
+    return "server.network.write"
   }
-  if (operation === "relay.tailscale.stack.remove") return "instance.delete"
+  if (operation === "relay.tailscale.stack.remove") return "server.delete"
   if (
-    operation === "instance.files.database.write" ||
-    operation === "instance.files.put"
+    operation === "server.files.database.write" ||
+    operation === "server.files.put"
   ) {
-    return "instance.files.write"
+    return "server.files.write"
   }
   if (
     operation === "relay.pairing.create" ||
     operation === "relay.pairing.revoke" ||
     operation === "relay.clients.update" ||
     operation === "relay.clients.revoke" ||
-    operation === "instance.create" ||
-    operation === "instance.rename" ||
-    operation === "instance.delete" ||
-    operation === "instance.files.write" ||
-    operation === "instance.files.upload-url" ||
-    operation === "instance.console.write" ||
-    operation === "instance.network.ports.write" ||
-    operation === "instance.network.routes.write" ||
-    operation === "instance.network.databases.remove"
+    operation === "server.create" ||
+    operation === "server.rename" ||
+    operation === "server.delete" ||
+    operation === "server.files.write" ||
+    operation === "server.files.upload-url" ||
+    operation === "server.console.write" ||
+    operation === "server.network.ports.write" ||
+    operation === "server.network.routes.write" ||
+    operation === "server.network.databases.remove"
   ) {
-    return operation === "instance.network.ports.write" ||
-      operation === "instance.network.routes.write" ||
-      operation === "instance.network.databases.remove"
-      ? "instance.network.write"
+    return operation === "server.network.ports.write" ||
+      operation === "server.network.routes.write" ||
+      operation === "server.network.databases.remove"
+      ? "server.network.write"
       : operation
   }
-  if (operation === "instance.startup.write") return "instance.create"
-  if (operation === "instance.action") {
+  if (operation === "server.startup.write") return "server.create"
+  if (operation === "server.action") {
     const action = audit.details.action
     if (
       action === "start" ||
@@ -364,7 +361,7 @@ export function activityPermissionForAudit(
       action === "restart" ||
       action === "kill"
     ) {
-      return `instance.power.${action}`
+      return `server.power.${action}`
     }
   }
   return null

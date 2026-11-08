@@ -60,13 +60,13 @@ describeMysql("scoped instance inventory", () => {
             id: "inventory-grant",
             userId: user.id,
             relayId,
-            resourceType: "instance",
+            resourceType: "server",
             resourceId: id,
           })
           yield* insertRows("access_selection", {
             access_id: "inventory-grant",
             selection_kind: "permission",
-            selection_key: "instance.read",
+            selection_key: "server.read",
           })
           const requests: Array<InstanceInventoryRequest> = [
             { kind: "server" as const, relayId, id },
@@ -101,7 +101,7 @@ describeMysql("scoped instance inventory", () => {
           yield* resetDatabase
           const readable = "b".repeat(12)
           const member = (
-            kind: "app" | "database" | "instance",
+            kind: "app" | "database" | "server",
             id: string
           ) => ({
             attached: true,
@@ -112,8 +112,8 @@ describeMysql("scoped instance inventory", () => {
             saved: true,
           })
           const members = [
-            member("instance", readable),
-            member("instance", "c".repeat(12)),
+            member("server", readable),
+            member("server", "c".repeat(12)),
             member("app", "d".repeat(12)),
             member("database", "e".repeat(12)),
           ]
@@ -121,7 +121,7 @@ describeMysql("scoped instance inventory", () => {
           const grant = (
             userId: string,
             grantId: string,
-            resourceType: "database" | "instance",
+            resourceType: "database" | "server",
             resourceId: string,
             permissions: ReadonlyArray<string>
           ) =>
@@ -150,8 +150,8 @@ describeMysql("scoped instance inventory", () => {
             "database.read",
             "database.network.read",
           ])
-          yield* grant(networkReader.id, "server", "instance", readable, [
-            "instance.read",
+          yield* grant(networkReader.id, "server", "server", readable, [
+            "server.read",
           ])
           yield* grant(databaseReader.id, "database", "database", id, [
             "database.read",

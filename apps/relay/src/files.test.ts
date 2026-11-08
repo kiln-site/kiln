@@ -21,8 +21,8 @@ import ZipStream from "zip-stream"
 
 import { FilesystemDriver } from "./files.js"
 import { RelayFilesystemError } from "./effect/errors.js"
-import type { RelayInstanceConfig } from "./config.js"
-import { testInstance, testRelayConfig } from "./test/fixtures.js"
+import type { RelayServerConfig } from "./config.js"
+import { testServer, testRelayConfig } from "./test/fixtures.js"
 
 const describeLinux = process.platform === "linux" ? describe : describe.skip
 
@@ -271,7 +271,7 @@ function withSetup<TResult>(
   use: (setup: {
     directory: string
     driver: FilesystemDriver
-    instance: RelayInstanceConfig
+    instance: RelayServerConfig
     root: string
   }) => Effect.Effect<TResult, unknown>
 ) {
@@ -286,7 +286,7 @@ function withSetup<TResult>(
         return yield* use({
           directory,
           driver: new FilesystemDriver(testRelayConfig(directory)),
-          instance: testInstance(),
+          instance: testServer(),
           root,
         })
       }),

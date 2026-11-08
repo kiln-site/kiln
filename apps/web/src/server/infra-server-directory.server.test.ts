@@ -2,8 +2,8 @@ import { assert, layer } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 
 import { AppCache } from "@/effect/cache"
-import type { DirectoryInstance } from "@/lib/instance-directory"
-import { registerPreparedInstanceEffect } from "@/lib/instance-registry"
+import type { ServerDirectoryEntry } from "@/lib/server-directory"
+import { registerPreparedServerEffect } from "@/lib/server-registry"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { readInfraServerDirectory } from "@/server/infra-directory.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
@@ -22,7 +22,7 @@ const user: AuthenticatedUser = {
   status: "enabled",
   twoFactorEnabled: false,
 }
-const server = (id: string): DirectoryInstance => ({
+const server = (id: string): ServerDirectoryEntry => ({
   id,
   name: "Survival",
   brickId: "minecraft-paper",
@@ -51,13 +51,13 @@ describeMysql("Game Server directory", () => {
           yield* insertUser(user.id)
           yield* insertRelay(relayId)
           yield* insertRelay("2".repeat(12))
-          yield* registerPreparedInstanceEffect(relayId, server(id), "owner")
-          yield* registerPreparedInstanceEffect(
+          yield* registerPreparedServerEffect(relayId, server(id), "owner")
+          yield* registerPreparedServerEffect(
             relayId,
             server("b".repeat(12)),
             "owner"
           )
-          yield* registerPreparedInstanceEffect(
+          yield* registerPreparedServerEffect(
             "2".repeat(12),
             server(id),
             "owner"
@@ -66,13 +66,13 @@ describeMysql("Game Server directory", () => {
             id: "read-one",
             userId: user.id,
             relayId,
-            resourceType: "instance",
+            resourceType: "server",
             resourceId: id,
           })
           yield* insertRows("access_selection", {
             access_id: "read-one",
             selection_kind: "permission",
-            selection_key: "instance.read",
+            selection_key: "server.read",
           })
           const rows = yield* readInfraServerDirectory(user).pipe(
             Effect.provide(disabledCache)

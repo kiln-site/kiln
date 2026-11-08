@@ -175,15 +175,15 @@ function scheduleScopeOptions(
     options.push({
       description: `${scheduleTargetKindLabel(target.kind)} · ${target.relayName} · ${target.id}`,
       id: target.id,
-      kind: target.kind === "instance" ? "server" : target.kind,
+      kind: target.kind,
       name:
-        target.kind === "instance"
+        target.kind === "server"
           ? (instancesById.get(`${target.relayId}:${target.id}`)?.name ??
             target.name)
           : target.name,
       relayId: target.relayId,
       relayName:
-        target.kind === "instance"
+        target.kind === "server"
           ? (instancesById.get(`${target.relayId}:${target.id}`)?.relayName ??
             target.relayName)
           : target.relayName,
@@ -202,7 +202,7 @@ function selectScheduleScopeInstances(snapshot: RelaySnapshot) {
 }
 
 function scheduleTargetKindLabel(kind: ScheduleOption["kind"]) {
-  if (kind === "instance") return "Game Server"
+  if (kind === "server") return "Game Server"
   if (kind === "database") return "Database"
   if (kind === "app") return "App"
   return "Relay"

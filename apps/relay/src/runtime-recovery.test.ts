@@ -11,7 +11,7 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { loadConfig } from "./config.js"
 import { OperationLanes } from "./operation-lanes.js"
-import { instanceLifecycleLocks } from "./operation-plans.js"
+import { serverLifecycleLocks } from "./operation-plans.js"
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
 import {
   RuntimeRecoveryManager,
@@ -221,7 +221,7 @@ describe("runtime recovery", () => {
         const release = yield* Deferred.make<void>()
         const stop = yield* lanes
           .run(
-            { label: "stop", locks: instanceLifecycleLocks(instanceId) },
+            { label: "stop", locks: serverLifecycleLocks(instanceId) },
             Deferred.await(release).pipe(
               Effect.andThen(manager.recordPowerAction(instanceId, "stop"))
             )

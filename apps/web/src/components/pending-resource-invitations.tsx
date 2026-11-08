@@ -49,7 +49,7 @@ export const PendingResourceInvitations = memo(
     // the invitation; the rest show what each cell renders for it.
     cells: PendingInvitationCells
     columns: PendingInvitationColumns
-    resourceType: "instance" | "database" | "relay"
+    resourceType: "server" | "database" | "relay"
     searchStore: DataTableSearchStore
     visibleResourceKeys: ReadonlySet<string>
   }) {
@@ -246,7 +246,7 @@ export const PendingInvitationCard = memo(function PendingInvitationCard({
       className="min-w-0 flex-1"
       instance={{
         id: invitation.scope.resourceId,
-        kind: type === "instance" ? "server" : type,
+        kind: type,
         relayId: invitation.scope.relayId,
       }}
       meta={`Invited ${invitation.createdAt.slice(0, 10)}`}
@@ -272,7 +272,7 @@ export const PendingResourceInvitationBadge = memo(
     relayId,
     resourceId,
   }: {
-    resourceType: "instance" | "database" | "relay"
+    resourceType: "server" | "database" | "relay"
     relayId: string
     resourceId: string
   }) {

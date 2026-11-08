@@ -40,7 +40,7 @@ export const stranger = person("stranger")
 
 /** The owner's grant on one resource, with just these permissions. */
 const allow = (
-  resourceType: "instance" | "relay",
+  resourceType: "server" | "relay",
   resourceId: string,
   permissions: ReadonlyArray<string>
 ) =>
@@ -87,7 +87,7 @@ export const seedDeletion = Effect.gen(function* () {
   for (const user of [owner, stranger]) {
     yield* insertUser(user.id, { emailVerifiedAt: new Date(at) })
   }
-  yield* allow("instance", serverId, ["instance.delete", "backup.create"])
+  yield* allow("server", serverId, ["server.delete", "backup.create"])
   yield* insertInstance(relayId, serverId, { display_name: "Survival" })
 })
 
@@ -173,7 +173,7 @@ export const finishBackup = (backupId: string) =>
   })
 
 export const serverRecords = selectRows<{ instance_id: string }>(
-  "instance"
+  "server"
 ).pipe(Effect.map((rows) => rows.map((row) => row.instance_id)))
 
 /**
@@ -338,13 +338,13 @@ export const deletionRelayConnection = {
         result =
           operation === "app.delete" ? { appId: id, deleted: true } : { id }
         break
-      case "instance.delete":
+      case "server.delete":
       case "database.delete":
         state.servers.delete(id)
         leaveNetworks(id)
         state.frozen.delete(id)
         result =
-          operation === "instance.delete"
+          operation === "server.delete"
             ? { deleted: true, instanceId: id }
             : { databaseId: id, deleted: true }
         break
@@ -359,7 +359,7 @@ export const deletionRelayConnection = {
 }
 
 // The fake's networks as its Relay reports them. A member's ID names its
-// resource second (`instance:<id>`, `app:<id>:<service>`), and its hostname
+// resource second (`server:<id>`, `app:<id>:<service>`), and its hostname
 // is its ID; it's frozen while its resource is.
 function stackStates() {
   return [...deletionRelay.stacks].map(([id, members]) => ({

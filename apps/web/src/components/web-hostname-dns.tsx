@@ -19,7 +19,7 @@ import type {
 export interface WebHostnameResourceRef {
   relayId: string
   resourceId: string
-  resourceType: "app" | "instance"
+  resourceType: "app" | "server"
 }
 
 /**

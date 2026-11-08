@@ -14,7 +14,7 @@ type FrozenKind = RelayResourceFreezeRecord["kind"]
 const allowed: Record<FrozenKind, ReadonlySet<string>> = {
   app: new Set(["app.delete"]),
   database: new Set(["database.delete"]),
-  instance: new Set(["instance.delete"]),
+  server: new Set(["server.delete"]),
   volume: new Set(["relay.volumes.delete"]),
 }
 const allowedForEvery = new Set([
@@ -26,7 +26,7 @@ const allowedForEvery = new Set([
 const refusals: Record<FrozenKind, string> = {
   app: "This App is being deleted",
   database: "This database is being deleted",
-  instance: "This game server is being deleted",
+  server: "This game server is being deleted",
   volume: "This volume is being deleted",
 }
 // A Tailscale network's change is refused for one of its members, so it
@@ -34,7 +34,7 @@ const refusals: Record<FrozenKind, string> = {
 const memberNouns: Record<FrozenKind, string> = {
   app: "App",
   database: "Database",
-  instance: "Game server",
+  server: "Game server",
   volume: "Volume",
 }
 
@@ -148,7 +148,7 @@ export class ResourceFreezes implements FrozenResources {
   /**
    * Why an operation may not run: it touches a frozen resource and isn't
    * one of the few that still may. Lock keys name the resource first, as
-   * `instance:<id>` or a part of it, `instance:<id>/files`.
+   * `server:<id>` or a part of it, `server:<id>/files`.
    */
   refusal(label: string, locks: ReadonlyArray<LaneLock>): string | null {
     if (this.#frozen.size === 0 || allowedForEvery.has(label)) return null

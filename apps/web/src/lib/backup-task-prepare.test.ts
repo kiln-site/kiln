@@ -43,7 +43,7 @@ const seedResticBackup = (options: { enabled: boolean }) =>
     yield* insertRows("backup_repository", {
       id: repositoryId,
       relay_id: "relay-one",
-      target_kind: "instance",
+      target_kind: "server",
       target_id: "instance-one",
       storage_id: storageId,
       storage_key: storageId,
@@ -70,7 +70,7 @@ const incrementalCreate: BackupDispatch = {
   maxBytes: null,
   mode: "incremental",
   reason: "manual",
-  target: { id: "instance-one", kind: "instance" },
+  target: { id: "instance-one", kind: "server" },
   taskId,
 }
 
@@ -130,7 +130,7 @@ describeMysql("restic backup dispatch", () => {
           kind: "restore",
           objectKey: null,
           storageId: null,
-          target: { id: "instance-one", kind: "instance" },
+          target: { id: "instance-one", kind: "server" },
           taskId,
         })
 
@@ -139,7 +139,7 @@ describeMysql("restic backup dispatch", () => {
           backupId,
           kind: "restore",
           source: { bytes: 1_024, checksumSha256, kind: "local" },
-          target: { id: "instance-one", kind: "instance" },
+          target: { id: "instance-one", kind: "server" },
           taskId,
         })
       })

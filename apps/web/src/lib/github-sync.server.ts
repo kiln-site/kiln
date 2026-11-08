@@ -191,7 +191,7 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
 
   const access = githubSyncTargetAccess({
     id: sync.resourceId,
-    kind: sync.resourceKind === "instance" ? "server" : sync.resourceKind,
+    kind: sync.resourceKind,
     relayId: sync.relayId,
   })
   if (!access) return yield* fail("This sync's instance doesn't exist")
@@ -222,7 +222,7 @@ const runGitHubSyncEffect = Effect.fn("github.sync.run")(function* (
       try: () =>
         relayRpc(
           relay,
-          "instance.files.put",
+          "server.files.put",
           {
             contentBase64: content.toString("base64"),
             instanceId: fileRootId,
@@ -387,7 +387,7 @@ export const githubSyncRunOperation = durableOperation({
     connectionId: Schema.String,
     relayId: Schema.String,
     resourceId: Schema.String,
-    resourceKind: Schema.Literals(["app", "instance", "relay"]),
+    resourceKind: Schema.Literals(["app", "server", "relay"]),
     syncId: Schema.String,
     trigger: Schema.Literals(["created", "manual", "push"]),
   }),

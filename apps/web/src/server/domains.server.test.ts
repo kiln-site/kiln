@@ -1,7 +1,7 @@
 import { assert, layer } from "@effect/vitest"
 import { Effect, Layer } from "effect"
 import { afterAll, afterEach, vi } from "vite-plus/test"
-import { relayInstanceSchema } from "@workspace/contracts"
+import { relayServerSchema } from "@workspace/contracts"
 
 import { AppCache } from "@/effect/cache"
 import type { InstanceDomainAssignment } from "@/effect/domains"
@@ -38,7 +38,7 @@ const insertAssignment = (assignment: InstanceDomainAssignment) =>
     insertRows("hostname_claim", {
       hostname: `${assignment.vanityLabel}.${assignment.domain}`,
       relay_id: assignment.relayId,
-      resource_type: "instance",
+      resource_type: "server",
       resource_id: assignment.instanceId,
       created_at: 0,
     }),
@@ -46,7 +46,7 @@ const insertAssignment = (assignment: InstanceDomainAssignment) =>
   ])
 
 const insertDomainRow = (assignment: InstanceDomainAssignment) =>
-  insertRows("instance_domain", {
+  insertRows("server_domain", {
     id: assignment.id,
     is_primary: assignment.primary,
     relay_id: assignment.relayId,
@@ -118,7 +118,7 @@ const assignmentRows = selectRows<{
   id: string
   is_primary: number
   vanity_label: string
-}>("instance_domain")
+}>("server_domain")
 
 const claimedNames = Effect.map(
   selectRows<{ hostname: string }>("hostname_claim"),
@@ -126,19 +126,19 @@ const claimedNames = Effect.map(
 )
 
 const assignmentStatuses = Effect.map(
-  selectRows<{ status: string }>("instance_domain"),
+  selectRows<{ status: string }>("server_domain"),
   (rows) => rows.map((row) => row.status)
 )
 
 const optOutKeys = Effect.map(
   selectRows<{ relay_id: string; instance_id: string }>(
-    "instance_domain_opt_out"
+    "server_domain_opt_out"
   ),
   (rows) => rows.map((row) => `${row.relay_id}:${row.instance_id}`)
 )
 
 const assignmentKeys = Effect.map(
-  selectRows<{ relay_id: string; instance_id: string }>("instance_domain"),
+  selectRows<{ relay_id: string; instance_id: string }>("server_domain"),
   (rows) => rows.map((row) => `${row.relay_id}:${row.instance_id}`)
 )
 
@@ -403,7 +403,7 @@ describeMysql("removing a game server's domain", () => {
 })
 
 function testInstance() {
-  const instance = relayInstanceSchema.parse({
+  const instance = relayServerSchema.parse({
     connectAddress: "new-relay.example.com:32002",
     containerId: "container",
     desiredState: "running",

@@ -60,7 +60,7 @@ describe("Relay mclo.gs uploads", () => {
         mclogs.endpoint,
         {
           content,
-          instanceId: "instance",
+          instanceId: "server",
           path: "console.log",
           size: content.length,
         },

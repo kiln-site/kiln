@@ -66,7 +66,7 @@ describeMysql("Relay deletion", () => {
           yield* insertGrant({
             userId: "user",
             relayId: "relay-one",
-            resourceType: "instance",
+            resourceType: "server",
             resourceId: "instance-one",
           })
           yield* insertGrant({
@@ -95,7 +95,7 @@ describeMysql("Relay deletion", () => {
             relays.map((row) => row.id),
             ["relay-two"]
           )
-          assert.deepEqual(yield* selectRows("instance"), [])
+          assert.deepEqual(yield* selectRows("server"), [])
           const grants = yield* selectRows<{ relay_id: string }>("access_grant")
           assert.deepEqual(
             grants.map((row) => row.relay_id),

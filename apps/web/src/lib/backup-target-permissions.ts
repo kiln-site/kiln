@@ -83,7 +83,7 @@ export function grantsAllowBackup(
       grant.relayId === target.relayId &&
       grantHasPermission(grant, action) &&
       (grant.resourceType === "relay" ||
-        ((target.kind === "instance" || target.kind === "database") &&
+        ((target.kind === "server" || target.kind === "database") &&
           grant.resourceType === target.kind &&
           grant.resourceId === target.id))
   )

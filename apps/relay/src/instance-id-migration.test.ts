@@ -11,6 +11,7 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 import { DockerEngine } from "./docker-engine.js"
 import { fingerprint, loadOrCreateRelayIdentity } from "./effect/identity.js"
 import { migrateInstanceIds } from "./instance-id-migration.js"
+import { migrateServerNaming } from "./server-naming-migration.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 
@@ -123,23 +124,25 @@ describe("the move to 12-character instance IDs", () => {
         {
           databaseId,
           memberId: serverId,
-          memberKind: "instance",
+          memberKind: "server",
           relayId: relayFingerprint,
         },
         true
       )
     )
-    await Effect.runPromise(state.setInstanceName(serverId, "Survival"))
+    await Effect.runPromise(state.setServerName(serverId, "Survival"))
 
     // The Relay starts.
     const identity = await Effect.runPromise(loadOrCreateRelayIdentity(config))
-    const migrate = () =>
-      migrateInstanceIds({
+    const migrate = async () => {
+      await migrateServerNaming({ config, state })
+      await migrateInstanceIds({
         config,
         engine: new DockerEngine(config.dockerSocket),
         identity,
         state,
       })
+    }
     await migrate()
 
     const relayId = await migratedInstanceId({
@@ -174,19 +177,19 @@ describe("the move to 12-character instance IDs", () => {
     ).toMatchObject({ id: relayId, version: 2 })
 
     // Each instance answers to its new ID, from the resources it had.
-    expect(await harness.docker.findInstance(newServerId)).toMatchObject({
+    expect(await harness.docker.findServer(newServerId)).toMatchObject({
       directory: serverId,
       id: newServerId,
       service: serverContainer,
     })
-    expect(await harness.docker.findInstance(serverId)).toBeNull()
+    expect(await harness.docker.findServer(serverId)).toBeNull()
     const [migratedDatabase] = await harness.databases.list()
     expect(migratedDatabase).toMatchObject({
       hostname: `database-${newDatabaseId}`,
       id: newDatabaseId,
     })
     expect(migratedDatabase?.members).toEqual([
-      expect.objectContaining({ id: newServerId, kind: "instance" }),
+      expect.objectContaining({ id: newServerId, kind: "server" }),
     ])
     const [migratedApp] = await harness.apps.list()
     expect(migratedApp).toMatchObject({ id: newAppId, network: appNetwork })
@@ -207,25 +210,25 @@ describe("the move to 12-character instance IDs", () => {
       await Effect.runPromise(
         state.listMemberDatabaseConnections({
           id: newServerId,
-          kind: "instance",
+          kind: "server",
         })
       )
     ).toEqual([
       {
         databaseId: newDatabaseId,
         memberId: newServerId,
-        memberKind: "instance",
+        memberKind: "server",
         relayId,
       },
     ])
-    expect(await Effect.runPromise(state.listInstanceNames())).toEqual([
+    expect(await Effect.runPromise(state.listServerNames())).toEqual([
       expect.objectContaining({ instanceId: newServerId, name: "Survival" }),
     ])
     const stack = JSON.parse(
       await readFile(join(stackDirectory, "stack.json"), "utf8")
     ) as { bindings: Array<{ memberId: string }>; id: string }
     expect(stack.id).toBe(newStackId)
-    expect(stack.bindings[0]?.memberId).toBe(`instance:${newServerId}`)
+    expect(stack.bindings[0]?.memberId).toBe(`server:${newServerId}`)
 
     // Nothing physical moved or was renamed.
     expect(
@@ -239,7 +242,7 @@ describe("the move to 12-character instance IDs", () => {
 
     // Starting again leaves it as it is.
     await migrate()
-    expect(await harness.docker.findInstance(newServerId)).toMatchObject({
+    expect(await harness.docker.findServer(newServerId)).toMatchObject({
       id: newServerId,
     })
     expect(

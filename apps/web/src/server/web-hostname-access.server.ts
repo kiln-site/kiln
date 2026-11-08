@@ -58,8 +58,8 @@ function permissionFor(
       ? ("app.manage" as const)
       : ("app.read" as const)
     : change
-      ? ("instance.network.write" as const)
-      : ("instance.network.read" as const)
+      ? ("server.network.write" as const)
+      : ("server.network.read" as const)
 }
 
 function requireResourcePermission(

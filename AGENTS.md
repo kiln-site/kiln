@@ -8,14 +8,19 @@ Avoid unnecessary React renders and paints outside the changed component.
 
 ## Naming
 
-Users see different names than the code uses. Keep the code names; don't
-rename identifiers, routes, or wire formats to match the copy.
+Copy and code can name things differently. Follow the code names below in
+code, and don't rename identifiers, routes, or wire formats to match copy.
 User-facing name, then what the code calls it:
 
-- **Game Server**: `server` in Hearth's web UI (`/infra/servers`,
-  `/server/$serverId`, the picker kind `"server"`), and `instance` in the Relay
-  protocol, contracts, permissions (`instance.*`), and storage. CLI commands
-  keep `server` (`kiln servers list`, `kiln server info`).
+- **Instance**: `instance`, any managed resource of any kind: a Relay, game
+  server, App, database, or Tailscale network. Use it only for what applies to
+  every kind (`InstanceId`, `InstanceKind`, the instance directory).
+- **Game Server**: `server` everywhere: Hearth's UI (`/infra/servers`,
+  `/server/$serverId`), the kind `"server"`, permissions (`server.*`), Relay
+  methods, lane keys (`server:<id>`), types (`RelayServer`), storage
+  (`kiln_server`), and the CLI (`kiln servers list`). A field holding a game
+  server's ID may still be called `instanceId`, since a game server is an
+  instance.
 - **App**: `app`. **Database**: `database`.
 - **Relay**: `relay`, the host node that runs the containers.
 - **Hearth**: the web panel (`apps/web`).

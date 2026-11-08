@@ -348,14 +348,14 @@ const PersonActions = memo(function PersonActions({
           </DropdownMenuItem>
           {person.userId &&
           access?.scope.resourceType !== "database" &&
-          access?.permissions.includes("instance.read") ? (
+          access?.permissions.includes("server.read") ? (
             <DropdownMenuItem asChild>
               <Link
                 to="/activity"
                 search={{
                   user: person.userId,
                   relay: access.scope.relayId,
-                  ...(access.scope.resourceType === "instance"
+                  ...(access.scope.resourceType === "server"
                     ? { server: access.scope.resourceId }
                     : {}),
                 }}

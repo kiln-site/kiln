@@ -237,7 +237,7 @@ function answer(
     case "backup.task.enqueue":
       // Followed by Hearth's own records here.
       throw new Error("The Relay's backup queue is busy")
-    case "instance.network.routes.read":
+    case "server.network.routes.read":
       return {
         edgeConnected: true,
         message: "Ready",
@@ -281,7 +281,7 @@ function answer(
   const key = serverKey(relayId, id)
   let result: unknown = {}
   switch (operation) {
-    case "instance.provision.prepare":
+    case "server.provision.prepare":
       if (!relay.servers.has(key)) {
         relay.servers.set(key, {
           name: String(payload.name),
@@ -291,7 +291,7 @@ function answer(
       }
       result = instanceOf(relayId, id)
       break
-    case "instance.provision.claim": {
+    case "server.provision.claim": {
       const server = relay.servers.get(key)
       if (server && !relay.provisioningHeld.has(server.name)) {
         server.provisioning = false
@@ -299,7 +299,7 @@ function answer(
       result = instanceOf(relayId, id)
       break
     }
-    case "instance.action": {
+    case "server.action": {
       const server = relay.servers.get(key)
       if (!server) throw new Error("Server not found")
       server.state = payload.action === "stop" ? "stopped" : "running"
@@ -329,7 +329,7 @@ function answer(
     case "resource.freeze":
       result = { frozen: true }
       break
-    case "instance.delete":
+    case "server.delete":
       relay.servers.delete(key)
       result = { deleted: true, instanceId: id }
       break
@@ -757,7 +757,7 @@ describeMysql("Server migrations", () => {
           assert.strictEqual(row.state, "completed")
           assert.strictEqual(serversOn(newRelay).length, 1)
           assert.strictEqual(
-            (yield* selectRows<{ relay_id: string }>("instance")).filter(
+            (yield* selectRows<{ relay_id: string }>("server")).filter(
               (instance) => instance.relay_id === newRelay
             ).length,
             1
@@ -849,7 +849,7 @@ describeMysql("Server migrations", () => {
           // Left to finish, it can't be cancelled while it hands over, and
           // asks for the old server's final backup and deletion last, which
           // runs once the move ends.
-          const handingOver = hold("instance.network.routes.read")
+          const handingOver = hold("server.network.routes.read")
           const moved = yield* start(service, {
             chosen: { ...deleting, moveWebRoutes: true },
             mode: "migrate",
@@ -877,7 +877,7 @@ describeMysql("Server migrations", () => {
 
           // A move that keeps its old server is cancelled as it hands over:
           // it keeps the new server, and starts the old one again.
-          const keepingSource = hold("instance.network.routes.read")
+          const keepingSource = hold("server.network.routes.read")
           const kept = yield* start(service, {
             chosen: { moveWebRoutes: true },
             mode: "migrate",
@@ -967,7 +967,7 @@ describeMysql("Server migrations", () => {
             relay_id: oldRelay,
             requested_by: mover.id,
             resource_id: creative,
-            resource_kind: "instance",
+            resource_kind: "server",
             status: "backing_up",
             updated_at: at,
           })

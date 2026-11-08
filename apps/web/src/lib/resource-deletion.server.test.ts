@@ -67,7 +67,7 @@ const Lanes = testOperationsEngine(
 const deleteServer = (user = owner) =>
   requestResourceDeletionEffect({
     finalBackup: false,
-    kind: "instance",
+    kind: "server",
     relayId,
     resourceId: serverId,
     storageId: null,
@@ -95,14 +95,14 @@ const failBackup = (backupId: string) =>
 describeMysql("Deleting a game server or database", () => {
   layer(Lanes)((it) => {
     const network = "e".repeat(12)
-    const peer = `instance:${"f".repeat(12)}`
+    const peer = `server:${"f".repeat(12)}`
 
     it.effect(
       "writes its Tailscale network's DNS without it, then deletes it and takes it off the network",
       () =>
         Effect.gen(function* () {
           yield* seed
-          yield* seedNetwork(network, [`instance:${serverId}`, peer])
+          yield* seedNetwork(network, [`server:${serverId}`, peer])
           // A Relay the network isn't on doesn't answer, and needn't.
           yield* insertRelay("3".repeat(12))
           relay.unreachable.add("3".repeat(12))
@@ -127,7 +127,7 @@ describeMysql("Deleting a game server or database", () => {
           const paused = "4".repeat(12)
           yield* seed
           yield* insertRelay(paused, { enabled: false })
-          yield* seedNetwork(network, [`instance:${serverId}`, peer], [paused])
+          yield* seedNetwork(network, [`server:${serverId}`, peer], [paused])
 
           yield* deleteServer()
           const done = yield* until(serverId, ["completed", "failed"])
@@ -145,11 +145,11 @@ describeMysql("Deleting a game server or database", () => {
       () =>
         Effect.gen(function* () {
           yield* seed
-          yield* seedNetwork(network, [`instance:${serverId}`, peer])
+          yield* seedNetwork(network, [`server:${serverId}`, peer])
 
           yield* requestResourceDeletionEffect({
             finalBackup: true,
-            kind: "instance",
+            kind: "server",
             relayId,
             resourceId: serverId,
             storageId: null,
@@ -166,7 +166,7 @@ describeMysql("Deleting a game server or database", () => {
           ])
 
           yield* cancelResourceDeletionEffect({
-            kind: "instance",
+            kind: "server",
             relayId,
             resourceId: serverId,
             user: owner,
@@ -175,11 +175,11 @@ describeMysql("Deleting a game server or database", () => {
 
           assert.strictEqual(kept?.status, "cancelled")
           assert.deepStrictEqual(relay.stackDns.get(network), [
-            `instance-${serverId}`,
+            `server-${serverId}`,
             peer.replaceAll(":", "-"),
           ])
           assert.deepStrictEqual(relay.stacks.get(network), [
-            `instance:${serverId}`,
+            `server:${serverId}`,
             peer,
           ])
         }).pipe(TestClock.withLive),

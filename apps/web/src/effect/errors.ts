@@ -176,7 +176,7 @@ export class HostnameInUseError extends Schema.TaggedError<HostnameInUseError>()
       Schema.Struct({
         relayId: Schema.String,
         resourceId: Schema.String,
-        resourceType: Schema.Literals(["app", "instance"]),
+        resourceType: Schema.Literals(["app", "server"]),
       })
     ),
     hostname: Schema.String,

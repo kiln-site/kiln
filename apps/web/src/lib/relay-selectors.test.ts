@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { findRelayInstance } from "@/lib/relay-selectors"
+import { findRelayServer } from "@/lib/relay-selectors"
 
 const servers = [
   { id: "aaaaaaaaaaaa", name: "Survival", relayId: "111111111111" },
@@ -9,12 +9,12 @@ const servers = [
 
 describe("Relay render selectors", () => {
   it("finds a game server by its instance ID on any Relay", () => {
-    expect(findRelayInstance(servers, "aaaaaaaabbbb")).toBe(servers[1])
+    expect(findRelayServer(servers, "aaaaaaaabbbb")).toBe(servers[1])
   })
 
   it("matches neither part of an ID nor a name", () => {
-    expect(findRelayInstance(servers, "aaaaaaaa")).toBeUndefined()
-    expect(findRelayInstance(servers, "Survival")).toBeUndefined()
-    expect(findRelayInstance(servers, null)).toBeUndefined()
+    expect(findRelayServer(servers, "aaaaaaaa")).toBeUndefined()
+    expect(findRelayServer(servers, "Survival")).toBeUndefined()
+    expect(findRelayServer(servers, null)).toBeUndefined()
   })
 })

@@ -1,6 +1,6 @@
 import {
   relayBrowserMaxFrameBytes,
-  type RelayInstanceLifecycleEvent,
+  type RelayServerLifecycleEvent,
   type RelayConsoleLine,
 } from "@workspace/contracts"
 
@@ -8,7 +8,7 @@ type ConsoleBatchType = "history" | "reset"
 
 interface ConsoleBatchInput {
   instanceId: string
-  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>
+  lifecycle: ReadonlyArray<RelayServerLifecycleEvent>
   lines: ReadonlyArray<RelayConsoleLine>
   truncated: boolean
   type: ConsoleBatchType

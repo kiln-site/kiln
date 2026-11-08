@@ -34,7 +34,7 @@ export function openRelayResourceStream(
   return openUsageStream({
     decode: (message) => relayResourceStreamEventSchema.parse(message),
     id: instanceId,
-    kind: "instance",
+    kind: "server",
     poll: openHearthResourceStream,
     relayId,
   })

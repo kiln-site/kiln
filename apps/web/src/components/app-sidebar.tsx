@@ -111,7 +111,7 @@ import {
   relaySelectionValue,
   type RelayDirectoryEntry,
 } from "@/lib/relay-route"
-import type { SidebarInstance } from "@/lib/relay-selectors"
+import type { SidebarServer } from "@/lib/relay-selectors"
 import { globalSectionFromRouteId } from "@/lib/route-sections"
 import type { GlobalSection } from "@/lib/route-sections"
 import {
@@ -904,7 +904,7 @@ const InstanceNavigation = React.memo(function InstanceNavigation({
   serverCount,
 }: {
   capabilities: NavigationAccessCapabilities
-  instance: SidebarInstance | null
+  instance: SidebarServer | null
   serverCount: number
 }) {
   const navigate = useNavigate()
@@ -972,7 +972,7 @@ const InstanceNavigation = React.memo(function InstanceNavigation({
 })
 
 type InstanceSelection =
-  | { kind: "server"; instance: SidebarInstance }
+  | { kind: "server"; instance: SidebarServer }
   | { kind: "database"; database: ManagedDatabaseDirectoryEntry }
   | { kind: "app"; app: AppDirectoryEntry }
   | { kind: "relay"; relay: RelayDirectoryEntry }
@@ -1431,7 +1431,7 @@ function sidebarPickerKey(
 }
 
 function selectSidebarServerPickerItems(
-  servers: ReadonlyArray<SidebarInstance>
+  servers: ReadonlyArray<SidebarServer>
 ): Array<InstancePickerItem> {
   return servers.map((instance) => ({
     identity: {
@@ -1491,7 +1491,7 @@ const InstanceTabNavigation = React.memo(function InstanceTabNavigation({
   instance,
 }: {
   capabilities: NavigationAccessCapabilities
-  instance: SidebarInstance | null
+  instance: SidebarServer | null
 }) {
   const items = instance
     ? accessibleDestinationsForServer(instance, capabilities)

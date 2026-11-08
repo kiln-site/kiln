@@ -14,7 +14,7 @@ async function seeded() {
   const harness = await relayHarness()
   await harness.seedServer({ id, image: "example/server:latest" })
   fakeDocker.images.set("example/server:latest", {})
-  const instance = await harness.docker.findInstance(id)
+  const instance = await harness.docker.findServer(id)
   if (!instance) throw new Error("Expected the seeded game server")
   return { harness, instance }
 }
@@ -24,9 +24,9 @@ describe("moving workloads into the slice", () => {
     const { harness, instance } = await seeded()
     harness.docker.allocations.setWorkloadLimit(SLICE, 1024 ** 3)
 
-    await harness.lifecycle.runInstanceAction(instance, "start", [])
+    await harness.lifecycle.runServerAction(instance, "start", [])
 
-    const moved = fakeDocker.container(harness.resources.instanceContainer(id))!
+    const moved = fakeDocker.container(harness.resources.serverContainer(id))!
     expect(moved.cgroupParent).toBe(SLICE)
     expect(moved.labels[WORKLOAD_SLICE_LABEL]).toBe(SLICE)
     expect(moved.labels["kiln.server.id"]).toBe(id)
@@ -38,13 +38,13 @@ describe("moving workloads into the slice", () => {
     const { harness, instance } = await seeded()
     harness.docker.allocations.setWorkloadLimit(SLICE, 1024 ** 3)
     const container = fakeDocker.container(
-      harness.resources.instanceContainer(id)
+      harness.resources.serverContainer(id)
     )!
     container.state.running = true
 
-    await harness.lifecycle.runInstanceAction(instance, "start", [])
+    await harness.lifecycle.runServerAction(instance, "start", [])
 
-    const after = fakeDocker.container(harness.resources.instanceContainer(id))!
+    const after = fakeDocker.container(harness.resources.serverContainer(id))!
     expect(after.id).toBe(container.id)
     expect(after.cgroupParent).toBe("")
     expect(after.state.running).toBe(true)
@@ -53,25 +53,24 @@ describe("moving workloads into the slice", () => {
   it("moves a running game server on an asked-for restart", async () => {
     const { harness, instance } = await seeded()
     harness.docker.allocations.setWorkloadLimit(SLICE, 1024 ** 3)
-    fakeDocker.container(
-      harness.resources.instanceContainer(id)
-    )!.state.running = true
+    fakeDocker.container(harness.resources.serverContainer(id))!.state.running =
+      true
 
-    await harness.lifecycle.runInstanceAction(instance, "restart", [])
+    await harness.lifecycle.runServerAction(instance, "restart", [])
 
-    const moved = fakeDocker.container(harness.resources.instanceContainer(id))!
+    const moved = fakeDocker.container(harness.resources.serverContainer(id))!
     expect(moved.cgroupParent).toBe(SLICE)
   })
 
   it("leaves a game server where it is while no slice is confirmed", async () => {
     const { harness, instance } = await seeded()
     const before = fakeDocker.container(
-      harness.resources.instanceContainer(id)
+      harness.resources.serverContainer(id)
     )!.id
 
-    await harness.lifecycle.runInstanceAction(instance, "start", [])
+    await harness.lifecycle.runServerAction(instance, "start", [])
 
-    const after = fakeDocker.container(harness.resources.instanceContainer(id))!
+    const after = fakeDocker.container(harness.resources.serverContainer(id))!
     expect(after.id).toBe(before)
     expect(after.cgroupParent).toBe("")
   })

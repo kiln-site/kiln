@@ -9,7 +9,7 @@ import {
   appTailscaleMember,
   databaseIdFromFileRoot,
   databaseTailscaleMember,
-  instanceTailscaleMember,
+  serverTailscaleMember,
   isRelayFileRoot,
   type BackupTaskInput,
   type RelayControlOperation,
@@ -24,10 +24,10 @@ import {
 } from "./operation-lanes.js"
 
 /** Changing a game server's running process: power and console input. */
-export function instanceLifecycleLocks(instanceId: string): Array<LaneLock> {
+export function serverLifecycleLocks(instanceId: string): Array<LaneLock> {
   return [
-    shared(laneKeys.instance(instanceId)),
-    exclusive(laneKeys.instanceLifecycle(instanceId)),
+    shared(laneKeys.server(instanceId)),
+    exclusive(laneKeys.serverLifecycle(instanceId)),
   ]
 }
 
@@ -35,35 +35,35 @@ export function instanceLifecycleLocks(instanceId: string): Array<LaneLock> {
  * Starting a game server also recreates its container with its current
  * routes and ports, so it waits for route and proxy changes.
  */
-export function instanceStartLocks(instanceId: string): Array<LaneLock> {
-  return [...instanceLifecycleLocks(instanceId), shared(laneKeys.routes)]
+export function serverStartLocks(instanceId: string): Array<LaneLock> {
+  return [...serverLifecycleLocks(instanceId), shared(laneKeys.routes)]
 }
 
-export function instancePowerLocks(
+export function serverPowerLocks(
   instanceId: string,
   action: string
 ): Array<LaneLock> {
   return action === "start" || action === "restart"
-    ? instanceStartLocks(instanceId)
-    : instanceLifecycleLocks(instanceId)
+    ? serverStartLocks(instanceId)
+    : serverLifecycleLocks(instanceId)
 }
 
 /** Writing a game server's files. Live backups run alongside. */
-export function instanceFileLocks(instanceId: string): Array<LaneLock> {
+export function serverFileLocks(instanceId: string): Array<LaneLock> {
   return [
-    shared(laneKeys.instance(instanceId)),
-    exclusive(laneKeys.instanceFiles(instanceId)),
+    shared(laneKeys.server(instanceId)),
+    exclusive(laneKeys.serverFiles(instanceId)),
   ]
 }
 
 /** Reading a game server whole, as a backup does, while it keeps running. */
-export function instanceReadLocks(instanceId: string): Array<LaneLock> {
-  return [shared(laneKeys.instance(instanceId))]
+export function serverReadLocks(instanceId: string): Array<LaneLock> {
+  return [shared(laneKeys.server(instanceId))]
 }
 
 /** Replacing a game server: delete, reinstall, restore, or recreation. */
-export function instanceReplaceLocks(instanceId: string): Array<LaneLock> {
-  return [exclusive(laneKeys.instance(instanceId))]
+export function serverReplaceLocks(instanceId: string): Array<LaneLock> {
+  return [exclusive(laneKeys.server(instanceId))]
 }
 
 export function appLifecycleLocks(appId: string): Array<LaneLock> {
@@ -135,7 +135,7 @@ export function databaseReadLocks(databaseId: string): Array<LaneLock> {
 }
 
 /** The kinds of resource whose power the Relay changes. */
-export type PowerResourceKind = "app" | "database" | "instance"
+export type PowerResourceKind = "app" | "database" | "server"
 
 /**
  * A power action on any kind: the resource shared and its lifecycle
@@ -146,7 +146,7 @@ export function resourcePowerLocks(
   id: string,
   action: string
 ): Array<LaneLock> {
-  if (kind === "instance") return instancePowerLocks(id, action)
+  if (kind === "server") return serverPowerLocks(id, action)
   if (kind === "app") return appLifecycleLocks(id)
   return databaseLifecycleLocks(id)
 }
@@ -165,7 +165,7 @@ export function containerCommandLocks(
 
 /** The lane key a resource is replaced under, for its power intent. */
 export function resourceLaneKey(kind: PowerResourceKind, id: string): string {
-  if (kind === "instance") return laneKeys.instance(id)
+  if (kind === "server") return laneKeys.server(id)
   if (kind === "app") return laneKeys.app(id)
   return laneKeys.database(id)
 }
@@ -185,14 +185,14 @@ function appVolumeFileLocks(appId: string, volumeId: string): Array<LaneLock> {
 /** Writes under a file root, which is a game server, an App, or the host. */
 export function fileRootWriteLocks(
   rootId: string,
-  resolveInstance: InstanceResolver
+  resolveServer: ServerResolver
 ): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> {
   if (isRelayFileRoot(rootId)) return [exclusive(laneKeys.hostFiles)]
   const volume = appVolumeFromFileRoot(rootId)
   if (volume) return appVolumeFileLocks(volume.appId, volume.volumeId)
   const appId = appIdFromFileRoot(rootId)
   if (appId) return appFileLocks(appId)
-  return withInstance(resolveInstance(rootId), instanceFileLocks)
+  return withServer(resolveServer(rootId), serverFileLocks)
 }
 
 /**
@@ -209,7 +209,7 @@ export function fileRootWriteLocks(
  */
 export function backupTaskLocks(
   input: BackupTaskInput,
-  resolveInstance: InstanceResolver,
+  resolveServer: ServerResolver,
   resolveVolumeApps: VolumeAppsResolver
 ): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> {
   if (input.kind !== "create" && input.kind !== "restore") return []
@@ -236,10 +236,10 @@ export function backupTaskLocks(
     if (!restore && !stopped) return locks([])
     return Promise.resolve(resolveVolumeApps(id)).then(locks)
   }
-  if (kind === "instance") {
-    return withInstance(
-      resolveInstance(id),
-      restore ? instanceReplaceLocks : instanceReadLocks
+  if (kind === "server") {
+    return withServer(
+      resolveServer(id),
+      restore ? serverReplaceLocks : serverReadLocks
     )
   }
   if (kind === "database") {
@@ -285,7 +285,7 @@ export function fileRootTransferLocks(rootId: string): Array<LaneLock> {
     ]
   }
   const appId = appIdFromFileRoot(rootId)
-  return [shared(appId ? laneKeys.app(appId) : laneKeys.instance(rootId))]
+  return [shared(appId ? laneKeys.app(appId) : laneKeys.server(rootId))]
 }
 
 /**
@@ -305,9 +305,7 @@ export function fileRootCommitLocks(rootId: string): Array<LaneLock> {
   }
   const appId = appIdFromFileRoot(rootId)
   return [
-    exclusive(
-      appId ? laneKeys.appFiles(appId) : laneKeys.instanceFiles(rootId)
-    ),
+    exclusive(appId ? laneKeys.appFiles(appId) : laneKeys.serverFiles(rootId)),
   ]
 }
 
@@ -328,7 +326,7 @@ export function transferInstallLocks(rootId: string): Array<LaneLock> {
   if (isRelayFileRoot(rootId)) return [exclusive(laneKeys.hostFiles)]
   const appId = appIdFromFileRoot(rootId)
   if (appId) return appReplaceLocks(appId)
-  return instanceReplaceLocks(rootId)
+  return serverReplaceLocks(rootId)
 }
 
 /**
@@ -343,7 +341,7 @@ export type TailscaleStackReader = (
 
 /** Whether a resource is frozen for its deletion. */
 export type FrozenResourceCheck = (
-  kind: "app" | "database" | "instance",
+  kind: "app" | "database" | "server",
   id: string
 ) => boolean
 
@@ -394,12 +392,12 @@ export function tailscaleMemberLocks(
         ? []
         : [shared(laneKeys.database(databaseId))]
     }
-    const instanceId = instanceTailscaleMember(memberId)
+    const instanceId = serverTailscaleMember(memberId)
     if (instanceId) {
-      if (changes) return instanceLifecycleLocks(instanceId)
-      return isFrozen("instance", instanceId)
+      if (changes) return serverLifecycleLocks(instanceId)
+      return isFrozen("server", instanceId)
         ? []
-        : [shared(laneKeys.instance(instanceId))]
+        : [shared(laneKeys.server(instanceId))]
     }
     return []
   })
@@ -421,7 +419,7 @@ function requestedTailscaleBindings(
  * Resolves a game server reference to its full ID. Requests normally carry
  * the full ID, which needs no lookup; a short ID or name is looked up.
  */
-export type InstanceResolver = (reference: string) => string | Promise<string>
+export type ServerResolver = (reference: string) => string | Promise<string>
 
 /** The managed volumes an App mounts or its configuration names, by ID. */
 export type AppVolumesResolver = (
@@ -442,7 +440,7 @@ export type VolumeAppsResolver = (
 export function controlRequestLocks(
   operation: RelayControlOperation,
   payload: Readonly<Record<string, unknown>>,
-  resolveInstance: InstanceResolver,
+  resolveServer: ServerResolver,
   resolveAppVolumes: AppVolumesResolver,
   readTailscaleStack?: TailscaleStackReader,
   isFrozen?: FrozenResourceCheck
@@ -454,7 +452,7 @@ export function controlRequestLocks(
     const reference = stringField(payload, field)
     return reference === null
       ? null
-      : withInstance(resolveInstance(reference), locks)
+      : withServer(resolveServer(reference), locks)
   }
   const app = (locks: (id: string) => Array<LaneLock>, field = "appId") => {
     const id = stringField(payload, field)
@@ -478,7 +476,7 @@ export function controlRequestLocks(
   }
   const fileRoot = () => {
     const rootId = stringField(payload, "instanceId")
-    return rootId === null ? null : fileRootWriteLocks(rootId, resolveInstance)
+    return rootId === null ? null : fileRootWriteLocks(rootId, resolveServer)
   }
 
   switch (operation) {
@@ -528,23 +526,23 @@ export function controlRequestLocks(
     case "app.network.routes.read":
     case "app.deployment.read":
     case "app.image.check":
-    case "instance.resources.read":
-    case "instance.files.list":
-    case "instance.files.directory.list":
-    case "instance.files.directory.sizes":
-    case "instance.files.search":
-    case "instance.files.stat":
-    case "instance.files.read":
-    case "instance.icon.read":
-    case "instance.files.database.read":
-    case "instance.console.history":
-    case "instance.logs.share":
-    case "instance.logs.latest":
-    case "instance.deployment.read":
-    case "instance.network.routes.read":
+    case "server.resources.read":
+    case "server.files.list":
+    case "server.files.directory.list":
+    case "server.files.directory.sizes":
+    case "server.files.search":
+    case "server.files.stat":
+    case "server.files.read":
+    case "server.icon.read":
+    case "server.files.database.read":
+    case "server.console.history":
+    case "server.logs.share":
+    case "server.logs.latest":
+    case "server.deployment.read":
+    case "server.network.routes.read":
     // Port leases are their own reservation, with their own lock.
-    case "instance.network.ports.reserve":
-    case "instance.network.ports.release":
+    case "server.network.ports.reserve":
+    case "server.network.ports.release":
       return null
 
     // The streamer is shared infrastructure; its tickets and streams are
@@ -632,9 +630,9 @@ export function controlRequestLocks(
     case "schedule.overview":
     // Provisioning only records and claims jobs; the worker takes each new
     // instance's locks for the create itself.
-    case "instance.provision.prepare":
-    case "instance.provision.claim":
-    case "instance.provision.cancel":
+    case "server.provision.prepare":
+    case "server.provision.claim":
+    case "server.provision.cancel":
     case "database.provision.prepare":
     case "database.provision.claim":
     case "database.provision.cancel":
@@ -646,8 +644,8 @@ export function controlRequestLocks(
     // A new game server's ID is chosen as its request arrives (index.ts).
     // Its create takes the routes itself, once its image is downloaded, to
     // rewrite the Relay's CoreDNS.
-    case "instance.create":
-      return instance(instanceReplaceLocks)
+    case "server.create":
+      return instance(serverReplaceLocks)
 
     // Looks up how an earlier change went.
     case "operation.get":
@@ -697,7 +695,7 @@ export function controlRequestLocks(
     // DNS records change nothing of a stack's members.
     case "relay.tailscale.stack.dns":
       return instance(
-        (id) => [...instanceReplaceLocks(id), shared(laneKeys.tailscale)],
+        (id) => [...serverReplaceLocks(id), shared(laneKeys.tailscale)],
         "id"
       )
     // Applying a stack joins and leaves members, and removing one leaves
@@ -707,9 +705,9 @@ export function controlRequestLocks(
     case "relay.tailscale.stack.remove": {
       const reference = stringField(payload, "id")
       if (reference === null) return null
-      const resolved = resolveInstance(reference)
+      const resolved = resolveServer(reference)
       return Promise.resolve(resolved).then(async (stackId) => [
-        ...instanceReplaceLocks(stackId),
+        ...serverReplaceLocks(stackId),
         shared(laneKeys.tailscale),
         ...tailscaleMemberLocks(
           (await readTailscaleStack?.(stackId)) ?? [],
@@ -753,10 +751,10 @@ export function controlRequestLocks(
       const memberId = member && stringField(member, "id")
       if (databaseId === null || !member || memberId === null) return null
       switch (member.kind) {
-        case "instance":
-          return withInstance(resolveInstance(memberId), (id) => [
+        case "server":
+          return withServer(resolveServer(memberId), (id) => [
             ...databaseLocks(databaseId),
-            ...instanceLifecycleLocks(id),
+            ...serverLifecycleLocks(id),
           ])
         case "app":
           return [...databaseLocks(databaseId), ...appLifecycleLocks(memberId)]
@@ -828,41 +826,41 @@ export function controlRequestLocks(
     // These replace the server's container or files, so they wait for
     // everything else on it, live backups included. Each takes the routes
     // itself for the step that rewrites the Relay's CoreDNS.
-    case "instance.startup.write":
-    case "instance.delete":
-      return instance(instanceReplaceLocks)
+    case "server.startup.write":
+    case "server.delete":
+      return instance(serverReplaceLocks)
     // These recreate the container with new labels, as a start does.
-    case "instance.network.databases.remove":
-      return instance(instanceLifecycleLocks)
+    case "server.network.databases.remove":
+      return instance(serverLifecycleLocks)
     // Saved for the next restart, so it leaves the container alone but waits
     // for one in progress, which clears what it applied. Taking the node's
     // allocations happens in its turn, once its files are measured.
-    case "instance.limits.write":
-      return instance(instanceLifecycleLocks)
-    case "instance.rename":
+    case "server.limits.write":
+      return instance(serverLifecycleLocks)
+    case "server.rename":
       return instance((id) => [
-        shared(laneKeys.instance(id)),
-        exclusive(laneKeys.instanceMetadata(id)),
+        shared(laneKeys.server(id)),
+        exclusive(laneKeys.serverMetadata(id)),
       ])
-    case "instance.action": {
+    case "server.action": {
       const action = stringField(payload, "action") ?? ""
-      return instance((id) => resourcePowerLocks("instance", id, action))
+      return instance((id) => resourcePowerLocks("server", id, action))
     }
-    case "instance.console.write":
-    case "instance.console.complete":
-      return instance(instanceLifecycleLocks)
-    case "instance.network.ports.write":
-    case "instance.network.routes.write":
+    case "server.console.write":
+    case "server.console.complete":
+      return instance(serverLifecycleLocks)
+    case "server.network.ports.write":
+    case "server.network.routes.write":
       return instance((id) => [
-        ...instanceLifecycleLocks(id),
+        ...serverLifecycleLocks(id),
         exclusive(laneKeys.routes),
       ])
-    case "instance.files.write":
-    case "instance.files.put":
-    case "instance.files.upload-url":
-    case "instance.files.mutate":
-    case "instance.files.mutate.result":
-    case "instance.files.database.write":
+    case "server.files.write":
+    case "server.files.put":
+    case "server.files.upload-url":
+    case "server.files.mutate":
+    case "server.files.mutate.result":
+    case "server.files.database.write":
       return fileRoot()
 
     // Freezing a resource for its deletion, or letting it go, waits for
@@ -872,7 +870,7 @@ export function controlRequestLocks(
       const kind = stringField(payload, "kind")
       const id = stringField(payload, "id")
       if (kind === null || id === null) return null
-      return resourceReplaceLocks(kind, id, resolveInstance)
+      return resourceReplaceLocks(kind, id, resolveServer)
     }
   }
 }
@@ -881,11 +879,11 @@ export function controlRequestLocks(
 export function resourceReplaceLocks(
   kind: string,
   id: string,
-  resolveInstance: InstanceResolver
+  resolveServer: ServerResolver
 ): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> | null {
   switch (kind) {
-    case "instance":
-      return withInstance(resolveInstance(id), instanceReplaceLocks)
+    case "server":
+      return withServer(resolveServer(id), serverReplaceLocks)
     case "app":
       return appReplaceLocks(id)
     case "database":
@@ -897,7 +895,7 @@ export function resourceReplaceLocks(
   }
 }
 
-function withInstance(
+function withServer(
   resolved: string | Promise<string>,
   locks: (id: string) => ReadonlyArray<LaneLock>
 ): ReadonlyArray<LaneLock> | Promise<ReadonlyArray<LaneLock>> {

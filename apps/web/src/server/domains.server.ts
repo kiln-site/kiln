@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 
-import type { RelayInstance } from "@workspace/contracts"
-import { relayInstanceSchema, relaySnapshotSchema } from "@workspace/contracts"
+import type { RelayServer } from "@workspace/contracts"
+import { relayServerSchema, relaySnapshotSchema } from "@workspace/contracts"
 import { Effect, Option, Result } from "effect"
 import { z } from "zod"
 
@@ -29,7 +29,7 @@ import {
   finishInstanceDomainRenameEffect,
   listDueInstanceDomainsEffect,
   deleteInstanceDomainAssignmentEffect,
-  deleteRelayInstanceDomainAssignmentsEffect,
+  deleteRelayServerDomainAssignmentsEffect,
   insertInstanceDomainAssignmentEffect,
   loadActiveInstanceDomainAssignmentsEffect,
   loadDomainConnectionCredentialEffect,
@@ -38,9 +38,9 @@ import {
   loadInstanceDomainOptOutEffect,
   loadManagedDomainEffect,
   listUsableVanityDomainsEffect,
-  loadRelayInstanceDomainAssignmentsEffect,
+  loadRelayServerDomainAssignmentsEffect,
   markInstanceDomainRemovingEffect,
-  markRelayInstanceDomainsRemovingEffect,
+  markRelayServerDomainsRemovingEffect,
   reassignInstanceDomainsEffect,
   recordInstanceDomainErrorEffect,
   recordInstanceDomainSyncErrorEffect,
@@ -74,7 +74,7 @@ import {
 } from "@/lib/domain-address"
 import { vanityLabelAllowed } from "@/server/reserved-names"
 import { publishDomainChange } from "@/lib/domain-realtime.server"
-import type { FleetRelayInstance } from "@/lib/relay-fleet"
+import type { FleetRelayServer } from "@/lib/relay-fleet"
 import { relayConnectionSnapshot } from "@/lib/relay-connection"
 import { dnsKey, withDnsChange } from "@/lib/dns-operations"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -109,7 +109,7 @@ import type {
   UpdateInstanceDomainInput,
 } from "@/server/domains"
 
-type DomainInstance = RelayInstance & { relayId: string }
+type DomainInstance = RelayServer & { relayId: string }
 
 const managedDomainAddressCachePolicy: CachePolicy = {
   key: "domains:assignments:active-addresses",
@@ -144,7 +144,7 @@ function withInstanceDomainLock<A, E, R>(
     servers.map(({ instanceId, relayId }) => ({
       relayId,
       resourceId: instanceId,
-      resourceType: "instance" as const,
+      resourceType: "server" as const,
     })),
     effect
   )
@@ -154,7 +154,7 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
   const user = await requireEligibleResourceUser()
   await requireRelayPermission({
     instanceId: data.instanceId,
-    permission: "instance.network.read",
+    permission: "server.network.read",
     relayId: data.relayId,
     user,
   })
@@ -173,7 +173,7 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
         const ownerId = yield* loadResourceOwnerIdEffect({
           relayId: data.relayId,
           resourceId: data.instanceId,
-          resourceType: "instance",
+          resourceType: "server",
         })
         // Its owner's, the person's own, and Kiln's: the ones it may use.
         const [owners, own] = yield* Effect.all(
@@ -219,7 +219,7 @@ const instanceDns = (scope: { instanceId: string; relayId: string }) =>
     dnsKey({
       relayId: scope.relayId,
       resourceId: scope.instanceId,
-      resourceType: "instance",
+      resourceType: "server",
     })
   )
 const changingDomains = "Changing this game server's domains"
@@ -264,7 +264,7 @@ export const addInstanceDomain = operation<CreateInstanceDomainInput>()({
     }),
   audit: ({ input }) => ({
     id: input.instanceId,
-    kind: "instance",
+    kind: "server",
     relayId: input.relayId,
   }),
   // A failed create still leaves a failed row behind.
@@ -291,7 +291,7 @@ const loadDomainScope = (user: AuthenticatedUser | null, id: string) =>
     yield* promiseEffect(() =>
       requireRelayPermission({
         instanceId: assignment.instanceId,
-        permission: "instance.network.write",
+        permission: "server.network.write",
         relayId: assignment.relayId,
         user: person,
       })
@@ -328,7 +328,7 @@ export const renameInstanceDomain = operation<UpdateInstanceDomainInput>()({
     ),
   audit: ({ context }) => ({
     id: context.instanceId,
-    kind: "instance",
+    kind: "server",
     relayId: context.relayId,
   }),
   // A failed rename can still clear leftover records.
@@ -362,7 +362,7 @@ export const removeInstanceDomain = operation<RemoveInstanceDomainInput>()({
       : Effect.void,
   audit: ({ context }) =>
     context
-      ? { id: context.instanceId, kind: "instance", relayId: context.relayId }
+      ? { id: context.instanceId, kind: "server", relayId: context.relayId }
       : null,
   // A failed removal still changes the row.
   publish: ({ context }) => {
@@ -379,7 +379,7 @@ export async function removeInstanceDomainHandler(
 }
 
 export async function provisionInstanceDomainBestEffort(
-  instance: RelayInstance,
+  instance: RelayServer,
   relayId: string
 ): Promise<void> {
   const changed = await runAppEffect(
@@ -400,7 +400,7 @@ export async function provisionInstanceDomainBestEffort(
 }
 
 export async function provisionInstanceDomain(
-  instance: RelayInstance,
+  instance: RelayServer,
   relayId: string
 ): Promise<void> {
   const changed = await runAppEffect(
@@ -412,7 +412,7 @@ export async function provisionInstanceDomain(
 
 export const applyManagedDomainAddressesEffect = Effect.fn(
   "domains.assignments.apply"
-)(function* (instances: Array<FleetRelayInstance>) {
+)(function* (instances: Array<FleetRelayServer>) {
   if (instances.length === 0) return instances
   const addresses = yield* loadManagedDomainAddressesEffect()
   return instances.map((instance) => ({
@@ -644,15 +644,15 @@ export const deleteManagedDomainAssignmentEffect = Effect.fn(
 export const removeRelayManagedDomainsEffect = Effect.fn(
   "domains.relay.removeAssignments"
 )(function* (relayId: string, removeCloudflareRecords: boolean) {
-  const assignments = yield* loadRelayInstanceDomainAssignmentsEffect(relayId)
+  const assignments = yield* loadRelayServerDomainAssignmentsEffect(relayId)
   if (!removeCloudflareRecords) {
-    yield* deleteRelayInstanceDomainAssignmentsEffect(relayId)
+    yield* deleteRelayServerDomainAssignmentsEffect(relayId)
     yield* invalidateManagedDomainAddressesEffect
     return assignments.length
   }
   // Marked first, so a delete that fails, or one cut short, is finished by
   // the DNS worker; none is forgotten while Cloudflare still has it.
-  yield* markRelayInstanceDomainsRemovingEffect(relayId)
+  yield* markRelayServerDomainsRemovingEffect(relayId)
   yield* invalidateManagedDomainAddressesEffect
   yield* Effect.forEach(
     assignments,
@@ -715,7 +715,7 @@ export const provisionInstanceDomainEffect = Effect.fn(
       const ownerId = yield* loadResourceOwnerIdEffect({
         relayId: instance.relayId,
         resourceId: instance.id,
-        resourceType: "instance",
+        resourceType: "server",
       })
       const domain = yield* chooseVanityDomainEffect(ownerId)
       if (!domain) return false
@@ -1555,7 +1555,7 @@ const requireUsableDomainEffect = Effect.fnUntraced(function* (
   const ownerId = yield* loadResourceOwnerIdEffect({
     relayId: instance.relayId,
     resourceId: instance.id,
-    resourceType: "instance",
+    resourceType: "server",
   })
   if (!vanityDomainUsable(domain, ownerId, actor)) {
     return yield* domainFailure(
@@ -1648,7 +1648,7 @@ function assignmentKey(relayId: string, instanceId: string): string {
 export function managedAddressForInstance(
   addresses: z.infer<typeof managedDomainAddressMapSchema>,
   instance: Pick<
-    FleetRelayInstance,
+    FleetRelayServer,
     "connectAddress" | "id" | "publicHost" | "publicPort" | "relayId"
   >
 ): string {
@@ -1666,7 +1666,7 @@ async function loadWritableInstanceFor(
   const relay = await requiredRelay(relayId)
   await requireRelayPermission({
     instanceId,
-    permission: "instance.network.write",
+    permission: "server.network.write",
     relayId,
     user,
   })
@@ -1678,7 +1678,7 @@ async function loadWritableInstanceFor(
   )
   const instance = snapshot.instances.find((item) => item.id === instanceId)
   if (!instance) throw new Error("Instance not found")
-  return relayInstanceSchema.parse(instance)
+  return relayServerSchema.parse(instance)
 }
 
 async function requiredRelay(id: string): Promise<PersistedRelay> {

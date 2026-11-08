@@ -20,7 +20,7 @@ describeMysql("Hearth audit", () => {
         yield* resetDatabase
         const operationId = randomUUID()
         yield* recordRelayChangeStarted({
-          operation: "instance.action",
+          operation: "server.action",
           operationId,
           payload: {
             action: "restart",
@@ -44,11 +44,11 @@ describeMysql("Hearth audit", () => {
 
         const events = yield* listAuditEvents({
           limit: 10,
-          target: { id: instanceId, kind: "instance" },
+          target: { id: instanceId, kind: "server" },
         })
         assert.strictEqual(events.length, 1)
         assert.deepInclude(events[0], {
-          action: "instance.action",
+          action: "server.action",
           actor: {
             credentialId: "credential-1",
             kind: "cli",
@@ -59,7 +59,7 @@ describeMysql("Hearth audit", () => {
           operationId,
           outcome: "failed",
           relayId,
-          target: { id: instanceId, kind: "instance" },
+          target: { id: instanceId, kind: "server" },
         })
       })
     )

@@ -6,7 +6,7 @@ import {
 } from "@/server/resource-deletions"
 
 export interface ResourceDeletionTarget {
-  kind: "app" | "database" | "instance" | "volume"
+  kind: "app" | "database" | "server" | "volume"
   relayId: string
   resourceId: string
 }

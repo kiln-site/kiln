@@ -1,4 +1,4 @@
-import type { RelayInstance } from "@workspace/contracts"
+import type { RelayServer } from "@workspace/contracts"
 
 import { vanityLabelAllowed } from "@/server/reserved-names"
 
@@ -116,7 +116,7 @@ function defaultSrvService(game: string): string {
 
 export function managedDomainSrvConfiguration(
   instance: Pick<
-    RelayInstance,
+    RelayServer,
     | "brickNetworkMode"
     | "brickPrimaryPortProtocol"
     | "brickSupportsSrv"

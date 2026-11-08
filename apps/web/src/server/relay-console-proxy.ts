@@ -64,7 +64,7 @@ export async function* openHearthRelayConsoleStream(input: {
   }
   const { identity, resource } = input
   // CLI credentials only follow servers' consoles.
-  if (!identity && resource.kind !== "instance") {
+  if (!identity && resource.kind !== "server") {
     throw new Error("Only server consoles can be followed from the CLI")
   }
   const prepare = () =>

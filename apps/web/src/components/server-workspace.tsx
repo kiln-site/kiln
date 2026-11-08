@@ -12,7 +12,7 @@ import {
   relayBrowserAuthorizationChanges,
 } from "@/lib/authenticated-relay-socket"
 import type { RelayObservedState } from "@workspace/contracts"
-import { relayInstanceLifecycleEventTime } from "@workspace/contracts"
+import { relayServerLifecycleEventTime } from "@workspace/contracts"
 
 import {
   Tooltip,
@@ -22,14 +22,14 @@ import {
 
 import {
   FileTreePreferencesContext,
-  InstanceIdentityContext,
-  InstancePermissionsContext,
-  InstanceRelayConnectedContext,
-} from "@/components/instance-workspace-context"
+  ServerIdentityContext,
+  ServerPermissionsContext,
+  ServerRelayConnectedContext,
+} from "@/components/server-workspace-context"
 import type {
   FileTreePreferences,
-  InstanceWorkspacePermissions,
-} from "@/components/instance-workspace-context"
+  ServerWorkspacePermissions,
+} from "@/components/server-workspace-context"
 import {
   ResourceMeter,
   ResourceMeterStrip,
@@ -53,9 +53,9 @@ import {
   beginPendingPowerAction,
   finishPendingPowerAction,
   isPowerControlLocked,
-  reconcilePendingPowerInstance,
+  reconcilePendingPowerServer,
   type ServerAction,
-} from "@/lib/instance-power-state"
+} from "@/lib/server-power-state"
 import { openRelayResourceStream } from "@/lib/relay-resource-stream"
 import {
   createResourceHistoryRecorder,
@@ -68,11 +68,11 @@ import {
 } from "@/lib/query-options"
 import type { RelayFleetSnapshot } from "@/lib/relay-fleet"
 import {
-  selectInstanceObservedState,
-  selectInstanceWorkspaceInstance,
+  selectServerObservedState,
+  selectWorkspaceServer,
 } from "@/lib/relay-selectors"
 import {
-  cachedRelayInstance,
+  cachedRelayServer,
   knownServer,
   updateRelaySnapshots,
   type KnownServer,
@@ -83,60 +83,62 @@ import {
   useServerRelay,
   useServerSnapshot,
 } from "@/lib/use-server-workspace"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { WorkspaceServer } from "@/lib/relay-selectors"
 import { performRelayAction } from "@/server/relay"
 
-export function InstanceWorkspace({
+export function ServerWorkspace({
   children,
   instance,
   fileTreePreferences,
   permissions,
 }: {
   children: React.ReactNode
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
   fileTreePreferences: FileTreePreferences
-  permissions: InstanceWorkspacePermissions
+  permissions: ServerWorkspacePermissions
 }) {
   return (
-    <InstanceIdentityContext.Provider value={instance}>
-      <InstancePermissionsContext.Provider value={permissions}>
+    <ServerIdentityContext.Provider value={instance}>
+      <ServerPermissionsContext.Provider value={permissions}>
         <FileTreePreferencesContext.Provider value={fileTreePreferences}>
-          <InstanceRelayConnectionBoundary instance={instance}>
-            <InstanceProvisioningBoundary instance={instance}>
+          <ServerRelayConnectionBoundary instance={instance}>
+            <ServerProvisioningBoundary instance={instance}>
               {children}
-            </InstanceProvisioningBoundary>
-          </InstanceRelayConnectionBoundary>
+            </ServerProvisioningBoundary>
+          </ServerRelayConnectionBoundary>
         </FileTreePreferencesContext.Provider>
-      </InstancePermissionsContext.Provider>
-    </InstanceIdentityContext.Provider>
+      </ServerPermissionsContext.Provider>
+    </ServerIdentityContext.Provider>
   )
 }
 
-export const InstanceWorkspaceShell = React.memo(
-  function InstanceWorkspaceShell({ children }: { children: React.ReactNode }) {
-    return (
-      <WorkspaceFrame header={<InstanceWorkspaceHeader />}>
-        <div data-slot="instance-workspace-surface" className="contents">
-          {children}
-        </div>
-      </WorkspaceFrame>
-    )
-  }
-)
+export const ServerWorkspaceShell = React.memo(function ServerWorkspaceShell({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return (
+    <WorkspaceFrame header={<ServerWorkspaceHeader />}>
+      <div data-slot="server-workspace-surface" className="contents">
+        {children}
+      </div>
+    </WorkspaceFrame>
+  )
+})
 
-function InstanceRelayConnectionBoundary({
+function ServerRelayConnectionBoundary({
   children,
   instance,
 }: {
   children: React.ReactNode
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
 }) {
   const { data: relayConnected = false } = useServerRelay(
     selectServerRelayConnected
   )
 
   return (
-    <InstanceRelayConnectedContext.Provider value={relayConnected}>
+    <ServerRelayConnectedContext.Provider value={relayConnected}>
       {!instance.provisioning ? (
         <RelayResourceStreamController
           instance={instance}
@@ -144,16 +146,16 @@ function InstanceRelayConnectionBoundary({
         />
       ) : null}
       {children}
-    </InstanceRelayConnectedContext.Provider>
+    </ServerRelayConnectedContext.Provider>
   )
 }
 
-function InstanceProvisioningBoundary({
+function ServerProvisioningBoundary({
   children,
   instance,
 }: {
   children: React.ReactNode
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
 }) {
   const isInfoRoute = useRouterState({
     select: (state) => state.location.pathname.endsWith("/info"),
@@ -185,7 +187,7 @@ function RelayResourceStreamController({
   instance,
   relayConnected,
 }: {
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
   relayConnected: boolean
 }) {
   const queryClient = useQueryClient()
@@ -218,7 +220,7 @@ function RelayResourceStreamController({
                   ) {
                     return
                   }
-                  const streamedInstance = reconcilePendingPowerInstance(
+                  const streamedInstance = reconcilePendingPowerServer(
                     instance.relayId,
                     event.instance
                   )
@@ -274,15 +276,15 @@ function RelayResourceStreamController({
   return null
 }
 
-function InstanceWorkspaceHeader() {
+function ServerWorkspaceHeader() {
   const [error, setError] = React.useState<string | null>(null)
-  const instance = useRouteWorkspaceInstance()
+  const instance = useRouteWorkspaceServer()
   const known = useKnownRouteServer(instance === undefined)
 
   return (
     <WorkspaceHeader
       identity={
-        <InstanceIdentityBoundary
+        <ServerIdentityBoundary
           error={error}
           instance={instance}
           known={known}
@@ -290,7 +292,7 @@ function InstanceWorkspaceHeader() {
       }
       center={<LiveResourceMetersBoundary instance={instance} />}
       actions={
-        <InstancePowerControlsBoundary instance={instance} onError={setError} />
+        <ServerPowerControlsBoundary instance={instance} onError={setError} />
       }
     />
   )
@@ -308,29 +310,29 @@ function useKnownRouteServer(pending: boolean) {
   )
 }
 
-function useRouteWorkspaceInstance() {
+function useRouteWorkspaceServer() {
   const serverId = useRouteServerId()
   const selectInstance = React.useMemo(
-    () => selectInstanceWorkspaceInstance(serverId ?? ""),
+    () => selectWorkspaceServer(serverId ?? ""),
     [serverId]
   )
   const { data: instance } = useServerSnapshot(selectInstance)
   return instance
 }
 
-const InstanceIdentityBoundary = React.memo(function InstanceIdentityBoundary({
+const ServerIdentityBoundary = React.memo(function ServerIdentityBoundary({
   error,
   instance,
   known,
 }: {
   error: string | null
-  instance: InstanceWorkspaceInstance | null | undefined
+  instance: WorkspaceServer | null | undefined
   known: KnownServer | undefined
 }) {
   // The same element whether known or read, so the name never remounts.
   const shown = instance ?? known
   return shown ? (
-    <InstanceIdentity
+    <ServerIdentity
       key={`${shown.relayId}:${shown.id}`}
       error={error}
       instance={shown}
@@ -343,7 +345,7 @@ const LiveResourceMetersBoundary = React.memo(
   function LiveResourceMetersBoundary({
     instance,
   }: {
-    instance: InstanceWorkspaceInstance | null | undefined
+    instance: WorkspaceServer | null | undefined
   }) {
     return instance ? (
       <LiveResourceMeters instanceId={instance.id} relayId={instance.relayId} />
@@ -351,12 +353,12 @@ const LiveResourceMetersBoundary = React.memo(
   }
 )
 
-const InstancePowerControlsBoundary = React.memo(
-  function InstancePowerControlsBoundary({
+const ServerPowerControlsBoundary = React.memo(
+  function ServerPowerControlsBoundary({
     instance,
     onError,
   }: {
-    instance: InstanceWorkspaceInstance | null | undefined
+    instance: WorkspaceServer | null | undefined
     onError: (error: string | null) => void
   }) {
     const { data: capabilities } = useSuspenseQuery(
@@ -369,7 +371,7 @@ const InstancePowerControlsBoundary = React.memo(
           canAccessInstancePermission(
             capabilities,
             instance,
-            `instance.power.${action}`
+            `server.power.${action}`
           )
         )
       return {
@@ -381,7 +383,7 @@ const InstancePowerControlsBoundary = React.memo(
     }, [capabilities, instance])
 
     return instance ? (
-      <InstancePowerControls
+      <ServerPowerControls
         powerPermissions={powerPermissions}
         instance={instance}
         onError={onError}
@@ -390,7 +392,7 @@ const InstancePowerControlsBoundary = React.memo(
   }
 )
 
-function InstanceAddressControl({ address }: { address: string }) {
+function ServerAddressControl({ address }: { address: string }) {
   const { serverId } = useParams({ from: "/_app/server/$serverId" })
   const addressError = address.startsWith("Error:") ? address : null
 
@@ -419,14 +421,14 @@ function InstanceAddressControl({ address }: { address: string }) {
   return <WorkspaceCopyValueButton label="server address" value={address} />
 }
 
-function InstanceIdentity({
+function ServerIdentity({
   error,
   instance,
   statusConfirmed,
 }: {
   error: string | null
   instance: Pick<
-    InstanceWorkspaceInstance,
+    WorkspaceServer,
     "connectAddress" | "id" | "implementation" | "name" | "version"
   >
   // The server's own read carries its live state; the directory does not.
@@ -437,7 +439,7 @@ function InstanceIdentity({
       error={error}
       name={instance.name}
       statusConfirmed={statusConfirmed}
-      title={<InstanceRouteTitle />}
+      title={<ServerRouteTitle />}
     >
       <span className="hidden shrink-0 items-center gap-1.5 @[30rem]:inline-flex">
         <span>
@@ -449,12 +451,12 @@ function InstanceIdentity({
         <WorkspaceIdCopyButton id={instance.id} label="server ID" />
         <WorkspaceMetaSeparator />
       </span>
-      <InstanceAddressControl address={instance.connectAddress} />
+      <ServerAddressControl address={instance.connectAddress} />
     </WorkspaceIdentity>
   )
 }
 
-function InstanceRouteTitle() {
+function ServerRouteTitle() {
   const title = useRouterState({
     select: (state) => {
       if (
@@ -476,18 +478,18 @@ function InstanceRouteTitle() {
   return <>{title}</>
 }
 
-function InstancePowerControls({
+function ServerPowerControls({
   powerPermissions,
   instance,
   onError,
 }: {
   powerPermissions: Record<ServerAction, boolean>
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
   onError: (error: string | null) => void
 }) {
   const queryClient = useQueryClient()
   const selectObservedState = React.useMemo(
-    () => selectInstanceObservedState(instance.id, instance.relayId),
+    () => selectServerObservedState(instance.id, instance.relayId),
     [instance.id, instance.relayId]
   )
   const { data: observedState } = useServerSnapshot(selectObservedState)
@@ -497,10 +499,7 @@ function InstancePowerControls({
   const relayActionMutation = useMutation({
     mutationFn: performRelayAction,
     onSuccess: (updated) => {
-      const reconciled = reconcilePendingPowerInstance(
-        instance.relayId,
-        updated
-      )
+      const reconciled = reconcilePendingPowerServer(instance.relayId, updated)
       updateRelaySnapshots(queryClient, (snapshot) =>
         replaceRelaySnapshotInstance(snapshot, reconciled)
       )
@@ -520,7 +519,7 @@ function InstancePowerControls({
       ) {
         return
       }
-      const previousInstance = cachedRelayInstance(
+      const previousInstance = cachedRelayServer(
         queryClient,
         instance.relayId,
         instance.id
@@ -529,13 +528,13 @@ function InstancePowerControls({
         instance.relayId,
         instance.id,
         nextAction,
-        relayInstanceLifecycleEventTime(
+        relayServerLifecycleEventTime(
           previousInstance?.lifecycle ?? [],
           "started"
         )
       )
       updateRelaySnapshots(queryClient, (snapshot) =>
-        updateInstancePowerState(
+        updateServerPowerState(
           snapshot,
           instance.id,
           instance.relayId,
@@ -561,7 +560,7 @@ function InstancePowerControls({
               finishPendingPowerAction(instance.relayId, instance.id)
               if (previousInstance) {
                 updateRelaySnapshots(queryClient, (snapshot) =>
-                  updateInstancePowerState(
+                  updateServerPowerState(
                     snapshot,
                     instance.id,
                     instance.relayId,
@@ -621,7 +620,7 @@ function InstancePowerControls({
   )
 }
 
-function updateInstancePowerState(
+function updateServerPowerState(
   snapshot: RelayFleetSnapshot | undefined,
   instanceId: string,
   relayId: string,
@@ -664,7 +663,7 @@ function LiveResourceMeters({
     <ResourceMeterStrip
       columns={4}
       label="Server resource usage"
-      uptime={<InstanceUptimeMeter instanceId={instanceId} relayId={relayId} />}
+      uptime={<ServerUptimeMeter instanceId={instanceId} relayId={relayId} />}
     >
       {SERVER_RESOURCE_IDS.map((resourceId) => (
         <LiveResourceMeter
@@ -713,7 +712,7 @@ function LiveResourceMeter({
   return <ResourceMeter resource={resource} historyStore={historyStore} />
 }
 
-function InstanceUptimeMeter({
+function ServerUptimeMeter({
   instanceId,
   relayId,
 }: {
@@ -728,7 +727,7 @@ function InstanceUptimeMeter({
       return instance
         ? {
             running: instance.observedState === "running",
-            startedAt: relayInstanceLifecycleEventTime(
+            startedAt: relayServerLifecycleEventTime(
               instance.lifecycle,
               "started"
             ),

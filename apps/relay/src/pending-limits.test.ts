@@ -1,6 +1,6 @@
 import {
   brickRecipeSchema,
-  relayCreateInstanceSchema,
+  relayCreateServerSchema,
   resourceLimitsEqual,
   type ResourceLimits,
 } from "@workspace/contracts"
@@ -32,7 +32,7 @@ function current(name: string) {
 // Runs a control request's work as the control socket admits it.
 function control(
   harness: RelayHarness,
-  operation: "instance.action" | "instance.limits.write",
+  operation: "server.action" | "server.limits.write",
   payload: Record<string, unknown>,
   work: () => Promise<unknown>
 ) {
@@ -57,7 +57,7 @@ async function runningServer(harness: RelayHarness) {
     id: server,
     running: true,
   })
-  const instance = await harness.docker.findInstance(server)
+  const instance = await harness.docker.findServer(server)
   if (!instance) throw new Error("The server wasn't found")
   return { container: { id, memoryBytes, name }, instance }
 }
@@ -67,7 +67,7 @@ describe("limits saved for a game server's next restart", () => {
     const harness = await relayHarness()
     const { container, instance } = await runningServer(harness)
 
-    await harness.lifecycle.setInstanceLimits(instance, saved)
+    await harness.lifecycle.setServerLimits(instance, saved)
 
     expect(await harness.docker.pendingLimits(server)).toEqual(saved)
     const running = current(container.name)
@@ -75,7 +75,7 @@ describe("limits saved for a game server's next restart", () => {
     expect(running.state.running).toBe(true)
     expect(running.memoryBytes).toBe(container.memoryBytes)
 
-    const updated = await harness.lifecycle.runInstanceAction(
+    const updated = await harness.lifecycle.runServerAction(
       instance,
       "restart",
       []
@@ -92,9 +92,9 @@ describe("limits saved for a game server's next restart", () => {
   it("wait out a start sent to a server that's already running", async () => {
     const harness = await relayHarness()
     const { container, instance } = await runningServer(harness)
-    await harness.lifecycle.setInstanceLimits(instance, saved)
+    await harness.lifecycle.setServerLimits(instance, saved)
 
-    await harness.lifecycle.runInstanceAction(instance, "start", [])
+    await harness.lifecycle.runServerAction(instance, "start", [])
 
     expect(current(container.name).id).toBe(container.id)
     expect(await harness.docker.pendingLimits(server)).toEqual(saved)
@@ -104,9 +104,9 @@ describe("limits saved for a game server's next restart", () => {
     const harness = await relayHarness()
     const { container, instance } = await runningServer(harness)
     const noMemoryLimit = { ...saved, memoryBytes: null }
-    await harness.lifecycle.setInstanceLimits(instance, noMemoryLimit)
+    await harness.lifecycle.setServerLimits(instance, noMemoryLimit)
 
-    await harness.lifecycle.runInstanceAction(instance, "restart", [])
+    await harness.lifecycle.runServerAction(instance, "restart", [])
 
     expect(current(container.name).memoryBytes).toBe(0)
     expect(await harness.docker.pendingLimits(server)).toBeNull()
@@ -118,7 +118,7 @@ describe("limits saved for a game server's next restart", () => {
     await harness.seedServer({ id: other })
     const larger = { ...saved, memoryBytes: 8 * GIBIBYTE }
 
-    await harness.lifecycle.setInstanceLimits(instance, larger)
+    await harness.lifecycle.setServerLimits(instance, larger)
 
     const held = await harness.docker.allocations.others("server", other)
     expect(held.map((limits) => limits.memoryBytes)).toContain(8 * GIBIBYTE)
@@ -127,24 +127,24 @@ describe("limits saved for a game server's next restart", () => {
   it("saved during a restart wait for it, and survive it", async () => {
     const harness = await relayHarness()
     const { container, instance } = await runningServer(harness)
-    await harness.lifecycle.setInstanceLimits(instance, saved)
+    await harness.lifecycle.setServerLimits(instance, saved)
     const stop = fakeDocker.hold({ command: "stop", target: container.name })
 
     const restart = control(
       harness,
-      "instance.action",
+      "server.action",
       { action: "restart", instanceId: server },
-      () => harness.lifecycle.runInstanceAction(instance, "restart", [])
+      () => harness.lifecycle.runServerAction(instance, "restart", [])
     )
     await stop.reached
     const newer = { ...saved, memoryBytes: 2 * GIBIBYTE }
     const save = control(
       harness,
-      "instance.limits.write",
+      "server.limits.write",
       { instanceId: server },
       async () => {
-        const current = await harness.docker.findInstance(server)
-        await harness.lifecycle.setInstanceLimits(current ?? instance, newer)
+        const current = await harness.docker.findServer(server)
+        await harness.lifecycle.setServerLimits(current ?? instance, newer)
       }
     )
     stop.release()
@@ -156,9 +156,9 @@ describe("limits saved for a game server's next restart", () => {
 
   it("apply when a change of port restarts the server", async () => {
     const harness = await relayHarness()
-    const created = await harness.lifecycle.createInstanceWithId(
+    const created = await harness.lifecycle.createServerWithId(
       server,
-      relayCreateInstanceSchema.parse({
+      relayCreateServerSchema.parse({
         name: "Game",
         recipe: "https://bricks.test/game.yml",
         recipeDefinition: brickRecipeSchema.parse({
@@ -188,11 +188,11 @@ describe("limits saved for a game server's next restart", () => {
         variables: {},
       })
     )
-    const instance = await harness.docker.findInstance(server)
+    const instance = await harness.docker.findServer(server)
     if (!instance) throw new Error("The server wasn't found")
-    await harness.lifecycle.setInstanceLimits(instance, saved)
+    await harness.lifecycle.setServerLimits(instance, saved)
 
-    await harness.lifecycle.updateInstancePorts(
+    await harness.lifecycle.updateServerPorts(
       server,
       created.ports.map((allocation) => ({
         id: allocation.id,
@@ -212,19 +212,19 @@ describe("limits saved for a game server's next restart", () => {
     async (command) => {
       const harness = await relayHarness()
       const { container, instance } = await runningServer(harness)
-      await harness.lifecycle.setInstanceLimits(instance, saved)
+      await harness.lifecycle.setServerLimits(instance, saved)
       fakeDocker.failNext({ command }, "no space left on device")
 
       await expect(
-        harness.lifecycle.runInstanceAction(instance, "restart", [])
+        harness.lifecycle.runServerAction(instance, "restart", [])
       ).rejects.toThrow(/could not apply/u)
 
       expect(await harness.docker.pendingLimits(server)).toEqual(saved)
-      const restored = await harness.docker.findInstance(server)
+      const restored = await harness.docker.findServer(server)
       if (!restored) throw new Error("The server didn't come back")
       expect(current(container.name).memoryBytes).toBe(container.memoryBytes)
 
-      await harness.lifecycle.runInstanceAction(restored, "restart", [])
+      await harness.lifecycle.runServerAction(restored, "restart", [])
 
       expect(current(container.name).memoryBytes).toBe(GIBIBYTE)
       expect(await harness.docker.pendingLimits(server)).toBeNull()
@@ -234,9 +234,9 @@ describe("limits saved for a game server's next restart", () => {
   it("are dropped when set back to what the server has", async () => {
     const harness = await relayHarness()
     const { instance } = await runningServer(harness)
-    await harness.lifecycle.setInstanceLimits(instance, saved)
+    await harness.lifecycle.setServerLimits(instance, saved)
 
-    await harness.lifecycle.setInstanceLimits(instance, instance.limits)
+    await harness.lifecycle.setServerLimits(instance, instance.limits)
 
     expect(await harness.docker.pendingLimits(server)).toBeNull()
   })

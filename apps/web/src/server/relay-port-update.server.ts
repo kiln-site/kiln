@@ -1,14 +1,14 @@
 import type {
-  RelayInstance,
-  RelayInstancePortInput,
+  RelayServer,
+  RelayServerPortInput,
 } from "@workspace/contracts"
 
 import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
 
 export async function syncInstanceDomainAfterPortUpdateBestEffort(
-  instance: RelayInstance,
+  instance: RelayServer,
   relayId: string,
-  ports: ReadonlyArray<RelayInstancePortInput>
+  ports: ReadonlyArray<RelayServerPortInput>
 ): Promise<void> {
   const updatesPrimaryPublicPort = ports.some(
     (port) => port.id === "primary" && port.externalPort !== undefined

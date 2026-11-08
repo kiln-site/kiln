@@ -14,7 +14,9 @@ import type { InstanceLegacyId } from "../instance-keys.js"
  * The one-time move to 12-character instance IDs, as SQLite keeps it: the
  * old ID each migrated instance had (`relay_instance_legacy_ids`), the old
  * IDs the Relay's records name, and the rewrite of every record to the new
- * ones. The rest of the move is in `instance-id-migration.ts`.
+ * ones. The rest of the move is in `instance-id-migration.ts`. It runs after
+ * every SQLite migration, so a Relay from before reads game servers as
+ * `server` here (`39_server_naming`).
  */
 export interface RelayInstanceIdState {
   /** Every migrated instance's old ID. */
@@ -137,10 +139,10 @@ export function makeRelayInstanceIdState(sql: SqlClient): RelayInstanceIdState {
           add("server", routes)
           add("app", owned("app:", routes))
           for (const table of [
-            "relay_instance_names",
+            "relay_server_names",
             "relay_pending_primary_ports",
             "relay_runtime_recovery",
-            "relay_instance_lifecycle_events",
+            "relay_server_lifecycle_events",
             "relay_pending_limits",
           ]) {
             add(
@@ -163,22 +165,18 @@ export function makeRelayInstanceIdState(sql: SqlClient): RelayInstanceIdState {
           add(
             "server",
             yield* column(
-              "SELECT scope_id AS value FROM relay_browser_authorization_floors WHERE scope_kind = 'instance'"
+              "SELECT scope_id AS value FROM relay_browser_authorization_floors WHERE scope_kind = 'server'"
             )
           )
           for (const table of [
             "relay_database_connections",
             "relay_database_connection_choices",
           ]) {
-            for (const [kind, memberKind] of [
-              ["server", "instance"],
-              ["app", "app"],
-              ["database", "database"],
-            ] as const) {
+            for (const kind of ["server", "app", "database"] as const) {
               add(
                 kind,
                 yield* column(
-                  `SELECT member_id AS value FROM ${table} WHERE member_kind = '${memberKind}'`
+                  `SELECT member_id AS value FROM ${table} WHERE member_kind = '${kind}'`
                 )
               )
             }
@@ -210,7 +208,7 @@ export function makeRelayInstanceIdState(sql: SqlClient): RelayInstanceIdState {
           add(
             "server",
             yield* column(
-              "SELECT resource_id AS value FROM relay_resource_freezes WHERE kind = 'instance'"
+              "SELECT resource_id AS value FROM relay_resource_freezes WHERE kind = 'server'"
             )
           )
           volumes(
@@ -221,7 +219,7 @@ export function makeRelayInstanceIdState(sql: SqlClient): RelayInstanceIdState {
           add(
             "server",
             yield* column(
-              "SELECT owner_id AS value FROM relay_docker_cleanups WHERE owner_kind = 'instance'"
+              "SELECT owner_id AS value FROM relay_docker_cleanups WHERE owner_kind = 'server'"
             )
           )
           volumes(
@@ -246,7 +244,7 @@ export function makeRelayInstanceIdState(sql: SqlClient): RelayInstanceIdState {
           )
           add("app", owned("app:", owners))
           add("database", owned("database:", owners))
-          add("server", owned("instance:", owners))
+          add("server", owned("server:", owners))
           // Schedules name their targets with the Relay each is on, which
           // a game server's new ID depends on.
           for (const definition of yield* column(
@@ -255,7 +253,7 @@ export function makeRelayInstanceIdState(sql: SqlClient): RelayInstanceIdState {
             for (const target of scheduleTargets(definition)) {
               relay([target.relayId])
               if (target.kind === "relay") relay([target.id])
-              else if (target.kind === "instance") {
+              else if (target.kind === "server") {
                 if (
                   isLegacyResourceId(target.id) &&
                   isLegacyRelayId(target.relayId)
@@ -274,7 +272,7 @@ export function makeRelayInstanceIdState(sql: SqlClient): RelayInstanceIdState {
           )) {
             const target = backupTarget(input)
             if (!target) continue
-            if (target.kind === "instance") add("server", [target.id])
+            if (target.kind === "server") add("server", [target.id])
             else if (target.kind === "app") add("app", [target.id])
             else if (target.kind === "volume") volumes([target.id])
             else if (target.kind === "database") add("database", [target.id])

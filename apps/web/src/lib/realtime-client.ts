@@ -1,8 +1,8 @@
 import type { QueryClient } from "@tanstack/react-query"
 import { Result } from "effect"
-import type { RelayInstance } from "@workspace/contracts"
+import type { RelayServer } from "@workspace/contracts"
 
-import type { RelayInstancesCollection } from "@/lib/collections/relay-instances"
+import type { RelayServersCollection } from "@/lib/collections/relay-servers"
 import {
   invalidateNameDependentBackupRuns,
   refreshHearthRealtimeTopics,
@@ -35,7 +35,7 @@ import {
 
 export interface ApplyRealtimeEventInput {
   event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
-  instances: RelayInstancesCollection
+  instances: RelayServersCollection
   queryClient: QueryClient
   refreshTopics?: (
     topics: ReadonlyArray<(typeof hearthRealtimeTopics)[number]>,
@@ -318,7 +318,7 @@ export function applyProvisioningInstance(
 
 export function applyUpdatedInstance(
   queryClient: QueryClient,
-  updated: RelayInstance & { relayId: string }
+  updated: RelayServer & { relayId: string }
 ): void {
   const current = queryClient
     .getQueryData<RelayFleetSnapshot>(queryKeys.relay.snapshot)
@@ -405,7 +405,7 @@ export function applyRecoveredRelayConnection(
  */
 export function fleetCacheInUse(
   queryClient: QueryClient,
-  instances: RelayInstancesCollection
+  instances: RelayServersCollection
 ): boolean {
   if (instances.status !== "idle" && instances.status !== "cleaned-up")
     return true
@@ -431,7 +431,7 @@ export function fleetCacheInUse(
  */
 export function fleetEventNeedsRecovery(
   queryClient: QueryClient,
-  instances: RelayInstancesCollection,
+  instances: RelayServersCollection,
   event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
 ): boolean {
   if (event.type === "collections.invalidate") return false

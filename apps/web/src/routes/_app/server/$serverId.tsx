@@ -62,7 +62,7 @@ export const Route = createFileRoute("/_app/server/$serverId")({
       )
       const invitation = invitations.find(
         (candidate) =>
-          candidate.scope.resourceType === "instance" &&
+          candidate.scope.resourceType === "server" &&
           candidate.scope.resourceId === params.serverId
       )
       if (invitation)

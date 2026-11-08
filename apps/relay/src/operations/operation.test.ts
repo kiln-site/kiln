@@ -21,12 +21,12 @@ describe("Relay operations", () => {
         const lanes = new OperationLanes()
         const inner = operation<void>()({
           name: "test.inner",
-          locks: () => [exclusive(laneKeys.instanceLifecycle(serverId))],
+          locks: () => [exclusive(laneKeys.serverLifecycle(serverId))],
           run: () => Effect.succeed("inner ran"),
         })
         const outer = operation<void>()({
           name: "test.outer",
-          locks: () => [exclusive(laneKeys.instance(serverId))],
+          locks: () => [exclusive(laneKeys.server(serverId))],
           run: () => runOperation(lanes, inner, undefined, timer),
         })
 
@@ -48,7 +48,7 @@ describe("Relay operations", () => {
         })
         const outer = operation<void>()({
           name: "test.outer",
-          locks: () => [shared(laneKeys.instance(serverId))],
+          locks: () => [shared(laneKeys.server(serverId))],
           run: () => runOperation(lanes, inner, undefined, timer),
         })
 
@@ -72,15 +72,15 @@ describe("Relay operations", () => {
         const before = yield* Effect.forkChild(
           lanes.run(
             {
-              label: "instance.action",
-              locks: [exclusive(laneKeys.instanceLifecycle(serverId))],
+              label: "server.action",
+              locks: [exclusive(laneKeys.serverLifecycle(serverId))],
             },
             Deferred.await(holding)
           )
         )
         const start = operation<void>()({
           name: "test.start",
-          locks: () => [exclusive(laneKeys.instanceLifecycle(serverId))],
+          locks: () => [exclusive(laneKeys.serverLifecycle(serverId))],
           precondition: () => wanted === "start",
           run: () =>
             Effect.sync(() => {
@@ -114,7 +114,7 @@ describe("Relay operations", () => {
         const change = yield* Effect.forkChild(
           lanes.run(
             {
-              label: "instance.routes.write",
+              label: "server.routes.write",
               locks: [exclusive(laneKeys.routes)],
             },
             Deferred.await(holding)

@@ -26,8 +26,8 @@ import {
 } from "@/lib/realtime-source.server"
 import { type RelayReachability } from "@/lib/relay-fleet"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
-import { projectRelayInstanceOverview } from "@workspace/contracts"
-import type { RelayInstance, RelayNode } from "@workspace/contracts"
+import { projectRelayServerOverview } from "@workspace/contracts"
+import type { RelayServer, RelayNode } from "@workspace/contracts"
 import { Result } from "effect"
 import type {
   FleetInstance,
@@ -254,7 +254,7 @@ export async function openAuthorizedRealtimeStream(input: {
       return
     }
 
-    if (event.type === "instance.upsert") {
+    if (event.type === "server.upsert") {
       if (!canReadInstance(policy, event.relayId, event.instance.id)) return
       enqueue({
         deleted: [],
@@ -268,14 +268,14 @@ export async function openAuthorizedRealtimeStream(input: {
           epoch: event.epoch,
           scope: { relayId: event.relayId },
           sequence: event.sequence,
-          topics: ["instance-directory"],
+          topics: ["server-directory"],
           type: "collections.invalidate",
         })
       }
       return
     }
 
-    if (event.type === "instance.delete") {
+    if (event.type === "server.delete") {
       if (!canReadInstance(policy, event.relayId, event.instanceId)) return
       enqueue({
         deleted: [{ instanceId: event.instanceId, relayId: event.relayId }],
@@ -288,7 +288,7 @@ export async function openAuthorizedRealtimeStream(input: {
         epoch: event.epoch,
         scope: { relayId: event.relayId },
         sequence: event.sequence,
-        topics: ["instance-directory"],
+        topics: ["server-directory"],
         type: "collections.invalidate",
       })
       return
@@ -318,7 +318,7 @@ export async function openAuthorizedRealtimeStream(input: {
         epoch: event.epoch,
         scope: { relayId: event.relayId },
         sequence: event.sequence,
-        topics: ["instance-directory"],
+        topics: ["server-directory"],
         type: "collections.invalidate",
       })
     }
@@ -480,12 +480,12 @@ async function loadRealtimeAccessPolicy(
   const relayWideRead = new Set<string>()
   const readableInstances = new Map<string, Set<string>>()
   for (const grant of grants) {
-    if (!grantHasPermission(grant, "instance.read")) continue
+    if (!grantHasPermission(grant, "server.read")) continue
     if (grant.resourceType === "relay") {
       relayWideRead.add(grant.relayId)
       continue
     }
-    if (grant.resourceType !== "instance") continue
+    if (grant.resourceType !== "server") continue
     let ids = readableInstances.get(grant.relayId)
     if (!ids) {
       ids = new Set()
@@ -532,11 +532,11 @@ function hasReadableRelayGrant(
 }
 
 function fleetInstance(
-  instance: RelayInstance,
+  instance: RelayServer,
   relay: PersistedRelay
 ): FleetInstance {
   return {
-    ...projectRelayInstanceOverview(instance),
+    ...projectRelayServerOverview(instance),
     relayId: relay.id,
     relayName: relay.name,
     relayStatus: reachability(relay.id),

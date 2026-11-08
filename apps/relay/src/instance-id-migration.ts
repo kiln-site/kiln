@@ -398,8 +398,9 @@ function withJoinRelayId(value: unknown, identity: RelayIdentity): unknown {
 }
 
 // The state files that name instances, rewritten in place. Returns how
-// many changed.
-async function rewriteStateFiles(
+// many changed. The move to `server` (server-naming-migration.ts) rewrites
+// the same files.
+export async function rewriteStateFiles(
   config: RelayConfig,
   rewrite: (text: string) => string
 ): Promise<number> {
@@ -649,7 +650,7 @@ async function addDatabaseNetworkAliases({
           : labels["kiln.resource.kind"] === "app" && appId
             ? resources.appAliases(appId, labels["kiln.app.service"] ?? "app")
             : serverId
-              ? databaseMemberAliases({ id: serverId, kind: "instance" })
+              ? databaseMemberAliases({ id: serverId, kind: "server" })
               : []
       if (wanted.length < 2) continue
       const container = await Effect.runPromise(

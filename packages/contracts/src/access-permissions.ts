@@ -2,7 +2,7 @@ import { z } from "zod"
 
 export const permissionScopeTypes = [
   "relay",
-  "instance",
+  "server",
   "database",
   "app",
 ] as const
@@ -10,7 +10,7 @@ export const permissionScopeTypeSchema = z.enum(permissionScopeTypes)
 export type PermissionScopeType = (typeof permissionScopeTypes)[number]
 // Scopes people can be invited to. An app is reached only through its Relay
 // or by owning it.
-export const accessGrantScopeTypes = ["relay", "instance", "database"] as const
+export const accessGrantScopeTypes = ["relay", "server", "database"] as const
 export const accessGrantScopeTypeSchema = z.enum(accessGrantScopeTypes)
 export type AccessGrantScopeType = (typeof accessGrantScopeTypes)[number]
 
@@ -31,19 +31,19 @@ export const legacyAccessPermissions = [
   "relay.delete",
   "access.invite",
   "access.manage",
-  "instance.read",
-  "instance.console.read",
-  "instance.console.write",
-  "instance.files.read",
-  "instance.files.write",
-  "instance.delete",
-  "instance.power",
-  "instance.settings",
-  "instance.logs.share",
-  "instance.network.read",
-  "instance.network.write",
-  "instance.network.public-port.write",
-  "instance.sftp.connect",
+  "server.read",
+  "server.console.read",
+  "server.console.write",
+  "server.files.read",
+  "server.files.write",
+  "server.delete",
+  "server.power",
+  "server.settings",
+  "server.logs.share",
+  "server.network.read",
+  "server.network.write",
+  "server.network.public-port.write",
+  "server.sftp.connect",
   "database.read",
   "database.create",
   "database.credentials.read",
@@ -72,17 +72,17 @@ export const accessPermissions = [
   "preset.read",
   "preset.create",
   "preset.manage",
-  "instance.create",
-  "instance.configuration.read",
-  "instance.configuration.write",
-  "instance.limits.write",
-  "instance.power.start",
-  "instance.power.stop",
-  "instance.power.restart",
-  "instance.power.kill",
-  "instance.files.delete",
-  "instance.files.chmod",
-  "instance.logs.read",
+  "server.create",
+  "server.configuration.read",
+  "server.configuration.write",
+  "server.limits.write",
+  "server.power.start",
+  "server.power.stop",
+  "server.power.restart",
+  "server.power.kill",
+  "server.files.delete",
+  "server.files.chmod",
+  "server.logs.read",
   "relay.update",
   "relay.pause",
   "relay.connections.read",
@@ -120,7 +120,7 @@ Object.freeze(legacyAccessPermissions)
  */
 export type PermissionFamily =
   | "relay"
-  | "instance"
+  | "server"
   | "database"
   | "app"
   | "shared"
@@ -150,7 +150,7 @@ export interface PermissionPreset extends PermissionCollection {
 
 const allScopes = Object.freeze([...permissionScopeTypes])
 const grantScopes = Object.freeze([...accessGrantScopeTypes])
-const instanceScopes = Object.freeze(["relay", "instance"] as const)
+const serverScopes = Object.freeze(["relay", "server"] as const)
 const databaseScopes = Object.freeze(["relay", "database"] as const)
 const appScopes = Object.freeze(["relay", "app"] as const)
 const relayScopes = Object.freeze(["relay"] as const)
@@ -162,24 +162,24 @@ const implicationEdges: Partial<
   "access.manage": ["access.invite"],
   "preset.create": ["preset.read"],
   "preset.manage": ["preset.create"],
-  "instance.console.write": ["instance.console.read"],
-  "instance.files.write": ["instance.files.read"],
-  "instance.files.delete": ["instance.files.read"],
-  "instance.files.chmod": ["instance.files.read"],
-  "instance.sftp.connect": ["instance.files.read"],
-  "instance.power": ["instance.power.kill"],
-  "instance.power.stop": ["instance.power.start"],
-  "instance.power.restart": ["instance.power.stop"],
-  "instance.power.kill": ["instance.power.restart"],
-  "instance.settings": [
-    "instance.configuration.write",
-    "instance.limits.write",
+  "server.console.write": ["server.console.read"],
+  "server.files.write": ["server.files.read"],
+  "server.files.delete": ["server.files.read"],
+  "server.files.chmod": ["server.files.read"],
+  "server.sftp.connect": ["server.files.read"],
+  "server.power": ["server.power.kill"],
+  "server.power.stop": ["server.power.start"],
+  "server.power.restart": ["server.power.stop"],
+  "server.power.kill": ["server.power.restart"],
+  "server.settings": [
+    "server.configuration.write",
+    "server.limits.write",
   ],
-  "instance.configuration.write": ["instance.configuration.read"],
-  "instance.limits.write": ["instance.configuration.read"],
-  "instance.logs.share": ["instance.logs.read"],
-  "instance.network.write": ["instance.network.read"],
-  "instance.network.public-port.write": ["instance.network.write"],
+  "server.configuration.write": ["server.configuration.read"],
+  "server.limits.write": ["server.configuration.read"],
+  "server.logs.share": ["server.logs.read"],
+  "server.network.write": ["server.network.read"],
+  "server.network.public-port.write": ["server.network.write"],
   "database.credentials.rotate": ["database.credentials.read"],
   "database.network.write": ["database.network.read"],
   "database.data.write": ["database.data.read"],
@@ -215,7 +215,7 @@ const permissionPlacement: Record<
   "relay.files.read": ["relay.files", "relay"],
   "relay.files.write": ["relay.files", "relay"],
   "relay.files.mount": ["relay.files", "relay"],
-  "instance.create": ["resource.creation", "relay"],
+  "server.create": ["resource.creation", "relay"],
   "database.create": ["resource.creation", "relay"],
   "access.read": ["access", "shared"],
   "access.invite": ["access", "shared"],
@@ -233,29 +233,29 @@ const permissionPlacement: Record<
   "schedule.execute": ["schedule", "shared"],
   "schedule.update": ["schedule", "shared"],
   "schedule.delete": ["schedule", "shared"],
-  "instance.read": ["overview", "instance"],
-  "instance.console.read": ["instance.console", "instance"],
-  "instance.console.write": ["instance.console", "instance"],
-  "instance.files.read": ["instance.files", "instance"],
-  "instance.files.write": ["instance.files", "instance"],
-  "instance.files.delete": ["instance.files", "instance"],
-  "instance.files.chmod": ["instance.files", "instance"],
-  "instance.sftp.connect": ["instance.files", "instance"],
-  "instance.delete": ["resource.deletion", "instance"],
-  "instance.power": ["instance.power", "instance"],
-  "instance.power.start": ["instance.power", "instance"],
-  "instance.power.stop": ["instance.power", "instance"],
-  "instance.power.restart": ["instance.power", "instance"],
-  "instance.power.kill": ["instance.power", "instance"],
-  "instance.settings": ["instance.configuration", "instance"],
-  "instance.configuration.read": ["instance.configuration", "instance"],
-  "instance.configuration.write": ["instance.configuration", "instance"],
-  "instance.limits.write": ["instance.configuration", "instance"],
-  "instance.logs.read": ["instance.logs", "instance"],
-  "instance.logs.share": ["instance.logs", "instance"],
-  "instance.network.read": ["instance.network", "instance"],
-  "instance.network.write": ["instance.network", "instance"],
-  "instance.network.public-port.write": ["instance.network", "instance"],
+  "server.read": ["overview", "server"],
+  "server.console.read": ["server.console", "server"],
+  "server.console.write": ["server.console", "server"],
+  "server.files.read": ["server.files", "server"],
+  "server.files.write": ["server.files", "server"],
+  "server.files.delete": ["server.files", "server"],
+  "server.files.chmod": ["server.files", "server"],
+  "server.sftp.connect": ["server.files", "server"],
+  "server.delete": ["resource.deletion", "server"],
+  "server.power": ["server.power", "server"],
+  "server.power.start": ["server.power", "server"],
+  "server.power.stop": ["server.power", "server"],
+  "server.power.restart": ["server.power", "server"],
+  "server.power.kill": ["server.power", "server"],
+  "server.settings": ["server.configuration", "server"],
+  "server.configuration.read": ["server.configuration", "server"],
+  "server.configuration.write": ["server.configuration", "server"],
+  "server.limits.write": ["server.configuration", "server"],
+  "server.logs.read": ["server.logs", "server"],
+  "server.logs.share": ["server.logs", "server"],
+  "server.network.read": ["server.network", "server"],
+  "server.network.write": ["server.network", "server"],
+  "server.network.public-port.write": ["server.network", "server"],
   "database.read": ["overview", "database"],
   "database.credentials.read": ["database.credentials", "database"],
   "database.credentials.rotate": ["database.credentials", "database"],
@@ -282,7 +282,7 @@ const permissionPlacement: Record<
 
 const familyScopes: Record<PermissionFamily, readonly PermissionScopeType[]> = {
   relay: relayScopes,
-  instance: instanceScopes,
+  server: serverScopes,
   database: databaseScopes,
   app: appScopes,
   // People, presets, backups and schedules live on resources people can be
@@ -293,7 +293,7 @@ const familyScopes: Record<PermissionFamily, readonly PermissionScopeType[]> = {
 /** Base visibility a family always carries; shared permissions take the target's. */
 const familyVisibility: Record<PermissionFamily, AccessPermission | null> = {
   relay: "relay.read",
-  instance: "instance.read",
+  server: "server.read",
   database: "database.read",
   app: "app.read",
   shared: null,
@@ -304,14 +304,14 @@ const familyVisibility: Record<PermissionFamily, AccessPermission | null> = {
  * reveal those children. Managing people or presets on a Relay does not.
  */
 const relayScopeChildVisibility: Record<string, readonly AccessPermission[]> = {
-  backup: ["instance.read", "database.read"],
-  schedule: ["instance.read", "database.read"],
+  backup: ["server.read", "database.read"],
+  schedule: ["server.read", "database.read"],
 }
 
 /** Legacy umbrella permissions kept only so migrated selections stay valid. */
 const compatibilityOnlyPermissions: ReadonlySet<AccessPermission> = new Set([
-  "instance.power",
-  "instance.settings",
+  "server.power",
+  "server.settings",
 ])
 
 const permissionCopy: Record<
@@ -354,103 +354,103 @@ const permissionCopy: Record<
     label: "Manage presets",
     description: "Edit or delete presets. Changes apply to linked assignments.",
   },
-  "instance.read": {
+  "server.read": {
     label: "View server",
     description: "See server status and basic details.",
   },
-  "instance.create": {
+  "server.create": {
     label: "Create servers",
     description: "Provision new servers on this Relay.",
   },
-  "instance.console.read": {
+  "server.console.read": {
     label: "View console",
     description: "Read live server console output.",
   },
-  "instance.console.write": {
+  "server.console.write": {
     label: "Send commands",
     description: "Run commands in the server console.",
   },
-  "instance.files.read": {
+  "server.files.read": {
     label: "View and download files",
     description: "Browse server files and download their contents.",
   },
-  "instance.files.write": {
+  "server.files.write": {
     label: "Edit files",
     description: "Create, upload, edit, copy, move, and rename server files.",
   },
-  "instance.files.delete": {
+  "server.files.delete": {
     label: "Delete files",
     description: "Remove server files and folders.",
   },
-  "instance.files.chmod": {
+  "server.files.chmod": {
     label: "Change file permissions",
     description: "Change which users can read, write, or run server files.",
   },
-  "instance.sftp.connect": {
+  "server.sftp.connect": {
     label: "Connect using SFTP",
     description:
       "Browse files with an SFTP client. File changes need the matching file permissions.",
   },
-  "instance.delete": {
+  "server.delete": {
     label: "Delete server",
     description: "Permanently remove the server and its data.",
   },
-  "instance.power": {
+  "server.power": {
     label: "Control server power",
     description: "Start, stop, restart, or force stop the server.",
   },
-  "instance.power.start": {
+  "server.power.start": {
     label: "Start server",
     description: "Start a stopped server.",
   },
-  "instance.power.stop": {
+  "server.power.stop": {
     label: "Stop server",
     description: "Shut down the server gracefully. Also allows starting it.",
   },
-  "instance.power.restart": {
+  "server.power.restart": {
     label: "Restart server",
     description:
       "Stop and start the server. Also allows starting and stopping it separately.",
   },
-  "instance.power.kill": {
+  "server.power.kill": {
     label: "Force stop server",
     description:
       "Stop the server immediately. Also allows starting, stopping, and restarting it.",
   },
-  "instance.settings": {
+  "server.settings": {
     label: "Manage server settings",
     description: "Change startup configuration and resource limits.",
   },
-  "instance.configuration.read": {
+  "server.configuration.read": {
     label: "View configuration",
     description: "See the server’s startup settings and Brick configuration.",
   },
-  "instance.configuration.write": {
+  "server.configuration.write": {
     label: "Manage configuration",
     description:
       "Change startup settings, switch Bricks, and reinstall the server.",
   },
-  "instance.limits.write": {
+  "server.limits.write": {
     label: "Manage resource limits",
     description: "Change the server’s memory, CPU, and disk limits.",
   },
-  "instance.logs.read": {
+  "server.logs.read": {
     label: "View saved logs",
     description: "Read the server’s saved log files.",
   },
-  "instance.logs.share": {
+  "server.logs.share": {
     label: "Share logs",
     description: "Publish server logs through a shareable link.",
   },
-  "instance.network.read": {
+  "server.network.read": {
     label: "View server network",
     description: "See the server’s addresses, ports, and routes.",
   },
-  "instance.network.write": {
+  "server.network.write": {
     label: "Manage server network",
     description: "Change the server’s network settings and routes.",
   },
-  "instance.network.public-port.write": {
+  "server.network.public-port.write": {
     label: "Assign public ports",
     description:
       "Assign ports that make the server reachable outside its private network.",
@@ -687,12 +687,12 @@ export function accessPermissionSupported(
 
 const blockLabels: Record<string, string> = {
   overview: "Overview",
-  "instance.power": "Server power",
-  "instance.console": "Console",
-  "instance.files": "Files",
-  "instance.logs": "Logs",
-  "instance.configuration": "Configuration",
-  "instance.network": "Networking",
+  "server.power": "Server power",
+  "server.console": "Console",
+  "server.files": "Files",
+  "server.logs": "Logs",
+  "server.configuration": "Configuration",
+  "server.network": "Networking",
   access: "People and access",
   preset: "Presets",
   backup: "Backups",
@@ -909,11 +909,11 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
       selections: Object.freeze(
         [
           "overview.all",
-          "instance.console.read",
-          "instance.configuration.read",
+          "server.console.read",
+          "server.configuration.read",
           "database.logs.read",
           "app.logs.read",
-          "instance.network.read",
+          "server.network.read",
           "database.network.read",
           "backup.read",
           "schedule.read",
@@ -931,11 +931,11 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
       selections: Object.freeze(
         [
           "overview.all",
-          "instance.power.restart",
-          "instance.console.all",
-          "instance.files.all",
-          "instance.logs.all",
-          "instance.network.write",
+          "server.power.restart",
+          "server.console.all",
+          "server.files.all",
+          "server.logs.all",
+          "server.network.write",
           "database.power",
           "database.network.write",
           "database.logs.read",
@@ -986,17 +986,17 @@ export const relayReadOnlyMachineActions = [
   "backup.read",
   "backup.download",
   "schedule.read",
-  "instance.read",
-  "instance.console.read",
+  "server.read",
+  "server.console.read",
   "database.logs.read",
   "app.read",
   "app.logs.read",
-  "instance.sftp.connect",
-  "instance.files.list",
-  "instance.files.read",
-  "instance.files.download",
-  "instance.network.read",
-  "instance.logs.read",
+  "server.sftp.connect",
+  "server.files.list",
+  "server.files.read",
+  "server.files.download",
+  "server.network.read",
+  "server.logs.read",
 ] as const
 
 /** Human authority required to delegate a Relay machine client's unrestricted resource scope. */
@@ -1031,26 +1031,26 @@ export function permissionsForRelayClientPolicy(
           permissions = ["relay.configure"]
           break
         case "relay.read":
-          permissions = ["relay.read", "instance.configuration.read"]
+          permissions = ["relay.read", "server.configuration.read"]
           break
         case "brick.read":
-          permissions = ["instance.create"]
+          permissions = ["server.create"]
           break
-        case "instance.create":
+        case "server.create":
           permissions = [
             ...expandPermissionSelections(
-              [{ kind: "collection", key: "instance.all" }],
+              [{ kind: "collection", key: "server.all" }],
               "relay"
             ),
-            "instance.create",
+            "server.create",
           ]
           break
-        case "instance.rename":
-          permissions = ["instance.configuration.write"]
+        case "server.rename":
+          permissions = ["server.configuration.write"]
           break
-        case "instance.files.list":
-        case "instance.files.download":
-          permissions = ["instance.files.read"]
+        case "server.files.list":
+        case "server.files.download":
+          permissions = ["server.files.read"]
           break
         case "relay.files.download":
           permissions = ["relay.files.read"]
@@ -1064,11 +1064,11 @@ export function permissionsForRelayClientPolicy(
         case "app.files.upload":
           permissions = ["app.files.write"]
           break
-        case "instance.files.create":
-        case "instance.files.rename":
-        case "instance.files.upload":
-        case "instance.files.upload-url":
-          permissions = ["instance.files.write"]
+        case "server.files.create":
+        case "server.files.rename":
+        case "server.files.upload":
+        case "server.files.upload-url":
+          permissions = ["server.files.write"]
           break
         case "schedule.write":
           permissions = [

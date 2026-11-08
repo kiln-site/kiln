@@ -50,14 +50,14 @@ export class InstanceInventorySource extends Context.Service<
 const readAccess: Record<
   Kind,
   {
-    resourceType: "instance" | "database" | "relay" | "app"
+    resourceType: "server" | "database" | "relay" | "app"
     permission: AccessPermission
   }
 > = {
   app: { resourceType: "app", permission: "app.read" },
   database: { resourceType: "database", permission: "database.read" },
   relay: { resourceType: "relay", permission: "relay.read" },
-  server: { resourceType: "instance", permission: "instance.read" },
+  server: { resourceType: "server", permission: "server.read" },
 }
 
 /**

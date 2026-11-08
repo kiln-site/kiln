@@ -47,8 +47,8 @@ import type { RelayDirectoryEntry } from "@/lib/relay-route"
 // container.
 
 export interface RailResource {
-  // "instance" is a game server.
-  kind: "database" | "instance"
+  // "server" is a game server.
+  kind: "database" | "server"
   id: string
   name: string
   relayId: string
@@ -99,11 +99,11 @@ const InfoRailNotifications = React.memo(function InfoRailNotifications({
   )
   const kinds = React.useMemo((): ReadonlyArray<NotificationKind> => {
     if (!capabilities) return []
-    if (kind === "instance")
+    if (kind === "server")
       return canAccessInstancePermission(
         capabilities,
         { id, relayId },
-        "instance.configuration.write"
+        "server.configuration.write"
       )
         ? ["security.report"]
         : []

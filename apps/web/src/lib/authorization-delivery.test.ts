@@ -62,7 +62,7 @@ const deliveries = Effect.map(
 const delivery = (relayId: string, instanceId: string, desired: number) => ({
   relay_id: relayId,
   subject_id: "user",
-  scope_kind: "instance",
+  scope_kind: "server",
   scope_id: instanceId,
   desired_revision: desired,
   acknowledged_revision: 0,
@@ -147,7 +147,7 @@ describeMysql("authorization delivery", () => {
             operation<void>()({
               doing: "Changing who may use this",
               locks: () => [
-                exclusive(resourceKey("instance", "relay-one", "alpha")),
+                exclusive(resourceKey("server", "relay-one", "alpha")),
               ],
               name: "test.access",
               run: () =>
@@ -185,7 +185,7 @@ describeMysql("authorization delivery", () => {
               issuerGeneration: 4,
               items: ["acknowledged", "advanced"].map((instanceId) => ({
                 minimumRevision: 8,
-                scope: { instanceId, kind: "instance" as const },
+                scope: { instanceId, kind: "server" as const },
                 subject: "user",
               })),
             })

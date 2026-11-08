@@ -11,12 +11,12 @@ import { effectiveScopePermissions } from "@/lib/resource-permissions"
 const memberRead = {
   app: { permission: "app.read", resourceType: "app" },
   database: { permission: "database.read", resourceType: "database" },
-  instance: { permission: "instance.read", resourceType: "instance" },
+  server: { permission: "server.read", resourceType: "server" },
 } as const satisfies Record<
   DatabaseConnectionMemberKind,
   {
     permission: AccessPermission
-    resourceType: "app" | "database" | "instance"
+    resourceType: "app" | "database" | "server"
   }
 >
 
@@ -38,7 +38,7 @@ export function withVisibleDatabaseMembers<
   if (viewer.admin) return database
   const may = (
     permission: AccessPermission,
-    resourceType: "app" | "database" | "instance",
+    resourceType: "app" | "database" | "server",
     resourceId: string
   ) =>
     effectiveScopePermissions(viewer.grants, {

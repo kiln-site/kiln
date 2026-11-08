@@ -39,7 +39,7 @@ import {
 import { publishDomainChange } from "@/lib/domain-realtime.server"
 import { domainInZone, validateBlacklistPatterns } from "@/lib/domain-schemas"
 import { kilnRootDomain } from "@/lib/environment"
-import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
+import { listServerDirectoryEffect } from "@/lib/server-directory"
 import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
 import { activeRelay, listPersistedRelays } from "@/lib/relay-registry"
 import { relayJsonEffect } from "@/lib/relay-client"
@@ -110,7 +110,7 @@ export async function getDomainSettingsHandler() {
     ),
     runAppEffect("webHostnames.list", listWebHostnamesEffect()),
     listPersistedRelays(),
-    runAppEffect("instances.directory.list", listInstanceDirectoryEffect()),
+    runAppEffect("instances.directory.list", listServerDirectoryEffect()),
     runAppEffect("apps.list", listAppRecordsEffect()),
     resourceAccess(user),
   ])
@@ -239,7 +239,7 @@ export async function getManualWebHostnamesHandler(): Promise<
   const [hostnames, relays, directory, apps, access] = await Promise.all([
     runAppEffect("webHostnames.list", listWebHostnamesEffect()),
     listPersistedRelays(),
-    runAppEffect("instances.directory.list", listInstanceDirectoryEffect()),
+    runAppEffect("instances.directory.list", listServerDirectoryEffect()),
     runAppEffect("apps.list", listAppRecordsEffect()),
     resourceAccess(user),
   ])
@@ -290,7 +290,7 @@ export async function getManualWebHostnamesHandler(): Promise<
           {
             relayId: route.relayId,
             resourceId: id,
-            resourceType: isApp ? "app" : "instance",
+            resourceType: isApp ? "app" : "server",
           },
           hostname
         ),
@@ -306,7 +306,7 @@ export async function getManualWebHostnamesHandler(): Promise<
         routed: true,
         relayName: resources.relayName(route.relayId),
         resource: resources.webResource(
-          isApp ? "app" : "instance",
+          isApp ? "app" : "server",
           route.relayId,
           id
         ),
@@ -320,7 +320,7 @@ export async function getManualWebHostnamesHandler(): Promise<
 }
 
 type InstanceDirectoryRecord = Effect.Success<
-  ReturnType<typeof listInstanceDirectoryEffect>
+  ReturnType<typeof listServerDirectoryEffect>
 >[number]
 
 /** Names and links for the game servers and apps the page's rows point at. */
@@ -342,7 +342,7 @@ function resourceDirectory(
     relayName: (relayId: string) => relayNames.get(relayId) ?? "Unknown Relay",
     server,
     webResource(
-      resourceType: "app" | "instance",
+      resourceType: "app" | "server",
       relayId: string,
       resourceId: string
     ): WebHostnameOverview["resource"] {

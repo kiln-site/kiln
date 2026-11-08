@@ -15,12 +15,12 @@ import {
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
 import { instanceIdSchema } from "./instance-id.js"
-import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
+import { relayServerLifecycleEventSchema } from "./server-lifecycle.js"
 import {
   MINIMUM_CPU_LIMIT_MILLIS,
   MINIMUM_MEMORY_LIMIT_BYTES,
 } from "./resource-limits.js"
-import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
+import { relayServerStateReasonSchema } from "./server-state-reason.js"
 
 export const cliAccessModes = ["full_access", "read_only"] as const
 export const cliAccessModeSchema = z.enum(cliAccessModes)
@@ -240,9 +240,9 @@ export const cliServerInfoResponseSchema = z
         memoryLimitBytes: z.number().int().nonnegative(),
         name: cliStoredServerNameSchema,
         observedState: z.string().min(1),
-        stateReason: relayInstanceStateReasonSchema.nullable().default(null),
+        stateReason: relayServerStateReasonSchema.nullable().default(null),
         publicAddress: z.string().nullable(),
-        lifecycle: z.array(relayInstanceLifecycleEventSchema),
+        lifecycle: z.array(relayServerLifecycleEventSchema),
         resources: cliServerResourceSchema.nullable(),
         version: z.string().min(1),
       })
@@ -368,7 +368,7 @@ export const cliCreateBackupRequestSchema = z.discriminatedUnion("targetKind", [
   cliCreateBackupBaseSchema
     .extend({
       targetId: z.string().min(1).max(120),
-      targetKind: z.literal("instance"),
+      targetKind: z.literal("server"),
     })
     .strict(),
   cliCreateBackupBaseSchema

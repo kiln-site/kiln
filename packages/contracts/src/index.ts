@@ -7,7 +7,7 @@ import {
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
 import { instanceIdSchema } from "./instance-id.js"
-import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
+import { relayServerLifecycleEventSchema } from "./server-lifecycle.js"
 import {
   NO_RESOURCE_LIMITS,
   observedResourceLimitsSchema,
@@ -15,7 +15,7 @@ import {
   resourceLimitsSchema,
   serviceResourceLimitsSchema,
 } from "./resource-limits.js"
-import { relayInstanceStateReasonSchema } from "./instance-state-reason.js"
+import { relayServerStateReasonSchema } from "./server-state-reason.js"
 import {
   webRouteEndpoints,
   webRouteHostnames,
@@ -55,12 +55,12 @@ export * from "./instance-limits.js"
 export * from "./resource-limits.js"
 export * from "./database-login.js"
 export * from "./security.js"
-export * from "./instance-overview.js"
+export * from "./server-overview.js"
 export * from "./icon-images.js"
 export * from "./instance-state.js"
 export * from "./instance-inventory.js"
-export * from "./instance-lifecycle.js"
-export * from "./instance-state-reason.js"
+export * from "./server-lifecycle.js"
+export * from "./server-state-reason.js"
 export * from "./backups.js"
 export * from "./backup-failures.js"
 export * from "./git-repository.js"
@@ -146,9 +146,9 @@ export const provisioningStateSchema = z
   })
   .strict()
 
-export const relayInstanceProvisioningSchema = provisioningStateSchema
+export const relayServerProvisioningSchema = provisioningStateSchema
 
-export const relayInstanceRecoverySchema = z
+export const relayServerRecoverySchema = z
   .object({
     attempt: z.number().int().nonnegative(),
     exitCode: z.number().int().nullable(),
@@ -181,7 +181,7 @@ export const relayDatabaseNameSchema = z.string().trim().min(1).max(120)
 // What joins a database's network, by its kind's code name: a game server,
 // an App (every service of it), or another database.
 export const databaseConnectionMemberKindSchema = z.enum([
-  "instance",
+  "server",
   "app",
   "database",
 ])
@@ -298,7 +298,7 @@ export const relayResourceFreezeSchema = z.discriminatedUnion("kind", [
     .object({
       deletionId: z.uuid(),
       id: instanceIdSchema,
-      kind: z.enum(["app", "database", "instance"]),
+      kind: z.enum(["app", "database", "server"]),
     })
     .strict(),
   // A volume is a Kiln volume, by its own 40-character ID; an App's own
@@ -738,7 +738,7 @@ export const relayVolumeNameSchema = z
 export const relayVolumeMountSchema = z.object({
   container: z.string(),
   destination: z.string(),
-  kind: z.enum(["app", "database", "instance", "relay", "other"]),
+  kind: z.enum(["app", "database", "server", "relay", "other"]),
   readOnly: z.boolean(),
   // The app's, database's, or game server's ID, when the container names one.
   resourceId: z.string().nullable(),
@@ -1570,7 +1570,7 @@ export const brickVariableValuesSchema = z.record(
   brickVariableValueSchema
 )
 
-export const relayInstanceTailscaleSchema = z
+export const relayServerTailscaleSchema = z
   .object({
     enabled: z.boolean().default(false),
     subdomain: relayTailscaleSubdomainSchema.optional(),
@@ -1586,7 +1586,7 @@ export const relayInstanceTailscaleSchema = z
     }
   })
 
-export const relayCreateInstanceSchema = z.object({
+export const relayCreateServerSchema = z.object({
   // Hearth sends `limits` to Relays with `resource-limits-v1`, and
   // `diskLimitBytes` alone to older ones.
   diskLimitBytes: relayRequestedDiskLimitBytesSchema.default(
@@ -1596,39 +1596,39 @@ export const relayCreateInstanceSchema = z.object({
   name: relayInstanceNameSchema.optional(),
   recipe: brickSourceSchema,
   recipeDefinition: brickRecipeSchema.optional(),
-  tailscale: relayInstanceTailscaleSchema
+  tailscale: relayServerTailscaleSchema
     .default({ enabled: false })
     .optional(),
   variables: brickVariableValuesSchema,
   start: z.boolean().default(true),
 })
 
-export const relayPrepareInstanceSchema = relayCreateInstanceSchema.extend({
+export const relayPrepareServerSchema = relayCreateServerSchema.extend({
   idempotencyKey: z.uuid(),
   instanceId: instanceIdSchema,
 })
 
-export const relayProvisionInstanceSchema = z.object({
+export const relayProvisionServerSchema = z.object({
   instanceId: instanceIdSchema,
 })
 
 // Claiming a game server's provisioning names the deployment Hearth
 // recorded its install as, which names the install's log on the Relay.
-export const relayClaimInstanceProvisioningSchema =
-  relayProvisionInstanceSchema.extend({ deploymentId: z.uuid() })
+export const relayClaimServerProvisioningSchema =
+  relayProvisionServerSchema.extend({ deploymentId: z.uuid() })
 
 export const relayServerDeploymentReadSchema = z
   .object({ deploymentId: z.uuid(), instanceId: instanceIdSchema })
   .strict()
 
-export const relayInstanceLimitsWriteSchema = z
+export const relayServerLimitsWriteSchema = z
   .object({
     instanceId: instanceIdSchema,
     limits: resourceLimitsSchema,
   })
   .strict()
 
-export const relayUpdateInstanceStartupSchema = z
+export const relayUpdateServerStartupSchema = z
   .object({
     diskLimitBytes: relayRequestedDiskLimitBytesSchema.optional(),
     limits: resourceLimitsInputSchema.optional(),
@@ -1638,7 +1638,7 @@ export const relayUpdateInstanceStartupSchema = z
     // The deployment Hearth recorded a reinstall or change of Brick as,
     // which names its log on the Relay. Absent for other startup changes.
     deploymentId: z.uuid().optional(),
-    tailscale: relayInstanceTailscaleSchema.optional(),
+    tailscale: relayServerTailscaleSchema.optional(),
     variables: brickVariableValuesSchema.optional(),
     start: z.boolean().default(true),
   })
@@ -2161,7 +2161,7 @@ export const relayInstanceResourcesSchema = z.object({
 
 // What the Relay applied; `null` means no limit. Relays before
 // `resource-limits-v1` send no CPU limit and 0 for no memory limit.
-export const relayInstanceLimitsSchema = z.object({
+export const relayServerLimitsSchema = z.object({
   cpuMillis: z.number().int().positive().nullable().default(null),
   diskBytes: relayDiskLimitBytesSchema.nullable(),
   memoryBytes: z
@@ -2172,29 +2172,29 @@ export const relayInstanceLimitsSchema = z.object({
     .transform((bytes) => (bytes === 0 ? null : bytes)),
 })
 
-export const relayInstancePortIdSchema = z
+export const relayServerPortIdSchema = z
   .string()
   .regex(
     /^(?:primary|brick-[a-z0-9][a-z0-9-]{0,31}|[a-f0-9]{8})$/u,
     "Port allocation ID is invalid"
   )
 
-export const relayInstancePortNameSchema = z.string().trim().min(1).max(32)
+export const relayServerPortNameSchema = z.string().trim().min(1).max(32)
 
-export const relayInstancePortProtocolSchema = z.enum(["tcp", "udp", "both"])
+export const relayServerPortProtocolSchema = z.enum(["tcp", "udp", "both"])
 
 const relayInstancePortConfigurationSchema = z
   .object({
     internalPort: z.number().int().min(1).max(65_535),
-    name: relayInstancePortNameSchema,
-    protocol: relayInstancePortProtocolSchema,
+    name: relayServerPortNameSchema,
+    protocol: relayServerPortProtocolSchema,
   })
   .strict()
 
-export const relayInstancePortInputSchema = relayInstancePortConfigurationSchema
+export const relayServerPortInputSchema = relayInstancePortConfigurationSchema
   .extend({
     externalPort: z.number().int().min(1).max(65_535).optional(),
-    id: relayInstancePortIdSchema.optional(),
+    id: relayServerPortIdSchema.optional(),
     leaseId: z
       .string()
       .regex(/^[a-f0-9]{32}$/u)
@@ -2210,12 +2210,12 @@ export const relayInstancePortInputSchema = relayInstancePortConfigurationSchema
     }
   })
 
-export const relayInstancePendingPrimaryPortSchema =
+export const relayServerPendingPrimaryPortSchema =
   relayInstancePortConfigurationSchema.extend({
     id: z.literal("primary"),
   })
 
-export const relayInstancePortLeaseRequestSchema = z
+export const relayServerPortLeaseRequestSchema = z
   .object({
     externalPort: z.number().int().min(1).max(65_535).optional(),
     leaseId: z
@@ -2223,41 +2223,41 @@ export const relayInstancePortLeaseRequestSchema = z
       .regex(/^[a-f0-9]{32}$/u)
       .optional(),
     overridePortRange: z.boolean().optional(),
-    protocol: relayInstancePortProtocolSchema,
+    protocol: relayServerPortProtocolSchema,
   })
   .strict()
 
-export const relayInstancePortLeaseReleaseSchema = z
+export const relayServerPortLeaseReleaseSchema = z
   .object({
     leaseId: z.string().regex(/^[a-f0-9]{32}$/u),
   })
   .strict()
 
-export const relayInstancePortLeaseSchema = z
+export const relayServerPortLeaseSchema = z
   .object({
     expiresAt: z.string().datetime(),
     externalPort: z.number().int().min(1).max(65_535),
     id: z.string().regex(/^[a-f0-9]{32}$/u),
-    protocol: relayInstancePortProtocolSchema,
+    protocol: relayServerPortProtocolSchema,
   })
   .strict()
 
-export const relayInstancePortMetadataSchema =
+export const relayServerPortMetadataSchema =
   relayInstancePortConfigurationSchema.extend({
-    id: relayInstancePortIdSchema,
+    id: relayServerPortIdSchema,
     kind: z.enum(["primary", "brick", "custom"]),
   })
 
-export const relayInstancePortAllocationSchema =
-  relayInstancePortMetadataSchema.extend({
+export const relayServerPortAllocationSchema =
+  relayServerPortMetadataSchema.extend({
     externalPort: z.number().int().min(1).max(65_535),
   })
 
 export const relayInstanceCustomRouteLabelSchema = z
   .object({
     internal: z.number().int().min(1).max(65_535),
-    name: relayInstancePortNameSchema,
-    protocol: relayInstancePortProtocolSchema,
+    name: relayServerPortNameSchema,
+    protocol: relayServerPortProtocolSchema,
     public: z.number().int().min(1).max(65_535),
   })
   .strict()
@@ -2306,16 +2306,16 @@ function relayInstancePortArraySchema<
     })
 }
 
-export const relayInstancePortInputsSchema = relayInstancePortArraySchema(
-  relayInstancePortInputSchema
+export const relayServerPortInputsSchema = relayInstancePortArraySchema(
+  relayServerPortInputSchema
 )
 
-export const relayInstancePortMetadataListSchema = relayInstancePortArraySchema(
-  relayInstancePortMetadataSchema
+export const relayServerPortMetadataListSchema = relayInstancePortArraySchema(
+  relayServerPortMetadataSchema
 )
 
-export const relayInstancePortAllocationsSchema = relayInstancePortArraySchema(
-  relayInstancePortAllocationSchema
+export const relayServerPortAllocationsSchema = relayInstancePortArraySchema(
+  relayServerPortAllocationSchema
 )
 
 export const relaySavedDatabaseConnectionSchema = z.object({
@@ -2329,7 +2329,7 @@ export const relayRemoveDatabaseConnectionSchema = z.object({
   databaseRelayId: relayIdSchema,
 })
 
-export const relayInstanceSchema = z.object({
+export const relayServerSchema = z.object({
   id: instanceIdSchema,
   name: z.string().min(1),
   game: z.string().min(1),
@@ -2343,20 +2343,20 @@ export const relayInstanceSchema = z.object({
   hostDirectory: z.string().min(1).optional(),
   desiredState: relayDesiredStateSchema,
   observedState: relayObservedStateSchema,
-  stateReason: relayInstanceStateReasonSchema.nullable().default(null),
+  stateReason: relayServerStateReasonSchema.nullable().default(null),
   databaseConnectionWarnings: z.array(z.string()).optional(),
   savedDatabaseConnections: z
     .array(relaySavedDatabaseConnectionSchema)
     .optional(),
-  recovery: relayInstanceRecoverySchema.nullable().default(null),
-  lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
+  recovery: relayServerRecoverySchema.nullable().default(null),
+  lifecycle: z.array(relayServerLifecycleEventSchema).default([]),
   containerId: z.string().nullable(),
   status: z.string(),
   brickId: brickIdSchema.optional(),
   brickFormat: z.string().min(1).optional(),
   brickNetworkMode: z.enum(["direct", "minecraft-backend"]).optional(),
   brickPrimaryPort: z.number().int().min(1).max(65_535).optional(),
-  brickPrimaryPortProtocol: relayInstancePortProtocolSchema.optional(),
+  brickPrimaryPortProtocol: relayServerPortProtocolSchema.optional(),
   brickSupportsSrv: z.boolean().default(false),
   brickSource: brickSourceSchema.optional(),
   brickSnapshotSha256: z
@@ -2365,21 +2365,21 @@ export const relayInstanceSchema = z.object({
     .optional(),
   publicHost: z.string().min(1).max(253).optional(),
   publicPort: z.number().int().min(1).max(65_535).optional(),
-  pendingPrimaryPort: relayInstancePendingPrimaryPortSchema.optional(),
-  ports: relayInstancePortAllocationsSchema.or(z.tuple([])).default([]),
-  tailscale: relayInstanceTailscaleSchema.default({ enabled: false }),
+  pendingPrimaryPort: relayServerPendingPrimaryPortSchema.optional(),
+  ports: relayServerPortAllocationsSchema.or(z.tuple([])).default([]),
+  tailscale: relayServerTailscaleSchema.default({ enabled: false }),
   variables: brickVariableValuesSchema.optional(),
   managedByRelay: z.boolean().default(false),
   // Limits saved since its container was made, which it takes when it next
   // restarts. Absent when `limits` are the ones saved.
   pendingLimits: resourceLimitsSchema.optional(),
-  limits: relayInstanceLimitsSchema.default({
+  limits: relayServerLimitsSchema.default({
     cpuMillis: null,
     diskBytes: DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
     memoryBytes: null,
   }),
   resources: relayInstanceResourcesSchema.nullable().default(null),
-  provisioning: relayInstanceProvisioningSchema.optional(),
+  provisioning: relayServerProvisioningSchema.optional(),
 })
 
 export const relayTailscaleStackBindingSchema =
@@ -2452,7 +2452,7 @@ export const relayTailscaleStackSchema = z
     domain: relayTailscaleDomainSchema,
     hostname: relayTailscaleHostnameSchema,
     id: relayTailscaleStackIdSchema,
-    instance: relayInstanceSchema,
+    instance: relayServerSchema,
     name: relayInstanceNameSchema,
     status: z
       .object({
@@ -2878,7 +2878,7 @@ const relaySnapshotRelaySchema = z.object({
 
 export const relaySnapshotSchema = z.object({
   node: relayNodeSchema,
-  instances: z.array(relayInstanceSchema),
+  instances: z.array(relayServerSchema),
   relay: relaySnapshotRelaySchema.optional(),
 })
 
@@ -2889,8 +2889,8 @@ export const relaySnapshotSchema = z.object({
  * authenticated socket.
  */
 export const relaySnapshotDeltaSchema = z.object({
-  deletedInstanceIds: z.array(relayInstanceSchema.shape.id),
-  instances: z.array(relayInstanceSchema),
+  deletedInstanceIds: z.array(relayServerSchema.shape.id),
+  instances: z.array(relayServerSchema),
   node: relayNodeSchema.optional(),
   relay: relaySnapshotRelaySchema.optional(),
 })
@@ -3071,7 +3071,7 @@ export const relayFilePutResultSchema = z.union([
     .strict(),
 ])
 
-// The largest image `instance.icon.read` returns. Its base64 stays well
+// The largest image `server.icon.read` returns. Its base64 stays well
 // under `relayControlMaxFrameBytes`.
 export const relayIconMaxBytes = 512 * 1024
 
@@ -3168,7 +3168,7 @@ export const relayFileActivitySchema = z.object({
   files: z.array(relayFileActivityEntrySchema),
 })
 
-export const relayInstanceActionSchema = z.object({
+export const relayServerActionSchema = z.object({
   action: z.enum(["start", "stop", "restart", "kill"]),
 })
 
@@ -3230,7 +3230,7 @@ export const relayServerDeploymentLogSchema = z
 
 export const relayConsoleSchema = z.object({
   instanceId: z.string().min(1),
-  lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
+  lifecycle: z.array(relayServerLifecycleEventSchema).default([]),
   lines: z.array(relayConsoleLineSchema),
   truncated: z.boolean(),
 })
@@ -3239,19 +3239,19 @@ export const relayConsoleStreamEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("ready"),
     instanceId: z.string().min(1),
-    lifecycle: z.array(relayInstanceLifecycleEventSchema).default([]),
+    lifecycle: z.array(relayServerLifecycleEventSchema).default([]),
   }),
   z.object({
     type: z.literal("reset"),
     instanceId: z.string().min(1),
-    lifecycle: z.array(relayInstanceLifecycleEventSchema),
+    lifecycle: z.array(relayServerLifecycleEventSchema),
     lines: z.array(relayConsoleLineSchema),
     truncated: z.boolean(),
   }),
   z.object({
     type: z.literal("history"),
     instanceId: z.string().min(1),
-    lifecycle: z.array(relayInstanceLifecycleEventSchema),
+    lifecycle: z.array(relayServerLifecycleEventSchema),
     lines: z.array(relayConsoleLineSchema),
     truncated: z.boolean(),
   }),
@@ -3265,7 +3265,7 @@ export const relayResourceHistoryMaxSamples = 256
 
 export const relayResourceStreamEventSchema = z.object({
   type: z.literal("resource"),
-  instance: relayInstanceSchema,
+  instance: relayServerSchema,
   history: z
     .array(relayInstanceResourcesSchema)
     .max(relayResourceHistoryMaxSamples)
@@ -3323,8 +3323,8 @@ export const relayWorkloadUsageEventSchema = relayWorkloadUsageSchema.extend({
   type: z.literal("resource.usage"),
 })
 
-export const relayInstanceResourceSnapshotSchema = z.object({
-  instance: relayInstanceSchema,
+export const relayServerResourceSnapshotSchema = z.object({
+  instance: relayServerSchema,
   history: z
     .array(relayInstanceResourcesSchema)
     .max(relayResourceHistoryMaxSamples),
@@ -3525,13 +3525,13 @@ export type BrickRecipe = z.infer<typeof brickRecipeSchema>
 export type BrickCatalogDocument = z.infer<typeof brickCatalogDocumentSchema>
 export type Brick = z.infer<typeof brickSchema>
 export type RelayCatalog = z.infer<typeof relayCatalogSchema>
-export type RelayCreateInstance = z.infer<typeof relayCreateInstanceSchema>
-export type RelayPrepareInstance = z.infer<typeof relayPrepareInstanceSchema>
-export type RelayProvisionInstance = z.infer<
-  typeof relayProvisionInstanceSchema
+export type RelayCreateServer = z.infer<typeof relayCreateServerSchema>
+export type RelayPrepareServer = z.infer<typeof relayPrepareServerSchema>
+export type RelayProvisionServer = z.infer<
+  typeof relayProvisionServerSchema
 >
-export type RelayInstanceProvisioning = z.infer<
-  typeof relayInstanceProvisioningSchema
+export type RelayServerProvisioning = z.infer<
+  typeof relayServerProvisioningSchema
 >
 export type RelayServerDeploymentLog = z.infer<
   typeof relayServerDeploymentLogSchema
@@ -3540,12 +3540,12 @@ export type ProvisioningKind = z.infer<typeof provisioningKindSchema>
 export type ProvisioningPhase = z.infer<typeof provisioningPhaseSchema>
 export type ProvisioningWorkPhase = z.infer<typeof provisioningWorkPhaseSchema>
 export type ProvisioningState = z.infer<typeof provisioningStateSchema>
-export type RelayUpdateInstanceStartup = z.infer<
-  typeof relayUpdateInstanceStartupSchema
+export type RelayUpdateServerStartup = z.infer<
+  typeof relayUpdateServerStartupSchema
 >
 export type RelayNetworking = z.infer<typeof relayNetworkingSchema>
-export type RelayInstanceTailscale = z.infer<
-  typeof relayInstanceTailscaleSchema
+export type RelayServerTailscale = z.infer<
+  typeof relayServerTailscaleSchema
 >
 export type RelayTailscaleInstall = z.infer<typeof relayTailscaleInstallSchema>
 export type RelayTailscaleOverview = z.infer<
@@ -3585,36 +3585,36 @@ export type RelayInstanceWebRouteState = z.infer<
   typeof relayInstanceWebRouteStateSchema
 >
 export type RelayObservedState = z.infer<typeof relayObservedStateSchema>
-export type RelayInstanceRecovery = z.infer<typeof relayInstanceRecoverySchema>
+export type RelayServerRecovery = z.infer<typeof relayServerRecoverySchema>
 export type RelayInstanceResources = z.infer<
   typeof relayInstanceResourcesSchema
 >
-export type RelayInstanceLimits = z.infer<typeof relayInstanceLimitsSchema>
-export type RelayInstancePortInput = z.infer<
-  typeof relayInstancePortInputSchema
+export type RelayServerLimits = z.infer<typeof relayServerLimitsSchema>
+export type RelayServerPortInput = z.infer<
+  typeof relayServerPortInputSchema
 >
-export type RelayInstancePortLease = z.infer<
-  typeof relayInstancePortLeaseSchema
+export type RelayServerPortLease = z.infer<
+  typeof relayServerPortLeaseSchema
 >
-export type RelayInstancePortLeaseRequest = z.infer<
-  typeof relayInstancePortLeaseRequestSchema
+export type RelayServerPortLeaseRequest = z.infer<
+  typeof relayServerPortLeaseRequestSchema
 >
-export type RelayInstancePendingPrimaryPort = z.infer<
-  typeof relayInstancePendingPrimaryPortSchema
+export type RelayServerPendingPrimaryPort = z.infer<
+  typeof relayServerPendingPrimaryPortSchema
 >
-export type RelayInstancePortProtocol = z.infer<
-  typeof relayInstancePortProtocolSchema
+export type RelayServerPortProtocol = z.infer<
+  typeof relayServerPortProtocolSchema
 >
-export type RelayInstancePortMetadata = z.infer<
-  typeof relayInstancePortMetadataSchema
+export type RelayServerPortMetadata = z.infer<
+  typeof relayServerPortMetadataSchema
 >
-export type RelayInstancePortAllocation = z.infer<
-  typeof relayInstancePortAllocationSchema
+export type RelayServerPortAllocation = z.infer<
+  typeof relayServerPortAllocationSchema
 >
 export type RelayInstanceCustomRouteLabel = z.infer<
   typeof relayInstanceCustomRouteLabelSchema
 >
-export type RelayInstance = z.infer<typeof relayInstanceSchema>
+export type RelayServer = z.infer<typeof relayServerSchema>
 export type RelaySnapshotDelta = z.infer<typeof relaySnapshotDeltaSchema>
 export type RelayNode = z.infer<typeof relayNodeSchema>
 export type RelaySystemUpdate = z.infer<typeof relaySystemUpdateSchema>
@@ -3739,7 +3739,7 @@ export function relaySnapshotControlDelta(
     : control
 }
 
-function relayInstanceControlState(instance: RelayInstance) {
+function relayInstanceControlState(instance: RelayServer) {
   const { resources: _resources, ...control } = instance
   return control
 }
@@ -3821,7 +3821,7 @@ export type RelayFileActivityEntry = z.infer<
 export type RelayFileActivity = z.infer<typeof relayFileActivitySchema>
 export type RelayAuditQuery = z.infer<typeof relayAuditQuerySchema>
 export type RelayAuditRecord = z.infer<typeof relayAuditRecordSchema>
-export type RelayInstanceAction = z.infer<typeof relayInstanceActionSchema>
+export type RelayServerAction = z.infer<typeof relayServerActionSchema>
 export type RelayConsoleLevel = z.infer<typeof relayConsoleLevelSchema>
 export type RelayConsoleSegment = z.infer<typeof relayConsoleSegmentSchema>
 export type RelayConsoleLine = z.infer<typeof relayConsoleLineSchema>

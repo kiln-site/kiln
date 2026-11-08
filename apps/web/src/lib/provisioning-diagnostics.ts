@@ -1,6 +1,6 @@
 import type {
   ProvisioningKind,
-  RelayInstanceProvisioning,
+  RelayServerProvisioning,
 } from "@workspace/contracts"
 
 const KIND_LABELS: Record<ProvisioningKind, string> = {
@@ -10,7 +10,7 @@ const KIND_LABELS: Record<ProvisioningKind, string> = {
 }
 
 const PHASE_LABELS: Record<
-  NonNullable<RelayInstanceProvisioning["failedPhase"]>,
+  NonNullable<RelayServerProvisioning["failedPhase"]>,
   string
 > = {
   preparing: "Prepare",
@@ -22,7 +22,7 @@ const PHASE_LABELS: Record<
 export function provisioningFailureDiagnostics(input: {
   attempt: number
   error: string | null
-  failedPhase: RelayInstanceProvisioning["failedPhase"]
+  failedPhase: RelayServerProvisioning["failedPhase"]
   instanceId: string
   instanceName: string
   kind?: ProvisioningKind

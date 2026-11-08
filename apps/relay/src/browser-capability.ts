@@ -98,14 +98,14 @@ function validateCapabilityV2(
   now: number
 ): void {
   const allowed = new Set(
-    browserCapabilityActions[capability.resourceKind ?? "instance"][
+    browserCapabilityActions[capability.resourceKind ?? "server"][
       capability.operation
     ]
   )
   const writes = capability.actions.some(
     (action) =>
-      action === "instance.console.write" ||
-      action === "instance.files.upload" ||
+      action === "server.console.write" ||
+      action === "server.files.upload" ||
       action === "app.files.upload" ||
       action === "relay.files.upload" ||
       action === "database.dump.import"
@@ -161,11 +161,11 @@ const browserCapabilityActions: Record<
     preview: ["database.dump.export"],
     resources: ["database.read"],
   },
-  instance: {
-    console: [relayConsoleReadActions.instance, "instance.console.write"],
-    file: ["instance.files.download", "instance.files.upload"],
-    preview: ["instance.files.download"],
-    resources: ["instance.read"],
+  server: {
+    console: [relayConsoleReadActions.server, "server.console.write"],
+    file: ["server.files.download", "server.files.upload"],
+    preview: ["server.files.download"],
+    resources: ["server.read"],
   },
   relay: {
     console: [relayConsoleReadActions.relay],
@@ -187,8 +187,8 @@ export function capabilityResourceKind(
   capability: RelayBrowserCapability
 ): RelayBrowserResourceKind {
   return capability.version === 2
-    ? (capability.resourceKind ?? "instance")
-    : "instance"
+    ? (capability.resourceKind ?? "server")
+    : "server"
 }
 
 // The server whose access revisions apply to the capability, if it is for
@@ -196,7 +196,7 @@ export function capabilityResourceKind(
 export function serverScopeId(
   capability: RelayBrowserCapability
 ): string | null {
-  return capabilityResourceKind(capability) === "instance"
+  return capabilityResourceKind(capability) === "server"
     ? capability.instanceId
     : null
 }
@@ -209,12 +209,12 @@ export function browserAuthority(
     actions: new Set(capability.actions),
     expiresAt: capability.expiresAt,
     instanceId: capability.instanceId,
-    resourceKind: "instance",
+    resourceKind: "server",
     issuer: capability.issuer,
     issuerGeneration: 0,
     keyThumbprint: capability.keyThumbprint,
     loginSessionId: null,
-    operation: capability.actions.includes("instance.read")
+    operation: capability.actions.includes("server.read")
       ? "resources"
       : "console",
     origin: capability.origin,

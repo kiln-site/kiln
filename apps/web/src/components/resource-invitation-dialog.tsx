@@ -214,7 +214,7 @@ export function settleResourceInvitationDecision(
         ? queryKeys.databases.directory
         : queryKeys.relays,
   })
-  if (result.scope.resourceType === "instance")
+  if (result.scope.resourceType === "server")
     void queryClient.invalidateQueries({
       queryKey: relayConnectionQueryOptions(queryClient).queryKey,
     })
@@ -227,7 +227,7 @@ export function acceptedInvitationHref(
   queryClient: QueryClient,
   scope: DecidedScope
 ): string {
-  if (scope.resourceType === "instance") {
+  if (scope.resourceType === "server") {
     const connection = queryClient.getQueryData(
       relayConnectionQueryOptions(queryClient).queryKey
     )

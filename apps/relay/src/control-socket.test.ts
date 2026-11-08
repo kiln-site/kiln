@@ -171,12 +171,12 @@ describe("Relay control socket", () => {
     const relay = await startRelay()
     const hostId = "relay:0123456789ab"
     for (const actions of [
-      ["instance.files.list", "instance.files.read", "instance.files.write"],
+      ["server.files.list", "server.files.read", "server.files.write"],
       ["app.files.read", "app.files.write"],
     ] as const) {
       const hearth = await relay.pair({ role: "custom", actions })
       const connection = await relay.connect(hearth)
-      const id = sendRequest(connection.socket, "instance.files.read", {
+      const id = sendRequest(connection.socket, "server.files.read", {
         instanceId: hostId,
         path: "etc/os-release",
       })
@@ -189,7 +189,7 @@ describe("Relay control socket", () => {
     const reader = await relay.connect(
       await relay.pair({ role: "custom", actions: ["relay.files.read"] })
     )
-    const read = sendRequest(reader.socket, "instance.files.read", {
+    const read = sendRequest(reader.socket, "server.files.read", {
       instanceId: hostId,
       path: "etc/os-release",
     })
@@ -198,7 +198,7 @@ describe("Relay control socket", () => {
       replyTo: read,
       type: "response",
     })
-    const write = sendRequest(reader.socket, "instance.files.write", {
+    const write = sendRequest(reader.socket, "server.files.write", {
       instanceId: hostId,
       path: "etc/os-release",
       content: "changed",
@@ -303,7 +303,7 @@ describe("Relay control socket", () => {
       const operationId = randomUUID()
       sendRequest(
         socket,
-        "instance.action",
+        "server.action",
         { action: "start", instanceId },
         { operationId }
       )

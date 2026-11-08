@@ -11,7 +11,7 @@ import {
   type ServerNavigation,
   type ServerNavigationInput,
 } from "@/lib/server-navigation"
-import type { SidebarInstance } from "@/lib/relay-selectors"
+import type { SidebarServer } from "@/lib/relay-selectors"
 import { readSelectedInstance } from "@/lib/ui-preference-cookies"
 
 /**
@@ -22,12 +22,12 @@ import { readSelectedInstance } from "@/lib/ui-preference-cookies"
 export function useServerNavigation(
   input: ServerNavigationInput,
   enabled: boolean
-): { data: ServerNavigation<SidebarInstance> | undefined; isPending: boolean } {
+): { data: ServerNavigation<SidebarServer> | undefined; isPending: boolean } {
   const serverId = "serverId" in input ? input.serverId : null
   const selectedServerId =
     "selectedServerId" in input ? input.selectedServerId : null
   const select = React.useMemo(
-    () => (instances: Array<SidebarInstance>) =>
+    () => (instances: Array<SidebarServer>) =>
       resolveServerNavigation(
         instances,
         serverId === null ? { selectedServerId } : { serverId }

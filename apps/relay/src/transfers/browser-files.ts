@@ -111,7 +111,7 @@ interface FileRootSource {
 
 export interface BrowserFileTransferOptions {
   readonly config: Pick<RelayConfig, "browserLimits">
-  readonly docker: Pick<DockerDriver, "findInstance">
+  readonly docker: Pick<DockerDriver, "findServer">
   readonly filesystem: FilesystemDriver
   /** The host's files, addressed as the Relay's file root. */
   readonly hostFiles?: FileRootSource | undefined
@@ -482,8 +482,7 @@ export function browserFileTransfers(
         yield* Effect.annotateCurrentSpan("kiln.transfer.operation", "upload")
         // An App, database, or host root is addressed by its root ID; a game
         // server by the full ID it was found under.
-        const laneRootId =
-          fileRootKind(rootId) === "instance" ? root.id : rootId
+        const laneRootId = fileRootKind(rootId) === "server" ? root.id : rootId
         const uploaded = yield* options.lanes.run(
           {
             label: "browser.file.upload",
@@ -716,7 +715,7 @@ const resolveFileRoot = Effect.fn("RelayTransfer.resolveFileRoot")(function* (
   const databaseId = databaseIdFromFileRoot(rootId)
   if (databaseId) return yield* source(options.databaseFiles, databaseId)
   const instance = yield* Effect.tryPromise(() =>
-    options.docker.findInstance(rootId)
+    options.docker.findServer(rootId)
   )
   return instance ? { filesystem: options.filesystem, root: instance } : null
 })
@@ -725,7 +724,7 @@ function fileRootKind(rootId: string) {
   if (isRelayFileRoot(rootId)) return "relay"
   if (appIdFromFileRoot(rootId) !== null) return "app"
   if (databaseIdFromFileRoot(rootId) !== null) return "database"
-  return "instance"
+  return "server"
 }
 
 function browserFileAction(method: BrowserFileMethod, rootId: string) {

@@ -29,10 +29,15 @@ const listName = () => `${databaseTablePrefix()}snapshot`
 const copyName = (position: number) => `${listName()}_${position}`
 const quote = (name: string) => `\`${name.replaceAll("`", "``")}\``
 
+/** Whether a table is the snapshot's own, which migrations leave alone. */
+export function isMigrationSnapshotTable(name: string): boolean {
+  const list = listName()
+  return name === list || name.startsWith(`${list}_`)
+}
+
 /** Hearth's tables, by its prefix, without the snapshot's own. */
 const hearthTables = Effect.fnUntraced(function* (sql: Sql) {
   const prefix = databaseTablePrefix()
-  const list = listName()
   const rows = yield* sql<{ name: string }>`
     SELECT table_name AS name FROM information_schema.tables
     WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'
@@ -40,10 +45,7 @@ const hearthTables = Effect.fnUntraced(function* (sql: Sql) {
   return rows
     .map((row) => row.name)
     .filter(
-      (name) =>
-        name.startsWith(prefix) &&
-        name !== list &&
-        !name.startsWith(`${list}_`)
+      (name) => name.startsWith(prefix) && !isMigrationSnapshotTable(name)
     )
     .sort()
 })

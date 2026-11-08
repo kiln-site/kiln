@@ -29,7 +29,7 @@ import {
 export const memberPermission = {
   app: "app.manage",
   database: "database.network.write",
-  instance: "instance.network.write",
+  server: "server.network.write",
 } as const satisfies Record<DatabaseConnectionMember["kind"], AccessPermission>
 
 /**
@@ -58,7 +58,7 @@ export async function writeDatabaseConnection(
   })
   const { id, kind } = input.member
   await requireRelayPermission({
-    ...(kind === "instance"
+    ...(kind === "server"
       ? { instanceId: id }
       : kind === "app"
         ? { appId: id }
@@ -121,7 +121,7 @@ export const connectDatabase = operation<DatabaseConnectionInput>()({
           })
           const { id, kind } = input.member
           await requireRelayPermission({
-            ...(kind === "instance"
+            ...(kind === "server"
               ? { instanceId: id }
               : kind === "app"
                 ? { appId: id }

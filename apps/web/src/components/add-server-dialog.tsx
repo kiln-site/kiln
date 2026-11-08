@@ -33,7 +33,7 @@ import {
   defaultProvisioningBrickVariables,
 } from "@/lib/brick-variables"
 import { randomIdempotencyKey } from "@/lib/idempotency-key"
-import { relayFleetInstance } from "@/lib/relay-fleet"
+import { relayFleetServer } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import {
   brickCatalogQueryOptions,
@@ -176,10 +176,7 @@ const AddServerForm = React.memo(function AddServerForm({
       const relay = relays.find((item) => item.id === variables.data.relayId)
       if (!relay) throw new Error("Provisioning Relay is no longer available")
 
-      applyProvisioningInstance(
-        queryClient,
-        relayFleetInstance(instance, relay)
-      )
+      applyProvisioningInstance(queryClient, relayFleetServer(instance, relay))
       onClose()
       await navigate({
         to: "/server/$serverId/startup",

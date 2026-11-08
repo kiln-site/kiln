@@ -47,7 +47,7 @@ const control = (operation: string, payload: Record<string, unknown>) =>
 
 const backupOf = (kind: "create" | "restore") =>
   backupTaskLocks(
-    { kind, target: { id: serverId, kind: "instance" } } as Parameters<
+    { kind, target: { id: serverId, kind: "server" } } as Parameters<
       typeof backupTaskLocks
     >[0],
     resolve,
@@ -70,11 +70,11 @@ describe("resources frozen for deletion", () => {
       harness.lanes.run(
         {
           label: "resource.freeze",
-          locks: resourceReplaceLocks("instance", serverId, resolve)!,
+          locks: resourceReplaceLocks("server", serverId, resolve)!,
         },
         Effect.promise(() =>
           harness.freezes.freeze(
-            { deletionId: deletion, id: serverId, kind: "instance" },
+            { deletionId: deletion, id: serverId, kind: "server" },
             quiet
           )
         )
@@ -82,8 +82,8 @@ describe("resources frozen for deletion", () => {
     )
     const start = attempt(
       harness,
-      "instance.action",
-      control("instance.action", { action: "start", instanceId: serverId })
+      "server.action",
+      control("server.action", { action: "start", instanceId: serverId })
     )
     await Effect.runPromise(Deferred.succeed(backupDone, undefined))
     await Effect.runPromise(Fiber.join(backup))
@@ -94,15 +94,15 @@ describe("resources frozen for deletion", () => {
     expect(
       await attempt(
         harness,
-        "instance.files.write",
-        control("instance.files.write", { instanceId: serverId })
+        "server.files.write",
+        control("server.files.write", { instanceId: serverId })
       )
     ).toBe(refused)
     expect(
       await attempt(
         harness,
         "browser.console",
-        control("instance.console.write", { instanceId: serverId })
+        control("server.console.write", { instanceId: serverId })
       )
     ).toBe(refused)
     expect(await attempt(harness, "backup.restore", backupOf("restore"))).toBe(
@@ -116,8 +116,8 @@ describe("resources frozen for deletion", () => {
     expect(
       await attempt(
         harness,
-        "instance.action",
-        control("instance.action", {
+        "server.action",
+        control("server.action", {
           action: "start",
           instanceId: otherServerId,
         })
@@ -126,8 +126,8 @@ describe("resources frozen for deletion", () => {
     expect(
       await attempt(
         harness,
-        "instance.delete",
-        control("instance.delete", { instanceId: serverId })
+        "server.delete",
+        control("server.delete", { instanceId: serverId })
       )
     ).toBe("ran")
   })
@@ -138,12 +138,12 @@ describe("resources frozen for deletion", () => {
     const frozen = {
       deletionId: deletion,
       id: serverId,
-      kind: "instance",
+      kind: "server",
     } as const
     const stop = async () => {
-      const instance = await harness.docker.findInstance(serverId)
+      const instance = await harness.docker.findServer(serverId)
       if (instance)
-        await harness.lifecycle.runInstanceAction(instance, "stop", [])
+        await harness.lifecycle.runServerAction(instance, "stop", [])
     }
     await harness.freezes.freeze(frozen, stop)
     expect(server.state.running).toBe(false)
@@ -161,11 +161,11 @@ describe("resources frozen for deletion", () => {
     // restarts: still frozen, and stopped before anything runs.
     server.state.running = true
     const restarted = await harness.restart()
-    expect(restarted.freezes.has("instance", serverId)).toBe(true)
+    expect(restarted.freezes.has("server", serverId)).toBe(true)
     await restarted.freezes.reapply(async () => {
-      const instance = await restarted.docker.findInstance(serverId)
+      const instance = await restarted.docker.findServer(serverId)
       if (instance) {
-        await restarted.lifecycle.runInstanceAction(instance, "stop", [])
+        await restarted.lifecycle.runServerAction(instance, "stop", [])
       }
     })
     expect(server.state.running).toBe(false)
@@ -173,8 +173,8 @@ describe("resources frozen for deletion", () => {
       Effect.exit(
         restarted.lanes.run(
           {
-            label: "instance.action",
-            locks: control("instance.action", {
+            label: "server.action",
+            locks: control("server.action", {
               action: "start",
               instanceId: serverId,
             }),
@@ -186,7 +186,7 @@ describe("resources frozen for deletion", () => {
     expect(start._tag).toBe("Failure")
 
     await restarted.freezes.unfreeze(frozen, async () => {})
-    expect(restarted.freezes.has("instance", serverId)).toBe(false)
+    expect(restarted.freezes.has("server", serverId)).toBe(false)
   })
 
   it("refuses every change to a frozen volume, even an App starting that mounts it, but its final backup and deletion", async () => {

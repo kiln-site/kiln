@@ -8,7 +8,7 @@ import {
 
 const backupId = "11111111-1111-4111-8111-111111111111"
 const taskId = "22222222-2222-4222-8222-222222222222"
-const target = { id: "instance-one", kind: "instance" as const }
+const target = { id: "instance-one", kind: "server" as const }
 
 const s3Repository = {
   accessKeyId: "AKIAEXAMPLE",

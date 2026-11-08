@@ -75,11 +75,11 @@ import {
   sniffIconImage,
 } from "@workspace/contracts"
 
-import type { RelayConfig, RelayInstanceConfig } from "./config.js"
+import type { RelayConfig, RelayServerConfig } from "./config.js"
 
 // The directory files are served from, relative to the driver's root: a
 // server's, or an app's data directory.
-export type FileRoot = Pick<RelayInstanceConfig, "directory" | "id">
+export type FileRoot = Pick<RelayServerConfig, "directory" | "id">
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { RelayFilesystemError } from "./effect/errors.js"
 import {

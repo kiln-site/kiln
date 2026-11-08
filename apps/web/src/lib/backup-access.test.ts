@@ -47,7 +47,7 @@ const backup = {
   status: "available",
   storageId: null,
   targetId: "instance-1",
-  targetKind: "instance",
+  targetKind: "server",
   taskBytesCompleted: 1,
   taskBytesTotal: 1,
   taskCurrentArtifactId: null,
@@ -125,7 +125,7 @@ describe("backup access", () => {
       id: "grant-1",
       relayId: backup.relayId,
       resourceId: backup.targetId,
-      resourceType: "instance",
+      resourceType: "server",
       permissions: ["backup.restore", "backup.delete"],
     } satisfies AccessGrant
     expect(hasBackupPermission(user, [grant], backup, "backup.restore")).toBe(

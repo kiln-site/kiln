@@ -4,8 +4,8 @@ import { join } from "node:path"
 import {
   brickRecipeSchema,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
-  relayCreateInstanceSchema,
-  relayUpdateInstanceStartupSchema,
+  relayCreateServerSchema,
+  relayUpdateServerStartupSchema,
   type RelayNetworking,
 } from "@workspace/contracts"
 import { Deferred, Effect, Exit, Fiber } from "effect"
@@ -55,7 +55,7 @@ const recipe = brickRecipeSchema.parse({
 // Runs a control request's work as the control socket admits it.
 function control(
   harness: RelayHarness,
-  operation: "instance.action" | "instance.delete" | "relay.networking.write",
+  operation: "server.action" | "server.delete" | "relay.networking.write",
   payload: Record<string, unknown>,
   work: () => Promise<unknown>
 ) {
@@ -160,7 +160,7 @@ describe("game server provisioning", () => {
     // the networking settings and the game servers.
     const pull = fakeDocker.hold({ command: "pull", target: image })
     const worker = await serverWorker(harness)
-    const input = relayCreateInstanceSchema.parse({
+    const input = relayCreateServerSchema.parse({
       diskLimitBytes: MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
       name: "New",
       recipe: "https://bricks.test/paper.yml",
@@ -174,10 +174,7 @@ describe("game server provisioning", () => {
         input,
         instanceId: newServerId,
         kind: "server",
-        placeholder: await harness.lifecycle.prepareInstance(
-          newServerId,
-          input
-        ),
+        placeholder: await harness.lifecycle.prepareServer(newServerId, input),
       })
     )
     await Effect.runPromise(worker.manager.claim("server", newServerId))
@@ -186,9 +183,9 @@ describe("game server provisioning", () => {
     // Meanwhile the other game server is deleted and the networking changes.
     const deleted = control(
       harness,
-      "instance.delete",
+      "server.delete",
       { instanceId: deletedServerId },
-      () => harness.lifecycle.deleteInstance(deletedServerId, true)
+      () => harness.lifecycle.deleteServer(deletedServerId, true)
     )
     const changed = control(harness, "relay.networking.write", after, () =>
       harness.lifecycle.configureNetworking(after)
@@ -214,10 +211,10 @@ describe("game server provisioning", () => {
       expect.arrayContaining([`${after.dnsPort}/udp`, `${after.dnsPort}/tcp`])
     )
     expect(
-      fakeDocker.container(harness.resources.instanceContainer(deletedServerId))
+      fakeDocker.container(harness.resources.serverContainer(deletedServerId))
     ).toBeUndefined()
     expect(
-      fakeDocker.container(harness.resources.instanceContainer(newServerId))
+      fakeDocker.container(harness.resources.serverContainer(newServerId))
     ).toBeDefined()
   })
 
@@ -255,7 +252,7 @@ describe("game server provisioning", () => {
 
     const pull = fakeDocker.hold({ command: "pull", target: image })
     const worker = await serverWorker(harness)
-    const input = relayCreateInstanceSchema.parse({
+    const input = relayCreateServerSchema.parse({
       diskLimitBytes: MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
       name: "New",
       recipe: "https://bricks.test/paper.yml",
@@ -269,10 +266,7 @@ describe("game server provisioning", () => {
         input,
         instanceId: newServerId,
         kind: "server",
-        placeholder: await harness.lifecycle.prepareInstance(
-          newServerId,
-          input
-        ),
+        placeholder: await harness.lifecycle.prepareServer(newServerId, input),
       })
     )
     await Effect.runPromise(worker.manager.claim("server", newServerId))
@@ -282,16 +276,16 @@ describe("game server provisioning", () => {
     await Promise.all([
       control(
         harness,
-        "instance.action",
+        "server.action",
         { action: "start", instanceId: otherServerId },
-        () => harness.power.requested("instance", otherServerId, "start")
+        () => harness.power.requested("server", otherServerId, "start")
       ),
       control(harness, "relay.networking.write", after, () =>
         harness.lifecycle.configureNetworking(after)
       ),
     ])
     expect(
-      fakeDocker.container(harness.resources.instanceContainer(otherServerId))
+      fakeDocker.container(harness.resources.serverContainer(otherServerId))
         ?.state.running
     ).toBe(true)
 
@@ -307,7 +301,7 @@ describe("game server provisioning", () => {
     expect(coreDns.state.running).toBe(true)
     expect(coreDns.env.KILN_NODE_ADDRESS).toBe(after.address)
     expect(
-      fakeDocker.container(harness.resources.instanceContainer(newServerId))
+      fakeDocker.container(harness.resources.serverContainer(newServerId))
     ).toBeDefined()
   })
 
@@ -328,7 +322,7 @@ describe("game server provisioning", () => {
       },
     })
     const admitted = <A>(
-      operation: "instance.create" | "instance.startup.write",
+      operation: "server.create" | "server.startup.write",
       instanceId: string,
       work: () => Promise<A>
     ) =>
@@ -347,10 +341,10 @@ describe("game server provisioning", () => {
         )
       )
     const create = (id: string, name: string, definition = twoPorts) =>
-      admitted("instance.create", id, () =>
-        harness.lifecycle.createInstanceWithId(
+      admitted("server.create", id, () =>
+        harness.lifecycle.createServerWithId(
           id,
-          relayCreateInstanceSchema.parse({
+          relayCreateServerSchema.parse({
             diskLimitBytes: MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
             name,
             recipe: "https://bricks.test/paper.yml",
@@ -368,10 +362,10 @@ describe("game server provisioning", () => {
     // Its startup change moves it to an image that isn't here yet.
     const nextImage = "example.test/paper:next"
     const pull = fakeDocker.hold({ command: "pull", target: nextImage })
-    const changed = admitted("instance.startup.write", newServerId, () =>
-      harness.lifecycle.reconfigureInstance(
+    const changed = admitted("server.startup.write", newServerId, () =>
+      harness.lifecycle.reconfigureServer(
         newServerId,
-        relayUpdateInstanceStartupSchema.parse({
+        relayUpdateServerStartupSchema.parse({
           recipeDefinition: {
             ...twoPorts,
             runtime: { ...twoPorts.runtime, image: nextImage },

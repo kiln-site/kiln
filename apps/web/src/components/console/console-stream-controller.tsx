@@ -6,13 +6,13 @@ import type {
   ConsoleStreamStore,
 } from "@/components/console/console-stores"
 import { useRelayConsoleStream } from "@/components/console/use-relay-console-stream"
-import { useInstanceRelayConnected } from "@/components/instance-workspace-context"
+import { useServerRelayConnected } from "@/components/server-workspace-context"
 import {
   relayConnectionQueryOptions,
   tailscaleStacksQueryOptions,
 } from "@/lib/query-options"
 import {
-  selectInstanceConsoleRuntime,
+  selectServerConsoleRuntime,
   selectRelayBrowserOrigin,
   selectRelayConsoleTransport,
 } from "@/lib/relay-selectors"
@@ -48,7 +48,7 @@ export function ConsoleStreamController({
   relayId: string
   streamStore: ConsoleStreamStore
 }) {
-  const relayConnected = useInstanceRelayConnected()
+  const relayConnected = useServerRelayConnected()
   const retryVersion = React.useSyncExternalStore(
     streamStore.subscribeRetry,
     streamStore.getRetrySnapshot,
@@ -59,13 +59,13 @@ export function ConsoleStreamController({
     selectConsoleTransport
   )
   const selectRuntime = React.useMemo(
-    () => selectInstanceConsoleRuntime(instanceId, relayId),
+    () => selectServerConsoleRuntime(instanceId, relayId),
     [instanceId, relayId]
   )
   const { data: runtime } = useServerSnapshot(selectRuntime)
   const snapshot = useRelayConsoleStream(
     relayId,
-    { id: instanceId, kind: "instance" },
+    { id: instanceId, kind: "server" },
     relayConnected,
     browserOrigin,
     consoleTransport,
@@ -138,7 +138,7 @@ function TailscaleConsoleStreamSource({
   // its instance ID.
   const serverId = instanceId
   const selectRuntime = React.useMemo(
-    () => selectInstanceConsoleRuntime(instanceId, relayId),
+    () => selectServerConsoleRuntime(instanceId, relayId),
     [instanceId, relayId]
   )
   const { data: runtime } = useServerSnapshot(selectRuntime, serverId)
@@ -156,7 +156,7 @@ function TailscaleConsoleStreamSource({
   )
   const snapshot = useRelayConsoleStream(
     relayId,
-    { id: instanceId, kind: "instance" },
+    { id: instanceId, kind: "server" },
     relayConnected,
     browserOrigin,
     consoleTransport,

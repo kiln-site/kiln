@@ -147,7 +147,7 @@ export const ResourcePicker = memo(function ResourcePicker({
                   </span>
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  {resource.resourceType === "instance"
+                  {resource.resourceType === "server"
                     ? "Game Server"
                     : resource.resourceType}
                 </span>

@@ -41,7 +41,7 @@ describeMysql("Relay permission requirements", () => {
           id: "grant-one",
           userId: authenticatedUser.id,
           relayId: "relay-one",
-          resourceType: "instance",
+          resourceType: "server",
           resourceId: "instance-one",
         })
         yield* insertRows("access_selection", {
@@ -55,10 +55,10 @@ describeMysql("Relay permission requirements", () => {
       "allows implied permissions only on the granted Relay and instance",
       () =>
         Effect.gen(function* () {
-          yield* seedConsoleGrant("instance.console.write")
+          yield* seedConsoleGrant("server.console.write")
           yield* requireRelayPermissionsEffect({
             instanceId: "instance-one",
-            permissions: ["instance.console.read", "instance.console.write"],
+            permissions: ["server.console.read", "server.console.write"],
             relayId: "relay-one",
             user: authenticatedUser,
           })
@@ -69,7 +69,7 @@ describeMysql("Relay permission requirements", () => {
             assert.strictEqual(
               yield* denied({
                 ...target,
-                permissions: ["instance.console.read"],
+                permissions: ["server.console.read"],
                 user: authenticatedUser,
               }),
               "PermissionDeniedError"
@@ -89,7 +89,7 @@ describeMysql("Relay permission requirements", () => {
           id: "grant-one",
           userId: authenticatedUser.id,
           relayId: "relay-one",
-          resourceType: "instance",
+          resourceType: "server",
           resourceId: "instance-one",
         })
         yield* insertRows("access_selection", {

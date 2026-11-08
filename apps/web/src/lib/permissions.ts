@@ -34,8 +34,8 @@ export function instancePortsWritePermission(
   return ports.some(
     (port) => port.id !== undefined && port.externalPort !== undefined
   )
-    ? "instance.network.public-port.write"
-    : "instance.network.write"
+    ? "server.network.public-port.write"
+    : "server.network.write"
 }
 
 /** Resolved grants carry their expanded permissions; an empty list grants nothing. */

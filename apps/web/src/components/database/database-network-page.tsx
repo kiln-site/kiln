@@ -102,7 +102,7 @@ function DatabaseTailscale({
 const kindNames = {
   app: "App",
   database: "Database",
-  instance: "Game server",
+  server: "Game server",
 } as const
 
 // When its containers next join the network or take their name there: an
@@ -110,7 +110,7 @@ const kindNames = {
 const nextChange = {
   app: "on its next deploy",
   database: "when it next starts or restarts",
-  instance: "when it next starts or restarts",
+  server: "when it next starts or restarts",
 } as const
 
 // What the member's names there are, now and once its containers change.
@@ -134,7 +134,7 @@ function memberReach(member: RelayDatabaseMember): string | null {
   )
 }
 
-const kindOrder = { instance: 0, app: 1, database: 2 } as const
+const kindOrder = { server: 0, app: 1, database: 2 } as const
 
 function ConnectedMembers({
   canWrite,
@@ -237,7 +237,7 @@ function MemberName({
   const className =
     "flex min-w-0 flex-1 items-center outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
   switch (member.kind) {
-    case "instance":
+    case "server":
       return (
         <Link
           to="/server/$serverId/console"

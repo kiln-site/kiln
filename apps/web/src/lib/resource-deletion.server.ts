@@ -86,7 +86,7 @@ export class ResourceDeletionError extends Schema.TaggedError<ResourceDeletionEr
 const DeletionInput = Schema.Struct({
   attempt: Schema.Number,
   deletionId: Schema.String,
-  kind: Schema.Literals(["instance", "database", "app", "volume"]),
+  kind: Schema.Literals(["server", "database", "app", "volume"]),
   relayId: Schema.String,
   resourceId: Schema.String,
 })
@@ -95,7 +95,7 @@ type DeletionInput = typeof DeletionInput.Type
 /** One backup a deletion's final backup is made of. */
 const FinalBackupPart = Schema.Struct({
   id: Schema.String,
-  kind: Schema.Literals(["instance", "database", "app", "volume"]),
+  kind: Schema.Literals(["server", "database", "app", "volume"]),
 })
 type FinalBackupPart = typeof FinalBackupPart.Type
 
@@ -304,15 +304,15 @@ const checkAccess = (input: DeletionInput) =>
     const deletion = yield* loadResourceDeletionEffect(input.deletionId)
     if (!deletion) return yield* Effect.die("The deletion is gone")
     const user = yield* currentActingUser(deletion.requestedBy, deletion.actor)
-    if (input.kind === "instance" || input.kind === "database") {
+    if (input.kind === "server" || input.kind === "database") {
       yield* requireRelayPermissionsEffect({
         permissions: [
-          input.kind === "instance" ? "instance.delete" : "database.delete",
+          input.kind === "server" ? "server.delete" : "database.delete",
           ...(deletion.finalBackup ? (["backup.create"] as const) : []),
         ],
         relayId: input.relayId,
         user,
-        ...(input.kind === "instance"
+        ...(input.kind === "server"
           ? { instanceId: input.resourceId }
           : { databaseId: input.resourceId }),
       })
@@ -473,7 +473,7 @@ const reserveFinalBackup = (
     const dispatch = yield* promiseEffect(() =>
       runAppEffect(
         "resourceDeletions.reserveBackup",
-        part.kind === "instance"
+        part.kind === "server"
           ? reserveInstanceBackupEffect(reservation)
           : part.kind === "database"
             ? reserveDatabaseBackupEffect(reservation)
@@ -552,9 +552,9 @@ const deleteOnRelay = (input: DeletionInput, plan: DeletionPlan) =>
       )
     )
     const command =
-      input.kind === "instance"
+      input.kind === "server"
         ? {
-            operation: "instance.delete" as const,
+            operation: "server.delete" as const,
             payload: { deleteData: true, instanceId: input.resourceId },
           }
         : input.kind === "database"
@@ -623,7 +623,7 @@ const deleteAppOnRelay = (input: DeletionInput, plan: DeletionPlan) => {
 const resourceOnRelay = (input: DeletionInput) =>
   promiseEffect(async () => {
     const relay = await activeRelay(input.relayId)
-    if (input.kind === "instance") {
+    if (input.kind === "server") {
       const snapshot = relaySnapshotSchema.parse(
         await relayRpc(relay, "relay.snapshot", {}, 15_000)
       )
@@ -1112,7 +1112,7 @@ function publishDeletionChange(resource: {
   publishRealtimeChange({
     audience: { kind: "relays", relayIds: [resource.relayId] },
     scope:
-      resource.kind === "instance"
+      resource.kind === "server"
         ? { instanceId: resource.resourceId, relayId: resource.relayId }
         : resource.kind === "database"
           ? { databaseId: resource.resourceId, relayId: resource.relayId }
@@ -1125,11 +1125,11 @@ function publishDeletionChange(resource: {
 // Whoever has the resource open sees it go, whether or not the request
 // that asked is still waiting.
 function publishDeleted(input: DeletionInput): void {
-  if (input.kind === "instance") {
+  if (input.kind === "server") {
     publishRealtimeChange({
       instanceId: input.resourceId,
       relayId: input.relayId,
-      type: "instance.delete",
+      type: "server.delete",
     })
     return
   }
@@ -1150,7 +1150,7 @@ function publishDeleted(input: DeletionInput): void {
 }
 
 function noun(kind: ResourceDeletionKind): string {
-  return kind === "instance"
+  return kind === "server"
     ? "game server"
     : kind === "database"
       ? "database"

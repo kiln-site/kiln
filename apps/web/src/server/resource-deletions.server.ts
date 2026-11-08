@@ -50,8 +50,8 @@ function permissionFor(
   action: "delete" | "read"
 ): AccessPermission {
   switch (target.kind) {
-    case "instance":
-      return `instance.${action}`
+    case "server":
+      return `server.${action}`
     case "database":
       return `database.${action}`
     case "app":
@@ -71,7 +71,7 @@ async function authorize(
       permission,
       relayId: target.relayId,
       user,
-      ...(target.kind === "instance"
+      ...(target.kind === "server"
         ? { instanceId: target.resourceId }
         : target.kind === "database"
           ? { databaseId: target.resourceId }
@@ -88,7 +88,7 @@ async function requireFinalBackupPermission(
   target: ResourceDeletionTarget,
   user: AuthenticatedUser
 ): Promise<void> {
-  if (target.kind === "instance" || target.kind === "database") {
+  if (target.kind === "server" || target.kind === "database") {
     await authorize(target, ["backup.create"])
     return
   }
@@ -205,7 +205,7 @@ export async function cancelResourceDeletionHandler(
 
 // The name its pages show, which its deletion confirmation asks for.
 async function resourceName(target: ResourceDeletionTarget): Promise<string> {
-  if (target.kind === "instance") {
+  if (target.kind === "server") {
     return instanceDeletionName(
       await activeRelay(target.relayId),
       target.resourceId

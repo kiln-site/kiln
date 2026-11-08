@@ -176,7 +176,7 @@ describeMysql("deleting backups whatever their state", () => {
                 maxBytes: null,
                 mode: "full",
                 reason: "manual",
-                target: { id: "instance-one", kind: "instance" },
+                target: { id: "instance-one", kind: "server" },
                 taskId: createTaskId,
               },
               inputRefreshRequired: false,
@@ -217,7 +217,7 @@ describeMysql("deleting backups whatever their state", () => {
             requestedBy: "user-one",
             taskId: deleteTaskId,
           })
-          const target = { id: "instance-one", kind: "instance" as const }
+          const target = { id: "instance-one", kind: "server" as const }
 
           // The create finished before the cancel reached it.
           yield* reconcileBackupTaskEffect(
@@ -323,7 +323,7 @@ describeMysql("deleting backups whatever their state", () => {
                 backupId,
                 destination: { artifactId, kind: "local" },
                 kind: "delete",
-                target: { id: "instance-one", kind: "instance" },
+                target: { id: "instance-one", kind: "server" },
                 taskId: deleteTaskId,
               },
               inputRefreshRequired: false,
@@ -358,7 +358,7 @@ describeMysql("deleting backups whatever their state", () => {
           yield* task("11111111-1111-4111-8111-1111111111e1", {
             status: "queued",
             target_id: "instance-b",
-            target_kind: "instance",
+            target_kind: "server",
             task_kind: "restore",
           })
           const finalBackupOf = (targetId: string) =>
@@ -421,7 +421,7 @@ describeMysql("deleting backups whatever their state", () => {
                 backupId: id,
                 dependsOnTaskId: null,
                 requestedBy: "user-one",
-                target: { id: "instance-new", kind: "instance" },
+                target: { id: "instance-new", kind: "server" },
                 taskId: crypto.randomUUID(),
               }).pipe(Effect.result)
             ),

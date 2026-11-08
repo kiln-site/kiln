@@ -16,10 +16,10 @@ const ownerColumns: Record<
     ownerColumn: "owner_id",
     table: "database",
   },
-  instance: {
+  server: {
     idColumn: "instance_id",
     ownerColumn: "owner_id",
-    table: "instance",
+    table: "server",
   },
   relay: { idColumn: "id", ownerColumn: "created_by", table: "relay" },
 }

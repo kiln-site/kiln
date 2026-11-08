@@ -58,7 +58,7 @@ export function shouldWaitForRelayBrowserAuthorization(
 export function relayBrowserAuthorizationChanges(
   relayId: string,
   instanceId: string,
-  resourceKind: RelayBrowserResourceKind = "instance"
+  resourceKind: RelayBrowserResourceKind = "server"
 ) {
   return Effect.gen(function* () {
     const changes = yield* Queue.sliding<void>(1)

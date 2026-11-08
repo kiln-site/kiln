@@ -15,8 +15,9 @@ has one ID: 12 lowercase hexadecimal characters, such as `a7c39f204bd1`.
   `claimInstanceIdEffect`. Deleted instances keep their reservation, so an old
   reference never comes to mean a new instance.
 - What kind of instance it is comes from the instance, never from the ID.
-  Keys that mix kinds name the kind: `app:<id>`, `database:<id>`,
-  `relay:<id>` (a Relay's host files), and a game server's bare ID.
+  Keys that mix kinds name the kind: `server:<id>`, `app:<id>`,
+  `database:<id>`, and `relay:<id>` (a Relay's host files). A file root names
+  a game server by its bare ID.
 - A Relay's ID is an instance ID like any other, generated when its identity
   is first created and kept in `network/identity/identity.json`. Its Ed25519
   public-key fingerprint only authenticates it: pairing, signed challenges,

@@ -124,7 +124,7 @@ export const settleStaleServerDeploymentsEffect = Effect.fn(
     installs.length
       ? (yield* database.queryRows<RowDataPacket & { instance_id: string }>(
           "servers.deployments.followedInstalls",
-          `SELECT instance_id FROM ${databaseTable("instance_post_provision")}
+          `SELECT instance_id FROM ${databaseTable("server_post_provision")}
             WHERE instance_id IN (${installs.map(() => "?").join(", ")})`,
           installs.map((record) => record.instanceId)
         )).map((row) => row.instance_id)

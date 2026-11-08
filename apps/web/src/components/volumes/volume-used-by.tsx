@@ -182,7 +182,7 @@ function volumeMountItems(
                 key: `database:${id}`,
                 name: `Database ${id}`,
               }
-            : mount.kind === "instance" && id
+            : mount.kind === "server" && id
               ? {
                   identity: { id, kind: "server", relayId } as const,
                   key: `server:${id}`,

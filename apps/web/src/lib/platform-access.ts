@@ -232,7 +232,7 @@ const ownedResources = {
     label: "database",
     write: `UPDATE ${databaseTable("database")} SET owner_id = ? WHERE relay_id = ? AND database_id = ?`,
   },
-  instance: { label: "game server", write: null },
+  server: { label: "game server", write: null },
   relay: {
     label: "Relay",
     write: `UPDATE ${databaseTable("relay")} SET created_by = ? WHERE id = ? AND id = ?`,
@@ -354,7 +354,7 @@ export function transferResourceOwnershipEffect(
             ])
           } else {
             yield* transaction.execute(
-              `INSERT INTO ${databaseTable("instance")}
+              `INSERT INTO ${databaseTable("server")}
                      (relay_id, instance_id, display_name, owner_id, created_at, updated_at)
                    VALUES (?, ?, NULL, ?, ?, ?)
                    ON DUPLICATE KEY UPDATE owner_id = VALUES(owner_id), owner_provisional = 0,
@@ -372,7 +372,7 @@ export function transferResourceOwnershipEffect(
                 oldOwnerId: ownerId,
                 relayId: data.relayId,
                 resourceId: data.resourceId,
-                ...(data.resourceType === "instance"
+                ...(data.resourceType === "server"
                   ? { instanceId: data.resourceId }
                   : {}),
               }),
@@ -386,8 +386,8 @@ export function transferResourceOwnershipEffect(
                 {
                   relayId: data.relayId,
                   scope:
-                    data.resourceType === "instance"
-                      ? { instanceId: data.resourceId, kind: "instance" }
+                    data.resourceType === "server"
+                      ? { instanceId: data.resourceId, kind: "server" }
                       : { kind: "subject_relay" },
                 },
               ],

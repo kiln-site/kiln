@@ -23,7 +23,7 @@ const relayId = "1".repeat(12)
 const ownedId = "a".repeat(12)
 const unownedId = "b".repeat(12)
 const scope = (resourceId: string) =>
-  ({ relayId, resourceId, resourceType: "instance" }) as const
+  ({ relayId, resourceId, resourceType: "server" }) as const
 
 const sessionUser = (id: string): AuthenticatedUser => ({
   email: `${id}@example.test`,
@@ -48,7 +48,7 @@ const grant = (
       id,
       relayId,
       resourceId,
-      resourceType: resourceId === relayId ? "relay" : "instance",
+      resourceType: resourceId === relayId ? "relay" : "server",
       state: "active",
       userId,
     })
@@ -76,12 +76,12 @@ const seed = Effect.gen(function* () {
   yield* insertRelay(relayId)
   yield* insertInstance(relayId, ownedId, { owner_id: "owner" })
   yield* insertInstance(relayId, unownedId)
-  yield* grant("manager", ownedId, ["instance.read", "access.read"])
-  yield* grant("player", ownedId, ["instance.read"])
-  yield* grant("player", unownedId, ["instance.read"])
+  yield* grant("manager", ownedId, ["server.read", "access.read"])
+  yield* grant("player", ownedId, ["server.read"])
+  yield* grant("player", unownedId, ["server.read"])
   // Relay access reaches a server only through server permissions.
   yield* grant("relay-viewer", relayId, ["relay.read"])
-  yield* grant("relay-player", relayId, ["instance.read"])
+  yield* grant("relay-player", relayId, ["server.read"])
 })
 
 const refusal = (promise: Promise<unknown>) =>

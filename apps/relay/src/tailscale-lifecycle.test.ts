@@ -4,7 +4,7 @@ import { join } from "node:path"
 import {
   appTailscaleMemberId,
   databaseTailscaleMemberId,
-  instanceTailscaleMemberId,
+  serverTailscaleMemberId,
   relayTailscaleStackConfigSchema,
   type RelayTailscaleStackConfig,
 } from "@workspace/contracts"
@@ -164,13 +164,13 @@ describe("Tailscale stack forwarding", () => {
               address: bound,
               enabled: true,
               hostname: "paper",
-              memberId: `instance:${"d".repeat(12)}`,
+              memberId: `server:${"d".repeat(12)}`,
             },
             {
               address: "10.165.57.11",
               enabled: false,
               hostname: "paused",
-              memberId: `instance:${"e".repeat(12)}`,
+              memberId: `server:${"e".repeat(12)}`,
             },
           ],
           subnet: "10.165.57.0/24",
@@ -221,7 +221,7 @@ describe("Tailscale stack forwarding", () => {
       harness.lanes
         .admit({
           label: "relay.tailscale.stack.apply",
-          locks: [exclusive(laneKeys.instance("c".repeat(12)))],
+          locks: [exclusive(laneKeys.server("c".repeat(12)))],
         })
         .run(
           Effect.promise(() => {
@@ -266,19 +266,19 @@ describe("Tailscale network members", () => {
   ]
   const members = stackConfig(stackId, {
     bindings: [
-      binding(instanceTailscaleMemberId(serverId), "paper", 10),
+      binding(serverTailscaleMemberId(serverId), "paper", 10),
       binding(appTailscaleMemberId(appId, "web"), "web", 11),
       binding(appTailscaleMemberId(appId, "worker"), "worker", 12),
       binding(databaseTailscaleMemberId(databaseId), "postgres", 13),
-      binding(instanceTailscaleMemberId(otherServerId), "other", 14),
+      binding(serverTailscaleMemberId(otherServerId), "other", 14),
     ],
     subnet: "10.165.60.0/24",
   })
   // Game servers only, none of which this Relay runs unless a test seeds it.
   const servers = stackConfig(stackId, {
     bindings: [
-      binding(instanceTailscaleMemberId(serverId), "paper", 10),
-      binding(instanceTailscaleMemberId(otherServerId), "other", 14),
+      binding(serverTailscaleMemberId(serverId), "paper", 10),
+      binding(serverTailscaleMemberId(otherServerId), "other", 14),
     ],
     subnet: "10.165.60.0/24",
   })
@@ -289,14 +289,14 @@ describe("Tailscale network members", () => {
     stackContainer(harness, stackId, true)
     await harness.seedServer({ id: serverId })
     for (const [kind, id] of [
-      ["instance", serverId],
+      ["server", serverId],
       ["app", appId],
       ["database", databaseId],
     ] as const) {
       await harness.freezes.freeze({ deletionId: deletion, id, kind }, quiet)
     }
 
-    await harness.lifecycle.deleteInstance(serverId, true)
+    await harness.lifecycle.deleteServer(serverId, true)
     // An App's and a database's deletions take them off once they're gone.
     await harness.lifecycle.removeFromTailscale((memberId) =>
       memberId.startsWith(`app:${appId}:`)
@@ -306,10 +306,10 @@ describe("Tailscale network members", () => {
     )
 
     const saved = await savedState(harness, stackId)
-    expect(saved.members).toEqual([instanceTailscaleMemberId(otherServerId)])
+    expect(saved.members).toEqual([serverTailscaleMemberId(otherServerId)])
     expect(saved.records).toEqual(hearthRecords)
     expect(
-      fakeDocker.container(harness.resources.instanceContainer(serverId))
+      fakeDocker.container(harness.resources.serverContainer(serverId))
     ).toBeUndefined()
   })
 
@@ -318,16 +318,16 @@ describe("Tailscale network members", () => {
     await savedStack(harness, servers, hearthRecords)
     stackContainer(harness, stackId, true)
     await harness.freezes.freeze(
-      { deletionId: deletion, id: serverId, kind: "instance" },
+      { deletionId: deletion, id: serverId, kind: "server" },
       quiet
     )
 
     await expect(
-      harness.lifecycle.deleteInstance(serverId, true)
+      harness.lifecycle.deleteServer(serverId, true)
     ).rejects.toThrow("Instance not found")
 
     const saved = await savedState(harness, stackId)
-    expect(saved.members).toEqual([instanceTailscaleMemberId(otherServerId)])
+    expect(saved.members).toEqual([serverTailscaleMemberId(otherServerId)])
     expect(saved.records).toEqual(hearthRecords)
   })
 
@@ -358,12 +358,12 @@ describe("Tailscale network members", () => {
         {
           enabled: true,
           hostname: "paper",
-          memberId: instanceTailscaleMemberId(serverId),
+          memberId: serverTailscaleMemberId(serverId),
         },
         {
           enabled: true,
           hostname: "other",
-          memberId: instanceTailscaleMemberId(otherServerId),
+          memberId: serverTailscaleMemberId(otherServerId),
         },
       ],
       domain: servers.domain,
@@ -432,8 +432,8 @@ describe("Tailscale forwarding repair", () => {
   ) => ({ address: `10.165.63.${host}`, enabled, hostname, memberId })
   const before = stackConfig(stackId, {
     bindings: [
-      binding(instanceTailscaleMemberId(serverId), "paper", 10, true),
-      binding(instanceTailscaleMemberId(otherServerId), "other", 14, false),
+      binding(serverTailscaleMemberId(serverId), "paper", 10, true),
+      binding(serverTailscaleMemberId(otherServerId), "other", 14, false),
     ],
     subnet: "10.165.63.0/24",
   })
@@ -465,10 +465,7 @@ describe("Tailscale forwarding repair", () => {
     await looking.reached
     const applying = harness.lanes.admit({
       label: "relay.tailscale.stack.apply",
-      locks: [
-        exclusive(laneKeys.instance(stackId)),
-        shared(laneKeys.tailscale),
-      ],
+      locks: [exclusive(laneKeys.server(stackId)), shared(laneKeys.tailscale)],
     })
     const applied = Effect.runPromise(
       applying.run(

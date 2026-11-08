@@ -6,7 +6,7 @@ import { grantHasPermission } from "@/lib/permissions"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
 import { builtinTailscaleBrickId } from "@workspace/contracts"
-import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
+import { listServerDirectoryEffect } from "@/lib/server-directory"
 import {
   loadManagedDomainAddressesEffect,
   managedAddressForInstance,
@@ -20,7 +20,7 @@ export const readInfraServerDirectory = Effect.fn("Infra.directory.servers")(
         grants: isPlatformAdmin(user)
           ? Effect.succeed([])
           : listUserGrantsEffect(user.id),
-        records: listInstanceDirectoryEffect(),
+        records: listServerDirectoryEffect(),
         addresses: loadManagedDomainAddressesEffect(),
       },
       { concurrency: 4 }
@@ -37,9 +37,9 @@ export const readInfraServerDirectory = Effect.fn("Infra.directory.servers")(
         !isPlatformAdmin(user) &&
         !effectiveScopePermissions(grants, {
           relayId: record.relayId,
-          resourceType: "instance",
+          resourceType: "server",
           resourceId: record.id,
-        }).has("instance.read")
+        }).has("server.read")
       )
         return []
       const {

@@ -41,7 +41,7 @@ export interface BackupConfigurationTarget {
     stoppedDescription?: string | undefined
     stoppedUnavailable: string | null
   }
-  kind: "app" | "volume" | "database" | "instance" | "platform"
+  kind: "app" | "volume" | "database" | "server" | "platform"
   name: string
   description?: string
   relayId: string
@@ -137,7 +137,7 @@ export function BackupConfigurationDialog({
   const effectiveConsistency =
     consistencyChoice?.stoppedUnavailable === null ? consistency : "live"
   const incrementalAllowed = showTarget
-    ? target?.kind === "instance"
+    ? target?.kind === "server"
     : (allowIncremental ?? false)
   const effectiveMode =
     mode === "incremental" && incrementalAllowed ? "incremental" : "full"
@@ -169,7 +169,7 @@ export function BackupConfigurationDialog({
     [destinationKeysInUse]
   )
   const showMode =
-    !consistencyChoice && (showTarget ? target?.kind === "instance" : true)
+    !consistencyChoice && (showTarget ? target?.kind === "server" : true)
 
   const resetConfiguration = () => {
     setName(initialName ?? timestampedBackupName("manual"))
@@ -593,7 +593,7 @@ function backupTargetItem(
     identity: {
       id: target.id,
       kind:
-        target.kind === "instance"
+        target.kind === "server"
           ? "server"
           : target.kind === "volume"
             ? "relay"

@@ -21,7 +21,7 @@ export const RESOURCE_HISTORY_WINDOW_MS = 6 * 60_000
 /** The shortest time between two samples of one resource. */
 export const RESOURCE_SAMPLE_INTERVAL_MS = 1_500
 
-export type ResourceSampleKind = "app" | "database" | "instance" | "relay"
+export type ResourceSampleKind = "app" | "database" | "server" | "relay"
 
 const sampleDuration = Metric.histogram("relay.resources.sample.duration", {
   description: "Time one resource's usage took to sample, by how it ended",

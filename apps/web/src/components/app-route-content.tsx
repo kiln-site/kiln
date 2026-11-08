@@ -15,8 +15,8 @@ import { AppWorkspaceShell } from "@/components/app/app-workspace"
 import { DatabaseWorkspaceShell } from "@/components/database/database-workspace"
 import { EmptyServerState } from "@/components/empty-server-state"
 import { InfraShell } from "@/components/infra-layout"
-import { InstanceRouteFrame } from "@/components/instance-route-frame"
-import { InstanceWorkspaceShell } from "@/components/instance-workspace"
+import { ServerRouteFrame } from "@/components/server-route-frame"
+import { ServerWorkspaceShell } from "@/components/server-workspace"
 import { KilnWorkspaceShell } from "@/components/kiln/kiln-workspace"
 import { RelayWorkspaceShell } from "@/components/relay/relay-workspace"
 import { RelayUnavailableState } from "@/components/relay-unavailable-state"
@@ -76,7 +76,7 @@ function AppRouteViewport({ children }: { children: React.ReactNode }) {
   if (routeFrame) {
     return <GlobalRouteFrame section={routeFrame}>{children}</GlobalRouteFrame>
   }
-  return <InstanceRouteViewport>{children}</InstanceRouteViewport>
+  return <ServerRouteViewport>{children}</ServerRouteViewport>
 }
 
 const NotFoundRouteFrame = React.memo(function NotFoundRouteFrame({
@@ -120,19 +120,19 @@ const GlobalRouteFrame = React.memo(function GlobalRouteFrame({
   )
 })
 
-const InstanceRouteViewport = React.memo(function InstanceRouteViewport({
+const ServerRouteViewport = React.memo(function ServerRouteViewport({
   children,
 }: {
   children: React.ReactNode
 }) {
   return (
-    <InstanceWorkspaceShell>
-      <InstanceRouteBoundary>{children}</InstanceRouteBoundary>
-    </InstanceWorkspaceShell>
+    <ServerWorkspaceShell>
+      <ServerRouteIdBoundary>{children}</ServerRouteIdBoundary>
+    </ServerWorkspaceShell>
   )
 })
 
-function InstanceRouteBoundary({ children }: { children: React.ReactNode }) {
+function ServerRouteIdBoundary({ children }: { children: React.ReactNode }) {
   const serverId = useRouteServerId()
   if (!serverId || serverId === "unavailable") return <RouteEmptyState />
   return (
@@ -189,7 +189,7 @@ function ServerRouteBoundary({
   if (route === undefined || misrouted)
     return <div className="min-h-0 flex-1 bg-background" />
   if (route === "missing") return <RouteEmptyState />
-  return <InstanceRouteFrame serverId={serverId}>{children}</InstanceRouteFrame>
+  return <ServerRouteFrame serverId={serverId}>{children}</ServerRouteFrame>
 }
 
 interface OpenedServer {

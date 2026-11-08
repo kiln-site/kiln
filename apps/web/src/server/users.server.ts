@@ -99,7 +99,7 @@ const holdsSomething = `(${hasCredential}
   OR COALESCE(u.role, 'user') IN ('admin', 'relay_creator')
   OR EXISTS (SELECT 1 FROM ${databaseTable("invitation")} i WHERE i.user_id = u.id AND ${openInvitation("i")})
   OR EXISTS (SELECT 1 FROM ${databaseTable("access_grant")} g WHERE g.user_id = u.id AND g.state <> 'revoked')
-  OR EXISTS (SELECT 1 FROM ${databaseTable("instance")} s WHERE s.owner_id = u.id)
+  OR EXISTS (SELECT 1 FROM ${databaseTable("server")} s WHERE s.owner_id = u.id)
   OR EXISTS (SELECT 1 FROM ${databaseTable("database")} d WHERE d.owner_id = u.id)
   OR EXISTS (SELECT 1 FROM ${databaseTable("app")} a WHERE a.owner_id = u.id)
   OR EXISTS (SELECT 1 FROM ${databaseTable("relay")} r WHERE r.created_by = u.id))`
@@ -160,8 +160,8 @@ async function userHoldings(userIds: ReadonlyArray<string>) {
         -- An expired or declined invitation leaves nothing to accept.
         AND EXISTS (SELECT 1 FROM ${databaseTable("invitation")} i WHERE i.access_id = g.id AND ${openInvitation("i")})))
      UNION ALL
-     SELECT s.owner_id, 'instance', s.relay_id, s.instance_id, 'owner', r.enabled
-       FROM ${databaseTable("instance")} s
+     SELECT s.owner_id, 'server', s.relay_id, s.instance_id, 'owner', r.enabled
+       FROM ${databaseTable("server")} s
        JOIN ${databaseTable("relay")} r ON r.id = s.relay_id
       WHERE s.owner_id IN (?)
      UNION ALL
@@ -205,7 +205,7 @@ async function platformTotals(): Promise<PlatformTotals> {
   >(
     `SELECT
        (SELECT COUNT(*) FROM ${databaseTable("relay")} WHERE enabled = TRUE) AS relays,
-       (SELECT COUNT(*) FROM ${databaseTable("instance")} s JOIN ${databaseTable("relay")} r ON r.id = s.relay_id AND r.enabled = TRUE) AS instances,
+       (SELECT COUNT(*) FROM ${databaseTable("server")} s JOIN ${databaseTable("relay")} r ON r.id = s.relay_id AND r.enabled = TRUE) AS instances,
        (SELECT COUNT(*) FROM ${databaseTable("app")} a JOIN ${databaseTable("relay")} r ON r.id = a.relay_id AND r.enabled = TRUE) AS apps,
        (SELECT COUNT(*) FROM ${databaseTable("database")} d JOIN ${databaseTable("relay")} r ON r.id = d.relay_id AND r.enabled = TRUE) AS \`databases\``
   )
@@ -253,7 +253,7 @@ function serializeUser(
         ? totals
         : {
             relays: count("relay"),
-            instances: count("instance"),
+            instances: count("server"),
             apps: count("app"),
             databases: count("database"),
           }),
@@ -332,7 +332,7 @@ export async function getUserAccessHandler(
   const resourceName = `COALESCE(
     CASE g.resource_type
       WHEN 'relay' THEN r.name
-      WHEN 'instance' THEN (SELECT COALESCE(s.display_name, s.source_name, s.instance_id) FROM ${databaseTable("instance")} s WHERE s.relay_id = g.relay_id AND s.instance_id = g.resource_id)
+      WHEN 'server' THEN (SELECT COALESCE(s.display_name, s.source_name, s.instance_id) FROM ${databaseTable("server")} s WHERE s.relay_id = g.relay_id AND s.instance_id = g.resource_id)
       ELSE (SELECT d.name FROM ${databaseTable("database")} d WHERE d.relay_id = g.relay_id AND d.database_id = g.resource_id)
     END, g.resource_id)`
   const [grants] = await databasePool.query<Array<GrantRow>>(
@@ -341,7 +341,7 @@ export async function getUserAccessHandler(
        FROM ${databaseTable("access_grant")} g
        JOIN ${databaseTable("relay")} r ON r.id = g.relay_id
       WHERE g.user_id = ? AND g.state <> 'revoked'
-      ORDER BY r.name, g.relay_id, FIELD(g.resource_type, 'relay', 'instance', 'database'), resource_name, g.id`,
+      ORDER BY r.name, g.relay_id, FIELD(g.resource_type, 'relay', 'server', 'database'), resource_name, g.id`,
     [userId]
   )
   const ids = grants.map((grant) => grant.id)
@@ -400,8 +400,8 @@ export async function getUserAccessHandler(
     `SELECT r.id AS relay_id, 'relay' AS resource_type, r.id AS resource_id, r.name, r.name AS relay_name
        FROM ${databaseTable("relay")} r WHERE r.enabled = TRUE AND r.created_by = ?
      UNION ALL
-     SELECT s.relay_id, 'instance', s.instance_id, COALESCE(s.display_name, s.source_name, s.instance_id), r.name
-       FROM ${databaseTable("instance")} s JOIN ${databaseTable("relay")} r ON r.id = s.relay_id AND r.enabled = TRUE
+     SELECT s.relay_id, 'server', s.instance_id, COALESCE(s.display_name, s.source_name, s.instance_id), r.name
+       FROM ${databaseTable("server")} s JOIN ${databaseTable("relay")} r ON r.id = s.relay_id AND r.enabled = TRUE
       WHERE s.owner_id = ?
      UNION ALL
      SELECT d.relay_id, 'database', d.database_id, d.name, r.name

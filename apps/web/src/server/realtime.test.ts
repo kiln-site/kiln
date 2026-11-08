@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { relayInstanceSchema, relayNodeSchema } from "@workspace/contracts"
+import { relayServerSchema, relayNodeSchema } from "@workspace/contracts"
 import { describe, expect, it, vi } from "vite-plus/test"
 
 import type { AccessGrant } from "@/lib/access-control"
@@ -88,7 +88,7 @@ describe("authorized realtime stream", () => {
     })
     const reader = stream.getReader()
     await reader.read()
-    const instance = relayInstanceSchema.parse({
+    const instance = relayServerSchema.parse({
       connectAddress: "server.test",
       containerId: null,
       desiredState: "running",
@@ -107,7 +107,7 @@ describe("authorized realtime stream", () => {
         "https://user:source-secret@example.com/brick.yaml?token=query-secret",
     })
     publishRealtimeChange({
-      type: "instance.upsert",
+      type: "server.upsert",
       relayId: "relay-one",
       instance,
     })
@@ -124,7 +124,7 @@ describe("authorized realtime stream", () => {
   it.each([false, true])(
     "gates snapshot node deltas independently of child instances (relay.read: %s)",
     async (readNode) => {
-      const instance = relayInstanceSchema.parse({
+      const instance = relayServerSchema.parse({
         connectAddress: "server.test",
         containerId: null,
         desiredState: "running",
@@ -156,8 +156,8 @@ describe("authorized realtime stream", () => {
           id: "child",
           relayId: "relay-one",
           resourceId: instance.id,
-          resourceType: "instance",
-          permissions: ["instance.read"],
+          resourceType: "server",
+          permissions: ["server.read"],
         },
         ...(readNode
           ? [

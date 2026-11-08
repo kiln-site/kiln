@@ -267,7 +267,7 @@ function AccessForm({
           resource.scope.resourceType === "app"
             ? "An app's owner can see it and its logs, delete it, and transfer it. Configuring it takes app permissions on its Relay. Transfer ownership to change this."
             : `Owners hold every permission on their ${
-                resource.scope.resourceType === "instance"
+                resource.scope.resourceType === "server"
                   ? "game server"
                   : resource.scope.resourceType === "database"
                     ? "database"

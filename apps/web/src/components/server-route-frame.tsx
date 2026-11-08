@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 
-import { InstanceWorkspace } from "@/components/instance-workspace"
+import { ServerWorkspace } from "@/components/server-workspace"
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { canAccessInstancePermission } from "@/lib/navigation-destinations"
 import {
@@ -10,9 +10,9 @@ import {
 } from "@/lib/query-options"
 import type { UiPreferences } from "@/lib/query-options"
 import { applyProvisioningInstance } from "@/lib/realtime-client"
-import { selectInstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import { selectWorkspaceServer } from "@/lib/relay-selectors"
 import { useServerSnapshot } from "@/lib/use-server-workspace"
-import { getFreshRelayInstance } from "@/server/relay"
+import { getFreshRelayServer } from "@/server/relay"
 
 const initialProvisioningReconciliationDelayMs = 1_000
 const maximumProvisioningReconciliationDelayMs = 10_000
@@ -24,7 +24,7 @@ function selectFileTreePreferences(preferences: UiPreferences) {
   }
 }
 
-export const InstanceRouteFrame = React.memo(function InstanceRouteFrame({
+export const ServerRouteFrame = React.memo(function ServerRouteFrame({
   children,
   serverId,
 }: {
@@ -32,7 +32,7 @@ export const InstanceRouteFrame = React.memo(function InstanceRouteFrame({
   serverId: string
 }) {
   const selectInstance = React.useMemo(
-    () => selectInstanceWorkspaceInstance(serverId),
+    () => selectWorkspaceServer(serverId),
     [serverId]
   )
   const { data: instance } = useServerSnapshot(selectInstance)
@@ -66,23 +66,23 @@ export const InstanceRouteFrame = React.memo(function InstanceRouteFrame({
         : false
 
     return {
-      consoleRead: can("instance.console.read"),
-      consoleWrite: can("instance.console.write"),
+      consoleRead: can("server.console.read"),
+      consoleWrite: can("server.console.write"),
       // Copying a server, to duplicate or move it, reads its files and
       // settings; where it can go is up to the Relays.
       copyServer:
-        can("instance.files.read") && can("instance.configuration.read"),
-      deleteServer: can("instance.delete"),
-      filesWrite: can("instance.files.write"),
-      networkRead: can("instance.network.read"),
-      networkPublicPortWrite: can("instance.network.public-port.write"),
-      networkWrite: can("instance.network.write"),
-      powerStart: can("instance.power.start"),
-      powerRestart: can("instance.power.restart"),
-      configurationRead: can("instance.configuration.read"),
-      configurationWrite: can("instance.configuration.write"),
-      limitsWrite: can("instance.limits.write"),
-      shareLogs: can("instance.logs.share"),
+        can("server.files.read") && can("server.configuration.read"),
+      deleteServer: can("server.delete"),
+      filesWrite: can("server.files.write"),
+      networkRead: can("server.network.read"),
+      networkPublicPortWrite: can("server.network.public-port.write"),
+      networkWrite: can("server.network.write"),
+      powerStart: can("server.power.start"),
+      powerRestart: can("server.power.restart"),
+      configurationRead: can("server.configuration.read"),
+      configurationWrite: can("server.configuration.write"),
+      limitsWrite: can("server.limits.write"),
+      shareLogs: can("server.logs.share"),
     }
   }, [capabilities, instanceId, relayId])
 
@@ -96,13 +96,13 @@ export const InstanceRouteFrame = React.memo(function InstanceRouteFrame({
           relayId={instance.relayId}
         />
       ) : null}
-      <InstanceWorkspace
+      <ServerWorkspace
         instance={instance}
         fileTreePreferences={fileTreePreferences}
         permissions={permissions}
       >
         {children}
-      </InstanceWorkspace>
+      </ServerWorkspace>
     </>
   )
 })
@@ -130,7 +130,7 @@ function ProvisioningReconciler({
         () =>
           recoverPromise(
             () =>
-              getFreshRelayInstance({
+              getFreshRelayServer({
                 data: { instanceId, relayId },
               }).then((updated) => {
                 if (closed) return

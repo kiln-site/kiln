@@ -1,5 +1,5 @@
 import { loadConfig } from "../config"
-import type { RelayConfig, RelayInstanceConfig } from "../config"
+import type { RelayConfig, RelayServerConfig } from "../config"
 
 /** A Relay config loaded the same way production loads it, rooted at `dataDirectory`. */
 export function testRelayConfig(
@@ -14,9 +14,9 @@ export function testRelayConfig(
   })
 }
 
-export function testInstance(
-  overrides: Partial<RelayInstanceConfig> = {}
-): RelayInstanceConfig {
+export function testServer(
+  overrides: Partial<RelayServerConfig> = {}
+): RelayServerConfig {
   const id = overrides.id ?? "instance-1"
   return {
     connectAddress: "relay.test",

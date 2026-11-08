@@ -55,7 +55,7 @@ export async function resolveSftpAuthorization(
 
   const [instances] = await databasePool.query<Array<InstanceRow>>(
     `SELECT instance_id
-       FROM ${databaseTable("instance")}
+       FROM ${databaseTable("server")}
       WHERE relay_id = ?
       ORDER BY instance_id ASC`,
     [relayId]
@@ -96,17 +96,17 @@ export async function resolveSftpAuthorization(
   const resolved = new Map<string, Set<string>>()
   for (const [instanceId, selected] of permissions) {
     const grant = { permissions: [...selected] }
-    if (!grantHasPermission(grant, "instance.sftp.connect")) continue
+    if (!grantHasPermission(grant, "server.sftp.connect")) continue
     const writable = linkedCli?.mode !== "read_only"
     resolved.set(
       instanceId,
       new Set(
         sftpFileActions({
-          read: grantHasPermission(grant, "instance.files.read"),
-          write: writable && grantHasPermission(grant, "instance.files.write"),
+          read: grantHasPermission(grant, "server.files.read"),
+          write: writable && grantHasPermission(grant, "server.files.write"),
           delete:
-            writable && grantHasPermission(grant, "instance.files.delete"),
-          chmod: writable && grantHasPermission(grant, "instance.files.chmod"),
+            writable && grantHasPermission(grant, "server.files.delete"),
+          chmod: writable && grantHasPermission(grant, "server.files.chmod"),
         })
       )
     )
@@ -140,15 +140,15 @@ export function sftpFileActions(permissions: {
   chmod: boolean
 }): ReadonlyArray<string> {
   return [
-    ...(permissions.read ? ["instance.files.list", "instance.files.read"] : []),
+    ...(permissions.read ? ["server.files.list", "server.files.read"] : []),
     ...(permissions.write
       ? [
-          "instance.files.create",
-          "instance.files.write",
-          "instance.files.rename",
+          "server.files.create",
+          "server.files.write",
+          "server.files.rename",
         ]
       : []),
-    ...(permissions.delete ? ["instance.files.delete"] : []),
-    ...(permissions.chmod ? ["instance.files.chmod"] : []),
+    ...(permissions.delete ? ["server.files.delete"] : []),
+    ...(permissions.chmod ? ["server.files.chmod"] : []),
   ]
 }

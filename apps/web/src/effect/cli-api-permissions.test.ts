@@ -5,7 +5,7 @@ import { Effect, Layer } from "effect"
 import {
   builtinTailscaleBrick,
   expandPermissionSelections,
-  relayInstanceSchema,
+  relayServerSchema,
   relaySnapshotSchema,
 } from "@workspace/contracts"
 import type { CliPrincipal } from "@/effect/cli-access"
@@ -113,7 +113,7 @@ const recipe = {
     },
   },
 }
-const instance = relayInstanceSchema.parse({
+const instance = relayServerSchema.parse({
   id: instanceId,
   name: "Survival",
   service: "survival",
@@ -154,7 +154,7 @@ beforeEach(() => {
   f.authorize.mockImplementation(({ permission }) =>
     expandPermissionSelections(
       [...allowed].map((key) => ({ kind: "permission", key })),
-      "instance"
+      "server"
     ).includes(permission)
       ? Effect.void
       : Effect.fail(
@@ -217,10 +217,10 @@ const startup = (extra: Record<string, unknown>, mode = principal.mode) =>
     )
   )
 const writes = () =>
-  f.rpc.mock.calls.filter((call) => call[1] === "instance.startup.write")
+  f.rpc.mock.calls.filter((call) => call[1] === "server.startup.write")
 describe("CLI startup permission boundary", () => {
   it("denies memory resource changes with configuration permission alone", async () => {
-    allowed.add("instance.configuration.write")
+    allowed.add("server.configuration.write")
     await expect(
       startup({ variables: { memory: "4G" } })
     ).rejects.toMatchObject({ code: "forbidden" })
@@ -232,7 +232,7 @@ describe("CLI backup export boundary", () => {
   const input = {
     relayId,
     targetId: instanceId,
-    targetKind: "instance",
+    targetKind: "server",
     storageId: "60a4d6e2-f17f-44e1-80d3-3ca75d589dc9",
     name: "Backup",
   }

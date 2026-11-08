@@ -18,7 +18,7 @@ import {
 
 const scope: ResourceScope = {
   relayId: "relay",
-  resourceType: "instance",
+  resourceType: "server",
   resourceId: "server",
 }
 
@@ -74,8 +74,8 @@ describeMysql("effective resource authority", () => {
           yield* insertRelay("relay")
           for (const [id, resourceType, resourceId] of [
             ["relay-access", "relay", "relay"],
-            ["server-access", "instance", "server"],
-            ["other-access", "instance", "other"],
+            ["server-access", "server", "server"],
+            ["other-access", "server", "other"],
           ] as const) {
             yield* insertGrant({
               id,
@@ -85,18 +85,18 @@ describeMysql("effective resource authority", () => {
               resourceId,
             })
           }
-          yield* select("relay-access", "instance.files.read")
-          yield* insertPreset("server-preset", scope, ["instance.console.read"])
+          yield* select("relay-access", "server.files.read")
+          yield* insertPreset("server-preset", scope, ["server.console.read"])
           yield* assignPreset("server-access", "server-preset")
-          yield* select("other-access", "instance.delete")
+          yield* select("other-access", "server.delete")
 
           const first = effectiveScopePermissions(
             yield* loadResourceGrantsEffect("user", "relay"),
             scope
           )
-          expect(first.has("instance.files.read")).toBe(true)
-          expect(first.has("instance.console.read")).toBe(true)
-          expect(first.has("instance.delete")).toBe(false)
+          expect(first.has("server.files.read")).toBe(true)
+          expect(first.has("server.console.read")).toBe(true)
+          expect(first.has("server.delete")).toBe(false)
 
           // A preset edit is observed on the next authorization read without
           // touching the membership rows.
@@ -105,15 +105,15 @@ describeMysql("effective resource authority", () => {
           yield* insertRows("preset_selection", {
             preset_id: "server-preset",
             selection_kind: "permission",
-            selection_key: "instance.files.write",
+            selection_key: "server.files.write",
           })
 
           const next = effectiveScopePermissions(
             yield* loadResourceGrantsEffect("user", "relay"),
             scope
           )
-          expect(next.has("instance.console.read")).toBe(false)
-          expect(next.has("instance.files.write")).toBe(true)
+          expect(next.has("server.console.read")).toBe(false)
+          expect(next.has("server.files.write")).toBe(true)
         })
     )
 
@@ -127,13 +127,13 @@ describeMysql("effective resource authority", () => {
             id: "server-access",
             userId: "user",
             relayId: "relay",
-            resourceType: "instance",
+            resourceType: "server",
             resourceId: "server",
           })
           yield* insertPreset(
             "other-preset",
             { ...scope, resourceId: "other" },
-            ["instance.delete"]
+            ["server.delete"]
           )
           yield* assignPreset("server-access", "other-preset")
 
@@ -152,7 +152,7 @@ describeMysql("effective resource authority", () => {
           yield* insertInstance("relay", "other")
           // Inactive assignments, one of them Relay-wide, grant nothing.
           for (const [state, resourceType, resourceId] of [
-            ["pending", "instance", "other"],
+            ["pending", "server", "other"],
             ["revoked", "relay", "relay"],
           ] as const) {
             yield* insertGrant({
@@ -170,7 +170,7 @@ describeMysql("effective resource authority", () => {
 
           expect(grants.map((grant) => grant.source)).toEqual(["owner"])
           expect(
-            effectiveScopePermissions(grants, scope).has("instance.delete")
+            effectiveScopePermissions(grants, scope).has("server.delete")
           ).toBe(true)
           expect(
             effectiveScopePermissions(grants, { ...scope, resourceId: "other" })

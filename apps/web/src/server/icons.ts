@@ -93,8 +93,7 @@ const iconOperation = <
         ? { id: input.subject.id, kind: "user" }
         : {
             id: input.subject.id,
-            kind:
-              input.subject.kind === "server" ? "instance" : input.subject.kind,
+            kind: input.subject.kind,
             relayId: input.subject.relayId,
           },
   })

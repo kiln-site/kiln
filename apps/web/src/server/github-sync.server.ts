@@ -34,7 +34,6 @@ import {
   type GitHubConnection,
   type GitHubInstallationRecord,
   type GitHubSync,
-  type GitHubSyncResourceKind,
   type GitHubSyncRun,
 } from "@/effect/github-sync"
 import { countAppGitHubSourcesEffect } from "@/effect/app-deployments"
@@ -63,7 +62,7 @@ import {
   githubSyncTargetAccess,
   type GitHubSyncTargetKind,
 } from "@/lib/github-sync-targets"
-import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
+import { listServerDirectoryEffect } from "@/lib/server-directory"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { readLimitedText } from "@/lib/request-body"
 import { requireEligibleResourceUser } from "@/server/auth"
@@ -140,7 +139,7 @@ export async function getGitHubSyncOverviewHandler(user: AuthenticatedUser) {
       runAppEffect("github.connections.load", loadGitHubConnectionsEffect()),
       runAppEffect("github.syncs.load", loadGitHubSyncsEffect()),
       listPersistedRelays(),
-      runAppEffect("instances.directory.list", listInstanceDirectoryEffect()),
+      runAppEffect("instances.directory.list", listServerDirectoryEffect()),
       runAppEffect("apps.list", listAppRecordsEffect()),
       admin ? Promise.resolve([]) : listUserGrants(user.id),
       runAppEffect("apps.github.sources.count", countAppGitHubSourcesEffect()),
@@ -186,7 +185,7 @@ export async function getGitHubSyncOverviewHandler(user: AuthenticatedUser) {
     connections.map((connection) => [connection.id, connectionName(connection)])
   )
   const syncViews = syncs.flatMap((sync): Array<GitHubSyncView> => {
-    const kind = targetKind(sync.resourceKind)
+    const kind = sync.resourceKind
     const target = targetsByKey.get(
       targetKey({ id: sync.resourceId, kind, relayId: sync.relayId })
     ) ?? {
@@ -598,7 +597,7 @@ async function saveGitHubSyncHandler(
   const target = existing
     ? {
         id: existing.resourceId,
-        kind: targetKind(existing.resourceKind),
+        kind: existing.resourceKind,
         relayId: existing.relayId,
       }
     : data.target
@@ -650,7 +649,7 @@ async function saveGitHubSyncHandler(
       id,
       relayId: target.relayId,
       resourceId: target.id,
-      resourceKind: target.kind === "server" ? "instance" : target.kind,
+      resourceKind: target.kind,
     })
   )
   await enqueueGitHubSync(id, "created")
@@ -793,7 +792,7 @@ async function manageableSync(user: AuthenticatedUser, id: string) {
   const sync = await runAppEffect("github.sync.load", loadGitHubSyncEffect(id))
   await requireTargetWrite(user, {
     id: sync.resourceId,
-    kind: targetKind(sync.resourceKind),
+    kind: sync.resourceKind,
     relayId: sync.relayId,
   })
   return sync
@@ -831,10 +830,6 @@ function targetAllows(
       access.scope
     )
   )
-}
-
-function targetKind(kind: GitHubSyncResourceKind): GitHubTargetKind {
-  return kind === "instance" ? "server" : kind
 }
 
 function targetKey(target: { id: string; kind: string; relayId: string }) {

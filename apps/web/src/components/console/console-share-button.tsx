@@ -9,13 +9,13 @@ import type {
 } from "@/components/console/console-stores"
 import { ConsoleTooltip } from "@/components/console/console-tooltip"
 import { copyToClipboard } from "@/components/console/console-toolbar-actions"
-import { useInstanceRelayConnected } from "@/components/instance-workspace-context"
+import { useServerRelayConnected } from "@/components/server-workspace-context"
 import {
   mclogsShareLabel,
   mclogsShareTooltip,
   useMclogsShareAction,
 } from "@/components/use-mclogs-share-action"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { WorkspaceServer } from "@/lib/relay-selectors"
 import { uploadConsoleLogToMclogs } from "@/server/relay"
 
 // Kept apart from the other toolbar actions, which act only on the console's
@@ -27,11 +27,11 @@ export function ConsoleShareButton({
   uiStore,
 }: {
   canShare: boolean
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
   streamStore: ConsoleStreamStore
   uiStore: ConsoleUiStore
 }) {
-  const relayConnected = useInstanceRelayConnected()
+  const relayConnected = useServerRelayConnected()
   const hasLines = React.useSyncExternalStore(
     streamStore.subscribe,
     streamStore.getHasLinesSnapshot,

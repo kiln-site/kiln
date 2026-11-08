@@ -9,10 +9,7 @@ import {
   formatDiskLimit,
   formatMemoryLimit,
 } from "@/lib/resource-limits"
-import type {
-  InstanceSettingsInstance,
-  RelayNodeSummary,
-} from "@/lib/relay-selectors"
+import type { SettingsServer, RelayNodeSummary } from "@/lib/relay-selectors"
 
 // What the game server is at a glance. Its name, status, and usage are in
 // the header.
@@ -20,13 +17,13 @@ export function ServerInfoRail({
   instance,
   node,
 }: {
-  instance: InstanceSettingsInstance
+  instance: SettingsServer
   node: RelayNodeSummary
 }) {
   const resource = React.useMemo(
     () => ({
       id: instance.id,
-      kind: "instance" as const,
+      kind: "server" as const,
       name: instance.name,
       relayId: instance.relayId,
     }),

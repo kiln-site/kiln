@@ -78,7 +78,7 @@ import type { DataTableSearchStore } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
 import { notALoginField } from "@/lib/not-a-login-field"
 import { queryKeys, tailscaleStacksQueryOptions } from "@/lib/query-options"
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { WorkspaceServer } from "@/lib/relay-selectors"
 import { defaultTailscaleHostname } from "@/lib/tailscale-selectors"
 import {
   showTailscaleOperationError,
@@ -439,10 +439,10 @@ export const TailscaleConnectMembersPopover = React.memo(
 
 // A game server's, an App service's, or a database's Tailscale networks:
 // which it has joined, under what hostname, and joining or leaving others.
-// The member is named by its member ID (`instanceTailscaleMemberId`,
+// The member is named by its member ID (`serverTailscaleMemberId`,
 // `appTailscaleMemberId`, `databaseTailscaleMemberId`).
 export type TailscaleMember = Pick<
-  InstanceWorkspaceInstance,
+  WorkspaceServer,
   "id" | "name" | "relayId" | "relayName"
 > & { memberId: string }
 

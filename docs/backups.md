@@ -70,7 +70,8 @@ or has failed.
 
 Targets are:
 
-- `instance`: a game server data directory;
+- `server`: a game server data directory (archives written before it was
+  renamed say `instance`, and still restore);
 - `database`: a managed database logical dump;
 - `platform`: Hearth's database and the recoverable Kiln configuration;
 - `app`: an App's folder;

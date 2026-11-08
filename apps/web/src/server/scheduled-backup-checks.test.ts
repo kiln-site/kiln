@@ -116,7 +116,7 @@ const storageId = "11111111-1111-4111-8111-111111111111"
 
 const target = (id: string) => ({
   id,
-  kind: "instance" as const,
+  kind: "server" as const,
   name: id.slice(0, 4),
   relayId,
 })
@@ -190,7 +190,7 @@ describeMysql("Scheduled backups, checked before they run", () => {
               exclude_patterns: "[]",
               relay_id: relayId,
               target_id: targetId,
-              target_kind: "instance",
+              target_kind: "server",
               updated_at: at,
               ...row,
             })
@@ -203,7 +203,7 @@ describeMysql("Scheduled backups, checked before they run", () => {
           )
           yield* requestResourceDeletionRowEffect({
             finalBackup: false,
-            kind: "instance",
+            kind: "server",
             relayId,
             resourceId: beingDeleted,
             storageId: null,
@@ -255,7 +255,7 @@ describeMysql("Scheduled backups, checked before they run", () => {
             storage_id: storageId,
             storage_key: storageId,
             target_id: capped,
-            target_kind: "instance",
+            target_kind: "server",
           })
           yield* deploy(
             backupSchedule({ kind: "storage", storageId }, [capped])
@@ -297,12 +297,12 @@ describeMysql("Scheduled backups, checked before they run", () => {
                       `INSERT INTO kiln_backup_policy
                          (relay_id, target_kind, target_id, exclude_patterns,
                           admin_quantity_limit, created_at, updated_at)
-                       VALUES (?, 'instance', ?, '[]', 0, ?, ?)`,
+                       VALUES (?, 'server', ?, '[]', 0, ?, ?)`,
                       [relayId, capped, at, at]
                     )
                     yield* invalidateScheduleDeploymentsEffect(transaction, {
                       relayId,
-                      target: { id: capped, kind: "instance" },
+                      target: { id: capped, kind: "server" },
                     })
                   })
                 )

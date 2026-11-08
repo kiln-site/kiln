@@ -113,7 +113,7 @@ export const readRelayIconEffect = Effect.fn("Icons.readRelay")(function* (
   }
   const result = relayIconReadResultSchema.parse(
     yield* promiseEffect(() =>
-      relayRpc(relay, "instance.icon.read", input, relayReadTimeoutMs, subject)
+      relayRpc(relay, "server.icon.read", input, relayReadTimeoutMs, subject)
     )
   )
   if (!result) return null
@@ -290,14 +290,7 @@ export function iconLaneKey(subject: IconSubject): string {
   if (subject.kind === "user") {
     return partKey(`user-icon:${subject.id}`, "picture")
   }
-  return partKey(
-    resourceKey(
-      subject.kind === "server" ? "instance" : subject.kind,
-      subject.relayId,
-      subject.id
-    ),
-    "icon"
-  )
+  return partKey(resourceKey(subject.kind, subject.relayId, subject.id), "icon")
 }
 
 // Hearth's own icon work, in the icon's lane. Inside a person's icon change,

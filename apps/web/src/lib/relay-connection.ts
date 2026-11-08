@@ -171,7 +171,7 @@ export async function relayRpc(
   relay: RelayEndpoint & { readonly enabled?: boolean },
   operation: RelayControlOperation,
   payload: unknown,
-  timeoutMs = operation === "instance.delete"
+  timeoutMs = operation === "server.delete"
     ? relayControlDeadlineMs(operation)
     : 10_000,
   subject?: string,

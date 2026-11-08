@@ -54,7 +54,7 @@ const insertApp = (
     ...row,
   })
 
-const owners = (table: "app" | "database" | "instance", id: string) =>
+const owners = (table: "app" | "database" | "server", id: string) =>
   Effect.map(
     selectRows<Record<string, string | null>>(table),
     (rows) =>

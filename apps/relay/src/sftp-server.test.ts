@@ -12,21 +12,21 @@ vi.mock("node:fs/promises", async (importOriginal) =>
 import type { RelayConfig } from "./config.js"
 import { FilesystemDriver } from "./files.js"
 import { attachSftpServer } from "./sftp-server.js"
-import { testInstance, testRelayConfig } from "./test/fixtures.js"
+import { testServer, testRelayConfig } from "./test/fixtures.js"
 import { holdNextCommit } from "./test/held-commit.js"
 import { OperationLanes } from "./operation-lanes.js"
-import { controlRequestLocks, instanceReplaceLocks } from "./operation-plans.js"
+import { controlRequestLocks, serverReplaceLocks } from "./operation-plans.js"
 
 const describeLinux = process.platform === "linux" ? describe : describe.skip
 const allowFileAccess = async () => [
-  "instance.sftp.connect",
-  "instance.files.list",
-  "instance.files.read",
-  "instance.files.create",
-  "instance.files.write",
-  "instance.files.delete",
-  "instance.files.rename",
-  "instance.files.chmod",
+  "server.sftp.connect",
+  "server.files.list",
+  "server.files.read",
+  "server.files.create",
+  "server.files.write",
+  "server.files.delete",
+  "server.files.rename",
+  "server.files.chmod",
 ]
 
 describeLinux("Relay SFTP server", () => {
@@ -35,7 +35,7 @@ describeLinux("Relay SFTP server", () => {
     const instanceId = "c".repeat(12)
     const instanceDirectory = resolve(dataDirectory, "instances", instanceId)
     await mkdir(instanceDirectory, { recursive: true })
-    const instance = testInstance({ id: instanceId })
+    const instance = testServer({ id: instanceId })
     const lanes = new OperationLanes()
     const server = await attachSftpServer({
       lanes,
@@ -49,10 +49,10 @@ describeLinux("Relay SFTP server", () => {
               instances: [
                 {
                   actions: [
-                    "instance.files.list",
-                    "instance.files.read",
-                    "instance.files.create",
-                    "instance.files.write",
+                    "server.files.list",
+                    "server.files.read",
+                    "server.files.create",
+                    "server.files.write",
                   ],
                   id: instanceId,
                 },
@@ -64,7 +64,7 @@ describeLinux("Relay SFTP server", () => {
         ],
       },
       docker: {
-        findInstance: async (id) => (id === instanceId ? instance : null),
+        findServer: async (id) => (id === instanceId ? instance : null),
       },
     })
 
@@ -79,7 +79,7 @@ describeLinux("Relay SFTP server", () => {
       // A restore replaces the server's files while the handle is open.
       await Effect.runPromise(
         lanes.run(
-          { label: "restore", locks: instanceReplaceLocks(instanceId) },
+          { label: "restore", locks: serverReplaceLocks(instanceId) },
           Effect.void
         )
       )
@@ -110,7 +110,7 @@ describeLinux("Relay SFTP server", () => {
     const path = resolve(instanceDirectory, "server.properties")
     await mkdir(instanceDirectory, { recursive: true })
     await writeFile(path, "motd=old")
-    const instance = testInstance({ id: instanceId })
+    const instance = testServer({ id: instanceId })
     const config = testConfig(dataDirectory)
     const lanes = new OperationLanes()
     const server = await attachSftpServer({
@@ -130,7 +130,7 @@ describeLinux("Relay SFTP server", () => {
         ],
       },
       docker: {
-        findInstance: async (id) => (id === instanceId ? instance : null),
+        findServer: async (id) => (id === instanceId ? instance : null),
       },
     })
     const client = await connect(server.port, "dev123")
@@ -140,14 +140,14 @@ describeLinux("Relay SFTP server", () => {
       const opened = Math.floor((await stat(path)).mtimeMs)
       const commit = holdNextCommit()
       const locks = controlRequestLocks(
-        "instance.files.put",
+        "server.files.put",
         { instanceId },
         (id) => id,
         () => []
       )
       const saved = Effect.runPromise(
         lanes.run(
-          { label: "instance.files.put", locks: locks ?? [] },
+          { label: "server.files.put", locks: locks ?? [] },
           new FilesystemDriver(config)
             .upload(
               instance,
@@ -204,9 +204,9 @@ describeLinux("Relay SFTP server", () => {
     const server = await attachSftpServer({
       lanes: new OperationLanes(),
       clientActions: async () => [
-        "instance.sftp.connect",
-        "instance.files.list",
-        "instance.files.read",
+        "server.sftp.connect",
+        "server.files.list",
+        "server.files.read",
       ],
       config: testConfig(dataDirectory),
       control: {
@@ -217,10 +217,10 @@ describeLinux("Relay SFTP server", () => {
               instances: [
                 {
                   actions: [
-                    "instance.files.list",
-                    "instance.files.read",
-                    "instance.files.create",
-                    "instance.files.write",
+                    "server.files.list",
+                    "server.files.read",
+                    "server.files.create",
+                    "server.files.write",
                   ],
                   id: instanceId,
                 },
@@ -232,8 +232,8 @@ describeLinux("Relay SFTP server", () => {
         ],
       },
       docker: {
-        findInstance: async (id) =>
-          id === instanceId ? testInstance({ id: instanceId }) : null,
+        findServer: async (id) =>
+          id === instanceId ? testServer({ id: instanceId }) : null,
       },
     })
     const client = await connect(server.port, "dev123")
@@ -265,7 +265,7 @@ describeLinux("Relay SFTP server", () => {
     const authorization = {
       instances: [
         {
-          actions: ["instance.files.list", "instance.files.read"],
+          actions: ["server.files.list", "server.files.read"],
           id: "a".repeat(12),
         },
       ],
@@ -282,7 +282,7 @@ describeLinux("Relay SFTP server", () => {
           { clientId: "hearth-two", payload: authorization },
         ],
       },
-      docker: { findInstance: async () => null },
+      docker: { findServer: async () => null },
     })
     try {
       await expect(connect(server.port, "dev123")).rejects.toThrow(

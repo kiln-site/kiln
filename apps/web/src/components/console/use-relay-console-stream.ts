@@ -5,11 +5,11 @@ import type {
   RelayConsole,
   RelayConsoleLine,
   RelayConsoleResource,
-  RelayInstanceLifecycleEvent,
-  RelayInstanceLifecycleState,
+  RelayServerLifecycleEvent,
+  RelayServerLifecycleState,
   RelayObservedState,
 } from "@workspace/contracts"
-import { relayInstanceLifecycleEventTime as lifecycleEventTime } from "@workspace/contracts"
+import { relayServerLifecycleEventTime as lifecycleEventTime } from "@workspace/contracts"
 
 import {
   consoleRecoveryLine,
@@ -35,7 +35,7 @@ import {
 import { consoleCopy } from "@/lib/console-copy"
 import type { ConsoleLoadTiming } from "@/lib/console-performance"
 import { queryKeys } from "@/lib/query-options"
-import type { ConsoleInstanceRuntime } from "@/lib/relay-selectors"
+import type { ConsoleServerRuntime } from "@/lib/relay-selectors"
 import {
   shouldWaitForRelayBrowserAuthorization,
   relayBrowserAuthorizationChanges,
@@ -49,7 +49,7 @@ export function useRelayConsoleStream(
   relayConnected: boolean,
   browserOrigin: string | null,
   consoleTransport: "direct" | "hearth" | null,
-  runtime: ConsoleInstanceRuntime | null | undefined,
+  runtime: ConsoleServerRuntime | null | undefined,
   loadTiming?: ConsoleLoadTiming,
   canWrite = false,
   retryVersion = 0
@@ -362,7 +362,7 @@ export function useRelayConsoleStream(
     }
 
     function replaceSession(
-      lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>,
+      lifecycle: ReadonlyArray<RelayServerLifecycleEvent>,
       lines: ReadonlyArray<RelayConsoleLine>,
       truncated: boolean
     ) {
@@ -390,7 +390,7 @@ export function useRelayConsoleStream(
         lifecycleEventTime(currentRuntime?.lifecycle, "started") === startedAt
       )
       const nextLines =
-        resourceKind !== "instance"
+        resourceKind !== "server"
           ? [...lines]
           : mergeConsoleStateLines(
               lines,
@@ -629,7 +629,7 @@ export function useRelayConsoleStream(
 
 function consoleMatchesRuntime(
   consoleData: RelayConsole | null,
-  runtime: ConsoleInstanceRuntime | null | undefined
+  runtime: ConsoleServerRuntime | null | undefined
 ): boolean {
   if (!consoleData) return false
   const expectedStartedAt = lifecycleEventTime(runtime?.lifecycle, "started")
@@ -645,7 +645,7 @@ function consoleLifecycleTime(consoleData: RelayConsole | null): string | null {
 
 function runtimeLifecycleTimestamp(
   state: RelayObservedState,
-  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>
+  lifecycle: ReadonlyArray<RelayServerLifecycleEvent>
 ): string | null {
   const lifecycleState = observedLifecycleState(state)
   return lifecycleState ? lifecycleEventTime(lifecycle, lifecycleState) : null
@@ -654,7 +654,7 @@ function runtimeLifecycleTimestamp(
 function retimestampRuntimeLifecycleLines(
   lines: ReadonlyArray<RelayConsoleLine>,
   consoleStartedTime: string | null,
-  lifecycle: ReadonlyArray<RelayInstanceLifecycleEvent>
+  lifecycle: ReadonlyArray<RelayServerLifecycleEvent>
 ): Array<RelayConsoleLine> | null {
   const sessionStartedAt = lifecycleEventTime(lifecycle, "started")
   if (
@@ -681,7 +681,7 @@ function retimestampRuntimeLifecycleLines(
 
 function observedLifecycleState(
   state: RelayObservedState
-): RelayInstanceLifecycleState | null {
+): RelayServerLifecycleState | null {
   if (state === "starting") return "started"
   if (state === "running") return "ready"
   if (state === "stopping" || state === "stopped" || state === "failed") {
@@ -691,7 +691,7 @@ function observedLifecycleState(
 }
 
 function lifecycleObservedState(
-  state: RelayInstanceLifecycleState
+  state: RelayServerLifecycleState
 ): RelayObservedState {
   if (state === "started") return "starting"
   if (state === "ready") return "running"

@@ -81,7 +81,7 @@ const allow = (instanceId: string, permissions: ReadonlyArray<string>) =>
       id,
       relayId,
       resourceId: instanceId,
-      resourceType: "instance",
+      resourceType: "server",
       userId: user.id,
     })
     yield* insertRows(
@@ -110,8 +110,8 @@ describeMysql("Copying files between Relays", () => {
           yield* insertRelay(relayId)
           yield* insertInstance(relayId, sourceId)
           yield* insertInstance(relayId, destinationId)
-          yield* allow(sourceId, ["instance.files.read"])
-          yield* allow(destinationId, ["instance.files.write"])
+          yield* allow(sourceId, ["server.files.read"])
+          yield* allow(destinationId, ["server.files.write"])
 
           // Something holds the destination whole, as a restore does.
           const held = yield* Deferred.make<void>()

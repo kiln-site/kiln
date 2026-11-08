@@ -26,20 +26,20 @@ type InstanceKind = InstanceIconSubject["kind"]
 // Seeing an icon takes reading what it belongs to; changing one takes what
 // renaming it does.
 const readPermissions = {
-  server: "instance.read",
+  server: "server.read",
   app: "app.read",
   database: "database.read",
 } as const satisfies Record<InstanceKind, AccessPermission>
 
 const editPermissions = {
-  server: "instance.configuration.write",
+  server: "server.configuration.write",
   app: "app.manage",
   database: "database.delete",
 } as const satisfies Record<InstanceKind, AccessPermission>
 
 // Copying an icon from a file takes reading that file.
 const filePermissions = {
-  server: "instance.files.read",
+  server: "server.files.read",
   app: "app.files.read",
 } as const satisfies Partial<Record<InstanceKind, AccessPermission>>
 
@@ -145,6 +145,6 @@ export async function requireFileRootRead(
   await requireRelayPermission(
     appId
       ? { appId, permission: "app.files.read", relayId, user }
-      : { instanceId: rootId, permission: "instance.files.read", relayId, user }
+      : { instanceId: rootId, permission: "server.files.read", relayId, user }
   )
 }

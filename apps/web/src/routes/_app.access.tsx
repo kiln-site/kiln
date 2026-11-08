@@ -8,7 +8,7 @@ export const Route = createFileRoute("/_app/access")({
   validateSearch: z.object({
     tab: z.enum(["users", "presets"]).optional(),
     relayId: z.string().max(64).optional(),
-    resourceType: z.enum(["relay", "instance", "database"]).optional(),
+    resourceType: z.enum(["relay", "server", "database"]).optional(),
     resourceName: z.string().max(256).optional(),
     resourceId: z.string().max(64).optional(),
   }),

@@ -27,7 +27,7 @@ import {
 // ./resource-access authenticate, then hand the user here.
 
 const inheritedPeopleSelectors = new Map(
-  (["instance", "database"] as const).map((scope) => {
+  (["server", "database"] as const).map((scope) => {
     const grantsRead = (selection: PermissionSelection) =>
       expandPermissionSelections([selection], "relay").includes(`${scope}.read`)
     return [

@@ -4,16 +4,16 @@ import { queryCollectionOptions } from "@tanstack/query-db-collection"
 
 import { fleetInstanceSchema } from "@/lib/realtime-events"
 import { queryKeys } from "@/lib/query-options"
-import { getRelayInstances } from "@/server/relay"
+import { getRelayServers } from "@/server/relay"
 
-export const relayInstancesCollectionOptions = collectionOptions(
-  "relay-instances",
+export const relayServersCollectionOptions = collectionOptions(
+  "relay-servers",
   (client) =>
     queryCollectionOptions({
-      id: "relay-instances",
+      id: "relay-servers",
       getKey: fleetInstanceKey,
       queryClient: client.requireDependency<QueryClient>("queryClient"),
-      queryFn: () => getRelayInstances(),
+      queryFn: () => getRelayServers(),
       queryKey: queryKeys.relay.instances,
       refetchOnMount: false,
       refetchOnReconnect: false,
@@ -30,10 +30,10 @@ export function fleetInstanceKey(instance: {
   return `${instance.relayId}:${instance.id}`
 }
 
-export function getRelayInstancesCollection(client: DbClient) {
-  return client.collection(relayInstancesCollectionOptions)
+export function getRelayServersCollection(client: DbClient) {
+  return client.collection(relayServersCollectionOptions)
 }
 
-export type RelayInstancesCollection = ReturnType<
-  typeof getRelayInstancesCollection
+export type RelayServersCollection = ReturnType<
+  typeof getRelayServersCollection
 >

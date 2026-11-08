@@ -15,10 +15,10 @@ import { randomUUID } from "node:crypto"
 import {
   DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
   relayControlDeadlineMs,
-  relayCreateInstanceSchema,
+  relayCreateServerSchema,
   relayInstanceWebRouteStateSchema,
   relaySnapshotSchema,
-  type RelayInstance,
+  type RelayServer,
 } from "@workspace/contracts"
 import { Cause, Clock, Duration, Effect, Schedule, Schema } from "effect"
 import { Activity } from "effect/workflow"
@@ -236,7 +236,7 @@ const migrationKey = (id: string) => `server-migration:${id}`
 // reserved to.
 const migrationLocks = (input: ServerMigrationInput) => {
   const source = resourceKey(
-    "instance",
+    "server",
     input.source.relayId,
     input.source.instanceId
   )
@@ -255,7 +255,7 @@ const migrationLocks = (input: ServerMigrationInput) => {
         ]),
     exclusive(
       resourceKey(
-        "instance",
+        "server",
         input.destination.relayId,
         input.destination.instanceId
       )
@@ -368,20 +368,20 @@ export async function requireMigrationPermissions(
     scope: instanceScope(input.source.relayId, input.source.instanceId),
     user,
   })
-  authorization.require("instance.files.read")
-  authorization.require("instance.configuration.read")
+  authorization.require("server.files.read")
+  authorization.require("server.configuration.read")
   ;(
     await resolveScopeAuthorization({
       scope: relayScope(input.destination.relayId),
       user,
     })
-  ).require("instance.create")
+  ).require("server.create")
   // Whether or not it runs now: it may be started before the copy stops
   // it, and starts again after a duplicate.
   if (options.stopSource) {
-    authorization.require("instance.power.stop")
+    authorization.require("server.power.stop")
     if (input.mode === "duplicate") {
-      authorization.require("instance.power.start")
+      authorization.require("server.power.start")
     }
   }
   if (options.copyAccess) authorization.require("access.read")
@@ -389,11 +389,11 @@ export async function requireMigrationPermissions(
   if (options.linkBackups) authorization.require("backup.download")
   if (options.backup) authorization.require("backup.create")
   if (options.deleteSource) {
-    authorization.require("instance.delete")
+    authorization.require("server.delete")
     authorization.require("backup.create")
   }
   if (options.moveDomain || options.moveWebRoutes) {
-    authorization.require("instance.network.write")
+    authorization.require("server.network.write")
   }
   return authorization
 }
@@ -584,7 +584,7 @@ const migrationSteps = (input: ServerMigrationInput, operationId: string) =>
       yield* step(input, "finish/delete", (actor) =>
         requestResourceDeletionEffect({
           finalBackup: true,
-          kind: "instance",
+          kind: "server",
           queued: true,
           relayId: input.source.relayId,
           resourceId: input.source.instanceId,
@@ -794,7 +794,7 @@ const createDestination = (
     // A Relay that can't take these limits fails the copy.
     const create = yield* Effect.try({
       try: () =>
-        relayCreateInstanceSchema.parse({
+        relayCreateServerSchema.parse({
           diskLimitBytes,
           ...relayResourceLimitsRequest(
             destination.id,
@@ -863,7 +863,7 @@ const reserveBackup = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
         relayId: input.source.relayId,
         storageIds: input.backupStorageIds,
         targetId: input.source.instanceId,
-        targetKind: "instance",
+        targetKind: "server",
         user: actor,
       })
     )
@@ -939,7 +939,7 @@ const stopSource = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
       [instance.observedState === "stopped" ? 0 : 1, input.migrationId]
     )
     if (instance.observedState !== "stopped") {
-      yield* rpc(source, "instance.action", actor.id, {
+      yield* rpc(source, "server.action", actor.id, {
         action: "stop",
         instanceId: input.source.instanceId,
       })
@@ -1000,7 +1000,7 @@ const handOverOwner = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
       RowDataPacket & { owner_id: string | null }
     >(
       "serverMigrations.owner",
-      `SELECT owner_id FROM ${databaseTable("instance")}
+      `SELECT owner_id FROM ${databaseTable("server")}
         WHERE relay_id = ? AND instance_id = ? LIMIT 1`,
       [input.source.relayId, input.source.instanceId]
     )
@@ -1011,7 +1011,7 @@ const handOverOwner = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
       (transaction) =>
         Effect.gen(function* () {
           yield* transaction.execute(
-            `UPDATE ${databaseTable("instance")}
+            `UPDATE ${databaseTable("server")}
                 SET owner_id = ?, owner_provisional = 0
               WHERE relay_id = ? AND instance_id = ?`,
             [ownerId, input.destination.relayId, input.destination.instanceId]
@@ -1023,7 +1023,7 @@ const handOverOwner = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
                   relayId: input.destination.relayId,
                   scope: {
                     instanceId: input.destination.instanceId,
-                    kind: "instance",
+                    kind: "server",
                   },
                 },
               ],
@@ -1044,7 +1044,7 @@ const moveWebRoutes = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
   Effect.gen(function* () {
     const [source, destination] = yield* relays(input)
     const state = relayInstanceWebRouteStateSchema.parse(
-      yield* rpc(source, "instance.network.routes.read", actor.id, {
+      yield* rpc(source, "server.network.routes.read", actor.id, {
         instanceId: input.source.instanceId,
       })
     )
@@ -1057,11 +1057,11 @@ const moveWebRoutes = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
           state.routes.map(({ id: _id, ...route }) => route)
         )
       )
-      yield* rpc(destination, "instance.network.routes.write", actor.id, {
+      yield* rpc(destination, "server.network.routes.write", actor.id, {
         instanceId: input.destination.instanceId,
         routes,
       })
-      yield* rpc(source, "instance.network.routes.write", actor.id, {
+      yield* rpc(source, "server.network.routes.write", actor.id, {
         instanceId: input.source.instanceId,
         routes: [],
       })
@@ -1072,12 +1072,12 @@ const moveWebRoutes = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
       {
         relayId: input.source.relayId,
         resourceId: input.source.instanceId,
-        resourceType: "instance",
+        resourceType: "server",
       },
       {
         relayId: destination.id,
         resourceId: input.destination.instanceId,
-        resourceType: "instance",
+        resourceType: "server",
       }
     )
   })
@@ -1095,7 +1095,7 @@ const restartSource = (id: string, actor: AuthenticatedUser | null) =>
       actor?.id
     )
     if (!instance || instance.observedState !== "stopped") return
-    yield* rpc(source, "instance.action", actor?.id, {
+    yield* rpc(source, "server.action", actor?.id, {
       action: "start",
       instanceId: row.source_instance_id,
     })
@@ -1145,7 +1145,7 @@ const endMigrationEffect = (
       sourceHandedToDeletion(
         yield* findResourceDeletionEffect(
           row.source_relay_id,
-          "instance",
+          "server",
           row.source_instance_id
         )
       )
@@ -1192,7 +1192,7 @@ const endMigrationEffect = (
         )
         yield* requestResourceDeletionEffect({
           finalBackup: false,
-          kind: "instance",
+          kind: "server",
           queued: true,
           relayId: row.destination_relay_id,
           resourceId: row.destination_instance_id,
@@ -1247,7 +1247,7 @@ const notifyEnded = (
       id: row.destination_instance_id,
       name: row.destination_name,
       relayId: row.destination_relay_id,
-      type: "instance",
+      type: "server",
     },
     ...(message ? { error: message } : {}),
     ...(state === "completed" &&
@@ -1263,7 +1263,7 @@ const notifyEnded = (
       id: row.source_instance_id,
       name: row.source_name,
       relayId: row.source_relay_id,
-      type: "instance",
+      type: "server",
     },
   }).pipe(
     Effect.tap(() =>
@@ -1302,7 +1302,7 @@ const destinationRecorded = (row: MigrationRow) =>
     const database = yield* Database
     const rows = yield* database.queryRows<RowDataPacket>(
       "serverMigrations.destination",
-      `SELECT 1 FROM ${databaseTable("instance")}
+      `SELECT 1 FROM ${databaseTable("server")}
         WHERE relay_id = ? AND instance_id = ? LIMIT 1`,
       [row.destination_relay_id, row.destination_instance_id]
     )
@@ -1331,11 +1331,11 @@ export const rollBackLegacyServerMigration = durableOperation({
   kind: "server.migration.rollback-legacy",
   locks: (input) => [
     exclusive(
-      resourceKey("instance", input.source.relayId, input.source.instanceId)
+      resourceKey("server", input.source.relayId, input.source.instanceId)
     ),
     exclusive(
       resourceKey(
-        "instance",
+        "server",
         input.destination.relayId,
         input.destination.instanceId
       )
@@ -1462,7 +1462,7 @@ function snapshotInstance(
   relay: PersistedRelay,
   instanceId: string,
   subject: string | undefined
-): Effect.Effect<RelayInstance | null, unknown> {
+): Effect.Effect<RelayServer | null, unknown> {
   return rpc(relay, "relay.snapshot", subject, {}).pipe(
     Effect.map(
       (value) =>
@@ -1478,9 +1478,9 @@ function snapshotInstance(
 function rpc(
   relay: PersistedRelay,
   operation:
-    | "instance.action"
-    | "instance.network.routes.read"
-    | "instance.network.routes.write"
+    | "server.action"
+    | "server.network.routes.read"
+    | "server.network.routes.write"
     | "relay.snapshot"
     | "transfer.pull.cancel"
     | "transfer.source.discard",
@@ -1493,8 +1493,8 @@ function rpc(
       relay,
       operation,
       payload,
-      operation === "instance.action"
-        ? relayControlDeadlineMs("instance.action")
+      operation === "server.action"
+        ? relayControlDeadlineMs("server.action")
         : 30_000,
       subject
     )

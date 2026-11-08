@@ -5,7 +5,7 @@ import { consoleCopy, type ConsoleCopy } from "@/lib/console-copy"
 // The shared console UI reads its wording from here; pages for other kinds of
 // resource than servers provide theirs.
 export const ConsoleCopyContext = React.createContext<ConsoleCopy>(
-  consoleCopy.instance
+  consoleCopy.server
 )
 
 export function useConsoleCopy(): ConsoleCopy {

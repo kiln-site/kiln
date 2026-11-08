@@ -16,9 +16,9 @@ import {
   type DomainSettings,
 } from "@/components/domains-shared"
 import {
-  useInstanceIdentity,
-  useInstancePermissions,
-} from "@/components/instance-workspace-context"
+  useServerIdentity,
+  useServerPermissions,
+} from "@/components/server-workspace-context"
 import { StatusIndicator } from "@/components/status-indicator"
 import { WorkspaceCopyValueButton } from "@/components/workspace-header"
 import {
@@ -53,8 +53,8 @@ type DomainDialog =
  * vanity domains it may use. Kiln keeps their DNS records.
  */
 export const ServerDomainsSection = React.memo(function ServerDomainsSection() {
-  const instance = useInstanceIdentity()
-  const permissions = useInstancePermissions()
+  const instance = useServerIdentity()
+  const permissions = useServerPermissions()
   const select = React.useCallback(
     (data: DomainSettings) =>
       data.managedDomains.filter(

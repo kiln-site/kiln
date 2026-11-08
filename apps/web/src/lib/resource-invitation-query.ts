@@ -15,7 +15,7 @@ export function invitationInfrastructureHref(
   invitation: Pick<ResourceInvitation, "id" | "scope">
 ) {
   const section =
-    invitation.scope.resourceType === "instance"
+    invitation.scope.resourceType === "server"
       ? "servers"
       : invitation.scope.resourceType === "database"
         ? "databases"

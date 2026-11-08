@@ -786,10 +786,10 @@ async function loadTargetDirectory(): Promise<Array<ScheduleTarget>> {
        FROM ${databaseTable("relay")} relay
       WHERE relay.enabled = TRUE
       UNION ALL
-     SELECT instance.instance_id AS id, 'instance' AS kind,
+     SELECT instance.instance_id AS id, 'server' AS kind,
             COALESCE(instance.display_name, instance.instance_id) AS name,
             instance.relay_id
-       FROM ${databaseTable("instance")} instance
+       FROM ${databaseTable("server")} instance
        JOIN ${databaseTable("relay")} relay ON relay.id = instance.relay_id
       WHERE relay.enabled = TRUE
       UNION ALL

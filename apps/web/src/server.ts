@@ -20,13 +20,13 @@ import { scheduleBackupCopyProcessing } from "./lib/backup-copy"
 import { checkAuthSchema } from "./lib/auth"
 import { stopWarmCacheRefreshes } from "./lib/cache"
 import { wakePendingAuthorizationDelivery } from "./lib/authorization-delivery"
-import { scheduleInstancePostProvisionProcessing } from "./lib/instance-post-provision"
+import { scheduleServerPostProvisionProcessing } from "./lib/server-post-provision"
 import { stopPollingWorkers } from "./lib/polling-worker"
 import { startKilnUpdateNotifications } from "./lib/kiln-update-notifications"
 import {
-  startInstanceDirectorySync,
-  stopInstanceDirectorySync,
-} from "./lib/instance-directory-sync"
+  startServerDirectorySync,
+  stopServerDirectorySync,
+} from "./lib/server-directory-sync"
 import {
   startGitHubSyncPolling,
   stopGitHubSyncPolling,
@@ -75,7 +75,7 @@ await checkAuthSchema()
 // Before the app runtime starts, so telemetry carries the ID, and before
 // Relays connect, since Hearth sends it to them.
 await loadInstallationId()
-startInstanceDirectorySync()
+startServerDirectorySync()
 startGitHubSyncPolling()
 startAppDeploymentPolling()
 startAppImageUpdateChecks()
@@ -150,7 +150,7 @@ forkAppEffect(
   )
 )
 scheduleBackupCopyProcessing()
-scheduleInstancePostProvisionProcessing()
+scheduleServerPostProvisionProcessing()
 // Deletions a previous Hearth, or the final-delete worker before it, left
 // running carry on, each as the operation it was, and any attempt recorded
 // but never admitted is admitted: now, then every half minute.
@@ -206,7 +206,7 @@ let shutdownPromise: Promise<void> | undefined
 export function shutdownHearth(): Promise<void> {
   // Disposing the runtime also flushes pending telemetry.
   shutdownPromise ??= Promise.all([
-    stopInstanceDirectorySync(),
+    stopServerDirectorySync(),
     stopGitHubSyncPolling(),
     stopAppDeploymentPolling(),
     stopAppImageUpdateChecks(),

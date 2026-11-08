@@ -30,7 +30,7 @@ export class LaneRejectedError extends Schema.TaggedError<LaneRejectedError>()(
 ) {}
 
 export interface LaneAdmission {
-  /** Names the operation in diagnostics, such as `instance.action`. */
+  /** Names the operation in diagnostics, such as `server.action`. */
   readonly label: string
   /**
    * The locks, or a promise of them when a target must be looked up first.

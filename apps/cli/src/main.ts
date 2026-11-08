@@ -30,7 +30,7 @@ import {
   DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
   MAXIMUM_INSTANCE_NAME_LENGTH,
   databaseIdSchema,
-  formatRelayInstanceStateReason,
+  formatRelayServerStateReason,
   relayIdSchema,
   relayFileContentSchema,
   relayFileTreeSchema,
@@ -316,7 +316,7 @@ const runCommandEffect = Effect.fn("cli.command")(function* (
                 ...common,
                 relayId: target.relayId,
                 targetId: target.instanceId,
-                targetKind: "instance",
+                targetKind: "server",
               }))
             )
           : {
@@ -1017,7 +1017,7 @@ function writeServerInfo(
   writeLine(`Relay: ${result.relay.name}`)
   writeLine(`State: ${server.observedState} (desired ${server.desiredState})`)
   if (server.stateReason) {
-    writeLine(`Reason: ${formatRelayInstanceStateReason(server.stateReason)}`)
+    writeLine(`Reason: ${formatRelayServerStateReason(server.stateReason)}`)
   }
   writeLine(`Game: ${server.game}`)
   writeLine(`Implementation: ${server.implementation} ${server.version}`)

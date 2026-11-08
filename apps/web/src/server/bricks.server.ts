@@ -1,7 +1,7 @@
 import {
   brickSchema,
   brickVariableValuesSchema,
-  relayInstanceSchema,
+  relayServerSchema,
   relaySnapshotSchema,
 } from "@workspace/contracts"
 import type { z } from "zod"
@@ -26,7 +26,7 @@ export async function getInstanceStartupHandler(
   await requireRelayPermission({
     user,
     relayId: relay.id,
-    permission: "instance.configuration.read",
+    permission: "server.configuration.read",
     instanceId: data.instanceId,
   })
   const snapshot = relaySnapshotSchema.parse(
@@ -41,14 +41,14 @@ export async function getInstanceStartupHandler(
   return {
     brick,
     brickSource,
-    instance: relayInstanceSchema.parse(instance),
+    instance: relayServerSchema.parse(instance),
     variables: brickVariableValuesSchema.parse(variables),
   }
 }
 
 export async function loadInstanceRecipe(
   relay: PersistedRelay,
-  instance: z.infer<typeof relayInstanceSchema>
+  instance: z.infer<typeof relayServerSchema>
 ) {
   let brickSource = instance.brickSource
   if (!brickSource) {

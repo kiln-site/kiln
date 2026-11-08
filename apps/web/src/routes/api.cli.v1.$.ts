@@ -420,7 +420,7 @@ async function streamConsole(
   const iterator = openHearthRelayConsoleStream({
     credentialId: principal.credentialId,
     relayId: input.relayId,
-    resource: { id: input.instanceId, kind: "instance" },
+    resource: { id: input.instanceId, kind: "server" },
     signal: lifecycle.signal,
     user: principal.user,
   })

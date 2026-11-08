@@ -14,7 +14,7 @@ export interface ConsoleCopy {
 export const consoleCopy: Record<RelayBrowserResourceKind, ConsoleCopy> = {
   app: { notice: "LOG", search: "Search logs", stream: "log stream" },
   database: { notice: "LOG", search: "Search logs", stream: "log stream" },
-  instance: {
+  server: {
     notice: "CONSOLE",
     search: "Search console",
     stream: "console stream",

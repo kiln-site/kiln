@@ -12,7 +12,7 @@ export function fileRootKey(relayId: string, rootId: string): string {
   const appId = appIdFromFileRoot(rootId)
   return appId
     ? resourceKey("app", relayId, appId)
-    : resourceKey("instance", relayId, rootId)
+    : resourceKey("server", relayId, rootId)
 }
 
 /**

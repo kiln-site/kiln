@@ -3,7 +3,7 @@ import {
   appIdSchema,
   databaseIdSchema,
   relayIdSchema,
-  relayInstanceLimitsWriteSchema,
+  relayServerLimitsWriteSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -21,7 +21,7 @@ const capacityInputSchema = z.strictObject({
   relayId: relayIdSchema,
 })
 
-const instanceLimitsInputSchema = relayInstanceLimitsWriteSchema.extend({
+const instanceLimitsInputSchema = relayServerLimitsWriteSchema.extend({
   relayId: relayIdSchema,
 })
 
@@ -33,12 +33,12 @@ export const getResourceLimitsCapacity = createServerFn({ method: "GET" })
 
 // Saved at once; the game server takes them the next time it restarts.
 const changeInstanceLimits = resourceOperation({
-  kind: "instance",
+  kind: "server",
   id: (input: z.infer<typeof instanceLimitsInputSchema>) => input.instanceId,
-  name: "instance.limits.update",
+  name: "server.limits.update",
   lock: { part: "config" },
   doing: "Changing this game server's limits",
-  permission: () => "instance.limits.write",
+  permission: () => "server.limits.write",
   run: saveInstanceLimits,
 })
 

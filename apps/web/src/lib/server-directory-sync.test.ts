@@ -2,19 +2,19 @@ import { assert, layer } from "@effect/vitest"
 import { Deferred, Effect, Fiber } from "effect"
 
 import {
-  listInstanceDirectoryEffect,
-  type DirectoryInstance,
-} from "@/lib/instance-directory"
+  listServerDirectoryEffect,
+  type ServerDirectoryEntry,
+} from "@/lib/server-directory"
 import {
-  InstanceDirectorySource,
-  syncInstanceDirectories,
-} from "@/lib/instance-directory-sync"
+  ServerDirectorySource,
+  syncServerDirectories,
+} from "@/lib/server-directory-sync"
 import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertInstance, insertRelay } from "@/test/seed"
 
 const relayId = "1".repeat(12)
-const server: DirectoryInstance = {
+const server: ServerDirectoryEntry = {
   id: "a".repeat(12),
   name: "Before",
   game: "Minecraft",
@@ -39,7 +39,7 @@ describeMysql("instance directory synchronization", () => {
               subscribeRealtimeChanges((event) => {
                 if (
                   event.type === "hearth.invalidate" &&
-                  event.topics.includes("instance-directory")
+                  event.topics.includes("server-directory")
                 )
                   Deferred.doneUnsafe(initialCommit, Effect.void)
               })
@@ -47,11 +47,11 @@ describeMysql("instance directory synchronization", () => {
             (unsubscribe) => Effect.sync(unsubscribe)
           )
           const disconnected = Deferred.makeUnsafe<void>()
-          let current: ReadonlyArray<DirectoryInstance> | null = [server]
+          let current: ReadonlyArray<ServerDirectoryEntry> | null = [server]
           let changed!: (relayId: string) => void
           let released = false
-          const worker = yield* syncInstanceDirectories.pipe(
-            Effect.provideService(InstanceDirectorySource, {
+          const worker = yield* syncServerDirectories.pipe(
+            Effect.provideService(ServerDirectorySource, {
               instances: () => {
                 if (current === null)
                   Deferred.doneUnsafe(disconnected, Effect.void)
@@ -73,7 +73,7 @@ describeMysql("instance directory synchronization", () => {
             const unsubscribe = subscribeRealtimeChanges((event) => {
               if (
                 event.type === "hearth.invalidate" &&
-                event.topics.includes("instance-directory")
+                event.topics.includes("server-directory")
               )
                 resume(Effect.void)
             })
@@ -81,20 +81,20 @@ describeMysql("instance directory synchronization", () => {
             return Effect.sync(unsubscribe)
           })
           assert.strictEqual(
-            (yield* listInstanceDirectoryEffect())[0]?.name,
+            (yield* listServerDirectoryEffect())[0]?.name,
             "Before"
           )
           current = [{ ...server, name: "After", version: "1.22" }]
           yield* flush
           assert.strictEqual(
-            (yield* listInstanceDirectoryEffect())[0]?.version,
+            (yield* listServerDirectoryEffect())[0]?.version,
             "1.22"
           )
           current = null
           changed(relayId)
           yield* Deferred.await(disconnected)
           assert.strictEqual(
-            (yield* listInstanceDirectoryEffect())[0]?.name,
+            (yield* listServerDirectoryEffect())[0]?.name,
             "After"
           )
           // A snapshot can briefly omit an instance that still exists, for
@@ -102,7 +102,7 @@ describeMysql("instance directory synchronization", () => {
           current = []
           yield* flush
           assert.strictEqual(
-            (yield* listInstanceDirectoryEffect())[0]?.name,
+            (yield* listServerDirectoryEffect())[0]?.name,
             "After"
           )
           yield* Fiber.interrupt(worker)

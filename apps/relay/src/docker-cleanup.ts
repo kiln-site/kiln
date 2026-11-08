@@ -50,7 +50,7 @@ import {
 import {
   appLifecycleLocks,
   databaseLifecycleLocks,
-  instanceLifecycleLocks,
+  serverLifecycleLocks,
 } from "./operation-plans.js"
 import {
   operation,
@@ -942,8 +942,8 @@ function ownerLocks(
       return appLifecycleLocks(owner.id)
     case "database":
       return databaseLifecycleLocks(owner.id)
-    case "instance":
-      return instanceLifecycleLocks(owner.id)
+    case "server":
+      return serverLifecycleLocks(owner.id)
     case undefined:
       return [exclusive(laneKeys.dockerCleanup)]
   }

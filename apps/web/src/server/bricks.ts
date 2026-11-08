@@ -7,12 +7,12 @@ import {
   brickSchema,
   brickSourceSchema,
   instanceIdSchema,
-  relayCreateInstanceSchema,
+  relayCreateServerSchema,
   relayInstanceNameSchema,
-  relayInstanceSchema,
+  relayServerSchema,
   relayIdSchema,
   relaySnapshotSchema,
-  relayUpdateInstanceStartupSchema,
+  relayUpdateServerStartupSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -82,7 +82,7 @@ const brickVersionCatalogSchema = z.object({
 })
 
 const relayInputSchema = z.object({ relayId: relayIdSchema })
-export const hearthCreateInstanceInputSchema = relayCreateInstanceSchema
+export const hearthCreateInstanceInputSchema = relayCreateServerSchema
   .omit({ recipeDefinition: true })
   .extend({
     ...relayInputSchema.shape,
@@ -95,7 +95,7 @@ const instanceInputSchema = relayInputSchema.extend({
   instanceId: instanceIdSchema,
 })
 export const hearthUpdateInstanceStartupInputSchema =
-  relayUpdateInstanceStartupSchema
+  relayUpdateServerStartupSchema
     .extend(instanceInputSchema.shape)
     .strict()
     .superRefine((value, context) => {
@@ -212,14 +212,14 @@ export const getBrickVersions = createServerFn({ method: "GET" })
 const createInstance = operation<
   z.infer<typeof hearthCreateInstanceInputSchema> & { instanceId: string }
 >()({
-  name: "instance.create",
+  name: "server.create",
   doing: "Creating this game server",
   authorize: ({ input, user }) =>
     signedIn(user).pipe(
       Effect.tap((person) =>
         promiseEffect(() =>
           requireRelayPermission({
-            permission: "instance.create",
+            permission: "server.create",
             relayId: input.relayId,
             user: person,
           })
@@ -228,7 +228,7 @@ const createInstance = operation<
     ),
   locks: ({ input }) => [
     exclusive(
-      resourceKey("instance", input.relayId, input.instanceId)
+      resourceKey("server", input.relayId, input.instanceId)
     ),
     shared(relayKey(input.relayId)),
   ],
@@ -236,7 +236,7 @@ const createInstance = operation<
     promiseEffect(() => createInstanceHandler(user, input)),
   audit: ({ input }) => ({
     id: input.instanceId,
-    kind: "instance",
+    kind: "server",
     relayId: input.relayId,
   }),
 })
@@ -247,7 +247,7 @@ export const createBrickInstance = createServerFn({ method: "POST" })
     const user = await requireEligibleResourceUser()
     // Reserved once, outside the operation, for the person's request.
     const instanceId = await runAppEffect(
-      "instance.create.reserveId",
+      "server.create.reserveId",
       reserveServerInstanceIdEffect(`${user.id}:${data.idempotencyKey}`)
     )
     return runOperationPromise(
@@ -276,7 +276,7 @@ async function createInstanceHandler(
     relayId: _,
     ...createInput
   } = data
-  const input = relayCreateInstanceSchema.parse({
+  const input = relayCreateServerSchema.parse({
     ...createInput,
     ...relayResourceLimitsRequest(
       relay.id,
@@ -307,7 +307,7 @@ export const getInstanceRecipe = createServerFn({ method: "GET" })
     await requireRelayPermission({
       user,
       relayId: relay.id,
-      permission: "instance.configuration.read",
+      permission: "server.configuration.read",
       instanceId: data.instanceId,
     })
     const snapshot = relaySnapshotSchema.parse(
@@ -332,10 +332,10 @@ export const getInstanceStartup = createServerFn({ method: "GET" })
   )
 
 export function startupNetworkChanged(
-  existing: z.infer<typeof relayInstanceSchema>["tailscale"],
+  existing: z.infer<typeof relayServerSchema>["tailscale"],
   input: {
     reinstall?: boolean
-    tailscale?: z.infer<typeof relayInstanceSchema>["tailscale"]
+    tailscale?: z.infer<typeof relayServerSchema>["tailscale"]
   }
 ): boolean {
   // Reinstall preserves the applied network configuration. Compare fields,
@@ -351,10 +351,10 @@ export function startupNetworkChanged(
 // Startup weighs several permissions against what changes, so only reading
 // its configuration is checked before the lanes; the run checks the rest.
 const changeInstanceStartup = resourceOperation({
-  kind: "instance",
+  kind: "server",
   id: (input: z.infer<typeof hearthUpdateInstanceStartupInputSchema>) =>
     input.instanceId,
-  name: "instance.startup.update",
+  name: "server.startup.update",
   // A reinstall replaces it.
   lock: (input) => (input.reinstall ? "whole" : { part: "config" }),
   // It provisions its domains afterwards.
@@ -363,12 +363,12 @@ const changeInstanceStartup = resourceOperation({
       dnsKey({
         relayId: input.relayId,
         resourceId: input.instanceId,
-        resourceType: "instance",
+        resourceType: "server",
       })
     ),
   ],
   doing: "Changing this game server's startup",
-  permission: () => "instance.configuration.read",
+  permission: () => "server.configuration.read",
   run: updateInstanceStartupHandler,
 })
 
@@ -391,8 +391,8 @@ async function updateInstanceStartupHandler(
     scope: instanceScope(relay.id, data.instanceId),
     user,
   })
-  authorization.require("instance.configuration.read")
-  const existing = await requiredRelayInstance(relay, data.instanceId)
+  authorization.require("server.configuration.read")
+  const existing = await requiredRelayServer(relay, data.instanceId)
   const submittedRecipe = data.recipe
   const recipeChanged =
     !data.reinstall &&
@@ -419,20 +419,20 @@ async function updateInstanceStartupHandler(
       data.variables ?? {}
     )
   }
-  if (networkChanged) authorization.require("instance.network.write")
+  if (networkChanged) authorization.require("server.network.write")
   if (configurationChanged)
-    authorization.require("instance.configuration.write")
-  if (limitsChanged) authorization.require("instance.limits.write")
+    authorization.require("server.configuration.write")
+  if (limitsChanged) authorization.require("server.limits.write")
   // Applying unchanged settings still rebuilds the container. A read grant
   // alone must never authorize this mutation.
   if (
     !configurationChanged &&
     !limitsChanged &&
     !networkChanged &&
-    !authorization.allows("instance.configuration.write") &&
-    !authorization.allows("instance.limits.write")
+    !authorization.allows("server.configuration.write") &&
+    !authorization.allows("server.limits.write")
   ) {
-    authorization.require("instance.network.write")
+    authorization.require("server.network.write")
   }
   const powerPermission = startupPowerPermission(existing, data)
   if (powerPermission) authorization.require(powerPermission)
@@ -450,7 +450,7 @@ async function updateInstanceStartupHandler(
       {
         method: "PUT",
         body: JSON.stringify(
-          relayUpdateInstanceStartupSchema.parse({
+          relayUpdateServerStartupSchema.parse({
             ...trustedData,
             ...(recipeDefinition ? { recipeDefinition } : {}),
             ...(deploymentId ? { deploymentId } : {}),
@@ -462,7 +462,7 @@ async function updateInstanceStartupHandler(
     )
   // A reinstall or change of Brick is a deployment; other startup changes
   // aren't.
-  const instance = relayInstanceSchema.parse(
+  const instance = relayServerSchema.parse(
     data.reinstall || recipeDefinition
       ? await asServerDeployment(
           {
@@ -489,7 +489,7 @@ async function updateInstanceStartupHandler(
   publishRealtimeChange({
     instance,
     relayId: relay.id,
-    type: "instance.upsert",
+    type: "server.upsert",
   })
   return instance
 }
@@ -497,7 +497,7 @@ async function updateInstanceStartupHandler(
 // The Brick a reinstall installs again, as its deployment names it.
 async function currentBrick(
   relay: PersistedRelay,
-  instance: z.infer<typeof relayInstanceSchema>
+  instance: z.infer<typeof relayServerSchema>
 ) {
   const brick = await recoverPromise(
     async () => (await loadInstanceRecipe(relay, instance)).brick.metadata,
@@ -627,7 +627,7 @@ function canProvisionOnRelay(
       (grant) =>
         grant.relayId === relay.id &&
         grant.resourceType === "relay" &&
-        grantHasPermission(grant, "instance.create")
+        grantHasPermission(grant, "server.create")
     )
   )
 }
@@ -639,7 +639,7 @@ async function requireRelayProvisionAccess(
   await requireRelayPermission({
     user,
     relayId: relay.id,
-    permission: "instance.create",
+    permission: "server.create",
   })
 }
 
@@ -697,10 +697,7 @@ async function visibleRecipeDefinition(
   return brickRecipeDefinition(brick)
 }
 
-async function requiredRelayInstance(
-  relay: PersistedRelay,
-  instanceId: string
-) {
+async function requiredRelayServer(relay: PersistedRelay, instanceId: string) {
   const snapshot = relaySnapshotSchema.parse(
     await requestRelay(relay, "/v1/snapshot")
   )

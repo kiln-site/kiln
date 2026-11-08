@@ -60,7 +60,7 @@ export function grantsAllowPermission(
     if (!grantHasPermission(grant, permission)) return false
     if (grant.resourceType === "relay") return true
     return Boolean(
-      (grant.resourceType === "instance" &&
+      (grant.resourceType === "server" &&
         target.instanceId &&
         grant.resourceId === target.instanceId) ||
       (grant.resourceType === "database" &&
@@ -177,7 +177,7 @@ export const requireRelayPermissionsEffect = Effect.fn(
     {
       relayId: input.relayId,
       resourceType: input.instanceId
-        ? "instance"
+        ? "server"
         : input.databaseId
           ? "database"
           : input.appId
@@ -340,15 +340,15 @@ export function allowedInstanceIdsForUser(
     relayGrants.some(
       (grant) =>
         grant.resourceType === "relay" &&
-        grantHasPermission(grant, "instance.read")
+        grantHasPermission(grant, "server.read")
     )
   ) {
     return new Set(instanceIds)
   }
   return new Set(
     relayGrants.flatMap((grant) =>
-      grant.resourceType === "instance" &&
-      grantHasPermission(grant, "instance.read")
+      grant.resourceType === "server" &&
+      grantHasPermission(grant, "server.read")
         ? [grant.resourceId]
         : []
     )
@@ -361,12 +361,12 @@ export function allowedInstanceIdsForUser(
 export const deleteResourceAccessEffect = Effect.fn("access.deleteResource")(
   function* (
     relayId: string,
-    resourceType: "database" | "instance",
+    resourceType: "database" | "server",
     resourceId: string
   ) {
     const database = yield* Database
     const invitationColumn =
-      resourceType === "instance" ? "instance_id" : "database_id"
+      resourceType === "server" ? "instance_id" : "database_id"
     const changed = yield* database.transaction(
       "access.deleteResource",
       (transaction) =>
@@ -403,8 +403,8 @@ export const deleteResourceAccessEffect = Effect.fn("access.deleteResource")(
                 {
                   relayId,
                   scope:
-                    resourceType === "instance"
-                      ? { instanceId: resourceId, kind: "instance" }
+                    resourceType === "server"
+                      ? { instanceId: resourceId, kind: "server" }
                       : { kind: "subject_relay" },
                 },
               ],

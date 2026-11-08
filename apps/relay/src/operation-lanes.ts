@@ -47,11 +47,11 @@ export const laneKeys = {
   hostFiles: "relay:host-files",
   /** Starting an update of the host's OS packages. See host-packages.ts. */
   hostPackages: "relay:host-packages",
-  instance: (id: string) => `instance:${id}`,
-  instanceFiles: (id: string) => `instance:${id}/files`,
+  server: (id: string) => `server:${id}`,
+  serverFiles: (id: string) => `server:${id}/files`,
   /** Power and console input: anything that changes the running process. */
-  instanceLifecycle: (id: string) => `instance:${id}/lifecycle`,
-  instanceMetadata: (id: string) => `instance:${id}/metadata`,
+  serverLifecycle: (id: string) => `server:${id}/lifecycle`,
+  serverMetadata: (id: string) => `server:${id}/metadata`,
   /** Web routes, game ports, and the edge proxy shared by every resource. */
   routes: "relay:routes",
   /**
@@ -91,7 +91,7 @@ export type LaneRefusal = (
 
 /** What the lanes know of resources frozen for their deletion. */
 export interface FrozenResources {
-  has(kind: "app" | "database" | "instance", id: string): boolean
+  has(kind: "app" | "database" | "server", id: string): boolean
   refusal(label: string, locks: ReadonlyArray<LaneLock>): string | null
 }
 
@@ -140,7 +140,7 @@ export class OperationLanes extends Lanes {
    * Whether a resource is frozen for its deletion, for work that touches it
    * from inside another operation, such as connecting an App to a database.
    */
-  isFrozen(kind: "app" | "database" | "instance", id: string): boolean {
+  isFrozen(kind: "app" | "database" | "server", id: string): boolean {
     return this.#frozen?.has(kind, id) ?? false
   }
 }

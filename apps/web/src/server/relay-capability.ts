@@ -27,7 +27,7 @@ const relativeFilePathSchema = z
   )
 
 const fileCapabilityInputSchema = browserCapabilityInputSchema.extend({
-  action: z.enum(["instance.files.download", "instance.files.upload"]),
+  action: z.enum(["server.files.download", "server.files.upload"]),
   path: relativeFilePathSchema,
   optInV2: z.boolean().optional().default(false),
 })
@@ -43,7 +43,7 @@ const browserCapabilityBatchSchema = browserCapabilityInputSchema
     resourceKind: z
       .enum(relayBrowserResourceKinds)
       .optional()
-      .default("instance"),
+      .default("server"),
     requests: z
       .array(
         z.discriminatedUnion("kind", [

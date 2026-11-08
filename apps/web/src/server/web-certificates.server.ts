@@ -6,7 +6,7 @@ import type { WebHostnameCertificate } from "@/server/domains"
 interface CertificateOwner {
   readonly relayId: string
   readonly resourceId: string
-  readonly resourceType: "app" | "instance"
+  readonly resourceType: "app" | "server"
 }
 
 /** A resource's hostnames still waiting on a certificate, from its Relay's snapshot. */

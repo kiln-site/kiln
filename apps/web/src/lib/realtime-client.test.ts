@@ -10,7 +10,7 @@ const relayServer = vi.hoisted(() => ({
 }))
 vi.mock("@/server/relay", () => relayServer)
 
-import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
+import { getRelayServersCollection } from "@/lib/collections/relay-servers"
 import { createAppClients, type AppRouterContext } from "@/lib/query-client"
 import type {
   FleetInstance,
@@ -61,7 +61,7 @@ function fleet() {
   const clients = createAppClients()
   openClients.push(clients)
   return {
-    instances: getRelayInstancesCollection(clients.dbClient),
+    instances: getRelayServersCollection(clients.dbClient),
     queryClient: clients.queryClient,
   }
 }

@@ -253,7 +253,7 @@ function routeUpstreamHost(
   const appId = appIdFromRouteOwner(route.instanceId)
   return appId
     ? resources.appAlias(appId, route.service ?? APP_SERVICE)
-    : resources.instanceContainer(route.instanceId)
+    : resources.serverContainer(route.instanceId)
 }
 
 // Where a route's requests go, as Traefik reaches it.

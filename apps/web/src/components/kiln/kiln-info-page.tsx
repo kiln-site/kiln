@@ -57,7 +57,7 @@ import {
 } from "@/lib/query-options"
 import type { RelayDirectoryEntry } from "@/lib/relay-route"
 import { kilnFavorite } from "@/lib/instance-favorites"
-import { selectSidebarInstanceCount } from "@/lib/relay-selectors"
+import { selectSidebarServerCount } from "@/lib/relay-selectors"
 import {
   queueTerminalInput,
   relayTerminalInputKey,
@@ -461,7 +461,7 @@ const KilnInstanceCounts = React.memo(function KilnInstanceCounts() {
   })
   const { data: instances = 0 } = useQuery({
     ...relaySnapshotQueryOptions(),
-    select: selectSidebarInstanceCount,
+    select: selectSidebarServerCount,
   })
   const { data: apps = 0 } = useQuery({
     ...appDirectoryQueryOptions(),

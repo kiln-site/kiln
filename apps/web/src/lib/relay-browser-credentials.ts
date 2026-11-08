@@ -67,7 +67,7 @@ export function notifyRelayBrowserAuthorizationChanged(): void {
 export function relayBrowserAuthorizationSignal(
   relayId: string,
   instanceId: string,
-  resourceKind: RelayBrowserResourceKind = "instance"
+  resourceKind: RelayBrowserResourceKind = "server"
 ): {
   getSnapshot: () => number
   subscribe: (listener: () => void) => () => void
@@ -100,7 +100,7 @@ export function relayBrowserAuthorizationSignal(
 export function acquireRelayBrowserCredentials(
   relayId: string,
   instanceId: string,
-  resourceKind: RelayBrowserResourceKind = "instance"
+  resourceKind: RelayBrowserResourceKind = "server"
 ): {
   credentials: Promise<RelayBrowserCredentials>
   issue: (request: BrowserCapabilityRequest) => Promise<IssuedBrowserCapability>
@@ -320,7 +320,7 @@ function credentialsKey(
   instanceId: string,
   resourceKind: RelayBrowserResourceKind
 ): string {
-  return resourceKind === "instance"
+  return resourceKind === "server"
     ? `${relayId}:${instanceId}`
     : `${relayId}:${resourceKind}:${instanceId}`
 }

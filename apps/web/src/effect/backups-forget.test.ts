@@ -11,7 +11,7 @@ const insertRepository = (id: string, relayId: string, targetId: string) =>
   insertRows("backup_repository", {
     id,
     relay_id: relayId,
-    target_kind: "instance",
+    target_kind: "server",
     target_id: targetId,
     password_ciphertext: "repository-password",
     created_at: at,
@@ -20,7 +20,7 @@ const insertRepository = (id: string, relayId: string, targetId: string) =>
 const insertPolicy = (relayId: string, targetId: string) =>
   insertRows("backup_policy", {
     relay_id: relayId,
-    target_kind: "instance",
+    target_kind: "server",
     target_id: targetId,
     exclude_patterns: "[]",
     created_at: at,
@@ -58,7 +58,7 @@ const insertBackupWithDependents = (
       backup_name: id,
       filename: `${id}.zip`,
       artifact_kind: "archive",
-      target_kind: "instance",
+      target_kind: "server",
       target_id: row.target_id,
       source_name: row.target_id,
       shared_by: "user-one",
@@ -164,7 +164,7 @@ describeMysql("backup forgetting", () => {
         yield* insertRows("resource_deletion", {
           id: "00000000-0000-4000-8000-000000000001",
           relay_id: "relay-one",
-          resource_kind: "instance",
+          resource_kind: "server",
           resource_id: "instance-one",
           final_backup: true,
           backup_id: "backup-one",

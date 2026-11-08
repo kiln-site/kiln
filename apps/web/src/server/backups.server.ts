@@ -107,7 +107,7 @@ import type {
   BackupRunForQueryInput,
   CopyBackupInput,
   DatabaseBackupInput,
-  InstanceBackupInput,
+  ServerBackupInput,
   PlatformBackupInput,
   RenameBackupInput,
   ResourceBackupInput,
@@ -120,7 +120,7 @@ const backupRunsPageSize = 50
 
 export async function createInstanceBackupHandler(
   user: AuthenticatedUser,
-  data: InstanceBackupInput
+  data: ServerBackupInput
 ) {
   const relay = await requireBackupRelay(data.relayId)
   // Create and the personal-destination download rule share one grant load.
@@ -792,7 +792,7 @@ export async function restoreInstanceBackupHandler(
   if (
     !backup ||
     backup.status !== "available" ||
-    backup.targetKind !== "instance" ||
+    backup.targetKind !== "server" ||
     (backup.artifactKind !== "archive" &&
       backup.artifactKind !== "restic_snapshot") ||
     (backup.artifactKind === "archive" && backup.backupMode !== "full") ||

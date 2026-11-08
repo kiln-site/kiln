@@ -50,7 +50,7 @@ export function useCheckWebCertificate(
         data:
           resource.resourceType === "app"
             ? { ...resource, hostname, resourceType: "app" }
-            : { ...resource, hostname, resourceType: "instance" },
+            : { ...resource, hostname, resourceType: "server" },
       }),
     onError: (cause) =>
       showToast({

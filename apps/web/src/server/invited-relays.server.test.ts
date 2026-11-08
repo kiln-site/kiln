@@ -13,7 +13,7 @@ const now = Date.UTC(2026, 5, 1)
 const invite = Effect.fnUntraced(function* (input: {
   readonly grantState?: "pending" | "revoked"
   readonly relayId: string
-  readonly resourceType?: "relay" | "instance"
+  readonly resourceType?: "relay" | "server"
   readonly userId?: string
   readonly invitation?: Record<string, number | string>
 }) {
@@ -97,7 +97,7 @@ const seed = Effect.gen(function* () {
   })
   yield* invite({ relayId: "r-grant-rev", grantState: "revoked" })
   yield* invite({ relayId: "r-disabled" })
-  yield* invite({ relayId: "r-srv-only", resourceType: "instance" })
+  yield* invite({ relayId: "r-srv-only", resourceType: "server" })
   yield* invite({ relayId: "r-not-mine", userId: "someone-else" })
 })
 

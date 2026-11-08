@@ -30,7 +30,7 @@ export const loadResourceOwnerIdEffect = Effect.fn("domains.resource.owner")(
   function* (scope: {
     relayId: string
     resourceId: string
-    resourceType: "app" | "instance"
+    resourceType: "app" | "server"
   }) {
     const database = yield* Database
     const query = resourceOwnerQuery(scope)

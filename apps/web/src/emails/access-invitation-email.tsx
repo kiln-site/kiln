@@ -13,12 +13,12 @@ export interface AccessInvitationEmailProps {
   inviterName: string
   resourceName: string
   role: string
-  scope: "database" | "instance" | "platform" | "relay"
+  scope: "database" | "server" | "platform" | "relay"
 }
 
 const kindNoun = {
   database: "database",
-  instance: "game server",
+  server: "game server",
   relay: "Relay",
 } as const
 
@@ -71,7 +71,7 @@ AccessInvitationEmail.PreviewProps = {
   inviterName: "Sam Rivera",
   resourceName: "Paper 1.21",
   role: "a member",
-  scope: "instance",
+  scope: "server",
 } satisfies AccessInvitationEmailProps
 
 export default AccessInvitationEmail

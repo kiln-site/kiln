@@ -55,7 +55,7 @@ Each run:
 1. Reads the branch head and its recursive tree.
 2. For every included file, compares its blob SHA with the one Kiln last
    wrote to that path (`synced_files`), and writes only changed files through
-   the Relay's `instance.files.put` operation (`files-put-v1`). Files are
+   the Relay's `server.files.put` operation (`files-put-v1`). Files are
    written atomically and parent folders are created.
 3. Unless **Replace existing files** is on, a file is only written if it's
    absent or unchanged since Kiln wrote it. The put carries the modification

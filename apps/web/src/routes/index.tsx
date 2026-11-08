@@ -14,7 +14,7 @@ import {
   relayReachabilityQueryOptions,
   serverDirectoryQueryOptions,
 } from "@/lib/query-options"
-import { findRelayInstance } from "@/lib/relay-selectors"
+import { findRelayServer } from "@/lib/relay-selectors"
 import { getInvitationPreview } from "@/server/access"
 import { getAuthState } from "@/server/auth"
 import {
@@ -120,7 +120,7 @@ export const Route = createFileRoute("/")({
       }
       throw redirect({ href: firstAccessibleAppHref(capabilities) })
     }
-    const rememberedInstance = findRelayInstance(
+    const rememberedInstance = findRelayServer(
       instances,
       uiPreferences.selectedInstance
     )

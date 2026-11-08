@@ -138,7 +138,7 @@ export interface SecurityTarget {
   /** The scope picker key of the resource it belongs to. */
   scope: string
   relayId: string
-  resourceType: "app" | "database" | "instance" | "relay"
+  resourceType: "app" | "database" | "server" | "relay"
   resourceId: string
   /** The app service or Kiln service, or "host" for the Relay's host. */
   component: string | null
@@ -367,7 +367,7 @@ export function securityItemKind(
       return use.component ? `App · ${use.component}` : "App"
     case "database":
       return "Database"
-    case "instance":
+    case "server":
       return "Game server"
   }
 }
@@ -383,8 +383,7 @@ export function securityItemInstance(
   }
   return {
     id: use.resourceId,
-    kind:
-      use.resourceType === "instance" ? ("server" as const) : use.resourceType,
+    kind: use.resourceType,
     relayId,
   }
 }
@@ -408,8 +407,7 @@ export function securityScopeKey(
   relayId: string,
   resourceId: string
 ): string {
-  const kind = resourceType === "instance" ? "server" : resourceType
-  return `${kind}:${relayId}:${resourceId}`
+  return `${resourceType}:${relayId}:${resourceId}`
 }
 
 export function parseSecurityScope(scope: string): {
@@ -426,6 +424,6 @@ export function parseSecurityScope(scope: string): {
   return {
     relayId,
     resourceId,
-    resourceType: kind === "server" ? "instance" : kind,
+    resourceType: kind,
   }
 }

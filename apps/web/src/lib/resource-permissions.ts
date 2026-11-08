@@ -150,8 +150,8 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
       `SELECT id, id AS relay_id, 'relay' AS resource_type, id AS resource_id, NULL AS engine
          FROM ${databaseTable("relay")} WHERE created_by = ?${relayId ? " AND id = ?" : ""}
        UNION ALL
-       SELECT instance_id AS id, relay_id, 'instance', instance_id, NULL
-         FROM ${databaseTable("instance")} WHERE owner_id = ?${relayFilter}${scope ? " AND instance_id = ?" : ""}
+       SELECT instance_id AS id, relay_id, 'server', instance_id, NULL
+         FROM ${databaseTable("server")} WHERE owner_id = ?${relayFilter}${scope ? " AND instance_id = ?" : ""}
        UNION ALL
        SELECT database_id AS id, relay_id, 'database', database_id, engine
          FROM ${databaseTable("database")} WHERE owner_id = ?${relayFilter}${scope ? " AND database_id = ?" : ""}
@@ -161,7 +161,7 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
       [
         userId,
         ...(relayId ? [relayId] : []),
-        ...owned("instance"),
+        ...owned("server"),
         ...owned("database"),
         ...owned("app"),
       ]

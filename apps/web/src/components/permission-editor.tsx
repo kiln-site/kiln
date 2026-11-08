@@ -1069,7 +1069,7 @@ function appliesOn(item: Item, scopeType: PermissionScopeType) {
     item.selection.kind === "permission"
       ? permissionDefinition(item.selection.key)?.family
       : undefined
-  if (family === "instance")
+  if (family === "server")
     return "Every current and future game server on this Relay."
   if (family === "database")
     return "Every current and future database on this Relay."
@@ -1188,7 +1188,7 @@ function hasContextNames(context: PermissionContext) {
   return !!(context.relayName ?? context.resourceName)
 }
 function contextKind(scopeType: PermissionScopeType) {
-  return scopeType === "instance"
+  return scopeType === "server"
     ? "game server"
     : scopeType === "database"
       ? "database"
@@ -1197,7 +1197,7 @@ function contextKind(scopeType: PermissionScopeType) {
         : "relay"
 }
 function scopeNoun(scopeType: PermissionScopeType) {
-  return scopeType === "instance"
+  return scopeType === "server"
     ? "a game server"
     : scopeType === "database"
       ? "a database"

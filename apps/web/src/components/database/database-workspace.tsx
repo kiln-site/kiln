@@ -43,7 +43,7 @@ import {
   WorkspaceMetaSeparator,
 } from "@/components/workspace-header"
 import { WorkspacePowerControls } from "@/components/workspace-power-controls"
-import type { ServerAction } from "@/lib/instance-power-state"
+import type { ServerAction } from "@/lib/server-power-state"
 import { databaseDestinations } from "@/lib/navigation-destinations"
 import { managedDatabaseDirectoryQueryOptions } from "@/lib/query-options"
 import { runManagedDatabaseAction } from "@/server/databases"

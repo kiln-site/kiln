@@ -167,7 +167,7 @@ describe("Relay capability issuance orchestration", () => {
       )
     })
     const issue = (
-      action: "instance.files.download" | "instance.files.upload",
+      action: "server.files.download" | "server.files.upload",
       instanceId = relayFileRootId(hostId)
     ) =>
       issueFileCapabilityForRequest({
@@ -182,7 +182,7 @@ describe("Relay capability issuance orchestration", () => {
     it("uses host permissions and keeps another Relay's root outside the capability", async () => {
       expect(
         decodeCapabilityPayload(
-          (await issue("instance.files.download")).capability
+          (await issue("server.files.download")).capability
         )
       ).toMatchObject({
         actions: ["relay.files.download"],
@@ -191,11 +191,11 @@ describe("Relay capability issuance orchestration", () => {
         operation: "file",
       })
       await expect(
-        issue("instance.files.download", relayFileRootId("8".repeat(12)))
+        issue("server.files.download", relayFileRootId("8".repeat(12)))
       ).rejects.toThrow()
-      await expect(issue("instance.files.upload")).rejects.toThrow()
-      granted = ["instance.files.read", "app.files.read"]
-      await expect(issue("instance.files.download")).rejects.toThrow()
+      await expect(issue("server.files.upload")).rejects.toThrow()
+      granted = ["server.files.read", "app.files.read"]
+      await expect(issue("server.files.download")).rejects.toThrow()
     })
   })
 
@@ -242,7 +242,7 @@ describe("Relay capability issuance orchestration", () => {
         publicKeyJwk,
         relayId: "1".repeat(12),
         requests: [{ kind: "console", optInV2: true, write: true }],
-        resource: { id: "instance-one", kind: "instance" },
+        resource: { id: "instance-one", kind: "server" },
       })
     ).rejects.toBe(revoked)
   })

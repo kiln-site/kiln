@@ -13,10 +13,10 @@ import type {
   DatabaseConnectionMemberKind,
   RelayBackupTask,
   RelayDesiredState,
-  RelayInstanceLifecycleEvent,
-  RelayInstanceRecovery,
-  RelayInstancePendingPrimaryPort,
-  RelayInstancePortProtocol,
+  RelayServerLifecycleEvent,
+  RelayServerRecovery,
+  RelayServerPendingPrimaryPort,
+  RelayServerPortProtocol,
   RelayInstanceWebRoute,
   RelayBrowserAuthorizationRevision,
 } from "@workspace/contracts"
@@ -30,14 +30,18 @@ import {
   relayAppSchema,
   relayCreateAppSchema,
   relayCreateDatabaseSchema,
-  relayCreateInstanceSchema,
-  relayInstanceSchema,
+  relayCreateServerSchema,
+  relayServerSchema,
   relayManagedDatabaseSchema,
   resticSnapshotIdSchema,
   type ResourceLimits,
 } from "@workspace/contracts"
 
 import { RelayStateError } from "./errors.js"
+import {
+  renameServerKindsInText,
+  renameServerPermission,
+} from "../server-naming.js"
 import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "../browser-security.js"
 import {
   makeRelayScheduleState,
@@ -157,7 +161,7 @@ export const DATABASE_CONNECTION_RECOVERY_KEY = "database_connections_recovered"
 export interface RelayResourceFreezeRecord {
   readonly deletionId: string
   readonly id: string
-  readonly kind: "app" | "database" | "instance" | "volume"
+  readonly kind: "app" | "database" | "server" | "volume"
 }
 
 /**
@@ -176,7 +180,7 @@ export interface RelayResourceFreezeUndo {
 /** The resource a leftover container belonged to. */
 export interface RelayDockerCleanupOwner {
   readonly id: string
-  readonly kind: "app" | "database" | "instance"
+  readonly kind: "app" | "database" | "server"
 }
 
 /** A container Docker wouldn't remove when Relay was done with it. */
@@ -214,7 +218,7 @@ export interface RelayDockerImageRecord {
 
 const OPERATION_JOURNAL_METADATA_KEY = "operation_journal_id"
 
-export interface RelayStoredInstanceName {
+export interface RelayStoredServerName {
   readonly instanceId: string
   readonly name: string
 }
@@ -249,12 +253,12 @@ export interface RelayVolumeReferenceImport {
 /** Kinds of instance whose disk limit the Relay keeps here, not on Docker. */
 export type RelayDiskLimitKind = "app" | "database"
 
-export interface RelayStoredPendingPrimaryPort extends RelayInstancePendingPrimaryPort {
+export interface RelayStoredPendingPrimaryPort extends RelayServerPendingPrimaryPort {
   readonly instanceId: string
 }
 
 export interface RelayStoredLifecycleSession {
-  readonly events: Array<RelayInstanceLifecycleEvent>
+  readonly events: Array<RelayServerLifecycleEvent>
   readonly instanceId: string
 }
 
@@ -273,8 +277,8 @@ const provisioningSchemas = {
     placeholder: relayManagedDatabaseSchema,
   },
   server: {
-    input: relayCreateInstanceSchema,
-    placeholder: relayInstanceSchema,
+    input: relayCreateServerSchema,
+    placeholder: relayServerSchema,
   },
 }
 
@@ -332,7 +336,7 @@ export interface RelayRuntimeRecoveryRecord {
   readonly lastExitAt: number | null
   readonly lastExitCode: number | null
   readonly lastOomKilled: boolean
-  readonly lastReason: RelayInstanceRecovery["reason"] | null
+  readonly lastReason: RelayServerRecovery["reason"] | null
   readonly lastRuntimeMs: number | null
   readonly lastStartedAt: string | null
   readonly nextAttemptAt: number | null
@@ -401,15 +405,15 @@ const RelayWebRouteRowSchema = Schema.Struct({
   www: Schema.Literals(["none", "redirect", "serve"]),
 })
 
-const RelayInstancePortProtocolSchema = Schema.Literals(["tcp", "udp", "both"])
+const RelayServerPortProtocolSchema = Schema.Literals(["tcp", "udp", "both"])
 
 const RelayPendingPrimaryPortRowSchema = Schema.Struct({
   instanceId: Schema.String,
   internalPort: Schema.Number,
-  protocol: RelayInstancePortProtocolSchema,
+  protocol: RelayServerPortProtocolSchema,
 })
 
-const RelayInstanceLifecycleStateSchema = Schema.Literals([
+const RelayServerLifecycleStateSchema = Schema.Literals([
   "started",
   "ready",
   "stopping",
@@ -419,7 +423,7 @@ const RelayInstanceLifecycleStateSchema = Schema.Literals([
 
 const RelayLifecycleEventRowSchema = Schema.Struct({
   instanceId: Schema.String,
-  state: RelayInstanceLifecycleStateSchema,
+  state: RelayServerLifecycleStateSchema,
   time: Schema.String,
 })
 
@@ -878,8 +882,8 @@ export class RelayStateStore extends Context.Service<
     readonly listInvitations: (
       now: number
     ) => Effect.Effect<ReadonlyArray<RelayInvitation>, RelayStateError>
-    readonly listInstanceNames: () => Effect.Effect<
-      ReadonlyArray<RelayStoredInstanceName>,
+    readonly listServerNames: () => Effect.Effect<
+      ReadonlyArray<RelayStoredServerName>,
       RelayStateError
     >
     readonly listVolumeNames: () => Effect.Effect<
@@ -947,7 +951,7 @@ export class RelayStateStore extends Context.Service<
       key: string,
       value: string
     ) => Effect.Effect<void, RelayStateError>
-    readonly setInstanceName: (
+    readonly setServerName: (
       instanceId: string,
       name: string
     ) => Effect.Effect<void, RelayStateError>
@@ -964,7 +968,7 @@ export class RelayStateStore extends Context.Service<
     readonly deleteRuntimeRecovery: (
       instanceId: string
     ) => Effect.Effect<void, RelayStateError>
-    readonly deleteInstanceName: (
+    readonly deleteServerName: (
       instanceId: string
     ) => Effect.Effect<void, RelayStateError>
     readonly deleteVolumeName: (
@@ -1039,7 +1043,7 @@ export class RelayStateStore extends Context.Service<
       instanceId: string,
       port: {
         readonly internalPort: number
-        readonly protocol: RelayInstancePortProtocol
+        readonly protocol: RelayServerPortProtocol
       }
     ) => Effect.Effect<void, RelayStateError>
     readonly replaceInstanceRoutes: (
@@ -1828,6 +1832,177 @@ const migrations = SqliteMigrator.fromRecord({
       legacy_id TEXT NOT NULL UNIQUE
     ) STRICT`
   }),
+  // Game servers were `instance` beside `app` and `database`; they're
+  // `server` in every kind, lock key, member ID, target key, Docker image
+  // owner, permission, and operation, and the tables only they have say so.
+  // The state files move as the Relay starts (server-naming-migration.ts).
+  "39_server_naming": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const serverKind = (column: string) =>
+      `CASE ${column} WHEN 'instance' THEN 'server' ELSE ${column} END`
+    // Each table whose kind is checked, rebuilt to check `server`.
+    const rebuild = (
+      table: string,
+      definition: string,
+      columns: ReadonlyArray<string>,
+      kindColumn: string,
+      indexes: ReadonlyArray<string> = []
+    ) =>
+      Effect.gen(function* () {
+        yield* sql.unsafe(`DROP TABLE IF EXISTS ${table}_next`)
+        yield* sql.unsafe(`CREATE TABLE ${table}_next (${definition}) STRICT`)
+        yield* sql.unsafe(
+          `INSERT INTO ${table}_next (${columns.join(", ")}) SELECT ${columns
+            .map((column) =>
+              column === kindColumn ? serverKind(column) : column
+            )
+            .join(", ")} FROM ${table}`
+        )
+        yield* sql.unsafe(`DROP TABLE ${table}`)
+        yield* sql.unsafe(`ALTER TABLE ${table}_next RENAME TO ${table}`)
+        for (const index of indexes) yield* sql.unsafe(index)
+      })
+    yield* rebuild(
+      "relay_browser_authorization_floors",
+      `issuer TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      scope_kind TEXT NOT NULL
+        CHECK (scope_kind IN ('subject_relay', 'server', 'login_session')),
+      scope_id TEXT NOT NULL,
+      minimum_revision INTEGER NOT NULL CHECK (minimum_revision >= 0),
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (issuer, subject, scope_kind, scope_id)`,
+      [
+        "issuer",
+        "subject",
+        "scope_kind",
+        "scope_id",
+        "minimum_revision",
+        "updated_at",
+      ],
+      "scope_kind",
+      [
+        `CREATE INDEX relay_browser_authorization_floors_updated
+        ON relay_browser_authorization_floors (updated_at)`,
+      ]
+    )
+    yield* rebuild(
+      "relay_database_connections",
+      `member_kind TEXT NOT NULL
+        CHECK (member_kind IN ('server', 'app', 'database')),
+      member_id TEXT NOT NULL,
+      database_id TEXT NOT NULL,
+      relay_id TEXT NOT NULL,
+      PRIMARY KEY (member_kind, member_id, database_id),
+      CHECK (member_kind <> 'database' OR member_id <> database_id)`,
+      ["member_kind", "member_id", "database_id", "relay_id"],
+      "member_kind",
+      [
+        `CREATE INDEX relay_database_connections_target
+        ON relay_database_connections (relay_id, database_id)`,
+      ]
+    )
+    yield* rebuild(
+      "relay_database_connection_choices",
+      `member_kind TEXT NOT NULL
+        CHECK (member_kind IN ('server', 'app', 'database')),
+      member_id TEXT NOT NULL,
+      database_id TEXT NOT NULL,
+      PRIMARY KEY (member_kind, member_id, database_id)`,
+      ["member_kind", "member_id", "database_id"],
+      "member_kind"
+    )
+    yield* rebuild(
+      "relay_resource_freezes",
+      `kind TEXT NOT NULL
+        CHECK (kind IN ('app', 'database', 'server', 'volume')),
+      resource_id TEXT NOT NULL,
+      deletion_id TEXT NOT NULL,
+      frozen_at INTEGER NOT NULL,
+      undo TEXT NOT NULL DEFAULT '{}',
+      PRIMARY KEY (kind, resource_id)`,
+      ["kind", "resource_id", "deletion_id", "frozen_at", "undo"],
+      "kind"
+    )
+    yield* rebuild(
+      "relay_docker_cleanups",
+      `container_id TEXT PRIMARY KEY NOT NULL,
+      owner_kind TEXT CHECK (owner_kind IN ('app', 'database', 'server')),
+      owner_id TEXT,
+      reason TEXT NOT NULL,
+      volumes INTEGER NOT NULL,
+      error TEXT NOT NULL,
+      failures INTEGER NOT NULL,
+      first_failed_at INTEGER NOT NULL`,
+      [
+        "container_id",
+        "owner_kind",
+        "owner_id",
+        "reason",
+        "volumes",
+        "error",
+        "failures",
+        "first_failed_at",
+      ],
+      "owner_kind"
+    )
+    yield* sql`ALTER TABLE relay_instance_names RENAME TO relay_server_names`
+    yield* sql`
+      ALTER TABLE relay_instance_lifecycle_events
+      RENAME TO relay_server_lifecycle_events
+    `
+    yield* sql`
+      UPDATE relay_docker_images
+      SET owner = 'server:' || substr(owner, 10)
+      WHERE owner LIKE 'instance:%'
+    `
+    yield* sql`
+      UPDATE relay_operations
+      SET operation = 'server.' || substr(operation, 10)
+      WHERE operation LIKE 'instance.%'
+    `
+    // JSON, through every value: kinds, keys, and permissions.
+    for (const [table, key, columns] of [
+      ["relay_clients", "id", ["actions_json"]],
+      ["relay_invitations", "id", ["actions_json"]],
+      ["relay_audit", "id", ["event", "details_json"]],
+      ["relay_backup_tasks", "task_id", ["input_json", "result_json"]],
+      [
+        "relay_instance_provisioning_jobs",
+        "instance_id",
+        ["input_json", "placeholder_json"],
+      ],
+      ["relay_schedules", "schedule_id", ["definition_json"]],
+      [
+        "relay_schedule_runs",
+        "run_id",
+        ["sequence_attempts_json", "target_runs_json"],
+      ],
+    ] as const) {
+      const rows = yield* sql.unsafe<Record<string, string | null>>(
+        `SELECT ${key}, ${columns.join(", ")} FROM ${table}`
+      )
+      for (const row of rows) {
+        const updates = columns.flatMap((column) => {
+          const value = row[column]
+          if (typeof value !== "string") return []
+          // A list of actions is permissions; an audit's event is one name.
+          const renamed =
+            column === "actions_json"
+              ? renameServerKindsInText(value, "actions")
+              : column === "event"
+                ? renameServerPermission(value)
+                : renameServerKindsInText(value)
+          return renamed === value ? [] : [[column, renamed] as const]
+        })
+        if (updates.length === 0) continue
+        yield* sql.unsafe(
+          `UPDATE ${table} SET ${updates.map(([column]) => `${column} = ?`).join(", ")} WHERE ${key} = ?`,
+          [...updates.map(([, value]) => value), row[key]!]
+        )
+      }
+    }
+  }),
 })
 
 // The App IDs a Hearth still owes, as stored; anything unreadable owes
@@ -2044,11 +2219,11 @@ const makeRelayStateStore = Effect.gen(function* () {
         instance_id AS instanceId,
         state,
         time
-      FROM relay_instance_lifecycle_events
+      FROM relay_server_lifecycle_events
       ORDER BY instance_id ASC, time ASC
     `
       const decoded = yield* decodeLifecycleEventRows(rows)
-      const sessions = new Map<string, Array<RelayInstanceLifecycleEvent>>()
+      const sessions = new Map<string, Array<RelayServerLifecycleEvent>>()
       for (const { instanceId, state, time } of decoded) {
         const events = sessions.get(instanceId) ?? []
         events.push({ state, time })
@@ -2495,7 +2670,7 @@ const makeRelayStateStore = Effect.gen(function* () {
   })
 
   const browserScopeId = (scope: RelayBrowserAuthorizationRevision["scope"]) =>
-    scope.kind === "instance"
+    scope.kind === "server"
       ? scope.instanceId
       : scope.kind === "login_session"
         ? scope.loginSessionId
@@ -3779,9 +3954,9 @@ const makeRelayStateStore = Effect.gen(function* () {
               AND subject = ${query.subject}
               AND (
                 (scope_kind = 'subject_relay' AND scope_id = '')
-                -- Instance floors never have an empty ID, so '' matches none.
+                -- Server floors never have an empty ID, so '' matches none.
                 OR (
-                  scope_kind = 'instance'
+                  scope_kind = 'server'
                   AND scope_id = ${query.instanceId ?? ""}
                 )
                 OR (
@@ -4059,12 +4234,12 @@ const makeRelayStateStore = Effect.gen(function* () {
           )
         })
       ),
-    listInstanceNames: () =>
+    listServerNames: () =>
       run(
-        "list_instance_names",
-        sql<RelayStoredInstanceName>`
+        "list_server_names",
+        sql<RelayStoredServerName>`
           SELECT instance_id AS instanceId, name
-          FROM relay_instance_names
+          FROM relay_server_names
           ORDER BY instance_id ASC
         `
       ),
@@ -4311,11 +4486,11 @@ const makeRelayStateStore = Effect.gen(function* () {
           ON CONFLICT (key) DO UPDATE SET value = excluded.value
         `.pipe(Effect.asVoid)
       ),
-    setInstanceName: (instanceId, name) =>
+    setServerName: (instanceId, name) =>
       run(
-        "set_instance_name",
+        "set_server_name",
         sql`
-          INSERT INTO relay_instance_names (instance_id, name, updated_at)
+          INSERT INTO relay_server_names (instance_id, name, updated_at)
           VALUES (${instanceId}, ${name}, ${Date.now()})
           ON CONFLICT (instance_id) DO UPDATE
           SET name = excluded.name, updated_at = excluded.updated_at
@@ -4385,14 +4560,14 @@ const makeRelayStateStore = Effect.gen(function* () {
         sql.withTransaction(
           Effect.gen(function* () {
             yield* sql`
-              DELETE FROM relay_instance_lifecycle_events
+              DELETE FROM relay_server_lifecycle_events
               WHERE instance_id = ${session.instanceId}
             `
             yield* Effect.forEach(
               session.events,
               (event) =>
                 sql`
-                  INSERT INTO relay_instance_lifecycle_events (
+                  INSERT INTO relay_server_lifecycle_events (
                     instance_id,
                     state,
                     time
@@ -4407,11 +4582,11 @@ const makeRelayStateStore = Effect.gen(function* () {
           })
         )
       ),
-    deleteInstanceName: (instanceId) =>
+    deleteServerName: (instanceId) =>
       run(
-        "delete_instance_name",
+        "delete_server_name",
         sql`
-          DELETE FROM relay_instance_names WHERE instance_id = ${instanceId}
+          DELETE FROM relay_server_names WHERE instance_id = ${instanceId}
         `.pipe(Effect.asVoid)
       ),
     deleteVolumeName: (volumeId) =>
@@ -4569,7 +4744,7 @@ const makeRelayStateStore = Effect.gen(function* () {
       run(
         "delete_lifecycle_session",
         sql`
-          DELETE FROM relay_instance_lifecycle_events
+          DELETE FROM relay_server_lifecycle_events
           WHERE instance_id = ${instanceId}
         `.pipe(Effect.asVoid)
       ),
@@ -4729,10 +4904,10 @@ function parseBackupTaskInputJson(value: string): unknown {
 
 function fallbackBackupTarget(input: unknown): BackupTaskInput["target"] {
   if (!input || typeof input !== "object" || !("target" in input)) {
-    return { id: "unknown", kind: "instance" }
+    return { id: "unknown", kind: "server" }
   }
   const parsed = backupTargetSchema.safeParse(input.target)
-  return parsed.success ? parsed.data : { id: "unknown", kind: "instance" }
+  return parsed.success ? parsed.data : { id: "unknown", kind: "server" }
 }
 
 function fallbackSnapshotId(input: unknown): string {

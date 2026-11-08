@@ -18,7 +18,7 @@ const relayId = "1".repeat(12)
 const instanceId = "a".repeat(12)
 const input = {
   relayId,
-  resourceType: "instance" as const,
+  resourceType: "server" as const,
   resourceId: instanceId,
   userId: "recipient",
 }
@@ -55,7 +55,7 @@ const seed = (options: {
     yield* insertGrant({
       userId: "recipient",
       relayId,
-      resourceType: "instance",
+      resourceType: "server",
       resourceId: instanceId,
       role: "viewer",
       state: options.recipientGrant ?? "active",
@@ -63,7 +63,7 @@ const seed = (options: {
   })
 
 const instanceOwner = Effect.map(
-  selectRows<{ owner_id: string | null }>("instance"),
+  selectRows<{ owner_id: string | null }>("server"),
   ([instance]) => instance?.owner_id
 )
 

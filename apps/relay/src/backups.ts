@@ -48,7 +48,7 @@ import {
   type ResticRepositoryLocation,
 } from "@workspace/contracts"
 
-import type { RelayConfig, RelayInstanceConfig } from "./config.js"
+import type { RelayConfig, RelayServerConfig } from "./config.js"
 import { brickSnapshotDirectory, readBrickSnapshot } from "./bricks.js"
 import type { DatabaseDriver } from "./databases.js"
 import {
@@ -106,12 +106,12 @@ import {
   resticRepositoryString,
 } from "./backups/destinations/index.js"
 import {
-  installPreparedInstanceRestore,
+  installPreparedServerRestore,
   materializeBackupArtifact,
-  prepareInstanceRestoreStaging,
+  prepareServerRestoreStaging,
   recoverInterruptedRestores,
   requireRestoreSpace,
-  restorePortableInstanceBackup,
+  restorePortableServerBackup,
   settleRestoreJournal,
   type RestoreInstallGate,
 } from "./backup-restore.js"
@@ -203,10 +203,10 @@ export interface BackupVolumes {
 
 export class BackupManager {
   readonly #config: RelayConfig
-  readonly #findInstance: (
+  readonly #findServer: (
     instanceId: string
-  ) => Promise<RelayInstanceConfig | null>
-  readonly #isInstanceStopped: (instanceId: string) => Promise<boolean>
+  ) => Promise<RelayServerConfig | null>
+  readonly #isServerStopped: (instanceId: string) => Promise<boolean>
   readonly #databases: DatabaseDriver | null
   readonly #apps: BackupApps | null
   readonly #volumes: BackupVolumes | null
@@ -220,8 +220,8 @@ export class BackupManager {
 
   private constructor(options: {
     config: RelayConfig
-    findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>
-    isInstanceStopped: (instanceId: string) => Promise<boolean>
+    findServer: (instanceId: string) => Promise<RelayServerConfig | null>
+    isServerStopped: (instanceId: string) => Promise<boolean>
     databases: DatabaseDriver | null
     apps: BackupApps | null
     volumes: BackupVolumes | null
@@ -233,8 +233,8 @@ export class BackupManager {
   }) {
     this.#config = options.config
     this.#lanes = options.lanes
-    this.#findInstance = options.findInstance
-    this.#isInstanceStopped = options.isInstanceStopped
+    this.#findServer = options.findServer
+    this.#isServerStopped = options.isServerStopped
     this.#databases = options.databases
     this.#apps = options.apps
     this.#volumes = options.volumes
@@ -247,8 +247,8 @@ export class BackupManager {
 
   static make(options: {
     config: RelayConfig
-    findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>
-    isInstanceStopped: (instanceId: string) => Promise<boolean>
+    findServer: (instanceId: string) => Promise<RelayServerConfig | null>
+    isServerStopped: (instanceId: string) => Promise<boolean>
     databases?: DatabaseDriver
     apps?: BackupApps
     volumes?: BackupVolumes
@@ -277,8 +277,8 @@ export class BackupManager {
       }
       const manager = new BackupManager({
         config: options.config,
-        findInstance: options.findInstance,
-        isInstanceStopped: options.isInstanceStopped,
+        findServer: options.findServer,
+        isServerStopped: options.isServerStopped,
         databases: options.databases ?? null,
         apps: options.apps ?? null,
         volumes: options.volumes ?? null,
@@ -1607,7 +1607,7 @@ export class BackupManager {
         const result = yield* runResticExport(
           this.#config,
           this.#restic,
-          this.#findInstance,
+          this.#findServer,
           task.input,
           task.taskId,
           (progress) =>
@@ -1755,7 +1755,7 @@ export class BackupManager {
           }
           return
         }
-        if (input.target.kind !== "instance") {
+        if (input.target.kind !== "server") {
           return yield* backupFailure(
             "unsupported_restore",
             "restore",
@@ -1763,7 +1763,7 @@ export class BackupManager {
           )
         }
         const instance = yield* Effect.tryPromise({
-          try: () => this.#findInstance(input.target.id),
+          try: () => this.#findServer(input.target.id),
           catch: (cause) =>
             RelayBackupError.make({
               code: "instance_lookup_failed",
@@ -1780,7 +1780,7 @@ export class BackupManager {
           )
         }
         const stopped = yield* Effect.tryPromise({
-          try: () => this.#isInstanceStopped(input.target.id),
+          try: () => this.#isServerStopped(input.target.id),
           catch: (cause) =>
             RelayBackupError.make({
               code: "instance_state_failed",
@@ -1807,7 +1807,7 @@ export class BackupManager {
             )
           : Effect.tryPromise({
               try: () =>
-                restorePortableInstanceBackup(
+                restorePortableServerBackup(
                   this.#config,
                   { ...input, kind: "restore" },
                   instance,
@@ -2110,13 +2110,13 @@ export class BackupManager {
         input.destination.kind === "restic" &&
         input.mode === "incremental" &&
         input.artifactKind === "restic_snapshot" &&
-        input.target.kind === "instance"
+        input.target.kind === "server"
       ) {
         const destination = input.destination
         const result = yield* runResticCreate(
           this.#config,
           this.#restic,
-          this.#findInstance,
+          this.#findServer,
           input,
           (progress) =>
             this.#state.updateBackupTaskProgress(
@@ -2196,7 +2196,7 @@ export class BackupManager {
         return
       }
       if (
-        input.target.kind !== "instance" ||
+        input.target.kind !== "server" ||
         input.artifactKind !== "archive" ||
         input.mode !== "full"
       ) {
@@ -2207,7 +2207,7 @@ export class BackupManager {
         )
       }
       const instance = yield* Effect.tryPromise({
-        try: () => this.#findInstance(input.target.id),
+        try: () => this.#findServer(input.target.id),
         catch: (cause) =>
           RelayBackupError.make({
             code: "instance_lookup_failed",
@@ -2253,7 +2253,7 @@ export class BackupManager {
       )
       const result = yield* Effect.tryPromise({
         try: async () =>
-          createPortableInstanceBackup(
+          createPortableServerBackup(
             this.#config,
             input,
             instance,
@@ -2371,10 +2371,10 @@ function archiveMaximumBytes(input: BackupCreateTaskInput): number | null {
   )
 }
 
-async function createPortableInstanceBackup(
+async function createPortableServerBackup(
   config: RelayConfig,
   input: BackupCreateTaskInput,
-  instance: RelayInstanceConfig,
+  instance: RelayServerConfig,
   progress: BackupProgress,
   signal: AbortSignal,
   webRoutes: ReadonlyArray<RelayInstanceWebRoute>
@@ -2421,7 +2421,7 @@ async function createPortableInstanceBackup(
             progress.total,
             maximumBytes
           )
-          const manifest = await instanceBackupManifest(
+          const manifest = await serverBackupManifest(
             config,
             input,
             instance,
@@ -2501,10 +2501,10 @@ function backupWebRoute(route: RelayInstanceWebRoute) {
   }
 }
 
-async function instanceBackupManifest(
+async function serverBackupManifest(
   config: RelayConfig,
   input: BackupCreateTaskInput,
-  instance: RelayInstanceConfig,
+  instance: RelayServerConfig,
   webRoutes: ReadonlyArray<RelayInstanceWebRoute>
 ): Promise<BackupArchiveManifest> {
   const recipe = instance.brickSnapshotSha256
@@ -2848,7 +2848,7 @@ async function readExportExpiry(path: string): Promise<number | null> {
 function runResticCreate(
   config: RelayConfig,
   restic: ResticDriver,
-  findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>,
+  findServer: (instanceId: string) => Promise<RelayServerConfig | null>,
   input: BackupCreateTaskInput & { kind?: "create" },
   updateProgress: (
     progress: BackupProgress
@@ -2863,7 +2863,7 @@ function runResticCreate(
       "create.restic"
     )
     const instance = yield* Effect.tryPromise({
-      try: () => findInstance(input.target.id),
+      try: () => findServer(input.target.id),
       catch: (cause) =>
         RelayBackupError.make({
           code: "instance_lookup_failed",
@@ -2964,7 +2964,7 @@ async function createResticSnapshot(
   config: RelayConfig,
   restic: ResticDriver,
   input: BackupCreateTaskInput,
-  instance: RelayInstanceConfig,
+  instance: RelayServerConfig,
   password: string,
   progress: BackupProgress,
   signal: AbortSignal,
@@ -3228,7 +3228,7 @@ function runResticRestore(
   config: RelayConfig,
   restic: ResticDriver,
   input: Extract<BackupTaskInput, { kind: "restore" }>,
-  instance: RelayInstanceConfig,
+  instance: RelayServerConfig,
   signal: AbortSignal,
   beginInstall: RestoreInstallGate
 ) {
@@ -3253,7 +3253,7 @@ function runResticRestore(
         input.archive?.targetId ?? input.target.id,
         source.repository
       )
-      const prepared = await prepareInstanceRestoreStaging(
+      const prepared = await prepareServerRestoreStaging(
         config,
         instance.directory,
         input.taskId
@@ -3290,7 +3290,7 @@ function runResticRestore(
                 prepared.paths.staging,
                 instance.limits
               )
-              await installPreparedInstanceRestore(prepared, beginInstall)
+              await installPreparedServerRestore(prepared, beginInstall)
               return { warnings: validated.warnings }
             },
             catch: (cause) => cause,
@@ -3566,7 +3566,7 @@ function cleanupResticCache(
 function runResticExport(
   config: RelayConfig,
   restic: ResticDriver,
-  findInstance: (instanceId: string) => Promise<RelayInstanceConfig | null>,
+  findServer: (instanceId: string) => Promise<RelayServerConfig | null>,
   input: Extract<BackupTaskInput, { kind: "export" }>,
   taskId: string,
   updateProgress: (
@@ -3582,7 +3582,7 @@ function runResticExport(
     // A snapshot of a server since deleted exports all the same: its path
     // comes from the snapshot then.
     const instance = yield* Effect.tryPromise({
-      try: () => findInstance(input.target.id),
+      try: () => findServer(input.target.id),
       catch: (cause) =>
         RelayBackupError.make({
           code: "instance_lookup_failed",

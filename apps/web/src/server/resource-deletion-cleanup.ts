@@ -14,14 +14,14 @@ import {
 import { promiseEffect } from "@/effect/promise"
 import { reportAppError } from "@/effect/runtime"
 import { deleteResourceAccessEffect } from "@/lib/access-control"
-import { removeDeletedInstanceEffect } from "@/lib/instance-registry"
+import { removeDeletedServerEffect } from "@/lib/server-registry"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { deleteInstanceDomainEffect } from "@/server/domains.server"
 
 /** A game server, App, or database the Relay no longer has. */
 export interface DeletedResource {
   id: string
-  kind: "app" | "database" | "instance"
+  kind: "app" | "database" | "server"
   relayId: string
 }
 
@@ -40,7 +40,7 @@ export const cleanUpDeletedResourceEffect = Effect.fn(
   "resources.delete.cleanUp"
 )(function* (resource: DeletedResource, subject: string) {
   const { id, kind, relayId } = resource
-  if (kind === "instance") {
+  if (kind === "server") {
     // Only once the server is gone: its names stay held while it might
     // survive. Deletes Cloudflare refuses are left to the DNS worker.
     yield* deleteInstanceDomainEffect(relayId, id)
@@ -56,7 +56,7 @@ export const cleanUpDeletedResourceEffect = Effect.fn(
       })
     })
   }
-  if (kind === "instance") {
+  if (kind === "server") {
     yield* cleanupStep(
       "relay.snapshot.invalidate",
       resource,
@@ -83,20 +83,20 @@ export const cleanUpDeletedResourceEffect = Effect.fn(
   }
   yield* removeResourceFavoritesEffect({
     id,
-    kind: kind === "instance" ? "server" : kind,
+    kind,
     relayId,
   })
-  yield* removeIconsEffect({ kind: kind === "instance" ? "server" : kind, relayId, id })
+  yield* removeIconsEffect({ kind, relayId, id })
   if (kind !== "database") {
     yield* deleteInstanceDeploymentsEffect(
-      kind === "instance" ? "server" : "app",
+      kind === "server" ? "server" : "app",
       id
     )
   }
   // The Relay has removed it, so its directory record goes too. Live
   // snapshots never remove records on their own.
-  yield* kind === "instance"
-    ? removeDeletedInstanceEffect(relayId, id)
+  yield* kind === "server"
+    ? removeDeletedServerEffect(relayId, id)
     : kind === "app"
       ? deleteAppRecordEffect(relayId, id)
       : deleteManagedDatabaseRecordEffect(relayId, id)

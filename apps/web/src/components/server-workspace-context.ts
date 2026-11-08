@@ -1,8 +1,8 @@
 import * as React from "react"
 
-import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
+import type { WorkspaceServer } from "@/lib/relay-selectors"
 
-export interface InstanceWorkspacePermissions {
+export interface ServerWorkspacePermissions {
   consoleRead: boolean
   consoleWrite: boolean
   copyServer: boolean
@@ -25,15 +25,15 @@ export interface FileTreePreferences {
 }
 
 // Keep context identity outside the Fast Refresh boundary for workspace UI.
-export const InstanceIdentityContext =
-  React.createContext<InstanceWorkspaceInstance | null>(null)
-export const InstancePermissionsContext =
-  React.createContext<InstanceWorkspacePermissions | null>(null)
+export const ServerIdentityContext =
+  React.createContext<WorkspaceServer | null>(null)
+export const ServerPermissionsContext =
+  React.createContext<ServerWorkspacePermissions | null>(null)
 export const FileTreePreferencesContext =
   React.createContext<FileTreePreferences | null>(null)
-export const InstanceRelayConnectedContext = React.createContext<
-  boolean | null
->(null)
+export const ServerRelayConnectedContext = React.createContext<boolean | null>(
+  null
+)
 
 function useRequiredContext<T>(
   context: React.Context<T | null>,
@@ -41,20 +41,17 @@ function useRequiredContext<T>(
 ): T {
   const value = React.useContext(context)
   if (value === null) {
-    throw new Error(`${hookName} must be used within InstanceWorkspace`)
+    throw new Error(`${hookName} must be used within ServerWorkspace`)
   }
   return value
 }
 
-export function useInstanceIdentity() {
-  return useRequiredContext(InstanceIdentityContext, "useInstanceIdentity")
+export function useServerIdentity() {
+  return useRequiredContext(ServerIdentityContext, "useServerIdentity")
 }
 
-export function useInstancePermissions() {
-  return useRequiredContext(
-    InstancePermissionsContext,
-    "useInstancePermissions"
-  )
+export function useServerPermissions() {
+  return useRequiredContext(ServerPermissionsContext, "useServerPermissions")
 }
 
 export function useFileTreePreferences() {
@@ -64,9 +61,9 @@ export function useFileTreePreferences() {
   )
 }
 
-export function useInstanceRelayConnected() {
+export function useServerRelayConnected() {
   return useRequiredContext(
-    InstanceRelayConnectedContext,
-    "useInstanceRelayConnected"
+    ServerRelayConnectedContext,
+    "useServerRelayConnected"
   )
 }

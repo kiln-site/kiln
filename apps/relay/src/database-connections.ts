@@ -122,7 +122,7 @@ export function databaseMemberAliases(
   member: DatabaseConnectionMember
 ): Array<string> {
   const prefix =
-    member.kind === "instance"
+    member.kind === "server"
       ? "server"
       : member.kind === "database"
         ? "database"
@@ -280,7 +280,7 @@ export class DatabaseConnections {
         ...connections.map((connection) => ({
           ...connection,
           memberId: snapshot.instanceId,
-          memberKind: "instance" as const,
+          memberKind: "server" as const,
         }))
       )
     }
@@ -290,7 +290,7 @@ export class DatabaseConnections {
   /** A game server's connections, as the labels its container carries. */
   async labels(instanceId: string): Promise<Record<string, string>> {
     return databaseConnectionLabels(
-      await this.list({ id: instanceId, kind: "instance" })
+      await this.list({ id: instanceId, kind: "server" })
     )
   }
 

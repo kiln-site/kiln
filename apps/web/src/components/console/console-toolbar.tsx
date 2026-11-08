@@ -1,7 +1,7 @@
 import * as React from "react"
 import {
-  formatRelayInstanceStateReason,
-  type RelayInstanceStateReason,
+  formatRelayServerStateReason,
+  type RelayServerStateReason,
 } from "@workspace/contracts"
 
 import {
@@ -26,15 +26,15 @@ import { ConsoleWarning } from "@/components/console/console-warning"
 import { ConsoleRetryButton } from "@/components/console/console-retry-button"
 import { useServerSnapshot } from "@/lib/use-server-workspace"
 import {
-  selectInstanceLifecycleStartedAt,
-  selectInstanceStateReason,
-  type InstanceWorkspaceInstance,
+  selectServerLifecycleStartedAt,
+  selectServerStateReason,
+  type WorkspaceServer,
 } from "@/lib/relay-selectors"
 
 interface ConsoleToolbarProps {
   active: boolean
   canShare: boolean
-  instance: InstanceWorkspaceInstance
+  instance: WorkspaceServer
   streamStore: ConsoleStreamStore
   uiStore: ConsoleUiStore
 }
@@ -85,11 +85,11 @@ const ConsoleRuntimeReason = React.memo(function ConsoleRuntimeReason({
   relayId: string
 }) {
   const selectReason = React.useMemo(
-    () => selectInstanceStateReason(instanceId, relayId),
+    () => selectServerStateReason(instanceId, relayId),
     [instanceId, relayId]
   )
   const selectStartedAt = React.useMemo(
-    () => selectInstanceLifecycleStartedAt(instanceId, relayId),
+    () => selectServerLifecycleStartedAt(instanceId, relayId),
     [instanceId, relayId]
   )
   const { data: reason } = useServerSnapshot(selectReason)
@@ -110,7 +110,7 @@ function DelayedConsoleRuntimeReasonContent({
   reason,
   startedAt,
 }: {
-  reason: RelayInstanceStateReason
+  reason: RelayServerStateReason
   startedAt: string | null
 }) {
   const [visible, setVisible] = React.useState(
@@ -132,9 +132,9 @@ function DelayedConsoleRuntimeReasonContent({
 function ConsoleRuntimeReasonContent({
   reason,
 }: {
-  reason: RelayInstanceStateReason
+  reason: RelayServerStateReason
 }) {
-  const message = formatRelayInstanceStateReason(reason)
+  const message = formatRelayServerStateReason(reason)
   return (
     <ConsoleWarning
       message={message}

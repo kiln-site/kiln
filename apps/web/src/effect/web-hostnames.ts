@@ -419,11 +419,11 @@ export const webHostnameCoveredEffect = Effect.fn("webHostnames.covered")(
       "hostname" | "relayId" | "resourceId" | "resourceType"
     >
   ) {
-    if (row.resourceType !== "instance") return false
+    if (row.resourceType !== "server") return false
     const database = yield* Database
     const rows = yield* database.queryRows<RowDataPacket>(
       "webHostnames.covered",
-      `SELECT 1 FROM ${databaseTable("instance_domain")}
+      `SELECT 1 FROM ${databaseTable("server_domain")}
         WHERE relay_id = ? AND instance_id = ?
           AND (CONCAT(vanity_label, '.', domain) = ?
             OR CONCAT(next_vanity_label, '.', next_domain) = ?)
@@ -723,8 +723,8 @@ export const reviveWebHostnamesEffect = Effect.fn("webHostnames.revive")(
 )
 
 // A game server's web route on a name one of its domains also uses.
-const sharedWithDomain = `used.resource_type = 'instance' AND EXISTS (
-  SELECT 1 FROM ${databaseTable("instance_domain")} domain
+const sharedWithDomain = `used.resource_type = 'server' AND EXISTS (
+  SELECT 1 FROM ${databaseTable("server_domain")} domain
    WHERE domain.relay_id = used.relay_id
      AND domain.instance_id = used.resource_id
      AND (CONCAT(domain.vanity_label, '.', domain.domain) = used.hostname

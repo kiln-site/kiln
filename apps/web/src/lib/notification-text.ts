@@ -12,7 +12,7 @@ import { kilnReleaseLabel } from "@/lib/release-version"
 export const resourceTypeLabels = {
   app: "App",
   database: "Database",
-  instance: "Game Server",
+  server: "Game Server",
   relay: "Relay",
 } satisfies Record<NotificationResource["type"], string>
 

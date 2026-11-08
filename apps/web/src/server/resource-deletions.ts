@@ -14,7 +14,7 @@ import {
 // A game server's, database's, App's, or Kiln volume's deletion that's
 // running, or that stopped for someone to try again or keep it.
 const targetSchema = z.strictObject({
-  kind: z.enum(["instance", "database", "app", "volume"]),
+  kind: z.enum(["server", "database", "app", "volume"]),
   relayId: relayIdSchema,
   // An instance ID, or a Kiln volume's 40-hex ID; an App's own volumes go
   // with it.

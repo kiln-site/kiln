@@ -11,7 +11,7 @@ export const securityImageIdSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u)
 
 export const securityResourceTypeSchema = z.enum([
   "relay",
-  "instance",
+  "server",
   "database",
   "app",
 ])

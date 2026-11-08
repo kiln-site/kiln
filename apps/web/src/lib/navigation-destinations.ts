@@ -29,7 +29,7 @@ import {
   accessPermissionSupported,
   builtinTailscaleBrickId,
   type DatabaseEngine,
-  type RelayInstance,
+  type RelayServer,
 } from "@workspace/contracts"
 
 import {
@@ -65,14 +65,14 @@ export interface NavigationAccessCapabilities {
   canManageRelays: boolean
   pendingScopes?: readonly {
     relayId: string
-    resourceType: "relay" | "instance" | "database"
+    resourceType: "relay" | "server" | "database"
     resourceId: string
     invitationId: string
   }[]
   grants: ReadonlyArray<{
     relayId: string
     resourceId: string
-    resourceType: "app" | "database" | "instance" | "relay"
+    resourceType: "app" | "database" | "server" | "relay"
     permissions: readonly AccessPermission[]
   }>
   isPlatformAdmin: boolean
@@ -249,7 +249,7 @@ export const serverDestinations = [
     id: "console",
     keywords: ["terminal"],
     label: "Console",
-    permission: "instance.console.read",
+    permission: "server.console.read",
     to: "/server/$serverId/console",
     workspaces: ["network-stack", "server"],
   },
@@ -258,7 +258,7 @@ export const serverDestinations = [
     id: "files",
     keywords: ["browser", "storage"],
     label: "Files",
-    permission: "instance.files.read",
+    permission: "server.files.read",
     to: "/server/$serverId/files/$",
     workspaces: ["network-stack", "server"],
   },
@@ -267,7 +267,7 @@ export const serverDestinations = [
     id: "startup",
     keywords: ["configuration", "variables"],
     label: "Startup",
-    permission: "instance.configuration.read",
+    permission: "server.configuration.read",
     to: "/server/$serverId/startup",
     workspaces: ["server"],
   },
@@ -276,7 +276,7 @@ export const serverDestinations = [
     id: "network",
     keywords: ["ports", "allocation"],
     label: "Network",
-    permission: "instance.network.read",
+    permission: "server.network.read",
     to: "/server/$serverId/network",
     workspaces: ["network-stack", "server"],
   },
@@ -285,13 +285,13 @@ export const serverDestinations = [
     id: "info",
     keywords: ["settings", "details"],
     label: "Info",
-    permission: "instance.read",
+    permission: "server.read",
     to: "/server/$serverId/info",
     workspaces: ["server"],
   },
 ] as const satisfies ReadonlyArray<ServerDestination>
 
-type NavigableServer = Pick<RelayInstance, "brickId">
+type NavigableServer = Pick<RelayServer, "brickId">
 
 type AccessibleServer = NavigableServer & {
   id: string
@@ -346,7 +346,7 @@ export function canAccessInstancePermission(
       grantHasPermission(grant, permission) &&
       ((grant.resourceType === "relay" &&
         grant.resourceId === instance.relayId) ||
-        (grant.resourceType === "instance" && grant.resourceId === instance.id))
+        (grant.resourceType === "server" && grant.resourceId === instance.id))
   )
 }
 
@@ -783,11 +783,11 @@ export function canAccessInfrastructureDestination(
     // servers and apps they reach.
     return (
       capabilities.isPlatformAdmin ||
-      hasScopedPermission(capabilities, "instance.read", [
-        "instance",
+      hasScopedPermission(capabilities, "server.read", [
+        "server",
         "relay",
       ]) ||
-      hasScopedPermission(capabilities, "instance.create", ["relay"]) ||
+      hasScopedPermission(capabilities, "server.create", ["relay"]) ||
       hasScopedPermission(capabilities, "app.read", ["relay", "app"]) ||
       hasScopedPermission(capabilities, "app.create", ["relay"])
     )
@@ -796,7 +796,7 @@ export function canAccessInfrastructureDestination(
     // App deployments and game servers' installs and reinstalls.
     return (
       hasScopedPermission(capabilities, "app.read", ["relay", "app"]) ||
-      hasScopedPermission(capabilities, "instance.read", ["instance", "relay"])
+      hasScopedPermission(capabilities, "server.read", ["server", "relay"])
     )
   }
   // Each list also opens for people who can only create there; its create
@@ -810,13 +810,13 @@ export function canAccessInfrastructureDestination(
   if (destination.access === "instance-read") {
     return (
       capabilities.pendingScopes?.some(
-        (scope) => scope.resourceType === "instance"
+        (scope) => scope.resourceType === "server"
       ) === true ||
-      hasScopedPermission(capabilities, "instance.read", [
-        "instance",
+      hasScopedPermission(capabilities, "server.read", [
+        "server",
         "relay",
       ]) ||
-      hasScopedPermission(capabilities, "instance.create", ["relay"])
+      hasScopedPermission(capabilities, "server.create", ["relay"])
     )
   }
   return (
@@ -860,8 +860,8 @@ function canUseSyncs(capabilities: NavigationAccessCapabilities): boolean {
   return (
     capabilities.isPlatformAdmin ||
     capabilities.canManageRelays ||
-    hasScopedPermission(capabilities, "instance.files.write", [
-      "instance",
+    hasScopedPermission(capabilities, "server.files.write", [
+      "server",
       "relay",
     ]) ||
     hasScopedPermission(capabilities, "app.files.write", ["relay", "app"]) ||
@@ -883,7 +883,7 @@ export function canAccessActivity(
 ): boolean {
   return (
     hasScopedPermission(capabilities, "relay.audit.read", ["relay"]) ||
-    hasScopedPermission(capabilities, "instance.read", ["instance", "relay"])
+    hasScopedPermission(capabilities, "server.read", ["server", "relay"])
   )
 }
 

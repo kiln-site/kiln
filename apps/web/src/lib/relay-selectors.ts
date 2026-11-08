@@ -1,7 +1,7 @@
-import type { RelayInstance, RelayNode } from "@workspace/contracts"
+import type { RelayServer, RelayNode } from "@workspace/contracts"
 import {
   builtinTailscaleBrickId,
-  relayInstanceLifecycleEventTime,
+  relayServerLifecycleEventTime,
 } from "@workspace/contracts"
 
 import type { RelayConnection } from "@/lib/query-options"
@@ -15,16 +15,16 @@ export type RelayConnectionSummary =
     >
 
 /** A game server as navigation shows it: identity only, never live state. */
-export type SidebarInstance = Pick<
-  RelayInstance,
+export type SidebarServer = Pick<
+  RelayServer,
   "brickId" | "id" | "implementation" | "name" | "version"
 > & {
   relayId: string
   relayName: string
 }
 
-export type ServerListInstance = Pick<
-  RelayInstance,
+export type ServerListEntry = Pick<
+  RelayServer,
   | "brickId"
   | "connectAddress"
   | "game"
@@ -41,8 +41,8 @@ export type ServerListInstance = Pick<
   relayUpdating?: boolean
 }
 
-export type InstanceWorkspaceInstance = Pick<
-  RelayInstance,
+export type WorkspaceServer = Pick<
+  RelayServer,
   | "connectAddress"
   | "game"
   | "id"
@@ -66,17 +66,17 @@ export type InstanceWorkspaceInstance = Pick<
 // What the file workspace needs of what it browses: a server, or an app's
 // data directory (whose `id` is its file root, `app:<appId>`).
 export type FileWorkspaceInstance = Pick<
-  InstanceWorkspaceInstance,
+  WorkspaceServer,
   "id" | "implementation" | "name" | "relayId" | "version"
-> & { observedState?: RelayInstance["observedState"] }
+> & { observedState?: RelayServer["observedState"] }
 
-export type InstanceRuntime = Pick<
-  RelayInstance,
+export type ServerRuntime = Pick<
+  RelayServer,
   "id" | "lifecycle" | "observedState" | "recovery" | "resources"
 > & { relayId: string }
 
-export type InstanceSettingsInstance = Pick<
-  RelayInstance,
+export type SettingsServer = Pick<
+  RelayServer,
   | "brickFormat"
   | "brickId"
   | "brickSource"
@@ -101,8 +101,8 @@ export type InstanceSettingsInstance = Pick<
 
 export type RelayNodeSummary = Pick<RelayNode, "id" | "name">
 
-export interface InstanceSettingsData {
-  instance: InstanceSettingsInstance
+export interface ServerSettingsData {
+  instance: SettingsServer
   node: RelayNodeSummary
 }
 
@@ -118,19 +118,17 @@ export function selectRelayConnectionSummary(
     : connection
 }
 
-export function selectSidebarInstances(
+export function selectSidebarServers(
   snapshot: RelayFleetSnapshot
-): Array<SidebarInstance> {
-  const instances: Array<SidebarInstance> = []
+): Array<SidebarServer> {
+  const instances: Array<SidebarServer> = []
   for (const instance of snapshot.instances) {
     if (isServerInstance(instance)) instances.push(sidebarInstance(instance))
   }
   return instances
 }
 
-export function selectSidebarInstanceCount(
-  snapshot: RelayFleetSnapshot
-): number {
+export function selectSidebarServerCount(snapshot: RelayFleetSnapshot): number {
   let count = 0
   for (const instance of snapshot.instances) {
     if (isServerInstance(instance)) count += 1
@@ -151,7 +149,7 @@ export function selectRelayServerCount(relayId: string) {
 
 function sidebarInstance(
   instance: RelayFleetSnapshot["instances"][number]
-): SidebarInstance {
+): SidebarServer {
   return {
     brickId: instance.brickId,
     id: instance.id,
@@ -202,9 +200,9 @@ export function selectRelayConsoleTransport(relayId: string) {
   }
 }
 
-export function selectInstanceWorkspaceInstance(identifier: string) {
-  return (snapshot: RelayFleetSnapshot): InstanceWorkspaceInstance | null => {
-    const instance = findRelayInstance(snapshot.instances, identifier)
+export function selectWorkspaceServer(identifier: string) {
+  return (snapshot: RelayFleetSnapshot): WorkspaceServer | null => {
+    const instance = findRelayServer(snapshot.instances, identifier)
     if (!instance) return null
     return {
       connectAddress: instance.connectAddress,
@@ -228,13 +226,13 @@ export function selectInstanceWorkspaceInstance(identifier: string) {
   }
 }
 
-export type ConsoleInstanceRuntime = Omit<InstanceRuntime, "resources">
+export type ConsoleServerRuntime = Omit<ServerRuntime, "resources">
 
-export function selectInstanceConsoleRuntime(
+export function selectServerConsoleRuntime(
   instanceId: string,
   relayId?: string
 ) {
-  return (snapshot: RelayFleetSnapshot): ConsoleInstanceRuntime | null => {
+  return (snapshot: RelayFleetSnapshot): ConsoleServerRuntime | null => {
     const instance = snapshot.instances.find(
       (item) => item.id === instanceId && (!relayId || item.relayId === relayId)
     )
@@ -250,8 +248,8 @@ export function selectInstanceConsoleRuntime(
   }
 }
 
-export function selectInstanceSettings(instanceId: string, relayId?: string) {
-  return (snapshot: RelayFleetSnapshot): InstanceSettingsData | null => {
+export function selectServerSettings(instanceId: string, relayId?: string) {
+  return (snapshot: RelayFleetSnapshot): ServerSettingsData | null => {
     const instance = snapshot.instances.find(
       (item) => item.id === instanceId && (!relayId || item.relayId === relayId)
     )
@@ -296,10 +294,7 @@ export function selectInstanceSettings(instanceId: string, relayId?: string) {
 // Whether a game server is running, so saved limits wait on a restart or a
 // start, and the files a disk limit has to hold, rounded so usage ticking up
 // doesn't render the section.
-export function selectInstanceLimitsState(
-  instanceId: string,
-  relayId?: string
-) {
+export function selectServerLimitsState(instanceId: string, relayId?: string) {
   return (snapshot: RelayFleetSnapshot) => {
     const instance = snapshot.instances.find(
       (candidate) =>
@@ -323,7 +318,7 @@ export function selectInstanceLimitsState(
 
 const DISK_USED_ROUNDING = 64 * 1024 ** 2
 
-export function selectInstanceObservedState(
+export function selectServerObservedState(
   instanceId: string,
   relayId?: string
 ) {
@@ -334,10 +329,7 @@ export function selectInstanceObservedState(
     )?.observedState ?? null
 }
 
-export function selectInstanceStateReason(
-  instanceId: string,
-  relayId?: string
-) {
+export function selectServerStateReason(instanceId: string, relayId?: string) {
   return (snapshot: RelayFleetSnapshot) =>
     snapshot.instances.find(
       (instance) =>
@@ -345,7 +337,7 @@ export function selectInstanceStateReason(
     )?.stateReason ?? null
 }
 
-export function selectInstanceLifecycleStartedAt(
+export function selectServerLifecycleStartedAt(
   instanceId: string,
   relayId?: string
 ) {
@@ -353,11 +345,11 @@ export function selectInstanceLifecycleStartedAt(
     const instance = snapshot.instances.find(
       (item) => item.id === instanceId && (!relayId || item.relayId === relayId)
     )
-    return relayInstanceLifecycleEventTime(instance?.lifecycle, "started")
+    return relayServerLifecycleEventTime(instance?.lifecycle, "started")
   }
 }
 
-export function selectInstanceContainerRunning(
+export function selectServerContainerRunning(
   instanceId: string,
   relayId?: string
 ) {
@@ -366,7 +358,7 @@ export function selectInstanceContainerRunning(
       (instance) =>
         instance.id === instanceId &&
         (!relayId || instance.relayId === relayId) &&
-        relayInstanceLifecycleEventTime(instance.lifecycle, "started") !==
+        relayServerLifecycleEventTime(instance.lifecycle, "started") !==
           null &&
         (instance.observedState === "starting" ||
           instance.observedState === "running" ||
@@ -378,7 +370,7 @@ export function selectInstanceContainerRunning(
  * The game server an ID names. An instance ID is unique across every Relay,
  * so it names one server however many Relays the fleet has.
  */
-export function findRelayInstance<T extends { id: string }>(
+export function findRelayServer<T extends { id: string }>(
   instances: ReadonlyArray<T>,
   id: string | null | undefined
 ): T | undefined {

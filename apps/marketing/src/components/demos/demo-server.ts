@@ -5,7 +5,7 @@ import type {
 } from "@workspace/contracts"
 
 import { consoleStateLine } from "@/components/console/console-lifecycle"
-import type { ServerAction } from "@/lib/instance-power-state"
+import type { ServerAction } from "@/lib/server-power-state"
 import { resourceHistoryStore } from "@/lib/resource-history-store"
 
 import { createRandom } from "~/components/demos/server-log"

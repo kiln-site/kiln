@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vite-plus/test"
-import type { RelayInstancePortAllocation } from "@workspace/contracts"
+import type { RelayServerPortAllocation } from "@workspace/contracts"
 
 import {
   discoverPortAllocations,
@@ -24,7 +24,7 @@ describe("instance port allocations", () => {
       name: "Voice chat",
       protocol: "udp",
     },
-  ] satisfies ReadonlyArray<RelayInstancePortAllocation>
+  ] satisfies ReadonlyArray<RelayServerPortAllocation>
 
   it("writes one recoverable label per route", () => {
     expect(portAllocationContainerLabels(allocations)).toEqual({

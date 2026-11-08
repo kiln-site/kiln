@@ -4,8 +4,8 @@ import {
   appTailscaleMember,
   databaseTailscaleMember,
   databaseTailscaleMemberId,
-  instanceTailscaleMember,
-  instanceTailscaleMemberId,
+  serverTailscaleMember,
+  serverTailscaleMemberId,
 } from "@workspace/contracts"
 
 import { engineLabel } from "@/components/database/database-presentation"
@@ -30,7 +30,7 @@ export interface TailscaleMemberListing {
   readonly id: string
   readonly identity: InstanceNameInstance
   readonly kind: "app" | "database" | "server"
-  /** `instance:<id>`, `app:<id>:<service>`, or `database:<id>`. */
+  /** `server:<id>`, `app:<id>:<service>`, or `database:<id>`. */
   readonly memberId: string
   /** What it is beyond its name: a release, a service, or an engine. */
   readonly meta: string
@@ -76,7 +76,7 @@ export function useTailscaleMemberDirectory() {
     const supported = new Set(fleetData?.supportedRelayIds ?? [])
     const joinable = new Map<string, TailscaleMemberListing>()
     for (const server of fleetData?.servers ?? []) {
-      const memberId = instanceTailscaleMemberId(server.id)
+      const memberId = serverTailscaleMemberId(server.id)
       joinable.set(tailscaleMemberKey(server.relayId, memberId), {
         id: server.id,
         identity: {
@@ -152,7 +152,7 @@ export function useTailscaleMemberDirectory() {
         }
       }
       const databaseId = databaseTailscaleMember(binding.memberId)
-      const id = databaseId ?? instanceTailscaleMember(binding.memberId) ?? ""
+      const id = databaseId ?? serverTailscaleMember(binding.memberId) ?? ""
       return {
         ...common,
         id,

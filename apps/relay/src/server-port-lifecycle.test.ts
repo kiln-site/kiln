@@ -1,8 +1,8 @@
 import {
   brickRecipeSchema,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
-  relayCreateInstanceSchema,
-  type RelayInstancePortProtocol,
+  relayCreateServerSchema,
+  type RelayServerPortProtocol,
 } from "@workspace/contracts"
 import { Effect, Exit } from "effect"
 import { describe, expect, it, vi } from "vite-plus/test"
@@ -14,7 +14,7 @@ import { relayHarness } from "./test/relay.js"
 const first = "a".repeat(12)
 const second = "b".repeat(12)
 
-describe("instance port lifecycle", () => {
+describe("game server port lifecycle", () => {
   it("expires abandoned leases, enforces lease ownership, and lets one concurrent reservation win", async () => {
     vi.useFakeTimers({
       now: Date.parse("2026-07-30T12:00:00.000Z"),
@@ -32,7 +32,7 @@ describe("instance port lifecycle", () => {
         externalPort?: number
       ) =>
         Effect.runPromiseExit(
-          harness.lifecycle.reserveInstancePortEffect(instanceId, {
+          harness.lifecycle.reserveServerPortEffect(instanceId, {
             externalPort,
             leaseId,
             protocol: "tcp",
@@ -40,7 +40,7 @@ describe("instance port lifecycle", () => {
         )
       const release = (instanceId: string, leaseId: string) =>
         Effect.runPromiseExit(
-          harness.lifecycle.releaseInstancePortEffect(instanceId, leaseId)
+          harness.lifecycle.releaseServerPortEffect(instanceId, leaseId)
         )
       const lease = (
         exit: Exit.Exit<{ externalPort: number; id: string }, unknown>
@@ -110,9 +110,9 @@ describe("instance port lifecycle", () => {
         },
       })
     const create = (id: string, protocol: "tcp" | "udp", start: boolean) =>
-      harness.lifecycle.createInstanceWithId(
+      harness.lifecycle.createServerWithId(
         id,
-        relayCreateInstanceSchema.parse({
+        relayCreateServerSchema.parse({
           diskLimitBytes: MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
           name: `Game ${protocol}`,
           recipe: `https://bricks.test/game-${protocol}.yml`,
@@ -127,8 +127,8 @@ describe("instance port lifecycle", () => {
     expect(running.ports[0]?.externalPort).toBe(30_000)
     expect(stopped.ports[0]?.externalPort).toBe(30_000)
 
-    const widened = (protocol: RelayInstancePortProtocol) =>
-      harness.lifecycle.updateInstancePorts(
+    const widened = (protocol: RelayServerPortProtocol) =>
+      harness.lifecycle.updateServerPorts(
         first,
         running.ports.map((allocation) => ({
           id: allocation.id,

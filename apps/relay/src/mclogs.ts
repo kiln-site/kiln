@@ -36,8 +36,8 @@ export const uploadConsoleLogToMclogs = Effect.fn("mclogs.upload")(function* (
           source: "Kiln",
           metadata: [
             {
-              key: "instance",
-              label: "Instance",
+              key: "server",
+              label: "Server",
               value: log.instanceId,
               visible: true,
             },

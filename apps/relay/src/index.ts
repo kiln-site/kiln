@@ -55,7 +55,7 @@ import {
   appIdSchema,
   appTailscaleMember,
   databaseTailscaleMemberId,
-  instanceTailscaleMemberId,
+  serverTailscaleMemberId,
   relayAppWebRouteStateSchema,
   relayAppWebRoutesWriteSchema,
   relayDeleteAppSchema,
@@ -67,7 +67,7 @@ import {
   relayDeployAppSchema,
   relayDatabaseActionSchema,
   relayDatabaseLimitsSchema,
-  relayInstanceLimitsWriteSchema,
+  relayServerLimitsWriteSchema,
   type ResourceLimits,
   relayDatabaseDataReadSchema,
   relayDatabaseDataWriteSchema,
@@ -93,18 +93,18 @@ import {
   relayResourceFreezeSchema,
   type RelayResourceFreeze,
   relayAuditQuerySchema,
-  relayCreateInstanceSchema,
-  relayPrepareInstanceSchema,
-  relayProvisionInstanceSchema,
-  relayClaimInstanceProvisioningSchema,
+  relayCreateServerSchema,
+  relayPrepareServerSchema,
+  relayProvisionServerSchema,
+  relayClaimServerProvisioningSchema,
   relayServerDeploymentReadSchema,
-  relayInstanceActionSchema,
+  relayServerActionSchema,
   relayInstanceNameSchema,
-  relayInstanceSchema,
+  relayServerSchema,
   relayRemoveDatabaseConnectionSchema,
-  relayInstancePortLeaseReleaseSchema,
-  relayInstancePortLeaseRequestSchema,
-  relayInstancePortInputsSchema,
+  relayServerPortLeaseReleaseSchema,
+  relayServerPortLeaseRequestSchema,
+  relayServerPortInputsSchema,
   relayInstanceWebRouteInputsSchema,
   relayWebRouteOptionsV1Feature,
   relayNetworkingSchema,
@@ -146,7 +146,7 @@ import {
   relayTailscaleStackDnsSchema,
   relayTailscaleStackRemoveSchema,
   relayRotateDatabaseCredentialsSchema,
-  relayUpdateInstanceStartupSchema,
+  relayUpdateServerStartupSchema,
   relayBootstrapDiscoveryTranscript,
   relayControlDeadlineMs,
   relayOperationRetentionMs,
@@ -168,7 +168,7 @@ import type {
   RelayControlOperation,
   RelayControlRequest,
   RelayDirectorySizes,
-  RelayInstance,
+  RelayServer,
   RelayInstanceWebRoute,
 } from "@workspace/contracts"
 
@@ -286,7 +286,7 @@ import type {
   RelayStoredPendingPrimaryPort,
 } from "./effect/state.js"
 import { loadRelayTls } from "./effect/tls.js"
-import { applyStoredInstanceNames } from "./instance-names.js"
+import { applyStoredServerNames } from "./server-names.js"
 import { normalizedRoute } from "./route-label.js"
 import { uploadConsoleLogToMclogs } from "./mclogs.js"
 import { closeRelayServer } from "./shutdown.js"
@@ -306,7 +306,7 @@ import { operation, runOperation } from "./operations/operation.js"
 import {
   controlRequestLocks,
   databaseReadLocks,
-  instanceLifecycleLocks,
+  serverLifecycleLocks,
   transferInstallLocks,
   transferPackLocks,
 } from "./operation-plans.js"
@@ -318,7 +318,7 @@ import { normalizeSourceCidrs } from "./source-policy.js"
 import { withRemoteFileSource } from "./remote-file-source.js"
 import { RelaySnapshotHub } from "./snapshot-hub.js"
 import { WorkloadResources } from "./workload-resources.js"
-import { retainProvisioningInstances } from "./instance-mutation-snapshot.js"
+import { retainProvisioningServers } from "./server-mutation-snapshot.js"
 import { RuntimeRecoveryManager } from "./runtime-recovery.js"
 import {
   hostProvisioningCapacity,
@@ -352,6 +352,7 @@ import {
 } from "./platform.js"
 import { ScheduleManager } from "./schedules.js"
 import { migrateInstanceIds } from "./instance-id-migration.js"
+import { migrateServerNaming } from "./server-naming-migration.js"
 import {
   webRoutesForHearth,
   webRoutesFromHearth,
@@ -400,8 +401,10 @@ const startupCore = await runRelayEffect(
     return { identity, journalId, state }
   })
 )
-// Before anything reads Docker or admits work: the move to 12-character
-// instance IDs, once, and the old IDs migrated instances keep their names by.
+// Before anything reads Docker or admits work: the move to calling game
+// servers `server` in state files, and to 12-character instance IDs, each
+// once, and the old IDs migrated instances keep their names by.
+await migrateServerNaming({ config, state: startupCore.state })
 await migrateInstanceIds({
   config,
   engine: new DockerEngine(config.dockerSocket),
@@ -703,7 +706,7 @@ lifecycle.useDatabaseContainers((databaseId) =>
 // A game server's container takes its addresses on its Tailscale networks
 // whenever it starts, its recovery starts included.
 runtimeRecovery.useTailscaleAddresses((instanceId) =>
-  lifecycle.reattachTailscaleMember(instanceTailscaleMemberId(instanceId))
+  lifecycle.reattachTailscaleMember(serverTailscaleMemberId(instanceId))
 )
 // A database's container takes its addresses on its Tailscale networks once
 // a replacement's old one has let them go, and whenever it starts.
@@ -863,7 +866,7 @@ for (const snapshot of databaseConnectionSnapshots) {
     "relay.startup.databaseConnections",
     Effect.tryPromise(() =>
       databaseConnections.reconcile(
-        { id: snapshot.instanceId, kind: "instance" },
+        { id: snapshot.instanceId, kind: "server" },
         [{ container: snapshot.service }]
       )
     ).pipe(
@@ -974,7 +977,7 @@ const tailscaleFirewallFiber = forkRelayEffect(
 )
 // A server being recreated stays in snapshots as it was, so it doesn't
 // vanish from Hearth while its container is replaced.
-const retainedInstances = new Map<string, RelayInstance>()
+const retainedServers = new Map<string, RelayServer>()
 const snapshotHub = new RelaySnapshotHub(relaySnapshot)
 // Keep one shared snapshot sampler active so crash recovery does not depend on
 // a Hearth control connection. Interactive readers reuse the same cached loop.
@@ -1039,9 +1042,9 @@ const backupManager = await runRelayEffect(
     fences: restoreFences,
     lanes,
     volumes,
-    findInstance: (instanceId) => docker.findInstance(instanceId),
-    isInstanceStopped: async (instanceId) => {
-      const instance = (await docker.inspectInstances()).find(
+    findServer: (instanceId) => docker.findServer(instanceId),
+    isServerStopped: async (instanceId) => {
+      const instance = (await docker.inspectServers()).find(
         (candidate) => candidate.id === instanceId
       )
       return (
@@ -1133,14 +1136,14 @@ const power = new ResourcePower({
       return apps.action({ action, appId })
     },
     database: (databaseId, action) => databases.action({ action, databaseId }),
-    instance: runInstancePower,
+    server: runServerPower,
   },
   lanes,
   // A schedule's power step takes what the same request from Hearth would:
   // an App's start also holds the volumes it mounts.
   locks: async (kind, id, action) =>
     (await controlRequestLocks(
-      kind === "instance" ? "instance.action" : `${kind}.action`,
+      kind === "server" ? "server.action" : `${kind}.action`,
       {
         action,
         ...(kind === "app"
@@ -1149,7 +1152,7 @@ const power = new ResourcePower({
             ? { databaseId: id }
             : { instanceId: id }),
       },
-      resolveInstanceReference,
+      resolveServerReference,
       (appId) =>
         runRelayEffect("relay.apps.volumes", volumes.appVolumeIds(appId)),
       undefined,
@@ -1170,7 +1173,7 @@ const scheduleManager = await ScheduleManager.make({
       "relay.schedules.backup.enqueue",
       backupManager.enqueue(input)
     ),
-  findInstance: (instanceId) => docker.findInstance(instanceId),
+  findServer: (instanceId) => docker.findServer(instanceId),
   forkEffect: (name, effect) => forkRelayEffect(name, effect),
   getBackup: (taskId) =>
     runRelayEffect("relay.schedules.backup.get", backupManager.get(taskId)),
@@ -1199,10 +1202,10 @@ const scheduleManager = await ScheduleManager.make({
     inLane(
       {
         label: "schedule.console.write",
-        locks: instanceLifecycleLocks(instanceId),
+        locks: serverLifecycleLocks(instanceId),
       },
       async () => {
-        const instance = await docker.findInstance(instanceId)
+        const instance = await docker.findServer(instanceId)
         if (!instance) throw new Error("Instance not found")
         await docker.sendCommand(instance, command)
       }
@@ -1619,10 +1622,10 @@ const controlSocket = attachControlSocket({
   requestLocks: (request) =>
     controlRequestLocks(
       request.operation,
-      request.operation === "instance.create"
+      request.operation === "server.create"
         ? { instanceId: plannedInstanceId(request) }
         : lockFields(request.payload),
-      resolveInstanceReference,
+      resolveServerReference,
       (appId) =>
         runRelayEffect("relay.apps.volumes", volumes.appVolumeIds(appId)),
       async (stackId) => {
@@ -1689,7 +1692,7 @@ const browserSocket = attachBrowserSocket({
   filesystem,
   identity: relayIdentity,
   lanes,
-  onConsoleStop: (instanceId) => power.changed("instance", instanceId),
+  onConsoleStop: (instanceId) => power.changed("server", instanceId),
   runEffect: (effect) => runRelayEffect("relay.browser.state", effect),
   server,
   state: startup.state,
@@ -2181,9 +2184,9 @@ async function relaySnapshot() {
     Effect.all(
       [
         relayOperation(() => nodeSnapshot(config, docker)),
-        relayOperation(() => docker.inspectInstances()),
+        relayOperation(() => docker.inspectServers()),
         relayOperation(() =>
-          runRelayEffectUntraced(startup.state.listInstanceNames())
+          runRelayEffectUntraced(startup.state.listServerNames())
         ),
         relayOperation(() =>
           runRelayEffectUntraced(startup.state.listPendingPrimaryPorts())
@@ -2202,12 +2205,12 @@ async function relaySnapshot() {
   )
   const visibleInstances = applyPendingLimits(
     applyStoredPendingPrimaryPorts(
-      applyStoredInstanceNames(instances, storedNames),
+      applyStoredServerNames(instances, storedNames),
       pendingPrimaryPorts
     ),
     pendingLimits
   )
-  const retained = Array.from(retainedInstances.values())
+  const retained = Array.from(retainedServers.values())
   const provisioningById = new Map(
     provisioningJobs.flatMap((job) =>
       job.kind === "server" ? [[job.instanceId, job.placeholder] as const] : []
@@ -2226,7 +2229,7 @@ async function relaySnapshot() {
   })
   return {
     node: { ...node, updates },
-    instances: retainProvisioningInstances(
+    instances: retainProvisioningServers(
       [...instancesWithProvisioning, ...provisioningById.values()],
       retained
     ),
@@ -2430,7 +2433,7 @@ async function executeControlRequest(
       if (mode === "commit") {
         await runRelayEffect(
           "relay.tailscale.stack.deleteName",
-          startup.state.deleteInstanceName(id)
+          startup.state.deleteServerName(id)
         )
       }
       await snapshotHub.refresh()
@@ -2836,7 +2839,7 @@ async function executeControlRequest(
             item.minimumRevision < 0 ||
             item.subject.length === 0 ||
             item.subject.length > 240 ||
-            (item.scope.kind === "instance" &&
+            (item.scope.kind === "server" &&
               (item.scope.instanceId.length === 0 ||
                 item.scope.instanceId.length > 240)) ||
             (item.scope.kind === "login_session" &&
@@ -3488,12 +3491,12 @@ async function executeControlRequest(
         : undefined
       return scheduleManager.overview(scheduleIds)
     }
-    case "instance.create": {
+    case "server.create": {
       if (!config.canProvisionInstances) {
         throw new Error("New server provisioning is disabled on this Relay")
       }
-      const input = relayCreateInstanceSchema.parse(request.payload)
-      const instance = await lifecycle.createInstanceWithId(
+      const input = relayCreateServerSchema.parse(request.payload)
+      const instance = await lifecycle.createServerWithId(
         plannedInstanceId(request),
         input
       )
@@ -3502,19 +3505,19 @@ async function executeControlRequest(
         relayOperation(() =>
           runRelayEffect(
             "relay.instance.createName",
-            startup.state.setInstanceName(instance.id, name)
+            startup.state.setServerName(instance.id, name)
           )
         ).pipe(
           Effect.onError(() =>
             Effect.all(
               [
                 cleanupOperation("instance create", () =>
-                  lifecycle.deleteInstance(instance.id, true)
+                  lifecycle.deleteServer(instance.id, true)
                 ),
                 cleanupOperation("instance name", () =>
                   runRelayEffect(
                     "relay.instance.createName.rollback",
-                    startup.state.deleteInstanceName(instance.id)
+                    startup.state.deleteServerName(instance.id)
                   )
                 ),
               ],
@@ -3523,15 +3526,15 @@ async function executeControlRequest(
           )
         )
       )
-      return refreshRelayInstance(instance)
+      return refreshRelayServer(instance)
     }
-    case "instance.provision.prepare": {
+    case "server.provision.prepare": {
       if (!config.canProvisionInstances) {
         throw new Error("New server provisioning is disabled on this Relay")
       }
-      const prepared = relayPrepareInstanceSchema.parse(request.payload)
+      const prepared = relayPrepareServerSchema.parse(request.payload)
       const { idempotencyKey, instanceId, ...input } = prepared
-      const placeholder = await lifecycle.prepareInstance(instanceId, input)
+      const placeholder = await lifecycle.prepareServer(instanceId, input)
       return runRelayEffect(
         "relay.instance.provision.prepare",
         provisioningManager.prepare({
@@ -3546,31 +3549,31 @@ async function executeControlRequest(
         })
       )
     }
-    case "instance.provision.claim": {
+    case "server.provision.claim": {
       const { deploymentId, instanceId } =
-        relayClaimInstanceProvisioningSchema.parse(request.payload)
+        relayClaimServerProvisioningSchema.parse(request.payload)
       serverDeploymentLogs.expectInstall(instanceId, deploymentId)
       return runRelayEffect(
         "relay.instance.provision.claim",
         provisioningManager.claim("server", instanceId)
       )
     }
-    case "instance.provision.cancel": {
-      const { instanceId } = relayProvisionInstanceSchema.parse(request.payload)
+    case "server.provision.cancel": {
+      const { instanceId } = relayProvisionServerSchema.parse(request.payload)
       const cancelled = await runRelayEffect(
         "relay.instance.provision.cancel",
         provisioningManager.cancel("server", instanceId)
       )
       return { cancelled, instanceId }
     }
-    case "instance.startup.write": {
+    case "server.startup.write": {
       const instanceId = requiredString(payload, "instanceId")
-      const input = relayUpdateInstanceStartupSchema.parse(payload)
+      const input = relayUpdateServerStartupSchema.parse(payload)
       const existing =
         (await snapshotHub.read()).instances.find(
           (candidate) => candidate.id === instanceId
-        ) ?? relayInstanceSchema.parse(await requiredInstance(payload))
-      return retainingInstance(existing, async () => {
+        ) ?? relayServerSchema.parse(await requiredServer(payload))
+      return retainingServer(existing, async () => {
         // A reinstall or change of Brick is a deployment Hearth names.
         const instance = await serverDeploymentLogs.run(
           instanceId,
@@ -3578,27 +3581,27 @@ async function executeControlRequest(
           input.reinstall
             ? "Reinstalling the game server"
             : "Changing the game server's Brick",
-          (onPhase) => lifecycle.reconfigureInstance(instanceId, input, onPhase)
+          (onPhase) => lifecycle.reconfigureServer(instanceId, input, onPhase)
         )
-        return relayInstanceWithStoredName(instance)
+        return relayServerWithStoredName(instance)
       })
     }
-    case "instance.limits.write": {
-      const { limits } = relayInstanceLimitsWriteSchema.parse(payload)
-      const instance = await requiredInstance(payload)
-      await lifecycle.setInstanceLimits(instance, limits)
-      const updated = (await docker.inspectInstances()).find(
+    case "server.limits.write": {
+      const { limits } = relayServerLimitsWriteSchema.parse(payload)
+      const instance = await requiredServer(payload)
+      await lifecycle.setServerLimits(instance, limits)
+      const updated = (await docker.inspectServers()).find(
         (candidate) => candidate.id === instance.id
       )
       if (!updated) throw new Error("Instance not found")
-      return refreshRelayInstance(updated)
+      return refreshRelayServer(updated)
     }
-    case "instance.rename": {
-      const instance = await requiredInstance(payload)
+    case "server.rename": {
+      const instance = await requiredServer(payload)
       const name = relayInstanceNameSchema.parse(payload.name)
       await runRelayEffect(
         "relay.instance.rename",
-        startup.state.setInstanceName(instance.id, name)
+        startup.state.setServerName(instance.id, name)
       )
       const snapshot = await snapshotHub.refresh()
       return (
@@ -3607,7 +3610,7 @@ async function executeControlRequest(
         ) ?? { ...instance, name }
       )
     }
-    case "instance.delete": {
+    case "server.delete": {
       const instanceId = requiredString(payload, "instanceId")
       const provisioningJob = await runRelayEffect(
         "relay.instance.provision.readForDelete",
@@ -3625,31 +3628,28 @@ async function executeControlRequest(
         }
         if (
           provisioningJob.status === "failed" &&
-          (await docker.findInstance(instanceId))
+          (await docker.findServer(instanceId))
         ) {
-          await lifecycle.deleteInstance(
-            instanceId,
-            payload.deleteData === true
-          )
+          await lifecycle.deleteServer(instanceId, payload.deleteData === true)
         } else {
-          await lifecycle.deletePreparedInstance(
+          await lifecycle.deletePreparedServer(
             instanceId,
             payload.deleteData === true
           )
         }
         await runRelayEffect(
           "relay.instance.deletePreparedName",
-          startup.state.deleteInstanceName(instanceId)
+          startup.state.deleteServerName(instanceId)
         )
         await docker.setPendingLimits(instanceId, null)
-        await resourceFreezes.forget("instance", instanceId)
+        await resourceFreezes.forget("server", instanceId)
         await serverDeploymentLogs.remove(instanceId)
         return { deleted: true, instanceId }
       }
-      await lifecycle.deleteInstance(instanceId, payload.deleteData === true)
+      await lifecycle.deleteServer(instanceId, payload.deleteData === true)
       await runRelayEffect(
         "relay.instance.deleteName",
-        startup.state.deleteInstanceName(instanceId)
+        startup.state.deleteServerName(instanceId)
       )
       await runRelayEffect(
         "relay.instance.deletePendingPrimaryPort",
@@ -3657,9 +3657,9 @@ async function executeControlRequest(
       )
       await docker.setPendingLimits(instanceId, null)
       // Its routes go with it, so their hostnames are free again.
-      await withRoutesLock("instance.delete.routes", async () => {
+      await withRoutesLock("server.delete.routes", async () => {
         await runRelayEffect(
-          "relay.network.routes.deleteInstance",
+          "relay.network.routes.deleteServer",
           startup.state.replaceInstanceRoutes(instanceId, [])
         )
         await lifecycle.configureWebRoutes(
@@ -3669,19 +3669,19 @@ async function executeControlRequest(
           )
         )
       })
-      await resourceFreezes.forget("instance", instanceId)
+      await resourceFreezes.forget("server", instanceId)
       await serverDeploymentLogs.remove(instanceId)
       return { deleted: true, instanceId }
     }
-    case "instance.action": {
-      const input = relayInstanceActionSchema.parse(payload)
+    case "server.action": {
+      const input = relayServerActionSchema.parse(payload)
       return power.requested(
-        "instance",
-        resolveInstanceReference(requiredString(payload, "instanceId")),
+        "server",
+        resolveServerReference(requiredString(payload, "instanceId")),
         input.action
       )
     }
-    case "instance.resources.read": {
+    case "server.resources.read": {
       const instanceId = requiredString(payload, "instanceId")
       const instance = (await snapshotHub.read()).instances.find(
         (candidate) => candidate.id === instanceId
@@ -3692,11 +3692,11 @@ async function executeControlRequest(
         instance,
       }
     }
-    case "instance.files.list":
+    case "server.files.list":
       return withFileTarget(payload, (target) =>
         runRelayEffect("relay.files.tree", target.filesystem.tree(target.root))
       )
-    case "instance.files.directory.list": {
+    case "server.files.directory.list": {
       const input = relayDirectoryPageInputSchema.parse(payload)
       return withFileTarget(input, (target) =>
         runRelayEffect(
@@ -3705,7 +3705,7 @@ async function executeControlRequest(
         )
       )
     }
-    case "instance.files.directory.sizes": {
+    case "server.files.directory.sizes": {
       const input = relayDirectorySizesInputSchema.parse(payload)
       if (isRelayFileRoot(input.instanceId)) {
         // Host directories are too large to size recursively.
@@ -3723,7 +3723,7 @@ async function executeControlRequest(
         )
       )
     }
-    case "instance.files.search": {
+    case "server.files.search": {
       const input = relayFileSearchPageInputSchema.parse(payload)
       return withFileTarget(input, (target) =>
         runRelayEffect(
@@ -3732,7 +3732,7 @@ async function executeControlRequest(
         )
       )
     }
-    case "instance.files.stat": {
+    case "server.files.stat": {
       const input = relayFileStatInputSchema.parse(payload)
       return withFileTarget(input, (target) =>
         runRelayEffect(
@@ -3741,14 +3741,14 @@ async function executeControlRequest(
         )
       )
     }
-    case "instance.files.read":
+    case "server.files.read":
       return withFileTarget(payload, (target) =>
         runRelayEffect(
           "relay.files.read",
           target.filesystem.read(target.root, requiredString(payload, "path"))
         )
       )
-    case "instance.icon.read": {
+    case "server.icon.read": {
       const input = relayIconReadInputSchema.parse(payload)
       if ("instanceId" in input) {
         return withFileTarget(input, (target) =>
@@ -3781,7 +3781,7 @@ async function executeControlRequest(
         size: file.bytes.byteLength,
       })
     }
-    case "instance.files.write": {
+    case "server.files.write": {
       const input = relaySaveFileInputSchema.parse(payload)
       return withFileTarget(payload, (target) =>
         runRelayEffect(
@@ -3794,7 +3794,7 @@ async function executeControlRequest(
         )
       )
     }
-    case "instance.files.put": {
+    case "server.files.put": {
       const input = relayFilePutInputSchema.parse(payload)
       const content = Buffer.from(input.contentBase64, "base64")
       return withFileTarget(input, (target) =>
@@ -3834,7 +3834,7 @@ async function executeControlRequest(
         )
       )
     }
-    case "instance.files.upload-url": {
+    case "server.files.upload-url": {
       const input = relayRemoteFileUploadSchema.parse(request.payload)
       return withFileTarget(input, (target) =>
         runRelayEffect(
@@ -3847,7 +3847,7 @@ async function executeControlRequest(
         )
       )
     }
-    case "instance.files.mutate": {
+    case "server.files.mutate": {
       const input = relayFileMutationInputSchema.parse(payload)
       return withFileTarget(payload, (target) =>
         runRelayEffect(
@@ -3858,7 +3858,7 @@ async function executeControlRequest(
         )
       )
     }
-    case "instance.files.mutate.result": {
+    case "server.files.mutate.result": {
       const input = relayFileMutationInputSchema.parse(payload)
       return withFileTarget(payload, (target) =>
         runRelayEffect(
@@ -3867,7 +3867,7 @@ async function executeControlRequest(
         )
       )
     }
-    case "instance.files.database.read": {
+    case "server.files.database.read": {
       const input = relayFileDatabaseReadInputSchema.parse(payload)
       return withFileTarget(input, (target) =>
         runRelayEffect(
@@ -3876,7 +3876,7 @@ async function executeControlRequest(
         )
       )
     }
-    case "instance.files.database.write": {
+    case "server.files.database.write": {
       const input = relayFileDatabaseWriteInputSchema.parse(payload)
       return withFileTarget(input, (target) =>
         runRelayEffect(
@@ -3885,28 +3885,28 @@ async function executeControlRequest(
         )
       )
     }
-    case "instance.console.history":
+    case "server.console.history":
       return docker.console(
-        await requiredInstance(payload),
+        await requiredServer(payload),
         typeof payload.limit === "number" ? payload.limit : 2_000
       )
-    case "instance.console.write": {
-      const instance = await requiredInstance(payload)
+    case "server.console.write": {
+      const instance = await requiredServer(payload)
       const input = relayConsoleCommandSchema.parse(payload)
       const { intentionalStop } = await docker.sendCommand(
         instance,
         input.command
       )
-      if (intentionalStop) power.changed("instance", instance.id)
+      if (intentionalStop) power.changed("server", instance.id)
       return { accepted: true, command: input.command }
     }
-    case "instance.console.complete": {
-      const instance = await requiredInstance(payload)
+    case "server.console.complete": {
+      const instance = await requiredServer(payload)
       const input = relayConsoleCompletionInputSchema.parse(payload)
       return docker.completeCommand(instance, input.input, input.cursor)
     }
-    case "instance.logs.share": {
-      const instance = await requiredInstance(payload)
+    case "server.logs.share": {
+      const instance = await requiredServer(payload)
       const input = relayConsoleShareInputSchema.parse(payload)
       const log = await docker.consoleLog(instance)
       return runRelayEffect(
@@ -3914,19 +3914,19 @@ async function executeControlRequest(
         uploadConsoleLogToMclogs(config.mclogsApiUrl, log, input)
       )
     }
-    case "instance.deployment.read": {
+    case "server.deployment.read": {
       const { deploymentId, instanceId } =
         relayServerDeploymentReadSchema.parse(payload)
       return serverDeploymentLogs.read(instanceId, deploymentId)
     }
-    case "instance.logs.latest":
+    case "server.logs.latest":
       return runRelayEffect(
         "relay.files.latestLog",
-        filesystem.latestLog(await requiredInstance(payload))
+        filesystem.latestLog(await requiredServer(payload))
       )
-    case "instance.network.ports.reserve": {
-      const instance = await requiredInstance(payload)
-      const input = relayInstancePortLeaseRequestSchema.parse({
+    case "server.network.ports.reserve": {
+      const instance = await requiredServer(payload)
+      const input = relayServerPortLeaseRequestSchema.parse({
         externalPort: payload.externalPort,
         leaseId: payload.leaseId,
         overridePortRange: payload.overridePortRange,
@@ -3934,33 +3934,33 @@ async function executeControlRequest(
       })
       return runRelayEffect(
         "relay.ports.reserve",
-        lifecycle.reserveInstancePortEffect(instance.id, input)
+        lifecycle.reserveServerPortEffect(instance.id, input)
       )
     }
-    case "instance.network.ports.release": {
-      const instance = await requiredInstance(payload)
-      const input = relayInstancePortLeaseReleaseSchema.parse({
+    case "server.network.ports.release": {
+      const instance = await requiredServer(payload)
+      const input = relayServerPortLeaseReleaseSchema.parse({
         leaseId: payload.leaseId,
       })
       await runRelayEffect(
         "relay.ports.release",
-        lifecycle.releaseInstancePortEffect(instance.id, input.leaseId)
+        lifecycle.releaseServerPortEffect(instance.id, input.leaseId)
       )
       return { released: true }
     }
-    case "instance.network.ports.write": {
-      const instance = await requiredInstance(payload)
-      const retainedInstance =
+    case "server.network.ports.write": {
+      const instance = await requiredServer(payload)
+      const retainedServer =
         (await snapshotHub.read()).instances.find(
           (candidate) => candidate.id === instance.id
-        ) ?? relayInstanceSchema.parse(instance)
-      const ports = relayInstancePortInputsSchema.parse(payload.ports)
+        ) ?? relayServerSchema.parse(instance)
+      const ports = relayServerPortInputsSchema.parse(payload.ports)
       const routes = await runRelayEffect(
         "relay.network.ports.routes",
         startup.state.listInstanceRoutes(instance.id)
       )
-      return retainingInstance(retainedInstance, async () => {
-        const updated = await lifecycle.updateInstancePorts(
+      return retainingServer(retainedServer, async () => {
+        const updated = await lifecycle.updateServerPorts(
           instance.id,
           ports,
           routes
@@ -3979,11 +3979,11 @@ async function executeControlRequest(
             startup.state.deletePendingPrimaryPort(instance.id)
           )
         }
-        return relayInstanceWithStoredName(updated)
+        return relayServerWithStoredName(updated)
       })
     }
-    case "instance.network.routes.read": {
-      const instance = await requiredInstance(payload)
+    case "server.network.routes.read": {
+      const instance = await requiredServer(payload)
       const routes = await runRelayEffect(
         "relay.network.routes.read",
         startup.state.listInstanceRoutes(instance.id)
@@ -3993,10 +3993,10 @@ async function executeControlRequest(
         await lifecycle.webRouteState(instance.id, routes)
       )
     }
-    case "instance.network.databases.remove": {
+    case "server.network.databases.remove": {
       const input = relayRemoveDatabaseConnectionSchema.parse(payload)
-      const instance = await requiredInstance(payload)
-      const member = { id: instance.id, kind: "instance" } as const
+      const instance = await requiredServer(payload)
+      const member = { id: instance.id, kind: "server" } as const
       await databaseConnections.set(
         member,
         input.databaseId,
@@ -4011,8 +4011,8 @@ async function executeControlRequest(
         (candidate) => candidate.id === instance.id
       )
     }
-    case "instance.network.routes.write": {
-      const instance = await requiredInstance(payload)
+    case "server.network.routes.write": {
+      const instance = await requiredServer(payload)
       const requestedRoutes = relayInstanceWebRouteInputsSchema.parse(
         payload.routes
       )
@@ -4669,7 +4669,7 @@ async function withFileTarget<T>(
       ? "app-volume"
       : appId
         ? "app"
-        : "instance"
+        : "server"
   // Every file operation first finds its root; a game server's is found by
   // looking up its container.
   const target = await traceRelayPromise(
@@ -4720,8 +4720,8 @@ async function quietFrozenResource(
   recovering = false
 ): Promise<void> {
   switch (freeze.kind) {
-    case "instance": {
-      const instance = await docker.findInstance(freeze.id)
+    case "server": {
+      const instance = await docker.findServer(freeze.id)
       if (!instance) return
       // Only its full ID: a short one would freeze nothing work names.
       if (instance.id !== freeze.id) {
@@ -4729,12 +4729,12 @@ async function quietFrozenResource(
       }
       // Startup has no in-memory power intents or schedules yet, and the
       // power coordinator isn't constructed until recovery has finished.
-      if (!recovering) power.changed("instance", instance.id)
+      if (!recovering) power.changed("server", instance.id)
       const routes = await runRelayEffect(
         "relay.network.routes.forFreeze",
         startupCore.state.listInstanceRoutes(instance.id)
       )
-      await lifecycle.runInstanceAction(instance, "stop", routes)
+      await lifecycle.runServerAction(instance, "stop", routes)
       return
     }
     case "app":
@@ -4777,22 +4777,19 @@ function refuseIfFrozenDatabase(databaseId: string): void {
   })
 }
 
-async function requiredInstance(payload: Readonly<Record<string, unknown>>) {
+async function requiredServer(payload: Readonly<Record<string, unknown>>) {
   const instanceId = requiredString(payload, "instanceId")
-  const instance = await docker.findInstance(instanceId)
+  const instance = await docker.findServer(instanceId)
   if (!instance) throw new Error("Instance not found")
   return instance
 }
 
-async function relayInstanceWithStoredName(instance: RelayInstance) {
+async function relayServerWithStoredName(instance: RelayServer) {
   const [names, pendingPrimaryPorts, pendingLimits] = await Effect.runPromise(
     Effect.all(
       [
         relayOperation(() =>
-          runRelayEffect(
-            "relay.instance.name",
-            startup.state.listInstanceNames()
-          )
+          runRelayEffect("relay.instance.name", startup.state.listServerNames())
         ),
         relayOperation(() =>
           runRelayEffect(
@@ -4813,7 +4810,7 @@ async function relayInstanceWithStoredName(instance: RelayInstance) {
   return (
     applyPendingLimits(
       applyStoredPendingPrimaryPorts(
-        applyStoredInstanceNames([instance], names),
+        applyStoredServerNames([instance], names),
         pendingPrimaryPorts
       ),
       pendingLimits
@@ -4821,16 +4818,16 @@ async function relayInstanceWithStoredName(instance: RelayInstance) {
   )
 }
 
-async function refreshRelayInstance(instance: RelayInstance) {
-  const updated = await relayInstanceWithStoredName(instance)
+async function refreshRelayServer(instance: RelayServer) {
+  const updated = await relayServerWithStoredName(instance)
   await snapshotHub.refresh()
   return updated
 }
 
 function applyPendingLimits(
-  instances: ReadonlyArray<RelayInstance>,
+  instances: ReadonlyArray<RelayServer>,
   pendingLimits: ReadonlyMap<string, ResourceLimits>
-): Array<RelayInstance> {
+): Array<RelayServer> {
   return instances.map((instance) => {
     const limits = pendingLimits.get(instance.id)
     return limits ? { ...instance, pendingLimits: limits } : instance
@@ -4838,9 +4835,9 @@ function applyPendingLimits(
 }
 
 function applyStoredPendingPrimaryPorts(
-  instances: ReadonlyArray<RelayInstance>,
+  instances: ReadonlyArray<RelayServer>,
   pendingPrimaryPorts: ReadonlyArray<RelayStoredPendingPrimaryPort>
-): Array<RelayInstance> {
+): Array<RelayServer> {
   const pendingByInstanceId = new Map(
     pendingPrimaryPorts.map(({ instanceId, ...port }) => [instanceId, port])
   )
@@ -4855,17 +4852,17 @@ function applyStoredPendingPrimaryPorts(
 
 // Keeps `instance` in snapshots while `mutate` recreates it, then refreshes.
 // The caller holds the server's lane locks.
-function retainingInstance<T>(
-  instance: RelayInstance,
+function retainingServer<T>(
+  instance: RelayServer,
   mutate: () => Promise<T>
 ): Promise<T> {
   return Effect.runPromise(
-    Effect.sync(() => retainedInstances.set(instance.id, instance)).pipe(
+    Effect.sync(() => retainedServers.set(instance.id, instance)).pipe(
       Effect.andThen(relayOperation(mutate)),
       Effect.ensuring(
         Effect.sync(() => {
-          if (retainedInstances.get(instance.id) === instance) {
-            retainedInstances.delete(instance.id)
+          if (retainedServers.get(instance.id) === instance) {
+            retainedServers.delete(instance.id)
           }
         }).pipe(
           Effect.andThen(
@@ -4920,17 +4917,17 @@ async function applyPauseHolds(): Promise<void> {
 
 // A game server's power action: recreating its container with its current
 // routes and ports when it starts, and keeping it in snapshots meanwhile.
-async function runInstancePower(
+async function runServerPower(
   instanceId: string,
   action: PowerAction
-): Promise<RelayInstance> {
-  const instance = await docker.findInstance(instanceId)
+): Promise<RelayServer> {
+  const instance = await docker.findServer(instanceId)
   if (!instance) throw new Error("Instance not found")
-  const retainedInstance =
+  const retainedServer =
     (await snapshotHub.read()).instances.find(
       (candidate) => candidate.id === instance.id
-    ) ?? relayInstanceSchema.parse(instance)
-  return retainingInstance(retainedInstance, async () => {
+    ) ?? relayServerSchema.parse(instance)
+  return retainingServer(retainedServer, async () => {
     const [routes, pendingPrimaryPort] = await Effect.runPromise(
       Effect.all(
         [
@@ -4950,7 +4947,7 @@ async function runInstancePower(
         { concurrency: 2 }
       )
     )
-    const updated = await lifecycle.runInstanceAction(
+    const updated = await lifecycle.runServerAction(
       instance,
       action,
       routes,
@@ -4966,7 +4963,7 @@ async function runInstancePower(
         startup.state.deletePendingPrimaryPort(instance.id)
       )
     }
-    return relayInstanceWithStoredName(updated)
+    return relayServerWithStoredName(updated)
   })
 }
 
@@ -4980,7 +4977,7 @@ function inLane<T>(
 
 // Requests carry a game server's ID; one that matches nothing locks as
 // itself and fails later.
-function resolveInstanceReference(reference: string): string {
+function resolveServerReference(reference: string): string {
   return reference
 }
 

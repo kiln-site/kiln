@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { assert, layer } from "@effect/vitest"
 import {
   builtinTailscaleBrick,
-  relayInstanceSchema,
+  relayServerSchema,
   relaySnapshotSchema,
 } from "@workspace/contracts"
 import { Effect } from "effect"
@@ -67,7 +67,7 @@ const user: AuthenticatedUser = {
   twoFactorEnabled: false,
 }
 
-const instance = relayInstanceSchema.parse({
+const instance = relayServerSchema.parse({
   id: instanceId,
   name: "Survival",
   service: "server",
@@ -112,7 +112,7 @@ const grant = (
       id,
       userId: user.id,
       relayId,
-      resourceType: "instance",
+      resourceType: "server",
       resourceId,
     })
     yield* insertRows(
@@ -326,7 +326,7 @@ describeMysql("backup authorization", () => {
             retentionDays: null,
             scope: "user" as const,
             sizeLimitBytes: null,
-            target: { id: instanceId, kind: "instance" as const },
+            target: { id: instanceId, kind: "server" as const },
           }
 
           const message = yield* rejection(() =>

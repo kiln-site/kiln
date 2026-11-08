@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  observedInstancePowerState,
+  observedServerPowerState,
   type ContainerPowerState,
-  type InstancePowerTransition,
+  type ServerPowerTransition,
 } from "./power-state.js"
 
 // A started container counts as running once it has stayed up this long.
@@ -26,8 +26,8 @@ function containerState(
 }
 
 function transition(
-  overrides: Partial<InstancePowerTransition> = {}
-): InstancePowerTransition {
+  overrides: Partial<ServerPowerTransition> = {}
+): ServerPowerTransition {
   return {
     action: "start",
     commandCompleted: true,
@@ -40,7 +40,7 @@ function transition(
 describe("instance power state", () => {
   it("keeps a newly started container in starting until it is stable", () => {
     expect(
-      observedInstancePowerState(
+      observedServerPowerState(
         containerState(),
         transition(),
         startedAtMs + INSTANCE_STARTUP_STABILITY_MS - 1
@@ -51,7 +51,7 @@ describe("instance power state", () => {
     })
 
     expect(
-      observedInstancePowerState(
+      observedServerPowerState(
         containerState(),
         transition(),
         startedAtMs + INSTANCE_STARTUP_STABILITY_MS
@@ -70,13 +70,13 @@ describe("instance power state", () => {
     })
 
     expect(
-      observedInstancePowerState(containerState(), stopping, startedAtMs)
+      observedServerPowerState(containerState(), stopping, startedAtMs)
     ).toEqual({
       observedState: "stopping",
       transitionComplete: false,
     })
     expect(
-      observedInstancePowerState(
+      observedServerPowerState(
         containerState({
           Running: false,
           StartedAt: "",
@@ -99,11 +99,11 @@ describe("instance power state", () => {
     })
 
     expect(
-      observedInstancePowerState(containerState(), restarting, startedAtMs)
+      observedServerPowerState(containerState(), restarting, startedAtMs)
         .observedState
     ).toBe("stopping")
     expect(
-      observedInstancePowerState(
+      observedServerPowerState(
         containerState({ StartedAt: "2026-07-28T20:00:02.000Z" }),
         restarting,
         startedAtMs + 2_000

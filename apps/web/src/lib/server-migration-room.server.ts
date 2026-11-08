@@ -5,7 +5,7 @@ import {
   relayDiskAllocationAvailableBytes,
   relaySnapshotSchema,
   relayTransferSpaceV1Feature,
-  type RelayInstance,
+  type RelayServer,
   type RelaySnapshot,
   type ResourceLimits,
 } from "@workspace/contracts"
@@ -89,7 +89,7 @@ export async function loadRelayRoom(
  * disk limit, or the default one when it has none.
  */
 export function migrationSourceRoom(
-  instance: RelayInstance,
+  instance: RelayServer,
   rootBytes: number | null,
   given: ResourceLimits | null = null
 ): MigrationSourceRoom {

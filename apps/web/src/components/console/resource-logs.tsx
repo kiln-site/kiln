@@ -33,7 +33,7 @@ import {
 import { useRelayConsoleStream } from "@/components/console/use-relay-console-stream"
 import { consoleCopy } from "@/lib/console-copy"
 
-type LogsResourceKind = Exclude<RelayBrowserResourceKind, "instance">
+type LogsResourceKind = Exclude<RelayBrowserResourceKind, "server">
 
 // The server console without its command bar: a database's, an app's, or a
 // Relay's container output, followed live the same way. Key it by resource so

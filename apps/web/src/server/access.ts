@@ -34,10 +34,10 @@ import type { PersistedRelay } from "@/lib/relay-registry"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { getCurrentUser, requireEligibleResourceUser } from "@/server/auth"
 import {
-  claimInstanceOwner,
-  claimInstanceOwnerEffect,
+  claimServerOwner,
+  claimServerOwnerEffect,
   wakeDisplacedOwnerDelivery,
-} from "@/lib/instance-registry"
+} from "@/lib/server-registry"
 import { resolveScopeAuthorization } from "@/lib/scope-authorization.server"
 import {
   requireAppTransferable,
@@ -166,7 +166,7 @@ export const getAccessCapabilities = createServerFn({ method: "GET" }).handler(
       Array<
         RowDataPacket & {
           relay_id: string
-          resource_type: "relay" | "instance" | "database"
+          resource_type: "relay" | "server" | "database"
           resource_id: string
           invitation_id: string
         }
@@ -605,7 +605,7 @@ const transferOwnership = operation<
         )
         authorization.require("access.manage")
       }
-      if (input.resourceType === "instance")
+      if (input.resourceType === "server")
         yield* promiseEffect(() => instanceOwnerId(relay, input.resourceId))
       // Only an administrator or its owner may transfer it, as the transfer
       // checks again while it holds it.
@@ -800,7 +800,7 @@ async function instanceOwnerId(
   instanceId: string
 ): Promise<string | null> {
   const [persistedRows] = await databasePool.query<Array<InstanceOwnerRow>>(
-    `SELECT owner_id, owner_provisional FROM ${databaseTable("instance")}
+    `SELECT owner_id, owner_provisional FROM ${databaseTable("server")}
       WHERE relay_id = ? AND instance_id = ? LIMIT 1`,
     [relay.id, instanceId]
   )
@@ -820,14 +820,14 @@ async function instanceOwnerId(
       const displaced = yield* database.transaction(
         "access.instance.claimOwner",
         (tx) =>
-          claimInstanceOwnerEffect(
+          claimServerOwnerEffect(
             tx,
             { instanceId, ownerId: initialOwnerId, relayId: relay.id },
             tx.execute(
-              `INSERT INTO ${databaseTable("instance")}
+              `INSERT INTO ${databaseTable("server")}
                  (relay_id, instance_id, display_name, owner_id, created_at, updated_at)
                VALUES (?, ?, NULL, ?, ?, ?)
-               ON DUPLICATE KEY UPDATE ${claimInstanceOwner},
+               ON DUPLICATE KEY UPDATE ${claimServerOwner},
                  updated_at = VALUES(updated_at)`,
               [relay.id, instanceId, initialOwnerId, now, now]
             )
@@ -837,7 +837,7 @@ async function instanceOwnerId(
     })
   )
   const [resolvedRows] = await databasePool.query<Array<InstanceOwnerRow>>(
-    `SELECT owner_id FROM ${databaseTable("instance")}
+    `SELECT owner_id FROM ${databaseTable("server")}
       WHERE relay_id = ? AND instance_id = ? LIMIT 1`,
     [relay.id, instanceId]
   )
