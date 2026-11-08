@@ -13,16 +13,50 @@ import {
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
 
-// Rename, for an Info section's actions. The dialog mounts only while open.
+// Rename, for an Info section's actions, or as a pencil beside the name it
+// changes. The dialog mounts only while open.
 export function RenameButton({
+  compact = false,
   disabledReason,
   ...dialog
 }: Omit<React.ComponentProps<typeof RenameDialog>, "onOpenChange"> & {
+  // A pencil icon, to sit beside the name.
+  compact?: boolean
   // Why it can't rename right now, such as a disconnected Relay.
   disabledReason?: string
 }) {
   const [open, setOpen] = React.useState(false)
+  if (compact) {
+    return (
+      <>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              aria-label={`Rename ${dialog.noun}`}
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              disabled={Boolean(disabledReason)}
+              onClick={() => setOpen(true)}
+            >
+              <Pencil />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {disabledReason ?? "Rename"}
+          </TooltipContent>
+        </Tooltip>
+        {open ? <RenameDialog {...dialog} onOpenChange={setOpen} /> : null}
+      </>
+    )
+  }
   return (
     <>
       <Button
