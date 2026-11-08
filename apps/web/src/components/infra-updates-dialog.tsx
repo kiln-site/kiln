@@ -81,6 +81,11 @@ import {
 import { RelativeTime } from "@/components/relative-time"
 import { replaceRelayUpdateVersion } from "@/lib/system-update-cache"
 import {
+  clearRelaysAfterHearth,
+  readRelaysAfterHearth,
+  saveRelaysAfterHearth,
+} from "@/lib/system-update-after-hearth"
+import {
   compareLatestReleaseVersion,
   findKilnRelease,
   isKilnReleaseVersion,
@@ -141,6 +146,8 @@ type UpdateTarget = {
   reachable: boolean
   reason: string | null
   relayId: string | null
+  // A Relay can't update until Hearth runs the release it would update to.
+  waitsForHearth: boolean
 }
 
 type ActiveUpdate = {
@@ -453,20 +460,28 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
     [activityStore, publishDisplayedActive, replaceActive]
   )
   const updateMutation = useMutation({
-    mutationFn: (update: PendingUpdate) =>
-      startUpdates(
-        update.targets,
+    mutationFn: (update: PendingUpdate) => {
+      const { afterHearth, now } = updatePhases(update.targets)
+      if (afterHearth.length > 0) {
+        saveRelaysAfterHearth(
+          update.latestVersion,
+          afterHearth.flatMap(({ relayId }) => relayId ?? [])
+        )
+      }
+      return startUpdates(
+        now,
         update.latestVersion,
         update.latestVersionName,
         registerStartedUpdate
-      ),
+      )
+    },
     onMutate: async (update) => {
       setSystemUpdateOverviewRefetchBlocked(true)
       const cancelOverviewQuery = queryClient.cancelQueries({
         exact: true,
         queryKey: queryKeys.updates,
       })
-      const preparingUpdates = update.targets.flatMap((target) =>
+      const preparingUpdates = updatePhases(update.targets).now.flatMap((target) =>
         isTargetUpdating(activeRef.current, target)
           ? []
           : [
@@ -504,6 +519,7 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
     },
     onSuccess: ({ failures }) => {
       for (const failure of failures) {
+        if (failure.target.component === "hearth") clearRelaysAfterHearth()
         activityStore.setTargetFailure(failure.target.key, failure.message)
         batch.current = recordSystemUpdateFailure(batch.current, failure)
       }
@@ -553,6 +569,7 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
       }
 
       if (operation.status === "failed") {
+        if (completed.component === "hearth") clearRelaysAfterHearth()
         replaceActive(remainingActive)
         const disposition = systemUpdateCompletionDisposition(
           completed.component,
@@ -631,6 +648,10 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
           activityStore.setHearthReloadRequired(true)
           setPending(null)
           publishDisplayedActive()
+          // Reload as soon as Hearth is ready: the Relays' updates carry on
+          // without this page, and the reloaded one follows them.
+          dismissToast(systemUpdateToastId)
+          setHearthCompletion(completion)
         }
       } else {
         holdCompletedUpdate({
@@ -925,6 +946,48 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
   )
   const mutateUpdate = updateMutation.mutate
   const resetUpdate = updateMutation.reset
+
+  // After Hearth's update reloads the page, the Relays it held back update,
+  // now that Hearth runs their release.
+  React.useEffect(() => {
+    const saved = readRelaysAfterHearth()
+    if (!saved) return
+    let current = true
+    void Effect.runPromise(
+      Effect.tryPromise(() =>
+        queryClient.fetchQuery(updateOverviewQueryOptions())
+      ).pipe(Effect.option)
+    ).then((overview) => {
+      // Kept while Hearth hasn't reached their release, as when this page
+      // was reloaded before Hearth's update finished.
+      if (
+        !current ||
+        Option.isNone(overview) ||
+        overview.value.relaysWaitForHearth
+      ) {
+        return
+      }
+      clearRelaysAfterHearth()
+      const latest = overview.value.releases[0]
+      if (latest?.version !== saved.version) return
+      const relayIds = new Set(saved.relayIds)
+      const targets = updateTargets(overview.value).filter(
+        (target) =>
+          target.relayId !== null &&
+          relayIds.has(target.relayId) &&
+          targetHasUpdate(target, overview.value.releases)
+      )
+      if (targets.length === 0) return
+      mutateUpdate({
+        latestVersion: latest.version,
+        latestVersionName: latest.name,
+        targets,
+      })
+    })
+    return () => {
+      current = false
+    }
+  }, [mutateUpdate, queryClient])
   const pendingRef = React.useRef(pending)
   React.useEffect(() => {
     pendingRef.current = pending
@@ -2214,6 +2277,16 @@ const UpdateTargetAction = React.memo(function UpdateTargetAction({
     )
   }
   if (
+    target.waitsForHearth &&
+    (state === "failed" || targetHasUpdate(target, releases))
+  ) {
+    return (
+      <Button className="w-24" disabled size="sm" type="button" variant="ghost">
+        Waiting
+      </Button>
+    )
+  }
+  if (
     state === "failed" ||
     targetHasUpdate(target, releases) ||
     (target.eligible && latest)
@@ -2368,8 +2441,17 @@ const UpdaterFooter = React.memo(function UpdaterFooter({
     )
   }
 
+  // Relays waiting for Hearth go with it when it updates too.
+  const hearthUpdates = targets.some(
+    (target) =>
+      target.component === "hearth" && targetHasUpdate(target, releases)
+  )
   const availableTargets = latestRelease
-    ? targets.filter((target) => targetHasUpdate(target, releases))
+    ? targets.filter(
+        (target) =>
+          targetHasUpdate(target, releases) &&
+          (!target.waitsForHearth || hearthUpdates)
+      )
     : []
   return (
     <UpdaterFooterBar tone={checkFailed ? "warning" : "default"}>
@@ -3705,6 +3787,7 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
       overview.hearth?.reason ??
       "Pair a Relay running on Hearth's Docker host to enable updates.",
     relayId: overview.hearth?.relayId ?? null,
+    waitsForHearth: false,
   }
   return [
     ...(overview.canUpdateHearth ? [hearth] : []),
@@ -3719,6 +3802,7 @@ function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
       reachable: relay.reachable,
       reason: relay.reason,
       relayId: relay.relayId,
+      waitsForHearth: overview.relaysWaitForHearth,
     })),
   ]
 }
@@ -3747,6 +3831,27 @@ function reportedActiveUpdate(
     versionName:
       overview?.releases.find(({ version }) => version === update.version)
         ?.name ?? friendlyVersionName(update.version),
+  }
+}
+
+// Relays update to the release Hearth runs, so an update with Hearth starts
+// with it and the Relay that updates it, whose updater keeps its version if
+// Hearth's fails. The rest wait for the new Hearth.
+function updatePhases(targets: ReadonlyArray<UpdateTarget>): {
+  afterHearth: Array<UpdateTarget>
+  now: Array<UpdateTarget>
+} {
+  const hearth = targets.find(({ component }) => component === "hearth")
+  const now = targets.filter(
+    (target) =>
+      !hearth ||
+      !target.waitsForHearth ||
+      target.component === "hearth" ||
+      target.relayId === hearth.relayId
+  )
+  return {
+    afterHearth: targets.filter((target) => !now.includes(target)),
+    now,
   }
 }
 
@@ -4115,6 +4220,9 @@ function targetNote(
   if (comparison === 0) return null
   if (comparison === -1) {
     return { text: "Newer than the latest release", tone: "info" }
+  }
+  if (target.waitsForHearth && target.eligible) {
+    return { text: "Updates after the Panel", tone: "muted" }
   }
   if (!target.eligible) {
     return {

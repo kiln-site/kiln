@@ -83,6 +83,22 @@ external deployment.
 Hearth itself does not receive the Docker socket. A co-located Relay performs
 its update. Relay updates use the Relay's own socket.
 
+## Hearth first
+
+A Relay updates to the release Hearth runs, never past it. Hearth supports
+Relays one release behind it, for as long as it takes to update them, but a
+Relay ahead of Hearth may not connect to it. While Hearth runs an older
+release than the latest, Relays show "Updates after the Panel" and Hearth
+refuses to start their updates.
+
+- **Update all** starts with Hearth, together with the co-located Relay that
+  performs Hearth's update. That Relay's updater replaces Hearth first, and
+  if Hearth's update fails, it keeps its own version too.
+- The page reloads as soon as the new Hearth is ready, without waiting for
+  other updates. The reloaded updater then starts the Relays Update all held
+  back, from the same browser tab.
+- If Hearth's update fails, the other Relays aren't updated.
+
 ## Container replacement
 
 Relay pulls the selected immutable digest and verifies its image labels. It
@@ -120,6 +136,26 @@ passes over Kiln's services leave Hearth alone while the updater holds it, and
 recreate Hearth only from the image the updater left, so an update is never
 undone. See [Self-hosting](self-hosting.md).
 
+## Database snapshot
+
+Hearth runs its migrations at startup, before it serves anything. Before
+running new ones, it copies each of its tables, and its definition, into the
+same database. If a migration fails, Hearth restores the copies, so the
+database is as it was before the update, and exits. The updater then sees
+the failed health check and starts the rollback copy, which runs on the
+restored database.
+
+- A start that stops partway, while migrating or restoring, leaves its
+  snapshot. The next Hearth to start, of either release, restores it before
+  anything else.
+- A new database, with no migrations applied yet, takes no snapshot.
+- Taking the snapshot and restoring it count toward the updater's wait for
+  Hearth's health check. Both copy the whole database, which takes seconds
+  for a typical one.
+- A Hearth redeployed outside Kiln, such as from Coolify, restores its
+  database the same way, but nothing brings back the previous container:
+  redeploy the previous image.
+
 Coolify remains free to manage the same containers. Kiln does not call the
 Coolify API and does not modify its project configuration. A later Coolify
 deployment is authoritative and may reapply the tag configured there.
@@ -156,7 +192,7 @@ records the next line, that metadata takes precedence over the bootstrap setting
 See [forking and publishing](forking.md) for repository settings, package identity,
 GHCR visibility and npm trust.
 
-When a release changes the Relay control protocol, update Hearth first. The
-transitional Hearth release must continue speaking the previous Relay protocol
-long enough to update the fleet; Relay updates remain blocked until the running
-Hearth recognizes the manifest protocol.
+Hearth also refuses Relay updates whose manifest names a Relay protocol it
+doesn't speak. Updating Hearth first makes that rare: a release that changes
+the protocol only needs its Hearth to keep speaking the previous one long
+enough to update the fleet (see [Hearth first](#hearth-first)).
