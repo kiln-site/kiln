@@ -17,6 +17,10 @@ const viewerImports: Record<
   FileContentViewerKind,
   () => Promise<React.ComponentType<FileContentViewerProps>>
 > = {
+  audio: () =>
+    import("@/components/files/audio-viewer").then(
+      (module) => module.AudioViewer
+    ),
   database: () =>
     import("@/components/files/file-database-viewer").then(
       (module) => module.FileDatabaseViewer
