@@ -17,6 +17,7 @@
     "@better-auth/passkey": "1.8.0-beta.5",
     "@codemirror/commands": "^6.11.1",
     "@codemirror/language": "^6.12.4",
+    "@codemirror/language-data": "^6.5.2",
     "@codemirror/legacy-modes": "^6.5.4",
     "@codemirror/lint": "^6.9.7",
     "@codemirror/merge": "^6.12.2",

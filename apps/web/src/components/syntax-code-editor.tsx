@@ -2,11 +2,13 @@ import * as React from "react"
 import { indentLess, indentMore } from "@codemirror/commands"
 import {
   HighlightStyle,
+  LanguageDescription,
   StreamLanguage,
   bracketMatching,
   indentUnit,
   syntaxHighlighting,
 } from "@codemirror/language"
+import { languages } from "@codemirror/language-data"
 import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile"
 import { json } from "@codemirror/legacy-modes/mode/javascript"
 import { properties } from "@codemirror/legacy-modes/mode/properties"
@@ -46,6 +48,7 @@ import type { DecorationSet, Panel, ViewUpdate } from "@codemirror/view"
 import { tags } from "@lezer/highlight"
 import { minimalSetup } from "codemirror"
 
+import { forkPromise } from "@/effect/promise"
 import { findSensitiveTextRedactions } from "@/lib/redaction"
 import { fileLanguageForPath } from "@/lib/file-language"
 import {
@@ -507,6 +510,33 @@ function languageForPath(path: string): Extension {
   }
 }
 
+// Any other language CodeMirror knows, matched by file name and loaded the
+// first time a file needs it. Our own modes, above, win for the files they
+// cover.
+function codeMirrorLanguageForPath(path: string) {
+  if (fileLanguageForPath(path).id !== "text") return null
+  const filename = path.split("/").at(-1) ?? path
+  return (
+    LanguageDescription.matchFilename(languages, filename) ??
+    LanguageDescription.matchFilename(languages, filename.toLowerCase())
+  )
+}
+
+/**
+ * The language for `path`, or none for now while a CodeMirror language loads,
+ * which is then handed to `onLoad`.
+ */
+function languageExtensionForPath(
+  path: string,
+  onLoad: (path: string, language: Extension) => void
+): Extension {
+  const description = codeMirrorLanguageForPath(path)
+  if (!description) return languageForPath(path)
+  if (description.support) return description.support
+  forkPromise(() => description.load().then((support) => onLoad(path, support)))
+  return []
+}
+
 function contentAttributesFor(ariaLabel: string): Extension {
   return EditorView.contentAttributes.of({
     "aria-label": ariaLabel,
@@ -600,6 +630,7 @@ export const SyntaxCodeEditor = React.forwardRef<
   const initialRedactSensitive = React.useRef(redactSensitive)
   const initialWrapLines = React.useRef(wrapLines)
   const syncing = React.useRef(false)
+  const currentPath = React.useRef(path)
   const [contentAttributes] = React.useState(() => new Compartment())
   const [editability] = React.useState(() => new Compartment())
   const [indentation] = React.useState(() => new Compartment())
@@ -628,6 +659,15 @@ export const SyntaxCodeEditor = React.forwardRef<
     []
   )
 
+  // A language that finished loading applies if its file is still open.
+  const applyLoadedLanguage = React.useCallback(
+    (loadedPath: string, language: Extension) => {
+      if (currentPath.current !== loadedPath) return
+      view.current?.dispatch({ effects: languageMode.reconfigure(language) })
+    },
+    [languageMode]
+  )
+
   React.useLayoutEffect(() => {
     if (!host.current) return
 
@@ -654,7 +694,9 @@ export const SyntaxCodeEditor = React.forwardRef<
           highlightActiveLine(),
           highlightActiveLineGutter(),
           bracketMatching(),
-          languageMode.of(languageForPath(initialPath.current)),
+          languageMode.of(
+            languageExtensionForPath(initialPath.current, applyLoadedLanguage)
+          ),
           syntaxHighlighting(kilnHighlightStyle),
           kilnEditorTheme,
           contentAttributes.of(contentAttributesFor(initialAriaLabel.current)),
@@ -704,6 +746,7 @@ export const SyntaxCodeEditor = React.forwardRef<
       view.current = null
     }
   }, [
+    applyLoadedLanguage,
     contentAttributes,
     editability,
     indentation,
@@ -718,14 +761,18 @@ export const SyntaxCodeEditor = React.forwardRef<
   React.useLayoutEffect(() => {
     const editor = view.current
     if (!editor) return
+    currentPath.current = path
     editor.dispatch({
       effects: [
         contentAttributes.reconfigure(contentAttributesFor(ariaLabel)),
         editability.reconfigure(editabilityFor(readOnly, disabled)),
-        languageMode.reconfigure(languageForPath(path)),
+        languageMode.reconfigure(
+          languageExtensionForPath(path, applyLoadedLanguage)
+        ),
       ],
     })
   }, [
+    applyLoadedLanguage,
     ariaLabel,
     contentAttributes,
     disabled,

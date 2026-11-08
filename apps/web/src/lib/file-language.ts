@@ -72,8 +72,55 @@ export function fileLanguageForPath(path: string): FileLanguage {
   }
   if (lowerPath.endsWith(".txt")) return { id: "text", label: "Text" }
 
-  const extension = filename.match(/\.([a-z0-9][a-z0-9_-]{0,11})$/)?.[1]
-  if (extension) return { id: "text", label: extension.toUpperCase() }
+  // The editor highlights these with CodeMirror's own languages; `text` here
+  // means none of Kiln's modes covers them.
+  const extension = filename.match(/\.([a-z0-9][a-z0-9_+-]{0,11})$/)?.[1]
+  if (extension) {
+    return {
+      id: "text",
+      label: extensionLabels[extension] ?? extension.toUpperCase(),
+    }
+  }
 
   return { id: "text", label: "Plain Text" }
+}
+
+const extensionLabels: Record<string, string> = {
+  c: "C",
+  cc: "C++",
+  cjs: "JavaScript",
+  cpp: "C++",
+  cs: "C#",
+  css: "CSS",
+  go: "Go",
+  gradle: "Groovy",
+  groovy: "Groovy",
+  h: "C",
+  hpp: "C++",
+  htm: "HTML",
+  html: "HTML",
+  java: "Java",
+  js: "JavaScript",
+  jsx: "JSX",
+  kt: "Kotlin",
+  kts: "Kotlin",
+  less: "Less",
+  lua: "Lua",
+  markdown: "Markdown",
+  md: "Markdown",
+  mjs: "JavaScript",
+  php: "PHP",
+  pl: "Perl",
+  ps1: "PowerShell",
+  py: "Python",
+  rb: "Ruby",
+  rs: "Rust",
+  sass: "Sass",
+  scala: "Scala",
+  scss: "SCSS",
+  svg: "SVG",
+  swift: "Swift",
+  ts: "TypeScript",
+  tsx: "TSX",
+  vue: "Vue",
 }
