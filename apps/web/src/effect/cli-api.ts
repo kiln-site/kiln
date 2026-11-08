@@ -1676,7 +1676,10 @@ const resolveBrickSource = Effect.fn("cli.api.brick.resolve")(function* (
     })
   }
   const selected = matches[0]!
-  const { source, ...recipeDefinition } = selected
+  // A catalog Brick's icon is Hearth's to show; the Relay's recipe has no
+  // place for it and refuses it, as creating one in Hearth's own pages
+  // leaves it out.
+  const { iconSvg: _iconSvg, source, ...recipeDefinition } = selected
   return { recipeDefinition, source }
 })
 
