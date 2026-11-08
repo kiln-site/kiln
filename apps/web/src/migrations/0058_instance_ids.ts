@@ -566,6 +566,20 @@ ORDER BY table_name, ordinal_position`)
     if (!list) primaryKeys.set(key.table_name, (list = []))
     list.push(key.column_name)
   }
+  // A backup task's Relay is its backup's, read before either is rewritten:
+  // a restore queued into another game server names that server alone.
+  const backupRelays = new Map(
+    (yield* sql.unsafe<{ id: string; relay_id: string }>(
+      `SELECT id, relay_id FROM \`${table("backup")}\``
+    )).map((row) => [row.id, row.relay_id])
+  )
+  const relayOfRow = (
+    name: string,
+    row: Record<string, string | null>
+  ): string | null =>
+    name === table("backup_task") && row.backup_id
+      ? (backupRelays.get(row.backup_id) ?? null)
+      : null
   let rewritten = 0
   for (const [name, textColumns] of tables) {
     const primaryKey = primaryKeys.get(name)
@@ -576,7 +590,8 @@ ORDER BY table_name, ordinal_position`)
       name,
       primaryKey,
       textColumns,
-      kinds.get(name) ?? []
+      kinds.get(name) ?? [],
+      (row) => relayOfRow(name, row)
     )
   }
   yield* Effect.logInfo("Instance ID migration rewrote records", { rewritten })
@@ -591,7 +606,9 @@ const rewriteTable = Effect.fn("migration.instanceIds.rewriteTable")(function* (
   name: string,
   primaryKey: ReadonlyArray<string>,
   textColumns: ReadonlyArray<{ name: string; json: boolean }>,
-  kindColumns: ReadonlyArray<string>
+  kindColumns: ReadonlyArray<string>,
+  // A row's Relay from another table, for one without a Relay of its own.
+  relayOfRow: (row: Record<string, string | null>) => string | null
 ) {
   const read = (column: { name: string; json: boolean }) =>
     `CAST(\`${column.name}\` AS CHAR)`
@@ -640,7 +657,7 @@ WHERE (${primaryKey.map((key) => `\`${key}\``).join(", ")}) IN (${page
         const value = row[column.name]
         if (typeof value !== "string" || value.length === 0) continue
         const relayColumn = relayColumnOf(column.name)
-        const relay = relayColumn ? row[relayColumn] : null
+        const relay = relayColumn ? row[relayColumn] : relayOfRow(row)
         const rewriter =
           relay && mapping.relays.has(relay)
             ? mapping.forRelay(relay)
