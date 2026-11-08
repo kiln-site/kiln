@@ -541,13 +541,14 @@ const reserveBackupCreateIn = Effect.fnUntraced(function* (
   const policy = policies[0]
   if (!policy) return yield* Effect.die("Backup policy was not created")
   if (input.reason === "final_delete") {
+    // A restore going into the resource, whichever backup it restores.
     const activeRestores = yield* transaction.queryRows<KnownBackupTaskRow>(
       `SELECT task.id
                  FROM ${databaseTable("backup_task")} task
                  JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
                 WHERE backup.relay_id = ?
-                  AND backup.target_kind = ?
-                  AND backup.target_id = ?
+                  AND COALESCE(task.target_kind, backup.target_kind) = ?
+                  AND COALESCE(task.target_id, backup.target_id) = ?
                   AND task.task_kind = 'restore'
                   AND task.status IN ('queued', 'running')
                 LIMIT 1`,
@@ -1512,15 +1513,6 @@ const latestBackupTaskJoin = `JOIN ${databaseTable("backup_task")} task ON task.
           LIMIT 1
        )`
 
-// A backup's newest restore, whatever ran on it since, such as an export.
-const latestRestoreTaskJoin = `JOIN ${databaseTable("backup_task")} task ON task.id = (
-         SELECT latest.id
-           FROM ${databaseTable("backup_task")} latest
-          WHERE latest.backup_id = backup.id AND latest.task_kind = 'restore'
-          ORDER BY latest.created_at DESC, latest.id DESC
-          LIMIT 1
-       )`
-
 const backupActiveSql = `(backup.status IN ('queued', 'running', 'deleting')
   OR (backup.status = 'available' AND task.status IN ('queued', 'running'))
   OR EXISTS (
@@ -1738,18 +1730,60 @@ export const listTargetBackupsEffect = Effect.fn("backups.targets")(function* (
       )
     : []
   // Each target's newest restore, even on a backup something else ran on
-  // since, so its outcome stays shown.
-  const restores = new Map<string, BackupCatalogRecord>()
-  for (const record of yield* catalogRecordsWhere(
-    where,
-    values,
+  // since, so its outcome stays shown; whichever backup it restored, the
+  // target's own or another resource's.
+  const into = targets
+    .map(
+      () =>
+        "(COALESCE(latest.target_kind, backup.target_kind) = ? AND COALESCE(latest.target_id, backup.target_id) = ?)"
+    )
+    .join(" OR ")
+  const restoreRecords = yield* catalogRecordsWhere(
+    "backup.relay_id = ?",
+    [...targets.flatMap((target) => [target.kind, target.id]), relayId],
     500,
-    latestRestoreTaskJoin
-  )) {
-    const key = `${record.targetKind}:${record.targetId}`
+    `JOIN ${databaseTable("backup_task")} task ON task.id = (
+         SELECT latest.id
+           FROM ${databaseTable("backup_task")} latest
+          WHERE latest.backup_id = backup.id AND latest.task_kind = 'restore'
+            AND (${into})
+          ORDER BY latest.created_at DESC, latest.id DESC
+          LIMIT 1
+       )`
+  )
+  const destinations = new Map(
+    restoreRecords.length === 0
+      ? []
+      : (yield* (yield* Database).queryRows<
+          RowDataPacket & {
+            id: string
+            target_id: string | null
+            target_kind: BackupTargetKind | null
+          }
+        >(
+          "backup_restore_destinations",
+          `SELECT id, target_kind, target_id
+             FROM ${databaseTable("backup_task")}
+            WHERE id IN (${restoreRecords.map(() => "?").join(", ")})`,
+          restoreRecords.map((record) => record.taskId)
+        )).map((row) => [row.id, row])
+  )
+  const restores = new Map<string, BackupCatalogRecord>()
+  for (const record of restoreRecords) {
+    const task = destinations.get(record.taskId)
+    const key =
+      task?.target_kind && task.target_id
+        ? `${task.target_kind}:${task.target_id}`
+        : `${record.targetKind}:${record.targetId}`
     const previous = restores.get(key)
     if (!previous || record.taskUpdatedAt > previous.taskUpdatedAt) {
-      restores.set(key, record)
+      // Shown as the target's, which it went into.
+      const [kind, ...id] = key.split(":")
+      restores.set(key, {
+        ...record,
+        targetId: id.join(":"),
+        targetKind: kind as BackupTargetKind,
+      })
     }
   }
   return {
@@ -2828,12 +2862,15 @@ const removeBackupRecord = Effect.fnUntraced(function* (
        finished_at, created_at, updated_at)
      VALUES (?, ?, 'delete', 'succeeded', ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE status = 'succeeded', error = NULL,
-       error_code = NULL, started_at = COALESCE(started_at, VALUES(started_at)),
-       finished_at = VALUES(finished_at), updated_at = VALUES(updated_at)`,
+       error_code = NULL, started_at = COALESCE(started_at, ?),
+       finished_at = ?, updated_at = ?`,
     [
       input.taskId,
       input.backupId,
       input.requestedBy,
+      input.now,
+      input.now,
+      input.now,
       input.now,
       input.now,
       input.now,

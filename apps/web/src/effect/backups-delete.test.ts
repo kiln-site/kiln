@@ -8,8 +8,10 @@ import {
   listDispatchableBackupTasksEffect,
   reconcileBackupTaskEffect,
   reserveBackupDeleteEffect,
+  reserveInstanceBackupEffect,
   settleUndispatchableBackupTaskEffect,
 } from "@/effect/backups"
+import { BackupStorageError } from "@/effect/errors"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertBackup, insertRows, selectRows } from "@/test/seed"
 
@@ -337,6 +339,48 @@ describeMysql("deleting backups whatever their state", () => {
           const after = yield* state
           assert.strictEqual(after.backup, "failed")
           assert.deepStrictEqual(after.artifacts, ["failed"])
+        })
+    )
+
+    it.effect(
+      "won't finally delete a resource a restore is going into, whichever backup it restores",
+      () =>
+        Effect.gen(function* () {
+          yield* fresh
+          // A's backup, queued to restore into B.
+          yield* insertBackup(backupId, {
+            relay_id: relayId,
+            target_id: "instance-a",
+          })
+          yield* artifact({ status: "available" })
+          yield* task(createTaskId, { status: "succeeded", task_kind: "create" })
+          yield* task("11111111-1111-4111-8111-1111111111e1", {
+            status: "queued",
+            target_id: "instance-b",
+            target_kind: "instance",
+            task_kind: "restore",
+          })
+          const finalBackupOf = (targetId: string) =>
+            reserveInstanceBackupEffect({
+              backupId: crypto.randomUUID(),
+              createdBy: "user-one",
+              name: "final",
+              reason: "final_delete",
+              relayId,
+              requestedMaxBytes: null,
+              storageIds: [null],
+              targetId,
+              taskId: crypto.randomUUID(),
+            }).pipe(Effect.flip)
+
+          const intoB = yield* finalBackupOf("instance-b")
+          assert.instanceOf(intoB, BackupStorageError)
+          assert.strictEqual(intoB.code, "restore_in_progress")
+          // A, which the restore only reads from, isn't held by it; with no
+          // deletion waiting, its reservation stops later for that.
+          const fromA = yield* finalBackupOf("instance-a")
+          assert.instanceOf(fromA, BackupStorageError)
+          assert.strictEqual(fromA.code, "reservation_failed")
         })
     )
   })
