@@ -488,12 +488,10 @@ async function loadRepairs(
 ): Promise<Array<AliasRepair>> {
   const saved = await Effect.runPromise(state.getMetadata(ALIAS_REPAIRS_KEY))
   if (!saved) return []
-  try {
-    const parsed = JSON.parse(saved) as unknown
-    return Array.isArray(parsed) ? (parsed as Array<AliasRepair>) : []
-  } catch {
-    return []
-  }
+  const parsed = Result.try(() => JSON.parse(saved) as unknown)
+  return Result.isSuccess(parsed) && Array.isArray(parsed.success)
+    ? (parsed.success as Array<AliasRepair>)
+    : []
 }
 
 function saveRepairs(

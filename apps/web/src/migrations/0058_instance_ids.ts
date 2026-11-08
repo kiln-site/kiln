@@ -6,7 +6,7 @@ import {
   type InstanceIdKind,
   type LegacyIdRewriter,
 } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 import { SqlClient } from "effect/sql"
 
 import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
@@ -723,12 +723,9 @@ function rewriteValue(
 const SCOPED_KEYS = ["id", "instanceId", "resourceId", "targetId"]
 
 function scopedJson(text: string, mapping: Mapping): string | null {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text)
-  } catch {
-    return null
-  }
+  const decoded = Result.try(() => JSON.parse(text) as unknown)
+  if (Result.isFailure(decoded)) return null
+  const parsed = decoded.success
   let changed = false
   const visit = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(visit)
