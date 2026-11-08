@@ -83,6 +83,29 @@ describe("database backups", () => {
     }
   )
 
+  it("refuses a dump of another engine before importing any of it", async () => {
+    const { container, directory, harness } = await harnessWithDatabase("mysql")
+    const source = join(directory, "postgres.sql.gz")
+    await writeFile(
+      source,
+      gzipSync(`--\n-- PostgreSQL database dump\n--\n\n${dump}`)
+    )
+
+    await expect(
+      restoreCompressedDatabaseBackup(harness.databases, databaseId, source)
+    ).rejects.toThrow("PostgreSQL dump")
+    expect(container.executedSql).toEqual([])
+
+    // One of its own engine's tools still restores.
+    const own = join(directory, "mysql.sql.gz")
+    await writeFile(
+      own,
+      gzipSync(`-- MySQL dump 10.13  Distrib 8.4.7, for Linux (aarch64)\n${dump}`)
+    )
+    await restoreCompressedDatabaseBackup(harness.databases, databaseId, own)
+    expect(container.executedSql).toHaveLength(1)
+  })
+
   it("fails with the client's error and keeps no partial backup", async () => {
     const { container, directory, harness } =
       await harnessWithDatabase("postgres")

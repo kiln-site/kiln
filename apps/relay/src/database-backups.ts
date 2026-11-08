@@ -14,6 +14,8 @@ import {
 } from "@workspace/contracts"
 
 import type { DatabaseDriver } from "./databases.js"
+import { RelayBackupError } from "./effect/errors.js"
+import { ensuringPromise } from "./effect/promise.js"
 import { type DockerExecProcess, streamIntoProcess } from "./docker-engine.js"
 
 const DATABASE_BACKUP_TIMEOUT_MS = 30 * 60_000
@@ -80,12 +82,63 @@ export async function createCompressedDatabaseBackup(
   }
 }
 
+const DUMP_HEADER_BYTES = 64 * 1024
+
+type DumpFamily = "mysql" | "postgres"
+
+/**
+ * Which engine family a dump came from, by the header its dump tool writes
+ * first: `mysqldump` and `mariadb-dump` start with `-- MySQL dump` or
+ * `-- MariaDB dump`, `pg_dump` with `-- PostgreSQL database dump`. Null
+ * when the first bytes name neither.
+ */
+async function dumpFamily(source: string): Promise<DumpFamily | null> {
+  const input = createReadStream(source)
+  const gunzip = createGunzip()
+  const chunks: Array<Buffer> = []
+  let bytes = 0
+  await ensuringPromise(
+    async () => {
+      for await (const chunk of input.pipe(gunzip)) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+        chunks.push(buffer)
+        bytes += buffer.byteLength
+        if (bytes >= DUMP_HEADER_BYTES) break
+      }
+    },
+    () => {
+      input.destroy()
+      gunzip.destroy()
+    }
+  )
+  const header = Buffer.concat(chunks).subarray(0, DUMP_HEADER_BYTES).toString("utf8")
+  if (/^-- (?:MySQL|MariaDB) dump /mu.test(header)) return "mysql"
+  if (/^-- PostgreSQL database dump/mu.test(header)) return "postgres"
+  return null
+}
+
+const familyNames: Record<DumpFamily, string> = {
+  mysql: "MySQL or MariaDB",
+  postgres: "PostgreSQL",
+}
+
 export async function restoreCompressedDatabaseBackup(
   databases: DatabaseDriver,
   databaseId: string,
   source: string
 ): Promise<{ warnings: Array<string> }> {
   const database = await databases.backupTarget(databaseId)
+  // Read before anything is imported: a dump one engine's tools wrote
+  // doesn't load into another's, and may have changed it partway first.
+  const family = await dumpFamily(source)
+  const target: DumpFamily = database.engine === "postgres" ? "postgres" : "mysql"
+  if (family && family !== target) {
+    throw RelayBackupError.make({
+      code: "database_engine_mismatch",
+      operation: "restore.database.verify",
+      reason: `This backup is a ${familyNames[family]} dump, which can't be restored into a ${familyNames[target]} database`,
+    })
+  }
   const child = await startDatabaseClient(databases, database, "import")
   const stderr = collectProcessErrors(child)
   // The client's progress output isn't kept, but it must be read for the

@@ -19,7 +19,7 @@ import {
   statfs,
   writeFile,
 } from "node:fs/promises"
-import { basename, dirname, relative, resolve, sep } from "node:path"
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path"
 import { constants as zlibConstants } from "node:zlib"
 import { logException } from "@workspace/telemetry"
 import { Deferred, Effect, Fiber, Option, Queue, Result, Schema } from "effect"
@@ -96,6 +96,7 @@ import {
   type BackupTaskOutcome,
   recordBackupTask,
   recordBackupTaskQueued,
+  recordResticSnapshot,
 } from "./backups/telemetry.js"
 import {
   backupArchivePath,
@@ -118,12 +119,12 @@ import {
   requiredRepositoryPassword,
   RESTIC_EXIT_REPOSITORY_MISSING,
   resticDriverLocation,
-  resticRepositoryPath,
   resticSnapshotSelector,
   translateExcludePatterns,
   validateStagingTree,
   type ResticDriver,
   type ResticDriverLocation,
+  type ResticSnapshotSummary,
 } from "./restic.js"
 
 const MAX_BACKUP_ENTRIES = 100_000
@@ -1018,6 +1019,9 @@ export class BackupManager {
           return restoreTarBackup({
             archive,
             backupId: input.archive?.backupId ?? input.backupId,
+            madeOf: input.archive
+              ? { id: input.archive.targetId, kind: input.target.kind }
+              : input.target,
             beginInstall,
             config: this.#config,
             consumers: [...lockedApps],
@@ -1718,7 +1722,7 @@ export class BackupManager {
                 reason: backupErrorMessage(cause),
                 cause,
               }),
-          })
+          }).pipe(Effect.withSpan("Backups.restore.fetch"))
           const result = yield* Effect.tryPromise({
             try: () =>
               restoreCompressedDatabaseBackup(
@@ -1727,13 +1731,16 @@ export class BackupManager {
                 artifact
               ),
             catch: (cause) =>
-              RelayBackupError.make({
-                code: "database_restore_failed",
-                operation: "restore.database",
-                reason: backupErrorMessage(cause),
-                cause,
-              }),
+              cause instanceof RelayBackupError
+                ? cause
+                : RelayBackupError.make({
+                    code: "database_restore_failed",
+                    operation: "restore.database",
+                    reason: backupErrorMessage(cause),
+                    cause,
+                  }),
           }).pipe(
+            Effect.withSpan("Backups.database.import"),
             Effect.ensuring(
               input.source.kind === "remote"
                 ? promiseEffect(() => rm(temporary, { force: true })).pipe(
@@ -1797,7 +1804,7 @@ export class BackupManager {
             "Stop the server before restoring a backup"
           )
         }
-        const result = yield* input.source.kind === "restic"
+        const result = yield* (input.source.kind === "restic"
           ? runResticRestore(
               this.#config,
               this.#restic,
@@ -1824,6 +1831,14 @@ export class BackupManager {
                       cause,
                     }),
             })
+        ).pipe(
+          Effect.withSpan("Backups.restore.files", {
+            attributes: {
+              // Made as another backup, or of another server.
+              "backup.restore.source_differs": input.archive !== undefined,
+            },
+          })
+        )
         const completed = yield* this.#state.completeBackupTask(
           task.taskId,
           result,
@@ -1967,6 +1982,7 @@ export class BackupManager {
               cause,
             }),
         }).pipe(
+          Effect.withSpan("Backups.platform.dump"),
           Effect.flatMap((created) =>
             storeCreatedBackup(
               this.#config,
@@ -2064,6 +2080,7 @@ export class BackupManager {
               cause,
             }),
         }).pipe(
+          Effect.withSpan("Backups.database.dump"),
           Effect.flatMap((created) =>
             storeCreatedBackup(
               this.#config,
@@ -2161,7 +2178,9 @@ export class BackupManager {
               AbortSignal.timeout(RESTIC_RECOVERY_TIMEOUT_MS)
             ).pipe(
               Effect.flatMap(({ prune }) =>
-                this.#state.scheduleBackupPrune(prune, Date.now())
+                prune
+                  ? this.#state.scheduleBackupPrune(prune, Date.now())
+                  : Effect.void
               )
             )
           )
@@ -2260,6 +2279,13 @@ export class BackupManager {
                 cause,
               }),
       }).pipe(
+        Effect.tap((archived) =>
+          Effect.annotateCurrentSpan({
+            "backup.bytes": archived.bytes,
+            "backup.warnings": archived.warnings.length,
+          })
+        ),
+        Effect.withSpan("Backups.archive"),
         Effect.flatMap((archived) =>
           storeCreatedBackup(
             this.#config,
@@ -2636,8 +2662,19 @@ function storeCreatedBackup(
     signal.throwIfAborted()
     progress.phase = "finalizing"
     progress.currentArtifactId = lastUploadedArtifactId
+    yield* Effect.annotateCurrentSpan({
+      "backup.artifacts.stored": available,
+      "backup.artifacts.failed": outcomes.length - available,
+    })
     return { ...result, artifacts: outcomes }
-  })
+  }).pipe(
+    Effect.withSpan("Backups.store", {
+      attributes: {
+        "backup.bytes": result.bytes,
+        "backup.destinations": 1 + (input.replicas?.length ?? 0),
+      },
+    })
+  )
 }
 
 function uploadBackupArtifact(
@@ -2649,14 +2686,24 @@ function uploadBackupArtifact(
   signal: AbortSignal,
   onChunk: (bytes: number) => void
 ) {
-  return backupDestinationFor("s3").saveFullBackup({
-    backupId: input.backupId,
-    config,
-    destination: input.destination,
-    onChunk,
-    result,
-    signal,
-  })
+  return backupDestinationFor("s3")
+    .saveFullBackup({
+      backupId: input.backupId,
+      config,
+      destination: input.destination,
+      onChunk,
+      result,
+      signal,
+    })
+    .pipe(
+      Effect.withSpan("Backups.upload", {
+        attributes: {
+          "backup.artifact.id": input.destination.artifactId ?? null,
+          "backup.bytes": result.bytes,
+          "backup.storage.kind": "s3",
+        },
+      })
+    )
 }
 
 function deleteBackupArtifacts(
@@ -2769,16 +2816,6 @@ function backupExportPartialPath(
   )
 }
 
-export async function removeResticRepository(
-  config: RelayConfig,
-  targetId: string
-): Promise<void> {
-  await rm(resticRepositoryPath(config, targetId), {
-    force: true,
-    recursive: true,
-  })
-}
-
 async function sweepExpiredBackupExports(config: RelayConfig): Promise<void> {
   const now = Date.now()
   const directory = backupExportDirectoryPath(config)
@@ -2865,6 +2902,7 @@ function runResticCreate(
         Effect.forever
       )
     )
+    let summary: ResticSnapshotSummary | null = null
     const result = yield* Effect.tryPromise({
       try: () =>
         createResticSnapshot(
@@ -2874,7 +2912,10 @@ function runResticCreate(
           instance,
           password,
           progress,
-          signal
+          signal,
+          (taken) => {
+            summary = taken
+          }
         ),
       catch: (cause) =>
         cause instanceof RelayBackupError
@@ -2898,6 +2939,31 @@ function runResticCreate(
         })
       )
     )
+    const taken = summary as ResticSnapshotSummary | null
+    yield* Effect.annotateCurrentSpan({
+      "restic.snapshot.id": result.snapshotId,
+      "restic.snapshot.reused": taken === null,
+      "restic.bytes.processed": result.bytes,
+      ...(taken
+        ? {
+            "restic.bytes.added": taken.dataAdded,
+            "restic.files.new": taken.filesNew,
+            "restic.files.changed": taken.filesChanged,
+            "restic.files.unmodified": taken.filesUnmodified,
+            "restic.files.processed": taken.totalFilesProcessed,
+          }
+        : {}),
+    })
+    if (taken && taken.dataAdded !== null) {
+      yield* recordResticSnapshot(config.nodeId, {
+        bytesAdded: taken.dataAdded,
+        bytesProcessed: result.bytes,
+        storageKind:
+          input.destination.kind === "restic"
+            ? input.destination.repository.kind
+            : "local",
+      })
+    }
     return result
   })
 }
@@ -2909,7 +2975,10 @@ async function createResticSnapshot(
   instance: RelayInstanceConfig,
   password: string,
   progress: BackupProgress,
-  signal: AbortSignal
+  signal: AbortSignal,
+  // What restic said of the snapshot it took, for the task's trace; none
+  // when an earlier attempt's is kept.
+  onSummary: (summary: ResticSnapshotSummary) => void
 ): Promise<BackupResticCreateTaskResult> {
   const location = resticDriverLocation(
     config,
@@ -2922,9 +2991,9 @@ async function createResticSnapshot(
     ...DEFAULT_EXCLUDES,
     ...input.exclude,
   ])
-  const exists = await restic.catConfig({ location, password, signal })
-  if (exists === "missing") await restic.init({ location, password, signal })
-  const existing = await restic.snapshotsByTag({
+  // A snapshot an attempt before a Relay restart saved is kept, not taken
+  // again.
+  const existing = await restic.openForBackup({
     location,
     password,
     signal,
@@ -3041,6 +3110,7 @@ async function createResticSnapshot(
     taskId: input.taskId,
     totalBytes: summary.success.totalBytesProcessed,
   })
+  onSummary(summary.success)
   progress.completed = summary.success.totalBytesProcessed
   progress.total = summary.success.totalBytesProcessed
   return {
@@ -3129,6 +3199,39 @@ async function forgetTaskSnapshotsAfterFailedCreate(
   }
 }
 
+/**
+ * The snapshot path a restore or export reads: the server directory it was
+ * taken of, which the snapshot itself records when that server isn't the
+ * one at hand, as when it's gone or another is restored into.
+ */
+async function resticSnapshotSource(
+  config: RelayConfig,
+  restic: ResticDriver,
+  input: {
+    directory: string | null
+    location: ResticDriverLocation
+    password: string
+    signal: AbortSignal
+    snapshotId: string
+  }
+): Promise<string> {
+  if (input.directory) {
+    return resticSnapshotSelector(input.snapshotId, input.directory)
+  }
+  const [path] = await restic.snapshotPaths(input)
+  // Taken from the Relay's server root with the server's own directory, so
+  // the snapshot holds that directory under its path from the root.
+  const directory = path ? relative(config.rootDirectory, path) : ""
+  if (!directory || directory.startsWith("..") || isAbsolute(directory)) {
+    throw RelayBackupError.make({
+      code: "restic_snapshot_path",
+      operation: "restore.restic",
+      reason: "The snapshot wasn't taken of a game server on this Relay",
+    })
+  }
+  return resticSnapshotSelector(input.snapshotId, directory)
+}
+
 function runResticRestore(
   config: RelayConfig,
   restic: ResticDriver,
@@ -3151,6 +3254,13 @@ function runResticRestore(
         source.repositoryPassword,
         "restore.restic"
       )
+      // The repository belongs to the server the snapshot was taken of,
+      // which another restored into may not be, and may no longer exist.
+      const location = resticDriverLocation(
+        config,
+        input.archive?.targetId ?? input.target.id,
+        source.repository
+      )
       const prepared = await prepareInstanceRestoreStaging(
         config,
         instance.directory,
@@ -3164,11 +3274,7 @@ function runResticRestore(
                 dirname(prepared.paths.staging),
                 (
                   await restic.stats({
-                    location: resticDriverLocation(
-                      config,
-                      input.target.id,
-                      source.repository
-                    ),
+                    location,
                     password,
                     signal,
                     snapshotId: source.snapshotId,
@@ -3176,16 +3282,15 @@ function runResticRestore(
                 ).totalSize
               )
               await restic.restore({
-                location: resticDriverLocation(
-                  config,
-                  input.target.id,
-                  source.repository
-                ),
+                location,
                 password,
-                selector: resticSnapshotSelector(
-                  source.snapshotId,
-                  instance.directory
-                ),
+                selector: await resticSnapshotSource(config, restic, {
+                  directory: input.archive ? null : instance.directory,
+                  location,
+                  password,
+                  signal,
+                  snapshotId: source.snapshotId,
+                }),
                 signal,
                 target: prepared.paths.staging,
               })
@@ -3224,7 +3329,7 @@ function runResticRestore(
         ? cleanupResticCache(config, restic, {
             password: input.source.repositoryPassword,
             repository: input.source.repository,
-            targetId: input.target.id,
+            targetId: input.archive?.targetId ?? input.target.id,
           })
         : Effect.void
     )
@@ -3259,7 +3364,7 @@ function runResticForget(
       input.target.id,
       destination.repository
     )
-    yield* Effect.tryPromise({
+    const repositoryExists = yield* Effect.tryPromise({
       try: async () => {
         if (destination.createTaskId) {
           const snapshots = await restic.snapshotsByTag({
@@ -3301,10 +3406,20 @@ function runResticForget(
               reason: backupErrorMessage(cause),
               cause,
             }),
-    })
+    }).pipe(
+      // A repository already gone holds no snapshot to forget, and nothing
+      // to prune.
+      Effect.as(true),
+      Effect.catchIf(
+        (cause) => cause.exitCode === RESTIC_EXIT_REPOSITORY_MISSING,
+        () => Effect.succeed(false)
+      )
+    )
     yield* promiseEffect(() => removeBackupExport(config, input.backupId))
     return {
-      prune: resticPruneFor(config, {
+      prune: !repositoryExists
+        ? undefined
+        : resticPruneFor(config, {
         repository: destination.repository,
         repositoryPassword: password,
         target: input.target,
@@ -3472,6 +3587,8 @@ function runResticExport(
       input.repositoryPassword,
       "export.restic"
     )
+    // A snapshot of a server since deleted exports all the same: its path
+    // comes from the snapshot then.
     const instance = yield* Effect.tryPromise({
       try: () => findInstance(input.target.id),
       catch: (cause) =>
@@ -3482,13 +3599,11 @@ function runResticExport(
           cause,
         }),
     })
-    if (!instance) {
-      return yield* backupFailure(
-        "instance_not_found",
-        "export.lookup",
-        "The export target no longer exists on this Relay"
-      )
-    }
+    const location = resticDriverLocation(
+      config,
+      input.target.id,
+      input.repository
+    )
     const destination = backupExportPath(config, input.backupId)
     const partial = backupExportPartialPath(config, input.backupId, taskId)
     const existing = yield* promiseEffect(() =>
@@ -3518,11 +3633,7 @@ function runResticExport(
         })
         await rm(partial, { force: true })
         const stats = await restic.stats({
-          location: resticDriverLocation(
-            config,
-            input.target.id,
-            input.repository
-          ),
+          location,
           password,
           signal,
           snapshotId: input.snapshotId,
@@ -3535,19 +3646,18 @@ function runResticExport(
         )
         const dumped = await restic.dumpZip({
           destination: partial,
-          location: resticDriverLocation(
-            config,
-            input.target.id,
-            input.repository
-          ),
+          location,
           onProgress: (bytes) => {
             progress.completed = bytes
           },
           password,
-          selector: resticSnapshotSelector(
-            input.snapshotId,
-            instance.directory
-          ),
+          selector: await resticSnapshotSource(config, restic, {
+            directory: instance?.directory ?? null,
+            location,
+            password,
+            signal,
+            snapshotId: input.snapshotId,
+          }),
           signal,
         })
         await rename(partial, destination)

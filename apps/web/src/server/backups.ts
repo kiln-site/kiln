@@ -158,6 +158,9 @@ const backupDownloadInputSchema = z.strictObject({
 const backupRestoreInputSchema = z.strictObject({
   backupId: z.uuid(),
   safetyBackup: z.boolean().default(true),
+  // Another resource of the backup's kind on its Relay to restore into, as
+  // when its own is gone; omitted, the backup's own.
+  targetId: backupTargetSchema.shape.id.optional(),
 })
 
 // A target's retention: the most backups it keeps, the most space they take,

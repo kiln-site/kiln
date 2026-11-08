@@ -118,7 +118,14 @@ export async function createTarBackup(options: {
  */
 export async function restoreTarBackup(options: {
   readonly archive: string
+  /** The backup the archive was made as. */
   readonly backupId: string
+  /**
+   * The resource the archive was taken of, which its manifest names: the
+   * target, or another of its kind when restoring it elsewhere. Everything
+   * else, the journal and its fence among them, names the target.
+   */
+  readonly madeOf: BackupTarget
   readonly beginInstall: () => void
   readonly config: RelayConfig
   /** Apps using the target, which can't start while it's partway swapped. */
@@ -134,8 +141,9 @@ export async function restoreTarBackup(options: {
   const manifest = await readTarManifest(options.archive)
   if (
     manifest.backupId !== options.backupId ||
-    manifest.target.kind !== options.target.kind ||
-    manifest.target.id !== options.target.id
+    options.madeOf.kind !== options.target.kind ||
+    manifest.target.kind !== options.madeOf.kind ||
+    manifest.target.id !== options.madeOf.id
   ) {
     throw tarError(
       "manifest_mismatch",

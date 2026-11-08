@@ -58,10 +58,11 @@ describe("restic S3 driver", () => {
     vi.stubEnv("HTTP_PROXY", "http://evil.example:8080")
     const cacheDirectory = join(testDirectory, "restic-cache")
     const { processes, spawn } = fakeRestic((restic) => restic.respond({}))
-    await createResticDriver({ cacheDirectory, spawn }).catConfig({
+    await createResticDriver({ cacheDirectory, spawn }).forget({
       location: s3Location,
       password: "repo-secret",
       signal: new AbortController().signal,
+      snapshotId: "abcdef12",
     })
     const call = processes[0]
     expect(call).toBeDefined()

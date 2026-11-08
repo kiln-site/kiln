@@ -409,10 +409,12 @@ export const BackupRowActions = React.memo(function BackupRowActions({
     canCancel &&
     backup.taskKind === "create" &&
     (backup.taskStatus === "queued" || backup.taskStatus === "running")
+  // One whose resource is gone restores into another of its kind; Kiln's
+  // own runs on its Relay's host, which must still be there.
   const canRestore =
     backup.status === "available" &&
     !backupSourceIsActive(backup) &&
-    targetAvailable &&
+    (targetAvailable || backup.targetKind !== "platform") &&
     // Kiln's restore runs on its Relay's host; the dialog says how.
     (backup.targetKind === "instance" ||
       backup.targetKind === "database" ||
@@ -446,7 +448,9 @@ export const BackupRowActions = React.memo(function BackupRowActions({
             <span className="inline-flex">{restore}</span>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {missingTargetMessage(backup.targetKind)}
+            {backup.targetKind === "platform"
+              ? missingTargetMessage(backup.targetKind)
+              : `${missingTargetMessage(backup.targetKind)}. Restore it into another.`}
           </TooltipContent>
         </Tooltip>
       )}
@@ -1126,8 +1130,17 @@ function backupIsActive(backup: Backup): boolean {
   )
 }
 
+/**
+ * Any backup can be deleted, whatever state it's in: one being made is
+ * cancelled first, and one already being deleted is sent again. Only a
+ * restore from it holds it, until that restore ends.
+ */
 export function backupCanBeRemoved(backup: Backup): boolean {
-  return !backup.relayPresent || !backupIsActive(backup)
+  if (!backup.relayPresent) return true
+  return !(
+    backup.taskKind === "restore" &&
+    (backup.taskStatus === "queued" || backup.taskStatus === "running")
+  )
 }
 
 function backupSourceIsActive(backup: Backup): boolean {

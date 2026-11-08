@@ -8,6 +8,7 @@ import type {
   BackupDeleteTaskInput,
   BackupRestoreTaskInput,
   BackupTaskPhase,
+  BackupTarget,
   BackupTaskStatus,
   BackupTargetKind,
   RelayBackupTask,
@@ -39,12 +40,10 @@ import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets } from "@/lib/environment"
 import {
   backupObjectKey,
-  deleteS3BackupPrefix,
   isSafeResticObjectPrefix,
   RESTIC_OBJECT_PREFIX_ERROR,
   resticRepositoryObjectPrefix,
 } from "@/backups/destinations/s3"
-import { loadBackupStorageCredentialEffect } from "@/backups/destinations/s3"
 
 const RESTIC_REPOSITORY_PASSWORD_PURPOSE = "kiln-restic-repository-password"
 // Running copy tasks untouched this long are treated as abandoned.
@@ -240,6 +239,8 @@ interface DispatchableBackupRow extends RowDataPacket {
   task_created_at_ms: number
   task_id: string
   task_kind: "create" | "delete" | "export" | "restore"
+  task_target_id: string | null
+  task_target_kind: BackupRow["target_kind"] | null
 }
 
 interface KnownBackupTaskRow extends RowDataPacket {
@@ -408,6 +409,14 @@ export interface BackupExportDispatch {
   ttlMs: number
 }
 
+/** A queued task whose catalog record lacks what its Relay task needs. */
+export interface UndispatchableBackupTask {
+  backupId: string
+  kind: "undispatchable"
+  reason: string
+  taskId: string
+}
+
 export type BackupDispatch =
   | BackupCreateDispatch
   | BackupDeleteDispatch
@@ -532,13 +541,14 @@ const reserveBackupCreateIn = Effect.fnUntraced(function* (
   const policy = policies[0]
   if (!policy) return yield* Effect.die("Backup policy was not created")
   if (input.reason === "final_delete") {
+    // A restore going into the resource, whichever backup it restores.
     const activeRestores = yield* transaction.queryRows<KnownBackupTaskRow>(
       `SELECT task.id
                  FROM ${databaseTable("backup_task")} task
                  JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
                 WHERE backup.relay_id = ?
-                  AND backup.target_kind = ?
-                  AND backup.target_id = ?
+                  AND COALESCE(task.target_kind, backup.target_kind) = ?
+                  AND COALESCE(task.target_id, backup.target_id) = ?
                   AND task.task_kind = 'restore'
                   AND task.status IN ('queued', 'running')
                 LIMIT 1`,
@@ -1093,6 +1103,47 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
   )
 })
 
+// One artifact's part in a delete the Relay reported: gone, or kept as
+// valid as it was, with why it wasn't deleted.
+const applyDeleteOutcome = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  input: {
+    at: number
+    backupId: string
+    now: number
+    outcome: {
+      artifactId: string
+      error: string | null
+      errorCode?: string | null
+      status: string
+    }
+  }
+) {
+  const deleted = input.outcome.status === "deleted"
+  yield* transaction.execute(
+    `UPDATE ${databaseTable("backup_artifact")}
+        SET status = CASE
+              WHEN ? THEN 'deleted'
+              WHEN status = 'deleting' THEN 'available'
+              ELSE status
+            END,
+            error = ?, error_code = ?,
+            deleted_at = CASE WHEN ? THEN ? ELSE deleted_at END,
+            updated_at = ?
+      WHERE id = ? AND backup_id = ?`,
+    [
+      deleted,
+      input.outcome.error,
+      input.outcome.errorCode ?? null,
+      deleted,
+      input.at,
+      input.now,
+      input.outcome.artifactId,
+      input.backupId,
+    ]
+  )
+})
+
 export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
   function* (task: RelayBackupTask, relayId?: string) {
     const database = yield* Database
@@ -1206,36 +1257,24 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                 WHERE backup_id = ? AND status = 'deleting'`,
               [now, task.backupId]
             )
+            // Only a complete copy shows as being deleted, so one that
+            // failed being made never comes back as available.
             if (task.currentArtifactId) {
               yield* transaction.execute(
                 `UPDATE ${databaseTable("backup_artifact")}
                     SET status = 'deleting', error = NULL, error_code = NULL,
                         updated_at = ?
-                  WHERE id = ? AND backup_id = ? AND status <> 'deleted'`,
+                  WHERE id = ? AND backup_id = ? AND status = 'available'`,
                 [now, task.currentArtifactId, task.backupId]
               )
             }
             for (const outcome of outcomes) {
-              const artifactStatus =
-                outcome.status === "deleted" ? "deleted" : "available"
-              yield* transaction.execute(
-                `UPDATE ${databaseTable("backup_artifact")}
-                    SET status = ?, error = ?, error_code = ?,
-                        deleted_at = CASE WHEN ? = 'deleted'
-                          THEN ? ELSE NULL END,
-                        updated_at = ?
-                  WHERE id = ? AND backup_id = ?`,
-                [
-                  artifactStatus,
-                  outcome.error,
-                  outcome.errorCode ?? null,
-                  artifactStatus,
-                  task.updatedAt,
-                  now,
-                  outcome.artifactId,
-                  task.backupId,
-                ]
-              )
+              yield* applyDeleteOutcome(transaction, {
+                at: task.updatedAt,
+                backupId: task.backupId,
+                now,
+                outcome,
+              })
             }
           } else if (task.status === "succeeded") {
             // A forgotten restic snapshot leaves nothing behind in any of
@@ -1252,32 +1291,36 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
               )
             } else {
               for (const outcome of outcomes) {
-                const artifactStatus =
-                  outcome.status === "deleted" ? "deleted" : "available"
-                yield* transaction.execute(
-                  `UPDATE ${databaseTable("backup_artifact")}
-                      SET status = ?, error = ?, error_code = ?,
-                          deleted_at = CASE WHEN ? = 'deleted'
-                            THEN ? ELSE NULL END,
-                          updated_at = ?
-                  WHERE id = ? AND backup_id = ?`,
-                  [
-                    artifactStatus,
-                    outcome.error,
-                    outcome.errorCode ?? null,
-                    artifactStatus,
-                    task.finishedAt ?? now,
-                    now,
-                    outcome.artifactId,
-                    task.backupId,
-                  ]
-                )
+                yield* applyDeleteOutcome(transaction, {
+                  at: task.finishedAt ?? now,
+                  backupId: task.backupId,
+                  now,
+                  outcome,
+                })
               }
             }
-            const remaining = yield* transaction.queryRows<RowDataPacket>(
-              `SELECT id FROM ${databaseTable("backup_artifact")}
-                WHERE backup_id = ? AND status <> 'deleted' LIMIT 1`,
+            // What a delete left behind keeps the backup: available while a
+            // complete copy remains, failed while only failed ones do.
+            const [remaining] = yield* transaction.queryRows<
+              RowDataPacket & { available: number | string; kept: number | string }
+            >(
+              `SELECT COUNT(*) AS kept,
+                      COALESCE(SUM(status IN ('available', 'deleting')), 0) AS available
+                 FROM ${databaseTable("backup_artifact")}
+                WHERE backup_id = ? AND status <> 'deleted'`,
               [task.backupId]
+            )
+            const status =
+              Number(remaining?.available ?? 0) > 0
+                ? "available"
+                : Number(remaining?.kept ?? 0) > 0
+                  ? "failed"
+                  : "deleted"
+            yield* transaction.execute(
+              `UPDATE ${databaseTable("backup_artifact")}
+                  SET status = 'available', updated_at = ?
+                WHERE backup_id = ? AND status = 'deleting'`,
+              [now, task.backupId]
             )
             yield* transaction.execute(
               `UPDATE ${databaseTable("backup")}
@@ -1286,39 +1329,26 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                         THEN ? ELSE NULL END,
                       updated_at = ?
                 WHERE id = ?`,
-              [
-                remaining[0] ? "available" : "deleted",
-                remaining[0] ? "available" : "deleted",
-                task.finishedAt ?? now,
-                now,
-                task.backupId,
-              ]
+              [status, status, task.finishedAt ?? now, now, task.backupId]
             )
           } else if (task.status === "failed" || task.status === "cancelled") {
-            yield* transaction.execute(
-              `UPDATE ${databaseTable("backup")}
-                  SET status = 'available', updated_at = ?
-                WHERE id = ?`,
-              [now, task.backupId]
-            )
-            yield* transaction.execute(
-              `UPDATE ${databaseTable("backup_artifact")}
-                  SET status = 'available', error = ?, error_code = ?,
-                      updated_at = ?
-                WHERE backup_id = ? AND status = 'deleting'`,
-              [task.error, task.errorCode ?? null, now, task.backupId]
-            )
+            yield* restoreStatusAfterFailedDelete(transaction, {
+              backupId: task.backupId,
+              code: task.errorCode ?? null,
+              now,
+              reason: task.error,
+            })
           }
           return
         }
         if (task.kind !== "create") return
-        if (
-          knownTask.backup_status === "deleting" ||
-          knownTask.backup_status === "deleted"
-        ) {
-          return
-        }
+        if (knownTask.backup_status === "deleted") return
+        // Being deleted: what the create made is still recorded, so a delete
+        // that doesn't finish leaves a backup as valid as its create made
+        // it, but the backup stays deleting.
+        const deleting = knownTask.backup_status === "deleting"
         if (task.status === "queued" || task.status === "running") {
+          if (deleting) return
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup")}
                 SET status = ?, started_at = COALESCE(started_at, ?),
@@ -1412,7 +1442,7 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
                     completed_at = ?, updated_at = ?
               WHERE id = ?`,
             [
-              available[0] ? "available" : "failed",
+              deleting ? "deleting" : available[0] ? "available" : "failed",
               filename,
               task.result.bytes,
               checksum,
@@ -1428,9 +1458,14 @@ export const reconcileBackupTaskEffect = Effect.fn("backups.reconcile")(
         if (task.status === "failed" || task.status === "cancelled") {
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup")}
-                SET status = 'failed', completed_at = ?, updated_at = ?
+                SET status = ?, completed_at = ?, updated_at = ?
               WHERE id = ?`,
-            [task.finishedAt ?? now, now, task.backupId]
+            [
+              deleting ? "deleting" : "failed",
+              task.finishedAt ?? now,
+              now,
+              task.backupId,
+            ]
           )
           yield* transaction.execute(
             `UPDATE ${databaseTable("backup_artifact")}
@@ -1474,15 +1509,6 @@ const latestBackupTaskJoin = `JOIN ${databaseTable("backup_task")} task ON task.
          SELECT latest.id
            FROM ${databaseTable("backup_task")} latest
           WHERE latest.backup_id = backup.id
-          ORDER BY latest.created_at DESC, latest.id DESC
-          LIMIT 1
-       )`
-
-// A backup's newest restore, whatever ran on it since, such as an export.
-const latestRestoreTaskJoin = `JOIN ${databaseTable("backup_task")} task ON task.id = (
-         SELECT latest.id
-           FROM ${databaseTable("backup_task")} latest
-          WHERE latest.backup_id = backup.id AND latest.task_kind = 'restore'
           ORDER BY latest.created_at DESC, latest.id DESC
           LIMIT 1
        )`
@@ -1704,18 +1730,57 @@ export const listTargetBackupsEffect = Effect.fn("backups.targets")(function* (
       )
     : []
   // Each target's newest restore, even on a backup something else ran on
-  // since, so its outcome stays shown.
-  const restores = new Map<string, BackupCatalogRecord>()
-  for (const record of yield* catalogRecordsWhere(
-    where,
-    values,
-    500,
-    latestRestoreTaskJoin
+  // since, so its outcome stays shown; whichever backup it restored, the
+  // target's own or another resource's, and one backup restored into two
+  // targets shows on each.
+  const database = yield* Database
+  const newest = new Map<string, string>()
+  for (const row of yield* database.queryRows<
+    RowDataPacket & { id: string; target: string }
+  >(
+    "backup_target_restores",
+    `SELECT task.id,
+            CONCAT(COALESCE(task.target_kind, backup.target_kind), ':',
+                   COALESCE(task.target_id, backup.target_id)) AS target
+       FROM ${databaseTable("backup_task")} task
+       JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
+      WHERE backup.relay_id = ? AND backup.status <> 'deleted'
+        AND task.task_kind = 'restore'
+        AND (${targets
+          .map(
+            () =>
+              "(COALESCE(task.target_kind, backup.target_kind) = ? AND COALESCE(task.target_id, backup.target_id) = ?)"
+          )
+          .join(" OR ")})
+      ORDER BY task.created_at DESC, task.id DESC
+      LIMIT 500`,
+    [relayId, ...targets.flatMap((target) => [target.kind, target.id])]
   )) {
-    const key = `${record.targetKind}:${record.targetId}`
-    const previous = restores.get(key)
-    if (!previous || record.taskUpdatedAt > previous.taskUpdatedAt) {
-      restores.set(key, record)
+    if (!newest.has(row.target)) newest.set(row.target, row.id)
+  }
+  const taskTargets = new Map(
+    [...newest].map(([target, taskId]) => [taskId, target])
+  )
+  const restores = new Map<string, BackupCatalogRecord>()
+  if (taskTargets.size > 0) {
+    const ids = [...taskTargets.keys()]
+    for (const record of yield* catalogRecordsWhere(
+      "backup.relay_id = ?",
+      [...ids, relayId],
+      ids.length,
+      `JOIN ${databaseTable("backup_task")} task
+         ON task.backup_id = backup.id
+        AND task.id IN (${ids.map(() => "?").join(", ")})`
+    )) {
+      const key = taskTargets.get(record.taskId)
+      if (!key) continue
+      // Shown as the target's, which it went into.
+      const [kind, ...id] = key.split(":")
+      restores.set(key, {
+        ...record,
+        targetId: id.join(":"),
+        targetKind: kind as BackupTargetKind,
+      })
     }
   }
   return {
@@ -1738,6 +1803,35 @@ export const getBackupForTaskEffect = Effect.fn("backups.forTask")(function* (
   )
   return record ?? null
 })
+
+/**
+ * A restore task's backup and the resource it went into: the backup's own,
+ * or the one the task names.
+ */
+export const getRestoreForTaskEffect = Effect.fn("backups.restoreForTask")(
+  function* (taskId: string) {
+    const backup = yield* getBackupForTaskEffect(taskId)
+    if (!backup) return null
+    const database = yield* Database
+    const [task] = yield* database.queryRows<
+      RowDataPacket & {
+        target_id: string | null
+        target_kind: BackupTargetKind | null
+      }
+    >(
+      "backup_restore_target",
+      `SELECT target_kind, target_id
+         FROM ${databaseTable("backup_task")}
+        WHERE id = ?`,
+      [taskId]
+    )
+    const target: BackupTarget =
+      task?.target_kind && task.target_id
+        ? { id: task.target_id, kind: task.target_kind }
+        : { id: backup.targetId, kind: backup.targetKind }
+    return { backup, target }
+  }
+)
 
 export const getBackupCatalogRecordEffect = Effect.fn("backups.get")(function* (
   backupId: string
@@ -2055,6 +2149,8 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
             ) AS create_task_id,
             task.id AS task_id, task.task_kind, task.reserved_bytes,
             task.created_at AS task_created_at_ms,
+            task.target_kind AS task_target_kind,
+            task.target_id AS task_target_id,
             backup.storage_id, backup.object_key,
             backup.linked_from_backup_id, backup.linked_from_target_id,
             backup.consistency, backup.batch_id,
@@ -2090,11 +2186,15 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
           OR (task.task_kind = 'delete' AND backup.status = 'deleting')
           OR (task.task_kind = 'export' AND backup.status = 'available'))
         AND task.status = 'queued'
+        -- A restore follows its safety backup only once it succeeded; a
+        -- delete follows the create it waits on however that ended.
         AND (task.depends_on_task_id IS NULL OR EXISTS (
           SELECT 1
             FROM ${databaseTable("backup_task")} dependency
            WHERE dependency.id = task.depends_on_task_id
-             AND dependency.status = 'succeeded'
+             AND (dependency.status = 'succeeded'
+               OR (task.task_kind = 'delete'
+                 AND dependency.status IN ('failed', 'cancelled')))
         ))
       ORDER BY task.created_at ASC, task.id ASC`,
     [relayId]
@@ -2117,25 +2217,37 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
     artifacts.push(artifact)
     artifactsByBackup.set(artifact.backup_id, artifacts)
   }
-  return rows.map((row): BackupDispatch => {
+  return rows.map((row): BackupDispatch | UndispatchableBackupTask => {
     const artifacts = artifactsByBackup.get(row.backup_id) ?? []
+    const undispatchable = (reason: string) => ({
+      backupId: row.backup_id,
+      kind: "undispatchable" as const,
+      reason,
+      taskId: row.task_id,
+    })
     const archive = linkedArchive(row)
     if (row.task_kind === "restore") {
       const artifact = artifacts.find(
         (candidate) => candidate.status === "available"
       )
+      const destination =
+        row.task_target_kind && row.task_target_id
+          ? { id: row.task_target_id, kind: row.task_target_kind }
+          : { id: row.target_id, kind: row.target_kind }
+      const restoreIdentity = restoreArchive(row, row.backup_id, destination)
       if (row.backup_mode === "incremental") {
         if (!artifact || !row.restic_snapshot_id) {
-          throw new Error("Available snapshot is missing restore metadata")
+          return undispatchable("The snapshot is missing restore metadata")
         }
         return {
+          ...restoreIdentity,
           artifactId: artifact.id,
           backupId: row.backup_id,
           kind: "restore",
           objectKey: null,
           snapshotId: row.restic_snapshot_id,
           storageId: null,
-          target: { id: row.target_id, kind: row.target_kind },
+          target: destination,
           taskId: row.task_id,
         }
       }
@@ -2144,12 +2256,10 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
         "backup artifact bytes"
       )
       if (!artifact || bytes === null || !artifact.checksum_sha256) {
-        throw new Error(
-          "Available backup is missing restore integrity metadata"
-        )
+        return undispatchable("The backup is missing restore integrity metadata")
       }
       return {
-        ...archive,
+        ...restoreIdentity,
         backupId: row.backup_id,
         bytes,
         checksumSha256: artifact.checksum_sha256,
@@ -2157,13 +2267,13 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
         kind: "restore",
         objectKey: artifact.object_key,
         storageId: artifact.storage_id,
-        target: { id: row.target_id, kind: row.target_kind },
+        target: destination,
         taskId: row.task_id,
       }
     }
     if (row.task_kind === "export") {
       if (!row.restic_snapshot_id) {
-        throw new Error("Available snapshot is missing export metadata")
+        return undispatchable("The snapshot is missing export metadata")
       }
       return {
         backupId: row.backup_id,
@@ -2245,16 +2355,40 @@ function linkedArchive(row: {
     : {}
 }
 
+// The archive identity a restore's Relay task checks its backup against:
+// what a linked backup was made as, or, restoring into another resource,
+// the backup and resource it was taken of.
+function restoreArchive(
+  row: {
+    linked_from_backup_id: string | null
+    linked_from_target_id: string | null
+    target_id: string
+  },
+  backupId: string,
+  destination: { id: string }
+) {
+  const linked = linkedArchive(row)
+  if (linked.archive) return linked
+  return destination.id === row.target_id
+    ? {}
+    : { archive: { backupId, targetId: row.target_id } }
+}
+
 export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
   function* (input: {
     backupId: string
     dependsOnTaskId: string | null
     requestedBy: string
+    /**
+     * Where the backup goes: its own resource when omitted, or another of
+     * the same kind on its Relay, as when its own is gone.
+     */
+    target?: BackupTarget
     taskId: string
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    return yield* database.transaction(
+    const reserve = database.transaction(
       "backup_reserve_restore",
       (transaction) =>
         Effect.gen(function* () {
@@ -2320,12 +2454,37 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
               reason: "Only complete backups can be restored",
             })
           }
+          const destination = input.target ?? {
+            id: backup.target_id,
+            kind: backup.target_kind,
+          }
+          if (destination.kind !== backup.target_kind) {
+            return yield* BackupStorageError.make({
+              code: "restore_target_mismatch",
+              operation: "backup.restore",
+              reason: "A backup can only be restored into the same kind of resource",
+            })
+          }
+          // Restores into one resource queue behind each other, whichever
+          // backup each restores, on its policy row, made first if it has
+          // none yet so two can't both find nothing to wait for; the check
+          // after it is a locking read, so it sees what the one before it
+          // committed rather than this transaction's older snapshot. Ones
+          // from before restores could go elsewhere went into their
+          // backup's own resource.
+          yield* transaction.execute(
+            `INSERT IGNORE INTO ${databaseTable("backup_policy")}
+              (relay_id, target_kind, target_id, exclude_patterns, created_at,
+               updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [backup.relay_id, destination.kind, destination.id, "[]", now, now]
+          )
           yield* transaction.queryRows<RowDataPacket>(
             `SELECT relay_id
                FROM ${databaseTable("backup_policy")}
               WHERE relay_id = ? AND target_kind = ? AND target_id = ?
               FOR UPDATE`,
-            [backup.relay_id, backup.target_kind, backup.target_id]
+            [backup.relay_id, destination.kind, destination.id]
           )
           const conflictingTasks =
             yield* transaction.queryRows<KnownBackupTaskRow>(
@@ -2334,12 +2493,13 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
                  JOIN ${databaseTable("backup")} active_backup
                    ON active_backup.id = task.backup_id
                 WHERE active_backup.relay_id = ?
-                  AND active_backup.target_kind = ?
-                  AND active_backup.target_id = ?
+                  AND COALESCE(task.target_kind, active_backup.target_kind) = ?
+                  AND COALESCE(task.target_id, active_backup.target_id) = ?
                   AND task.task_kind = 'restore'
                   AND task.status IN ('queued', 'running')
-                LIMIT 1`,
-              [backup.relay_id, backup.target_kind, backup.target_id]
+                LIMIT 1
+                LOCK IN SHARE MODE`,
+              [backup.relay_id, destination.kind, destination.id]
             )
           if (conflictingTasks[0]) {
             return yield* BackupStorageError.make({
@@ -2351,9 +2511,10 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
           yield* refuseIfFinalDeletionInProgress(transaction, {
             operation: "backup.restore",
             relayId: backup.relay_id,
-            targetId: backup.target_id,
-            targetKind: backup.target_kind,
+            targetId: destination.id,
+            targetKind: destination.kind,
           })
+          const elsewhere = destination.id !== backup.target_id
           if (input.dependsOnTaskId) {
             const dependencies =
               yield* transaction.queryRows<KnownBackupTaskRow>(
@@ -2374,19 +2535,21 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
           yield* transaction.execute(
             `INSERT INTO ${databaseTable("backup_task")}
               (id, backup_id, task_kind, status, depends_on_task_id, requested_by,
-               created_at, updated_at)
-             VALUES (?, ?, 'restore', 'queued', ?, ?, ?, ?)`,
+               target_kind, target_id, created_at, updated_at)
+             VALUES (?, ?, 'restore', 'queued', ?, ?, ?, ?, ?, ?)`,
             [
               input.taskId,
               input.backupId,
               input.dependsOnTaskId,
               input.requestedBy,
+              elsewhere ? destination.kind : null,
+              elsewhere ? destination.id : null,
               now,
               now,
             ]
           )
           return {
-            ...linkedArchive(backup),
+            ...restoreArchive(backup, input.backupId, destination),
             artifactId: artifact.id,
             backupId: input.backupId,
             ...(resticRestore
@@ -2398,14 +2561,54 @@ export const reserveBackupRestoreEffect = Effect.fn("backups.reserveRestore")(
             kind: "restore",
             objectKey: resticRestore ? null : artifact.object_key,
             storageId: resticRestore ? null : artifact.storage_id,
-            target: { id: backup.target_id, kind: backup.target_kind },
+            target: destination,
             taskId: input.taskId,
           } satisfies BackupRestoreDispatch
         })
     )
+    // Two restores into a resource without a policy row both make it, and
+    // MySQL may end one of them for a deadlock: it runs once more.
+    return yield* reserve.pipe(Effect.catchIf(isDeadlock, () => reserve))
   }
 )
 
+/**
+ * What deleting a backup does next: send its delete to the Relay, nothing
+ * at all when only the catalog record held it, or wait for the create still
+ * making it to end first.
+ */
+export type BackupDeleteReservation =
+  | { kind: "dispatch"; dispatch: BackupDeleteDispatch }
+  | { kind: "removed" }
+  | { kind: "waiting"; createTaskId: string }
+
+interface DeletableBackupRow extends BackupRow {
+  repository_present: number | boolean
+}
+
+interface BackupTaskStateRow extends RowDataPacket {
+  depends_on_task_id: string | null
+  dependency_status: BackupTaskStatus | null
+  id: string
+  status: BackupTaskStatus
+  task_kind: BackupRow["task_kind"]
+}
+
+/**
+ * Reserves deleting a backup, whatever state it's in:
+ *
+ * - one already being deleted keeps its delete task, sent again, since a
+ *   Relay takes a task ID once;
+ * - one still being created is marked deleting at once, and its delete
+ *   waits for the create to end, cancelled or not, so it never runs before
+ *   the create writes what it deletes;
+ * - an incremental one whose repository Hearth no longer has, as a deleted
+ *   game server's left by older releases, can't be read or forgotten by
+ *   anyone, so only its record goes.
+ *
+ * It's refused only while the backup is restored or copied from, or its
+ * resource is being deleted.
+ */
 export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
   function* (input: {
     backupId: string
@@ -2448,35 +2651,59 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
             )
           }
         }
-        const rows = yield* transaction.queryRows<BackupRow>(
+        const [backup] = yield* transaction.queryRows<DeletableBackupRow>(
           `SELECT backup.id, backup.relay_id, backup.target_kind,
                   backup.target_id, backup.storage_id, backup.object_key,
-                  backup.restic_snapshot_id, backup.backup_mode,
-                  backup.linked_from_backup_id, backup.linked_from_target_id
+                  backup.restic_snapshot_id, backup.backup_mode, backup.status,
+                  backup.repository_id, backup.linked_from_backup_id,
+                  backup.linked_from_target_id,
+                  EXISTS (
+                    SELECT 1 FROM ${databaseTable("backup_repository")} repository
+                     WHERE repository.id = backup.repository_id
+                  ) AS repository_present
              FROM ${databaseTable("backup")} backup
-            WHERE backup.id = ? AND backup.status IN ('available', 'failed')
-              AND NOT EXISTS (
-                SELECT 1
-                  FROM ${databaseTable("backup_task")} active_task
-                 WHERE active_task.backup_id = backup.id
-                   AND active_task.task_kind = 'restore'
-                   AND active_task.status IN ('queued', 'running')
-              )
-              AND NOT EXISTS (
-                SELECT 1
-                  FROM ${databaseTable("backup_copy_task")} active_copy
-                 WHERE active_copy.backup_id = backup.id
-                   AND active_copy.status IN ('queued', 'running')
-              )
+            WHERE backup.id = ?
             FOR UPDATE`,
           [input.backupId]
         )
-        const backup = rows[0]
-        if (!backup) {
+        if (!backup || backup.status === "deleted") {
           return yield* BackupStorageError.make({
             code: "backup_unavailable",
             operation: "backup.delete",
-            reason: "Only complete or failed backups can be deleted",
+            reason: "This backup is already deleted",
+          })
+        }
+        const tasks = yield* transaction.queryRows<BackupTaskStateRow>(
+          `SELECT task.id, task.task_kind, task.status, task.depends_on_task_id,
+                  dependency.status AS dependency_status
+             FROM ${databaseTable("backup_task")} task
+             LEFT JOIN ${databaseTable("backup_task")} dependency
+               ON dependency.id = task.depends_on_task_id
+            WHERE task.backup_id = ?
+            ORDER BY task.created_at ASC, task.id ASC
+            FOR UPDATE`,
+          [input.backupId]
+        )
+        const active = (task: BackupTaskStateRow) =>
+          task.status === "queued" || task.status === "running"
+        if (tasks.some((task) => task.task_kind === "restore" && active(task))) {
+          return yield* BackupStorageError.make({
+            code: "restore_in_progress",
+            operation: "backup.delete",
+            reason: "Wait for the restore from this backup to finish",
+          })
+        }
+        const [copying] = yield* transaction.queryRows<RowDataPacket>(
+          `SELECT 1 FROM ${databaseTable("backup_copy_task")}
+            WHERE backup_id = ? AND status IN ('queued', 'running')
+            LIMIT 1`,
+          [input.backupId]
+        )
+        if (copying) {
+          return yield* BackupStorageError.make({
+            code: "copy_in_progress",
+            operation: "backup.delete",
+            reason: "Wait for the copy of this backup to finish",
           })
         }
         yield* refuseIfFinalDeletionInProgress(transaction, {
@@ -2485,6 +2712,20 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
           targetId: backup.target_id,
           targetKind: backup.target_kind,
         })
+        const pending = [...tasks]
+          .reverse()
+          .find((task) => task.task_kind === "delete" && active(task))
+        // Without its repository Hearth has no password to read or forget
+        // the snapshot with, and never will: the record is all that's left.
+        if (backup.backup_mode === "incremental" && !backup.repository_present) {
+          yield* removeBackupRecord(transaction, {
+            backupId: input.backupId,
+            now,
+            requestedBy: input.requestedBy,
+            taskId: pending?.id ?? input.taskId,
+          })
+          return { kind: "removed" } satisfies BackupDeleteReservation
+        }
         // A linked backup shares its archive with the backup it was made as,
         // and each stored copy of it, a Relay's own file or an S3 object,
         // goes with the last backup that still lists it. Ones another keeps
@@ -2531,79 +2772,297 @@ export const reserveBackupDeleteEffect = Effect.fn("backups.reserveDelete")(
             [input.backupId]
           )
           if (!kept) {
-            yield* transaction.execute(
-              `UPDATE ${databaseTable("backup")}
-                  SET status = 'deleted', deleted_at = ?, updated_at = ?
-                WHERE id = ?`,
-              [now, now, input.backupId]
-            )
-            yield* transaction.execute(
-              `INSERT INTO ${databaseTable("backup_task")}
-                (id, backup_id, task_kind, status, requested_by, started_at,
-                 finished_at, created_at, updated_at)
-               VALUES (?, ?, 'delete', 'succeeded', ?, ?, ?, ?, ?)`,
-              [
-                input.taskId,
-                input.backupId,
-                input.requestedBy,
-                now,
-                now,
-                now,
-                now,
-              ]
-            )
-            return null
+            yield* removeBackupRecord(transaction, {
+              backupId: input.backupId,
+              now,
+              requestedBy: input.requestedBy,
+              taskId: pending?.id ?? input.taskId,
+            })
+            return { kind: "removed" } satisfies BackupDeleteReservation
           }
         }
+        const create = tasks.find((task) => task.task_kind === "create")
+        const taskId = pending?.id ?? input.taskId
+        const waitsFor = pending
+          ? pending.depends_on_task_id &&
+            (pending.dependency_status === "queued" ||
+              pending.dependency_status === "running")
+            ? pending.depends_on_task_id
+            : null
+          : create && active(create)
+            ? create.id
+            : null
         yield* transaction.execute(
           `UPDATE ${databaseTable("backup")}
               SET status = 'deleting', updated_at = ?
             WHERE id = ?`,
           [now, input.backupId]
         )
-        yield* transaction.execute(
-          `INSERT INTO ${databaseTable("backup_task")}
-            (id, backup_id, task_kind, status, requested_by, created_at,
-             updated_at)
-           VALUES (?, ?, 'delete', 'queued', ?, ?, ?)`,
-          [input.taskId, input.backupId, input.requestedBy, now, now]
+        if (!pending) {
+          yield* transaction.execute(
+            `INSERT INTO ${databaseTable("backup_task")}
+              (id, backup_id, task_kind, status, depends_on_task_id,
+               requested_by, created_at, updated_at)
+             VALUES (?, ?, 'delete', 'queued', ?, ?, ?, ?)`,
+            [taskId, input.backupId, waitsFor, input.requestedBy, now, now]
+          )
+        }
+        if (waitsFor) {
+          return {
+            createTaskId: waitsFor,
+            kind: "waiting",
+          } satisfies BackupDeleteReservation
+        }
+        const artifacts = yield* transaction.queryRows<BackupArtifactRow>(
+          `SELECT artifact.id, artifact.backup_id, artifact.storage_id,
+                  artifact.status, artifact.filename, artifact.object_key,
+                  artifact.bytes, artifact.checksum_sha256, artifact.error,
+                  artifact.error_code
+             FROM ${databaseTable("backup_artifact")} artifact
+            WHERE artifact.backup_id = ? AND artifact.status <> 'deleted'
+            ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC`,
+          [input.backupId]
         )
-        const createTask = backup.restic_snapshot_id
-          ? null
-          : (yield* transaction.queryRows<{ id: string } & RowDataPacket>(
-              `SELECT id
-                   FROM ${databaseTable("backup_task")}
-                  WHERE backup_id = ? AND task_kind = 'create'
-                  ORDER BY created_at ASC, id ASC
-                  LIMIT 1`,
-              [input.backupId]
-            ))[0]
         return {
-          artifacts: (yield* transaction.queryRows<BackupArtifactRow>(
-            `SELECT artifact.id, artifact.backup_id, artifact.storage_id,
-                      artifact.status, artifact.filename, artifact.object_key,
-                      artifact.bytes, artifact.checksum_sha256, artifact.error,
-            artifact.error_code
-                 FROM ${databaseTable("backup_artifact")} artifact
-                WHERE artifact.backup_id = ? AND artifact.status <> 'deleted'
-                ORDER BY (artifact.storage_id IS NULL) DESC, artifact.created_at ASC`,
-            [input.backupId]
-          )).map(dispatchArtifact),
-          ...linkedArchive(backup),
-          backupId: input.backupId,
-          kind: "delete",
-          ...(backup.restic_snapshot_id
-            ? { snapshotId: backup.restic_snapshot_id }
-            : backup.backup_mode === "incremental" && createTask
-              ? { createTaskId: createTask.id }
-              : {}),
-          target: { id: backup.target_id, kind: backup.target_kind },
-          taskId: input.taskId,
-        } satisfies BackupDeleteDispatch
+          dispatch: {
+            artifacts: artifacts.map(dispatchArtifact),
+            ...linkedArchive(backup),
+            backupId: input.backupId,
+            kind: "delete",
+            ...(backup.restic_snapshot_id
+              ? { snapshotId: backup.restic_snapshot_id }
+              : backup.backup_mode === "incremental" && create
+                ? { createTaskId: create.id }
+                : {}),
+            target: { id: backup.target_id, kind: backup.target_kind },
+            taskId,
+          },
+          kind: "dispatch",
+        } satisfies BackupDeleteReservation
       })
     )
   }
 )
+
+// Deletes a backup's record and everything it lists, with nothing to ask a
+// Relay: its delete task, the one already queued or a new one, ends here.
+const removeBackupRecord = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  input: {
+    backupId: string
+    now: number
+    requestedBy: string | null
+    taskId: string
+  }
+) {
+  yield* transaction.execute(
+    `UPDATE ${databaseTable("backup")}
+        SET status = 'deleted', deleted_at = ?, updated_at = ?
+      WHERE id = ?`,
+    [input.now, input.now, input.backupId]
+  )
+  yield* transaction.execute(
+    `UPDATE ${databaseTable("backup_artifact")}
+        SET status = 'deleted', deleted_at = COALESCE(deleted_at, ?),
+            updated_at = ?
+      WHERE backup_id = ? AND status <> 'deleted'`,
+    [input.now, input.now, input.backupId]
+  )
+  yield* transaction.execute(
+    `INSERT INTO ${databaseTable("backup_task")}
+      (id, backup_id, task_kind, status, requested_by, started_at,
+       finished_at, created_at, updated_at)
+     VALUES (?, ?, 'delete', 'succeeded', ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE status = 'succeeded', error = NULL,
+       error_code = NULL, started_at = COALESCE(started_at, ?),
+       finished_at = ?, updated_at = ?`,
+    [
+      input.taskId,
+      input.backupId,
+      input.requestedBy,
+      input.now,
+      input.now,
+      input.now,
+      input.now,
+      input.now,
+      input.now,
+      input.now,
+    ]
+  )
+})
+
+interface UndispatchedTaskRow extends RowDataPacket {
+  backup_id: string
+  backup_mode: BackupRow["backup_mode"]
+  backup_status: BackupRow["status"]
+  repository_present: number | boolean
+  status: BackupTaskStatus
+  task_kind: BackupRow["task_kind"]
+}
+
+/**
+ * Settles a queued task Hearth can't send, so its backup leaves the state
+ * the task holds it in instead of waiting there for good. A delete whose
+ * incremental backup has lost its repository ends with only the record
+ * gone, as deleting it again would; anything else fails with why, and its
+ * backup goes back to what it was, to be retried or deleted.
+ */
+export const settleUndispatchableBackupTaskEffect = Effect.fn(
+  "backups.settleUndispatchable"
+)(function* (input: { code: string; reason: string; taskId: string }) {
+  yield* Effect.annotateCurrentSpan({
+    "backup.task.id": input.taskId,
+    "backup.failure.code": input.code,
+  })
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  return yield* database.transaction("backup_settle_undispatchable", (transaction) =>
+    Effect.gen(function* () {
+      const [task] = yield* transaction.queryRows<UndispatchedTaskRow>(
+        `SELECT task.backup_id, task.task_kind, task.status,
+                backup.status AS backup_status, backup.backup_mode,
+                EXISTS (
+                  SELECT 1 FROM ${databaseTable("backup_repository")} repository
+                   WHERE repository.id = backup.repository_id
+                ) AS repository_present
+           FROM ${databaseTable("backup_task")} task
+           JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
+          WHERE task.id = ?
+          FOR UPDATE`,
+        [input.taskId]
+      )
+      // Taken by the Relay meanwhile, or already settled.
+      if (!task || task.status !== "queued") return "unchanged" as const
+      if (
+        task.task_kind === "delete" &&
+        task.backup_status === "deleting" &&
+        task.backup_mode === "incremental" &&
+        !task.repository_present
+      ) {
+        yield* removeBackupRecord(transaction, {
+          backupId: task.backup_id,
+          now,
+          requestedBy: null,
+          taskId: input.taskId,
+        })
+        return "removed" as const
+      }
+      yield* transaction.execute(
+        `UPDATE ${databaseTable("backup_task")}
+            SET status = 'failed', error = ?, error_code = ?, finished_at = ?,
+                updated_at = ?
+          WHERE id = ?`,
+        [input.reason.slice(0, 4_096), input.code, now, now, input.taskId]
+      )
+      if (
+        task.task_kind === "create" &&
+        (task.backup_status === "queued" || task.backup_status === "running")
+      ) {
+        yield* transaction.execute(
+          `UPDATE ${databaseTable("backup")}
+              SET status = 'failed', completed_at = ?, updated_at = ?
+            WHERE id = ?`,
+          [now, now, task.backup_id]
+        )
+        yield* transaction.execute(
+          `UPDATE ${databaseTable("backup_artifact")}
+              SET status = 'failed', error = ?, error_code = ?,
+                  completed_at = ?, updated_at = ?
+            WHERE backup_id = ? AND status IN ('queued', 'running')`,
+          [input.reason, input.code, now, now, task.backup_id]
+        )
+      }
+      if (task.task_kind === "delete" && task.backup_status === "deleting") {
+        yield* restoreStatusAfterFailedDelete(transaction, {
+          backupId: task.backup_id,
+          code: input.code,
+          now,
+          reason: input.reason,
+        })
+      }
+      return "failed" as const
+    })
+  )
+})
+
+// A delete that didn't finish leaves each artifact as valid as it was
+// before: one it was deleting is available again, a failed one stays
+// failed. The backup follows its artifacts.
+const restoreStatusAfterFailedDelete = Effect.fnUntraced(function* (
+  transaction: DatabaseTransaction,
+  input: { backupId: string; code: string | null; now: number; reason: string | null }
+) {
+  yield* transaction.execute(
+    `UPDATE ${databaseTable("backup_artifact")}
+        SET status = 'available', error = ?, error_code = ?, updated_at = ?
+      WHERE backup_id = ? AND status = 'deleting'`,
+    [input.reason, input.code, input.now, input.backupId]
+  )
+  yield* transaction.execute(
+    `UPDATE ${databaseTable("backup")} backup
+        SET backup.status = CASE
+              WHEN EXISTS (
+                SELECT 1 FROM ${databaseTable("backup_artifact")} artifact
+                 WHERE artifact.backup_id = backup.id
+                   AND artifact.status = 'available'
+              ) THEN 'available'
+              ELSE 'failed'
+            END,
+            backup.updated_at = ?
+      WHERE backup.id = ?`,
+    [input.now, input.backupId]
+  )
+})
+
+/**
+ * A create Hearth still counts as queued for a backup being deleted, which
+ * its Relay says it never received: it's cancelled here, so the delete
+ * waiting on it can go.
+ */
+export const cancelUnsentCreateEffect = Effect.fn("backups.cancelUnsentCreate")(
+  function* (taskId: string) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    const result = yield* database.execute(
+      "backup_cancel_unsent_create",
+      `UPDATE ${databaseTable("backup_task")} task
+         JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
+          SET task.status = 'cancelled',
+              task.error = 'Cancelled before its Relay started it',
+              task.finished_at = ?, task.updated_at = ?
+        WHERE task.id = ? AND task.task_kind = 'create'
+          AND task.status IN ('queued', 'running')
+          AND backup.status IN ('deleting', 'deleted')`,
+      [now, now, taskId]
+    )
+    return result.affectedRows > 0
+  }
+)
+
+/**
+ * The creates among a Relay's queued and running tasks whose backup is
+ * being deleted, or is gone, which the Relay should stop; and the ones
+ * Hearth still waits on that the Relay doesn't have at all.
+ */
+export const createsOfDeletedBackupsEffect = Effect.fn(
+  "backups.createsOfDeletedBackups"
+)(function* (relayId: string, relayTaskIds: ReadonlyArray<string>) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    { id: string; status: BackupTaskStatus } & RowDataPacket
+  >(
+    "backup_creates_of_deleted",
+    `SELECT task.id, task.status
+       FROM ${databaseTable("backup_task")} task
+       JOIN ${databaseTable("backup")} backup ON backup.id = task.backup_id
+      WHERE backup.relay_id = ? AND task.task_kind = 'create'
+        AND backup.status IN ('deleting', 'deleted')
+        AND (task.status IN ('queued', 'running')
+          OR task.id IN (${relayTaskIds.length > 0 ? relayTaskIds.map(() => "?").join(", ") : "NULL"}))`,
+    [relayId, ...relayTaskIds]
+  )
+  return rows
+})
 
 export const forgetBackupEffect = Effect.fn("backups.forget")(function* (
   backupId: string
@@ -2995,9 +3454,9 @@ export const loadBackupRepositoryPasswordEffect = Effect.fn(
   const row = rows[0]
   if (!row) {
     return yield* BackupStorageError.make({
-      code: "invalid_backup_destination",
+      code: "repository_missing",
       operation: "backup.dispatch",
-      reason: "The restic repository is unavailable",
+      reason: "Hearth no longer has this backup's restic repository",
     })
   }
   return {
@@ -3005,77 +3464,6 @@ export const loadBackupRepositoryPasswordEffect = Effect.fn(
     password: yield* decryptRepositoryPassword(row.password_ciphertext),
     storageId: row.storage_id,
   } satisfies BackupRepositorySecret
-})
-
-export const purgeInstanceBackupRepositoriesEffect = Effect.fn(
-  "backups.purgeInstanceRepositories"
-)(function* (relayId: string, targetId: string) {
-  const database = yield* Database
-  const repositories = yield* database.queryRows<
-    {
-      id: string
-      object_prefix: string | null
-      storage_id: string | null
-    } & RowDataPacket
-  >(
-    "backup_instance_repositories",
-    `SELECT id, storage_id, object_prefix
-       FROM ${databaseTable("backup_repository")}
-      WHERE relay_id = ? AND target_kind = 'instance' AND target_id = ?`,
-    [relayId, targetId]
-  )
-  for (const repository of repositories) {
-    if (!repository.storage_id || !repository.object_prefix) continue
-    const credential = yield* loadBackupStorageCredentialEffect(
-      repository.storage_id
-    )
-    if (!credential) {
-      return yield* BackupStorageError.make({
-        code: "storage_unavailable",
-        operation: "backup.purgeRepository",
-        reason: "The backup destination is unavailable",
-      })
-    }
-    yield* deleteS3BackupPrefix(credential, repository.object_prefix)
-  }
-  const now = yield* Clock.currentTimeMillis
-  yield* database.transaction(
-    "backup_purge_instance_repositories",
-    (transaction) =>
-      Effect.gen(function* () {
-        yield* transaction.execute(
-          `UPDATE ${databaseTable("backup")}
-              SET status = 'deleted', completed_at = COALESCE(completed_at, ?),
-                  updated_at = ?
-            WHERE relay_id = ? AND target_kind = 'instance' AND target_id = ?
-              AND backup_mode = 'incremental' AND status <> 'deleted'`,
-          [now, now, relayId, targetId]
-        )
-        yield* transaction.execute(
-          `UPDATE ${databaseTable("backup_artifact")} artifact
-             JOIN ${databaseTable("backup")} backup ON backup.id = artifact.backup_id
-              SET artifact.status = 'deleted',
-                  artifact.deleted_at = COALESCE(artifact.deleted_at, ?),
-                  artifact.updated_at = ?
-            WHERE backup.relay_id = ? AND backup.target_kind = 'instance'
-              AND backup.target_id = ? AND backup.backup_mode = 'incremental'
-              AND artifact.status <> 'deleted'`,
-          [now, now, relayId, targetId]
-        )
-        yield* transaction.execute(
-          `UPDATE ${databaseTable("backup")}
-            SET repository_id = NULL, updated_at = ?
-          WHERE relay_id = ? AND target_kind = 'instance' AND target_id = ?
-            AND status = 'deleted'`,
-          [now, relayId, targetId]
-        )
-        yield* transaction.execute(
-          `DELETE FROM ${databaseTable("backup_repository")}
-          WHERE relay_id = ? AND target_kind = 'instance' AND target_id = ?`,
-          [relayId, targetId]
-        )
-      })
-  )
 })
 
 export const reserveBackupCopyEffect = Effect.fn("backups.reserveCopy")(

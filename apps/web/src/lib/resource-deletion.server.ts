@@ -10,7 +10,6 @@ import { Activity, DurableClock } from "effect/workflow"
 import { z } from "zod"
 
 import {
-  purgeInstanceBackupRepositoriesEffect,
   reserveDatabaseBackupEffect,
   reserveInstanceBackupEffect,
   reserveResourceBackupEffect,
@@ -695,16 +694,9 @@ const cleanUp = (input: DeletionInput) =>
   Effect.gen(function* () {
     const deletion = yield* loadResourceDeletionEffect(input.deletionId)
     const subject = deletion?.requestedBy ?? "system"
-    if (input.kind === "instance") {
-      // Its incremental snapshots go with it; its archives, the final
-      // backup among them, stay until they're deleted as backups are.
-      yield* promiseEffect(() =>
-        runAppEffect(
-          "resourceDeletions.purgeRepositories",
-          purgeInstanceBackupRepositoriesEffect(input.relayId, input.resourceId)
-        )
-      )
-    }
+    // Its backups, incremental snapshots and their repositories among them,
+    // stay until they're deleted as backups are, and can be restored into
+    // another resource meanwhile.
     // Hearth keeps nothing of a Kiln volume but its backups, which stay.
     if (input.kind !== "volume") {
       const resource = {

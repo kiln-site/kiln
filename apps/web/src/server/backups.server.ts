@@ -7,7 +7,6 @@ import {
   relayVolumesSchema,
   type AccessGrantScopeType,
   type BackupTarget,
-  relayLinkedBackupsV1Feature,
 } from "@workspace/contracts"
 
 import { createBackupDownloadShareEffect } from "@/effect/backup-download-shares"
@@ -76,6 +75,7 @@ import { relayRpc } from "@/lib/relay-connection"
 import { kilnInstallationId } from "@/effect/installation"
 import { kilnPublicUrl } from "@/lib/environment"
 import {
+  cancelCreateForDelete,
   dispatchBackupTask,
   reconcileRelayBackups,
 } from "@/lib/backup-reconciliation"
@@ -547,7 +547,7 @@ export async function deleteBackupHandler(
     )
   }
   const relay = await requireBackupRelay(backup.relayId)
-  const input = await runAppEffect(
+  const reservation = await runAppEffect(
     "backups.reserveDelete",
     reserveBackupDeleteEffect({
       backupId: backup.id,
@@ -556,10 +556,15 @@ export async function deleteBackupHandler(
     })
   )
   publishBackupChange(relay.id, backup.id)
-  // Null when another backup still shares the archive: only the record goes.
-  if (!input) return { forgotten: false as const, relayAccepted: true }
+  // Only the record went: another backup still shares the archive, or
+  // nothing can read what it named any more.
+  if (reservation.kind === "removed") {
+    return { forgotten: false as const, relayAccepted: true }
+  }
   const dispatched = await Promise.allSettled([
-    dispatchBackupTask(relay, input, user.id),
+    reservation.kind === "waiting"
+      ? cancelCreateForDelete(relay, reservation.createTaskId, user.id)
+      : dispatchBackupTask(relay, reservation.dispatch, user.id),
   ])
   return {
     forgotten: false as const,
@@ -736,6 +741,46 @@ export async function getBackupExportStateHandler(
   return runAppEffect("backups.exportState", backupExportStateEffect(backup.id))
 }
 
+/** Where a restore goes: the backup's own resource, or `targetId` of its kind. */
+export function backupRestoreDestination(
+  backup: Pick<BackupCatalogRecord, "targetId" | "targetKind">,
+  targetId: string | undefined
+): BackupTarget {
+  return { id: targetId ?? backup.targetId, kind: backup.targetKind }
+}
+
+/**
+ * Restoring a backup into its own resource takes permission to restore it.
+ * Restoring it into another copies its data there, so it takes permission
+ * to download the backup, as linking it to a copy does, and to restore the
+ * resource it goes into. Either is decided by the catalog record, so it
+ * works the same once the backup's own resource is gone.
+ */
+export async function requireRestoreAuthority(
+  user: AuthenticatedUser,
+  backup: BackupCatalogRecord,
+  destination: BackupTarget
+): Promise<void> {
+  const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
+  if (destination.id === backup.targetId) {
+    if (!hasBackupPermission(user, grants, backup, "backup.restore")) {
+      throw new Error("You do not have permission to restore this backup")
+    }
+    return
+  }
+  if (!hasBackupPermission(user, grants, backup, "backup.download")) {
+    throw new Error(
+      "Restoring a backup into another resource takes permission to download it"
+    )
+  }
+  await requireBackupTargetPermission(
+    user,
+    backup.relayId,
+    destination,
+    "backup.restore"
+  )
+}
+
 export async function restoreInstanceBackupHandler(
   user: AuthenticatedUser,
   data: BackupRestoreInput
@@ -756,24 +801,12 @@ export async function restoreInstanceBackupHandler(
   ) {
     throw new Error("Backup is not available for an instance restore")
   }
-  const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-  if (!hasBackupPermission(user, grants, backup, "backup.restore")) {
-    throw new Error("You do not have permission to restore this backup")
-  }
+  const destination = backupRestoreDestination(backup, data.targetId)
+  await requireRestoreAuthority(user, backup, destination)
   const relay = await requireBackupRelay(backup.relayId)
-  // A linked backup restores an archive made as another backup, which only
-  // Relays that know of linked backups accept.
-  if (backup.linkedFrom) {
-    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-    if (!relayConnectionFeatures(relay.id).has(relayLinkedBackupsV1Feature)) {
-      throw new Error(
-        `Update ${relay.name} to the latest Kiln release to restore backups linked from another server`
-      )
-    }
-  }
   if (data.safetyBackup) {
     await requireRelayPermission({
-      instanceId: backup.targetId,
+      instanceId: destination.id,
       permission: "backup.create",
       relayId: relay.id,
       user,
@@ -783,7 +816,7 @@ export async function restoreInstanceBackupHandler(
     await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
   )
   const instance = snapshot.instances.find(
-    (candidate) => candidate.id === backup.targetId
+    (candidate) => candidate.id === destination.id
   )
   if (!instance) throw new Error("Restore target was not found on this Relay")
   if (
@@ -804,31 +837,12 @@ export async function restoreInstanceBackupHandler(
           storageIds: [null],
           relayId: relay.id,
           requestedMaxBytes: null,
-          targetId: backup.targetId,
+          targetId: destination.id,
           taskId: randomUUID(),
         })
       )
     : null
-  const restore = await runAppEffect(
-    "backups.reserveRestore",
-    reserveBackupRestoreEffect({
-      backupId: backup.id,
-      dependsOnTaskId: safety?.taskId ?? null,
-      requestedBy: user.id,
-      taskId: randomUUID(),
-    })
-  )
-  publishBackupChange(relay.id, backup.id)
-  if (safety) publishBackupChange(relay.id, safety.backupId)
-  const firstTask = safety ?? restore
-  const dispatched = await Promise.allSettled([
-    dispatchBackupTask(relay, firstTask, user.id),
-  ])
-  return {
-    relayAccepted: dispatched[0]?.status === "fulfilled",
-    restoreTaskId: restore.taskId,
-    safetyBackupId: safety?.backupId ?? null,
-  }
+  return queueRestore(relay, user, backup, destination, safety)
 }
 
 export async function restoreDatabaseBackupHandler(
@@ -848,24 +862,12 @@ export async function restoreDatabaseBackupHandler(
   ) {
     throw new Error("Backup is not available for a database restore")
   }
-  const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-  if (!hasBackupPermission(user, grants, backup, "backup.restore")) {
-    throw new Error("You do not have permission to restore this backup")
-  }
+  const destination = backupRestoreDestination(backup, data.targetId)
+  await requireRestoreAuthority(user, backup, destination)
   const relay = await requireBackupRelay(backup.relayId)
-  // A linked backup restores an archive made as another backup, which only
-  // Relays that know of linked backups accept.
-  if (backup.linkedFrom) {
-    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-    if (!relayConnectionFeatures(relay.id).has(relayLinkedBackupsV1Feature)) {
-      throw new Error(
-        `Update ${relay.name} to the latest Kiln release to restore backups linked from another server`
-      )
-    }
-  }
   if (data.safetyBackup) {
     await requireRelayPermission({
-      databaseId: backup.targetId,
+      databaseId: destination.id,
       permission: "backup.create",
       relayId: relay.id,
       user,
@@ -878,7 +880,7 @@ export async function restoreDatabaseBackupHandler(
   if (
     !records.some(
       (record) =>
-        record.relayId === relay.id && record.databaseId === backup.targetId
+        record.relayId === relay.id && record.databaseId === destination.id
     )
   ) {
     throw new Error("Restore target was not found on this Relay")
@@ -894,30 +896,12 @@ export async function restoreDatabaseBackupHandler(
           storageIds: [null],
           relayId: relay.id,
           requestedMaxBytes: null,
-          targetId: backup.targetId,
+          targetId: destination.id,
           taskId: randomUUID(),
         })
       )
     : null
-  const restore = await runAppEffect(
-    "backups.reserveDatabaseRestore",
-    reserveBackupRestoreEffect({
-      backupId: backup.id,
-      dependsOnTaskId: safety?.taskId ?? null,
-      requestedBy: user.id,
-      taskId: randomUUID(),
-    })
-  )
-  publishBackupChange(relay.id, backup.id)
-  if (safety) publishBackupChange(relay.id, safety.backupId)
-  const dispatched = await Promise.allSettled([
-    dispatchBackupTask(relay, safety ?? restore, user.id),
-  ])
-  return {
-    relayAccepted: dispatched[0]?.status === "fulfilled",
-    restoreTaskId: restore.taskId,
-    safetyBackupId: safety?.backupId ?? null,
-  }
+  return queueRestore(relay, user, backup, destination, safety)
 }
 
 /**
@@ -943,10 +927,21 @@ export async function restoreResourceBackupHandler(
     throw new Error("Backup is not available for an App or volume restore")
   }
   const relay = await requireBackupRelay(backup.relayId)
-  const target = { id: backup.targetId, kind: backup.targetKind }
-  await requireBackupTargetRestore(user, relay, target)
+  const destination = {
+    ...backupRestoreDestination(backup, data.targetId),
+    kind: backup.targetKind,
+  }
+  await requireRestoreAuthority(user, backup, destination)
+  // What uses the resource it goes into, as its Relay says now; the one it
+  // was taken of may be gone.
+  await requireBackupTargetRestore(user, relay, destination)
   if (data.safetyBackup) {
-    await requireBackupTargetPermission(user, relay.id, target, "backup.create")
+    await requireBackupTargetPermission(
+      user,
+      relay.id,
+      destination,
+      "backup.create"
+    )
   }
   const safety = data.safetyBackup
     ? await runAppEffect(
@@ -960,18 +955,31 @@ export async function restoreResourceBackupHandler(
           relayId: relay.id,
           requestedMaxBytes: null,
           storageIds: [null],
-          targetId: target.id,
-          targetKind: target.kind,
+          targetId: destination.id,
+          targetKind: destination.kind,
           taskId: randomUUID(),
         })
       )
     : null
+  return queueRestore(relay, user, backup, destination, safety)
+}
+
+// Reserves the restore behind its safety backup, if any, and sends whichever
+// goes first; the Relay's next reconciliation sends what didn't arrive.
+async function queueRestore(
+  relay: PersistedRelay,
+  user: AuthenticatedUser,
+  backup: BackupCatalogRecord,
+  destination: BackupTarget,
+  safety: BackupDispatch | null
+) {
   const restore = await runAppEffect(
-    "backups.reserveResourceRestore",
+    "backups.reserveRestore",
     reserveBackupRestoreEffect({
       backupId: backup.id,
       dependsOnTaskId: safety?.taskId ?? null,
       requestedBy: user.id,
+      target: destination,
       taskId: randomUUID(),
     })
   )

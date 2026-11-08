@@ -2,7 +2,7 @@ import { Effect } from "effect"
 
 import {
   getBackupCatalogRecordEffect,
-  getBackupForTaskEffect,
+  getRestoreForTaskEffect,
 } from "@/effect/backups"
 import { kilnInstallationId } from "@/effect/installation"
 import { promiseEffect } from "@/effect/promise"
@@ -48,6 +48,8 @@ import {
   syncBackupRunsHandler,
   updateBackupExcludesHandler,
   updateBackupLimitsHandler,
+  backupRestoreDestination,
+  requireRestoreAuthority,
   restoreDatabaseBackupHandler,
   restoreInstanceBackupHandler,
   restoreResourceBackupHandler,
@@ -240,8 +242,9 @@ export const backUpPlatform = operation<PlatformBackupInput>()({
   }),
 })
 
-// A restore replaces its target's data, so it holds the target whole, and
-// the backup it restores, so that isn't deleted under it. Its safety backup,
+// A restore replaces the data of the resource it goes into, the backup's
+// own or another of its kind, so it holds that resource whole, and the
+// backup it restores, so that isn't deleted under it. Its safety backup,
 // taken first and kept on the Relay, is reserved within it.
 const restoreOperation = <A>(
   name: string,
@@ -260,20 +263,24 @@ const restoreOperation = <A>(
           Effect.gen(function* () {
             const backup = yield* getBackupCatalogRecordEffect(input.backupId)
             // The run says why one that's gone can't be restored.
-            if (!backup) return { backup: null, user: person }
-            yield* promiseEffect(() => requireBackupAction(person, backup))
-            return { backup, user: person }
+            if (!backup) return { backup: null, destination: null, user: person }
+            const destination = backupRestoreDestination(backup, input.targetId)
+            yield* promiseEffect(() =>
+              requireRestoreAuthority(person, backup, destination)
+            )
+            return { backup, destination, user: person }
           })
         )
       ),
-    locks: ({ context: { backup } }) => (backup ? restoreLocks(backup) : []),
+    locks: ({ context: { backup, destination } }) =>
+      backup && destination ? restoreLocks(backup, destination) : [],
     run: ({ context, input }) =>
       promiseEffect(() => handler(context.user, input)),
-    audit: ({ context: { backup } }) =>
-      backup
+    audit: ({ context: { backup, destination } }) =>
+      backup && destination
         ? {
-            id: backup.targetId,
-            kind: backup.targetKind,
+            id: destination.id,
+            kind: destination.kind,
             relayId: backup.relayId,
           }
         : null,
@@ -304,49 +311,42 @@ export const resolveRestore = operation<{
 }>()({
   name: "backup.restore.resolve",
   doing: "Finishing a restore",
+  // The handler checks the person may restore what the Relay's journal
+  // says the restore went into; it's held as the restore held it.
   authorize: ({ input, user }) =>
     signedIn(user).pipe(
       Effect.flatMap((person) =>
         Effect.gen(function* () {
-          const backup = yield* getBackupForTaskEffect(input.taskId)
+          const restore = yield* getRestoreForTaskEffect(input.taskId)
           // The run says why one it doesn't know can't be resolved.
-          if (backup) {
-            yield* promiseEffect(() => requireBackupAction(person, backup))
+          if (restore) {
+            yield* promiseEffect(() =>
+              requireRestoreAuthority(person, restore.backup, restore.target)
+            )
           }
-          return { backup, user: person }
+          return { restore, user: person }
         })
       )
     ),
-  locks: ({ context: { backup } }) => (backup ? restoreLocks(backup) : []),
+  locks: ({ context: { restore } }) =>
+    restore ? restoreLocks(restore.backup, restore.target) : [],
   run: ({ context, input }) =>
     promiseEffect(() => resolveUnfinishedRestoreHandler(context.user, input)),
-  audit: ({ context: { backup }, input }) => ({
-    id: backup?.targetId ?? input.taskId,
-    kind: backup?.targetKind ?? "restore",
+  audit: ({ context: { restore }, input }) => ({
+    id: restore?.target.id ?? input.taskId,
+    kind: restore?.target.kind ?? "restore",
     relayId: input.relayId,
   }),
 })
 
-function restoreLocks(backup: BackupCatalogRecord): Array<LaneLock> {
+function restoreLocks(
+  backup: BackupCatalogRecord,
+  destination: BackupTarget
+): Array<LaneLock> {
   return [
-    exclusive(
-      backupTargetKey(backup.relayId, {
-        id: backup.targetId,
-        kind: backup.targetKind,
-      })
-    ),
+    exclusive(backupTargetKey(backup.relayId, destination)),
     shared(backupKey(backup.id)),
   ]
-}
-
-async function requireBackupAction(
-  user: AuthenticatedUser,
-  backup: BackupCatalogRecord
-): Promise<void> {
-  const grants = isPlatformAdmin(user) ? [] : await listUserGrants(user.id)
-  if (!hasBackupPermission(user, grants, backup, "backup.restore")) {
-    throw new Error("You do not have permission to restore this backup")
-  }
 }
 
 // A change to one backup, holding it as `lock` says: whole to delete it, a

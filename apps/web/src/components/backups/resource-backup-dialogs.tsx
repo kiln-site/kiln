@@ -19,6 +19,11 @@ import {
   type BackupConfiguration,
 } from "@/components/backup-configuration-dialog"
 import type { Backup } from "@/components/backups/state"
+import {
+  RestoreDestinationSelect,
+  useRestoreDestination,
+  type RestoreDestination,
+} from "@/components/backups/restore-destination"
 import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
 import {
   appDirectoryQueryOptions,
@@ -157,11 +162,38 @@ export function ResourceRestoreDialog({
       apps.data?.find((app) => app.id === appId)?.name ?? appId.slice(0, 8),
     [apps.data]
   )
+  // The App folders or volumes on its Relay it can go into: its own while
+  // it exists, or another, as when its own is gone.
+  const destinations = React.useMemo((): Array<RestoreDestination> => {
+    if (volume) {
+      return (volumes.data?.volumes ?? []).flatMap((candidate) =>
+        candidate.id === null
+          ? []
+          : [
+              {
+                id: candidate.id,
+                name: candidate.owner
+                  ? `${appName(candidate.owner.appId)} · ${candidate.owner.volume}`
+                  : candidate.name,
+              },
+            ]
+      )
+    }
+    return (apps.data ?? []).flatMap((app) =>
+      app.relayId === backup.relayId
+        ? [{ id: app.id, name: `${app.name} folder` }]
+        : []
+    )
+  }, [apps.data, appName, backup.relayId, volume, volumes.data])
+  const { destination, elsewhere, ownExists, setDestination } =
+    useRestoreDestination(backup.targetId, destinations)
+  const destinationId = destination?.id ?? backup.targetId
+  const shownName = destination?.name ?? targetName
   const running = React.useMemo(() => {
     if (!volumes.data) return null
     if (volume) {
       const found = volumes.data.volumes.find(
-        (candidate) => candidate.id === backup.targetId
+        (candidate) => candidate.id === destinationId
       )
       return (found?.mounts ?? [])
         .filter((mount) => mount.running)
@@ -172,11 +204,11 @@ export function ResourceRestoreDialog({
         )
     }
     return null
-  }, [appName, backup.targetId, volume, volumes.data])
+  }, [appName, destinationId, volume, volumes.data])
   const users = React.useMemo(() => {
     if (!volume || !volumes.data) return []
     const found = volumes.data.volumes.find(
-      (candidate) => candidate.id === backup.targetId
+      (candidate) => candidate.id === destinationId
     )
     return [
       ...new Set([
@@ -184,10 +216,16 @@ export function ResourceRestoreDialog({
         ...(found?.users.map((user) => user.appId) ?? []),
       ]),
     ].map(appName)
-  }, [appName, backup.targetId, volume, volumes.data])
+  }, [appName, destinationId, volume, volumes.data])
   const restore = useMutation({
     mutationFn: () =>
-      restoreResourceBackup({ data: { backupId: backup.id, safetyBackup } }),
+      restoreResourceBackup({
+        data: {
+          backupId: backup.id,
+          safetyBackup,
+          ...(elsewhere && destination ? { targetId: destination.id } : {}),
+        },
+      }),
     onSuccess: async (result) => {
       await Promise.all([
         resetActiveBackupRunsToFirstPage(queryClient),
@@ -195,7 +233,7 @@ export function ResourceRestoreDialog({
       ])
       showToast({
         message: result.relayAccepted
-          ? `Restore of ${targetName} queued`
+          ? `Restore of ${shownName} queued`
           : "Restore saved and will resume when the Relay reconnects",
         type: result.relayAccepted ? "success" : "warning",
       })
@@ -208,13 +246,23 @@ export function ResourceRestoreDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Restore {targetName}</DialogTitle>
+          <DialogTitle>Restore {shownName}</DialogTitle>
           <DialogDescription>
             {volume
               ? `This replaces everything in the volume with “${backup.name}”. Every container that mounts it must be stopped, and the Apps that use it can’t start until the restore is done.`
               : `This replaces the App’s folder with “${backup.name}”. Stop the App first; it can’t start until the restore is done.`}
           </DialogDescription>
         </DialogHeader>
+        {!ownExists || destinations.length > 1 ? (
+          <RestoreDestinationSelect
+            destinations={destinations}
+            disabled={restore.isPending}
+            kindLabel={volume ? "volumes" : "Apps"}
+            ownId={backup.targetId}
+            value={destination?.id ?? null}
+            onChange={setDestination}
+          />
+        ) : null}
         {volume && users.length > 0 ? (
           <p className="type-meta text-muted-foreground">
             Apps that use it: {users.join(", ")}. Restoring it takes permission
@@ -252,7 +300,7 @@ export function ResourceRestoreDialog({
             Cancel
           </Button>
           <Button
-            disabled={restore.isPending || blocked}
+            disabled={restore.isPending || blocked || !destination}
             type="button"
             onClick={() => restore.mutate()}
           >

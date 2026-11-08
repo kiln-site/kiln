@@ -1803,6 +1803,15 @@ const migrations = SqliteMigrator.fromRecord({
       memory_bytes INTEGER
     ) STRICT`
   }),
+  // A create is refused once its backup has a delete, which each enqueue
+  // looks up by backup.
+  "37_backup_tasks_by_backup": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`
+      CREATE INDEX relay_backup_tasks_backup
+      ON relay_backup_tasks (backup_id, kind)
+    `
+  }),
 })
 
 // The App IDs a Hearth still owes, as stored; anything unreadable owes
@@ -1839,6 +1848,13 @@ const makeRelayStateStore = Effect.gen(function* () {
     effect.pipe(
       Effect.mapError((cause) => RelayStateError.make({ operation, cause })),
       Effect.withSpan(`relay.state.${operation}`)
+    )
+  // A hot path, as a running backup's progress written every half second:
+  // the same errors, without a span tree in its task's trace for each write.
+  const runUntraced = <T>(operation: string, effect: Effect.Effect<T, unknown>) =>
+    effect.pipe(
+      Effect.mapError((cause) => RelayStateError.make({ operation, cause })),
+      Effect.withTracerEnabled(false)
     )
 
   const selectOperation = (clientId: string, operationId: string) =>
@@ -2983,6 +2999,17 @@ const makeRelayStateStore = Effect.gen(function* () {
               }
               return existing
             }
+            // A create that arrives after its backup's delete, as one Hearth
+            // sent just before it was deleted, mustn't write what that delete
+            // already removed: it's recorded cancelled, never run.
+            const deleted =
+              input.kind === "create" &&
+              (yield* sql<{ taskId: string }>`
+                SELECT task_id AS taskId
+                FROM relay_backup_tasks
+                WHERE backup_id = ${input.backupId} AND kind = 'delete'
+                LIMIT 1
+              `).length > 0
             yield* sql`
               INSERT INTO relay_backup_tasks (
                 task_id,
@@ -2990,14 +3017,18 @@ const makeRelayStateStore = Effect.gen(function* () {
                 kind,
                 status,
                 input_json,
+                error,
+                finished_at,
                 created_at,
                 updated_at
               ) VALUES (
                 ${input.taskId},
                 ${input.backupId},
                 ${input.kind},
-                'queued',
-                ${JSON.stringify(input)},
+                ${deleted ? "cancelled" : "queued"},
+                ${deleted ? scrubBackupTaskInputJson(JSON.stringify(input)) : JSON.stringify(input)},
+                ${deleted ? "The backup was deleted before this create arrived" : null},
+                ${deleted ? now : null},
                 ${now},
                 ${now}
               )
@@ -3148,7 +3179,7 @@ const makeRelayStateStore = Effect.gen(function* () {
       currentArtifactId,
       now
     ) =>
-      run(
+      runUntraced(
         "update_backup_task_progress",
         sql.withTransaction(
           Effect.gen(function* () {

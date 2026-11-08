@@ -21,6 +21,7 @@ export interface CliArguments {
   profile?: string
   safetyBackup: boolean
   storage?: string
+  to?: string
   token?: string
   url?: string
   variables: Array<string>
@@ -47,6 +48,7 @@ export function parseArguments(argv: Array<string>): CliArguments {
   let profile: string | undefined
   let safetyBackup = true
   let storage: string | undefined
+  let to: string | undefined
   let token: string | undefined
   let url: string | undefined
   const variables: Array<string> = []
@@ -113,6 +115,7 @@ export function parseArguments(argv: Array<string>): CliArguments {
     } else if (flag === "--name") name = value()
     else if (flag === "--profile") profile = value()
     else if (flag === "--storage") storage = value()
+    else if (flag === "--to") to = value()
     else if (flag === "--token") token = value()
     else if (flag === "--url") url = value()
     else if (flag === "--variable") variables.push(value())
@@ -143,6 +146,7 @@ export function parseArguments(argv: Array<string>): CliArguments {
     ...(profile ? { profile } : {}),
     safetyBackup,
     ...(storage ? { storage } : {}),
+    ...(to ? { to } : {}),
     ...(token ? { token } : {}),
     ...(url ? { url } : {}),
     variables,

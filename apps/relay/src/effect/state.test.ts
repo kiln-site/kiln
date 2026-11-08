@@ -298,6 +298,48 @@ describe("Relay state", () => {
       )
     })
   )
+
+  stateTest(
+    "never runs a create that arrives after its backup's delete",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* RelayStateStore
+        const backupId = "41100000-0000-4000-8000-000000000020"
+        const target = { id: "instance-a", kind: "instance" as const }
+        // Hearth deleted the backup while the create it had sent was still
+        // on its way.
+        yield* store.enqueueBackupTask(
+          {
+            backupId,
+            destination: { kind: "local" },
+            kind: "delete",
+            target,
+            taskId: "41100000-0000-4000-8000-000000000021",
+          },
+          600
+        )
+        const create = yield* store.enqueueBackupTask(
+          {
+            artifactKind: "archive",
+            backupId,
+            destination: { kind: "local" },
+            exclude: [],
+            kind: "create",
+            maxBytes: null,
+            mode: "full",
+            reason: "manual",
+            target,
+            taskId: "41100000-0000-4000-8000-000000000022",
+          },
+          610
+        )
+
+        assert.strictEqual(create.status, "cancelled")
+        const delete_ = yield* store.claimNextBackupTask(620)
+        assert.strictEqual(delete_?.kind, "delete")
+        assert.isNull(yield* store.claimNextBackupTask(630))
+      })
+  )
 })
 
 /** Gives each test its own SQLite file so tests never share rows or run order. */
