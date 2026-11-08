@@ -1,4 +1,5 @@
 import { useFileRootPath } from "@/components/files/file-root-context"
+import { FileContentViewer } from "@/components/files/file-content-viewer"
 import { FilePageContent } from "@/components/files/file-page-content"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -30,38 +31,12 @@ import {
   relayFileEntryQueryOptions,
   relayFileQueryOptions,
 } from "@/lib/query-options"
-import { isDatabaseFilePath } from "@/lib/database-files"
+import { fileViewerKind, fileViewerReadsText } from "@/lib/file-viewers"
 import type { FileWorkspaceInstance } from "@/lib/relay-selectors"
 import { recordRelayFileView } from "@/server/relay"
-import { usePreloadedModule } from "@/lib/use-preloaded-module"
-import {
-  loadFileDatabaseViewerModule,
-  loadedFileDatabaseViewerModule,
-  warmFilePreviewModule,
-} from "@/lib/workspace-module-preloads"
+import { warmFilePreviewModule } from "@/lib/workspace-module-preloads"
 
 const activeFileRevisionPollDelayMs = 30_000
-
-function FileDatabasePreview({
-  fallback,
-  ...props
-}: React.ComponentProps<
-  typeof import("@/components/files/file-database-viewer").FileDatabaseViewer
-> & { fallback: React.ReactNode }) {
-  const module = usePreloadedModule(
-    loadFileDatabaseViewerModule,
-    loadedFileDatabaseViewerModule
-  )
-  if (!module) return fallback
-  const Viewer = module.FileDatabaseViewer
-  return (
-    <>
-      <Viewer {...props} />
-      {/* The viewer is on screen; its tables load after. */}
-      <FilePageContent path={props.displayPath} view="database" />
-    </>
-  )
-}
 
 const UnavailablePreviewToolbar = React.memo(
   function UnavailablePreviewToolbar({
@@ -231,15 +206,21 @@ export function FileViewer({
   const selectedPathIsReadable = Boolean(
     selectedPath && selectedEntry?.kind === "file"
   )
-  // Databases are browsed through the Relay instead of read as text. Files
-  // that only share the extension fall back to the text editor.
+  // Some files are shown by a viewer that reads them its own way, such as a
+  // database browsed through the Relay. One that turns out not to be what its
+  // name says is shown as text instead.
   const [textFallbackPath, setTextFallbackPath] = React.useState<string | null>(
     null
   )
-  const selectedPathIsDatabase =
-    selectedPathIsReadable &&
-    isDatabaseFilePath(selectedPath) &&
-    textFallbackPath !== selectedPath
+  const viewerKind =
+    selectedPathIsReadable && textFallbackPath !== selectedPath
+      ? fileViewerKind(selectedPath)
+      : "text"
+  const contentViewerKind = fileViewerReadsText(viewerKind) ? null : viewerKind
+  const showAsText = React.useCallback(
+    () => setTextFallbackPath(selectedPath),
+    [selectedPath]
+  )
   React.useEffect(() => {
     if (selectedPathIsDirectory && selectedPath !== selectedDirectoryPath) {
       onPathChange(selectedDirectoryPath)
@@ -269,7 +250,7 @@ export function FileViewer({
     ...relayFileQueryOptions(instance.relayId, instance.id, selectedPath),
     enabled:
       (selectedPathIsReadable || readWithEntry) &&
-      !selectedPathIsDatabase &&
+      contentViewerKind === null &&
       relayConnected,
     refetchInterval: activeFileRevisionPollDelayMs,
     refetchIntervalInBackground: false,
@@ -280,7 +261,9 @@ export function FileViewer({
   const loadingFile =
     fileTreeLoading ||
     (Boolean(selectedPath) && relayConnected && entryQuery.isPending) ||
-    (selectedPathIsReadable && !selectedPathIsDatabase && fileQuery.isPending)
+    (selectedPathIsReadable &&
+      contentViewerKind === null &&
+      fileQuery.isPending)
   // A read that failed while the Relay was away says nothing of the path.
   const routeError =
     selectedPath && relayConnected && entryQuery.isError
@@ -308,7 +291,7 @@ export function FileViewer({
     Boolean(selectedPath && !relayConnected && !selectedEntry && !file) ||
     (selectedPathIsReadable &&
       !file &&
-      (!relayConnected || (!selectedPathIsDatabase && fileQuery.isError)))
+      (!relayConnected || (contentViewerKind === null && fileQuery.isError)))
   React.useEffect(() => {
     if (isHome) {
       selectionStore.completeNavigation(selectedPath, "loaded")
@@ -318,7 +301,7 @@ export function FileViewer({
     selectionStore.completeNavigation(
       selectedPath,
       selectedPathIsDirectory ||
-        (selectedPathIsDatabase && relayConnected) ||
+        (contentViewerKind !== null && relayConnected) ||
         (file && !selectedFileUnavailable)
         ? "loaded"
         : "unavailable"
@@ -329,7 +312,7 @@ export function FileViewer({
     loadingFile,
     selectedFileUnavailable,
     selectedPath,
-    selectedPathIsDatabase,
+    contentViewerKind,
     selectedPathIsDirectory,
     selectionStore,
   ])
@@ -370,7 +353,12 @@ export function FileViewer({
     )
   }
 
-  if (selectedPathIsDatabase && relayConnected && !loadingFile) {
+  if (
+    contentViewerKind !== null &&
+    selectedEntry &&
+    relayConnected &&
+    !loadingFile
+  ) {
     const fallback = (
       <UnavailablePreview
         path={selectedPath}
@@ -388,17 +376,20 @@ export function FileViewer({
           key={`${instance.id}:${selectedPath}`}
           instance={instance}
           path={selectedPath}
-          revision="database"
+          revision={String(selectedEntry.modifiedAt)}
           enabled={relayConnected}
         />
-        <FileDatabasePreview
-          fallback={fallback}
+        <FileContentViewer
           key={`${instance.id}:${selectedPath}`}
+          kind={contentViewerKind}
+          fallback={fallback}
+          canShare={canShare}
           canWrite={canWrite}
           displayPath={selectedPath}
+          entry={selectedEntry}
           instance={instance}
           treeCollapsed={treeCollapsed}
-          onNotDatabase={() => setTextFallbackPath(selectedPath)}
+          onShowAsText={showAsText}
           onTreeExpand={onTreeExpand}
         />
       </>
