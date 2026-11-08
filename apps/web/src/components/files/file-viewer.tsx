@@ -217,6 +217,13 @@ export function FileViewer({
       ? fileViewerKind(selectedPath)
       : "text"
   const contentViewerKind = fileViewerReadsText(viewerKind) ? null : viewerKind
+  // A cached copy can show while the entry is unknown, so text files are
+  // told apart by name.
+  const textViewerKind = (() => {
+    const kind =
+      textFallbackPath === selectedPath ? "text" : fileViewerKind(selectedPath)
+    return fileViewerReadsText(kind) ? kind : "text"
+  })()
   const showAsText = React.useCallback(
     () => setTextFallbackPath(selectedPath),
     [selectedPath]
@@ -413,10 +420,12 @@ export function FileViewer({
           file={file}
           displayPath={selectedPath}
           instance={instance}
+          kind={textViewerKind}
           loading={fileQuery.isPending}
           error={error}
           preferencesStore={preferencesStore}
           treeCollapsed={treeCollapsed}
+          onOpenPath={onPathChange}
           onTreeExpand={onTreeExpand}
           onUploadFiles={onUploadFiles}
         />

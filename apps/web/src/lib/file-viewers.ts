@@ -3,24 +3,30 @@
 // the Files workspace loads.
 
 /**
- * A file's viewer. Text viewers show the file's text read through Hearth;
- * the others read the file their own way.
+ * A file's viewer. Text viewers show the file's text read through Hearth,
+ * in the editor and, for some, rendered beside it; the others read the file
+ * their own way.
  */
-export type FileViewerKind = "text" | "database"
-
-/** The viewers that read a file their own way rather than as text. */
-export type FileContentViewerKind = Exclude<FileViewerKind, TextViewerKind>
+export type FileViewerKind = TextViewerKind | FileContentViewerKind
 
 /** The viewers that show a file's text, read through Hearth. */
-export type TextViewerKind = "text"
+export type TextViewerKind = "text" | RenderedTextViewerKind
+
+/** Text files that can also be shown rendered, as a document or a table. */
+export type RenderedTextViewerKind = "markdown"
+
+/** The viewers that read a file their own way rather than as text. */
+export type FileContentViewerKind = "database"
 
 const textViewers: ReadonlySet<FileViewerKind> = new Set<TextViewerKind>([
+  "markdown",
   "text",
 ])
 
 // Matched by extension, longest first where one is a suffix of another.
 const viewersByExtension: ReadonlyArray<readonly [RegExp, FileViewerKind]> = [
   [/\.(?:db|sqlite|sqlite3|db3|s3db|sl3)$/iu, "database"],
+  [/\.(?:md|markdown|mdown|mkd)$/iu, "markdown"],
 ]
 
 export function fileViewerKind(path: string): FileViewerKind {
@@ -36,4 +42,11 @@ export function fileViewerReadsText(
   kind: FileViewerKind
 ): kind is TextViewerKind {
   return textViewers.has(kind)
+}
+
+/** Whether a text file of `kind` can also be shown rendered. */
+export function fileViewerRendersText(
+  kind: TextViewerKind
+): kind is RenderedTextViewerKind {
+  return kind !== "text"
 }

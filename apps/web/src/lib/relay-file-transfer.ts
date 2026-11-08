@@ -145,13 +145,19 @@ export const readRelayFileEffect = Effect.fn("RelayTransfer.read")(function* (
   input: FileTransferInput & { readonly maxBytes: number }
 ) {
   const authorization = yield* authorizeRelayFileRequest(input, "GET")
+  // One signal for the request and its body: a read stopped after the
+  // headers arrive still ends the download.
+  const controller = yield* Effect.acquireRelease(
+    Effect.sync(() => new AbortController()),
+    (controller) => Effect.sync(() => controller.abort())
+  )
   const response = yield* Effect.tryPromise({
-    try: (signal) =>
+    try: () =>
       fetch(authorization.url, {
         headers: authorization.headers,
         method: "GET",
         mode: "cors",
-        signal,
+        signal: controller.signal,
       }),
     catch: (cause) => unavailable("download", cause),
   })
@@ -176,7 +182,7 @@ export const readRelayFileEffect = Effect.fn("RelayTransfer.read")(function* (
     })
   }
   return blob
-})
+}, Effect.scoped)
 
 /**
  * Hands a file's download to the browser's own download manager, which
