@@ -70,7 +70,7 @@ import {
 import { getRelayResources } from "@/server/relay-host"
 import { getAppVolumes, getRelayVolumes } from "@/server/relay-volumes"
 import { getRelayDockerStorage } from "@/server/relay-docker"
-import { isDatabaseFilePath } from "@/lib/database-files"
+import { fileViewerKind, fileViewerReadsText } from "@/lib/file-viewers"
 import { traceFileWork } from "@/lib/file-timing"
 import { reconcilePendingPowerSnapshot } from "@/lib/instance-power-state"
 import { systemUpdateOverviewRefetchPolicy } from "@/lib/system-update-presence"
@@ -1442,13 +1442,15 @@ export function relayFileQueryOptions(
 /**
  * Whether to read a file alongside its entry rather than after it, saving a
  * round trip. The entry still decides what the path is; this skips paths the
- * read would fail on or go unused for: directories and database files.
+ * read would fail on or go unused for: directories and files a viewer reads
+ * its own way.
  */
 export function readsFileWithEntry(
   path: string,
   kind: RelayFileEntry["kind"] | undefined
 ) {
-  if (!path || path.endsWith("/") || isDatabaseFilePath(path)) return false
+  if (!path || path.endsWith("/")) return false
+  if (!fileViewerReadsText(fileViewerKind(path))) return false
   if (kind) return kind === "file"
   // An unlisted path, as on a direct load: a name with an extension is
   // almost always a file.

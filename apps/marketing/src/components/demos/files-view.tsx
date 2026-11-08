@@ -44,7 +44,7 @@ import {
   fileEditorHeaderContentClassName,
 } from "@/components/files/file-viewer-toolbar"
 import { SyntaxCodeEditor } from "@/components/syntax-code-editor"
-import { isDatabaseFilePath } from "@/lib/database-files"
+import { fileViewerKind } from "@/lib/file-viewers"
 import { fileLanguageForPath } from "@/lib/file-language"
 import {
   mclogsShareLabel,
@@ -301,7 +301,7 @@ function Files({
             onTreeExpand={() => setTreeCollapsed(false)}
             onUploadFiles={async () => {}}
           />
-        ) : isDatabaseFilePath(path) ? (
+        ) : fileViewerKind(path) === "database" ? (
           <DemoDatabase
             key={path}
             path={path}

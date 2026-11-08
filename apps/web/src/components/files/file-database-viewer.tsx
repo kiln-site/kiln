@@ -14,6 +14,7 @@ import {
 } from "@/components/database-viewer/database-source"
 import { DatabaseViewer } from "@/components/database-viewer/database-viewer"
 import { FileActionMenuItem } from "@/components/files/file-actions"
+import type { FileContentViewerProps } from "@/components/files/file-content-viewer"
 import { FileDownloadDialog } from "@/components/files/file-download-dialog"
 import {
   FileToolbarIdentity,
@@ -38,17 +39,10 @@ export function FileDatabaseViewer({
   canWrite,
   displayPath,
   instance,
-  onNotDatabase,
+  onShowAsText,
   onTreeExpand,
   treeCollapsed,
-}: {
-  canWrite: boolean
-  displayPath: string
-  instance: FileWorkspaceInstance
-  onNotDatabase: () => void
-  onTreeExpand: () => void
-  treeCollapsed: boolean
-}) {
+}: FileContentViewerProps) {
   const source = React.useMemo(
     () =>
       relayFileDatabaseSource({
@@ -61,9 +55,9 @@ export function FileDatabaseViewer({
   )
   const handleUnavailable = React.useCallback(
     (message: string) => {
-      if (message.includes("not a SQLite database")) onNotDatabase()
+      if (message.includes("not a SQLite database")) onShowAsText()
     },
-    [onNotDatabase]
+    [onShowAsText]
   )
   const identity = React.useCallback(
     ({ readOnly }: { readOnly: boolean | null }) => (

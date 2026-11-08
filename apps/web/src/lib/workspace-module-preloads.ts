@@ -1,18 +1,13 @@
 import { forkPromise, tapPromiseError } from "@/effect/promise"
 import { traceFileWork } from "@/lib/file-timing"
-import { isDatabaseFilePath } from "@/lib/database-files"
+import { warmFileViewerModule } from "@/lib/file-viewer-modules"
+import { fileViewerKind, fileViewerReadsText } from "@/lib/file-viewers"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
 
 type FileWorkspaceModule = typeof import("@/components/files/file-workspace")
-type FileDatabaseViewerModule =
-  typeof import("@/components/files/file-database-viewer")
 
 let fileWorkspaceModulePromise: Promise<FileWorkspaceModule> | undefined
 let fileWorkspaceModule: FileWorkspaceModule | undefined
-let fileDatabaseViewerModulePromise:
-  | Promise<FileDatabaseViewerModule>
-  | undefined
-let fileDatabaseViewerModule: FileDatabaseViewerModule | undefined
 
 export function loadFileWorkspaceModule() {
   if (!fileWorkspaceModulePromise) {
@@ -45,34 +40,10 @@ export function warmFileWorkspaceModule() {
   forkPromise(loadFileWorkspaceModule)
 }
 
-export function loadFileDatabaseViewerModule() {
-  if (!fileDatabaseViewerModulePromise) {
-    fileDatabaseViewerModulePromise = tapPromiseError(
-      () =>
-        traceFileWork(
-          "database-module",
-          {},
-          () => import("@/components/files/file-database-viewer")
-        ).then((module) => {
-          fileDatabaseViewerModule = module
-          return module
-        }),
-      (error) => {
-        fileDatabaseViewerModulePromise = undefined
-        throw error
-      }
-    )
-  }
-  return fileDatabaseViewerModulePromise
-}
-
-export function loadedFileDatabaseViewerModule() {
-  return fileDatabaseViewerModule
-}
-
 /** Warm only the preview a file path is likely to use. */
 export function warmFilePreviewModule(path: string) {
   if (!path || path.endsWith("/")) return
-  if (isDatabaseFilePath(path)) forkPromise(loadFileDatabaseViewerModule)
-  else warmSyntaxCodeEditorModule()
+  const kind = fileViewerKind(path)
+  if (fileViewerReadsText(kind)) warmSyntaxCodeEditorModule()
+  else warmFileViewerModule(kind)
 }

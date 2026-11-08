@@ -7,20 +7,20 @@ import { currentPageOpenSpan } from "@/lib/page-timing"
 /** Work a Files page waits on before its content can show. */
 export type FileWork =
   | "activity"
-  | "database-module"
   | "directory"
   | "editor-module"
   | "entry"
   | "file"
+  | "viewer-module"
   | "workspace-module"
 
 const spanNames: Record<FileWork, string> = {
   activity: "Files activity read",
-  "database-module": "File database viewer module",
   directory: "Files directory read",
   "editor-module": "Code editor module",
   entry: "Files entry read",
   file: "Files file read",
+  "viewer-module": "File viewer module",
   "workspace-module": "Files workspace module",
 }
 
