@@ -108,6 +108,11 @@ interface Mapping {
   readonly relays: ReadonlyMap<string, string>
   /** With a Relay to go by: its game servers too. */
   readonly forRelay: (fingerprint: string) => LegacyIdRewriter
+  /**
+   * New IDs an earlier run gave as a game server's to an old ID that's a
+   * Tailscale network's, App's, or database's, with the ID they should be.
+   */
+  readonly shadowed: ReadonlyMap<string, string>
 }
 
 // Columns that name an instance, by kind. `kindColumn` picks the kind per
@@ -360,6 +365,25 @@ FROM \`${name}\``)
     }
   }
 
+  // A Tailscale network's container carries a game server's label, so its
+  // old ID also shows up as a game server on its Relay. An old ID that's a
+  // Tailscale network's, App's, or database's is that, never a game
+  // server's, as the Relay decides too.
+  const owners = new Map<string, string>()
+  for (const entry of found.values()) {
+    if (entry.kind !== "server" && entry.kind !== "relay")
+      owners.set(entry.legacyId, entry.id)
+  }
+  const earlier = new Set(reserved.map((row) => row.id))
+  const shadowed = new Map<string, string>()
+  for (const [key, entry] of found) {
+    const owner = owners.get(entry.legacyId)
+    if (entry.kind !== "server" || owner === undefined) continue
+    found.delete(key)
+    // An earlier run may have rewritten rows with it already.
+    if (earlier.has(entry.id)) shadowed.set(entry.id, owner)
+  }
+
   const now = Date.now()
   const entries = [...found.values()]
   // A game server's Relay, by its new ID, which its ID is bound to.
@@ -457,6 +481,7 @@ FROM \`${table("instance_id")}\``)).map((row) => [row.id, row])
     global,
     globalIds,
     relays,
+    shadowed,
   } satisfies Mapping
 })
 
@@ -519,7 +544,12 @@ const rewriteTables = Effect.fn("migration.instanceIds.rewrite")(function* (
   sql: Sql,
   mapping: Mapping
 ) {
-  if (mapping.global.size === 0 && mapping.relays.size === 0) return
+  if (
+    mapping.global.size === 0 &&
+    mapping.relays.size === 0 &&
+    mapping.shadowed.size === 0
+  )
+    return
   const columns = yield* sql.unsafe<{
     table_name: string
     column_name: string
@@ -594,6 +624,27 @@ ORDER BY table_name, ordinal_position`)
       (row) => relayOfRow(name, row)
     )
   }
+  // An earlier run gave a Tailscale network's old ID a game server's new ID
+  // where a row named its Relay, then stopped re-adding the foreign key
+  // that disagreement broke. A new ID is 12 hex characters of a hash, which
+  // turns up nowhere by chance, so each is replaced wherever it appears.
+  for (const [from, to] of mapping.shadowed) {
+    for (const [name, textColumns] of tables) {
+      yield* sql.unsafe(
+        `UPDATE \`${name}\`
+SET ${textColumns.map((column) => `\`${column.name}\` = REPLACE(\`${column.name}\`, ?, ?)`).join(", ")}
+WHERE ${textColumns.map((column) => `CAST(\`${column.name}\` AS CHAR) LIKE ?`).join(" OR ")}`,
+        [
+          ...textColumns.flatMap(() => [from, to]),
+          ...textColumns.map(() => `%${from}%`),
+        ]
+      )
+    }
+  }
+  if (mapping.shadowed.size > 0)
+    yield* Effect.logInfo("Instance ID migration repaired shadowed IDs", {
+      ids: mapping.shadowed.size,
+    })
   yield* Effect.logInfo("Instance ID migration rewrote records", { rewritten })
 })
 

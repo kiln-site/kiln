@@ -45,6 +45,9 @@ compute the same new ID on their own.
   settings, notifications, encrypted App configurations — and shrinks the ID
   columns. Signed pairing records, key material, and the object paths of
   backups already in storage keep what they say.
+- An old ID found both as a game server and as a Tailscale network, App, or
+  database is the latter, on Hearth and the Relay alike: a Tailscale
+  network's container carries a game server's label with the network's ID.
 - Each Relay migrates its own state when it starts: its identity file, every
   SQLite record, and the state files that name instances. Docker labels can't
   be changed and volumes can't be renamed, so a migrated instance keeps its

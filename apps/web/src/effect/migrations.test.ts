@@ -1,10 +1,12 @@
-import { expect, layer } from "@effect/vitest"
+import { describe, expect, layer } from "@effect/vitest"
+import { migratedInstanceId } from "@workspace/contracts"
 import { Effect } from "effect"
 import { SqlClient } from "effect/sql"
 
 import { databaseTableName } from "@/lib/database-config"
 import { migrations } from "@/migrations"
 import { explicitBackupDestinations } from "@/migrations/0054_explicit_backup_destinations"
+import { instanceIds } from "@/migrations/0058_instance_ids"
 import { describeMysql, testDatabaseClient } from "@/test/database"
 
 import { applyMigrations } from "./migrations"
@@ -263,6 +265,143 @@ describeMysql("database migrations", () => {
         }),
       schemaBuildTimeout
     )
+
+    describe("a Tailscale network whose old ID is also a game server's", () => {
+      const fingerprint = "r".repeat(43)
+      const legacyNetwork = "5c".repeat(20)
+      const ids = Effect.promise(async () => ({
+        network: await migratedInstanceId({
+          id: legacyNetwork,
+          kind: "tailscale",
+        }),
+        relay: await migratedInstanceId({ fingerprint, kind: "relay" }),
+        server: await migratedInstanceId({
+          id: legacyNetwork,
+          kind: "server",
+          relayFingerprint: fingerprint,
+        }),
+      }))
+      const insertRelay = (id: string) =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`INSERT INTO kiln_relay
+              (id, name, hostname, browser_origin, relay_public_key, client_id,
+               client_public_key, client_private_key_ciphertext, client_role,
+               client_actions, created_at, updated_at)
+            VALUES (${id}, 'Q02', 'q02.test', 'https://q02.test', 'key',
+                    ${"c".repeat(43)}, 'key', 'x', 'full_access', '[]', 0, 0)`
+        })
+      // The network, its deployment, and the game server its container
+      // shows up as, by what they're named in the database.
+      const insertNetwork = (network: string, server: string, relay: string) =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`INSERT INTO kiln_tailscale_network
+              (id, name, domain, created_at, updated_at)
+            VALUES (${network}, 'Tailnet', 'kiln', 0, 0)`
+          yield* sql`INSERT INTO kiln_tailscale_network_deployment
+              (network_id, relay_id, deployment, cleanup_next_attempt_at,
+               observed_at, updated_at)
+            VALUES (${server}, ${relay}, ${JSON.stringify({ id: server })},
+                    0, 0, 0)`
+          yield* sql`INSERT INTO kiln_instance
+              (relay_id, instance_id, created_at, updated_at)
+            VALUES (${relay}, ${server}, 0, 0)`
+        })
+      const migratedNetwork = Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        const [deployment] = yield* sql<{
+          deployment: unknown
+          network_id: string
+        }>`SELECT network_id, deployment
+            FROM kiln_tailscale_network_deployment`
+        const [instance] = yield* sql<{ instance_id: string }>`
+          SELECT instance_id FROM kiln_instance`
+        const [network] = yield* sql<{ id: string }>`
+          SELECT id FROM kiln_tailscale_network`
+        const parsed =
+          typeof deployment?.deployment === "string"
+            ? JSON.parse(deployment.deployment)
+            : deployment?.deployment
+        return {
+          deploymentId: parsed?.id,
+          deploymentNetwork: deployment?.network_id,
+          instance: instance?.instance_id,
+          network: network?.id,
+        }
+      })
+
+      it.effect(
+        "keeps the network's ID everywhere",
+        () =>
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            const { network } = yield* ids
+            yield* dropAllTables
+            yield* applyMigrations(
+              migrations.filter((migration) => migration.id <= 57)
+            )
+            yield* sql`SET FOREIGN_KEY_CHECKS = 0`
+            yield* insertRelay(fingerprint)
+            yield* insertNetwork(legacyNetwork, legacyNetwork, fingerprint)
+            yield* sql`SET FOREIGN_KEY_CHECKS = 1`
+
+            yield* applyMigrations(migrations)
+
+            expect(yield* migratedNetwork).toEqual({
+              deploymentId: network,
+              deploymentNetwork: network,
+              instance: network,
+              network,
+            })
+          }),
+        schemaBuildTimeout
+      )
+
+      it.effect(
+        "repairs what an earlier run gave the game server's ID",
+        () =>
+          Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            const { network, relay, server } = yield* ids
+            yield* dropAllTables
+            yield* applyMigrations(
+              migrations.filter((migration) => migration.id <= 57)
+            )
+            yield* instanceIds.run
+            // As that run left it: rows rewritten with the game server's ID,
+            // and stopped re-adding the foreign key that broke.
+            yield* sql`ALTER TABLE kiln_tailscale_network_deployment
+              DROP FOREIGN KEY kiln_tailscale_network_deployment_network_fk`
+            yield* sql`SET FOREIGN_KEY_CHECKS = 0`
+            yield* insertRelay(relay)
+            yield* sql`UPDATE kiln_relay SET fingerprint = ${fingerprint}`
+            yield* insertNetwork(network, server, relay)
+            yield* sql`INSERT INTO kiln_instance_id
+                (id, kind, legacy_id, legacy_scope, relay_id, created_at)
+              VALUES (${relay}, 'relay', ${fingerprint}, NULL, NULL, 0),
+                     (${network}, 'tailscale', ${legacyNetwork}, NULL, NULL, 0),
+                     (${server}, 'server', ${legacyNetwork}, ${fingerprint},
+                      ${relay}, 0)`
+            yield* sql`SET FOREIGN_KEY_CHECKS = 1`
+
+            yield* instanceIds.run
+
+            expect(yield* migratedNetwork).toEqual({
+              deploymentId: network,
+              deploymentNetwork: network,
+              instance: network,
+              network,
+            })
+            const [key] = yield* sql<{ count: number }>`
+              SELECT COUNT(*) AS count FROM information_schema.table_constraints
+               WHERE table_schema = DATABASE()
+                 AND constraint_name = 'kiln_tailscale_network_deployment_network_fk'`
+            expect(Number(key?.count)).toBe(1)
+          }),
+        schemaBuildTimeout
+      )
+    })
 
     it.effect(
       "merges deployments and Kiln updates people already have",
