@@ -17,7 +17,11 @@ import {
 } from "./http.js"
 
 /** The kinds of transfer, a small fixed set for metric attributes. */
-export type TransferRoute = "backup.download" | "browser.file" | "peer.transfer"
+export type TransferRoute =
+  | "backup.download"
+  | "browser.file"
+  | "browser.preview"
+  | "peer.transfer"
 
 /** What a transfer moved, once it ended. */
 export interface TransferResult extends SentBody {

@@ -14,21 +14,27 @@ const browserCapabilityInputSchema = z.object({
   write: z.boolean().optional().default(false),
 })
 
+const relativeFilePathSchema = z
+  .string()
+  .min(1)
+  .max(2_048)
+  .refine(
+    (path) =>
+      !path.includes("\0") &&
+      !path.startsWith("/") &&
+      !path.split(/[\\/]/u).includes(".."),
+    "Invalid relative file path"
+  )
+
 const fileCapabilityInputSchema = browserCapabilityInputSchema.extend({
   action: z.enum(["instance.files.download", "instance.files.upload"]),
-  path: z
-    .string()
-    .min(1)
-    .max(2_048)
-    .refine(
-      (path) =>
-        !path.includes("\0") &&
-        !path.startsWith("/") &&
-        !path.split(/[\\/]/u).includes(".."),
-      "Invalid relative file path"
-    ),
+  path: relativeFilePathSchema,
   optInV2: z.boolean().optional().default(false),
 })
+
+const filePreviewCapabilityInputSchema = browserCapabilityInputSchema
+  .omit({ write: true })
+  .extend({ path: relativeFilePathSchema })
 
 const browserCapabilityBatchSchema = browserCapabilityInputSchema
   .omit({ write: true })
@@ -99,5 +105,25 @@ export const issueFileCapability = createServerFn({ method: "POST" })
       publicKeyJwk: data.publicKeyJwk,
       relayId: data.relayId,
       optInV2: data.optInV2,
+    })
+  })
+
+/** A link the browser's media player can follow to play one file. */
+export const issueFilePreviewCapability = createServerFn({ method: "POST" })
+  .validator(filePreviewCapabilityInputSchema)
+  .handler(async ({ data }) => {
+    const [
+      { requireEligibleResourceIdentity },
+      { issueFilePreviewCapabilityForRequest },
+    ] = await Promise.all([
+      import("@/server/auth"),
+      import("@/server/relay-capability-service"),
+    ])
+    return issueFilePreviewCapabilityForRequest({
+      authenticate: requireEligibleResourceIdentity,
+      instanceId: data.instanceId,
+      path: data.path,
+      publicKeyJwk: data.publicKeyJwk,
+      relayId: data.relayId,
     })
   })

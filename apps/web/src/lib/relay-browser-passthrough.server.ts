@@ -38,7 +38,7 @@ import {
 // transfers it carries (relay-passthrough-limits.server.ts).
 
 // Routes arrive decoded: their names are encoded again for the Relay.
-const BROWSER_ROUTE = /^(files|backups)\/([^/]+)$/u
+const BROWSER_ROUTE = /^(files|backups|previews)\/([^/]+)$/u
 // A Relay pulling through Hearth puts its usual route (`relayPeerTransferPath`)
 // beneath the pass-through's own path.
 const PEER_ROUTE = /^v1\/peer\/transfers\/([A-Za-z0-9_-]{8,64})$/u
@@ -93,7 +93,7 @@ export function passRelayBrowserRequest(
         request,
         (signer) =>
           checkBrowserTicket({
-            kind: kind as "backups" | "files",
+            kind: kind as "backups" | "files" | "previews",
             name,
             relayId,
             request,

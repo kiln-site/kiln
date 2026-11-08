@@ -185,7 +185,247 @@ interface SignedRequest {
   readonly path: string
 }
 
-async function startRelay(options: { instanceExists?: boolean } = {}) {
+describe("file preview links", () => {
+  const previewPath = (token: string, path = "clips/intro.mp4") =>
+    `/v1/browser/previews/${instanceId}?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`
+
+  async function relayWithClip() {
+    const relay = await startRelay()
+    await mkdir(join(relay.instanceRoot, "clips"), { recursive: true })
+    const clip = randomBytes(4096)
+    await writeFile(join(relay.instanceRoot, "clips/intro.mp4"), clip)
+    await writeFile(join(relay.instanceRoot, "clips/page.html"), "<script>")
+    return { clip, relay }
+  }
+
+  it("plays a file inline, a range at a time, with no request proof", async () => {
+    const { clip, relay } = await relayWithClip()
+
+    const response = await send(relay.port, {
+      headers: { Range: "bytes=1024-2047" },
+      method: "GET",
+      path: previewPath(relay.previewToken()),
+    })
+
+    expect(response.status).toBe(206)
+    expect(response.body.equals(clip.subarray(1024, 2048))).toBe(true)
+    expect(response.headers["content-type"]).toBe("video/mp4")
+    expect(response.headers["content-disposition"]).toMatch(/^inline;/u)
+    expect(response.headers["content-security-policy"]).toContain("sandbox")
+  })
+
+  it("refuses a link for a different file", async () => {
+    const { relay } = await relayWithClip()
+
+    const response = await send(relay.port, {
+      method: "GET",
+      path: previewPath(
+        relay.previewToken({ path: "clips/other.mp4" }),
+        "clips/intro.mp4"
+      ),
+    })
+
+    expect(response.status).toBe(401)
+  })
+
+  it("refuses a file transfer capability, which needs a proof", async () => {
+    const { relay } = await relayWithClip()
+
+    const response = await send(relay.port, {
+      method: "GET",
+      path: previewPath(relay.previewToken({ operation: "file" })),
+    })
+
+    expect(response.status).toBe(401)
+  })
+
+  it("refuses a link that grants writing", async () => {
+    const { relay } = await relayWithClip()
+
+    const response = await send(relay.port, {
+      method: "GET",
+      path: previewPath(
+        relay.previewToken({ action: "instance.files.upload" })
+      ),
+    })
+
+    expect(response.status).toBe(401)
+  })
+
+  it("refuses to change a file through a link", async () => {
+    const { relay } = await relayWithClip()
+
+    const response = await send(relay.port, {
+      body: "replaced",
+      method: "PUT",
+      path: previewPath(relay.previewToken()),
+    })
+
+    expect(response.status).toBe(405)
+    expect(
+      await readFile(join(relay.instanceRoot, "clips/intro.mp4"))
+    ).toHaveLength(4096)
+  })
+
+  it("never serves a page or script inline", async () => {
+    const { relay } = await relayWithClip()
+
+    const response = await send(relay.port, {
+      method: "GET",
+      path: previewPath(
+        relay.previewToken({ path: "clips/page.html" }),
+        "clips/page.html"
+      ),
+    })
+
+    expect(response.status).toBe(415)
+    expect(response.body.toString()).not.toContain("<script>")
+  })
+
+  it("refuses a link that lasts longer than a preview may", async () => {
+    const { relay } = await relayWithClip()
+
+    const response = await send(relay.port, {
+      method: "GET",
+      path: previewPath(relay.previewToken({ expiresInMs: 60 * 60_000 })),
+    })
+
+    expect(response.status).toBe(401)
+  })
+
+  it("records each link's reads once, whichever range comes first", async () => {
+    const { relay } = await relayWithClip()
+    const first = relay.previewToken()
+    const second = relay.previewToken()
+
+    for (const range of ["bytes=2048-", "bytes=0-1023", undefined]) {
+      await send(relay.port, {
+        headers: range ? { Range: range } : {},
+        method: "GET",
+        path: previewPath(first),
+      })
+    }
+    await send(relay.port, { method: "GET", path: previewPath(second) })
+
+    await vi.waitFor(async () => {
+      const previews = (await relay.audits()).filter(
+        (record) => record.event === "browser.file.download"
+      )
+      expect(previews).toHaveLength(2)
+    })
+  })
+
+  it("isn't taken where a proof is asked for", async () => {
+    const { relay } = await relayWithClip()
+    const request = await relay.signedRequest({
+      method: "GET",
+      operation: "preview",
+      path: "clips/intro.mp4",
+    })
+
+    expect((await send(relay.port, request)).status).toBe(401)
+  })
+
+  it("cuts off a file already playing when access is taken away", async () => {
+    const relay = await startRelay()
+    await mkdir(join(relay.instanceRoot, "clips"), { recursive: true })
+    const size = 64 * 1024 * 1024
+    await writeFile(
+      join(relay.instanceRoot, "clips/intro.mp4"),
+      Buffer.alloc(size, 7)
+    )
+
+    const { received, status } = await new Promise<{
+      received: number
+      status: number
+    }>((resolve, reject) => {
+      const request = httpRequest(
+        {
+          host: "127.0.0.1",
+          method: "GET",
+          path: previewPath(relay.previewToken()),
+          port: relay.port,
+        },
+        (response) => {
+          let bytes = 0
+          let revoked = false
+          response.on("data", (chunk: Buffer) => {
+            bytes += chunk.length
+            if (revoked) return
+            revoked = true
+            // Hold the stream so the file is still being sent.
+            response.pause()
+            relay.revokeLive()
+            setTimeout(() => response.resume(), 50)
+          })
+          const done = () =>
+            resolve({ received: bytes, status: response.statusCode ?? 0 })
+          response.once("close", done)
+          response.once("error", done)
+        }
+      )
+      request.once("error", reject)
+      request.end()
+    })
+
+    // It was playing, and stopped short of the whole file.
+    expect(status).toBe(200)
+    expect(received).toBeGreaterThan(0)
+    expect(received).toBeLessThan(size)
+  })
+
+  it("waits its turn with the Relay's other unauthenticated requests", async () => {
+    const relay = await startRelay({ pendingFileAuthentications: 1 })
+    // A download form still arriving holds the one authentication slot.
+    const slow = httpRequest({
+      headers: {
+        "Content-Length": "1024",
+        "Content-Type": "application/x-www-form-urlencoded",
+        Origin: origin,
+      },
+      host: "127.0.0.1",
+      method: "POST",
+      path: `/v1/browser/files/${instanceId}`,
+      port: relay.port,
+    })
+    slow.on("error", () => undefined)
+    slow.write("path=")
+    try {
+      await vi.waitFor(async () => {
+        const response = await send(relay.port, {
+          method: "GET",
+          path: previewPath(relay.previewToken()),
+        })
+        expect(response.status).toBe(429)
+      })
+    } finally {
+      slow.destroy()
+    }
+  })
+
+  it("stops working once the person's access changes", async () => {
+    const { relay } = await relayWithClip()
+    const token = relay.previewToken()
+    expect(
+      (await send(relay.port, { method: "HEAD", path: previewPath(token) }))
+        .status
+    ).toBe(200)
+
+    await relay.reviseAccess()
+
+    expect(
+      (await send(relay.port, { method: "GET", path: previewPath(token) }))
+        .status
+    ).toBe(401)
+  })
+})
+
+async function startRelay(
+  options: {
+    instanceExists?: boolean
+    pendingFileAuthentications?: number
+  } = {}
+) {
   const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-transfers-"))
   const instanceRoot = join(dataDirectory, "instances", instanceId)
   await mkdir(instanceRoot, { recursive: true })
@@ -243,7 +483,7 @@ async function startRelay(options: { instanceExists?: boolean } = {}) {
       browserLimits: {
         ...config.browserLimits,
         fileReplayEntries: 100,
-        pendingFileAuthentications: 16,
+        pendingFileAuthentications: options.pendingFileAuthentications ?? 16,
       },
       proxyMode: "none",
     },
@@ -296,6 +536,66 @@ async function startRelay(options: { instanceExists?: boolean } = {}) {
     instanceRoot,
     lanes,
     port: address.port,
+    // A preview link's capability, as Hearth signs it for a media player.
+    previewToken: (
+      input: {
+        action?: string
+        expiresInMs?: number
+        operation?: "file" | "preview"
+        path?: string
+      } = {}
+    ) => {
+      const issuedAt = Date.now()
+      return signToken(issuerKeys.privateKey, {
+        actions: [input.action ?? "instance.files.download"],
+        audience: relayId,
+        authorizationRevision: authority.minimumRevision,
+        capabilityId: `preview-${randomBytes(6).toString("hex")}`,
+        expiresAt: issuedAt + (input.expiresInMs ?? 10 * 60_000),
+        instanceId,
+        issuedAt,
+        issuer,
+        issuerGeneration: authority.issuerGeneration,
+        keyThumbprint: "unused",
+        loginSessionId: "login-1",
+        operation: input.operation ?? "preview",
+        origin,
+        path: input.path ?? "clips/intro.mp4",
+        subject: "user-1",
+        version: 2,
+      } satisfies RelayBrowserCapabilityV2)
+    },
+    audits: () => runtime.runPromise(state.listAudits({ limit: 100 })),
+    // The Relay hears the person's access was taken away, as Hearth tells it,
+    // which cuts off what's under way.
+    revokeLive: () =>
+      attached.reviseAuthorization(
+        issuer,
+        [
+          {
+            minimumRevision: authority.minimumRevision + 1,
+            scope: { kind: "login_session", loginSessionId: "login-1" },
+            subject: "user-1",
+          },
+        ],
+        authority.issuerGeneration
+      ),
+    // Hearth raises the person's floor, as when their access is taken away.
+    reviseAccess: () =>
+      runtime.runPromise(
+        state.reviseBrowserAuthorization(
+          issuer,
+          [
+            {
+              minimumRevision: authority.minimumRevision + 1,
+              scope: { kind: "login_session", loginSessionId: "login-1" },
+              subject: "user-1",
+            },
+          ],
+          undefined,
+          Date.now()
+        )
+      ),
     backupToken: (backupId: string) =>
       signToken(issuerKeys.privateKey, {
         action: "backup.download",
@@ -313,6 +613,7 @@ async function startRelay(options: { instanceExists?: boolean } = {}) {
       action?: string
       capabilityPath?: string
       method: "GET" | "HEAD" | "PUT"
+      operation?: "file" | "preview"
       path: string
     }): Promise<SignedRequest> => {
       const browserKeys = generateKeyPairSync("ec", { namedCurve: "P-256" })
@@ -343,7 +644,7 @@ async function startRelay(options: { instanceExists?: boolean } = {}) {
           .update(JSON.stringify(publicKeyJwk))
           .digest("base64url"),
         loginSessionId: "login-1",
-        operation: "file",
+        operation: input.operation ?? "file",
         origin,
         path: input.capabilityPath ?? input.path,
         subject: "user-1",
@@ -400,7 +701,11 @@ function send(
         method: string
         path: string
       }
-): Promise<{ body: Buffer; status: number }> {
+): Promise<{
+  body: Buffer
+  headers: IncomingMessage["headers"]
+  status: number
+}> {
   return new Promise((resolve, reject) => {
     const request = httpRequest(
       {
@@ -416,6 +721,7 @@ function send(
         response.once("end", () =>
           resolve({
             body: Buffer.concat(chunks),
+            headers: response.headers,
             status: response.statusCode ?? 0,
           })
         )

@@ -1,10 +1,19 @@
+import { relayBrowserPreviewLeaseMs } from "@workspace/contracts"
+
 export const BROWSER_READ_LEASE_MAX_MS = 60_000
 export const BROWSER_WRITE_LEASE_MAX_MS = 30_000
+// A preview link is followed for as long as its file plays.
+export const BROWSER_PREVIEW_LEASE_MAX_MS = relayBrowserPreviewLeaseMs
 export const BROWSER_ISSUED_AT_SKEW_MS = 5_000
 // Floors must outlive every capability minted before a revocation. Derive the
 // retention from the same bounds enforced at admission, including clock skew.
 export const BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS =
-  5 * Math.max(BROWSER_READ_LEASE_MAX_MS, BROWSER_WRITE_LEASE_MAX_MS) +
+  5 *
+    Math.max(
+      BROWSER_READ_LEASE_MAX_MS,
+      BROWSER_WRITE_LEASE_MAX_MS,
+      BROWSER_PREVIEW_LEASE_MAX_MS
+    ) +
   BROWSER_ISSUED_AT_SKEW_MS
 const BROWSER_FILE_PROOF_NONCE_BYTES = 32
 

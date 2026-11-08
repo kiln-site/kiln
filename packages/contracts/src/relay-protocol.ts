@@ -824,8 +824,18 @@ export const RelayAuthReadySchema = Schema.Struct({
 export const RelayBrowserOperationKindSchema = Schema.Literals([
   "console",
   "file",
+  // Reading one file through a link a browser's media player can follow,
+  // as for a video it seeks through: no request proof, so only reads.
+  "preview",
   "resources",
 ])
+
+/**
+ * How long a preview link lasts. A player keeps seeking through a file for
+ * as long as it's open, so this is longer than other leases; the Relay keeps
+ * revocations at least this long.
+ */
+export const relayBrowserPreviewLeaseMs = 10 * 60_000
 
 // The kinds of resource a browser capability can be for. Its `instanceId` is
 // the resource's ID (a Relay's own ID for `relay` and `platform`, Kiln's

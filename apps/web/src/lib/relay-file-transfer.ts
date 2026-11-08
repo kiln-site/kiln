@@ -14,7 +14,10 @@ import {
   runBrowserEffect,
 } from "@/lib/browser-telemetry"
 import type { FileArchiveFormat } from "@/lib/file-download-preferences"
-import { issueFileCapability } from "@/server/relay-capability"
+import {
+  issueFileCapability,
+  issueFilePreviewCapability,
+} from "@/server/relay-capability"
 import { saveRelayFile } from "@/server/relay"
 
 // A small text file can still be saved through Hearth when the browser
@@ -183,6 +186,59 @@ export const readRelayFileEffect = Effect.fn("RelayTransfer.read")(function* (
   }
   return blob
 }, Effect.scoped)
+
+export interface RelayFilePreviewLink {
+  /** When the link stops working, in milliseconds since the epoch. */
+  readonly expiresAt: number
+  readonly url: string
+}
+
+/**
+ * A link the browser's own media player can follow to play a file, seeking
+ * through it with range requests. It needs no request proof, so it only
+ * reads that one file, until it expires.
+ */
+export const relayFilePreviewLinkEffect = Effect.fn("RelayTransfer.preview")(
+  function* (input: FileTransferInput) {
+    const keys = yield* pageTransferKeys
+    const issued = yield* Effect.tryPromise({
+      try: () =>
+        issueFilePreviewCapability({
+          data: {
+            instanceId: input.instanceId,
+            path: input.path,
+            publicKeyJwk: keys.publicKeyJwk,
+            relayId: input.relayId,
+          },
+        }),
+      catch: (cause) =>
+        new RelayTransferError({
+          reason: "rejected",
+          message:
+            cause instanceof Error
+              ? cause.message
+              : "Hearth could not authorize this preview",
+          cause,
+        }),
+    })
+    const url =
+      issued.proxyMode === "hearth"
+        ? new URL(
+            `/api/relays/${encodeURIComponent(input.relayId)}/browser/previews/${encodeURIComponent(input.instanceId)}`,
+            window.location.origin
+          )
+        : new URL(
+            `/v1/browser/previews/${encodeURIComponent(input.instanceId)}`,
+            issued.browserOrigin
+          )
+    url.searchParams.set("path", input.path)
+    url.searchParams.set("token", issued.capability)
+    return {
+      expiresAt: issued.expiresAt,
+      url: url.toString(),
+    } satisfies RelayFilePreviewLink
+  }
+)
 
 /**
  * Hands a file's download to the browser's own download manager, which
@@ -367,6 +423,14 @@ export function downloadRelayArchive(
   }
 ): Promise<void> {
   return runBrowserEffect(downloadRelayArchiveEffect(input))
+}
+
+export function relayFilePreviewLink(
+  input: FileTransferInput & { signal?: AbortSignal }
+): Promise<RelayFilePreviewLink> {
+  return runBrowserEffect(relayFilePreviewLinkEffect(input), {
+    signal: input.signal,
+  })
 }
 
 export function readRelayFile(

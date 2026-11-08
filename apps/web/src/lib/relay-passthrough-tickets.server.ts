@@ -51,7 +51,7 @@ let formReads = 0
  * credential Hearth signed for it that's still valid.
  */
 export async function checkBrowserTicket(input: {
-  readonly kind: "backups" | "files"
+  readonly kind: "backups" | "files" | "previews"
   readonly name: string
   readonly relayId: string
   readonly request: Request
@@ -61,6 +61,15 @@ export async function checkBrowserTicket(input: {
   if (kind === "backups") {
     const token = new URL(request.url).searchParams.get("token") ?? ""
     return signedFor(token, signer, relayId, { backupId: name })
+      ? { allowed: true, body: null }
+      : { allowed: false }
+  }
+  // A preview link carries its capability in the URL, as a player can't
+  // set headers; it only reads.
+  if (kind === "previews") {
+    const token = new URL(request.url).searchParams.get("token") ?? ""
+    return (request.method === "GET" || request.method === "HEAD") &&
+      signedFor(token, signer, relayId, { instanceId: name })
       ? { allowed: true, body: null }
       : { allowed: false }
   }

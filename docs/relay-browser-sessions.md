@@ -143,7 +143,7 @@ reconnects only after the next access change.
 If Hearth and the Relay can't reach each other, no revocation gets through,
 but no renewal does either. Open sockets keep their authority for at most 30
 seconds (write) or 60 seconds (read), and file requests stop being admitted
-when their capabilities expire.
+when their capabilities expire: within a minute, or 10 for preview links.
 
 ## Surfaces
 
@@ -153,6 +153,14 @@ when their capabilities expire.
 | App, database, Relay, and Kiln service logs | Console socket               | `app.logs.read`, `database.logs.read`, `relay.logs.read` |
 | Game server, App, and database usage        | Resource socket              | `instance.read`, `app.read`, `database.read`             |
 | Files, App data, host files, database dumps | HTTP `/v1/browser/files/...` | `*.files.download`, `*.files.upload`, `database.dump.*`  |
+| Audio and video in the Files tab            | HTTP `/v1/browser/previews/...` | `*.files.download`, `database.dump.export`            |
+
+A media player can't sign its requests, so a preview link carries a
+`preview` capability with no proof: it names one file, grants only its
+download action, and is served only as audio or video, inline under a
+sandbox policy. It lasts up to 10 minutes, and revocation floors are kept
+five times that long. Each request checks the person's authorization, and a
+revocation cuts off a preview already playing.
 
 A socket with the same owner as an open one replaces it (1012), so a tab has
 one console and one resource socket per resource; tabs have separate keys.
