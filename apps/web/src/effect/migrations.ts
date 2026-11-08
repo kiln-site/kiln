@@ -1,5 +1,5 @@
 import * as MysqlClient from "@effect/sql-mysql2/MysqlClient"
-import { Clock, Effect, Schedule } from "effect"
+import { Cause, Clock, Effect, Schedule } from "effect"
 import { SqlClient } from "effect/sql"
 import { isSqlError } from "effect/sql/SqlError"
 
@@ -8,6 +8,11 @@ import { migrations } from "@/migrations"
 
 import { databaseClientConfig } from "./database"
 import { MigrationError } from "./errors"
+import {
+  dropMigrationSnapshot,
+  restoreMigrationSnapshot,
+  takeMigrationSnapshot,
+} from "./migration-snapshot"
 
 export interface Migration {
   readonly id: number
@@ -50,10 +55,46 @@ export const applyMigrations = Effect.fn("database.migrate")(function* (
     )
   `
   yield* lockMigrations(ledger)
+  // A start that stopped while migrating, or while restoring, left its
+  // snapshot: put the database back as it was before that update first.
+  if (yield* restoreMigrationSnapshot()) {
+    yield* Effect.logWarning(
+      "Restored the database from before an update that didn't finish"
+    )
+  }
   const rows = yield* sql<{ id: number }>`SELECT id FROM ${sql(ledger)}`
   const applied = new Set(rows.map((row) => row.id))
-  for (const migration of pending) {
-    if (applied.has(migration.id)) continue
+  const due = pending.filter((migration) => !applied.has(migration.id))
+  if (due.length === 0) return
+  // A new database has nothing to lose.
+  const snapshot = applied.size > 0
+  if (snapshot) yield* takeMigrationSnapshot()
+  yield* runMigrations(ledger, due).pipe(
+    // A failed migration puts back the database it started from, so the
+    // release Hearth rolls back to runs on it. Interrupted, as when the
+    // process stops, the next start restores it.
+    Effect.catchCause((cause) =>
+      !snapshot || Cause.hasInterruptsOnly(cause)
+        ? Effect.failCause(cause)
+        : restoreMigrationSnapshot().pipe(
+            Effect.andThen(
+              Effect.logError(
+                "A migration failed; restored the database from before this update"
+              )
+            ),
+            Effect.andThen(Effect.failCause(cause))
+          )
+    )
+  )
+  if (snapshot) yield* dropMigrationSnapshot()
+}, Effect.scoped)
+
+const runMigrations = Effect.fnUntraced(function* (
+  ledger: string,
+  due: ReadonlyArray<Migration>
+) {
+  const sql = yield* SqlClient.SqlClient
+  for (const migration of due) {
     yield* migration.run.pipe(
       Effect.mapError(
         (cause) =>
@@ -74,7 +115,7 @@ export const applyMigrations = Effect.fn("database.migrate")(function* (
     `
     yield* Effect.log(`Applied migration ${migration.id}_${migration.name}`)
   }
-}, Effect.scoped)
+})
 
 function validateOrder(pending: ReadonlyArray<Migration>) {
   const ordered = pending.every(

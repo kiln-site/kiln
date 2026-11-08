@@ -265,6 +265,9 @@ export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
       canUpdateHearth: platformAdmin,
       currentVersion,
       hearth: hearthTarget,
+      // Relays wait until Hearth runs the latest release (see
+      // `hearthBehindLatest`).
+      relaysWaitForHearth: hearthBehindLatest(releases),
       previousVersions,
       releases,
       // When Hearth last asked GitHub for releases.
@@ -563,7 +566,32 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
         { concurrency: "unbounded" }
       )
     )
-    const failures = prepared.flatMap((result) =>
+    // A Relay updates to the release Hearth runs, so Hearth goes first. The
+    // Relay that updates Hearth may go along with it: its updater replaces
+    // Hearth first and keeps its own version if that fails.
+    const hearthRelayId = prepared.flatMap((result) =>
+      "target" in result && result.target.component === "hearth"
+        ? [result.target.relay.id]
+        : []
+    )[0]
+    const gated = hearthBehindLatest(releases)
+      ? prepared.map((result) =>
+          "target" in result &&
+          result.target.component === "relay" &&
+          result.target.relay.id !== hearthRelayId
+            ? {
+                failure: {
+                  component: "relay" as const,
+                  message:
+                    "Update the Panel first. Relays update to the version it runs.",
+                  outcomeUnknown: false,
+                  relayId: result.target.relay.id,
+                },
+              }
+            : result
+        )
+      : prepared
+    const failures = gated.flatMap((result) =>
       "failure" in result ? [result.failure] : []
     )
     const groups = new Map<
@@ -577,7 +605,7 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
         }>
       }
     >()
-    for (const result of prepared) {
+    for (const result of gated) {
       if (!("target" in result)) continue
       const group = groups.get(result.target.relay.id) ?? {
         relay: result.target.relay,
@@ -792,6 +820,22 @@ async function coLocatedRelay(
   if (selected) return selected
   throw new Error(
     "Hearth updates require a paired Relay on the same Docker host"
+  )
+}
+
+/**
+ * Whether Hearth runs an older release than the latest, which Relays update
+ * to. A Relay ahead of Hearth may not connect to it: only a Relay behind it
+ * is supported, for as long as Hearth takes to update it. A development or
+ * local build isn't a release, so it doesn't hold Relays back.
+ */
+function hearthBehindLatest(
+  releases: Parameters<typeof compareLatestReleaseVersion>[1]
+): boolean {
+  return (
+    import.meta.env.VITE_KILN_RELEASE_BUILD === true &&
+    compareLatestReleaseVersion(import.meta.env.VITE_KILN_VERSION, releases) ===
+      1
   )
 }
 

@@ -266,6 +266,105 @@ describeMysql("database migrations", () => {
       schemaBuildTimeout
     )
 
+    describe("an update whose migration doesn't finish", () => {
+      // Every table's definition and rows, as Hearth's release finds them.
+      const database = Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        const tables = yield* sql<{ name: string }>`
+          SELECT table_name AS name FROM information_schema.tables
+          WHERE table_schema = DATABASE() ORDER BY table_name
+        `
+        const state: Record<string, { definition: string; rows: unknown }> =
+          {}
+        for (const { name } of tables) {
+          const [created] = yield* sql.unsafe<Record<string, string>>(
+            `SHOW CREATE TABLE \`${name}\``
+          )
+          state[name] = {
+            definition: created?.["Create Table"] ?? "",
+            rows: yield* sql.unsafe(`SELECT * FROM \`${name}\` ORDER BY 1`),
+          }
+        }
+        return state
+      })
+      const notification = (id: string, kind: string) => ({
+        created_at: 1,
+        data: "{}",
+        id,
+        kind,
+        read_at: null,
+        source_key: `${kind}:${id}`,
+        user_id: "user-a",
+      })
+      // Changes the schema and rows the way a migration can before it
+      // stops: a new column, a new table, rows changed and deleted.
+      const halfDone = (stop: Effect.Effect<never, unknown>) => ({
+        id: migrationIds.at(-1)! + 1,
+        name: "half_done",
+        run: Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`ALTER TABLE kiln_notification ADD COLUMN extra int NULL`
+          yield* sql`CREATE TABLE kiln_half_done (id int PRIMARY KEY)`
+          yield* sql`UPDATE kiln_notification SET kind = 'changed'`
+          yield* sql`DELETE FROM kiln_notification WHERE id = 'b'`
+          return yield* stop
+        }),
+      })
+      const migrated = Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        yield* dropAllTables
+        yield* applyMigrations(migrations)
+        yield* sql`INSERT INTO kiln_notification ${sql.insert([
+          notification("a", "app.deployed"),
+          notification("b", "kiln.updated"),
+        ])}`
+        // An expression default, as MySQL marks DEFAULT_GENERATED, keeps
+        // the value it was given.
+        yield* sql`CREATE TABLE kiln_dated (
+          id int PRIMARY KEY,
+          at timestamp(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+        )`
+        yield* sql`INSERT INTO kiln_dated VALUES (1, '2020-01-02 03:04:05.000')`
+        return yield* database
+      })
+
+      it.effect(
+        "puts the database back when a migration fails",
+        () =>
+          Effect.gen(function* () {
+            const before = yield* migrated
+
+            const exit = yield* Effect.exit(
+              applyMigrations([
+                ...migrations,
+                halfDone(Effect.fail(new Error("broken migration"))),
+              ])
+            )
+
+            expect(exit._tag).toBe("Failure")
+            expect(yield* database).toEqual(before)
+          }),
+        schemaBuildTimeout
+      )
+
+      it.effect(
+        "puts it back on the next start when the process stopped",
+        () =>
+          Effect.gen(function* () {
+            const before = yield* migrated
+            yield* Effect.exit(
+              applyMigrations([...migrations, halfDone(Effect.interrupt)])
+            )
+
+            // The release it rolled back to starts.
+            yield* applyMigrations(migrations)
+
+            expect(yield* database).toEqual(before)
+          }),
+        schemaBuildTimeout
+      )
+    })
+
     describe("a Tailscale network whose old ID is also a game server's", () => {
       const fingerprint = "r".repeat(43)
       const legacyNetwork = "5c".repeat(20)

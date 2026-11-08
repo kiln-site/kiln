@@ -8,6 +8,7 @@ import {
 
 import { forkPromise, tapPromiseError } from "@/effect/promise"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
+import { readRelaysAfterHearth } from "@/lib/system-update-after-hearth"
 
 // The dialog is large and rarely opened, so it loads after the page: when
 // the browser is idle, or when first opened.
@@ -186,6 +187,11 @@ const AuthorizedInfraUpdatesDialogHost = React.memo(
     // Stay mounted once opened, so closing still animates.
     const [opened, setOpened] = React.useState(false)
     if (state.open && !opened) setOpened(true)
+    // Relays an "Update all" held back for Hearth's update start once the
+    // page it reloaded is up, from the updater, though it stays closed.
+    React.useEffect(() => {
+      if (readRelaysAfterHearth()) setOpened(true)
+    }, [])
 
     React.useEffect(() => {
       const idle =

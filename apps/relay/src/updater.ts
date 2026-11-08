@@ -122,11 +122,30 @@ const runBatchEffect = Effect.fn("relay.updater.runBatch")(function* (
               : 1
         )
       if (pending.length === 0) return false
-      yield* Effect.forEach(
-        pending,
-        (operation) => runRecordedOperationEffect(operation),
-        { discard: true }
-      )
+      // Hearth goes first. If its update fails, Hearth is back on its
+      // version, and a Relay ahead of it can't connect to it, so this Relay
+      // keeps its version too.
+      let hearthFailed = false
+      for (const operation of pending) {
+        if (operation.component === "relay" && hearthFailed) {
+          yield* updateOperationEffect({
+            ...operation,
+            error:
+              "Not updated: Hearth's update failed, so this Relay stays on Hearth's version.",
+            finishedAt: new Date().toISOString(),
+            status: "failed",
+          })
+          continue
+        }
+        yield* runRecordedOperationEffect(operation)
+        if (operation.component === "hearth") {
+          hearthFailed ||= yield* readOperationEffect(operation.id).pipe(
+            Effect.map((recorded) => recorded.status === "failed"),
+            // Without its outcome, Hearth may be back on its version.
+            Effect.catch(() => Effect.succeed(true))
+          )
+        }
+      }
       return true
     })
   )
