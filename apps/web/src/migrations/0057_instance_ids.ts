@@ -68,12 +68,18 @@ const createDirectory = Effect.fn("migration.instanceIds.directory")(function* (
   \`kind\` enum('relay','server','app','database','tailscale') NOT NULL,
   \`legacy_id\` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
   \`legacy_scope\` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  \`relay_id\` char(12) CHARACTER SET ascii COLLATE ascii_bin NULL,
   \`request_key\` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NULL,
   \`created_at\` bigint unsigned NOT NULL,
   PRIMARY KEY (\`id\`),
   UNIQUE KEY \`${table("instance_id")}_request_key\` (\`request_key\`),
   KEY \`${table("instance_id")}_legacy_idx\` (\`legacy_id\`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`)
+  // A game server's ID is bound to the Relay that runs it.
+  if (!(yield* columnExists(sql, table("instance_id"), "relay_id"))) {
+    yield* sql.unsafe(`ALTER TABLE \`${table("instance_id")}\`
+  ADD COLUMN \`relay_id\` char(12) CHARACTER SET ascii COLLATE ascii_bin NULL AFTER \`legacy_scope\``)
+  }
   const relay = table("relay")
   if (!(yield* columnExists(sql, relay, "fingerprint"))) {
     yield* sql.unsafe(`ALTER TABLE \`${relay}\`
@@ -339,17 +345,28 @@ FROM \`${name}\``)
 
   const now = Date.now()
   const entries = [...found.values()]
+  // A game server's Relay, by its new ID, which its ID is bound to.
+  const relayOf = new Map<string, string>()
+  for (const entry of entries) {
+    if (entry.scope !== null && !relayOf.has(entry.scope)) {
+      relayOf.set(
+        entry.scope,
+        yield* migrated({ kind: "relay", fingerprint: entry.scope })
+      )
+    }
+  }
   for (let start = 0; start < entries.length; start += 200) {
     const batch = entries.slice(start, start + 200)
     yield* sql.unsafe(
       `INSERT IGNORE INTO \`${table("instance_id")}\`
-  (id, kind, legacy_id, legacy_scope, request_key, created_at)
-VALUES ${batch.map(() => "(?, ?, ?, ?, NULL, ?)").join(", ")}`,
+  (id, kind, legacy_id, legacy_scope, relay_id, request_key, created_at)
+VALUES ${batch.map(() => "(?, ?, ?, ?, ?, NULL, ?)").join(", ")}`,
       batch.flatMap((entry) => [
         entry.id,
         entry.kind,
         entry.legacyId,
         entry.scope,
+        entry.scope === null ? null : (relayOf.get(entry.scope) ?? null),
         now,
       ])
     )

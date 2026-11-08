@@ -245,5 +245,27 @@ describe("the move to 12-character instance IDs", () => {
     expect(
       (await Effect.runPromise(loadOrCreateRelayIdentity(config))).id
     ).toBe(relayId)
+
+    // A stop between taking the game server off the database's network and
+    // joining it again with its names: the next start joins it again.
+    await Effect.runPromise(state.setMetadata("instance_ids_aliases_v2", ""))
+    await Effect.runPromise(
+      state.setMetadata(
+        "instance_ids_alias_repairs",
+        JSON.stringify([
+          {
+            aliases: [`server-${newServerId}`, `server-${serverId}`],
+            container: server.id,
+            network: databaseNetwork,
+            previous: [`server-${serverId}`],
+          },
+        ])
+      )
+    )
+    server.networks.delete(databaseNetwork)
+    await migrate()
+    expect(server.networks.get(databaseNetwork)?.aliases).toEqual(
+      expect.arrayContaining([`server-${newServerId}`, `server-${serverId}`])
+    )
   })
 })

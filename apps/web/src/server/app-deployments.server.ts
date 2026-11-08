@@ -203,18 +203,24 @@ async function listDeployments(
       reachable: {
         ...(kinds.includes("app") && {
           app: {
-            instanceIds: apps.flatMap((app) =>
+            instances: apps.flatMap((app) =>
               relayNames.has(app.relayId) &&
               !appRelayIds.includes(app.relayId) &&
               hasAppPermission(user, grants, app, "app.read")
-                ? [app.appId]
+                ? [{ id: app.appId, relayId: app.relayId }]
                 : []
             ),
             relayIds: appRelayIds,
           },
         }),
         ...(kinds.includes("server") && {
-          server: { instanceIds: [...readableServers.keys()], relayIds: [] },
+          server: {
+            instances: [...readableServers.values()].map((server) => ({
+              id: server.id,
+              relayId: server.relayId,
+            })),
+            relayIds: [],
+          },
         }),
       },
     })

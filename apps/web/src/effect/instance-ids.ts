@@ -48,26 +48,44 @@ export const reserveInstanceIdEffect = Effect.fn("instanceIds.reserve")(
 /**
  * Reserves an ID something else chose, such as the one a Relay generated
  * for itself or for a game server it created. Fails if another instance
- * already holds it.
+ * already holds it. A game server's ID is also bound to its Relay
+ * (`relayId`), the first to claim it: another Relay naming a server by the
+ * same ID is refused, so it can't pass its server off as that one.
  */
 export const claimInstanceIdEffect = Effect.fn("instanceIds.claim")(function* (
   kind: InstanceIdKind,
-  id: string
+  id: string,
+  relayId: string | null = null
 ) {
   const database = yield* Database
   yield* database.execute(
     "instanceIds.claim",
     `INSERT IGNORE INTO ${databaseTable("instance_id")}
-       (id, kind, request_key, created_at)
-     VALUES (?, ?, NULL, ?)`,
-    [id, kind, Date.now()]
+       (id, kind, relay_id, request_key, created_at)
+     VALUES (?, ?, ?, NULL, ?)`,
+    [id, kind, relayId, Date.now()]
   )
-  const rows = yield* database.queryRows<RowDataPacket & { kind: string }>(
+  if (relayId !== null) {
+    // Reserved for a create before its Relay was known.
+    yield* database.execute(
+      "instanceIds.claim.bind",
+      `UPDATE ${databaseTable("instance_id")} SET relay_id = ?
+        WHERE id = ? AND kind = ? AND relay_id IS NULL`,
+      [relayId, id, kind]
+    )
+  }
+  const rows = yield* database.queryRows<
+    RowDataPacket & { kind: string; relay_id: string | null }
+  >(
     "instanceIds.claim.read",
-    `SELECT kind FROM ${databaseTable("instance_id")} WHERE id = ?`,
+    `SELECT kind, relay_id FROM ${databaseTable("instance_id")} WHERE id = ?`,
     [id]
   )
-  if (rows[0]?.kind !== kind) {
+  const holder = rows[0]
+  if (
+    holder?.kind !== kind ||
+    (relayId !== null && holder.relay_id !== relayId)
+  ) {
     return yield* Effect.fail(
       new InstanceIdTakenError(
         `Instance ID ${id} already belongs to another instance`

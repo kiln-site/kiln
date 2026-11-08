@@ -293,14 +293,24 @@ export const relayDeleteDatabaseSchema = z
  * the Relay refuses every change to it but its final backup and its
  * deletion; unfrozen, it is a resource like any other again.
  */
-export const relayResourceFreezeSchema = z
-  .object({
-    deletionId: z.uuid(),
-    id: instanceIdSchema,
-    // A volume is a Kiln volume, by its ID; an App's own volumes go with it.
-    kind: z.enum(["app", "database", "instance", "volume"]),
-  })
-  .strict()
+export const relayResourceFreezeSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      deletionId: z.uuid(),
+      id: instanceIdSchema,
+      kind: z.enum(["app", "database", "instance"]),
+    })
+    .strict(),
+  // A volume is a Kiln volume, by its own 40-character ID; an App's own
+  // volumes go with it.
+  z
+    .object({
+      deletionId: z.uuid(),
+      id: z.string().regex(/^[a-f0-9]{40}$/u),
+      kind: z.literal("volume"),
+    })
+    .strict(),
+])
 
 export type RelayResourceFreeze = z.infer<typeof relayResourceFreezeSchema>
 

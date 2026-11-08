@@ -57,6 +57,12 @@ import {
 import { relayOwnsLabels, relayResourceNames } from "./relay-resources.js"
 
 export const INSTANCE_IDS_MIGRATION_KEY = "instance_ids_v2"
+// Set once every container on a database network has its new names, which
+// may take more than one start.
+const INSTANCE_ID_ALIASES_KEY = "instance_ids_aliases_v2"
+// Attachments taken off a database network to join again with new names,
+// written before each leaves, so one a stop cut off joins again next start.
+const ALIAS_REPAIRS_KEY = "instance_ids_alias_repairs"
 
 const DATABASE_CONNECTION_LABEL_PREFIX = "kiln.instance.databases."
 const COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
@@ -88,6 +94,7 @@ export async function migrateInstanceIds(
   const { state } = input
   if (await Effect.runPromise(state.getMetadata(INSTANCE_IDS_MIGRATION_KEY))) {
     useInstanceLegacyIds(await Effect.runPromise(state.instanceIds.list()))
+    await ensureDatabaseNetworkAliases(input)
     return
   }
   const started = Date.now()
@@ -100,7 +107,6 @@ export async function migrateInstanceIds(
   const rewriter = legacyIdRewriter(replacements)
   const rewrite = stateRewriter(rewriter, input.identity)
   const files = await rewriteStateFiles(input.config, rewrite)
-  const aliases = await addDatabaseNetworkAliases(input)
   const rows = await Effect.runPromise(
     state.instanceIds.migrate({
       entries,
@@ -112,6 +118,7 @@ export async function migrateInstanceIds(
           : rewrite(value),
     })
   )
+  const aliases = await ensureDatabaseNetworkAliases(input)
   const counts = new Map<InstanceIdKind, number>()
   for (const entry of entries)
     counts.set(entry.kind, (counts.get(entry.kind) ?? 0) + 1)
@@ -448,12 +455,146 @@ async function rewriteStateFiles(
  * name to an attachment, so each joins again with all of them, a moment
  * off the network. One that fails is logged and keeps its old names.
  */
+async function ensureDatabaseNetworkAliases(
+  input: InstanceIdMigrationInput
+): Promise<number> {
+  const { state } = input
+  if (await Effect.runPromise(state.getMetadata(INSTANCE_ID_ALIASES_KEY))) {
+    return 0
+  }
+  await resumeRepairs(input)
+  const { added, complete } = await addDatabaseNetworkAliases(input)
+  if (complete) {
+    await Effect.runPromise(state.setMetadata(INSTANCE_ID_ALIASES_KEY, "1"))
+  }
+  return added
+}
+
+interface AliasRepair {
+  readonly aliases: ReadonlyArray<string>
+  readonly container: string
+  readonly network: string
+  readonly previous: ReadonlyArray<string>
+}
+
+async function loadRepairs(
+  state: InstanceIdMigrationInput["state"]
+): Promise<Array<AliasRepair>> {
+  const saved = await Effect.runPromise(state.getMetadata(ALIAS_REPAIRS_KEY))
+  if (!saved) return []
+  try {
+    const parsed = JSON.parse(saved) as unknown
+    return Array.isArray(parsed) ? (parsed as Array<AliasRepair>) : []
+  } catch {
+    return []
+  }
+}
+
+function saveRepairs(
+  state: InstanceIdMigrationInput["state"],
+  repairs: ReadonlyArray<AliasRepair>
+): Promise<void> {
+  return Effect.runPromise(
+    state.setMetadata(ALIAS_REPAIRS_KEY, JSON.stringify(repairs))
+  )
+}
+
+// Joins again what a stop cut off between leaving a database network and
+// joining it again with its new names.
+async function resumeRepairs({ engine, state }: InstanceIdMigrationInput) {
+  for (const repair of await loadRepairs(state)) {
+    const container = await Effect.runPromise(
+      engine
+        .inspectContainer(repair.container)
+        .pipe(Effect.orElseSucceed(() => null))
+    )
+    if (container && !container.NetworkSettings?.Networks?.[repair.network]) {
+      await reattach(engine, repair, repair.container, false)
+    }
+  }
+  await saveRepairs(state, [])
+}
+
+/**
+ * Takes a container off a database network, unless it's already off, and
+ * joins it again with its new names, or as it was when Docker refuses them.
+ */
+async function reattach(
+  engine: InstanceIdMigrationInput["engine"],
+  repair: AliasRepair,
+  name: string,
+  attached = true
+): Promise<"renamed" | "kept" | "detached"> {
+  if (attached) {
+    const left = await Effect.runPromise(
+      engine.disconnectNetwork(repair.network, repair.container).pipe(
+        Effect.as(true),
+        Effect.catch((cause) =>
+          Effect.sync(() => {
+            console.warn(
+              `${name} couldn't take its new name on ${repair.network}; it keeps ${repair.previous.join(", ") || "none"}:`,
+              cause
+            )
+            return false
+          })
+        )
+      )
+    )
+    if (!left) return "kept"
+  }
+  const joined = await Effect.runPromise(
+    engine
+      .connectNetwork(repair.network, repair.container, {
+        aliases: [...repair.aliases],
+      })
+      .pipe(
+        Effect.as(true),
+        Effect.catch((cause) =>
+          Effect.sync(() => {
+            console.warn(
+              `${name} couldn't take its new name on ${repair.network}; joining again as before:`,
+              cause
+            )
+            return false
+          })
+        )
+      )
+  )
+  if (joined) {
+    console.info(
+      `${name} answers to ${repair.aliases.join(", ")} on ${repair.network}`
+    )
+    return "renamed"
+  }
+  // Back as it was, rather than off the network.
+  return Effect.runPromise(
+    engine
+      .connectNetwork(repair.network, repair.container, {
+        aliases: [...repair.previous],
+      })
+      .pipe(
+        Effect.as("kept" as const),
+        Effect.catch((again) =>
+          Effect.sync(() => {
+            console.error(
+              `${name} couldn't join ${repair.network} again; it joins when it next starts:`,
+              again
+            )
+            return "detached" as const
+          })
+        )
+      )
+  )
+}
+
 async function addDatabaseNetworkAliases({
   config,
   engine,
-}: InstanceIdMigrationInput): Promise<number> {
+  state,
+}: InstanceIdMigrationInput): Promise<{ added: number; complete: boolean }> {
   const resources = relayResourceNames(config)
   let added = 0
+  let complete = true
   const networks = await Effect.runPromise(
     engine
       .listNetworks({ filters: { label: ["kiln.resource.kind=database"] } })
@@ -511,56 +652,25 @@ async function addDatabaseNetworkAliases({
         ]),
       ]
       const name = summary.Names[0]?.replace(/^\//u, "") ?? summary.Id
-      added += await Effect.runPromise(
-        engine.disconnectNetwork(network.Name, summary.Id).pipe(
-          Effect.tapError((cause) =>
-            Effect.sync(() =>
-              console.warn(
-                `${name} couldn't take its new name on ${network.Name}; it keeps ${current.join(", ") || "none"}:`,
-                cause
-              )
-            )
-          ),
-          Effect.andThen(
-            engine.connectNetwork(network.Name, summary.Id, { aliases }).pipe(
-              Effect.tap(() =>
-                Effect.sync(() =>
-                  console.info(
-                    `${name} answers to ${aliases.join(", ")} on ${network.Name}`
-                  )
-                )
-              ),
-              Effect.as(1),
-              // Back as it was, rather than off the network.
-              Effect.catch((cause) =>
-                Effect.sync(() =>
-                  console.warn(
-                    `${name} couldn't take its new name on ${network.Name}; joining again as before:`,
-                    cause
-                  )
-                ).pipe(
-                  Effect.andThen(
-                    engine.connectNetwork(network.Name, summary.Id, {
-                      aliases: current,
-                    })
-                  ),
-                  Effect.catch((again) =>
-                    Effect.sync(() =>
-                      console.error(
-                        `${name} couldn't join ${network.Name} again; it joins when it next starts:`,
-                        again
-                      )
-                    )
-                  ),
-                  Effect.as(0)
-                )
-              )
-            )
-          ),
-          Effect.orElseSucceed(() => 0)
+      const repair: AliasRepair = {
+        aliases,
+        container: summary.Id,
+        network: network.Name,
+        previous: current,
+      }
+      await saveRepairs(state, [...(await loadRepairs(state)), repair])
+      const outcome = await reattach(engine, repair, name)
+      await saveRepairs(
+        state,
+        (await loadRepairs(state)).filter(
+          (pending) =>
+            pending.container !== repair.container ||
+            pending.network !== repair.network
         )
       )
+      if (outcome === "renamed") added += 1
+      else complete = false
     }
   }
-  return added
+  return { added, complete }
 }

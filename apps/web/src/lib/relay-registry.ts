@@ -1221,6 +1221,13 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
           `DELETE FROM ${databaseTable("access_grant")} WHERE relay_id = ?`,
           [id]
         )
+        // Deployments name their instance and Relay without a foreign key,
+        // so they don't go with the Relay's Apps and game servers on their
+        // own.
+        yield* transaction.execute(
+          `DELETE FROM ${databaseTable("deployment")} WHERE relay_id = ?`,
+          [id]
+        )
         // A join still adding this Relay can't finish without it: it ends,
         // its worker stops at its next write, and the Relay may join again.
         yield* transaction.execute(

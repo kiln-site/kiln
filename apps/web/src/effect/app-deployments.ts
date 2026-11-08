@@ -525,8 +525,11 @@ export const loadDeploymentEffect = Effect.fn("deployments.load")(function* (
 export interface ReachableDeployments {
   /** Every one on these Relays. */
   relayIds: ReadonlyArray<string>
-  /** And these instances', wherever they are. */
-  instanceIds: ReadonlyArray<string>
+  /**
+   * And these instances', each on its own Relay: an instance's deployments
+   * are only ever read with the Relay that runs it.
+   */
+  instances: ReadonlyArray<{ readonly id: string; readonly relayId: string }>
 }
 
 /**
@@ -550,12 +553,17 @@ export const listDeploymentsEffect = Effect.fn("deployments.list")(
         ...(scope.relayIds.length
           ? [`relay_id IN (${scope.relayIds.map(() => "?").join(", ")})`]
           : []),
-        ...(scope.instanceIds.length
-          ? [`instance_id IN (${scope.instanceIds.map(() => "?").join(", ")})`]
-          : []),
+        ...scope.instances.map(() => "(relay_id = ? AND instance_id = ?)"),
       ]
       if (within.length === 0) return []
-      parameters.push(kind, ...scope.relayIds, ...scope.instanceIds)
+      parameters.push(
+        kind,
+        ...scope.relayIds,
+        ...scope.instances.flatMap((instance) => [
+          instance.relayId,
+          instance.id,
+        ])
+      )
       return [`(instance_kind = ? AND (${within.join(" OR ")}))`]
     })
     if (reachable.length === 0) return []
