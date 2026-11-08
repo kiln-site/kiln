@@ -44,7 +44,11 @@ import { Effect, Result } from "effect"
 
 import type { RelayConfig } from "./config.js"
 import { databaseMemberAliases } from "./database-connections.js"
-import type { DockerEngine, DockerNetwork } from "./docker-engine.js"
+import {
+  isDockerNotFound,
+  type DockerEngine,
+  type DockerNetwork,
+} from "./docker-engine.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { recoverPromise } from "./effect/promise.js"
 import type { RelayIdentity } from "./effect/identity.js"
@@ -462,9 +466,11 @@ async function ensureDatabaseNetworkAliases(
   if (await Effect.runPromise(state.getMetadata(INSTANCE_ID_ALIASES_KEY))) {
     return 0
   }
-  await resumeRepairs(input)
+  const resumed = await resumeRepairs(input)
   const { added, complete } = await addDatabaseNetworkAliases(input)
-  if (complete) {
+  // Done only once each container has its names and none is left off its
+  // network; anything Docker couldn't answer is tried again next start.
+  if (resumed && complete && (await loadRepairs(state)).length === 0) {
     await Effect.runPromise(state.setMetadata(INSTANCE_ID_ALIASES_KEY, "1"))
   }
   return added
@@ -499,20 +505,28 @@ function saveRepairs(
   )
 }
 
-// Joins again what a stop cut off between leaving a database network and
-// joining it again with its new names.
-async function resumeRepairs({ engine, state }: InstanceIdMigrationInput) {
+// Joins again what a stop, or a Docker that refused it, left off a database
+// network between leaving it and joining it again with its new names. A
+// repair stays recorded until the container is back on its network or gone.
+async function resumeRepairs({
+  engine,
+  state,
+}: InstanceIdMigrationInput): Promise<boolean> {
+  const remaining: Array<AliasRepair> = []
   for (const repair of await loadRepairs(state)) {
-    const container = await Effect.runPromise(
-      engine
-        .inspectContainer(repair.container)
-        .pipe(Effect.orElseSucceed(() => null))
+    const inspected = await Effect.runPromise(
+      Effect.result(engine.inspectContainer(repair.container))
     )
-    if (container && !container.NetworkSettings?.Networks?.[repair.network]) {
-      await reattach(engine, repair, repair.container, false)
+    if (Result.isFailure(inspected)) {
+      if (!isDockerNotFound(inspected.failure)) remaining.push(repair)
+      continue
     }
+    if (inspected.success.NetworkSettings?.Networks?.[repair.network]) continue
+    const outcome = await reattach(engine, repair, repair.container, false)
+    if (outcome === "detached") remaining.push(repair)
   }
-  await saveRepairs(state, [])
+  await saveRepairs(state, remaining)
+  return remaining.length === 0
 }
 
 /**
@@ -600,16 +614,17 @@ async function addDatabaseNetworkAliases({
       .listNetworks({ filters: { label: ["kiln.resource.kind=database"] } })
       .pipe(
         Effect.catch((cause) =>
-          Effect.sync((): ReadonlyArray<DockerNetwork> => {
+          Effect.sync((): ReadonlyArray<DockerNetwork> | null => {
             console.warn(
               "Database networks couldn't be listed to name members:",
               cause
             )
-            return []
+            return null
           })
         )
       )
   )
+  if (!networks) return { added, complete: false }
   for (const network of networks) {
     if (
       !relayOwnsLabels(config, network.Labels) ||
@@ -619,8 +634,12 @@ async function addDatabaseNetworkAliases({
     const attached = await Effect.runPromise(
       engine
         .listContainers({ all: true, filters: { network: [network.Name] } })
-        .pipe(Effect.orElseSucceed(() => []))
+        .pipe(Effect.orElseSucceed(() => null))
     )
+    if (!attached) {
+      complete = false
+      continue
+    }
     for (const summary of attached) {
       const labels = summary.Labels ?? {}
       const databaseId = instanceIdFrom(labels["kiln.database.id"])
@@ -640,7 +659,11 @@ async function addDatabaseNetworkAliases({
           .inspectContainer(summary.Id)
           .pipe(Effect.orElseSucceed(() => null))
       )
-      const endpoint = container?.NetworkSettings?.Networks?.[network.Name]
+      if (!container) {
+        complete = false
+        continue
+      }
+      const endpoint = container.NetworkSettings?.Networks?.[network.Name]
       if (!endpoint) continue
       const current = endpoint.Aliases ?? []
       if (wanted.every((alias) => current.includes(alias))) continue
@@ -660,14 +683,17 @@ async function addDatabaseNetworkAliases({
       }
       await saveRepairs(state, [...(await loadRepairs(state)), repair])
       const outcome = await reattach(engine, repair, name)
-      await saveRepairs(
-        state,
-        (await loadRepairs(state)).filter(
-          (pending) =>
-            pending.container !== repair.container ||
-            pending.network !== repair.network
+      // One left off its network keeps its repair for the next start.
+      if (outcome !== "detached") {
+        await saveRepairs(
+          state,
+          (await loadRepairs(state)).filter(
+            (pending) =>
+              pending.container !== repair.container ||
+              pending.network !== repair.network
+          )
         )
-      )
+      }
       if (outcome === "renamed") added += 1
       else complete = false
     }

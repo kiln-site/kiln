@@ -583,7 +583,20 @@ const rewriteTable = Effect.fn("migration.instanceIds.rewriteTable")(function* (
 ) {
   const read = (column: { name: string; json: boolean }) =>
     `CAST(\`${column.name}\` AS CHAR)`
-  const hasRelay = textColumns.some((column) => column.name === "relay_id")
+  const names = new Set(textColumns.map((column) => column.name))
+  // The Relay each column's game servers are on: a column of its own where
+  // the table declares one, as a server migration's source and destination
+  // do, else the row's `relay_id`.
+  const relayColumnOf = (column: string): string | null => {
+    const declared = instanceIdColumns.find(
+      (source) =>
+        table(source.table) === name &&
+        source.column === column &&
+        source.relayColumn !== undefined
+    )?.relayColumn
+    if (declared && names.has(declared)) return declared
+    return names.has("relay_id") ? "relay_id" : null
+  }
   // Primary keys first, read once, so rewriting a key never moves a row
   // past the next page.
   const candidates = yield* sql.unsafe<Record<string, unknown>>(
@@ -609,15 +622,16 @@ WHERE (${primaryKey.map((key) => `\`${key}\``).join(", ")}) IN (${page
       page.flatMap((row) => primaryKey.map((key) => row[key] as never))
     )
     for (const row of rows) {
-      const relay = hasRelay ? row.relay_id : null
-      const rewriter =
-        relay && mapping.relays.has(relay)
-          ? mapping.forRelay(relay)
-          : mapping.global
       const updates: Array<[string, string]> = []
       for (const column of textColumns) {
         const value = row[column.name]
         if (typeof value !== "string" || value.length === 0) continue
+        const relayColumn = relayColumnOf(column.name)
+        const relay = relayColumn ? row[relayColumn] : null
+        const rewriter =
+          relay && mapping.relays.has(relay)
+            ? mapping.forRelay(relay)
+            : mapping.global
         const next = rewriteValue(
           name,
           column.name,
