@@ -174,6 +174,11 @@ guide doesn't cover, search through the source code in `node_modules/effect/src`
   individual verification stages or targeted tests while iterating. Follow
   [Contributing](CONTRIBUTING.md) for PR conventions. When asked to deliver a PR,
   commit, push, and open it ready for review. Never merge it yourself.
+- CI tests each PR merged with the latest `main`, so a branch built on an
+  older `main` can pass locally and fail in CI. Rebase onto `origin/main`
+  before `pnpm verify` and before each push; for a stack, sync the whole
+  stack. After each push, review amendments included, check CI before
+  pushing again.
 - After merge, follow the cleanup instructions in the development guide.
 
 ## References
