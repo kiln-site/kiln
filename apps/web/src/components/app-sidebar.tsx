@@ -684,7 +684,7 @@ const AppTabNavigation = React.memo(function AppTabNavigation({
         <Link
           to={appTabRoute(item.id)}
           params={{ appId: app.id }}
-          activeOptions={{ exact: item.id !== "files" }}
+          activeOptions={{ exact: item.id !== "files", includeSearch: false }}
           activeProps={{ "data-active": true }}
           preload="intent"
         >
@@ -1558,7 +1558,7 @@ const InstanceTabNavigationItem = React.memo(
             <Link
               to="/server/$serverId/network"
               params={{ serverId }}
-              activeOptions={{ exact: true }}
+              activeOptions={{ exact: true, includeSearch: false }}
               activeProps={{ "data-active": true }}
               preload="intent"
             >
