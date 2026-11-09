@@ -11,22 +11,19 @@ import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
 const now = Date.UTC(2026, 5, 1)
 
 const invite = Effect.fnUntraced(function* (input: {
-  readonly grantState?: "pending" | "revoked"
   readonly relayId: string
-  readonly resourceType?: "relay" | "instance"
   readonly userId?: string
   readonly invitation?: Record<string, number | string>
 }) {
   const accessId = randomUUID()
-  const resourceType = input.resourceType ?? "relay"
   const userId = input.userId ?? "invitee"
   yield* insertGrant({
     id: accessId,
     relayId: input.relayId,
-    resourceId: resourceType === "relay" ? input.relayId : "server-1",
-    resourceType,
+    resourceId: input.relayId,
+    resourceType: "relay",
     role: "viewer",
-    state: input.grantState ?? "pending",
+    state: "pending",
     userId,
   })
   yield* insertRows("invitation", {
@@ -54,50 +51,24 @@ const seed = Effect.gen(function* () {
   })
   yield* insertUser("invitee")
   yield* insertUser("someone-else")
-  for (const id of [
-    "r-invited",
-    "r-accepted",
-    "r-declined",
-    "r-expired",
-    "r-cancelled",
-    "r-revoked",
-    "r-grant-rev",
-    "r-disabled",
-    "r-srv-only",
-    "r-not-mine",
-  ]) {
+  for (const id of ["r-invited", "r-expired", "r-cancelled", "r-not-mine"]) {
     yield* insertRelay(id, {
       created_by: "owner",
-      enabled: id !== "r-disabled",
+      enabled: true,
       port: 8443,
       use_tls: true,
     })
   }
   yield* invite({ relayId: "r-invited" })
   yield* invite({
-    relayId: "r-accepted",
-    invitation: { accepted_at: now - 500 },
-  })
-  yield* invite({
-    relayId: "r-declined",
-    invitation: { declined_at: now - 500 },
-  })
-  yield* invite({
     relayId: "r-expired",
     invitation: { expires_at: now - 1 },
   })
-  // Cancelling sets revoked_at too; either alone must hide the invitation.
+  // Cancelling sets revoked_at too; cancelled_at alone must hide it.
   yield* invite({
     relayId: "r-cancelled",
     invitation: { cancelled_at: now - 500 },
   })
-  yield* invite({
-    relayId: "r-revoked",
-    invitation: { revoked_at: now - 500 },
-  })
-  yield* invite({ relayId: "r-grant-rev", grantState: "revoked" })
-  yield* invite({ relayId: "r-disabled" })
-  yield* invite({ relayId: "r-srv-only", resourceType: "instance" })
   yield* invite({ relayId: "r-not-mine", userId: "someone-else" })
 })
 

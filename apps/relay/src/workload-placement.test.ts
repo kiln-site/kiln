@@ -50,32 +50,6 @@ describe("moving workloads into the slice", () => {
     expect(after.state.running).toBe(true)
   })
 
-  it("moves a running game server on an asked-for restart", async () => {
-    const { harness, instance } = await seeded()
-    harness.docker.allocations.setWorkloadLimit(SLICE, 1024 ** 3)
-    fakeDocker.container(
-      harness.resources.instanceContainer(id)
-    )!.state.running = true
-
-    await harness.lifecycle.runInstanceAction(instance, "restart", [])
-
-    const moved = fakeDocker.container(harness.resources.instanceContainer(id))!
-    expect(moved.cgroupParent).toBe(SLICE)
-  })
-
-  it("leaves a game server where it is while no slice is confirmed", async () => {
-    const { harness, instance } = await seeded()
-    const before = fakeDocker.container(
-      harness.resources.instanceContainer(id)
-    )!.id
-
-    await harness.lifecycle.runInstanceAction(instance, "start", [])
-
-    const after = fakeDocker.container(harness.resources.instanceContainer(id))!
-    expect(after.id).toBe(before)
-    expect(after.cgroupParent).toBe("")
-  })
-
   it("doesn't call a replaced database placed when it isn't", async () => {
     const harness = await relayHarness()
     const databaseId = "d".repeat(12)

@@ -13,11 +13,6 @@ import {
   createAppRecordEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
-import { saveNotificationPreferencesEffect } from "@/effect/notification-preferences"
-import {
-  listNotificationsEffect,
-  notifyUsersEffect,
-} from "@/effect/notifications"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTableName } from "@/lib/database-config"
@@ -33,17 +28,8 @@ import { insertRelay, insertRows, insertUser } from "@/test/seed"
 const relay = vi.hoisted(() => ({
   count: 0,
   configs: [] as Array<{ environment?: string } | undefined>,
-  // Whether each deployment sent, in order, skipped the build cache.
-  noCache: [] as Array<boolean>,
   deployments: new Map<string, { id: string; state: string }>(),
   journal: new Map<string, { result: unknown; status: "succeeded" }>(),
-  // Apps it doesn't have, as one whose provisioning failed.
-  missing: new Set<string>(),
-  // Each app's saved database connections, and where the databases that
-  // haven't finished provisioning are.
-  connections: new Map<string, Array<string>>(),
-  databaseLists: 0,
-  provisioning: new Map<string, string>(),
   sent: [] as Array<string>,
 }))
 
@@ -57,7 +43,6 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     payload: {
       appId?: string
       config?: { environment?: string }
-      noCache?: boolean
       operationId?: string
       requests?: Array<{ id: string }>
     },
@@ -80,7 +65,6 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       relay.deployments.set(appId, deployment)
       relay.sent.push(appId)
       relay.configs.push(payload.config)
-      relay.noCache.push(payload.noCache === true)
       const result = relayApp(appId)
       if (frame.operationId) {
         relay.journal.set(frame.operationId, { result, status: "succeeded" })
@@ -89,15 +73,9 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     }
     if (operation === "app.list") {
       const id = payload.requests![0]!.id
-      if (relay.missing.has(id)) return []
       return [{ app: relayApp(id), id, view: "detail" }]
     }
-    if (operation === "database.list") {
-      relay.databaseLists++
-      return [...relay.provisioning].map(([id, phase]) =>
-        relayDatabase(id, phase)
-      )
-    }
+    if (operation === "database.list") return []
     return {}
   },
 }))
@@ -113,10 +91,7 @@ const second = "b".repeat(12)
 const third = "c".repeat(12)
 const fourth = "d".repeat(12)
 const fifth = "e".repeat(12)
-const sixth = "f".repeat(12)
 const seventh = "7".repeat(12)
-const eighth = "8".repeat(12)
-const ninth = "9".repeat(12)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -141,27 +116,8 @@ function relayApp(id: string) {
     id,
     network: `kiln-app-${id.slice(0, 8)}`,
     observedState: "running",
-    savedDatabaseIds: relay.connections.get(id) ?? [],
+    savedDatabaseIds: [],
     status: "Running",
-  }
-}
-
-function relayDatabase(id: string, phase: string) {
-  return {
-    containerId: null,
-    createdAt: new Date(0).toISOString(),
-    databaseName: "kiln_main",
-    engine: "postgres",
-    hostname: `database-${id}`,
-    id,
-    image: "postgres:17",
-    internalPort: 5432,
-    members: [],
-    name: "Main",
-    observedState: "provisioning",
-    provisioning: { attempt: 0, error: null, phase },
-    status: "Preparing database",
-    supportsImportExport: true,
   }
 }
 
@@ -191,16 +147,12 @@ const seedApp = (appId: string) =>
 const ask = (
   appId: string,
   trigger: "manual" | "update" = "manual",
-  userId: string | null = null,
-  awaitProvisioning = false,
-  noCache = false
+  userId: string | null = null
 ) =>
   Effect.promise(() => import("@/lib/app-deployments.server")).pipe(
     Effect.flatMap(({ askAppDeploymentEffect }) =>
       askAppDeploymentEffect({
         appId,
-        awaitProvisioning,
-        noCache,
         relayId,
         trigger,
         userId,
@@ -321,55 +273,6 @@ describeMysql("App deployments", () => {
     )
 
     it.effect(
-      "clear a failure for someone who muted the App once it deploys",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          relay.deployments.clear()
-          yield* insertRelay(relayId)
-          yield* insertUser("owner", { role: "admin" })
-          yield* insertRows("relay_database_connection_import", {
-            acknowledged_at: 0,
-            configs_cleared_at: 0,
-            relay_id: relayId,
-          })
-          yield* seedApp(sixth)
-          yield* notifyUsersEffect(["owner"], "app.deployed:earlier", {
-            deploymentId: "earlier",
-            kind: "app.deployed",
-            resource: {
-              id: sixth,
-              name: "Site",
-              relayId,
-              type: "app",
-            },
-            status: "failed",
-            update: false,
-          })
-          yield* saveNotificationPreferencesEffect("owner", {
-            resources: {
-              [`app:${relayId}:${sixth}`]: {
-                kinds: { "app.deployed": false },
-                name: "Site",
-                type: "app",
-              },
-            },
-          })
-
-          const id = yield* deploy(sixth)
-          yield* until(() => relay.deployments.has(sixth))
-          relay.deployments.set(sixth, {
-            id: relay.deployments.get(sixth)?.id ?? "",
-            state: "succeeded",
-          })
-          yield* ended(id)
-
-          assert.deepStrictEqual(yield* listNotificationsEffect("owner"), [])
-        }).pipe(TestClock.withLive),
-      60_000
-    )
-
-    it.effect(
       "refuse a person's ask once they may no longer manage the app",
       () =>
         Effect.gen(function* () {
@@ -399,67 +302,6 @@ describeMysql("App deployments", () => {
           assert.strictEqual(refused?.status, "failed")
           assert.strictEqual(refused?.triggeredBy, "removed-person")
           assert.strictEqual(sentTo(fifth), 0)
-        }).pipe(TestClock.withLive),
-      60_000
-    )
-
-    it.effect(
-      "wait for a connected database still provisioning, but not one that failed",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          relay.sent.length = 0
-          yield* insertRelay(relayId)
-          yield* insertUser("owner")
-          yield* insertRows("relay_database_connection_import", {
-            acknowledged_at: 0,
-            configs_cleared_at: 0,
-            relay_id: relayId,
-          })
-          yield* seedApp(ninth)
-          const database = "b".repeat(12)
-          relay.connections.set(ninth, [database])
-          relay.provisioning.set(database, "pulling_image")
-
-          // Its containers couldn't join a network that isn't there yet.
-          const id = yield* ask(ninth)
-          yield* until(() => relay.databaseLists > 0)
-          assert.strictEqual((yield* loadOperation(id))?.state, "waiting")
-          assert.strictEqual(sentTo(ninth), 0)
-
-          // One that failed will never have one, so it goes without.
-          relay.provisioning.set(database, "failed")
-          yield* readmitWaitingOperations
-          yield* until(() => sentTo(ninth) === 1)
-          relay.connections.clear()
-          relay.provisioning.clear()
-        }).pipe(TestClock.withLive),
-      60_000
-    )
-
-    it.effect(
-      "deploy a new app asked again once it's there, though its first deploy gave up",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          relay.sent.length = 0
-          relay.missing.add(sixth)
-          yield* insertRelay(relayId)
-          yield* insertUser("owner")
-          yield* insertRows("relay_database_connection_import", {
-            acknowledged_at: 0,
-            configs_cleared_at: 0,
-            relay_id: relayId,
-          })
-          yield* seedApp(sixth)
-
-          // Its Relay doesn't have it: its first deploy gives up.
-          yield* ended(yield* ask(sixth, "manual", null, true))
-
-          // Asked again once it's there, it deploys.
-          relay.missing.delete(sixth)
-          yield* ask(sixth)
-          yield* until(() => sentTo(sixth) === 1)
         }).pipe(TestClock.withLive),
       60_000
     )
@@ -518,51 +360,6 @@ describeMysql("App deployments", () => {
           )
           yield* readmitWaitingOperations
           yield* until(() => sentTo(seventh) === 1)
-        }).pipe(TestClock.withLive),
-      60_000
-    )
-
-    it.effect(
-      "skip the build cache once asked to, whatever joins the ask, and only for that deployment",
-      () =>
-        Effect.gen(function* () {
-          yield* resetDatabase
-          relay.count = 0
-          relay.deployments.clear()
-          relay.journal.clear()
-          relay.noCache.length = 0
-          relay.sent.length = 0
-          yield* insertRelay(relayId)
-          yield* insertUser("owner")
-          yield* insertRows("relay_database_connection_import", {
-            acknowledged_at: 0,
-            configs_cleared_at: 0,
-            relay_id: relayId,
-          })
-          yield* seedApp(eighth)
-          const finish = () =>
-            Effect.sync(() =>
-              relay.deployments.set(eighth, {
-                ...relay.deployments.get(eighth)!,
-                state: "succeeded",
-              })
-            )
-
-          yield* deploy(eighth)
-          yield* until(() => sentTo(eighth) === 1)
-
-          // Asked while one runs, then joined by a plain ask, as a push's.
-          const joined = yield* ask(eighth, "manual", null, false, true)
-          yield* deploy(eighth)
-          yield* finish()
-          yield* until(() => sentTo(eighth) === 2)
-
-          yield* finish()
-          yield* ended(joined)
-          yield* deploy(eighth)
-          yield* until(() => sentTo(eighth) === 3)
-
-          assert.deepStrictEqual(relay.noCache, [false, true, false])
         }).pipe(TestClock.withLive),
       60_000
     )

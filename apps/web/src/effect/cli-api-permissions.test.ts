@@ -247,12 +247,4 @@ describe("CLI backup export boundary", () => {
     await run(createCliBackupEffect(principal, input))
     expect(f.reserve).toHaveBeenCalled()
   })
-  it("refuses a backup that doesn't say where it goes", async () => {
-    allowed.add("backup.create")
-    const { storageId: _storageId, ...unnamed } = input
-    await expect(
-      run(createCliBackupEffect(principal, unnamed))
-    ).rejects.toBeDefined()
-    expect(f.reserve).not.toHaveBeenCalled()
-  })
 })

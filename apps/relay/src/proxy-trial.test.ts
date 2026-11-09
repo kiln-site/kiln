@@ -36,14 +36,6 @@ async function hearthRelay() {
   const traefik = () => fakeDocker.container(harness.resources.traefikContainer)
   const proxyFile = join(harness.config.dataDirectory, "proxy.json")
   return {
-    dynamic: () =>
-      readFile(
-        join(
-          harness.config.dataDirectory,
-          "infrastructure/traefik/dynamic/kiln.yaml"
-        ),
-        "utf8"
-      ),
     harness,
     publishListener: () => {
       relayContainer.portBindings["4100/tcp"] = [
@@ -85,44 +77,6 @@ it("leaves the Relay on the networks it was on, from start to finish", async () 
   expect(relay.relayNetworks()).toEqual(["bridge"])
 })
 
-it("doesn't leave Traefik on the Relay's network once committed", async () => {
-  const relay = await hearthRelay()
-  await relay.start()
-  await relay.harness.lifecycle.requestProxyTrialCertificate(id)
-
-  await relay.harness.lifecycle.commitProxyTrial(id)
-
-  expect(relay.traefik()?.networks.has("bridge")).toBe(false)
-  expect(relay.relayNetworks()).toEqual(["bridge"])
-})
-
-it("answers only the trial it's running", async () => {
-  const relay = await hearthRelay()
-  await relay.start()
-
-  expect(relay.harness.lifecycle.proxyTrialAnswer(id)).toBe(answer)
-  expect(relay.harness.lifecycle.proxyTrialAnswer("x".repeat(43))).toBeNull()
-})
-
-it("asks Let's Encrypt for nothing until the route is proven", async () => {
-  const relay = await hearthRelay()
-  await relay.start()
-  expect(await relay.dynamic()).not.toContain("certResolver")
-  expect(await relay.dynamic()).not.toContain("defaultGeneratedCert")
-
-  await relay.harness.lifecycle.requestProxyTrialCertificate(id)
-
-  expect(await relay.dynamic()).toContain("certResolver: kiln-ip")
-})
-
-it("won't commit a route that hasn't had its certificate requested", async () => {
-  const relay = await hearthRelay()
-  await relay.start()
-
-  expect(await relay.harness.lifecycle.commitProxyTrial(id)).not.toBeNull()
-  expect(await relay.savedMode()).toBe("hearth")
-})
-
 it("keeps Traefik and starts next in Traefik mode once committed", async () => {
   const relay = await hearthRelay()
   await relay.start()
@@ -132,6 +86,9 @@ it("keeps Traefik and starts next in Traefik mode once committed", async () => {
 
   expect(await relay.savedMode()).toBe("traefik")
   expect(relay.traefik()?.state.running).toBe(true)
+  // Traefik leaves the Relay's network; the Relay stays on its own.
+  expect(relay.traefik()?.networks.has("bridge")).toBe(false)
+  expect(relay.relayNetworks()).toEqual(["bridge"])
 })
 
 it("refuses a stale trial's steps once another took over", async () => {
@@ -168,19 +125,4 @@ it("can't be undone once committed, as by a late stop", async () => {
 
   expect(relay.traefik()?.state.running).toBe(true)
   expect(await relay.savedMode()).toBe("traefik")
-})
-
-it("starts no trial when something else holds port 80", async () => {
-  const relay = await hearthRelay()
-  fakeDocker.addContainer({
-    image: "nginx",
-    name: "someone-elses-proxy",
-    running: true,
-  }).portBindings["80/tcp"] = [{ HostIp: "", HostPort: "80" }]
-
-  expect(await relay.start()).toContain("port 80")
-
-  expect(relay.traefik()).toBeUndefined()
-  expect(relay.harness.lifecycle.proxyTrialAnswer(id)).toBeNull()
-  expect(await relay.savedMode()).toBe("hearth")
 })

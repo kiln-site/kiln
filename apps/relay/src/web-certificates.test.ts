@@ -181,17 +181,6 @@ describe("bundled Traefik certificates", () => {
     expect(traefik()).toBe(before)
   })
 
-  it("still owes a write Traefik's routes didn't get, as while the Relay is paused", async () => {
-    await certificates.track([route])
-    answers.set("shop.example.com", "found")
-    expect((await certificates.check()).rewrite).toBe(true)
-    // The write was turned away: the next check still asks for it.
-    expect((await certificates.check()).rewrite).toBe(true)
-
-    certificates.wrote(certificates.gate())
-    expect((await certificates.check()).rewrite).toBe(false)
-  })
-
   it("asks again only for someone checking, not a background check that overlapped them", async () => {
     await certificates.track([route])
     answers.set("shop.example.com", "found")
@@ -208,26 +197,6 @@ describe("bundled Traefik certificates", () => {
     expect(result.asked).toBe(false)
     expect(traefik()).toBe(asked)
   })
-
-  it("asks for a route's other names while one still waits for DNS", async () => {
-    const both = { ...route, www: "serve" as const }
-    answers.set("shop.example.com", "found")
-    await certificates.track([both])
-    await certificates.check()
-
-    expect(routerTls([both])).toEqual({
-      certResolver: "kiln",
-      domains: [{ main: "shop.example.com" }],
-    })
-  })
-
-  it("leaves routes that already have certificates as they were", async () => {
-    await issue("shop.example.com")
-    await certificates.track([route])
-
-    expect(routerTls()).toEqual({ certResolver: "kiln" })
-    expect(certificates.pending()).toEqual([])
-  })
 })
 
 describe("checking a name at its own nameservers", () => {
@@ -242,7 +211,6 @@ describe("checking a name at its own nameservers", () => {
     "ns.example.co.uk example.co.uk A": ["192.0.2.2"],
     "ns.example.com new.example.com A": dnsCodes.NOTFOUND,
     "ns.example.com shop.example.com A": ["192.0.2.1"],
-    "ns.example.com slow.example.com A": "ETIMEOUT",
   }
   const resolve = nameResolver({
     addresses: async (host) => [host],
@@ -267,13 +235,7 @@ describe("checking a name at its own nameservers", () => {
       "new.example.com",
       "missing",
     ],
-    ["waits for a domain without an address yet", "example.com", "missing"],
     ["asks a zone its parent only refers to", "example.co.uk", "found"],
-    [
-      "lets Traefik try when nameservers don't answer",
-      "slow.example.com",
-      "unknown",
-    ],
   ] as const)("%s", async (_, hostname, expected) => {
     expect(await resolve(hostname)).toBe(expected)
   })

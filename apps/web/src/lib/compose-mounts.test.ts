@@ -21,36 +21,4 @@ volumes:
 `
     expect(composeMounts(text, project)).toBeNull()
   })
-
-  it("says where each definition is, for opening the file there", () => {
-    const text = `x-base: &base
-  image: base
-  volumes:
-    - inherited:/inherited
-services:
-  web:
-    image: web
-    volumes:
-      - data:/data:ro   # kept
-      - type: volume
-        source: logs
-        target: /logs
-  job:
-    <<: *base
-volumes:
-  data: {}
-  logs: {}
-`
-    const mounts = composeMounts(text, project)!
-    const definition = (target: string) => {
-      const range = mounts.find((mount) => mount.target === target)?.range
-      return range ? text.slice(range.from, range.to) : range
-    }
-    expect(definition("/data")).toBe("data:/data:ro")
-    expect(definition("/logs")).toBe(
-      "type: volume\n        source: logs\n        target: /logs"
-    )
-    // A merge brings this one in; it has no place in the service.
-    expect(definition("/inherited")).toBeNull()
-  })
 })

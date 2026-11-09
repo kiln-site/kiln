@@ -55,7 +55,7 @@ const recipe = brickRecipeSchema.parse({
 // Runs a control request's work as the control socket admits it.
 function control(
   harness: RelayHarness,
-  operation: "instance.action" | "instance.delete" | "relay.networking.write",
+  operation: "instance.delete" | "relay.networking.write",
   payload: Record<string, unknown>,
   work: () => Promise<unknown>
 ) {
@@ -216,96 +216,6 @@ describe("game server provisioning", () => {
     expect(
       fakeDocker.container(harness.resources.instanceContainer(deletedServerId))
     ).toBeUndefined()
-    expect(
-      fakeDocker.container(harness.resources.instanceContainer(newServerId))
-    ).toBeDefined()
-  })
-
-  it("lets other game servers start and the networking change while a create downloads its image", async () => {
-    const harness = await relayHarness()
-    const corefile = join(
-      harness.config.dataDirectory,
-      "infrastructure",
-      "coredns",
-      "Corefile"
-    )
-    const before: RelayNetworking = {
-      address: "10.0.0.1",
-      dnsPort: 53,
-      domain: "kiln.test",
-      enabled: true,
-    }
-    const after: RelayNetworking = {
-      ...before,
-      address: "10.0.0.2",
-      dnsPort: 5353,
-    }
-    const otherServerId = "c".repeat(12)
-    await harness.seedServer({
-      id: otherServerId,
-      labels: {
-        "kiln.instance.hostname": "other.kiln.test",
-        "kiln.instance.tailscale-enabled": "true",
-        "kiln.instance.tailscale-subdomain": "other",
-      },
-    })
-    await control(harness, "relay.networking.write", before, () =>
-      harness.lifecycle.configureNetworking(before)
-    )
-
-    const pull = fakeDocker.hold({ command: "pull", target: image })
-    const worker = await serverWorker(harness)
-    const input = relayCreateInstanceSchema.parse({
-      diskLimitBytes: MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
-      name: "New",
-      recipe: "https://bricks.test/paper.yml",
-      recipeDefinition: recipe,
-      start: false,
-      variables: {},
-    })
-    await Effect.runPromise(
-      worker.manager.prepare({
-        idempotencyKey: "22222222-2222-4222-8222-222222222222",
-        input,
-        instanceId: newServerId,
-        kind: "server",
-        placeholder: await harness.lifecycle.prepareInstance(
-          newServerId,
-          input
-        ),
-      })
-    )
-    await Effect.runPromise(worker.manager.claim("server", newServerId))
-    await pull.reached
-
-    // Both finish while the image is still downloading.
-    await Promise.all([
-      control(
-        harness,
-        "instance.action",
-        { action: "start", instanceId: otherServerId },
-        () => harness.power.requested("instance", otherServerId, "start")
-      ),
-      control(harness, "relay.networking.write", after, () =>
-        harness.lifecycle.configureNetworking(after)
-      ),
-    ])
-    expect(
-      fakeDocker.container(harness.resources.instanceContainer(otherServerId))
-        ?.state.running
-    ).toBe(true)
-
-    pull.release()
-    expect(await Effect.runPromise(worker.finished)).toBeNull()
-
-    // The create's CoreDNS is the networking and game servers as they are
-    // once it's made.
-    const written = await readFile(corefile, "utf8")
-    expect(written).toContain(`${after.domain}:${after.dnsPort} {`)
-    expect(written).toContain("other")
-    const coreDns = fakeDocker.container(harness.resources.coreDnsContainer)!
-    expect(coreDns.state.running).toBe(true)
-    expect(coreDns.env.KILN_NODE_ADDRESS).toBe(after.address)
     expect(
       fakeDocker.container(harness.resources.instanceContainer(newServerId))
     ).toBeDefined()

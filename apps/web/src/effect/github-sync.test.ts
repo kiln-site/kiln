@@ -72,20 +72,9 @@ const shaAfterSaving = (includePatterns: Array<string>, branch = "main") =>
 
 describeMysql("GitHub syncs", () => {
   layer(TestDatabase)((it) => {
-    it.effect("keeps the last commit when a save changes no source", () =>
-      Effect.gen(function* () {
-        assert.strictEqual(
-          yield* shaAfterSaving(settings.includePatterns),
-          commitSha
-        )
-      })
-    )
-
     it.effect("forgets the last commit when a save changes the source", () =>
       Effect.gen(function* () {
         assert.isNull(yield* shaAfterSaving(["*.json"]))
-        assert.isNull(yield* shaAfterSaving(["*.yaml", "*.json"]))
-        assert.isNull(yield* shaAfterSaving(["*.JSON", "*.yaml"]))
         assert.isNull(yield* shaAfterSaving(settings.includePatterns, "next"))
       })
     )

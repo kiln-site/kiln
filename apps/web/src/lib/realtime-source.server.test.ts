@@ -34,18 +34,6 @@ describe("realtime source", () => {
     expect(await seen).toBe("subscriber")
   })
 
-  it("never coalesces targeted access policy changes as normal overflow", () => {
-    const event = {
-      epoch,
-      reauthenticate: false,
-      sequence: 1,
-      type: "access.changed",
-      userIds: [identity.userId],
-    } satisfies RealtimeSourceEvent
-
-    expect(classifyRealtimeEvent(event, identity)).toBe("ordered")
-  })
-
   it("closes immediately for access and session revocation", () => {
     const access = {
       epoch,

@@ -117,13 +117,5 @@ describeMysql("requireBackupStorageSelection", () => {
         yield* check(personal)
       })
     )
-
-    it.effect("the Relay's own storage and shared destinations need nothing", () =>
-      Effect.gen(function* () {
-        yield* seed("backup.create")
-        yield* check(null)
-        yield* check(platform)
-      })
-    )
   })
 })

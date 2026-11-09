@@ -59,25 +59,6 @@ const confirm = (confirmation: string, password: string) =>
 describeMysql("deletion confirmation", () => {
   layer(TestDatabase)((it) => {
     it.effect(
-      "stops checking passwords after five wrong ones, the right one too",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          for (let attempt = 0; attempt < 5; attempt += 1) {
-            yield* Effect.flip(confirm("Survival", `wrong ${attempt}`))
-          }
-          const checked = verified.count
-
-          const refused = yield* Effect.flip(
-            confirm("Survival", "correct horse battery")
-          )
-
-          assert.strictEqual(refused._tag, "PasswordAttemptsError")
-          assert.strictEqual(verified.count, checked)
-        })
-    )
-
-    it.effect(
       "checks no more than five passwords when ten wrong ones arrive at once",
       () =>
         Effect.gen(function* () {

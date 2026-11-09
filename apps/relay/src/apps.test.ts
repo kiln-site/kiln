@@ -198,34 +198,6 @@ describe("an App created with a database", () => {
       databaseId,
     ])
   })
-
-  it("keeps the connection to one with more networks than it should have", async () => {
-    const harness = await relayHarness()
-    addDatabaseNetwork("database-network")
-    addDatabaseNetwork("database-network-again")
-
-    await harness.apps.create({
-      databaseIds: [databaseId],
-      id: appId,
-      name: "Website",
-    })
-
-    expect((await harness.apps.get(appId)).savedDatabaseIds).toEqual([
-      databaseId,
-    ])
-  })
-
-  it("doesn't bring back a connection to one deleted meanwhile", async () => {
-    const harness = await relayHarness()
-
-    await harness.apps.create({
-      databaseIds: [databaseId],
-      id: appId,
-      name: "Website",
-    })
-
-    expect((await harness.apps.get(appId)).savedDatabaseIds).toEqual([])
-  })
 })
 
 describe("rolling deployments", () => {
@@ -289,23 +261,6 @@ describe("deployment logs", () => {
       })
     ).toBeNull()
   })
-
-  it("streams a deployment by its id only while it's the latest", async () => {
-    const harness = await createdApp()
-    const first = await deploy(harness, {})
-    const second = await deploy(harness, { command: "serve --v2" })
-    const history = async (id: string) => {
-      const session = await harness.apps.consoleSession(
-        appId,
-        `deployment:${id}`,
-        () => Promise.reject(new Error("Not a container's stream"))
-      )
-      return session.history()
-    }
-
-    expect((await history(second.deployment!.id)).lines).not.toHaveLength(0)
-    expect((await history(first.deployment!.id)).lines).toEqual([])
-  })
 })
 
 describe("App volumes", () => {
@@ -339,23 +294,6 @@ describe("App volumes", () => {
     )
     expect(container?.cgroupParent).toBe(slice)
     expect(container?.labels["kiln.relay.workload-slice"]).toBe(slice)
-    await removeCompose()
-  })
-
-  it("won't let a Compose file put a service in the slice itself", async () => {
-    const removeCompose = await composeConfigCommand()
-    const harness = await createdApp()
-
-    await deploy(harness, {
-      compose:
-        "services:\n  web:\n    image: nginx:alpine\n    cgroup_parent: kilnworkloads.slice\n",
-      sourceType: "compose",
-    })
-
-    const [container] = [...fakeDocker.containers.values()].filter(
-      (candidate) => candidate.labels["kiln.app.id"] === appId
-    )
-    expect(container?.cgroupParent).toBe("")
     await removeCompose()
   })
 

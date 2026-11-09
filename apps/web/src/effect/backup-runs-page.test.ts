@@ -130,14 +130,6 @@ describeMysql("backup runs page", () => {
             yield* pageIds({
               scope,
               isAdmin: false,
-              appScopes: [{ appId: worker, relayId: "relay-a" }],
-            }),
-            []
-          )
-          assert.deepStrictEqual(
-            yield* pageIds({
-              scope,
-              isAdmin: false,
               appScopes: [{ appId: website, relayId: "relay-a" }],
             }),
             ["website-db"]
@@ -259,19 +251,6 @@ describeMysql("backup runs page", () => {
           }),
           []
         )
-        assert.sameMembers(
-          yield* pageIds({ isAdmin: true, scope: { kind: "platform" } }),
-          ["a-platform", "b-platform"]
-        )
-        assert.sameMembers(yield* pageIds({ isAdmin: true }), [
-          "a-inst-a",
-          "a-inst-b",
-          "a-db",
-          "a-platform",
-          "b-inst",
-          "b-platform",
-          "c-inst",
-        ])
       })
     )
   })

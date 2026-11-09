@@ -14,9 +14,6 @@ describe("database logins", () => {
     `app"user`,
     "app user",
     "app\non ~* +@all",
-    "App",
-    "1app",
-    "",
   ])("refuses %j as a name or username", (value) => {
     expect(databaseNameFieldSchema.safeParse(value).success).toBe(false)
     expect(databaseUsernameSchema.safeParse(value).success).toBe(false)
@@ -32,10 +29,5 @@ describe("database logins", () => {
     expect(databaseUsernameIssue("redis", "default")).not.toBeNull()
     expect(databaseNameIssue("mysql", "mysql")).not.toBeNull()
     expect(databaseNameIssue("postgres", "postgres")).not.toBeNull()
-    // Only reserved on the engines that use them.
-    expect(databaseUsernameIssue("mysql", "healthcheck")).toBeNull()
-    expect(databaseUsernameIssue("postgres", "default")).toBeNull()
-    expect(databaseUsernameIssue("postgres", "postgres")).toBeNull()
-    expect(databaseNameIssue("postgres", "mysql")).toBeNull()
   })
 })

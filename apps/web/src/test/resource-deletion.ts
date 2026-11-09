@@ -195,8 +195,6 @@ export const deletionRelay = {
   // last wrote to each network's DNS.
   stacks: new Map<string, Array<string>>(),
   stackDns: new Map<string, Array<string>>(),
-  // Relays that don't answer.
-  unreachable: new Set<string>(),
   volumes: [] as Array<FakeVolume>,
 }
 
@@ -249,7 +247,6 @@ function resetDeletionRelay(servers: ReadonlyArray<string>): void {
   deletionRelay.servers.clear()
   deletionRelay.stacks.clear()
   deletionRelay.stackDns.clear()
-  deletionRelay.unreachable.clear()
   deletionRelay.volumes.length = 0
   for (const id of servers) deletionRelay.servers.add(id)
 }
@@ -270,9 +267,6 @@ export const deletionRelayConnection = {
     frame: { operationId?: string } = {}
   ): Promise<unknown> => {
     const state = deletionRelay
-    if (state.unreachable.has(relay.id)) {
-      throw new Error("The Relay isn't connected")
-    }
     if (operation === "operation.get") {
       return (
         state.journal.get(String(payload.operationId)) ?? { status: "unknown" }

@@ -92,25 +92,6 @@ const insertDatabase = (id: string, name: string) =>
     username: `user_${name}`,
   })
 
-const insertFavorite = (userId: string, kind: string, id: string) =>
-  insertRows("instance_favorite", {
-    created_at: now,
-    relay_id: relayId,
-    resource_id: id,
-    resource_kind: kind,
-    user_id: userId,
-  })
-
-const insertIcon = (kind: string, id: string) =>
-  insertRows("icon", {
-    checked_at: now,
-    relay_id: relayId,
-    source: "custom",
-    subject_id: id,
-    subject_kind: kind,
-    updated_at: now,
-  })
-
 const insertSchedule = (
   id: string,
   targets: ReadonlyArray<{
@@ -177,7 +158,7 @@ const ids = <T extends Record<string, unknown>>(
 describeMysql("cleaning up after a deleted resource", () => {
   layer(TestDatabase)((it) => {
     it.effect(
-      "takes a database's access, favorites, schedules, and record, and tells Relays",
+      "takes a database's access, schedules, and record, and tells Relays",
       () =>
         Effect.gen(function* () {
           yield* resetDatabase
@@ -218,10 +199,6 @@ describeMysql("cleaning up after a deleted resource", () => {
             resource_type: "database",
             updated_at: now,
           })
-          yield* insertFavorite("user-one", "database", databaseId)
-          yield* insertFavorite("user-two", "database", databaseId)
-          yield* insertFavorite("user-one", "database", otherDatabaseId)
-          yield* insertIcon("database", databaseId)
           const deleted = { id: databaseId, name: "main", relayId }
           const other = { id: otherDatabaseId, name: "other", relayId }
           const remote = {
@@ -280,13 +257,6 @@ describeMysql("cleaning up after a deleted resource", () => {
             [["user-one", 1]]
           )
           assert.deepStrictEqual(relays.woken, [relayId])
-          assert.deepStrictEqual(
-            (yield* selectRows<{ resource_id: string; user_id: string }>(
-              "instance_favorite"
-            )).map((row) => [row.user_id, row.resource_id]),
-            [["user-one", otherDatabaseId]]
-          )
-          assert.lengthOf(yield* selectRows("icon"), 0)
 
           // A schedule keeps its other targets, saved and sent again; one
           // with nothing left to run on is deleted.

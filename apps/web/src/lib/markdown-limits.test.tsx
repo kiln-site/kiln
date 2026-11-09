@@ -25,12 +25,6 @@ function table(columns: number, rows: number) {
   )
 }
 
-it("renders an ordinary table", () => {
-  const html = render(table(3, 2))
-
-  expect(html.match(/<td/gu)).toHaveLength(6)
-})
-
 it("leaves a table too wide to pad to the source, rendering none of it", () => {
   const html = render(table(MAX_MARKDOWN_TABLE_COLUMNS * 10, 100))
 

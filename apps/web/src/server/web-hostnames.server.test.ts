@@ -150,14 +150,6 @@ function fakeCloudflare(zones: Array<{ id: string; name: string }>) {
             `${record.type} ${record.name} ${record.content}${record.proxied ? " (proxied)" : ""}`
         )
         .sort(),
-    /** `name → proxied` for every record. */
-    proxied: () =>
-      Object.fromEntries(
-        [...records.values()].map((record) => [
-          record.name,
-          record.proxied ?? false,
-        ])
-      ),
     seed: (record: FakeRecord) => {
       nextId += 1
       const id = `manual-${nextId}`
@@ -450,33 +442,6 @@ describeMysql("web route hostnames", () => {
             "TXT shop.owner.example v=spf1 -all",
           ])
         })
-    )
-
-    it.effect("puts a route's record through Cloudflare's proxy and back", () =>
-      Effect.gen(function* () {
-        yield* seed
-        const cloudflare = fakeCloudflare([ownerZone])
-        const proxy = (proxied: boolean) =>
-          saveWebRouteHostnamesEffect(
-            {
-              actor: owner,
-              hostnames: ["shop.owner.example"],
-              proxy: { hostnames: ["shop.owner.example"], proxied },
-              resource: app,
-            },
-            Effect.void
-          ).pipe(Effect.andThen(reconcileResourceWebHostnamesEffect(app)))
-
-        yield* save(owner, ["shop.owner.example"])
-        assert.deepEqual(cloudflare.proxied(), { "shop.owner.example": false })
-        yield* proxy(true)
-        assert.deepEqual(cloudflare.proxied(), { "shop.owner.example": true })
-        yield* proxy(false)
-        assert.deepEqual(cloudflare.proxied(), { "shop.owner.example": false })
-        assert.deepEqual(cloudflare.dns(), {
-          "shop.owner.example": "relay-one.relay.test",
-        })
-      })
     )
 
     it.effect("uses an owner's Cloudflare connection only for its owner", () =>

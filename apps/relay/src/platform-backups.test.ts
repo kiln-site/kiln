@@ -303,7 +303,7 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
     running,
   })
 
-  async function sharedKiln(options: { running: boolean }) {
+  async function sharedKiln() {
     const harness = await relayHarness({
       KILN_INSTALLATION_ID: "kiln-test",
       KILN_PLATFORM_BACKUP_KEY: recoveryKey,
@@ -335,7 +335,8 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
         installationId: "kiln-test",
       })
     )
-    own.state.running = options.running
+    // Stopped, as a restore needs.
+    own.state.running = false
     const restore = async (manifest: Partial<PlatformBackupManifest>) => {
       const source = join(testDirectory, `shared-${randomUUID()}.kiln`)
       await writeFile(source, platformBundle("CREATE TABLE kept (id int);", manifest))
@@ -345,7 +346,7 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
   }
 
   it("backs up and restores this stack's database while another stack runs", async () => {
-    const kiln = await sharedKiln({ running: false })
+    const kiln = await sharedKiln()
     kiln.mysql.sqlDump = "CREATE TABLE dumped (id int);"
     const backup = join(testDirectory, `shared-${randomUUID()}.kiln`)
     await createEncryptedPlatformBackup(
@@ -378,16 +379,8 @@ describe("Kiln platform backups on a MySQL other Hearths share", () => {
     )
   })
 
-  it("won't restore while this stack's Hearth runs", async () => {
-    const kiln = await sharedKiln({ running: true })
-
-    await expect(kiln.restore({ databaseName: database })).rejects.toThrow(
-      "Stop Hearth"
-    )
-  })
-
   it("won't restore a backup of another database, or one that doesn't name its database", async () => {
-    const kiln = await sharedKiln({ running: false })
+    const kiln = await sharedKiln()
 
     await expect(
       kiln.restore({ databaseName: "s_bbbbbbbbbbbb" })

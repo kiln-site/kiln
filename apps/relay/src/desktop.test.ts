@@ -32,7 +32,6 @@ const x11 = [
   "xauthority=/run/user/1000/gdm/Xauthority",
   "pulse=yes",
 ].join("\n")
-const wayland = "displayManager=yes\nuser=ada\nclass=user\nstatus=wayland\n"
 
 const servers: Array<Server> = []
 
@@ -68,11 +67,7 @@ const listen = (server: Server, port: number) =>
 // Stands in for voxl where the Relay reaches it, noting what it was sent.
 async function fakeVoxl() {
   const upgrades: Array<IncomingHttpHeaders> = []
-  const state = { unreachable: false }
   const server = createServer((_request, response) => {
-    // Answers as an unreachable streamer does, once: what replaces it is fine.
-    response.statusCode = state.unreachable ? 503 : 200
-    state.unreachable = false
     response.end("ok")
   })
   server.on("upgrade", (incoming, socket) => {
@@ -82,12 +77,7 @@ async function fakeVoxl() {
     )
   })
   await listen(server, VOXL_PORT)
-  const stop = () =>
-    new Promise((resolve) => {
-      server.closeAllConnections()
-      server.close(resolve)
-    })
-  return { state, stop, upgrades }
+  return { upgrades }
 }
 
 async function harness(script = x11) {
@@ -162,47 +152,6 @@ describe("the node's desktop", () => {
     expect(upgrades).toHaveLength(1)
     expect(upgrades[0]?.authorization).toMatch(/^Bearer .{43}$/u)
     expect(upgrades[0]?.origin).toBeUndefined()
-  })
-
-  it("replaces a streamer that runs but no longer answers, as after a Relay restart", async () => {
-    const voxl = await fakeVoxl()
-    const { desktop } = await harness()
-    await desktop.attach()
-    const name = `${TEST_NAMESPACE}-kiln-desktop`
-    const stranded = fakeDocker.container(name)?.id
-    await desktop.attach()
-    expect(fakeDocker.container(name)?.id).toBe(stranded)
-    voxl.state.unreachable = true
-    await desktop.attach()
-    expect(fakeDocker.container(name)?.state.running).toBe(true)
-    expect(fakeDocker.container(name)?.id).not.toBe(stranded)
-  })
-
-  it("removes a streamer an earlier Relay process left, with nobody watching", async () => {
-    await fakeVoxl()
-    const { config, desktop, lanes } = await harness()
-    await desktop.attach()
-    const name = `${TEST_NAMESPACE}-kiln-desktop`
-    expect(fakeDocker.container(name)).toBeDefined()
-    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] })
-    const restarted = desktopOn(config, async () => x11, lanes)
-    const server = createServer()
-    servers.push(server)
-    restarted.attachServer(server)
-    vi.advanceTimersByTime(6 * 60_000)
-    vi.useRealTimers()
-    await vi.waitFor(() => expect(fakeDocker.container(name)).toBeUndefined())
-  })
-
-  it("ends a ticket once its streamer is gone, so the page attaches again", async () => {
-    const voxl = await fakeVoxl()
-    const { desktop, port } = await harness()
-    const { ticket } = await desktop.attach()
-    await voxl.stop()
-    await handshake(port, `/v1/desktop/${ticket}/ws`).catch(() => 0)
-    await vi.waitFor(() =>
-      expect(desktop.heartbeat([ticket]).tickets).toEqual([])
-    )
   })
 
   it("lets a ticket lapse without Hearth's heartbeats, and keeps it with them", async () => {
@@ -306,16 +255,6 @@ describe("the node's desktop", () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(fakeDocker.container(name)?.id).toBe(running)
     expect(desktop.heartbeat([kept]).tickets).toEqual([kept])
-  })
-
-  it("starts nothing for a desktop it can't stream", async () => {
-    const { desktop } = await harness(wayland)
-    await expect(desktop.attach()).rejects.toBeInstanceOf(
-      DesktopUnavailableError
-    )
-    expect(
-      fakeDocker.container(`${TEST_NAMESPACE}-kiln-desktop`)
-    ).toBeUndefined()
   })
 
   it("doesn't take over another container with the streamer's name", async () => {

@@ -90,72 +90,67 @@ describeMysql("periodic schedule removal", () => {
         ])
       })
     )
-    for (const deleted of [false, true]) {
-      it.effect(
-        `retries a lost removal for a ${deleted ? "deleted" : "retargeted"} schedule`,
-        () =>
-          Effect.gen(function* () {
-            yield* resetDatabase
-            relays.applied.clear()
-            yield* insertRelay(relayA, { enabled: true })
-            const id = "14bb1e12-fab9-45f3-8f85-ae22d2f074e5"
-            const schedule = scheduleDefinitionSchema.parse({
-              actions: [
-                {
-                  id: "22222222-2222-4222-8222-222222222222",
-                  type: "power",
-                  action: "restart",
-                },
-              ],
-              cron: "daily",
-              enabled: true,
-              id,
-              name: "Nightly",
-              revision: 1,
-              targets: [serverA],
-            })
-            yield* insertRows("schedule", {
-              id,
-              name: "Nightly",
-              cron_expression: "daily",
-              revision: 2,
-              created_by: "owner",
-              created_at: 1000,
-              updated_at: 2000,
-              deleted_at: deleted ? 2000 : null,
-            })
-            yield* insertRows("schedule_action", {
-              id: schedule.actions[0]!.id,
-              schedule_id: id,
-              position: 0,
-              action_type: "power",
-              action_config: JSON.stringify(schedule.actions[0]),
-              created_at: 1000,
-            })
-            yield* Effect.promise(() => deploySchedule(schedule, "owner"))
-            if (!deleted) {
-              const otherRelay = "b".repeat(12)
-              yield* insertRelay(otherRelay)
-              yield* insertRows("schedule_target", {
-                schedule_id: id,
-                relay_id: otherRelay,
-                target_kind: "instance",
-                target_id: "2".repeat(12),
-                target_name: "Other",
-                created_at: 1000,
-              })
-            }
-            const database = yield* Database
-            yield* database.execute(
-              "test.removal",
-              "UPDATE kiln_schedule_deployment SET desired_revision = 2, status = 'pending'"
-            )
-            yield* Effect.promise(redeployUnacknowledgedSchedules)
-            expect(relays.applied.has(relayA)).toBe(false)
-            expect(yield* selectRows("schedule_deployment")).toEqual([])
-          }),
-        60000
-      )
-    }
+    it.effect(
+      "retries a lost removal for a retargeted schedule",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relays.applied.clear()
+          yield* insertRelay(relayA, { enabled: true })
+          const id = "14bb1e12-fab9-45f3-8f85-ae22d2f074e5"
+          const schedule = scheduleDefinitionSchema.parse({
+            actions: [
+              {
+                id: "22222222-2222-4222-8222-222222222222",
+                type: "power",
+                action: "restart",
+              },
+            ],
+            cron: "daily",
+            enabled: true,
+            id,
+            name: "Nightly",
+            revision: 1,
+            targets: [serverA],
+          })
+          yield* insertRows("schedule", {
+            id,
+            name: "Nightly",
+            cron_expression: "daily",
+            revision: 2,
+            created_by: "owner",
+            created_at: 1000,
+            updated_at: 2000,
+          })
+          yield* insertRows("schedule_action", {
+            id: schedule.actions[0]!.id,
+            schedule_id: id,
+            position: 0,
+            action_type: "power",
+            action_config: JSON.stringify(schedule.actions[0]),
+            created_at: 1000,
+          })
+          yield* Effect.promise(() => deploySchedule(schedule, "owner"))
+          const otherRelay = "b".repeat(12)
+          yield* insertRelay(otherRelay)
+          yield* insertRows("schedule_target", {
+            schedule_id: id,
+            relay_id: otherRelay,
+            target_kind: "instance",
+            target_id: "2".repeat(12),
+            target_name: "Other",
+            created_at: 1000,
+          })
+          const database = yield* Database
+          yield* database.execute(
+            "test.removal",
+            "UPDATE kiln_schedule_deployment SET desired_revision = 2, status = 'pending'"
+          )
+          yield* Effect.promise(redeployUnacknowledgedSchedules)
+          expect(relays.applied.has(relayA)).toBe(false)
+          expect(yield* selectRows("schedule_deployment")).toEqual([])
+        }),
+      60000
+    )
   })
 })

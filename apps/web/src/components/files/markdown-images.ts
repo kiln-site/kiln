@@ -6,10 +6,10 @@ import { readRelayFile } from "@/lib/relay-file-transfer"
 // A document's images are read from the Relay as it renders, so a README
 // full of screenshots stays within what one person's transfers may use.
 export const MAX_DOCUMENT_IMAGE_BYTES = 16 * 1024 * 1024
-export const MAX_DOCUMENT_IMAGES_BYTES = 64 * 1024 * 1024
-export const MAX_DOCUMENT_IMAGES = 64
+const MAX_DOCUMENT_IMAGES_BYTES = 64 * 1024 * 1024
+const MAX_DOCUMENT_IMAGES = 64
 // Under the Relay's share of transfers for one browser.
-export const DOCUMENT_IMAGE_READS_AT_ONCE = 4
+const DOCUMENT_IMAGE_READS_AT_ONCE = 4
 
 export type DocumentImageState =
   | { readonly status: "loading" }

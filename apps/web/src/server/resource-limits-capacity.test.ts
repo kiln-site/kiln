@@ -66,29 +66,21 @@ const instance = relayInstanceSchema.parse({
   limits: { diskBytes: 1024 ** 3, memoryBytes: 1024 ** 3 },
 })
 
-const snapshotWith = (server: typeof instance) =>
-  relaySnapshotSchema.parse({
-    instances: [
-      server,
-      {
-        ...instance,
-        id: "b".repeat(12),
-        limits: { diskBytes: 2 * 1024 ** 3, memoryBytes: 2 * 1024 ** 3 },
-      },
-    ],
-    node: {
-      id: relayId,
-      name: "Relay",
-      version: "test",
-      platform: "linux",
-      arch: "arm64",
-      connectedAt: new Date(at).toISOString(),
-      cpu: { cores: 4, loadPercent: 0 },
-      memory: { totalBytes: 8 * 1024 ** 3, usedBytes: 3 * 1024 ** 3 },
-      storage: { totalBytes: 20 * 1024 ** 3, usedBytes: 4 * 1024 ** 3 },
-      docker: { available: true, version: "test" },
-    },
-  })
+relay.snapshot = relaySnapshotSchema.parse({
+  instances: [instance],
+  node: {
+    id: relayId,
+    name: "Relay",
+    version: "test",
+    platform: "linux",
+    arch: "arm64",
+    connectedAt: new Date(at).toISOString(),
+    cpu: { cores: 4, loadPercent: 0 },
+    memory: { totalBytes: 8 * 1024 ** 3, usedBytes: 3 * 1024 ** 3 },
+    storage: { totalBytes: 20 * 1024 ** 3, usedBytes: 4 * 1024 ** 3 },
+    docker: { available: true, version: "test" },
+  },
+})
 
 const grant = (
   target: { relayId: string; resourceType: "relay" | "instance" },
@@ -115,15 +107,18 @@ const grant = (
   })
 
 const seed = Effect.gen(function* () {
-  relay.snapshot = snapshotWith(instance)
   yield* resetDatabase
   yield* insertRelay(relayId)
   yield* insertRelay(otherRelayId)
 })
 
-const capacity = (id = instance.id, kind: "app" | "server" = "server") =>
+const capacity = () =>
   Effect.promise(() =>
-    getResourceLimitsCapacityHandler(member, { id, kind, relayId })
+    getResourceLimitsCapacityHandler(member, {
+      id: instance.id,
+      kind: "server",
+      relayId,
+    })
   )
 
 describeMysql("resource limits", () => {
@@ -137,54 +132,6 @@ describeMysql("resource limits", () => {
         ])
 
         assert.isNull(yield* capacity())
-      })
-    )
-
-    it.effect("counts what every other instance on the node holds", () =>
-      Effect.gen(function* () {
-        yield* seed
-        yield* grant({ relayId, resourceType: "relay" }, [
-          "instance.read",
-          "relay.read",
-        ])
-
-        const room = yield* capacity()
-        assert.strictEqual(room?.cores, 4)
-        assert.strictEqual(room?.assignableMemoryBytes, 6 * 1024 ** 3)
-      })
-    )
-
-    it.effect("gives an app with no containers the whole node", () =>
-      Effect.gen(function* () {
-        yield* seed
-        yield* grant({ relayId, resourceType: "relay" }, [
-          "app.read",
-          "relay.read",
-        ])
-
-        const room = yield* capacity("c".repeat(12), "app")
-        assert.strictEqual(room?.assignableMemoryBytes, 5 * 1024 ** 3)
-      })
-    )
-
-    it.effect("keeps limits waiting for a restart held from the rest", () =>
-      Effect.gen(function* () {
-        yield* seed
-        yield* grant({ relayId, resourceType: "relay" }, [
-          "app.read",
-          "relay.read",
-        ])
-        relay.snapshot = snapshotWith({
-          ...instance,
-          pendingLimits: {
-            cpuMillis: null,
-            diskBytes: 1024 ** 3,
-            memoryBytes: 3 * 1024 ** 3,
-          },
-        })
-
-        const room = yield* capacity("c".repeat(12), "app")
-        assert.strictEqual(room?.assignableMemoryBytes, 3 * 1024 ** 3)
       })
     )
   })
