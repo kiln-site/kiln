@@ -90,7 +90,8 @@ export const relayDatabaseDumpExportFile = "export"
 export const relayInstallationV1Feature = "relay-installation-v1"
 // The Relay lists what runs on its host (`relay.security.targets`) and
 // inventories its host and images with Syft (`relay.security.inventory`),
-// so Hearth can check them for known vulnerabilities.
+// so Hearth can check them for known vulnerabilities. `relay.security.cancel`
+// stops the inventory running and those waiting, as when scans are paused.
 export const relaySecurityInventoryV1Feature = "security-inventory-v1"
 // Web routes take a www counterpart, plain HTTP, a primary flag, an optional
 // label, and redirects to another URL. Older Relays need a name and a port
@@ -190,6 +191,7 @@ export const relayControlOperations = [
   "relay.installation.replace",
   "relay.security.targets",
   "relay.security.inventory",
+  "relay.security.cancel",
   "relay.host.packages.read",
   "relay.host.packages.update",
   "browser.authorization.revise",
@@ -435,6 +437,8 @@ export function relayControlOperationChanges(
     case "relay.platform.database.read":
     case "relay.security.targets":
     case "relay.security.inventory":
+    // Removes only the inventory's own helpers, and is safe to send again.
+    case "relay.security.cancel":
     case "relay.host.packages.read":
     case "brick.catalog":
     case "brick.recipe":

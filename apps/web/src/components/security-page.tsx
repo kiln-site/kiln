@@ -6,10 +6,16 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query"
-import { LoaderCircle, ScanSearch, ShieldCheck } from "lucide-react"
+import {
+  CirclePause,
+  LoaderCircle,
+  ScanSearch,
+  ShieldCheck,
+} from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import { showToast } from "@workspace/ui/components/sonner"
+import { Switch } from "@workspace/ui/components/switch"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { DataTableEmptyState } from "@/components/data-table"
@@ -50,8 +56,9 @@ import {
 import {
   securityOverviewQueryOptions,
   securityQueryKeys,
+  securityScanSettingsQueryOptions,
 } from "@/lib/security-queries"
-import { scanSecurityNow } from "@/server/security"
+import { scanSecurityNow, setSecurityScansPaused } from "@/server/security"
 
 /**
  * Whether what Kiln runs is safe: each instance and Relay host, worst first,
@@ -88,6 +95,7 @@ export const SecurityPage = React.memo(function SecurityPage({
         scope={scope}
         onScopeChange={onScopeChange}
       />
+      <ScanPauseSetting />
       {overview.items.length === 0 ? (
         <NothingChecked />
       ) : (
@@ -153,8 +161,10 @@ const SecurityScopePicker = React.memo(function SecurityScopePicker({
       ),
     [onScopeChange]
   )
+  const paused = useQuery(securityScanSettingsQueryOptions()).data?.paused
   const canScan =
-    scope === null ? scannable.length > 0 : scannable.includes(scope)
+    !paused &&
+    (scope === null ? scannable.length > 0 : scannable.includes(scope))
   return (
     <ServerScopePicker<SecurityScopeKind>
       allLabel="All instances"
@@ -171,9 +181,75 @@ const SecurityScopePicker = React.memo(function SecurityScopePicker({
       manageSettingsTooltip={
         canScan
           ? "Check again against the latest vulnerability data"
-          : "You can't scan what's selected"
+          : paused
+            ? "Scans are paused"
+            : "You can't scan what's selected"
       }
     />
+  )
+})
+
+// Pauses every scan on every Relay, stopping those running. Administrators
+// see it to change; everyone sees it while scans are paused.
+const ScanPauseSetting = React.memo(function ScanPauseSetting() {
+  const queryClient = useQueryClient()
+  const { data } = useQuery(securityScanSettingsQueryOptions())
+  const { isPending, mutate } = useMutation({
+    mutationFn: (paused: boolean) =>
+      setSecurityScansPaused({ data: { paused } }),
+    onError: (error: Error) =>
+      showToast({
+        message: `Could not change scans: ${error.message}`,
+        type: "error",
+      }),
+    onSuccess: ({ paused }) => {
+      queryClient.setQueryData(securityQueryKeys.scanSettings, (current) =>
+        current ? { ...current, paused } : current
+      )
+      showToast({
+        message: paused
+          ? "Scans paused. Running scans are being stopped."
+          : "Scans resumed.",
+        type: "success",
+      })
+    },
+  })
+  if (!data || (!data.canChange && !data.paused)) return null
+  return (
+    <section
+      aria-label="Security scans"
+      className={cn(
+        "flex shrink-0 items-center gap-3 rounded-xl border px-4 py-3",
+        data.paused ? "border-amber-400/40 bg-amber-400/10" : "border-border/80"
+      )}
+    >
+      <CirclePause
+        className={cn(
+          "size-4 shrink-0",
+          data.paused
+            ? "text-amber-300 light:text-amber-700"
+            : "text-muted-foreground"
+        )}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="type-card-title">
+          {data.paused ? "Scans are paused" : "Pause all scans"}
+        </p>
+        <p className="type-meta text-muted-foreground">
+          {data.paused
+            ? "No Relay is inventoried and nothing is checked until scans resume. What's shown is from before."
+            : "Stops the scans running on every Relay and starts no more until you resume them."}
+        </p>
+      </div>
+      {data.canChange ? (
+        <Switch
+          aria-label="Pause all scans"
+          checked={data.paused}
+          disabled={isPending}
+          onCheckedChange={(paused) => mutate(paused)}
+        />
+      ) : null}
+    </section>
   )
 })
 

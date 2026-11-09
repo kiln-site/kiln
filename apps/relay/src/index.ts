@@ -2461,6 +2461,8 @@ async function executeControlRequest(
       return securityInventory.inventory(
         relaySecurityInventoryRequestSchema.parse(request.payload)
       )
+    case "relay.security.cancel":
+      return securityInventory.cancel()
     case "relay.host.packages.read":
       return hostPackages.read(
         relayHostPackagesRequestSchema.parse(request.payload)
