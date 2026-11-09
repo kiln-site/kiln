@@ -57,7 +57,6 @@ function stopWaitStart(
     name: "Nightly maintenance",
     revision: 1,
     targets: [target],
-    timezone: "UTC",
   }
 }
 

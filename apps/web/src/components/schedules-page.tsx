@@ -54,7 +54,6 @@ import {
   scheduleActionNeedsNamedTarget,
   scheduleActionsForSave,
   scheduleActionSupportsTarget,
-  scheduleCronAliases,
   validateScheduleCron,
 } from "@workspace/contracts/schedules"
 import { Badge } from "@workspace/ui/components/badge"
@@ -155,6 +154,18 @@ import type { InstancePickerKind } from "@/lib/instance-picker-filters"
 import { notALoginField } from "@/lib/not-a-login-field"
 import { scheduleBackupDestination } from "@/lib/schedule-backup-configuration"
 import {
+  schedulePresetCron,
+  schedulePresetFromCron,
+  schedulePresetLabel,
+  schedulePresetShortLabel,
+  scheduleMonthDays,
+  scheduleWeekdayLabel,
+  timeZoneObservesDaylightSaving,
+  timeZoneShortName,
+  useBrowserTimeZone,
+  type SchedulePresetKind,
+} from "@/lib/schedule-timing"
+import {
   removeScheduleFromCache,
   schedulesCollectionOptions,
   upsertScheduleCache,
@@ -195,7 +206,7 @@ const relativeFormatter = new Intl.RelativeTimeFormat("en-US", {
   style: "short",
 })
 const timestampFormatters = new Map<string, Intl.DateTimeFormat>()
-const fullTimestampFormatters = new Map<string, Intl.DateTimeFormat>()
+let fullTimestampFormatter: Intl.DateTimeFormat | undefined
 const relativeClockListeners = new Set<() => void>()
 let relativeClockSnapshot = Date.now()
 let relativeClockTimer: ReturnType<typeof setInterval> | null = null
@@ -898,29 +909,36 @@ const ScheduleTiming = React.memo(function ScheduleTiming({
 }: {
   schedule: Schedule
 }) {
-  const alias = cronAliasLabel(schedule.cron)
+  const timeZone = useBrowserTimeZone()
+  const label = React.useMemo(() => {
+    const preset = schedulePresetFromCron(schedule.cron, timeZone, Date.now())
+    return preset
+      ? {
+          long: schedulePresetLabel(preset),
+          short: schedulePresetShortLabel(preset),
+        }
+      : null
+  }, [schedule.cron, timeZone])
   const nextRun = scheduleNextRun(schedule)
   return (
     <span className="flex min-w-0 flex-col items-start">
-      {alias ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span
-              tabIndex={0}
-              className="max-w-full cursor-default truncate rounded-sm text-xs font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-            >
-              {alias}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="font-mono">
-            {schedule.cron}
-          </TooltipContent>
-        </Tooltip>
-      ) : (
-        <span className="max-w-full truncate font-mono text-xs text-foreground">
-          {schedule.cron}
-        </span>
-      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            tabIndex={0}
+            className={cn(
+              "max-w-full cursor-default truncate rounded-sm text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+              label ? "font-medium" : "font-mono"
+            )}
+          >
+            {label?.short ?? schedule.cron}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">
+          {label ? <p>{label.long}</p> : null}
+          <p className="font-mono">{schedule.cron} UTC</p>
+        </TooltipContent>
+      </Tooltip>
       {nextRun ? (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -934,7 +952,7 @@ const ScheduleTiming = React.memo(function ScheduleTiming({
             </time>
           </TooltipTrigger>
           <TooltipContent side="bottom">
-            {fullTimestampLabel(nextRun, schedule.timezone)}
+            {fullTimestampLabel(nextRun)}
           </TooltipContent>
         </Tooltip>
       ) : (
@@ -1010,7 +1028,7 @@ const ScheduleLastRun = React.memo(function ScheduleLastRun({
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom">
-        {fullTimestampLabel(finishedAt, schedule.timezone)}
+        {fullTimestampLabel(finishedAt)}
       </TooltipContent>
     </Tooltip>
   )
@@ -1171,7 +1189,6 @@ export const ScheduleHistoryPage = React.memo(function ScheduleHistoryPage() {
 type ScheduleHistoryRun = Schedule["runs"][number] & {
   definitionActions: Schedule["actions"]
   scheduleName: string
-  timezone: string
 }
 
 function scheduleHistoryRuns(
@@ -1195,7 +1212,6 @@ function scheduleHistoryRuns(
         ...run,
         definitionActions: schedule.actions,
         scheduleName: schedule.name,
-        timezone: schedule.timezone,
       })
     }
   }
@@ -1580,12 +1596,13 @@ const HistoryRowOpen = React.memo(function HistoryRowOpen({
   entry: AutomationHistoryEntry
   onOpen: (entry: AutomationHistoryEntry) => void
 }) {
+  const timeZone = useBrowserTimeZone()
   return (
     <button
       type="button"
       aria-label={
         entry.kind === "schedule"
-          ? `View ${entry.name} run from ${timestampLabel(new Date(entry.startedAt), entry.run.timezone)} details`
+          ? `View ${entry.name} run from ${timestampLabel(new Date(entry.startedAt), timeZone)} details`
           : `View the sync from ${entry.name}`
       }
       className="absolute inset-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
@@ -1931,7 +1948,7 @@ const ScheduleRunDialog = React.memo(function ScheduleRunDialog({
                 />
                 <RunMetadataItem
                   label="Started"
-                  value={timestampLabel(new Date(run.startedAt), run.timezone)}
+                  value={timestampLabel(new Date(run.startedAt))}
                   detail={<RelativeTimeText date={new Date(run.startedAt)} />}
                 />
                 <RunMetadataItem
@@ -1961,20 +1978,14 @@ const ScheduleRunDialog = React.memo(function ScheduleRunDialog({
                   />
                   <RunMetadataRow
                     label="Scheduled for"
-                    value={fullTimestampLabel(
-                      new Date(run.scheduledAt),
-                      run.timezone
-                    )}
+                    value={fullTimestampLabel(new Date(run.scheduledAt))}
                   />
                   <RunMetadataRow
                     label="Completed"
                     value={
                       run.status === "running"
                         ? "Not completed"
-                        : fullTimestampLabel(
-                            new Date(run.finishedAt),
-                            run.timezone
-                          )
+                        : fullTimestampLabel(new Date(run.finishedAt))
                     }
                   />
                   <RunMetadataRow
@@ -2004,7 +2015,6 @@ const ScheduleRunDialog = React.memo(function ScheduleRunDialog({
                     <ActionAttemptAudit
                       actionsById={actionsById}
                       attempts={run.sequenceAttempts}
-                      timezone={run.timezone}
                     />
                   </div>
                 </section>
@@ -2038,7 +2048,6 @@ const ScheduleRunDialog = React.memo(function ScheduleRunDialog({
                         key={targetRun.id}
                         actionsById={actionsById}
                         run={targetRun}
-                        timezone={run.timezone}
                       />
                     ))}
                   </div>
@@ -2104,11 +2113,9 @@ function RunMetadataRow({
 function TargetRunAudit({
   actionsById,
   run,
-  timezone,
 }: {
   actionsById: ReadonlyMap<string, ScheduleAction>
   run: ScheduleHistoryRun["targetRuns"][number]
-  timezone: string
 }) {
   return (
     <article className="overflow-hidden rounded-lg border bg-background/35">
@@ -2139,11 +2146,7 @@ function TargetRunAudit({
           No actions were attempted.
         </p>
       ) : (
-        <ActionAttemptAudit
-          actionsById={actionsById}
-          attempts={run.attempts}
-          timezone={timezone}
-        />
+        <ActionAttemptAudit actionsById={actionsById} attempts={run.attempts} />
       )}
     </article>
   )
@@ -2152,11 +2155,9 @@ function TargetRunAudit({
 function ActionAttemptAudit({
   actionsById,
   attempts,
-  timezone,
 }: {
   actionsById: ReadonlyMap<string, ScheduleAction>
   attempts: ReadonlyArray<ScheduleHistoryRun["sequenceAttempts"][number]>
-  timezone: string
 }) {
   return (
     <ol className="divide-y divide-border/70">
@@ -2182,7 +2183,7 @@ function ActionAttemptAudit({
                 {actionAuditSummary(action, attempt.actionId)}
               </p>
               <p className="type-meta mt-1 text-muted-foreground">
-                {timestampLabel(new Date(attempt.startedAt), timezone)} ·{" "}
+                {timestampLabel(new Date(attempt.startedAt))} ·{" "}
                 {durationLabel(attempt.finishedAt - attempt.startedAt)}
               </p>
               {attempt.error ? (
@@ -2275,9 +2276,17 @@ function ScheduleEditorDialog({
       (option) => option.available || referenced.has(targetKey(option))
     )
   }, [existing, options])
+  const timeZone = useBrowserTimeZone()
   const [name, setName] = React.useState(existing?.name ?? "")
+  // A new schedule runs daily at the viewer's midnight.
   const [cron, setCron] = React.useState(() =>
-    normalizeScheduleCron(existing?.cron ?? "daily")
+    existing
+      ? normalizeScheduleCron(existing.cron)
+      : (schedulePresetCron(
+          { kind: "daily", minutes: 0 },
+          timeZone,
+          Date.now()
+        ) ?? "0 0 * * *")
   )
   const [enabled, setEnabled] = React.useState(existing?.enabled ?? true)
   const [continueOnFailure, setContinueOnFailure] = React.useState(
@@ -2292,7 +2301,10 @@ function ScheduleEditorDialog({
   const [actions, setActions] = React.useState<Array<ScheduleActionDraft>>(
     existing?.actions ?? []
   )
-  const cronSummary = React.useMemo(() => cronDescription(cron), [cron])
+  const cronSummary = React.useMemo(
+    () => cronDescription(cron, timeZone),
+    [cron, timeZone]
+  )
   const selectedOptions = React.useMemo(
     () =>
       editorOptions.filter((option) => selectedTargets.has(targetKey(option))),
@@ -2362,9 +2374,6 @@ function ScheduleEditorDialog({
             ...target
           }) => target
         ),
-        // Kept for persisted schedule compatibility. Relays evaluate cron in
-        // their own local timezone.
-        timezone: existing?.timezone ?? "UTC",
       }
       return existing
         ? updateSchedule({
@@ -2661,6 +2670,72 @@ function ScheduleActionValidationMessage({
   ) : null
 }
 
+type TimingDraft = {
+  day: number
+  kind: SchedulePresetKind | "custom"
+  minute: number
+  minutes: number
+  weekday: number
+}
+
+function timingDraft(cron: string, timeZone: string): TimingDraft {
+  const preset = schedulePresetFromCron(cron, timeZone, Date.now())
+  return {
+    day: preset?.kind === "monthly" ? preset.day : 1,
+    kind: preset?.kind ?? "custom",
+    minute: preset?.kind === "hourly" ? preset.minute : 0,
+    minutes: preset && preset.kind !== "hourly" ? preset.minutes : 0,
+    weekday: preset?.kind === "weekly" ? preset.weekday : 1,
+  }
+}
+
+/** The UTC cron a draft's preset saves, or null for a custom cron. */
+function timingDraftCron(draft: TimingDraft, timeZone: string) {
+  const now = Date.now()
+  switch (draft.kind) {
+    case "custom":
+      return null
+    case "hourly":
+      return schedulePresetCron(
+        { kind: "hourly", minute: draft.minute },
+        timeZone,
+        now
+      )
+    case "daily":
+      return schedulePresetCron(
+        { kind: "daily", minutes: draft.minutes },
+        timeZone,
+        now
+      )
+    case "weekly":
+      return schedulePresetCron(
+        { kind: "weekly", minutes: draft.minutes, weekday: draft.weekday },
+        timeZone,
+        now
+      )
+    case "monthly":
+      return schedulePresetCron(
+        { day: draft.day, kind: "monthly", minutes: draft.minutes },
+        timeZone,
+        now
+      )
+  }
+}
+
+const weekdays = [1, 2, 3, 4, 5, 6, 0] as const
+const monthDays = Array.from({ length: scheduleMonthDays }, (_, index) =>
+  String(index + 1)
+)
+
+function timeInputValue(minutes: number) {
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`
+}
+
+function timeInputMinutes(value: string) {
+  const match = /^(\d{2}):(\d{2})/u.exec(value)
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null
+}
+
 const ScheduleDetailsFields = React.memo(function ScheduleDetailsFields({
   cron,
   cronSummary,
@@ -2674,7 +2749,28 @@ const ScheduleDetailsFields = React.memo(function ScheduleDetailsFields({
   onCronChange: React.Dispatch<React.SetStateAction<string>>
   onNameChange: React.Dispatch<React.SetStateAction<string>>
 }) {
-  const [timing, setTiming] = React.useState(() => cronPreset(cron))
+  const timeZone = useBrowserTimeZone()
+  const [timing, setTiming] = React.useState(() => timingDraft(cron, timeZone))
+  // A monthly day can land outside days 1–28 in UTC, which cron can't run.
+  const [outOfRange, setOutOfRange] = React.useState(false)
+  const changeTiming = (next: TimingDraft) => {
+    setTiming(next)
+    const nextCron = timingDraftCron(next, timeZone)
+    setOutOfRange(next.kind !== "custom" && nextCron === null)
+    if (next.kind !== "custom") onCronChange(nextCron ?? "")
+  }
+  const zoneName = React.useMemo(
+    () => timeZoneShortName(timeZone, Date.now()),
+    [timeZone]
+  )
+  const showsDaylightSaving = React.useMemo(
+    () => timeZoneObservesDaylightSaving(timeZone, Date.now()),
+    [timeZone]
+  )
+  const showsTime =
+    timing.kind === "daily" ||
+    timing.kind === "weekly" ||
+    timing.kind === "monthly"
   return (
     <div className="space-y-2.5">
       <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_12rem]">
@@ -2691,14 +2787,13 @@ const ScheduleDetailsFields = React.memo(function ScheduleDetailsFields({
         </Field>
         <Field label="Timing">
           <Select
-            value={timing}
-            onValueChange={(value) => {
-              setTiming(value)
-              if (value === "custom") return
-              onCronChange(
-                scheduleCronAliases[value as keyof typeof scheduleCronAliases]
-              )
-            }}
+            value={timing.kind}
+            onValueChange={(value) =>
+              changeTiming({
+                ...timing,
+                kind: value as TimingDraft["kind"],
+              })
+            }
           >
             <SelectTrigger className="w-full">
               <SelectValue />
@@ -2713,16 +2808,76 @@ const ScheduleDetailsFields = React.memo(function ScheduleDetailsFields({
           </Select>
         </Field>
       </div>
+      {showsTime ? (
+        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_12rem]">
+          {timing.kind === "weekly" ? (
+            <Field label="Day">
+              <Select
+                value={String(timing.weekday)}
+                onValueChange={(value) =>
+                  changeTiming({ ...timing, weekday: Number(value) })
+                }
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {weekdays.map((weekday) => (
+                    <SelectItem key={weekday} value={String(weekday)}>
+                      {scheduleWeekdayLabel(weekday)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          ) : timing.kind === "monthly" ? (
+            <Field label="Day of the month">
+              <Select
+                value={String(timing.day)}
+                onValueChange={(value) =>
+                  changeTiming({ ...timing, day: Number(value) })
+                }
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {monthDays.map((day) => (
+                    <SelectItem key={day} value={day}>
+                      {day}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          ) : (
+            <div className="hidden sm:block" />
+          )}
+          <Field label={`Time (${zoneName})`}>
+            <Input
+              aria-label={`Time, ${zoneName}`}
+              type="time"
+              required
+              value={timeInputValue(timing.minutes)}
+              onChange={(event) => {
+                const minutes = timeInputMinutes(event.target.value)
+                if (minutes !== null) changeTiming({ ...timing, minutes })
+              }}
+            />
+          </Field>
+        </div>
+      ) : null}
       <div className="grid gap-2 sm:grid-cols-[minmax(12rem,0.8fr)_minmax(0,1.2fr)] sm:items-end">
-        <Field label="Cron">
+        <Field label="Cron (UTC)">
           <Input
-            aria-label="Cron expression"
+            aria-label="Cron expression, in UTC"
             className="font-mono"
             value={cron}
             maxLength={120}
             placeholder="0 0 * * *"
             onChange={(event) => {
-              setTiming("custom")
+              setTiming({ ...timing, kind: "custom" })
+              setOutOfRange(false)
               onCronChange(event.target.value)
             }}
           />
@@ -2731,9 +2886,17 @@ const ScheduleDetailsFields = React.memo(function ScheduleDetailsFields({
           className={`flex min-h-8 items-center rounded-lg border px-3 py-1 text-xs leading-5 ${cronSummary !== null ? "bg-muted/25 text-foreground" : "border-destructive/35 bg-destructive/5 text-destructive light:bg-destructive/10"}`}
           role={cronSummary === null ? "alert" : undefined}
         >
-          {cronSummary ?? "Enter a valid five-part cron expression."}
+          {outOfRange
+            ? "In UTC that falls outside days 1–28. Pick another day or time."
+            : (cronSummary ?? "Enter a valid five-part cron expression.")}
         </div>
       </div>
+      {showsDaylightSaving && showsTime ? (
+        <p className="type-meta text-muted-foreground">
+          Schedules run on UTC, so this local time moves an hour when daylight
+          saving starts or ends.
+        </p>
+      ) : null}
     </div>
   )
 })
@@ -4291,53 +4454,31 @@ function targetList(targets: ReadonlyArray<ScheduleOption>) {
   return `${names.slice(0, -1).join(", ")}, and ${names.at(-1)}`
 }
 
-function cronPreset(cron: string) {
-  const presets: Partial<
-    Record<string, "daily" | "hourly" | "monthly" | "weekly">
-  > = {
-    daily: "daily",
-    hourly: "hourly",
-    monthly: "monthly",
-    weekly: "weekly",
-    "0 * * * *": "hourly",
-    "0 0 * * *": "daily",
-    "0 0 * * 0": "weekly",
-    "0 0 1 * *": "monthly",
+/**
+ * The cron in words: a preset in the viewer's time zone, or a custom cron in
+ * UTC, where it runs.
+ */
+function cronDescription(cron: string, timeZone: string) {
+  if (!validateScheduleCron(cron)) return null
+  const now = Date.now()
+  const preset = schedulePresetFromCron(cron, timeZone, now)
+  if (preset) {
+    const label = schedulePresetLabel(preset)
+    return preset.kind === "hourly"
+      ? label
+      : `${label} ${timeZoneShortName(timeZone, now)}`
   }
-  return presets[cron.trim().toLowerCase().replace(/\s+/gu, " ")] ?? "custom"
-}
-
-function cronDescription(cron: string) {
   return Result.getOrElse(
-    Result.try(() => {
-      if (!validateScheduleCron(cron, "UTC")) return null
-      const normalizedCron = normalizeScheduleCron(cron)
-      const [minute = "", hour = "", dayOfMonth, month, dayOfWeek] =
-        normalizedCron.split(/\s+/u)
-      if (
-        /^\d+$/u.test(minute) &&
-        /^\d+$/u.test(hour) &&
-        dayOfMonth === "*" &&
-        month === "*" &&
-        dayOfWeek === "*"
-      ) {
-        const hourNumber = Number(hour)
-        const displayHour = hourNumber % 12 || 12
-        return `Every day at ${displayHour}:${minute.padStart(2, "0")} ${hourNumber >= 12 ? "PM" : "AM"}`
-      }
-      return cronstrue.toString(normalizedCron, {
-        throwExceptionOnParseError: true,
-      })
-    }),
+    Result.try(
+      () =>
+        `${stripTrailingPeriod(
+          cronstrue.toString(normalizeScheduleCron(cron), {
+            throwExceptionOnParseError: true,
+          })
+        )} UTC`
+    ),
     () => null
   )
-}
-
-function cronAliasLabel(cron: string) {
-  const preset = cronPreset(cron)
-  return preset === "custom"
-    ? null
-    : `${preset[0]?.toUpperCase()}${preset.slice(1)}`
 }
 
 function scheduleInput(schedule: Schedule) {
@@ -4348,7 +4489,6 @@ function scheduleInput(schedule: Schedule) {
     enabled: schedule.enabled,
     name: schedule.name,
     targets: schedule.targets,
-    timezone: schedule.timezone,
   }
 }
 
@@ -4383,7 +4523,6 @@ function scheduleSearchText(schedule: Schedule) {
   return [
     schedule.name,
     schedule.cron,
-    schedule.timezone,
     ...schedule.actions.flatMap((action) => [
       actionLabel(action.type),
       action.type === "console_command"
@@ -4449,30 +4588,27 @@ function durationLabel(durationMs: number) {
   return `${minutes}m ${seconds}s`
 }
 
-function timestampLabel(date: Date, timeZone: string) {
-  let formatter = timestampFormatters.get(timeZone)
+/** In the browser's time zone, or `timeZone` where the label is rendered on the server too. */
+function timestampLabel(date: Date, timeZone?: string) {
+  let formatter = timestampFormatters.get(timeZone ?? "")
   if (!formatter) {
     formatter = new Intl.DateTimeFormat("en-US", {
       dateStyle: "medium",
       timeStyle: "short",
       timeZone,
     })
-    timestampFormatters.set(timeZone, formatter)
+    timestampFormatters.set(timeZone ?? "", formatter)
   }
   return formatter.format(date)
 }
 
-function fullTimestampLabel(date: Date, timeZone: string) {
-  let formatter = fullTimestampFormatters.get(timeZone)
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat("en-US", {
-      dateStyle: "full",
-      timeStyle: "long",
-      timeZone,
-    })
-    fullTimestampFormatters.set(timeZone, formatter)
-  }
-  return formatter.format(date)
+/** In the browser's time zone; only shown in tooltips and dialogs. */
+function fullTimestampLabel(date: Date) {
+  fullTimestampFormatter ??= new Intl.DateTimeFormat("en-US", {
+    dateStyle: "full",
+    timeStyle: "long",
+  })
+  return fullTimestampFormatter.format(date)
 }
 
 function scheduleNextRun(schedule: Schedule) {

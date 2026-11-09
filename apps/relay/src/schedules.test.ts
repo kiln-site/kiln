@@ -3,7 +3,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setImmediate as yieldToEventLoop } from "node:timers/promises"
 
+import { SqliteClient } from "@effect/sql-sqlite-node"
 import { Effect, Fiber, ManagedRuntime } from "effect"
+import { SqlClient } from "effect/sql"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import type { RelayScheduleProjection } from "@workspace/contracts/schedules"
@@ -103,7 +105,7 @@ async function manager(
     return schedules
   }
   const schedules = await start()
-  return { restart: start, schedules }
+  return { filename, restart: start, schedules }
 }
 
 const projection: RelayScheduleProjection = {
@@ -127,7 +129,6 @@ const projection: RelayScheduleProjection = {
       relayId: "relay-a",
     },
   ],
-  timezone: "UTC",
 }
 
 async function latestRun(schedules: ScheduleManager) {
@@ -169,6 +170,45 @@ describe("Relay schedule persistence", () => {
       expect(commands).toEqual([])
     } finally {
       await Effect.runPromise(Fiber.interrupt(worker))
+    }
+  })
+})
+
+describe("Relay schedule time zone", () => {
+  it("runs schedules in UTC whatever the Relay's own time zone, including ones stored with a zone", async () => {
+    const processTimeZone = process.env.TZ
+    process.env.TZ = "America/New_York"
+    try {
+      const { filename, restart, schedules } = await manager()
+      const applied = await schedules.apply(projection)
+      expect(applied.nextRunAt).toBe(Date.parse("2026-01-16T00:00:00.000Z"))
+      schedules.close()
+
+      // As a Relay stored it before schedules ran in UTC: with a zone, and
+      // next running at midnight in that zone.
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* sql`
+            UPDATE relay_schedules
+            SET definition_json = json_set(definition_json, '$.timezone', 'America/New_York'),
+              next_run_at = ${Date.parse("2026-01-16T05:00:00.000Z")}
+          `
+          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 39`
+        }).pipe(Effect.provide(SqliteClient.layer({ filename })))
+      )
+
+      const recovered = await restart()
+      expect((await recovered.overview()).deployments).toMatchObject([
+        { nextRunAt: Date.parse("2026-01-16T00:00:00.000Z") },
+      ])
+      await expect(runNow(recovered)).resolves.toMatchObject({
+        scheduleId: projection.id,
+        status: "running",
+      })
+    } finally {
+      if (processTimeZone === undefined) delete process.env.TZ
+      else process.env.TZ = processTimeZone
     }
   })
 })

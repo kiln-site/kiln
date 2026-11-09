@@ -502,7 +502,7 @@ export const removeDeletedResourceFromSchedules = createServerOnlyFn(
               }> = []
               for (const { schedule_id: scheduleId } of affected) {
                 const [row] = yield* transaction.queryRows<ScheduleRow>(
-                  `SELECT id, name, cron_expression, timezone, enabled,
+                  `SELECT id, name, cron_expression, enabled,
                         continue_on_failure, revision, created_by, created_at,
                         updated_at
                    FROM ${databaseTable("schedule")}
@@ -592,7 +592,6 @@ export const removeDeletedResourceFromSchedules = createServerOnlyFn(
                   name: row.name,
                   revision,
                   targets: remaining,
-                  timezone: row.timezone,
                 })
                 yield* transaction.execute(
                   `UPDATE ${databaseTable("schedule")}
@@ -886,13 +885,12 @@ async function replaceSchedule(
           yield* refuseResourcesBeingDeleted(transaction, schedule.targets)
           const result = yield* transaction.execute(
             `UPDATE ${databaseTable("schedule")}
-                SET name = ?, cron_expression = ?, timezone = ?, enabled = ?,
+                SET name = ?, cron_expression = ?, enabled = ?,
                     continue_on_failure = ?, revision = ?, updated_at = ?
               WHERE id = ? AND revision = ? AND deleted_at IS NULL`,
             [
               schedule.name,
               schedule.cron,
-              schedule.timezone,
               schedule.enabled,
               schedule.continueOnFailure === true,
               schedule.revision,

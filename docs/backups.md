@@ -299,7 +299,7 @@ ID). Only platform administrators back Kiln up, by hand or on a schedule. Its ba
 Hearth stores a schedule target of kind `relay` for it, and the Relay turns it
 into a `platform` backup of its installation.
 
-A fresh installation backs Kiln up once a day, at 03:00 on the Relay's clock, to the Relay,
+A fresh installation backs Kiln up once a day, at 03:00 UTC, to the Relay,
 and keeps 30 days of them, in at most 20 GiB. Migration 24 marks a database migrated before
 anyone signed up; once an administrator and a Relay reporting this
 installation exist, Hearth creates the **Kiln backups** schedule, owned by
@@ -695,8 +695,7 @@ repository was removed while it waited has nothing to do and succeeds.
 A create opens its repository with the lookup it needs anyway, the snapshots
 an interrupted attempt of the same task saved: a repository that doesn't
 exist yet (restic exit 10) is made then, and a wrong password (exit 12)
-fails the task. A command refused because the repository is locked (exit
-11) runs `restic unlock`, which removes only stale locks, such as one a
+fails the task. A command refused because the repository is locked (exit 11) runs `restic unlock`, which removes only stale locks, such as one a
 restarted Relay left, and is tried once more; a live lock still fails it.
 
 restic writes a lock file before every command, reads included. When storage

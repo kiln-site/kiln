@@ -30,7 +30,6 @@ import {
 
 import {
   legacyScheduleStateSchema,
-  relayTimezone,
   type RelayScheduleState,
 } from "./effect/schedule-state.js"
 import type {
@@ -187,7 +186,7 @@ export class ScheduleManager {
   apply(projection: RelayScheduleProjection) {
     const input = relayScheduleProjectionSchema.parse(projection)
     const nextRunAt = input.enabled
-      ? nextScheduleOccurrence(input.cron, relayTimezone, Date.now()).getTime()
+      ? nextScheduleOccurrence(input.cron, Date.now()).getTime()
       : null
     return this.#serialized(async () => {
       const applied = await Effect.runPromise(
