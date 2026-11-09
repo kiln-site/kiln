@@ -11,6 +11,7 @@ import {
   loadSecurityTargetsEffect,
   requestSecurityScanEffect,
   securityResourceNamesEffect,
+  securityScansPausedEffect,
 } from "@/effect/security"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -24,6 +25,7 @@ import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import {
   scanRelaySoon,
   securityNotifyPermissions,
+  setSecurityScansPausedEffect,
 } from "@/lib/security-scans.server"
 import {
   groupSecurityFindings,
@@ -42,6 +44,7 @@ import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { promiseEffect } from "@/effect/promise"
 import {
   operation,
+  platformAdministrator,
   runOperationPromise,
   signedIn,
 } from "@/operations/operation"
@@ -467,6 +470,9 @@ async function scanSecurityNowFor(
   user: AuthenticatedUser,
   input: { scope: string | null }
 ) {
+  if (await runAppEffect("security.scansPaused", securityScansPausedEffect())) {
+    throw new Error("Scans are paused")
+  }
   const access = await securityAccess(user)
   const parsed = input.scope === null ? null : parseSecurityScope(input.scope)
   if (input.scope !== null && !parsed) throw new Error("Unknown scope")
@@ -518,4 +524,44 @@ async function scanSecurityNowFor(
     })
   }
   return { scopes: scopes.length }
+}
+
+/** Whether scans are paused everywhere, and whether the viewer may change it. */
+export async function getSecurityScanSettingsHandler(): Promise<{
+  canChange: boolean
+  paused: boolean
+}> {
+  const user = await requireEligibleResourceUser()
+  return {
+    canChange: isPlatformAdmin(user),
+    paused: await runAppEffect(
+      "security.scansPaused",
+      securityScansPausedEffect()
+    ),
+  }
+}
+
+// One Hearth-wide setting that no lane guards: pausing twice is pausing.
+const setScansPaused = operation<{ readonly paused: boolean }>()({
+  name: "security.setScansPaused",
+  doing: "Changing whether security scans run",
+  authorize: ({ user }) => platformAdministrator(user),
+  locks: () => [],
+  run: ({ input }) => setSecurityScansPausedEffect(input.paused),
+  audit: () => ({ id: "all", kind: "security" }),
+  publish: () =>
+    publishRealtimeChange({
+      audience: { kind: "authenticated" },
+      topics: ["security"],
+      type: "hearth.invalidate",
+    }),
+})
+
+export async function setSecurityScansPausedHandler(input: {
+  paused: boolean
+}) {
+  await runOperationPromise(setScansPaused, input, {
+    user: await requireEligibleResourceUser(),
+  })
+  return { paused: input.paused }
 }

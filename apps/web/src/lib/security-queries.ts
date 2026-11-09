@@ -7,6 +7,7 @@ import {
   getSecurityImageVersions,
   getSecurityOverview,
   getSecurityPackages,
+  getSecurityScanSettings,
 } from "@/server/security"
 
 // Everything under "security" reloads when the security topic changes.
@@ -21,6 +22,17 @@ export const securityQueryKeys = {
   overview: (scope: string | null, own = false) =>
     ["security", "overview", scope, own] as const,
   resource: (scope: string) => ["security", "resource", scope] as const,
+  scanSettings: ["security", "scan-settings"] as const,
+}
+
+/** Whether scans are paused across Kiln, and whether the viewer may change it. */
+export function securityScanSettingsQueryOptions() {
+  return queryOptions({
+    queryKey: securityQueryKeys.scanSettings,
+    queryFn: ({ signal }) => getSecurityScanSettings({ signal }),
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  })
 }
 
 export function securityOverviewQueryOptions(

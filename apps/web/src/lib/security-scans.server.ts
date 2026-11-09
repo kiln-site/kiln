@@ -38,6 +38,8 @@ import {
   pendingSecurityAnnouncementsEffect,
   recordSecurityAnnouncementsEffect,
   requestHostInventoryEffect,
+  saveSecurityScansPausedEffect,
+  securityScansPausedEffect,
   type AnnouncedFinding,
   type DueInventory,
   type SecurityAnnouncement,
@@ -71,6 +73,11 @@ import {
 // Grype checks each new inventory, and every inventory again whenever its
 // vulnerability database changes, which Hearth looks for every six hours.
 // Findings nobody has heard of go to the people who can act on them.
+//
+// A platform administrator can pause all of it: no Relay is asked for
+// anything and Grype checks nothing until scans resume. Pausing stops the
+// sweep running here and asks every Relay to stop the inventory it's
+// collecting; every other Hearth stops before its next Relay or inventory.
 
 const sweepInterval = "2 minutes"
 const syncIntervalMs = 15 * 60_000
@@ -89,6 +96,7 @@ const storedInventoryMaxBytes = 16 * 1024 * 1024 - 1
 
 declare global {
   var kilnSecurityScanner: Fiber.Fiber<void> | undefined
+  var kilnSecuritySweep: Fiber.Fiber<void> | undefined
   var kilnSecuritySynced: Map<string, number> | undefined
   var kilnSecurityDatabase:
     | { builtAt: number | null; checkedAt: number; failure: string | null }
@@ -145,6 +153,7 @@ const syncRelayEffect = Effect.fnUntraced(function* (relay: PersistedRelay) {
   let busy = false
   let more = false
   for (const inventory of due) {
+    if (yield* securityScansPausedEffect()) break
     if ((yield* Clock.currentTimeMillis) >= deadline) {
       more = true
       break
@@ -365,6 +374,7 @@ const matchPendingEffect = Effect.fnUntraced(function* () {
     const pending = yield* pendingMatchesEffect(builtAt)
     if (!pending.length) break
     for (const { relayId, sbomKey } of pending) {
+      if (yield* securityScansPausedEffect()) return touched
       if ((yield* Clock.currentTimeMillis) >= deadline) {
         Queue.offerUnsafe(wake, undefined)
         return touched
@@ -539,12 +549,14 @@ export function startSecurityScans(): void {
   // is. All of them at first, for what a restart interrupted.
   let owed: Set<string> | null = null
   const sweep = Effect.gen(function* () {
+    if (yield* securityScansPausedEffect()) return
     const now = yield* Clock.currentTimeMillis
     const changed = new Set<string>()
     const relays = yield* listPersistedRelaysEffect()
     owed ??= new Set(relays.map((relay) => relay.id))
     for (const relay of relays) {
       if (!inventories(relay)) continue
+      if (yield* securityScansPausedEffect()) break
       if (now - (synced.get(relay.id) ?? 0) < syncIntervalMs) continue
       synced.set(relay.id, now)
       yield* syncRelayEffect(relay).pipe(
@@ -585,12 +597,22 @@ export function startSecurityScans(): void {
     }
     publishSecurityChange(changed)
   }).pipe(report("Security.sweep"))
+  // Each sweep runs in its own fiber, so pausing can stop it where it is
+  // and the worker carries on to the next.
+  const interruptibleSweep = Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(sweep)
+    globalThis.kilnSecuritySweep = fiber
+    yield* Fiber.await(fiber)
+    if (globalThis.kilnSecuritySweep === fiber) {
+      globalThis.kilnSecuritySweep = undefined
+    }
+  })
   // The first sweep waits a little, so Relays have connected. Each next one
   // comes after the interval, or sooner when someone scans now.
   globalThis.kilnSecurityScanner ??= forkAppWorker(
     Effect.sleep("1 minute").pipe(
       Effect.andThen(
-        sweep.pipe(
+        interruptibleSweep.pipe(
           Effect.andThen(
             Effect.raceFirst(
               Effect.sleep(sweepInterval),
@@ -604,6 +626,41 @@ export function startSecurityScans(): void {
     )
   )
 }
+
+/**
+ * Pauses or resumes every scan, on every Relay. Pausing stops the sweep
+ * running here and the inventory each Relay is collecting.
+ */
+export const setSecurityScansPausedEffect = Effect.fn(
+  "Security.setScansPaused"
+)(function* (paused: boolean) {
+  yield* saveSecurityScansPausedEffect(paused)
+  if (!paused) {
+    // Relays skipped while paused are due already.
+    Queue.offerUnsafe(wake, undefined)
+    return
+  }
+  const running = globalThis.kilnSecuritySweep
+  if (running) yield* Fiber.interrupt(running)
+  const relays = (yield* listPersistedRelaysEffect()).filter(inventories)
+  yield* Effect.forEach(
+    relays,
+    (relay) =>
+      Effect.tryPromise({
+        try: (signal) =>
+          relayRpc(
+            relay,
+            "relay.security.cancel",
+            {},
+            30_000,
+            undefined,
+            signal
+          ),
+        catch: relayFailure("Could not stop the Relay's inventory"),
+      }).pipe(report("Security.cancel", { "relay.id": relay.id })),
+    { concurrency: 8, discard: true }
+  )
+})
 
 export function stopSecurityScans(): Promise<void> {
   const scanner = globalThis.kilnSecurityScanner

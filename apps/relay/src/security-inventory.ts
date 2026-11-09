@@ -111,6 +111,9 @@ export class SecurityInventory {
   // One inventory at a time; requests for others wait their turn.
   readonly #permit = Semaphore.makeUnsafe(1)
   #scanner: Promise<string | null> | null = null
+  // Counts cancellations: an inventory asked for before the latest one
+  // doesn't start, or stops where it is.
+  #generation = 0
 
   constructor(config: SecurityInventoryConfig) {
     this.#config = config
@@ -167,18 +170,22 @@ export class SecurityInventory {
         meta.collectedAt <= input.collectedAfter)
     if (input.offset === 0 && stale) {
       if (busy()) return { status: "busy" }
+      const generation = this.#generation
       const collected = await recoverPromise(
         () =>
           this.#enqueue(() =>
-            this.#collect(input.target, paths, input.collectedAfter)
+            this.#collect(input.target, paths, input.collectedAfter, generation)
           ),
-        (cause) => ({
-          error: (cause instanceof Error ? cause.message : String(cause)).slice(
-            0,
-            1_000
-          ),
-          status: "failed" as const,
-        })
+        (cause) =>
+          generation !== this.#generation
+            ? cancelledInventory
+            : {
+                error: (cause instanceof Error
+                  ? cause.message
+                  : String(cause)
+                ).slice(0, 1_000),
+                status: "failed" as const,
+              }
       )
       if (collected.status !== "ready") return collected
       meta = collected.meta
@@ -259,14 +266,42 @@ export class SecurityInventory {
     return this.#scanner
   }
 
+  /**
+   * Stops the inventory running now, removing its helper, and those waiting
+   * their turn. Hearth asks when someone pauses scans.
+   */
+  async cancel(): Promise<{ readonly cancelled: number }> {
+    this.#generation += 1
+    const helpers = await Effect.runPromise(
+      this.#engine.listContainers({
+        all: true,
+        filters: { label: [`${HELPER_LABEL}=true`] },
+      })
+    )
+    let cancelled = 0
+    for (const helper of helpers) {
+      if (!relayOwnsLabels(this.#config, helper.Labels)) continue
+      await Effect.runPromise(
+        this.#engine
+          .removeContainer(helper.Id, { force: true })
+          .pipe(Effect.catch(() => Effect.void))
+      )
+      cancelled += 1
+    }
+    return { cancelled }
+  }
+
   async #collect(
     target: RelaySecurityTarget,
     paths: InventoryPaths,
-    collectedAfter: number | null
+    collectedAfter: number | null,
+    generation: number
   ): Promise<
     | { readonly meta: InventoryMeta; readonly status: "ready" }
     | Exclude<RelaySecurityInventoryResponse, { status: "ready" }>
   > {
+    const cancelled = () => generation !== this.#generation
+    if (cancelled()) return cancelledInventory
     // A request that waited its turn may find another collected it.
     const existing = await this.#meta(paths.meta)
     if (
@@ -332,6 +367,7 @@ export class SecurityInventory {
       | { readonly meta: InventoryMeta; readonly status: "ready" }
       | Exclude<RelaySecurityInventoryResponse, { status: "ready" }>
     > => {
+      if (cancelled()) return cancelledInventory
       const create = (ioWeight: { readonly BlkioWeight?: number }) =>
         Effect.runPromise(
           this.#engine.createContainer(helperName, {
@@ -402,6 +438,7 @@ export class SecurityInventory {
           })
         )
       )
+      if (cancelled()) return cancelledInventory
       if (exitCode !== 0) {
         return {
           error: await this.#failure(helper.Id, exitCode),
@@ -582,6 +619,11 @@ export class SecurityInventory {
     )
   }
 }
+
+const cancelledInventory = {
+  error: "The inventory was cancelled",
+  status: "failed",
+} as const
 
 // As provisioning judges it: a load average of one per core or more.
 function busy(): boolean {

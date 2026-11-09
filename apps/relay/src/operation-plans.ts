@@ -511,6 +511,7 @@ export function controlRequestLocks(
     // one at a time in their own helper.
     case "relay.security.targets":
     case "relay.security.inventory":
+    case "relay.security.cancel":
     // Asks the package manager what's new, changing only its package lists.
     case "relay.host.packages.read":
     case "relay.platform.logs":

@@ -1796,6 +1796,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "relay.security.targets":
     case "relay.security.inventory":
       return "relay.read"
+    // What acting on the host's vulnerabilities takes.
+    case "relay.security.cancel":
+      return "relay.update"
     case "relay.host.files.mount":
       return "relay.files.mount"
     case "relay.proxy.config.read":

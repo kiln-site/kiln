@@ -5,7 +5,7 @@ import type {
   RelaySecurityContainer,
   RelaySecurityTargets,
 } from "@workspace/contracts"
-import { Clock, Effect } from "effect"
+import { Clock, Effect, Predicate } from "effect"
 
 import { Database } from "@/effect/database"
 import type { GrypeFinding } from "@/effect/grype"
@@ -331,6 +331,46 @@ export const pendingMatchesEffect = Effect.fn("security.pendingMatches")(
     return rows.map((row) => ({ relayId: row.relay_id, sbomKey: row.sbom_key }))
   }
 )
+
+// Whether someone paused every scan, across every Relay: one Hearth-wide
+// setting, read each sweep, so every Hearth stops.
+const scansSettingId = "00000000-0000-4000-8000-000000000005"
+const scansSettingKey = "security.scans"
+
+/** Whether security scans are paused everywhere. */
+export const securityScansPausedEffect = Effect.fn("security.scansPaused")(
+  function* () {
+    const database = yield* Database
+    const rows = yield* database.queryRows<
+      RowDataPacket & { setting_value: unknown }
+    >(
+      "security.scansPaused",
+      `SELECT setting_value FROM ${databaseTable("setting")}
+        WHERE id = ? AND user_id IS NULL AND setting_key = ?
+        LIMIT 1`,
+      [scansSettingId, scansSettingKey]
+    )
+    const raw = rows[0]?.setting_value
+    const value: unknown = typeof raw === "string" ? JSON.parse(raw) : raw
+    return Predicate.hasProperty(value, "paused") && value.paused === true
+  }
+)
+
+export const saveSecurityScansPausedEffect = Effect.fn(
+  "security.saveScansPaused"
+)(function* (paused: boolean) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "security.saveScansPaused",
+    `INSERT INTO ${databaseTable("setting")}
+       (id, user_id, setting_key, setting_value, created_at, updated_at)
+     VALUES (?, NULL, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                             updated_at = VALUES(updated_at)`,
+    [scansSettingId, scansSettingKey, JSON.stringify({ paused }), now, now]
+  )
+})
 
 /** Whether Hearth holds any inventory, so it needs Grype's database. */
 export const hasInventoriesEffect = Effect.fn("security.hasInventories")(

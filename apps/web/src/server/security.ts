@@ -13,7 +13,9 @@ import {
   getSecurityPackagesHandler,
   getSecurityImageVersionsHandler,
   getSecurityOverviewHandler,
+  getSecurityScanSettingsHandler,
   scanSecurityNowHandler,
+  setSecurityScansPausedHandler,
 } from "@/server/security.server"
 
 const scopeInputSchema = z.strictObject({
@@ -53,3 +55,13 @@ export const getSecurityImageVersions = createServerFn({ method: "GET" })
 export const scanSecurityNow = createServerFn({ method: "POST" })
   .validator(scopeInputSchema)
   .handler(({ data }) => scanSecurityNowHandler(data))
+
+/** Whether scans are paused across Kiln, and whether the viewer may change it. */
+export const getSecurityScanSettings = createServerFn({
+  method: "GET",
+}).handler(() => getSecurityScanSettingsHandler())
+
+/** Pauses every scan on every Relay, stopping those running, or resumes them. */
+export const setSecurityScansPaused = createServerFn({ method: "POST" })
+  .validator(z.strictObject({ paused: z.boolean() }))
+  .handler(({ data }) => setSecurityScansPausedHandler(data))
