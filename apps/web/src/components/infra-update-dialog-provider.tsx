@@ -1,5 +1,9 @@
 import * as React from "react"
-import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
+import {
+  useQueryClient,
+  useSuspenseQuery,
+  type QueryClient,
+} from "@tanstack/react-query"
 import {
   useNavigate,
   useRouter,
@@ -27,14 +31,18 @@ import {
 let dialogModulePromise:
   | Promise<typeof import("@/components/infra-updates-dialog")>
   | undefined
+let loadedDialogModule:
+  | typeof import("@/components/infra-updates-dialog")
+  | null = null
 
 function loadDialogModule() {
   dialogModulePromise ??= tapPromiseError(
     () =>
-      traceUpdaterWork(
-        "module",
-        () => import("@/components/infra-updates-dialog")
-      ),
+      traceUpdaterWork("module", async () => {
+        const dialogModule = await import("@/components/infra-updates-dialog")
+        loadedDialogModule = dialogModule
+        return dialogModule
+      }),
     (error) => {
       dialogModulePromise = undefined
       throw error
@@ -128,13 +136,18 @@ export function useInfraUpdateDialogStore(): InfraUpdateDialogStore {
  */
 export function usePrefetchInfraUpdates(): () => void {
   const queryClient = useQueryClient()
-  return React.useCallback(() => {
-    forkPromise(loadDialogModule)
-    // An update that's running holds the overview still.
-    if (!canRefetchSystemUpdateOverview()) return
-    void queryClient.prefetchQuery(updateOverviewQueryOptions())
-    void queryClient.prefetchQuery(latestReleasesQueryOptions())
-  }, [queryClient])
+  return React.useCallback(
+    () => prefetchInfraUpdates(queryClient),
+    [queryClient]
+  )
+}
+
+function prefetchInfraUpdates(queryClient: QueryClient): void {
+  forkPromise(loadDialogModule)
+  // An update that's running holds the overview still.
+  if (!canRefetchSystemUpdateOverview()) return
+  void queryClient.prefetchQuery(updateOverviewQueryOptions())
+  void queryClient.prefetchQuery(latestReleasesQueryOptions())
 }
 
 // Opens the Updates dialog over the Relays page, for the URLs that link to
@@ -220,10 +233,15 @@ const AuthorizedInfraUpdatesDialogHost = React.memo(
       store.getSnapshot,
       store.getServerSnapshot
     )
-    // Whether the open being timed found its data already loaded.
+    // Each open reads its data alongside loading the dialog, not once it
+    // has loaded, and the open being timed notes what was already there.
     const queryClient = useQueryClient()
     React.useEffect(() => {
       if (state.requestId === 0) return
+      annotateUpdaterOpen(
+        "kiln.updater.module_loaded",
+        loadedDialogModule !== null
+      )
       annotateUpdaterOpen(
         "kiln.updater.overview_cached",
         queryClient.getQueryData(queryKeys.updates) !== undefined
@@ -232,6 +250,7 @@ const AuthorizedInfraUpdatesDialogHost = React.memo(
         "kiln.updater.releases_cached",
         queryClient.getQueryData(queryKeys.latestReleases) !== undefined
       )
+      prefetchInfraUpdates(queryClient)
     }, [queryClient, state.requestId])
     // Stay mounted once opened, so closing still animates.
     const [opened, setOpened] = React.useState(false)
@@ -253,10 +272,20 @@ const AuthorizedInfraUpdatesDialogHost = React.memo(
       }
     }, [])
 
+    // Once loaded, the dialog renders directly: through React.lazy it
+    // suspends on its first render even then, and React holds back
+    // revealing it for up to 300ms. Chosen once, as changing it would
+    // remount the dialog.
+    const dialogComponent = React.useRef<React.ComponentType<
+      React.ComponentProps<typeof InfraUpdatesDialog>
+    > | null>(null)
     if (!opened) return null
+    dialogComponent.current ??=
+      loadedDialogModule?.InfraUpdatesDialog ?? InfraUpdatesDialog
+    const Dialog = dialogComponent.current
     return (
       <React.Suspense fallback={null}>
-        <InfraUpdatesDialog
+        <Dialog
           initialRelayId={state.relayId}
           open={state.open}
           requestId={state.requestId}
