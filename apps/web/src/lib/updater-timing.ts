@@ -5,8 +5,8 @@ import { startBrowserSpan, type BrowserSpan } from "@/lib/browser-telemetry"
 
 /**
  * How long the Updates dialog takes to become useful, from the click that
- * opened it: when its targets painted, and when the check for the latest
- * release painted its answer. Each milestone, and each piece of work an
+ * opened it: when it painted, when its targets did, when their update
+ * actions did, and when the check for the latest release painted its answer. Each milestone, and each piece of work an
  * open waits on, is a `performance.measure` entry named
  * `kiln:updater:<name>`, readable in devtools and by measurement scripts,
  * and a child span of "Updater open".
@@ -14,8 +14,17 @@ import { startBrowserSpan, type BrowserSpan } from "@/lib/browser-telemetry"
  * Every open has an ID, so a milestone of one that was closed or replaced
  * can't mark the next.
  */
-export type UpdaterMilestone = "targets" | "latest"
-export type UpdaterWork = "module" | "overview" | "releases"
+// "actions" is when each target's update button painted, once its Relay
+// said whether it can update.
+export type UpdaterMilestone = "dialog" | "targets" | "actions" | "latest"
+export type UpdaterWork = "module" | "overview" | "eligibility" | "releases"
+
+const requiredMilestones: ReadonlyArray<UpdaterMilestone> = [
+  "dialog",
+  "targets",
+  "actions",
+  "latest",
+]
 
 interface UpdaterOpen {
   id: number
@@ -29,6 +38,7 @@ interface UpdaterOpen {
 const workSpanNames: Record<UpdaterWork, string> = {
   module: "Updater module",
   overview: "Updater overview read",
+  eligibility: "Updater eligibility read",
   releases: "Updater release check",
 }
 
@@ -148,7 +158,9 @@ function markUpdaterMilestone(milestone: UpdaterMilestone, openId: number) {
       attributes: { "kiln.operation": `ui.updater.${milestone}` },
     }).end(undefined, end)
     open.recorded.add(milestone)
-    if (open.recorded.size === 2) finishUpdaterOpen("ready")
+    if (requiredMilestones.every((required) => open.recorded.has(required))) {
+      finishUpdaterOpen("ready")
+    }
   })
 }
 

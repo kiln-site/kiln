@@ -102,6 +102,7 @@ import {
   getLatestKilnReleases,
   getRelayRelease,
   getReleaseHistory,
+  getUpdateEligibility,
   getUpdateOverview,
 } from "@/server/updates"
 import { traceUpdaterWork } from "@/lib/updater-timing"
@@ -312,8 +313,11 @@ export const queryKeys = {
     logs: (relayId: string, role: RelayPlatformTarget) =>
       ["kiln-platform", "logs", relayId, role] as const,
   },
+  // The eligibility and latest-release reads sit under the overview, so
+  // invalidating it after updates reads them again too.
   updates: ["updates", "overview"] as const,
-  latestReleases: ["updates", "latest-releases"] as const,
+  updateEligibility: ["updates", "overview", "eligibility"] as const,
+  latestReleases: ["updates", "overview", "latest-releases"] as const,
   releaseHistory: ["updates", "release-history"] as const,
   relayRelease: (relayId: string, version: string) =>
     ["updates", "relay", relayId, version] as const,
@@ -1036,13 +1040,26 @@ export function tailscaleStacksQueryOptions() {
   })
 }
 
-// Everything the Updates dialog shows at once, against the releases Hearth
-// already has. Asking GitHub for newer ones is `latestReleasesQueryOptions`.
+// Everything the Updates dialog shows at once, from what Hearth already
+// knows. Whether each target can update is `updateEligibilityQueryOptions`,
+// and asking GitHub for newer releases is `latestReleasesQueryOptions`.
 export function updateOverviewQueryOptions() {
   return queryOptions({
     ...systemUpdateOverviewRefetchPolicy,
     queryKey: queryKeys.updates,
     queryFn: () => traceUpdaterWork("overview", () => getUpdateOverview()),
+    staleTime: 30_000,
+  })
+}
+
+// Asks each Relay whether its target can update; a slow one holds back only
+// its own rows' actions.
+export function updateEligibilityQueryOptions() {
+  return queryOptions({
+    ...systemUpdateOverviewRefetchPolicy,
+    queryKey: queryKeys.updateEligibility,
+    queryFn: () => traceUpdaterWork("eligibility", () => getUpdateEligibility()),
+    retry: false,
     staleTime: 30_000,
   })
 }

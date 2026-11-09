@@ -77,6 +77,7 @@ import {
   latestReleasesQueryOptions,
   queryKeys,
   releaseHistoryInfiniteQueryOptions,
+  updateEligibilityQueryOptions,
   updateOverviewQueryOptions,
 } from "@/lib/query-options"
 import { useUpdaterMilestone } from "@/lib/updater-timing"
@@ -128,7 +129,11 @@ import {
   type ReportedUpdateObservation,
   type SystemUpdateReport,
 } from "@/lib/system-update-reports"
-import type { LatestKilnReleases, UpdateOverview } from "@/server/updates"
+import type {
+  LatestKilnReleases,
+  UpdateEligibility,
+  UpdateOverview,
+} from "@/server/updates"
 import {
   checkForKilnReleases,
   getSystemUpdates,
@@ -137,6 +142,8 @@ import {
 } from "@/server/updates"
 
 type UpdateTarget = {
+  // Its Relay hasn't said yet whether it can update.
+  checking: boolean
   component: "hearth" | "relay"
   currentVersion: string | null
   eligible: boolean
@@ -291,6 +298,7 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
   const gitRepository = useKilnGitRepository()
   const githubIssuesUrl = `${gitRepository}/issues/new/choose`
   const queryClient = useQueryClient()
+  useUpdaterMilestone("dialog", open)
   const [pending, setPending] = React.useState<PendingUpdate | null>(null)
   const [active, setActive] = React.useState<Array<ActiveUpdate>>([])
   const [activityStore] = React.useState(createSystemUpdateActivityStore)
@@ -992,9 +1000,20 @@ export const InfraUpdatesDialog = React.memo(function InfraUpdatesDialog({
             clearRelaysAfterHearth()
             return
           }
+          const eligibility = yield* Effect.tryPromise(() =>
+            queryClient.fetchQuery({
+              ...updateEligibilityQueryOptions(),
+              staleTime: 0,
+            })
+          ).pipe(Effect.option)
+          if (!current) return
+          if (Option.isNone(eligibility)) {
+            yield* Effect.sleep(relaysAfterHearthPollMs)
+            continue
+          }
           const listed = new Set(overview.relays.map(({ relayId }) => relayId))
           const targets: Array<UpdateTarget> = []
-          for (const target of updateTargets(overview)) {
+          for (const target of updateTargets(overview, eligibility.value)) {
             if (target.relayId === null || !pending.has(target.relayId)) {
               continue
             }
@@ -1364,20 +1383,36 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
     enabled: () => open && !busy && canRefetchSystemUpdateOverview(),
     notifyOnChangeProps: ["data", "error", "isError", "isPending"],
   })
-  // The overview shows the releases Hearth already has; this asks GitHub
-  // for newer ones meanwhile, so only the newest version waits on it.
+  // The overview's rows show at once; whether each can update, and newer
+  // releases from GitHub, fill in as they arrive.
+  const eligibilityQuery = useQuery({
+    ...updateEligibilityQueryOptions(),
+    enabled: () => open && !busy && canRefetchSystemUpdateOverview(),
+    notifyOnChangeProps: ["data", "isError"],
+  })
   const releasesQuery = useQuery({
     ...latestReleasesQueryOptions(),
     enabled: () => open && !busy && canRefetchSystemUpdateOverview(),
     notifyOnChangeProps: ["data", "isError", "isPending"],
   })
-  const overview = React.useMemo(() => {
+  const [overview, eligibility] = React.useMemo(() => {
     const merged = withLatestReleases(overviewQuery.data, releasesQuery.data)
-    return import.meta.env.DEV ? withDevMockRelays(merged) : merged
-  }, [overviewQuery.data, releasesQuery.data])
+    return import.meta.env.DEV
+      ? withDevMockRelays(merged, eligibilityQuery.data)
+      : ([merged, eligibilityQuery.data] as const)
+  }, [eligibilityQuery.data, overviewQuery.data, releasesQuery.data])
+  // An eligibility read that failed leaves every target unavailable rather
+  // than checking forever.
+  const eligibilityFailed = eligibilityQuery.isError && !eligibility
   const targets = React.useMemo(
-    () => (overview ? updateTargets(overview) : []),
-    [overview]
+    () =>
+      overview
+        ? updateTargets(
+            overview,
+            eligibility ?? (eligibilityFailed ? failedEligibility : undefined)
+          )
+        : [],
+    [eligibility, eligibilityFailed, overview]
   )
   const releases = overview?.releases ?? noReleases
   const latestTag = releasesQuery.data?.releases[0]?.tag
@@ -1397,12 +1432,34 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
     }
   }, [latestTag, queryClient])
   useUpdaterMilestone("targets", overview !== undefined)
+  useUpdaterMilestone(
+    "actions",
+    overview !== undefined && (eligibility !== undefined || eligibilityFailed)
+  )
   const refetchOverview = overviewQuery.refetch
+  const refetchEligibility = eligibilityQuery.refetch
   const refetchReleases = releasesQuery.refetch
+  // Asks GitHub again now, as the check button does: the automatic check
+  // shares Hearth's answer for a few minutes.
   const retryCheck = React.useCallback(() => {
-    void refetchOverview()
-    void refetchReleases()
-  }, [refetchOverview, refetchReleases])
+    void Effect.runPromise(
+      Effect.tryPromise(() => checkForKilnReleases()).pipe(
+        Effect.ignore,
+        Effect.andThen(
+          Effect.promise(() =>
+            Promise.all([
+              refetchOverview(),
+              refetchEligibility(),
+              refetchReleases(),
+            ])
+          )
+        )
+      )
+    )
+  }, [refetchEligibility, refetchOverview, refetchReleases])
+  // Whether the dialog shows the releases GitHub had when Hearth last asked.
+  const releasesStale =
+    releasesQuery.isError || releasesQuery.data?.failed === true
 
   return (
     <>
@@ -1431,7 +1488,7 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
       <UpdaterFooter
         activityStore={activityStore}
         checkFailed={
-          (overviewQuery.isError || releasesQuery.isError) &&
+          (overviewQuery.isError || eligibilityFailed || releasesStale) &&
           overview !== undefined
         }
         confirmation={confirmation}
@@ -1449,6 +1506,7 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
 })
 
 const noReleases: ReadonlyArray<PublicKilnRelease> = []
+const failedEligibility: UpdateEligibility = { hearth: null, relays: [] }
 
 // Times when the open's check for the newest release painted its answer.
 // Its own observer, so the dialog doesn't render as the check starts and
@@ -1951,6 +2009,14 @@ function targetActionRank(
   releases: ReadonlyArray<PublicKilnRelease>
 ): number {
   if (!target.reachable) return 3
+  // Placed by its version until its Relay says whether it can update.
+  if (target.checking) {
+    const comparison = compareLatestReleaseVersion(
+      target.currentVersion,
+      releases
+    )
+    return comparison === 1 ? 0 : comparison === 0 ? 1 : 2
+  }
   if (targetHasUpdate(target, releases)) return 0
   return target.eligible ||
     compareLatestReleaseVersion(target.currentVersion, releases) === 0
@@ -1965,29 +2031,45 @@ function rankGroup(rank: number): UpdateGroup {
 /**
  * Relays grouped by what they need, your own first in each group. Groups are
  * fixed while the dialog is open: a Relay that finishes updating stays where
- * it was instead of jumping to Up to date. New Relays join by their state.
+ * it was instead of jumping to Up to date. New Relays join by their state,
+ * and one placed while its Relay was still being asked is placed again once
+ * it has answered.
  */
 function useActionGroups(
   relays: ReadonlyArray<UpdateTarget>,
   releases: ReadonlyArray<PublicKilnRelease>
 ): Array<{ group: UpdateGroup; targets: Array<UpdateTarget> }> {
-  const ranksRef = React.useRef<Map<string, number> | null>(null)
-  const relayKeys = relays.map((relay) => relay.key).join("\n")
-  // Only a change in which Relays exist regroups; versions alone don't.
+  const ranksRef = React.useRef<Map<
+    string,
+    { checking: boolean; rank: number }
+  > | null>(null)
+  const relayKeys = relays
+    .map((relay) => `${relay.key}:${relay.checking ? 1 : 0}`)
+    .join("\n")
+  // Only a change in which Relays exist, or one answering, regroups;
+  // versions alone don't.
   const ranks = React.useMemo(() => {
     const previous = ranksRef.current
     const next = new Map(
-      relays.map((relay) => [
-        relay.key,
-        previous?.get(relay.key) ?? targetActionRank(relay, releases),
-      ])
+      relays.map((relay) => {
+        const kept = previous?.get(relay.key)
+        return [
+          relay.key,
+          kept && (!kept.checking || relay.checking)
+            ? kept
+            : {
+                checking: relay.checking,
+                rank: targetActionRank(relay, releases),
+              },
+        ]
+      })
     )
     ranksRef.current = next
     return next
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [relayKeys])
   return React.useMemo(() => {
-    const rankOf = (relay: UpdateTarget) => ranks.get(relay.key) ?? 3
+    const rankOf = (relay: UpdateTarget) => ranks.get(relay.key)?.rank ?? 3
     return updateGroups.flatMap((group) => {
       const targets = relays
         .filter((relay) => rankGroup(rankOf(relay)) === group)
@@ -2417,6 +2499,20 @@ const UpdateTargetAction = React.memo(function UpdateTargetAction({
       >
         <Check />
         Updated
+      </Button>
+    )
+  }
+  if (target.checking && state !== "failed") {
+    return (
+      <Button className="w-24" disabled size="sm" type="button" variant="ghost">
+        {latest ? (
+          "Up to date"
+        ) : (
+          <>
+            <LoaderCircle className="animate-spin" />
+            Checking
+          </>
+        )}
       </Button>
     )
   }
@@ -3736,15 +3832,18 @@ function ChangelogSkeleton() {
 // that many fake Relays on recent releases, many sharing one, to try the
 // updater with a large fleet.
 function withDevMockRelays(
-  overview: UpdateOverview | undefined
-): UpdateOverview | undefined {
+  overview: UpdateOverview | undefined,
+  eligibility: UpdateEligibility | undefined
+): readonly [UpdateOverview | undefined, UpdateEligibility | undefined] {
   const count = Number(
     Result.getOrElse(
       Result.try(() => window.localStorage.getItem("kiln.dev.mockRelays")),
       () => null
     ) ?? 0
   )
-  if (!overview || !Number.isInteger(count) || count <= 0) return overview
+  if (!overview || !Number.isInteger(count) || count <= 0) {
+    return [overview, eligibility] as const
+  }
   const { releases } = overview
   const versionAt = (index: number) =>
     releases[Math.min(index, releases.length - 1)]?.version ?? null
@@ -3755,9 +3854,10 @@ function withDevMockRelays(
     const current = versionAt(index < count * 0.6 ? 2 : index % 2 ? 5 : 12)
     const previous = versionAt(index % 3 === 0 ? 5 : 20)
     if (previous) previousVersions[`relay:${relayId}`] = previous
-    const base = {
-      container: "",
-      currentImage: "",
+    // A third can update, a third can't, and a third are offline. Updating
+    // one for real fails; the footer's Mock buttons simulate it instead.
+    const offline = index % 3 === 2
+    return {
       currentVersion: current,
       name: `relay-${["eu", "us", "ap"][index % 3]}-${String(index + 1).padStart(2, "0")}`,
       ownedByViewer: index % 4 === 0,
@@ -3766,33 +3866,24 @@ function withDevMockRelays(
         index % 4 === 0
           ? null
           : (["Notch", "jeb_", "Dinnerbone"][index % 3] ?? null),
+      reachable: !offline,
+      reason: offline ? "Development mock Relay" : null,
       relayId,
     }
-    // A third can update, a third can't, and a third are offline. Updating
-    // one for real fails; the footer's Mock buttons simulate it instead.
-    return index % 3 === 2
-      ? {
-          ...base,
-          component: "relay" as const,
-          eligible: false,
-          reachable: false as const,
-          reason: "Development mock Relay",
-        }
-      : {
-          ...base,
-          component: "relay" as const,
-          eligible: index % 3 === 1,
-          installationId: null,
-          reachable: true as const,
-          reason: index % 3 === 1 ? null : "Development mock Relay",
-          sameInstallation: true,
-        }
   })
-  return {
-    ...overview,
-    previousVersions,
-    relays: [...overview.relays, ...relays],
-  }
+  const mockEligibility = relays.map((relay, index) => ({
+    eligible: index % 3 === 1,
+    reachable: relay.reachable,
+    reason: index % 3 === 1 ? null : "Development mock Relay",
+    relayId: relay.relayId,
+  }))
+  return [
+    { ...overview, previousVersions, relays: [...overview.relays, ...relays] },
+    eligibility && {
+      ...eligibility,
+      relays: [...eligibility.relays, ...mockEligibility],
+    },
+  ] as const
 }
 
 function changelogMarkers(
@@ -3932,38 +4023,56 @@ function UpdateDialogError({
   )
 }
 
-function updateTargets(overview: UpdateOverview): Array<UpdateTarget> {
+// Each target from the overview, with whether it can update once its Relay
+// has said; until then it's `checking`.
+function updateTargets(
+  overview: UpdateOverview,
+  eligibility: UpdateEligibility | undefined
+): Array<UpdateTarget> {
+  const checking = eligibility === undefined
+  const hearthTarget = eligibility?.hearth ?? null
   const hearth: UpdateTarget = {
+    checking,
     component: "hearth",
-    currentVersion:
-      overview.hearth?.currentVersion ?? overview.currentVersion ?? null,
-    eligible: overview.hearth?.eligible ?? false,
+    currentVersion: hearthTarget?.currentVersion ?? overview.currentVersion,
+    eligible: hearthTarget?.eligible ?? false,
     key: "hearth",
     name: "Panel",
     ownerName: null,
     ownedByViewer: false,
     reachable: true,
-    reason:
-      overview.hearth?.reason ??
-      "Pair a Relay running on Hearth's Docker host to enable updates.",
-    relayId: overview.hearth?.relayId ?? null,
+    reason: checking
+      ? null
+      : (hearthTarget?.reason ??
+        (hearthTarget
+          ? null
+          : "Pair a Relay running on Hearth's Docker host to enable updates.")),
+    relayId: hearthTarget?.relayId ?? null,
     waitsForHearth: false,
   }
+  const inspected = new Map(
+    eligibility?.relays.map((relay) => [relay.relayId, relay])
+  )
   return [
     ...(overview.canUpdateHearth ? [hearth] : []),
-    ...overview.relays.map((relay): UpdateTarget => ({
-      component: "relay",
-      currentVersion: relay.currentVersion,
-      eligible: relay.eligible,
-      key: relayTargetKey(relay.relayId),
-      name: relay.name,
-      ownerName: relay.ownerName,
-      ownedByViewer: relay.ownedByViewer,
-      reachable: relay.reachable,
-      reason: relay.reason,
-      relayId: relay.relayId,
-      waitsForHearth: overview.relaysWaitForHearth,
-    })),
+    ...overview.relays.map((relay): UpdateTarget => {
+      const inspection = inspected.get(relay.relayId)
+      const reachable = relay.reachable && (inspection?.reachable ?? true)
+      return {
+        checking: reachable && inspection === undefined,
+        component: "relay",
+        currentVersion: relay.currentVersion,
+        eligible: inspection?.eligible ?? false,
+        key: relayTargetKey(relay.relayId),
+        name: relay.name,
+        ownerName: relay.ownerName,
+        ownedByViewer: relay.ownedByViewer,
+        reachable,
+        reason: inspection?.reason ?? relay.reason,
+        relayId: relay.relayId,
+        waitsForHearth: overview.relaysWaitForHearth,
+      }
+    }),
   ]
 }
 
@@ -3976,7 +4085,7 @@ function reportedActiveUpdate(
   const targetKey =
     update.component === "hearth" ? "hearth" : relayTargetKey(report.relayId)
   const target = overview
-    ? updateTargets(overview).find(({ key }) => key === targetKey)
+    ? updateTargets(overview, undefined).find(({ key }) => key === targetKey)
     : undefined
   return {
     component: update.component,
@@ -4054,6 +4163,7 @@ async function startUpdates(
               component,
               relayId,
             })),
+            version: latestVersion,
           },
         })
       ).pipe(Effect.result)
@@ -4327,6 +4437,7 @@ function areUpdateTargetsEqual(
   next: UpdateTarget
 ): boolean {
   return (
+    previous.checking === next.checking &&
     previous.component === next.component &&
     previous.currentVersion === next.currentVersion &&
     previous.eligible === next.eligible &&
@@ -4336,7 +4447,8 @@ function areUpdateTargetsEqual(
     previous.ownedByViewer === next.ownedByViewer &&
     previous.reachable === next.reachable &&
     previous.reason === next.reason &&
-    previous.relayId === next.relayId
+    previous.relayId === next.relayId &&
+    previous.waitsForHearth === next.waitsForHearth
   )
 }
 
@@ -4381,6 +4493,7 @@ function targetNote(
   if (comparison === -1) {
     return { text: "Newer than the latest release", tone: "info" }
   }
+  if (target.checking) return { text: "Checking…", tone: "muted" }
   if (target.waitsForHearth && target.eligible) {
     return { text: "Updates after the Panel", tone: "muted" }
   }

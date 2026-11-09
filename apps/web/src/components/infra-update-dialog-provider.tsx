@@ -15,6 +15,7 @@ import {
   accessCapabilitiesQueryOptions,
   latestReleasesQueryOptions,
   queryKeys,
+  updateEligibilityQueryOptions,
   updateOverviewQueryOptions,
 } from "@/lib/query-options"
 import { readRelaysAfterHearth } from "@/lib/system-update-after-hearth"
@@ -147,6 +148,7 @@ function prefetchInfraUpdates(queryClient: QueryClient): void {
   // An update that's running holds the overview still.
   if (!canRefetchSystemUpdateOverview()) return
   void queryClient.prefetchQuery(updateOverviewQueryOptions())
+  void queryClient.prefetchQuery(updateEligibilityQueryOptions())
   void queryClient.prefetchQuery(latestReleasesQueryOptions())
 }
 
