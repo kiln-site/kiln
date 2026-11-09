@@ -1,16 +1,17 @@
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start"
 import { relayIdSchema } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { z } from "zod"
 
 import { kilnReleaseManifestEffect } from "@/effect/github-releases"
-import { promiseEffect } from "@/effect/promise"
+import { promiseEffect, recoverPromise } from "@/effect/promise"
 import {
   checkKilnReleasesEffect,
+  latestKilnReleasesEffect,
   listKilnReleasesEffect,
   recordComponentVersionsEffect,
   releaseHistoryPageEffect,
-  releasesCheckedAtEffect,
+  storedKilnReleasesEffect,
 } from "@/effect/kiln-release-feed"
 import { PermissionDeniedError, RelayUnavailableError } from "@/effect/errors"
 import { platformAdminIdsEffect } from "@/effect/notifications"
@@ -52,6 +53,9 @@ const startUpdatesSchema = z.object({
   // the Relays' snapshots if the reply is lost.
   requestId: z.uuid().optional(),
   targets: z.array(startUpdateTargetSchema).min(1),
+  // The release the person confirmed. Hearth installs its latest release,
+  // so it refuses when that's another one.
+  version: z.string().min(1).max(191),
 })
 const releaseHistorySchema = z.object({
   cursor: z
@@ -123,163 +127,439 @@ async function updateRelaysForUser(
   return relays.filter((relay) => allowed.has(relay.id))
 }
 
+type RelayConnectionModule = typeof import("@/lib/relay-connection")
+
+// How long the updater waits for one Relay's inspection, connecting
+// included, before showing it unavailable.
+const inspectTimeoutMs = 5_000
+
+/**
+ * What the Updates dialog shows at once, from what Hearth already knows:
+ * each target's version and whether Hearth reaches it, against the releases
+ * it already has. It asks no Relay (whether each target can be updated is
+ * `getUpdateEligibility`) and never GitHub (see `getLatestKilnReleases`).
+ */
 export const getUpdateOverview = createServerFn({ method: "GET" }).handler(
   async () => {
     const user = await requireUpdateAccess()
     const platformAdmin = isPlatformAdmin(user)
-    const [releases, relays, container] = await Promise.all([
-      runAppEffect("updates.releases", listKilnReleasesEffect()),
+    const [relays, connection] = await Promise.all([
+      updateRelaysForUser(user),
+      import("@/lib/relay-connection"),
+    ])
+    return runAppEffect(
+      "Updates.overview",
+      updateOverviewEffect({
+        connection,
+        platformAdmin,
+        relays,
+        userId: user.id,
+      })
+    )
+  }
+)
+
+const updateOverviewEffect = Effect.fnUntraced(function* ({
+  connection,
+  platformAdmin,
+  relays,
+  userId,
+}: {
+  connection: RelayConnectionModule
+  platformAdmin: boolean
+  relays: Array<PersistedRelay>
+  userId: string
+}) {
+  const currentVersion = import.meta.env.VITE_KILN_VERSION
+  // A Relay Hearth knows is away is shown offline; one it reaches, or is
+  // still reaching, is asked whether it can update by the eligibility read.
+  const relayRows = relays.map((relay) => {
+    const state = connection.relayConnectionState(relay.id)
+    const unreachable = state.status === "unreachable"
+    return {
+      currentVersion:
+        connection.relayConnectionNode(relay.id)?.version ?? relay.nodeVersion,
+      name: relay.name,
+      reachable: !unreachable,
+      reason: unreachable ? (state.lastError ?? "Relay is unreachable") : null,
+      relayId: relay.id,
+    }
+  })
+  yield* Effect.annotateCurrentSpan({
+    "relay.count": relays.length,
+    "relay.unreachable": relayRows.filter((relay) => !relay.reachable).length,
+    "updates.platformAdmin": platformAdmin,
+  })
+  const [stored, [relaysWithOwners, adminIds], previousVersions] =
+    yield* Effect.all(
+      [
+        storedKilnReleasesEffect(),
+        // Admins can update Relays other people brought, so those name who
+        // paired them. Relays an admin paired are the platform's own and
+        // name nobody. Like the Relays page, only admins see email-derived
+        // names.
+        Effect.all(
+          [
+            attachRelayOwnersEffect(relays, platformAdmin),
+            platformAdminIdsEffect(),
+          ],
+          { concurrency: "unbounded" }
+        ),
+        // The versions each component ran before, so the changelog can show
+        // where it came from. Recording them is best effort.
+        recordComponentVersionsEffect([
+          ...(platformAdmin ? [{ key: "hearth", version: currentVersion }] : []),
+          ...relayRows.map((relay) => ({
+            key: `relay:${relay.relayId}`,
+            version: relay.currentVersion,
+          })),
+        ]).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning(
+              "Could not record component versions",
+              error
+            ).pipe(Effect.as({} as Record<string, string>))
+          )
+        ),
+      ],
+      { concurrency: "unbounded" }
+    )
+  yield* Effect.annotateCurrentSpan("releases.count", stored.releases.length)
+  const admins = new Set(adminIds)
+  const owners = new Map(
+    relaysWithOwners.map((relay) => [
+      relay.id,
+      {
+        ownedByViewer: relay.createdBy === userId,
+        ownerName:
+          relay.createdBy && admins.has(relay.createdBy)
+            ? null
+            : relay.ownerName,
+      },
+    ])
+  )
+
+  return {
+    canUpdateHearth: platformAdmin,
+    currentVersion,
+    // Relays wait until Hearth runs the latest release (see
+    // `hearthBehindLatest`).
+    relaysWaitForHearth: hearthBehindLatest(stored.releases),
+    previousVersions,
+    releases: stored.releases,
+    // When Hearth last asked GitHub for releases.
+    releasesCheckedAt: stored.checkedAt,
+    relays: relayRows.map((relay) => ({
+      ...relay,
+      ownedByViewer: owners.get(relay.relayId)?.ownedByViewer ?? false,
+      ownerName: owners.get(relay.relayId)?.ownerName ?? null,
+    })),
+  }
+})
+
+/**
+ * Whether each target can be updated from Kiln, which only its Relay can
+ * tell: it inspects the container. A Relay Hearth knows is away isn't asked.
+ * Each answer that arrives within `eligibilityWaitMs` is returned, and the
+ * rest are `pending`: the Updates dialog asks again for them, joining the
+ * inspections still running, so one slow Relay holds back only its own row.
+ */
+export const getUpdateEligibility = createServerFn({ method: "GET" }).handler(
+  async () => {
+    const user = await requireUpdateAccess()
+    const platformAdmin = isPlatformAdmin(user)
+    const [relays, container, connection] = await Promise.all([
       updateRelaysForUser(user),
       platformAdmin ? getContainerHostname() : Promise.resolve(null),
+      import("@/lib/relay-connection"),
     ])
-    const enabledRelays = relays
-    const { relayRpc } = await import("@/lib/relay-connection")
-
-    const [relayTargets, hearthCandidates] = await Promise.all([
-      Promise.all(
-        enabledRelays.map((relay) =>
-          Effect.runPromise(
-            Effect.tryPromise({
-              try: async () => {
-                const inspection = systemInspectionSchema.parse(
-                  await relayRpc(relay, "relay.system.inspect", {}, 5_000)
-                )
-                return {
-                  ...inspection,
-                  name: relay.name,
-                  relayId: relay.id,
-                  reachable: true as const,
-                }
-              },
-              catch: (cause) => cause,
-            }).pipe(
-              Effect.catch((cause) =>
-                Effect.succeed({
-                  component: "relay" as const,
-                  container: "",
-                  currentImage: "",
-                  currentVersion: relay.nodeVersion,
-                  eligible: false,
-                  name: relay.name,
-                  reachable: false as const,
-                  reason:
-                    cause instanceof Error
-                      ? cause.message
-                      : "Relay update support is unavailable",
-                  relayId: relay.id,
-                })
-              )
-            )
-          )
-        )
-      ),
-      platformAdmin && container
-        ? Promise.all(
-            enabledRelays.map((relay) =>
-              Effect.runPromise(
-                Effect.tryPromise({
-                  try: async () => {
-                    const inspection = systemInspectionSchema.parse(
-                      await relayRpc(
-                        relay,
-                        "relay.system.inspect",
-                        { container },
-                        5_000
-                      )
+    // How many inspections this read started; the rest it joined or reused.
+    let started = 0
+    const awaitShared = <A>(key: string, run: () => Promise<A>) =>
+      awaitSharedAnswer(key, () => {
+        started += 1
+        return run()
+      })
+    return runAppEffect(
+      "Updates.eligibility",
+      Effect.gen(function* () {
+        const [relayAnswers, hearth] = yield* Effect.all(
+          [
+            Effect.forEach(
+              relays,
+              (relay) => {
+                const state = connection.relayConnectionState(relay.id)
+                return awaitShared(
+                  // A change of connection asks again rather than reusing
+                  // what the Relay said before it.
+                  `relay:${relay.id}:${state.status}:${state.updatedAt}`,
+                  () =>
+                    recoverPromise(
+                      () =>
+                        runAppEffect(
+                          "Updates.inspectRelay",
+                          inspectRelayTarget(relay, connection)
+                        ),
+                      () => ({
+                        eligible: false,
+                        reachable: false,
+                        reason: "Relay update support is unavailable",
+                        relayId: relay.id,
+                      })
                     )
-                    return inspection.component === "hearth" &&
-                      inspection.sameInstallation
-                      ? {
-                          ...inspection,
-                          relayId: relay.id,
-                          relayName: relay.name,
-                        }
-                      : null
-                  },
-                  catch: (cause) => cause,
-                }).pipe(
-                  // A remote Relay cannot see Hearth's container and is skipped.
-                  Effect.catch(() => Effect.succeed(null))
+                ).pipe(
+                  Effect.map(
+                    Option.match({
+                      onNone: () => ({
+                        pending: true as const,
+                        relayId: relay.id,
+                      }),
+                      onSome: (answer) => ({ ...answer, pending: false as const }),
+                    })
+                  )
                 )
-              )
-            )
-          )
-        : Promise.resolve([]),
-    ])
-    const hearthTarget = hearthCandidates.find((target) => target) ?? null
-    const releasesCheckedAt = await runAppEffect(
-      "updates.releases-checked-at",
-      releasesCheckedAtEffect()
-    )
-    const currentVersion = import.meta.env.VITE_KILN_VERSION
-    // Admins can update Relays other people brought, so those name who
-    // paired them. Relays an admin paired are the platform's own and name
-    // nobody. Like the Relays page, only admins see email-derived names.
-    const [relaysWithOwners, adminIds] = await runAppEffect(
-      "updates.relay-owners",
-      Effect.all([
-        attachRelayOwnersEffect(enabledRelays, platformAdmin),
-        platformAdminIdsEffect(),
-      ])
-    )
-    const admins = new Set(adminIds)
-    const owners = new Map(
-      relaysWithOwners.map((relay) => [
-        relay.id,
-        {
-          ownedByViewer: relay.createdBy === user.id,
-          ownerName:
-            relay.createdBy && admins.has(relay.createdBy)
-              ? null
-              : relay.ownerName,
-        },
-      ])
-    )
-    // The versions each component ran before, so the changelog can show
-    // where it came from. Recording them is best effort.
-    const previousVersions = await runAppEffect(
-      "updates.component-versions",
-      recordComponentVersionsEffect([
-        ...(platformAdmin
-          ? [
-              {
-                key: "hearth",
-                version: hearthTarget?.currentVersion ?? currentVersion,
               },
-            ]
-          : []),
-        ...relayTargets.map((relay) => ({
-          key: `relay:${relay.relayId}`,
-          version: relay.currentVersion,
-        })),
-      ]).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("Could not record component versions", error).pipe(
-            Effect.as({} as Record<string, string>)
-          )
+              { concurrency: "unbounded" }
+            ),
+            platformAdmin && container
+              ? awaitShared(
+                  // Asked again when any Relay that might be on Hearth's host
+                  // connects or goes, rather than reusing what it found then.
+                  `hearth:${container}:${relays
+                    .map((relay) => {
+                      const state = connection.relayConnectionState(relay.id)
+                      return `${relay.id}@${state.status}@${state.updatedAt}`
+                    })
+                    .join(",")}`,
+                  () =>
+                    recoverPromise(
+                      () =>
+                        runAppEffect(
+                          "Updates.findHearth",
+                          findHearthTarget(relays, container, connection)
+                        ),
+                      () => null
+                    )
+                )
+              : Effect.succeed(Option.some(null)),
+          ],
+          { concurrency: "unbounded" }
+        )
+        yield* Effect.annotateCurrentSpan({
+          "relay.count": relays.length,
+          "relay.pending": relayAnswers.filter((answer) => answer.pending)
+            .length,
+          "updates.hearth.pending": Option.isNone(hearth),
+          "updates.inspections.started": started,
+        })
+        return {
+          hearth: Option.getOrNull(hearth),
+          hearthPending: Option.isNone(hearth),
+          relays: relayAnswers,
+        }
+      })
+    )
+  }
+)
+
+// How long an eligibility read waits for each answer before calling it
+// pending, and how long an answer is kept once it arrives, so the read
+// asking again for the pending ones doesn't inspect the rest again.
+const eligibilityWaitMs = 1_000
+const answerKeepMs = 10_000
+const sharedAnswers = new Map<
+  string,
+  { answer: Promise<unknown>; settledAt: number | null }
+>()
+
+// The answer for `key`, shared with the reads asking meanwhile, or None if
+// it doesn't arrive within `eligibilityWaitMs`; it keeps running for the
+// next read. `run` must not reject.
+function awaitSharedAnswer<A>(key: string, run: () => Promise<A>) {
+  return Effect.suspend(() => {
+    const now = Date.now()
+    for (const [entryKey, entry] of sharedAnswers) {
+      if (entry.settledAt !== null && now - entry.settledAt >= answerKeepMs) {
+        sharedAnswers.delete(entryKey)
+      }
+    }
+    let entry = sharedAnswers.get(key)
+    if (!entry) {
+      const created = { answer: run(), settledAt: null as number | null }
+      void created.answer.then(() => {
+        created.settledAt = Date.now()
+      })
+      sharedAnswers.set(key, created)
+      entry = created
+    }
+    const answer = entry.answer as Promise<A>
+    return Effect.promise(() => answer).pipe(
+      Effect.timeoutOption(eligibilityWaitMs)
+    )
+  })
+}
+
+export type UpdateEligibility = Awaited<
+  ReturnType<typeof getUpdateEligibility>
+>
+
+// Asks a Relay about its own container. One Hearth knows is away is shown
+// unavailable at once: it reconnects by itself, and asking would only wait
+// out the connection attempt.
+const inspectRelayTarget = Effect.fnUntraced(function* (
+  relay: PersistedRelay,
+  connection: RelayConnectionModule
+) {
+  const state = connection.relayConnectionState(relay.id)
+  yield* Effect.annotateCurrentSpan({
+    "relay.connection": state.status,
+    "relay.id": relay.id,
+  })
+  const unavailable = (reason: string) => ({
+    eligible: false,
+    reachable: false,
+    reason,
+    relayId: relay.id,
+  })
+  if (state.status === "unreachable") {
+    return unavailable(state.lastError ?? "Relay is unreachable")
+  }
+  return yield* inspectSystem(relay, {}, connection).pipe(
+    Effect.map((inspection) => ({
+      eligible: inspection.eligible,
+      reachable: true,
+      reason: inspection.reason,
+      relayId: relay.id,
+    })),
+    Effect.catch((cause) =>
+      Effect.succeed(
+        unavailable(
+          cause instanceof Error
+            ? cause.message
+            : "Relay update support is unavailable"
         )
       )
     )
+  )
+})
 
+// The Relay last found on Hearth's Docker host, asked first next time while
+// Hearth is connected to it, so finding Hearth's container usually takes
+// one request rather than one per Relay.
+let hearthRelayId: string | null = null
+
+// Finds the Relay that can update Hearth: only one on its Docker host sees
+// its container.
+const findHearthTarget = Effect.fnUntraced(function* (
+  relays: ReadonlyArray<PersistedRelay>,
+  container: string,
+  connection: RelayConnectionModule
+) {
+  const inspectOn = (relay: PersistedRelay) =>
+    inspectSystem(relay, { container }, connection).pipe(
+      Effect.map((inspection) =>
+        inspection.component === "hearth" && inspection.sameInstallation
+          ? {
+              currentVersion: inspection.currentVersion,
+              eligible: inspection.eligible,
+              reason: inspection.reason,
+              relayId: relay.id,
+              relayName: relay.name,
+            }
+          : null
+      ),
+      // A remote Relay cannot see Hearth's container and is skipped.
+      Effect.catch(() => Effect.succeed(null))
+    )
+  // Only while connected, so a remembered Relay that went quiet doesn't
+  // delay asking the others.
+  const remembered = relays.find(
+    (relay) =>
+      relay.id === hearthRelayId &&
+      connection.relayConnectionState(relay.id).status === "authenticated"
+  )
+  if (remembered) {
+    const target = yield* inspectOn(remembered)
+    yield* Effect.annotateCurrentSpan("updates.hearth.remembered", true)
+    if (target) return target
+  }
+  const candidates = relays.filter(
+    (relay) =>
+      relay !== remembered &&
+      connection.relayConnectionState(relay.id).status !== "unreachable"
+  )
+  yield* Effect.annotateCurrentSpan("updates.hearth.asked", candidates.length)
+  // The first Relay that sees Hearth's container answers; the others are
+  // stopped rather than waited for.
+  const target =
+    candidates.length === 0
+      ? null
+      : yield* Effect.raceAll(
+          candidates.map((relay) =>
+            inspectOn(relay).pipe(
+              Effect.flatMap((found) =>
+                found ? Effect.succeed(found) : Effect.fail("elsewhere" as const)
+              )
+            )
+          )
+        ).pipe(Effect.catch(() => Effect.succeed(null)))
+  hearthRelayId = target?.relayId ?? null
+  return target
+})
+
+// The timeout covers connecting as well as the request, which the request's
+// own timeout doesn't.
+function inspectSystem(
+  relay: PersistedRelay,
+  payload: { container?: string },
+  connection: RelayConnectionModule
+) {
+  return Effect.tryPromise({
+    try: (signal) =>
+      connection.relayRpc(
+        relay,
+        "relay.system.inspect",
+        payload,
+        inspectTimeoutMs,
+        undefined,
+        signal
+      ),
+    catch: (cause) => cause,
+  }).pipe(
+    Effect.timeoutOrElse({
+      duration: inspectTimeoutMs,
+      orElse: () =>
+        Effect.fail(new Error("The Relay didn't answer in time")),
+    }),
+    Effect.map((result) => systemInspectionSchema.parse(result))
+  )
+}
+
+/**
+ * The newest releases, after asking GitHub for newer ones when Hearth's last
+ * check is a few minutes old. The Updates dialog shows the releases it
+ * already has meanwhile, and only the newest version and its changes wait
+ * on this.
+ */
+export const getLatestKilnReleases = createServerFn({ method: "GET" }).handler(
+  async () => {
+    await requireUpdateAccess()
+    const latest = await runAppEffect(
+      "Updates.latestReleases",
+      latestKilnReleasesEffect()
+    )
     return {
-      canUpdateHearth: platformAdmin,
-      currentVersion,
-      hearth: hearthTarget,
-      // Relays wait until Hearth runs the latest release (see
-      // `hearthBehindLatest`).
-      relaysWaitForHearth: hearthBehindLatest(releases),
-      previousVersions,
-      releases,
-      // When Hearth last asked GitHub for releases.
-      releasesCheckedAt,
-      relays: relayTargets.map((relay) => ({
-        ...relay,
-        ownedByViewer: owners.get(relay.relayId)?.ownedByViewer ?? false,
-        ownerName: owners.get(relay.relayId)?.ownerName ?? null,
-      })),
+      checkedAt: latest.checkedAt,
+      failed: latest.failed,
+      relaysWaitForHearth: hearthBehindLatest(latest.releases),
+      releases: latest.releases,
     }
   }
 )
+
+export type LatestKilnReleases = Awaited<
+  ReturnType<typeof getLatestKilnReleases>
+>
 
 /**
  * Asks GitHub for new Kiln releases now, for the updater's check button,
@@ -485,6 +765,17 @@ export const startSystemUpdates = createServerFn({ method: "POST" })
     const latestRelease = releases[0]
     if (!latestRelease) {
       throw new Error("No public Kiln release is available to install")
+    }
+    if (latestRelease.version !== data.version) {
+      return {
+        failures: data.targets.map((target) => ({
+          component: target.component,
+          message: `${latestRelease.name} is now the latest release. Review it, then update again.`,
+          outcomeUnknown: false,
+          relayId: target.relayId,
+        })),
+        started: [],
+      }
     }
     const [manifest, relays, { relayRpc }, hearthContainer] = await Promise.all(
       [

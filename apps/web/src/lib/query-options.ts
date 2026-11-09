@@ -98,11 +98,15 @@ import {
 import { getTailscaleStacks } from "@/server/tailscale"
 import { getAuthState } from "@/server/auth"
 import type { ReleaseHistoryCursor } from "@/effect/kiln-release-feed"
+import type { UpdateEligibility } from "@/server/updates"
 import {
+  getLatestKilnReleases,
   getRelayRelease,
   getReleaseHistory,
+  getUpdateEligibility,
   getUpdateOverview,
 } from "@/server/updates"
+import { traceUpdaterWork } from "@/lib/updater-timing"
 import {
   getResourceOwner,
   getResourceUserCount,
@@ -310,7 +314,11 @@ export const queryKeys = {
     logs: (relayId: string, role: RelayPlatformTarget) =>
       ["kiln-platform", "logs", relayId, role] as const,
   },
+  // The eligibility and latest-release reads sit under the overview, so
+  // invalidating it after updates reads them again too.
   updates: ["updates", "overview"] as const,
+  updateEligibility: ["updates", "overview", "eligibility"] as const,
+  latestReleases: ["updates", "overview", "latest-releases"] as const,
   releaseHistory: ["updates", "release-history"] as const,
   relayRelease: (relayId: string, version: string) =>
     ["updates", "relay", relayId, version] as const,
@@ -1033,12 +1041,54 @@ export function tailscaleStacksQueryOptions() {
   })
 }
 
+// Everything the Updates dialog shows at once, from what Hearth already
+// knows. Whether each target can update is `updateEligibilityQueryOptions`,
+// and asking GitHub for newer releases is `latestReleasesQueryOptions`.
 export function updateOverviewQueryOptions() {
   return queryOptions({
     ...systemUpdateOverviewRefetchPolicy,
     queryKey: queryKeys.updates,
-    queryFn: () => getUpdateOverview(),
+    queryFn: () => traceUpdaterWork("overview", () => getUpdateOverview()),
     staleTime: 30_000,
+  })
+}
+
+// Asks each Relay whether its target can update. Hearth answers for those
+// that reply within a second and marks the rest pending; asking again
+// joins their inspections, so a slow Relay holds back only its own row.
+export function updateEligibilityQueryOptions() {
+  return queryOptions({
+    ...systemUpdateOverviewRefetchPolicy,
+    queryKey: queryKeys.updateEligibility,
+    queryFn: () => traceUpdaterWork("eligibility", () => getUpdateEligibility()),
+    // Not after a failed read: the dialog's Retry asks again.
+    refetchInterval: (query) =>
+      query.state.status !== "error" &&
+      query.state.data &&
+      eligibilityPending(query.state.data)
+        ? 100
+        : false,
+    retry: false,
+    staleTime: 30_000,
+  })
+}
+
+export function eligibilityPending(eligibility: UpdateEligibility): boolean {
+  return (
+    eligibility.hearthPending ||
+    eligibility.relays.some((relay) => relay.pending)
+  )
+}
+
+// Hearth asks GitHub at most every five minutes however often this is read,
+// so reading it more often only repeats Hearth's answer.
+export function latestReleasesQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.latestReleases,
+    queryFn: () => traceUpdaterWork("releases", () => getLatestKilnReleases()),
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: 5 * 60_000,
   })
 }
 
