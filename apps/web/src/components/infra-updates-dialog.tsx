@@ -74,6 +74,7 @@ import {
 } from "@/lib/changelog-timeline"
 import { flattenCursorPages } from "@/lib/cursor-page"
 import {
+  eligibilityPending,
   latestReleasesQueryOptions,
   queryKeys,
   releaseHistoryInfiniteQueryOptions,
@@ -1401,19 +1402,31 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
       ? withDevMockRelays(merged, eligibilityQuery.data)
       : ([merged, eligibilityQuery.data] as const)
   }, [eligibilityQuery.data, overviewQuery.data, releasesQuery.data])
-  // An eligibility read that failed leaves every target unavailable rather
-  // than checking forever.
-  const eligibilityFailed = eligibilityQuery.isError && !eligibility
+  // A failed eligibility read leaves the targets it didn't answer for
+  // unavailable rather than checking forever.
+  const eligibilityFailed = eligibilityQuery.isError
   const targets = React.useMemo(
     () =>
-      overview
-        ? updateTargets(
-            overview,
-            eligibility ?? (eligibilityFailed ? failedEligibility : undefined)
-          )
-        : [],
+      overview ? updateTargets(overview, eligibility, eligibilityFailed) : [],
     [eligibility, eligibilityFailed, overview]
   )
+  // A Relay the overview lists that the eligibility read didn't cover, as
+  // one paired since, is asked about once.
+  const uncovered = React.useMemo(() => {
+    if (!overview || !eligibility) return ""
+    const covered = new Set(eligibility.relays.map(({ relayId }) => relayId))
+    return overview.relays
+      .filter((relay) => relay.reachable && !covered.has(relay.relayId))
+      .map(({ relayId }) => relayId)
+      .join(",")
+  }, [eligibility, overview])
+  const askedUncovered = React.useRef("")
+  const refetchEligibilityFor = eligibilityQuery.refetch
+  React.useEffect(() => {
+    if (!uncovered || askedUncovered.current === uncovered) return
+    askedUncovered.current = uncovered
+    void refetchEligibilityFor()
+  }, [refetchEligibilityFor, uncovered])
   const releases = overview?.releases ?? noReleases
   const latestTag = releasesQuery.data?.releases[0]?.tag
   // The changelog reads Hearth's copy without asking GitHub, so a newer
@@ -1434,7 +1447,9 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
   useUpdaterMilestone("targets", overview !== undefined)
   useUpdaterMilestone(
     "actions",
-    overview !== undefined && (eligibility !== undefined || eligibilityFailed)
+    overview !== undefined &&
+      ((eligibility !== undefined && !eligibilityPending(eligibility)) ||
+        eligibilityFailed)
   )
   const refetchOverview = overviewQuery.refetch
   const refetchEligibility = eligibilityQuery.refetch
@@ -1506,7 +1521,6 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
 })
 
 const noReleases: ReadonlyArray<PublicKilnRelease> = []
-const failedEligibility: UpdateEligibility = { hearth: null, relays: [] }
 
 // Times when the open's check for the newest release painted its answer.
 // Its own observer, so the dialog doesn't render as the check starts and
@@ -2032,24 +2046,26 @@ function rankGroup(rank: number): UpdateGroup {
  * Relays grouped by what they need, your own first in each group. Groups are
  * fixed while the dialog is open: a Relay that finishes updating stays where
  * it was instead of jumping to Up to date. New Relays join by their state,
- * and one placed while its Relay was still being asked is placed again once
- * it has answered.
+ * one placed while its Relay was still being asked is placed again once it
+ * has answered, and all are placed again when a newer release is found.
  */
 function useActionGroups(
   relays: ReadonlyArray<UpdateTarget>,
   releases: ReadonlyArray<PublicKilnRelease>
 ): Array<{ group: UpdateGroup; targets: Array<UpdateTarget> }> {
-  const ranksRef = React.useRef<Map<
-    string,
-    { checking: boolean; rank: number }
-  > | null>(null)
+  const ranksRef = React.useRef<{
+    latest: string | undefined
+    ranks: Map<string, { checking: boolean; rank: number }>
+  } | null>(null)
+  const latest = releases[0]?.version
   const relayKeys = relays
     .map((relay) => `${relay.key}:${relay.checking ? 1 : 0}`)
     .join("\n")
-  // Only a change in which Relays exist, or one answering, regroups;
-  // versions alone don't.
+  // Only a change in which Relays exist, one answering, or a newer release
+  // found regroups; versions alone don't.
   const ranks = React.useMemo(() => {
-    const previous = ranksRef.current
+    const previous =
+      ranksRef.current?.latest === latest ? ranksRef.current.ranks : null
     const next = new Map(
       relays.map((relay) => {
         const kept = previous?.get(relay.key)
@@ -2064,10 +2080,10 @@ function useActionGroups(
         ]
       })
     )
-    ranksRef.current = next
+    ranksRef.current = { latest, ranks: next }
     return next
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [relayKeys])
+  }, [latest, relayKeys])
   return React.useMemo(() => {
     const rankOf = (relay: UpdateTarget) => ranks.get(relay.key)?.rank ?? 3
     return updateGroups.flatMap((group) => {
@@ -3873,6 +3889,7 @@ function withDevMockRelays(
   })
   const mockEligibility = relays.map((relay, index) => ({
     eligible: index % 3 === 1,
+    pending: false as const,
     reachable: relay.reachable,
     reason: index % 3 === 1 ? null : "Development mock Relay",
     relayId: relay.relayId,
@@ -4024,15 +4041,21 @@ function UpdateDialogError({
 }
 
 // Each target from the overview, with whether it can update once its Relay
-// has said; until then it's `checking`.
+// has said; until then it's `checking`. When Hearth couldn't be asked
+// (`failed`), the targets it didn't answer for are unavailable instead.
 function updateTargets(
   overview: UpdateOverview,
-  eligibility: UpdateEligibility | undefined
+  eligibility: UpdateEligibility | undefined,
+  failed = false
 ): Array<UpdateTarget> {
-  const checking = eligibility === undefined
+  const unanswered = failed
+    ? "Couldn't check whether this can update. Try again."
+    : null
+  const hearthChecking =
+    !failed && (eligibility === undefined || eligibility.hearthPending)
   const hearthTarget = eligibility?.hearth ?? null
   const hearth: UpdateTarget = {
-    checking,
+    checking: hearthChecking,
     component: "hearth",
     currentVersion: hearthTarget?.currentVersion ?? overview.currentVersion,
     eligible: hearthTarget?.eligible ?? false,
@@ -4041,25 +4064,30 @@ function updateTargets(
     ownerName: null,
     ownedByViewer: false,
     reachable: true,
-    reason: checking
+    reason: hearthChecking
       ? null
       : (hearthTarget?.reason ??
         (hearthTarget
           ? null
-          : "Pair a Relay running on Hearth's Docker host to enable updates.")),
+          : eligibility && !eligibility.hearthPending
+            ? "Pair a Relay running on Hearth's Docker host to enable updates."
+            : unanswered)),
     relayId: hearthTarget?.relayId ?? null,
     waitsForHearth: false,
   }
   const inspected = new Map(
-    eligibility?.relays.map((relay) => [relay.relayId, relay])
+    eligibility?.relays.flatMap((relay) =>
+      relay.pending ? [] : [[relay.relayId, relay] as const]
+    )
   )
   return [
     ...(overview.canUpdateHearth ? [hearth] : []),
     ...overview.relays.map((relay): UpdateTarget => {
       const inspection = inspected.get(relay.relayId)
       const reachable = relay.reachable && (inspection?.reachable ?? true)
+      const checking = reachable && !inspection && !failed
       return {
-        checking: reachable && inspection === undefined,
+        checking,
         component: "relay",
         currentVersion: relay.currentVersion,
         eligible: inspection?.eligible ?? false,
@@ -4068,7 +4096,10 @@ function updateTargets(
         ownerName: relay.ownerName,
         ownedByViewer: relay.ownedByViewer,
         reachable,
-        reason: inspection?.reason ?? relay.reason,
+        reason:
+          inspection?.reason ??
+          relay.reason ??
+          (reachable && !inspection ? unanswered : null),
         relayId: relay.relayId,
         waitsForHearth: overview.relaysWaitForHearth,
       }

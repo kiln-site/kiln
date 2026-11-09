@@ -1,10 +1,10 @@
 import { createServerFn, createServerOnlyFn } from "@tanstack/react-start"
 import { relayIdSchema } from "@workspace/contracts"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { z } from "zod"
 
 import { kilnReleaseManifestEffect } from "@/effect/github-releases"
-import { promiseEffect } from "@/effect/promise"
+import { promiseEffect, recoverPromise } from "@/effect/promise"
 import {
   checkKilnReleasesEffect,
   latestKilnReleasesEffect,
@@ -260,8 +260,9 @@ const updateOverviewEffect = Effect.fnUntraced(function* ({
 /**
  * Whether each target can be updated from Kiln, which only its Relay can
  * tell: it inspects the container. A Relay Hearth knows is away isn't asked.
- * The Updates dialog shows its rows meanwhile, so one slow Relay holds back
- * only its own answer.
+ * Each answer that arrives within `eligibilityWaitMs` is returned, and the
+ * rest are `pending`: the Updates dialog asks again for them, joining the
+ * inspections still running, so one slow Relay holds back only its own row.
  */
 export const getUpdateEligibility = createServerFn({ method: "GET" }).handler(
   async () => {
@@ -275,25 +276,111 @@ export const getUpdateEligibility = createServerFn({ method: "GET" }).handler(
     return runAppEffect(
       "Updates.eligibility",
       Effect.gen(function* () {
-        yield* Effect.annotateCurrentSpan("relay.count", relays.length)
-        const [relayTargets, hearth] = yield* Effect.all(
+        const [relayAnswers, hearth] = yield* Effect.all(
           [
             Effect.forEach(
               relays,
-              (relay) => inspectRelayTarget(relay, connection),
+              (relay) => {
+                const state = connection.relayConnectionState(relay.id)
+                return awaitShared(
+                  // A change of connection asks again rather than reusing
+                  // what the Relay said before it.
+                  `relay:${relay.id}:${state.status}:${state.updatedAt}`,
+                  () =>
+                    recoverPromise(
+                      () =>
+                        runAppEffect(
+                          "Updates.inspectRelay",
+                          inspectRelayTarget(relay, connection)
+                        ),
+                      () => ({
+                        eligible: false,
+                        reachable: false,
+                        reason: "Relay update support is unavailable",
+                        relayId: relay.id,
+                      })
+                    )
+                ).pipe(
+                  Effect.map(
+                    Option.match({
+                      onNone: () => ({
+                        pending: true as const,
+                        relayId: relay.id,
+                      }),
+                      onSome: (answer) => ({ ...answer, pending: false as const }),
+                    })
+                  )
+                )
+              },
               { concurrency: "unbounded" }
             ),
             platformAdmin && container
-              ? findHearthTarget(relays, container, connection)
-              : Effect.succeed(null),
+              ? awaitShared(`hearth:${container}`, () =>
+                  recoverPromise(
+                    () =>
+                      runAppEffect(
+                        "Updates.findHearth",
+                        findHearthTarget(relays, container, connection)
+                      ),
+                    () => null
+                  )
+                )
+              : Effect.succeed(Option.some(null)),
           ],
           { concurrency: "unbounded" }
         )
-        return { hearth, relays: relayTargets }
+        yield* Effect.annotateCurrentSpan({
+          "relay.count": relays.length,
+          "relay.pending": relayAnswers.filter((answer) => answer.pending)
+            .length,
+          "updates.hearth.pending": Option.isNone(hearth),
+        })
+        return {
+          hearth: Option.getOrNull(hearth),
+          hearthPending: Option.isNone(hearth),
+          relays: relayAnswers,
+        }
       })
     )
   }
 )
+
+// How long an eligibility read waits for each answer before calling it
+// pending, and how long an answer is kept once it arrives, so the read
+// asking again for the pending ones doesn't inspect the rest again.
+const eligibilityWaitMs = 1_000
+const answerKeepMs = 10_000
+const sharedAnswers = new Map<
+  string,
+  { answer: Promise<unknown>; settledAt: number | null }
+>()
+
+// The answer for `key`, shared with the reads asking meanwhile, or None if
+// it doesn't arrive within `eligibilityWaitMs`; it keeps running for the
+// next read. `run` must not reject.
+function awaitShared<A>(key: string, run: () => Promise<A>) {
+  return Effect.suspend(() => {
+    const now = Date.now()
+    for (const [entryKey, entry] of sharedAnswers) {
+      if (entry.settledAt !== null && now - entry.settledAt >= answerKeepMs) {
+        sharedAnswers.delete(entryKey)
+      }
+    }
+    let entry = sharedAnswers.get(key)
+    if (!entry) {
+      const created = { answer: run(), settledAt: null as number | null }
+      void created.answer.then(() => {
+        created.settledAt = Date.now()
+      })
+      sharedAnswers.set(key, created)
+      entry = created
+    }
+    const answer = entry.answer as Promise<A>
+    return Effect.promise(() => answer).pipe(
+      Effect.timeoutOption(eligibilityWaitMs)
+    )
+  })
+}
 
 export type UpdateEligibility = Awaited<
   ReturnType<typeof getUpdateEligibility>
@@ -302,7 +389,7 @@ export type UpdateEligibility = Awaited<
 // Asks a Relay about its own container. One Hearth knows is away is shown
 // unavailable at once: it reconnects by itself, and asking would only wait
 // out the connection attempt.
-const inspectRelayTarget = Effect.fn("Updates.inspectRelay")(function* (
+const inspectRelayTarget = Effect.fnUntraced(function* (
   relay: PersistedRelay,
   connection: RelayConnectionModule
 ) {
@@ -346,7 +433,7 @@ let hearthRelayId: string | null = null
 
 // Finds the Relay that can update Hearth: only one on its Docker host sees
 // its container.
-const findHearthTarget = Effect.fn("Updates.findHearth")(function* (
+const findHearthTarget = Effect.fnUntraced(function* (
   relays: ReadonlyArray<PersistedRelay>,
   container: string,
   connection: RelayConnectionModule

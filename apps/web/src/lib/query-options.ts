@@ -98,6 +98,7 @@ import {
 import { getTailscaleStacks } from "@/server/tailscale"
 import { getAuthState } from "@/server/auth"
 import type { ReleaseHistoryCursor } from "@/effect/kiln-release-feed"
+import type { UpdateEligibility } from "@/server/updates"
 import {
   getLatestKilnReleases,
   getRelayRelease,
@@ -1052,16 +1053,26 @@ export function updateOverviewQueryOptions() {
   })
 }
 
-// Asks each Relay whether its target can update; a slow one holds back only
-// its own rows' actions.
+// Asks each Relay whether its target can update. Hearth answers for those
+// that reply within a second and marks the rest pending; asking again
+// joins their inspections, so a slow Relay holds back only its own row.
 export function updateEligibilityQueryOptions() {
   return queryOptions({
     ...systemUpdateOverviewRefetchPolicy,
     queryKey: queryKeys.updateEligibility,
     queryFn: () => traceUpdaterWork("eligibility", () => getUpdateEligibility()),
+    refetchInterval: (query) =>
+      query.state.data && eligibilityPending(query.state.data) ? 100 : false,
     retry: false,
     staleTime: 30_000,
   })
+}
+
+export function eligibilityPending(eligibility: UpdateEligibility): boolean {
+  return (
+    eligibility.hearthPending ||
+    eligibility.relays.some((relay) => relay.pending)
+  )
 }
 
 // Hearth asks GitHub at most every five minutes however often this is read,
