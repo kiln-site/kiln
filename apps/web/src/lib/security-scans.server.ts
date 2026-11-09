@@ -642,7 +642,10 @@ export const setSecurityScansPausedEffect = Effect.fn(
   }
   const running = globalThis.kilnSecuritySweep
   if (running) yield* Fiber.interrupt(running)
-  const relays = (yield* listPersistedRelaysEffect()).filter(inventories)
+  // A paused Relay may still be collecting one, and takes the cancel.
+  const relays = (yield* listPersistedRelaysEffect()).filter((relay) =>
+    relayConnectionFeatures(relay.id).has(relaySecurityInventoryV1Feature)
+  )
   yield* Effect.forEach(
     relays,
     (relay) =>

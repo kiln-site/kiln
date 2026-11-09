@@ -162,6 +162,8 @@ export class SecurityInventory {
   async inventory(
     input: RelaySecurityInventoryRequest
   ): Promise<RelaySecurityInventoryResponse> {
+    // Before anything is awaited, so a cancel during the reads below counts.
+    const generation = this.#generation
     const paths = this.#paths(input.target)
     let meta = await this.#meta(paths.meta)
     const stale =
@@ -170,7 +172,6 @@ export class SecurityInventory {
         meta.collectedAt <= input.collectedAfter)
     if (input.offset === 0 && stale) {
       if (busy()) return { status: "busy" }
-      const generation = this.#generation
       const collected = await recoverPromise(
         () =>
           this.#enqueue(() =>
