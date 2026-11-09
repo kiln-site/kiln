@@ -1061,8 +1061,13 @@ export function updateEligibilityQueryOptions() {
     ...systemUpdateOverviewRefetchPolicy,
     queryKey: queryKeys.updateEligibility,
     queryFn: () => traceUpdaterWork("eligibility", () => getUpdateEligibility()),
+    // Not after a failed read: the dialog's Retry asks again.
     refetchInterval: (query) =>
-      query.state.data && eligibilityPending(query.state.data) ? 100 : false,
+      query.state.status !== "error" &&
+      query.state.data &&
+      eligibilityPending(query.state.data)
+        ? 100
+        : false,
     retry: false,
     staleTime: 30_000,
   })

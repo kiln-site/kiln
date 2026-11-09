@@ -273,6 +273,13 @@ export const getUpdateEligibility = createServerFn({ method: "GET" }).handler(
       platformAdmin ? getContainerHostname() : Promise.resolve(null),
       import("@/lib/relay-connection"),
     ])
+    // How many inspections this read started; the rest it joined or reused.
+    let started = 0
+    const awaitShared = <A>(key: string, run: () => Promise<A>) =>
+      awaitSharedAnswer(key, () => {
+        started += 1
+        return run()
+      })
     return runAppEffect(
       "Updates.eligibility",
       Effect.gen(function* () {
@@ -315,15 +322,24 @@ export const getUpdateEligibility = createServerFn({ method: "GET" }).handler(
               { concurrency: "unbounded" }
             ),
             platformAdmin && container
-              ? awaitShared(`hearth:${container}`, () =>
-                  recoverPromise(
-                    () =>
-                      runAppEffect(
-                        "Updates.findHearth",
-                        findHearthTarget(relays, container, connection)
-                      ),
-                    () => null
-                  )
+              ? awaitShared(
+                  // Asked again when any Relay that might be on Hearth's host
+                  // connects or goes, rather than reusing what it found then.
+                  `hearth:${container}:${relays
+                    .map((relay) => {
+                      const state = connection.relayConnectionState(relay.id)
+                      return `${relay.id}@${state.status}@${state.updatedAt}`
+                    })
+                    .join(",")}`,
+                  () =>
+                    recoverPromise(
+                      () =>
+                        runAppEffect(
+                          "Updates.findHearth",
+                          findHearthTarget(relays, container, connection)
+                        ),
+                      () => null
+                    )
                 )
               : Effect.succeed(Option.some(null)),
           ],
@@ -334,6 +350,7 @@ export const getUpdateEligibility = createServerFn({ method: "GET" }).handler(
           "relay.pending": relayAnswers.filter((answer) => answer.pending)
             .length,
           "updates.hearth.pending": Option.isNone(hearth),
+          "updates.inspections.started": started,
         })
         return {
           hearth: Option.getOrNull(hearth),
@@ -358,7 +375,7 @@ const sharedAnswers = new Map<
 // The answer for `key`, shared with the reads asking meanwhile, or None if
 // it doesn't arrive within `eligibilityWaitMs`; it keeps running for the
 // next read. `run` must not reject.
-function awaitShared<A>(key: string, run: () => Promise<A>) {
+function awaitSharedAnswer<A>(key: string, run: () => Promise<A>) {
   return Effect.suspend(() => {
     const now = Date.now()
     for (const [entryKey, entry] of sharedAnswers) {

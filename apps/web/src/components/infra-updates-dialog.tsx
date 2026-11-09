@@ -1901,31 +1901,30 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
       return next
     })
   }, [])
-  const latestRelease = releases[0] ?? null
-  if (!latestRelease) {
-    return (
-      <p className="type-support flex items-center gap-2 px-5 py-6 text-muted-foreground">
-        {releasesPending ? (
-          <>
-            <LoaderCircle className="size-4 animate-spin" />
-            Checking for updates…
-          </>
-        ) : (
-          "No public Kiln releases are available yet."
-        )}
-      </p>
-    )
-  }
+  // Without a release, the targets still show, with nothing to update to.
+  const latestVersion = releases[0]?.version ?? ""
   const hearthTarget = targets.find((target) => target.component === "hearth")
 
   return (
     <div className="pb-2">
+      {latestVersion ? null : (
+        <p className="type-support flex h-11 items-center gap-2 px-5 text-muted-foreground">
+          {releasesPending ? (
+            <>
+              <LoaderCircle className="size-4 animate-spin" />
+              Checking for updates…
+            </>
+          ) : (
+            "No public Kiln releases are available yet."
+          )}
+        </p>
+      )}
       {hearthTarget ? (
         <UpdateTargetRow
           activityStore={activityStore}
-          first
+          first={latestVersion !== ""}
           focused={false}
-          latestVersion={latestRelease.version}
+          latestVersion={latestVersion}
           releases={releases}
           target={hearthTarget}
           onChangelog={onChangelog}
@@ -1937,7 +1936,7 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
           <UpdateGroupHeader
             collapsed={collapsed.has(group)}
             count={groupTargets.length}
-            first={!hearthTarget && index === 0}
+            first={!hearthTarget && index === 0 && latestVersion !== ""}
             group={group}
             onToggle={toggleGroup}
           />
@@ -1948,7 +1947,7 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
                   activityStore={activityStore}
                   focused={target.relayId === focusedRelayId}
                   key={target.key}
-                  latestVersion={latestRelease.version}
+                  latestVersion={latestVersion}
                   releases={releases}
                   target={target}
                   onChangelog={onChangelog}
@@ -2064,8 +2063,8 @@ function useActionGroups(
   // Only a change in which Relays exist, one answering, or a newer release
   // found regroups; versions alone don't.
   const ranks = React.useMemo(() => {
-    const previous =
-      ranksRef.current?.latest === latest ? ranksRef.current.ranks : null
+    const kept = ranksRef.current
+    const previous = kept && kept.latest === latest ? kept.ranks : null
     const next = new Map(
       relays.map((relay) => {
         const kept = previous?.get(relay.key)
@@ -4498,6 +4497,7 @@ function targetHasUpdate(
   target: UpdateTarget,
   releases: ReadonlyArray<PublicKilnRelease>
 ): boolean {
+  if (releases.length === 0) return false
   const comparison = compareLatestReleaseVersion(
     target.currentVersion,
     releases
