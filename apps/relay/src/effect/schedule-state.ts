@@ -1,4 +1,4 @@
-import { Effect, Result } from "effect"
+import { Clock, Effect, Result } from "effect"
 import type { SqlClient } from "effect/sql/SqlClient"
 import { isSqlError } from "effect/sql/SqlError"
 import { z } from "zod"
@@ -57,6 +57,24 @@ export interface ScheduleOccurrence {
 export type RelayScheduleState = ReturnType<typeof makeRelayScheduleState>
 
 const historyLimit = 1_000
+
+/**
+ * When a schedule a Relay worked out in its own time zone next runs in UTC.
+ * A run still to come moves to its UTC time; one already due is kept, so the
+ * Relay records it as missed when it starts.
+ */
+export const utcNextRunAt = (
+  cron: string,
+  enabled: boolean,
+  nextRunAt: number | null,
+  now: number
+) =>
+  enabled && nextRunAt !== null && nextRunAt > now
+    ? Result.getOrElse(
+        Result.try(() => nextScheduleOccurrence(cron, now).getTime()),
+        () => nextRunAt
+      )
+    : nextRunAt
 
 const deployment = (
   scheduleId: string,
@@ -191,8 +209,19 @@ export function makeRelayScheduleState(sql: SqlClient) {
         "import_legacy",
         sql.withTransaction(
           Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
             for (const schedule of state.schedules) {
-              const { nextRunAt, timezone: _, ...definition } = schedule
+              const {
+                nextRunAt: storedNextRunAt,
+                timezone: _,
+                ...definition
+              } = schedule
+              const nextRunAt = utcNextRunAt(
+                schedule.cron,
+                schedule.enabled,
+                storedNextRunAt,
+                now
+              )
               yield* sql`INSERT INTO relay_schedules
                   (schedule_id, revision, enabled, next_run_at, definition_json)
                 SELECT ${schedule.id}, ${schedule.revision}, ${schedule.enabled ? 1 : 0}, ${nextRunAt}, ${JSON.stringify(definition)}

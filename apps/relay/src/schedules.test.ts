@@ -184,19 +184,24 @@ describe("Relay schedule time zone", () => {
       expect(applied.nextRunAt).toBe(Date.parse("2026-01-16T00:00:00.000Z"))
       schedules.close()
 
-      // As a Relay stored it before schedules ran in UTC.
+      // As a Relay stored it before schedules ran in UTC: with a zone, and
+      // next running at midnight in that zone.
       await Effect.runPromise(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient
           yield* sql`
             UPDATE relay_schedules
-            SET definition_json = json_set(definition_json, '$.timezone', 'America/New_York')
+            SET definition_json = json_set(definition_json, '$.timezone', 'America/New_York'),
+              next_run_at = ${Date.parse("2026-01-16T05:00:00.000Z")}
           `
           yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 39`
         }).pipe(Effect.provide(SqliteClient.layer({ filename })))
       )
 
       const recovered = await restart()
+      expect((await recovered.overview()).deployments).toMatchObject([
+        { nextRunAt: Date.parse("2026-01-16T00:00:00.000Z") },
+      ])
       await expect(runNow(recovered)).resolves.toMatchObject({
         scheduleId: projection.id,
         status: "running",

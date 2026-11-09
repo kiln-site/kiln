@@ -123,7 +123,10 @@ export function schedulePresetFromCron(
     }
   }
   if (weekday === "*" && integer.test(day)) {
+    // Both days must be ones the preset offers, or saving it again would
+    // change the cron or be refused.
     const localDay = Number(day) + dayShift
+    if (Number(day) > scheduleMonthDays) return null
     if (localDay < 1 || localDay > scheduleMonthDays) return null
     return { kind: "monthly", day: localDay, minutes }
   }

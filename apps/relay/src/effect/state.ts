@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto"
 
 import { SqliteClient, SqliteMigrator } from "@effect/sql-sqlite-node"
 import type { z } from "zod"
-import { Context, Effect, Layer, Predicate, Result, Schema } from "effect"
+import {
+  Clock,
+  Context,
+  Effect,
+  Layer,
+  Predicate,
+  Result,
+  Schema,
+} from "effect"
 import * as SqlClient from "effect/sql/SqlClient"
 import type {
   BackupFailureCode,
@@ -41,6 +49,7 @@ import { RelayStateError } from "./errors.js"
 import { BROWSER_AUTHORIZATION_FLOOR_RETENTION_MS } from "../browser-security.js"
 import {
   makeRelayScheduleState,
+  utcNextRunAt,
   type RelayScheduleState,
 } from "./schedule-state.js"
 import {
@@ -1828,13 +1837,39 @@ const migrations = SqliteMigrator.fromRecord({
       legacy_id TEXT NOT NULL UNIQUE
     ) STRICT`
   }),
-  // Schedules run in UTC, so what Hearth sent no longer names a time zone.
+  // Schedules run in UTC, so what Hearth sent no longer names a time zone,
+  // and a run worked out in the Relay's own zone moves to its UTC time.
   "39_schedules_in_utc": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
+    const now = yield* Clock.currentTimeMillis
     yield* sql`
       UPDATE relay_schedules
       SET definition_json = json_remove(definition_json, '$.timezone')
     `
+    const schedules = yield* sql<{
+      cron: string | null
+      enabled: number
+      next_run_at: number | null
+      schedule_id: string
+    }>`
+      SELECT schedule_id, enabled, next_run_at,
+        json_extract(definition_json, '$.cron') AS cron
+      FROM relay_schedules
+    `
+    for (const schedule of schedules) {
+      if (schedule.cron === null) continue
+      const nextRunAt = utcNextRunAt(
+        schedule.cron,
+        schedule.enabled === 1,
+        schedule.next_run_at,
+        now
+      )
+      if (nextRunAt === schedule.next_run_at) continue
+      yield* sql`
+        UPDATE relay_schedules SET next_run_at = ${nextRunAt}
+        WHERE schedule_id = ${schedule.schedule_id}
+      `
+    }
   }),
 })
 
