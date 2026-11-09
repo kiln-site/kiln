@@ -32,7 +32,7 @@ import {
   updateRelaySnapshots,
   updateServerWorkspaces,
 } from "@/lib/server-workspace"
-import type { UpdateOverview } from "@/server/updates"
+import type { UpdateEligibility, UpdateOverview } from "@/server/updates"
 
 export interface ApplyRealtimeEventInput {
   event: Exclude<RealtimeClientEvent, { type: "relay.invalidate" | "reset" }>
@@ -231,7 +231,8 @@ function applyRealtimeSnapshotEvent(
 type RelayStatusEvent = Extract<RealtimeClientEvent, { type: "relay.status" }>
 
 // The Updates dialog shows a Relay offline from Hearth's connection state
-// when it opened. A Relay that comes back, or goes, is read again, with
+// when it opened, or from an inspection it couldn't answer, as while it was
+// still connecting. A Relay that comes back, or goes, is read again, with
 // whether it can update; an update that's running holds both still.
 function refreshUpdatesForReachability(
   queryClient: QueryClient,
@@ -240,7 +241,14 @@ function refreshUpdatesForReachability(
   const shown = queryClient
     .getQueryData<UpdateOverview>(queryKeys.updates)
     ?.relays.find((relay) => relay.relayId === event.relayId)
-  if (!shown || shown.reachable === (event.status === "connected")) return
+  if (!shown) return
+  const inspected = queryClient
+    .getQueryData<UpdateEligibility>(queryKeys.updateEligibility)
+    ?.relays.find((relay) => relay.relayId === event.relayId)
+  const reachable =
+    shown.reachable &&
+    (inspected === undefined || inspected.pending || inspected.reachable)
+  if (reachable === (event.status === "connected")) return
   void queryClient.invalidateQueries({ exact: true, queryKey: queryKeys.updates })
   void queryClient.invalidateQueries({
     exact: true,

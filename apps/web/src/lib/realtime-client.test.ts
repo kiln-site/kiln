@@ -9,6 +9,17 @@ const relayServer = vi.hoisted(() => ({
   getServerWorkspace: vi.fn(),
 }))
 vi.mock("@/server/relay", () => relayServer)
+// What Hearth answers the Updates dialog with; tests decide.
+const updatesServer = vi.hoisted(() => ({
+  getLatestKilnReleases: vi.fn(),
+  getRelayRelease: vi.fn(),
+  getReleaseHistory: vi.fn(),
+  getUpdateEligibility: vi.fn(),
+  getUpdateOverview: vi.fn(),
+}))
+vi.mock("@/server/updates", () => updatesServer)
+
+import { QueryObserver } from "@tanstack/react-query"
 
 import { getRelayInstancesCollection } from "@/lib/collections/relay-instances"
 import { createAppClients, type AppRouterContext } from "@/lib/query-client"
@@ -18,6 +29,10 @@ import type {
   RealtimeClientEvent,
 } from "@/lib/realtime-events"
 import { applyRealtimeEventSafely } from "@/lib/realtime-client"
+import {
+  updateEligibilityQueryOptions,
+  updateOverviewQueryOptions,
+} from "@/lib/query-options"
 import {
   ensureServerWorkspace,
   type ServerWorkspace,
@@ -131,5 +146,77 @@ describe("game server pages", () => {
     reads[1]!.answer(foundPage(alpha))
 
     await expect(navigation).resolves.toMatchObject({ status: "found" })
+  })
+})
+
+describe("Updates dialog", () => {
+  const relayId = "1".repeat(12)
+  const eligibility = (answer: { eligible: boolean; reachable: boolean }) => ({
+    hearth: null,
+    hearthPending: false,
+    relays: [
+      {
+        ...answer,
+        pending: false,
+        reason: answer.reachable ? null : "The Relay didn't answer in time",
+        relayId,
+      },
+    ],
+  })
+
+  // A Relay still connecting when the dialog opened is listed as reachable,
+  // and its inspection timed out; once it connects it's asked again.
+  it("asks a Relay that has connected whether it can update", async () => {
+    const clients = fleet()
+    updatesServer.getUpdateOverview.mockResolvedValue({
+      canUpdateHearth: false,
+      currentVersion: "0.1.0",
+      previousVersions: {},
+      relays: [
+        {
+          currentVersion: "0.1.0",
+          name: "Relay A",
+          ownedByViewer: true,
+          ownerName: null,
+          reachable: true,
+          reason: null,
+          relayId,
+        },
+      ],
+      relaysWaitForHearth: false,
+      releases: [],
+      releasesCheckedAt: null,
+    })
+    updatesServer.getUpdateEligibility
+      .mockResolvedValueOnce(eligibility({ eligible: false, reachable: false }))
+      .mockResolvedValue(eligibility({ eligible: true, reachable: true }))
+    await clients.queryClient.fetchQuery(updateOverviewQueryOptions())
+    const observer = new QueryObserver(
+      clients.queryClient,
+      updateEligibilityQueryOptions()
+    )
+    const unsubscribe = observer.subscribe(() => undefined)
+    await vi.waitFor(() =>
+      expect(observer.getCurrentResult().data?.relays[0]).toMatchObject({
+        reachable: false,
+      })
+    )
+
+    applyEvent(clients, {
+      epoch,
+      relayId,
+      sequence: 2,
+      status: "connected",
+      type: "relay.status",
+      updating: false,
+    })
+
+    await vi.waitFor(() =>
+      expect(observer.getCurrentResult().data?.relays[0]).toMatchObject({
+        eligible: true,
+        reachable: true,
+      })
+    )
+    unsubscribe()
   })
 })
