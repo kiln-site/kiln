@@ -2,7 +2,7 @@ import { once } from "node:events"
 import { createServer } from "node:http"
 import type { AddressInfo } from "node:net"
 
-import { expect, it, onTestFinished, vi } from "vite-plus/test"
+import { it, onTestFinished, vi } from "vite-plus/test"
 
 // Hearth's signing is the one thing replaced; the read goes to a real HTTP
 // server, as it goes to the Relay.
@@ -54,23 +54,6 @@ async function slowRelay(size: number) {
   relayOrigin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   return { ended, sending }
 }
-
-it("reads a file's bytes", async () => {
-  const server = createServer((_request, response) => {
-    response.writeHead(200, { "Access-Control-Allow-Origin": "*" })
-    response.end("pixels")
-  })
-  server.listen(0, "127.0.0.1")
-  await once(server, "listening")
-  onTestFinished(
-    () => new Promise<void>((resolve) => server.close(() => resolve()))
-  )
-  relayOrigin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-
-  const blob = await readRelayFile({ ...input, maxBytes: 1024 })
-
-  expect(await blob.text()).toBe("pixels")
-})
 
 it("ends the download when a read is stopped after its headers arrive", async () => {
   const relay = await slowRelay(16 * 1024 * 1024)

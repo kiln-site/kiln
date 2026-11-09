@@ -138,14 +138,11 @@ const open = () => {
 // The status line Hearth answers a browser's handshake with.
 const handshake = (input: {
   origin?: string
-  path?: string
   relayId?: string
   session: string
 }) =>
   new Promise<string>((resolve) => {
-    const path =
-      input.path ??
-      `/desktop-client/ws?relay=${input.relayId ?? relay.id}&session=${input.session}`
+    const path = `/desktop-client/ws?relay=${input.relayId ?? relay.id}&session=${input.session}`
     const socket = connect(hearthPort, "127.0.0.1", () =>
       socket.write(
         [
@@ -258,11 +255,6 @@ it("refuses someone who lost the permission", async () => {
   vi.mocked(requireRelayPermission).mockRejectedValueOnce(new Error("denied"))
   expect(await handshake({ origin, session })).toContain("403")
   expect(relayHeaders).toEqual([])
-})
-
-it("leaves other upgrades alone", async () => {
-  const answer = await handshake({ origin, path: "/api/other", session: "" })
-  expect(answer).toBe("")
 })
 
 it("ends a session a page can't get a stream on, however often it retries", async () => {

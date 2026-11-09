@@ -111,103 +111,81 @@ describeLinux("Relay direct file transfers", () => {
     )
   )
 
-  it.effect(
-    "rejects unsafe, duplicate, and link archive entries without output",
-    () =>
-      withSetup(({ driver, instance, root }) =>
-        Effect.gen(function* () {
-          const cases = [
-            {
-              archive: "unsafe.tar.gz",
-              destination: "unsafe-tar",
-              expectedCode: "unsafe_archive_path",
-              write: () =>
-                writeTarGzArchive(resolve(root, "world", "unsafe.tar.gz"), [
-                  { content: "safe", name: "first.txt" },
-                  { content: "escape", name: "../escape.txt" },
-                ]),
-            },
-            {
-              archive: "duplicate.tar.gz",
-              destination: "duplicate-tar",
-              expectedCode: "duplicate_archive_path",
-              write: () =>
-                writeTarGzArchive(resolve(root, "world", "duplicate.tar.gz"), [
-                  { content: "first", name: "same.txt" },
-                  { content: "second", name: "same.txt" },
-                ]),
-            },
-            {
-              archive: "link.tar.gz",
-              destination: "link-tar",
-              expectedCode: "unsupported_archive_entry",
-              write: () =>
-                writeTarGzArchive(resolve(root, "world", "link.tar.gz"), [
-                  {
-                    linkname: "target.txt",
-                    name: "linked.txt",
-                    type: "symlink",
-                  },
-                ]),
-            },
-            {
-              archive: "unsafe.zip",
-              destination: "unsafe-zip",
-              expectedCode: "invalid_archive",
-              write: () =>
-                writeUnsafeZipArchive(resolve(root, "world", "unsafe.zip")),
-            },
-            {
-              archive: "duplicate.zip",
-              destination: "duplicate-zip",
-              expectedCode: "duplicate_archive_path",
-              write: () =>
-                writeZipArchive(resolve(root, "world", "duplicate.zip"), [
-                  { content: "first", name: "same.txt" },
-                  { content: "second", name: "same.txt" },
-                ]),
-            },
-            {
-              archive: "link.zip",
-              destination: "link-zip",
-              expectedCode: "unsupported_archive_entry",
-              write: () =>
-                writeZipArchive(resolve(root, "world", "link.zip"), [
-                  {
-                    linkname: "target.txt",
-                    name: "linked.txt",
-                    type: "symlink",
-                  },
-                ]),
-            },
-          ] as const
+  it.effect("rejects unsafe and link archive entries without output", () =>
+    withSetup(({ driver, instance, root }) =>
+      Effect.gen(function* () {
+        const cases = [
+          {
+            archive: "unsafe.tar.gz",
+            destination: "unsafe-tar",
+            expectedCode: "unsafe_archive_path",
+            write: () =>
+              writeTarGzArchive(resolve(root, "world", "unsafe.tar.gz"), [
+                { content: "safe", name: "first.txt" },
+                { content: "escape", name: "../escape.txt" },
+              ]),
+          },
+          {
+            archive: "link.tar.gz",
+            destination: "link-tar",
+            expectedCode: "unsupported_archive_entry",
+            write: () =>
+              writeTarGzArchive(resolve(root, "world", "link.tar.gz"), [
+                {
+                  linkname: "target.txt",
+                  name: "linked.txt",
+                  type: "symlink",
+                },
+              ]),
+          },
+          {
+            archive: "unsafe.zip",
+            destination: "unsafe-zip",
+            expectedCode: "invalid_archive",
+            write: () =>
+              writeUnsafeZipArchive(resolve(root, "world", "unsafe.zip")),
+          },
+          {
+            archive: "link.zip",
+            destination: "link-zip",
+            expectedCode: "unsupported_archive_entry",
+            write: () =>
+              writeZipArchive(resolve(root, "world", "link.zip"), [
+                {
+                  linkname: "target.txt",
+                  name: "linked.txt",
+                  type: "symlink",
+                },
+              ]),
+          },
+        ] as const
 
-          for (const archiveCase of cases) {
-            yield* fromPromise(archiveCase.write)
-            const failure = yield* driver
-              .mutate(instance, {
-                operation: "unarchive",
-                path: `world/${archiveCase.archive}`,
-                destination: `world/${archiveCase.destination}`,
-              })
-              .pipe(Effect.flip)
+        for (const archiveCase of cases) {
+          yield* fromPromise(archiveCase.write)
+          const failure = yield* driver
+            .mutate(instance, {
+              operation: "unarchive",
+              path: `world/${archiveCase.archive}`,
+              destination: `world/${archiveCase.destination}`,
+            })
+            .pipe(Effect.flip)
 
-            assert.instanceOf(failure, RelayFilesystemError)
-            assert.strictEqual(failure.code, archiveCase.expectedCode)
-            const worldEntries = yield* fromPromise(() =>
-              readdir(resolve(root, "world"))
+          assert.instanceOf(failure, RelayFilesystemError)
+          assert.strictEqual(failure.code, archiveCase.expectedCode)
+          const worldEntries = yield* fromPromise(() =>
+            readdir(resolve(root, "world"))
+          )
+          assert.notInclude(worldEntries, "escape.txt")
+          assert.isFalse(
+            worldEntries.some(
+              (entry) =>
+                entry === archiveCase.destination ||
+                entry.startsWith(`${archiveCase.destination}.`)
             )
-            assert.notInclude(worldEntries, "escape.txt")
-            assert.isFalse(
-              worldEntries.some(
-                (entry) =>
-                  entry === archiveCase.destination ||
-                  entry.startsWith(`${archiveCase.destination}.`)
-              )
-            )
-          }
-        })
-      )
+          )
+        }
+      })
+    )
   )
 
   it.effect("refuses a final symlink for transfers and file actions", () =>

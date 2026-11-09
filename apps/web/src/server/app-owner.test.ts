@@ -16,7 +16,6 @@ afterAll(() => disposeAppRuntime())
 const relayId = "1".repeat(12)
 const otherRelayId = "5".repeat(12)
 const appId = "a".repeat(12)
-const orphanedId = "b".repeat(12)
 const target = (id: string) => ({ appId: id, relayId })
 
 const sessionUser = (id: string): AuthenticatedUser => ({
@@ -73,14 +72,11 @@ const insertApp = (id: string, createdBy: string) =>
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   yield* insertUser("owner", { name: "Steve" })
-  for (const id of ["manager", "viewer", "stranger", "relay-only", "elsewhere"])
+  for (const id of ["viewer", "stranger", "relay-only", "elsewhere"])
     yield* insertUser(id)
   yield* insertRelay(relayId)
   yield* insertRelay(otherRelayId)
   yield* insertApp(appId, "owner")
-  // Its creator's account is gone.
-  yield* insertApp(orphanedId, "deleted-user")
-  yield* grant("manager", relayId, ["app.read", "access.read"])
   yield* grant("viewer", relayId, ["app.read"])
   // Relay access that doesn't reach its apps.
   yield* grant("relay-only", relayId, ["relay.read", "access.read"])
@@ -95,8 +91,8 @@ const refusal = (promise: Promise<unknown>) =>
     )
   )
 
-const ownerFor = (userId: string, id = appId) =>
-  Effect.promise(() => getAppOwnerHandler(sessionUser(userId), target(id)))
+const ownerFor = (userId: string) =>
+  Effect.promise(() => getAppOwnerHandler(sessionUser(userId), target(appId)))
 
 describeMysql("app owner", () => {
   layer(TestDatabase)((it) => {

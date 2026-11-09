@@ -29,7 +29,7 @@ export function delimiterFor(path: string, text: string): string {
 }
 
 /** The rows of delimited text, each a list of its fields. */
-export function parseDelimitedText(
+function parseDelimitedText(
   text: string,
   delimiter: string
 ): Array<Array<string>> {

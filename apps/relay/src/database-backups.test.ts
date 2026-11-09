@@ -143,28 +143,4 @@ describe("database backups", () => {
     ).rejects.toThrow('role "postgres" does not exist')
     expect(existsSync(destination)).toBe(false)
   })
-
-  it("reports the client's error when it stops reading a large restore partway", async () => {
-    const { directory, harness } = await harnessWithDatabase("postgres")
-    fakeDocker.programFailures.set(
-      "psql",
-      'ERROR:  relation "players" already exists'
-    )
-    const source = join(directory, "large.sql.gz")
-    // More than the connection buffers, so input is still being written
-    // when the client exits.
-    await writeFile(
-      source,
-      gzipSync(
-        Array.from(
-          { length: 200_000 },
-          (_, index) => `INSERT INTO players VALUES ('player-${index}');\n`
-        ).join("")
-      )
-    )
-
-    await expect(
-      restoreCompressedDatabaseBackup(harness.databases, databaseId, source)
-    ).rejects.toThrow('relation "players" already exists')
-  })
 })

@@ -478,11 +478,6 @@ export class FakeDocker {
     this.#endExecs(container)
   }
 
-  /** Simulates Docker or the host restarting the container's process. */
-  restartProcess(containerName: string): void {
-    this.#start(this.#requiredContainer(containerName))
-  }
-
   /** Pauses the next matching operation until the test releases it. */
   hold(match: FakeDockerOperation): HeldOperation {
     let reached!: () => void

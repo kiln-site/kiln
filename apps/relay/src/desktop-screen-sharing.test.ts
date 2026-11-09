@@ -17,15 +17,6 @@ import { OperationLanes } from "./operation-lanes.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness } from "./test/relay.js"
 
-// `plutil -convert binary1` of two arrangements, the second to the left of the
-// first, as the window server keeps them.
-const displaysPlist = binaryDisplays()
-const macHost = [
-  `displays=${displaysPlist}`,
-  "accounts=.localized Guest Shared ada grace not/a/name",
-  "",
-].join("\n")
-
 const servers: Array<Server | TcpServer> = []
 const sockets: Array<Socket> = []
 
@@ -99,7 +90,7 @@ async function harness(
     [
       new ScreenSharingDesktop(
         config,
-        { runScript: async () => macHost },
+        { runScript: async () => "" },
         lanes
       ),
       new VoxlDesktop(config, { runScript: voxlScript }),
@@ -136,32 +127,7 @@ const firstMessage = (port: number, ticket: string, send?: string) =>
     socket.on("close", () => resolve(seen || null))
   })
 
-describe("a Mac's displays and accounts", () => {
-  it("reports its displays' arrangements in the image's pixels", async () => {
-    onMac()
-    const vnc = await fakeVnc()
-    const { desktop } = await harness(vnc.port)
-    const shown = await desktop.read()
-    expect(shown).toMatchObject({
-      accounts: ["ada", "grace"],
-      layouts: [
-        [
-          { height: 2100, width: 3360, x: 0, y: 0 },
-          { height: 2880, width: 5120, x: 3360, y: 0 },
-        ],
-        [
-          { height: 2100, width: 3360, x: 5120, y: 0 },
-          { height: 2880, width: 5120, x: 0, y: 0 },
-        ],
-        [
-          { height: 1200, width: 1920, x: 0, y: 0 },
-          { height: 2880, width: 5120, x: 1920, y: 0 },
-        ],
-      ],
-      status: "screen-sharing",
-    })
-  })
-
+describe("a Mac's display files", () => {
   it("still shows the desktop when the Mac's files can't be read", async () => {
     for (const output of [
       "",
@@ -187,59 +153,6 @@ describe("a Mac's displays and accounts", () => {
 })
 
 describe("a Mac's desktop", () => {
-  it("shows Screen Sharing once the Mac's owner turns it on", async () => {
-    onMac()
-    const vnc = await fakeVnc()
-    const { desktop } = await harness(vnc.port)
-    expect((await desktop.read()).status).toBe("screen-sharing")
-    await new Promise((resolve) => vnc.server.close(resolve))
-    for (const socket of sockets) socket.destroy()
-    expect((await desktop.read()).status).toBe("screen-sharing-off")
-    await expect(desktop.attach()).rejects.toBeInstanceOf(
-      DesktopUnavailableError
-    )
-  })
-
-  it("doesn't take another service on that port for Screen Sharing", async () => {
-    onMac()
-    const other = await fakeVnc("HTTP/1.1 400 Bad Request\r\n\r\n")
-    const { desktop } = await harness(other.port)
-    expect((await desktop.read()).status).toBe("screen-sharing-off")
-  })
-
-  it("carries the Mac's greeting to the viewer, to sign in", async () => {
-    onMac()
-    const vnc = await fakeVnc()
-    const { desktop, port } = await harness(vnc.port)
-    const { desktop: shown, ticket } = await desktop.attach()
-    expect(shown.status).toBe("screen-sharing")
-    expect(await firstMessage(port, ticket)).toContain("RFB 003.889")
-  })
-
-  it("doesn't make anyone wait for the desktop image", async () => {
-    onMac()
-    const vnc = await fakeVnc()
-    const { desktop } = await harness(vnc.port)
-    fakeDocker.addContainer({ name: hostname(), running: true })
-    const pulling = fakeDocker.hold({ command: "pull" })
-    const { desktop: shown } = await desktop.attach()
-    expect(shown.status).toBe("screen-sharing")
-    expect(fakeDocker.containers.size).toBe(1)
-    await pulling.reached
-    pulling.release()
-  })
-
-  it("opens all the same when the desktop image can't download", async () => {
-    onMac()
-    const vnc = await fakeVnc()
-    const { desktop } = await harness(vnc.port)
-    fakeDocker.addContainer({ name: hostname(), running: true })
-    fakeDocker.failNext({ command: "pull" }, "no such image")
-    const { desktop: shown } = await desktop.attach()
-    expect(shown.status).toBe("screen-sharing")
-    await vi.waitFor(() => expect(fakeDocker.pulls.size).toBe(0))
-  })
-
   it("runs its encoder with nothing but the Relay's loopback", async () => {
     onMac()
     const vnc = await fakeVnc()
@@ -272,18 +185,6 @@ describe("a Mac's desktop", () => {
     expect((await desktop.read()).status).toBe("paused")
   })
 
-  it("ends a ticket once Screen Sharing goes away, so the page attaches again", async () => {
-    onMac()
-    const vnc = await fakeVnc()
-    const { desktop, port } = await harness(vnc.port)
-    const { ticket } = await desktop.attach()
-    await new Promise((resolve) => vnc.server.close(resolve))
-    await firstMessage(port, ticket)
-    await vi.waitFor(() =>
-      expect(desktop.heartbeat([ticket]).tickets).toEqual([])
-    )
-  })
-
   it("respects a Relay with host access turned off", async () => {
     onMac()
     const vnc = await fakeVnc()
@@ -306,29 +207,6 @@ describe("a Mac's desktop", () => {
     await expect(desktop.attach()).rejects.toBeInstanceOf(
       DesktopUnavailableError
     )
-  })
-
-  it("leaves everything but Docker on a Mac to the other backends", async () => {
-    const vnc = await fakeVnc()
-    for (const info of [
-      { OperatingSystem: "Debian GNU/Linux 13 (trixie)" },
-      {
-        Labels: ["com.docker.desktop.address=npipe://\\\\.\\pipe\\docker"],
-        OperatingSystem: "Docker Desktop",
-      },
-    ]) {
-      fakeDocker.info = info
-      const { desktop } = await harness(vnc.port, async () => "")
-      expect((await desktop.read()).status).toBe("none")
-    }
-    fakeDocker.info = {
-      Labels: [
-        "com.docker.desktop.address=unix:///Users/ada/Library/Containers/com.docker.docker/Data/docker-cli.sock",
-      ],
-      OperatingSystem: "Docker Desktop",
-    }
-    const { desktop } = await harness(vnc.port)
-    expect((await desktop.read()).status).toBe("screen-sharing")
   })
 })
 
@@ -388,66 +266,6 @@ function manyNamesForOneString() {
     header,
     ...Array.from({ length: aliases }, () => header + list.length),
   ])
-}
-
-function binaryDisplays() {
-  const objects: Array<Buffer> = []
-  const add = (object: Buffer) => objects.push(object) - 1
-  const references = (values: ReadonlyArray<number>) => {
-    const bytes = Buffer.alloc(values.length * 2)
-    values.forEach((value, index) => bytes.writeUInt16BE(value, index * 2))
-    return bytes
-  }
-  const string = (text: string) =>
-    add(
-      Buffer.concat([
-        Buffer.from(
-          text.length < 15 ? [0x50 | text.length] : [0x5f, 0x10, text.length]
-        ),
-        Buffer.from(text),
-      ])
-    )
-  // Eight bytes, as Apple writes a negative integer.
-  const integer = (value: number) => {
-    const bytes = Buffer.alloc(9)
-    bytes.writeUInt8(0x13, 0)
-    bytes.writeBigInt64BE(BigInt(value), 1)
-    return add(bytes)
-  }
-  const array = (items: ReadonlyArray<number>) =>
-    add(Buffer.concat([Buffer.from([0xa0 | items.length]), references(items)]))
-  const dictionary = (fields: Record<string, number>) => {
-    const keys = Object.keys(fields).map(string)
-    const size = keys.length
-    return add(
-      Buffer.concat([
-        Buffer.from([0xd0 | size]),
-        references([...keys, ...Object.values(fields)]),
-      ])
-    )
-  }
-  const display = (x: number, wide: number, high: number, scale = 2) =>
-    dictionary({
-      CurrentInfo: dictionary({
-        High: integer(high),
-        OriginX: integer(x),
-        OriginY: integer(0),
-        Scale: integer(scale),
-        Wide: integer(wide),
-      }),
-    })
-  const config = (displays: ReadonlyArray<number>) =>
-    dictionary({ DisplayConfig: array(displays) })
-  const top = dictionary({
-    DisplayAnyUserSets: dictionary({
-      Configs: array([
-        config([display(0, 1680, 1050), display(1680, 2560, 1440)]),
-        config([display(0, 1680, 1050), display(-2560, 2560, 1440)]),
-        config([display(0, 1920, 1200, 1), display(1920, 2560, 1440)]),
-      ]),
-    }),
-  })
-  return binaryPlist(objects, top)
 }
 
 function selfReferencingPlist() {

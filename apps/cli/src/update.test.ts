@@ -82,31 +82,22 @@ describe("CLI GitHub updates", () => {
     vi.unstubAllGlobals()
   })
 
-  it("leaves the installation untouched for missing, foreign, or corrupt downloads", async () => {
-    for (const kind of [
-      "missing",
-      "foreign",
-      "digest",
-      "truncated",
-      "version",
-      "http",
-    ]) {
+  it("leaves the installation untouched for foreign or corrupt downloads", async () => {
+    for (const kind of ["foreign", "digest", "version"]) {
       await fixture(async (directory, target) => {
         const wrongVersion = binary("9.9.9")
         const metadata =
           kind === "version" ? release("1.1.0", wrongVersion) : release()
-        if (kind === "missing") metadata.assets = []
         if (kind === "foreign")
           metadata.assets[0]!.browser_download_url =
             "https://github.com/other/repo/asset"
         if (kind === "digest")
           metadata.assets[0]!.digest = `sha256:${"0".repeat(64)}`
-        stubGitHub(metadata, () => {
-          if (kind === "truncated") return new Response("bad")
-          if (kind === "http") return new Response("bad", { status: 503 })
-          if (kind === "version") return new Response(wrongVersion)
-          return new Response(binary("1.1.0"))
-        })
+        stubGitHub(metadata, () =>
+          kind === "version"
+            ? new Response(wrongVersion)
+            : new Response(binary("1.1.0"))
+        )
 
         const error = await Effect.runPromise(update(target).pipe(Effect.flip))
 

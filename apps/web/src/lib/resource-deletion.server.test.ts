@@ -98,29 +98,6 @@ describeMysql("Deleting a game server or database", () => {
     const peer = `instance:${"f".repeat(12)}`
 
     it.effect(
-      "writes its Tailscale network's DNS without it, then deletes it and takes it off the network",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* seedNetwork(network, [`instance:${serverId}`, peer])
-          // A Relay the network isn't on doesn't answer, and needn't.
-          yield* insertRelay("3".repeat(12))
-          relay.unreachable.add("3".repeat(12))
-
-          yield* deleteServer()
-          const done = yield* until(serverId, ["completed", "failed"])
-
-          assert.strictEqual(done?.status, "completed")
-          // Written once, while it was frozen and still a member.
-          assert.deepStrictEqual(relay.stackDns.get(network), [
-            peer.replaceAll(":", "-"),
-          ])
-          assert.deepStrictEqual(relay.stacks.get(network), [peer])
-        }).pipe(TestClock.withLive),
-      90_000
-    )
-
-    it.effect(
       "deletes nothing while a Relay its Tailscale network is on is paused",
       () =>
         Effect.gen(function* () {

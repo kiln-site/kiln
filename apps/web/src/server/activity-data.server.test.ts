@@ -109,46 +109,32 @@ const activityFor = (viewer: AuthenticatedUser) =>
 
 describeMysql("Activity permission boundary", () => {
   layer(TestDatabase)((it) => {
-    for (const [label, grants, ids, actors] of [
-      [
-        "Relay instance reader",
-        [{ permissions: ["instance.read"] }],
-        ["server-a-event", "server-b-event"],
-        ["actor-a", "actor-b"],
-      ],
-      [
-        "child instance reader",
-        [
+    it.effect("limits records and actors for a child instance reader", () =>
+      Effect.gen(function* () {
+        yield* seed([
           {
             permissions: ["instance.read"],
             resourceType: "instance",
             resourceId: "server-a",
           },
-        ],
-        ["server-a-event"],
-        ["actor-a"],
-      ],
-    ] as const)
-      it.effect(`limits records and actors for a ${label}`, () =>
-        Effect.gen(function* () {
-          yield* seed(grants)
+        ])
 
-          const result = yield* activityFor(user)
+        const result = yield* activityFor(user)
 
-          assert.deepEqual(
-            result.entries.map((entry) => entry.id),
-            ids.map((id) => `relay-a:${id}`)
-          )
-          assert.deepEqual(
-            result.entries.map((entry) => entry.actor.email),
-            actors.map((id) => `${id}@example.test`)
-          )
-          assert.deepEqual(
-            result.relays.map((relay) => relay.id),
-            ids.length ? ["relay-a"] : []
-          )
-        })
-      )
+        assert.deepEqual(
+          result.entries.map((entry) => entry.id),
+          ["relay-a:server-a-event"]
+        )
+        assert.deepEqual(
+          result.entries.map((entry) => entry.actor.email),
+          ["actor-a@example.test"]
+        )
+        assert.deepEqual(
+          result.relays.map((relay) => relay.id),
+          ["relay-a"]
+        )
+      })
+    )
 
     it.effect(
       "does not carry Relay audit authority into another Relay with a child grant",

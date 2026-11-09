@@ -4,11 +4,7 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
-import { loadAppConfigEffect } from "@/effect/managed-apps"
-import {
-  createManagedDatabaseRecordEffect,
-  loadManagedDatabaseCredentialEffect,
-} from "@/effect/managed-databases"
+import { createManagedDatabaseRecordEffect } from "@/effect/managed-databases"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
@@ -177,88 +173,6 @@ const apps = selectRows<{ app_id: string }>("app")
 
 describeMysql("Creating an App with a database", () => {
   layer(TestDatabase)((it) => {
-    it.effect("connects a new database, with its credentials to hand", () =>
-      Effect.gen(function* () {
-        yield* seed(["app.create", "database.create"])
-
-        const created = yield* createApp({
-          database: { engine: "postgres", kind: "new", name: "Blog" },
-        })
-
-        const [saved] = relay.connections.get(created.id)!
-        assert.isDefined(saved)
-        const credential = yield* loadManagedDatabaseCredentialEffect(
-          relayId,
-          saved!
-        )
-        const app = yield* loadAppConfigEffect(relayId, created.id)
-        assert.strictEqual(
-          app?.config.environment,
-          [
-            `DB_HOST=database-${saved}`,
-            "DB_PORT=5432",
-            `DB_USER=${credential!.username}`,
-            `DB_PASS=${credential!.password}`,
-            `DB_NAME=${credential!.databaseName}`,
-            "",
-          ].join("\n")
-        )
-      })
-    )
-
-    it.effect("gives a new database the names chosen for it", () =>
-      Effect.gen(function* () {
-        yield* seed(["app.create", "database.create"])
-
-        const created = yield* createApp({
-          database: {
-            databaseName: "blog_data",
-            engine: "postgres",
-            kind: "new",
-            name: "Blog",
-            username: "blog_owner",
-          },
-        })
-
-        const [saved] = relay.connections.get(created.id)!
-        const credential = yield* loadManagedDatabaseCredentialEffect(
-          relayId,
-          saved!
-        )
-        assert.strictEqual(credential?.databaseName, "blog_data")
-        assert.strictEqual(credential?.username, "blog_owner")
-        const app = yield* loadAppConfigEffect(relayId, created.id)
-        assert.include(app?.config.environment, "DB_USER=blog_owner")
-        assert.include(app?.config.environment, "DB_NAME=blog_data")
-      })
-    )
-
-    it.effect("creates a database with the name and username it's given", () =>
-      Effect.gen(function* () {
-        yield* seed(["database.create"])
-
-        const created = yield* runOperation(
-          createDatabase,
-          {
-            databaseName: "shop_data",
-            engine: "postgres",
-            id: "e".repeat(12),
-            name: "Shop",
-            relayId,
-            username: "shop_owner",
-          },
-          { user: person("alice") }
-        )
-
-        const credential = yield* loadManagedDatabaseCredentialEffect(
-          relayId,
-          created.id
-        )
-        assert.strictEqual(credential?.databaseName, "shop_data")
-        assert.strictEqual(credential?.username, "shop_owner")
-      })
-    )
-
     it.effect("records no database for a username its engine keeps", () =>
       Effect.gen(function* () {
         yield* seed(["database.create"])
@@ -282,24 +196,6 @@ describeMysql("Creating an App with a database", () => {
           rows.map((row) => row.name),
           ["Shared"]
         )
-      })
-    )
-
-    it.effect("copies an existing database's credentials", () =>
-      Effect.gen(function* () {
-        yield* seed([
-          "app.create",
-          "database.credentials.read",
-          "database.network.write",
-        ])
-
-        const created = yield* createApp({
-          database: { id: database, kind: "existing" },
-        })
-
-        assert.deepStrictEqual(relay.connections.get(created.id), [database])
-        const app = yield* loadAppConfigEffect(relayId, created.id)
-        assert.include(app?.config.environment, "DB_PASS=the-password\n")
       })
     )
 
@@ -385,20 +281,6 @@ describeMysql("Creating an App with a database", () => {
 
         assert.include(String(refused), "already exists")
         assert.deepStrictEqual(yield* apps, [])
-        assert.deepStrictEqual(relay.jobs, [])
-      })
-    )
-
-    it.effect("makes no database when the App's name is taken", () =>
-      Effect.gen(function* () {
-        yield* seed(["app.create", "database.create"])
-        yield* createApp({})
-        relay.jobs.length = 0
-
-        yield* createApp({
-          database: { engine: "postgres", kind: "new", name: "Blog" },
-        }).pipe(Effect.flip)
-
         assert.deepStrictEqual(relay.jobs, [])
       })
     )

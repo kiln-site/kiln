@@ -322,7 +322,7 @@ function assertPublicDesktopImage(repository, commit) {
  * it and starts a nightly at once, and nothing would run a nightly again that
  * got here first. An image that never comes still fails the release.
  */
-export async function untilPublished(check) {
+async function untilPublished(check) {
   const deadline = Date.now() + PUBLISH_WAIT_MS
   for (;;) {
     try {

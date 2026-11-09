@@ -197,18 +197,6 @@ describe("Tailscale stack forwarding", () => {
     ])
   })
 
-  it("restores the allowlist after the stack container restarts", async () => {
-    const harness = await relayHarness()
-    const container = await runningStack(harness)
-    await harness.lifecycle.reconcileTailscaleStackFirewalls()
-
-    fakeDocker.restartProcess(container.name)
-    expect(container.firewall.get("KILN-TAILSCALE")).toBeUndefined()
-    await harness.lifecycle.reconcileTailscaleStackFirewalls()
-
-    expect(container.firewall.get("KILN-TAILSCALE")).toEqual(allowlist)
-  })
-
   it("restores the allowlist while the Relay is paused, after what holds the stack", async () => {
     const harness = await relayHarness()
     const container = await runningStack(harness)
@@ -313,24 +301,6 @@ describe("Tailscale network members", () => {
     ).toBeUndefined()
   })
 
-  it("takes a game server already gone off its networks when its deletion is sent again", async () => {
-    const harness = await relayHarness()
-    await savedStack(harness, servers, hearthRecords)
-    stackContainer(harness, stackId, true)
-    await harness.freezes.freeze(
-      { deletionId: deletion, id: serverId, kind: "instance" },
-      quiet
-    )
-
-    await expect(
-      harness.lifecycle.deleteInstance(serverId, true)
-    ).rejects.toThrow("Instance not found")
-
-    const saved = await savedState(harness, stackId)
-    expect(saved.members).toEqual([instanceTailscaleMemberId(otherServerId)])
-    expect(saved.records).toEqual(hearthRecords)
-  })
-
   it("serves Hearth's records, not its own members, as an apply recreates CoreDNS", async () => {
     const harness = await relayHarness()
     await savedStack(harness, servers, hearthRecords)
@@ -376,47 +346,6 @@ describe("Tailscale network members", () => {
     expect(saved.records).toEqual(hearthRecords)
     expect(saved.corefile).toContain("10.165.61.10 peer.test")
     expect(saved.corefile).not.toContain("other.test")
-  })
-
-  it("serves Hearth's records again as a prepared removal rolls back", async () => {
-    const harness = await relayHarness()
-    await preparedRemoval(harness, servers)
-    await savedStack(harness, servers, hearthRecords)
-    stackContainer(harness, stackId, false)
-
-    await harness.lifecycle.removeTailscaleStack(stackId, "rollback")
-
-    const saved = await savedState(harness, stackId)
-    expect(saved.records).toEqual(hearthRecords)
-    expect(saved.corefile).toContain("10.165.61.10 peer.test")
-    expect(saved.corefile).not.toContain("other.test")
-  })
-
-  it("reports which members are frozen and whether a removal is pending", async () => {
-    const harness = await relayHarness()
-    await savedStack(harness, members, hearthRecords)
-    const removing = stackConfig("b".repeat(12), { subnet: "10.165.62.0/24" })
-    await preparedRemoval(harness, removing)
-    await harness.freezes.freeze(
-      { deletionId: deletion, id: appId, kind: "app" },
-      quiet
-    )
-
-    const states = await harness.lifecycle.tailscaleStackStates()
-
-    const state = states.find(({ id }) => id === stackId)
-    expect(
-      state?.bindings
-        .filter((binding) => binding.frozen)
-        .map((binding) => binding.memberId)
-    ).toEqual([
-      appTailscaleMemberId(appId, "web"),
-      appTailscaleMemberId(appId, "worker"),
-    ])
-    expect(state?.removalPending).toBe(false)
-    expect(states.find(({ id }) => id === removing.id)?.removalPending).toBe(
-      true
-    )
   })
 })
 

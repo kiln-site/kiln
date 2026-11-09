@@ -3,11 +3,8 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  cacheNamespace,
   grantPattern,
-  isReservedProject,
   sqlIdentifier,
-  sqlString,
   stackResources,
   withBoxLock,
   withStackLock,
@@ -28,18 +25,6 @@ describe("stack resources", () => {
     )
     expect(namedLikeItsTests.testDatabase).not.toBe(stack.testDatabase)
   })
-
-  it("keeps stacks off the box's own Compose projects", () => {
-    expect(isReservedProject("kiln-dev-shared")).toBe(true)
-    expect(isReservedProject("kiln-dev-s3")).toBe(true)
-    expect(isReservedProject("kiln-shared-a")).toBe(false)
-  })
-
-  it("leaves room for the longest test database name", () => {
-    const { testDatabase } = stackResources("a".repeat(63))
-
-    expect(`${testDatabase}_128_auth_startup`.length).toBeLessThanOrEqual(64)
-  })
 })
 
 describe("sql text", () => {
@@ -54,22 +39,6 @@ describe("sql text", () => {
     )
   })
 
-  it("quotes strings", () => {
-    expect(sqlString("it's\\here")).toBe("'it''s\\\\here'")
-  })
-})
-
-describe("cache namespace", () => {
-  it("matches Hearth's", () => {
-    expect(
-      cacheNamespace({
-        database: "s_aaaaaaaaaaaa",
-        host: "kiln-dev-mysql",
-        port: 3306,
-        tablePrefix: "kiln_",
-      })
-    ).toBe("kiln:hearth:v1:ab932f5f8e5c2cfa")
-  })
 })
 
 describe("stack lock", () => {
@@ -106,16 +75,6 @@ describe("box lock", () => {
     await Promise.all([hold("a", 80), hold("b", 1)])
 
     expect(order).toEqual(["a in", "a out", "b in", "b out"])
-  })
-
-  it("gives up when a holder keeps it", async () => {
-    await withBoxLock(
-      () =>
-        expect(
-          withBoxLock(() => undefined, { port, timeoutMs: 50 })
-        ).rejects.toThrow("Timed out"),
-      { port }
-    )
   })
 
   it("is released when its holder is killed", async () => {

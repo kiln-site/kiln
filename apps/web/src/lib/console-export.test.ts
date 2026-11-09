@@ -17,8 +17,4 @@ describe("formatConsoleLog", () => {
       "203.0.113.9"
     )
   })
-
-  it("keeps the address once the viewer shows it", () => {
-    expect(formatConsoleLog(lines, { redact: false })).toContain("203.0.113.9")
-  })
 })

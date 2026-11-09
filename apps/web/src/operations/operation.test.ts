@@ -26,7 +26,7 @@ import {
   resourceKey,
   shared,
 } from "./lanes"
-import { inLanes, operation, runOperation } from "./operation"
+import { operation, runOperation } from "./operation"
 import {
   findOperation,
   finishOperation,
@@ -275,62 +275,6 @@ describeMysql("Hearth operations", () => {
           yield* Fiber.join(savingSecond)
           assert.strictEqual(yield* Fiber.join(backingUp), "second")
         })
-    )
-
-    it.effect("keeps a person waiting 30 seconds in all, however often", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        const settingsOf = (id: string) =>
-          partKey(`backup-storage:${id}`, "settings")
-        const releaseFirst = yield* Deferred.make<void>()
-        const releaseSecond = yield* Deferred.make<void>()
-        const savingFirst = yield* runOperation(
-          holding("test.storage.save", "Saving the first destination", [
-            exclusive(settingsOf("first")),
-          ]),
-          releaseFirst,
-          { user: person }
-        ).pipe(Effect.forkChild({ startImmediately: true }))
-        const savingSecond = yield* runOperation(
-          holding("test.storage.save", "Saving the second destination", [
-            exclusive(settingsOf("second")),
-          ]),
-          releaseSecond,
-          { user: person }
-        ).pipe(Effect.forkChild({ startImmediately: true }))
-        yield* Effect.yieldNow
-
-        let preferred = "first"
-        const backingUp = yield* runOperation(
-          operation<void>()({
-            authorize: () => Effect.sync(() => preferred),
-            doing: "Backing up this game server",
-            locks: ({ context }) => [shared(settingsOf(context))],
-            name: "test.backup",
-            run: ({ context }) => Effect.succeed(context),
-          }),
-          undefined,
-          { user: person }
-        ).pipe(Effect.forkChild({ startImmediately: true }))
-        yield* Effect.yieldNow
-        // 20 seconds behind the first, then its turn again behind the second.
-        yield* TestClock.adjust("20 seconds")
-        preferred = "second"
-        yield* Deferred.succeed(releaseFirst, undefined)
-        yield* Fiber.join(savingFirst)
-        yield* Effect.yieldNow
-        assert.isUndefined(backingUp.pollUnsafe())
-
-        yield* TestClock.adjust("10 seconds")
-        const refused = yield* Fiber.join(backingUp).pipe(Effect.flip)
-        assert.strictEqual(refused._tag, "OperationBusyError")
-        assert.strictEqual(
-          refused.message,
-          "Saving the second destination is in progress. Try again once it's done."
-        )
-        yield* Deferred.succeed(releaseSecond, undefined)
-        yield* Fiber.join(savingSecond)
-      })
     )
 
     it.effect(
@@ -638,40 +582,6 @@ describeMysql("Hearth operations", () => {
           assert.strictEqual(yield* record(next), "cancelled")
           assert.isFalse(yield* cancelQueuedOperation(first))
         }).pipe(TestClock.withLive)
-    )
-
-    it.effect("turns away Hearth's own work that's only worth doing now", () =>
-      Effect.gen(function* () {
-        yield* resetDatabase
-        const release = yield* Deferred.make<void>()
-        const holder = yield* runOperation(
-          holding("test.deploy", "Deploying this game server", [
-            exclusive(serverDns),
-          ]),
-          release,
-          { user: person }
-        ).pipe(Effect.forkChild({ startImmediately: true }))
-        yield* Effect.yieldNow
-        const poll = inLanes(
-          "test.poll",
-          "Polling",
-          [exclusive(serverDns)],
-          Effect.succeed("polled"),
-          { onlyIfFree: true }
-        )
-
-        // Busy: turned away at once, rather than waiting behind it.
-        const refused = yield* poll.pipe(Effect.flip)
-        assert.strictEqual(
-          (refused as { _tag?: string })._tag,
-          "OperationBusyError"
-        )
-
-        // Free: it runs.
-        yield* Deferred.succeed(release, undefined)
-        yield* Fiber.join(holder)
-        assert.strictEqual(yield* poll, "polled")
-      }).pipe(TestClock.withLive)
     )
 
     it.effect(

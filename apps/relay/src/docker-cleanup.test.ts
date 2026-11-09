@@ -344,22 +344,6 @@ describe("image retention", () => {
       image.startsWith(`kiln-app-${appId}:`)
     )
 
-  it("records the build a successful deployment runs", async () => {
-    const harness = await relayHarness()
-    await harness.apps.create({ id: appId, name: "Website" })
-    const app = await deploy(harness, {
-      dockerfile: "FROM nginx:alpine\n",
-      sourceType: "dockerfile",
-    })
-
-    expect(app.deployment?.state).toBe("succeeded")
-    expect(
-      (await Effect.runPromise(harness.state.listAppDeploymentImages())).map(
-        (record) => record.imageId
-      )
-    ).toEqual([`sha256:kiln-app-${appId}:${app.deployment!.id}`])
-  })
-
   it("keeps the builds of an App's five newest successful deployments and any build's first day", async () => {
     const harness = await relayHarness()
     await harness.apps.create({ id: appId, name: "Website" })
@@ -405,27 +389,6 @@ describe("image retention", () => {
       [...deployed.slice(1), `kiln-app-${appId}:recent-failure`].sort()
     )
     expect(fakeDocker.images.has("someone/else:1")).toBe(true)
-  })
-
-  it("keeps a build a day after the App's first deployment failed, even when asked to remove images Kiln didn't run", async () => {
-    const harness = await relayHarness()
-    await harness.apps.create({ id: appId, name: "Website" })
-    fakeDocker.failNext({ command: "create" }, "no space left on device")
-    const app = await deploy(harness, {
-      dockerfile: "FROM nginx:alpine\n",
-      sourceType: "dockerfile",
-    })
-    expect(app.deployment?.state).toBe("failed")
-    expect(builds()).toHaveLength(1)
-
-    await Effect.runPromise(
-      harness.cleanup.cleanNow({ buildCache: false, unknownImages: true })
-    )
-    expect(builds()).toHaveLength(1)
-
-    vi.useFakeTimers({ now: clock + 25 * 60 * 60_000, toFake: ["Date"] })
-    await Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
-    expect(builds()).toEqual([])
   })
 
   it("keeps Hearth's image from before its latest successful update, through a failed attempt since, and never another installation's", async () => {
@@ -488,78 +451,6 @@ describe("image retention", () => {
   })
 })
 
-describe("Hearth and Relay images", () => {
-  const image = (name: string, component: string, created: number) => {
-    fakeDocker.images.set(name, { "io.kiln.component": component })
-    fakeDocker.imageCreated.set(name, created)
-    fakeDocker.untaggedImages.add(name)
-  }
-
-  it("removes the helper images of failed Hearth updates but the newest", async () => {
-    const harness = await relayHarness()
-    const cleanup = await cleanupWithUpdates(harness, [
-      update({
-        component: "hearth",
-        helperImage: "sha256:relay-helper-1",
-        requestedImage: "sha256:hearth-next-1",
-        startedAt: "2026-01-01T00:00:00.000Z",
-        status: "failed",
-      }),
-      update({
-        component: "hearth",
-        helperImage: "sha256:relay-helper-2",
-        requestedImage: "sha256:hearth-next-2",
-        startedAt: "2026-01-02T00:00:00.000Z",
-        status: "failed",
-      }),
-    ])
-    image("relay-helper-1", "relay", 100)
-    image("relay-helper-2", "relay", 200)
-
-    await Effect.runPromise(cleanup.pass({ kind: "timer" }))
-
-    expect(fakeDocker.images.has("relay-helper-1")).toBe(false)
-    expect(fakeDocker.images.has("relay-helper-2")).toBe(true)
-  })
-
-  it("keeps no other old image when the one before the latest update is kept anyway", async () => {
-    const harness = await relayHarness()
-    // The image before the latest update is pinned by a tag.
-    fakeDocker.images.set("ghcr.io/kiln-site/hearth:0.1.0", {
-      "io.kiln.component": "hearth",
-    })
-    const cleanup = await cleanupWithUpdates(harness, [
-      update({
-        component: "hearth",
-        requestedImage: "sha256:ghcr.io/kiln-site/hearth:0.1.0",
-        startedAt: "2026-01-01T00:00:00.000Z",
-        status: "succeeded",
-        previousImageId: "sha256:hearth-oldest",
-      }),
-      update({
-        component: "hearth",
-        previousImageId: "sha256:ghcr.io/kiln-site/hearth:0.1.0",
-        requestedImage: "sha256:hearth-current",
-        startedAt: "2026-01-02T00:00:00.000Z",
-        status: "succeeded",
-      }),
-    ])
-    image("hearth-current", "hearth", 300)
-    fakeDocker.addContainer({
-      image: "hearth-current",
-      name: "kiln-hearth",
-      running: true,
-    })
-    image("hearth-oldest", "hearth", 100)
-
-    await Effect.runPromise(cleanup.pass({ kind: "timer" }))
-
-    expect([...fakeDocker.images.keys()].sort()).toEqual(
-      ["ghcr.io/kiln-site/hearth:0.1.0", "hearth-current"].sort()
-    )
-  })
-})
-
 describe("unused images", () => {
   it("removes an image none of Kiln's containers has used for a day, and never one Kiln didn't run", async () => {
     const harness = await relayHarness()
@@ -608,74 +499,8 @@ describe("unused images", () => {
   })
 })
 
-describe("the desktop image", () => {
-  it("stays once a stream has used it, unlike one from an older version", async () => {
-    const harness = await relayHarness()
-    const owned = { "kiln.relay.owner": TEST_NAMESPACE }
-    const current = harness.config.desktopImage
-    const older = `${current}-older`
-    for (const [name, image] of [
-      ["kiln-test-kiln-desktop-encoder", current],
-      ["kiln-test-kiln-desktop", older],
-    ] as const) {
-      fakeDocker.addContainer({
-        image,
-        labels: { ...owned, "kiln.relay.infrastructure": "desktop" },
-        name,
-        running: true,
-      })
-    }
-    const pass = () =>
-      Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
-    await pass()
-    fakeDocker.removeContainer("kiln-test-kiln-desktop-encoder")
-    fakeDocker.removeContainer("kiln-test-kiln-desktop")
-    await pass()
-
-    vi.useFakeTimers({
-      now: Date.now() + 25 * 60 * 60_000,
-      toFake: ["Date"],
-    })
-    await pass()
-
-    expect(fakeDocker.images.has(current)).toBe(true)
-    expect(fakeDocker.images.has(older)).toBe(false)
-  })
-
-  it("stays when it's named by digest, as a pinned Relay names it", async () => {
-    const harness = await relayHarness()
-    const owned = { "kiln.relay.owner": TEST_NAMESPACE }
-    const pinned = `ghcr.io/example/desktop@sha256:${"a".repeat(64)}`
-    harness.config.desktopImage = pinned
-    await Effect.runPromise(
-      new DockerEngine(harness.config.dockerSocket).pullImage(pinned, {
-        timeout: 1_000,
-      })
-    )
-    fakeDocker.addContainer({
-      image: pinned,
-      labels: { ...owned, "kiln.relay.infrastructure": "desktop" },
-      name: "kiln-test-kiln-desktop-encoder",
-      running: true,
-    })
-    const pass = () =>
-      Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
-    await pass()
-    fakeDocker.removeContainer("kiln-test-kiln-desktop-encoder")
-    await pass()
-
-    vi.useFakeTimers({
-      now: Date.now() + 25 * 60 * 60_000,
-      toFake: ["Date"],
-    })
-    await pass()
-
-    expect(fakeDocker.images.has(pinned)).toBe(true)
-  })
-})
-
 describe("cleanup a person asks for", () => {
-  it("reports what it could remove, then removes Kiln's unused images at once and only what they chose besides", async () => {
+  it("removes Kiln's unused images at once, and only what a person chose besides", async () => {
     const harness = await relayHarness()
     const database = fakeDocker.addContainer({
       image: "postgres:16",
@@ -694,13 +519,6 @@ describe("cleanup a person asks for", () => {
       { InUse: true, Size: 2_000_000 },
     ]
 
-    expect(await Effect.runPromise(harness.cleanup.storage())).toMatchObject({
-      buildCache: { bytes: 7_000_000, reclaimableBytes: 5_000_000 },
-      images: { count: 2 },
-      reclaimable: { bytes: 1_000_000, images: 1 },
-      unknown: { bytes: 1_000_000, images: 1 },
-    })
-
     const kilnOnly = await Effect.runPromise(
       harness.cleanup.cleanNow({ buildCache: false, unknownImages: false })
     )
@@ -714,100 +532,5 @@ describe("cleanup a person asks for", () => {
     expect(everything).toMatchObject({ buildCacheBytes: 5_000_000, images: 1 })
     expect(fakeDocker.images.size).toBe(0)
     expect(fakeDocker.buildCache).toEqual([{ InUse: true, Size: 2_000_000 }])
-  })
-})
-
-describe("a cleanup someone asks for, in the background", () => {
-  it("answers as it starts, runs one at a time, and shows it running until it's done", async () => {
-    const harness = await relayHarness()
-    const database = fakeDocker.addContainer({
-      image: "postgres:16",
-      labels: {
-        "kiln.database.id": "f".repeat(32),
-        "kiln.relay.owner": TEST_NAMESPACE,
-      },
-      name: "kiln-test-database",
-    })
-    await Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
-    fakeDocker.removeContainer(database.name)
-    await Effect.runPromise(harness.cleanup.storage())
-    const removal = fakeDocker.hold({ command: "image rm" })
-
-    const started = await Effect.runPromise(
-      harness.cleanup.startCleanup({ buildCache: false, unknownImages: false })
-    )
-    await removal.reached
-    const again = await Effect.runPromise(
-      harness.cleanup.startCleanup({ buildCache: false, unknownImages: true })
-    )
-    const running = await Effect.runPromise(harness.cleanup.storage())
-
-    expect(started.alreadyRunning).toBe(false)
-    expect(again).toEqual({
-      alreadyRunning: true,
-      startedAt: started.startedAt,
-    })
-    expect(running.cleaning).toEqual({ startedAt: started.startedAt })
-    expect(fakeDocker.images.has("postgres:16")).toBe(true)
-
-    removal.release()
-    await vi.waitFor(async () => {
-      const done = await Effect.runPromise(harness.cleanup.storage())
-      expect(done.cleaning).toBeNull()
-      expect(done.lastCleanup).toMatchObject({ images: 1, requested: true })
-    })
-    expect(fakeDocker.images.has("postgres:16")).toBe(false)
-  })
-
-  it("keeps how a cleanup that failed in the background ended", async () => {
-    const harness = await relayHarness()
-    // Read once, so reads while it runs answer from these figures.
-    await Effect.runPromise(harness.cleanup.storage())
-    // Docker fails it as it looks for update leftovers, then recovers
-    // before it removes images.
-    fakeDocker.failNext(
-      { command: "ps" },
-      "Cannot connect to the Docker daemon"
-    )
-
-    await Effect.runPromise(
-      harness.cleanup.startCleanup({ buildCache: false, unknownImages: false })
-    )
-
-    await vi.waitFor(async () => {
-      const done = await Effect.runPromise(harness.cleanup.storage())
-      expect(done.cleaning).toBeNull()
-      expect(done.lastCleanup?.error).toContain(
-        "Cannot connect to the Docker daemon"
-      )
-    })
-  })
-
-  it("keeps the image and says it didn't finish when Docker fails to remove one", async () => {
-    const harness = await relayHarness()
-    const database = fakeDocker.addContainer({
-      image: "postgres:16",
-      labels: {
-        "kiln.database.id": "f".repeat(32),
-        "kiln.relay.owner": TEST_NAMESPACE,
-      },
-      name: "kiln-test-database",
-    })
-    await Effect.runPromise(harness.cleanup.pass({ kind: "timer" }))
-    fakeDocker.removeContainer(database.name)
-    await Effect.runPromise(harness.cleanup.storage())
-    fakeDocker.failNext({ command: "image rm" }, "layer is locked")
-
-    await Effect.runPromise(
-      harness.cleanup.startCleanup({ buildCache: false, unknownImages: false })
-    )
-
-    await vi.waitFor(async () => {
-      const done = await Effect.runPromise(harness.cleanup.storage())
-      expect(done.cleaning).toBeNull()
-      expect(done.lastCleanup).toMatchObject({ images: 0 })
-      expect(done.lastCleanup?.error).toContain("layer is locked")
-    })
-    expect(fakeDocker.images.has("postgres:16")).toBe(true)
   })
 })

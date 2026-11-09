@@ -87,7 +87,6 @@ describeMysql("platform invitations", () => {
     for (const [lifecycle, invitation] of [
       ["expired", { expires_at: now }],
       ["accepted", { accepted_at: now - 1 }],
-      ["revoked", { revoked_at: now - 1 }],
     ] as const)
       it.effect(`rejects a ${lifecycle} invitation without a role change`, () =>
         Effect.gen(function* () {

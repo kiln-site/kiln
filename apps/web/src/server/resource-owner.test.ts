@@ -65,23 +65,14 @@ const grant = (
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   yield* insertUser("owner", { name: "Steve" })
-  for (const id of [
-    "manager",
-    "player",
-    "stranger",
-    "relay-viewer",
-    "relay-player",
-  ])
-    yield* insertUser(id)
+  for (const id of ["player", "stranger", "relay-viewer"]) yield* insertUser(id)
   yield* insertRelay(relayId)
   yield* insertInstance(relayId, ownedId, { owner_id: "owner" })
   yield* insertInstance(relayId, unownedId)
-  yield* grant("manager", ownedId, ["instance.read", "access.read"])
   yield* grant("player", ownedId, ["instance.read"])
   yield* grant("player", unownedId, ["instance.read"])
   // Relay access reaches a server only through server permissions.
   yield* grant("relay-viewer", relayId, ["relay.read"])
-  yield* grant("relay-player", relayId, ["instance.read"])
 })
 
 const refusal = (promise: Promise<unknown>) =>

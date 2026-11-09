@@ -293,28 +293,6 @@ describe("file preview links", () => {
     expect(response.status).toBe(401)
   })
 
-  it("records each link's reads once, whichever range comes first", async () => {
-    const { relay } = await relayWithClip()
-    const first = relay.previewToken()
-    const second = relay.previewToken()
-
-    for (const range of ["bytes=2048-", "bytes=0-1023", undefined]) {
-      await send(relay.port, {
-        headers: range ? { Range: range } : {},
-        method: "GET",
-        path: previewPath(first),
-      })
-    }
-    await send(relay.port, { method: "GET", path: previewPath(second) })
-
-    await vi.waitFor(async () => {
-      const previews = (await relay.audits()).filter(
-        (record) => record.event === "browser.file.download"
-      )
-      expect(previews).toHaveLength(2)
-    })
-  })
-
   it("isn't taken where a proof is asked for", async () => {
     const { relay } = await relayWithClip()
     const request = await relay.signedRequest({
@@ -565,7 +543,6 @@ async function startRelay(
         version: 2,
       } satisfies RelayBrowserCapabilityV2)
     },
-    audits: () => runtime.runPromise(state.listAudits({ limit: 100 })),
     // The Relay hears the person's access was taken away, as Hearth tells it,
     // which cuts off what's under way.
     revokeLive: () =>

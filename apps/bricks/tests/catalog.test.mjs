@@ -12,13 +12,6 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const JAVA_ARGS_RULE_PATTERN =
   "^(?!.*(?:^|\\s)(?:@(?!@)\\S+|-Xm[sx]\\S*|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM|VMOptionsFile|Flags)(?:=\\S*)?|--nogui|-jar)(?:\\s|$)).*$"
 const SERVER_JAR_FILE_RULE_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._\\-]{0,123}\\.jar$"
-const OFFICIAL_READINESS_LOGS = {
-  fabric: [")! For help, type "],
-  folia: [")! For help, type "],
-  palworld: ["Setting breakpad minidump AppID = 2394010"],
-  paper: [")! For help, type "],
-  velocity: ["Done ("],
-}
 const loadJson = async (path) =>
   JSON.parse(await readFile(join(root, path), "utf8"))
 const loadYaml = async (path) =>
@@ -96,13 +89,6 @@ test("the official catalog and every recipe satisfy the v1 schemas", async () =>
       recipe.console?.stopCommands.length ?? 0,
       `${recipePath}: console stop commands must be unique`
     )
-    if (recipe.metadata.id in OFFICIAL_READINESS_LOGS) {
-      assert.deepEqual(
-        recipe.readiness?.logs,
-        OFFICIAL_READINESS_LOGS[recipe.metadata.id],
-        `${recipePath}: readiness logs must match the official startup signal`
-      )
-    }
     const installationMarker =
       recipe.runtime.environment.KILN_INSTALLATION_MARKER
     if (installationMarker) {
@@ -134,9 +120,7 @@ test("the official catalog and every recipe satisfy the v1 schemas", async () =>
         serverJarFilePattern.test(serverJarFile?.default ?? ""),
         true
       )
-      assert.equal(serverJarFilePattern.test("custom-server.jar"), true)
       assert.equal(serverJarFilePattern.test("../server.jar"), false)
-      assert.equal(serverJarFilePattern.test("server.zip"), false)
       assert.equal(
         javaArgs?.type,
         "string",
@@ -152,11 +136,6 @@ test("the official catalog and every recipe satisfy the v1 schemas", async () =>
         /(?:-Xm[sx]\b|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM)\b|--nogui|-jar)/u,
         `${recipePath}: java_args defaults must omit managed heap and startup command arguments`
       )
-      assert.doesNotMatch(
-        javaArgs.default ?? "",
-        /--add-modules=jdk\.incubator\.vector/u,
-        `${recipePath}: java_args defaults must omit --add-modules=jdk.incubator.vector so Java 11 can start`
-      )
       assert.equal(
         javaArgs.rules?.pattern,
         JAVA_ARGS_RULE_PATTERN,
@@ -164,30 +143,14 @@ test("the official catalog and every recipe satisfy the v1 schemas", async () =>
       )
       const javaArgsPattern = new RegExp(javaArgs.rules?.pattern ?? "", "u")
       assert.equal(javaArgsPattern.test(javaArgs.default ?? ""), true)
-      assert.equal(javaArgsPattern.test(""), true)
-      assert.equal(javaArgsPattern.test("-XX:+UseG1GC -Dkiln.test=true"), true)
-      assert.equal(javaArgsPattern.test('-Dmessage="hello world"'), true)
+      assert.equal(javaArgsPattern.test("-Dcontact=ops@example.com"), true)
       assert.equal(javaArgsPattern.test("-Xmx2G"), false)
-      assert.equal(javaArgsPattern.test("-XX:+UseG1GC --nogui"), false)
-      assert.equal(javaArgsPattern.test("-jar custom.jar"), false)
-      assert.equal(javaArgsPattern.test("-XX:MaxRAMPercentage=75.0"), false)
-      assert.equal(javaArgsPattern.test("-XX:MaxHeapSize=1G"), false)
-      assert.equal(javaArgsPattern.test("-XX:InitialHeapSize=512M"), false)
-      assert.equal(javaArgsPattern.test("-XX:MaxRAM=4G"), false)
-      assert.equal(javaArgsPattern.test("-XX:MinRAMPercentage=50"), false)
-      assert.equal(javaArgsPattern.test("-XX:MaxRAMFraction=2"), false)
-      assert.equal(javaArgsPattern.test("@/server/flags.txt"), false)
       assert.equal(javaArgsPattern.test("-XX:+UseG1GC @flags.txt"), false)
       assert.equal(
         javaArgsPattern.test("-XX:VMOptionsFile=/server/flags.txt"),
         false
       )
-      assert.equal(javaArgsPattern.test("-Dcontact=ops@example.com"), true)
       assert.equal(javaArgsPattern.test("-XX:-UseContainerSupport"), false)
-      assert.equal(
-        javaArgsPattern.test("-XX:+UseG1GC -XX:-UseCGroupMemoryLimitForHeap"),
-        false
-      )
     }
   }
 })

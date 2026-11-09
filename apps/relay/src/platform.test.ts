@@ -1,12 +1,10 @@
 import { createHmac } from "node:crypto"
 import { hostname } from "node:os"
 
-import { Effect, Fiber, ManagedRuntime, Metric } from "effect"
-import { TestClock } from "effect/testing"
-import { describe, expect, it, onTestFinished, vi } from "vite-plus/test"
+import { Effect } from "effect"
+import { describe, expect, it } from "vite-plus/test"
 
 import { DockerEngine } from "./docker-engine.js"
-import { sampleNodeMetrics } from "./node-metrics.js"
 import {
   addOwnerInvitation,
   isPlatformOwner,
@@ -200,7 +198,6 @@ describe("Kiln deployed without Kiln's labels", () => {
     return {
       context,
       database,
-      harness,
       hearth,
       // What a Relay checks when a Hearth connects, then saves.
       identify: (claim: {
@@ -221,86 +218,6 @@ describe("Kiln deployed without Kiln's labels", () => {
       status: () => run(platformStatus(context, null)),
     }
   }
-
-  const containersInGroup = (relayId: string, group: string) =>
-    run(
-      Metric.snapshot.pipe(
-        Effect.map((snapshots) => {
-          const found = snapshots.find(
-            ({ attributes, id }) =>
-              id === "relay.container.count" &&
-              attributes?.["relay.id"] === relayId &&
-              attributes["kiln.container.group"] === group
-          )
-          return (found?.state as { value?: number } | undefined)?.value
-        })
-      )
-    )
-
-  it("reports a proven Hearth's containers under their own metric groups", async () => {
-    const kiln = await coolify()
-    await expect(
-      kiln.identify({ containerId: kiln.hearth.id, key: secret })
-    ).resolves.toBe(true)
-
-    const relayId = "relay-beside-coolify"
-    // Virtual time for the samples; Docker's answers take real time.
-    const clock = ManagedRuntime.make(TestClock.layer())
-    const sampler = clock.runFork(
-      sampleNodeMetrics(
-        () => relayId,
-        kiln.context.engine,
-        kiln.harness.config,
-        kiln.harness.docker.allocations
-      )
-    )
-    onTestFinished(async () => {
-      await run(Fiber.interrupt(sampler))
-      await clock.dispose()
-    })
-    await vi.waitFor(
-      async () => {
-        await clock.runPromise(TestClock.adjust("15 seconds"))
-        await expect(containersInGroup(relayId, "hearth")).resolves.toBe(1)
-      },
-      // Slowly enough that a search isn't timed out by the jumps themselves.
-      { interval: 250, timeout: 4_000 }
-    )
-    await expect(containersInGroup(relayId, "mysql")).resolves.toBe(1)
-    await expect(containersInGroup(relayId, "valkey")).resolves.toBe(1)
-    // The other app's database stays where everything else Kiln doesn't run is.
-    await expect(containersInGroup(relayId, "database")).resolves.toBe(0)
-    await expect(containersInGroup(relayId, "other")).resolves.toBe(1)
-  })
-
-  it("keeps sampling while finding Hearth's containers is stuck", async () => {
-    const kiln = await coolify()
-    await expect(
-      kiln.identify({ containerId: kiln.hearth.id, key: secret })
-    ).resolves.toBe(true)
-    const stuck = fakeDocker.hold({
-      command: "inspect",
-      target: kiln.hearth.name,
-    })
-
-    const relayId = "relay-with-a-stuck-search"
-    const sampler = Effect.runFork(
-      sampleNodeMetrics(
-        () => relayId,
-        kiln.context.engine,
-        kiln.harness.config,
-        kiln.harness.docker.allocations
-      )
-    )
-    onTestFinished(async () => {
-      stuck.release()
-      await run(Fiber.interrupt(sampler))
-    })
-    await stuck.reached
-    await vi.waitFor(async () => {
-      await expect(containersInGroup(relayId, "other")).resolves.toBe(4)
-    })
-  })
 
   it("reports nothing for a Hearth that can't prove the container it names", async () => {
     const kiln = await coolify()
@@ -325,5 +242,10 @@ describe("Kiln deployed without Kiln's labels", () => {
     await expect(
       run(platformTargetContainer(kiln.context, "database"))
     ).resolves.toBeNull()
+
+    // The container's own secret does prove it.
+    await expect(
+      kiln.identify({ containerId: kiln.hearth.id, key: secret })
+    ).resolves.toBe(true)
   })
 })

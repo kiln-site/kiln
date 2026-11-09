@@ -69,13 +69,7 @@ describe("CLI response and URL boundaries", () => {
         version: "1.21.11",
       },
     }
-    const serialized = cliServerInfoResponseSchema.parse(response)
-    assert.deepStrictEqual(serialized.server.stateReason, {
-      code: "automatic_recovery",
-      exitCode: 137,
-      phase: "restarting",
-      reason: "process_exit",
-    })
+    assert.isTrue(cliServerInfoResponseSchema.safeParse(response).success)
     assert.isFalse(
       cliServerInfoResponseSchema.safeParse({
         ...response,

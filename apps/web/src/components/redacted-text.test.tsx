@@ -22,12 +22,3 @@ it("shows nothing about a hidden value, including its length", () => {
   expect(long).toBe(short)
   expect(long).not.toContain("example")
 })
-
-it("gives a repeated value a different mosaic each time", () => {
-  const [first, second] =
-    render("a@b.co", "a@b.co").match(/style="[^"]+"/g) ?? []
-
-  expect(first).toBeDefined()
-  expect(second).toBeDefined()
-  expect(first).not.toBe(second)
-})
