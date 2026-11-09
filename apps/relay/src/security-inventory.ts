@@ -281,12 +281,13 @@ export class SecurityInventory {
     let cancelled = 0
     for (const helper of helpers) {
       if (!relayOwnsLabels(this.#config, helper.Labels)) continue
-      await Effect.runPromise(
-        this.#engine
-          .removeContainer(helper.Id, { force: true })
-          .pipe(Effect.catch(() => Effect.void))
+      const removed = await Effect.runPromise(
+        this.#engine.removeContainer(helper.Id, { force: true }).pipe(
+          Effect.as(true),
+          Effect.catch(() => Effect.succeed(false))
+        )
       )
-      cancelled += 1
+      if (removed) cancelled += 1
     }
     return { cancelled }
   }
@@ -430,6 +431,9 @@ export class SecurityInventory {
           })
         )
       const helper = await this.#startHelper(helperName, create)
+      // A cancel while Docker created the helper found none to remove; the
+      // cleanup below removes it.
+      if (cancelled()) return cancelledInventory
       const exitCode = await Effect.runPromise(
         this.#engine.waitContainer(helper.Id, "not-running").pipe(
           Effect.timeoutOrElse({
