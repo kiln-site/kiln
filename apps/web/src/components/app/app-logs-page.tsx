@@ -533,7 +533,9 @@ const logRailSize: PanelSize = {
     const page = panel.parentElement?.getBoundingClientRect().width
     return page ? Math.min(440, Math.floor(page * 0.4)) : 440
   },
-  minSize: 200,
+  // Wide enough for the Runtime and Deployments tabs at every type scale.
+  minSize: () =>
+    14 * parseFloat(getComputedStyle(document.documentElement).fontSize),
   storageKey: "kiln:app-log-sources-width",
   variable: "--app-log-sources-width",
 }
@@ -561,9 +563,9 @@ const AppLogsRail = React.memo(function AppLogsRail({
   return (
     <aside
       ref={panelRef}
-      className="relative hidden w-[var(--app-log-sources-width,16rem)] shrink-0 flex-col bg-muted/[0.06] md:flex"
+      className="relative hidden w-[var(--app-log-sources-width,16rem)] min-w-56 shrink-0 flex-col bg-muted/[0.06] md:flex"
     >
-      <div className="grid h-12 shrink-0 grid-cols-2 border-b">
+      <div className="flex h-12 shrink-0 border-b">
         <Link
           replace
           aria-disabled={firstService === undefined}
@@ -702,7 +704,7 @@ function deploymentTitle(deployment: Deployment): string {
 
 // The look of a page's section tabs.
 const railTabClassName =
-  "relative flex items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:bg-accent/55 aria-disabled:pointer-events-none aria-disabled:opacity-40 [&_svg]:size-3.5"
+  "relative flex flex-1 basis-auto items-center justify-center gap-1.5 px-3 text-xs whitespace-nowrap font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:bg-accent/55 aria-disabled:pointer-events-none aria-disabled:opacity-40 [&_svg]:size-3.5"
 const railTabActiveClassName =
   "text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-primary"
 

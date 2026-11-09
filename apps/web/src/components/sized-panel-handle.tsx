@@ -8,7 +8,8 @@ export interface PanelSize {
   label: string
   // Upper bound for the current layout, given the panel being resized.
   maxSize: (panel: HTMLElement) => number
-  minSize: number
+  // Lower bound, a function when it follows the panel's content or type size.
+  minSize: number | ((panel: HTMLElement) => number)
   storageKey: string
   variable: string
 }
@@ -39,13 +40,19 @@ export function SizedPanelHandle({
   const apply = React.useCallback(
     (next: number) => {
       const panel = panelRef.current
-      const maximum = panel
-        ? Math.max(size.minSize, size.maxSize(panel))
-        : Number.POSITIVE_INFINITY
-      current.current = Math.round(
-        Math.min(maximum, Math.max(size.minSize, next))
+      const minimum = Math.ceil(
+        typeof size.minSize === "number"
+          ? size.minSize
+          : panel
+            ? size.minSize(panel)
+            : 0
       )
+      const maximum = panel
+        ? Math.max(minimum, size.maxSize(panel))
+        : Number.POSITIVE_INFINITY
+      current.current = Math.round(Math.min(maximum, Math.max(minimum, next)))
       panel?.style.setProperty(size.variable, `${current.current}px`)
+      handleRef.current?.setAttribute("aria-valuemin", String(minimum))
       handleRef.current?.setAttribute("aria-valuenow", String(current.current))
       return current.current
     },
@@ -84,7 +91,7 @@ export function SizedPanelHandle({
       ref={handleRef}
       orientation={orientation}
       aria-label={size.label}
-      aria-valuemin={size.minSize}
+      aria-valuemin={typeof size.minSize === "number" ? size.minSize : 0}
       aria-valuenow={size.defaultSize}
       className="flex"
       onPointerDown={(event) => {
@@ -132,7 +139,7 @@ export function SizedPanelHandle({
             : event.key === grow
               ? current.current + step
               : event.key === "Home"
-                ? size.minSize
+                ? Number.NEGATIVE_INFINITY
                 : event.key === "End"
                   ? Number.POSITIVE_INFINITY
                   : null
