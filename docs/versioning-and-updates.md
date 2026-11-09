@@ -56,6 +56,14 @@ release.
 administrators. The Game servers page is at `/infra/servers`; `/servers`
 redirects there.
 
+The dialog opens with the releases Hearth already has, and asks each Relay
+about its container over the connection Hearth keeps to it; a Relay Hearth
+knows is away shows as offline without waiting for it. Meanwhile it asks
+Hearth for newer releases, which asks GitHub at most every five minutes
+however many people open it, and shows "Checking for updates…" until that
+answers. The check button asks GitHub now. The changelog reads Hearth's copy
+too, and reloads when the check finds a newer release.
+
 One-click updates are enabled only when all of these are true:
 
 1. The target is a Hearth or Relay image from the configured distribution.

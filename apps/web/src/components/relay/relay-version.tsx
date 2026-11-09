@@ -7,7 +7,10 @@ import { Button } from "@workspace/ui/components/button"
 import { Popover, PopoverTrigger } from "@workspace/ui/components/popover"
 
 import { InfoCopyValue, InfoDetailsContent } from "@/components/info-page"
-import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
+import {
+  useInfraUpdateDialogStore,
+  usePrefetchInfraUpdates,
+} from "@/components/infra-update-dialog-provider"
 import { useRelayLiveStatus } from "@/components/relay/relay-presentation"
 import {
   relayReleaseQueryOptions,
@@ -93,6 +96,7 @@ function RelayUpdateWarning({
 function RelayUpdateButton({ relayId }: { relayId: string }) {
   const router = useRouter()
   const store = useInfraUpdateDialogStore()
+  const prefetch = usePrefetchInfraUpdates()
   return (
     <Button
       type="button"
@@ -102,6 +106,8 @@ function RelayUpdateButton({ relayId }: { relayId: string }) {
           store.open(relayId)
         })
       }}
+      onFocus={prefetch}
+      onPointerEnter={prefetch}
     >
       Update Relay
     </Button>

@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useSuspenseQuery } from "@tanstack/react-query"
+import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query"
 import {
   useNavigate,
   useRouter,
@@ -7,8 +7,20 @@ import {
 } from "@tanstack/react-router"
 
 import { forkPromise, tapPromiseError } from "@/effect/promise"
-import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
+import {
+  accessCapabilitiesQueryOptions,
+  latestReleasesQueryOptions,
+  queryKeys,
+  updateOverviewQueryOptions,
+} from "@/lib/query-options"
 import { readRelaysAfterHearth } from "@/lib/system-update-after-hearth"
+import { canRefetchSystemUpdateOverview } from "@/lib/system-update-presence"
+import {
+  annotateUpdaterOpen,
+  finishUpdaterOpen,
+  startUpdaterOpen,
+  traceUpdaterWork,
+} from "@/lib/updater-timing"
 
 // The dialog is large and rarely opened, so it loads after the page: when
 // the browser is idle, or when first opened.
@@ -18,7 +30,11 @@ let dialogModulePromise:
 
 function loadDialogModule() {
   dialogModulePromise ??= tapPromiseError(
-    () => import("@/components/infra-updates-dialog"),
+    () =>
+      traceUpdaterWork(
+        "module",
+        () => import("@/components/infra-updates-dialog")
+      ),
     (error) => {
       dialogModulePromise = undefined
       throw error
@@ -68,22 +84,26 @@ function createInfraUpdateDialogStore(): InfraUpdateDialogStore {
   }
 
   return {
-    close: () =>
+    close: () => {
+      finishUpdaterOpen("closed")
       publish({
         open: false,
         relayId: null,
         requestId: state.requestId,
         view: state.view,
-      }),
+      })
+    },
     getServerSnapshot: () => closedUpdateDialogState,
     getSnapshot: () => state,
-    open: (relayId, view = "overview") =>
+    open: (relayId, view = "overview") => {
+      startUpdaterOpen({ "kiln.updater.view": view })
       publish({
         open: true,
         relayId: relayId ?? null,
         requestId: state.requestId + 1,
         view,
-      }),
+      })
+    },
     subscribe: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -99,6 +119,22 @@ export function useInfraUpdateDialogStore(): InfraUpdateDialogStore {
     )
   }
   return store
+}
+
+/**
+ * Starts loading what the Updates dialog shows, for a control that opens it
+ * to call when pointed at or focused, so it usually opens with its targets
+ * already there.
+ */
+export function usePrefetchInfraUpdates(): () => void {
+  const queryClient = useQueryClient()
+  return React.useCallback(() => {
+    forkPromise(loadDialogModule)
+    // An update that's running holds the overview still.
+    if (!canRefetchSystemUpdateOverview()) return
+    void queryClient.prefetchQuery(updateOverviewQueryOptions())
+    void queryClient.prefetchQuery(latestReleasesQueryOptions())
+  }, [queryClient])
 }
 
 // Opens the Updates dialog over the Relays page, for the URLs that link to
@@ -184,6 +220,19 @@ const AuthorizedInfraUpdatesDialogHost = React.memo(
       store.getSnapshot,
       store.getServerSnapshot
     )
+    // Whether the open being timed found its data already loaded.
+    const queryClient = useQueryClient()
+    React.useEffect(() => {
+      if (state.requestId === 0) return
+      annotateUpdaterOpen(
+        "kiln.updater.overview_cached",
+        queryClient.getQueryData(queryKeys.updates) !== undefined
+      )
+      annotateUpdaterOpen(
+        "kiln.updater.releases_cached",
+        queryClient.getQueryData(queryKeys.latestReleases) !== undefined
+      )
+    }, [queryClient, state.requestId])
     // Stay mounted once opened, so closing still animates.
     const [opened, setOpened] = React.useState(false)
     if (state.open && !opened) setOpened(true)

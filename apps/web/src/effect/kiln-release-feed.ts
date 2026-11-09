@@ -112,11 +112,40 @@ export const checkKilnReleasesEffect = Effect.fn("releases.check")(
   }
 )
 
-/** When Hearth last asked GitHub for releases, or null if it never has. */
-export const releasesCheckedAtEffect = Effect.fn("releases.checkedAt")(
+/**
+ * The newest Kiln releases Hearth already has, and when it last asked GitHub
+ * for them (null if it never has), without asking GitHub again. Pages that
+ * must show at once read these and leave checking to
+ * `latestKilnReleasesEffect`.
+ */
+export const storedKilnReleasesEffect = Effect.fn("releases.listStored")(
   function* () {
     const state = yield* loadFeedState
-    return state?.repository === kilnGitRepository() ? state.checkedAt : null
+    // Another repository's copy is another history, cleared on its next check.
+    if (state?.repository !== kilnGitRepository()) {
+      return { checkedAt: null, releases: [] }
+    }
+    const rows = yield* selectReleases(null, recentReleaseCount)
+    return {
+      checkedAt: state.checkedAt,
+      releases: orderKilnReleases(rows.map(publicRelease)),
+    }
+  }
+)
+
+/**
+ * The newest Kiln releases after checking GitHub when the last check is old
+ * enough, with when that check ran and whether GitHub answered it.
+ */
+export const latestKilnReleasesEffect = Effect.fn("releases.listLatest")(
+  function* () {
+    const { failed, state } = yield* syncReleaseFeed(checkIntervalMs)
+    const rows = yield* selectReleases(null, recentReleaseCount)
+    return {
+      checkedAt: state.checkedAt,
+      failed,
+      releases: orderKilnReleases(rows.map(publicRelease)),
+    }
   }
 )
 
@@ -127,9 +156,11 @@ export const releasesCheckedAtEffect = Effect.fn("releases.checkedAt")(
  */
 export const releaseHistoryPageEffect = Effect.fn("releases.historyPage")(
   function* (cursor: ReleaseHistoryCursor | null, limit: number) {
-    // Only the newest page needs GitHub's latest releases; older pages read
-    // Hearth's copy, as long as it's a copy of this repository's feed.
-    const stored = cursor === null ? null : yield* loadFeedState
+    // Pages read Hearth's copy, as long as it's a copy of this repository's
+    // feed. The Updates dialog checks GitHub for newer releases itself and
+    // reloads these when it finds some, so opening the changelog doesn't
+    // wait on GitHub.
+    const stored = yield* loadFeedState
     let state =
       stored?.repository === kilnGitRepository()
         ? stored
@@ -205,6 +236,8 @@ export const recordComponentVersionsEffect = Effect.fn(
 
 // Asks GitHub for new releases unless Hearth did within `maxAgeMs`.
 // `failed` says GitHub couldn't be asked, and Hearth's copy was kept.
+// The span includes waiting for another request's check, which this one
+// then shares; `releases.github` says whether this one asked GitHub.
 const syncReleaseFeed = (maxAgeMs: number) =>
   feedLock.withPermits(1)(
   Effect.gen(function* () {
@@ -213,8 +246,10 @@ const syncReleaseFeed = (maxAgeMs: number) =>
     const stored = yield* loadFeedState
     const current = stored?.repository === repository ? stored : null
     if (current && now - current.checkedAt < maxAgeMs) {
+      yield* Effect.annotateCurrentSpan("releases.github", false)
       return { failed: current.failed === true, state: current }
     }
+    yield* Effect.annotateCurrentSpan("releases.github", true)
 
     const database = yield* Database
     if (!current) {
@@ -247,9 +282,14 @@ const syncReleaseFeed = (maxAgeMs: number) =>
       repository,
     }
     yield* saveFeedState(next)
+    yield* Effect.annotateCurrentSpan("releases.failed", checked.failed)
     return { failed: checked.failed, state: next }
   })
-)
+).pipe(
+    Effect.withSpan("releases.sync", {
+      attributes: { "releases.maxAgeMs": maxAgeMs },
+    })
+  )
 
 const catchUpWithGitHub = Effect.fnUntraced(function* (
   current: FeedState | null
@@ -281,6 +321,8 @@ const resolvePendingAliases = Effect.gen(function* () {
       ORDER BY published_at DESC
       LIMIT 5`
   )
+  // Each is a manifest request on every check until one answers.
+  yield* Effect.annotateCurrentSpan("releases.pendingAliases", pending.length)
   for (const row of pending) {
     const resolved = yield* kilnStableReleaseAliasesEffect(
       publicRelease(row)
@@ -292,7 +334,7 @@ const resolvePendingAliases = Effect.gen(function* () {
       [JSON.stringify(resolved.value), row.tag]
     )
   }
-})
+}).pipe(Effect.withSpan("releases.resolvePendingAliases"))
 
 const backfillReleaseHistory = Effect.gen(function* () {
   const state = yield* loadFeedState

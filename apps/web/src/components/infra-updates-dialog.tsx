@@ -74,10 +74,12 @@ import {
 } from "@/lib/changelog-timeline"
 import { flattenCursorPages } from "@/lib/cursor-page"
 import {
+  latestReleasesQueryOptions,
   queryKeys,
   releaseHistoryInfiniteQueryOptions,
   updateOverviewQueryOptions,
 } from "@/lib/query-options"
+import { useUpdaterMilestone } from "@/lib/updater-timing"
 import { RelativeTime } from "@/components/relative-time"
 import { replaceRelayUpdateVersion } from "@/lib/system-update-cache"
 import {
@@ -126,7 +128,7 @@ import {
   type ReportedUpdateObservation,
   type SystemUpdateReport,
 } from "@/lib/system-update-reports"
-import type { UpdateOverview } from "@/server/updates"
+import type { LatestKilnReleases, UpdateOverview } from "@/server/updates"
 import {
   checkForKilnReleases,
   getSystemUpdates,
@@ -1356,26 +1358,58 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
     activityStore.getBusySnapshot,
     activityStore.getBusySnapshot
   )
+  const queryClient = useQueryClient()
   const overviewQuery = useQuery({
     ...updateOverviewQueryOptions(),
     enabled: () => open && !busy && canRefetchSystemUpdateOverview(),
     notifyOnChangeProps: ["data", "error", "isError", "isPending"],
   })
-  const overview = React.useMemo(
-    () =>
-      import.meta.env.DEV
-        ? withDevMockRelays(overviewQuery.data)
-        : overviewQuery.data,
-    [overviewQuery.data]
-  )
+  // The overview shows the releases Hearth already has; this asks GitHub
+  // for newer ones meanwhile, so only the newest version waits on it.
+  const releasesQuery = useQuery({
+    ...latestReleasesQueryOptions(),
+    enabled: () => open && !busy && canRefetchSystemUpdateOverview(),
+    notifyOnChangeProps: ["data", "isError", "isPending"],
+  })
+  const overview = React.useMemo(() => {
+    const merged = withLatestReleases(overviewQuery.data, releasesQuery.data)
+    return import.meta.env.DEV ? withDevMockRelays(merged) : merged
+  }, [overviewQuery.data, releasesQuery.data])
   const targets = React.useMemo(
     () => (overview ? updateTargets(overview) : []),
     [overview]
   )
   const releases = overview?.releases ?? noReleases
+  const latestTag = releasesQuery.data?.releases[0]?.tag
+  // The changelog reads Hearth's copy without asking GitHub, so a newer
+  // release the check found reloads it.
+  React.useEffect(() => {
+    if (latestTag === undefined) return
+    const history = queryClient.getQueryData(
+      releaseHistoryInfiniteQueryOptions().queryKey
+    )
+    const newest = history?.pages[0]?.releases
+    if (newest && !newest.some((release) => release.tag === latestTag)) {
+      void queryClient.invalidateQueries({
+        exact: true,
+        queryKey: queryKeys.releaseHistory,
+      })
+    }
+  }, [latestTag, queryClient])
+  useUpdaterMilestone("targets", overview !== undefined)
+  const refetchOverview = overviewQuery.refetch
+  const refetchReleases = releasesQuery.refetch
+  const retryCheck = React.useCallback(() => {
+    void refetchOverview()
+    void refetchReleases()
+  }, [refetchOverview, refetchReleases])
 
   return (
     <>
+      <UpdaterLatestTiming
+        enabled={open && !busy}
+        shown={overview !== undefined}
+      />
       <UpdaterHeader closeButtonRef={closeButtonRef} store={store} />
       <UpdateDialogBody
         activityStore={activityStore}
@@ -1388,6 +1422,7 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
         focusedRelayId={focusedRelayId}
         overview={overview}
         pending={overviewQuery.isPending && !busy}
+        releasesPending={releasesQuery.isPending}
         store={store}
         targets={targets}
         onRetry={overviewQuery.refetch}
@@ -1395,7 +1430,10 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
       />
       <UpdaterFooter
         activityStore={activityStore}
-        checkFailed={overviewQuery.isError && overview !== undefined}
+        checkFailed={
+          (overviewQuery.isError || releasesQuery.isError) &&
+          overview !== undefined
+        }
         confirmation={confirmation}
         open={open}
         releases={releases}
@@ -1403,7 +1441,7 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
         onCancelUpdate={onCancelUpdate}
         onConfirmUpdate={onConfirmUpdate}
         onMockUpdate={onMockUpdate}
-        onRetryCheck={overviewQuery.refetch}
+        onRetryCheck={retryCheck}
         onUpdate={onUpdate}
       />
     </>
@@ -1411,6 +1449,43 @@ const UpdateDialogData = React.memo(function UpdateDialogData({
 })
 
 const noReleases: ReadonlyArray<PublicKilnRelease> = []
+
+// Times when the open's check for the newest release painted its answer.
+// Its own observer, so the dialog doesn't render as the check starts and
+// ends.
+const UpdaterLatestTiming = React.memo(function UpdaterLatestTiming({
+  enabled,
+  shown,
+}: {
+  enabled: boolean
+  shown: boolean
+}) {
+  const { isFetching } = useQuery({
+    ...latestReleasesQueryOptions(),
+    enabled: () => enabled && canRefetchSystemUpdateOverview(),
+    notifyOnChangeProps: ["isFetching"],
+  })
+  useUpdaterMilestone("latest", shown && !isFetching)
+  return null
+})
+
+// The releases the overview was read with, or the check's when it ran
+// later: an overview read after a check already has its releases.
+function withLatestReleases(
+  overview: UpdateOverview | undefined,
+  latest: LatestKilnReleases | undefined
+): UpdateOverview | undefined {
+  if (!overview || !latest) return overview
+  if ((latest.checkedAt ?? 0) <= (overview.releasesCheckedAt ?? 0)) {
+    return overview
+  }
+  return {
+    ...overview,
+    relaysWaitForHearth: latest.relaysWaitForHearth,
+    releases: latest.releases,
+    releasesCheckedAt: latest.checkedAt,
+  }
+}
 
 const UpdaterHeader = React.memo(function UpdaterHeader({
   closeButtonRef,
@@ -1541,25 +1616,36 @@ const UpdaterCheckButton = React.memo(function UpdaterCheckButton({
     activityStore.getBusySnapshot,
     activityStore.getBusySnapshot
   )
-  const overviewQuery = useQuery({
-    ...updateOverviewQueryOptions(),
+  const releasesQuery = useQuery({
+    ...latestReleasesQueryOptions(),
     enabled: () => open && !updating && canRefetchSystemUpdateOverview(),
     notifyOnChangeProps: ["isFetching"],
   })
-  const refetchOverview = overviewQuery.refetch
+  const refetchReleases = releasesQuery.refetch
+  const queryClient = useQueryClient()
   // Hearth asks GitHub itself only every few minutes, so checking asks it
   // now before reading the updates again.
   const checkMutation = useMutation({
     mutationFn: async () => {
       const { failed } = await checkForKilnReleases()
       // An update that started meanwhile holds the overview still.
-      if (canRefetchSystemUpdateOverview()) await refetchOverview()
+      if (canRefetchSystemUpdateOverview()) {
+        await Promise.all([
+          refetchReleases(),
+          queryClient.refetchQueries({
+            exact: true,
+            queryKey: queryKeys.updates,
+          }),
+        ])
+      }
       if (failed) onNotice("Couldn’t reach GitHub")
     },
     onError: () => onNotice("Couldn’t check for updates"),
   })
+  // Spins while Hearth asks GitHub, on opening or for this button; reading
+  // the overview again doesn't.
   const checking = useMinimumDuration(
-    overviewQuery.isFetching || checkMutation.isPending,
+    releasesQuery.isFetching || checkMutation.isPending,
     minimumUpdateCheckDuration
   )
   const check = checkMutation.mutate
@@ -1622,6 +1708,7 @@ const UpdateDialogBody = React.memo(function UpdateDialogBody({
   focusedRelayId,
   overview,
   pending,
+  releasesPending,
   store,
   targets,
   onRetry,
@@ -1633,6 +1720,8 @@ const UpdateDialogBody = React.memo(function UpdateDialogBody({
   focusedRelayId: string | null
   overview: UpdateOverview | undefined
   pending: boolean
+  // Hearth has no releases yet and is asking GitHub for them.
+  releasesPending: boolean
   store: UpdateDialogViewStore
   targets: Array<UpdateTarget>
   onRetry: () => void
@@ -1680,6 +1769,7 @@ const UpdateDialogBody = React.memo(function UpdateDialogBody({
           activityStore={activityStore}
           focusedRelayId={focusedRelayId}
           releases={overview.releases}
+          releasesPending={releasesPending}
           targets={targets}
           onChangelog={store.openChangelog}
           onUpdate={onUpdate}
@@ -1700,6 +1790,7 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
   activityStore,
   focusedRelayId,
   releases,
+  releasesPending,
   targets,
   onChangelog,
   onUpdate,
@@ -1707,6 +1798,7 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
   activityStore: SystemUpdateActivityStore
   focusedRelayId: string | null
   releases: ReadonlyArray<PublicKilnRelease>
+  releasesPending: boolean
   targets: Array<UpdateTarget>
   onChangelog: (targetKey: string) => void
   onUpdate: UpdateHandler
@@ -1740,8 +1832,15 @@ const UpdateTargetList = React.memo(function UpdateTargetList({
   const latestRelease = releases[0] ?? null
   if (!latestRelease) {
     return (
-      <p className="type-support px-5 py-6 text-muted-foreground">
-        No public Kiln releases are available yet.
+      <p className="type-support flex items-center gap-2 px-5 py-6 text-muted-foreground">
+        {releasesPending ? (
+          <>
+            <LoaderCircle className="size-4 animate-spin" />
+            Checking for updates…
+          </>
+        ) : (
+          "No public Kiln releases are available yet."
+        )}
       </p>
     )
   }
@@ -2623,24 +2722,40 @@ const LastCheckedLabel = React.memo(function LastCheckedLabel({
     activityStore.getBusySnapshot,
     activityStore.getBusySnapshot
   )
-  // When Hearth last asked GitHub, which is what a check refreshes.
-  const { data: checkedAt } = useQuery({
+  const enabled = () =>
+    open && !updating && canRefetchSystemUpdateOverview()
+  // When Hearth last asked GitHub, which is what a check refreshes: by the
+  // overview, or by the check the dialog ran after it.
+  const { data: overviewCheckedAt } = useQuery({
     ...updateOverviewQueryOptions(),
-    enabled: () => open && !updating && canRefetchSystemUpdateOverview(),
+    enabled,
     select: selectReleasesCheckedAt,
     notifyOnChangeProps: ["data"],
   })
+  const { data: latestCheckedAt, isFetching: checking } = useQuery({
+    ...latestReleasesQueryOptions(),
+    enabled,
+    select: selectLatestCheckedAt,
+    notifyOnChangeProps: ["data", "isFetching"],
+  })
+  const checkedAt = Math.max(overviewCheckedAt ?? 0, latestCheckedAt ?? 0)
   return (
     <span className="truncate">
-      {checkedAt
-        ? `Checked ${lastCheckedFormatter.format(new Date(checkedAt))}`
-        : null}
+      {checking
+        ? "Checking for updates…"
+        : checkedAt
+          ? `Checked ${lastCheckedFormatter.format(new Date(checkedAt))}`
+          : null}
     </span>
   )
 })
 
 function selectReleasesCheckedAt(overview: UpdateOverview): number | null {
   return overview.releasesCheckedAt
+}
+
+function selectLatestCheckedAt(latest: LatestKilnReleases): number | null {
+  return latest.checkedAt
 }
 
 // Rows have fixed heights so the virtualizer never measures, and nothing

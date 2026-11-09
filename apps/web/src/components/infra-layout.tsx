@@ -11,7 +11,10 @@ import {
 } from "@workspace/ui/components/tooltip"
 
 import { HearthMark } from "@/components/hearth-mark"
-import { useInfraUpdateDialogStore } from "@/components/infra-update-dialog-provider"
+import {
+  useInfraUpdateDialogStore,
+  usePrefetchInfraUpdates,
+} from "@/components/infra-update-dialog-provider"
 import { SectionNavigation } from "@/components/section-navigation"
 import { accessibleInfrastructureDestinations } from "@/lib/navigation-destinations"
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
@@ -99,6 +102,7 @@ export function InfraUpdatesButton({
   className?: string
 }) {
   const store = useInfraUpdateDialogStore()
+  const prefetch = usePrefetchInfraUpdates()
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -109,6 +113,8 @@ export function InfraUpdatesButton({
           type="button"
           variant="outline"
           onClick={() => store.open()}
+          onFocus={prefetch}
+          onPointerEnter={prefetch}
         >
           <CloudDownload />
           <span className="hidden sm:inline">Updates</span>

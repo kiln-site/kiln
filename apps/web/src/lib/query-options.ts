@@ -99,10 +99,12 @@ import { getTailscaleStacks } from "@/server/tailscale"
 import { getAuthState } from "@/server/auth"
 import type { ReleaseHistoryCursor } from "@/effect/kiln-release-feed"
 import {
+  getLatestKilnReleases,
   getRelayRelease,
   getReleaseHistory,
   getUpdateOverview,
 } from "@/server/updates"
+import { traceUpdaterWork } from "@/lib/updater-timing"
 import {
   getResourceOwner,
   getResourceUserCount,
@@ -311,6 +313,7 @@ export const queryKeys = {
       ["kiln-platform", "logs", relayId, role] as const,
   },
   updates: ["updates", "overview"] as const,
+  latestReleases: ["updates", "latest-releases"] as const,
   releaseHistory: ["updates", "release-history"] as const,
   relayRelease: (relayId: string, version: string) =>
     ["updates", "relay", relayId, version] as const,
@@ -1033,12 +1036,26 @@ export function tailscaleStacksQueryOptions() {
   })
 }
 
+// Everything the Updates dialog shows at once, against the releases Hearth
+// already has. Asking GitHub for newer ones is `latestReleasesQueryOptions`.
 export function updateOverviewQueryOptions() {
   return queryOptions({
     ...systemUpdateOverviewRefetchPolicy,
     queryKey: queryKeys.updates,
-    queryFn: () => getUpdateOverview(),
+    queryFn: () => traceUpdaterWork("overview", () => getUpdateOverview()),
     staleTime: 30_000,
+  })
+}
+
+// Hearth asks GitHub at most every five minutes however often this is read,
+// so reading it more often only repeats Hearth's answer.
+export function latestReleasesQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.latestReleases,
+    queryFn: () => traceUpdaterWork("releases", () => getLatestKilnReleases()),
+    refetchOnWindowFocus: false,
+    retry: false,
+    staleTime: 5 * 60_000,
   })
 }
 
