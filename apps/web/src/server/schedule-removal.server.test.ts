@@ -67,7 +67,6 @@ describeMysql("periodic schedule removal", () => {
           id,
           name: "Nightly",
           cron_expression: "daily",
-          timezone: "UTC",
           revision: 2,
           created_by: "owner",
           created_at: 1000,
@@ -114,13 +113,11 @@ describeMysql("periodic schedule removal", () => {
               name: "Nightly",
               revision: 1,
               targets: [serverA],
-              timezone: "UTC",
             })
             yield* insertRows("schedule", {
               id,
               name: "Nightly",
               cron_expression: "daily",
-              timezone: "UTC",
               revision: 2,
               created_by: "owner",
               created_at: 1000,

@@ -132,7 +132,6 @@ const insertSchedule = (
       id,
       name: id,
       revision: 4,
-      timezone: "UTC",
       updated_at: now,
     })
     for (const [position, action] of actions.entries()) {

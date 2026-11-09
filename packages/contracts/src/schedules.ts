@@ -159,16 +159,9 @@ export function normalizeScheduleCron(value: string): string {
   return scheduleCronAliases[normalized as ScheduleCronAlias] ?? value.trim()
 }
 
-export function validateScheduleTimezone(value: string): boolean {
-  return Result.isSuccess(
-    Result.try(() =>
-      new Intl.DateTimeFormat("en-US", { timeZone: value }).format()
-    )
-  )
-}
-
-export function validateScheduleCron(value: string, timezone: string): boolean {
-  if (!validateScheduleTimezone(timezone)) return false
+// Schedules are stored and run in UTC, whatever the Relay's own time zone.
+// Hearth shows their times in each viewer's browser time zone.
+export function validateScheduleCron(value: string): boolean {
   return Result.isSuccess(
     Result.try(() => {
       const normalized = normalizeScheduleCron(value)
@@ -177,7 +170,7 @@ export function validateScheduleCron(value: string, timezone: string): boolean {
       }
       CronExpressionParser.parse(normalized, {
         currentDate: new Date(),
-        tz: timezone,
+        tz: "UTC",
       })
     })
   )
@@ -185,12 +178,11 @@ export function validateScheduleCron(value: string, timezone: string): boolean {
 
 export function nextScheduleOccurrence(
   expression: string,
-  timezone: string,
   after: Date | number | string = new Date()
 ): Date {
   return CronExpressionParser.parse(normalizeScheduleCron(expression), {
     currentDate: after,
-    tz: timezone,
+    tz: "UTC",
   })
     .next()
     .toDate()
@@ -205,12 +197,6 @@ export const scheduleInputSchema = z.object({
   enabled: z.boolean().default(true),
   name: z.string().trim().min(1).max(120),
   targets: z.array(scheduleTargetSchema).min(1).max(2_000),
-  timezone: z
-    .string()
-    .trim()
-    .min(1)
-    .max(120)
-    .refine(validateScheduleTimezone, "Timezone is invalid"),
 })
 
 export const scheduleDefinitionSchema = scheduleInputSchema
@@ -220,7 +206,7 @@ export const scheduleDefinitionSchema = scheduleInputSchema
   })
   .strict()
   .superRefine((schedule, context) => {
-    if (!validateScheduleCron(schedule.cron, schedule.timezone)) {
+    if (!validateScheduleCron(schedule.cron)) {
       context.addIssue({
         code: "custom",
         message: "Cron expression is invalid",

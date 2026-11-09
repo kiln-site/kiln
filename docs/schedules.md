@@ -92,10 +92,12 @@ takes effect when it's back. A backup step to S3, or an incremental one,
 carries its destination's keys or repository password, which the Relay
 keeps with the schedule so its backups run without Hearth.
 
-The Relay reads cron in its own time zone: its process's `TZ`, which a
-container that doesn't set it leaves at UTC. The time zone saved with a
-schedule doesn't change when it runs; Hearth shows the schedule's times in
-it, UTC for schedules created in the editor.
+Schedules are saved and run in UTC, whatever the Relay's own `TZ`. Hearth
+shows their times in each viewer's browser time zone. The editor's Hourly,
+Daily, Weekly and Monthly presets take a local time and save the UTC cron it
+matches that day, so the local time moves an hour when daylight saving
+starts or ends. A custom cron is written in UTC. A Monthly preset offers days
+1 to 28, and refuses a local time whose UTC day falls outside them.
 
 A fresh installation starts with a daily **Kiln backups** schedule; see
 [Kiln's own backups](backups.md#kilns-own-backups).

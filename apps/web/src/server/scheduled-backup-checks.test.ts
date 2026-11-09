@@ -141,7 +141,6 @@ const backupSchedule = (
   name: "Nightly backups",
   revision: 1,
   targets: targets.map(target),
-  timezone: "UTC",
 })
 
 // The schedule saved, as Hearth keeps it, then sent to its Relay.

@@ -76,7 +76,6 @@ describeMysql("schedule deployment", () => {
             name: "Nightly",
             revision: 1,
             targets: [appA, appB],
-            timezone: "UTC",
           })
           yield* insertRows("schedule", {
             cron_expression: schedule.cron,
@@ -85,7 +84,6 @@ describeMysql("schedule deployment", () => {
             id: schedule.id,
             name: schedule.name,
             revision: 1,
-            timezone: "UTC",
             updated_at: 1_000,
           })
 

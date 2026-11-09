@@ -57,6 +57,7 @@ import { appVolumeFileRoots } from "./0056_app_volume_file_roots"
 import { backupRestoreDestinations } from "./0057_backup_restore_destinations"
 import { instanceIds } from "./0058_instance_ids"
 import { instanceDeployments } from "./0059_instance_deployments"
+import { schedulesInUtc } from "./0060_schedules_in_utc"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -117,4 +118,5 @@ export const migrations: ReadonlyArray<Migration> = [
   backupRestoreDestinations,
   instanceIds,
   instanceDeployments,
+  schedulesInUtc,
 ]

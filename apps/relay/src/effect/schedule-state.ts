@@ -21,6 +21,8 @@ export const legacyScheduleStateSchema = z.strictObject({
   schedules: z.array(
     relayScheduleProjectionSchema.safeExtend({
       nextRunAt: z.number().int().nonnegative().nullable(),
+      // Written before schedules ran in UTC; dropped on import.
+      timezone: z.string().optional(),
     })
   ),
   tombstones: z.record(z.string(), z.number().int().positive()),
@@ -55,8 +57,6 @@ export interface ScheduleOccurrence {
 export type RelayScheduleState = ReturnType<typeof makeRelayScheduleState>
 
 const historyLimit = 1_000
-export const relayTimezone =
-  Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
 
 const deployment = (
   scheduleId: string,
@@ -192,7 +192,7 @@ export function makeRelayScheduleState(sql: SqlClient) {
         sql.withTransaction(
           Effect.gen(function* () {
             for (const schedule of state.schedules) {
-              const { nextRunAt, ...definition } = schedule
+              const { nextRunAt, timezone: _, ...definition } = schedule
               yield* sql`INSERT INTO relay_schedules
                   (schedule_id, revision, enabled, next_run_at, definition_json)
                 SELECT ${schedule.id}, ${schedule.revision}, ${schedule.enabled ? 1 : 0}, ${nextRunAt}, ${JSON.stringify(definition)}
@@ -319,7 +319,6 @@ export function makeRelayScheduleState(sql: SqlClient) {
                 definition,
                 nextRunAt: nextScheduleOccurrence(
                   definition.cron,
-                  relayTimezone,
                   now
                 ).getTime(),
               }

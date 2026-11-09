@@ -57,15 +57,14 @@ export function insertSchedule(
     yield* refuseResourcesBeingDeleted(transaction, schedule.targets)
     yield* transaction.execute(
       `INSERT INTO ${databaseTable("schedule")}
-         (id, name, cron_expression, timezone, enabled,
+         (id, name, cron_expression, enabled,
           continue_on_failure, revision, created_by, created_at,
           updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         schedule.id,
         schedule.name,
         schedule.cron,
-        schedule.timezone,
         schedule.enabled,
         schedule.continueOnFailure === true,
         schedule.revision,
@@ -122,7 +121,6 @@ export async function seedDefaultKilnBackupSchedule(): Promise<string | null> {
     name: "Kiln backups",
     revision: 1,
     targets: [{ id: relayId, kind: "relay", name: "Kiln", relayId }],
-    timezone: "UTC",
   })
   const owner = await runAppEffect(
     "schedules.seedKilnBackups",
@@ -331,7 +329,6 @@ export async function deployScheduleToRelay(
           name: schedule.name,
           revision: schedule.revision,
           targets: [...targets],
-          timezone: schedule.timezone,
         }
         const result = relayScheduleDeploymentSchema.parse(
           await relayRpc(relay, "schedule.apply", projection, 15_000, subject)
@@ -439,7 +436,10 @@ async function prepareRelayScheduleActions(
                 ),
           { concurrency: scheduleReconciliationConcurrency }
         ).pipe(
-          Effect.map((executions) => ({ ...action, executions: executions.flat() }))
+          Effect.map((executions) => ({
+            ...action,
+            executions: executions.flat(),
+          }))
         )
       },
       { concurrency: 1 }
@@ -707,7 +707,6 @@ export interface ScheduleRow extends RowDataPacket {
   id: string
   name: string
   revision: number
-  timezone: string
   updated_at: number
 }
 
@@ -747,7 +746,7 @@ export async function loadSchedules() {
   const [scheduleRows, actionRows, targetRows, deploymentRows, runRows] =
     await Promise.all([
       databasePool.query<ScheduleRow[]>(
-        `SELECT id, name, cron_expression, timezone, enabled,
+        `SELECT id, name, cron_expression, enabled,
                 continue_on_failure, revision, created_by, created_at,
                 updated_at
            FROM ${databaseTable("schedule")}
@@ -800,7 +799,6 @@ export async function loadSchedules() {
         name: target.target_name,
         relayId: target.relay_id,
       })),
-      timezone: row.timezone,
     })
     return {
       ...definition,

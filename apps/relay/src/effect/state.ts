@@ -1828,6 +1828,14 @@ const migrations = SqliteMigrator.fromRecord({
       legacy_id TEXT NOT NULL UNIQUE
     ) STRICT`
   }),
+  // Schedules run in UTC, so what Hearth sent no longer names a time zone.
+  "39_schedules_in_utc": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`
+      UPDATE relay_schedules
+      SET definition_json = json_remove(definition_json, '$.timezone')
+    `
+  }),
 })
 
 // The App IDs a Hearth still owes, as stored; anything unreadable owes
@@ -1867,7 +1875,10 @@ const makeRelayStateStore = Effect.gen(function* () {
     )
   // A hot path, as a running backup's progress written every half second:
   // the same errors, without a span tree in its task's trace for each write.
-  const runUntraced = <T>(operation: string, effect: Effect.Effect<T, unknown>) =>
+  const runUntraced = <T>(
+    operation: string,
+    effect: Effect.Effect<T, unknown>
+  ) =>
     effect.pipe(
       Effect.mapError((cause) => RelayStateError.make({ operation, cause })),
       Effect.withTracerEnabled(false)
