@@ -489,10 +489,20 @@ const findHearthTarget = Effect.fnUntraced(function* (
       connection.relayConnectionState(relay.id).status !== "unreachable"
   )
   yield* Effect.annotateCurrentSpan("updates.hearth.asked", candidates.length)
-  const found = yield* Effect.forEach(candidates, inspectOn, {
-    concurrency: "unbounded",
-  })
-  const target = found.find((candidate) => candidate !== null) ?? null
+  // The first Relay that sees Hearth's container answers; the others are
+  // stopped rather than waited for.
+  const target =
+    candidates.length === 0
+      ? null
+      : yield* Effect.raceAll(
+          candidates.map((relay) =>
+            inspectOn(relay).pipe(
+              Effect.flatMap((found) =>
+                found ? Effect.succeed(found) : Effect.fail("elsewhere" as const)
+              )
+            )
+          )
+        ).pipe(Effect.catch(() => Effect.succeed(null)))
   hearthRelayId = target?.relayId ?? null
   return target
 })
