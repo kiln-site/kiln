@@ -117,7 +117,7 @@ describeMysql("scheduled App backups", () => {
             resourceType: "relay",
             userId: user.id,
           })
-          yield* allow("app.files.read")
+          yield* allow("instance.files.read")
           relay.online = true
 
           // A live backup stops nothing.

@@ -90,20 +90,20 @@ the authority reading or writing that data does
 (`lib/backup-target-permissions.ts`):
 
 - Game servers and databases take `backup.*` on the Relay or on themselves.
-- An App's folder, and a volume its Compose project owns, follow the App:
-  seeing its backups takes `app.read`; making or downloading one
-  `app.files.read`, as reading its files does; restoring or deleting one
-  `app.files.write`, as replacing them does. The Relay's `backup.*`
+- An App's folder, and a volume its Compose project owns, follow the App's
+  files: seeing its backups takes `app.read`; making or downloading one
+  `instance.files.read`, as reading its files does; restoring or deleting
+  one `instance.files.write`, as replacing them does. The Relay's `backup.*`
   grants don't reach them. App owners hold neither file permission, since
   an App's files reach the node through its Compose file, so, as with its
-  configuration, only people with App permissions on the Relay back an App
+  configuration, only people with file permissions on the Relay back an App
   up. Restoring needs no `app.manage`: the Relay requires the App stopped
-  and replaces only files `app.files.write` could already change, and the
-  Compose file isn't among them (Hearth sends it with each deployment).
+  and replaces only files `instance.files.write` could already change, and
+  the Compose file isn't among them (Hearth sends it with each deployment).
 - A Kiln volume, shared by design, takes `backup.*` on the Relay.
 - A stopped backup also takes `app.manage` on every App it stops and
   starts again, as starting and stopping them does.
-- Restoring a volume also takes `app.files.write` on every App that uses
+- Restoring a volume also takes `instance.files.write` on every App that uses
   it, as the Relay reports them; while the Relay can't tell which Apps use
   it yet, the restore is refused.
 - Kiln's own backups are an administrator's alone.

@@ -73,6 +73,28 @@ describe("permission catalog boundaries", () => {
   })
 })
 
+describe("file permissions", () => {
+  it("show the Apps they reach on a Relay, and nothing beyond one game server", () => {
+    const files = (scope: "instance" | "relay") =>
+      expandPermissionSelections(
+        [{ kind: "permission", key: "instance.files.read" }],
+        scope
+      )
+    expect(files("relay")).toEqual(
+      expect.arrayContaining(["instance.read", "app.read"])
+    )
+    expect(files("instance")).toContain("instance.read")
+    expect(files("instance")).not.toContain("app.read")
+    // Everything about Apps no longer carries their files.
+    expect(
+      expandPermissionSelections(
+        [{ kind: "collection", key: "app.all" }],
+        "relay"
+      )
+    ).not.toContain("instance.files.read")
+  })
+})
+
 describe("machine policy delegation", () => {
   it("requires full scoped authority for clients that can mint unrestricted clients", () => {
     const full = permissionsForRelayClientPolicy("full_access")

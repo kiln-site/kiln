@@ -194,7 +194,7 @@ describe("Relay capability issuance orchestration", () => {
         issue("instance.files.download", relayFileRootId("8".repeat(12)))
       ).rejects.toThrow()
       await expect(issue("instance.files.upload")).rejects.toThrow()
-      granted = ["instance.files.read", "app.files.read"]
+      granted = ["instance.files.read"]
       await expect(issue("instance.files.download")).rejects.toThrow()
     })
   })

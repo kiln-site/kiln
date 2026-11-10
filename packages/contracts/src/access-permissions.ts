@@ -105,8 +105,6 @@ export const accessPermissions = [
   "app.delete",
   "app.logs.read",
   "app.terminal",
-  "app.files.read",
-  "app.files.write",
 ] as const
 export type AccessPermission = (typeof accessPermissions)[number]
 Object.freeze(accessPermissions)
@@ -117,6 +115,11 @@ Object.freeze(legacyAccessPermissions)
  * carry that kind's base visibility. shared permissions (access, presets,
  * backups, schedules) apply wherever they are assigned and carry the target's
  * visibility. App permissions are granted on a Relay, for all of its apps.
+ *
+ * What every kind of instance has takes one `instance.*` permission, which
+ * reaches each instance its grant covers: `instance.files.*` is a game
+ * server's files on that game server, and on a Relay every game server's and
+ * every App's. Only what one kind alone has keeps that kind's name.
  */
 export type PermissionFamily =
   | "relay"
@@ -183,7 +186,6 @@ const implicationEdges: Partial<
   "database.credentials.rotate": ["database.credentials.read"],
   "database.network.write": ["database.network.read"],
   "database.data.write": ["database.data.read"],
-  "app.files.write": ["app.files.read"],
   "backup.create": ["backup.read"],
   "backup.download": ["backup.read"],
   "backup.restore": ["backup.read"],
@@ -276,8 +278,6 @@ const permissionPlacement: Record<
   "app.delete": ["resource.deletion", "app"],
   "app.logs.read": ["app.logs", "app"],
   "app.terminal": ["app.terminal", "app"],
-  "app.files.read": ["app.files", "app"],
-  "app.files.write": ["app.files", "app"],
 }
 
 const familyScopes: Record<PermissionFamily, readonly PermissionScopeType[]> = {
@@ -306,6 +306,15 @@ const familyVisibility: Record<PermissionFamily, AccessPermission | null> = {
 const relayScopeChildVisibility: Record<string, readonly AccessPermission[]> = {
   backup: ["instance.read", "database.read"],
   schedule: ["instance.read", "database.read"],
+}
+
+/**
+ * Permissions every kind of instance takes reach more than game servers when
+ * assigned on a Relay, so there they also reveal the other instances they
+ * reach: file permissions cover Apps' files, and show the Apps.
+ */
+const relayScopeReach: Record<string, readonly AccessPermission[]> = {
+  "instance.files": ["app.read"],
 }
 
 /** Legacy umbrella permissions kept only so migrated selections stay valid. */
@@ -372,15 +381,17 @@ const permissionCopy: Record<
   },
   "instance.files.read": {
     label: "View and download files",
-    description: "Browse server files and download their contents.",
+    description:
+      "Browse files and download their contents: a game server's, and on a Relay every game server's and App's.",
   },
   "instance.files.write": {
     label: "Edit files",
-    description: "Create, upload, edit, copy, move, and rename server files.",
+    description:
+      "Create, upload, edit, copy, move, and rename files. An App's files can reach the Relay's host.",
   },
   "instance.files.delete": {
     label: "Delete files",
-    description: "Remove server files and folders.",
+    description: "Remove files and folders.",
   },
   "instance.files.chmod": {
     label: "Change file permissions",
@@ -537,14 +548,6 @@ const permissionCopy: Record<
   "app.terminal": {
     label: "Open app shells",
     description: "Run a shell inside an app's containers.",
-  },
-  "app.files.read": {
-    label: "View app files",
-    description: "Browse and download an app's data directory.",
-  },
-  "app.files.write": {
-    label: "Edit app files",
-    description: "Create, upload, edit, move, and delete an app's files.",
   },
   "database.logs.read": {
     label: "View database logs",
@@ -708,7 +711,6 @@ const blockLabels: Record<string, string> = {
   "app.manage": "App configuration",
   "app.logs": "App logs",
   "app.terminal": "App shell",
-  "app.files": "App files",
   "resource.deletion": "Resource deletion",
   "resource.creation": "Resource creation",
   "relay.configuration": "Relay configuration",
@@ -879,6 +881,9 @@ export function expandPermissionSelections(
           for (const child of relayScopeChildVisibility[definition.block] ?? [])
             result.add(child)
       }
+      if (scope === "relay")
+        for (const reached of relayScopeReach[definition.block] ?? [])
+          result.add(reached)
       return
     }
     const group = collections.get(item.key)
@@ -1057,12 +1062,6 @@ export function permissionsForRelayClientPolicy(
           break
         case "relay.files.upload":
           permissions = ["relay.files.write"]
-          break
-        case "app.files.download":
-          permissions = ["app.files.read"]
-          break
-        case "app.files.upload":
-          permissions = ["app.files.write"]
           break
         case "instance.files.create":
         case "instance.files.rename":

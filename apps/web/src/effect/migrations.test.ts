@@ -7,7 +7,9 @@ import { databaseTableName } from "@/lib/database-config"
 import { migrations } from "@/migrations"
 import { explicitBackupDestinations } from "@/migrations/0054_explicit_backup_destinations"
 import { instanceIds } from "@/migrations/0058_instance_ids"
+import { expandStoredSelections } from "@/lib/resource-permissions"
 import { describeMysql, testDatabaseClient } from "@/test/database"
+import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
 
 import { applyMigrations } from "./migrations"
 
@@ -274,8 +276,7 @@ describeMysql("database migrations", () => {
           SELECT table_name AS name FROM information_schema.tables
           WHERE table_schema = DATABASE() ORDER BY table_name
         `
-        const state: Record<string, { definition: string; rows: unknown }> =
-          {}
+        const state: Record<string, { definition: string; rows: unknown }> = {}
         for (const { name } of tables) {
           const [created] = yield* sql.unsafe<Record<string, string>>(
             `SHOW CREATE TABLE \`${name}\``
@@ -590,6 +591,153 @@ describeMysql("database migrations", () => {
               id: "g",
               read: false,
             },
+          ])
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
+      "keeps what people could do to an App's files, as the file permissions every instance takes",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while an App's files had permissions of
+          // their own.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 60)
+          )
+          const relayId = "1".repeat(12)
+          yield* insertRelay(relayId, {
+            client_actions: JSON.stringify([
+              "app.read",
+              "app.files.read",
+              "app.files.upload",
+            ]),
+            client_role: "custom",
+          })
+          const selections = (
+            owner: Record<string, string>,
+            keys: ReadonlyArray<string>
+          ) =>
+            keys.map((key) => ({
+              ...owner,
+              selection_kind: key.endsWith(".all")
+                ? "collection"
+                : "permission",
+              selection_key: key,
+            }))
+          const grants = {
+            reader: ["app.files.read"],
+            writer: ["app.files.write", "instance.files.write"],
+            files: ["app.files.all"],
+            apps: ["app.all"],
+          }
+          // Each a different person's grant on the Relay.
+          for (const [id, keys] of Object.entries(grants)) {
+            yield* insertUser(id)
+            yield* insertGrant({
+              id,
+              relayId,
+              resourceId: relayId,
+              resourceType: "relay",
+              userId: id,
+            })
+            yield* insertRows(
+              "access_selection",
+              selections({ access_id: id }, keys)
+            )
+          }
+          // On one game server an App permission never did anything.
+          yield* insertUser("server")
+          yield* insertGrant({
+            id: "server",
+            relayId,
+            resourceId: "5".repeat(12),
+            resourceType: "instance",
+            userId: "server",
+          })
+          yield* insertRows(
+            "access_selection",
+            selections({ access_id: "server" }, [
+              "app.files.write",
+              "instance.console.read",
+            ])
+          )
+          yield* insertRows("permission_preset", {
+            created_at: 1,
+            id: "preset",
+            name: "App files",
+            relay_id: relayId,
+            resource_id: relayId,
+            resource_type: "relay",
+            updated_at: 1,
+          })
+          yield* insertRows(
+            "preset_selection",
+            selections({ preset_id: "preset" }, ["app.files.read"])
+          )
+
+          yield* applyMigrations(migrations)
+
+          const selected = (table: string, owner: string, id: string) =>
+            sql<{ key: string }>`
+              SELECT selection_key AS \`key\` FROM ${sql(databaseTableName(table))}
+               WHERE ${sql(owner)} = ${id} ORDER BY selection_key
+            `.pipe(Effect.map((rows) => rows.map((row) => row.key)))
+          const granted = (id: string) =>
+            selected("access_selection", "access_id", id)
+          expect(yield* granted("reader")).toEqual(["instance.files.read"])
+          expect(yield* granted("writer")).toEqual([
+            "instance.files.delete",
+            "instance.files.write",
+          ])
+          expect(yield* granted("files")).toEqual([
+            "instance.files.delete",
+            "instance.files.write",
+          ])
+          expect(yield* granted("apps")).toEqual([
+            "app.all",
+            "instance.files.delete",
+            "instance.files.write",
+          ])
+          expect(yield* granted("server")).toEqual(["instance.console.read"])
+          expect(
+            yield* selected("preset_selection", "preset_id", "preset")
+          ).toEqual(["instance.files.read"])
+
+          // What was stored now loads, and reaches an App's files and the
+          // App itself.
+          const apps = expandStoredSelections(
+            (yield* granted("apps")).map((key) => ({
+              key,
+              kind: key.endsWith(".all") ? "collection" : "permission",
+            })),
+            "relay"
+          )
+          expect(apps).toEqual(
+            expect.arrayContaining([
+              "app.manage",
+              "app.read",
+              "instance.files.read",
+              "instance.files.write",
+              "instance.files.delete",
+            ])
+          )
+
+          const [relay] = yield* sql<{ actions: unknown }>`
+            SELECT client_actions AS actions
+              FROM ${sql(databaseTableName("relay"))} WHERE id = ${relayId}
+          `
+          expect(
+            typeof relay?.actions === "string"
+              ? JSON.parse(relay.actions)
+              : relay?.actions
+          ).toEqual([
+            "app.read",
+            "instance.files.list",
+            "instance.files.read",
+            "instance.files.upload",
           ])
         }),
       schemaBuildTimeout

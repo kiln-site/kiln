@@ -70,6 +70,7 @@ export * from "./database-browser.js"
 export * from "./app-keys.js"
 export * from "./instance-id.js"
 export * from "./instance-id-migration.js"
+export * from "./file-permission-migration.js"
 
 // A Relay's ID is an instance ID like any other's; its public-key
 // fingerprint, which authenticates it, is a separate value.

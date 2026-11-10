@@ -200,7 +200,7 @@ describeMysql("App and volume backup authorization", () => {
         Effect.gen(function* () {
           yield* seed
           const backupId = yield* seedVolumeBackup
-          yield* grant(["backup.restore", "app.files.write"])
+          yield* grant(["backup.restore", "instance.files.write"])
           relay.protectionReady = false
 
           const message = yield* rejection(() =>
@@ -233,7 +233,7 @@ describeMysql("App and volume backup authorization", () => {
           assert.deepStrictEqual(yield* restoreTasks, [])
 
           // With it, the restore is queued.
-          yield* addPermission(access, "app.files.write")
+          yield* addPermission(access, "instance.files.write")
           yield* Effect.promise(() =>
             restoreResourceBackupHandler(user, {
               backupId,

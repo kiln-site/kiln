@@ -124,11 +124,12 @@ describeMysql("resource ownership", () => {
               })
             )
           // What an app runs can reach the node, so changing it, its shell,
-          // and its files still take app permissions on the Relay.
+          // and its files still take permissions on the Relay.
           for (const permission of [
             "app.manage",
             "app.terminal",
-            "app.files.write",
+            "instance.files.read",
+            "instance.files.write",
           ] as const)
             assert.isFalse(
               grantsAllowPermission(grants, permission, {

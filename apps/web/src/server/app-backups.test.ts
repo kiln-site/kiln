@@ -165,7 +165,7 @@ describeMysql("App backups", () => {
           name: "Website",
           relayId,
         })
-        yield* grant(["app.files.read"])
+        yield* grant(["instance.files.read"])
 
         yield* Effect.promise(() =>
           createAppBackupsHandler(user, {
@@ -219,7 +219,7 @@ describeMysql("App backups", () => {
           yield* insertRows("access_selection", {
             access_id: access,
             selection_kind: "permission",
-            selection_key: "app.files.write",
+            selection_key: "instance.files.write",
           })
           yield* Effect.promise(() =>
             resolveUnfinishedRestoreHandler(user, {

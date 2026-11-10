@@ -43,10 +43,6 @@ export const relayActions = [
   "app.delete",
   "app.logs.read",
   "app.terminal",
-  "app.files.read",
-  "app.files.write",
-  "app.files.download",
-  "app.files.upload",
   "backup.read",
   "backup.create",
   "backup.download",
@@ -125,11 +121,10 @@ export function fileMutationAction(
   }
 }
 
-// An App's files and the host's each take one action to read and one to
-// change. A game server's take an action for each operation
-// (`actionForRequest`), so it has no row here.
+// The host's files take one action to read and one to change. A game
+// server's and an App's take an action for each operation
+// (`actionForRequest`), so they have no row here.
 const fileRootActions = {
-  app: { read: "app.files.read", write: "app.files.write" },
   relay: { read: "relay.files.read", write: "relay.files.write" },
 } as const satisfies Partial<
   Record<FileRootOwner["kind"], Record<"read" | "write", RelayAction>>
@@ -137,14 +132,12 @@ const fileRootActions = {
 
 /**
  * The action reading or changing a file root's files takes, where its kind
- * has one for each. Null for a game server's root.
+ * has one for each. Null for a game server's root or an App's.
  */
 export function fileRootAction(
   rootId: string,
   access: "read" | "write"
 ): RelayAction | null {
   const { kind } = fileRootOwner(rootId)
-  return kind === "app" || kind === "relay"
-    ? fileRootActions[kind][access]
-    : null
+  return kind === "relay" ? fileRootActions[kind][access] : null
 }

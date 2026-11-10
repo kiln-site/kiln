@@ -132,6 +132,16 @@ they're granted on. At Relay scope, backup and schedule permissions also
 reveal that Relay's game servers and databases, but people and preset
 permissions don't. Any Relay grant reveals the Relay.
 
+What every kind of instance has takes one `instance.*` permission, which
+reaches each instance its grant covers. Files are the first: on one game
+server `instance.files.*` is that game server's files, and on a Relay it is
+every game server's and every App's, so there it also reveals the Apps
+(`app.read`). An App's files can reach the Relay's host, so a file permission
+on a Relay is that much authority. A Relay's own host files keep
+`relay.files.*`, and a database's dumps keep `database.dump.*`. Only what one
+kind alone has keeps that kind's name; `app.all` covers what Apps alone have,
+not their files.
+
 **Presets** come in two kinds:
 
 - Kiln's built-in Observer, Operator, and Administrator presets, which can't
@@ -170,7 +180,8 @@ created it. Owners of a Relay, game server, or database hold `all` there;
 on a Relay, that covers everything on it. An App's owner holds only
 `app.read`, `app.logs.read`, and `app.delete`.
 Configuring and deploying an App, opening its shell, and using its files can
-reach the Relay's host, so those still take App permissions on the Relay.
+reach the Relay's host, so those still take permissions on the Relay: App
+permissions for the first two, and file permissions for its files.
 
 Only the owner or a platform administrator can transfer ownership, to an
 enabled, verified account that already has access there: an active grant on

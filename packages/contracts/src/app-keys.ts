@@ -110,9 +110,13 @@ export function fileRootOwner(rootId: string): FileRootOwner {
   return { kind: "instance", id: rootId }
 }
 
+// An App's files move with the actions a game server's do.
 const fileTransferActions = {
-  app: { download: "app.files.download", upload: "app.files.upload" },
-  database: { download: "database.dump.export", upload: "database.dump.import" },
+  app: { download: "instance.files.download", upload: "instance.files.upload" },
+  database: {
+    download: "database.dump.export",
+    upload: "database.dump.import",
+  },
   instance: {
     download: "instance.files.download",
     upload: "instance.files.upload",
