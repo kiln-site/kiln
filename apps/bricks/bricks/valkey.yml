@@ -1,0 +1,32 @@
+format: kiln.brick/v2
+kind: database
+type: valkey
+metadata:
+  id: valkey
+  name: Valkey
+  summary: An open source, Redis-compatible key-value store that keeps its data on disk.
+  author: Kiln
+  icon: ../icons/valkey.svg
+  color: "#6983ff"
+  tags: [key-value]
+inputs:
+  - key: version
+    label: Version
+    help: The major version it runs. A redeploy takes that version's newer releases.
+    type: select
+    options: ["8", "7"]
+    default: "8"
+deploy:
+  type: image
+  image: valkey/valkey:{{ version }}
+  # Its login is an ACL file Kiln writes into the data volume.
+  command: [valkey-server, --appendonly, "yes", --aclfile, /data/users.acl]
+  ports:
+    - { name: redis, port: 6379 }
+  volumes: [/data]
+  # It answers any connection without a login with NOAUTH, which is enough
+  # to know it is serving.
+  ready:
+    command: valkey-cli ping | grep -qE '^(PONG|NOAUTH)'
+database:
+  connection: "redis://{{ database.username }}:{{ database.password }}@{{ database.host }}:{{ database.port }}"

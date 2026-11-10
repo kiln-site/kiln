@@ -287,7 +287,7 @@ with no type runs with the foundation and nothing more.
 | Kind          | Its section                                  | Types               |
 | ------------- | -------------------------------------------- | ------------------- |
 | `game-server` | `game-server`: `game`, `stop`, `srv`         | `minecraft`         |
-| `database`    | `database`: `connection`, `export`, `import` | `postgres`, `mysql` |
+| `database`    | `database`: `connection`, `export`, `import` | See below           |
 | `app`         | None                                         | None                |
 | `group`       | `group`: `members`                           | None                |
 
@@ -316,9 +316,22 @@ which publishes only its first port and gives it an SRV record. Without a
 | `export`     |          | A command that writes a dump to stdout.                     |
 | `import`     |          | A command that reads a dump from stdin.                     |
 
-Without `export`, backups copy the volume. `type: postgres` or `mysql`
-unlocks the table viewer. A database with no type has neither a viewer nor
-files.
+A database's name, login, host and port are Kiln's to give, not answers:
+its templates take them as `database.name`, `database.username`,
+`database.password`, `database.host` and `database.port`, in `deploy.env`
+and in `connection`.
+
+A database listens on its first port, keeps its data in its first volume,
+and is ready when its `ready` command succeeds.
+
+| Type                           | What Kiln adds                                              |
+| ------------------------------ | ----------------------------------------------------------- |
+| `postgres`, `mysql`, `mariadb` | The table viewer, dumps and restores, and password rotation |
+| `redis`, `valkey`              | Its login, as an ACL file in the data volume, and rotation  |
+
+A type brings its own export and import. `export` and `import` are for a
+database with no type, which has neither a viewer nor files; without
+`export`, its backups copy the volume.
 
 ### Groups
 

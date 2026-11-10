@@ -22,7 +22,7 @@ export type BrickKind = (typeof brickKinds)[number]
  */
 export const brickTypes = {
   "game-server": ["minecraft"],
-  database: ["postgres", "mysql"],
+  database: ["postgres", "mysql", "mariadb", "redis", "valkey"],
   app: [],
   group: [],
 } as const satisfies Record<BrickKind, ReadonlyArray<string>>

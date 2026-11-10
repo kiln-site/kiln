@@ -10,3 +10,8 @@ recipes:
   - bricks/fabric.yml
   - bricks/velocity.yml
   - bricks/palworld.yml
+  - bricks/postgres.yml
+  - bricks/mysql.yml
+  - bricks/mariadb.yml
+  - bricks/redis.yml
+  - bricks/valkey.yml
