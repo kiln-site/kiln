@@ -203,6 +203,16 @@ schedule targets show only what those grants reach; the Access directory
 filters in SQL before paginating. A resource the account can't reach looks
 the same as one that doesn't exist.
 
+Files open under a file root: a game server's ID, `app:<id>` for an App's
+folder or one of its volumes, `database:<id>` for a database's dumps, and
+`relay:<id>` for a Relay's host files. Which permission a root's files take
+is decided in one place on each side. Hearth resolves it with
+`fileRootPermission` (`apps/web/src/lib/file-root-permissions.ts`) and checks
+it with `requireFileRootPermission`; the Relay resolves its action with
+`fileRootAction` (`apps/relay/src/permissions.ts`) and, for moving files in
+or out, `fileTransferAction` in the contracts. Code that takes a file root
+calls these and never reads the root's prefix to pick a permission.
+
 Browser capabilities for consoles, files, and usage are issued only after
 Hearth reads the account, session, and authorization revision again. If the
 revision keeps changing during issuance, the capability is refused. Relays

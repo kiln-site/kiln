@@ -13,9 +13,13 @@ import {
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import { Database } from "@/effect/database"
-import { PermissionDeniedError } from "@/effect/errors"
+import { PermissionDeniedError, ResourceNotFoundError } from "@/effect/errors"
 import { runAppEffect } from "@/effect/runtime"
 import { advanceAuthorizationRevisionEffect } from "@/lib/authorization-revision"
+import {
+  fileRootPermission,
+  type FileRootAccess,
+} from "@/lib/file-root-permissions"
 import type { AccessPermission, PlatformPermission } from "@/lib/permissions"
 import {
   platformRoleHasPermission,
@@ -148,6 +152,44 @@ export const requireRelayPermissionEffect = Effect.fn(
     permissions: [input.permission],
   })
 })
+
+/**
+ * Requires reading, changing or deleting the files under a file root: a game
+ * server's, an App's folder or volume, a database's dumps, or the Relay's
+ * host files. Every file root is checked here.
+ */
+export const requireFileRootPermissionEffect = Effect.fnUntraced(function* (
+  user: AuthenticatedUser,
+  relayId: string,
+  rootId: string,
+  access: FileRootAccess
+) {
+  const required = fileRootPermission(relayId, rootId, access)
+  if (!required) {
+    return yield* ResourceNotFoundError.make({
+      resource: "relay",
+      message: "Relay not found",
+    })
+  }
+  return yield* requireRelayPermissionEffect({
+    ...required.scope,
+    permission: required.permission,
+    relayId,
+    user,
+  })
+})
+
+export function requireFileRootPermission(
+  user: AuthenticatedUser,
+  relayId: string,
+  rootId: string,
+  access: FileRootAccess
+): Promise<void> {
+  return runAppEffect(
+    "files.permission",
+    requireFileRootPermissionEffect(user, relayId, rootId, access)
+  )
+}
 
 export const requireRelayPermissionsEffect = Effect.fn(
   "access.requireRelayPermissions"

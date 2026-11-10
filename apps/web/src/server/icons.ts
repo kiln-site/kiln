@@ -12,6 +12,7 @@ import { z } from "zod"
 import { getIconDetailsEffect } from "@/effect/icons"
 import { resolveMinecraftProfileEffect } from "@/effect/minecraft-profile"
 import { runAppEffect } from "@/effect/runtime"
+import { requireFileRootPermission } from "@/lib/access-control"
 import {
   detectInstanceIconEffect,
   iconLaneKey,
@@ -35,7 +36,6 @@ import {
   authorizedIconSubject,
   iconIndexFor,
   iconSubjectFor,
-  requireFileRootRead,
   requireIconFileAccess,
 } from "@/server/icons.server"
 import { promiseEffect } from "@/effect/promise"
@@ -375,7 +375,7 @@ export const readPictureSourceFile = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
-    await requireFileRootRead(user, data.relayId, data.rootId)
+    await requireFileRootPermission(user, data.relayId, data.rootId, "read")
     const relay = await activeRelay(data.relayId)
     const path = data.path.replace(/^\/+/u, "")
     const icon = await runAppEffect(

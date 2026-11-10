@@ -62,8 +62,7 @@ import {
   relayVolumesV1Feature,
   relayDatabaseProvisioningV1Feature,
   relayAppProvisioningV1Feature,
-  appIdFromFileRoot,
-  isRelayFileRoot,
+  fileTransferAction,
   relayFileRequestReplayV1Feature,
   relaySnapshotDeltaFeature,
   relaySnapshotNodeResourcesFeature,
@@ -96,7 +95,7 @@ import {
 import {
   actionsForRole,
   fileMutationAction,
-  fileTransferAction,
+  fileRootAction,
   isActionAllowed,
 } from "./permissions.js"
 import { relayBuildLabel } from "./build-info.js"
@@ -1638,7 +1637,11 @@ function authenticationVerifier(options: {
   )
 }
 
-function appFileAction(operation: RelayControlOperation): RelayAction {
+// Whether a file operation only reads, for roots with one action to read and
+// one to change.
+function fileOperationAccess(
+  operation: RelayControlOperation
+): "read" | "write" {
   switch (operation) {
     case "instance.files.list":
     case "instance.files.directory.list":
@@ -1647,9 +1650,9 @@ function appFileAction(operation: RelayControlOperation): RelayAction {
     case "instance.files.stat":
     case "instance.files.read":
     case "instance.files.database.read":
-      return "app.files.read"
+      return "read"
     default:
-      return "app.files.write"
+      return "write"
   }
 }
 
@@ -1709,21 +1712,14 @@ const anyClientOperations = new Set<RelayControlOperation>([
 ])
 
 function actionForRequest(request: RelayControlRequest): RelayAction | null {
-  if (
-    request.operation.startsWith("instance.files.") &&
-    isRelayFileRoot(objectString(request.payload, "instanceId") ?? "")
-  ) {
-    const action = appFileAction(request.operation)
-    return action === "app.files.read"
-      ? "relay.files.read"
-      : "relay.files.write"
-  }
-  // An app's data directory is served by the same file operations.
-  if (
-    request.operation.startsWith("instance.files.") &&
-    appIdFromFileRoot(objectString(request.payload, "instanceId") ?? "")
-  ) {
-    return appFileAction(request.operation)
+  // An App's data directory and the host's files are served by the same file
+  // operations as a game server's.
+  if (request.operation.startsWith("instance.files.")) {
+    const action = fileRootAction(
+      objectString(request.payload, "instanceId") ?? "",
+      fileOperationAccess(request.operation)
+    )
+    if (action) return action
   }
   switch (request.operation) {
     case "relay.snapshot":
@@ -2044,10 +2040,12 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     // images from either.
     case "instance.icon.read": {
       if (objectString(request.payload, "appId")) return "app.files.read"
-      const root = objectString(request.payload, "instanceId") ?? ""
-      if (isRelayFileRoot(root)) return "relay.files.read"
-      if (appIdFromFileRoot(root)) return "app.files.read"
-      return "instance.files.read"
+      return (
+        fileRootAction(
+          objectString(request.payload, "instanceId") ?? "",
+          "read"
+        ) ?? "instance.files.read"
+      )
     }
     case "instance.files.database.write":
       return "instance.files.write"

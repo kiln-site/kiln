@@ -12,7 +12,8 @@ import {
   relayPlatformV2Feature,
   appIdFromFileRoot,
   databaseIdFromFileRoot,
-  isRelayFileRoot,
+  fileRootOwner,
+  fileTransferAction,
   relayFileRootId,
   relayDatabaseDumpFilesV1Feature,
   relayHostFilesV1Feature,
@@ -288,7 +289,7 @@ export function issueFileCapabilityForRequest(input: {
     "file.capability.issue",
     prepareBrowserCapabilityEffect({
       actions: [
-        fileRootAction(
+        fileTransferAction(
           input.instanceId,
           input.action === "instance.files.upload" ? "upload" : "download"
         ),
@@ -320,7 +321,7 @@ export function issueFilePreviewCapabilityForRequest(input: {
   return runAppEffect(
     "file.preview.capability.issue",
     prepareBrowserCapabilityEffect({
-      actions: [fileRootAction(input.instanceId, "download")],
+      actions: [fileTransferAction(input.instanceId, "download")],
       operation: "preview",
       optInV2: true,
       path: input.path,
@@ -333,37 +334,10 @@ export function issueFilePreviewCapabilityForRequest(input: {
   )
 }
 
-// An app's data directory (`app:<appId>`) is transferred with the app's own
-// file actions, a database's dumps (`database:<databaseId>`) with its dump
-// actions, and the host's files with the Relay's.
-function fileRootAction(
-  rootId: string,
-  direction: "download" | "upload"
-): BrowserAction {
-  const upload = direction === "upload"
-  if (isRelayFileRoot(rootId)) {
-    return upload ? "relay.files.upload" : "relay.files.download"
-  }
-  if (appIdFromFileRoot(rootId) !== null) {
-    return upload ? "app.files.upload" : "app.files.download"
-  }
-  if (databaseIdFromFileRoot(rootId) !== null) {
-    return upload ? "database.dump.import" : "database.dump.export"
-  }
-  return upload ? "instance.files.upload" : "instance.files.download"
-}
-
+// A file root as the resource a capability names: the root's ID, under the
+// kind of thing its files belong to.
 function fileRootResource(rootId: string): RelayConsoleResource {
-  return {
-    id: rootId,
-    kind: isRelayFileRoot(rootId)
-      ? "relay"
-      : appIdFromFileRoot(rootId) !== null
-        ? "app"
-        : databaseIdFromFileRoot(rootId) !== null
-          ? "database"
-          : "instance",
-  }
+  return { id: rootId, kind: fileRootOwner(rootId).kind }
 }
 
 const prepareBrowserCapabilityEffect = Effect.fn("relay.capability.prepare")(

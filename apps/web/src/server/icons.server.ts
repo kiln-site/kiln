@@ -1,9 +1,3 @@
-import {
-  appIdFromFileRoot,
-  isRelayFileRoot,
-  relayFileRootId,
-} from "@workspace/contracts"
-
 import { listIconIndexEffect } from "@/effect/icons"
 import { runAppEffect } from "@/effect/runtime"
 import {
@@ -120,31 +114,4 @@ export async function iconIndexFor(user: AuthenticatedUser) {
     })
   )
   return { digests, everyone: admin, selfId: user.id } satisfies IconIndex
-}
-
-/**
- * Requires reading a file root: a game server's files, an app's data
- * directory (`app:<appId>`), or a Relay's host files, as the Files page
- * does.
- */
-export async function requireFileRootRead(
-  user: AuthenticatedUser,
-  relayId: string,
-  rootId: string
-) {
-  if (isRelayFileRoot(rootId)) {
-    if (rootId !== relayFileRootId(relayId)) throw new Error("Relay not found")
-    await requireRelayPermission({
-      user,
-      relayId,
-      permission: "relay.files.read",
-    })
-    return
-  }
-  const appId = appIdFromFileRoot(rootId)
-  await requireRelayPermission(
-    appId
-      ? { appId, permission: "app.files.read", relayId, user }
-      : { instanceId: rootId, permission: "instance.files.read", relayId, user }
-  )
 }
