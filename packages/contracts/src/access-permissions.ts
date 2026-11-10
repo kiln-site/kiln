@@ -481,7 +481,7 @@ const permissionCopy: Record<
   "instance.configuration.write": {
     label: "Manage configuration",
     description:
-      "Change startup settings, switch Bricks, and reinstall the server.",
+      "Change startup settings and switch Bricks.",
   },
   "instance.limits.write": {
     label: "Manage resource limits",

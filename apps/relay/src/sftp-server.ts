@@ -54,7 +54,7 @@ interface OpenFile {
   grantId: string
   /**
    * How many times the server had been replaced when the file was opened.
-   * Writes stop once a restore, reinstall, or delete has replaced it since.
+   * Writes stop once a restore, redeploy, or delete has replaced it since.
    */
   generation: number
   kind: "file"

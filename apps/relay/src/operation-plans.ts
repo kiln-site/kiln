@@ -61,7 +61,7 @@ export function instanceReadLocks(instanceId: string): Array<LaneLock> {
   return [shared(laneKeys.instance(instanceId))]
 }
 
-/** Replacing a game server: delete, reinstall, restore, or recreation. */
+/** Replacing a game server: delete, redeploy, restore, or recreation. */
 export function instanceReplaceLocks(instanceId: string): Array<LaneLock> {
   return [exclusive(laneKeys.instance(instanceId))]
 }

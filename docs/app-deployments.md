@@ -284,21 +284,22 @@ recorded. Each app keeps its 200 latest records.
 ## Game server deployments
 
 A game server's first install, whether a create or a copy provisions it,
-each reinstall, and each change of its Brick are deployments too, recorded
+each redeploy, and each change of its Brick are deployments too, recorded
 in the same table by the server's instance ID and listed on the
 Deployments page for whoever can read the server, naming the Brick it
 installed. Starting, stopping, restarting, crash recovery, and saving
-startup settings without a reinstall or a new Brick aren't.
+startup settings without a new Brick aren't. A redeploy is recorded under
+the trigger `reinstall`, its name before every kind deployed again.
 
 Hearth records an install as running before it claims the server's
 provisioning job, sending the deployment's ID with the claim; a create
 retried while it runs resumes the same one. The post-provisioning worker,
 which watches the Relay's snapshot, ends it: succeeded once the server's
-provisioning clears, failed with its error once it fails. A reinstall or
-change of Brick is recorded before Hearth sends the startup change, with
-the deployment's ID in it, and ends as the Relay answers. A Hearth restart
+provisioning clears, failed with its error once it fails. A redeploy or
+change of Brick is recorded before Hearth asks the Relay, with the
+deployment's ID in the request, and ends as the Relay answers. A Hearth restart
 mid-way leaves a record running; the minute sweep ends it as **Unknown**
-once nothing can still follow it: a reinstall or change of Brick after 15
+once nothing can still follow it: a redeploy or change of Brick after 15
 minutes, an install after 10 minutes without a post-provisioning job, or a
 day with one.
 

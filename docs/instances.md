@@ -33,6 +33,7 @@ Every kind gets these from the platform.
 | ----------- | ----------------------------------------------- | --------------------------------------------------------------------------------------- |
 | Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases and Apps: one Relay request and one permission         |
 | Deployments | One redeploy for every kind                     | Done for game servers, databases and Apps: one Relay request and one permission         |
+| Limits      | One request and one permission for every kind   | Each kind has its own request and permission                                            |
 | Domains     | Every kind, automatic for an App's web services | Game servers only                                                                       |
 | Networking  | One page for every kind                         | A page per kind, on a few shared sections                                               |
 | Files       | One file browser and one permission             | Done for game servers and Apps                                                          |
@@ -189,8 +190,8 @@ addition for the step that needs it.
   a Brick on a stock image can't. When a Brick first needs it.
 - **An install step in a container of its own**: eggs' install script,
   Railpack's steps. A Brick could then use a stock image and a script where
-  it needs an Ember image today, and it is what reinstalling a Brick does
-  (step 6).
+  it needs an Ember image today, and it is what redeploying a game server
+  would run again.
 - **Generated values of a chosen form and length**: Coolify makes passwords,
   hex and base64 of 32, 64 or 128. `generate` makes one kind. Apps often need
   a key of an exact form (step 8).
@@ -216,7 +217,10 @@ from a tag or an image name today.
 5. `kind` and `type` in place of the Brick ID and game name checks. Done:
    an instance says its kind and type, and console completion is something
    a Brick declares.
-6. One redeploy for game servers and Apps.
+6. One redeploy for every kind. Done: one permission (`instance.deploy`)
+   and one Relay request (`instance.deploy`) deploy a game server, a
+   database or an App again as it is set up. Resource limits come next the
+   same way: each kind still has its own request and permission for them.
 7. Databases as Bricks.
 8. Apps as Bricks.
 9. Domains for every kind.

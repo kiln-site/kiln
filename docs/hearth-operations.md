@@ -168,7 +168,7 @@ A backup destination's save takes `#settings`, which reserving a backup to
 it takes shared, so each waits for the other. An edit to Hearth's own database holds
 `hearth` shared; importing into it, or restarting or repairing Kiln's
 services, holds it whole. Deleting any of them takes it
-whole, as reinstalling a game server does. An account
+whole, as redeploying a game server or a database does. An account
 (`user:<id>`) and a CLI request (`cli-device:<id>`) stay whole on purpose:
 sign-ins wait for nothing while an administrator changes the account, and a
 request is answered once.
