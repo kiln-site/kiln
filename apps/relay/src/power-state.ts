@@ -139,7 +139,7 @@ export function instanceStateReason(
           : "out_of_memory",
     }
   }
-  if (state.ExitCode !== 0 && state.ExitCode !== 143) {
+  if (!containerExitedCleanly(state.ExitCode, false)) {
     return { code: "process_exit", exitCode: state.ExitCode }
   }
   return { code: "unknown" }
@@ -170,6 +170,24 @@ function observedContainerState(
 }
 
 function stoppedContainerState(state: ContainerPowerState): RelayObservedState {
-  if (state.OOMKilled) return "failed"
-  return state.ExitCode === 0 || state.ExitCode === 143 ? "stopped" : "failed"
+  return containerExitedCleanly(state.ExitCode, state.OOMKilled)
+    ? "stopped"
+    : "failed"
 }
+
+/**
+ * Whether a container that isn't running stopped rather than failed, for a
+ * game server, a database and an App alike. Its process ended by itself with
+ * no error, or on a signal that stops it: an interrupt (130), a terminate
+ * (143), or the kill (137) that a Kill sends and that a stop sends a process
+ * that didn't answer in time. Running out of memory also ends on a kill, and
+ * is a failure.
+ */
+export function containerExitedCleanly(
+  exitCode: number,
+  oomKilled: boolean
+): boolean {
+  return !oomKilled && cleanExitCodes.has(exitCode)
+}
+
+const cleanExitCodes: ReadonlySet<number> = new Set([0, 130, 137, 143])

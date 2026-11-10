@@ -105,6 +105,27 @@ describe("managed database recovery metadata", () => {
   })
 })
 
+describe("managed database power state", () => {
+  it("shows a database someone killed as stopped, and one that crashed as failed", async () => {
+    const harness = await relayHarness()
+    const id = "c".repeat(12)
+    await createDatabase(harness, id)
+    const observed = async () =>
+      (await harness.databases.list())[0]?.observedState
+
+    await harness.power.requested("database", id, "kill")
+    expect(await observed()).toBe("stopped")
+
+    await harness.power.requested("database", id, "start")
+    const { name } = databaseContainer(id)
+    fakeDocker.exit(name, { exitCode: 137, oomKilled: true })
+    expect(await observed()).toBe("failed")
+    await harness.power.requested("database", id, "start")
+    fakeDocker.exit(name, { exitCode: 1 })
+    expect(await observed()).toBe("failed")
+  })
+})
+
 describe("managed database credentials and dumps", () => {
   const credentials = { password, username: "kiln_user" }
 

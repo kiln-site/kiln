@@ -10,6 +10,7 @@ import {
   appServiceLimitsSchema,
   relayAppLimitsV1Feature,
   relayControlDeadlineMs,
+  relayPowerActionSchema,
   relayAppSchema,
   relayAppTerminalClaimSchema,
   relayAppTerminalRestartSchema,
@@ -92,7 +93,7 @@ const createAppInputSchema = z.strictObject({
   relayId: relayIdSchema,
 })
 const appActionInputSchema = appInputSchema.extend({
-  action: z.enum(["start", "stop", "restart"]),
+  action: relayPowerActionSchema,
 })
 const appConfigInputSchema = appInputSchema.extend({
   config: appConfigPatchSchema,

@@ -17,6 +17,7 @@ import {
   instancePowerPermission,
   newDatabaseNamesShape,
   relayControlDeadlineMs,
+  relayPowerActionSchema,
   relayDatabaseNameSchema,
   relayIdSchema,
   relayDatabaseTerminalClaimSchema,
@@ -87,7 +88,7 @@ const databaseInputSchema = z.strictObject({
   relayId: relayIdSchema,
 })
 const databaseActionInputSchema = databaseInputSchema.extend({
-  action: z.enum(["start", "stop", "restart"]),
+  action: relayPowerActionSchema,
 })
 const databaseLimitsInputSchema = databaseInputSchema.extend({
   limits: resourceLimitsInputSchema,

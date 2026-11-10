@@ -1,12 +1,11 @@
 import { resourceDeletionQueryOptions } from "@/lib/resource-deletion-queries"
 import { NO_RESOURCE_LIMITS } from "@workspace/contracts"
 import { DatabaseKindIcon } from "@/components/instance-kind-icon"
-import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import { inventoryInstanceState } from "@/lib/instance-state"
 import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 import * as React from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { Trash2 } from "lucide-react"
 
@@ -34,7 +33,6 @@ import {
 } from "@/components/resource-workspace"
 import { WorkspaceFrame } from "@/components/workspace-frame"
 import { WorkloadResourceMeters } from "@/components/workload-resource-meters"
-import { recoverPromise } from "@/effect/promise"
 import {
   WorkspaceCopyValueButton,
   WorkspaceHeader,
@@ -43,7 +41,7 @@ import {
   WorkspaceMetaSeparator,
 } from "@/components/workspace-header"
 import { WorkspacePowerControls } from "@/components/workspace-power-controls"
-import type { ServerAction } from "@/lib/instance-power-state"
+import { useInstancePower } from "@/lib/use-instance-power"
 import { databaseDestinations } from "@/lib/navigation-destinations"
 import { managedDatabaseDirectoryQueryOptions } from "@/lib/query-options"
 import { runManagedDatabaseAction } from "@/server/databases"
@@ -272,8 +270,6 @@ const DatabaseWorkspaceHeader = React.memo(function DatabaseWorkspaceHeader({
   )
 })
 
-const databasePowerActions = ["start", "stop", "restart"] as const
-
 function DatabasePowerControls({
   onError,
   workspace,
@@ -282,7 +278,6 @@ function DatabasePowerControls({
   workspace: DatabaseWorkspaceDatabase
 }) {
   const { database } = workspace
-  const queryClient = useQueryClient()
   const { data: deletion } = useQuery(
     resourceDeletionQueryOptions({
       kind: "database",
@@ -292,49 +287,37 @@ function DatabasePowerControls({
   )
   const canPower = !deletion && database.permissions.includes("database.power")
   const powerPermissions = React.useMemo(
-    () => ({ kill: false, restart: canPower, start: canPower, stop: canPower }),
+    () => ({
+      kill: canPower,
+      restart: canPower,
+      start: canPower,
+      stop: canPower,
+    }),
     [canPower]
   )
-  const action = useMutation({
-    mutationFn: (nextAction: (typeof databasePowerActions)[number]) =>
+  const power = useInstancePower({
+    reference: {
+      id: database.id,
+      kind: "database",
+      relayId: database.relayId,
+    },
+    run: (action) =>
       runManagedDatabaseAction({
         data: {
-          action: nextAction,
+          action,
           databaseId: database.id,
           relayId: database.relayId,
         },
       }),
-    onMutate: () => onError(null),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
-        queryKey: instanceInventoryScope({
-          kind: "database",
-          relayId: database.relayId,
-          id: database.id,
-        }),
-      })
-    },
-    onError: (cause) => {
-      onError(cause.message)
-      showDatabaseOperationError("Database action failed", cause)
-    },
+    onError,
+    onFailure: (cause) =>
+      showDatabaseOperationError("Database action failed", cause),
   })
-  const runAction = action.mutateAsync
-  const handleAction = React.useCallback(
-    async (nextAction: ServerAction) => {
-      if (nextAction === "kill") return
-      // Failures surface through the mutation's onError.
-      await recoverPromise(
-        () => runAction(nextAction),
-        () => undefined
-      )
-    },
-    [runAction]
-  )
 
   return (
     <WorkspacePowerControls
-      action={action.isPending ? action.variables : null}
+      action={power.action}
+      killWarning="This immediately terminates the database's container. Changes it hasn't written to disk may be lost."
       noun="database"
       powerPermissions={powerPermissions}
       target={{
@@ -343,7 +326,7 @@ function DatabasePowerControls({
         provisioning: database.provisioning ?? null,
       }}
       relayConnected={databaseRelayAvailable(database)}
-      onAction={handleAction}
+      onAction={power.onAction}
     />
   )
 }
