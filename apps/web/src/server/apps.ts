@@ -229,9 +229,13 @@ const changeAppLimits = resourceOperation({
   name: "app.limits.update",
   lock: { part: "config" },
   doing: "Changing this App's limits",
-  permission: () => "app.manage",
+  permission: () => "instance.limits.write",
   run: async (user, data) => {
-    const { relay } = await authorizedAppFor(user, data, "app.manage")
+    const { relay } = await authorizedAppFor(
+      user,
+      data,
+      "instance.limits.write"
+    )
     const limits = { serviceLimits: data.serviceLimits }
     // Saved once the Relay applies them, so limits it refuses aren't used
     // by the next deployment, and into the config saved by then, so other

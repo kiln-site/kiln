@@ -1885,12 +1885,14 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "database.inspect":
     case "database.resources.read":
       return "database.read"
-    // Limits are part of what a database is created with, as a game
-    // server's startup settings are.
     case "database.provision.prepare":
     case "database.provision.claim":
-    case "database.limits.write":
       return "database.create"
+    // Changing resource limits takes one action, whatever kind's they are.
+    case "database.limits.write":
+    case "app.limits.write":
+    case "instance.limits.write":
+      return "instance.limits.write"
     // Wiping deletes all of a database's data, so it takes deletion.
     case "database.provision.cancel":
     case "database.delete":
@@ -1949,7 +1951,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
               ? "relay.configure"
               : null
     }
-    case "app.limits.write":
     case "app.network.routes.write":
       return "app.manage"
     case "app.volumes.write":
@@ -2017,7 +2018,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "instance.provision.prepare":
     case "instance.provision.claim":
     case "instance.startup.write":
-    case "instance.limits.write":
       return "instance.create"
     case "instance.provision.cancel":
       return "instance.delete"

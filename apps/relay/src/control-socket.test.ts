@@ -319,6 +319,37 @@ describe("Relay control socket", () => {
     expect(await allowed(["instance.create"])).toEqual([])
   })
 
+  it("takes the same limits action for every kind, and not what creates or configures them", async () => {
+    const relay = await startRelay()
+    const id = "0123456789ab"
+    // Which kinds' limits a client holding these actions may change.
+    const allowed = async (actions: ReadonlyArray<RelayAction>) => {
+      const { inbox, socket } = await relay.connect(
+        await relay.pair({ role: "custom", actions })
+      )
+      const kinds: Array<string> = []
+      for (const [kind, operation, payload] of [
+        ["instance", "instance.limits.write", { instanceId: id }],
+        ["database", "database.limits.write", { databaseId: id }],
+        ["app", "app.limits.write", { appId: id }],
+      ] as const) {
+        sendRequest(socket, operation, payload)
+        const reply = (await inbox.next()) as { code?: string }
+        if (reply.code !== "forbidden") kinds.push(kind)
+      }
+      return kinds
+    }
+
+    expect(await allowed(["instance.limits.write"])).toEqual([
+      "instance",
+      "database",
+      "app",
+    ])
+    expect(
+      await allowed(["instance.create", "database.create", "app.manage"])
+    ).toEqual([])
+  })
+
   it("checks a certificate with what changing its route takes", async () => {
     const relay = await startRelay({
       execute: async () => ({ asked: false, pending: null }),

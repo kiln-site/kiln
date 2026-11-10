@@ -149,11 +149,15 @@ reveals those kinds there.
   an App (`app.manage`) or a game server (`instance.configuration.write`)
   doesn't include it, so saving an App's source and deploying it at once
   takes both.
+- **Resource limits**: `instance.limits.write` changes the memory, CPU and
+  disk limits of a game server, a database or an App. It doesn't read a
+  game server's configuration, and configuring an App (`app.manage`)
+  doesn't include it.
 
 Only what one kind alone has keeps that kind's name. `database.all` covers a
 database's power, since power can be granted on one database; selected on a
 Relay, that power reaches every instance there. `app.all` covers what Apps
-alone have, not their files, power or deploying.
+alone have, not their files, power, deploying or limits.
 
 **Presets** come in two kinds:
 

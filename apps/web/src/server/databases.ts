@@ -343,7 +343,7 @@ const changeDatabaseLimits = resourceOperation({
   // Its Relay holds the database and the node's allocations to apply them.
   lock: { part: "config" },
   doing: "Changing this database's limits",
-  permission: () => "database.limits.write",
+  permission: () => "instance.limits.write",
   run: async (user, data) => {
     const relay = await requiredRelay(data.relayId)
     const database = relayManagedDatabaseSchema.parse(
