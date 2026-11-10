@@ -144,11 +144,15 @@ Relay's snapshots, Hearth's catalogs, backup manifests) are converted when
 read, through `readBrickRecipe` in the contracts, which is the only code
 that knows v1. Game servers are the kind installed from a Brick so far.
 
-The code still decides by a Brick's ID or by what it was derived from in
-places a recipe should decide: `brickId === "tailscale"` stands in for a
-kind, and an instance's network mode (`minecraft-backend`), which the
-`minecraft` type sets, stands in for that type in the status check, SRV
-records and the proxy.
+An instance carries what its Brick says it is: `brickKind` and `brickType`,
+from the `kiln.brick.kind` and `kiln.brick.type` labels on its container.
+Whatever depends on what an instance is reads those. The older
+`kiln.brick.network-mode` label is still written, for backups and for
+containers made before the type was; one of those is read as `minecraft`
+when its network mode is `minecraft-backend`.
+
+The code still decides by a Brick's ID in places a recipe should decide:
+`brickId === "tailscale"` stands in for a kind.
 
 Tied settings have four things to settle before they are built: secrets stay
 in Hearth and the file only names them; a push acts with the authority of

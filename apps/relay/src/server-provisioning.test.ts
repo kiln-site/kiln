@@ -172,10 +172,9 @@ describe("game server provisioning", () => {
         input,
         instanceId: newServerId,
         kind: "server",
-        placeholder: await harness.lifecycle.prepareInstance(
-          newServerId,
-          input
-        ),
+        placeholder: (
+          await harness.lifecycle.prepareInstance(newServerId, input)
+        ).placeholder,
       })
     )
     await Effect.runPromise(worker.manager.claim("server", newServerId))

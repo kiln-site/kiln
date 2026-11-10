@@ -3508,16 +3508,18 @@ async function executeControlRequest(
       }
       const prepared = relayPrepareInstanceSchema.parse(request.payload)
       const { idempotencyKey, instanceId, ...input } = prepared
-      const placeholder = await lifecycle.prepareInstance(instanceId, input)
+      const { answers, placeholder } = await lifecycle.prepareInstance(
+        instanceId,
+        input
+      )
       return runRelayEffect(
         "relay.instance.provision.prepare",
         provisioningManager.prepare({
           kind: "server",
           idempotencyKey,
-          input:
-            placeholder.brickId === "velocity" && placeholder.variables
-              ? { ...input, variables: placeholder.variables }
-              : input,
+          // With what was looked up for it, so the job installs the version
+          // its placeholder shows.
+          input: { ...input, variables: answers },
           instanceId,
           placeholder,
         })

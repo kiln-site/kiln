@@ -117,13 +117,13 @@ function defaultSrvService(game: string): string {
 export function managedDomainSrvConfiguration(
   instance: Pick<
     RelayInstance,
-    | "brickNetworkMode"
+    | "brickType"
     | "brickPrimaryPortProtocol"
     | "brickSupportsSrv"
     | "game"
   >
 ): { protocol: "tcp" | "udp"; service: string } | null {
-  const minecraftNetwork = instance.brickNetworkMode === "minecraft-backend"
+  const minecraftNetwork = instance.brickType === "minecraft"
   if (!instance.brickSupportsSrv && !minecraftNetwork) return null
 
   const protocol =
@@ -133,7 +133,13 @@ export function managedDomainSrvConfiguration(
       : instance.brickPrimaryPortProtocol === "both" && minecraftNetwork
         ? "tcp"
         : null
+  // Minecraft looks up `_minecraft._tcp`, whatever a Brick calls its game.
   return protocol
-    ? { protocol, service: defaultSrvService(instance.game) }
+    ? {
+        protocol,
+        service: minecraftNetwork
+          ? "minecraft"
+          : defaultSrvService(instance.game),
+      }
     : null
 }

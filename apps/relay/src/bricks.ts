@@ -70,9 +70,8 @@ export interface GameServerBrick {
   /** Where its one volume is mounted. */
   mount: string
   /**
-   * `minecraft-backend` for the `minecraft` type: behind the Relay's
-   * Minecraft entry point, which publishes only its first port and checks
-   * readiness with a status ping. `direct` publishes every port.
+   * As containers are labelled and backups record it: `minecraft-backend`
+   * for the `minecraft` type, `direct` otherwise. Decide by `type`.
    */
   networkMode: "direct" | "minecraft-backend"
   pids: number
@@ -82,6 +81,12 @@ export interface GameServerBrick {
   stopCommands: ReadonlyArray<string> | null
   stopSignal: string | null
   supportsSrv: boolean
+  /**
+   * The type its Brick names, which unlocks what Kiln does for it.
+   * `minecraft` sits behind the Relay's Minecraft entry point, which
+   * publishes only its first port and checks readiness with a status ping.
+   */
+  type: string | null
   user: string | null
   workingDirectory: string | null
 }
@@ -388,22 +393,26 @@ export function gameServerBrick(
     stopCommands: server?.stop ?? null,
     stopSignal: deploy.stopSignal ?? null,
     supportsSrv: server?.srv ?? false,
+    type: recipe.type ?? null,
     user: deploy.user ?? null,
     workingDirectory: deploy.workingDirectory ?? null,
   }
 }
 
-// Resolve once at creation, then persist the concrete version with the instance.
-export async function resolveBrickForProvisioning(
+/**
+ * The answers a Brick is provisioned with: what was given, and what Kiln has
+ * to look up for it. Looked up once, and then given to whatever provisions
+ * later, so it installs the version the instance was made with.
+ */
+export async function brickProvisioningAnswers(
   recipe: BrickRecipe,
-  input: Readonly<Record<string, BrickVariableValue>>,
-  source: string
-): Promise<ResolvedBrick> {
+  input: Readonly<Record<string, BrickVariableValue>>
+): Promise<Readonly<Record<string, BrickVariableValue>>> {
   if (
     recipe.minecraft?.latestVersion !== "velocity" ||
     Object.hasOwn(input, "version")
   ) {
-    return resolveBrick(recipe, input, source)
+    return input
   }
   const response = await fetch(
     "https://mcjarfiles.com/api/get-versions/proxies/velocity",
@@ -424,7 +433,19 @@ export async function resolveBrickForProvisioning(
   const version = latestVelocityVersion(versions)
   if (!version)
     throw new Error("Velocity version catalog contains no supported versions")
-  return resolveBrick(recipe, { ...input, version }, source)
+  return { ...input, version }
+}
+
+export async function resolveBrickForProvisioning(
+  recipe: BrickRecipe,
+  input: Readonly<Record<string, BrickVariableValue>>,
+  source: string
+): Promise<ResolvedBrick> {
+  return resolveBrick(
+    recipe,
+    await brickProvisioningAnswers(recipe, input),
+    source
+  )
 }
 
 export function resolveBrick(

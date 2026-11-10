@@ -2201,6 +2201,12 @@ export const relayInstanceSchema = z.object({
   status: z.string(),
   brickId: brickIdSchema.optional(),
   brickFormat: z.string().min(1).optional(),
+  // What its Brick says it is. Anything that depends on what an instance is
+  // reads these, never its Brick's ID or how its network is set up.
+  brickKind: z.enum(["game-server", "database", "app"]).optional(),
+  brickType: z.string().min(1).max(32).optional(),
+  // As containers are labelled and backups record it. It follows from the
+  // type: `minecraft-backend` for `minecraft`, `direct` for anything else.
   brickNetworkMode: z.enum(["direct", "minecraft-backend"]).optional(),
   brickPrimaryPort: z.number().int().min(1).max(65_535).optional(),
   brickPrimaryPortProtocol: relayInstancePortProtocolSchema.optional(),
