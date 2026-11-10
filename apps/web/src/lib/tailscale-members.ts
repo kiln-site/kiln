@@ -1,6 +1,6 @@
 import {
   appTailscaleMember,
-  builtinTailscaleBrickId,
+  isTailscaleNode,
   databaseTailscaleMember,
   instanceTailscaleMember,
 } from "@workspace/contracts"
@@ -51,7 +51,7 @@ export function tailscaleMemberProblem(
   if (!instanceId || !instance || !instance.managedByRelay) {
     return `Game server ${binding.memberId} is unavailable`
   }
-  if (instance.brickId === builtinTailscaleBrickId) {
+  if (isTailscaleNode(instance)) {
     return "A Tailscale deployment cannot attach to itself"
   }
   return null

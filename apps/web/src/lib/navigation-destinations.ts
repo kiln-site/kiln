@@ -27,7 +27,7 @@ import {
 } from "lucide-react"
 import {
   accessPermissionSupported,
-  builtinTailscaleBrickId,
+  isTailscaleNode,
   type DatabaseEngine,
   type RelayInstance,
 } from "@workspace/contracts"
@@ -302,7 +302,7 @@ function destinationsForServer(
   instance: NavigableServer
 ): ReadonlyArray<ServerDestination> {
   const workspace =
-    instance.brickId === builtinTailscaleBrickId ? "network-stack" : "server"
+    isTailscaleNode(instance) ? "network-stack" : "server"
   const destinations: ReadonlyArray<ServerDestination> = serverDestinations
   return destinations.filter((destination) =>
     destination.workspaces.includes(workspace)

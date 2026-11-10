@@ -2,6 +2,7 @@ import * as React from "react"
 import {
   formatRelayInstanceStateReason,
   type RelayInstanceStateReason,
+  isTailscaleNode,
 } from "@workspace/contracts"
 
 import {
@@ -51,7 +52,7 @@ export const ConsoleToolbar = React.memo(function ConsoleToolbar({
       <ConsoleSearchControl uiStore={uiStore} />
       <ConsoleLevelMenu uiStore={uiStore} />
       <ConsoleRetryButton streamStore={streamStore} />
-      {instance.implementation.toLowerCase() === "tailscale" ? (
+      {isTailscaleNode(instance) ? (
         <TailscaleConsoleFilterMenus
           instanceId={instance.id}
           uiStore={uiStore}

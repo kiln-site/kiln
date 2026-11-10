@@ -151,8 +151,11 @@ Whatever depends on what an instance is reads those. The older
 containers made before the type was; one of those is read as `minecraft`
 when its network mode is `minecraft-backend`.
 
-The code still decides by a Brick's ID in places a recipe should decide:
-`brickId === "tailscale"` stands in for a kind.
+One thing is still told apart by its Brick's ID: a Tailscale node, which a
+Relay runs as a game server until Tailscale is a kind of its own. Everything
+that asks goes through `isTailscaleNode` in the contracts, so that step
+changes one function. The Brick picker also still guesses its "Steam"
+category from a tag or an image name.
 
 Tied settings have four things to settle before they are built: secrets stay
 in Hearth and the file only names them; a push acts with the authority of
@@ -170,7 +173,9 @@ that can't be applied leaves the last good state.
 4. The new Brick format, with the v1 converter and the official recipes.
    Done for game servers: Hearth and Relays read `kiln.brick/v2`, and
    convert v1 where it is stored.
-5. `kind` and `type` in place of the Brick ID and game name checks.
+5. `kind` and `type` in place of the Brick ID and game name checks. Done:
+   an instance says its kind and type, and console completion is something
+   a Brick declares.
 6. One redeploy for game servers and Apps.
 7. Databases as Bricks.
 8. Apps as Bricks.

@@ -1,4 +1,5 @@
 import * as React from "react"
+import { isTailscaleNode } from "@workspace/contracts"
 
 import {
   createConsoleAggregateStreamStore,
@@ -53,7 +54,7 @@ function ConsoleWorkspaceSession({
   canShare: boolean
   canWrite: boolean
 }) {
-  const tailscale = instance.implementation.toLowerCase() === "tailscale"
+  const tailscale = isTailscaleNode(instance)
   const [uiStore] = React.useState(createConsoleUiStore)
   const [streamStore] = React.useState<ConsoleStreamStore>(() =>
     tailscale
@@ -102,7 +103,7 @@ function ConsoleWorkspaceSession({
       <ConsoleCommandBar
         active={active}
         canWrite={
-          canWrite && instance.implementation.toLowerCase() !== "tailscale"
+          canWrite && !tailscale
         }
         instance={instance}
       />
