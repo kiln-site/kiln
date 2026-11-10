@@ -100,7 +100,7 @@ describe("limits saved for a game server's next restart", () => {
     const save = control(
       harness,
       "instance.limits.write",
-      { instanceId: server },
+      { id: server, kind: "instance" },
       async () => {
         const current = await harness.docker.findInstance(server)
         await harness.lifecycle.setInstanceLimits(current ?? instance, newer)

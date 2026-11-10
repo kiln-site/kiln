@@ -1564,7 +1564,10 @@ function auditDetailsForRequest(
     if (target && typeof payload.id === "string") details[target] = payload.id
     if (typeof payload.action === "string") details.action = payload.action
   }
-  if (request.operation === "instance.deploy") {
+  if (
+    request.operation === "instance.deploy" ||
+    request.operation === "instance.limits.write"
+  ) {
     const target = kindAuditTarget(payload.kind)
     if (target && typeof payload.id === "string") details[target] = payload.id
   }
@@ -1643,9 +1646,14 @@ function powerAction(
 // The one place that says which action a deploy takes: the same one for
 // every kind that deploys, and none for anything else.
 function deployAction(kind: string | null): RelayAction | null {
+  return isInstanceKind(kind) ? "instance.deploy" : null
+}
+
+// The kinds of instance a request that names its kind can be for.
+function isInstanceKind(
+  kind: string | null
+): kind is "app" | "database" | "instance" {
   return kind === "instance" || kind === "database" || kind === "app"
-    ? "instance.deploy"
-    : null
 }
 
 function kindAuditTarget(
@@ -1889,10 +1897,10 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "database.provision.claim":
       return "database.create"
     // Changing resource limits takes one action, whatever kind's they are.
-    case "database.limits.write":
-    case "app.limits.write":
     case "instance.limits.write":
-      return "instance.limits.write"
+      return isInstanceKind(objectString(request.payload, "kind"))
+        ? "instance.limits.write"
+        : null
     // Wiping deletes all of a database's data, so it takes deletion.
     case "database.provision.cancel":
     case "database.delete":

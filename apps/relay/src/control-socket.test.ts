@@ -319,7 +319,7 @@ describe("Relay control socket", () => {
     expect(await allowed(["instance.create"])).toEqual([])
   })
 
-  it("takes the same limits action for every kind, and not what creates or configures them", async () => {
+  it("takes the same limits action for every kind, not what creates or configures them, and none for a Relay", async () => {
     const relay = await startRelay()
     const id = "0123456789ab"
     // Which kinds' limits a client holding these actions may change.
@@ -328,12 +328,8 @@ describe("Relay control socket", () => {
         await relay.pair({ role: "custom", actions })
       )
       const kinds: Array<string> = []
-      for (const [kind, operation, payload] of [
-        ["instance", "instance.limits.write", { instanceId: id }],
-        ["database", "database.limits.write", { databaseId: id }],
-        ["app", "app.limits.write", { appId: id }],
-      ] as const) {
-        sendRequest(socket, operation, payload)
+      for (const kind of ["instance", "database", "app", "relay"]) {
+        sendRequest(socket, "instance.limits.write", { id, kind })
         const reply = (await inbox.next()) as { code?: string }
         if (reply.code !== "forbidden") kinds.push(kind)
       }

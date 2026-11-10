@@ -349,9 +349,9 @@ const changeDatabaseLimits = resourceOperation({
     const database = relayManagedDatabaseSchema.parse(
       await databaseRpc(
         relay,
-        "database.limits.write",
-        { databaseId: data.databaseId, limits: data.limits },
-        240_000,
+        "instance.limits.write",
+        { id: data.databaseId, kind: "database", limits: data.limits },
+        relayControlDeadlineMs("instance.limits.write"),
         user.id
       )
     )

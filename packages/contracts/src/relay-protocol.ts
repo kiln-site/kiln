@@ -196,7 +196,6 @@ export const relayControlOperations = [
   "database.provision.cancel",
   "database.wipe",
   "database.delete",
-  "database.limits.write",
   "database.credentials.rotate",
   "database.network.write",
   "database.network.import",
@@ -216,7 +215,6 @@ export const relayControlOperations = [
   "app.provision.claim",
   "app.provision.cancel",
   "app.delete",
-  "app.limits.write",
   "app.volumes.write",
   "app.network.routes.read",
   "app.deployment.read",
@@ -348,7 +346,6 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "database.provision.cancel",
   "database.delete",
   "database.wipe",
-  "database.limits.write",
   "database.credentials.rotate",
   "database.network.write",
   "database.network.import",
@@ -361,7 +358,6 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "app.provision.claim",
   "app.provision.cancel",
   "app.delete",
-  "app.limits.write",
   "app.volumes.write",
   "app.network.routes.write",
   "app.terminal.attach",
@@ -519,7 +515,6 @@ export function relayControlOperationChanges(
     case "database.provision.cancel":
     case "database.wipe":
     case "database.delete":
-    case "database.limits.write":
     case "database.credentials.rotate":
     case "database.network.write":
     case "database.network.import":
@@ -530,7 +525,6 @@ export function relayControlOperationChanges(
     case "app.provision.cancel":
     case "app.delete":
     case "app.deployment.abort":
-    case "app.limits.write":
     case "app.volumes.write":
     case "app.network.routes.write":
     case "backup.task.enqueue":
@@ -654,15 +648,14 @@ export function relayControlDeadlineMs(
   if (operation === "instance.delete") return 360_000
   // Freezing stops the resource first, as a stop does.
   if (operation === "resource.freeze") return 240_000
-  // Waits its turn behind a restart in progress.
+  // A game server's waits its turn behind a restart in progress; removing a
+  // database's limit recreates its container and waits for it to be ready.
   if (operation === "instance.limits.write") return 240_000
   if (operation === "database.delete") return 180_000
   if (operation === "app.delete") return 180_000
   // Up to four registry lookups at a time, each up to 20 seconds; Hearth
   // sends at most 16 apps per request.
   if (operation === "app.image.check") return 120_000
-  // Removing a limit recreates the container and waits for it to be ready.
-  if (operation === "database.limits.write") return 240_000
   if (operation === "database.credentials.rotate") return 180_000
   // Waits its turn behind changes to every App and database it names.
   if (operation === "database.network.import") return 120_000

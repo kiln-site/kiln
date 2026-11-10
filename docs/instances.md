@@ -33,7 +33,7 @@ Every kind gets these from the platform.
 | ----------- | ----------------------------------------------- | --------------------------------------------------------------------------------------- |
 | Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases and Apps: one Relay request and one permission         |
 | Deployments | One redeploy for every kind                     | Done for game servers, databases and Apps: one Relay request and one permission         |
-| Limits      | One request and one permission for every kind   | Each kind has its own request and permission                                            |
+| Limits      | One request and one permission for every kind   | Done for game servers, databases and Apps: one Relay request and one permission         |
 | Domains     | Every kind, automatic for an App's web services | Game servers only                                                                       |
 | Networking  | One page for every kind                         | A page per kind, on a few shared sections                                               |
 | Files       | One file browser and one permission             | Done for game servers and Apps                                                          |
@@ -86,7 +86,8 @@ entry there.
 Two patterns are in place. Follow them when a capability moves.
 
 - **One Relay request that names the kind.** `instance.action`,
-  `instance.deploy` and `resource.freeze` take `{ kind, id, ... }` rather
+  `instance.deploy`, `instance.limits.write` and `resource.freeze` take
+  `{ kind, id, ... }` rather
   than one request per kind. The Relay picks the permission and the work
   from the same `kind`.
 - **One place that picks the permission, on each side.** Hearth has
@@ -223,8 +224,9 @@ from a tag or an image name today.
    a Brick declares.
 6. One redeploy for every kind. Done: one permission (`instance.deploy`)
    and one Relay request (`instance.deploy`) deploy a game server, a
-   database or an App again as it is set up. Resource limits come next the
-   same way: each kind still has its own request and permission for them.
+   database or an App again as it is set up. Resource limits followed the
+   same way: `instance.limits.write` is one permission and one request,
+   and each kind still applies them its own way.
 7. Databases as Bricks.
 8. Apps as Bricks.
 9. Domains for every kind.

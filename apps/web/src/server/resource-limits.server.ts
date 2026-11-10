@@ -56,7 +56,7 @@ export async function saveInstanceLimits(
     await databaseRpc(
       relay,
       "instance.limits.write",
-      { instanceId: data.instanceId, limits: data.limits },
+      { id: data.instanceId, kind: "instance", limits: data.limits },
       240_000,
       user.id
     )

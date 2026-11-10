@@ -277,13 +277,6 @@ export const relayProvisionDatabaseSchema = z
   .object({ databaseId: databaseIdSchema })
   .strict()
 
-export const relayDatabaseLimitsSchema = z
-  .object({
-    databaseId: databaseIdSchema,
-    limits: resourceLimitsInputSchema,
-  })
-  .strict()
-
 export const relayDeleteDatabaseSchema = z
   .object({
     databaseId: databaseIdSchema,
@@ -1283,13 +1276,6 @@ export const relayAppDeploymentAbortSchema = z
   .object({ appId: appIdSchema })
   .strict()
 
-export const relayAppLimitsSchema = z
-  .object({
-    appId: appIdSchema,
-    serviceLimits: appServiceLimitsSchema,
-  })
-  .strict()
-
 export const relayDeleteAppSchema = z
   .object({
     appId: appIdSchema,
@@ -1508,12 +1494,35 @@ export const relayServerDeploymentReadSchema = z
   })
   .strict()
 
-export const relayInstanceLimitsWriteSchema = z
-  .object({
-    instanceId: instanceIdSchema,
-    limits: resourceLimitsSchema,
-  })
-  .strict()
+/**
+ * Changing an instance's resource limits: one request for every kind, which
+ * names the kind beside its ID. A game server's are what it will have,
+ * whole, from its next restart; a database's are the ones that change; an
+ * App's are each service's.
+ */
+export const relayInstanceLimitsWriteSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      id: instanceIdSchema,
+      kind: z.literal("instance"),
+      limits: resourceLimitsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      id: databaseIdSchema,
+      kind: z.literal("database"),
+      limits: resourceLimitsInputSchema,
+    })
+    .strict(),
+  z
+    .object({
+      id: appIdSchema,
+      kind: z.literal("app"),
+      serviceLimits: appServiceLimitsSchema,
+    })
+    .strict(),
+])
 
 export const relayUpdateInstanceStartupSchema = z
   .object({
@@ -3372,7 +3381,11 @@ export function databaseEngineSupportsBrowsing(
 
 export type RelayManagedDatabase = z.infer<typeof relayManagedDatabaseSchema>
 export type RelayCreateDatabase = z.infer<typeof relayCreateDatabaseSchema>
-export type RelayDatabaseLimits = z.infer<typeof relayDatabaseLimitsSchema>
+/** A database's limits to change, as its Relay's manager takes them. */
+export interface RelayDatabaseLimits {
+  databaseId: string
+  limits: z.infer<typeof resourceLimitsInputSchema>
+}
 export type RelayDeleteDatabase = z.infer<typeof relayDeleteDatabaseSchema>
 export type RelayRotateDatabaseCredentials = z.infer<
   typeof relayRotateDatabaseCredentialsSchema
@@ -3422,7 +3435,11 @@ export type AppMountSource = z.infer<typeof appMountSourceSchema>
 export type AppDeploymentState = z.infer<typeof appDeploymentStateSchema>
 export type RelayApp = z.infer<typeof relayAppSchema>
 export type RelayAppContainer = z.infer<typeof relayAppContainerSchema>
-export type RelayAppLimits = z.infer<typeof relayAppLimitsSchema>
+/** An App's limits for each service, as its Relay's manager takes them. */
+export interface RelayAppLimits {
+  appId: string
+  serviceLimits: z.infer<typeof appServiceLimitsSchema>
+}
 export type RelayAppDeployment = z.infer<typeof relayAppDeploymentSchema>
 export type RelayCreateApp = z.input<typeof relayCreateAppSchema>
 export type RelayDeployApp = z.infer<typeof relayDeployAppSchema>
