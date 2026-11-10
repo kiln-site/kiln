@@ -141,10 +141,22 @@ Every kind except a Relay comes from a Brick. Three things stay separate:
   several containers.
 - **An icon** that is an SVG mark or a full image.
 
-Only what Kiln runs is settled. The format's database, App and group parts
-are provisional until steps 7, 8 and 11 run them against what Kiln does
-today: a database's separate administrator login, password rotation and
-per-engine setup, and a group's install order, partial failure and deletion.
+Only what Kiln runs is settled. The format's App and group parts are
+provisional until steps 8 and 11 run them against what Kiln does today: a
+group's install order, partial failure and deletion.
+
+A database is created from a database Brick whose `type` is an engine Kiln
+knows (`postgres`, `mysql`, `mariadb`, `redis`, `valkey`). The Brick says
+what runs: the image, with the version as an input, the data volume, the
+port, the start command and how to tell it is ready. Kiln supplies the
+database's name, username and password to its templates. What Kiln does to
+a database after that is the type's, not the Brick's: its login, password
+rotation, dumps and the viewer. That relies on how the Brick runs it (the
+image, its port, the variables it takes its login from), so for now only
+the database Bricks of Kiln's own catalog are offered and accepted, and the
+Relay refuses one that doesn't run as its type does. A database made before
+databases ran Bricks is read as its engine's official Brick, and nothing
+about its container or data changes.
 
 A database that an App needs should be a member of a group, not a container
 in its Compose project: only then is it a database to Kiln, with the viewer,
@@ -153,7 +165,18 @@ dumps, backups and permissions one has.
 The v1 format is retired, not kept beside v2. Copies already stored (a
 Relay's snapshots, Hearth's catalogs, backup manifests) are converted when
 read, through `readBrickRecipe` in the contracts, which is the only code
-that knows v1. Game servers are the kind installed from a Brick so far.
+that knows v1. Game servers and databases are installed from a Brick; Apps
+aren't yet.
+
+Adding either opens the same dialog (`AddInstanceDialogHost`): pick the
+kind, pick its Brick, then answer what that kind asks. Each page's Add
+button opens it on its own kind. Everything about browsing Bricks is shared;
+a kind adds one row to `brickKindPresentations`
+(`apps/web/src/components/brick-kinds.ts`) for its categories and labels,
+and one pane for what it asks before creating. A game server asks a name
+and a Relay, and its Brick's inputs are answered on its Startup page; a
+database answers its Brick's inputs there, since its version is chosen
+once.
 
 An instance carries what its Brick says it is: `brickKind` and `brickType`,
 from the `kiln.brick.kind` and `kiln.brick.type` labels on its container.
@@ -227,7 +250,12 @@ from a tag or an image name today.
    database or an App again as it is set up. Resource limits followed the
    same way: `instance.limits.write` is one permission and one request,
    and each kind still applies them its own way.
-7. Databases as Bricks.
+7. Databases as Bricks. Done: the five engines are official Bricks, the
+   Relay creates a database from its Brick, and Hearth records the Brick,
+   image and port each database runs instead of a table of engines. Game
+   servers and databases are added from one dialog. Only those five Bricks
+   run, not another catalog's; a database's version is chosen when it is
+   created, and moving one to another major version is not built.
 8. Apps as Bricks.
 9. Domains for every kind.
 10. One instance page, with each kind's own tabs.

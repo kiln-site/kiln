@@ -41,10 +41,10 @@ import {
 import { isTailscaleNode } from "@workspace/contracts"
 
 import {
-  AddServerDialogHost,
-  createAddServerDialogStore,
-} from "@/components/add-server-dialog"
-import type { AddServerDialogStore } from "@/components/add-server-dialog"
+  AddInstanceDialogHost,
+  createAddInstanceDialogStore,
+  type AddInstanceDialogStore,
+} from "@/components/add-instance-dialog"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
   FavoritesOnlyButton,
@@ -99,6 +99,7 @@ import {
   type DataTableSource,
 } from "@/lib/data-table-source"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
+import { canCreateGameServers } from "@/lib/navigation-destinations"
 import { grantHasPermission } from "@/lib/permissions"
 import type { getInfraServerDirectory } from "@/server/infra-directory"
 type ServerDirectory = Awaited<
@@ -145,19 +146,15 @@ export const ServersPage = React.memo(function ServersPage({
 }: {
   searchStore: ServerSearchStore
 }) {
-  const [dialogStore] = React.useState(createAddServerDialogStore)
+  const [dialogStore] = React.useState(() =>
+    createAddInstanceDialogStore("game-server")
+  )
   const [deleteTarget, setDeleteTarget] =
     React.useState<ServerDeleteTarget | null>(null)
   const { data: capabilities } = useSuspenseQuery(
     accessCapabilitiesQueryOptions()
   )
-  const canProvision =
-    capabilities.isPlatformAdmin ||
-    capabilities.grants.some(
-      (grant) =>
-        grant.resourceType === "relay" &&
-        grantHasPermission(grant, "instance.create")
-    )
+  const canProvision = canCreateGameServers(capabilities)
   const deleteAccess = React.useMemo<ServerDeleteAccess>(() => {
     const instances = new Set<string>()
     const relays = new Set<string>()
@@ -230,7 +227,7 @@ export const ServersPage = React.memo(function ServersPage({
           />
         </React.Suspense>
       </DataTableWorkspace>
-      {canProvision ? <AddServerDialogHost store={dialogStore} /> : null}
+      {canProvision ? <AddInstanceDialogHost store={dialogStore} /> : null}
       {deleteTarget ? (
         <ServerDeleteDialog
           key={`${deleteTarget.relayId}:${deleteTarget.id}`}
@@ -277,7 +274,7 @@ const AddServerButton = React.memo(function AddServerButton({
   dialogStore,
 }: {
   canProvision: boolean
-  dialogStore: AddServerDialogStore
+  dialogStore: AddInstanceDialogStore
 }) {
   if (!canProvision) return null
   return (
@@ -302,7 +299,7 @@ const ServerTableData = React.memo(function ServerTableData({
 }: {
   canProvision: boolean
   deleteAccess: ServerDeleteAccess
-  dialogStore: AddServerDialogStore
+  dialogStore: AddInstanceDialogStore
   onDelete: (target: ServerDeleteTarget) => void
   searchStore: ServerSearchStore
 }) {
@@ -344,7 +341,7 @@ const ServerDataTable = React.memo(function ServerDataTable({
 }: {
   canProvision: boolean
   deleteAccess: ServerDeleteAccess
-  dialogStore: AddServerDialogStore
+  dialogStore: AddInstanceDialogStore
   onDelete: (target: ServerDeleteTarget) => void
   searchStore: ServerSearchStore
   source: DataTableSource<ServerTableItem>
@@ -770,7 +767,7 @@ function EmptyServerTable({
   searchActive,
 }: {
   canProvision: boolean
-  dialogStore: AddServerDialogStore
+  dialogStore: AddInstanceDialogStore
   searchActive: boolean
 }) {
   const awaitingFirstRelay = useAwaitingFirstRelay()

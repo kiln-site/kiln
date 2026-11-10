@@ -6,11 +6,11 @@ import { ChevronsUpDown, Plus } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
 
 import { engineLabel } from "@/components/database/database-presentation"
+import { NewDatabaseDialog } from "@/components/database/new-database-dialog"
 import {
-  NewDatabaseDialog,
   newDatabaseInput,
   type NewDatabaseValues,
-} from "@/components/database/new-database-dialog"
+} from "@/components/database/new-database-form"
 import {
   DrawerPopover,
   DrawerPopoverContent,
@@ -198,9 +198,9 @@ export const AppDatabaseFields = React.memo(function AppDatabaseFields({
       </p>
       {creating ? (
         <NewDatabaseDialog
-          description="Created with the app, on the same Relay."
           initial={draft.kind === "new" ? draft : undefined}
           nameFallback={appName || "Same as the app"}
+          note="Created with the app, on the same Relay."
           submitLabel="Add database"
           title="New database"
           onClose={() => setCreating(false)}

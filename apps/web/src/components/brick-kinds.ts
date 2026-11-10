@@ -5,9 +5,13 @@ import { brickGame, type Brick, type BrickKind } from "@workspace/contracts"
 // Everything else about browsing Bricks is the same for every kind.
 
 /** The kinds of instance someone picks a Brick for. */
-export type PickableBrickKind = Extract<BrickKind, "game-server">
+export type PickableBrickKind = Extract<BrickKind, "database" | "game-server">
 
 export interface BrickKindPresentation {
+  /** What the kind is called where someone chooses between kinds. */
+  name: string
+  /** The kind as the rest of Hearth knows it, for its icon and colour. */
+  instanceKind: "database" | "server"
   /** Offered after "All", in this order. */
   categories: ReadonlyArray<{ id: string; label: string }>
   /** Which of them a Brick is in. */
@@ -36,11 +40,34 @@ function gameLabel(brick: Brick): string {
   return game
 }
 
+// Kiln has a viewer and dumps for the SQL engines; the others keep keys.
+const keyValueTypes: ReadonlySet<string> = new Set(["redis", "valkey"])
+
+/** Every kind someone can pick a Brick for, in the order they're offered. */
+export const pickableBrickKinds: ReadonlyArray<PickableBrickKind> = [
+  "game-server",
+  "database",
+]
+
 export const brickKindPresentations: Record<
   PickableBrickKind,
   BrickKindPresentation
 > = {
+  database: {
+    name: "Database",
+    instanceKind: "database",
+    categories: [
+      { id: "sql", label: "SQL" },
+      { id: "key-value", label: "Key-value" },
+    ],
+    category: (brick) =>
+      keyValueTypes.has(brick.type ?? "") ? "key-value" : "sql",
+    label: (brick) =>
+      keyValueTypes.has(brick.type ?? "") ? "Key-value store" : "SQL database",
+  },
   "game-server": {
+    name: "Game Server",
+    instanceKind: "server",
     categories: [
       { id: "minecraft", label: "Minecraft" },
       { id: "steam", label: "Steam" },

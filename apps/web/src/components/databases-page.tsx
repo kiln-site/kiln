@@ -1,6 +1,5 @@
 import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
-import type { getInfraRelayOptions } from "@/server/infra-directory"
 import {
   PendingInvitationCard,
   PendingResourceInvitations,
@@ -11,7 +10,7 @@ import {
 import * as React from "react"
 import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { Link } from "@tanstack/react-router"
 import type { DatabaseEngine } from "@workspace/contracts"
 import {
   Database,
@@ -39,14 +38,6 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
-import { showToast } from "@workspace/ui/components/sonner"
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -66,10 +57,9 @@ import {
 } from "@/components/data-table"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
-  NewDatabaseDialog,
-  newDatabaseInput,
-  type NewDatabaseValues,
-} from "@/components/database/new-database-dialog"
+  AddInstanceDialogHost,
+  createAddInstanceDialogStore,
+} from "@/components/add-instance-dialog"
 import {
   CredentialsDialog,
   DeleteDatabaseDialog,
@@ -101,7 +91,6 @@ import {
 } from "@/components/data-table-workspace"
 import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
-import { randomIdempotencyKey } from "@/lib/idempotency-key"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { infraDatabasesCollectionOptions } from "@/lib/collections/infra-directories"
 import { InfraSyncButton } from "@/components/infra-sync-button"
@@ -127,15 +116,8 @@ import {
   refreshInfraTable,
 } from "@/lib/infra-directory"
 import { heldPowerActions } from "@/lib/use-instance-power"
-import { queryKeys } from "@/lib/query-options"
-import {
-  createManagedDatabase,
-  runManagedDatabaseAction,
-} from "@/server/databases"
+import { runManagedDatabaseAction } from "@/server/databases"
 
-type ManagedRelay = Awaited<
-  ReturnType<typeof getInfraRelayOptions>
->["relays"][number]
 type DatabaseDialog =
   | { kind: "credentials"; database: DatabaseDirectory }
   | { kind: "delete"; database: DatabaseDirectory }
@@ -171,9 +153,11 @@ export const DatabasesPage = React.memo(function DatabasesPage({
   searchStore: DataTableSearchStore
 }) {
   const { data } = useQuery(infraRelayOptionsQueryOptions("database"))
-  const [createOpen, setCreateOpen] = React.useState(false)
+  const [addStore] = React.useState(() =>
+    createAddInstanceDialogStore("database")
+  )
   const [dialog, setDialog] = React.useState<DatabaseDialog>(null)
-  const openCreate = React.useCallback(() => setCreateOpen(true), [])
+  const openCreate = addStore.open
   const openDialog = React.useCallback((next: DatabaseDialog) => {
     setDialog(next)
   }, [])
@@ -210,12 +194,7 @@ export const DatabasesPage = React.memo(function DatabasesPage({
         </React.Suspense>
       </DataTableWorkspace>
 
-      {createOpen && data ? (
-        <CreateDatabaseDialog
-          relays={data.relays}
-          onClose={() => setCreateOpen(false)}
-        />
-      ) : null}
+      {canCreate ? <AddInstanceDialogHost store={addStore} /> : null}
       {dialog?.kind === "credentials" ? (
         <CredentialsDialog
           key={`${dialog.database.relayId}:${dialog.database.id}`}
@@ -765,88 +744,6 @@ function ActionIconButton({
       </TooltipTrigger>
       <TooltipContent side="bottom">{tooltip}</TooltipContent>
     </Tooltip>
-  )
-}
-
-function CreateDatabaseDialog({
-  onClose,
-  relays,
-}: {
-  onClose: () => void
-  relays: Array<ManagedRelay>
-}) {
-  const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const availableRelays = relays.filter((relay) => relay.canCreate)
-  const [relayId, setRelayId] = React.useState(
-    () => availableRelays.at(0)?.id ?? ""
-  )
-  const relayLabelId = React.useId()
-  // Trying the same create again reuses its key, so it reuses its ID.
-  const attemptRef = React.useRef<{
-    fingerprint: string
-    idempotencyKey: string
-  } | null>(null)
-  const create = useMutation({
-    mutationFn: (values: NewDatabaseValues) => {
-      const input = { ...newDatabaseInput(values), relayId }
-      const fingerprint = JSON.stringify(input)
-      const idempotencyKey =
-        attemptRef.current?.fingerprint === fingerprint
-          ? attemptRef.current.idempotencyKey
-          : randomIdempotencyKey()
-      attemptRef.current = { fingerprint, idempotencyKey }
-      return createManagedDatabase({ data: { ...input, idempotencyKey } })
-    },
-    onSuccess: async (created, { name }) => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.databases.all,
-      })
-      // A database the Relay provisions in the background opens on its
-      // provisioning page instead.
-      if (created.observedState !== "provisioning") {
-        showToast({ message: `${name} is ready`, type: "success" })
-      }
-      onClose()
-      await navigate({
-        params: { databaseId: created.id },
-        to: "/db/$databaseId/info",
-      })
-    },
-  })
-
-  return (
-    <NewDatabaseDialog
-      description="Hearth creates a private network, persistent volume, and generated password, and names anything you leave blank. No host port is published."
-      disabled={!relayId}
-      error={create.error?.message}
-      pending={create.isPending}
-      submitLabel="Create database"
-      title="Add database"
-      onClose={onClose}
-      onSubmit={create.mutate}
-    >
-      <div>
-        <span id={relayLabelId} className="mb-2 block text-xs font-medium">
-          Relay
-        </span>
-        <Select value={relayId} onValueChange={setRelayId}>
-          <SelectTrigger
-            aria-labelledby={relayLabelId}
-            className="h-9 w-full px-3"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {availableRelays.map((relay) => (
-              <SelectItem key={relay.id} value={relay.id}>
-                {relay.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-    </NewDatabaseDialog>
   )
 }
 

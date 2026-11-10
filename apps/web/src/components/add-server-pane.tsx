@@ -10,19 +10,16 @@ import {
 } from "@workspace/contracts"
 
 import { Button } from "@workspace/ui/components/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-} from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
 
 import {
   BrickRelayField,
   useBrickRelayReady,
 } from "@/components/brick-relay-field"
+import type { PickableBrickKind } from "@/components/brick-kinds"
 import {
   BrickCatalogBrowser,
+  BrickCatalogUnavailable,
   type BrickSelection,
 } from "@/components/brick-selector"
 import { defaultBrickInstanceName } from "@/lib/brick-variables"
@@ -33,105 +30,42 @@ import { applyProvisioningInstance } from "@/lib/realtime-client"
 import { useIdempotencyKey } from "@/lib/use-idempotency-key"
 import { createBrickInstance } from "@/server/bricks"
 
-type AddServerDialogState = { kind: "closed" } | { kind: "open" }
 type CreateBrickInstanceInput = Parameters<typeof createBrickInstance>[0]
 
-export interface AddServerDialogStore {
-  close: () => void
-  getServerSnapshot: () => AddServerDialogState
-  getSnapshot: () => AddServerDialogState
-  open: () => void
-  subscribe: (listener: () => void) => () => void
-}
-
-const closedState: AddServerDialogState = { kind: "closed" }
-
-export function createAddServerDialogStore(): AddServerDialogStore {
-  let state = closedState
-  const listeners = new Set<() => void>()
-
-  function publish(next: AddServerDialogState) {
-    if (next === state) return
-    state = next
-    for (const listener of listeners) listener()
-  }
-
-  return {
-    close: () => publish(closedState),
-    getServerSnapshot: () => closedState,
-    getSnapshot: () => state,
-    open: () => publish({ kind: "open" }),
-    subscribe: (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-  }
-}
-
-export const AddServerDialogHost = React.memo(function AddServerDialogHost({
-  store,
+// The game servers in the Add instance dialog: the catalogs' game server
+// Bricks, and the name and Relay a new one takes. What its Brick asks is
+// answered on its Startup page, once it exists.
+export const AddServerPane = React.memo(function AddServerPane({
+  kinds,
+  onClose,
+  onKindChange,
 }: {
-  store: AddServerDialogStore
+  kinds: ReadonlyArray<PickableBrickKind>
+  onClose: () => void
+  onKindChange: (kind: PickableBrickKind) => void
 }) {
-  const state = React.useSyncExternalStore(
-    store.subscribe,
-    store.getSnapshot,
-    store.getServerSnapshot
-  )
+  const catalogQuery = useQuery(brickCatalogQueryOptions())
+  if (!catalogQuery.data) {
+    return (
+      <BrickCatalogUnavailable
+        error={catalogQuery.error?.message}
+        kind="game-server"
+        kinds={kinds}
+        pending={catalogQuery.isPending}
+        onKindChange={onKindChange}
+      />
+    )
+  }
   return (
-    <AddServerDialog
-      open={state.kind === "open"}
-      onOpenChange={(open) => {
-        if (!open) store.close()
-      }}
+    <AddServerForm
+      bricks={catalogQuery.data.bricks}
+      canAddCustomBrick={catalogQuery.data.canAddCustomBrick}
+      customBricks={catalogQuery.data.customBricks}
+      kinds={kinds}
+      relays={catalogQuery.data.relays}
+      onClose={onClose}
+      onKindChange={onKindChange}
     />
-  )
-})
-
-const AddServerDialog = React.memo(function AddServerDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  const catalogQuery = useQuery({
-    ...brickCatalogQueryOptions(),
-    enabled: open,
-  })
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-[min(36rem,calc(100dvh-2rem))] max-h-none gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] xl:max-w-5xl">
-        <DialogTitle className="sr-only">Add Game Server</DialogTitle>
-        {!catalogQuery.data ? (
-          <div className="grid min-h-56 place-items-center text-center">
-            {catalogQuery.isPending ? (
-              <LoaderCircle className="size-5 animate-spin text-primary-ink" />
-            ) : (
-              <div className="max-w-sm">
-                <CircleAlert className="mx-auto size-5 text-amber-300 light:text-amber-700" />
-                <p className="mt-2 text-sm font-semibold">
-                  Brick catalog unavailable
-                </p>
-                <p className="type-support mt-1 text-muted-foreground">
-                  {catalogQuery.error?.message ??
-                    "Connect a Relay to load verified Bricks."}
-                </p>
-              </div>
-            )}
-          </div>
-        ) : (
-          <AddServerForm
-            bricks={catalogQuery.data.bricks}
-            canAddCustomBrick={catalogQuery.data.canAddCustomBrick}
-            customBricks={catalogQuery.data.customBricks}
-            relays={catalogQuery.data.relays}
-            onClose={() => onOpenChange(false)}
-          />
-        )}
-      </DialogContent>
-    </Dialog>
   )
 })
 
@@ -139,14 +73,18 @@ const AddServerForm = React.memo(function AddServerForm({
   bricks,
   canAddCustomBrick,
   customBricks,
+  kinds,
   relays,
   onClose,
+  onKindChange,
 }: {
   bricks: Array<Brick>
   canAddCustomBrick: boolean
   customBricks: Array<Brick>
+  kinds: ReadonlyArray<PickableBrickKind>
   relays: Array<PersistedRelay>
   onClose: () => void
+  onKindChange: (kind: PickableBrickKind) => void
 }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -189,6 +127,8 @@ const AddServerForm = React.memo(function AddServerForm({
   return (
     <BrickCatalogBrowser
       kind="game-server"
+      kinds={kinds}
+      onKindChange={onKindChange}
       relayId={relayId}
       bricks={bricks}
       canAddCustomBrick={canAddCustomBrick}
