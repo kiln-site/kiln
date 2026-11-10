@@ -110,4 +110,20 @@ describe("instance power state", () => {
       ).observedState
     ).toBe("starting")
   })
+
+  it("shows a killed game server as stopped, and one that ran out of memory as failed", () => {
+    const killing = transition({ action: "kill" })
+    const exited = (overrides: Partial<ContainerPowerState>) =>
+      observedInstancePowerState(
+        containerState({ Running: false, Status: "exited", ...overrides }),
+        killing,
+        startedAtMs
+      ).observedState
+
+    // The kill a person asked for, and the one a stop sends a process that
+    // didn't answer in time.
+    expect(exited({ ExitCode: 137 })).toBe("stopped")
+    expect(exited({ ExitCode: 137, OOMKilled: true })).toBe("failed")
+    expect(exited({ ExitCode: 1 })).toBe("failed")
+  })
 })

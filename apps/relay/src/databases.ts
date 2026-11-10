@@ -67,6 +67,7 @@ import {
   relayOwnsLabels,
   relayResourceNames,
 } from "./relay-resources.js"
+import { containerExitedCleanly } from "./power-state.js"
 import { containerPower } from "./resource-power.js"
 import {
   assertResourceLimitsFit,
@@ -81,7 +82,12 @@ function databaseObservedState(
     if (container.State.Health?.Status === "starting") return "starting"
     return container.State.Health?.Status === "unhealthy" ? "failed" : "running"
   }
-  return container.State.ExitCode === 0 ? "stopped" : "failed"
+  return containerExitedCleanly(
+    container.State.ExitCode,
+    container.State.OOMKilled ?? false
+  )
+    ? "stopped"
+    : "failed"
 }
 
 const DATABASE_KIND_LABEL = "kiln.resource.kind"
@@ -166,6 +172,7 @@ interface DatabaseContainerInspect {
     Error?: string
     ExitCode: number
     Health?: { Status: string }
+    OOMKilled?: boolean
     Running: boolean
     StartedAt?: string
     Status: string

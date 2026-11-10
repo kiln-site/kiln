@@ -50,8 +50,7 @@ import {
 import { WorkspaceFrame } from "@/components/workspace-frame"
 import { WorkloadResourceMeters } from "@/components/workload-resource-meters"
 import { WorkspacePowerControls } from "@/components/workspace-power-controls"
-import { recoverPromise } from "@/effect/promise"
-import type { ServerAction } from "@/lib/instance-power-state"
+import { useInstancePower } from "@/lib/use-instance-power"
 import { appDestinations } from "@/lib/navigation-destinations"
 import {
   appConfigQueryOptions,
@@ -340,7 +339,7 @@ function AppPowerControls({
   })
   const powerPermissions = React.useMemo(
     () => ({
-      kill: false,
+      kill: canManage && deployed,
       restart: canManage && deployed,
       start: canManage && deployed,
       stop: canManage && deployed,
@@ -355,17 +354,14 @@ function AppPowerControls({
         id: app.id,
       }),
     })
-  const action = useMutation({
-    mutationFn: (nextAction: "restart" | "start" | "stop") =>
+  const power = useInstancePower({
+    reference: { id: app.id, kind: "app", relayId: app.relayId },
+    run: (action) =>
       runAppAction({
-        data: { action: nextAction, appId: app.id, relayId: app.relayId },
+        data: { action, appId: app.id, relayId: app.relayId },
       }),
-    onMutate: () => onError(null),
-    onSuccess: invalidate,
-    onError: (cause) => {
-      onError(cause.message)
-      showAppOperationError("App action failed", cause)
-    },
+    onError,
+    onFailure: (cause) => showAppOperationError("App action failed", cause),
   })
   const deploy = useMutation({
     mutationFn: (noCache: boolean) =>
@@ -395,25 +391,13 @@ function AppPowerControls({
       showAppOperationError(`${deployLabel} failed`, cause)
     },
   })
-  const runAction = action.mutateAsync
-  const handleAction = React.useCallback(
-    async (nextAction: ServerAction) => {
-      if (nextAction === "kill") return
-      // Failures surface through the mutation's onError.
-      await recoverPromise(
-        () => runAction(nextAction),
-        () => undefined
-      )
-    },
-    [runAction]
-  )
   const relayConnected = appRelayAvailable(app)
   const hearth = useAppDeployState(app.id)
   const deploying =
     (relayConnected && app.deployment?.state === "running") ||
     hearth?.deploying === true
   const queued = hearth?.queuedId ?? null
-  const deployDisabled = !relayConnected || action.isPending
+  const deployDisabled = !relayConnected || power.pending
   const deployPending = deploy.isPending || deploying || queued !== null
 
   if (!canManage) return null
@@ -423,7 +407,8 @@ function AppPowerControls({
         <CancelQueuedDeploy app={app} operationId={queued} />
       ) : null}
       <WorkspacePowerControls
-        action={action.isPending ? action.variables : null}
+        action={power.action}
+        killWarning="This immediately terminates the App's containers. Anything they haven't saved may be lost."
         menuAction={
           deployed && sourceType !== undefined && sourceType !== "image"
             ? {
@@ -451,7 +436,7 @@ function AppPowerControls({
           provisioning: app.provisioning ?? null,
         }}
         relayConnected={relayConnected}
-        onAction={handleAction}
+        onAction={power.onAction}
       />
     </div>
   )

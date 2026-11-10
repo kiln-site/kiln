@@ -197,6 +197,60 @@ describe("runtime recovery", () => {
       })
     )
 
+    it.effect(
+      "treats a server that keeps dying on a kill nobody asked for as crashing",
+      () =>
+        Effect.gen(function* () {
+          const manager = yield* makeManager({
+            KILN_RELAY_CRASH_RETRY_DELAY_SECONDS: "5",
+            KILN_RELAY_CRASH_RETRY_LIMIT: "1",
+            KILN_RELAY_CRASH_STABILITY_SECONDS: "300",
+          })
+          const instanceId = "7".repeat(12)
+          const container = server(instanceId, false)
+          const startedAt = "2026-08-06T12:00:00.000Z"
+          const startedAtMs = Date.parse(startedAt)
+          yield* reconcileAt(manager, startedAtMs, [
+            observation(instanceId, { startedAt }),
+          ])
+
+          // Killed from outside Kiln: the exit code a requested Kill leaves
+          // too, with nobody having asked for it.
+          const killedAt = startedAtMs + 10_000
+          const killed = crashed(instanceId, {
+            exitCode: 137,
+            finishedAt: new Date(killedAt).toISOString(),
+            startedAt,
+          })
+          const scheduled = yield* reconcileAt(manager, killedAt, [killed])
+          assert.deepInclude(scheduled.get(instanceId)?.recovery, {
+            attempt: 1,
+            exitCode: 137,
+            phase: "pending",
+            reason: "process_exit",
+          })
+
+          const retryAt = killedAt + 5_000
+          yield* reconcileAt(manager, retryAt, [killed])
+          yield* startsReached(container, 1)
+
+          // It dies the same way again, and recovery gives up saying why.
+          const exhausted = yield* reconcileAt(manager, retryAt + 2_000, [
+            crashed(instanceId, {
+              exitCode: 137,
+              finishedAt: new Date(retryAt + 2_000).toISOString(),
+              startedAt: new Date(retryAt + 1_000).toISOString(),
+            }),
+          ])
+          assert.deepInclude(exhausted.get(instanceId)?.recovery, {
+            exitCode: 137,
+            phase: "failed",
+            reason: "process_exit",
+          })
+          assert.strictEqual(exhausted.get(instanceId)?.desiredState, "running")
+        })
+    )
+
     it.effect("waits for a power change in progress and gives way to it", () =>
       Effect.gen(function* () {
         const lanes = new OperationLanes()

@@ -93,6 +93,7 @@ import {
 } from "./instance-keys.js"
 import { appLifecycleLocks } from "./operation-plans.js"
 import { provisioningStatus } from "./provisioning.js"
+import { containerExitedCleanly } from "./power-state.js"
 import { containerPower } from "./resource-power.js"
 import {
   checkOutRepository,
@@ -2810,9 +2811,7 @@ export class AppDriver {
       (container) => container.health === "unhealthy"
     )
     const failed = containers.filter(
-      (container) =>
-        !container.running &&
-        (container.oomKilled || !stoppedCleanly(container))
+      (container) => !container.running && !stoppedCleanly(container)
     )
     const [observedState, status] =
       deployment?.state === "running"
@@ -3473,8 +3472,9 @@ function publishedPorts(container: ContainerInspect): Array<AppPort> {
 // Stopped by Kiln or its own process, rather than crashed.
 function stoppedCleanly(container: AppContainer): boolean {
   return (
-    container.exitCode === null ||
-    [0, 130, 137, 143].includes(container.exitCode)
+    !container.oomKilled &&
+    (container.exitCode === null ||
+      containerExitedCleanly(container.exitCode, false))
   )
 }
 
