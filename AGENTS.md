@@ -30,6 +30,10 @@ User-facing name, then what the code calls it:
 - Every instance, Relays included, has one 12-character ID, reserved in
   Hearth's instance directory and never shortened. A Relay's fingerprint only
   authenticates it. See [Instance IDs](docs/instance-ids.md).
+- Every kind of instance is moving onto one foundation. Build what every
+  kind has once, as an instance feature, and never add another per-kind copy
+  of it. See [Instances](docs/instances.md) for the target, where each part
+  stands, and the order of the work.
 
 <!-- intent-skills:start -->
 
