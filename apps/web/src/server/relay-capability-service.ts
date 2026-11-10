@@ -63,8 +63,6 @@ type BrowserPublicKey = {
 }
 
 type BrowserAction =
-  | "app.files.download"
-  | "app.files.upload"
   | "app.logs.read"
   | "app.read"
   | "database.dump.export"
@@ -597,7 +595,6 @@ const createBrowserCapabilityEffect = Effect.fn("relay.capability.sign")(
           (action) =>
             action === "instance.console.write" ||
             action === "instance.files.upload" ||
-            action === "app.files.upload" ||
             action === "relay.files.upload" ||
             action === "database.dump.import"
         )
@@ -816,10 +813,6 @@ function permissionForBrowserAction(action: BrowserAction): AccessPermission {
       return "relay.files.read"
     case "relay.files.upload":
       return "relay.files.write"
-    case "app.files.download":
-      return "app.files.read"
-    case "app.files.upload":
-      return "app.files.write"
     default:
       return action
   }

@@ -228,7 +228,7 @@ export const seedApp = (volumes: ReadonlyArray<FakeVolume> = []) =>
     // Kiln volumes.
     yield* allow("relay", relayId, [
       "app.delete",
-      "app.files.read",
+      "instance.files.read",
       "backup.create",
       "relay.configure",
     ])

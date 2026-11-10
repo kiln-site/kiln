@@ -4,28 +4,27 @@ import type { AccessPermission } from "@/lib/permissions"
 
 export type FileRootAccess = "read" | "write" | "delete"
 
-// The one place that says which permission a file root's files take. Only a
-// game server tells deleting from writing, and a database's root holds its
-// dumps, which its dump permissions cover.
+// The one place that says which permission a file root's files take. A game
+// server's files and an App's take the file permissions every instance's do;
+// a database's root holds its dumps, which its dump permissions cover, and
+// the host's files keep permissions of their own.
+const instanceFiles = {
+  read: "instance.files.read",
+  write: "instance.files.write",
+  delete: "instance.files.delete",
+} as const satisfies Record<FileRootAccess, AccessPermission>
+
 const permissions: Record<
   FileRootOwner["kind"],
   Record<FileRootAccess, AccessPermission>
 > = {
-  app: {
-    read: "app.files.read",
-    write: "app.files.write",
-    delete: "app.files.write",
-  },
+  app: instanceFiles,
   database: {
     read: "database.dump.export",
     write: "database.dump.import",
     delete: "database.dump.import",
   },
-  instance: {
-    read: "instance.files.read",
-    write: "instance.files.write",
-    delete: "instance.files.delete",
-  },
+  instance: instanceFiles,
   relay: {
     read: "relay.files.read",
     write: "relay.files.write",

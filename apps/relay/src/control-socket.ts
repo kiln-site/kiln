@@ -1712,8 +1712,8 @@ const anyClientOperations = new Set<RelayControlOperation>([
 ])
 
 function actionForRequest(request: RelayControlRequest): RelayAction | null {
-  // An App's data directory and the host's files are served by the same file
-  // operations as a game server's.
+  // The host's files are served by the same file operations as a game
+  // server's and an App's, under actions of their own.
   if (request.operation.startsWith("instance.files.")) {
     const action = fileRootAction(
       objectString(request.payload, "instanceId") ?? "",
@@ -2039,7 +2039,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     // container takes reading the app's files; the Relay returns only
     // images from either.
     case "instance.icon.read": {
-      if (objectString(request.payload, "appId")) return "app.files.read"
+      if (objectString(request.payload, "appId")) return "instance.files.read"
       return (
         fileRootAction(
           objectString(request.payload, "instanceId") ?? "",

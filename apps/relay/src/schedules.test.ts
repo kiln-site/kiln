@@ -194,7 +194,8 @@ describe("Relay schedule time zone", () => {
             SET definition_json = json_set(definition_json, '$.timezone', 'America/New_York'),
               next_run_at = ${Date.parse("2026-01-16T05:00:00.000Z")}
           `
-          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id = 39`
+          // The migrator runs what follows the newest one it recorded.
+          yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 39`
         }).pipe(Effect.provide(SqliteClient.layer({ filename })))
       )
 

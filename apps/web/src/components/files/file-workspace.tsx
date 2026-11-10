@@ -54,6 +54,7 @@ interface FileWorkspaceProps {
   active: boolean
   routeFilePath?: string
   canShare: boolean
+  canDelete: boolean
   canWrite: boolean
   relayConnected: boolean
   openTreeOnEntry: boolean
@@ -128,6 +129,7 @@ export function FileWorkspace(props: FileWorkspaceProps) {
         instance={props.instance}
         selectionStore={selectionStore}
         canShare={props.canShare}
+        canDelete={props.canDelete}
         canWrite={props.canWrite}
         relayConnected={props.relayConnected}
         onPathChange={handlePathChange}
@@ -143,6 +145,7 @@ interface FileWorkspaceSurfaceProps {
   instance: FileWorkspaceInstance
   selectionStore: FileSelectionStore
   canShare: boolean
+  canDelete: boolean
   canWrite: boolean
   relayConnected: boolean
   onPathChange: (path: string) => void
@@ -155,6 +158,7 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
   instance,
   selectionStore,
   canShare,
+  canDelete,
   canWrite,
   relayConnected,
   onPathChange,
@@ -265,6 +269,7 @@ const StableFileWorkspaceSurface = React.memo(function FileWorkspaceSurface({
     onRefresh: handleRefresh,
   })
   const fileActions = useFileActions({
+    canDelete: canDelete && relayConnected,
     canWrite: canWrite && relayConnected,
     instance,
     onRefresh: handleRefresh,

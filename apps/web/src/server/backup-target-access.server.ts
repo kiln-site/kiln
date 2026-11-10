@@ -90,7 +90,7 @@ export async function requireAppsPermission(
   user: AuthenticatedUser,
   relayId: string,
   appIds: ReadonlyArray<string>,
-  permission: "app.files.write" | "app.manage",
+  permission: "instance.files.write" | "app.manage",
   reason: string
 ): Promise<void> {
   if (isPlatformAdmin(user) || appIds.length === 0) return
@@ -126,7 +126,7 @@ export async function requireBackupTargetRestore(
     user,
     relay.id,
     users,
-    "app.files.write",
+    "instance.files.write",
     "Restoring this volume replaces files every App that uses it reads; you need permission to change each App's files"
   )
 }

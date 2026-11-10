@@ -163,7 +163,7 @@ export function AppVolumesSection({
   const composeFile = useAppComposeMounts(app, config)
   const { data: capabilities } = useQuery(accessCapabilitiesQueryOptions())
   const canReadHost = useRelayPermission(app.relayId, "relay.files.read")
-  const canReadFiles = app.permissions.includes("app.files.read")
+  const canReadFiles = app.permissions.includes("instance.files.read")
   const composeVolumes = composeFile?.mounts?.some(
     (mount) => mount.kind === "volume" && mount.source
   )

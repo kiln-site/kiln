@@ -282,7 +282,7 @@ function FileActionMenuItems({
       <FileActionMenuItem
         surface={surface}
         close={close}
-        disabled={!controller.canWrite}
+        disabled={!controller.canDelete}
         icon={<Trash2 />}
         label="Delete"
         onSelect={request("delete")}

@@ -1,8 +1,10 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { SqliteClient } from "@effect/sql-sqlite-node"
 import { assert, describe, it } from "@effect/vitest"
 import { Effect } from "effect"
+import { SqlClient } from "effect/sql"
 import type { BackupTaskInput } from "@workspace/contracts"
 
 import { makeRelayStateLayer, RelayStateStore } from "./state.js"
@@ -299,46 +301,126 @@ describe("Relay state", () => {
     })
   )
 
-  stateTest(
-    "never runs a create that arrives after its backup's delete",
-    () =>
-      Effect.gen(function* () {
-        const store = yield* RelayStateStore
-        const backupId = "41100000-0000-4000-8000-000000000020"
-        const target = { id: "instance-a", kind: "instance" as const }
-        // Hearth deleted the backup while the create it had sent was still
-        // on its way.
-        yield* store.enqueueBackupTask(
-          {
-            backupId,
-            destination: { kind: "local" },
-            kind: "delete",
-            target,
-            taskId: "41100000-0000-4000-8000-000000000021",
-          },
-          600
-        )
-        const create = yield* store.enqueueBackupTask(
-          {
-            artifactKind: "archive",
-            backupId,
-            destination: { kind: "local" },
-            exclude: [],
-            kind: "create",
-            maxBytes: null,
-            mode: "full",
-            reason: "manual",
-            target,
-            taskId: "41100000-0000-4000-8000-000000000022",
-          },
-          610
-        )
+  stateTest("never runs a create that arrives after its backup's delete", () =>
+    Effect.gen(function* () {
+      const store = yield* RelayStateStore
+      const backupId = "41100000-0000-4000-8000-000000000020"
+      const target = { id: "instance-a", kind: "instance" as const }
+      // Hearth deleted the backup while the create it had sent was still
+      // on its way.
+      yield* store.enqueueBackupTask(
+        {
+          backupId,
+          destination: { kind: "local" },
+          kind: "delete",
+          target,
+          taskId: "41100000-0000-4000-8000-000000000021",
+        },
+        600
+      )
+      const create = yield* store.enqueueBackupTask(
+        {
+          artifactKind: "archive",
+          backupId,
+          destination: { kind: "local" },
+          exclude: [],
+          kind: "create",
+          maxBytes: null,
+          mode: "full",
+          reason: "manual",
+          target,
+          taskId: "41100000-0000-4000-8000-000000000022",
+        },
+        610
+      )
 
-        assert.strictEqual(create.status, "cancelled")
-        const delete_ = yield* store.claimNextBackupTask(620)
-        assert.strictEqual(delete_?.kind, "delete")
-        assert.isNull(yield* store.claimNextBackupTask(630))
-      })
+      assert.strictEqual(create.status, "cancelled")
+      const delete_ = yield* store.claimNextBackupTask(620)
+      assert.strictEqual(delete_?.kind, "delete")
+      assert.isNull(yield* store.claimNextBackupTask(630))
+    })
+  )
+
+  it.effect(
+    "keeps what a client or invitation could do to an App's files, as the file actions every instance takes",
+    () =>
+      withTemporaryDirectory((directory) =>
+        Effect.gen(function* () {
+          const filename = join(directory, "relay.sqlite")
+          const now = Date.UTC(2026, 0, 1)
+          const open = <A, E>(
+            use: Effect.Effect<A, E, RelayStateStore>
+          ): Effect.Effect<A, unknown> =>
+            use.pipe(Effect.provide(makeRelayStateLayer(filename)))
+          const invitation = (id: string, actions: ReadonlyArray<string>) => ({
+            actions,
+            createdAt: now,
+            expiresAt: now + 15 * 60_000,
+            id,
+            role: "custom" as const,
+            tokenHash: `hash-${id}`,
+          })
+
+          // As a Relay left them while an App's files had actions of their
+          // own: a paired client that may read and upload them, and an
+          // invitation not yet used that may change them.
+          yield* open(
+            Effect.gen(function* () {
+              const store = yield* RelayStateStore
+              const used = invitation("used", [
+                "app.read",
+                "app.files.read",
+                "app.files.upload",
+                "instance.files.read",
+              ])
+              yield* store.createInvitation(used)
+              yield* store.pairClient({
+                actions: used.actions,
+                id: "hearth-1",
+                invitationId: used.id,
+                name: "Hearth One",
+                origins: ["https://hearth.test"],
+                pairedAt: now + 1,
+                publicKey: "public-key-1",
+                role: "custom",
+                sourceCidrs: [],
+              })
+              yield* store.createInvitation(
+                invitation("unused", ["app.files.write"])
+              )
+            })
+          )
+          yield* Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient
+            // The migrator runs what follows the newest one it recorded.
+            yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 40`
+          }).pipe(Effect.provide(SqliteClient.layer({ filename })))
+
+          yield* open(
+            Effect.gen(function* () {
+              const store = yield* RelayStateStore
+              assert.deepStrictEqual(
+                (yield* store.findClientById("hearth-1"))?.actions,
+                [
+                  "app.read",
+                  "instance.files.list",
+                  "instance.files.read",
+                  "instance.files.upload",
+                ]
+              )
+              assert.deepStrictEqual(
+                (yield* store.findActiveInvitation("unused", now + 2))?.actions,
+                [
+                  "instance.files.write",
+                  "instance.files.delete",
+                  "instance.files.rename",
+                  "instance.files.upload-url",
+                ]
+              )
+            })
+          )
+        })
+      )
   )
 })
 

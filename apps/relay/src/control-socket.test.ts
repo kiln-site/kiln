@@ -170,22 +170,27 @@ describe("Relay control socket", () => {
   it("keeps host files behind their own grants", async () => {
     const relay = await startRelay()
     const hostId = "relay:0123456789ab"
-    for (const actions of [
-      ["instance.files.list", "instance.files.read", "instance.files.write"],
-      ["app.files.read", "app.files.write"],
-    ] as const) {
-      const hearth = await relay.pair({ role: "custom", actions })
-      const connection = await relay.connect(hearth)
-      const id = sendRequest(connection.socket, "instance.files.read", {
-        instanceId: hostId,
-        path: "etc/os-release",
+    // The file actions that cover every game server's and App's files stop
+    // short of the host's.
+    const instances = await relay.connect(
+      await relay.pair({
+        role: "custom",
+        actions: [
+          "instance.files.list",
+          "instance.files.read",
+          "instance.files.write",
+        ],
       })
-      expect(await connection.inbox.next()).toMatchObject({
-        code: "forbidden",
-        replyTo: id,
-        type: "error",
-      })
-    }
+    )
+    const refused = sendRequest(instances.socket, "instance.files.read", {
+      instanceId: hostId,
+      path: "etc/os-release",
+    })
+    expect(await instances.inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: refused,
+      type: "error",
+    })
     const reader = await relay.connect(
       await relay.pair({ role: "custom", actions: ["relay.files.read"] })
     )
@@ -210,31 +215,27 @@ describe("Relay control socket", () => {
     })
   })
 
-  it("keeps an App's files behind the App's file grants", async () => {
+  it("takes a game server's file actions for an App's files, and never the host's", async () => {
     const relay = await startRelay()
     const appRoot = "app:0123456789ab"
-    const servers = await relay.connect(
+    const host = await relay.connect(
       await relay.pair({
         role: "custom",
-        actions: [
-          "instance.files.list",
-          "instance.files.read",
-          "instance.files.write",
-        ],
+        actions: ["relay.files.read", "relay.files.write"],
       })
     )
-    const refused = sendRequest(servers.socket, "instance.files.read", {
+    const refused = sendRequest(host.socket, "instance.files.read", {
       instanceId: appRoot,
       path: "compose.yaml",
     })
-    expect(await servers.inbox.next()).toMatchObject({
+    expect(await host.inbox.next()).toMatchObject({
       code: "forbidden",
       replyTo: refused,
       type: "error",
     })
 
     const reader = await relay.connect(
-      await relay.pair({ role: "custom", actions: ["app.files.read"] })
+      await relay.pair({ role: "custom", actions: ["instance.files.read"] })
     )
     const read = sendRequest(reader.socket, "instance.files.read", {
       instanceId: appRoot,
@@ -245,6 +246,7 @@ describe("Relay control socket", () => {
       replyTo: read,
       type: "response",
     })
+    // Each change takes its own action, as on a game server.
     const write = sendRequest(reader.socket, "instance.files.write", {
       instanceId: appRoot,
       path: "compose.yaml",

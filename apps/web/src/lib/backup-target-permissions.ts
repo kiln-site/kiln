@@ -7,12 +7,12 @@ import { grantHasPermission, type AccessPermission } from "@/lib/permissions"
  * resource's data, so acting on it takes the authority reading or writing
  * that data does. Game servers and databases take `backup.*` on the Relay
  * or on themselves. An App's folder, and a volume its Compose project owns,
- * follow the App's permissions: listing its backups takes `app.read`,
- * making or downloading one `app.files.read`, as reading its files does,
- * and restoring or deleting one `app.files.write`, as replacing them does.
+ * follow what its files take: listing its backups takes `app.read`, making
+ * or downloading one `instance.files.read`, as reading its files does, and
+ * restoring or deleting one `instance.files.write`, as replacing them does.
  * App owners hold neither file permission, since an App's files reach the
  * node through its Compose file, so like its configuration only people
- * with App permissions on the Relay back it up. A Kiln volume, shared by
+ * with file permissions on the Relay back it up. A Kiln volume, shared by
  * design, takes `backup.*` on the Relay. The platform's is an
  * administrator's alone.
  *
@@ -27,11 +27,11 @@ export type BackupAction =
   | "backup.restore"
 
 const appPermissions: Record<BackupAction, AccessPermission> = {
-  "backup.create": "app.files.read",
-  "backup.delete": "app.files.write",
-  "backup.download": "app.files.read",
+  "backup.create": "instance.files.read",
+  "backup.delete": "instance.files.write",
+  "backup.download": "instance.files.read",
   "backup.read": "app.read",
-  "backup.restore": "app.files.write",
+  "backup.restore": "instance.files.write",
 }
 
 // An App's own volume is `<appId>/<key>`.

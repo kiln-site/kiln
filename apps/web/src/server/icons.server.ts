@@ -34,7 +34,7 @@ const editPermissions = {
 // Copying an icon from a file takes reading that file.
 const filePermissions = {
   server: "instance.files.read",
-  app: "app.files.read",
+  app: "instance.files.read",
 } as const satisfies Partial<Record<InstanceKind, AccessPermission>>
 
 function permissionTarget(subject: InstanceIconSubject) {

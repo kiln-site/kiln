@@ -48,7 +48,7 @@ administrators may schedule Kiln's backups.
   each target it reaches: `instance.console.write` for a game server's
   command, `relay.terminal` for a database's, and `app.terminal` for an
   App's; `instance.power.<action>`, `database.power`, or `app.manage` for
-  power; `backup.create` for a backup, or `app.files.read` for an App's.
+  power; `backup.create` for a backup, or `instance.files.read` for an App's.
 - Editing takes `schedule.update` and every step permission of both the
   stored schedule and the new one, so removing a step nobody let you run
   doesn't let you edit around it. An edit made after someone else's is

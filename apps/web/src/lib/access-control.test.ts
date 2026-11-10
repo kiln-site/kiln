@@ -148,9 +148,9 @@ describeMysql("Relay permission requirements", () => {
             dumps: databaseFileRootId("d".repeat(12)),
             host: relayFileRootId(relayId),
           }
-          // What a person holding one permission on the whole Relay can do
-          // under each root.
-          const reach = (permission: AccessPermission) =>
+          // What a person holding one permission can do under each root:
+          // on the whole Relay, or on one game server.
+          const reach = (permission: AccessPermission, serverId?: string) =>
             Effect.gen(function* () {
               yield* resetDatabase
               yield* insertRelay(relayId)
@@ -158,8 +158,8 @@ describeMysql("Relay permission requirements", () => {
                 id: "grant-one",
                 userId: authenticatedUser.id,
                 relayId,
-                resourceType: "relay",
-                resourceId: relayId,
+                resourceType: serverId ? "instance" : "relay",
+                resourceId: serverId ?? relayId,
               })
               yield* insertRows("access_selection", {
                 access_id: "grant-one",
@@ -177,32 +177,48 @@ describeMysql("Relay permission requirements", () => {
                       access
                     )
                   )
-                  if (result._tag === "Success") allowed.push(`${name} ${access}`)
+                  if (result._tag === "Success")
+                    allowed.push(`${name} ${access}`)
                 }
               }
               return allowed
             })
 
+          // On a Relay, a file permission covers every game server's and
+          // App's files, and nothing else's.
+          assert.deepStrictEqual(yield* reach("instance.files.read"), [
+            "server read",
+            "app read",
+            "volume read",
+          ])
           assert.deepStrictEqual(yield* reach("instance.files.write"), [
             "server read",
             "server write",
+            "app read",
+            "app write",
+            "volume read",
+            "volume write",
           ])
           assert.deepStrictEqual(yield* reach("instance.files.delete"), [
             "server read",
             "server delete",
-          ])
-          assert.deepStrictEqual(yield* reach("app.files.read"), [
             "app read",
-            "volume read",
-          ])
-          assert.deepStrictEqual(yield* reach("app.files.write"), [
-            "app read",
-            "app write",
             "app delete",
             "volume read",
-            "volume write",
             "volume delete",
           ])
+          // What only Apps have stops short of their files.
+          assert.deepStrictEqual(yield* reach("app.manage"), [])
+          // Given on one game server, it stays there: not an App's files,
+          // and not another game server's.
+          assert.deepStrictEqual(
+            yield* reach("instance.files.write", roots.server),
+            ["server read", "server write"]
+          )
+          assert.deepStrictEqual(
+            yield* reach("instance.files.write", "6".repeat(12)),
+            []
+          )
           assert.deepStrictEqual(yield* reach("database.dump.export"), [
             "dumps read",
           ])

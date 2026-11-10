@@ -80,6 +80,8 @@ export type FileWorkspaceAction =
 
 export interface FileActionsController {
   busy: boolean
+  // Deleting takes a permission of its own beside the one for other changes.
+  canDelete: boolean
   canWrite: boolean
   instance: Pick<FileWorkspaceInstance, "id" | "relayId">
   request: (action: FileWorkspaceAction, paths: ReadonlyArray<string>) => void

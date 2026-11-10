@@ -33,6 +33,7 @@ import {
   backupTargetSchema,
   backupTaskInputSchema,
   backupTaskResultSchema,
+  migratedFileActions,
   omitBackupSecrets,
   relayBackupTaskSchema,
   relayAppSchema,
@@ -1869,6 +1870,33 @@ const migrations = SqliteMigrator.fromRecord({
         UPDATE relay_schedules SET next_run_at = ${nextRunAt}
         WHERE schedule_id = ${schedule.schedule_id}
       `
+    }
+  }),
+  // An App's files take the file actions a game server's do. A client or
+  // invitation given actions of its own keeps what it could do to an App's
+  // files, under those actions.
+  "40_instance_file_actions": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    for (const table of ["relay_clients", "relay_invitations"]) {
+      const rows = yield* sql<{ actions_json: string; id: string }>`
+        SELECT id, actions_json FROM ${sql(table)} WHERE role = 'custom'
+      `
+      for (const row of rows) {
+        const stored = Result.getOrElse(
+          Result.try(() => JSON.parse(row.actions_json) as unknown),
+          () => null
+        )
+        // Anything unreadable grants nothing, and is kept as it is.
+        if (!Array.isArray(stored) || !stored.every(Predicate.isString)) {
+          continue
+        }
+        const actions = migratedFileActions(stored)
+        if (actions.join() === stored.join()) continue
+        yield* sql`
+          UPDATE ${sql(table)} SET actions_json = ${JSON.stringify(actions)}
+          WHERE id = ${row.id}
+        `
+      }
     }
   }),
 })

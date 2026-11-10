@@ -23,14 +23,11 @@ import { Effect } from "effect"
 import { z } from "zod"
 
 import {
-  listAppRecordsEffect,
   renameAppRecordEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
 import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
-import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
-import { accessPermissions } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
 import { webRouteProxySchema } from "@/lib/domain-schemas"
@@ -41,14 +38,13 @@ import {
 } from "@/lib/resource-deletion.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
-import { listPersistedRelays } from "@/lib/relay-registry"
 import {
   appConfigPatchSchema,
   authorizedApp,
   authorizedAppFor,
   getAppConfigHandler,
+  getAppDirectoryHandler,
   getAppOwnerHandler,
-  hasAppPermission,
   publishAppChange,
   updateAppConfigHandler,
 } from "@/server/app-access"
@@ -108,10 +104,6 @@ const appNetworkInputSchema = appInputSchema.extend({
   databaseId: databaseIdSchema,
 })
 
-const appPermissions = accessPermissions.filter((permission) =>
-  permission.startsWith("app.")
-)
-
 type AppInventoryStatus = "available" | "missing" | "unavailable"
 export type AppListItem = RelayApp & {
   createdAt: string
@@ -123,37 +115,7 @@ export type AppListItem = RelayApp & {
 }
 
 export const getAppDirectory = createServerFn({ method: "GET" }).handler(
-  async () => {
-    const user = await requireEligibleResourceUser()
-    const [persistedRelays, grants, records] = await Promise.all([
-      listPersistedRelays(),
-      isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
-      runAppEffect("apps.directory", listAppRecordsEffect()),
-    ])
-    const relayNames = new Map(
-      persistedRelays
-        .filter((relay) => relay.enabled)
-        .map((relay) => [relay.id, relay.name])
-    )
-    return records.flatMap((record) => {
-      const relayName = relayNames.get(record.relayId)
-      if (!relayName || !hasAppPermission(user, grants, record, "app.read")) {
-        return []
-      }
-      return [
-        {
-          id: record.appId,
-          createdAt: record.createdAt,
-          permissions: appPermissions.filter((permission) =>
-            hasAppPermission(user, grants, record, permission)
-          ),
-          name: record.name,
-          relayId: record.relayId,
-          relayName,
-        },
-      ]
-    })
-  }
+  async () => getAppDirectoryHandler(await requireEligibleResourceUser())
 )
 
 // The app's configuration. Its environment and the files it mounts carry

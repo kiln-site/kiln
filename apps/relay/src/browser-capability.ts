@@ -106,7 +106,6 @@ function validateCapabilityV2(
     (action) =>
       action === "instance.console.write" ||
       action === "instance.files.upload" ||
-      action === "app.files.upload" ||
       action === "relay.files.upload" ||
       action === "database.dump.import"
   )
@@ -150,8 +149,8 @@ const browserCapabilityActions: Record<
 > = {
   app: {
     console: [relayConsoleReadActions.app],
-    file: ["app.files.download", "app.files.upload"],
-    preview: ["app.files.download"],
+    file: ["instance.files.download", "instance.files.upload"],
+    preview: ["instance.files.download"],
     resources: ["app.read"],
   },
   // A database's files are its dumps (`database:<databaseId>`).

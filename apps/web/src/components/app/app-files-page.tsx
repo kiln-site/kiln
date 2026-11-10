@@ -87,7 +87,8 @@ export function AppFilesPage() {
         route={route}
         rootPath={volumeId ? (current?.path ?? "") : undefined}
         filePath={filePath}
-        canWrite={app.permissions.includes("app.files.write")}
+        canDelete={app.permissions.includes("instance.files.delete")}
+        canWrite={app.permissions.includes("instance.files.write")}
         connected={appFilesAvailable(app)}
       />
     </div>

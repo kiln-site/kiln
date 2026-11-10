@@ -506,7 +506,7 @@ export const appDestinations = [
     id: "files",
     keywords: ["data", "volumes", "upload"],
     label: "Files",
-    permission: "app.files.read",
+    permission: "instance.files.read",
     to: "/app/$appId/files/$",
   },
   {
@@ -864,7 +864,6 @@ function canUseSyncs(capabilities: NavigationAccessCapabilities): boolean {
       "instance",
       "relay",
     ]) ||
-    hasScopedPermission(capabilities, "app.files.write", ["relay", "app"]) ||
     hasScopedPermission(capabilities, "relay.files.write", ["relay"])
   )
 }

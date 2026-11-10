@@ -103,6 +103,7 @@ const treeLayoutCss = `
 // server.
 const readOnlyActions: FileActionsController = {
   busy: false,
+  canDelete: false,
   canWrite: false,
   instance: { id: demoServer.id, relayId: demoServer.relayId },
   request: () => {},
