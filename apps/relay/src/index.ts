@@ -61,7 +61,7 @@ import {
   relayAppImageCheckSchema,
   relayHostPackagesRequestSchema,
   relaySecurityInventoryRequestSchema,
-  relayDeployAppSchema,
+  relayDeployInstanceSchema,
   relayDatabaseLimitsSchema,
   relayInstanceLimitsWriteSchema,
   type ResourceLimits,
@@ -3170,11 +3170,6 @@ async function executeControlRequest(
       await resourceFreezes.forget("app", input.appId)
       return deleted
     }
-    case "app.deploy": {
-      const input = relayDeployAppSchema.parse(request.payload)
-      await notePowerChange(input.appId)
-      return apps.deploy(input)
-    }
     case "app.deployment.read":
       return apps.readDeployment(
         relayAppDeploymentReadSchema.parse(request.payload)
@@ -3550,17 +3545,46 @@ async function executeControlRequest(
           (candidate) => candidate.id === instanceId
         ) ?? relayInstanceSchema.parse(await requiredInstance(payload))
       return retainingInstance(existing, async () => {
-        // A reinstall or change of Brick is a deployment Hearth names.
+        // A change of Brick is a deployment Hearth names.
         const instance = await serverDeploymentLogs.run(
           instanceId,
           input.deploymentId,
-          input.reinstall
-            ? "Reinstalling the game server"
-            : "Changing the game server's Brick",
+          "Changing the game server's Brick",
           (onPhase) => lifecycle.reconfigureInstance(instanceId, input, onPhase)
         )
         return relayInstanceWithStoredName(instance)
       })
+    }
+    // Deploying again, for every kind: each as it is set up, an App with
+    // the configuration Hearth keeps for it.
+    case "instance.deploy": {
+      const input = relayDeployInstanceSchema.parse(request.payload)
+      switch (input.kind) {
+        case "app": {
+          const { id, kind: _kind, ...deploy } = input
+          await notePowerChange(id)
+          return apps.deploy({ ...deploy, appId: id })
+        }
+        case "instance": {
+          const existing =
+            (await snapshotHub.read()).instances.find(
+              (candidate) => candidate.id === input.id
+            ) ??
+            relayInstanceSchema.parse(
+              await requiredInstance({ instanceId: input.id })
+            )
+          return retainingInstance(existing, async () =>
+            relayInstanceWithStoredName(
+              await serverDeploymentLogs.run(
+                input.id,
+                input.deploymentId,
+                "Redeploying the game server",
+                (onPhase) => lifecycle.redeployInstance(input.id, onPhase)
+              )
+            )
+          )
+        }
+      }
     }
     case "instance.limits.write": {
       const { limits } = relayInstanceLimitsWriteSchema.parse(payload)

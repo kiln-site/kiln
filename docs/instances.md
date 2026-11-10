@@ -80,12 +80,13 @@ entry there.
 
 Two patterns are in place. Follow them when a capability moves.
 
-- **One Relay request that names the kind.** `instance.action` and
-  `resource.freeze` take `{ kind, id, ... }` rather than one request per
-  kind. The Relay picks the permission and the work from the same `kind`.
+- **One Relay request that names the kind.** `instance.action`,
+  `instance.deploy` and `resource.freeze` take `{ kind, id, ... }` rather
+  than one request per kind. The Relay picks the permission and the work
+  from the same `kind`.
 - **One place that picks the permission, on each side.** Hearth has
   `fileRootPermission` and `instancePowerPermission`; the Relay has
-  `fileRootAction` and `powerAction`. Callers say what they want to do and
+  `fileRootAction`, `powerAction` and `deployAction`. Callers say what they want to do and
   never choose a key themselves, so merging keys later changes one function
   and migrates stored grants.
 

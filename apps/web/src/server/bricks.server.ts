@@ -85,3 +85,18 @@ export async function requestRelay(
     relayJsonEffect(relay, path, (input) => input, init, timeout, subject)
   )
 }
+
+/** A game server as its Relay has it now. */
+export async function requiredRelayInstance(
+  relay: PersistedRelay,
+  instanceId: string
+) {
+  const snapshot = relaySnapshotSchema.parse(
+    await requestRelay(relay, "/v1/snapshot")
+  )
+  const instance = snapshot.instances.find(
+    (candidate) => candidate.id === instanceId
+  )
+  if (!instance) throw new Error("Instance not found")
+  return instance
+}

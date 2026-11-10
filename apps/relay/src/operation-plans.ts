@@ -793,12 +793,10 @@ export function controlRequestLocks(
     // for any restore of a volume it mounts or owns.
     case "app.delete":
       return appWithVolumes(appReplaceLocks)
-    // A deploy only checks and records the deployment; its worker takes the
-    // App's lifecycle lock for the build itself. App changes that reserve
-    // capacity take the node's allocations in a nested step, inside the
-    // lifecycle lock, so a deployment's container start can too.
+    // App changes that reserve capacity take the node's allocations in a
+    // nested step, inside the lifecycle lock, so a deployment's container
+    // start can too.
     case "app.limits.write":
-    case "app.deploy":
       return app(appLifecycleLocks)
     case "app.network.routes.write":
       return app((id) => [...appLifecycleLocks(id), exclusive(laneKeys.routes)])
@@ -852,6 +850,19 @@ export function controlRequestLocks(
           return null
       }
     }
+    // Deploying again, each kind by its own locks. A game server's replaces
+    // its container, so it waits for everything else on it. An App's only
+    // checks and records the deployment; its worker takes the App's
+    // lifecycle lock for the build itself.
+    case "instance.deploy":
+      switch (stringField(payload, "kind")) {
+        case "instance":
+          return instance(instanceReplaceLocks, "id")
+        case "app":
+          return app(appLifecycleLocks, "id")
+        default:
+          return null
+      }
     case "instance.console.write":
     case "instance.console.complete":
       return instance(instanceLifecycleLocks)

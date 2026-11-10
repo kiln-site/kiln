@@ -1560,15 +1560,13 @@ function auditDetailsForRequest(
   }
   if (request.operation === "instance.action") {
     // Its target under the name each kind's records go by.
-    const target = powerAuditTarget(payload.kind)
+    const target = kindAuditTarget(payload.kind)
     if (target && typeof payload.id === "string") details[target] = payload.id
     if (typeof payload.action === "string") details.action = payload.action
   }
-  if (
-    request.operation === "instance.startup.write" &&
-    payload.reinstall === true
-  ) {
-    details.reinstall = true
+  if (request.operation === "instance.deploy") {
+    const target = kindAuditTarget(payload.kind)
+    if (target && typeof payload.id === "string") details[target] = payload.id
   }
   if (
     (request.operation === "instance.create" ||
@@ -1642,7 +1640,13 @@ function powerAction(
   return null
 }
 
-function powerAuditTarget(
+// The one place that says which action a deploy takes: the same one for
+// every kind that deploys, and none for anything else.
+function deployAction(kind: string | null): RelayAction | null {
+  return kind === "instance" || kind === "app" ? "instance.deploy" : null
+}
+
+function kindAuditTarget(
   kind: unknown
 ): "appId" | "databaseId" | "instanceId" | null {
   return kind === "instance"
@@ -1701,9 +1705,11 @@ function memberActionsForRequest(
     // It connects Apps.
     case "database.network.import":
       return ["app.manage"]
-    // A deploy carries the configuration it deploys.
-    case "app.deploy":
-      return ["app.manage"]
+    // An App's deploy carries the configuration it deploys.
+    case "instance.deploy":
+      return objectString(request.payload, "kind") === "app"
+        ? ["app.manage"]
+        : []
     // A new App connected to databases changes their connections too.
     case "app.provision.prepare": {
       const databaseIds =
@@ -1941,8 +1947,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
               ? "relay.configure"
               : null
     }
-    case "app.deploy":
-      return "instance.deploy"
     case "app.limits.write":
     case "app.network.routes.write":
       return "app.manage"
@@ -2007,17 +2011,10 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "schedule.write"
     case "schedule.overview":
       return "schedule.read"
-    case "instance.startup.write":
-      // A reinstall deploys it again as it is; anything else changes what
-      // it was created with.
-      return request.payload &&
-        typeof request.payload === "object" &&
-        (request.payload as Record<string, unknown>).reinstall === true
-        ? "instance.deploy"
-        : "instance.create"
     case "instance.create":
     case "instance.provision.prepare":
     case "instance.provision.claim":
+    case "instance.startup.write":
     case "instance.limits.write":
       return "instance.create"
     case "instance.provision.cancel":
@@ -2033,6 +2030,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
         objectString(request.payload, "kind"),
         objectString(request.payload, "action")
       )
+    case "instance.deploy":
+      return deployAction(objectString(request.payload, "kind"))
     case "instance.files.list":
     case "instance.files.directory.list":
     case "instance.files.directory.sizes":

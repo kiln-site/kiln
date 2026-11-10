@@ -287,39 +287,32 @@ describe("Relay control socket", () => {
     expect(await allowed(["app.manage"])).toEqual([])
   })
 
-  it("takes the deploy action to deploy an App or reinstall a game server, and not what configures them", async () => {
+  it("takes the same deploy action for every kind, with what configures an App for its deploy, and none for a Relay", async () => {
     const relay = await startRelay()
     const id = "0123456789ab"
-    // Which of the two a client holding these actions may send.
+    // Which kinds a client holding these actions may deploy again.
     const allowed = async (actions: ReadonlyArray<RelayAction>) => {
       const { inbox, socket } = await relay.connect(
         await relay.pair({ role: "custom", actions })
       )
-      const sent: Array<string> = []
-      for (const [name, operation, payload] of [
-        ["app", "app.deploy", { appId: id }],
-        [
-          "reinstall",
-          "instance.startup.write",
-          { instanceId: id, reinstall: true },
-        ],
-        ["startup", "instance.startup.write", { instanceId: id }],
-      ] as const) {
-        sendRequest(socket, operation, payload)
+      const kinds: Array<string> = []
+      for (const kind of ["instance", "app", "relay"]) {
+        sendRequest(socket, "instance.deploy", { id, kind })
         const reply = (await inbox.next()) as { code?: string }
-        if (reply.code !== "forbidden") sent.push(name)
+        if (reply.code !== "forbidden") kinds.push(kind)
       }
-      return sent
+      return kinds
     }
 
-    // A deploy carries the App's configuration, so it takes configuring too.
-    expect(await allowed(["instance.deploy"])).toEqual(["reinstall"])
+    // An App's deploy carries its configuration, so it takes configuring too.
+    expect(await allowed(["instance.deploy"])).toEqual(["instance"])
     expect(await allowed(["instance.deploy", "app.manage"])).toEqual([
+      "instance",
       "app",
-      "reinstall",
     ])
+    // What configures either no longer deploys it.
     expect(await allowed(["app.manage"])).toEqual([])
-    expect(await allowed(["instance.create"])).toEqual(["startup"])
+    expect(await allowed(["instance.create"])).toEqual([])
   })
 
   it("checks a certificate with what changing its route takes", async () => {

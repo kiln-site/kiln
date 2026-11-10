@@ -41,8 +41,7 @@ import { listMcJarVersionsEffect } from "@/effect/mcjarfiles"
 import { provisionServer } from "@/lib/server-provisioning.server"
 import { asServerDeployment } from "@/lib/server-deployments.server"
 import { runAppEffect } from "@/effect/runtime"
-import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
-import { promiseEffect, recoverPromise } from "@/effect/promise"
+import { promiseEffect } from "@/effect/promise"
 import { reserveServerInstanceIdEffect } from "@/lib/provisioning.server"
 import { dnsKey } from "@/lib/dns-operations"
 import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
@@ -62,10 +61,13 @@ import {
   loadInstanceRecipe,
   requestRelay,
   requiredRelay,
+  requiredRelayInstance,
 } from "@/server/bricks.server"
-import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
+import {
+  deployInstanceAgain,
+  instanceReplaced,
+} from "@/server/instance-deploy.server"
 import { relayResourceLimitsRequest } from "@/lib/resource-limits.server"
-import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import {
   startupPowerPermission,
   startupResourceLimitsChanged,
@@ -327,14 +329,12 @@ export const getInstanceStartup = createServerFn({ method: "GET" })
 export function startupNetworkChanged(
   existing: z.infer<typeof relayInstanceSchema>["tailscale"],
   input: {
-    reinstall?: boolean
     tailscale?: z.infer<typeof relayInstanceSchema>["tailscale"]
   }
 ): boolean {
-  // Reinstall preserves the applied network configuration. Compare fields,
-  // not JSON order, so a repeated settings object remains a no-op.
+  // Compare fields, not JSON order, so a repeated settings object remains a
+  // no-op.
   return (
-    !input.reinstall &&
     input.tailscale !== undefined &&
     (input.tailscale.enabled !== existing.enabled ||
       input.tailscale.subdomain !== existing.subdomain)
@@ -348,8 +348,7 @@ const changeInstanceStartup = resourceOperation({
   id: (input: z.infer<typeof hearthUpdateInstanceStartupInputSchema>) =>
     input.instanceId,
   name: "instance.startup.update",
-  // A reinstall replaces it.
-  lock: (input) => (input.reinstall ? "whole" : { part: "config" }),
+  lock: { part: "config" },
   // It provisions its domains afterwards.
   alsoLocks: (input) => [
     exclusive(
@@ -387,33 +386,30 @@ async function updateInstanceStartupHandler(
   authorization.require("instance.configuration.read")
   const existing = await requiredRelayInstance(relay, data.instanceId)
   const submittedRecipe = data.recipe
-  const recipeChanged =
-    !data.reinstall &&
-    isBrickSourceChange(existing.brickSource, submittedRecipe)
+  const recipeChanged = isBrickSourceChange(
+    existing.brickSource,
+    submittedRecipe
+  )
   const recipeDefinition = recipeChanged
     ? await requiredVisibleRecipeDefinition(user, submittedRecipe)
     : null
   const networkChanged = startupNetworkChanged(existing.tailscale, data)
-  let configurationChanged = recipeChanged
-  let limitsChanged = false
-  if (!data.reinstall) {
-    const { brick: previousRecipe } = await loadInstanceRecipe(relay, existing)
-    const nextRecipe = recipeDefinition ?? previousRecipe
-    configurationChanged ||= startupConfigurationChanged(
+  const { brick: previousRecipe } = await loadInstanceRecipe(relay, existing)
+  const nextRecipe = recipeDefinition ?? previousRecipe
+  const configurationChanged =
+    recipeChanged ||
+    startupConfigurationChanged(
       previousRecipe,
       nextRecipe,
       existing.variables ?? {},
       data.variables ?? {}
     )
-    limitsChanged ||= startupResourceLimitsChanged(
-      previousRecipe,
-      nextRecipe,
-      existing.variables ?? {},
-      data.variables ?? {}
-    )
-  }
-  // A reinstall deploys it again as it is, changing none of its settings.
-  if (data.reinstall) authorization.require("instance.deploy")
+  const limitsChanged = startupResourceLimitsChanged(
+    previousRecipe,
+    nextRecipe,
+    existing.variables ?? {},
+    data.variables ?? {}
+  )
   if (networkChanged) authorization.require("instance.network.write")
   if (configurationChanged)
     authorization.require("instance.configuration.write")
@@ -421,7 +417,6 @@ async function updateInstanceStartupHandler(
   // Applying unchanged settings still rebuilds the container. A read grant
   // alone must never authorize this mutation.
   if (
-    !data.reinstall &&
     !configurationChanged &&
     !limitsChanged &&
     !networkChanged &&
@@ -430,11 +425,7 @@ async function updateInstanceStartupHandler(
   ) {
     authorization.require("instance.network.write")
   }
-  // A deploy restarts what it replaces, as an App's does, without power
-  // over it.
-  const powerPermission = data.reinstall
-    ? null
-    : startupPowerPermission(existing, data)
+  const powerPermission = startupPowerPermission(existing, data)
   if (powerPermission) authorization.require(powerPermission)
   const {
     deploymentId: _untrustedDeploymentId,
@@ -460,54 +451,32 @@ async function updateInstanceStartupHandler(
       360_000,
       user.id
     )
-  // A reinstall or change of Brick is a deployment; other startup changes
-  // aren't.
+  // A change of Brick is a deployment; other startup changes aren't.
   const instance = relayInstanceSchema.parse(
-    data.reinstall || recipeDefinition
+    recipeDefinition
       ? await asServerDeployment(
           {
-            ...(recipeDefinition
-              ? {
-                  brickId: recipeDefinition.metadata.id,
-                  brickName: recipeDefinition.metadata.name,
-                }
-              : await currentBrick(relay, existing)),
+            brickId: recipeDefinition.metadata.id,
+            brickName: recipeDefinition.metadata.name,
             instanceId: data.instanceId,
             relayId: relay.id,
-            trigger: data.reinstall ? "reinstall" : "brick",
+            trigger: "brick",
             userId: user.id,
           },
           apply
         )
       : await apply()
   )
-  await provisionInstanceDomainBestEffort(instance, relay.id)
-  await runAppEffect(
-    "relay.snapshot.invalidate",
-    invalidateRelayCache(relayCachePolicy.snapshot(relay.id))
-  )
-  publishRealtimeChange({
-    instance,
-    relayId: relay.id,
-    type: "instance.upsert",
-  })
-  return instance
+  return instanceReplaced(relay, instance)
 }
 
-// The Brick a reinstall installs again, as its deployment names it.
-async function currentBrick(
-  relay: PersistedRelay,
-  instance: z.infer<typeof relayInstanceSchema>
-) {
-  const brick = await recoverPromise(
-    async () => (await loadInstanceRecipe(relay, instance)).brick.metadata,
-    () => null
+export const redeployInstance = createServerFn({ method: "POST" })
+  .validator(instanceInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(deployInstanceAgain, data, {
+      user: await requireEligibleResourceUser(),
+    })
   )
-  return {
-    brickId: brick?.id ?? instance.brickId ?? null,
-    brickName: brick?.name ?? null,
-  }
-}
 
 function recipePreview(brick: z.infer<typeof brickSchema>) {
   const { iconSvg: _iconSvg, ...recipe } = brick
@@ -680,18 +649,4 @@ async function visibleRecipeDefinition(
   ].find((candidate) => candidate.source === source)
   if (!brick) return null
   return brickRecipeDefinition(brick)
-}
-
-async function requiredRelayInstance(
-  relay: PersistedRelay,
-  instanceId: string
-) {
-  const snapshot = relaySnapshotSchema.parse(
-    await requestRelay(relay, "/v1/snapshot")
-  )
-  const instance = snapshot.instances.find(
-    (candidate) => candidate.id === instanceId
-  )
-  if (!instance) throw new Error("Instance not found")
-  return instance
 }

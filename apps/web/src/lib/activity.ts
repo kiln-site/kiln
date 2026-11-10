@@ -213,9 +213,18 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
   if (operation === "instance.create") return "Created a game server"
   if (operation === "instance.delete") return "Deleted a game server"
   if (operation === "instance.rename") return "Renamed a game server"
+  // One request deploys every kind again; a Relay's older records have a
+  // game server's as a startup change that reinstalled it.
+  if (operation === "instance.deploy") {
+    return auditAppId(audit)
+      ? "Deployed an App"
+      : auditDatabaseId(audit)
+        ? "Redeployed a database"
+        : "Redeployed a game server"
+  }
   if (operation === "instance.startup.write") {
     return audit.details.reinstall === true
-      ? "Reinstalled a game server Brick"
+      ? "Redeployed a game server"
       : "Updated game server startup settings"
   }
   if (
@@ -379,6 +388,7 @@ export function activityPermissionForAudit(
       : operation
   }
   if (operation === "instance.startup.write") return "instance.create"
+  if (operation === "instance.deploy") return "instance.deploy"
   if (operation === "instance.action") {
     const action = audit.details.action
     if (
