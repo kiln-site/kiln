@@ -299,6 +299,47 @@ describe("game server provisioning", () => {
 
   // A Brick that installs its newest release learns which that is from a
   // lookup, and the answers that follow it can be ones it doesn't offer.
+  it("deploys a game server again as it is, from an image pulled anew", async () => {
+    const harness = await relayHarness()
+    const greeting = brickRecipeSchema.parse({
+      ...recipe,
+      inputs: [{ key: "motd", label: "MOTD", type: "text", default: "Hello" }],
+      deploy: { ...recipe.deploy, env: { MOTD: "{{ motd }}" } },
+    })
+    await harness.lifecycle.createInstanceWithId(
+      newServerId,
+      relayCreateInstanceSchema.parse({
+        diskLimitBytes: MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
+        name: "Lobby",
+        recipe: "https://bricks.test/paper.yml",
+        recipeDefinition: greeting,
+        start: true,
+        variables: { motd: "Welcome" },
+      })
+    )
+    const container = () =>
+      fakeDocker.container(harness.resources.instanceContainer(newServerId))
+    const before = container()
+    expect(before?.env.MOTD).toBe("Welcome")
+    const created = await harness.docker.findInstance(newServerId)
+    fakeDocker.pulls.clear()
+
+    const deployed = await harness.lifecycle.redeployInstance(newServerId)
+
+    // A new container, from the image as its registry has it now.
+    const after = container()
+    expect(after).not.toBe(before)
+    expect([...fakeDocker.pulls.keys()]).toEqual([image])
+    // Nothing about it changed: what it was answered, limited to, and
+    // whether it runs.
+    expect(after?.env.MOTD).toBe("Welcome")
+    expect(after?.memoryBytes).toBe(before?.memoryBytes)
+    expect(after?.state.running).toBe(true)
+    expect(deployed.variables).toEqual({ motd: "Welcome" })
+    expect(deployed.brickSnapshotSha256).toBe(created?.brickSnapshotSha256)
+    expect(deployed.limits.diskBytes).toBe(MINIMUM_INSTANCE_DISK_LIMIT_BYTES)
+  })
+
   it("refuses a startup change it can't apply while the server still runs", async () => {
     const harness = await relayHarness()
     vi.stubGlobal("fetch", async () =>

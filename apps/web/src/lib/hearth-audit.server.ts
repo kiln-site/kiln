@@ -90,8 +90,9 @@ export function relayChangeTarget(
   ) {
     return { id: nested.id, kind: nested.kind }
   }
-  // Power names its target's kind beside its ID, for every kind alike.
-  if (operation === "instance.action") {
+  // Power and deploying name their target's kind beside its ID, for every
+  // kind alike.
+  if (operation === "instance.action" || operation === "instance.deploy") {
     const kind = field("kind")
     const id = field("id")
     if (id && (kind === "instance" || kind === "app" || kind === "database")) {

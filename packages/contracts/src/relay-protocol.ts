@@ -216,7 +216,6 @@ export const relayControlOperations = [
   "app.provision.claim",
   "app.provision.cancel",
   "app.delete",
-  "app.deploy",
   "app.limits.write",
   "app.volumes.write",
   "app.network.routes.read",
@@ -256,6 +255,7 @@ export const relayControlOperations = [
   "instance.limits.write",
   "instance.delete",
   "instance.action",
+  "instance.deploy",
   "instance.resources.read",
   "instance.files.list",
   "instance.files.directory.list",
@@ -333,6 +333,7 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "instance.limits.write",
   "instance.delete",
   "instance.action",
+  "instance.deploy",
   "instance.files.write",
   "instance.files.put",
   "instance.files.upload-url",
@@ -360,7 +361,6 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "app.provision.claim",
   "app.provision.cancel",
   "app.delete",
-  "app.deploy",
   "app.limits.write",
   "app.volumes.write",
   "app.network.routes.write",
@@ -529,7 +529,6 @@ export function relayControlOperationChanges(
     case "app.provision.claim":
     case "app.provision.cancel":
     case "app.delete":
-    case "app.deploy":
     case "app.deployment.abort":
     case "app.limits.write":
     case "app.volumes.write":
@@ -553,6 +552,7 @@ export function relayControlOperationChanges(
     case "instance.limits.write":
     case "instance.delete":
     case "instance.action":
+    case "instance.deploy":
     case "instance.files.write":
     case "instance.files.put":
     case "instance.files.upload-url":
@@ -687,9 +687,12 @@ export function relayControlDeadlineMs(
   if (operation === "instance.logs.share") return 60_000
   // The CLI saves files of up to the control frame limit.
   if (operation === "instance.files.write") return 180_000
+  // A game server's deploy pulls its image and replaces its container; an
+  // App's only starts, and is followed from there.
   if (
     operation === "instance.create" ||
     operation === "instance.startup.write" ||
+    operation === "instance.deploy" ||
     operation === "instance.files.upload-url"
   ) {
     return 360_000

@@ -43,6 +43,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     payload: {
       appId?: string
       config?: { environment?: string }
+      id?: string
       operationId?: string
       requests?: Array<{ id: string }>
     },
@@ -56,8 +57,8 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
         relay.journal.get(payload.operationId ?? "") ?? { status: "unknown" }
       )
     }
-    if (operation === "app.deploy") {
-      const appId = payload.appId!
+    if (operation === "instance.deploy") {
+      const appId = payload.id!
       if (relay.deployments.get(appId)?.state === "running") {
         throw new Error("A deployment is already running")
       }

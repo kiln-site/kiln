@@ -1206,6 +1206,26 @@ export const relayDeployAppSchema = z
   })
   .strict()
 
+/**
+ * Deploying an instance again: one request for every kind, which names the
+ * kind beside its ID. A game server deploys as it is set up, under the
+ * deployment Hearth recorded, which names its log on the Relay. An App's
+ * configuration is Hearth's, so its deploy carries what it deploys.
+ */
+export const relayDeployInstanceSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      deploymentId: z.uuid(),
+      id: instanceIdSchema,
+      kind: z.literal("instance"),
+    })
+    .strict(),
+  relayDeployAppSchema
+    .omit({ appId: true })
+    .extend({ id: appIdSchema, kind: z.literal("app") })
+    .strict(),
+])
+
 // What image apps' tags name in their registries now, against the images
 // their containers run. Each app names the image its saved config deploys.
 export const relayAppImageCheckSchema = z
@@ -1494,16 +1514,15 @@ export const relayUpdateInstanceStartupSchema = z
     limits: resourceLimitsInputSchema.optional(),
     recipe: brickSourceSchema.optional(),
     recipeDefinition: brickRecipeSchema.optional(),
-    reinstall: z.boolean().optional(),
-    // The deployment Hearth recorded a reinstall or change of Brick as,
-    // which names its log on the Relay. Absent for other startup changes.
+    // The deployment Hearth recorded a change of Brick as, which names its
+    // log on the Relay. Absent for other startup changes.
     deploymentId: z.uuid().optional(),
     tailscale: relayInstanceTailscaleSchema.optional(),
     variables: brickVariableValuesSchema.optional(),
     start: z.boolean().default(true),
   })
   .superRefine((value, context) => {
-    if (value.reinstall !== true && value.variables === undefined) {
+    if (value.variables === undefined) {
       context.addIssue({
         code: "custom",
         message: "Enter startup variables",
@@ -3400,6 +3419,7 @@ export type RelayAppLimits = z.infer<typeof relayAppLimitsSchema>
 export type RelayAppDeployment = z.infer<typeof relayAppDeploymentSchema>
 export type RelayCreateApp = z.input<typeof relayCreateAppSchema>
 export type RelayDeployApp = z.infer<typeof relayDeployAppSchema>
+export type RelayDeployInstance = z.infer<typeof relayDeployInstanceSchema>
 export type AppGitHubBuild = z.infer<typeof appGitHubBuildSchema>
 export type RelayAppGitHubCheckout = z.infer<
   typeof relayAppGitHubCheckoutSchema

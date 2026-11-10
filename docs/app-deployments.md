@@ -25,7 +25,7 @@ source's owner, or an administrator, as for a sync.
 
 For each deployment Hearth resolves the commit to build: the branch head, a
 push's pinned commit, or the commit a redeploy names. It mints an installation token limited to that repository's contents,
-read-only. It travels in `app.deploy`'s `github` field and is never cached,
+read-only. It travels in the `github` field of the App's `instance.deploy` and is never cached,
 written to disk, or logged; the Relay's operation journal keeps only a hash
 of the request. It expires within the hour.
 

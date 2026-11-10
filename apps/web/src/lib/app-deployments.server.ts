@@ -1145,11 +1145,11 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
     })
     const sent = yield* relayCommand({
       name: "send",
-      operation: "app.deploy",
-      payload: plan.payload,
+      operation: "instance.deploy",
+      payload: deployRequest(plan.payload),
       recover: currentDeployment(input),
       relayId: input.relayId,
-      sendPayload: asSent(plan),
+      sendPayload: asSent(plan).pipe(Effect.map(deployRequest)),
       timeoutMs: 30_000,
     }).pipe(Effect.result)
     if (Result.isFailure(sent)) {
@@ -1228,6 +1228,14 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
       ),
     })
   })
+
+// An App's deploy as the Relay takes it: the request every kind's deploy
+// is, naming the kind beside its ID.
+const deployRequest = ({ appId, ...deploy }: DeployPlan["payload"]) => ({
+  ...deploy,
+  id: appId,
+  kind: "app" as const,
+})
 
 // The payload as it's sent: the app's saved configuration, read now, and a
 // token made now to check out its commit.

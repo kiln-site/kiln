@@ -340,9 +340,13 @@ function gameServerLimits(
   }
 }
 
+/**
+ * What a game server is rebuilt with: a change to its startup, or with no
+ * change, as it is, which deploys it again from an image pulled anew.
+ */
 function resolveInstanceStartupReconfigure(
   existing: RelayInstance,
-  input: RelayUpdateInstanceStartup
+  input: RelayUpdateInstanceStartup | null
 ): {
   forcePull: boolean
   limits: ResourceLimits
@@ -353,50 +357,43 @@ function resolveInstanceStartupReconfigure(
   tailscale: RelayInstanceTailscale
   variables: NonNullable<RelayInstance["variables"]>
 } {
-  const reinstall = input.reinstall === true
-  const recipe = reinstall
-    ? existing.brickSource
-    : (input.recipe ?? existing.brickSource)
+  const recipe = input?.recipe ?? existing.brickSource
   if (!recipe) {
     throw new Error("Instance is missing its Brick recipe source")
   }
-  const variables = reinstall ? existing.variables : input.variables
+  const variables = input ? input.variables : existing.variables
   if (!variables) {
     throw new Error(
-      reinstall
-        ? "Instance is missing its applied Brick variables"
-        : "Enter startup variables"
+      input
+        ? "Enter startup variables"
+        : "Instance is missing its applied Brick variables"
     )
   }
   const recipeChanged =
-    !reinstall &&
-    input.recipe !== undefined &&
-    input.recipe !== existing.brickSource
-  const definitionChanged = !reinstall && input.recipeDefinition !== undefined
+    input?.recipe !== undefined && input.recipe !== existing.brickSource
+  const definitionChanged = input?.recipeDefinition !== undefined
   const snapshotSha256 =
     recipeChanged || definitionChanged
       ? undefined
       : existing.brickSnapshotSha256
   return {
-    forcePull: reinstall,
-    limits: reinstall
-      ? existing.limits
-      : resolveResourceLimits(
+    forcePull: input === null,
+    limits: input
+      ? resolveResourceLimits(
           existing.limits,
           input.limits ??
             (input.diskLimitBytes === undefined
               ? undefined
               : { diskBytes: input.diskLimitBytes })
-        ),
+        )
+      : existing.limits,
     recipe,
-    ...(input.recipeDefinition
+    ...(input?.recipeDefinition
       ? { recipeDefinition: input.recipeDefinition }
       : {}),
     ...(snapshotSha256 ? { snapshotSha256 } : {}),
-    start: reinstall ? existing.desiredState === "running" : input.start,
-    tailscale: reinstall
-      ? existing.tailscale
-      : (input.tailscale ?? existing.tailscale),
+    start: input ? input.start : existing.desiredState === "running",
+    tailscale: input?.tailscale ?? existing.tailscale,
     variables,
   }
 }
@@ -2629,10 +2626,19 @@ export class LifecycleDriver {
     )
   }
 
+  /** Deploys a game server again as it is set up, from an image pulled anew. */
+  redeployInstance(
+    instanceId: string,
+    onPhase?: (phase: ProvisioningWorkPhase) => Promise<void>
+  ): Promise<RelayInstance> {
+    return this.reconfigureInstance(instanceId, null, onPhase)
+  }
+
   async reconfigureInstance(
     instanceId: string,
-    input: RelayUpdateInstanceStartup,
-    /** Reports each phase of a reinstall or change of Brick, for its log. */
+    /** Its startup change, or null to rebuild it as it is. */
+    input: RelayUpdateInstanceStartup | null,
+    /** Reports each phase of a deploy or change of Brick, for its log. */
     onPhase?: (phase: ProvisioningWorkPhase) => Promise<void>
   ): Promise<RelayInstance> {
     const inspected = await this.#docker.inspectInstances()

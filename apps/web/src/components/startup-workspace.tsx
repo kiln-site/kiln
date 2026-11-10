@@ -63,7 +63,7 @@ import {
   invalidateRelaySnapshots,
   updateRelaySnapshots,
 } from "@/lib/server-workspace"
-import { updateInstanceStartup } from "@/server/bricks"
+import { redeployInstance, updateInstanceStartup } from "@/server/bricks"
 
 const emptyBricks: Array<Brick> = []
 
@@ -235,7 +235,7 @@ const StartupForm = React.memo(function StartupForm({
     },
   })
   const reinstallMutation = useMutation({
-    mutationFn: updateInstanceStartup,
+    mutationFn: redeployInstance,
     onSuccess: async (updated) => {
       updateRelaySnapshots(queryClient, (current) => {
         const previous = current?.instances.find(
@@ -344,11 +344,7 @@ const StartupForm = React.memo(function StartupForm({
       Effect.tryPromise({
         try: () =>
           reinstallMutation.mutateAsync({
-            data: {
-              instanceId,
-              reinstall: true,
-              relayId,
-            },
+            data: { instanceId, relayId },
           }),
         catch: (cause) => cause,
       }).pipe(
