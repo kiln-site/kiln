@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react"
 import { Layers, Plus, TriangleAlert, X } from "lucide-react"
+import { permissionRelayReach } from "@workspace/contracts"
 import type {
   AccessPermission,
   PermissionScopeType,
@@ -1069,6 +1070,10 @@ function appliesOn(item: Item, scopeType: PermissionScopeType) {
     item.selection.kind === "permission"
       ? permissionDefinition(item.selection.key)?.family
       : undefined
+  if (family === "every" && item.selection.kind === "permission")
+    return `Every current and future ${everyInstanceNouns(
+      item.selection.key
+    )} on this Relay.`
   if (family === "instance")
     return "Every current and future game server on this Relay."
   if (family === "database")
@@ -1196,6 +1201,18 @@ function contextKind(scopeType: PermissionScopeType) {
         ? "app"
         : "relay"
 }
+// The kinds a permission every instance takes covers from a Relay, in words.
+function everyInstanceNouns(key: string) {
+  const definition = permissionDefinition(key)
+  const nouns = (definition ? permissionRelayReach(definition.key) : []).map(
+    (kind) =>
+      kind === "instance" ? "game server" : kind === "app" ? "App" : "database"
+  )
+  return nouns.length > 0
+    ? new Intl.ListFormat("en", { type: "conjunction" }).format(nouns)
+    : "instance"
+}
+
 function scopeNoun(scopeType: PermissionScopeType) {
   return scopeType === "instance"
     ? "a game server"
