@@ -112,6 +112,7 @@ function FilesRoute() {
       active
       routeFilePath={filePath}
       canShare={permissions.shareLogs}
+      canDelete={permissions.filesDelete}
       canWrite={permissions.filesWrite}
       relayConnected={relayConnected}
       openTreeOnEntry

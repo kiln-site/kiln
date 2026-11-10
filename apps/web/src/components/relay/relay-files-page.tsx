@@ -92,6 +92,7 @@ export function RelayFilesPage() {
             instance={instance}
             route={route}
             filePath={filePath}
+            canDelete={canWrite && limitation !== "read-only"}
             canWrite={canWrite && limitation !== "read-only"}
             connected={connected}
           />

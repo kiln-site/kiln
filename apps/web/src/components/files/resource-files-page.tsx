@@ -15,6 +15,7 @@ export function ResourceFilesPage({
   route,
   rootPath,
   filePath,
+  canDelete,
   canWrite,
   connected,
 }: {
@@ -22,6 +23,7 @@ export function ResourceFilesPage({
   route: { id: string; kind: "app" | "relay" }
   rootPath?: string
   filePath?: string
+  canDelete: boolean
   canWrite: boolean
   connected: boolean
 }) {
@@ -58,6 +60,7 @@ export function ResourceFilesPage({
       active
       routeFilePath={filePath}
       canShare={false}
+      canDelete={canDelete}
       canWrite={canWrite}
       relayConnected={connected}
       openTreeOnEntry

@@ -70,12 +70,14 @@ function moveTargetDirectory(value: string, rootPath: string): string | null {
 }
 
 export function useFileActions({
+  canDelete,
   canWrite,
   instance,
   onRefresh,
   onPathChange,
   selectionStore,
 }: {
+  canDelete: boolean
   canWrite: boolean
   instance: FileWorkspaceInstance
   onRefresh: () => void
@@ -230,6 +232,10 @@ export function useFileActions({
         void downloadArchive(paths, defaultName)
         return
       }
+      if (action === "delete") {
+        if (canDelete) setDialog({ kind: "delete", paths })
+        return
+      }
       if (!canWrite) return
       if ((action === "rename" || action === "move") && paths.length === 1) {
         setDialog({
@@ -258,10 +264,6 @@ export function useFileActions({
         )
         return
       }
-      if (action === "delete") {
-        setDialog({ kind: "delete", paths })
-        return
-      }
       if (action === "duplicate") {
         void runMutation(
           { operation: "duplicate", paths: [...paths] },
@@ -271,7 +273,7 @@ export function useFileActions({
         )
       }
     },
-    [canWrite, downloadArchive, runMutation]
+    [canDelete, canWrite, downloadArchive, runMutation]
   )
 
   async function submitDialog(value?: string) {
@@ -380,6 +382,7 @@ export function useFileActions({
   return {
     controller: {
       busy: mutation.isPending || archiveMutation.isPending,
+      canDelete,
       canWrite,
       instance,
       request,

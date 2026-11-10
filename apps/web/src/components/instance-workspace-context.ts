@@ -7,6 +7,7 @@ export interface InstanceWorkspacePermissions {
   consoleWrite: boolean
   copyServer: boolean
   deleteServer: boolean
+  filesDelete: boolean
   filesWrite: boolean
   networkRead: boolean
   networkPublicPortWrite: boolean
