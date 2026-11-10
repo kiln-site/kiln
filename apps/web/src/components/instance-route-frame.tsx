@@ -84,6 +84,7 @@ export const InstanceRouteFrame = React.memo(function InstanceRouteFrame({
       configurationRead: can("instance.configuration.read"),
       configurationWrite: can("instance.configuration.write"),
       limitsWrite: can("instance.limits.write"),
+      logsRead: can("instance.logs.read"),
       shareLogs: can("instance.logs.share"),
     }
   }, [capabilities, instanceId, relayId])

@@ -34,6 +34,7 @@ import {
   deploymentDuration,
   deploymentStatusPresentation,
   deploymentTriggerLabels,
+  serverDeploymentTriggerLabels,
   shortCommit,
   shortDigest,
 } from "@/components/app/app-deployment-presentation"
@@ -85,12 +86,6 @@ import type {
   ServerDeploymentView,
 } from "@/server/app-deployments.server"
 
-const ServerDeploymentLogDialog = React.lazy(() =>
-  import("@/components/server-deployment-log-dialog").then((module) => ({
-    default: module.ServerDeploymentLogDialog,
-  }))
-)
-
 // Every App's deployments, every game server's installs, redeploys, and
 // changes of Brick, and every database's redeploys, newest first, across
 // the Relays the person can read. Scoped to one App or game server, this
@@ -119,16 +114,9 @@ type ScopeKind = "app" | "relay" | "server"
 
 export type AppDeploymentsScope = DeploymentsScope
 
-const serverTriggerLabels: Record<ServerDeploymentView["trigger"], string> = {
-  brick: "Brick change",
-  install: "Install",
-  // Stored under the name it had before every kind deployed again.
-  reinstall: "Redeploy",
-}
-
 function triggerLabel(deployment: Deployment): string {
   return deployment.kind === "server"
-    ? serverTriggerLabels[deployment.trigger]
+    ? serverDeploymentTriggerLabels[deployment.trigger]
     : deployment.kind === "database"
       ? "Redeploy"
       : deploymentTriggerLabels[deployment.trigger]
@@ -625,54 +613,43 @@ const ServerDeploymentActions = React.memo(function ServerDeploymentActions({
 }: {
   deployment: RequestDeployment
 }) {
-  const [logOpen, setLogOpen] = React.useState(false)
   const target = requestTarget(deployment)
+  const label = `Log of ${target.name}'s deployment`
   return (
     <DataTableActionGroup>
       {deployment.canReadLogs ? (
+        // Its log opens on the instance's Logs page, as an App's does.
         <Tooltip>
           <TooltipTrigger asChild>
-            {deployment.kind === "database" ? (
-              // A database's opens on its Logs page, as an App's does.
-              <Button
-                asChild
-                className="text-muted-foreground hover:text-primary-ink"
-                size="icon-sm"
-                variant="ghost"
-              >
+            <Button
+              asChild
+              className="text-muted-foreground hover:text-primary-ink"
+              size="icon-sm"
+              variant="ghost"
+            >
+              {deployment.kind === "database" ? (
                 <Link
-                  aria-label={`Log of ${target.name}'s deployment`}
+                  aria-label={label}
                   params={{ databaseId: deployment.databaseId }}
                   search={{ deployment: deployment.id }}
                   to="/db/$databaseId/logs"
                 >
                   <ScrollText />
                 </Link>
-              </Button>
-            ) : (
-              <Button
-                aria-label={`Log of ${target.name}'s deployment`}
-                className="text-muted-foreground hover:text-primary-ink"
-                size="icon-sm"
-                type="button"
-                variant="ghost"
-                onClick={() => setLogOpen(true)}
-              >
-                <ScrollText />
-              </Button>
-            )}
+              ) : (
+                <Link
+                  aria-label={label}
+                  params={{ serverId: deployment.instanceId }}
+                  search={{ deployment: deployment.id }}
+                  to="/server/$serverId/logs"
+                >
+                  <ScrollText />
+                </Link>
+              )}
+            </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom">Log</TooltipContent>
         </Tooltip>
-      ) : null}
-      {logOpen && deployment.kind === "server" ? (
-        <React.Suspense fallback={null}>
-          <ServerDeploymentLogDialog
-            deployment={deployment}
-            open={logOpen}
-            onOpenChange={setLogOpen}
-          />
-        </React.Suspense>
       ) : null}
       <DropdownMenu>
         <Tooltip>

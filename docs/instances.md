@@ -47,7 +47,8 @@ Kiln's own, replacing the mclo.gs upload game servers have now.
 
 ## What a kind adds
 
-- **Game server**: a console in place of logs.
+- **Game server**: a console for its output. Its Logs page lists its
+  deployments, as a database's and an App's do beside their output.
 - **Database**: the viewer in place of files, and import and export. An
   engine without a viewer has neither a viewer nor files.
 - **App**: volumes, and its source.
@@ -227,7 +228,10 @@ from a tag or an image name today.
 10. One instance page, with each kind's own tabs.
 11. Tailscale as its own kind, with the instance group.
 12. One terminal path.
-13. One log path.
+13. One log path. The Logs page is one already: every kind fills the same
+    page (`InstanceLogsPage`) with its containers and its deployments. The
+    Relay still keeps an App's deployment logs apart from a game server's
+    and a database's, behind two read requests.
 
 The CLI is reworked after this, and isn't changed along the way beyond what
 keeps it working.

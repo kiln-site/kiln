@@ -125,6 +125,7 @@ import { Route as AppServerServerIdSplatRouteImport } from './routes/_app/server
 import { Route as AppServerServerIdConsoleRouteImport } from './routes/_app/server/$serverId.console'
 import { Route as AppServerServerIdFilesRouteImport } from './routes/_app/server/$serverId.files'
 import { Route as AppServerServerIdInfoRouteImport } from './routes/_app/server/$serverId.info'
+import { Route as AppServerServerIdLogsRouteImport } from './routes/_app/server/$serverId.logs'
 import { Route as AppServerServerIdNetworkRouteImport } from './routes/_app/server/$serverId.network'
 import { Route as AppServerServerIdStartupRouteImport } from './routes/_app/server/$serverId.startup'
 import { Route as ApiCliAuthDeviceRouteImport } from './routes/api.cli.auth.device'
@@ -722,6 +723,11 @@ const AppServerServerIdInfoRoute = AppServerServerIdInfoRouteImport.update({
   path: '/info',
   getParentRoute: () => AppServerServerIdRoute,
 } as any)
+const AppServerServerIdLogsRoute = AppServerServerIdLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => AppServerServerIdRoute,
+} as any)
 const AppServerServerIdNetworkRoute =
   AppServerServerIdNetworkRouteImport.update({
     id: '/network',
@@ -895,6 +901,7 @@ export interface FileRoutesByFullPath {
   '/server/$serverId/console': typeof AppServerServerIdConsoleRoute
   '/server/$serverId/files': typeof AppServerServerIdFilesRouteWithChildren
   '/server/$serverId/info': typeof AppServerServerIdInfoRoute
+  '/server/$serverId/logs': typeof AppServerServerIdLogsRoute
   '/server/$serverId/network': typeof AppServerServerIdNetworkRoute
   '/server/$serverId/startup': typeof AppServerServerIdStartupRoute
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
@@ -1014,6 +1021,7 @@ export interface FileRoutesByTo {
   '/server/$serverId/console': typeof AppServerServerIdConsoleRoute
   '/server/$serverId/files': typeof AppServerServerIdFilesRouteWithChildren
   '/server/$serverId/info': typeof AppServerServerIdInfoRoute
+  '/server/$serverId/logs': typeof AppServerServerIdLogsRoute
   '/server/$serverId/network': typeof AppServerServerIdNetworkRoute
   '/server/$serverId/startup': typeof AppServerServerIdStartupRoute
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
@@ -1144,6 +1152,7 @@ export interface FileRoutesById {
   '/_app/server/$serverId/console': typeof AppServerServerIdConsoleRoute
   '/_app/server/$serverId/files': typeof AppServerServerIdFilesRouteWithChildren
   '/_app/server/$serverId/info': typeof AppServerServerIdInfoRoute
+  '/_app/server/$serverId/logs': typeof AppServerServerIdLogsRoute
   '/_app/server/$serverId/network': typeof AppServerServerIdNetworkRoute
   '/_app/server/$serverId/startup': typeof AppServerServerIdStartupRoute
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
@@ -1274,6 +1283,7 @@ export interface FileRouteTypes {
     | '/server/$serverId/console'
     | '/server/$serverId/files'
     | '/server/$serverId/info'
+    | '/server/$serverId/logs'
     | '/server/$serverId/network'
     | '/server/$serverId/startup'
     | '/api/cli/auth/device'
@@ -1393,6 +1403,7 @@ export interface FileRouteTypes {
     | '/server/$serverId/console'
     | '/server/$serverId/files'
     | '/server/$serverId/info'
+    | '/server/$serverId/logs'
     | '/server/$serverId/network'
     | '/server/$serverId/startup'
     | '/api/cli/auth/device'
@@ -1522,6 +1533,7 @@ export interface FileRouteTypes {
     | '/_app/server/$serverId/console'
     | '/_app/server/$serverId/files'
     | '/_app/server/$serverId/info'
+    | '/_app/server/$serverId/logs'
     | '/_app/server/$serverId/network'
     | '/_app/server/$serverId/startup'
     | '/api/cli/auth/device'
@@ -2397,6 +2409,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppServerServerIdInfoRouteImport
       parentRoute: typeof AppServerServerIdRoute
     }
+    '/_app/server/$serverId/logs': {
+      id: '/_app/server/$serverId/logs'
+      path: '/logs'
+      fullPath: '/server/$serverId/logs'
+      preLoaderRoute: typeof AppServerServerIdLogsRouteImport
+      parentRoute: typeof AppServerServerIdRoute
+    }
     '/_app/server/$serverId/network': {
       id: '/_app/server/$serverId/network'
       path: '/network'
@@ -2719,6 +2738,7 @@ interface AppServerServerIdRouteChildren {
   AppServerServerIdConsoleRoute: typeof AppServerServerIdConsoleRoute
   AppServerServerIdFilesRoute: typeof AppServerServerIdFilesRouteWithChildren
   AppServerServerIdInfoRoute: typeof AppServerServerIdInfoRoute
+  AppServerServerIdLogsRoute: typeof AppServerServerIdLogsRoute
   AppServerServerIdNetworkRoute: typeof AppServerServerIdNetworkRoute
   AppServerServerIdStartupRoute: typeof AppServerServerIdStartupRoute
   AppServerServerIdIndexRoute: typeof AppServerServerIdIndexRoute
@@ -2729,6 +2749,7 @@ const AppServerServerIdRouteChildren: AppServerServerIdRouteChildren = {
   AppServerServerIdConsoleRoute: AppServerServerIdConsoleRoute,
   AppServerServerIdFilesRoute: AppServerServerIdFilesRouteWithChildren,
   AppServerServerIdInfoRoute: AppServerServerIdInfoRoute,
+  AppServerServerIdLogsRoute: AppServerServerIdLogsRoute,
   AppServerServerIdNetworkRoute: AppServerServerIdNetworkRoute,
   AppServerServerIdStartupRoute: AppServerServerIdStartupRoute,
   AppServerServerIdIndexRoute: AppServerServerIdIndexRoute,

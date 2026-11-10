@@ -18,6 +18,7 @@ export interface InstanceWorkspacePermissions {
   configurationRead: boolean
   configurationWrite: boolean
   limitsWrite: boolean
+  logsRead: boolean
   shareLogs: boolean
 }
 
