@@ -2205,6 +2205,8 @@ export const relayInstanceSchema = z.object({
   // reads these, never its Brick's ID or how its network is set up.
   brickKind: z.enum(["game-server", "database", "app"]).optional(),
   brickType: z.string().min(1).max(32).optional(),
+  // Whether its Brick says its console completes commands.
+  brickConsoleCompletion: z.boolean().optional(),
   // As containers are labelled and backups record it. It follows from the
   // type: `minecraft-backend` for `minecraft`, `direct` for anything else.
   brickNetworkMode: z.enum(["direct", "minecraft-backend"]).optional(),

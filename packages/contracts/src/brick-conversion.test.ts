@@ -221,6 +221,8 @@ describe("a kiln.brick/v1 recipe read as v2", () => {
         stop: ["stop", "/stop"],
         srv: true,
       },
+      // Kiln completed commands in Paper's console by its ID.
+      minecraft: { completion: true },
     })
   })
 
@@ -401,15 +403,19 @@ describe("a kiln.brick/v1 recipe read as v2", () => {
     expect(read.success && read.data.metadata.id).toBe("constructor")
   })
 
-  it("has Velocity install its newest release when no version is answered", () => {
-    const velocity = brickRecipeFromV1(
-      stored((recipe) => ({
-        ...recipe,
-        metadata: { ...recipe.metadata, id: "velocity" },
-      }))
-    )
-    expect(velocity.minecraft).toEqual({ latestVersion: "velocity" })
-    expect(brickRecipeFromV1(stored()).minecraft).toBeUndefined()
+  // Kiln did these by Brick ID; a converted recipe says them itself.
+  it("carries what Kiln did for a Minecraft Brick by its ID", () => {
+    const extras = (id: string) =>
+      brickRecipeFromV1(
+        stored((recipe) => ({
+          ...recipe,
+          metadata: { ...recipe.metadata, id },
+        }))
+      ).minecraft
+    expect(extras("velocity")).toEqual({ latestVersion: "velocity" })
+    expect(extras("paper")).toEqual({ completion: true })
+    expect(extras("folia")).toEqual({ completion: true })
+    expect(extras("fabric")).toBeUndefined()
   })
 })
 

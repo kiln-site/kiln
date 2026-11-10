@@ -1579,12 +1579,7 @@ export class DockerDriver {
       completedPrefix: null,
       suggestions: [],
     }
-    const implementation = (instance.brickId ?? instance.implementation)
-      .trim()
-      .toLowerCase()
-    if (!["paper", "folia", "purpur"].includes(implementation)) {
-      return emptyResult
-    }
+    if (!instance.brickConsoleCompletion) return emptyResult
 
     return this.#withConsoleLock(instance.id, async () => {
       const discovered = await this.#findDiscovered(instance.id)
@@ -2637,6 +2632,14 @@ export class DockerDriver {
       ),
       // Every container read here runs a game server Brick.
       brickKind: "game-server",
+      // One made before a container said so is asked by its Brick's ID, or
+      // by what it runs when it has none, as Kiln decided it then.
+      brickConsoleCompletion:
+        labels["kiln.brick.console-completion"] === undefined
+          ? ["paper", "folia", "purpur"].includes(
+              (validBrickId ?? implementation).trim().toLowerCase()
+            )
+          : labels["kiln.brick.console-completion"] === "true",
       // One made before a container said its type says it by how its
       // network was set up.
       brickType:

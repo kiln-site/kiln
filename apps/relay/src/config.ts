@@ -28,6 +28,7 @@ export interface RelayInstanceConfig {
   brickConsoleStopCommands?: ReadonlyArray<string>
   brickKind?: "game-server" | "database" | "app"
   brickType?: string
+  brickConsoleCompletion?: boolean
   brickNetworkMode?: "direct" | "minecraft-backend"
   brickPrimaryPort?: number
   brickPrimaryPortProtocol?: RelayInstancePortProtocol

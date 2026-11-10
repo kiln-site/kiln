@@ -36,6 +36,34 @@ describe("what an instance is", () => {
     expect(read(direct)).toEqual(["game-server", undefined])
   })
 
+  // Kiln used to offer console completion by a Brick's ID. A container made
+  // then says nothing of it, so it is still asked that way.
+  it("keeps console completion for a server made before its Brick said so", async () => {
+    const harness = await relayHarness()
+    await harness.seedServer({
+      id: older,
+      labels: { "kiln.brick.id": "paper" },
+    })
+    await harness.seedServer({
+      id: direct,
+      labels: { "kiln.brick.id": "fabric" },
+    })
+    // A Brick that says it doesn't is believed, whatever its ID.
+    await harness.seedServer({
+      id: created,
+      labels: {
+        "kiln.brick.id": "paper",
+        "kiln.brick.console-completion": "false",
+      },
+    })
+    const instances = await harness.docker.inspectInstances()
+    const completes = (id: string) =>
+      instances.find((candidate) => candidate.id === id)?.brickConsoleCompletion
+    expect(completes(older)).toBe(true)
+    expect(completes(direct)).toBe(false)
+    expect(completes(created)).toBe(false)
+  })
+
   it("is written on a new container, and read back from it", async () => {
     const harness = await relayHarness()
     const instance = await harness.lifecycle.createInstanceWithId(
@@ -60,21 +88,24 @@ describe("what an instance is", () => {
             volumes: ["/server"],
             ports: [{ name: "game", port: 25_565 }],
           },
+          minecraft: { completion: true },
         }),
         start: false,
         variables: {},
       })
     )
-    expect([instance.brickKind, instance.brickType]).toEqual([
-      "game-server",
-      "minecraft",
-    ])
+    expect([
+      instance.brickKind,
+      instance.brickType,
+      instance.brickConsoleCompletion,
+    ]).toEqual(["game-server", "minecraft", true])
     const labels = fakeDocker.container(
       harness.resources.instanceContainer(created)
     )?.labels
     expect(labels).toMatchObject({
       "kiln.brick.kind": "game-server",
       "kiln.brick.type": "minecraft",
+      "kiln.brick.console-completion": "true",
       // Still written, for what reads a container's labels as they were.
       "kiln.brick.network-mode": "minecraft-backend",
     })
