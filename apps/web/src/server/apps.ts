@@ -243,9 +243,9 @@ const changeAppLimits = resourceOperation({
     const updated = relayAppSchema.parse(
       await databaseRpc(
         relay,
-        "app.limits.write",
-        { appId: data.appId, ...limits },
-        60_000,
+        "instance.limits.write",
+        { id: data.appId, kind: "app", ...limits },
+        relayControlDeadlineMs("instance.limits.write"),
         user.id
       )
     )

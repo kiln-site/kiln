@@ -723,13 +723,6 @@ export function controlRequestLocks(
       ])
     }
 
-    // Checking a limit against every instance's and applying it happen
-    // together, holding the node's allocations.
-    case "database.limits.write":
-      return database((id) => [
-        ...databaseLocks(id),
-        exclusive(laneKeys.allocations),
-      ])
     case "database.wipe":
     case "database.delete":
       return database(databaseDeleteLocks)
@@ -793,11 +786,6 @@ export function controlRequestLocks(
     // for any restore of a volume it mounts or owns.
     case "app.delete":
       return appWithVolumes(appReplaceLocks)
-    // App changes that reserve capacity take the node's allocations in a
-    // nested step, inside the lifecycle lock, so a deployment's container
-    // start can too.
-    case "app.limits.write":
-      return app(appLifecycleLocks)
     case "app.network.routes.write":
       return app((id) => [...appLifecycleLocks(id), exclusive(laneKeys.routes)])
     // Apart from the App's lifecycle, so saving its configuration never
@@ -818,11 +806,27 @@ export function controlRequestLocks(
     // These recreate the container with new labels, as a start does.
     case "instance.network.databases.remove":
       return instance(instanceLifecycleLocks)
-    // Saved for the next restart, so it leaves the container alone but waits
-    // for one in progress, which clears what it applied. Taking the node's
-    // allocations happens in its turn, once its files are measured.
+    // Resource limits, each kind by its own locks. A game server's are
+    // saved for its next restart, so they leave the container alone but
+    // wait for one in progress, which clears what it applied; taking the
+    // node's allocations happens in its turn, once its files are measured.
+    // A database's are checked against every instance's and applied
+    // together, holding the node's allocations. An App's reserve capacity
+    // in a nested step, inside its lifecycle lock.
     case "instance.limits.write":
-      return instance(instanceLifecycleLocks)
+      switch (stringField(payload, "kind")) {
+        case "instance":
+          return instance(instanceLifecycleLocks, "id")
+        case "database":
+          return database(
+            (id) => [...databaseLocks(id), exclusive(laneKeys.allocations)],
+            "id"
+          )
+        case "app":
+          return app(appLifecycleLocks, "id")
+        default:
+          return null
+      }
     case "instance.rename":
       return instance((id) => [
         shared(laneKeys.instance(id)),

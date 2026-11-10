@@ -29,7 +29,6 @@ import {
   relayConsoleShareInputSchema,
   relayPrepareDatabaseSchema,
   relayProvisionDatabaseSchema,
-  relayAppLimitsSchema,
   relayStateDatabaseReadSchema,
   relayHostTerminalAttachSchema,
   relayHostTerminalWriteSchema,
@@ -62,7 +61,6 @@ import {
   relayHostPackagesRequestSchema,
   relaySecurityInventoryRequestSchema,
   relayDeployInstanceSchema,
-  relayDatabaseLimitsSchema,
   relayInstanceLimitsWriteSchema,
   type ResourceLimits,
   relayDatabaseDataReadSchema,
@@ -2973,10 +2971,6 @@ async function executeControlRequest(
     }
     case "database.wipe":
       return databases.wipe(relayDatabaseWipeSchema.parse(request.payload))
-    case "database.limits.write":
-      return databases.setLimits(
-        relayDatabaseLimitsSchema.parse(request.payload)
-      )
     case "database.credentials.rotate":
       return databases.rotateCredentials(
         relayRotateDatabaseCredentialsSchema.parse(request.payload)
@@ -3192,8 +3186,6 @@ async function executeControlRequest(
         relayAppImageCheckSchema.parse(request.payload),
         signal
       )
-    case "app.limits.write":
-      return apps.setLimits(relayAppLimitsSchema.parse(request.payload))
     case "app.volumes.write": {
       const input = relayAppVolumesWriteSchema.parse(request.payload)
       await runRelayEffect(
@@ -3602,15 +3594,31 @@ async function executeControlRequest(
         }
       }
     }
+    // Resource limits, for every kind. Each applies them its own way: a
+    // game server from its next restart, a database and an App at once.
     case "instance.limits.write": {
-      const { limits } = relayInstanceLimitsWriteSchema.parse(payload)
-      const instance = await requiredInstance(payload)
-      await lifecycle.setInstanceLimits(instance, limits)
-      const updated = (await docker.inspectInstances()).find(
-        (candidate) => candidate.id === instance.id
-      )
-      if (!updated) throw new Error("Instance not found")
-      return refreshRelayInstance(updated)
+      const input = relayInstanceLimitsWriteSchema.parse(payload)
+      switch (input.kind) {
+        case "database":
+          return databases.setLimits({
+            databaseId: input.id,
+            limits: input.limits,
+          })
+        case "app":
+          return apps.setLimits({
+            appId: input.id,
+            serviceLimits: input.serviceLimits,
+          })
+        case "instance": {
+          const instance = await requiredInstance({ instanceId: input.id })
+          await lifecycle.setInstanceLimits(instance, input.limits)
+          const updated = (await docker.inspectInstances()).find(
+            (candidate) => candidate.id === instance.id
+          )
+          if (!updated) throw new Error("Instance not found")
+          return refreshRelayInstance(updated)
+        }
+      }
     }
     case "instance.rename": {
       const instance = await requiredInstance(payload)

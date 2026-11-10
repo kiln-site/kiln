@@ -2,8 +2,9 @@ import { createServerFn } from "@tanstack/react-start"
 import {
   appIdSchema,
   databaseIdSchema,
+  instanceIdSchema,
   relayIdSchema,
-  relayInstanceLimitsWriteSchema,
+  resourceLimitsSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -21,7 +22,9 @@ const capacityInputSchema = z.strictObject({
   relayId: relayIdSchema,
 })
 
-const instanceLimitsInputSchema = relayInstanceLimitsWriteSchema.extend({
+const instanceLimitsInputSchema = z.strictObject({
+  instanceId: instanceIdSchema,
+  limits: resourceLimitsSchema,
   relayId: relayIdSchema,
 })
 

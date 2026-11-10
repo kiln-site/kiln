@@ -92,7 +92,11 @@ export function relayChangeTarget(
   }
   // Power and deploying name their target's kind beside its ID, for every
   // kind alike.
-  if (operation === "instance.action" || operation === "instance.deploy") {
+  if (
+    operation === "instance.action" ||
+    operation === "instance.deploy" ||
+    operation === "instance.limits.write"
+  ) {
     const kind = field("kind")
     const id = field("id")
     if (id && (kind === "instance" || kind === "app" || kind === "database")) {
