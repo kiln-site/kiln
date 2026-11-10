@@ -61,6 +61,7 @@ import { schedulesInUtc } from "./0060_schedules_in_utc"
 import { instanceFilePermissions } from "./0061_instance_file_permissions"
 import { instancePowerPermissions } from "./0062_instance_power_permissions"
 import { instanceDeployPermission } from "./0063_instance_deploy_permission"
+import { databaseDeployments } from "./0064_database_deployments"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -125,4 +126,5 @@ export const migrations: ReadonlyArray<Migration> = [
   instanceFilePermissions,
   instancePowerPermissions,
   instanceDeployPermission,
+  databaseDeployments,
 ]

@@ -423,6 +423,12 @@ config.nodeId = relayIdentity.id
 config.nodeName = relayIdentity.name
 const bricks = new BrickCatalog(config.brickCatalogUrl, config.dataDirectory)
 const serverDeploymentLogs = new ServerDeploymentLogs(config.dataDirectory)
+// A database's, apart from a game server's: what may read one kind's logs
+// can't name the other kind to read them.
+const databaseDeploymentLogs = new ServerDeploymentLogs(
+  config.dataDirectory,
+  "database-deployments"
+)
 // Resources being deleted refuse every change but their final backup and
 // their deletion, from the first operation admitted.
 const resourceFreezes = await runRelayEffect(
@@ -2940,6 +2946,7 @@ async function executeControlRequest(
         // and an App created with it may be connected to it.
         await databases.connections.forgetDatabase(input.databaseId)
         await resourceFreezes.forget("database", input.databaseId)
+        await databaseDeploymentLogs.remove(input.databaseId)
         return { databaseId: input.databaseId, deleted: true }
       }
       // Hearth removed its DNS records from every node first. One already
@@ -2961,6 +2968,7 @@ async function executeControlRequest(
       )
       await leaveTailscale()
       await resourceFreezes.forget("database", input.databaseId)
+      await databaseDeploymentLogs.remove(input.databaseId)
       return deleted
     }
     case "database.wipe":
@@ -3565,6 +3573,14 @@ async function executeControlRequest(
           await notePowerChange(id)
           return apps.deploy({ ...deploy, appId: id })
         }
+        case "database":
+          return databaseDeploymentLogs.run(
+            input.id,
+            input.deploymentId,
+            "Redeploying the database",
+            (onPhase, note) => databases.redeploy(input.id, onPhase, note),
+            "database"
+          )
         case "instance": {
           const existing =
             (await snapshotHub.read()).instances.find(
@@ -3921,9 +3937,13 @@ async function executeControlRequest(
       )
     }
     case "instance.deployment.read": {
-      const { deploymentId, instanceId } =
+      const { deploymentId, id, kind } =
         relayServerDeploymentReadSchema.parse(payload)
-      return serverDeploymentLogs.read(instanceId, deploymentId)
+      // The kind picked the action that let this through, so it picks the
+      // store too.
+      return (
+        kind === "database" ? databaseDeploymentLogs : serverDeploymentLogs
+      ).read(id, deploymentId)
     }
     case "instance.network.ports.reserve": {
       const instance = await requiredInstance(payload)

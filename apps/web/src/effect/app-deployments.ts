@@ -8,8 +8,9 @@ import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 
 // Where apps deploy from on GitHub, and Hearth's record of every
-// deployment across its Relays: each App deployment, and each game server's
-// install, reinstall, and change of Brick. The Relay keeps their logs.
+// deployment across its Relays: each App deployment, each game server's
+// install, reinstall, and change of Brick, and each database's redeploy.
+// The Relay keeps their logs.
 
 export type AppDeploymentTrigger =
   | "manual"
@@ -20,7 +21,11 @@ export type AppDeploymentTrigger =
 export type AppDeploymentStatus = "failed" | "running" | "succeeded" | "unknown"
 /** A game server's first install, a reinstall, or a change of its Brick. */
 export type ServerDeploymentTrigger = "brick" | "install" | "reinstall"
-export type DeploymentKind = "app" | "server"
+/** A database deployed again as it is. */
+export type DatabaseDeploymentTrigger = "redeploy"
+export type DeploymentKind = "app" | "database" | "server"
+/** The kinds a deployment is one request to the Relay for. */
+export type RequestDeploymentKind = Exclude<DeploymentKind, "app">
 
 /** The repository an app builds, and how. */
 export interface AppGitHubSource {
@@ -81,9 +86,19 @@ export interface ServerDeploymentRecord {
   triggeredBy: string | null
 }
 
-/** A deployment of either kind, as the Deployments page lists them. */
+/** A database's redeploy. */
+export interface DatabaseDeploymentRecord extends Omit<
+  ServerDeploymentRecord,
+  "brickId" | "brickName" | "instanceId" | "trigger"
+> {
+  databaseId: string
+  trigger: DatabaseDeploymentTrigger
+}
+
+/** A deployment of any kind, as the Deployments page lists them. */
 export type DeploymentRecord =
   | ({ kind: "app" } & AppDeploymentRecord)
+  | ({ kind: "database" } & DatabaseDeploymentRecord)
   | ({ kind: "server" } & ServerDeploymentRecord)
 
 interface SourceRow extends RowDataPacket {
@@ -119,7 +134,10 @@ interface DeploymentRow extends RowDataPacket {
   source_type: AppSourceType | null
   started_at: number | string
   status: AppDeploymentStatus
-  trigger: AppDeploymentTrigger | ServerDeploymentTrigger
+  trigger:
+    | AppDeploymentTrigger
+    | DatabaseDeploymentTrigger
+    | ServerDeploymentTrigger
   triggered_by: string | null
 }
 
@@ -286,22 +304,21 @@ export const insertAppDeploymentEffect = Effect.fn("apps.deployment.insert")(
 )
 
 /**
- * Records a game server's install, reinstall, or change of Brick as
- * running, once: recording it again changes nothing.
+ * Records a game server's install, reinstall, or change of Brick, or a
+ * database's redeploy, as running, once: recording it again changes
+ * nothing.
  */
 export const insertServerDeploymentEffect = Effect.fn(
   "servers.deployment.insert"
 )(function* (
   record: Pick<
     ServerDeploymentRecord,
-    | "brickId"
-    | "brickName"
-    | "id"
-    | "instanceId"
-    | "relayId"
-    | "trigger"
-    | "triggeredBy"
-  >
+    "brickId" | "brickName" | "id" | "instanceId" | "relayId" | "triggeredBy"
+  > &
+    (
+      | { kind: "database"; trigger: DatabaseDeploymentTrigger }
+      | { kind: "server"; trigger: ServerDeploymentTrigger }
+    )
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -310,10 +327,11 @@ export const insertServerDeploymentEffect = Effect.fn(
     `INSERT INTO ${deploymentTable()}
        (id, instance_kind, instance_id, relay_id, brick_id, brick_name,
         \`trigger\`, triggered_by, status, started_at)
-     VALUES (?, 'server', ?, ?, ?, ?, ?, ?, 'running', ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', ?)
      ON DUPLICATE KEY UPDATE id = id`,
     [
       record.id,
+      record.kind,
       record.instanceId,
       record.relayId,
       record.brickId?.slice(0, 64) ?? null,
@@ -323,7 +341,7 @@ export const insertServerDeploymentEffect = Effect.fn(
       now,
     ]
   )
-  yield* pruneDeploymentsEffect("server", record.instanceId)
+  yield* pruneDeploymentsEffect(record.kind, record.instanceId)
 })
 
 // The oldest past what each instance keeps.
@@ -349,8 +367,8 @@ const pruneDeploymentsEffect = Effect.fnUntraced(function* (
 })
 
 /**
- * Records how a game server's deployment ended. False if it had already
- * ended, so two watchers can't both report it.
+ * Records how a game server's or a database's deployment ended. False if
+ * it had already ended, so two watchers can't both report it.
  */
 export const finishServerDeploymentEffect = Effect.fn(
   "servers.deployment.finish"
@@ -367,7 +385,7 @@ export const finishServerDeploymentEffect = Effect.fn(
     "servers.deployment.finish",
     `UPDATE ${deploymentTable()}
         SET status = ?, error = ?, finished_at = ?
-      WHERE id = ? AND instance_kind = 'server' AND status = 'running'`,
+      WHERE id = ? AND instance_kind <> 'app' AND status = 'running'`,
     [outcome.status, outcome.error?.slice(0, 2_000) ?? null, now, id]
   )
   return result.affectedRows === 1
@@ -392,7 +410,9 @@ export const loadRunningServerInstallEffect = Effect.fn(
   return record?.kind === "server" ? record : null
 })
 
-/** Game server deployments recorded as running, oldest first. */
+/**
+ * Game server and database deployments recorded as running, oldest first.
+ */
 export const loadRunningServerDeploymentsEffect = Effect.fn(
   "servers.deployments.running"
 )(function* () {
@@ -401,16 +421,16 @@ export const loadRunningServerDeploymentsEffect = Effect.fn(
     "servers.deployments.running",
     `SELECT ${deploymentColumns}
        FROM ${deploymentTable()}
-      WHERE instance_kind = 'server' AND status = 'running'
+      WHERE instance_kind <> 'app' AND status = 'running'
       ORDER BY started_at ASC`
   )
   return rows.flatMap((row) => {
     const record = toRecord(row)
-    return record.kind === "server" ? [record] : []
+    return record.kind === "app" ? [] : [record]
   })
 })
 
-/** Forgets a deleted App's or game server's deployments. */
+/** Forgets a deleted instance's deployments. */
 export const deleteInstanceDeploymentsEffect = Effect.fn(
   "deployments.deleteInstance"
 )(function* (kind: DeploymentKind, instanceId: string) {
@@ -533,8 +553,9 @@ export interface ReachableDeployments {
 }
 
 /**
- * Deployments newest first, of the Apps and game servers a person may see,
- * or of one of them, before a cursor from the previous page.
+ * Deployments newest first, of the Apps, game servers and databases a
+ * person may see, or of one of them, before a cursor from the previous
+ * page.
  */
 export const listDeploymentsEffect = Effect.fn("deployments.list")(
   function* (input: {
@@ -545,7 +566,7 @@ export const listDeploymentsEffect = Effect.fn("deployments.list")(
     reachable: Partial<Record<DeploymentKind, ReachableDeployments>>
   }) {
     const parameters: Array<number | string> = []
-    const reachable = (["app", "server"] as const).flatMap((kind) => {
+    const reachable = (["app", "server", "database"] as const).flatMap((kind) => {
       const scope = input.reachable[kind]
       if (!scope) return []
       if (input.instance && input.instance.kind !== kind) return []
@@ -664,6 +685,20 @@ function toRecord(row: DeploymentRow): DeploymentRecord {
       startedAt: new Date(Number(row.started_at)).toISOString(),
       status: row.status,
       trigger: row.trigger as ServerDeploymentTrigger,
+      triggeredBy: row.triggered_by,
+    }
+  }
+  if (row.instance_kind === "database") {
+    return {
+      databaseId: row.instance_id,
+      error: row.error,
+      finishedAt: instant(row.finished_at),
+      id: row.id,
+      kind: "database",
+      relayId: row.relay_id,
+      startedAt: new Date(Number(row.started_at)).toISOString(),
+      status: row.status,
+      trigger: row.trigger as DatabaseDeploymentTrigger,
       triggeredBy: row.triggered_by,
     }
   }

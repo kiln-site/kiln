@@ -5,16 +5,18 @@ import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import { inventoryInstanceState } from "@/lib/instance-state"
 import { instanceStatePresentation } from "@/lib/instance-state-presentation"
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
-import { Trash2 } from "lucide-react"
+import { RefreshCw, Trash2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import { showToast } from "@workspace/ui/components/sonner"
 
 import { DeleteDatabaseDialog } from "@/components/database/database-dialogs"
 import {
   databaseRelayAvailable,
   engineLabel,
+  engineProductLabel,
   showDatabaseOperationError,
   type ManagedDatabase,
 } from "@/components/database/database-presentation"
@@ -24,6 +26,7 @@ import {
   type DatabaseWorkspaceDatabase,
 } from "@/components/database/database-workspace-context"
 import { ProvisioningGate } from "@/components/provisioning-progress"
+import { RedeployDialog } from "@/components/redeploy-dialog"
 import {
   ResourceWorkspaceBoundary,
   WorkspaceRouteTitle,
@@ -44,7 +47,10 @@ import { WorkspacePowerControls } from "@/components/workspace-power-controls"
 import { heldPowerActions, useInstancePower } from "@/lib/use-instance-power"
 import { databaseDestinations } from "@/lib/navigation-destinations"
 import { managedDatabaseDirectoryQueryOptions } from "@/lib/query-options"
-import { runManagedDatabaseAction } from "@/server/databases"
+import {
+  redeployManagedDatabase,
+  runManagedDatabaseAction,
+} from "@/server/databases"
 
 export const DatabaseWorkspaceShell = React.memo(
   function DatabaseWorkspaceShell({ children }: { children: React.ReactNode }) {
@@ -307,20 +313,76 @@ function DatabasePowerControls({
     onFailure: (cause) =>
       showDatabaseOperationError("Database action failed", cause),
   })
+  // Deploying is a permission of its own, apart from power.
+  const canDeploy =
+    !deletion && database.permissions.includes("instance.deploy")
+  const [redeployOpen, setRedeployOpen] = React.useState(false)
+  const navigate = useNavigate()
+  const redeploy = useMutation({
+    mutationFn: () =>
+      redeployManagedDatabase({
+        data: { databaseId: database.id, relayId: database.relayId },
+      }),
+    onMutate: () => {
+      setRedeployOpen(false)
+      // Follow the deployment as it happens, as an App's is.
+      if (database.permissions.includes("database.logs.read")) {
+        void navigate({
+          params: { databaseId: database.id },
+          search: { stream: "deployment" },
+          to: "/db/$databaseId/logs",
+        })
+      }
+    },
+    onSuccess: () =>
+      showToast({ message: `${database.name} redeployed`, type: "success" }),
+    onError: (cause) => showDatabaseOperationError("Redeploy failed", cause),
+  })
+  const relayConnected = databaseRelayAvailable(database)
 
   return (
-    <WorkspacePowerControls
-      action={power.action}
-      killWarning="This immediately terminates the database's container. Changes it hasn't written to disk may be lost."
-      noun="database"
-      powerPermissions={powerPermissions}
-      target={{
-        name: database.name,
-        observedState: database.observedState,
-        provisioning: database.provisioning ?? null,
-      }}
-      relayConnected={databaseRelayAvailable(database)}
-      onAction={power.onAction}
-    />
+    <>
+      <WorkspacePowerControls
+        action={power.action}
+        killWarning="This immediately terminates the database's container. Changes it hasn't written to disk may be lost."
+        menuAction={
+          canDeploy
+            ? {
+                description: "Pull its image again and replace its container",
+                disabled: !relayConnected || redeploy.isPending,
+                icon: <RefreshCw className="size-3.5" />,
+                label: "Redeploy",
+                onClick: () => setRedeployOpen(true),
+              }
+            : undefined
+        }
+        noun="database"
+        powerPermissions={powerPermissions}
+        target={{
+          name: database.name,
+          observedState: database.observedState,
+          provisioning: database.provisioning ?? null,
+        }}
+        relayConnected={relayConnected}
+        onAction={power.onAction}
+      />
+      {canDeploy ? (
+        <RedeployDialog
+          error={null}
+          name={database.name}
+          open={redeployOpen}
+          pending={false}
+          onConfirm={() => redeploy.mutate()}
+          onOpenChange={setRedeployOpen}
+        >
+          Pulls {engineProductLabel(database)} again and replaces the
+          container over the same data. The database is unavailable until
+          the new container is ready, and whatever is connected to it has
+          to reconnect. If the new container doesn't get ready, the old one
+          is started again, but anything a newer release already changed in
+          the data stays changed. Back up first what you can't lose.
+        </RedeployDialog>
+      ) : null}
+    </>
   )
 }

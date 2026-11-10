@@ -57,6 +57,7 @@ import {
 import { accessPermissions, grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { asDatabaseDeployment } from "@/lib/server-deployments.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { partKey, resourceKey, shared } from "@/operations/lanes"
 import { runOperationPromise } from "@/operations/operation"
@@ -358,6 +359,45 @@ const changeDatabaseLimits = resourceOperation({
     return databaseForViewer(user, relay.id, database)
   },
 })
+
+// Deploys a database again as it is: its image pulled anew and its
+// container replaced over the same data. It replaces the database, so
+// everything else on it waits; it is away while one container stops and
+// the other gets ready.
+const deployDatabaseAgain = resourceOperation({
+  kind: "database",
+  id: (input: z.infer<typeof databaseInputSchema>) => input.databaseId,
+  name: "database.deploy",
+  lock: "whole",
+  doing: "Deploying this database again",
+  permission: () => "instance.deploy",
+  run: async (user, data) => {
+    const relay = await requiredRelay(data.relayId)
+    const database = relayManagedDatabaseSchema.parse(
+      await asDatabaseDeployment(
+        { databaseId: data.databaseId, relayId: relay.id, userId: user.id },
+        (deploymentId) =>
+          databaseRpc(
+            relay,
+            "instance.deploy",
+            { deploymentId, id: data.databaseId, kind: "database" },
+            relayControlDeadlineMs("instance.deploy"),
+            user.id
+          )
+      )
+    )
+    publishDatabaseChange(relay.id, false)
+    return databaseForViewer(user, relay.id, database)
+  },
+})
+
+export const redeployManagedDatabase = createServerFn({ method: "POST" })
+  .validator(databaseInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(deployDatabaseAgain, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 export const updateManagedDatabaseLimits = createServerFn({ method: "POST" })
   .validator(databaseLimitsInputSchema)

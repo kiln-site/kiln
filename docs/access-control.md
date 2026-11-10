@@ -144,8 +144,8 @@ reveals those kinds there.
 - **Power**: `instance.power.*` starts, stops, restarts and kills a game
   server, a database or an App. Configuring an App (`app.manage`) doesn't
   include its power.
-- **Deploying**: `instance.deploy` deploys a game server or an App again as
-  it is set up, and restarts it without taking power over it. Configuring
+- **Deploying**: `instance.deploy` deploys a game server, a database or an
+  App again as it is set up, and restarts it without taking power over it. Configuring
   an App (`app.manage`) or a game server (`instance.configuration.write`)
   doesn't include it, so saving an App's source and deploying it at once
   takes both.

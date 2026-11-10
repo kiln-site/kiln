@@ -296,7 +296,7 @@ describe("Relay control socket", () => {
         await relay.pair({ role: "custom", actions })
       )
       const kinds: Array<string> = []
-      for (const kind of ["instance", "app", "relay"]) {
+      for (const kind of ["instance", "database", "app", "relay"]) {
         sendRequest(socket, "instance.deploy", { id, kind })
         const reply = (await inbox.next()) as { code?: string }
         if (reply.code !== "forbidden") kinds.push(kind)
@@ -305,9 +305,13 @@ describe("Relay control socket", () => {
     }
 
     // An App's deploy carries its configuration, so it takes configuring too.
-    expect(await allowed(["instance.deploy"])).toEqual(["instance"])
+    expect(await allowed(["instance.deploy"])).toEqual([
+      "instance",
+      "database",
+    ])
     expect(await allowed(["instance.deploy", "app.manage"])).toEqual([
       "instance",
+      "database",
       "app",
     ])
     // What configures either no longer deploys it.

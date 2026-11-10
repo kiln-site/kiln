@@ -1242,7 +1242,7 @@ export function appDeploymentLogQueryOptions(
 
 /** One App's or game server's deployments, one Relay's, or all. */
 export interface DeploymentsScope {
-  instance?: { id: string; kind: "app" | "server" }
+  instance?: { id: string; kind: "app" | "database" | "server" }
   relayId?: string
 }
 

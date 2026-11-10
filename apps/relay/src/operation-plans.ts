@@ -850,14 +850,17 @@ export function controlRequestLocks(
           return null
       }
     }
-    // Deploying again, each kind by its own locks. A game server's replaces
-    // its container, so it waits for everything else on it. An App's only
+    // Deploying again, each kind by its own locks. A game server's and a
+    // database's replace the container, so each waits for everything else
+    // on it. An App's only
     // checks and records the deployment; its worker takes the App's
     // lifecycle lock for the build itself.
     case "instance.deploy":
       switch (stringField(payload, "kind")) {
         case "instance":
           return instance(instanceReplaceLocks, "id")
+        case "database":
+          return database(databaseLocks, "id")
         case "app":
           return app(appLifecycleLocks, "id")
         default:

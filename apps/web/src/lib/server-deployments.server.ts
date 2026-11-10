@@ -6,7 +6,6 @@ import {
   insertServerDeploymentEffect,
   loadRunningServerDeploymentsEffect,
   loadRunningServerInstallEffect,
-  type ServerDeploymentTrigger,
 } from "@/effect/app-deployments"
 import { Database } from "@/effect/database"
 import { promiseEffect } from "@/effect/promise"
@@ -15,10 +14,11 @@ import { databaseTable } from "@/lib/database-config"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 
 // A game server's deployments: its first install, as a create or a copy
-// provisions it, and each reinstall or change of Brick. Starting, stopping,
-// recovering, and saving settings without applying them aren't deployments.
-// Each is recorded as running before the Relay is asked, under an ID Hearth
-// makes that also names its log on the Relay, and ends when the Relay says.
+// provisions it, and each reinstall or change of Brick. A database's are
+// its redeploys. Starting, stopping, recovering, and saving settings
+// without applying them aren't deployments. Each is recorded as running
+// before the Relay is asked, under an ID Hearth makes that also names its
+// log on the Relay, and ends when the Relay says.
 
 // A reinstall or change of Brick is one request, answered within six
 // minutes; one still running long after was cut off, as by a restart.
@@ -62,7 +62,7 @@ export async function beginServerInstall(
     loadRunningServerInstallEffect(input.instanceId)
   )
   if (running) return running.id
-  return insertRunning(input, "install")
+  return insertRunning({ ...input, kind: "server", trigger: "install" })
 }
 
 /** Ends a game server's install as its provisioning ended, if it was running. */
@@ -87,17 +87,50 @@ export async function asServerDeployment<T>(
   input: ServerDeploymentStart & { trigger: "brick" | "reinstall" },
   run: (deploymentId: string) => Promise<T>
 ): Promise<T> {
-  const id = await insertRunning(input, input.trigger)
+  return following(
+    input.relayId,
+    await insertRunning({ ...input, kind: "server" }),
+    run
+  )
+}
+
+/** Runs a database's redeploy as a deployment, as a game server's is. */
+export async function asDatabaseDeployment<T>(
+  input: { databaseId: string; relayId: string; userId: string },
+  run: (deploymentId: string) => Promise<T>
+): Promise<T> {
+  return following(
+    input.relayId,
+    await insertRunning({
+      brickId: null,
+      brickName: null,
+      instanceId: input.databaseId,
+      kind: "database",
+      relayId: input.relayId,
+      trigger: "redeploy",
+      userId: input.userId,
+    }),
+    run
+  )
+}
+
+// Asks the Relay for a deployment recorded as running, and ends it as the
+// Relay answers.
+function following<T>(
+  relayId: string,
+  id: string,
+  run: (deploymentId: string) => Promise<T>
+): Promise<T> {
   return Effect.runPromise(
     promiseEffect(() => run(id)).pipe(
       Effect.tap(() =>
         promiseEffect(() =>
-          finish(input.relayId, id, { error: null, status: "succeeded" })
+          finish(relayId, id, { error: null, status: "succeeded" })
         )
       ),
       Effect.tapError((error) =>
         promiseEffect(() =>
-          finish(input.relayId, id, {
+          finish(relayId, id, {
             error:
               error instanceof Error ? error.message : "The Relay refused it",
             status: "failed",
@@ -109,8 +142,8 @@ export async function asServerDeployment<T>(
 }
 
 /**
- * Ends game server deployments nothing follows any more, as one a Hearth
- * restart cut off, as unknown.
+ * Ends game server and database deployments nothing follows any more, as
+ * one a Hearth restart cut off, as unknown.
  */
 export const settleStaleServerDeploymentsEffect = Effect.fn(
   "servers.deployments.settleStale"
@@ -118,7 +151,9 @@ export const settleStaleServerDeploymentsEffect = Effect.fn(
   const running = yield* loadRunningServerDeploymentsEffect()
   if (running.length === 0) return
   const now = yield* Clock.currentTimeMillis
-  const installs = running.filter((record) => record.trigger === "install")
+  const installs = running.flatMap((record) =>
+    record.kind === "server" && record.trigger === "install" ? [record] : []
+  )
   const database = yield* Database
   const followed = new Set(
     installs.length
@@ -135,7 +170,8 @@ export const settleStaleServerDeploymentsEffect = Effect.fn(
     const stale =
       record.trigger === "install"
         ? age > installStale ||
-          (age > installUnfollowedStale && !followed.has(record.instanceId))
+          (age > installUnfollowedStale &&
+            !(record.kind === "server" && followed.has(record.instanceId)))
         : age > startupDeploymentStale
     if (!stale) continue
     const finished = yield* finishServerDeploymentEffect(record.id, {
@@ -147,21 +183,17 @@ export const settleStaleServerDeploymentsEffect = Effect.fn(
 })
 
 async function insertRunning(
-  input: ServerDeploymentStart,
-  trigger: ServerDeploymentTrigger
+  input: ServerDeploymentStart &
+    (
+      | { kind: "database"; trigger: "redeploy" }
+      | { kind: "server"; trigger: "brick" | "install" | "reinstall" }
+    )
 ): Promise<string> {
   const id = crypto.randomUUID()
+  const { userId, ...record } = input
   await runAppEffect(
     "servers.deployment.insert",
-    insertServerDeploymentEffect({
-      brickId: input.brickId,
-      brickName: input.brickName,
-      id,
-      instanceId: input.instanceId,
-      relayId: input.relayId,
-      trigger,
-      triggeredBy: input.userId,
-    })
+    insertServerDeploymentEffect({ ...record, id, triggeredBy: userId })
   )
   publishServerDeploymentChange(input.relayId)
   return id
