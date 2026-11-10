@@ -14,7 +14,11 @@ import { join, resolve as resolvePath, sep } from "node:path"
 import { Effect, Fiber, Schedule, Semaphore } from "effect"
 
 import type { DatabaseConnections } from "./database-connections.js"
-import { resolveBrickForProvisioning } from "./bricks.js"
+import {
+  brickProvisioningAnswers,
+  resolveBrick,
+  resolveBrickForProvisioning,
+} from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { recoverPromise, tapPromiseError } from "./effect/promise.js"
@@ -45,6 +49,7 @@ import type {
   ProvisioningWorkPhase,
   ResourceLimits,
   ResourceLimitsInput,
+  BrickVariableValue,
 } from "@workspace/contracts"
 import {
   appTailscaleMember,
@@ -2464,10 +2469,17 @@ export class LifecycleDriver {
       .pipe(Effect.withSpan("relay.ports.release"))
   }
 
+  /**
+   * A new server as it waits to be provisioned, and the answers its
+   * provisioning takes as given: what was sent, and what was looked up here.
+   */
   async prepareInstance(
     id: string,
     input: RelayCreateInstance
-  ): Promise<RelayInstance> {
+  ): Promise<{
+    answers: Readonly<Record<string, BrickVariableValue>>
+    placeholder: RelayInstance
+  }> {
     if (input.recipe === builtinTailscaleBrickSource) {
       throw new Error(
         "Create Tailscale from the Tailscale page so Hearth can place its node deployments"
@@ -2476,11 +2488,8 @@ export class LifecycleDriver {
     const definition =
       input.recipeDefinition ?? (await this.#bricks.recipe(input.recipe))
     const snapshotSha256 = await this.#bricks.saveSnapshot(definition)
-    const resolved = await resolveBrickForProvisioning(
-      definition,
-      input.variables,
-      input.recipe
-    )
+    const answers = await brickProvisioningAnswers(definition, input.variables)
+    const resolved = resolveBrick(definition, answers, input.recipe)
     const server = resolved.server
     const primaryPort = server.ports[0]
     if (!primaryPort) {
@@ -2500,9 +2509,11 @@ export class LifecycleDriver {
     const version = Object.hasOwn(resolved.values, "version")
       ? String(resolved.values.version)
       : "custom"
-    return relayInstanceSchema.parse({
+    const placeholder = relayInstanceSchema.parse({
       brickFormat: definition.format,
       brickId: definition.metadata.id,
+      brickKind: definition.kind === "group" ? undefined : definition.kind,
+      ...(server.type ? { brickType: server.type } : {}),
       brickNetworkMode: server.networkMode,
       brickPrimaryPort: primaryPort.container,
       brickPrimaryPortProtocol: primaryPort.protocol,
@@ -2537,6 +2548,7 @@ export class LifecycleDriver {
       variables: resolved.values,
       version,
     })
+    return { answers, placeholder }
   }
 
   async createInstanceWithId(
@@ -2929,7 +2941,7 @@ export class LifecycleDriver {
             input.ports ? [...input.ports] : []
           if (portAllocations.length === 0) {
             const publishedPorts =
-              server.networkMode === "direct" ? server.ports : [primaryPort]
+              server.type === "minecraft" ? [primaryPort] : server.ports
             for (const port of publishedPorts) {
               const externalPort =
                 port.host ??
@@ -2972,6 +2984,8 @@ export class LifecycleDriver {
             "kiln.brick.source": input.recipe,
             "kiln.brick.snapshot-sha256": snapshotSha256,
             "kiln.brick.variables": variablesLabel,
+            "kiln.brick.kind": definition.kind,
+            ...(server.type ? { "kiln.brick.type": server.type } : {}),
             "kiln.brick.network-mode": server.networkMode,
             "kiln.brick.supports-srv": String(server.supportsSrv),
             "kiln.traefik.managed": "true",
@@ -3002,9 +3016,9 @@ export class LifecycleDriver {
           }
           if (hostname) {
             const privatePort =
-              server.networkMode === "direct"
-                ? primaryAllocation.internalPort
-                : this.#config.connectPort
+              server.type === "minecraft"
+                ? this.#config.connectPort
+                : primaryAllocation.internalPort
             labels["kiln.instance.hostname"] =
               privatePort === 25_565 ? hostname : `${hostname}:${privatePort}`
           }
@@ -4415,6 +4429,7 @@ export class LifecycleDriver {
         "kiln.brick.format": "kiln.brick/v1",
         "kiln.brick.source": builtinTailscaleBrickSource,
         "kiln.brick.variables": "{}",
+        "kiln.brick.kind": "game-server",
         "kiln.brick.network-mode": "direct",
         "kiln.brick.primary-port": "53",
         "kiln.instance.name": config.name,

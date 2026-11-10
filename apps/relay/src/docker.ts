@@ -1937,16 +1937,15 @@ export class DockerDriver {
     instance: RelayInstanceConfig,
     container: DockerInspect
   ): Promise<boolean | undefined> {
+    const minecraft = instance.brickType === "minecraft"
     const protocol =
-      instance.brickPrimaryPortProtocol ??
-      (instance.brickNetworkMode === "minecraft-backend" ? "tcp" : undefined)
+      instance.brickPrimaryPortProtocol ?? (minecraft ? "tcp" : undefined)
     const port = instance.brickPrimaryPort
     if ((protocol !== "tcp" && protocol !== "both") || !port) return undefined
 
     const addresses = Object.values(
       container.NetworkSettings?.Networks ?? {}
     ).flatMap(({ IPAddress: address }) => (address ? [address] : []))
-    const minecraft = instance.brickNetworkMode === "minecraft-backend"
     const probe = minecraft ? minecraftStatusReady : tcpPortOpen
     const attempts = await Promise.all(
       addresses.map((address) => probe(address, port))
@@ -2579,6 +2578,11 @@ export class DockerDriver {
     const validNetworkMode = normalizedBrickNetworkMode(
       labels["kiln.brick.network-mode"]
     )
+    const brickType = labels["kiln.brick.type"]
+    const validBrickType =
+      brickType && /^[a-z][a-z0-9-]{0,31}$/u.test(brickType)
+        ? brickType
+        : undefined
     const brickReadiness = parseBrickReadinessLabel(
       labels["kiln.brick.readiness"]
     )
@@ -2631,6 +2635,13 @@ export class DockerDriver {
       brickConsoleStopCommands: parseBrickConsoleStopCommandsLabel(
         labels["kiln.brick.console-stop-commands"]
       ),
+      // Every container read here runs a game server Brick.
+      brickKind: "game-server",
+      // One made before a container said its type says it by how its
+      // network was set up.
+      brickType:
+        validBrickType ??
+        (validNetworkMode === "minecraft-backend" ? "minecraft" : undefined),
       brickNetworkMode: validNetworkMode,
       brickPrimaryPort:
         effectivePrimaryPort &&
