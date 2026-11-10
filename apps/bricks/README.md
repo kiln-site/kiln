@@ -5,12 +5,17 @@ server. This Kiln monorepo app contains the official catalog, reusable Ember
 container runtimes, and the public recipe specification.
 
 ```text
-catalog.yml          official recipe index
-embers/              reusable OCI runtimes
+catalog.yml          official kiln.brick/v1 recipe index
 recipes/             official kiln.brick/v1 recipes
+bricks.yml           official kiln.brick/v2 Brick index
+bricks/              official kiln.brick/v2 Bricks
+embers/              reusable OCI runtimes
 schema/              machine-readable format schemas
 docs/                format and authoring documentation
 ```
+
+`kiln.brick/v2` is the next format: one recipe shape for game servers,
+databases, Apps and groups of them. See [its specification](docs/brick-v2.md).
 
 A recipe is intentionally data, not Relay code. It selects any OCI image,
 declares user-configurable variables, maps them into environment and resource

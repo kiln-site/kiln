@@ -1,0 +1,46 @@
+format: kiln.brick/v2
+kind: game-server
+metadata:
+  id: palworld
+  name: Palworld
+  summary: Native Linux dedicated server installed and updated through SteamCMD.
+  author: Kiln
+  icon: ../icons/palworld.svg
+  color: "#55b9d1"
+  tags: [steam, survival, direct]
+  platforms: [amd64]
+inputs:
+  - key: version
+    label: Release channel
+    help: Palworld currently follows the latest Steam build.
+    type: select
+    options: [latest]
+    default: latest
+  - key: server_args
+    label: Server arguments
+    help: Optional additional arguments passed directly to PalServer.
+    type: text
+    optional: true
+    default: "Pal -publiclobby -useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS -port=8211 -publicport=8211"
+    max: 2048
+deploy:
+  type: image
+  image: ghcr.io/kiln-site/bricks-steamcmd:latest
+  runtime: SteamCMD
+  user: "1000:1000"
+  env:
+    KILN_VERSION: "{{ version }}"
+    KILN_STEAM_APP_ID: "2394010"
+    KILN_STEAM_EXECUTABLE: Pal/Binaries/Linux/PalServer-Linux-Shipping
+    KILN_INSTALLATION_MARKER: .kiln-ember-installed
+    KILN_SERVER_ARGS: "{{ server_args }}"
+  # 16G or more is recommended.
+  memory: 16G
+  pids: 2048
+  volumes: [/server]
+  ports:
+    - { name: game, port: 8211, protocol: udp }
+  ready:
+    log: ["Setting breakpad minidump AppID = 2394010"]
+game-server:
+  game: Palworld
