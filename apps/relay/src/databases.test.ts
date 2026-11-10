@@ -105,6 +105,78 @@ describe("managed database recovery metadata", () => {
   })
 })
 
+describe("managed database redeploy", () => {
+  it("replaces the container from its image pulled anew, over the same data and login", async () => {
+    const harness = await relayHarness()
+    const id = "e".repeat(12)
+    await createDatabase(harness, id)
+    const before = databaseContainer(id)
+    fakeDocker.pulls.clear()
+
+    const database = await harness.databases.redeploy(id)
+
+    const after = databaseContainer(id)
+    expect(after.id).not.toBe(before.id)
+    // The tag it was made from, pulled again: never another version.
+    expect([...fakeDocker.pulls.keys()]).toEqual([
+      `docker.io/library/${before.image}`,
+    ])
+    expect(after.image).toBe(before.image)
+    expect(after.mounts).toEqual(before.mounts)
+    expect(after.env).toEqual(before.env)
+    expect(after.labels).toMatchObject({
+      "kiln.database.id": id,
+      "kiln.database.volume": volumeOf(id),
+    })
+    expect(after.state.running).toBe(true)
+    expect(database).toMatchObject({ id, observedState: "running" })
+  })
+
+  it("leaves a stopped database stopped, in its new container", async () => {
+    const harness = await relayHarness()
+    const id = "e".repeat(12)
+    await createDatabase(harness, id)
+    await harness.power.requested("database", id, "stop")
+    const before = databaseContainer(id)
+
+    await harness.databases.redeploy(id)
+
+    expect(databaseContainer(id).id).not.toBe(before.id)
+    expect(databaseContainer(id).state.running).toBe(false)
+  })
+
+  it("puts the old container back, running, when the new one doesn't start", async () => {
+    const harness = await relayHarness()
+    const id = "e".repeat(12)
+    await createDatabase(harness, id)
+    const before = databaseContainer(id)
+    fakeDocker.failNext({ command: "start" }, "no space left on device")
+
+    await expect(harness.databases.redeploy(id)).rejects.toThrow(
+      "no space left on device"
+    )
+
+    expect(databaseContainer(id).id).toBe(before.id)
+    expect(databaseContainer(id).state.running).toBe(true)
+    expect(await harness.databases.list()).toHaveLength(1)
+  })
+
+  it("leaves the database running when its image can't be pulled", async () => {
+    const harness = await relayHarness()
+    const id = "e".repeat(12)
+    await createDatabase(harness, id)
+    const before = databaseContainer(id)
+    fakeDocker.failNext({ command: "pull" }, "registry unreachable")
+
+    await expect(harness.databases.redeploy(id)).rejects.toThrow(
+      "registry unreachable"
+    )
+
+    expect(databaseContainer(id)).toBe(before)
+    expect(before.state.running).toBe(true)
+  })
+})
+
 describe("managed database power state", () => {
   it("shows a database someone killed as stopped, and one that crashed as failed", async () => {
     const harness = await relayHarness()

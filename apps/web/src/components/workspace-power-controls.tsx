@@ -78,7 +78,11 @@ export function WorkspacePowerControls({
 }) {
   const [serverActionsOpen, setServerActionsOpen] = React.useState(false)
   const [confirmKill, setConfirmKill] = React.useState(false)
-  if (!Object.values(powerPermissions).some(Boolean) && !primaryAction) {
+  if (
+    !Object.values(powerPermissions).some(Boolean) &&
+    !primaryAction &&
+    !menuAction
+  ) {
     return null
   }
   const capitalizedNoun = `${noun.charAt(0).toUpperCase()}${noun.slice(1)}`

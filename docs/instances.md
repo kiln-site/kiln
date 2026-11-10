@@ -32,7 +32,7 @@ Every kind gets these from the platform.
 | Capability  | Target                                          | Today                                                                                   |
 | ----------- | ----------------------------------------------- | --------------------------------------------------------------------------------------- |
 | Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases and Apps: one Relay request and one permission         |
-| Deployments | One redeploy for every kind                     | An App's redeploy and a game server's Brick reinstall are separate; databases have none |
+| Deployments | One redeploy for every kind                     | Done for game servers, databases and Apps: one Relay request and one permission         |
 | Domains     | Every kind, automatic for an App's web services | Game servers only                                                                       |
 | Networking  | One page for every kind                         | A page per kind, on a few shared sections                                               |
 | Files       | One file browser and one permission             | Done for game servers and Apps                                                          |

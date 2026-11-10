@@ -1208,16 +1208,17 @@ export const relayDeployAppSchema = z
 
 /**
  * Deploying an instance again: one request for every kind, which names the
- * kind beside its ID. A game server deploys as it is set up, under the
- * deployment Hearth recorded, which names its log on the Relay. An App's
- * configuration is Hearth's, so its deploy carries what it deploys.
+ * kind beside its ID. A game server and a database deploy as they are set
+ * up, under the deployment Hearth recorded, which names its log on the
+ * Relay. An App's configuration is Hearth's, so its deploy carries what it
+ * deploys.
  */
 export const relayDeployInstanceSchema = z.discriminatedUnion("kind", [
   z
     .object({
       deploymentId: z.uuid(),
       id: instanceIdSchema,
-      kind: z.literal("instance"),
+      kind: z.enum(["instance", "database"]),
     })
     .strict(),
   relayDeployAppSchema
@@ -1497,8 +1498,14 @@ export const relayProvisionInstanceSchema = z.object({
 export const relayClaimInstanceProvisioningSchema =
   relayProvisionInstanceSchema.extend({ deploymentId: z.uuid() })
 
+// A game server's or a database's deployment log, which names the kind
+// beside its ID.
 export const relayServerDeploymentReadSchema = z
-  .object({ deploymentId: z.uuid(), instanceId: instanceIdSchema })
+  .object({
+    deploymentId: z.uuid(),
+    id: instanceIdSchema,
+    kind: z.enum(["instance", "database"]),
+  })
   .strict()
 
 export const relayInstanceLimitsWriteSchema = z

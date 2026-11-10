@@ -1,7 +1,7 @@
 import * as React from "react"
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
 import { Link, useNavigate, useRouter, useSearch } from "@tanstack/react-router"
-import { Container, History, LoaderCircle, Rocket } from "lucide-react"
+import { Container, History, Rocket } from "lucide-react"
 
 import {
   Select,
@@ -18,7 +18,6 @@ import {
   deploymentDuration,
   deploymentStatusPresentation,
   deploymentTriggerLabels,
-  formatDuration,
   shortCommit,
   shortDigest,
 } from "@/components/app/app-deployment-presentation"
@@ -30,21 +29,28 @@ import {
 } from "@/components/app/app-presentation"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import type { ConsoleStreamSnapshot } from "@/components/console/console-stores"
+import {
+  DEPLOYMENT_STREAM,
+  LogHeader,
+  LogMessage,
+  LogMeta,
+  LogRailRowContent,
+  LogSourcesRail,
+  RunningFor,
+  logRailFooterLinkClassName,
+  logRailRowClassName,
+  logRailTabActiveClassName,
+  logRailTabClassName,
+} from "@/components/console/log-sources"
 import { ResourceLogsSession } from "@/components/console/resource-logs"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { RelativeTime } from "@/components/relative-time"
-import {
-  SizedPanelHandle,
-  type PanelSize,
-} from "@/components/sized-panel-handle"
-import { StatusDot, StatusIndicator } from "@/components/status-indicator"
 import {
   appDeploymentLogQueryOptions,
   appDeploymentsQueryOptions,
 } from "@/lib/query-options"
 import type { AppDeploymentView } from "@/server/app-deployments.server"
 
-const DEPLOYMENT_STREAM = "deployment"
 const SERVICE_PREFIX = "service:"
 // What the Relay keeps logs of; older deployments live on in History.
 const LISTED_DEPLOYMENTS = 20
@@ -349,54 +355,6 @@ function SavedDeploymentLog({
   )
 }
 
-function LogMessage({
-  header,
-  loading = false,
-  message,
-}: {
-  header: React.ReactNode
-  loading?: boolean
-  message?: string
-}) {
-  return (
-    <section className="flex min-h-0 flex-1 flex-col bg-card">
-      {header}
-      <div className="grid min-h-0 flex-1 place-items-center bg-background p-6 text-center">
-        {loading ? (
-          <LoaderCircle className="size-4 animate-spin text-primary-ink" />
-        ) : (
-          <p className="text-sm text-muted-foreground">{message}</p>
-        )}
-      </div>
-    </section>
-  )
-}
-
-// The bar above any log: what it is on the left, the rest on the right.
-function LogHeader({
-  children,
-  status,
-  title,
-}: {
-  children?: React.ReactNode
-  status?: IdentityStatusPresentation
-  title: string
-}) {
-  return (
-    <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2 sm:px-4 md:flex-nowrap md:py-0">
-      {status ? <StatusIndicator status={status} /> : null}
-      <span className="type-control-sm min-w-0 flex-1 basis-48 truncate">
-        {title}
-      </span>
-      {children ? (
-        <span className="type-meta flex shrink-0 items-center gap-2 text-muted-foreground">
-          {children}
-        </span>
-      ) : null}
-    </div>
-  )
-}
-
 const DeploymentLogHeader = React.memo(function DeploymentLogHeader({
   deployment,
 }: {
@@ -425,20 +383,6 @@ const ServiceLogHeader = React.memo(function ServiceLogHeader({
     </LogHeader>
   )
 })
-
-// A row's second line and the header's right side, separated the same way.
-function LogMeta({ children }: { children: React.ReactNode }) {
-  return React.Children.toArray(children).flatMap((item, index) =>
-    index === 0
-      ? [item]
-      : [
-          <span key={`separator-${index}`} aria-hidden>
-            ·
-          </span>,
-          item,
-        ]
-  )
-}
 
 function DeploymentMeta({
   deployment,
@@ -511,35 +455,6 @@ function DeploymentReference({
   )
 }
 
-// Ticks by itself, so a running deployment re-renders nothing else.
-function RunningFor({ startedAt }: { startedAt: string }) {
-  const [now, setNow] = React.useState(Date.now)
-  React.useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
-    return () => window.clearInterval(timer)
-  }, [])
-  return (
-    <span className="tabular-nums">
-      Running for {formatDuration(now - Date.parse(startedAt))}
-    </span>
-  )
-}
-
-// Laid out like a database's table list, which is the same kind of panel.
-const logRailSize: PanelSize = {
-  defaultSize: 256,
-  label: "Resize log sources",
-  maxSize: (panel) => {
-    const page = panel.parentElement?.getBoundingClientRect().width
-    return page ? Math.min(440, Math.floor(page * 0.4)) : 440
-  },
-  // Wide enough for the Runtime and Deployments tabs at every type scale.
-  minSize: () =>
-    14 * parseFloat(getComputedStyle(document.documentElement).fontSize),
-  storageKey: "kiln:app-log-sources-width",
-  variable: "--app-log-sources-width",
-}
-
 const AppLogsRail = React.memo(function AppLogsRail({
   appId,
   deployments,
@@ -556,99 +471,93 @@ const AppLogsRail = React.memo(function AppLogsRail({
   source: LogSource
 }) {
   const { app } = useAppWorkspace()
-  const panelRef = React.useRef<HTMLElement>(null)
   const runtime = source.kind === "service"
   const firstService = services[0]?.name
   const newest = deployments[0]?.id
   return (
-    <aside
-      ref={panelRef}
-      className="relative hidden w-[var(--app-log-sources-width,16rem)] min-w-56 shrink-0 flex-col bg-muted/[0.06] md:flex"
-    >
-      <div className="flex h-12 shrink-0 border-b">
-        <Link
-          replace
-          aria-disabled={firstService === undefined}
-          className={cn(railTabClassName, runtime && railTabActiveClassName)}
-          disabled={firstService === undefined}
-          params={{ appId: app.id }}
-          search={{ stream: `${SERVICE_PREFIX}${firstService}` }}
-          to="/app/$appId/logs"
-        >
-          <Container />
-          Runtime
-        </Link>
-        <Link
-          replace
-          className={cn(railTabClassName, !runtime && railTabActiveClassName)}
-          params={{ appId: app.id }}
-          search={{ stream: DEPLOYMENT_STREAM }}
-          to="/app/$appId/logs"
-        >
-          <Rocket />
-          Deployments
-        </Link>
-      </div>
-      <nav
-        aria-label="Log source"
-        className="min-h-0 flex-1 overflow-y-auto py-1.5"
-      >
-        {runtime
-          ? services.map((service) => (
-              <LogRailRow
-                key={service.name}
-                current={source.name === service.name}
-                search={{ stream: `${SERVICE_PREFIX}${service.name}` }}
-                status={service.status}
-                title={service.name}
-              >
-                <ServiceMeta service={service} />
-              </LogRailRow>
-            ))
-          : deployments.map((deployment) => (
-              <LogRailRow
-                key={deployment.id}
-                current={
-                  source.id === deployment.id ||
-                  (source.id === null && deployment.id === newest)
-                }
-                live={isLive(deployment, live)}
-                search={{ deployment: deployment.id }}
-                status={deploymentStatusPresentation(deployment)}
-                title={deploymentTitle(deployment)}
-              >
-                <DeploymentMeta deployment={deployment} />
-              </LogRailRow>
-            ))}
-        {!runtime && deployments.length === 0 ? (
-          <p className="px-3 py-1 text-xs text-muted-foreground">
-            No deployments yet
-          </p>
-        ) : null}
-      </nav>
-      {runtime ? null : (
-        <div className="flex min-h-10 shrink-0 items-center border-t">
+    <LogSourcesRail
+      footer={
+        runtime ? undefined : (
           <Link
-            className="flex h-10 flex-1 items-center gap-2 px-3 text-xs text-muted-foreground transition-colors outline-none hover:bg-accent/45 hover:text-foreground focus-visible:bg-accent/55 [&_svg]:size-3.5"
+            className={logRailFooterLinkClassName}
             search={{ appId, relayId }}
             to="/infra/deployments"
           >
             <History />
             All deployments
           </Link>
-        </div>
-      )}
-      {/* Same edge as the file tree: a hairline the resize handle overlaps. */}
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0 right-0 z-30 w-px bg-border/80"
-      />
-      <SizedPanelHandle panelRef={panelRef} size={logRailSize} />
-    </aside>
+        )
+      }
+      tabs={
+        <>
+          <Link
+            replace
+            aria-disabled={firstService === undefined}
+            className={cn(
+              logRailTabClassName,
+              runtime && logRailTabActiveClassName
+            )}
+            disabled={firstService === undefined}
+            params={{ appId: app.id }}
+            search={{ stream: `${SERVICE_PREFIX}${firstService}` }}
+            to="/app/$appId/logs"
+          >
+            <Container />
+            Runtime
+          </Link>
+          <Link
+            replace
+            className={cn(
+              logRailTabClassName,
+              !runtime && logRailTabActiveClassName
+            )}
+            params={{ appId: app.id }}
+            search={{ stream: DEPLOYMENT_STREAM }}
+            to="/app/$appId/logs"
+          >
+            <Rocket />
+            Deployments
+          </Link>
+        </>
+      }
+    >
+      {runtime
+        ? services.map((service) => (
+            <LogRailRow
+              key={service.name}
+              current={source.name === service.name}
+              search={{ stream: `${SERVICE_PREFIX}${service.name}` }}
+              status={service.status}
+              title={service.name}
+            >
+              <ServiceMeta service={service} />
+            </LogRailRow>
+          ))
+        : deployments.map((deployment) => (
+            <LogRailRow
+              key={deployment.id}
+              current={
+                source.id === deployment.id ||
+                (source.id === null && deployment.id === newest)
+              }
+              live={isLive(deployment, live)}
+              search={{ deployment: deployment.id }}
+              status={deploymentStatusPresentation(deployment)}
+              title={deploymentTitle(deployment)}
+            >
+              <DeploymentMeta deployment={deployment} />
+            </LogRailRow>
+          ))}
+      {!runtime && deployments.length === 0 ? (
+        <p className="px-3 py-1 text-xs text-muted-foreground">
+          No deployments yet
+        </p>
+      ) : null}
+    </LogSourcesRail>
   )
 })
 
-// Every source the rail lists, whatever it is, in the same two lines.
+// A source in the rail, which opens it on this App's Logs page.
 function LogRailRow({
   children,
   current,
@@ -669,28 +578,15 @@ function LogRailRow({
     <Link
       replace
       aria-current={current ? "true" : undefined}
-      className="flex w-full gap-2 px-3 py-1.5 text-left text-xs text-foreground/85 outline-none hover:bg-accent/45 focus-visible:bg-accent/55 aria-[current]:bg-primary/12 aria-[current]:font-medium aria-[current]:text-primary-ink"
+      className={logRailRowClassName}
       params={{ appId: app.id }}
       search={search}
       title={title}
       to="/app/$appId/logs"
     >
-      <span className="grid h-[1.125rem] w-3.5 shrink-0 place-items-center">
-        <StatusDot status={status} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2 leading-[1.125rem]">
-          <span className="min-w-0 flex-1 truncate">{title}</span>
-          {live ? (
-            <span className="type-label shrink-0 border border-emerald-400/40 px-1 text-[0.625rem] leading-3.5 text-emerald-300 light:text-emerald-700">
-              Live
-            </span>
-          ) : null}
-        </span>
-        <span className="flex items-center gap-1.5 overflow-hidden text-[0.6875rem] leading-4 font-normal whitespace-nowrap text-muted-foreground">
-          {children}
-        </span>
-      </span>
+      <LogRailRowContent live={live} status={status} title={title}>
+        {children}
+      </LogRailRowContent>
     </Link>
   )
 }
@@ -701,12 +597,6 @@ function deploymentTitle(deployment: Deployment): string {
     `${sourceTypeLabels[deployment.sourceType]} deployment`
   )
 }
-
-// The look of a page's section tabs.
-const railTabClassName =
-  "relative flex flex-1 basis-auto items-center justify-center gap-1.5 px-3 text-xs whitespace-nowrap font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:bg-accent/55 aria-disabled:pointer-events-none aria-disabled:opacity-40 [&_svg]:size-3.5"
-const railTabActiveClassName =
-  "text-foreground after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-primary"
 
 // The rail, below the width that fits it.
 function AppLogsPicker({

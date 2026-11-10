@@ -91,12 +91,30 @@ const ServerDeploymentLogDialog = React.lazy(() =>
   }))
 )
 
-// Every App's deployments and every game server's installs, reinstalls,
-// and changes of Brick, newest first, across the Relays the person can
-// read. Scoped to one App or game server, this is its history.
+// Every App's deployments, every game server's installs, reinstalls, and
+// changes of Brick, and every database's redeploys, newest first, across
+// the Relays the person can read. Scoped to one App or game server, this
+// is its history.
 
 type Deployment = DeploymentView
 type AppDeployment = Extract<Deployment, { kind: "app" }>
+// One the Relay runs as a single request and logs under Hearth's ID.
+type RequestDeployment = Exclude<Deployment, { kind: "app" }>
+
+// What a game server's or a database's deployment is of.
+function requestTarget(deployment: RequestDeployment) {
+  return deployment.kind === "server"
+    ? {
+        id: deployment.instanceId,
+        idLabel: "Game server ID",
+        name: deployment.serverName,
+      }
+    : {
+        id: deployment.databaseId,
+        idLabel: "Database ID",
+        name: deployment.databaseName,
+      }
+}
 type ScopeKind = "app" | "relay" | "server"
 
 export type AppDeploymentsScope = DeploymentsScope
@@ -110,18 +128,20 @@ const serverTriggerLabels: Record<ServerDeploymentView["trigger"], string> = {
 function triggerLabel(deployment: Deployment): string {
   return deployment.kind === "server"
     ? serverTriggerLabels[deployment.trigger]
-    : deploymentTriggerLabels[deployment.trigger]
+    : deployment.kind === "database"
+      ? "Redeploy"
+      : deploymentTriggerLabels[deployment.trigger]
 }
 
 function instanceName(deployment: Deployment): string {
-  return deployment.kind === "server"
-    ? deployment.serverName
-    : deployment.appName
+  return deployment.kind === "app"
+    ? deployment.appName
+    : requestTarget(deployment).name
 }
 
 function statusOf(deployment: Deployment) {
   return deploymentStatusPresentation(
-    deployment.kind === "server" ? { ...deployment, rolling: null } : deployment
+    deployment.kind === "app" ? deployment : { ...deployment, rolling: null }
   )
 }
 
@@ -314,7 +334,9 @@ const DeploymentsTable = React.memo(function DeploymentsTable({
         (row) =>
           row.kind === "server"
             ? (row.brickName ?? row.brickId ?? "")
-            : (row.commitMessage ?? ""),
+            : row.kind === "app"
+              ? (row.commitMessage ?? "")
+              : "",
         {
           id: "commit",
           header: "Source",
@@ -322,8 +344,11 @@ const DeploymentsTable = React.memo(function DeploymentsTable({
           cell: ({ row }) =>
             row.original.kind === "server" ? (
               <DeploymentBrick deployment={row.original} />
-            ) : (
+            ) : row.original.kind === "app" ? (
               <DeploymentCommit deployment={row.original} />
+            ) : (
+              // A database deploys the image it was made from.
+              <span className="type-meta text-muted-foreground">Image</span>
             ),
           meta: dataTableColumnMeta({ width: "minmax(12rem,1.4fr)" }),
         }
@@ -364,10 +389,10 @@ const DeploymentsTable = React.memo(function DeploymentsTable({
         header: () => <span className="sr-only">Actions</span>,
         enableSorting: false,
         cell: ({ row }) =>
-          row.original.kind === "server" ? (
-            <ServerDeploymentActions deployment={row.original} />
-          ) : (
+          row.original.kind === "app" ? (
             <DeploymentActions deployment={row.original} />
+          ) : (
+            <ServerDeploymentActions deployment={row.original} />
           ),
         meta: dataTableColumnMeta(
           { width: "4.5rem" },
@@ -450,6 +475,31 @@ const DeploymentInstance = React.memo(function DeploymentInstance({
           meta={deployment.relayName}
           metaClassName="font-mono"
           name={deployment.serverName}
+          nameClassName="transition-colors group-hover/app-link:text-primary-ink"
+          showFavorite={false}
+          showStatus={false}
+        />
+      </Link>
+    )
+  }
+  if (deployment.kind === "database") {
+    return (
+      <Link
+        to="/db/$databaseId"
+        params={{ databaseId: deployment.databaseId }}
+        preload="intent"
+        className="group/app-link flex min-h-14 w-full min-w-0 items-center px-3 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+      >
+        <InstanceCard
+          className="min-w-0 flex-1"
+          instance={{
+            id: deployment.databaseId,
+            kind: "database",
+            relayId: deployment.relayId,
+          }}
+          meta={deployment.relayName}
+          metaClassName="font-mono"
+          name={deployment.databaseName}
           nameClassName="transition-colors group-hover/app-link:text-primary-ink"
           showFavorite={false}
           showStatus={false}
@@ -557,7 +607,7 @@ function DeploymentTrigger({ deployment }: { deployment: Deployment }) {
       <span className="text-[0.8125rem]">{triggerLabel(deployment)}</span>
       <span className="type-meta truncate text-muted-foreground">
         {deployment.triggeredByName ??
-          (deployment.kind === "server"
+          (deployment.kind !== "app"
             ? "Kiln"
             : deployment.commitAuthor
               ? `by ${deployment.commitAuthor}`
@@ -572,29 +622,49 @@ function DeploymentTrigger({ deployment }: { deployment: Deployment }) {
 const ServerDeploymentActions = React.memo(function ServerDeploymentActions({
   deployment,
 }: {
-  deployment: ServerDeploymentView
+  deployment: RequestDeployment
 }) {
   const [logOpen, setLogOpen] = React.useState(false)
+  const target = requestTarget(deployment)
   return (
     <DataTableActionGroup>
       {deployment.canReadLogs ? (
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              aria-label={`Log of ${deployment.serverName}'s deployment`}
-              className="text-muted-foreground hover:text-primary-ink"
-              size="icon-sm"
-              type="button"
-              variant="ghost"
-              onClick={() => setLogOpen(true)}
-            >
-              <ScrollText />
-            </Button>
+            {deployment.kind === "database" ? (
+              // A database's opens on its Logs page, as an App's does.
+              <Button
+                asChild
+                className="text-muted-foreground hover:text-primary-ink"
+                size="icon-sm"
+                variant="ghost"
+              >
+                <Link
+                  aria-label={`Log of ${target.name}'s deployment`}
+                  params={{ databaseId: deployment.databaseId }}
+                  search={{ deployment: deployment.id }}
+                  to="/db/$databaseId/logs"
+                >
+                  <ScrollText />
+                </Link>
+              </Button>
+            ) : (
+              <Button
+                aria-label={`Log of ${target.name}'s deployment`}
+                className="text-muted-foreground hover:text-primary-ink"
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+                onClick={() => setLogOpen(true)}
+              >
+                <ScrollText />
+              </Button>
+            )}
           </TooltipTrigger>
           <TooltipContent side="bottom">Log</TooltipContent>
         </Tooltip>
       ) : null}
-      {logOpen ? (
+      {logOpen && deployment.kind === "server" ? (
         <React.Suspense fallback={null}>
           <ServerDeploymentLogDialog
             deployment={deployment}
@@ -608,7 +678,7 @@ const ServerDeploymentActions = React.memo(function ServerDeploymentActions({
           <TooltipTrigger asChild>
             <DropdownMenuTrigger asChild>
               <Button
-                aria-label={`More actions for ${deployment.serverName}'s deployment`}
+                aria-label={`More actions for ${target.name}'s deployment`}
                 size="icon-sm"
                 type="button"
                 variant="ghost"
@@ -621,10 +691,7 @@ const ServerDeploymentActions = React.memo(function ServerDeploymentActions({
         </Tooltip>
         <DropdownMenuContent align="end" className="min-w-48">
           <CopyIdentifierMenuItem label="Deployment ID" value={deployment.id} />
-          <CopyIdentifierMenuItem
-            label="Game server ID"
-            value={deployment.instanceId}
-          />
+          <CopyIdentifierMenuItem label={target.idLabel} value={target.id} />
         </DropdownMenuContent>
       </DropdownMenu>
     </DataTableActionGroup>

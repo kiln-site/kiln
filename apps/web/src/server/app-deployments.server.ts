@@ -25,6 +25,7 @@ import {
   saveAppGitHubSourceEffect,
   type AppDeploymentRecord,
   type AppGitHubSource,
+  type DatabaseDeploymentRecord,
   type DeploymentKind,
   type DeploymentRecord,
   type ServerDeploymentRecord,
@@ -42,6 +43,7 @@ import {
   listAppRecordsEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
+import { listManagedDatabaseDirectoryEffect } from "@/effect/managed-databases"
 import { attachRelayOwnersEffect } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
 import {
@@ -115,9 +117,21 @@ export interface ServerDeploymentView extends ServerDeploymentRecord {
   triggeredByName: string | null
 }
 
-/** A deployment of either kind, as the Deployments page lists them. */
+/** A database's redeploy, as listed. */
+export interface DatabaseDeploymentView extends DatabaseDeploymentRecord {
+  kind: "database"
+  /** Who may read its log on the Relay. */
+  canReadLogs: boolean
+  databaseName: string
+  relayName: string
+  /** The person who asked, by name. */
+  triggeredByName: string | null
+}
+
+/** A deployment of any kind, as the Deployments page lists them. */
 export type DeploymentView =
   | ({ kind: "app" } & AppDeploymentView)
+  | DatabaseDeploymentView
   | ServerDeploymentView
 
 /** One App's deployments, one Relay's Apps', or every App the person reads. */
@@ -145,8 +159,8 @@ export async function getAppDeploymentsHandler(data: {
 }
 
 /**
- * Deployments of every App and game server the person can read, or one
- * Relay's, or one instance's history.
+ * Deployments of every App, game server and database the person can read,
+ * or one Relay's, or one instance's history.
  */
 export async function getDeploymentsHandler(data: {
   before?: { id: string; startedAt: string }
@@ -154,7 +168,7 @@ export async function getDeploymentsHandler(data: {
   relayId?: string
 }) {
   const user = await requireEligibleResourceUser()
-  return listDeployments(user, data, ["app", "server"])
+  return listDeployments(user, data, ["app", "server", "database"])
 }
 
 async function listDeployments(
@@ -166,7 +180,7 @@ async function listDeployments(
   },
   kinds: ReadonlyArray<DeploymentKind>
 ) {
-  const [relays, grants, apps, servers] = await Promise.all([
+  const [relays, grants, apps, servers, databases] = await Promise.all([
     listPersistedRelays(),
     isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
     kinds.includes("app")
@@ -174,6 +188,12 @@ async function listDeployments(
       : Promise.resolve([]),
     kinds.includes("server")
       ? runAppEffect("Infra.directory.servers", readInfraServerDirectory(user))
+      : Promise.resolve([]),
+    kinds.includes("database")
+      ? runAppEffect(
+          "managedDatabases.directory",
+          listManagedDatabaseDirectoryEffect()
+        )
       : Promise.resolve([]),
   ])
   const relayNames = new Map(
@@ -192,6 +212,25 @@ async function listDeployments(
   const readableServers = new Map(
     servers.flatMap((server) =>
       relayNames.has(server.relayId) ? [[server.id, server] as const] : []
+    )
+  )
+  const databasePermissions = (database: {
+    databaseId: string
+    relayId: string
+  }) =>
+    effectiveScopePermissions(grants, {
+      relayId: database.relayId,
+      resourceId: database.databaseId,
+      resourceType: "database",
+    })
+  // Each database the person reads.
+  const readableDatabases = new Map(
+    databases.flatMap((database) =>
+      relayNames.has(database.relayId) &&
+      (isPlatformAdmin(user) ||
+        databasePermissions(database).has("database.read"))
+        ? [[database.databaseId, database] as const]
+        : []
     )
   )
   const records = await runAppEffect(
@@ -218,6 +257,15 @@ async function listDeployments(
             instances: [...readableServers.values()].map((server) => ({
               id: server.id,
               relayId: server.relayId,
+            })),
+            relayIds: [],
+          },
+        }),
+        ...(kinds.includes("database") && {
+          database: {
+            instances: [...readableDatabases.values()].map((database) => ({
+              id: database.databaseId,
+              relayId: database.relayId,
             })),
             relayIds: [],
           },
@@ -257,6 +305,18 @@ async function listDeployments(
           relayName,
           serverName:
             readableServers.get(record.instanceId)?.name ?? record.instanceId,
+          triggeredByName: triggeredByName(record, index),
+        }
+      }
+      if (record.kind === "database") {
+        return {
+          ...record,
+          canReadLogs:
+            isPlatformAdmin(user) ||
+            databasePermissions(record).has("database.logs.read"),
+          databaseName:
+            readableDatabases.get(record.databaseId)?.name ?? record.databaseId,
+          relayName,
           triggeredByName: triggeredByName(record, index),
         }
       }
@@ -652,14 +712,21 @@ export async function getServerDeploymentLogHandler(
     "deployments.load",
     loadDeploymentEffect(data.deploymentId)
   )
-  // Not found alike whether it's missing, another kind, or another server's,
-  // so this says nothing of a server the person can't read.
-  if (record?.kind !== "server" || record.instanceId !== data.instanceId) {
+  // Not found alike whether it's missing, an App's, or another instance's,
+  // so this says nothing of one the person can't read.
+  const target =
+    record?.kind === "server"
+      ? { id: record.instanceId, kind: "instance" as const }
+      : record?.kind === "database"
+        ? { id: record.databaseId, kind: "database" as const }
+        : null
+  if (!record || !target || target.id !== data.instanceId) {
     throw new Error("Deployment not found")
   }
   await requireRelayPermission({
-    instanceId: record.instanceId,
-    permission: "instance.logs.read",
+    ...(target.kind === "instance"
+      ? { instanceId: target.id, permission: "instance.logs.read" }
+      : { databaseId: target.id, permission: "database.logs.read" }),
     relayId: record.relayId,
     user,
   })
@@ -671,7 +738,7 @@ export async function getServerDeploymentLogHandler(
     await databaseRpc(
       relay,
       "instance.deployment.read",
-      { deploymentId: record.id, instanceId: record.instanceId },
+      { deploymentId: record.id, ...target },
       15_000,
       user.id
     )
@@ -680,7 +747,9 @@ export async function getServerDeploymentLogHandler(
     log,
     reason: log
       ? null
-      : "The Relay keeps only each game server's 20 latest deployment logs",
+      : `The Relay keeps only each ${
+          target.kind === "instance" ? "game server" : "database"
+        }'s 20 latest deployment logs`,
   }
 }
 

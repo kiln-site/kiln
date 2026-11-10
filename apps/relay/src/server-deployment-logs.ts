@@ -24,10 +24,12 @@ import { provisioningErrorMessage } from "./provisioning-errors.js"
 import { provisioningStatus } from "./provisioning.js"
 
 // A game server's deployments, as Hearth records them: its first install,
-// each reinstall, and each change of Brick. Hearth names each one; the
-// Relay logs the steps it took and how it ended under that ID, in
-// `<data>/server-deployments/<server>/<deployment>.json`, keeping each
-// server's 20 latest. A log is rewritten whole as it grows, which its few
+// each redeploy, and each change of Brick. A database's redeploys are kept
+// the same way, in a store of their own. Hearth names each one; the Relay
+// logs the steps it took and how it ended under that ID, in
+// `<data>/server-deployments/<instance>/<deployment>.json`, or under
+// `database-deployments` for a database, keeping each instance's 20
+// latest. A log is rewritten whole as it grows, which its few
 // lines make cheap.
 
 const keptPerServer = 20
@@ -41,8 +43,15 @@ export class ServerDeploymentLogs {
   // runs. A restart fails the job, so nothing here needs to outlive one.
   readonly #pendingInstalls = new Map<string, string>()
 
-  constructor(dataDirectory: string) {
-    this.#directory = join(dataDirectory, "server-deployments")
+  /**
+   * Each kind of instance has a store of its own, in a folder of its own,
+   * so a log is only ever read as the kind it was written for.
+   */
+  constructor(
+    dataDirectory: string,
+    folder: "database-deployments" | "server-deployments" = "server-deployments"
+  ) {
+    this.#directory = join(dataDirectory, folder)
   }
 
   /** Notes the deployment a claimed install logs under. */
@@ -78,19 +87,27 @@ export class ServerDeploymentLogs {
     deploymentId: string | undefined,
     title: string,
     work: (
-      onPhase: (phase: ProvisioningWorkPhase) => Promise<void>
-    ) => Promise<T>
+      onPhase: (phase: ProvisioningWorkPhase) => Promise<void>,
+      /** A line of its own in the log. */
+      note: (text: string) => Promise<void>
+    ) => Promise<T>,
+    /** What its phases name. */
+    noun = "game server"
   ): Promise<T> {
-    if (!deploymentId) return work(async () => undefined)
+    const unlogged = async () => undefined
+    if (!deploymentId) return work(unlogged, unlogged)
     // A log that can't be started leaves the deployment to run unlogged.
     const log = await recoverPromise(
       () => this.#start(instanceId, deploymentId, title),
       () => null
     )
-    if (!log) return work(async () => undefined)
+    if (!log) return work(unlogged, unlogged)
     return Effect.runPromise(
       promiseEffect(() =>
-        work((phase) => log.line(provisioningStatus(phase, "game server")))
+        work(
+          (phase) => log.line(provisioningStatus(phase, noun)),
+          (text) => log.line(text)
+        )
       ).pipe(
         Effect.tap(() => promiseEffect(() => log.finish(null))),
         Effect.tapError((error) =>

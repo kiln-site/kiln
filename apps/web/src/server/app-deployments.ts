@@ -63,7 +63,10 @@ const allDeploymentsInputSchema = z.strictObject({
     .strictObject({ id: z.uuid(), startedAt: z.iso.datetime() })
     .optional(),
   instance: z
-    .strictObject({ id: instanceIdSchema, kind: z.enum(["app", "server"]) })
+    .strictObject({
+      id: instanceIdSchema,
+      kind: z.enum(["app", "server", "database"]),
+    })
     .optional(),
   relayId: relayIdSchema.optional(),
 })

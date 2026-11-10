@@ -87,12 +87,10 @@ export const cleanUpDeletedResourceEffect = Effect.fn(
     relayId,
   })
   yield* removeIconsEffect({ kind: kind === "instance" ? "server" : kind, relayId, id })
-  if (kind !== "database") {
-    yield* deleteInstanceDeploymentsEffect(
-      kind === "instance" ? "server" : "app",
-      id
-    )
-  }
+  yield* deleteInstanceDeploymentsEffect(
+    kind === "instance" ? "server" : kind,
+    id
+  )
   // The Relay has removed it, so its directory record goes too. Live
   // snapshots never remove records on their own.
   yield* kind === "instance"

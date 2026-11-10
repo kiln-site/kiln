@@ -306,5 +306,30 @@ The Relay logs each phase and how it ended under the deployment's ID, in
 `server-deployments/<server>/<deployment>.json` in its data directory,
 keeping each server's 20 latest and removing them with the server. A
 deployment's log opens from its row for whoever can read the server's logs
-(`instance.deployment.read`, which takes `instance.logs.read`). Deleting a
-game server or App removes its deployment records.
+(`instance.deployment.read`, which takes `instance.logs.read`). Deleting an
+instance of any kind removes its deployment records.
+
+## Database deployments
+
+A database deploys again as it is set up: the Relay pulls the image tag it
+was made from and replaces its container over the same data volume, so it
+runs whatever release that tag names now. The pull comes first, so a
+registry that can't be reached leaves the database running. It is away
+while the old container stops and the new one gets ready.
+
+When the new container never gets ready, the old one is started again,
+running if it was. That recovers the container, not the data: the new
+release opened the same volume, and what it changed there before failing
+stays changed. Whether the old release still reads it is up to the engine,
+so a redeploy is no substitute for a backup. The deployment's log says
+which image the database ran and which it pulled, by ID.
+
+A redeploy is recorded in the same table by the database's ID, before
+Hearth asks the Relay, and ends as the Relay answers; the minute sweep ends
+one a Hearth restart cut off as **Unknown** after 15 minutes. The Relay
+logs it as it does a game server's, in a store of its own
+(`database-deployments`), so a log is only read as the kind it was written
+for. The database's Logs page lists its
+deployments beside its container's output, as an App's does, and whoever
+reads the database's logs (`database.logs.read`) reads each one's log
+there.

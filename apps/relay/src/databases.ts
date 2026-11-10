@@ -167,6 +167,8 @@ interface DatabaseContainerInspect {
     NanoCpus?: number
   } | null
   Id: string
+  /** The image it runs, by ID. */
+  Image?: string
   Name: string
   State: {
     Error?: string
@@ -599,6 +601,57 @@ export class DatabaseDriver {
     return this.#required(id)
   }
 
+  /**
+   * Deploys the database again as it is: its image pulled anew, and a new
+   * container over the same data. It is away while one stops and the other
+   * gets ready. Its image is the tag it was made from, so this runs
+   * whatever release that tag names now.
+   *
+   * The old container is started again if the new one never gets ready.
+   * That recovers the container, not the data: the new release opens the
+   * same volume, and what it changed there before failing stays changed.
+   * Only a backup undoes that.
+   */
+  async redeploy(
+    databaseId: string,
+    onPhase: (phase: ProvisioningWorkPhase) => Promise<void> = async () => {},
+    /** Says what it found, for the deployment's log. */
+    note: (text: string) => Promise<void> = async () => {}
+  ): Promise<RelayManagedDatabase> {
+    const container = await this.#container(databaseId)
+    const { limits } = await this.#toManagedDatabase(
+      container,
+      await this.#diskLimits()
+    )
+    const image = databaseImage(container)
+    // Pulled before anything stops, so a registry that can't be reached
+    // leaves the database running.
+    await onPhase("pulling_image")
+    await Effect.runPromise(
+      this.#engine.pullImage(image, { timeout: 300_000 })
+    )
+    // Which image it ran and which it will, to tell an update from a
+    // redeploy of the same release, and to find the old one again.
+    const pulled = await Effect.runPromise(
+      this.#engine
+        .inspectImage<{ Id?: string }>(image)
+        .pipe(Effect.map(({ Id }) => Id ?? null))
+    )
+    const ran = container.Image ?? null
+    await note(
+      pulled !== null && pulled === ran
+        ? `${image} is unchanged (${shortImageId(pulled)})`
+        : `${image} is now ${shortImageId(pulled)}; it ran ${shortImageId(ran)}`
+    )
+    await onPhase("creating_container")
+    await traceRelayPromise(
+      "relay.databases.replaceContainer",
+      () => this.#replaceContainer(container, limits),
+      { "relay.database_id": databaseId }
+    )
+    return this.#required(databaseId)
+  }
+
   // A new container over the old one's volume and network, with the same
   // environment. The old one is set aside until the new one is ready, and
   // put back if it never is.
@@ -639,7 +692,7 @@ export class DatabaseDriver {
           ),
           healthcheck: databaseHealthcheck(engine),
           hostname: databaseHostname(id),
-          image: labels["kiln.database.image"] ?? container.Config.Image,
+          image: databaseImage(container),
           // What the old container's label said of it, not this one.
           labels: Object.fromEntries(
             Object.entries(stringLabels(labels)).filter(
@@ -1766,6 +1819,19 @@ async function writeAclFile(
 // Half the start interval of the health check, so a passing check is seen
 // soon after it lands. Inspecting a container is a cheap local request.
 const READY_POLL_MS = 250
+
+// The image a database's containers are made from: the tag it was created
+// with, whatever release of it a container runs.
+function databaseImage(container: DatabaseContainerInspect): string {
+  return (
+    container.Config.Labels?.["kiln.database.image"] ?? container.Config.Image
+  )
+}
+
+// An image's ID as people compare them: its first 12 hex digits.
+function shortImageId(id: string | null): string {
+  return id === null ? "an unknown image" : id.replace(/^sha256:/u, "").slice(0, 12)
+}
 
 async function waitUntilReady(
   engine: DockerEngine,

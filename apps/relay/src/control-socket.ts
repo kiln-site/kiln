@@ -1643,7 +1643,9 @@ function powerAction(
 // The one place that says which action a deploy takes: the same one for
 // every kind that deploys, and none for anything else.
 function deployAction(kind: string | null): RelayAction | null {
-  return kind === "instance" || kind === "app" ? "instance.deploy" : null
+  return kind === "instance" || kind === "database" || kind === "app"
+    ? "instance.deploy"
+    : null
 }
 
 function kindAuditTarget(
@@ -2073,8 +2075,16 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "instance.console.read"
     case "instance.logs.share":
       return "instance.logs.share"
+    // Each kind's deployment log takes what reading its logs does.
     case "instance.deployment.read":
-      return "instance.logs.read"
+      switch (objectString(request.payload, "kind")) {
+        case "instance":
+          return "instance.logs.read"
+        case "database":
+          return "database.logs.read"
+        default:
+          return null
+      }
     case "instance.network.ports.reserve":
     case "instance.network.ports.release":
     case "instance.network.ports.write":
