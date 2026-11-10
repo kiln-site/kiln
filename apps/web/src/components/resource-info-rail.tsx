@@ -118,7 +118,7 @@ const InfoRailNotifications = React.memo(function InfoRailNotifications({
       ...(canAccessDatabasePermission(
         capabilities,
         { id, relayId },
-        "database.power"
+        "instance.power.restart"
       )
         ? (["security.report"] as const)
         : []),

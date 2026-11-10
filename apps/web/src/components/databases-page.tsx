@@ -125,6 +125,7 @@ import {
   infraRelayOptionsQueryOptions,
   refreshInfraTable,
 } from "@/lib/infra-directory"
+import { heldPowerActions } from "@/lib/use-instance-power"
 import { queryKeys } from "@/lib/query-options"
 import {
   createManagedDatabase,
@@ -564,7 +565,9 @@ const DatabaseActions = React.memo(function DatabaseActions({
     database.supportsImportExport &&
     can("database.dump.import")
   const hasDumpActions = canExport || canImport
-  const canPower = available && can("database.power")
+  const power = heldPowerActions(database.permissions, available)
+  const canToggle = running ? power.stop : power.start
+  const canPower = canToggle || power.restart
   const canDelete = can("database.delete")
   const hasOperationalActions = canPower || hasDumpActions
   const canReadCredentials =
@@ -682,18 +685,18 @@ const DatabaseActions = React.memo(function DatabaseActions({
             }}
           />
           <DropdownMenuSeparator />
-          {canPower ? (
-            <>
-              <DropdownMenuItem
-                onSelect={() => action.mutate(running ? "stop" : "start")}
-              >
-                {running ? <Square /> : <Play />}
-                {running ? "Stop" : "Start"}
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => action.mutate("restart")}>
-                <RotateCw /> Restart
-              </DropdownMenuItem>
-            </>
+          {canToggle ? (
+            <DropdownMenuItem
+              onSelect={() => action.mutate(running ? "stop" : "start")}
+            >
+              {running ? <Square /> : <Play />}
+              {running ? "Stop" : "Start"}
+            </DropdownMenuItem>
+          ) : null}
+          {power.restart ? (
+            <DropdownMenuItem onSelect={() => action.mutate("restart")}>
+              <RotateCw /> Restart
+            </DropdownMenuItem>
           ) : null}
           {canPower && hasDumpActions ? <DropdownMenuSeparator /> : null}
           {canExport ? (

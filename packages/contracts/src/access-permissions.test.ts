@@ -61,7 +61,7 @@ describe("permission catalog boundaries", () => {
       "relay"
     )
     expect(child).not.toContain("relay.configure")
-    expect(child).not.toContain("database.read")
+    expect(child).not.toContain("database.credentials.read")
     expect(child).not.toContain("instance.create")
     // Collections carry granular keys only; compatibility umbrellas stay out.
     expect(child).not.toContain("instance.power")
@@ -92,6 +92,51 @@ describe("file permissions", () => {
         "relay"
       )
     ).not.toContain("instance.files.read")
+  })
+})
+
+describe("power permissions", () => {
+  const power = (
+    key: "instance.power.restart" | "instance.power.kill",
+    scope: "database" | "instance" | "relay"
+  ) => expandPermissionSelections([{ kind: "permission", key }], scope)
+
+  it("can be given on one database, and show only that database there", () => {
+    const restart = power("instance.power.restart", "database")
+    expect(restart).toEqual(
+      expect.arrayContaining([
+        "database.read",
+        "instance.power.restart",
+        "instance.power.stop",
+        "instance.power.start",
+      ])
+    )
+    expect(restart).not.toContain("instance.power.kill")
+    expect(restart).not.toContain("instance.read")
+    expect(restart).not.toContain("app.read")
+  })
+
+  it("show every kind they reach on a Relay, and only the game server on one", () => {
+    expect(power("instance.power.kill", "relay")).toEqual(
+      expect.arrayContaining(["instance.read", "database.read", "app.read"])
+    )
+    const server = power("instance.power.kill", "instance")
+    expect(server).toContain("instance.read")
+    expect(server).not.toContain("database.read")
+    expect(server).not.toContain("app.read")
+  })
+
+  it("come with everything about databases, and not with configuring Apps", () => {
+    const all = (key: string) =>
+      expandPermissionSelections([{ kind: "collection", key }], "relay")
+    expect(all("database.all")).toContain("instance.power.kill")
+    expect(all("app.all")).not.toContain("instance.power.start")
+    expect(
+      expandPermissionSelections(
+        [{ kind: "permission", key: "app.manage" }],
+        "relay"
+      )
+    ).not.toContain("instance.power.start")
   })
 })
 

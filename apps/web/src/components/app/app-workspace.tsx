@@ -50,7 +50,7 @@ import {
 import { WorkspaceFrame } from "@/components/workspace-frame"
 import { WorkloadResourceMeters } from "@/components/workload-resource-meters"
 import { WorkspacePowerControls } from "@/components/workspace-power-controls"
-import { useInstancePower } from "@/lib/use-instance-power"
+import { heldPowerActions, useInstancePower } from "@/lib/use-instance-power"
 import { appDestinations } from "@/lib/navigation-destinations"
 import {
   appConfigQueryOptions,
@@ -337,15 +337,12 @@ function AppPowerControls({
     enabled: canManage,
     select: ({ config }) => config.sourceType,
   })
+  // Power is its own permission; deploying goes with configuring the App.
   const powerPermissions = React.useMemo(
-    () => ({
-      kill: canManage && deployed,
-      restart: canManage && deployed,
-      start: canManage && deployed,
-      stop: canManage && deployed,
-    }),
-    [canManage, deployed]
+    () => heldPowerActions(app.permissions, !deletion && deployed),
+    [app.permissions, deletion, deployed]
   )
+  const canPower = Object.values(powerPermissions).some(Boolean)
   const invalidate = () =>
     queryClient.invalidateQueries({
       queryKey: instanceInventoryScope({
@@ -400,7 +397,7 @@ function AppPowerControls({
   const deployDisabled = !relayConnected || power.pending
   const deployPending = deploy.isPending || deploying || queued !== null
 
-  if (!canManage) return null
+  if (!canManage && !canPower) return null
   return (
     <div className="flex items-center gap-1.5">
       {queued !== null ? (
@@ -410,7 +407,10 @@ function AppPowerControls({
         action={power.action}
         killWarning="This immediately terminates the App's containers. Anything they haven't saved may be lost."
         menuAction={
-          deployed && sourceType !== undefined && sourceType !== "image"
+          canManage &&
+          deployed &&
+          sourceType !== undefined &&
+          sourceType !== "image"
             ? {
                 description: "Rebuild every layer from scratch",
                 disabled: deployDisabled || deployPending,
@@ -422,14 +422,19 @@ function AppPowerControls({
         }
         noun="app"
         powerPermissions={powerPermissions}
-        primaryAction={{
-          disabled: deployDisabled,
-          icon: <Rocket />,
-          label: deployLabel,
-          pending: deployPending,
-          pendingLabel: deploying || deploy.isPending ? "Deploying" : "Queued",
-          onClick: () => deploy.mutate(false),
-        }}
+        primaryAction={
+          canManage
+            ? {
+                disabled: deployDisabled,
+                icon: <Rocket />,
+                label: deployLabel,
+                pending: deployPending,
+                pendingLabel:
+                  deploying || deploy.isPending ? "Deploying" : "Queued",
+                onClick: () => deploy.mutate(false),
+              }
+            : undefined
+        }
         target={{
           name: app.name,
           observedState: app.observedState,

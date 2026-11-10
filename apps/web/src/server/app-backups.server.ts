@@ -149,8 +149,8 @@ export async function createAppBackupsHandler(
       user,
       relay.id,
       [...users],
-      "app.manage",
-      "A stopped backup stops and starts every App that uses what it backs up; you need permission to manage each"
+      "instance.power.stop",
+      "A stopped backup stops and starts every App that uses what it backs up; you need permission to stop each"
     )
   }
   await requirePersonalStorage(data.storageIds, user, relay.id, app)

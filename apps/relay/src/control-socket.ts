@@ -1636,27 +1636,18 @@ function authenticationVerifier(options: {
   )
 }
 
-// The one place that says which action a power request takes: a game
-// server's has one for each, a database's one for all, and an App's goes with
-// configuring it.
+// The one place that says which action a power request takes: the same one
+// for a game server, a database and an App, and none for anything else.
 function powerAction(
   kind: string | null,
   action: string | null
 ): RelayAction | null {
-  switch (kind) {
-    case "instance":
-      if (action === "start") return "instance.power.start"
-      if (action === "stop") return "instance.power.stop"
-      if (action === "restart") return "instance.power.restart"
-      if (action === "kill") return "instance.power.kill"
-      return null
-    case "database":
-      return "database.power"
-    case "app":
-      return "app.manage"
-    default:
-      return null
-  }
+  if (kind !== "instance" && kind !== "database" && kind !== "app") return null
+  if (action === "start") return "instance.power.start"
+  if (action === "stop") return "instance.power.stop"
+  if (action === "restart") return "instance.power.restart"
+  if (action === "kill") return "instance.power.kill"
+  return null
 }
 
 function powerAuditTarget(

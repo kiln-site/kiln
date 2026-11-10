@@ -259,7 +259,7 @@ describe("Relay control socket", () => {
     })
   })
 
-  it("takes the power grant of the kind a request names, and no other kind's", async () => {
+  it("takes the same power action for every kind, one for each action, and none for a Relay", async () => {
     const relay = await startRelay()
     const id = "0123456789ab"
     // Whether a client holding these actions may start each kind.
@@ -276,10 +276,15 @@ describe("Relay control socket", () => {
       return kinds
     }
 
-    expect(await allowed(["instance.power.start"])).toEqual(["instance"])
+    expect(await allowed(["instance.power.start"])).toEqual([
+      "instance",
+      "database",
+      "app",
+    ])
+    // Each action is its own on the Relay, and configuring an App is no
+    // longer power over it.
     expect(await allowed(["instance.power.stop"])).toEqual([])
-    expect(await allowed(["database.power"])).toEqual(["database"])
-    expect(await allowed(["app.manage"])).toEqual(["app"])
+    expect(await allowed(["app.manage"])).toEqual([])
   })
 
   it("checks a certificate with what changing its route takes", async () => {
@@ -404,7 +409,10 @@ describe("Relay control socket", () => {
 
     it("changes nothing for a client revoked, or stripped of the action, while it waited", async () => {
       const { container, hold, relay } = await relayWithDatabase()
-      const grant = { actions: ["database.power"], role: "custom" } as const
+      const grant = {
+        actions: ["instance.power.stop"],
+        role: "custom",
+      } as const
       const revoked = await relay.pair(grant)
       const demoted = await relay.pair(grant)
       const revokedConnection = await relay.connect(revoked)
@@ -443,7 +451,7 @@ describe("Relay control socket", () => {
     it("runs for a client still allowed to send it", async () => {
       const { container, hold, relay } = await relayWithDatabase()
       const hearth = await relay.pair({
-        actions: ["database.power"],
+        actions: ["instance.power.stop"],
         role: "custom",
       })
       const connection = await relay.connect(hearth)

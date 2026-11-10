@@ -125,7 +125,7 @@ export function RelayVolumesPage() {
   const { relay } = useRelayWorkspace()
   const canManage = useRelayPermission(relay.id, "relay.configure")
   // A stopped backup stops and starts the Apps that use the volume.
-  const canManageApps = useRelayPermission(relay.id, "app.manage")
+  const canStopApps = useRelayPermission(relay.id, "instance.power.stop")
   const [searchStore] = React.useState(() => createDataTableSearchStore())
   const [dialog, setDialog] = React.useState<VolumeDialog>(null)
   // The App whose volumes are shown, those it owns or uses, or null for all.
@@ -176,9 +176,9 @@ export function RelayVolumesPage() {
             open
             relayId={relay.id}
             stoppedUnavailable={
-              canManageApps
+              canStopApps
                 ? null
-                : "Stopping it takes permission to manage the Apps that use it"
+                : "Stopping it takes permission to stop the Apps that use it"
             }
             target={{ id: dialog.volume.id, kind: "volume" }}
             title={`Back up ${dialog.volume.name}`}

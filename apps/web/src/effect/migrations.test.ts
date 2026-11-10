@@ -696,10 +696,12 @@ describeMysql("database migrations", () => {
             "instance.files.delete",
             "instance.files.write",
           ])
+          // Selecting every App permission also covered an App's power.
           expect(yield* granted("apps")).toEqual([
             "app.all",
             "instance.files.delete",
             "instance.files.write",
+            "instance.power.kill",
           ])
           expect(yield* granted("server")).toEqual(["instance.console.read"])
           expect(
@@ -738,6 +740,160 @@ describeMysql("database migrations", () => {
             "instance.files.list",
             "instance.files.read",
             "instance.files.upload",
+          ])
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
+      "keeps who could power a database or an App, as the power permissions every instance takes",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while a database's power had a permission
+          // of its own and an App's went with configuring it.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 61)
+          )
+          const relayId = "1".repeat(12)
+          const databaseId = "2".repeat(12)
+          yield* insertRelay(relayId, {
+            client_actions: JSON.stringify([
+              "database.read",
+              "database.power",
+              "app.manage",
+            ]),
+            client_role: "custom",
+          })
+          const selections = (
+            owner: Record<string, string>,
+            keys: ReadonlyArray<string>
+          ) =>
+            keys.map((key) => ({
+              ...owner,
+              selection_kind: key.endsWith(".all")
+                ? "collection"
+                : "permission",
+              selection_key: key,
+            }))
+          const grant = Effect.fnUntraced(function* (
+            id: string,
+            resourceType: "database" | "instance" | "relay",
+            resourceId: string,
+            keys: ReadonlyArray<string>
+          ) {
+            yield* insertUser(id)
+            yield* insertGrant({
+              id,
+              relayId,
+              resourceId,
+              resourceType,
+              userId: id,
+            })
+            yield* insertRows(
+              "access_selection",
+              selections({ access_id: id }, keys)
+            )
+          })
+          yield* grant("databases", "relay", relayId, [
+            "database.power",
+            "database.logs.read",
+          ])
+          yield* grant("block", "relay", relayId, ["database.power.all"])
+          yield* grant("apps", "relay", relayId, ["app.manage"])
+          yield* grant("observer", "relay", relayId, ["app.logs.read"])
+          yield* grant("database", "database", databaseId, ["database.power"])
+          // On one game server a database permission never did anything.
+          yield* grant("server", "instance", "5".repeat(12), [
+            "database.power",
+            "database.power.all",
+            "instance.console.read",
+          ])
+          yield* insertRows("permission_preset", {
+            created_at: 1,
+            id: "preset",
+            name: "Database power",
+            relay_id: relayId,
+            resource_id: databaseId,
+            resource_type: "database",
+            updated_at: 1,
+          })
+          yield* insertRows(
+            "preset_selection",
+            selections({ preset_id: "preset" }, ["database.power"])
+          )
+
+          yield* applyMigrations(migrations)
+
+          const selected = (table: string, owner: string, id: string) =>
+            sql<{ key: string }>`
+              SELECT selection_key AS \`key\` FROM ${sql(databaseTableName(table))}
+               WHERE ${sql(owner)} = ${id} ORDER BY selection_key
+            `.pipe(Effect.map((rows) => rows.map((row) => row.key)))
+          const granted = (id: string) =>
+            selected("access_selection", "access_id", id)
+          expect(yield* granted("databases")).toEqual([
+            "database.logs.read",
+            "instance.power.kill",
+          ])
+          expect(yield* granted("block")).toEqual(["instance.power.kill"])
+          expect(yield* granted("apps")).toEqual([
+            "app.manage",
+            "instance.power.kill",
+          ])
+          expect(yield* granted("observer")).toEqual(["app.logs.read"])
+          expect(yield* granted("database")).toEqual(["instance.power.kill"])
+          expect(yield* granted("server")).toEqual(["instance.console.read"])
+          expect(
+            yield* selected("preset_selection", "preset_id", "preset")
+          ).toEqual(["instance.power.kill"])
+
+          // What was stored now loads, and still starts and stops.
+          const loaded = (
+            keys: ReadonlyArray<string>,
+            scope: "database" | "relay"
+          ) =>
+            expandStoredSelections(
+              keys.map((key) => ({
+                key,
+                kind: key.endsWith(".all") ? "collection" : "permission",
+              })),
+              scope
+            )
+          expect(loaded(yield* granted("database"), "database")).toEqual(
+            expect.arrayContaining([
+              "database.read",
+              "instance.power.start",
+              "instance.power.stop",
+              "instance.power.restart",
+              "instance.power.kill",
+            ])
+          )
+          expect(loaded(yield* granted("apps"), "relay")).toEqual(
+            expect.arrayContaining([
+              "app.manage",
+              "app.read",
+              "instance.power.start",
+              "instance.power.kill",
+            ])
+          )
+
+          const [relay] = yield* sql<{ actions: unknown }>`
+            SELECT client_actions AS actions
+              FROM ${sql(databaseTableName("relay"))} WHERE id = ${relayId}
+          `
+          expect(
+            typeof relay?.actions === "string"
+              ? JSON.parse(relay.actions)
+              : relay?.actions
+          ).toEqual([
+            "database.read",
+            "instance.power.start",
+            "instance.power.stop",
+            "instance.power.restart",
+            "instance.power.kill",
+            "app.manage",
           ])
         }),
       schemaBuildTimeout

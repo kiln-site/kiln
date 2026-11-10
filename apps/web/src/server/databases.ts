@@ -16,6 +16,7 @@ import {
   databaseIdSchema,
   instancePowerPermission,
   newDatabaseNamesShape,
+  permissionRelayReach,
   relayControlDeadlineMs,
   relayPowerActionSchema,
   relayDatabaseNameSchema,
@@ -111,8 +112,12 @@ const databaseMutateRequestSchema = databaseInputSchema.extend({
   request: databaseMutateInputSchema,
 })
 
-const databasePermissions = accessPermissions.filter((permission) =>
-  permission.startsWith("database.")
+// What a database's pages check: what databases alone have, and what every
+// instance has that reaches a database.
+const databasePermissions = accessPermissions.filter(
+  (permission) =>
+    permission.startsWith("database.") ||
+    permissionRelayReach(permission).includes("database")
 )
 
 type DatabaseInventoryStatus = "available" | "missing" | "unavailable"
@@ -306,7 +311,7 @@ const powerDatabase = resourceOperation({
   // Its Relay orders power by the database's process.
   lock: { part: "power" },
   doing: "Changing this database's power",
-  permission: (input) => instancePowerPermission("database", input.action),
+  permission: (input) => instancePowerPermission(input.action),
   run: async (user, data) => {
     const relay = await requiredRelay(data.relayId)
     const database = relayManagedDatabaseSchema.parse(

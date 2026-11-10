@@ -48,7 +48,6 @@ export const legacyAccessPermissions = [
   "database.create",
   "database.credentials.read",
   "database.credentials.rotate",
-  "database.power",
   "database.delete",
   "database.network.read",
   "database.network.write",
@@ -247,10 +246,10 @@ const permissionPlacement: Record<
   "instance.sftp.connect": ["instance.files", "instance"],
   "instance.delete": ["resource.deletion", "instance"],
   "instance.power": ["instance.power", "instance"],
-  "instance.power.start": ["instance.power", "instance"],
-  "instance.power.stop": ["instance.power", "instance"],
-  "instance.power.restart": ["instance.power", "instance"],
-  "instance.power.kill": ["instance.power", "instance"],
+  "instance.power.start": ["instance.power", "every"],
+  "instance.power.stop": ["instance.power", "every"],
+  "instance.power.restart": ["instance.power", "every"],
+  "instance.power.kill": ["instance.power", "every"],
   "instance.settings": ["instance.configuration", "instance"],
   "instance.configuration.read": ["instance.configuration", "instance"],
   "instance.configuration.write": ["instance.configuration", "instance"],
@@ -263,7 +262,6 @@ const permissionPlacement: Record<
   "database.read": ["overview", "database"],
   "database.credentials.read": ["database.credentials", "database"],
   "database.credentials.rotate": ["database.credentials", "database"],
-  "database.power": ["database.power", "database"],
   "database.delete": ["resource.deletion", "database"],
   "database.network.read": ["database.network", "database"],
   "database.network.write": ["database.network", "database"],
@@ -319,7 +317,7 @@ const relayScopeChildVisibility: Record<string, readonly AccessPermission[]> = {
  * granted: a Relay, and each kind of instance people can be invited to that
  * has it. `reaches` is the kinds it covers from a Relay, which it reveals
  * there. Files: a game server's and an App's, and an App is reached only
- * through its Relay.
+ * through its Relay. Power: a game server's, a database's and an App's.
  */
 const everyInstanceBlocks: Record<
   string,
@@ -332,19 +330,20 @@ const everyInstanceBlocks: Record<
     scopes: instanceScopes,
     reaches: ["instance.read", "app.read"],
   },
+  "instance.power": {
+    scopes: grantScopes,
+    reaches: ["instance.read", "database.read", "app.read"],
+  },
 }
 
 /**
- * The permission a power action takes on each kind of instance, said in one
- * place: a game server has one for each action, a database one for all, and
- * an App's goes with configuring it.
+ * The permission a power action takes, said in one place. It is the same on
+ * a game server, a database and an App.
  */
 export function instancePowerPermission(
-  kind: "app" | "database" | "instance",
   action: "kill" | "restart" | "start" | "stop"
 ): AccessPermission {
-  if (kind === "instance") return `instance.power.${action}`
-  return kind === "database" ? "database.power" : "app.manage"
+  return `instance.power.${action}`
 }
 
 /** Legacy umbrella permissions kept only so migrated selections stay valid. */
@@ -441,22 +440,23 @@ const permissionCopy: Record<
     description: "Start, stop, restart, or force stop the server.",
   },
   "instance.power.start": {
-    label: "Start server",
-    description: "Start a stopped server.",
+    label: "Start",
+    description:
+      "Start one that is stopped: a game server, a database, or an App.",
   },
   "instance.power.stop": {
-    label: "Stop server",
-    description: "Shut down the server gracefully. Also allows starting it.",
+    label: "Stop",
+    description: "Shut it down gracefully. Also allows starting it.",
   },
   "instance.power.restart": {
-    label: "Restart server",
+    label: "Restart",
     description:
-      "Stop and start the server. Also allows starting and stopping it separately.",
+      "Stop and start it. Also allows starting and stopping it separately.",
   },
   "instance.power.kill": {
-    label: "Force stop server",
+    label: "Force stop",
     description:
-      "Stop the server immediately. Also allows starting, stopping, and restarting it.",
+      "Stop it immediately. Also allows starting, stopping, and restarting it.",
   },
   "instance.settings": {
     label: "Manage server settings",
@@ -512,10 +512,6 @@ const permissionCopy: Record<
     label: "Reset database password",
     description: "Generate a new password for database connections.",
   },
-  "database.power": {
-    label: "Control database power",
-    description: "Start, stop, or restart the database.",
-  },
   "database.limits.write": {
     label: "Manage resource limits",
     description: "Change the database’s memory, CPU, and disk limits.",
@@ -565,7 +561,7 @@ const permissionCopy: Record<
   "app.manage": {
     label: "Configure and deploy apps",
     description:
-      "Change an app's source, environment, and networking, deploy it, and start or stop it. Apps can run any container, with the access that gives on the Relay's host.",
+      "Change an app's source, environment, and networking, and deploy it. Apps can run any container, with the access that gives on the Relay's host.",
   },
   "app.delete": {
     label: "Delete apps",
@@ -747,7 +743,7 @@ export function accessPermissionSupported(
 
 const blockLabels: Record<string, string> = {
   overview: "Overview",
-  "instance.power": "Server power",
+  "instance.power": "Power",
   "instance.console": "Console",
   "instance.files": "Files",
   "instance.logs": "Logs",
@@ -757,7 +753,6 @@ const blockLabels: Record<string, string> = {
   preset: "Presets",
   backup: "Backups",
   schedule: "Schedules",
-  "database.power": "Database power",
   "database.credentials": "Database credentials",
   "database.network": "Database networking",
   "database.dump": "Database data",
@@ -1003,7 +998,6 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
           "instance.files.all",
           "instance.logs.all",
           "instance.network.write",
-          "database.power",
           "database.network.write",
           "database.logs.read",
           "app.logs.read",

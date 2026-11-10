@@ -1,5 +1,9 @@
 import type { RowDataPacket } from "mysql2/promise"
-import { appConfigSchema, appMountsSchema } from "@workspace/contracts"
+import {
+  appConfigSchema,
+  appMountsSchema,
+  permissionRelayReach,
+} from "@workspace/contracts"
 import type { AppConfig, AppMount } from "@workspace/contracts"
 import { Effect } from "effect"
 
@@ -174,11 +178,12 @@ export function hasAppPermission(
   )
 }
 
-// What an App's pages check: what Apps alone have, and the file permissions
-// its files take as every instance's do.
+// What an App's pages check: what Apps alone have, and what every instance
+// has that reaches an App.
 const appPermissions = accessPermissions.filter(
   (permission) =>
-    permission.startsWith("app.") || permission.startsWith("instance.files.")
+    permission.startsWith("app.") ||
+    permissionRelayReach(permission).includes("app")
 )
 
 /** The Apps a person can see, each with what they may do to it. */

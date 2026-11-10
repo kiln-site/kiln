@@ -34,6 +34,7 @@ import {
   backupTaskInputSchema,
   backupTaskResultSchema,
   migratedFileActions,
+  migratedPowerActions,
   omitBackupSecrets,
   relayBackupTaskSchema,
   relayAppSchema,
@@ -1875,7 +1876,19 @@ const migrations = SqliteMigrator.fromRecord({
   // An App's files take the file actions a game server's do. A client or
   // invitation given actions of its own keeps what it could do to an App's
   // files, under those actions.
-  "40_instance_file_actions": Effect.gen(function* () {
+  "40_instance_file_actions": moveCustomActions(migratedFileActions),
+  // A database's and an App's power take the power actions a game server's
+  // do. `database.power` covered every one, and so did `app.manage`, which
+  // stays for configuring and deploying.
+  "41_instance_power_actions": moveCustomActions(migratedPowerActions),
+})
+
+// Rewrites the actions of every client and invitation given actions of its
+// own, when an action is replaced by ones every instance takes.
+function moveCustomActions(
+  move: (actions: ReadonlyArray<string>) => Array<string>
+) {
+  return Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
     for (const table of ["relay_clients", "relay_invitations"]) {
       const rows = yield* sql<{ actions_json: string; id: string }>`
@@ -1890,7 +1903,7 @@ const migrations = SqliteMigrator.fromRecord({
         if (!Array.isArray(stored) || !stored.every(Predicate.isString)) {
           continue
         }
-        const actions = migratedFileActions(stored)
+        const actions = move(stored)
         if (actions.join() === stored.join()) continue
         yield* sql`
           UPDATE ${sql(table)} SET actions_json = ${JSON.stringify(actions)}
@@ -1898,8 +1911,8 @@ const migrations = SqliteMigrator.fromRecord({
         `
       }
     }
-  }),
-})
+  })
+}
 
 // The App IDs a Hearth still owes, as stored; anything unreadable owes
 // nothing it can name, so it's kept as it is.

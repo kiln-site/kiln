@@ -146,7 +146,7 @@ goes to people who can act on it:
 | ---------------------------------- | ------------------------------ |
 | A Relay's host and Kiln's services | `relay.update`                 |
 | Game server                        | `instance.configuration.write` |
-| Database                           | `database.power`               |
+| Database                           | `instance.power.restart`       |
 | App                                | `app.manage`                   |
 
 Platform administrators hold all of them. In **Settings → Notifications**,

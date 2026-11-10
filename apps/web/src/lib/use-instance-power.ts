@@ -1,9 +1,28 @@
 import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { instancePowerPermission } from "@workspace/contracts"
 
 import { recoverPromise } from "@/effect/promise"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import type { ServerAction } from "@/lib/instance-power-state"
+
+/**
+ * The power actions someone may take on an instance, from the permissions
+ * they hold on it; none while `available` is false.
+ */
+export function heldPowerActions(
+  permissions: ReadonlyArray<string>,
+  available = true
+): Record<ServerAction, boolean> {
+  const may = (action: ServerAction) =>
+    available && permissions.includes(instancePowerPermission(action))
+  return {
+    kill: may("kill"),
+    restart: may("restart"),
+    start: may("start"),
+    stop: may("stop"),
+  }
+}
 
 /**
  * Power for a database or an App: runs the action through the kind's own

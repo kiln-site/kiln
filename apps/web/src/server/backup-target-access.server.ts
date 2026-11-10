@@ -82,7 +82,7 @@ export async function backupTargetUsers(
 
 /**
  * Refuses unless the user holds `permission` on every App: each App a
- * stopped backup stops and starts again takes `app.manage`, as starting and
+ * stopped backup stops and starts again takes `instance.power.stop`, as
  * stopping it does; each App using what a restore replaces takes the
  * permission that writes its files.
  */
@@ -90,7 +90,7 @@ export async function requireAppsPermission(
   user: AuthenticatedUser,
   relayId: string,
   appIds: ReadonlyArray<string>,
-  permission: "instance.files.write" | "app.manage",
+  permission: "instance.files.write" | "instance.power.stop",
   reason: string
 ): Promise<void> {
   if (isPlatformAdmin(user) || appIds.length === 0) return

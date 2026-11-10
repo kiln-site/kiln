@@ -114,7 +114,7 @@ const wake = (globalThis.kilnSecurityWake ??= Effect.runSync(
 /** What people who can act on a resource's vulnerabilities hold. */
 export const securityNotifyPermissions = {
   app: "app.manage",
-  database: "database.power",
+  database: "instance.power.restart",
   instance: "instance.configuration.write",
   relay: "relay.update",
 } as const satisfies Record<

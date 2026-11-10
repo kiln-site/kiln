@@ -41,7 +41,7 @@ import {
   WorkspaceMetaSeparator,
 } from "@/components/workspace-header"
 import { WorkspacePowerControls } from "@/components/workspace-power-controls"
-import { useInstancePower } from "@/lib/use-instance-power"
+import { heldPowerActions, useInstancePower } from "@/lib/use-instance-power"
 import { databaseDestinations } from "@/lib/navigation-destinations"
 import { managedDatabaseDirectoryQueryOptions } from "@/lib/query-options"
 import { runManagedDatabaseAction } from "@/server/databases"
@@ -285,15 +285,9 @@ function DatabasePowerControls({
       resourceId: database.id,
     })
   )
-  const canPower = !deletion && database.permissions.includes("database.power")
   const powerPermissions = React.useMemo(
-    () => ({
-      kill: canPower,
-      restart: canPower,
-      start: canPower,
-      stop: canPower,
-    }),
-    [canPower]
+    () => heldPowerActions(database.permissions, !deletion),
+    [database.permissions, deletion]
   )
   const power = useInstancePower({
     reference: {

@@ -275,12 +275,12 @@ const runAppActionNow = resourceOperation({
   name: "app.power",
   lock: { part: "power" },
   doing: "Changing this App's power",
-  permission: (input) => instancePowerPermission("app", input.action),
+  permission: (input) => instancePowerPermission(input.action),
   run: async (user, data) => {
     const { relay } = await authorizedAppFor(
       user,
       data,
-      instancePowerPermission("app", data.action)
+      instancePowerPermission(data.action)
     )
     const app = relayAppSchema.parse(
       await databaseRpc(

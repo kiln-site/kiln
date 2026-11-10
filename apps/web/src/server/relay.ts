@@ -1401,7 +1401,7 @@ const powerInstance = resourceOperation({
   // Starting it provisions its domains.
   alsoLocks: (input) => [exclusive(instanceDnsKey(input))],
   doing: "Changing this game server's power",
-  permission: (input) => instancePowerPermission("instance", input.action),
+  permission: (input) => instancePowerPermission(input.action),
   run: performInstanceActionHandler,
 })
 
