@@ -97,6 +97,8 @@ function brickViewFromBrick(brick: Brick, source = brick.source): BrickView {
 }
 
 interface StartupEditing {
+  /** Deploying it again as it is, which takes a permission of its own. */
+  canDeploy: boolean
   canEdit: boolean
   canStart: boolean
   canViewConsole: boolean
@@ -114,6 +116,7 @@ export function StartupWorkspace() {
   const observedState = startupQuery.data?.instance.observedState
   const editing = React.useMemo<StartupEditing>(
     () => ({
+      canDeploy: permissions.deploy && relayConnected,
       canEdit:
         permissions.configurationWrite &&
         relayConnected &&
@@ -190,7 +193,7 @@ const StartupForm = React.memo(function StartupForm({
   observedState: string
   relayId: string
 }) {
-  const { canEdit, canStart } = editing
+  const { canDeploy, canEdit, canStart } = editing
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [view, setView] = React.useState(() =>
@@ -334,7 +337,7 @@ const StartupForm = React.memo(function StartupForm({
   }
 
   async function onReinstall() {
-    if (!canEdit || pending || submittingRef.current) return
+    if (!canDeploy || pending || submittingRef.current) return
     setError(null)
     submittingRef.current = true
     await Effect.runPromise(
@@ -428,6 +431,10 @@ const StartupForm = React.memo(function StartupForm({
             initial={swapInitial}
             onConfirm={applyBrickSelection}
           />
+        </>
+      ) : null}
+      {canDeploy ? (
+        <>
           <StartupBrickReinstallDialog
             brickName={initialBrick.metadata.name}
             error={reinstallOpen ? error : null}
@@ -480,7 +487,7 @@ function StartupSettingsForm({
     value: BrickVariableValue | undefined
   ) => void
 }) {
-  const { canEdit, canStart } = editing
+  const { canDeploy, canEdit, canStart } = editing
   const variableDefinitions = view.variables
   const javaArgsDefinition = variableDefinitions.java_args
   const pairVersionAndJava =
@@ -516,6 +523,7 @@ function StartupSettingsForm({
         <div className="overflow-hidden rounded-xl border border-border/75 bg-background/45">
           <BrickSummary
             view={view}
+            canDeploy={canDeploy}
             canEdit={canEdit}
             pending={pending}
             onReinstall={onReinstall}
@@ -675,12 +683,14 @@ function StartupSection({
 
 function BrickSummary({
   view,
+  canDeploy,
   canEdit,
   pending,
   onReinstall,
   onSwap,
 }: {
   view: BrickView
+  canDeploy: boolean
   canEdit: boolean
   pending: boolean
   onReinstall: () => void
@@ -689,28 +699,32 @@ function BrickSummary({
   return (
     <WorkspaceSummaryCard
       action={
-        canEdit ? (
+        canDeploy || canEdit ? (
           <div className="flex shrink-0 flex-wrap justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={pending}
-              onClick={onReinstall}
-            >
-              <RefreshCw />
-              Reinstall
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={pending}
-              onClick={onSwap}
-            >
-              <ArrowLeftRight />
-              Swap Brick
-            </Button>
+            {canDeploy ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={pending}
+                onClick={onReinstall}
+              >
+                <RefreshCw />
+                Reinstall
+              </Button>
+            ) : null}
+            {canEdit ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={pending}
+                onClick={onSwap}
+              >
+                <ArrowLeftRight />
+                Swap Brick
+              </Button>
+            ) : null}
           </div>
         ) : null
       }

@@ -394,7 +394,7 @@ async function updateInstanceStartupHandler(
     ? await requiredVisibleRecipeDefinition(user, submittedRecipe)
     : null
   const networkChanged = startupNetworkChanged(existing.tailscale, data)
-  let configurationChanged = Boolean(data.reinstall || recipeChanged)
+  let configurationChanged = recipeChanged
   let limitsChanged = false
   if (!data.reinstall) {
     const { brick: previousRecipe } = await loadInstanceRecipe(relay, existing)
@@ -412,6 +412,8 @@ async function updateInstanceStartupHandler(
       data.variables ?? {}
     )
   }
+  // A reinstall deploys it again as it is, changing none of its settings.
+  if (data.reinstall) authorization.require("instance.deploy")
   if (networkChanged) authorization.require("instance.network.write")
   if (configurationChanged)
     authorization.require("instance.configuration.write")
@@ -419,6 +421,7 @@ async function updateInstanceStartupHandler(
   // Applying unchanged settings still rebuilds the container. A read grant
   // alone must never authorize this mutation.
   if (
+    !data.reinstall &&
     !configurationChanged &&
     !limitsChanged &&
     !networkChanged &&
@@ -427,7 +430,11 @@ async function updateInstanceStartupHandler(
   ) {
     authorization.require("instance.network.write")
   }
-  const powerPermission = startupPowerPermission(existing, data)
+  // A deploy restarts what it replaces, as an App's does, without power
+  // over it.
+  const powerPermission = data.reinstall
+    ? null
+    : startupPowerPermission(existing, data)
   if (powerPermission) authorization.require(powerPermission)
   const {
     deploymentId: _untrustedDeploymentId,

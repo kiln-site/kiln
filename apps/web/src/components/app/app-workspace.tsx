@@ -328,16 +328,16 @@ function AppPowerControls({
       resourceId: app.id,
     })
   )
-  const canManage = !deletion && app.permissions.includes("app.manage")
+  const canDeploy = !deletion && app.permissions.includes("instance.deploy")
   const deployed = app.containers.length > 0
   const deployLabel = deployed ? "Redeploy" : "Deploy"
   // An image is pulled, so it has no build cache to skip.
   const { data: sourceType } = useQuery({
     ...appConfigQueryOptions(app.relayId, app.id),
-    enabled: canManage,
+    enabled: canDeploy,
     select: ({ config }) => config.sourceType,
   })
-  // Power is its own permission; deploying goes with configuring the App.
+  // Power and deploying are each a permission of their own.
   const powerPermissions = React.useMemo(
     () => heldPowerActions(app.permissions, !deletion && deployed),
     [app.permissions, deletion, deployed]
@@ -397,7 +397,7 @@ function AppPowerControls({
   const deployDisabled = !relayConnected || power.pending
   const deployPending = deploy.isPending || deploying || queued !== null
 
-  if (!canManage && !canPower) return null
+  if (!canDeploy && !canPower) return null
   return (
     <div className="flex items-center gap-1.5">
       {queued !== null ? (
@@ -407,7 +407,7 @@ function AppPowerControls({
         action={power.action}
         killWarning="This immediately terminates the App's containers. Anything they haven't saved may be lost."
         menuAction={
-          canManage &&
+          canDeploy &&
           deployed &&
           sourceType !== undefined &&
           sourceType !== "image"
@@ -423,7 +423,7 @@ function AppPowerControls({
         noun="app"
         powerPermissions={powerPermissions}
         primaryAction={
-          canManage
+          canDeploy
             ? {
                 disabled: deployDisabled,
                 icon: <Rocket />,

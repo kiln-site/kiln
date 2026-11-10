@@ -142,13 +142,18 @@ reveals those kinds there.
   that much authority. A Relay's own host files keep `relay.files.*`, and a
   database's dumps keep `database.dump.*`.
 - **Power**: `instance.power.*` starts, stops, restarts and kills a game
-  server, a database or an App. Configuring and deploying an App
-  (`app.manage`) doesn't include its power.
+  server, a database or an App. Configuring an App (`app.manage`) doesn't
+  include its power.
+- **Deploying**: `instance.deploy` deploys a game server or an App again as
+  it is set up, and restarts it without taking power over it. Configuring
+  an App (`app.manage`) or a game server (`instance.configuration.write`)
+  doesn't include it, so saving an App's source and deploying it at once
+  takes both.
 
 Only what one kind alone has keeps that kind's name. `database.all` covers a
 database's power, since power can be granted on one database; selected on a
 Relay, that power reaches every instance there. `app.all` covers what Apps
-alone have, not their files or power.
+alone have, not their files, power or deploying.
 
 **Presets** come in two kinds:
 
@@ -187,10 +192,10 @@ provisionally by its Relay's owner, until the Relay's audit log names who
 created it. Owners of a Relay, game server, or database hold `all` there;
 on a Relay, that covers everything on it. An App's owner holds only
 `app.read`, `app.logs.read`, and `app.delete`.
-Configuring and deploying an App, opening its shell, and using its files can
-reach the Relay's host, so those still take permissions on the Relay: App
-permissions for the first two, and file permissions for its files. Its
-power takes `instance.power.*` on the Relay too.
+Configuring an App, opening its shell, and using its files can reach the
+Relay's host, so those still take permissions on the Relay: App permissions
+for the first two, and file permissions for its files. Its power takes
+`instance.power.*` and deploying it `instance.deploy`, on the Relay too.
 
 Only the owner or a platform administrator can transfer ownership, to an
 enabled, verified account that already has access there: an active grant on

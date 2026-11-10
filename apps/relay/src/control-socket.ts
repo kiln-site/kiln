@@ -1701,6 +1701,9 @@ function memberActionsForRequest(
     // It connects Apps.
     case "database.network.import":
       return ["app.manage"]
+    // A deploy carries the configuration it deploys.
+    case "app.deploy":
+      return ["app.manage"]
     // A new App connected to databases changes their connections too.
     case "app.provision.prepare": {
       const databaseIds =
@@ -1939,6 +1942,7 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
               : null
     }
     case "app.deploy":
+      return "instance.deploy"
     case "app.limits.write":
     case "app.network.routes.write":
       return "app.manage"
@@ -2003,10 +2007,17 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "schedule.write"
     case "schedule.overview":
       return "schedule.read"
+    case "instance.startup.write":
+      // A reinstall deploys it again as it is; anything else changes what
+      // it was created with.
+      return request.payload &&
+        typeof request.payload === "object" &&
+        (request.payload as Record<string, unknown>).reinstall === true
+        ? "instance.deploy"
+        : "instance.create"
     case "instance.create":
     case "instance.provision.prepare":
     case "instance.provision.claim":
-    case "instance.startup.write":
     case "instance.limits.write":
       return "instance.create"
     case "instance.provision.cancel":

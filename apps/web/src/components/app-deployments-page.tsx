@@ -698,7 +698,7 @@ const DeploymentActions = React.memo(function DeploymentActions({
           <TooltipContent side="bottom">More actions</TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" className="min-w-48">
-          {deployment.canManage ? (
+          {deployment.canDeploy ? (
             <DropdownMenuItem
               disabled={redeploy.isPending}
               onSelect={() => redeploy.mutate()}
@@ -715,7 +715,7 @@ const DeploymentActions = React.memo(function DeploymentActions({
               </a>
             </DropdownMenuItem>
           ) : null}
-          {deployment.canManage || deployment.commitUrl ? (
+          {deployment.canDeploy || deployment.commitUrl ? (
             <DropdownMenuSeparator />
           ) : null}
           <CopyIdentifierMenuItem label="Deployment ID" value={deployment.id} />

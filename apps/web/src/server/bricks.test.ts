@@ -34,17 +34,11 @@ describe("Hearth Brick mutation inputs", () => {
 })
 
 describe("Startup granular authority", () => {
-  it("requires restart for running rebuilds, including reinstalls, and no power for stopped edits", () => {
+  it("requires restart for running rebuilds, and no power for stopped edits", () => {
     expect(
       startupPowerPermission(
         { desiredState: "running", observedState: "running" },
         { start: true }
-      )
-    ).toBe("instance.power.restart")
-    expect(
-      startupPowerPermission(
-        { desiredState: "running", observedState: "running" },
-        { start: false, reinstall: true }
       )
     ).toBe("instance.power.restart")
     expect(

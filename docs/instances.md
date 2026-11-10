@@ -61,11 +61,15 @@ Kiln's own, replacing the mclo.gs upload game servers have now.
 - A Relay's own host keeps `relay.*`: its files and its shell are the
   machine's.
 
-Files and power follow this now. `instance.files.*` is a game server's
-files on that game server, and every game server's and App's on a Relay.
+Files, power and deploying follow this now. `instance.files.*` is a game
+server's files on that game server, and every game server's and App's on a
+Relay.
 `instance.power.*` is the power of a game server or database it is granted
 on, and of every game server, database and App on a Relay; an App's power
-is no longer part of `app.manage`. See [Access control](access-control.md).
+is no longer part of `app.manage`. `instance.deploy` deploys again what it
+is granted on, and everything on a Relay; it is no longer part of
+`app.manage`, nor of changing a game server's configuration. See
+[Access control](access-control.md).
 
 In the catalog (`packages/contracts/src/access-permissions.ts`) these are
 the `every` family, and `everyInstanceBlocks` says where each can be granted

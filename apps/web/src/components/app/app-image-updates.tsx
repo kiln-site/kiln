@@ -147,6 +147,8 @@ function AppImageUpdatesDialog({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const canManage = app.permissions.includes("app.manage")
+  // Skipping an update decides the App's updates; taking it is a deploy.
+  const canDeploy = app.permissions.includes("instance.deploy")
   const input = { appId: app.id, relayId: app.relayId }
   const [mode, setMode] = React.useState<AppImageUpdateMode>(updates.mode)
   const [waitDays, setWaitDays] = React.useState(() =>
@@ -284,7 +286,7 @@ function AppImageUpdatesDialog({
           ) : null}
         </dl>
 
-        {available && canManage ? (
+        {available && (canManage || canDeploy) ? (
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-muted-foreground">
               {skipped
@@ -292,7 +294,7 @@ function AppImageUpdatesDialog({
                 : "A newer image is out."}
             </p>
             <div className="flex shrink-0 gap-2">
-              {skipped ? null : (
+              {skipped || !canManage ? null : (
                 <Button
                   variant="outline"
                   size="sm"
@@ -302,12 +304,18 @@ function AppImageUpdatesDialog({
                   Skip
                 </Button>
               )}
-              <Button size="sm" disabled={busy} onClick={() => deploy.mutate()}>
-                {deploy.isPending ? (
-                  <LoaderCircle className="animate-spin" />
-                ) : null}
-                Update now
-              </Button>
+              {canDeploy ? (
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => deploy.mutate()}
+                >
+                  {deploy.isPending ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : null}
+                  Update now
+                </Button>
+              ) : null}
             </div>
           </div>
         ) : null}

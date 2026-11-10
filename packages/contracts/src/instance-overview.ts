@@ -10,7 +10,15 @@ export function projectRelayInstanceOverview<T extends RelayInstance>(
   return source === undefined ? overview : { ...overview, brickSource: source }
 }
 
-function publicBrickSource(source: string | undefined): string | undefined {
+/**
+ * A Brick's source as it may be shown to someone who can't read the
+ * instance's configuration, in an overview or an error: without the
+ * credentials, query or fragment a URL can carry, and not at all when it
+ * isn't a URL.
+ */
+export function publicBrickSource(
+  source: string | undefined
+): string | undefined {
   if (!source) return undefined
   const parsed = Result.try(() => new URL(source))
   // Invalid source strings can contain credentials too.

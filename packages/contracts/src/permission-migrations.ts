@@ -10,6 +10,9 @@
  *
  * Power: a database's took `database.power`, and an App's went with
  * configuring it (`app.manage`). Both covered every power action.
+ *
+ * Deploying: an App's went with configuring it (`app.manage`), and a game
+ * server's reinstall with changing its configuration. A database had none.
  */
 const fileActions: Readonly<Record<string, ReadonlyArray<string>>> = {
   "app.files.read": ["instance.files.list", "instance.files.read"],
@@ -81,3 +84,25 @@ export function migratedPowerActions(
  * `database.power`, and goes beside `app.manage`.
  */
 export const migratedPowerPermission = "instance.power.kill"
+
+// On a Relay, reinstalling a game server went with creating one, as changing
+// a database's limits goes with creating a database.
+const deployActions: Readonly<Record<string, ReadonlyArray<string>>> = {
+  // Still what configuring an App takes.
+  "app.manage": ["app.manage", "instance.deploy"],
+  "instance.create": ["instance.create", "instance.deploy"],
+  "database.create": ["database.create", "instance.deploy"],
+}
+
+/**
+ * A Relay client's actions, with deploying added beside the actions that
+ * covered it, or that replace a database's container as a deploy does.
+ */
+export function migratedDeployActions(
+  actions: ReadonlyArray<string>
+): Array<string> {
+  return replaced(actions, deployActions)
+}
+
+/** The permission that deploys an instance of any kind again. */
+export const migratedDeployPermission = "instance.deploy"

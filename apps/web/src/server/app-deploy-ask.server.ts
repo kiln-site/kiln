@@ -27,10 +27,10 @@ export const askAppDeploy = resourceOperation({
   id: (input: AppDeployAsk) => input.appId,
   name: "app.deploy.ask",
   doing: "Asking this App to deploy",
-  permission: () => "app.manage",
+  permission: () => "instance.deploy",
   lock: "shared",
   run: async (user, input) => {
-    const { relay } = await authorizedAppFor(user, input, "app.manage")
+    const { relay } = await authorizedAppFor(user, input, "instance.deploy")
     const { askAppDeploymentEffect } =
       await import("@/lib/app-deployments.server")
     await runAppEffect(

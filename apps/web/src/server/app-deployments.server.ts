@@ -84,7 +84,7 @@ const deploymentPageSize = 100
 export interface AppDeploymentView extends AppDeploymentRecord {
   appName: string
   /** Who may redeploy it and read its log. */
-  canManage: boolean
+  canDeploy: boolean
   canReadLogs: boolean
   commitUrl: string | null
   relayName: string
@@ -263,7 +263,7 @@ async function listDeployments(
       return {
         ...record,
         appName: appNames.get(record.appId) ?? record.appId,
-        canManage: hasAppPermission(user, grants, record, "app.manage"),
+        canDeploy: hasAppPermission(user, grants, record, "instance.deploy"),
         canReadLogs: hasAppPermission(user, grants, record, "app.logs.read"),
         commitUrl: commitUrl(record),
         relayName,
@@ -320,7 +320,7 @@ export async function cancelQueuedAppDeployHandler(
   user: AuthenticatedUser,
   data: { appId: string; operationId: string; relayId: string }
 ) {
-  const { relay } = await authorizedAppFor(user, data, "app.manage")
+  const { relay } = await authorizedAppFor(user, data, "instance.deploy")
   const waiting = await runAppEffect(
     "apps.deploy.waiting",
     waitingOperation(deployAppKind, appDeployKey(relay.id, data.appId))
@@ -502,6 +502,8 @@ export async function saveAppGitHubSourceHandler(
   }
 ) {
   const { relay } = await authorizedAppFor(user, data, "app.manage")
+  // Changing its source is configuring it; deploying it at once is a deploy.
+  if (data.deploy) await authorizedAppFor(user, data, "instance.deploy")
   if (!relayConnectionFeatures(relay.id).has(relayAppGitHubV1Feature)) {
     throw new Error(
       relayConnectionFeatures(relay.id).size === 0
@@ -569,7 +571,11 @@ export async function redeployAppDeploymentHandler(
   data: { deploymentId: string }
 ) {
   const record = await recordFor(data.deploymentId)
-  const { app, relay } = await authorizedAppFor(user, record, "app.manage")
+  const { app, relay } = await authorizedAppFor(
+    user,
+    record,
+    "instance.deploy"
+  )
   // A commit only of the repository the app deploys from now, which its
   // deployment names, and again once its turn comes.
   if (record.commitSha) {

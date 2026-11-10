@@ -696,9 +696,11 @@ describeMysql("database migrations", () => {
             "instance.files.delete",
             "instance.files.write",
           ])
-          // Selecting every App permission also covered an App's power.
+          // Selecting every App permission also covered an App's power and
+          // deploying it.
           expect(yield* granted("apps")).toEqual([
             "app.all",
+            "instance.deploy",
             "instance.files.delete",
             "instance.files.write",
             "instance.power.kill",
@@ -840,6 +842,7 @@ describeMysql("database migrations", () => {
           expect(yield* granted("block")).toEqual(["instance.power.kill"])
           expect(yield* granted("apps")).toEqual([
             "app.manage",
+            "instance.deploy",
             "instance.power.kill",
           ])
           expect(yield* granted("observer")).toEqual(["app.logs.read"])
@@ -894,7 +897,161 @@ describeMysql("database migrations", () => {
             "instance.power.restart",
             "instance.power.kill",
             "app.manage",
+            "instance.deploy",
           ])
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
+      "keeps who could deploy an App, reinstall a game server or replace a database's container, as the deploy permission every instance takes",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while deploying an App went with
+          // configuring it, and reinstalling a game server with changing
+          // its configuration.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 62)
+          )
+          const relayId = "1".repeat(12)
+          const databaseId = "2".repeat(12)
+          const serverId = "5".repeat(12)
+          yield* insertRelay(relayId, {
+            client_actions: JSON.stringify(["database.read", "instance.create"]),
+            client_role: "custom",
+          })
+          const selections = (
+            owner: Record<string, string>,
+            keys: ReadonlyArray<string>
+          ) =>
+            keys.map((key) => ({
+              ...owner,
+              selection_kind: key.endsWith(".all")
+                ? "collection"
+                : "permission",
+              selection_key: key,
+            }))
+          const grant = Effect.fnUntraced(function* (
+            id: string,
+            resourceType: "database" | "instance" | "relay",
+            resourceId: string,
+            keys: ReadonlyArray<string>
+          ) {
+            yield* insertUser(id)
+            yield* insertGrant({
+              id,
+              relayId,
+              resourceId,
+              resourceType,
+              userId: id,
+            })
+            yield* insertRows(
+              "access_selection",
+              selections({ access_id: id }, keys)
+            )
+          })
+          yield* grant("apps", "relay", relayId, ["app.manage"])
+          yield* grant("everyApp", "relay", relayId, ["app.all"])
+          yield* grant("server", "instance", serverId, [
+            "instance.configuration.write",
+          ])
+          yield* grant("limits", "database", databaseId, [
+            "database.limits.write",
+          ])
+          yield* grant("observer", "relay", relayId, [
+            "app.logs.read",
+            "instance.configuration.read",
+          ])
+          // On one database a game server's configuration never did
+          // anything.
+          yield* grant("stray", "database", databaseId, [
+            "instance.configuration.write",
+            "database.logs.read",
+          ])
+          yield* insertRows("permission_preset", {
+            created_at: 1,
+            id: "preset",
+            name: "Server configuration",
+            relay_id: relayId,
+            resource_id: serverId,
+            resource_type: "instance",
+            updated_at: 1,
+          })
+          yield* insertRows(
+            "preset_selection",
+            selections({ preset_id: "preset" }, ["instance.configuration.all"])
+          )
+
+          yield* applyMigrations(migrations)
+
+          const selected = (table: string, owner: string, id: string) =>
+            sql<{ key: string }>`
+              SELECT selection_key AS \`key\` FROM ${sql(databaseTableName(table))}
+               WHERE ${sql(owner)} = ${id} ORDER BY selection_key
+            `.pipe(Effect.map((rows) => rows.map((row) => row.key)))
+          const granted = (id: string) =>
+            selected("access_selection", "access_id", id)
+          expect(yield* granted("apps")).toEqual([
+            "app.manage",
+            "instance.deploy",
+          ])
+          expect(yield* granted("everyApp")).toEqual([
+            "app.all",
+            "instance.deploy",
+          ])
+          expect(yield* granted("server")).toEqual([
+            "instance.configuration.write",
+            "instance.deploy",
+          ])
+          expect(yield* granted("limits")).toEqual([
+            "database.limits.write",
+            "instance.deploy",
+          ])
+          expect(yield* granted("observer")).toEqual([
+            "app.logs.read",
+            "instance.configuration.read",
+          ])
+          expect(yield* granted("stray")).toEqual([
+            "database.logs.read",
+            "instance.configuration.write",
+          ])
+          expect(
+            yield* selected("preset_selection", "preset_id", "preset")
+          ).toEqual(["instance.configuration.all", "instance.deploy"])
+
+          // What was stored now loads, and deploys what it could before.
+          const loaded = (
+            keys: ReadonlyArray<string>,
+            scope: "database" | "instance" | "relay"
+          ) =>
+            expandStoredSelections(
+              keys.map((key) => ({
+                key,
+                kind: key.endsWith(".all") ? "collection" : "permission",
+              })),
+              scope
+            )
+          expect(loaded(yield* granted("limits"), "database")).toEqual(
+            expect.arrayContaining(["database.read", "instance.deploy"])
+          )
+          expect(loaded(yield* granted("server"), "instance")).toEqual(
+            expect.arrayContaining(["instance.read", "instance.deploy"])
+          )
+          expect(loaded(yield* granted("apps"), "relay")).toEqual(
+            expect.arrayContaining(["app.manage", "app.read", "instance.deploy"])
+          )
+
+          const [relay] = yield* sql<{ actions: unknown }>`
+            SELECT client_actions AS actions
+              FROM ${sql(databaseTableName("relay"))} WHERE id = ${relayId}
+          `
+          expect(
+            typeof relay?.actions === "string"
+              ? JSON.parse(relay.actions)
+              : relay?.actions
+          ).toEqual(["database.read", "instance.create", "instance.deploy"])
         }),
       schemaBuildTimeout
     )

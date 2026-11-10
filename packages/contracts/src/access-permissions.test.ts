@@ -140,6 +140,41 @@ describe("power permissions", () => {
   })
 })
 
+describe("the deploy permission", () => {
+  const expand = (key: string, scope: "database" | "instance" | "relay") =>
+    expandPermissionSelections(
+      [{ kind: key.endsWith(".all") ? "collection" : "permission", key }],
+      scope
+    )
+
+  it("can be given on one database, and reaches every kind from a Relay", () => {
+    const database = expand("instance.deploy", "database")
+    expect(database).toEqual(
+      expect.arrayContaining(["database.read", "instance.deploy"])
+    )
+    expect(database).not.toContain("instance.read")
+    expect(expand("instance.deploy", "relay")).toEqual(
+      expect.arrayContaining(["instance.read", "database.read", "app.read"])
+    )
+  })
+
+  it("doesn't come with configuring an App or a game server, or with power", () => {
+    expect(expand("app.manage", "relay")).not.toContain("instance.deploy")
+    expect(expand("app.all", "relay")).not.toContain("instance.deploy")
+    expect(expand("instance.configuration.write", "instance")).not.toContain(
+      "instance.deploy"
+    )
+    expect(expand("instance.power.kill", "relay")).not.toContain(
+      "instance.deploy"
+    )
+    // Nor does it configure or power what it deploys.
+    const deploy = expand("instance.deploy", "relay")
+    expect(deploy).not.toContain("app.manage")
+    expect(deploy).not.toContain("instance.configuration.write")
+    expect(deploy).not.toContain("instance.power.start")
+  })
+})
+
 describe("machine policy delegation", () => {
   it("requires full scoped authority for clients that can mint unrestricted clients", () => {
     const full = permissionsForRelayClientPolicy("full_access")

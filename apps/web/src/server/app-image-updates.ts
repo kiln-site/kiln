@@ -37,14 +37,15 @@ const skipInputSchema = appInputSchema.extend({ digest: imageDigestSchema })
 const imageOperation = <Input extends z.infer<typeof appInputSchema>, A>(
   name: string,
   doing: string,
-  run: (user: AuthenticatedUser, input: Input) => Promise<A>
+  run: (user: AuthenticatedUser, input: Input) => Promise<A>,
+  permission: "app.manage" | "instance.deploy" = "app.manage"
 ) =>
   resourceOperation({
     kind: "app",
     id: (input: Input) => input.appId,
     name,
     doing,
-    permission: () => "app.manage",
+    permission: () => permission,
     lock: "shared",
     run,
   })
@@ -71,7 +72,8 @@ const skipUpdate = imageOperation(
 const deployUpdate = imageOperation(
   "app.imageUpdates.deploy",
   "Deploying this App",
-  deployAppImageUpdateHandler
+  deployAppImageUpdateHandler,
+  "instance.deploy"
 )
 
 export const saveAppImageUpdatePolicy = createServerFn({ method: "POST" })

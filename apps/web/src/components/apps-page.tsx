@@ -506,7 +506,7 @@ const AppActions = React.memo(function AppActions({
     state.phase === "ready" &&
     state.observation.reachability === "connected" &&
     state.observation.inventory === "available"
-  const canManage = app.permissions.includes("app.manage")
+  const canDeploy = app.permissions.includes("instance.deploy")
   const hearth = useAppDeployState(app.id)
   const deploying = app.detail?.deploying === true || hearth?.deploying === true
   // Waiting its turn: asking again would only join it.
@@ -528,7 +528,7 @@ const AppActions = React.memo(function AppActions({
   return (
     <DataTableActionGroup>
       <DataTableInlineActions>
-        {canManage ? (
+        {canDeploy ? (
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -596,7 +596,7 @@ const AppActions = React.memo(function AppActions({
           className="min-w-44"
           onCloseAutoFocus={menu.onCloseAutoFocus}
         >
-          {canManage ? (
+          {canDeploy ? (
             <DataTablePhoneMenuItems>
               <DropdownMenuItem
                 disabled={deployDisabled}
