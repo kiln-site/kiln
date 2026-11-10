@@ -28,14 +28,14 @@ action to each. Today a network has one ID that every Relay's node shares.
 
 Every kind gets these from the platform.
 
-| Capability  | Target                                          | Today                                                                                        |
-| ----------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| Power       | Start, stop, restart and kill, for every kind   | One Relay request for all three workload kinds; kill and its permission still differ by kind |
-| Deployments | One redeploy for every kind                     | An App's redeploy and a game server's Brick reinstall are separate; databases have none      |
-| Domains     | Every kind, automatic for an App's web services | Game servers only                                                                            |
-| Networking  | One page for every kind                         | A page per kind, on a few shared sections                                                    |
-| Files       | One file browser and one permission             | Done for game servers and Apps                                                               |
-| Info page   | One page shell                                  | A page per kind, on a shared shell                                                           |
+| Capability  | Target                                          | Today                                                                                   |
+| ----------- | ----------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases and Apps: one Relay request and one permission         |
+| Deployments | One redeploy for every kind                     | An App's redeploy and a game server's Brick reinstall are separate; databases have none |
+| Domains     | Every kind, automatic for an App's web services | Game servers only                                                                       |
+| Networking  | One page for every kind                         | A page per kind, on a few shared sections                                               |
+| Files       | One file browser and one permission             | Done for game servers and Apps                                                          |
+| Info page   | One page shell                                  | A page per kind, on a shared shell                                                      |
 
 A Relay implements each in its own way: it can only be restarted, its
 deployments are its updates, and its files are the host's.
@@ -60,10 +60,16 @@ Kiln's own, replacing the mclo.gs upload game servers have now.
 - A Relay's own host keeps `relay.*`: its files and its shell are the
   machine's.
 
-Files follow this now: `instance.files.*` is a game server's files on that
-game server, and every game server's and App's on a Relay. Power is next:
-`instance.power.*` for every kind, with an App's power no longer part of
-`app.manage`. See [Access control](access-control.md).
+Files and power follow this now. `instance.files.*` is a game server's
+files on that game server, and every game server's and App's on a Relay.
+`instance.power.*` is the power of a game server or database it is granted
+on, and of every game server, database and App on a Relay; an App's power
+is no longer part of `app.manage`. See [Access control](access-control.md).
+
+In the catalog (`packages/contracts/src/access-permissions.ts`) these are
+the `every` family, and `everyInstanceBlocks` says where each can be granted
+and which kinds it reaches from a Relay. A capability that moves gets an
+entry there.
 
 ## How a shared capability is built
 
@@ -110,8 +116,8 @@ check, SRV records and the picker's grouping stand in for a type.
 
 ## Order of work
 
-1. Kill on every instance, with one rule for stopped and failed.
-2. One power permission for every kind.
+1. Kill on every instance, with one rule for stopped and failed. Done.
+2. One power permission for every kind. Done.
 3. Remove unused Relay requests and checks for older Relays.
 4. The new Brick format, with the v1 converter and the official recipes.
 5. `kind` and `type` in place of the Brick ID and game name checks.

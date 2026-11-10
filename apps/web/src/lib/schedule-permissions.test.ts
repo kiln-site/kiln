@@ -38,7 +38,7 @@ describe("schedule authorization", () => {
       relayId: "relay-a",
       resourceId: "database-a",
       resourceType: "database",
-      permissions: ["schedule.create", "database.terminal", "database.power"],
+      permissions: ["schedule.create", "database.terminal", "instance.power.restart"],
     }
     const relayGrant: AccessGrant = {
       id: "relay-grant",
@@ -109,11 +109,15 @@ describe("schedule authorization", () => {
     expect(failure([command], [relayGrant(["app.manage"])])).toContain(
       "app.terminal"
     )
-    expect(failure([stop], [relayGrant(["app.terminal"])])).toContain(
-      "app.manage"
-    )
+    // Configuring an App no longer stops it.
     expect(
-      failure([command, stop], [relayGrant(["app.terminal", "app.manage"])])
+      failure([stop], [relayGrant(["app.terminal", "app.manage"])])
+    ).toContain("instance.power.stop")
+    expect(
+      failure(
+        [command, stop],
+        [relayGrant(["app.terminal", "instance.power.stop"])]
+      )
     ).toBeNull()
     // Without Hearth's mark, a command step never reaches the App, so it
     // takes nothing of it.
@@ -135,7 +139,7 @@ describe("schedule authorization", () => {
           },
         ]
       )
-    ).toContain("app.manage")
+    ).toContain("instance.power.stop")
   })
 
   it("keeps Kiln's backups to platform administrators, whatever a Relay grant allows", () => {

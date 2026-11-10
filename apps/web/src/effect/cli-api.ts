@@ -1122,7 +1122,7 @@ export const performCliPowerActionEffect = Effect.fn("cli.api.power")(
     const relay = yield* authorizeTarget(
       principal,
       input,
-      instancePowerPermission("instance", input.action)
+      instancePowerPermission(input.action)
     )
     const result = yield* relayRpcEffect(
       relay,

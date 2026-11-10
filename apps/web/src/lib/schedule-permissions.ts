@@ -20,9 +20,9 @@ type ScheduleActionPermissionInput =
   | Pick<SchedulePowerAction, "action" | "type">
 
 const powerActions = ["start", "stop", "restart", "kill"] as const
-type PowerTargetKind = Parameters<typeof instancePowerPermission>[0]
 
-function isPowerTarget(kind: ScheduleTarget["kind"]): kind is PowerTargetKind {
+// The kinds whose power a schedule can change.
+function isPowerTarget(kind: ScheduleTarget["kind"]): boolean {
   return kind === "instance" || kind === "database" || kind === "app"
 }
 
@@ -43,7 +43,7 @@ export function scheduleActionPermission(
   if (action.type === "power") {
     // As starting or stopping it by hand does.
     return isPowerTarget(target.kind)
-      ? instancePowerPermission(target.kind, action.action)
+      ? instancePowerPermission(action.action)
       : null
   }
   // An App's backups follow its files' permissions, as manual ones do;
@@ -62,13 +62,9 @@ export function scheduleActionOptionPermissions(
   target: Pick<ScheduleTarget, "kind">
 ): ReadonlyArray<AccessPermission> {
   if (type === "power") {
-    const kind = target.kind
-    if (!isPowerTarget(kind)) return []
-    return [
-      ...new Set(
-        powerActions.map((action) => instancePowerPermission(kind, action))
-      ),
-    ]
+    return isPowerTarget(target.kind)
+      ? powerActions.map(instancePowerPermission)
+      : []
   }
   const permission = scheduleActionPermission({ type }, target)
   return permission === null ? [] : [permission]

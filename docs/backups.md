@@ -101,8 +101,8 @@ the authority reading or writing that data does
   and replaces only files `instance.files.write` could already change, and
   the Compose file isn't among them (Hearth sends it with each deployment).
 - A Kiln volume, shared by design, takes `backup.*` on the Relay.
-- A stopped backup also takes `app.manage` on every App it stops and
-  starts again, as starting and stopping them does.
+- A stopped backup also takes `instance.power.stop` on every App it stops
+  and starts again, as stopping them does.
 - Restoring a volume also takes `instance.files.write` on every App that uses
   it, as the Relay reports them; while the Relay can't tell which Apps use
   it yet, the restore is refused.
@@ -332,7 +332,7 @@ left the Relay running what it had before.
 A step that backs up an App backs up its folder and each volume its Compose
 project owns that has a Kiln ID, as a manual App backup does, each admitted on its own. It's taken live,
 or stopped once for all of them as a batch; saving a stopped one takes
-`app.manage` on the App and every App using those volumes, and while their
+`instance.power.stop` on the App and every App using those volumes, and while their
 Relay can't say which those are, only a stopped step the schedule already had
 is kept.
 

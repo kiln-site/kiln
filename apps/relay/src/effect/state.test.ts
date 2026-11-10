@@ -342,7 +342,7 @@ describe("Relay state", () => {
   )
 
   it.effect(
-    "keeps what a client or invitation could do to an App's files, as the file actions every instance takes",
+    "keeps what a client or invitation could do to an App's files and to a database's and an App's power, as the actions every instance takes",
     () =>
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
@@ -372,6 +372,7 @@ describe("Relay state", () => {
                 "app.files.read",
                 "app.files.upload",
                 "instance.files.read",
+                "database.power",
               ])
               yield* store.createInvitation(used)
               yield* store.pairClient({
@@ -386,7 +387,7 @@ describe("Relay state", () => {
                 sourceCidrs: [],
               })
               yield* store.createInvitation(
-                invitation("unused", ["app.files.write"])
+                invitation("unused", ["app.files.write", "app.manage"])
               )
             })
           )
@@ -406,6 +407,10 @@ describe("Relay state", () => {
                   "instance.files.list",
                   "instance.files.read",
                   "instance.files.upload",
+                  "instance.power.start",
+                  "instance.power.stop",
+                  "instance.power.restart",
+                  "instance.power.kill",
                 ]
               )
               assert.deepStrictEqual(
@@ -415,6 +420,12 @@ describe("Relay state", () => {
                   "instance.files.delete",
                   "instance.files.rename",
                   "instance.files.upload-url",
+                  // Configuring an App stays, with the power it covered.
+                  "app.manage",
+                  "instance.power.start",
+                  "instance.power.stop",
+                  "instance.power.restart",
+                  "instance.power.kill",
                 ]
               )
             })

@@ -2782,13 +2782,13 @@ function availableCreateTargets({
         capabilities.grants.some(
           (grant) =>
             grant.relayId === relayId &&
-            grantHasPermission(grant, "app.manage") &&
+            grantHasPermission(grant, "instance.power.stop") &&
             (grant.resourceType === "relay" ||
               (grant.resourceType === "app" && grant.resourceId === appId))
         )
       )
         ? null
-        : "Stopping it takes permission to manage every App that uses it",
+        : "Stopping it takes permission to stop every App that uses it",
   })
   const listing = volumeListing?.protection.ready ? volumeListing : undefined
   const users = (volume: import("@workspace/contracts").RelayVolume) => [

@@ -124,6 +124,7 @@ import {
 } from "@/lib/infra-directory"
 import type { DataTableSource } from "@/lib/data-table-source"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
+import { heldPowerActions } from "@/lib/use-instance-power"
 import { queryKeys, relayWebRoutesQueryOptions } from "@/lib/query-options"
 import { recoverPromise } from "@/effect/promise"
 import { saveAppGitHubSource } from "@/server/app-deployments"
@@ -516,6 +517,11 @@ const AppActions = React.memo(function AppActions({
   const busy = deploy.isPending || action.isPending
   const menu = useRowMenuDialogs()
   const canDelete = app.permissions.includes("app.delete")
+  const power = heldPowerActions(
+    app.permissions,
+    available && (app.detail?.containerCount ?? 0) > 0
+  )
+  const canToggle = running ? power.stop : power.start
   const deployDisabled =
     !available || !app.detail || busy || deploying || queued
 
@@ -605,24 +611,24 @@ const AppActions = React.memo(function AppActions({
             favorite={{ id: app.id, kind: "app", relayId: app.relayId }}
           />
           <DropdownMenuSeparator />
-          {canManage && available && (app.detail?.containerCount ?? 0) > 0 ? (
-            <>
-              <DropdownMenuItem
-                disabled={deploying}
-                onSelect={() => action.mutate(running ? "stop" : "start")}
-              >
-                {running ? <Square /> : <Play />}
-                {running ? "Stop" : "Start"}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={deploying}
-                onSelect={() => action.mutate("restart")}
-              >
-                <RotateCw /> Restart
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-            </>
+          {canToggle ? (
+            <DropdownMenuItem
+              disabled={deploying}
+              onSelect={() => action.mutate(running ? "stop" : "start")}
+            >
+              {running ? <Square /> : <Play />}
+              {running ? "Stop" : "Start"}
+            </DropdownMenuItem>
           ) : null}
+          {power.restart ? (
+            <DropdownMenuItem
+              disabled={deploying}
+              onSelect={() => action.mutate("restart")}
+            >
+              <RotateCw /> Restart
+            </DropdownMenuItem>
+          ) : null}
+          {canToggle || power.restart ? <DropdownMenuSeparator /> : null}
           <CopyIdentifierMenuItem label="App ID" value={app.id} />
           <CopyIdentifierMenuItem label="Relay ID" value={app.relayId} />
           {canDelete ? (

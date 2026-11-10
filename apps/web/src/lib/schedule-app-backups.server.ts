@@ -65,8 +65,8 @@ export async function requireScheduleAppBackups(input: {
       input.user,
       target.relayId,
       [...users],
-      "app.manage",
-      `A stopped backup of ${target.name} stops and starts every App that uses what it backs up; you need permission to manage each`
+      "instance.power.stop",
+      `A stopped backup of ${target.name} stops and starts every App that uses what it backs up; you need permission to stop each`
     )
   }
 }

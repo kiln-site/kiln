@@ -94,7 +94,7 @@ export function BackupConfigurationDialog({
   consistencyChoice?: {
     /** What stopping it does, when it's more than one target's. */
     stoppedDescription?: string
-    /** Why it can't be stopped, as without permission to manage its Apps. */
+    /** Why it can't be stopped, as without permission to stop its Apps. */
     stoppedUnavailable: string | null
   }
   description?: React.ReactNode

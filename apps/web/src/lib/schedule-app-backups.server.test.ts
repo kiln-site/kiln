@@ -124,7 +124,7 @@ describeMysql("scheduled App backups", () => {
           expect(yield* check(backup("live"))).toBeNull()
           expect(yield* check(backup("stopped"))).not.toBeNull()
 
-          yield* allow("app.manage")
+          yield* allow("instance.power.stop")
           expect(yield* check(backup("stopped"))).toBeNull()
 
           // While its Relay can't say which Apps it would stop, only a
