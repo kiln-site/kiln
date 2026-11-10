@@ -786,6 +786,7 @@ const StartupBrickSwapDialog = React.memo(function StartupBrickSwapDialog({
   if (loading) {
     return (
       <BrickSelectDialog
+        kind="game-server"
         open={open}
         onOpenChange={onOpenChange}
         relayId={relayId}
@@ -804,6 +805,7 @@ const StartupBrickSwapDialog = React.memo(function StartupBrickSwapDialog({
   if (error || (bricks.length === 0 && customBricks.length === 0)) {
     return (
       <BrickSelectDialog
+        kind="game-server"
         open={open}
         onOpenChange={onOpenChange}
         relayId={relayId}
@@ -823,6 +825,7 @@ const StartupBrickSwapDialog = React.memo(function StartupBrickSwapDialog({
 
   return (
     <BrickSelectDialog
+      kind="game-server"
       open={open}
       onOpenChange={onOpenChange}
       relayId={relayId}

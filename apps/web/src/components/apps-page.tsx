@@ -100,7 +100,6 @@ import {
 } from "@/components/instance-favorite"
 import { InstanceCard, InstanceStatus } from "@/components/instance-card"
 import { statusColumnWidth } from "@/components/instance-name-presentation"
-import { randomIdempotencyKey } from "@/lib/idempotency-key"
 import { instanceInventoryScope } from "@/lib/instance-inventory"
 import { infraAppsCollectionOptions } from "@/lib/collections/infra-directories"
 import { InfraSyncButton } from "@/components/infra-sync-button"
@@ -125,6 +124,7 @@ import {
 import type { DataTableSource } from "@/lib/data-table-source"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import { heldPowerActions } from "@/lib/use-instance-power"
+import { useIdempotencyKey } from "@/lib/use-idempotency-key"
 import { queryKeys, relayWebRoutesQueryOptions } from "@/lib/query-options"
 import { recoverPromise } from "@/effect/promise"
 import { saveAppGitHubSource } from "@/server/app-deployments"
@@ -731,10 +731,7 @@ function CreateAppDialog({
     React.useState<AppDatabaseDraft>(noAppDatabase)
   const relayLabelId = React.useId()
   // Trying the same create again reuses its key, so it reuses its IDs.
-  const attemptRef = React.useRef<{
-    fingerprint: string
-    idempotencyKey: string
-  } | null>(null)
+  const idempotencyKeyFor = useIdempotencyKey()
   const create = useMutation({
     mutationFn: async () => {
       const input = {
@@ -742,12 +739,7 @@ function CreateAppDialog({
         name: name.trim(),
         relayId,
       }
-      const fingerprint = JSON.stringify(input)
-      const idempotencyKey =
-        attemptRef.current?.fingerprint === fingerprint
-          ? attemptRef.current.idempotencyKey
-          : randomIdempotencyKey()
-      attemptRef.current = { fingerprint, idempotencyKey }
+      const idempotencyKey = idempotencyKeyFor(input)
       const created = await createApp({ data: { ...input, idempotencyKey } })
       if (kind !== "github") return { created, sourceError: null }
       // The app exists by now; a source it can't save is set on its page.
