@@ -1,6 +1,6 @@
 import type { RelayInstance, RelayNode } from "@workspace/contracts"
 import {
-  builtinTailscaleBrickId,
+  isTailscaleNode,
   relayInstanceLifecycleEventTime,
 } from "@workspace/contracts"
 
@@ -43,6 +43,7 @@ export type ServerListInstance = Pick<
 
 export type InstanceWorkspaceInstance = Pick<
   RelayInstance,
+  | "brickId"
   | "connectAddress"
   | "game"
   | "id"
@@ -166,7 +167,7 @@ function sidebarInstance(
 function isServerInstance(
   instance: RelayFleetSnapshot["instances"][number]
 ): boolean {
-  return instance.brickId !== builtinTailscaleBrickId
+  return !isTailscaleNode(instance)
 }
 
 export function selectRelayConfigured(connection: RelayConnection): boolean {
@@ -207,6 +208,7 @@ export function selectInstanceWorkspaceInstance(identifier: string) {
     const instance = findRelayInstance(snapshot.instances, identifier)
     if (!instance) return null
     return {
+      brickId: instance.brickId,
       connectAddress: instance.connectAddress,
       game: instance.game,
       id: instance.id,

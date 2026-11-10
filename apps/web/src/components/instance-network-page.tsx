@@ -24,6 +24,7 @@ import {
 import {
   instanceTailscaleMemberId,
   relayInstancePortInputSchema,
+  isTailscaleNode,
 } from "@workspace/contracts"
 import type {
   RelayInstancePendingPrimaryPort,
@@ -116,7 +117,7 @@ export function InstanceNetworkPage({
     select: (capabilities) => capabilities.isPlatformAdmin,
   })
 
-  if (instance.implementation.toLowerCase() === "tailscale") {
+  if (isTailscaleNode(instance)) {
     return (
       <div className="grid min-h-0 flex-1 place-items-center bg-background/55 px-6 text-center">
         <p className="text-sm text-muted-foreground">

@@ -1,4 +1,4 @@
-import { builtinTailscaleBrickId } from "@workspace/contracts"
+import { isTailscaleNode } from "@workspace/contracts"
 
 import type { FleetRelayInstance, RelayFleetSnapshot } from "@/lib/relay-fleet"
 
@@ -35,7 +35,7 @@ export function selectTailscaleServers(
   const supportedRelayIds = new Set(tailscaleSupportedRelayIds(snapshot))
   return snapshot.instances
     .flatMap((instance) =>
-      instance.brickId === builtinTailscaleBrickId
+      isTailscaleNode(instance)
         ? []
         : [
             {

@@ -47,7 +47,7 @@ import type {
   ResourceLimits,
 } from "@workspace/contracts"
 import {
-  builtinTailscaleBrickId,
+  isTailscaleNode,
   NO_RESOURCE_LIMITS,
   brickConsoleSchema,
   brickReadinessSchema,
@@ -2394,7 +2394,7 @@ export class DockerDriver {
     discovered: DiscoveredInstance,
     signal?: AbortSignal
   ): Promise<Array<ConsoleTarget>> {
-    if (instance.brickId !== builtinTailscaleBrickId) {
+    if (!isTailscaleNode(instance)) {
       return [{ component: null, container: discovered.container }]
     }
     const companionName = this.#resources.tailscaleStackDnsContainer(

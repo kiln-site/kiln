@@ -1,7 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto"
 import { isIP } from "node:net"
 
-import { builtinTailscaleBrickId } from "@workspace/contracts"
+import { isTailscaleNode } from "@workspace/contracts"
 import { Effect, Result, Schema } from "effect"
 
 import {
@@ -155,7 +155,7 @@ export async function getGitHubSyncOverviewHandler(user: AuthenticatedUser) {
 
   const allTargets: Array<GitHubSyncTarget> = [
     ...directory
-      .filter((record) => record.brickId !== builtinTailscaleBrickId)
+      .filter((record) => !isTailscaleNode(record))
       .map((record) => ({
         id: record.id,
         kind: "server" as const,

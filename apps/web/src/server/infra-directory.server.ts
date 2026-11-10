@@ -5,7 +5,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { grantHasPermission } from "@/lib/permissions"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
-import { builtinTailscaleBrickId } from "@workspace/contracts"
+import { isTailscaleNode } from "@workspace/contracts"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import {
   loadManagedDomainAddressesEffect,
@@ -32,7 +32,7 @@ export const readInfraServerDirectory = Effect.fn("Infra.directory.servers")(
     )
     return records.flatMap((record) => {
       const relayName = relayNames.get(record.relayId)
-      if (!relayName || record.brickId === builtinTailscaleBrickId) return []
+      if (!relayName || isTailscaleNode(record)) return []
       if (
         !isPlatformAdmin(user) &&
         !effectiveScopePermissions(grants, {

@@ -1377,6 +1377,18 @@ export function relayDiskAllocationAvailableBytes(
 }
 
 export const builtinTailscaleBrickId = "tailscale"
+/**
+ * Whether an instance is a node of a Tailscale network. A Relay runs one as
+ * a game server until Tailscale is a kind of its own (docs/instances.md),
+ * and tells it apart by its Brick. This is the one place that says how, so
+ * that changing it is one change.
+ */
+export function isTailscaleNode(instance: {
+  readonly brickId?: string | null | undefined
+}): boolean {
+  return instance.brickId === builtinTailscaleBrickId
+}
+
 export const builtinTailscaleBrickSource =
   "https://kiln.site/bricks/builtin/tailscale"
 export const builtinTailscaleBrick = brickSchema.parse({

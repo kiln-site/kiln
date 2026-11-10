@@ -68,6 +68,7 @@ import {
   relayTailscaleStackConfigSchema,
   relayTailscaleStackDnsSchema,
   relayTailscaleStackSchema,
+  isTailscaleNode,
 } from "@workspace/contracts"
 import type { BrickCatalog, GameServerBrick } from "./bricks.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
@@ -869,7 +870,7 @@ export class LifecycleDriver {
       if (!instanceId || !instance || !instance.managedByRelay) {
         throw new Error(`Game server ${binding.memberId} was not found`)
       }
-      if (instance.brickId === builtinTailscaleBrickId) {
+      if (isTailscaleNode(instance)) {
         throw new Error("A Tailscale deployment cannot attach to itself")
       }
     }
@@ -1964,7 +1965,7 @@ export class LifecycleDriver {
     routes: ReadonlyArray<RelayInstanceWebRoute>,
     pendingPrimaryPort: RelayInstancePendingPrimaryPort | null = null
   ): Promise<RelayInstance> {
-    if (instance.brickId === builtinTailscaleBrickId) {
+    if (isTailscaleNode(instance)) {
       if (action === "start" || action === "restart") {
         await this.#assertTailscaleStackRemovalNotPending(instance.id, action)
       }
@@ -2153,7 +2154,7 @@ export class LifecycleDriver {
         "Relay can only configure ports for containers it created"
       )
     }
-    if (instance.brickId === builtinTailscaleBrickId) {
+    if (isTailscaleNode(instance)) {
       throw new Error(
         "Configure this Tailscale network from Infrastructure → Tailscale"
       )
@@ -2376,7 +2377,7 @@ export class LifecycleDriver {
           "Relay can only reserve ports for containers it created"
         )
       }
-      if (instance.brickId === builtinTailscaleBrickId) {
+      if (isTailscaleNode(instance)) {
         return yield* portFailure(
           "tailscale_managed",
           "lease.reserve",
@@ -2605,7 +2606,7 @@ export class LifecycleDriver {
     if (!instance.managedByRelay) {
       throw new Error("Relay can only change containers it created")
     }
-    if (instance.brickId === builtinTailscaleBrickId) {
+    if (isTailscaleNode(instance)) {
       throw new Error("A Tailscale network's limits are its own")
     }
     if (resourceLimitsEqual(limits, instance.limits)) {
@@ -2640,7 +2641,7 @@ export class LifecycleDriver {
     if (!existing.managedByRelay) {
       throw new Error("Relay can only reconfigure containers it created")
     }
-    if (existing.brickId === builtinTailscaleBrickId) {
+    if (isTailscaleNode(existing)) {
       throw new Error(
         "Configure this Tailscale network from Infrastructure → Tailscale"
       )
@@ -3511,7 +3512,7 @@ export class LifecycleDriver {
     if (!instance.managedByRelay) {
       throw new Error("Relay can only delete containers it created")
     }
-    if (instance.brickId === builtinTailscaleBrickId) {
+    if (isTailscaleNode(instance)) {
       throw new Error(
         "Remove this logical network from Infrastructure → Tailscale so every node is cleaned up"
       )
