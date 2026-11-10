@@ -89,6 +89,53 @@ export function isServerFileRoot(id: string): boolean {
   )
 }
 
+/**
+ * What a file root's files belong to: a game server (its bare ID), an App
+ * (its folder or one of its volumes), a database (its dumps), or a Relay
+ * (its host files). Anything that depends on a root's kind reads it here.
+ */
+export interface FileRootOwner {
+  readonly kind: "app" | "database" | "instance" | "relay"
+  readonly id: string
+}
+
+export function fileRootOwner(rootId: string): FileRootOwner {
+  if (isRelayFileRoot(rootId)) {
+    return { kind: "relay", id: rootId.slice(RELAY_FILE_ROOT_PREFIX.length) }
+  }
+  const appId = appIdFromFileRoot(rootId)
+  if (appId) return { kind: "app", id: appId }
+  const databaseId = databaseIdFromFileRoot(rootId)
+  if (databaseId) return { kind: "database", id: databaseId }
+  return { kind: "instance", id: rootId }
+}
+
+const fileTransferActions = {
+  app: { download: "app.files.download", upload: "app.files.upload" },
+  database: { download: "database.dump.export", upload: "database.dump.import" },
+  instance: {
+    download: "instance.files.download",
+    upload: "instance.files.upload",
+  },
+  relay: { download: "relay.files.download", upload: "relay.files.upload" },
+} as const satisfies Record<
+  FileRootOwner["kind"],
+  Record<"download" | "upload", string>
+>
+export type FileTransferAction =
+  (typeof fileTransferActions)[FileRootOwner["kind"]]["download" | "upload"]
+
+/**
+ * The Relay action that moves files out of or into a file root, as the Relay
+ * checks it and as Hearth asks for it.
+ */
+export function fileTransferAction(
+  rootId: string,
+  direction: "download" | "upload"
+): FileTransferAction {
+  return fileTransferActions[fileRootOwner(rootId).kind][direction]
+}
+
 // Tailscale network members are named by kind: a game server as
 // `instance:<id>`, an App's service as `app:<appId>:<service>`, and a
 // database as `database:<id>`.

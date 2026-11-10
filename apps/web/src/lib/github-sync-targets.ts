@@ -4,6 +4,10 @@ import {
   relayFileRootId,
 } from "@workspace/contracts"
 
+import {
+  fileRootPermission,
+  type FileRootPermission,
+} from "@/lib/file-root-permissions"
 import type { AccessPermission } from "@/lib/permissions"
 
 export type GitHubSyncTargetKind = "app" | "relay" | "server"
@@ -18,7 +22,7 @@ export interface GitHubSyncTargetAccess {
   /** The Relay file root the sync writes through. */
   fileRootId: string
   read: AccessPermission
-  scope: { appId?: string; instanceId?: string; relayId: string }
+  scope: FileRootPermission["scope"] & { relayId: string }
   write: AccessPermission
 }
 
@@ -32,30 +36,26 @@ const resourceIdPattern = INSTANCE_ID_PATTERN
 export function githubSyncTargetAccess(
   target: GitHubSyncTargetRef
 ): GitHubSyncTargetAccess | null {
-  if (target.kind === "relay") {
-    return target.id === target.relayId
-      ? {
-          fileRootId: relayFileRootId(target.id),
-          read: "relay.files.read",
-          scope: { relayId: target.relayId },
-          write: "relay.files.write",
-        }
-      : null
-  }
   // A Relay's own ID names its host files, never a game server or App.
-  if (!resourceIdPattern.test(target.id) || target.id === target.relayId)
+  if (
+    target.kind === "relay"
+      ? target.id !== target.relayId
+      : !resourceIdPattern.test(target.id) || target.id === target.relayId
+  )
     return null
-  return target.kind === "app"
-    ? {
-        fileRootId: appFileRootId(target.id),
-        read: "app.files.read",
-        scope: { appId: target.id, relayId: target.relayId },
-        write: "app.files.write",
-      }
-    : {
-        fileRootId: target.id,
-        read: "instance.files.read",
-        scope: { instanceId: target.id, relayId: target.relayId },
-        write: "instance.files.write",
-      }
+  const fileRootId =
+    target.kind === "relay"
+      ? relayFileRootId(target.id)
+      : target.kind === "app"
+        ? appFileRootId(target.id)
+        : target.id
+  const read = fileRootPermission(target.relayId, fileRootId, "read")
+  const write = fileRootPermission(target.relayId, fileRootId, "write")
+  if (!read || !write) return null
+  return {
+    fileRootId,
+    read: read.permission,
+    scope: { ...read.scope, relayId: target.relayId },
+    write: write.permission,
+  }
 }

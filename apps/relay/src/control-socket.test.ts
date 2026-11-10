@@ -210,6 +210,53 @@ describe("Relay control socket", () => {
     })
   })
 
+  it("keeps an App's files behind the App's file grants", async () => {
+    const relay = await startRelay()
+    const appRoot = "app:0123456789ab"
+    const servers = await relay.connect(
+      await relay.pair({
+        role: "custom",
+        actions: [
+          "instance.files.list",
+          "instance.files.read",
+          "instance.files.write",
+        ],
+      })
+    )
+    const refused = sendRequest(servers.socket, "instance.files.read", {
+      instanceId: appRoot,
+      path: "compose.yaml",
+    })
+    expect(await servers.inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: refused,
+      type: "error",
+    })
+
+    const reader = await relay.connect(
+      await relay.pair({ role: "custom", actions: ["app.files.read"] })
+    )
+    const read = sendRequest(reader.socket, "instance.files.read", {
+      instanceId: appRoot,
+      path: "compose.yaml",
+    })
+    expect(await reader.inbox.next()).toMatchObject({
+      payload: { ok: true },
+      replyTo: read,
+      type: "response",
+    })
+    const write = sendRequest(reader.socket, "instance.files.write", {
+      instanceId: appRoot,
+      path: "compose.yaml",
+      content: "changed",
+    })
+    expect(await reader.inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: write,
+      type: "error",
+    })
+  })
+
   it("checks a certificate with what changing its route takes", async () => {
     const relay = await startRelay({
       execute: async () => ({ asked: false, pending: null }),

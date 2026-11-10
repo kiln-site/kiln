@@ -12,6 +12,7 @@ import {
   appIdFromFileRoot,
   appVolumeFromFileRoot,
   databaseIdFromFileRoot,
+  fileTransferAction,
   isRelayFileRoot,
   relayBrowserRequestProofTranscript,
 } from "@workspace/contracts"
@@ -47,7 +48,6 @@ import {
   fileRootCommitLocks,
   fileRootTransferLocks,
 } from "../operation-plans.js"
-import { fileTransferAction } from "../permissions.js"
 import {
   archiveBody,
   estimateCompressedSizes,

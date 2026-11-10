@@ -10,6 +10,7 @@ import type { IncomingMessage, ServerResponse } from "node:http"
 import { Clock, Effect, Option, Schema, Scope } from "effect"
 
 import {
+  fileTransferAction,
   RelayPeerTransferGrantSchema,
   relayPeerTransferProofTranscript,
   type RelayPeerTransferGrant,
@@ -22,7 +23,7 @@ import {
   traceParentSpan,
 } from "../../effect/runtime.js"
 import type { RelayStateStore } from "../../effect/state.js"
-import { actionsForRole, fileTransferAction } from "../../permissions.js"
+import { actionsForRole } from "../../permissions.js"
 import type { TransferGate } from "../gate.js"
 import {
   parseByteRange,

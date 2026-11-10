@@ -11,13 +11,14 @@ import { randomUUID } from "node:crypto"
 import type { IncomingMessage, ServerResponse } from "node:http"
 import { Effect, Result, Scope } from "effect"
 
+import { fileTransferAction } from "@workspace/contracts"
+
 import {
   browserAuthority,
   decodeCapability,
   validateCapability,
 } from "../browser-capability.js"
 import { reportRelayError } from "../effect/runtime.js"
-import { fileTransferAction } from "../permissions.js"
 import { fileBody } from "./bodies.js"
 import type { FileRoot, FilesystemDriver } from "../files.js"
 import type { BrowserFileTransferOptions } from "./browser-files.js"

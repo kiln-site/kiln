@@ -1,4 +1,10 @@
 import { assert, layer } from "@effect/vitest"
+import {
+  appFileRootId,
+  appVolumeFileRootId,
+  databaseFileRootId,
+  relayFileRootId,
+} from "@workspace/contracts"
 import { Effect } from "effect"
 
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -10,7 +16,10 @@ import {
   insertRelay,
   insertRows,
 } from "@/test/seed"
-import { requireRelayPermissionsEffect } from "@/lib/access-control"
+import {
+  requireFileRootPermissionEffect,
+  requireRelayPermissionsEffect,
+} from "@/lib/access-control"
 
 const authenticatedUser = {
   email: "user@example.com",
@@ -124,6 +133,104 @@ describeMysql("Relay permission requirements", () => {
           user: authenticatedUser,
         })
       })
+    )
+
+    it.effect(
+      "a file root's files take the permissions of what they belong to",
+      () =>
+        Effect.gen(function* () {
+          const relayId = "1".repeat(12)
+          const appId = "a".repeat(12)
+          const roots = {
+            server: "5".repeat(12),
+            app: appFileRootId(appId),
+            volume: appVolumeFileRootId(appId, "c".repeat(40)),
+            dumps: databaseFileRootId("d".repeat(12)),
+            host: relayFileRootId(relayId),
+          }
+          // What a person holding one permission on the whole Relay can do
+          // under each root.
+          const reach = (permission: AccessPermission) =>
+            Effect.gen(function* () {
+              yield* resetDatabase
+              yield* insertRelay(relayId)
+              yield* insertGrant({
+                id: "grant-one",
+                userId: authenticatedUser.id,
+                relayId,
+                resourceType: "relay",
+                resourceId: relayId,
+              })
+              yield* insertRows("access_selection", {
+                access_id: "grant-one",
+                selection_kind: "permission",
+                selection_key: permission,
+              })
+              const allowed: Array<string> = []
+              for (const [name, rootId] of Object.entries(roots)) {
+                for (const access of ["read", "write", "delete"] as const) {
+                  const result = yield* Effect.exit(
+                    requireFileRootPermissionEffect(
+                      authenticatedUser,
+                      relayId,
+                      rootId,
+                      access
+                    )
+                  )
+                  if (result._tag === "Success") allowed.push(`${name} ${access}`)
+                }
+              }
+              return allowed
+            })
+
+          assert.deepStrictEqual(yield* reach("instance.files.write"), [
+            "server read",
+            "server write",
+          ])
+          assert.deepStrictEqual(yield* reach("instance.files.delete"), [
+            "server read",
+            "server delete",
+          ])
+          assert.deepStrictEqual(yield* reach("app.files.read"), [
+            "app read",
+            "volume read",
+          ])
+          assert.deepStrictEqual(yield* reach("app.files.write"), [
+            "app read",
+            "app write",
+            "app delete",
+            "volume read",
+            "volume write",
+            "volume delete",
+          ])
+          assert.deepStrictEqual(yield* reach("database.dump.export"), [
+            "dumps read",
+          ])
+          assert.deepStrictEqual(yield* reach("database.dump.import"), [
+            "dumps write",
+            "dumps delete",
+          ])
+          assert.deepStrictEqual(yield* reach("relay.files.write"), [
+            "host read",
+            "host write",
+            "host delete",
+          ])
+
+          // Another Relay's host files aren't this Relay's to give, whatever
+          // the person holds here.
+          assert.strictEqual(
+            yield* requireFileRootPermissionEffect(
+              authenticatedUser,
+              relayId,
+              relayFileRootId("2".repeat(12)),
+              "read"
+            ).pipe(
+              Effect.flip,
+              Effect.map((error) => error._tag)
+            ),
+            "ResourceNotFoundError"
+          )
+        })
     )
 
     it.effect("denies disabled, unverified, or empty requests", () =>

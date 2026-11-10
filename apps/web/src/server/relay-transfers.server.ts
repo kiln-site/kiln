@@ -9,14 +9,11 @@
 import { randomUUID, sign } from "node:crypto"
 
 import {
-  appIdFromFileRoot,
   databaseIdFromFileRoot,
-  isRelayFileRoot,
-  relayFileRootId,
+  fileTransferAction,
   relayPeerTransfersV1Feature,
   RelayTransferPullSchema,
   RelayTransferSourceSchema,
-  type AccessPermission,
   type RelayPeerEndpoint,
   type RelayPeerTransferGrant,
   type RelayTransferPull,
@@ -34,7 +31,7 @@ import {
   runOperationPromise,
   signedIn,
 } from "@/operations/operation"
-import { requireRelayPermissionEffect } from "@/lib/access-control"
+import { requireFileRootPermissionEffect } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { PersistedRelay } from "@/lib/relay-registry"
 
@@ -176,7 +173,7 @@ export const relayTransferProblemsEffect = Effect.fn("RelayTransfers.problems")(
         })
         continue
       }
-      const action = clientTransferAction(rootId, direction)
+      const action = fileTransferAction(rootId, direction)
       if (relay.role !== "full_access" && !relay.actions.includes(action)) {
         problems.push({
           code: "hearth_access",
@@ -526,41 +523,11 @@ function requireRootPermission(
   rootId: string,
   access: "read" | "write"
 ) {
-  if (isRelayFileRoot(rootId)) {
-    if (rootId !== relayFileRootId(relayId)) {
-      return Effect.fail(new RelayTransferError({ message: "Relay not found" }))
-    }
-    return requireRelayPermissionEffect({
-      permission: `relay.files.${access}` satisfies AccessPermission,
-      relayId,
-      user,
-    })
-  }
-  const appId = appIdFromFileRoot(rootId)
-  if (appId) {
-    return requireRelayPermissionEffect({
-      appId,
-      permission: `app.files.${access}` satisfies AccessPermission,
-      relayId,
-      user,
-    })
-  }
-  const databaseId = databaseIdFromFileRoot(rootId)
-  if (databaseId) {
-    return requireRelayPermissionEffect({
-      databaseId,
-      permission:
-        access === "read" ? "database.dump.export" : "database.dump.import",
-      relayId,
-      user,
-    })
-  }
-  return requireRelayPermissionEffect({
-    instanceId: rootId,
-    permission: `instance.files.${access}` satisfies AccessPermission,
-    relayId,
-    user,
-  })
+  return requireFileRootPermissionEffect(user, relayId, rootId, access).pipe(
+    Effect.catchTag("ResourceNotFoundError", (error) =>
+      Effect.fail(new RelayTransferError({ message: error.message }))
+    )
+  )
 }
 
 // Whether this process can reach the Relay, connecting first if it hasn't:
@@ -575,17 +542,6 @@ function relayReachable(relay: PersistedRelay) {
     Effect.as(true),
     Effect.orElseSucceed(() => false)
   )
-}
-
-// The Relay client action Hearth needs on a Relay to move files out of or
-// into a root, as the Relay checks it.
-function clientTransferAction(
-  rootId: string,
-  direction: "download" | "upload"
-): string {
-  if (isRelayFileRoot(rootId)) return `relay.files.${direction}`
-  if (appIdFromFileRoot(rootId) !== null) return `app.files.${direction}`
-  return `instance.files.${direction}`
 }
 
 // A grant for the destination to fetch one artifact from the source, signed
