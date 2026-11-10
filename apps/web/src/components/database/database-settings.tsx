@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import {
   databaseEngineHasNamedDatabase,
   type ResourceLimits,
@@ -13,10 +14,11 @@ import {
   HardDriveDownload,
   KeyRound,
   LoaderCircle,
+  ScrollText,
   Upload,
 } from "lucide-react"
 
-import { Button } from "@workspace/ui/components/button"
+import { Button, buttonVariants } from "@workspace/ui/components/button"
 import {
   Tooltip,
   TooltipContent,
@@ -39,21 +41,27 @@ import { EditableIcon } from "@/components/icon-editor-dialog"
 import {
   InfoCopyValue,
   InfoFact,
-  InfoProfile,
   InfoSecretValue,
   InfoSection,
   InfoSectionLink,
 } from "@/components/info-page"
-import { InstanceFavoriteButton } from "@/components/instance-favorite"
+import { InstanceContainerSection } from "@/components/instance-container-section"
+import { InstanceFavoriteToggle } from "@/components/instance-favorite"
+import {
+  InstanceProfile,
+  InstanceProfileBrick,
+} from "@/components/instance-profile"
 import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import { RenameButton } from "@/components/rename-dialog"
 import { useCopyFeedback } from "@/components/workspace-header"
+import { formatBytes } from "@/lib/format-bytes"
 import {
   backupUsageQueryOptions,
+  managedDatabaseContainerQueryOptions,
   managedDatabaseCredentialQueryOptions,
   queryKeys,
 } from "@/lib/query-options"
-import { ResourceLimitsSection } from "@/components/resource-limits/resource-limits-section"
+import { formatDiskLimit } from "@/lib/resource-limits"
 import {
   renameManagedDatabase,
   updateManagedDatabaseLimits,
@@ -65,7 +73,9 @@ import {
 const DATABASE_NAME_MAX_LENGTH = 120
 const MASK = "••••••••••••"
 
-export function DatabaseGeneralSettings({
+// What the database is, in the profile every kind of instance has: the
+// engine it runs and the image that is deployed from.
+export function DatabaseProfile({
   canRename,
   database,
 }: {
@@ -87,30 +97,31 @@ export function DatabaseGeneralSettings({
     [database.id, database.relayId]
   )
   return (
-    <InfoProfile
+    <InstanceProfile
+      brick={
+        <InstanceProfileBrick icon={<DatabaseKindIcon />}>
+          {engineProductLabel(database)}
+        </InstanceProfileBrick>
+      }
+      favorite={
+        <InstanceFavoriteToggle
+          id={database.id}
+          kind="database"
+          name={database.name}
+          relayId={database.relayId}
+          variant="outline"
+        />
+      }
       icon={<EditableIcon canEdit={canRename} editor={editor} />}
       id={database.id}
       idLabel="database ID"
       name={database.name}
-      actions={
-        <>
-          {canRename ? <DatabaseRenameButton database={database} /> : null}
-          <InstanceFavoriteButton
-            id={database.id}
-            kind="database"
-            relayId={database.relayId}
-          />
-        </>
-      }
+      rename={canRename ? <DatabaseRenameButton database={database} /> : null}
     >
-      <InfoFact label="Engine">
-        <InfoCopyValue
-          label="engine"
-          mono={false}
-          value={engineProductLabel(database)}
-        />
+      <InfoFact label="Image">
+        <InfoCopyValue label="image" value={database.image} />
       </InfoFact>
-    </InfoProfile>
+    </InstanceProfile>
   )
 }
 
@@ -128,6 +139,7 @@ function DatabaseRenameButton({ database }: { database: ManagedDatabase }) {
   )
   return (
     <RenameButton
+      compact
       id={database.id}
       maxLength={DATABASE_NAME_MAX_LENGTH}
       name={database.name}
@@ -536,21 +548,52 @@ function databaseConnectionUrl(
   return `${scheme}://${encodeURIComponent(username)}:${password}@${database.hostname}:${database.internalPort}${path}`
 }
 
-// Databases warn rather than stop at their disk limit, so a full disk never
-// takes one offline.
-export function DatabaseLimitsSection({
+// A database's container: what it is, its usage against its limits, and
+// those limits, which open from the header. Databases warn rather than
+// stop at their disk limit, so a full disk never takes one offline. The
+// Relay reports the container's name, data folder, and volume size on
+// request, and only while it's reachable.
+export function DatabaseContainerSection({
   available,
+  canReadLogs,
   database,
   editable,
 }: {
   available: boolean
+  canReadLogs: boolean
   database: ManagedDatabase
   editable: boolean
 }) {
   const queryClient = useQueryClient()
+  const { data, isPending } = useQuery({
+    ...managedDatabaseContainerQueryOptions(database.relayId, database.id),
+    enabled: available,
+  })
+  const pending = available && isPending
   const groups = React.useMemo(
     () => [{ key: "database", limits: database.limits }],
     [database.limits]
+  )
+  const target = React.useMemo(
+    () => ({
+      id: database.id,
+      kind: "database" as const,
+      relayId: database.relayId,
+    }),
+    [database.id, database.relayId]
+  )
+  const running = database.observedState === "running"
+  const usage = React.useMemo(
+    () => ({ ...target, running }),
+    [running, target]
+  )
+  const container = React.useMemo(
+    () => ({
+      id: database.containerId,
+      name: data?.containerName ?? null,
+      pending,
+    }),
+    [data?.containerName, database.containerId, pending]
   )
   const save = React.useCallback(
     async (limits: Readonly<Record<string, ResourceLimits>>) => {
@@ -568,15 +611,60 @@ export function DatabaseLimitsSection({
     [database.id, database.relayId, queryClient]
   )
   return (
-    <ResourceLimitsSection
-      disabledReason={
-        available ? undefined : "Reconnect this database's Relay first"
+    <InstanceContainerSection
+      container={container}
+      dataDirectory={data?.dataDirectory ?? null}
+      disk={
+        data?.volumeBytes != null ? (
+          <span className="tabular-nums">
+            {formatBytes(data.volumeBytes)} used
+            {database.limits.diskBytes === null
+              ? ""
+              : ` of ${formatBytes(database.limits.diskBytes)}`}
+          </span>
+        ) : pending ? (
+          <LoaderCircle
+            aria-label="Loading"
+            className="size-3.5 animate-spin text-muted-foreground"
+          />
+        ) : (
+          <span className="tabular-nums">
+            {formatDiskLimit(database.limits.diskBytes)}
+          </span>
+        )
       }
-      editable={editable}
-      groups={groups}
-      hint="Changing memory or CPU applies at once. Removing one restarts the database. Over its disk limit, the database keeps running and everyone with access is warned."
-      target={{ id: database.id, kind: "database", relayId: database.relayId }}
-      onSave={save}
+      limits={database.limits}
+      limitsDialog={{
+        disabledReason: available
+          ? undefined
+          : "Reconnect this database's Relay first",
+        editable,
+        groups,
+        hint: "Changing memory or CPU applies at once. Removing one restarts the database. Over its disk limit, the database keeps running and everyone with access is warned.",
+        onSave: save,
+        target,
+      }}
+      links={
+        canReadLogs ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Link
+                aria-label="Logs"
+                to="/db/$databaseId/logs"
+                params={{ databaseId: database.id }}
+                className={cn(
+                  buttonVariants({ size: "icon-sm", variant: "ghost" }),
+                  "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <ScrollText />
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Logs</TooltipContent>
+          </Tooltip>
+        ) : null
+      }
+      usage={usage}
     />
   )
 }

@@ -1,14 +1,6 @@
 import * as React from "react"
 
-import {
-  InstanceInfoRail,
-  InfoContainerCard,
-} from "@/components/resource-info-rail"
-import {
-  formatCpuLimit,
-  formatDiskLimit,
-  formatMemoryLimit,
-} from "@/lib/resource-limits"
+import { InstanceInfoRail } from "@/components/resource-info-rail"
 import type {
   InstanceSettingsInstance,
   RelayNodeSummary,
@@ -33,20 +25,6 @@ export function ServerInfoRail({
     [instance.id, instance.name, instance.relayId]
   )
   return (
-    <InstanceInfoRail
-      relayName={node.name}
-      resource={resource}
-      container={
-        <InfoContainerCard
-          containerId={instance.containerId}
-          // Older Relays don't report the server's folder.
-          dataDirectory={instance.hostDirectory ?? null}
-          cpu={formatCpuLimit(instance.limits.cpuMillis)}
-          disk={formatDiskLimit(instance.limits.diskBytes)}
-          memory={formatMemoryLimit(instance.limits.memoryBytes)}
-          name={instance.service}
-        />
-      }
-    />
+    <InstanceInfoRail relayName={node.name} resource={resource} />
   )
 }

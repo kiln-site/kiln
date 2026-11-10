@@ -12,15 +12,14 @@ import {
 } from "@/components/info-page"
 import { ServerDeleteDialog } from "@/components/server-delete-dialog"
 import { ServerInfoRail } from "@/components/server/server-info-rail"
-import { ServerLimitsSection } from "@/components/server/server-limits-section"
+import { ServerContainerSection } from "@/components/server/server-limits-section"
 import {
   ServerMigrationDialog,
   type ServerMigrationMode,
 } from "@/components/server/server-migration-dialog"
 import {
-  ServerBrickSettings,
   ServerConnectionSettings,
-  ServerGeneralSettings,
+  ServerProfile,
   ServerProvisioningSection,
 } from "@/components/server/server-settings"
 import type {
@@ -31,9 +30,11 @@ import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
 import { ensuringPromise, recoverPromise } from "@/effect/promise"
 import { serverMigrationPreviewQueryOptions } from "@/lib/server-migration-queries"
 
-// The game server's details, each section with the actions that change it,
-// and a rail summing up where it runs and who can reach it. While it's
-// provisioning, the attempt leads and the connection is left out.
+// The game server's details, in the order every kind's Info page has: what
+// it is and the Brick it runs, its container with its usage and limits,
+// then what only a game server has, each section with the actions that
+// change it, and a rail summing up where it runs and who can reach it.
+// While it's provisioning, the attempt leads and the rest is left out.
 export function ServerInfoPage({
   instance,
   node,
@@ -47,6 +48,7 @@ export function ServerInfoPage({
   permissions: {
     configurationRead: boolean
     configurationWrite: boolean
+    consoleRead: boolean
     copyServer: boolean
     deleteServer: boolean
     limitsWrite: boolean
@@ -67,28 +69,26 @@ export function ServerInfoPage({
         resourceId={instance.id}
       />
       <ServerProvisioningSection instance={instance} />
-      <ServerGeneralSettings
+      <ServerProfile
         canRename={permissions.configurationWrite && !provisioning}
+        canShare={permissions.shareLogs}
+        canViewStartup={permissions.configurationRead}
         instance={instance}
         relayConnected={relayConnected}
       />
       {provisioning ? null : (
-        <ServerConnectionSettings
-          canViewNetwork={permissions.networkRead}
-          instance={instance}
-        />
-      )}
-      <ServerBrickSettings
-        canShare={permissions.shareLogs}
-        canViewStartup={permissions.configurationRead}
-        instance={instance}
-      />
-      {provisioning ? null : (
-        <ServerLimitsSection
+        <ServerContainerSection
+          canReadConsole={permissions.consoleRead}
           canRestart={permissions.powerRestart}
           editable={permissions.limitsWrite}
           instance={instance}
           relayConnected={relayConnected}
+        />
+      )}
+      {provisioning ? null : (
+        <ServerConnectionSettings
+          canViewNetwork={permissions.networkRead}
+          instance={instance}
         />
       )}
       {permissions.copyServer && !provisioning ? (

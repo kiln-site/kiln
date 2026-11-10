@@ -3,7 +3,7 @@ import { Link } from "@tanstack/react-router"
 import { APP_SERVICE, type AppConfig } from "@workspace/contracts"
 import { Container, Gauge, ScrollText, Tags } from "lucide-react"
 
-import { Button, buttonVariants } from "@workspace/ui/components/button"
+import { buttonVariants } from "@workspace/ui/components/button"
 import {
   Tooltip,
   TooltipContent,
@@ -39,7 +39,10 @@ import {
   InfoSection,
 } from "@/components/info-page"
 import { StatusIndicator } from "@/components/status-indicator"
-import { WorkloadUsageMeter } from "@/components/workload-resource-meters"
+import {
+  ContainerUsageMeters,
+  SectionIconButton,
+} from "@/components/instance-container-section"
 
 type AppContainer = App["containers"][number]
 
@@ -206,34 +209,6 @@ export function AppContainerSection({
   )
 }
 
-function SectionIconButton({
-  children,
-  label,
-  onClick,
-}: {
-  children: React.ReactNode
-  label: string
-  onClick: () => void
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          aria-label={label}
-          className="text-muted-foreground hover:text-foreground"
-          onClick={onClick}
-        >
-          {children}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{label}</TooltipContent>
-    </Tooltip>
-  )
-}
-
 // A Compose app's services, each with whether its container runs; the
 // chosen one fills the section.
 function ServiceTabs({
@@ -301,28 +276,16 @@ const ContainerUsage = React.memo(function ContainerUsage({
 }) {
   const running = serviceContainers.filter((candidate) => candidate.running)
   const measured = running.length > 0 ? running : [container]
-  const shared = {
-    id: app.id,
-    kind: "app",
-    relayId: app.relayId,
-    running: running.length > 0,
-    service: container.service,
-  } as const
   return (
-    <div className="@container border-t border-border/60 px-4 py-2.5">
-      <div className="grid gap-x-8 gap-y-1 @lg:grid-cols-2">
-        <WorkloadUsageMeter
-          {...shared}
-          limit={combinedLimit(measured, (limits) => limits.cpuMillis)}
-          resourceId="cpu"
-        />
-        <WorkloadUsageMeter
-          {...shared}
-          limit={combinedLimit(measured, (limits) => limits.memoryBytes)}
-          resourceId="memory"
-        />
-      </div>
-    </div>
+    <ContainerUsageMeters
+      cpuMillis={combinedLimit(measured, (limits) => limits.cpuMillis)}
+      id={app.id}
+      kind="app"
+      memoryBytes={combinedLimit(measured, (limits) => limits.memoryBytes)}
+      relayId={app.relayId}
+      running={running.length > 0}
+      service={container.service}
+    />
   )
 })
 

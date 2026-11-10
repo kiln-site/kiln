@@ -1,13 +1,22 @@
 import * as React from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
+import { Link } from "@tanstack/react-router"
 import { resourceLimitsEqual, type ResourceLimits } from "@workspace/contracts"
-import { RotateCw } from "lucide-react"
+import { RotateCw, TerminalSquare } from "lucide-react"
 
-import { Button } from "@workspace/ui/components/button"
+import { Button, buttonVariants } from "@workspace/ui/components/button"
 import { showToast } from "@workspace/ui/components/sonner"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@workspace/ui/components/tooltip"
+import { cn } from "@workspace/ui/lib/utils"
 
-import { ResourceLimitsSection } from "@/components/resource-limits/resource-limits-section"
+import { InstanceContainerSection } from "@/components/instance-container-section"
 import { StatusIndicator } from "@/components/status-indicator"
+import { formatBytes } from "@/lib/format-bytes"
+import { formatDiskLimit } from "@/lib/resource-limits"
 import {
   instanceStartupQueryOptions,
   replaceRelaySnapshotInstance,
@@ -36,15 +45,18 @@ const PENDING_START = {
   tone: "warning",
 } as const
 
-// A game server's limits are part of its container, so they save at once
-// and it takes them when it next restarts, as its web routes do. A disk
-// limit has to hold its files.
-export function ServerLimitsSection({
+// A game server's container: what it is, its usage against the limits it
+// runs under, and those limits, which open from the header. They are part
+// of its container, so they save at once and it takes them when it next
+// restarts, as its web routes do. A disk limit has to hold its files.
+export function ServerContainerSection({
+  canReadConsole,
   canRestart,
   editable,
   instance,
   relayConnected,
 }: {
+  canReadConsole: boolean
   canRestart: boolean
   editable: boolean
   instance: InstanceSettingsInstance
@@ -62,6 +74,14 @@ export function ServerLimitsSection({
   const groups = React.useMemo(
     () => [{ key: "server", limits: saved }],
     [saved]
+  )
+  const target = React.useMemo(
+    () => ({ id, kind: "server" as const, relayId }),
+    [id, relayId]
+  )
+  const usage = React.useMemo(
+    () => ({ ...target, running }),
+    [running, target]
   )
   const save = React.useCallback(
     async (next: Readonly<Record<string, ResourceLimits>>) => {
@@ -93,8 +113,9 @@ export function ServerLimitsSection({
   // couldn't say so.
   const pending =
     pendingLimits !== undefined && !resourceLimitsEqual(pendingLimits, limits)
+  const diskUsed = state?.diskUsedBytes ?? null
   return (
-    <ResourceLimitsSection
+    <InstanceContainerSection
       action={
         pending && running && canRestart && relayConnected ? (
           <Button
@@ -110,24 +131,60 @@ export function ServerLimitsSection({
           </Button>
         ) : null
       }
-      disabledReason={
-        relayConnected ? undefined : "Reconnect this server's Relay first"
+      container={{ id: instance.containerId, name: instance.service }}
+      // Older Relays don't report the server's folder.
+      dataDirectory={instance.hostDirectory ?? null}
+      disk={
+        <span className="tabular-nums">
+          {diskUsed === null
+            ? formatDiskLimit(limits.diskBytes)
+            : `${formatBytes(diskUsed)} used${
+                limits.diskBytes === null
+                  ? ""
+                  : ` of ${formatBytes(limits.diskBytes)}`
+              }`}
+        </span>
       }
-      diskFloorBytes={state?.diskUsedBytes}
-      editable={editable}
-      groups={groups}
-      hint={
-        running
+      limits={limits}
+      limitsDialog={{
+        disabledReason: relayConnected
+          ? undefined
+          : "Reconnect this server's Relay first",
+        diskFloorBytes: state?.diskUsedBytes,
+        editable,
+        groups,
+        hint: running
           ? "Limits save at once and apply the next time the server restarts."
-          : "Limits save at once and apply when the server starts."
+          : "Limits save at once and apply when the server starts.",
+        onSave: save,
+        target,
+      }}
+      links={
+        canReadConsole ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Link
+                aria-label="Console"
+                to="/server/$serverId/console"
+                params={{ serverId: id }}
+                className={cn(
+                  buttonVariants({ size: "icon-sm", variant: "ghost" }),
+                  "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <TerminalSquare />
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Console</TooltipContent>
+          </Tooltip>
+        ) : null
       }
       status={
         pending ? (
           <StatusIndicator status={running ? PENDING_RESTART : PENDING_START} />
         ) : null
       }
-      target={{ id, kind: "server", relayId }}
-      onSave={save}
+      usage={usage}
     />
   )
 }
