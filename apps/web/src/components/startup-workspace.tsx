@@ -95,6 +95,7 @@ interface StartupEditing {
   canEdit: boolean
   canStart: boolean
   canViewConsole: boolean
+  canViewLogs: boolean
 }
 
 export function StartupWorkspace() {
@@ -120,6 +121,7 @@ export function StartupWorkspace() {
           permissions.powerRestart),
       canStart: permissions.powerStart,
       canViewConsole: permissions.consoleRead,
+      canViewLogs: permissions.logsRead,
     }),
     [permissions, relayConnected, desiredState, observedState]
   )
@@ -246,7 +248,6 @@ const StartupForm = React.memo(function StartupForm({
         }),
         invalidateRelaySnapshots(queryClient),
       ])
-      setRedeployOpen(false)
       showToast({
         type: "success",
         message: "Game server redeployed",
@@ -332,6 +333,14 @@ const StartupForm = React.memo(function StartupForm({
   async function onRedeploy() {
     if (!canDeploy || pending || submittingRef.current) return
     setError(null)
+    setRedeployOpen(false)
+    // Follow the deployment as it happens, as an App's is.
+    if (editing.canViewLogs) {
+      void navigate({
+        params: { serverId: instanceId },
+        to: "/server/$serverId/logs",
+      })
+    }
     submittingRef.current = true
     await Effect.runPromise(
       Effect.tryPromise({
@@ -342,13 +351,15 @@ const StartupForm = React.memo(function StartupForm({
         catch: (cause) => cause,
       }).pipe(
         Effect.catch((cause) =>
-          Effect.sync(() =>
-            setError(
+          Effect.sync(() => {
+            const message =
               cause instanceof Error
                 ? cause.message
                 : "Could not redeploy the game server"
-            )
-          )
+            // Said here for whoever stayed, and wherever they went.
+            setError(message)
+            showToast({ type: "error", message: `Redeploy failed: ${message}` })
+          })
         ),
         Effect.ensuring(
           Effect.sync(() => {
@@ -381,7 +392,7 @@ const StartupForm = React.memo(function StartupForm({
       <div className="mx-auto max-w-3xl space-y-6 px-5 py-6 sm:px-8 sm:py-8">
         <StartupSettingsForm
           editing={editing}
-          error={redeployOpen ? null : error}
+          error={error}
           isRunning={isRunning}
           memoryBytes={memoryBytes}
           pending={pending}
@@ -426,9 +437,9 @@ const StartupForm = React.memo(function StartupForm({
         <>
           <RedeployDialog
             name={initialBrick.metadata.name}
-            error={redeployOpen ? error : null}
+            error={null}
             open={redeployOpen}
-            pending={redeployMutation.isPending}
+            pending={false}
             onOpenChange={(open) => {
               setRedeployOpen(open)
               if (open) setError(null)

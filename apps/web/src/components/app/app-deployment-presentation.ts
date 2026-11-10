@@ -2,6 +2,7 @@ import type { IdentityStatusPresentation } from "@/components/identity-name"
 import type {
   AppDeploymentStatus,
   AppDeploymentTrigger,
+  ServerDeploymentTrigger,
 } from "@/effect/app-deployments"
 
 // How a recorded deployment reads, on the Deployments page and an app's
@@ -46,6 +47,16 @@ export const deploymentTriggerLabels: Record<AppDeploymentTrigger, string> = {
   push: "Push",
   redeploy: "Redeploy",
   update: "Image update",
+}
+
+export const serverDeploymentTriggerLabels: Record<
+  ServerDeploymentTrigger,
+  string
+> = {
+  brick: "Brick change",
+  install: "Install",
+  // Stored under the name it had before every kind deployed again.
+  reinstall: "Redeploy",
 }
 
 /** An image digest as people compare them: its first 12 hex digits. */

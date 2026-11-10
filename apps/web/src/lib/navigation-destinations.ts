@@ -232,6 +232,7 @@ export type ServerDestinationId =
   | "console"
   | "files"
   | "info"
+  | "logs"
   | "network"
   | "startup"
 
@@ -252,6 +253,16 @@ export const serverDestinations = [
     permission: "instance.console.read",
     to: "/server/$serverId/console",
     workspaces: ["network-stack", "server"],
+  },
+  {
+    // Its deployments' logs; its own output is the console.
+    icon: ScrollText,
+    id: "logs",
+    keywords: ["deployments", "install", "redeploy"],
+    label: "Logs",
+    permission: "instance.logs.read",
+    to: "/server/$serverId/logs",
+    workspaces: ["server"],
   },
   {
     icon: Folder,

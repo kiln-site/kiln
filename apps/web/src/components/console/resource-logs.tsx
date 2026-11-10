@@ -31,7 +31,7 @@ import {
   ConsoleWrapButton,
 } from "@/components/console/console-toolbar-actions"
 import { useRelayConsoleStream } from "@/components/console/use-relay-console-stream"
-import { consoleCopy } from "@/lib/console-copy"
+import { consoleCopy, type ConsoleCopy } from "@/lib/console-copy"
 
 type LogsResourceKind = Exclude<RelayBrowserResourceKind, "instance">
 
@@ -69,13 +69,17 @@ export function ResourceLogsSession({
   stream?: string
   timeMode?: ConsoleTimeMode
 }) {
-  const [uiStore] = React.useState(() => createConsoleUiStore({ timeMode }))
-  const [streamStore] = React.useState(createConsoleStreamStore)
-
   return (
-    <ConsoleCopyContext.Provider value={consoleCopy[kind]}>
-      <section className="flex min-h-0 flex-1 flex-col bg-card">
-        {saved ? (
+    <LogsFrame
+      copy={consoleCopy[kind]}
+      elapsedFrom={elapsedFrom}
+      header={header}
+      logName={logName}
+      shareHref={shareHref}
+      timeMode={timeMode}
+    >
+      {(streamStore) =>
+        saved ? (
           <SavedLogsController saved={saved} streamStore={streamStore} />
         ) : (
           <ResourceLogsStreamController
@@ -86,7 +90,75 @@ export function ResourceLogsSession({
             stream={stream}
             streamStore={streamStore}
           />
-        )}
+        )
+      }
+    </LogsFrame>
+  )
+}
+
+/**
+ * Output that has ended, such as a deployment's log the Relay saved, shown
+ * as it stands. It is the same viewer whatever kind of instance it is of.
+ */
+export function SavedLogSession({
+  elapsedFrom,
+  header,
+  logName,
+  saved,
+  shareHref,
+  timeMode = "clock",
+}: {
+  elapsedFrom?: string | null
+  header?: React.ReactNode
+  logName: string
+  saved: ConsoleStreamSnapshot
+  shareHref?: string
+  timeMode?: ConsoleTimeMode
+}) {
+  return (
+    <LogsFrame
+      copy={savedLogCopy}
+      elapsedFrom={elapsedFrom}
+      header={header}
+      logName={logName}
+      shareHref={shareHref}
+      timeMode={timeMode}
+    >
+      {(streamStore) => (
+        <SavedLogsController saved={saved} streamStore={streamStore} />
+      )}
+    </LogsFrame>
+  )
+}
+
+// A saved log is a log, even a game server's, whose live output is a console.
+const savedLogCopy = consoleCopy.database
+
+// The viewer around whatever fills its stream store.
+function LogsFrame({
+  children,
+  copy,
+  elapsedFrom,
+  header,
+  logName,
+  shareHref,
+  timeMode,
+}: {
+  children: (streamStore: ConsoleStreamStore) => React.ReactNode
+  copy: ConsoleCopy
+  elapsedFrom: string | null | undefined
+  header: React.ReactNode
+  logName: string
+  shareHref: string | undefined
+  timeMode: ConsoleTimeMode
+}) {
+  const [uiStore] = React.useState(() => createConsoleUiStore({ timeMode }))
+  const [streamStore] = React.useState(createConsoleStreamStore)
+
+  return (
+    <ConsoleCopyContext.Provider value={copy}>
+      <section className="flex min-h-0 flex-1 flex-col bg-card">
+        {children(streamStore)}
         {header}
         <ResourceLogsToolbar
           logName={logName}

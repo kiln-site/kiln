@@ -1,18 +1,6 @@
 import * as React from "react"
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
-import { Link, useNavigate, useRouter, useSearch } from "@tanstack/react-router"
-import { Container, History, Rocket } from "lucide-react"
-
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
-import { cn } from "@workspace/ui/lib/utils"
+import { linkOptions, useRouter, useSearch } from "@tanstack/react-router"
 
 import {
   deploymentDuration,
@@ -30,17 +18,17 @@ import {
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import type { ConsoleStreamSnapshot } from "@/components/console/console-stores"
 import {
+  InstanceLogsPage,
+  LISTED_DEPLOYMENTS,
+  type InstanceLogsLinks,
+  type LogSource,
+  type LoggedDeployment,
+} from "@/components/console/instance-logs-page"
+import {
   DEPLOYMENT_STREAM,
-  LogHeader,
   LogMessage,
   LogMeta,
-  LogRailRowContent,
-  LogSourcesRail,
   RunningFor,
-  logRailFooterLinkClassName,
-  logRailRowClassName,
-  logRailTabActiveClassName,
-  logRailTabClassName,
 } from "@/components/console/log-sources"
 import { ResourceLogsSession } from "@/components/console/resource-logs"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
@@ -52,8 +40,6 @@ import {
 import type { AppDeploymentView } from "@/server/app-deployments.server"
 
 const SERVICE_PREFIX = "service:"
-// What the Relay keeps logs of; older deployments live on in History.
-const LISTED_DEPLOYMENTS = 20
 
 type Deployment = AppDeploymentView
 type LiveDeployments = ReadonlySet<string>
@@ -66,7 +52,7 @@ type Service = {
 // What the page shows: one service's containers, one deployment by its
 // record, or (deployment null) whichever the Relay is on, following it to the
 // next.
-type LogSource =
+type RequestedLog =
   | { kind: "deployment"; id: string | null }
   | { kind: "service"; name: string }
 
@@ -121,78 +107,109 @@ export function AppLogsPage() {
   const { deployment: requestedDeployment, stream: requested } = useSearch({
     from: "/_app/app/$appId/logs",
   })
-  const { data: deployments, isPending: deploymentsPending } = useInfiniteQuery(
-    {
-      ...appDeploymentsQueryOptions({ appId: app.id, relayId: app.relayId }),
-      select: listedDeployments,
-    }
-  )
+  const { data: records = emptyDeployments, isPending } = useInfiniteQuery({
+    ...appDeploymentsQueryOptions({ appId: app.id, relayId: app.relayId }),
+    select: listedDeployments,
+  })
   const services = React.useMemo(() => appLogServices(app), [app])
-  const live = React.useMemo(() => liveDeployments(app), [app])
   const source = logSource(
     requestedDeployment,
     requested,
     services,
     app.deployment?.state === "running"
   )
-  const picker = (
-    <AppLogsPicker
-      deployments={deployments ?? []}
-      live={live}
-      services={services}
-      source={source}
+  const sources = React.useMemo(
+    () =>
+      services.map(
+        (service): LogSource => ({
+          id: service.name,
+          meta: <ServiceMeta service={service} />,
+          status: service.status,
+          title: service.name,
+        })
+      ),
+    [services]
+  )
+  const deployments = React.useMemo(() => {
+    const live = liveDeployments(app)
+    return records.map(
+      (deployment): LoggedDeployment => ({
+        headingMeta: <DeploymentMeta deployment={deployment} full />,
+        id: deployment.id,
+        live: isLive(deployment, live),
+        meta: <DeploymentMeta deployment={deployment} />,
+        status: deploymentStatusPresentation(deployment),
+        title: deploymentTitle(deployment),
+      })
+    )
+  }, [app, records])
+  const links = React.useMemo((): InstanceLogsLinks => {
+    const here = {
+      params: { appId: app.id },
+      to: "/app/$appId/logs",
+    } as const
+    return {
+      all: linkOptions({
+        search: { appId: app.id, relayId: app.relayId },
+        to: "/infra/deployments",
+      }),
+      deployment: (id) => linkOptions({ ...here, search: { deployment: id } }),
+      latest: linkOptions({ ...here, search: { stream: DEPLOYMENT_STREAM } }),
+      source: (name) =>
+        linkOptions({
+          ...here,
+          search: { stream: `${SERVICE_PREFIX}${name}` },
+        }),
+    }
+  }, [app.id, app.relayId])
+  // The one the Relay is on, or the newest.
+  const latest =
+    records.find(
+      ({ relayDeploymentId }) => relayDeploymentId === app.deployment?.id
+    ) ?? records[0]
+  return (
+    <InstanceLogsPage
+      deployments={deployments}
+      latestId={latest?.id}
+      links={links}
+      renderDeployment={(id, header) => (
+        <DeploymentLogs
+          deployments={records}
+          header={header}
+          id={id}
+          pending={isPending}
+        />
+      )}
+      renderSource={(name, header) => (
+        <ResourceLogsSession
+          key={`${app.relayId}:${app.id}:${name}`}
+          header={header}
+          id={app.id}
+          kind="app"
+          logName={`${app.name}-${name}`}
+          relayAvailable={appRelayAvailable(app)}
+          relayId={app.relayId}
+          stream={`${SERVICE_PREFIX}${name}`}
+        />
+      )}
+      showing={
+        source.kind === "service"
+          ? { id: source.name, kind: "source" }
+          : { id: source.id, kind: "deployment" }
+      }
+      sources={sources}
     />
   )
-
-  return (
-    <div className="flex min-h-0 flex-1">
-      <AppLogsRail
-        appId={app.id}
-        deployments={deployments ?? []}
-        live={live}
-        relayId={app.relayId}
-        services={services}
-        source={source}
-      />
-      <div className="flex min-w-0 flex-1 flex-col">
-        {source.kind === "service" ? (
-          <ResourceLogsSession
-            key={`${app.relayId}:${app.id}:${source.name}`}
-            header={
-              <>
-                {picker}
-                <ServiceLogHeader
-                  service={services.find(({ name }) => name === source.name)}
-                  name={source.name}
-                />
-              </>
-            }
-            id={app.id}
-            kind="app"
-            logName={`${app.name}-${source.name}`}
-            relayAvailable={appRelayAvailable(app)}
-            relayId={app.relayId}
-            stream={`${SERVICE_PREFIX}${source.name}`}
-          />
-        ) : (
-          <DeploymentLogs
-            deployments={deployments ?? []}
-            id={source.id}
-            pending={deploymentsPending}
-            picker={picker}
-          />
-        )}
-      </div>
-    </div>
-  )
 }
+
+const emptyDeployments: ReadonlyArray<Deployment> = []
 
 function logSource(
   deployment: string | undefined,
   stream: string | undefined,
   services: ReadonlyArray<Service>,
   deploying: boolean
-): LogSource {
+): RequestedLog {
   if (deployment) return { id: deployment, kind: "deployment" }
   if (stream?.startsWith(SERVICE_PREFIX)) {
     return { kind: "service", name: stream.slice(SERVICE_PREFIX.length) }
@@ -209,14 +226,14 @@ function logSource(
 // it saved.
 function DeploymentLogs({
   deployments,
+  header,
   id,
   pending,
-  picker,
 }: {
   deployments: ReadonlyArray<Deployment>
+  header: React.ReactNode
   id: string | null
   pending: boolean
-  picker: React.ReactNode
 }) {
   const { app } = useAppWorkspace()
   const router = useRouter()
@@ -234,16 +251,6 @@ function DeploymentLogs({
   const logName = deployment?.commitSha
     ? `${app.name}-deployment-${shortCommit(deployment.commitSha)}`
     : `${app.name}-deployment`
-  const header = (
-    <>
-      {picker}
-      {deployment ? (
-        <DeploymentLogHeader deployment={deployment} />
-      ) : (
-        <LogHeader title="Deployment" />
-      )}
-    </>
-  )
   const shareHref = deployment
     ? router.buildLocation({
         params: { appId: app.id },
@@ -355,35 +362,6 @@ function SavedDeploymentLog({
   )
 }
 
-const DeploymentLogHeader = React.memo(function DeploymentLogHeader({
-  deployment,
-}: {
-  deployment: Deployment
-}) {
-  return (
-    <LogHeader
-      status={deploymentStatusPresentation(deployment)}
-      title={deploymentTitle(deployment)}
-    >
-      <DeploymentMeta deployment={deployment} full />
-    </LogHeader>
-  )
-})
-
-const ServiceLogHeader = React.memo(function ServiceLogHeader({
-  name,
-  service,
-}: {
-  name: string
-  service: Service | undefined
-}) {
-  return (
-    <LogHeader title={name} {...(service && { status: service.status })}>
-      {service ? <ServiceMeta service={service} /> : null}
-    </LogHeader>
-  )
-})
-
 function DeploymentMeta({
   deployment,
   full = false,
@@ -455,224 +433,9 @@ function DeploymentReference({
   )
 }
 
-const AppLogsRail = React.memo(function AppLogsRail({
-  appId,
-  deployments,
-  live,
-  relayId,
-  services,
-  source,
-}: {
-  appId: string
-  deployments: ReadonlyArray<Deployment>
-  live: LiveDeployments
-  relayId: string
-  services: ReadonlyArray<Service>
-  source: LogSource
-}) {
-  const { app } = useAppWorkspace()
-  const runtime = source.kind === "service"
-  const firstService = services[0]?.name
-  const newest = deployments[0]?.id
-  return (
-    <LogSourcesRail
-      footer={
-        runtime ? undefined : (
-          <Link
-            className={logRailFooterLinkClassName}
-            search={{ appId, relayId }}
-            to="/infra/deployments"
-          >
-            <History />
-            All deployments
-          </Link>
-        )
-      }
-      tabs={
-        <>
-          <Link
-            replace
-            aria-disabled={firstService === undefined}
-            className={cn(
-              logRailTabClassName,
-              runtime && logRailTabActiveClassName
-            )}
-            disabled={firstService === undefined}
-            params={{ appId: app.id }}
-            search={{ stream: `${SERVICE_PREFIX}${firstService}` }}
-            to="/app/$appId/logs"
-          >
-            <Container />
-            Runtime
-          </Link>
-          <Link
-            replace
-            className={cn(
-              logRailTabClassName,
-              !runtime && logRailTabActiveClassName
-            )}
-            params={{ appId: app.id }}
-            search={{ stream: DEPLOYMENT_STREAM }}
-            to="/app/$appId/logs"
-          >
-            <Rocket />
-            Deployments
-          </Link>
-        </>
-      }
-    >
-      {runtime
-        ? services.map((service) => (
-            <LogRailRow
-              key={service.name}
-              current={source.name === service.name}
-              search={{ stream: `${SERVICE_PREFIX}${service.name}` }}
-              status={service.status}
-              title={service.name}
-            >
-              <ServiceMeta service={service} />
-            </LogRailRow>
-          ))
-        : deployments.map((deployment) => (
-            <LogRailRow
-              key={deployment.id}
-              current={
-                source.id === deployment.id ||
-                (source.id === null && deployment.id === newest)
-              }
-              live={isLive(deployment, live)}
-              search={{ deployment: deployment.id }}
-              status={deploymentStatusPresentation(deployment)}
-              title={deploymentTitle(deployment)}
-            >
-              <DeploymentMeta deployment={deployment} />
-            </LogRailRow>
-          ))}
-      {!runtime && deployments.length === 0 ? (
-        <p className="px-3 py-1 text-xs text-muted-foreground">
-          No deployments yet
-        </p>
-      ) : null}
-    </LogSourcesRail>
-  )
-})
-
-// A source in the rail, which opens it on this App's Logs page.
-function LogRailRow({
-  children,
-  current,
-  live = false,
-  search,
-  status,
-  title,
-}: {
-  children: React.ReactNode
-  current: boolean
-  live?: boolean
-  search: { deployment: string } | { stream: string }
-  status: IdentityStatusPresentation
-  title: string
-}) {
-  const { app } = useAppWorkspace()
-  return (
-    <Link
-      replace
-      aria-current={current ? "true" : undefined}
-      className={logRailRowClassName}
-      params={{ appId: app.id }}
-      search={search}
-      title={title}
-      to="/app/$appId/logs"
-    >
-      <LogRailRowContent live={live} status={status} title={title}>
-        {children}
-      </LogRailRowContent>
-    </Link>
-  )
-}
-
 function deploymentTitle(deployment: Deployment): string {
   return (
     deployment.commitMessage ??
     `${sourceTypeLabels[deployment.sourceType]} deployment`
-  )
-}
-
-// The rail, below the width that fits it.
-function AppLogsPicker({
-  deployments,
-  live,
-  services,
-  source,
-}: {
-  deployments: ReadonlyArray<Deployment>
-  live: LiveDeployments
-  services: ReadonlyArray<Service>
-  source: LogSource
-}) {
-  const { app } = useAppWorkspace()
-  const navigate = useNavigate()
-  const value =
-    source.kind === "service"
-      ? `${SERVICE_PREFIX}${source.name}`
-      : (source.id ?? DEPLOYMENT_STREAM)
-  // One opened by its link, past the ones listed.
-  const unlisted =
-    source.kind === "deployment" &&
-    source.id !== null &&
-    !deployments.some(({ id }) => id === source.id)
-      ? source.id
-      : null
-  function select(next: string) {
-    void navigate({
-      params: { appId: app.id },
-      replace: true,
-      search: next.startsWith(SERVICE_PREFIX)
-        ? { stream: next }
-        : next === DEPLOYMENT_STREAM
-          ? { stream: DEPLOYMENT_STREAM }
-          : { deployment: next },
-      to: "/app/$appId/logs",
-    })
-  }
-  return (
-    <div className="shrink-0 border-b px-3 py-2 md:hidden">
-      <Select value={value} onValueChange={select}>
-        <SelectTrigger aria-label="Log source" className="h-9 w-full text-xs">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {services.length > 0 ? (
-            <SelectGroup>
-              <SelectLabel>Containers</SelectLabel>
-              {services.map(({ name }) => (
-                <SelectItem
-                  key={name}
-                  className="font-mono"
-                  value={`${SERVICE_PREFIX}${name}`}
-                >
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          ) : null}
-          <SelectGroup>
-            <SelectLabel>Deployments</SelectLabel>
-            <SelectItem value={DEPLOYMENT_STREAM}>Latest</SelectItem>
-            {unlisted ? (
-              <SelectItem value={unlisted}>Older deployment</SelectItem>
-            ) : null}
-            {deployments.map((deployment) => (
-              <SelectItem key={deployment.id} value={deployment.id}>
-                {deploymentTitle(deployment)}
-                {" · "}
-                {deploymentStatusPresentation(deployment).label}
-                {isLive(deployment, live) ? " · Live" : ""}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-    </div>
   )
 }
