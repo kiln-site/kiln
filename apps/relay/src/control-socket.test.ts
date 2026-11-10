@@ -29,7 +29,7 @@ import {
   relayAuthResponseTranscript,
   relayControlProtocol,
   relayCreateDatabaseSchema,
-  relayDatabaseActionSchema,
+  relayInstanceActionSchema,
   relaySnapshotDeltaFeature,
 } from "@workspace/contracts"
 import type {
@@ -259,6 +259,29 @@ describe("Relay control socket", () => {
     })
   })
 
+  it("takes the power grant of the kind a request names, and no other kind's", async () => {
+    const relay = await startRelay()
+    const id = "0123456789ab"
+    // Whether a client holding these actions may start each kind.
+    const allowed = async (actions: ReadonlyArray<RelayAction>) => {
+      const { inbox, socket } = await relay.connect(
+        await relay.pair({ role: "custom", actions })
+      )
+      const kinds: Array<string> = []
+      for (const kind of ["instance", "database", "app", "relay"]) {
+        sendRequest(socket, "instance.action", { action: "start", id, kind })
+        const reply = (await inbox.next()) as { code?: string }
+        if (reply.code !== "forbidden") kinds.push(kind)
+      }
+      return kinds
+    }
+
+    expect(await allowed(["instance.power.start"])).toEqual(["instance"])
+    expect(await allowed(["instance.power.stop"])).toEqual([])
+    expect(await allowed(["database.power"])).toEqual(["database"])
+    expect(await allowed(["app.manage"])).toEqual(["app"])
+  })
+
   it("checks a certificate with what changing its route takes", async () => {
     const relay = await startRelay({
       execute: async () => ({ asked: false, pending: null }),
@@ -353,7 +376,7 @@ describe("Relay control socket", () => {
       sendRequest(
         socket,
         "instance.action",
-        { action: "start", instanceId },
+        { action: "start", id: instanceId, kind: "instance" },
         { operationId }
       )
       await inbox.next()
@@ -455,12 +478,8 @@ describe("Relay control socket", () => {
       )!
       const relay = await startRelay({
         execute: async (request) => {
-          const input = relayDatabaseActionSchema.parse(request.payload)
-          return harness.power.requested(
-            "database",
-            input.databaseId,
-            input.action
-          )
+          const input = relayInstanceActionSchema.parse(request.payload)
+          return harness.power.requested(input.kind, input.id, input.action)
         },
         lanes: harness.lanes,
       })
@@ -490,8 +509,8 @@ describe("Relay control socket", () => {
       const operationId = randomUUID()
       const id = sendRequest(
         connection.socket,
-        "database.action",
-        { action: "stop", databaseId },
+        "instance.action",
+        { action: "stop", id: databaseId, kind: "database" },
         { operationId }
       )
       await until(

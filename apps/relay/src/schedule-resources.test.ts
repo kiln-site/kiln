@@ -93,14 +93,14 @@ describe("schedules and power", () => {
 
     // Someone stops it during the wait, as a Hearth request does.
     const locks = await controlRequestLocks(
-      "database.action",
-      { action: "stop", databaseId: id },
+      "instance.action",
+      { action: "stop", id, kind: "database" },
       (reference) => reference,
       () => []
     )
     await Effect.runPromise(
       harness.lanes.run(
-        { label: "database.action", locks: locks ?? [] },
+        { label: "instance.action", locks: locks ?? [] },
         Effect.promise(() => harness.power.requested("database", id, "stop"))
       )
     )

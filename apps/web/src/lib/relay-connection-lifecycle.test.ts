@@ -150,7 +150,7 @@ effectIt.effect(
           const action = relayRpc(
             endpoint,
             "instance.action",
-            { action: "stop", instanceId: "a".repeat(12) },
+            { action: "stop", id: "a".repeat(12), kind: "instance" },
             30_000
           )
           yield* Effect.promise(() =>
@@ -216,7 +216,7 @@ effectIt.effect(
           const lost = relayRpc(
             endpoint,
             "instance.action",
-            { action: "stop", instanceId: "e".repeat(12) },
+            { action: "stop", id: "e".repeat(12), kind: "instance" },
             30_000
           )
           yield* Effect.promise(() =>

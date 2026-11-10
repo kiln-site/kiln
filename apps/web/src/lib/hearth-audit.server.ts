@@ -90,6 +90,14 @@ export function relayChangeTarget(
   ) {
     return { id: nested.id, kind: nested.kind }
   }
+  // Power names its target's kind beside its ID, for every kind alike.
+  if (operation === "instance.action") {
+    const kind = field("kind")
+    const id = field("id")
+    if (id && (kind === "instance" || kind === "app" || kind === "database")) {
+      return { id, kind }
+    }
+  }
   const [area] = operation.split(".")
   if (area === "instance") {
     // File operations take a file root: a game server's, an App's, or the

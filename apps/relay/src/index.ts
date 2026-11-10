@@ -30,7 +30,6 @@ import {
   relayCreateDatabaseSchema,
   relayPrepareDatabaseSchema,
   relayProvisionDatabaseSchema,
-  relayAppActionSchema,
   relayAppLimitsSchema,
   relayStateDatabaseReadSchema,
   relayHostTerminalAttachSchema,
@@ -65,7 +64,6 @@ import {
   relayHostPackagesRequestSchema,
   relaySecurityInventoryRequestSchema,
   relayDeployAppSchema,
-  relayDatabaseActionSchema,
   relayDatabaseLimitsSchema,
   relayInstanceLimitsWriteSchema,
   type ResourceLimits,
@@ -1140,15 +1138,8 @@ const power = new ResourcePower({
   // an App's start also holds the volumes it mounts.
   locks: async (kind, id, action) =>
     (await controlRequestLocks(
-      kind === "instance" ? "instance.action" : `${kind}.action`,
-      {
-        action,
-        ...(kind === "app"
-          ? { appId: id }
-          : kind === "database"
-            ? { databaseId: id }
-            : { instanceId: id }),
-      },
+      "instance.action",
+      { action, id, kind },
       resolveInstanceReference,
       (appId) =>
         runRelayEffect("relay.apps.volumes", volumes.appVolumeIds(appId)),
@@ -2980,10 +2971,6 @@ async function executeControlRequest(
     }
     case "database.wipe":
       return databases.wipe(relayDatabaseWipeSchema.parse(request.payload))
-    case "database.action": {
-      const input = relayDatabaseActionSchema.parse(request.payload)
-      return power.requested("database", input.databaseId, input.action)
-    }
     case "database.limits.write":
       return databases.setLimits(
         relayDatabaseLimitsSchema.parse(request.payload)
@@ -3210,10 +3197,6 @@ async function executeControlRequest(
         relayAppImageCheckSchema.parse(request.payload),
         signal
       )
-    case "app.action": {
-      const input = relayAppActionSchema.parse(request.payload)
-      return power.requested("app", input.appId, input.action)
-    }
     case "app.limits.write":
       return apps.setLimits(relayAppLimitsSchema.parse(request.payload))
     case "app.volumes.write": {
@@ -3675,11 +3658,14 @@ async function executeControlRequest(
       await serverDeploymentLogs.remove(instanceId)
       return { deleted: true, instanceId }
     }
+    // Power for a game server, database or App alike.
     case "instance.action": {
       const input = relayInstanceActionSchema.parse(payload)
       return power.requested(
-        "instance",
-        resolveInstanceReference(requiredString(payload, "instanceId")),
+        input.kind,
+        input.kind === "instance"
+          ? resolveInstanceReference(input.id)
+          : input.id,
         input.action
       )
     }
