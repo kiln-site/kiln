@@ -25,9 +25,13 @@ The format describes every kind. Kiln reads them in stages.
 | -------------------------------- | ------------------------------------- |
 | Game server Bricks from an image | Run                                   |
 | `type: minecraft`                | Run                                   |
-| Database, App and group Bricks   | Defined here; not installable yet     |
+| Database Bricks of a known type  | Run from Kiln's own catalog, on that type's image |
+| A database's `connection`        | Defined here; Kiln builds a type's URL itself |
+| A database Brick with no type    | Defined here; not installable yet     |
+| App and group Bricks             | Defined here; not installable yet     |
 | `dockerfile` and `compose`       | Defined here; Apps use them later     |
-| `ready` by command or HTTP       | Defined here; game servers use logs   |
+| `ready` by command               | Run for databases; game servers use logs |
+| `ready` by HTTP                  | Defined here; Apps use it later       |
 | Ports that aren't `public`       | Defined here; not for game servers    |
 | A raster icon                    | Defined here; SVG marks are shown     |
 | `settings`                       | Reserved; refused until it is defined |
@@ -42,9 +46,11 @@ Those parts are provisional (see the rules below).
   Where a field has one, it is written below.
 - A template that names nothing is an error.
 - Semantics never change within a format once Kiln runs them. What Kiln
-  doesn't run yet is provisional: a database, an App, a group, and the parts
-  only they use may still change, until the first implementation of each
-  proves it. Game server Bricks are settled.
+  doesn't run yet is provisional: an App, a group, a database with no type,
+  and the parts only they use may still change, until the first
+  implementation of each proves it. Game server Bricks and typed database
+  Bricks are settled, except a database's `connection`, which nothing reads
+  yet.
 
 ## An example
 
@@ -328,6 +334,40 @@ and is ready when its `ready` command succeeds.
 | ------------------------------ | ----------------------------------------------------------- |
 | `postgres`, `mysql`, `mariadb` | The table viewer, dumps and restores, and password rotation |
 | `redis`, `valkey`              | Its login, as an ACL file in the data volume, and rotation  |
+
+Kiln does those through the type's own image: its command-line tools,
+which reach the engine on its usual port, and the variables it takes its
+first login from. So a database of a type runs from that type's image and
+no other, at whatever tag, and listens on that port:
+
+| Type       | Image           | Port |
+| ---------- | --------------- | ---- |
+| `postgres` | `postgres`      | 5432 |
+| `mysql`    | `mysql`         | 3306 |
+| `mariadb`  | `mariadb`       | 3306 |
+| `redis`    | `redis`         | 6379 |
+| `valkey`   | `valkey/valkey` | 6379 |
+
+Its environment sets the variables that image takes its first login from,
+each to what Kiln supplies, because Kiln's dumps, restores and wipes read
+them back inside the container:
+
+| Type       | Variables                                                                                     |
+| ---------- | --------------------------------------------------------------------------------------------- |
+| `postgres` | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`                                           |
+| `mysql`    | `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PASSWORD`, and `MYSQL_ROOT_PASSWORD` as a made secret  |
+| `mariadb`  | `MARIADB_DATABASE`, `MARIADB_USER`, `MARIADB_PASSWORD`, and `MARIADB_ROOT_PASSWORD` likewise  |
+
+The name, user and password are `{{ database.name }}`,
+`{{ database.username }}` and `{{ database.password }}`; a root password is
+a `secret` input with `generate: true` and no `default` or `suggest`, so
+that it is always one Kiln made.
+
+Redis and Valkey keep their data in `/data` and start with
+`--aclfile /data/users.acl`, the users file Kiln writes their login to.
+
+A typed database's connection URL is the one Kiln builds for its type;
+`connection` is for a database with no type, and isn't read yet.
 
 A type brings its own export and import. `export` and `import` are for a
 database with no type, which has neither a viewer nor files; without

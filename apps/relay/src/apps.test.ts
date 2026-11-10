@@ -18,6 +18,7 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { DockerEngine } from "./docker-engine.js"
 import { fakeDocker } from "./test/docker.js"
+import { databaseBrick } from "./test/database-bricks.js"
 import { RelayVolumes } from "./volumes.js"
 import {
   relayHarness,
@@ -153,11 +154,12 @@ describe("an App created with a database", () => {
     const harness = await relayHarness()
     const database = {
       databaseName: "kiln_main",
-      engine: "postgres",
+      ...databaseBrick("postgres"),
       id: databaseId,
       name: "Main",
       password: "p".repeat(24),
       username: "kiln_main",
+      variables: {},
     } as const
     await Effect.runPromise(
       harness.state.enqueueProvisioningJob(

@@ -21,6 +21,10 @@ import {
   latestVelocityVersion,
   readBrickRecipe,
   relayCatalogSchema,
+  databaseBrickProblem,
+  databaseEngineRuntimes,
+  databaseEngineRunsImage,
+  databaseEngineSchema,
 } from "@workspace/contracts"
 
 import { BrickRecipeError } from "./effect/errors.js"
@@ -34,6 +38,7 @@ import type {
   BrickRecipe,
   BrickVariableValue,
   RelayCatalog,
+  DatabaseEngine,
 } from "@workspace/contracts"
 import {
   BlockedRemoteAddressError,
@@ -216,7 +221,7 @@ export class BrickCatalog {
       )
     }
     const recipe = resolveRecipeIconSource(parsed.data, source, fromCatalog)
-    gameServerBrick(recipe, source.href)
+    runnableBrick(recipe, source.href)
     return recipe
   }
 }
@@ -261,7 +266,7 @@ export async function saveBrickSnapshot(
   recipe: BrickRecipe
 ): Promise<string> {
   const parsed = brickRecipeSchema.parse(recipe)
-  gameServerBrick(parsed, "snapshot")
+  runnableBrick(parsed, "snapshot")
   return writeBrickSnapshot(snapshotDirectory, JSON.stringify(parsed))
 }
 
@@ -304,7 +309,7 @@ function recordedBrickRecipe(document: unknown): BrickRecipe {
         .join("; ")
     )
   }
-  gameServerBrick(read.data, "snapshot")
+  runnableBrick(read.data, "snapshot")
   return read.data
 }
 
@@ -350,7 +355,7 @@ export function gameServerBrick(
   const unsupported = (reason: string) =>
     recipeError("unsupported_brick", source, reason)
   if (recipe.kind !== "game-server") {
-    throw unsupported(`Kiln can't install ${recipe.kind} Bricks yet`)
+    throw unsupported(`A ${recipe.kind} Brick isn't a game server`)
   }
   const deploy = recipe.deploy
   if (deploy?.type !== "image") {
@@ -451,15 +456,156 @@ export async function resolveBrickForProvisioning(
   )
 }
 
-export function resolveBrick(
+/**
+ * A recipe as something this Relay runs, whatever kind it is. Refuses, as
+ * `unsupported_brick`, a kind or a part it doesn't run yet.
+ */
+function runnableBrick(recipe: BrickRecipe, source: string): void {
+  if (recipe.kind === "database") databaseBrick(recipe, source)
+  else gameServerBrick(recipe, source)
+}
+
+/** What a database Brick says of the container a database runs in. */
+export interface DatabaseBrick {
+  command: ReadonlyArray<string>
+  /** Where its data volume is mounted. */
+  dataMount: string
+  engine: DatabaseEngine
+  /** The port it listens on. */
+  internalPort: number
+  /** The command that succeeds once it serves; its type's own without one. */
+  ready: string | null
+}
+
+/**
+ * A recipe as the database the Relay runs. A database is one of the types
+ * Kiln has the login, dumps and viewer for, from an image, listening on its
+ * first port and keeping its data in its first volume.
+ */
+export function databaseBrick(
+  recipe: BrickRecipe,
+  source = recipe.metadata.id
+): DatabaseBrick {
+  const unsupported = (reason: string) =>
+    recipeError("unsupported_brick", source, reason)
+  // What its type needs of it, which Hearth checks before offering it.
+  const problem = databaseBrickProblem(recipe)
+  if (problem) throw unsupported(problem)
+  const engine = databaseEngineSchema.parse(recipe.type)
+  const deploy = recipe.deploy
+  // `databaseBrickProblem` refused anything else.
+  if (deploy?.type !== "image") {
+    throw unsupported("A database Brick runs from an image")
+  }
+  const port = deploy.ports?.[0]?.port
+  const dataMount = deploy.volumes?.[0]
+  if (typeof port !== "number" || dataMount === undefined) {
+    throw unsupported("A database Brick names its port and its volume")
+  }
+  const ready = deploy.ready
+  if (ready && !("command" in ready)) {
+    throw unsupported("A database is ready by a command")
+  }
+  // What a game server takes from its Brick and a database doesn't yet.
+  const unused = (
+    [
+      "entrypoint",
+      "memory",
+      "pids",
+      "runtime",
+      "stopSignal",
+      "user",
+      "workingDirectory",
+    ] as const
+  ).filter((field) => deploy[field] !== undefined)
+  if (unused.length > 0) {
+    throw unsupported(`A database Brick can't set ${unused.join(", ")} yet`)
+  }
+  return {
+    command: deploy.command ?? [],
+    dataMount,
+    engine,
+    internalPort: port,
+    ready: ready?.command ?? null,
+  }
+}
+
+/** A database Brick with its answers and what Kiln gives it filled in. */
+export interface ResolvedDatabaseBrick extends DatabaseBrick {
+  environment: Record<string, string>
+  image: string
+  recipe: BrickRecipe
+  /** Every answer, with the secrets Kiln made. */
+  values: Record<string, BrickVariableValue>
+}
+
+/**
+ * A database Brick resolved for one database: its answers, and the name,
+ * login and address Kiln gives it, which its templates take as
+ * `database.*`.
+ */
+export function resolveDatabaseBrick(
   recipe: BrickRecipe,
   input: Readonly<Record<string, BrickVariableValue>>,
+  database: {
+    host: string
+    name: string
+    password: string
+    username: string
+  },
   source = recipe.metadata.id
-): ResolvedBrick {
-  const server = gameServerBrick(recipe, source)
+): ResolvedDatabaseBrick {
+  const brick = databaseBrick(recipe, source)
   const deploy = recipe.deploy
-  // `gameServerBrick` refused anything else.
+  // `databaseBrick` refused anything else.
   if (deploy?.type !== "image") throw new Error("Not an image Brick")
+  const supplied: Readonly<Record<string, string>> = {
+    "database.host": database.host,
+    "database.name": database.name,
+    "database.password": database.password,
+    "database.port": String(brick.internalPort),
+    "database.username": database.username,
+  }
+  const { interpolate, values } = brickAnswered(recipe, input, source, supplied)
+  // An answer is part of the image's name, so it is checked once filled in.
+  const image = interpolate(deploy.image)
+  if (!databaseEngineRunsImage(brick.engine, image)) {
+    throw unsupportedImage(source, brick.engine)
+  }
+  return {
+    ...brick,
+    environment: Object.fromEntries(
+      Object.entries(deploy.env ?? {}).map(([name, value]) => [
+        name,
+        interpolate(value),
+      ])
+    ),
+    image,
+    recipe,
+    values,
+  }
+}
+
+// Kiln's login, rotation, dumps and viewer for a type rely on its image.
+function unsupportedImage(source: string, engine: DatabaseEngine) {
+  return recipeError(
+    "unsupported_brick",
+    source,
+    `A ${engine} database runs from the ${databaseEngineRuntimes[engine].image} image, at a tag`
+  )
+}
+
+// A Brick's answers worked out, and its templates filled from them and from
+// whatever Kiln supplies for its kind.
+function brickAnswered(
+  recipe: BrickRecipe,
+  input: Readonly<Record<string, BrickVariableValue>>,
+  source: string,
+  supplied: Readonly<Record<string, string>> = {}
+): {
+  interpolate: (template: string) => string
+  values: Record<string, BrickVariableValue>
+} {
   const inputs = brickInputs(recipe)
   const unknown = Object.keys(input).filter(
     (name) => !inputs.some((definition) => definition.key === name)
@@ -501,6 +647,7 @@ export function resolveBrick(
     fillBrickTemplate(template, (name) => {
       if (name === "brick.id") return recipe.metadata.id
       if (name === "brick.name") return recipe.metadata.name
+      if (Object.hasOwn(supplied, name)) return supplied[name]
       if (!Object.hasOwn(values, name)) {
         throw recipeError(
           "missing_variable",
@@ -510,6 +657,19 @@ export function resolveBrick(
       }
       return String(values[name])
     })
+  return { interpolate, values }
+}
+
+export function resolveBrick(
+  recipe: BrickRecipe,
+  input: Readonly<Record<string, BrickVariableValue>>,
+  source = recipe.metadata.id
+): ResolvedBrick {
+  const server = gameServerBrick(recipe, source)
+  const deploy = recipe.deploy
+  // `gameServerBrick` refused anything else.
+  if (deploy?.type !== "image") throw new Error("Not an image Brick")
+  const { interpolate, values } = brickAnswered(recipe, input, source)
   const memory = deploy.memory === undefined ? null : interpolate(deploy.memory)
   if (memory !== null && !/^\d+[bkmgt]$/iu.test(memory)) {
     throw recipeError(

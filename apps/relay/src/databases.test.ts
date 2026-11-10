@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vite-plus/test"
 vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { fakeDocker } from "./test/docker.js"
+import { databaseBrick } from "./test/database-bricks.js"
 import {
   relayHarness,
   TEST_NAMESPACE,
@@ -30,7 +31,7 @@ function createDatabase(
   return harness.databases.create(
     relayCreateDatabaseSchema.parse({
       databaseName: "kiln_app",
-      engine,
+      ...databaseBrick(engine),
       id,
       name: "Main database",
       password,
@@ -59,7 +60,12 @@ describe("managed database recovery metadata", () => {
 
     const container = databaseContainer(id)
     expect(container.labels).toMatchObject({
+      "kiln.brick.id": "postgres",
+      "kiln.brick.kind": "database",
+      "kiln.brick.type": "postgres",
+      "kiln.brick.variables": JSON.stringify({ version: "17" }),
       "kiln.database.engine": "postgres",
+      "kiln.database.image": "postgres:17",
       "kiln.database.id": id,
       "kiln.database.network": networkOf(id),
       "kiln.database.volume": volumeOf(id),
@@ -73,6 +79,7 @@ describe("managed database recovery metadata", () => {
     // A fresh Relay recovers the database from Docker alone.
     const [recovered] = await (await harness.restart()).databases.list()
     expect(recovered).toMatchObject({
+      brickId: "postgres",
       engine: "postgres",
       id,
       observedState: "running",
@@ -103,6 +110,53 @@ describe("managed database recovery metadata", () => {
     expect(databaseContainer(id).state.running).toBe(true)
     expect(await harness.databases.list()).toHaveLength(1)
   })
+})
+
+describe("a database made before databases ran Bricks", () => {
+  // As a Relay labelled one then: its engine, and nothing of a Brick.
+  function asMadeBefore(id: string) {
+    const container = databaseContainer(id)
+    for (const label of Object.keys(container.labels)) {
+      if (
+        label.startsWith("kiln.brick.") ||
+        [
+          "kiln.database.command",
+          "kiln.database.data-mount",
+          "kiln.database.port",
+          "kiln.database.ready",
+        ].includes(label)
+      ) {
+        delete container.labels[label]
+      }
+    }
+    return container
+  }
+
+  it.each(["postgres", "redis"] as const)(
+    "is read as its engine's Brick, and replaced as it ran (%s)",
+    async (engine) => {
+      const harness = await relayHarness()
+      const id = "f".repeat(12)
+      await createDatabase(harness, id, engine)
+      const before = asMadeBefore(id)
+
+      const [listed] = await harness.databases.list()
+      expect(listed).toMatchObject({
+        brickId: engine,
+        engine,
+        internalPort: engine === "postgres" ? 5432 : 6379,
+      })
+
+      await harness.databases.redeploy(id)
+
+      const after = databaseContainer(id)
+      expect(after.id).not.toBe(before.id)
+      expect(after.cmd).toEqual(before.cmd)
+      expect(after.mounts).toEqual(before.mounts)
+      expect(after.env).toEqual(before.env)
+      expect(after.state.running).toBe(true)
+    }
+  )
 })
 
 describe("managed database redeploy", () => {

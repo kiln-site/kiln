@@ -58,6 +58,7 @@ import {
   databaseLifecycleLocks,
 } from "./operation-plans.js"
 import { fakeDocker } from "./test/docker.js"
+import { databaseBrick } from "./test/database-bricks.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 import { DatabaseSync } from "node:sqlite"
 
@@ -533,7 +534,7 @@ describe("Relay control socket", () => {
       await harness.databases.create(
         relayCreateDatabaseSchema.parse({
           databaseName: "kiln_app",
-          engine: "postgres",
+          ...databaseBrick("postgres"),
           id: databaseId,
           name: "Main database",
           password: "correct-horse-battery-staple-1",

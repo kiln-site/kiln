@@ -7,6 +7,7 @@ import { brickRecipeSchema } from "@workspace/contracts"
 
 import {
   BrickCatalog,
+  resolveDatabaseBrick,
   resolveRecipeIconSource,
   resolveBrick,
 } from "./bricks.js"
@@ -60,6 +61,14 @@ const recipe: BrickRecipe = brickRecipeSchema.parse({
 })
 
 const bricksDirectory = resolve(import.meta.dirname, "../../bricks")
+
+// What Kiln gives a database, which its Brick's templates take.
+const login = {
+  host: "database-dddddddddddd",
+  name: "kiln_app",
+  password: "correct-horse-battery-staple-1",
+  username: "kiln_user",
+}
 const catalogAt = (file: string) =>
   new BrickCatalog(
     pathToFileURL(join(bricksDirectory, file)).href,
@@ -204,17 +213,186 @@ describe("the official Bricks", () => {
 
   it("load, and resolve with nothing answered", async () => {
     const { bricks } = await catalogAt("bricks.yml").catalog()
-    expect(bricks.map((brick) => brick.metadata.id).sort()).toEqual([
+    const ids = (kind: string) =>
+      bricks
+        .filter((brick) => brick.kind === kind)
+        .map((brick) => brick.metadata.id)
+        .sort()
+    expect(ids("game-server")).toEqual([
       "fabric",
       "folia",
       "palworld",
       "paper",
       "velocity",
     ])
+    expect(ids("database")).toEqual([
+      "mariadb",
+      "mysql",
+      "postgres",
+      "redis",
+      "valkey",
+    ])
     for (const brick of bricks) {
       const { source: _source, ...definition } = brick
-      expect(() => resolveBrick(definition, {})).not.toThrow()
+      if (definition.kind === "database") {
+        expect(() =>
+          resolveDatabaseBrick(definition, {}, login)
+        ).not.toThrow()
+      } else {
+        expect(() => resolveBrick(definition, {})).not.toThrow()
+      }
     }
+  })
+
+  // The engine table these replaced: a database made from a Brick has to
+  // run as one made before did.
+  it.each([
+    ["postgres", "postgres:17", "/var/lib/postgresql/data", 5432],
+    ["mysql", "mysql:8.4", "/var/lib/mysql", 3306],
+    ["mariadb", "mariadb:11.8", "/var/lib/mysql", 3306],
+    ["redis", "redis:8", "/data", 6379],
+    ["valkey", "valkey/valkey:8", "/data", 6379],
+  ])(
+    "run a %s database as Kiln ran one before it had a Brick",
+    async (id, image, dataMount, internalPort) => {
+      const { bricks } = await catalogAt("bricks.yml").catalog()
+      const { source: _source, ...definition } = bricks.find(
+        (brick) => brick.metadata.id === id
+      )!
+      const resolved = resolveDatabaseBrick(definition, {}, login)
+
+      expect(resolved).toMatchObject({
+        dataMount,
+        engine: id,
+        image,
+        internalPort,
+      })
+      // Its login is the one Kiln gives it, never an answer.
+      const environment = JSON.stringify(resolved.environment)
+      if (id !== "redis" && id !== "valkey") {
+        expect(environment).toContain(login.username)
+        expect(environment).toContain(login.password)
+        expect(environment).toContain(login.name)
+      }
+      expect(environment).not.toContain("{{")
+    }
+  )
+
+  // Kiln logs in to, rotates, dumps and browses a type through its own
+  // image's tools, on the port they reach, so a Brick from any catalog
+  // can't run something else under that type.
+  it("refuse a database that doesn't run as its type does", async () => {
+    const { bricks } = await catalogAt("bricks.yml").catalog()
+    const { source: _source, ...postgres } = bricks.find(
+      (brick) => brick.metadata.id === "postgres"
+    )!
+    const deploy = postgres.deploy
+    if (deploy?.type !== "image") throw new Error("Not an image")
+    const withImage = (image: string, inputs = postgres.inputs) => ({
+      ...postgres,
+      deploy: { ...deploy, image },
+      inputs,
+    })
+
+    expect(() =>
+      resolveDatabaseBrick(withImage("example.com/other/postgres:17"), {}, login)
+    ).toThrow(/runs from the postgres image/u)
+    // An answer that would turn the tag into another registry's image.
+    const freeVersion = withImage("postgres:{{ version }}", [
+      { key: "version", label: "Version", type: "text", default: "17" },
+    ])
+    expect(resolveDatabaseBrick(freeVersion, {}, login).image).toBe(
+      "postgres:17"
+    )
+    for (const version of ["5000/evil", "17@sha256:abc", "17/evil:1"]) {
+      expect(() =>
+        resolveDatabaseBrick(freeVersion, { version }, login)
+      ).toThrow(/runs from the postgres image/u)
+    }
+
+    // Rotation and wipes reach Redis where its tools look for it, and log
+    // in with the users file Kiln writes.
+    const { source: _redisSource, ...redis } = bricks.find(
+      (brick) => brick.metadata.id === "redis"
+    )!
+    const redisDeploy = redis.deploy
+    if (redisDeploy?.type !== "image") throw new Error("Not an image")
+    expect(() =>
+      resolveDatabaseBrick(
+        {
+          ...redis,
+          deploy: { ...redisDeploy, ports: [{ name: "redis", port: 6380 }] },
+        },
+        {},
+        login
+      )
+    ).toThrow(/listens on port 6379/u)
+    expect(() =>
+      resolveDatabaseBrick(
+        {
+          ...redis,
+          deploy: { ...redisDeploy, command: ["redis-server"] },
+        },
+        {},
+        login
+      )
+    ).toThrow(/--aclfile/u)
+
+    // MariaDB's image takes MYSQL_* names too, and would start. Kiln's
+    // dumps and wipes read the MARIADB_* ones back inside the container.
+    const { source: _mariadbSource, ...mariadb } = bricks.find(
+      (brick) => brick.metadata.id === "mariadb"
+    )!
+    const mariadbDeploy = mariadb.deploy
+    if (mariadbDeploy?.type !== "image") throw new Error("Not an image")
+    expect(() =>
+      resolveDatabaseBrick(
+        {
+          ...mariadb,
+          deploy: {
+            ...mariadbDeploy,
+            env: Object.fromEntries(
+              Object.entries(mariadbDeploy.env ?? {}).map(([name, value]) => [
+                name.replace("MARIADB_", "MYSQL_"),
+                value,
+              ])
+            ),
+          },
+        },
+        {},
+        login
+      )
+    ).toThrow(/sets MARIADB_DATABASE/u)
+    // A root password written into the recipe is one anyone can read.
+    expect(() =>
+      resolveDatabaseBrick(
+        {
+          ...mariadb,
+          deploy: {
+            ...mariadbDeploy,
+            env: { ...mariadbDeploy.env, MARIADB_ROOT_PASSWORD: "hunter2" },
+          },
+        },
+        {},
+        login
+      )
+    ).toThrow(/MARIADB_ROOT_PASSWORD to a secret Kiln generates/u)
+    // Nor is a generated secret that comes with a value of its own, which
+    // would be used in place of one Kiln makes.
+    expect(() =>
+      resolveDatabaseBrick(
+        {
+          ...mariadb,
+          inputs: mariadb.inputs?.map((input) =>
+            input.key === "root_password"
+              ? { ...input, default: "hunter2" }
+              : input
+          ),
+        },
+        {},
+        login
+      )
+    ).toThrow(/MARIADB_ROOT_PASSWORD to a secret Kiln generates/u)
   })
 
   // Servers made from the v1 recipes keep those recipes. Read now, each has
@@ -224,8 +402,10 @@ describe("the official Bricks", () => {
       catalogAt("catalog.yml").catalog(),
       catalogAt("bricks.yml").catalog(),
     ])
-    expect(v1.bricks).toHaveLength(v2.bricks.length)
-    for (const brick of v2.bricks) {
+    // Only game servers had v1 recipes.
+    const servers = v2.bricks.filter((brick) => brick.kind === "game-server")
+    expect(v1.bricks).toHaveLength(servers.length)
+    for (const brick of servers) {
       const stored = v1.bricks.find(
         (candidate) => candidate.metadata.id === brick.metadata.id
       )!
