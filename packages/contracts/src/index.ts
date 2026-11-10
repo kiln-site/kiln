@@ -6,6 +6,7 @@ import {
   MAXIMUM_INSTANCE_NAME_LENGTH,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
+import { brickIdSchema } from "./brick-recipe.js"
 import { instanceIdSchema } from "./instance-id.js"
 import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
 import {
@@ -50,6 +51,7 @@ export * from "./container-identity.js"
 export * from "./relay-join.js"
 export * from "./release-version.js"
 export * from "./minecraft-java.js"
+export * from "./brick-recipe.js"
 export * from "./cli.js"
 export * from "./instance-limits.js"
 export * from "./resource-limits.js"
@@ -1320,8 +1322,6 @@ export const relayDatabaseDataWriteSchema = relayDatabaseExportSchema.extend({
 export const BRICK_INSTANCE_NAME_SUFFIX = " Server"
 export const RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH =
   MAXIMUM_INSTANCE_NAME_LENGTH - BRICK_INSTANCE_NAME_SUFFIX.length
-
-export const brickIdSchema = z.string().regex(/^[a-z0-9][a-z0-9.-]{0,63}$/u)
 
 export function brickIdExceedsRecommendedLength(id: string): boolean {
   return id.length > RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH

@@ -1,0 +1,12 @@
+# The official catalog of kiln.brick/v2 Bricks.
+format: kiln.catalog/v1
+name: Kiln
+author: QarthO
+docs: "https://kiln.site/docs"
+support: "https://discord.gg/gu76VAtSK5"
+recipes:
+  - bricks/paper.yml
+  - bricks/folia.yml
+  - bricks/fabric.yml
+  - bricks/velocity.yml
+  - bricks/palworld.yml

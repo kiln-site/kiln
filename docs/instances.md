@@ -19,10 +19,11 @@ work. Update it as each step lands.
 | App         | A Brick (target) | Today a source the person supplies.                 |
 | Tailscale   | A Brick (target) | Today a built-in Brick that runs as a game server.  |
 
-A Tailscale network is an **instance group**. The group has an instance ID,
-and so does each installation of it on a Relay. Shared actions act on one
-installation on one Relay; the group's page shows them together and sends an
-action to each. Today a network has one ID that every Relay's node shares.
+A Tailscale network is an [instance group](#instance-groups). The group has
+an instance ID, and so does each installation of it on a Relay. Shared
+actions act on one installation on one Relay; the group's page shows them
+together and sends an action to each. Today a network has one ID that every
+Relay's node shares.
 
 ## The foundation
 
@@ -88,31 +89,70 @@ A capability usually moves in two steps: first onto one path with no key
 change, then onto one permission with a migration on Hearth and on each
 Relay.
 
+## Instance groups
+
+A group keeps instances together: an ID, a name, an icon, and members of any
+kind on any Relay. It is its own record, not a feature of one kind:
+
+- A Brick can create one, for an App that comes with a database of its own.
+- A person can make one.
+- Kiln makes one for a Tailscale network, placing an installation on each
+  Relay that needs it, and for its own services (a Relay, Hearth, its cache
+  and its database), which people can't edit.
+
+Groups don't exist yet. The Brick format already describes one.
+
 ## Bricks
 
-Today a Brick is a `kiln.brick/v1` recipe for a game server
-(`apps/bricks/docs/recipe-v1.md`). The target is that every kind except a
-Relay comes from a Brick, in a new format:
+Every kind except a Relay comes from a Brick. Three things stay separate:
 
-- **`kind`**: game server, database, App or Tailscale. Each kind has a
-  section of its own in the recipe.
+- **The Brick** is the recipe: one instance, or a group of them.
+- **The source** is where its files come from: an image, a Git repository
+  from a connected [source](github-sync.md), or an upload. It is chosen at
+  install, so GitHub is a source and never a kind of Brick. Picking a
+  repository installs the Kiln file in it, or else the generic Dockerfile or
+  Compose Brick.
+- **The Kiln file** is a Brick with settings, kept in a repository: volumes,
+  domains, limits, backups, schedules. Applied once at import, or tied so
+  that Git stays the source of truth. Not built; the format reserves
+  `settings` for it.
+
+`kiln.brick/v2` (`apps/bricks/docs/brick-v2.md`) is the format:
+
+- **`kind`**: game server, database, App or group. Each has a section of its
+  own.
 - **`type`**, optional, within a kind. A Brick with no type runs with the
   foundation and nothing more. A type such as `minecraft` or `postgres`
-  unlocks extras Kiln implements, and the recipe says which it uses and
-  supplies their data.
-- **Several services** in one Brick.
-- **An icon** that is an SVG mark or a full image, shown in the Brick menu
-  and as the instance's default icon.
-- **Apps** come from catalog Bricks, a Docker image Brick, or a GitHub Brick.
+  unlocks extras Kiln implements, and the Brick says which it uses.
+- **`inputs`**, the install form, where `suggest` lets one default follow
+  another answer.
+- **`deploy`**: an image, a Dockerfile, or a Compose project for an App with
+  several containers.
+- **An icon** that is an SVG mark or a full image.
 
-The v1 format is retired rather than kept beside the new one. Copies already
-stored (a Relay's snapshots, Hearth's catalogs, backup manifests) are
-converted when read.
+Only what Kiln runs is settled. The format's database, App and group parts
+are provisional until steps 7, 8 and 11 run them against what Kiln does
+today: a database's separate administrator login, password rotation and
+per-engine setup, and a group's install order, partial failure and deletion.
 
-The code decides by a Brick's ID or a game's name in places a recipe should
-decide: `brickId === "tailscale"` stands in for a kind, and Velocity's
-version lookup, Java selection, console completion, the Minecraft status
-check, SRV records and the picker's grouping stand in for a type.
+A database that an App needs should be a member of a group, not a container
+in its Compose project: only then is it a database to Kiln, with the viewer,
+dumps, backups and permissions one has.
+
+The v1 format is retired, not kept beside v2. Copies already stored (a
+Relay's snapshots, Hearth's catalogs, backup manifests) are converted when
+read.
+
+The code still decides by a Brick's ID or a game's name in places a recipe
+should decide: `brickId === "tailscale"` stands in for a kind, and console
+completion, the Minecraft status check, SRV records and the picker's
+grouping stand in for a type.
+
+Tied settings have four things to settle before they are built: secrets stay
+in Hearth and the file only names them; a push acts with the authority of
+whoever linked the repository, checked again each time; removing a database
+or a volume from the file detaches it and never deletes data; and a push
+that can't be applied leaves the last good state.
 
 ## Order of work
 
@@ -122,6 +162,7 @@ check, SRV records and the picker's grouping stand in for a type.
    requests and the resource limit checks; other checks for older Relays go
    as their code is touched.
 4. The new Brick format, with the v1 converter and the official recipes.
+   The format and the official Bricks are written; nothing reads them yet.
 5. `kind` and `type` in place of the Brick ID and game name checks.
 6. One redeploy for game servers and Apps.
 7. Databases as Bricks.

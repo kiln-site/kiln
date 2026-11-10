@@ -1,0 +1,77 @@
+format: kiln.brick/v2
+kind: game-server
+type: minecraft
+metadata:
+  id: velocity
+  name: Velocity
+  summary: Modern Minecraft proxy running on Kiln's standard Java Ember.
+  author: Kiln
+  icon: ../icons/velocity.svg
+  color: "#4b98b0"
+  tags: [minecraft, java]
+  platforms: [amd64, arm64]
+inputs:
+  - key: version
+    label: Velocity version
+    help: Velocity release to install.
+    type: text
+    default: "4.1.2-SNAPSHOT"
+    pattern: "^[0-9]+(?:\\.[0-9]+){1,2}(?:-SNAPSHOT)?$"
+    max: 32
+  - key: java_version
+    label: Java version
+    help: Follows the Velocity version; change it when you need another.
+    type: select
+    options: ["11", "17", "21", "25"]
+    default: "25"
+    suggest:
+      # Velocity's Java toolchain changed in 3.3 (17), 3.5 (21) and 4.0 (25).
+      # Older releases run on Java 11, the oldest Java Ember.
+      - { when: version, from: "4", value: "25" }
+      - { when: version, from: "3.5", value: "21" }
+      - { when: version, from: "3.3", value: "17" }
+      - { when: version, from: "1", value: "11" }
+  - key: server_jar_file
+    label: Server Jar File
+    help: Filename Kiln downloads and starts.
+    type: text
+    default: velocity.jar
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._\\-]{0,123}\\.jar$"
+    max: 128
+  - key: java_args
+    label: Java arguments
+    help: Extra JVM flags. Heap size and startup command arguments are managed by Kiln and cannot be set here.
+    type: text
+    optional: true
+    default: "-XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+UnlockExperimentalVMOptions -XX:+ParallelRefProcEnabled -XX:+AlwaysPreTouch -XX:MaxInlineLevel=15"
+    pattern: "^(?!.*(?:^|\\s)(?:@(?!@)\\S+|-Xm[sx]\\S*|-XX:(?:-UseContainerSupport|-UseCGroupMemoryLimitForHeap|InitialHeapSize|MaxHeapSize|SoftMaxHeapSize|MaxRAMPercentage|MinRAMPercentage|InitialRAMPercentage|MaxRAMFraction|InitialRAMFraction|MinRAMFraction|MaxRAM|VMOptionsFile|Flags)(?:=\\S*)?|--nogui|-jar)(?:\\s|$)).*$"
+    max: 2048
+deploy:
+  type: image
+  image: "ghcr.io/kiln-site/bricks-java:{{ java_version }}"
+  runtime: "Java {{ java_version }}"
+  env:
+    KILN_IMPLEMENTATION: velocity
+    KILN_VERSION: "{{ version }}"
+    KILN_ARTIFACT_URL: "https://mcjarfiles.com/api/get-jar/proxies/velocity/{{ version }}"
+    KILN_ARTIFACT_FILE: "{{ server_jar_file }}"
+    KILN_INSTALLATION_MARKER: .kiln-ember-installed
+    KILN_SERVER_KIND: application
+    KILN_SERVER_ARGS: ""
+    KILN_JAVA_ARGS: "{{ java_args }}"
+    KILN_JAVA_MAX_RAM_PERCENTAGE: "75.0"
+    MIN_RAM: 512M
+  # The whole container's limit; Java uses up to 75% of it for its heap.
+  memory: 1G
+  pids: 512
+  volumes: [/server]
+  ports:
+    - { name: game, port: 25565 }
+  ready:
+    log: ["Done ("]
+game-server:
+  game: Minecraft
+  stop: [end, /end, shutdown, /shutdown, stop, /stop]
+minecraft:
+  # With no version answered at install, Kiln installs the newest release.
+  latestVersion: velocity
