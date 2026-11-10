@@ -703,6 +703,7 @@ describeMysql("database migrations", () => {
             "instance.deploy",
             "instance.files.delete",
             "instance.files.write",
+            "instance.limits.write",
             "instance.power.kill",
           ])
           expect(yield* granted("server")).toEqual(["instance.console.read"])
@@ -843,6 +844,7 @@ describeMysql("database migrations", () => {
           expect(yield* granted("apps")).toEqual([
             "app.manage",
             "instance.deploy",
+            "instance.limits.write",
             "instance.power.kill",
           ])
           expect(yield* granted("observer")).toEqual(["app.logs.read"])
@@ -897,6 +899,7 @@ describeMysql("database migrations", () => {
             "instance.power.restart",
             "instance.power.kill",
             "app.manage",
+            "instance.limits.write",
             "instance.deploy",
           ])
         }),
@@ -996,18 +999,21 @@ describeMysql("database migrations", () => {
           expect(yield* granted("apps")).toEqual([
             "app.manage",
             "instance.deploy",
+            "instance.limits.write",
           ])
           expect(yield* granted("everyApp")).toEqual([
             "app.all",
             "instance.deploy",
+            "instance.limits.write",
           ])
           expect(yield* granted("server")).toEqual([
             "instance.configuration.write",
             "instance.deploy",
           ])
+          // Its limits permission has since become every instance's.
           expect(yield* granted("limits")).toEqual([
-            "database.limits.write",
             "instance.deploy",
+            "instance.limits.write",
           ])
           expect(yield* granted("observer")).toEqual([
             "app.logs.read",
@@ -1019,7 +1025,11 @@ describeMysql("database migrations", () => {
           ])
           expect(
             yield* selected("preset_selection", "preset_id", "preset")
-          ).toEqual(["instance.configuration.all", "instance.deploy"])
+          ).toEqual([
+            "instance.configuration.all",
+            "instance.deploy",
+            "instance.limits.write",
+          ])
 
           // What was stored now loads, and deploys what it could before.
           const loaded = (
@@ -1051,7 +1061,138 @@ describeMysql("database migrations", () => {
             typeof relay?.actions === "string"
               ? JSON.parse(relay.actions)
               : relay?.actions
-          ).toEqual(["database.read", "instance.create", "instance.deploy"])
+          ).toEqual([
+            "database.read",
+            "instance.create",
+            "instance.limits.write",
+            "instance.deploy",
+          ])
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
+      "keeps who could change a database's or an App's limits, as the limits permission every instance takes",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while a database's limits had a permission
+          // of their own and an App's went with configuring it.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 64)
+          )
+          const relayId = "1".repeat(12)
+          const databaseId = "2".repeat(12)
+          const serverId = "5".repeat(12)
+          yield* insertRelay(relayId, {
+            client_actions: JSON.stringify(["database.read", "database.create"]),
+            client_role: "custom",
+          })
+          const selections = (
+            owner: Record<string, string>,
+            keys: ReadonlyArray<string>
+          ) =>
+            keys.map((key) => ({
+              ...owner,
+              selection_kind: key.endsWith(".all")
+                ? "collection"
+                : "permission",
+              selection_key: key,
+            }))
+          const grant = Effect.fnUntraced(function* (
+            id: string,
+            resourceType: "database" | "instance" | "relay",
+            resourceId: string,
+            keys: ReadonlyArray<string>
+          ) {
+            yield* insertUser(id)
+            yield* insertGrant({
+              id,
+              relayId,
+              resourceId,
+              resourceType,
+              userId: id,
+            })
+            yield* insertRows(
+              "access_selection",
+              selections({ access_id: id }, keys)
+            )
+          })
+          yield* grant("database", "database", databaseId, [
+            "database.limits.write",
+          ])
+          yield* grant("block", "relay", relayId, ["database.limits.all"])
+          yield* grant("apps", "relay", relayId, ["app.manage"])
+          // A game server's limits came with reading its configuration,
+          // and with selecting all of it.
+          yield* grant("server", "instance", serverId, [
+            "instance.limits.write",
+          ])
+          yield* grant("configuration", "instance", serverId, [
+            "instance.configuration.all",
+          ])
+          yield* grant("observer", "relay", relayId, ["database.logs.read"])
+
+          yield* applyMigrations(migrations)
+
+          const granted = (id: string) =>
+            sql<{ key: string }>`
+              SELECT selection_key AS \`key\`
+                FROM ${sql(databaseTableName("access_selection"))}
+               WHERE access_id = ${id} ORDER BY selection_key
+            `.pipe(Effect.map((rows) => rows.map((row) => row.key)))
+          expect(yield* granted("database")).toEqual(["instance.limits.write"])
+          expect(yield* granted("block")).toEqual(["instance.limits.write"])
+          expect(yield* granted("apps")).toEqual([
+            "app.manage",
+            "instance.limits.write",
+          ])
+          expect(yield* granted("server")).toEqual([
+            "instance.configuration.read",
+            "instance.limits.write",
+          ])
+          expect(yield* granted("configuration")).toEqual([
+            "instance.configuration.all",
+            "instance.limits.write",
+          ])
+          expect(yield* granted("observer")).toEqual(["database.logs.read"])
+
+          // What was stored now loads, and changes the limits it could.
+          const loaded = (
+            keys: ReadonlyArray<string>,
+            scope: "database" | "instance" | "relay"
+          ) =>
+            expandStoredSelections(
+              keys.map((key) => ({
+                key,
+                kind: key.endsWith(".all") ? "collection" : "permission",
+              })),
+              scope
+            )
+          expect(loaded(yield* granted("database"), "database")).toEqual(
+            expect.arrayContaining(["database.read", "instance.limits.write"])
+          )
+          expect(loaded(yield* granted("server"), "instance")).toEqual(
+            expect.arrayContaining([
+              "instance.configuration.read",
+              "instance.limits.write",
+            ])
+          )
+
+          const [relay] = yield* sql<{ actions: unknown }>`
+            SELECT client_actions AS actions
+              FROM ${sql(databaseTableName("relay"))} WHERE id = ${relayId}
+          `
+          expect(
+            typeof relay?.actions === "string"
+              ? JSON.parse(relay.actions)
+              : relay?.actions
+          ).toEqual([
+            "database.read",
+            "database.create",
+            "instance.limits.write",
+          ])
         }),
       schemaBuildTimeout
     )

@@ -58,6 +58,7 @@ export const relayActions = [
   "instance.power.restart",
   "instance.power.kill",
   "instance.deploy",
+  "instance.limits.write",
   "instance.console.read",
   "instance.console.write",
   "instance.sftp.connect",

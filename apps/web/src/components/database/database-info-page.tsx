@@ -84,7 +84,7 @@ export function DatabaseInfoPage() {
       <DatabaseLimitsSection
         available={available}
         database={database}
-        editable={can("database.limits.write")}
+        editable={can("instance.limits.write")}
       />
       <DatabaseConnectionSettings
         canViewNetwork={can("database.network.read")}

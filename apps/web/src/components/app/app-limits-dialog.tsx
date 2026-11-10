@@ -86,7 +86,7 @@ export function AppLimitsDialog({
       disabledReason={
         available ? undefined : "Reconnect this App's Relay first"
       }
-      editable={app.permissions.includes("app.manage")}
+      editable={app.permissions.includes("instance.limits.write")}
       groups={groups}
       hint="Memory and CPU change at once. A limit taken off applies the next time the app deploys."
       shownGroup={

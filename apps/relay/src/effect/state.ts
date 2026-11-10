@@ -35,6 +35,7 @@ import {
   backupTaskResultSchema,
   migratedDeployActions,
   migratedFileActions,
+  migratedLimitActions,
   migratedPowerActions,
   omitBackupSecrets,
   relayBackupTaskSchema,
@@ -1887,6 +1888,10 @@ const migrations = SqliteMigrator.fromRecord({
   // reinstall, which both stay for what else they cover; `database.create`
   // replaces a database's container to change its limits, as a deploy does.
   "42_instance_deploy_action": moveCustomActions(migratedDeployActions),
+  // Changing an instance's resource limits takes an action of its own. It
+  // went with `instance.create` and `database.create`, and with
+  // `app.manage` for an App, which all stay for what else they cover.
+  "43_instance_limits_action": moveCustomActions(migratedLimitActions),
 })
 
 // Rewrites the actions of every client and invitation given actions of its

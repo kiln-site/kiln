@@ -175,6 +175,41 @@ describe("the deploy permission", () => {
   })
 })
 
+describe("the limits permission", () => {
+  const expand = (key: string, scope: "database" | "instance" | "relay") =>
+    expandPermissionSelections(
+      [{ kind: key.endsWith(".all") ? "collection" : "permission", key }],
+      scope
+    )
+
+  it("can be given on one database, and reaches every kind from a Relay", () => {
+    const database = expand("instance.limits.write", "database")
+    expect(database).toEqual(
+      expect.arrayContaining(["database.read", "instance.limits.write"])
+    )
+    expect(database).not.toContain("instance.read")
+    expect(expand("instance.limits.write", "relay")).toEqual(
+      expect.arrayContaining(["instance.read", "database.read", "app.read"])
+    )
+  })
+
+  it("doesn't read a game server's configuration, or come with configuring an App", () => {
+    // A game server's startup answers can hold secrets, and limits on a
+    // Relay reach every game server there.
+    expect(expand("instance.limits.write", "relay")).not.toContain(
+      "instance.configuration.read"
+    )
+    expect(expand("instance.limits.write", "instance")).not.toContain(
+      "instance.configuration.read"
+    )
+    expect(expand("app.manage", "relay")).not.toContain("instance.limits.write")
+    expect(expand("app.all", "relay")).not.toContain("instance.limits.write")
+    expect(expand("database.all", "database")).toContain(
+      "instance.limits.write"
+    )
+  })
+})
+
 describe("machine policy delegation", () => {
   it("requires full scoped authority for clients that can mint unrestricted clients", () => {
     const full = permissionsForRelayClientPolicy("full_access")

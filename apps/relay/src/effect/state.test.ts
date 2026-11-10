@@ -342,7 +342,7 @@ describe("Relay state", () => {
   )
 
   it.effect(
-    "keeps what a client or invitation could do to an App's files, to a database's and an App's power, and to deploy an App, as the actions every instance takes",
+    "keeps what a client or invitation could do to an App's files, to a database's and an App's power, and to deploy an App or change its limits, as the actions every instance takes",
     () =>
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
@@ -420,9 +420,10 @@ describe("Relay state", () => {
                   "instance.files.delete",
                   "instance.files.rename",
                   "instance.files.upload-url",
-                  // Configuring an App stays, with the deploying and the
-                  // power it covered.
+                  // Configuring an App stays, with the limits, the
+                  // deploying and the power it covered.
                   "app.manage",
+                  "instance.limits.write",
                   "instance.deploy",
                   "instance.power.start",
                   "instance.power.stop",

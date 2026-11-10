@@ -82,7 +82,9 @@ export function AppContainerSection({
       ]
     if (next) select({ containerId: next.id, service: next.service })
   }
-  const canManage = app.permissions.includes("app.manage")
+  // Limits and deploying are each a permission of their own.
+  const canChangeLimits = app.permissions.includes("instance.limits.write")
+  const canDeploy = app.permissions.includes("instance.deploy")
   const pending = config ? appLimitsPendingDeploy(app, config) : false
   // Opens on the service shown. Before the first deploy, an app running one
   // service limits that one, and a Compose app every service it has limits
@@ -95,12 +97,12 @@ export function AppContainerSection({
 
   const actions = (
     <>
-      {pending && canManage && available ? (
+      {pending && canDeploy && available ? (
         <DeployToApplyButton app={app} />
       ) : null}
       {canLimit ? (
         <SectionIconButton
-          label={canManage ? "Resource limits" : "View resource limits"}
+          label={canChangeLimits ? "Resource limits" : "View resource limits"}
           onClick={() => setDialog("limits")}
         >
           <Gauge />

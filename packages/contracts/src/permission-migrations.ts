@@ -13,6 +13,10 @@
  *
  * Deploying: an App's went with configuring it (`app.manage`), and a game
  * server's reinstall with changing its configuration. A database had none.
+ *
+ * Resource limits: a database's took `database.limits.write`, and an App's
+ * went with configuring it. A game server's already had the name every
+ * kind's now take.
  */
 const fileActions: Readonly<Record<string, ReadonlyArray<string>>> = {
   "app.files.read": ["instance.files.list", "instance.files.read"],
@@ -106,3 +110,22 @@ export function migratedDeployActions(
 
 /** The permission that deploys an instance of any kind again. */
 export const migratedDeployPermission = "instance.deploy"
+
+// On a Relay, changing limits went with creating the instance, or with
+// configuring an App.
+const limitActions: Readonly<Record<string, ReadonlyArray<string>>> = {
+  // Still what configuring an App takes.
+  "app.manage": ["app.manage", "instance.limits.write"],
+  "instance.create": ["instance.create", "instance.limits.write"],
+  "database.create": ["database.create", "instance.limits.write"],
+}
+
+/** A Relay client's actions, with changing limits beside what covered it. */
+export function migratedLimitActions(
+  actions: ReadonlyArray<string>
+): Array<string> {
+  return replaced(actions, limitActions)
+}
+
+/** The permission that changes the resource limits of any kind of instance. */
+export const migratedLimitsPermission = "instance.limits.write"

@@ -98,7 +98,6 @@ export const accessPermissions = [
   "database.data.write",
   "database.terminal",
   "database.logs.read",
-  "database.limits.write",
   "app.read",
   "app.create",
   "app.manage",
@@ -181,7 +180,6 @@ const implicationEdges: Partial<
     "instance.limits.write",
   ],
   "instance.configuration.write": ["instance.configuration.read"],
-  "instance.limits.write": ["instance.configuration.read"],
   "instance.logs.share": ["instance.logs.read"],
   "instance.network.write": ["instance.network.read"],
   "instance.network.public-port.write": ["instance.network.write"],
@@ -255,7 +253,7 @@ const permissionPlacement: Record<
   "instance.settings": ["instance.configuration", "instance"],
   "instance.configuration.read": ["instance.configuration", "instance"],
   "instance.configuration.write": ["instance.configuration", "instance"],
-  "instance.limits.write": ["instance.configuration", "instance"],
+  "instance.limits.write": ["instance.limits", "every"],
   "instance.logs.read": ["instance.logs", "instance"],
   "instance.logs.share": ["instance.logs", "instance"],
   "instance.network.read": ["instance.network", "instance"],
@@ -273,7 +271,6 @@ const permissionPlacement: Record<
   "database.data.write": ["database.data", "database"],
   "database.terminal": ["database.terminal", "database"],
   "database.logs.read": ["database.logs", "database"],
-  "database.limits.write": ["database.limits", "database"],
   "app.read": ["overview", "app"],
   "app.create": ["resource.creation", "relay"],
   "app.manage": ["app.manage", "app"],
@@ -319,8 +316,8 @@ const relayScopeChildVisibility: Record<string, readonly AccessPermission[]> = {
  * granted: a Relay, and each kind of instance people can be invited to that
  * has it. `reaches` is the kinds it covers from a Relay, which it reveals
  * there. Files: a game server's and an App's, and an App is reached only
- * through its Relay. Power and deploying: a game server's, a database's and
- * an App's.
+ * through its Relay. Power, deploying and resource limits: a game server's,
+ * a database's and an App's.
  */
 const everyInstanceBlocks: Record<
   string,
@@ -338,6 +335,10 @@ const everyInstanceBlocks: Record<
     reaches: ["instance.read", "database.read", "app.read"],
   },
   "instance.deploy": {
+    scopes: grantScopes,
+    reaches: ["instance.read", "database.read", "app.read"],
+  },
+  "instance.limits": {
     scopes: grantScopes,
     reaches: ["instance.read", "database.read", "app.read"],
   },
@@ -485,7 +486,8 @@ const permissionCopy: Record<
   },
   "instance.limits.write": {
     label: "Manage resource limits",
-    description: "Change the server’s memory, CPU, and disk limits.",
+    description:
+      "Change its memory, CPU, and disk limits: a game server's, a database's, or an App's.",
   },
   "instance.logs.read": {
     label: "View saved logs",
@@ -523,10 +525,6 @@ const permissionCopy: Record<
   "database.credentials.rotate": {
     label: "Reset database password",
     description: "Generate a new password for database connections.",
-  },
-  "database.limits.write": {
-    label: "Manage resource limits",
-    description: "Change the database’s memory, CPU, and disk limits.",
   },
   "database.delete": {
     label: "Delete database",
@@ -757,6 +755,7 @@ const blockLabels: Record<string, string> = {
   overview: "Overview",
   "instance.power": "Power",
   "instance.deploy": "Deployments",
+  "instance.limits": "Resource limits",
   "instance.console": "Console",
   "instance.files": "Files",
   "instance.logs": "Logs",
@@ -772,7 +771,6 @@ const blockLabels: Record<string, string> = {
   "database.data": "Database tables",
   "database.terminal": "Database terminal",
   "database.logs": "Database logs",
-  "database.limits": "Database limits",
   "app.manage": "App configuration",
   "app.logs": "App logs",
   "app.terminal": "App shell",
