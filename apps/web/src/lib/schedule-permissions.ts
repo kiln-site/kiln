@@ -1,3 +1,4 @@
+import { instancePowerPermission } from "@workspace/contracts"
 import {
   scheduleActionAppliesToTarget,
   type ScheduleAction,
@@ -18,12 +19,12 @@ type ScheduleActionPermissionInput =
   | Pick<Exclude<ScheduleAction, { type: "power" }>, "type">
   | Pick<SchedulePowerAction, "action" | "type">
 
-const instancePowerPermissions = [
-  "instance.power.start",
-  "instance.power.stop",
-  "instance.power.restart",
-  "instance.power.kill",
-] as const satisfies ReadonlyArray<AccessPermission>
+const powerActions = ["start", "stop", "restart", "kill"] as const
+type PowerTargetKind = Parameters<typeof instancePowerPermission>[0]
+
+function isPowerTarget(kind: ScheduleTarget["kind"]): kind is PowerTargetKind {
+  return kind === "instance" || kind === "database" || kind === "app"
+}
 
 export function scheduleActionPermission(
   action: ScheduleActionPermissionInput,
@@ -40,11 +41,10 @@ export function scheduleActionPermission(
     return null
   }
   if (action.type === "power") {
-    if (target.kind === "instance") return `instance.power.${action.action}`
-    if (target.kind === "database") return "database.power"
     // As starting or stopping it by hand does.
-    if (target.kind === "app") return "app.manage"
-    return null
+    return isPowerTarget(target.kind)
+      ? instancePowerPermission(target.kind, action.action)
+      : null
   }
   // An App's backups follow its files' permissions, as manual ones do;
   // stopping it for one takes more, which the server checks.
@@ -62,9 +62,13 @@ export function scheduleActionOptionPermissions(
   target: Pick<ScheduleTarget, "kind">
 ): ReadonlyArray<AccessPermission> {
   if (type === "power") {
-    if (target.kind === "instance") return instancePowerPermissions
-    if (target.kind === "app") return ["app.manage"]
-    return target.kind === "database" ? ["database.power"] : []
+    const kind = target.kind
+    if (!isPowerTarget(kind)) return []
+    return [
+      ...new Set(
+        powerActions.map((action) => instancePowerPermission(kind, action))
+      ),
+    ]
   }
   const permission = scheduleActionPermission({ type }, target)
   return permission === null ? [] : [permission]

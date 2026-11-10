@@ -24,7 +24,8 @@ describeMysql("Hearth audit", () => {
           operationId,
           payload: {
             action: "restart",
-            instanceId,
+            id: instanceId,
+            kind: "instance",
             // Secrets in a payload never reach the audit.
             password: "hunter2",
           },
@@ -54,7 +55,7 @@ describeMysql("Hearth audit", () => {
             kind: "cli",
             userId: "user-1",
           },
-          details: { action: "restart" },
+          details: { action: "restart", kind: "instance" },
           errorCode: "operation_failed",
           operationId,
           outcome: "failed",
@@ -62,6 +63,27 @@ describeMysql("Hearth audit", () => {
           target: { id: instanceId, kind: "instance" },
         })
       })
+    )
+
+    it.effect(
+      "files a power change under the instance it was for, whatever its kind",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          const databaseId = "d".repeat(12)
+          yield* recordRelayChangeStarted({
+            operation: "instance.action",
+            operationId: randomUUID(),
+            payload: { action: "stop", id: databaseId, kind: "database" },
+            relayId,
+            subject: "user-1",
+          })
+
+          const found = (kind: string) =>
+            listAuditEvents({ limit: 10, target: { id: databaseId, kind } })
+          assert.lengthOf(yield* found("database"), 1)
+          assert.lengthOf(yield* found("instance"), 0)
+        })
     )
   })
 })

@@ -941,7 +941,8 @@ const stopSource = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
     if (instance.observedState !== "stopped") {
       yield* rpc(source, "instance.action", actor.id, {
         action: "stop",
-        instanceId: input.source.instanceId,
+        id: input.source.instanceId,
+        kind: "instance",
       })
     }
   })
@@ -1097,7 +1098,8 @@ const restartSource = (id: string, actor: AuthenticatedUser | null) =>
     if (!instance || instance.observedState !== "stopped") return
     yield* rpc(source, "instance.action", actor?.id, {
       action: "start",
-      instanceId: row.source_instance_id,
+      id: row.source_instance_id,
+      kind: "instance",
     })
     yield* promiseEffect(() =>
       provisionInstanceDomainBestEffort(instance, source.id)

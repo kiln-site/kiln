@@ -206,7 +206,6 @@ export const relayControlOperations = [
   "database.provision.cancel",
   "database.wipe",
   "database.delete",
-  "database.action",
   "database.limits.write",
   "database.credentials.rotate",
   "database.network.write",
@@ -229,7 +228,6 @@ export const relayControlOperations = [
   "app.provision.cancel",
   "app.delete",
   "app.deploy",
-  "app.action",
   "app.limits.write",
   "app.volumes.write",
   "app.network.routes.read",
@@ -362,7 +360,6 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "database.provision.cancel",
   "database.delete",
   "database.wipe",
-  "database.action",
   "database.limits.write",
   "database.credentials.rotate",
   "database.network.write",
@@ -378,7 +375,6 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "app.provision.cancel",
   "app.delete",
   "app.deploy",
-  "app.action",
   "app.limits.write",
   "app.volumes.write",
   "app.network.routes.write",
@@ -540,7 +536,6 @@ export function relayControlOperationChanges(
     case "database.provision.cancel":
     case "database.wipe":
     case "database.delete":
-    case "database.action":
     case "database.limits.write":
     case "database.credentials.rotate":
     case "database.network.write":
@@ -554,7 +549,6 @@ export function relayControlOperationChanges(
     case "app.delete":
     case "app.deploy":
     case "app.deployment.abort":
-    case "app.action":
     case "app.limits.write":
     case "app.volumes.write":
     case "app.network.routes.write":
@@ -683,12 +677,10 @@ export function relayControlDeadlineMs(
   if (operation === "database.create") return 360_000
   if (operation === "database.delete") return 180_000
   if (operation === "app.delete") return 180_000
-  if (operation === "app.action") return 180_000
   if (operation === "app.create") return 60_000
   // Up to four registry lookups at a time, each up to 20 seconds; Hearth
   // sends at most 16 apps per request.
   if (operation === "app.image.check") return 120_000
-  if (operation === "database.action") return 180_000
   // Removing a limit recreates the container and waits for it to be ready.
   if (operation === "database.limits.write") return 240_000
   if (operation === "database.credentials.rotate") return 180_000

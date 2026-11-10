@@ -20,7 +20,8 @@ import {
   relayConsoleCommandSchema,
   relayConsoleCompletionInputSchema,
   relayConsoleCompletionSchema,
-  relayInstanceActionSchema,
+  instancePowerPermission,
+  relayPowerActionSchema,
   relayInstanceNameSchema,
   relayInstancePortLeaseReleaseSchema,
   relayInstancePortLeaseRequestSchema,
@@ -222,9 +223,9 @@ const fileMutationInputSchema = z.intersection(
   relayFileMutationInputSchema
 )
 
-const actionInputSchema = instanceInputSchema.extend(
-  relayInstanceActionSchema.shape
-)
+const actionInputSchema = instanceInputSchema.extend({
+  action: relayPowerActionSchema,
+})
 
 const webRoutesInputSchema = instanceInputSchema.extend({
   proxy: webRouteProxySchema.optional(),
@@ -950,12 +951,7 @@ export const getRelayTree = createServerFn({ method: "GET" })
   .validator(treeInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireFileRootPermission(
-      user,
-      relay.id,
-      data.instanceId,
-      "read"
-    )
+    await requireFileRootPermission(user, relay.id, data.instanceId, "read")
     return runAppEffect(
       "relay.tree",
       cachedRelayJsonEffect({
@@ -973,12 +969,7 @@ export const getRelayDirectoryPage = createServerFn({ method: "GET" })
   .validator(directoryPageInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireFileRootPermission(
-      user,
-      relay.id,
-      data.instanceId,
-      "read"
-    )
+    await requireFileRootPermission(user, relay.id, data.instanceId, "read")
     const search = new URLSearchParams({ path: data.path })
     if (data.cursor) search.set("cursor", data.cursor)
     return runAppEffect(
@@ -995,12 +986,7 @@ export const getRelayDirectorySizes = createServerFn({ method: "POST" })
   .validator(directorySizesInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireFileRootPermission(
-      user,
-      relay.id,
-      data.instanceId,
-      "read"
-    )
+    await requireFileRootPermission(user, relay.id, data.instanceId, "read")
     const input = relayDirectorySizesInputSchema.parse({
       instanceId: data.instanceId,
       paths: data.paths,
@@ -1020,12 +1006,7 @@ export const getRelayFileEntry = createServerFn({ method: "GET" })
   .validator(fileStatInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireFileRootPermission(
-      user,
-      relay.id,
-      data.instanceId,
-      "read"
-    )
+    await requireFileRootPermission(user, relay.id, data.instanceId, "read")
     const search = new URLSearchParams({ path: data.path })
     return runAppEffect(
       "relay.fileStat",
@@ -1041,12 +1022,7 @@ export const searchRelayFiles = createServerFn({ method: "GET" })
   .validator(fileSearchPageInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireFileRootPermission(
-      user,
-      relay.id,
-      data.instanceId,
-      "read"
-    )
+    await requireFileRootPermission(user, relay.id, data.instanceId, "read")
     const search = new URLSearchParams({ query: data.query })
     if (data.cursor) search.set("cursor", data.cursor)
     return runAppEffect(
@@ -1063,12 +1039,7 @@ export const getRelayFile = createServerFn({ method: "GET" })
   .validator(fileInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireFileRootPermission(
-      user,
-      relay.id,
-      data.instanceId,
-      "read"
-    )
+    await requireFileRootPermission(user, relay.id, data.instanceId, "read")
     return traceAppPromise("relay.file", async () => {
       const response = await relayFetch(
         relay,
@@ -1104,8 +1075,7 @@ const fileRootAccess = (
 const recordFileView = operation<z.infer<typeof fileInputSchema>>()({
   name: "files.view",
   doing: "Opening a file here",
-  authorize: ({ input, user }) =>
-    fileRootAccess(input, user, "read"),
+  authorize: ({ input, user }) => fileRootAccess(input, user, "read"),
   locks: ({ input }) => [shared(fileRootKey(input.relayId, input.instanceId))],
   run: ({ context: { relay }, input }) =>
     promiseEffect(async () => {
@@ -1348,12 +1318,7 @@ export const getRelayFileActivity = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)
   .handler(async ({ data }) => {
     const { relay, user } = await instanceRelayAccess(data.relayId)
-    await requireFileRootPermission(
-      user,
-      relay.id,
-      data.instanceId,
-      "read"
-    )
+    await requireFileRootPermission(user, relay.id, data.instanceId, "read")
     return relayFileActivitySchema.parse(
       await listFileActivity(relay.id, data.instanceId)
     )
@@ -1364,8 +1329,7 @@ export const getRelayFileActivity = createServerFn({ method: "GET" })
 const pinFile = operation<z.infer<typeof filePinInputSchema>>()({
   name: "files.pin",
   doing: "Changing the pinned files here",
-  authorize: ({ input, user }) =>
-    fileRootAccess(input, user, "write"),
+  authorize: ({ input, user }) => fileRootAccess(input, user, "write"),
   locks: ({ input }) => [
     shared(fileRootKey(input.relayId, input.instanceId)),
     exclusive(filePinsKey(input.relayId, input.instanceId)),
@@ -1437,7 +1401,7 @@ const powerInstance = resourceOperation({
   // Starting it provisions its domains.
   alsoLocks: (input) => [exclusive(instanceDnsKey(input))],
   doing: "Changing this game server's power",
-  permission: (input) => `instance.power.${input.action}`,
+  permission: (input) => instancePowerPermission("instance", input.action),
   run: performInstanceActionHandler,
 })
 

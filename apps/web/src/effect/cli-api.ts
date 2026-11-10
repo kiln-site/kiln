@@ -38,6 +38,7 @@ import {
   relayFileContentSchema,
   relayFileTreeSchema,
   backupStorageProviderName,
+  instancePowerPermission,
   relayInstanceSchema,
   relayRemoteFileUploadSchema,
   relayRemoteFileUploadResultSchema,
@@ -519,10 +520,20 @@ export const restoreCliBackupEffect = Effect.fn("cli.api.backups.restore")(
     }
     const relay = yield* requiredRelay(backup.relayId)
     if (elsewhere) {
-      yield* requireCliBackupPermission(principal, backup, "backup.restore", destination)
+      yield* requireCliBackupPermission(
+        principal,
+        backup,
+        "backup.restore",
+        destination
+      )
     }
     if (input.safetyBackup) {
-      yield* requireCliBackupPermission(principal, backup, "backup.create", destination)
+      yield* requireCliBackupPermission(
+        principal,
+        backup,
+        "backup.create",
+        destination
+      )
     }
     if (backup.targetKind === "instance") {
       const snapshot = yield* relayRpcEffect(
@@ -655,7 +666,11 @@ export const deleteCliBackupEffect = Effect.fn("cli.api.backups.delete")(
               Effect.as(true),
               Effect.catch(() => Effect.succeed(false))
             )
-          : yield* enqueueCliBackupEffect(principal, relay, reservation.dispatch)
+          : yield* enqueueCliBackupEffect(
+              principal,
+              relay,
+              reservation.dispatch
+            )
     return cliDeleteBackupResponseSchema.parse({
       backupId: backup.id,
       relayAccepted,
@@ -1107,12 +1122,12 @@ export const performCliPowerActionEffect = Effect.fn("cli.api.power")(
     const relay = yield* authorizeTarget(
       principal,
       input,
-      `instance.power.${input.action}`
+      instancePowerPermission("instance", input.action)
     )
     const result = yield* relayRpcEffect(
       relay,
       "instance.action",
-      { action: input.action, instanceId: input.instanceId },
+      { action: input.action, id: input.instanceId, kind: "instance" },
       principal,
       CLI_RELAY_LONG_OPERATION_TIMEOUT_MS
     )

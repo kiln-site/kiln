@@ -267,13 +267,6 @@ export const relayProvisionDatabaseSchema = z
   .object({ databaseId: databaseIdSchema })
   .strict()
 
-export const relayDatabaseActionSchema = z
-  .object({
-    action: z.enum(["start", "stop", "restart", "kill"]),
-    databaseId: databaseIdSchema,
-  })
-  .strict()
-
 export const relayDatabaseLimitsSchema = z
   .object({
     databaseId: databaseIdSchema,
@@ -1263,13 +1256,6 @@ export const relayAppLimitsSchema = z
   .object({
     appId: appIdSchema,
     serviceLimits: appServiceLimitsSchema,
-  })
-  .strict()
-
-export const relayAppActionSchema = z
-  .object({
-    action: z.enum(["start", "stop", "restart", "kill"]),
-    appId: appIdSchema,
   })
   .strict()
 
@@ -3169,9 +3155,41 @@ export const relayFileActivitySchema = z.object({
   files: z.array(relayFileActivityEntrySchema),
 })
 
-export const relayInstanceActionSchema = z.object({
-  action: z.enum(["start", "stop", "restart", "kill"]),
-})
+export const relayPowerActionSchema = z.enum([
+  "start",
+  "stop",
+  "restart",
+  "kill",
+])
+
+/**
+ * A power action on a game server, database or App: one request for every
+ * kind, naming the kind as `resource.freeze` does. A game server may be
+ * named by a reference the Relay resolves.
+ */
+export const relayInstanceActionSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      action: relayPowerActionSchema,
+      id: z.string().min(1),
+      kind: z.literal("instance"),
+    })
+    .strict(),
+  z
+    .object({
+      action: relayPowerActionSchema,
+      id: appIdSchema,
+      kind: z.literal("app"),
+    })
+    .strict(),
+  z
+    .object({
+      action: relayPowerActionSchema,
+      id: databaseIdSchema,
+      kind: z.literal("database"),
+    })
+    .strict(),
+])
 
 export const relayConsoleLevelSchema = z.enum([
   "info",
@@ -3443,7 +3461,6 @@ export function databaseEngineSupportsBrowsing(
 
 export type RelayManagedDatabase = z.infer<typeof relayManagedDatabaseSchema>
 export type RelayCreateDatabase = z.infer<typeof relayCreateDatabaseSchema>
-export type RelayDatabaseAction = z.infer<typeof relayDatabaseActionSchema>
 export type RelayDatabaseLimits = z.infer<typeof relayDatabaseLimitsSchema>
 export type RelayDeleteDatabase = z.infer<typeof relayDeleteDatabaseSchema>
 export type RelayRotateDatabaseCredentials = z.infer<
@@ -3510,7 +3527,6 @@ export type RelayAppImageCheck = z.infer<typeof relayAppImageCheckSchema>
 export type RelayAppImageCheckResult = z.infer<
   typeof relayAppImageCheckResultSchema
 >
-export type RelayAppAction = z.infer<typeof relayAppActionSchema>
 export type RelayDeleteApp = z.infer<typeof relayDeleteAppSchema>
 export type RelayAppWebRoute = z.infer<typeof relayAppWebRouteSchema>
 export type RelayAppWebRouteInput = z.infer<typeof relayAppWebRouteInputSchema>
@@ -3822,6 +3838,7 @@ export type RelayFileActivityEntry = z.infer<
 export type RelayFileActivity = z.infer<typeof relayFileActivitySchema>
 export type RelayAuditQuery = z.infer<typeof relayAuditQuerySchema>
 export type RelayAuditRecord = z.infer<typeof relayAuditRecordSchema>
+export type RelayPowerAction = z.infer<typeof relayPowerActionSchema>
 export type RelayInstanceAction = z.infer<typeof relayInstanceActionSchema>
 export type RelayConsoleLevel = z.infer<typeof relayConsoleLevelSchema>
 export type RelayConsoleSegment = z.infer<typeof relayConsoleSegmentSchema>

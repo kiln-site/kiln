@@ -1566,12 +1566,11 @@ function auditDetailsForRequest(
   ) {
     details.databaseId = payload.id
   }
-  if (
-    (request.operation === "instance.action" ||
-      request.operation === "app.action") &&
-    typeof payload.action === "string"
-  ) {
-    details.action = payload.action
+  if (request.operation === "instance.action") {
+    // Its target under the name each kind's records go by.
+    const target = powerAuditTarget(payload.kind)
+    if (target && typeof payload.id === "string") details[target] = payload.id
+    if (typeof payload.action === "string") details.action = payload.action
   }
   if (
     request.operation === "instance.startup.write" &&
@@ -1635,6 +1634,41 @@ function authenticationVerifier(options: {
       })
     )
   )
+}
+
+// The one place that says which action a power request takes: a game
+// server's has one for each, a database's one for all, and an App's goes with
+// configuring it.
+function powerAction(
+  kind: string | null,
+  action: string | null
+): RelayAction | null {
+  switch (kind) {
+    case "instance":
+      if (action === "start") return "instance.power.start"
+      if (action === "stop") return "instance.power.stop"
+      if (action === "restart") return "instance.power.restart"
+      if (action === "kill") return "instance.power.kill"
+      return null
+    case "database":
+      return "database.power"
+    case "app":
+      return "app.manage"
+    default:
+      return null
+  }
+}
+
+function powerAuditTarget(
+  kind: unknown
+): "appId" | "databaseId" | "instanceId" | null {
+  return kind === "instance"
+    ? "instanceId"
+    : kind === "app"
+      ? "appId"
+      : kind === "database"
+        ? "databaseId"
+        : null
 }
 
 // Whether a file operation only reads, for roots with one action to read and
@@ -1872,8 +1906,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "database.delete":
     case "database.wipe":
       return "database.delete"
-    case "database.action":
-      return "database.power"
     case "database.credentials.rotate":
       return "database.credentials.rotate"
     case "database.network.write":
@@ -1929,7 +1961,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
               : null
     }
     case "app.deploy":
-    case "app.action":
     case "app.limits.write":
     case "app.network.routes.write":
       return "app.manage"
@@ -2008,14 +2039,11 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "instance.rename"
     case "instance.delete":
       return "instance.delete"
-    case "instance.action": {
-      const action = objectString(request.payload, "action")
-      if (action === "start") return "instance.power.start"
-      if (action === "stop") return "instance.power.stop"
-      if (action === "restart") return "instance.power.restart"
-      if (action === "kill") return "instance.power.kill"
-      return null
-    }
+    case "instance.action":
+      return powerAction(
+        objectString(request.payload, "kind"),
+        objectString(request.payload, "action")
+      )
     case "instance.files.list":
     case "instance.files.directory.list":
     case "instance.files.directory.sizes":

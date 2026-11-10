@@ -317,6 +317,19 @@ const relayScopeReach: Record<string, readonly AccessPermission[]> = {
   "instance.files": ["app.read"],
 }
 
+/**
+ * The permission a power action takes on each kind of instance, said in one
+ * place: a game server has one for each action, a database one for all, and
+ * an App's goes with configuring it.
+ */
+export function instancePowerPermission(
+  kind: "app" | "database" | "instance",
+  action: "kill" | "restart" | "start" | "stop"
+): AccessPermission {
+  if (kind === "instance") return `instance.power.${action}`
+  return kind === "database" ? "database.power" : "app.manage"
+}
+
 /** Legacy umbrella permissions kept only so migrated selections stay valid. */
 const compatibilityOnlyPermissions: ReadonlySet<AccessPermission> = new Set([
   "instance.power",

@@ -373,7 +373,7 @@ function relayControlRequest(path: string, init?: RequestInit) {
   if (resource === "actions" && method === "POST") {
     return {
       operation: "instance.action" as const,
-      payload: { ...body, instanceId },
+      payload: { ...body, id: instanceId, kind: "instance" },
     }
   }
   if (resource === "console") {

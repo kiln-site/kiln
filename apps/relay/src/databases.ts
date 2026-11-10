@@ -7,7 +7,6 @@ import { pipeline } from "node:stream/promises"
 import type {
   DatabaseEngine,
   RelayCreateDatabase,
-  RelayDatabaseAction,
   RelayDatabaseExport,
   RelayDatabaseImport,
   RelayDatabaseLimits,
@@ -15,6 +14,7 @@ import type {
   RelayDatabaseContainer,
   RelayDatabaseWipe,
   RelayDeleteDatabase,
+  RelayPowerAction,
   RelayManagedDatabase,
   RelayDatabaseMember,
   DatabaseConnectionMemberKind,
@@ -787,7 +787,10 @@ export class DatabaseDriver {
     )
   }
 
-  async action(input: RelayDatabaseAction): Promise<RelayManagedDatabase> {
+  async action(input: {
+    action: RelayPowerAction
+    databaseId: string
+  }): Promise<RelayManagedDatabase> {
     const database = await this.#required(input.databaseId)
     const container = requiredContainerId(database)
     // The databases it's connected to, joined before it starts. Only while

@@ -83,7 +83,11 @@ describe("resources frozen for deletion", () => {
     const start = attempt(
       harness,
       "instance.action",
-      control("instance.action", { action: "start", instanceId: serverId })
+      control("instance.action", {
+        action: "start",
+        id: serverId,
+        kind: "instance",
+      })
     )
     await Effect.runPromise(Deferred.succeed(backupDone, undefined))
     await Effect.runPromise(Fiber.join(backup))
@@ -119,7 +123,8 @@ describe("resources frozen for deletion", () => {
         "instance.action",
         control("instance.action", {
           action: "start",
-          instanceId: otherServerId,
+          id: otherServerId,
+          kind: "instance",
         })
       )
     ).toBe("ran")
@@ -176,7 +181,8 @@ describe("resources frozen for deletion", () => {
             label: "instance.action",
             locks: control("instance.action", {
               action: "start",
-              instanceId: serverId,
+              id: serverId,
+              kind: "instance",
             }),
           },
           Effect.void
@@ -201,10 +207,10 @@ describe("resources frozen for deletion", () => {
     const startApp = () =>
       attempt(
         harness,
-        "app.action",
+        "instance.action",
         controlRequestLocks(
-          "app.action",
-          { action: "start", appId },
+          "instance.action",
+          { action: "start", id: appId, kind: "app" },
           resolve,
           usesVolume
         )!

@@ -63,6 +63,22 @@ export function auditAppId(audit: RelayAuditRecord): string | null {
   return typeof audit.details.appId === "string" ? audit.details.appId : null
 }
 
+/**
+ * The kind of instance a power change was for, or null for anything else.
+ * One request covers every kind now; a Relay's older records name an App's
+ * or a database's by requests of their own.
+ */
+function auditPowerKind(
+  audit: RelayAuditRecord
+): "app" | "database" | "server" | null {
+  const operation = auditOperation(audit)
+  if (operation === "app.action") return "app"
+  if (operation === "database.action") return "database"
+  if (operation !== "instance.action") return null
+  if (auditAppId(audit)) return "app"
+  return auditDatabaseId(audit) ? "database" : "server"
+}
+
 export function auditInstanceCreatorId(
   audit: RelayAuditRecord,
   instanceId: string
@@ -122,7 +138,7 @@ export function activityTypeForAudit(audit: RelayAuditRecord): ActivityType {
   ) {
     return "files"
   }
-  if (operation === "instance.action") return "power"
+  if (auditPowerKind(audit)) return "power"
   if (
     operation?.startsWith("instance.network.") ||
     operation?.startsWith("relay.networking.") ||
@@ -179,13 +195,20 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
   if (audit.event === "client.revoked") return "Revoked a Hearth client"
   if (audit.event === "relay.renamed") return "Renamed a Relay"
 
-  if (operation === "instance.action") {
+  const power = auditPowerKind(audit)
+  if (power) {
+    const noun =
+      power === "app"
+        ? "an App"
+        : power === "database"
+          ? "a database"
+          : "a game server"
     const action = audit.details.action
-    if (action === "start") return "Started a game server"
-    if (action === "restart") return "Restarted a game server"
-    if (action === "stop") return "Stopped a game server"
-    if (action === "kill") return "Killed a game server process"
-    return "Changed a game server power state"
+    if (action === "start") return `Started ${noun}`
+    if (action === "restart") return `Restarted ${noun}`
+    if (action === "stop") return `Stopped ${noun}`
+    if (action === "kill") return `Killed ${noun} process`
+    return `Changed ${noun} power state`
   }
   if (operation === "instance.create") return "Created a game server"
   if (operation === "instance.delete") return "Deleted a game server"

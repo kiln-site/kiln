@@ -5,9 +5,11 @@ import {
   appServiceNameSchema,
   databaseEngineSchema,
   databaseIdSchema,
+  instancePowerPermission,
   newDatabaseNamesShape,
   appServiceLimitsSchema,
   relayAppLimitsV1Feature,
+  relayControlDeadlineMs,
   relayAppSchema,
   relayAppTerminalClaimSchema,
   relayAppTerminalRestartSchema,
@@ -272,15 +274,19 @@ const runAppActionNow = resourceOperation({
   name: "app.power",
   lock: { part: "power" },
   doing: "Changing this App's power",
-  permission: () => "app.manage",
+  permission: (input) => instancePowerPermission("app", input.action),
   run: async (user, data) => {
-    const { relay } = await authorizedAppFor(user, data, "app.manage")
+    const { relay } = await authorizedAppFor(
+      user,
+      data,
+      instancePowerPermission("app", data.action)
+    )
     const app = relayAppSchema.parse(
       await databaseRpc(
         relay,
-        "app.action",
-        { action: data.action, appId: data.appId },
-        180_000,
+        "instance.action",
+        { action: data.action, id: data.appId, kind: "app" },
+        relayControlDeadlineMs("instance.action"),
         user.id
       )
     )

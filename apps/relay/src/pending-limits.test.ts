@@ -92,7 +92,7 @@ describe("limits saved for a game server's next restart", () => {
     const restart = control(
       harness,
       "instance.action",
-      { action: "restart", instanceId: server },
+      { action: "restart", id: server, kind: "instance" },
       () => harness.lifecycle.runInstanceAction(instance, "restart", [])
     )
     await stop.reached

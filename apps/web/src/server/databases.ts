@@ -14,7 +14,9 @@ import {
   databaseRowsInputSchema,
   databaseRowsSchema,
   databaseIdSchema,
+  instancePowerPermission,
   newDatabaseNamesShape,
+  relayControlDeadlineMs,
   relayDatabaseNameSchema,
   relayIdSchema,
   relayDatabaseTerminalClaimSchema,
@@ -303,15 +305,15 @@ const powerDatabase = resourceOperation({
   // Its Relay orders power by the database's process.
   lock: { part: "power" },
   doing: "Changing this database's power",
-  permission: () => "database.power",
+  permission: (input) => instancePowerPermission("database", input.action),
   run: async (user, data) => {
     const relay = await requiredRelay(data.relayId)
     const database = relayManagedDatabaseSchema.parse(
       await databaseRpc(
         relay,
-        "database.action",
-        { action: data.action, databaseId: data.databaseId },
-        180_000,
+        "instance.action",
+        { action: data.action, id: data.databaseId, kind: "database" },
+        relayControlDeadlineMs("instance.action"),
         user.id
       )
     )

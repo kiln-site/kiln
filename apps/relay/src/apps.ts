@@ -18,7 +18,6 @@ import type {
   RelayAppDeploymentRead,
   RelayAppImageCheck,
   RelayAppImageCheckResult,
-  RelayAppAction,
   RelayAppContainer,
   RelayAppDeployment,
   RelayAppLimits,
@@ -28,6 +27,7 @@ import type {
   RelayCreateApp,
   RelayDeleteApp,
   RelayDeployApp,
+  RelayPowerAction,
   RelayInventoryLookup,
   RelayInventoryItem,
   ResourceLimits,
@@ -648,7 +648,10 @@ export class AppDriver {
     }
   }
 
-  async action(input: RelayAppAction): Promise<RelayApp> {
+  async action(input: {
+    action: RelayPowerAction
+    appId: string
+  }): Promise<RelayApp> {
     const containers = await this.#appContainers(input.appId)
     if (containers.length === 0) throw new Error("Deploy the app first")
     // A service that lost its Tailscale address takes it again as it starts.

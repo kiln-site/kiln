@@ -461,8 +461,11 @@ export function controlRequestLocks(
     return id === null ? null : locks(id)
   }
   // With every volume the App mounts, held shared.
-  const appWithVolumes = (locks: (id: string) => Array<LaneLock>) => {
-    const id = stringField(payload, "appId")
+  const appWithVolumes = (
+    locks: (id: string) => Array<LaneLock>,
+    field = "appId"
+  ) => {
+    const id = stringField(payload, field)
     if (id === null) return null
     return Promise.resolve(resolveAppVolumes(id)).then((volumeIds) => [
       ...locks(id),
@@ -731,10 +734,6 @@ export function controlRequestLocks(
         ...databaseLocks(id),
         exclusive(laneKeys.allocations),
       ])
-    case "database.action":
-      return database((id) =>
-        resourcePowerLocks("database", id, stringField(payload, "action") ?? "")
-      )
     case "database.wipe":
     case "database.delete":
       return database(databaseDeleteLocks)
@@ -811,10 +810,6 @@ export function controlRequestLocks(
     case "app.limits.write":
     case "app.deploy":
       return app(appLifecycleLocks)
-    // Starting it reads what it mounts (see appStartLocks), as scheduled
-    // App power does.
-    case "app.action":
-      return appWithVolumes(appLifecycleLocks)
     case "app.network.routes.write":
       return app((id) => [...appLifecycleLocks(id), exclusive(laneKeys.routes)])
     // Apart from the App's lifecycle, so saving its configuration never
@@ -845,9 +840,27 @@ export function controlRequestLocks(
         shared(laneKeys.instance(id)),
         exclusive(laneKeys.instanceMetadata(id)),
       ])
+    // Power for a game server, database or App, each by its kind. Starting
+    // an App reads what it mounts (see appStartLocks), as scheduled App power
+    // does.
     case "instance.action": {
       const action = stringField(payload, "action") ?? ""
-      return instance((id) => resourcePowerLocks("instance", id, action))
+      switch (stringField(payload, "kind")) {
+        case "instance":
+          return instance(
+            (id) => resourcePowerLocks("instance", id, action),
+            "id"
+          )
+        case "app":
+          return appWithVolumes(appLifecycleLocks, "id")
+        case "database":
+          return database(
+            (id) => resourcePowerLocks("database", id, action),
+            "id"
+          )
+        default:
+          return null
+      }
     }
     case "instance.console.write":
     case "instance.console.complete":

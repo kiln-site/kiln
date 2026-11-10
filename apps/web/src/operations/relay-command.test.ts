@@ -36,7 +36,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   relayRpc: async (
     _relay: unknown,
     operation: string,
-    payload: { operationId?: string; action?: string; instanceId?: string },
+    payload: { operationId?: string; action?: string; id?: string },
     _timeout?: number,
     _subject?: string,
     _signal?: AbortSignal,
@@ -84,7 +84,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       })
     }
     const result = { started: payload.action }
-    relay.applied.push(payload.instanceId ?? "")
+    relay.applied.push(payload.id ?? "")
     relay.journal.set(id, { result, status: "succeeded" })
     if (relay.next === "loses-reply-and-rebuilds") {
       relay.next = null
@@ -117,7 +117,7 @@ const start = durableOperation({
     relayCommand({
       name: "start",
       operation: "instance.action",
-      payload: { action: "start", instanceId: server },
+      payload: { action: "start", id: server, kind: "instance" },
       relayId: "relay-one",
       success: Schema.Struct({ started: Schema.String }),
     }),
