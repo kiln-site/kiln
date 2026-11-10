@@ -6,7 +6,6 @@ import {
   Copy,
   FileCode2,
   LoaderCircle,
-  ToyBrick,
   TriangleAlert,
 } from "lucide-react"
 import { MAXIMUM_INSTANCE_NAME_LENGTH } from "@workspace/contracts"
@@ -26,11 +25,15 @@ import { EditableIcon } from "@/components/icon-editor-dialog"
 import {
   InfoCopyValue,
   InfoFact,
-  InfoProfile,
+  InfoFactPair,
   InfoSection,
   InfoSectionLink,
 } from "@/components/info-page"
-import { InstanceFavoriteButton } from "@/components/instance-favorite"
+import { InstanceFavoriteToggle } from "@/components/instance-favorite"
+import {
+  InstanceProfile,
+  InstanceProfileBrick,
+} from "@/components/instance-profile"
 import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { RenameButton } from "@/components/rename-dialog"
 import { StatusIndicator } from "@/components/status-indicator"
@@ -45,12 +48,19 @@ import { updateInstanceName, uploadToMclogs } from "@/server/relay"
 // The game server's details on its Info page, one section per concern, each
 // with the actions that change it.
 
-export function ServerGeneralSettings({
+// What the game server is, in the profile every kind of instance has: the
+// Brick it is built from, with its recipe and the Startup page that changes
+// its version and runtime.
+export function ServerProfile({
   canRename,
+  canShare,
+  canViewStartup,
   instance,
   relayConnected,
 }: {
   canRename: boolean
+  canShare: boolean
+  canViewStartup: boolean
   instance: InstanceSettingsInstance
   relayConnected: boolean
 }) {
@@ -83,30 +93,80 @@ export function ServerGeneralSettings({
       instance.relayId,
     ]
   )
+  const provisioning = Boolean(instance.provisioning)
   return (
-    <InfoProfile
+    <InstanceProfile
+      brick={
+        <InstanceProfileBrick
+          icon={
+            <LiveServerBrickIcon
+              brickId={instance.brickId}
+              brickSource={instance.brickSource}
+              className="size-4 shrink-0"
+              implementation={instance.implementation}
+            />
+          }
+        >
+          {instance.implementation}
+        </InstanceProfileBrick>
+      }
+      brickAction={
+        provisioning ? null : (
+          <>
+            <BrickRecipeButton canShare={canShare} instance={instance} />
+            {canViewStartup ? (
+              <InfoSectionLink
+                to="/server/$serverId/startup"
+                params={{ serverId: instance.id }}
+              >
+                Startup
+              </InfoSectionLink>
+            ) : null}
+          </>
+        )
+      }
+      favorite={
+        <InstanceFavoriteToggle
+          id={instance.id}
+          kind="server"
+          name={instance.name}
+          relayId={instance.relayId}
+          variant="outline"
+        />
+      }
       icon={<EditableIcon canEdit={canRename} editor={editor} />}
       id={instance.id}
       idLabel="server ID"
       name={instance.name}
-      actions={
-        <>
-          {canRename ? (
-            <ServerRenameButton
-              instance={instance}
-              relayConnected={relayConnected}
-            />
-          ) : null}
-          <InstanceFavoriteButton
-            id={instance.id}
-            kind="server"
-            relayId={instance.relayId}
+      rename={
+        canRename ? (
+          <ServerRenameButton
+            instance={instance}
+            relayConnected={relayConnected}
           />
-        </>
+        ) : null
       }
     >
-      <InfoFact label="Game">{instance.game}</InfoFact>
-    </InfoProfile>
+      <InfoFactPair>
+        <InfoFact label="Game">{instance.game}</InfoFact>
+        <InfoFact label="Brick ID">
+          <InfoCopyValue
+            label="Brick ID"
+            value={instance.brickId ?? instance.implementation}
+          />
+        </InfoFact>
+      </InfoFactPair>
+      <InfoFactPair>
+        <InfoFact label="Version">
+          <span className="truncate">{instance.version}</span>
+        </InfoFact>
+        <InfoFact label="Runtime">
+          <span className="truncate font-mono text-xs">
+            {instance.javaVersion}
+          </span>
+        </InfoFact>
+      </InfoFactPair>
+    </InstanceProfile>
   )
 }
 
@@ -173,63 +233,6 @@ function AddressValue({ label, value }: { label: string; value: string }) {
     <span className="truncate font-mono text-xs text-destructive" title={value}>
       {value}
     </span>
-  )
-}
-
-// What the server is built from. Startup changes its version and runtime.
-export function ServerBrickSettings({
-  canShare,
-  canViewStartup,
-  instance,
-}: {
-  canShare: boolean
-  canViewStartup: boolean
-  instance: InstanceSettingsInstance
-}) {
-  const provisioning = Boolean(instance.provisioning)
-  return (
-    <InfoSection
-      icon={<ToyBrick />}
-      title="Brick"
-      action={
-        provisioning ? null : (
-          <>
-            <BrickRecipeButton canShare={canShare} instance={instance} />
-            {canViewStartup ? (
-              <InfoSectionLink
-                to="/server/$serverId/startup"
-                params={{ serverId: instance.id }}
-              >
-                Startup
-              </InfoSectionLink>
-            ) : null}
-          </>
-        )
-      }
-    >
-      <InfoFact label="Brick">
-        <LiveServerBrickIcon
-          brickId={instance.brickId}
-          brickSource={instance.brickSource}
-          className="size-4 shrink-0"
-          implementation={instance.implementation}
-        />
-        <InfoCopyValue
-          label="Brick ID"
-          value={instance.brickId ?? instance.implementation}
-        />
-      </InfoFact>
-      <InfoFact label="Version">
-        <span className="truncate">
-          {instance.implementation} {instance.version}
-        </span>
-      </InfoFact>
-      <InfoFact label="Runtime">
-        <span className="truncate font-mono text-xs">
-          {instance.javaVersion}
-        </span>
-      </InfoFact>
-    </InfoSection>
   )
 }
 
@@ -436,6 +439,7 @@ function ServerRenameButton({
   )
   return (
     <RenameButton
+      compact
       disabledReason={
         relayConnected
           ? undefined

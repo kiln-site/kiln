@@ -1,18 +1,7 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
-import { LoaderCircle } from "lucide-react"
 
-import {
-  databaseRelayAvailable,
-  type ManagedDatabase,
-} from "@/components/database/database-presentation"
-import {
-  InstanceInfoRail,
-  InfoContainerCard,
-} from "@/components/resource-info-rail"
-import { formatBytes } from "@/lib/format-bytes"
-import { formatCpuLimit, formatMemoryLimit } from "@/lib/resource-limits"
-import { managedDatabaseContainerQueryOptions } from "@/lib/query-options"
+import type { ManagedDatabase } from "@/components/database/database-presentation"
+import { InstanceInfoRail } from "@/components/resource-info-rail"
 
 // What the database is at a glance, like a game server's. Its name and
 // status are in the header.
@@ -27,48 +16,6 @@ export function DatabaseInfoRail({ database }: { database: ManagedDatabase }) {
     [database.id, database.name, database.relayId]
   )
   return (
-    <InstanceInfoRail
-      relayName={database.relayName}
-      resource={resource}
-      container={<DatabaseContainerCard database={database} />}
-    />
-  )
-}
-
-// The Relay reports the container's name, data folder, and volume size on
-// request, and only while it's reachable.
-function DatabaseContainerCard({ database }: { database: ManagedDatabase }) {
-  const available = databaseRelayAvailable(database)
-  const { data, isPending } = useQuery({
-    ...managedDatabaseContainerQueryOptions(database.relayId, database.id),
-    enabled: available,
-  })
-  const pending = available && isPending
-  return (
-    <InfoContainerCard
-      containerId={database.containerId}
-      dataDirectory={data?.dataDirectory ?? null}
-      cpu={formatCpuLimit(database.limits.cpuMillis)}
-      disk={
-        data?.volumeBytes != null ? (
-          <span className="tabular-nums">
-            {formatBytes(data.volumeBytes)} used
-            {database.limits.diskBytes === null
-              ? ""
-              : ` of ${formatBytes(database.limits.diskBytes)}`}
-          </span>
-        ) : pending ? (
-          <LoaderCircle
-            aria-label="Loading"
-            className="size-3.5 animate-spin text-muted-foreground"
-          />
-        ) : (
-          <span className="text-muted-foreground">—</span>
-        )
-      }
-      memory={formatMemoryLimit(database.limits.memoryBytes)}
-      name={data?.containerName ?? null}
-      pending={pending}
-    />
+    <InstanceInfoRail relayName={database.relayName} resource={resource} />
   )
 }

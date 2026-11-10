@@ -37,7 +37,7 @@ Every kind gets these from the platform.
 | Domains     | Every kind, automatic for an App's web services | Game servers only                                                                       |
 | Networking  | One page for every kind                         | A page per kind, on a few shared sections                                               |
 | Files       | One file browser and one permission             | Done for game servers and Apps                                                          |
-| Info page   | One page shell                                  | A page per kind, on a shared shell                                                      |
+| Info page   | One page shell                                  | One profile and container section for every kind; a Relay's page is its own             |
 
 A Relay implements each in its own way: it can only be restarted, its
 deployments are its updates, and its files are the host's.

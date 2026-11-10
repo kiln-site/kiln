@@ -30,6 +30,10 @@ import { GitHubMark } from "@/components/github-mark"
 import { EditableIcon } from "@/components/icon-editor-dialog"
 import { InfoCopyValue, InfoFact, InfoFactPair } from "@/components/info-page"
 import { InstanceFavoriteToggle } from "@/components/instance-favorite"
+import {
+  InstanceProfile,
+  InstanceProfileBrick,
+} from "@/components/instance-profile"
 import { AppKindIcon } from "@/components/instance-kind-icon"
 import { RenameButton } from "@/components/rename-dialog"
 import {
@@ -43,10 +47,8 @@ import { renameApp } from "@/server/apps"
 
 const APP_NAME_MAX_LENGTH = 120
 
-// What the app is, the same for every kind of instance: on the left its
-// icon, name, and Kiln ID with Favorite, and on the right the kind of Brick
-// it runs with Configure, split where the facts below split. What its Brick
-// deploys follows, the facts that matter to it.
+// What the app is, in the profile every kind of instance has: the kind of
+// Brick it runs with Configure, then what that Brick deploys.
 export function AppProfile({
   app,
   canManage,
@@ -59,61 +61,34 @@ export function AppProfile({
   const canRename = app.permissions.includes("app.manage")
   const editor = useAppIconEditor(app)
   return (
-    <section className="min-w-0 border bg-background/45">
-      <div className="@container px-4">
-        <div className="grid @lg:grid-cols-2 @lg:gap-x-8">
-          <div className="flex min-w-0 items-center gap-4 py-4">
-            <EditableIcon canEdit={canRename} editor={editor} />
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-1">
-                <h3
-                  className="truncate font-heading text-lg font-semibold tracking-[-0.02em]"
-                  title={app.name}
-                >
-                  {app.name}
-                </h3>
-                {canRename ? <AppRenameButton app={app} /> : null}
-              </div>
-              <div className="type-meta mt-1 flex min-w-0 items-center gap-1.5 text-muted-foreground">
-                <span className="shrink-0">Kiln ID</span>
-                <InfoCopyValue
-                  className="text-muted-foreground"
-                  label="app ID"
-                  value={app.id}
-                />
-              </div>
-            </div>
-            <InstanceFavoriteToggle
-              id={app.id}
-              kind="app"
-              name={app.name}
-              relayId={app.relayId}
-              variant="outline"
-            />
-          </div>
-          {/* The divider sits in the gap, so each half lines up with the
-              facts under it. */}
-          <div className="flex min-w-0 items-center gap-4 border-t border-border/60 py-4 @lg:-ml-4 @lg:border-t-0 @lg:border-l @lg:pl-4">
-            <div className="min-w-0 flex-1">
-              <p className="type-technical-label text-muted-foreground/80 light:text-muted-foreground/90">
-                Brick
-              </p>
-              {brick.state === "ready" ? (
-                <BrickKind type={brick.type} />
-              ) : (
-                <p className="mt-1 h-5 text-sm text-muted-foreground">…</p>
-              )}
-            </div>
-            {canManage ? <AppBrickConfigureButton app={app} /> : null}
-          </div>
-        </div>
-      </div>
-      <dl className="@container border-t px-4">
-        <BrickFacts brick={brick}>
-          {(facts) => <FactPairs facts={facts} />}
-        </BrickFacts>
-      </dl>
-    </section>
+    <InstanceProfile
+      brick={
+        brick.state === "ready" ? (
+          <BrickKind type={brick.type} />
+        ) : (
+          <p className="mt-1 h-5 text-sm text-muted-foreground">…</p>
+        )
+      }
+      brickAction={canManage ? <AppBrickConfigureButton app={app} /> : null}
+      favorite={
+        <InstanceFavoriteToggle
+          id={app.id}
+          kind="app"
+          name={app.name}
+          relayId={app.relayId}
+          variant="outline"
+        />
+      }
+      icon={<EditableIcon canEdit={canRename} editor={editor} />}
+      id={app.id}
+      idLabel="app ID"
+      name={app.name}
+      rename={canRename ? <AppRenameButton app={app} /> : null}
+    >
+      <BrickFacts brick={brick}>
+        {(facts) => <FactPairs facts={facts} />}
+      </BrickFacts>
+    </InstanceProfile>
   )
 }
 
@@ -264,10 +239,9 @@ function FactPairs({ facts }: { facts: ReadonlyArray<BrickFact> }) {
 function BrickKind({ type }: { type: AppSourceType }) {
   const github = type === "github"
   return (
-    <p className="mt-1 flex h-5 items-center gap-1.5 text-sm font-medium [&_svg]:size-4 [&_svg]:text-muted-foreground">
-      {github ? <GitHubMark /> : <Box />}
+    <InstanceProfileBrick icon={github ? <GitHubMark /> : <Box />}>
       {github ? "GitHub" : "Docker"}
-    </p>
+    </InstanceProfileBrick>
   )
 }
 

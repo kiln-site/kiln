@@ -153,7 +153,8 @@ export const WorkloadUsageMeter = React.memo(function WorkloadUsageMeter({
   service,
 }: {
   id: string
-  kind: RelayWorkloadResourceKind
+  // A game server's usage is its own, which its header follows.
+  kind: RelayWorkloadResourceKind | "server"
   // Memory in bytes or CPU in millicores; null when it has none.
   limit: number | null
   relayId: string
@@ -162,7 +163,10 @@ export const WorkloadUsageMeter = React.memo(function WorkloadUsageMeter({
   service: string | null
 }) {
   const historyStore = React.useMemo(
-    () => workloadHistoryStore(relayId, kind, id, service),
+    () =>
+      kind === "server"
+        ? resourceHistoryStore(relayId, id)
+        : workloadHistoryStore(relayId, kind, id, service),
     [id, kind, relayId, service]
   )
   const resources = React.useSyncExternalStore(
@@ -203,12 +207,12 @@ export const WorkloadUsageMeter = React.memo(function WorkloadUsageMeter({
       value={
         <>
           <span className="text-foreground">{used}</span>
-          {sample ? (
-            <span className="text-muted-foreground/80">
-              {limit === null ? " · " : " / "}
-              {of}
-            </span>
-          ) : null}
+          {/* Its limit shows whether or not it is running: nothing else on
+              the page says what it is allowed. */}
+          <span className="text-muted-foreground/80">
+            {limit === null ? " · " : sample ? " / " : " · limit "}
+            {of}
+          </span>
         </>
       }
     />

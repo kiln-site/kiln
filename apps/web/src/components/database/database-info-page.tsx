@@ -18,8 +18,8 @@ import {
   DatabaseConnectionSettings,
   DatabaseCredentialsSection,
   DatabaseDataSection,
-  DatabaseGeneralSettings,
-  DatabaseLimitsSection,
+  DatabaseContainerSection,
+  DatabaseProfile,
 } from "@/components/database/database-settings"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
 import {
@@ -34,8 +34,10 @@ import {
 import { accessCapabilitiesQueryOptions } from "@/lib/query-options"
 import { ResourceDeletionAlert } from "@/components/resource-deletion-alert"
 
-// The database's details, each section with the actions that change it, and
-// a rail summing up where it runs and who can reach it.
+// The database's details, in the order every kind's Info page has: what it
+// is and the engine it runs, its container with its usage and limits, then
+// what only a database has, each section with the actions that change it,
+// and a rail summing up where it runs and who can reach it.
 export function DatabaseInfoPage() {
   const { database } = useDatabaseWorkspace()
   const can = (permission: ManagedDatabase["permissions"][number]) =>
@@ -57,9 +59,15 @@ export function DatabaseInfoPage() {
         relayId={database.relayId}
         resourceId={database.id}
       />
-      <DatabaseGeneralSettings
+      <DatabaseProfile
         canRename={can("database.delete") && database.hasCredentials}
         database={database}
+      />
+      <DatabaseContainerSection
+        available={available}
+        canReadLogs={can("database.logs.read")}
+        database={database}
+        editable={can("instance.limits.write")}
       />
       {can("database.credentials.read") && database.hasCredentials ? (
         <DatabaseCredentialsSection
@@ -81,11 +89,6 @@ export function DatabaseInfoPage() {
           database={database}
         />
       ) : null}
-      <DatabaseLimitsSection
-        available={available}
-        database={database}
-        editable={can("instance.limits.write")}
-      />
       <DatabaseConnectionSettings
         canViewNetwork={can("database.network.read")}
         database={database}

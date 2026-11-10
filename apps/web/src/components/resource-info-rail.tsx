@@ -4,18 +4,13 @@ import {
   Activity,
   Archive,
   Check,
-  Container,
   Copy,
-  LoaderCircle,
   Users,
 } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
 import {
-  InfoCopyValue,
-  InfoFact,
-  InfoRailCard,
   InfoRailGroup,
   InfoRailLink,
   InfoRailRow,
@@ -43,8 +38,8 @@ import type { RelayDirectoryEntry } from "@/lib/relay-route"
 
 // The Info rail of an instance that runs on a Relay, a game server or a
 // database (an app's rail reuses its Relay link): links to its Relay, who can reach it, its activity, and its
-// backups, each shown only to those who can open it, then its owner and its
-// container.
+// backups, each shown only to those who can open it, then its owner. Its
+// container has a section of its own on the page.
 
 export interface RailResource {
   // "instance" is a game server.
@@ -55,11 +50,9 @@ export interface RailResource {
 }
 
 export function InstanceInfoRail({
-  container,
   relayName,
   resource,
 }: {
-  container: React.ReactNode
   // The Relay's name as the instance reports it, for those who can't list
   // Relays.
   relayName: string
@@ -79,7 +72,6 @@ export function InstanceInfoRail({
         />
       </InfoRailGroup>
       <InfoRailOwner resource={resource} />
-      {container}
       <InfoRailNotifications resource={resource} />
     </>
   )
@@ -152,77 +144,6 @@ const InfoRailOwner = React.memo(function InfoRailOwner({
     />
   )
 })
-
-// Where the instance lives on the Relay and the limits it runs under. Values
-// the Relay reports separately show a spinner until they arrive.
-export function InfoContainerCard({
-  containerId,
-  cpu,
-  dataDirectory,
-  disk,
-  memory,
-  name,
-  pending = false,
-}: {
-  containerId: string | null
-  cpu?: React.ReactNode
-  // The instance's folder on the Relay's host; null when the Relay doesn't
-  // say.
-  dataDirectory: string | null
-  disk: React.ReactNode
-  memory: React.ReactNode
-  name: string | null
-  pending?: boolean
-}) {
-  const unknown = pending ? (
-    <LoaderCircle
-      aria-label="Loading"
-      className="size-3.5 animate-spin text-muted-foreground"
-    />
-  ) : (
-    <span className="text-muted-foreground">—</span>
-  )
-  return (
-    <InfoRailCard icon={<Container />} title="Container">
-      <InfoFact label="Name">
-        {name ? <InfoCopyValue label="container name" value={name} /> : unknown}
-      </InfoFact>
-      <InfoFact label="ID">
-        {/* Shortened as Docker shows it; the full ID is what's copied. */}
-        {containerId ? (
-          <InfoCopyValue
-            display={containerId.slice(0, 12)}
-            label="container ID"
-            value={containerId}
-          />
-        ) : (
-          <span className="text-muted-foreground">Not created</span>
-        )}
-      </InfoFact>
-      <InfoFact label="Data">
-        {dataDirectory ? (
-          <InfoCopyValue
-            display="Copy path"
-            label="data path"
-            mono={false}
-            value={dataDirectory}
-          />
-        ) : (
-          unknown
-        )}
-      </InfoFact>
-      <InfoFact label="CPU">
-        {cpu ?? (
-          <span className="text-muted-foreground" title="No CPU limit">
-            —
-          </span>
-        )}
-      </InfoFact>
-      <InfoFact label="Memory">{memory}</InfoFact>
-      <InfoFact label="Disk">{disk}</InfoFact>
-    </InfoRailCard>
-  )
-}
 
 // The Relay the instance runs on, with its ID to copy. It opens the Relay for
 // those who manage it; others see just the name the instance reports.
