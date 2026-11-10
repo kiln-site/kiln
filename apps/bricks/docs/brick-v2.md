@@ -303,9 +303,10 @@ with no type runs with the foundation and nothing more.
 which publishes only its first port and gives it an SRV record. Without a
 `ready` line, readiness is a Minecraft status ping. Its section says which extras the Brick uses:
 
-| Field           |                                                                                             |
-| --------------- | ------------------------------------------------------------------------------------------- |
-| `latestVersion` | `velocity`: with no `version` answered at install, Kiln installs Velocity's newest release. |
+| Field           |                                                                                                                             |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `latestVersion` | `velocity`: with no `version` answered at install, Kiln installs Velocity's newest release.                                 |
+| `completion`    | `true` when its console completes a command it is asked about, as Paper's does. Kiln then offers completion in the console. |
 
 ### Databases
 

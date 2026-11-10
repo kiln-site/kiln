@@ -80,6 +80,16 @@ const minecraftJava = new Map<string, ReadonlyArray<JavaRule>>([
   ["velocity", velocityJava],
 ])
 
+// What else Kiln did for a Minecraft Brick by its ID: Velocity's newest
+// release when no version was answered, and console completion for the
+// servers whose consoles answer it. A record of v1, like the Java rules.
+const minecraftExtras = new Map<string, Record<string, unknown>>([
+  ["velocity", { latestVersion: "velocity" }],
+  ["paper", { completion: true }],
+  ["folia", { completion: true }],
+  ["purpur", { completion: true }],
+])
+
 function template(value: string): string {
   return value.replace(
     /\{\{\s*variables\.([a-z][a-z0-9_]{0,47})\s*\}\}/gu,
@@ -208,8 +218,8 @@ function convertedFromV1(recipe: BrickRecipeV1): unknown {
       ...(recipe.console ? { stop: recipe.console.stopCommands } : {}),
       ...(network.supportsSrv ? { srv: true } : {}),
     },
-    ...(minecraft && metadata.id === "velocity"
-      ? { minecraft: { latestVersion: "velocity" } }
+    ...(minecraft && minecraftExtras.has(metadata.id)
+      ? { minecraft: minecraftExtras.get(metadata.id) }
       : {}),
   }
 }

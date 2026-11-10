@@ -65,6 +65,8 @@ export interface GameServerPort {
 export interface GameServerBrick {
   architectures: ReadonlyArray<"amd64" | "arm64"> | null
   command: ReadonlyArray<string>
+  /** Whether its console completes a command it is asked about. */
+  consoleCompletion: boolean
   entrypoint: ReadonlyArray<string> | null
   game: string
   /** Where its one volume is mounted. */
@@ -383,6 +385,7 @@ export function gameServerBrick(
   return {
     architectures: recipe.metadata.platforms ?? null,
     command: deploy.command ?? [],
+    consoleCompletion: recipe.minecraft?.completion ?? false,
     entrypoint: deploy.entrypoint ?? null,
     game: brickGame(recipe),
     mount,

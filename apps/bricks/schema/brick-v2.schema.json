@@ -857,6 +857,9 @@
           "enum": [
             "velocity"
           ]
+        },
+        "completion": {
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -1566,6 +1569,9 @@
                         "enum": [
                           "velocity"
                         ]
+                      },
+                      "completion": {
+                        "type": "boolean"
                       }
                     },
                     "additionalProperties": false

@@ -273,6 +273,12 @@ export const brickMinecraftSchema = z.strictObject({
    * install. `velocity` asks the Velocity download index.
    */
   latestVersion: z.enum(["velocity"]).optional(),
+  /**
+   * Whether its console completes commands when asked, as Paper's does.
+   * Kiln asks by typing into the console, so only a server that answers
+   * that way should say so.
+   */
+  completion: z.boolean().optional(),
 })
 
 // As many as a recipe has: v1 set no limit, and a document is at most 1 MiB.
