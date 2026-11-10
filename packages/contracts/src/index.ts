@@ -227,7 +227,6 @@ export const relayManagedDatabaseSchema = z
     image: z.string().min(1).max(512),
     internalPort: z.number().int().min(1).max(65_535),
     members: z.array(relayDatabaseMemberSchema),
-    // Relays before resource-limits-v1 report neither.
     limits: observedResourceLimitsSchema.default(NO_RESOURCE_LIMITS),
     /** The data volume's size when the Relay last measured it. */
     diskUsedBytes: z.number().int().nonnegative().nullable().default(null),
@@ -1574,8 +1573,7 @@ export const relayInstanceTailscaleSchema = z
   })
 
 export const relayCreateInstanceSchema = z.object({
-  // Hearth sends `limits` to Relays with `resource-limits-v1`, and
-  // `diskLimitBytes` alone to older ones.
+  // The disk limit when `limits` names none.
   diskLimitBytes: relayRequestedDiskLimitBytesSchema.default(
     DEFAULT_INSTANCE_DISK_LIMIT_BYTES
   ),
@@ -2146,8 +2144,7 @@ export const relayInstanceResourcesSchema = z.object({
     .optional(),
 })
 
-// What the Relay applied; `null` means no limit. Relays before
-// `resource-limits-v1` send no CPU limit and 0 for no memory limit.
+// What the Relay applied; `null` means no limit.
 export const relayInstanceLimitsSchema = z.object({
   cpuMillis: z.number().int().positive().nullable().default(null),
   diskBytes: relayDiskLimitBytesSchema.nullable(),
@@ -2713,17 +2710,6 @@ export const relayPlatformStatusSchema = z.object({
    */
   proxy: relayPlatformProxySchema.nullable().optional(),
   services: z.array(relayPlatformServiceSchema).max(8),
-})
-
-// `proxy` needs `relay-platform-v2`.
-export const relayPlatformLogsInputSchema = z.object({
-  lines: z.number().int().min(1).max(2_000).default(500),
-  role: relayPlatformTargetSchema,
-})
-
-export const relayPlatformLogsSchema = z.object({
-  lines: z.array(z.string()).max(2_000),
-  role: relayPlatformTargetSchema,
 })
 
 export const relayPlatformActionInputSchema = z.discriminatedUnion("action", [
@@ -3390,13 +3376,6 @@ export const relayConsoleCompletionSchema = z.object({
   suggestions: z.array(z.string()).max(100),
 })
 
-export const relayLatestLogSchema = z.object({
-  instanceId: z.string().min(1),
-  path: z.literal("logs/latest.log"),
-  content: z.string(),
-  size: z.number().int().nonnegative(),
-})
-
 export const relayConsoleShareInputSchema = z.object({
   implementation: z.string().min(1),
   version: z.string().min(1),
@@ -3877,4 +3856,3 @@ export type RelayConsoleShareInput = z.infer<
 export type RelayMclogsUploadResult = z.infer<
   typeof relayMclogsUploadResultSchema
 >
-export type RelayLatestLog = z.infer<typeof relayLatestLogSchema>

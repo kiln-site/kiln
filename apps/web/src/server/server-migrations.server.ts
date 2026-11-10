@@ -1,7 +1,6 @@
 // The server migration server functions in ./server-migrations authenticate
 // the caller and hand the signed-in user to these handlers.
 import {
-  DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
   relayLinkedBackupsV1Feature,
   relayInstanceWebRouteStateSchema,
   relaySnapshotSchema,
@@ -44,7 +43,6 @@ import {
 } from "@/lib/server-migrations.server"
 import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
 import { requireBackupStorageSelection } from "@/lib/backup-storage-selection.server"
-import { relayResourceLimitsRequest } from "@/lib/resource-limits.server"
 import type {
   MigrationRelayRoom,
   MigrationSourceRoom,
@@ -325,16 +323,6 @@ export async function startServerMigrationHandler(
   if ((await serverNames(destination, user)).includes(data.name)) {
     throw new Error(
       `A server on ${destination.name} is already named ${data.name}`
-    )
-  }
-  // Limits a Relay can't take are refused here, not partway through.
-  if (options.limits) {
-    const diskBytes =
-      options.limits.diskBytes ?? DEFAULT_INSTANCE_DISK_LIMIT_BYTES
-    relayResourceLimitsRequest(
-      destination.id,
-      { cpuMillis: null, diskBytes, memoryBytes: null },
-      options.limits
     )
   }
   const room = await checkMigrationRoom({

@@ -229,6 +229,10 @@ function answer(
           version: "test",
         },
       }
+    // Neither Relay has databases or Apps holding its room.
+    case "database.list":
+    case "app.list":
+      return []
     case "brick.recipe":
       return builtinTailscaleBrick
     case "relay.tailscale.stack.state":

@@ -11,7 +11,7 @@ export function normalizedRoute(pathname: string): string {
   }
 
   const match = pathname.match(
-    /^\/v1\/instances\/[^/]+(?:\/(tree|file|actions|resources|console|console-completions|console-stream|latest-log|ports|web-routes|startup))?$/u
+    /^\/v1\/instances\/[^/]+(?:\/(tree|file|actions|resources|console|console-completions|console-stream|ports|web-routes|startup))?$/u
   )
   if (!match) return "unknown"
   return match[1] ? `v1.instances.${match[1]}` : "v1.instances.instance"

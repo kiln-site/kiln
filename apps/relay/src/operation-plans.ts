@@ -517,7 +517,6 @@ export function controlRequestLocks(
     case "relay.security.cancel":
     // Asks the package manager what's new, changing only its package lists.
     case "relay.host.packages.read":
-    case "relay.platform.logs":
     case "relay.platform.database.read":
     case "relay.installation.read":
     case "browser.authorization.revise":
@@ -543,7 +542,6 @@ export function controlRequestLocks(
     case "instance.files.database.read":
     case "instance.console.history":
     case "instance.logs.share":
-    case "instance.logs.latest":
     case "instance.deployment.read":
     case "instance.network.routes.read":
     // Port leases are their own reservation, with their own lock.
@@ -725,8 +723,6 @@ export function controlRequestLocks(
       ])
     }
 
-    case "database.create":
-      return database(databaseLocks, "id")
     // Checking a limit against every instance's and applying it happen
     // together, holding the node's allocations.
     case "database.limits.write":
@@ -789,12 +785,6 @@ export function controlRequestLocks(
       ]
     }
 
-    case "app.create": {
-      const databaseIds = Array.isArray(payload.databaseIds)
-        ? payload.databaseIds.filter(Predicate.isString)
-        : []
-      return app((id) => appCreateLocks(id, databaseIds), "id")
-    }
     // Stops the running build beside it, which holds the App's lifecycle,
     // so a deletion needn't wait for the build it removes.
     case "app.deployment.abort":

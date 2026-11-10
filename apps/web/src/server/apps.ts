@@ -8,7 +8,6 @@ import {
   instancePowerPermission,
   newDatabaseNamesShape,
   appServiceLimitsSchema,
-  relayAppLimitsV1Feature,
   relayControlDeadlineMs,
   relayPowerActionSchema,
   relayAppSchema,
@@ -233,9 +232,6 @@ const changeAppLimits = resourceOperation({
   permission: () => "app.manage",
   run: async (user, data) => {
     const { relay } = await authorizedAppFor(user, data, "app.manage")
-    if (!(await relayAppLimitsSupported(relay.id))) {
-      throw new Error("Update this Relay to set app limits")
-    }
     const limits = { serviceLimits: data.serviceLimits }
     // Saved once the Relay applies them, so limits it refuses aren't used
     // by the next deployment, and into the config saved by then, so other
@@ -521,7 +517,3 @@ function publishRelayVolumesChange(relayId: string): void {
   })
 }
 
-async function relayAppLimitsSupported(relayId: string): Promise<boolean> {
-  const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-  return relayConnectionFeatures(relayId).has(relayAppLimitsV1Feature)
-}

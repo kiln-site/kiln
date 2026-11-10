@@ -47,9 +47,6 @@ import {
   relayRestartV1Feature,
   relayResourcesV1Feature,
   relayFilePutV1Feature,
-  relayResourceLimitsV1Feature,
-  relayDatabaseLimitsV1Feature,
-  relayAppLimitsV1Feature,
   relayAppGitHubV1Feature,
   relayAppImageUpdatesV1Feature,
   relaySecurityInventoryV1Feature,
@@ -1348,9 +1345,6 @@ function authenticateSocket(
           relayRestartV1Feature,
           relayResourcesV1Feature,
           relayFilePutV1Feature,
-          relayResourceLimitsV1Feature,
-          relayDatabaseLimitsV1Feature,
-          relayAppLimitsV1Feature,
           relayDatabaseProvisioningV1Feature,
           relayAppProvisioningV1Feature,
           relayAppGitHubV1Feature,
@@ -1553,15 +1547,13 @@ function auditDetailsForRequest(
     details.appId = payload.appId
   }
   if (
-    (request.operation === "app.create" ||
-      request.operation === "app.provision.prepare") &&
+    request.operation === "app.provision.prepare" &&
     typeof payload.id === "string"
   ) {
     details.appId = payload.id
   }
   if (
-    (request.operation === "database.create" ||
-      request.operation === "database.provision.prepare") &&
+    request.operation === "database.provision.prepare" &&
     typeof payload.id === "string"
   ) {
     details.databaseId = payload.id
@@ -1710,7 +1702,6 @@ function memberActionsForRequest(
     case "database.network.import":
       return ["app.manage"]
     // A new App connected to databases changes their connections too.
-    case "app.create":
     case "app.provision.prepare": {
       const databaseIds =
         request.payload && typeof request.payload === "object"
@@ -1860,8 +1851,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     // Relay installed may restart or repair it; the Relay checks that too.
     case "relay.platform.read":
       return "relay.read"
-    case "relay.platform.logs":
-      return "relay.logs.read"
     case "relay.platform.action":
       return "relay.update"
     // Hearth's own database holds everything Hearth knows.
@@ -1887,7 +1876,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "database.read"
     // Limits are part of what a database is created with, as a game
     // server's startup settings are.
-    case "database.create":
     case "database.provision.prepare":
     case "database.provision.claim":
     case "database.limits.write":
@@ -1927,7 +1915,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "app.read"
     case "app.deployment.read":
       return "app.logs.read"
-    case "app.create":
     case "app.provision.prepare":
     case "app.provision.claim":
       return "app.create"
@@ -2076,7 +2063,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "instance.console.read"
     case "instance.logs.share":
       return "instance.logs.share"
-    case "instance.logs.latest":
     case "instance.deployment.read":
       return "instance.logs.read"
     case "instance.network.ports.reserve":

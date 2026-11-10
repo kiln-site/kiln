@@ -11,7 +11,6 @@ import {
 import type { CliPrincipal } from "@/effect/cli-access"
 import { PermissionDeniedError } from "@/effect/errors"
 const f = vi.hoisted(() => ({
-  features: new Set(["resource-limits-v1"]),
   authorize: vi.fn(),
   relays: vi.fn(),
   rpc: vi.fn(),
@@ -35,7 +34,7 @@ vi.mock("@/lib/relay-registry", async (original) => ({
   listPersistedRelaysEffect: f.relays,
 }))
 vi.mock("@/lib/relay-connection", () => ({
-  relayConnectionFeatures: () => f.features,
+  relayConnectionFeatures: () => new Set<string>(),
   relayRpc: f.rpc,
 }))
 vi.mock("@/lib/relay-client", async (original) => ({
@@ -150,7 +149,6 @@ let allowed: Set<string>
 beforeEach(() => {
   vi.clearAllMocks()
   allowed = new Set()
-  f.features = new Set(["resource-limits-v1"])
   f.authorize.mockImplementation(({ permission }) =>
     expandPermissionSelections(
       [...allowed].map((key) => ({ kind: "permission", key })),

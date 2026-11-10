@@ -27,7 +27,6 @@ import {
   relayConsoleCommandSchema,
   relayConsoleCompletionInputSchema,
   relayConsoleShareInputSchema,
-  relayCreateDatabaseSchema,
   relayPrepareDatabaseSchema,
   relayProvisionDatabaseSchema,
   relayAppLimitsSchema,
@@ -39,7 +38,6 @@ import {
   relayAppTerminalClaimSchema,
   relayAppTerminalRestartSchema,
   relayAppTerminalWriteSchema,
-  relayCreateAppSchema,
   relayPrepareAppSchema,
   relayProvisionAppSchema,
   appIdFromFileRoot,
@@ -153,7 +151,6 @@ import {
   relayBrowserAuthorizationReviseMaxItems,
   relayBackupFailureCodesV1Feature,
   relayPlatformActionInputSchema,
-  relayPlatformLogsInputSchema,
   relayPlatformTerminalAttachSchema,
   relayPlatformTerminalClaimSchema,
   relayPlatformTerminalRestartSchema,
@@ -334,7 +331,6 @@ import {
   isPlatformOwner,
   identifyHearth,
   platformAction,
-  platformLogs,
   platformSetupUrl,
   platformStatus,
   platformUpdateRefusal,
@@ -2888,8 +2884,6 @@ async function executeControlRequest(
         input.history
       )
     }
-    case "database.create":
-      return databases.create(relayCreateDatabaseSchema.parse(request.payload))
     case "database.provision.prepare": {
       const { idempotencyKey, ...input } = relayPrepareDatabaseSchema.parse(
         request.payload
@@ -3101,8 +3095,6 @@ async function executeControlRequest(
             signal
           )
         : apps.list()
-    case "app.create":
-      return apps.create(relayCreateAppSchema.parse(request.payload))
     case "app.provision.prepare": {
       const { idempotencyKey, ...input } = relayPrepareAppSchema.parse(
         request.payload
@@ -3907,11 +3899,6 @@ async function executeControlRequest(
         relayServerDeploymentReadSchema.parse(payload)
       return serverDeploymentLogs.read(instanceId, deploymentId)
     }
-    case "instance.logs.latest":
-      return runRelayEffect(
-        "relay.files.latestLog",
-        filesystem.latestLog(await requiredInstance(payload))
-      )
     case "instance.network.ports.reserve": {
       const instance = await requiredInstance(payload)
       const input = relayInstancePortLeaseRequestSchema.parse({
@@ -4086,14 +4073,6 @@ async function executeControlRequest(
         "relay.platform.read",
         platformStatus(platformReadContext(), await clientRecord(client.id))
       )
-    case "relay.platform.logs": {
-      const input = relayPlatformLogsInputSchema.parse(request.payload)
-      await requirePlatformReader(client.id)
-      return runRelayEffect(
-        "relay.platform.logs",
-        platformLogs(platformReadContext(), input.role, input.lines)
-      )
-    }
     case "relay.platform.database.read": {
       const input = relayPlatformDatabaseReadSchema.parse(request.payload)
       await requirePlatformReader(client.id, "browse Kiln's database")

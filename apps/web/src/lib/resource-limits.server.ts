@@ -1,10 +1,8 @@
 import {
   relayDiskAllocationAvailableBytes,
   NO_RESOURCE_LIMITS,
-  relayAppLimitsV1Feature,
   relayAppSchema,
   relayManagedDatabaseSchema,
-  relayResourceLimitsV1Feature,
   widestResourceLimits,
   type RelayNode,
   type RelaySnapshot,
@@ -14,7 +12,7 @@ import {
 
 import { z } from "zod"
 
-import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { relayRpc } from "@/lib/relay-connection"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import type { ResourceLimitsCapacity } from "@/lib/resource-limits"
 
@@ -44,34 +42,13 @@ export function nodeResourceCapacity(
   }
 }
 
-/**
- * The limits to send a Relay. A Relay without `resource-limits-v1` ignores
- * `limits`, so it gets the disk limit alone, and a change it can't apply
- * fails here instead of being dropped.
- */
+/** The limits to send a Relay with a request: none when none are set. */
 export function relayResourceLimitsRequest(
-  relayId: string,
-  current: ResourceLimits,
   limits: ResourceLimitsInput | undefined
-): { diskLimitBytes?: number; limits?: ResourceLimitsInput } {
-  if (limits === undefined || Object.keys(limits).length === 0) return {}
-  if (relayConnectionFeatures(relayId).has(relayResourceLimitsV1Feature)) {
-    return { limits }
-  }
-  const unchanged = (key: "cpuMillis" | "memoryBytes") =>
-    limits[key] === undefined || limits[key] === current[key]
-  if (
-    !unchanged("cpuMillis") ||
-    !unchanged("memoryBytes") ||
-    limits.diskBytes === null
-  ) {
-    throw new Error(
-      "Update this Relay to change its memory or CPU limits, or to remove a limit"
-    )
-  }
-  return limits.diskBytes === undefined
+): { limits?: ResourceLimitsInput } {
+  return limits === undefined || Object.keys(limits).length === 0
     ? {}
-    : { diskLimitBytes: limits.diskBytes }
+    : { limits }
 }
 
 export type InstanceAllocation = {
@@ -97,17 +74,13 @@ export async function relayAllocations(
       ? widestResourceLimits(instance.limits, instance.pendingLimits)
       : instance.limits,
   }))
-  const features = relayConnectionFeatures(relay.id)
-  if (!features.has(relayResourceLimitsV1Feature)) return servers
   const [databases, apps] = await Promise.all([
     relayRpc(relay, "database.list", {}, 30_000).then((value) =>
       z.array(relayManagedDatabaseSchema).parse(value)
     ),
-    features.has(relayAppLimitsV1Feature)
-      ? relayRpc(relay, "app.list", {}, 30_000).then((value) =>
-          z.array(relayAppSchema).parse(value)
-        )
-      : [],
+    relayRpc(relay, "app.list", {}, 30_000).then((value) =>
+      z.array(relayAppSchema).parse(value)
+    ),
   ])
   return [
     ...servers,

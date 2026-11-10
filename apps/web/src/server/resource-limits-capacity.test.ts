@@ -4,7 +4,6 @@ import { assert, layer } from "@effect/vitest"
 import {
   builtinTailscaleBrick,
   relayInstanceSchema,
-  relayResourceLimitsV1Feature,
   relaySnapshotSchema,
 } from "@workspace/contracts"
 import { Effect } from "effect"
@@ -21,10 +20,10 @@ import { insertGrant, insertRelay, insertRows } from "@/test/seed"
 const relay = vi.hoisted(() => ({ snapshot: undefined as unknown }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
-  relayConnectionFeatures: () => new Set([relayResourceLimitsV1Feature]),
   relayRpc: async (_relay: unknown, operation: string) => {
     if (operation === "relay.snapshot") return relay.snapshot
     if (operation === "database.list") return []
+    if (operation === "app.list") return []
     throw new Error(`Unexpected Relay operation ${operation}`)
   },
 }))
