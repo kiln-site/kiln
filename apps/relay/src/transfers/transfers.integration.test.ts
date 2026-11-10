@@ -49,6 +49,11 @@ afterEach(async () => {
   await Promise.allSettled(cleanups.splice(0).map((cleanup) => cleanup()))
 })
 
+// Reading or writing a file directly takes a Linux Relay host, which checks
+// through /proc that what it opened is inside the root. On any other host the
+// Relay refuses, so only what is refused before the file is opened runs there.
+const itOnLinux = it.runIf(process.platform === "linux")
+
 describe("browser file transfers", () => {
   it("refuses a capability issued for a different file", async () => {
     const relay = await startRelay()
@@ -86,7 +91,7 @@ describe("browser file transfers", () => {
     expect((await send(relay.port, request)).status).toBe(401)
   })
 
-  it.runIf(process.platform === "linux")(
+  itOnLinux(
     "never lets a save that checks the file is unchanged replace an upload",
     async () => {
       const relay = await startRelay()
@@ -198,21 +203,24 @@ describe("file preview links", () => {
     return { clip, relay }
   }
 
-  it("plays a file inline, a range at a time, with no request proof", async () => {
-    const { clip, relay } = await relayWithClip()
+  itOnLinux(
+    "plays a file inline, a range at a time, with no request proof",
+    async () => {
+      const { clip, relay } = await relayWithClip()
 
-    const response = await send(relay.port, {
-      headers: { Range: "bytes=1024-2047" },
-      method: "GET",
-      path: previewPath(relay.previewToken()),
-    })
+      const response = await send(relay.port, {
+        headers: { Range: "bytes=1024-2047" },
+        method: "GET",
+        path: previewPath(relay.previewToken()),
+      })
 
-    expect(response.status).toBe(206)
-    expect(response.body.equals(clip.subarray(1024, 2048))).toBe(true)
-    expect(response.headers["content-type"]).toBe("video/mp4")
-    expect(response.headers["content-disposition"]).toMatch(/^inline;/u)
-    expect(response.headers["content-security-policy"]).toContain("sandbox")
-  })
+      expect(response.status).toBe(206)
+      expect(response.body.equals(clip.subarray(1024, 2048))).toBe(true)
+      expect(response.headers["content-type"]).toBe("video/mp4")
+      expect(response.headers["content-disposition"]).toMatch(/^inline;/u)
+      expect(response.headers["content-security-policy"]).toContain("sandbox")
+    }
+  )
 
   it("refuses a link for a different file", async () => {
     const { relay } = await relayWithClip()
@@ -304,53 +312,56 @@ describe("file preview links", () => {
     expect((await send(relay.port, request)).status).toBe(401)
   })
 
-  it("cuts off a file already playing when access is taken away", async () => {
-    const relay = await startRelay()
-    await mkdir(join(relay.instanceRoot, "clips"), { recursive: true })
-    const size = 64 * 1024 * 1024
-    await writeFile(
-      join(relay.instanceRoot, "clips/intro.mp4"),
-      Buffer.alloc(size, 7)
-    )
-
-    const { received, status } = await new Promise<{
-      received: number
-      status: number
-    }>((resolve, reject) => {
-      const request = httpRequest(
-        {
-          host: "127.0.0.1",
-          method: "GET",
-          path: previewPath(relay.previewToken()),
-          port: relay.port,
-        },
-        (response) => {
-          let bytes = 0
-          let revoked = false
-          response.on("data", (chunk: Buffer) => {
-            bytes += chunk.length
-            if (revoked) return
-            revoked = true
-            // Hold the stream so the file is still being sent.
-            response.pause()
-            relay.revokeLive()
-            setTimeout(() => response.resume(), 50)
-          })
-          const done = () =>
-            resolve({ received: bytes, status: response.statusCode ?? 0 })
-          response.once("close", done)
-          response.once("error", done)
-        }
+  itOnLinux(
+    "cuts off a file already playing when access is taken away",
+    async () => {
+      const relay = await startRelay()
+      await mkdir(join(relay.instanceRoot, "clips"), { recursive: true })
+      const size = 64 * 1024 * 1024
+      await writeFile(
+        join(relay.instanceRoot, "clips/intro.mp4"),
+        Buffer.alloc(size, 7)
       )
-      request.once("error", reject)
-      request.end()
-    })
 
-    // It was playing, and stopped short of the whole file.
-    expect(status).toBe(200)
-    expect(received).toBeGreaterThan(0)
-    expect(received).toBeLessThan(size)
-  })
+      const { received, status } = await new Promise<{
+        received: number
+        status: number
+      }>((resolve, reject) => {
+        const request = httpRequest(
+          {
+            host: "127.0.0.1",
+            method: "GET",
+            path: previewPath(relay.previewToken()),
+            port: relay.port,
+          },
+          (response) => {
+            let bytes = 0
+            let revoked = false
+            response.on("data", (chunk: Buffer) => {
+              bytes += chunk.length
+              if (revoked) return
+              revoked = true
+              // Hold the stream so the file is still being sent.
+              response.pause()
+              relay.revokeLive()
+              setTimeout(() => response.resume(), 50)
+            })
+            const done = () =>
+              resolve({ received: bytes, status: response.statusCode ?? 0 })
+            response.once("close", done)
+            response.once("error", done)
+          }
+        )
+        request.once("error", reject)
+        request.end()
+      })
+
+      // It was playing, and stopped short of the whole file.
+      expect(status).toBe(200)
+      expect(received).toBeGreaterThan(0)
+      expect(received).toBeLessThan(size)
+    }
+  )
 
   it("waits its turn with the Relay's other unauthenticated requests", async () => {
     const relay = await startRelay({ pendingFileAuthentications: 1 })
@@ -381,7 +392,7 @@ describe("file preview links", () => {
     }
   })
 
-  it("stops working once the person's access changes", async () => {
+  itOnLinux("stops working once the person's access changes", async () => {
     const { relay } = await relayWithClip()
     const token = relay.previewToken()
     expect(
