@@ -20,7 +20,11 @@ import type {
   BackupTaskInput,
   RelayBackupTask,
 } from "@workspace/contracts"
-import { brickRecipeSchema } from "@workspace/contracts"
+import {
+  brickRecipeFromV1,
+  brickRecipeSchema,
+  brickRecipeV1Schema,
+} from "@workspace/contracts"
 
 import {
   recoverInterruptedRestores,
@@ -35,7 +39,31 @@ import { testInstance, testRelayConfig } from "./test/fixtures.js"
 import { OperationLanes } from "./operation-lanes.js"
 
 describe("Relay archive restores", () => {
-  it.effect("restores a verified archive through a staged directory swap", () =>
+  // A server keeps the recipe it was made from, named by a checksum of how
+  // it is stored. One made while recipes were kiln.brick/v1 has a v1 file.
+  it.effect.each([
+    {
+      recipe: "its recipe",
+      record: (config: RelayConfig) =>
+        new BrickCatalog(
+          config.brickCatalogUrl,
+          config.dataDirectory
+        ).saveSnapshot(testBrickRecipe()),
+      restored: testBrickRecipe(),
+    },
+    {
+      recipe: "a kiln.brick/v1 recipe, under the checksum the server names",
+      record: async (config: RelayConfig) => {
+        const content = JSON.stringify(testBrickRecipeV1())
+        const checksum = sha256(Buffer.from(content))
+        const directory = brickSnapshotDirectory(config.dataDirectory)
+        await mkdir(directory, { recursive: true })
+        await writeFile(resolve(directory, `${checksum}.json`), content)
+        return checksum
+      },
+      restored: brickRecipeFromV1(testBrickRecipeV1()),
+    },
+  ])("restores a verified archive, and $recipe", ({ record, restored: recipe }) =>
     withRelay("kiln-backup-restore-", ({ config, root }) =>
       Effect.gen(function* () {
         yield* Effect.promise(() =>
@@ -44,12 +72,7 @@ describe("Relay archive restores", () => {
         const subdomain = `${"a".repeat(60)}.${"b".repeat(59)}`
         const instance = testInstance({
           brickSource: "https://kiln.test/bricks/paper.yml",
-          brickSnapshotSha256: yield* Effect.promise(() =>
-            new BrickCatalog(
-              config.brickCatalogUrl,
-              config.dataDirectory
-            ).saveSnapshot(testBrickRecipe())
-          ),
+          brickSnapshotSha256: yield* Effect.promise(() => record(config)),
           tailscale: { enabled: true, subdomain },
         })
         const manager = yield* backupManager(config, async () => instance)
@@ -98,7 +121,7 @@ describe("Relay archive restores", () => {
               config.dataDirectory
             ).recipe(instance.brickSource ?? "", instance.brickSnapshotSha256)
           ),
-          testBrickRecipe()
+          recipe
         )
       })
     )
@@ -261,6 +284,31 @@ function sha256(contents: Buffer): string {
 
 function testBrickRecipe() {
   return brickRecipeSchema.parse({
+    format: "kiln.brick/v2",
+    kind: "game-server",
+    type: "minecraft",
+    metadata: {
+      author: "Kiln",
+      id: "paper",
+      name: "Paper",
+      summary: "Paper test recipe",
+    },
+    deploy: {
+      type: "image",
+      image: "example.test/paper:latest",
+      runtime: "Paper",
+      memory: "4G",
+      pids: 128,
+      volumes: ["/server"],
+      ports: [{ name: "game", port: 25_565 }],
+    },
+    "game-server": { game: "Minecraft", srv: true },
+  })
+}
+
+// The same recipe as a Relay stored it before recipes covered every kind.
+function testBrickRecipeV1() {
+  return brickRecipeV1Schema.parse({
     format: "kiln.brick/v1",
     metadata: {
       author: "Kiln",

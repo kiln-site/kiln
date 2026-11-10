@@ -21,12 +21,14 @@ import { openPromise, type Entry, type ZipFile } from "yauzl"
 
 import {
   backupArchiveManifestSchema,
-  brickRecipeSchema,
   type BackupArchiveManifest,
   type BackupRestoreTaskInput,
 } from "@workspace/contracts"
 
-import { brickSnapshotDirectory, saveBrickSnapshot } from "./bricks.js"
+import {
+  brickSnapshotDirectory,
+  saveRecordedBrickSnapshot,
+} from "./bricks.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { RelayBackupError } from "./effect/errors.js"
@@ -266,9 +268,9 @@ async function extractBackupArchive(
           manifest?.formatVersion === 3 &&
           manifest.server.brick.recipe !== null
         ) {
-          const snapshotSha256 = await saveBrickSnapshot(
+          const snapshotSha256 = await saveRecordedBrickSnapshot(
             brickSnapshotDirectory(config.dataDirectory),
-            brickRecipeSchema.parse(manifest.server.brick.recipe)
+            manifest.server.brick.recipe
           )
           if (
             manifest.server.brick.snapshotSha256 &&

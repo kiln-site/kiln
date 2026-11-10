@@ -87,27 +87,24 @@ describe("instance port lifecycle", () => {
     })
     const recipe = (protocol: "tcp" | "udp") =>
       brickRecipeSchema.parse({
-        format: "kiln.brick/v1",
+        format: "kiln.brick/v2",
+        kind: "game-server",
         metadata: {
           author: "Kiln",
-          description: "Test recipe",
-          game: "Test",
           id: `game-${protocol}`,
           name: "Game",
+          summary: "Test recipe",
         },
-        variables: {},
-        runtime: {
-          environment: {},
+        deploy: {
+          type: "image",
           image: `example.test/game-${protocol}:latest`,
-          name: "Game",
-          resources: { memory: "512M", pids: 128 },
-          storage: { mount: "/server" },
+          runtime: "Game",
+          memory: "512M",
+          pids: 128,
+          volumes: ["/server"],
+          ports: [{ name: "game", port: 7777, protocol }],
         },
-        network: {
-          mode: "direct",
-          ports: [{ container: 7777, name: "game", protocol }],
-          primaryPort: "game",
-        },
+        "game-server": { game: "Test" },
       })
     const create = (id: string, protocol: "tcp" | "udp", start: boolean) =>
       harness.lifecycle.createInstanceWithId(

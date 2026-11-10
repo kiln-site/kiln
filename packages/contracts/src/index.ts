@@ -6,8 +6,14 @@ import {
   MAXIMUM_INSTANCE_NAME_LENGTH,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
-import { brickIdSchema, brickInputValueSchema } from "./brick-recipe.js"
-import { brickRecipeSchema } from "./brick-v1.js"
+import { readBrick } from "./brick-conversion.js"
+import {
+  brickIdSchema,
+  brickInputValueSchema,
+  brickRecipeSchema,
+  brickSchema,
+  brickSourceSchema,
+} from "./brick-recipe.js"
 import { instanceIdSchema } from "./instance-id.js"
 import { relayInstanceLifecycleEventSchema } from "./instance-lifecycle.js"
 import {
@@ -1333,7 +1339,6 @@ export function brickIdExceedsRecommendedLength(id: string): boolean {
 // A v1 variable's value and a v2 input's are the same thing.
 export const brickVariableValueSchema = brickInputValueSchema
 
-export const brickSourceSchema = z.string().trim().url().max(2_048)
 export const relayInstanceNameSchema = z
   .string()
   .trim()
@@ -1371,57 +1376,41 @@ export function relayDiskAllocationAvailableBytes(
   return Math.max(remainingBytes, currentLimitBytes)
 }
 
-export const brickSchema = brickRecipeSchema.extend({
-  iconSvg: z
-    .string()
-    .max(64 * 1024)
-    .optional(),
-  source: brickSourceSchema,
-})
-
 export const builtinTailscaleBrickId = "tailscale"
 export const builtinTailscaleBrickSource =
   "https://kiln.site/bricks/builtin/tailscale"
 export const builtinTailscaleBrick = brickSchema.parse({
-  format: "kiln.brick/v1",
+  format: "kiln.brick/v2",
+  kind: "game-server",
   metadata: {
     id: builtinTailscaleBrickId,
     name: "Tailscale",
-    description: "Private tailnet access for servers managed by Kiln.",
-    game: "Networking",
+    summary: "Private tailnet access for servers managed by Kiln.",
     author: "Kiln",
     tags: ["networking", "private"],
   },
-  variables: {
-    domain: {
-      type: "string",
+  inputs: [
+    {
+      key: "domain",
       label: "Private domain",
-      description: "Domain used for private server names.",
-      required: true,
-      sensitive: false,
+      help: "Domain used for private server names.",
+      type: "text",
       default: "test",
     },
-  },
-  runtime: {
+  ],
+  deploy: {
+    type: "image",
     image: "tailscale/tailscale:stable",
-    name: "Tailscale",
-    environment: {},
-    resources: {
-      memory: "64m",
-      memoryReservation: "16m",
-      pids: 128,
-    },
-    storage: { mount: "/config" },
-  },
-  network: {
-    mode: "direct",
-    primaryPort: "dns-tcp",
+    runtime: "Tailscale",
+    memory: "64m",
+    pids: 128,
+    volumes: ["/config"],
     ports: [
-      { name: "dns-tcp", container: 53, protocol: "tcp" },
-      { name: "dns-udp", container: 53, protocol: "udp" },
+      { name: "dns-tcp", port: 53 },
+      { name: "dns-udp", port: 53, protocol: "udp" },
     ],
   },
-  constraints: {},
+  "game-server": { game: "Networking" },
   source: builtinTailscaleBrickSource,
 })
 
@@ -3288,6 +3277,29 @@ export const relayCatalogSchema = z.object({
   bricks: z.array(brickSchema),
 })
 
+/**
+ * A catalog as Hearth stored it. Bricks it holds from while recipes were
+ * `kiln.brick/v1` are converted; one that can't be read fails the catalog,
+ * as it always did.
+ */
+export function readRelayCatalog(document: unknown) {
+  if (
+    !document ||
+    typeof document !== "object" ||
+    !("bricks" in document) ||
+    !Array.isArray(document.bricks)
+  ) {
+    return relayCatalogSchema.safeParse(document)
+  }
+  return relayCatalogSchema.safeParse({
+    ...document,
+    bricks: document.bricks.map((brick: unknown) => {
+      const read = readBrick(brick)
+      return read.success ? read.data : brick
+    }),
+  })
+}
+
 export const brickCatalogDocumentSchema = z
   .object({
     format: z.literal("kiln.catalog/v1"),
@@ -3390,7 +3402,6 @@ export type RelayAppTerminalAttach = z.infer<
 export type BrickId = z.infer<typeof brickIdSchema>
 export type BrickVariableValue = z.infer<typeof brickVariableValueSchema>
 export type BrickCatalogDocument = z.infer<typeof brickCatalogDocumentSchema>
-export type Brick = z.infer<typeof brickSchema>
 export type RelayCatalog = z.infer<typeof relayCatalogSchema>
 export type RelayCreateInstance = z.infer<typeof relayCreateInstanceSchema>
 export type RelayPrepareInstance = z.infer<typeof relayPrepareInstanceSchema>

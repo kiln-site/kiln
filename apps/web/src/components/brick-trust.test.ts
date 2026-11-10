@@ -44,26 +44,14 @@ function brick(source: string, author: string): Brick {
   return {
     source,
     ...brickRecipeSchema.parse({
-      format: "kiln.brick/v1",
-      metadata: {
-        author,
-        description: "Test recipe",
-        game: "Minecraft",
-        id: "paper",
-        name: "Paper",
-      },
-      variables: {},
-      runtime: {
-        environment: {},
+      format: "kiln.brick/v2",
+      kind: "game-server",
+      metadata: { author, id: "paper", name: "Paper", summary: "Test recipe" },
+      deploy: {
+        type: "image",
         image: "example.test/paper:latest",
-        name: "Paper",
-        resources: { memory: "1G", pids: 128 },
-        storage: { mount: "/server" },
-      },
-      network: {
-        mode: "direct",
-        ports: [{ container: 25565, name: "game", protocol: "tcp" }],
-        primaryPort: "game",
+        volumes: ["/server"],
+        ports: [{ name: "game", port: 25565 }],
       },
     }),
   }

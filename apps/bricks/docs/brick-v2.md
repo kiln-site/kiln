@@ -19,9 +19,21 @@ by [`bricks.yml`](../bricks.yml).
 
 ## What Kiln runs today
 
-Nothing reads this format yet. Relays run `kiln.brick/v1`
-([recipe-v1.md](recipe-v1.md)) from [`recipes/`](../recipes) until they
-learn v2; the official v2 Bricks sit beside them until then.
+The format describes every kind. Kiln reads them in stages.
+
+| Part                             | Status                                |
+| -------------------------------- | ------------------------------------- |
+| Game server Bricks from an image | Run                                   |
+| `type: minecraft`                | Run                                   |
+| Database, App and group Bricks   | Defined here; not installable yet     |
+| `dockerfile` and `compose`       | Defined here; Apps use them later     |
+| `ready` by command or HTTP       | Defined here; game servers use logs   |
+| Ports that aren't `public`       | Defined here; not for game servers    |
+| A raster icon                    | Defined here; SVG marks are shown     |
+| `settings`                       | Reserved; refused until it is defined |
+
+A Relay refuses a Brick that uses a part it doesn't run yet, and says which.
+Those parts are provisional (see the rules below).
 
 ## Rules of the format
 
@@ -384,7 +396,15 @@ Custom Brick sources must use HTTPS. A Relay operator may configure a local
 ## From v1
 
 `kiln.brick/v1` ([recipe-v1.md](recipe-v1.md)) described game servers only.
-This is where each of its fields went.
+Kiln converts a v1 recipe wherever it reads one: a catalog or a link that
+still serves v1, the copy a Relay keeps for each server, the Bricks and
+catalogs Hearth stored, and the recipe inside a backup. New Bricks are
+written in v2.
+
+A server keeps the recipe it was made from, named by a checksum of the file
+on its Relay. That file is never rewritten, so a server made from a v1 recipe
+keeps a v1 file, read as v2 each time, until its Brick is changed or
+reinstalled.
 
 | v1                                               | v2                                                             |
 | ------------------------------------------------ | -------------------------------------------------------------- |

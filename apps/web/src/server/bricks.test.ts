@@ -67,25 +67,20 @@ describe("Startup granular authority", () => {
     ).toBe("instance.power.start")
   })
   it("detects changed resource variables, omitted defaults, and recipe limits without treating unrelated variables as limits", () => {
+    // Its memory limit is one input's answer, as a recipe converted from
+    // kiln.brick/v1 has it.
     const recipe = {
       ...recipeDefinition,
-      variables: {
-        memory: {
-          type: "string" as const,
-          sensitive: false,
+      inputs: [
+        {
+          key: "memory",
           label: "Memory",
-          description: "Memory",
+          type: "text" as const,
+          optional: true,
           default: "1g",
-          required: false,
         },
-      },
-      runtime: {
-        ...recipeDefinition.runtime,
-        resources: {
-          ...recipeDefinition.runtime.resources,
-          memory: "{{ variables.memory }}",
-        },
-      },
+      ],
+      deploy: { ...recipeDefinition.deploy!, memory: "{{ memory }}" },
     }
     expect(
       startupConfigurationChanged(
@@ -133,16 +128,103 @@ describe("Startup granular authority", () => {
     expect(
       startupResourceLimitsChanged(
         recipe,
-        {
-          ...recipe,
-          runtime: {
-            ...recipe.runtime,
-            resources: { ...recipe.runtime.resources, memory: "4g" },
-          },
-        },
+        { ...recipe, deploy: { ...recipe.deploy, memory: "4g" } },
         {},
         {}
       )
     ).toBe(true)
+  })
+
+  // An answer that follows another changes with it, sent or not. Changing
+  // only the memory here also changes the image, which takes configuration
+  // authority that a limits grant doesn't carry.
+  it("counts an answer nobody sent that follows one that was", () => {
+    const recipe = {
+      ...recipeDefinition,
+      inputs: [
+        {
+          key: "memory",
+          label: "Memory",
+          type: "text" as const,
+          default: "2G",
+        },
+        {
+          key: "tag",
+          label: "Tag",
+          type: "select" as const,
+          options: ["small", "large"],
+          default: "small",
+          suggest: [{ when: "memory", matches: "^4G$", value: "large" }],
+        },
+      ],
+      deploy: {
+        ...recipeDefinition.deploy!,
+        type: "image" as const,
+        image: "example/server:{{ tag }}",
+        memory: "{{ memory }}",
+      },
+    }
+    const existing = { memory: "2G", tag: "small" }
+    expect(
+      startupConfigurationChanged(recipe, recipe, existing, { memory: "4G" })
+    ).toBe(true)
+    expect(
+      startupResourceLimitsChanged(recipe, recipe, existing, { memory: "4G" })
+    ).toBe(true)
+    // Sent as it was, the tag stands, and only the limit changes.
+    expect(
+      startupConfigurationChanged(recipe, recipe, existing, {
+        memory: "4G",
+        tag: "small",
+      })
+    ).toBe(false)
+    // Nothing sent and nothing following: nothing changed.
+    expect(startupConfigurationChanged(recipe, recipe, existing, {})).toBe(
+      false
+    )
+  })
+
+  // An answer that sets the memory limit is left to the limits permission
+  // only while that is all it sets.
+  it("counts an answer that sets the limit and something else as both", () => {
+    const limitOnly = {
+      ...recipeDefinition,
+      inputs: [
+        {
+          key: "memory",
+          label: "Memory",
+          type: "text" as const,
+          default: "2G",
+        },
+      ],
+      deploy: {
+        ...recipeDefinition.deploy!,
+        type: "image" as const,
+        image: "example/server:latest",
+        memory: "{{ memory }}",
+      },
+    }
+    const alsoImage = {
+      ...limitOnly,
+      deploy: { ...limitOnly.deploy, image: "example/server:{{ memory }}" },
+    }
+    const alsoEnvironment = {
+      ...limitOnly,
+      deploy: { ...limitOnly.deploy, env: { HEAP: "{{ memory }}" } },
+    }
+    const changed = [{ memory: "2G" }, { memory: "4G" }] as const
+    expect(startupConfigurationChanged(limitOnly, limitOnly, ...changed)).toBe(
+      false
+    )
+    for (const recipe of [alsoImage, alsoEnvironment]) {
+      expect(startupConfigurationChanged(recipe, recipe, ...changed)).toBe(true)
+      expect(startupResourceLimitsChanged(recipe, recipe, ...changed)).toBe(
+        true
+      )
+    }
+    // Moving to a recipe that uses it for more is a change of configuration.
+    expect(startupConfigurationChanged(limitOnly, alsoImage, ...changed)).toBe(
+      true
+    )
   })
 })

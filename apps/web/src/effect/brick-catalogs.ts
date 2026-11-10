@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 
-import { relayCatalogSchema } from "@workspace/contracts"
+import { readRelayCatalog } from "@workspace/contracts"
 import type { RelayCatalog } from "@workspace/contracts"
 import { Clock, Effect, Result } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
@@ -245,7 +245,7 @@ function decodeCatalogRows(rows: ReadonlyArray<CatalogRow>) {
 }
 
 function decodeCatalogRow(row: CatalogRow) {
-  const snapshot = relayCatalogSchema.safeParse(decodeJson(row.snapshot))
+  const snapshot = readRelayCatalog(decodeJson(row.snapshot))
   const record = {
     id: row.id,
     ownerEmail: row.owner_email,

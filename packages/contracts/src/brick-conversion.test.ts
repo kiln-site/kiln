@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { brickRecipeFromV1, readBrickRecipe } from "./brick-conversion"
+import {
+  brickRecipeFromV1,
+  readBrick,
+  readBrickRecipe,
+} from "./brick-conversion"
+import { readRelayCatalog } from "./index"
 import { brickInputProblem, brickSuggestedValue } from "./brick-recipe"
-import { brickRecipeSchema, type BrickRecipe } from "./brick-v1"
+import { brickRecipeV1Schema, type BrickRecipeV1 } from "./brick-v1"
 
 // A v1 recipe as a Relay or Hearth stored one, using every part of the
 // format.
@@ -110,7 +115,7 @@ const v1 = {
 }
 
 const stored = (changes: (recipe: typeof v1) => unknown = (recipe) => recipe) =>
-  brickRecipeSchema.parse(changes(structuredClone(v1))) as BrickRecipe
+  brickRecipeV1Schema.parse(changes(structuredClone(v1))) as BrickRecipeV1
 
 describe("a kiln.brick/v1 recipe read as v2", () => {
   it("runs what it ran before", () => {
@@ -425,5 +430,36 @@ describe("reading a stored or fetched recipe", () => {
         .success
     ).toBe(false)
     expect(readBrickRecipe(null).success).toBe(false)
+  })
+
+  // Hearth keeps the Bricks people added, and each catalog as it last read
+  // it, with where each recipe came from and its icon.
+  it("reads a Brick and a catalog Hearth stored while recipes were v1", () => {
+    const saved = {
+      ...v1,
+      iconSvg: '<svg viewBox="0 0 1 1"></svg>',
+      source: "https://example.test/paper.yml",
+    }
+    const expected = {
+      ...brickRecipeFromV1(stored()),
+      iconSvg: saved.iconSvg,
+      source: saved.source,
+    }
+    const brick = readBrick(saved)
+    expect(brick.success && brick.data).toEqual(expected)
+
+    const catalog = readRelayCatalog({
+      format: "kiln.catalog/v1",
+      name: "Mine",
+      bricks: [saved, expected],
+    })
+    expect(catalog.success && catalog.data.bricks).toEqual([expected, expected])
+    // One Brick that can't be read still fails its catalog.
+    expect(
+      readRelayCatalog({
+        format: "kiln.catalog/v1",
+        bricks: [{ ...saved, source: undefined }],
+      }).success
+    ).toBe(false)
   })
 })

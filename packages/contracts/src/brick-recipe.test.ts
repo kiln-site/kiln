@@ -2,8 +2,12 @@ import { describe, expect, it } from "vite-plus/test"
 import { z } from "zod"
 
 import {
-  brickRecipeV2Schema,
+  brickAnswers,
+  brickAnswersProblem,
+  brickFollowers,
+  brickRecipeSchema,
   brickSuggestedValue,
+  redactedBrickInputs,
   type BrickInput,
 } from "./brick-recipe"
 
@@ -81,7 +85,7 @@ const group = {
 }
 
 function problems(recipe: unknown): Array<string> {
-  const parsed = brickRecipeV2Schema.safeParse(recipe)
+  const parsed = brickRecipeSchema.safeParse(recipe)
   return parsed.success
     ? []
     : parsed.error.issues.map(
@@ -97,7 +101,7 @@ describe("kiln.brick/v2", () => {
   })
 
   it("stores a recipe as it was written", () => {
-    expect(brickRecipeV2Schema.parse(gameServer)).toEqual(gameServer)
+    expect(brickRecipeSchema.parse(gameServer)).toEqual(gameServer)
   })
 
   it("refuses a field it doesn't know, so a typo can't change a deployment", () => {
@@ -167,6 +171,37 @@ describe("kiln.brick/v2", () => {
         suggest: [{ when: "missing", matches: ".", value: 1 }],
       })
     ).toEqual(["inputs.2.suggest.0.when: No input is named missing"])
+    // Round in a circle, no set of answers has to satisfy every rule.
+    expect(
+      problems({
+        ...gameServer,
+        inputs: [
+          {
+            key: "a",
+            label: "A",
+            type: "text",
+            suggest: [{ when: "c", matches: ".", value: "x" }],
+          },
+          {
+            key: "b",
+            label: "B",
+            type: "text",
+            suggest: [{ when: "a", matches: ".", value: "x" }],
+          },
+          {
+            key: "c",
+            label: "C",
+            type: "text",
+            suggest: [{ when: "b", matches: ".", value: "x" }],
+          },
+        ],
+        deploy: { ...gameServer.deploy, image: "example", env: {} },
+      })
+    ).toEqual([
+      "inputs.0.suggest: Inputs can't follow each other in a circle",
+      "inputs.1.suggest: Inputs can't follow each other in a circle",
+      "inputs.2.suggest: Inputs can't follow each other in a circle",
+    ])
     // Its value isn't known until Kiln installs the Brick.
     expect(
       problems({
@@ -254,10 +289,161 @@ describe("suggested values", () => {
   })
 })
 
+describe("working out answers", () => {
+  // Written out of order on purpose: each follows the one after it.
+  const inputs: Array<BrickInput> = [
+    {
+      key: "image",
+      label: "Image",
+      type: "text",
+      default: "stable-image",
+      suggest: [{ when: "tag", matches: "^edge$", value: "edge-image" }],
+    },
+    {
+      key: "tag",
+      label: "Tag",
+      type: "select",
+      options: ["stable", "edge"],
+      suggest: [{ when: "channel", matches: "^new$", value: "edge" }],
+    },
+    {
+      key: "channel",
+      label: "Channel",
+      type: "select",
+      options: ["old", "new"],
+      default: "old",
+    },
+    { key: "motd", label: "Message", type: "text", optional: true },
+  ]
+
+  it("gives each input what was answered, else its rules, else its default", () => {
+    expect(brickAnswers(inputs, {})).toEqual({
+      channel: "old",
+      image: "stable-image",
+    })
+    // One answer reaches everything that follows it, through other inputs.
+    expect(brickAnswers(inputs, { channel: "new" })).toEqual({
+      channel: "new",
+      tag: "edge",
+      image: "edge-image",
+    })
+    // An answer stands even where a rule would have said otherwise.
+    expect(brickAnswers(inputs, { channel: "new", tag: "stable" })).toEqual({
+      channel: "new",
+      tag: "stable",
+      image: "stable-image",
+    })
+  })
+
+  it("works out again only what follows the answer that changed", () => {
+    const followers = brickFollowers(inputs, "channel")
+    expect([...followers].sort()).toEqual(["image", "tag"])
+    // The tag had a value only because of the old channel answer; it has no
+    // default, so it goes. The message nobody answered stays unanswered.
+    expect(
+      brickAnswers(
+        inputs,
+        { channel: "old", tag: "edge", image: "edge-image" },
+        followers
+      )
+    ).toEqual({ channel: "old", image: "stable-image" })
+    expect(
+      brickAnswers(inputs, { channel: "new", tag: "stable" }, followers)
+    ).toEqual({ channel: "new", tag: "edge", image: "edge-image" })
+    expect(brickFollowers(inputs, "image").size).toBe(0)
+  })
+
+  it("refuses what a rule asks for and the input doesn't offer", () => {
+    const tag: BrickInput = {
+      key: "tag",
+      label: "Tag",
+      type: "select",
+      options: ["stable"],
+      default: "stable",
+      suggest: [{ when: "channel", matches: "^new$", value: "edge" }],
+    }
+    const channel = inputs[2]!
+    // Worked out, it holds the value asked for, never its default instead.
+    const answers = brickAnswers([channel, tag], { channel: "new" })
+    expect(answers.tag).toBe("edge")
+    expect(brickAnswersProblem([channel, tag], answers)).toEqual({
+      code: "unsupported_suggestion",
+      key: "tag",
+      message: "Channel new needs Tag edge, which this Brick doesn't offer",
+    })
+    // Someone can still choose what it does offer.
+    expect(
+      brickAnswersProblem([channel, tag], { channel: "new", tag: "stable" })
+    ).toBeNull()
+    // A sensitive answer on either side stays out of the message.
+    const problem = brickAnswersProblem(
+      [channel, { ...tag, sensitive: true }],
+      answers
+    )
+    expect(problem?.code).toBe("unsupported_suggestion")
+    expect(problem?.message).not.toMatch(/edge|new/u)
+  })
+
+  it("says which answer is missing or refused, and makes no secret required", () => {
+    const token: BrickInput = {
+      key: "token",
+      label: "Token",
+      type: "secret",
+      generate: true,
+    }
+    const name: BrickInput = {
+      key: "name",
+      label: "Name",
+      type: "text",
+      pattern: "^[a-z]+$",
+    }
+    expect(brickAnswersProblem([token, name], {})).toEqual({
+      code: "missing",
+      key: "name",
+      message: "Name is required",
+    })
+    expect(
+      brickAnswersProblem([token, name], { name: "Not Valid" })?.code
+    ).toBe("invalid")
+    expect(brickAnswersProblem([token, name], { name: "valid" })).toBeNull()
+  })
+})
+
+describe("showing a recipe", () => {
+  it("leaves out what a sensitive input holds, whatever its type", () => {
+    const shown = redactedBrickInputs([
+      {
+        key: "token",
+        label: "Token",
+        type: "secret",
+        default: "hunter2",
+        suggest: [{ when: "name", matches: "^admin$", value: "hunter3" }],
+      },
+      {
+        key: "tier",
+        label: "Tier",
+        type: "select",
+        sensitive: true,
+        options: ["gold", "silver"],
+        default: "gold",
+      },
+      { key: "pin", label: "PIN", type: "number", sensitive: true, default: 1 },
+      { key: "name", label: "Name", type: "text", default: "public" },
+    ])
+    expect(JSON.stringify(shown)).not.toMatch(/hunter|gold|silver/u)
+    expect(shown.map((input) => input.default)).toEqual([
+      "[redacted]",
+      "[redacted]",
+      "[redacted]",
+      "public",
+    ])
+  })
+})
+
 describe("the schema editors read", () => {
   it("is the one generated from the contract", async () => {
     await expect(
-      `${JSON.stringify(z.toJSONSchema(brickRecipeV2Schema), null, 2)}\n`
+      `${JSON.stringify(z.toJSONSchema(brickRecipeSchema), null, 2)}\n`
     ).toMatchFileSnapshot("../../../apps/bricks/schema/brick-v2.schema.json")
   })
 })

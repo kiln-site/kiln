@@ -1,31 +1,54 @@
 import {
   BRICK_INSTANCE_NAME_SUFFIX,
   RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH,
-  requiredMinecraftJavaVersion,
+  brickAnswers,
+  brickFollowers,
+  brickInputProblem,
+  brickInputSensitive,
+  brickInputValueType,
+  brickInputs,
+  fillBrickTemplate,
   type Brick,
+  type BrickInput,
   type BrickVariableValue,
 } from "@workspace/contracts"
-import { Result } from "effect"
 
 export const LONG_STRING_FIELD_MAX_LENGTH = 256
 
-export function usesLongStringBrickField(
-  definition: Brick["variables"][string]
-): boolean {
+/** A Brick's inputs by their key, in the order of its form. */
+export type BrickFields = Readonly<Record<string, BrickInput>>
+
+export function brickFields(brick: Pick<Brick, "inputs">): BrickFields {
+  return Object.fromEntries(
+    brickInputs(brick).map((input) => [input.key, input])
+  )
+}
+
+/** Whether an input's answer is text, as a text, a secret or a text select is. */
+export function isTextBrickField(definition: BrickInput): boolean {
+  return brickInputValueType(definition) === "string"
+}
+
+export function usesLongStringBrickField(definition: BrickInput): boolean {
   return (
-    definition.type === "string" &&
-    !definition.sensitive &&
-    definition.options === undefined &&
-    (definition.rules?.maxLength ?? 0) >= LONG_STRING_FIELD_MAX_LENGTH
+    definition.type === "text" &&
+    !brickInputSensitive(definition) &&
+    (definition.max ?? 0) >= LONG_STRING_FIELD_MAX_LENGTH
   )
 }
 
 export function canPairMinecraftJavaVersionFields(
-  definitions: Brick["variables"]
+  definitions: BrickFields
 ): boolean {
-  return (
-    definitions.version?.type === "string" &&
-    definitions.java_version?.type === "string"
+  const { version, java_version: java } = definitions
+  return Boolean(
+    version &&
+    isTextBrickField(version) &&
+    java &&
+    isTextBrickField(java) &&
+    // The pair shows both answers; a sensitive one keeps its own field.
+    !brickInputSensitive(version) &&
+    !brickInputSensitive(java)
   )
 }
 
@@ -41,55 +64,50 @@ export function updateBrickVariable(
 }
 
 export function defaultBrickVariables(
-  brick: Brick
+  brick: Pick<Brick, "inputs">
 ): Record<string, BrickVariableValue> {
-  const variables = Object.fromEntries(
-    Object.entries(brick.variables).flatMap(([name, definition]) =>
-      definition.default === undefined ? [] : [[name, definition.default]]
-    )
-  )
-  return withRecommendedMinecraftJava(
-    brick.metadata.id,
-    brick.variables,
-    variables
-  )
-}
-
-export function defaultProvisioningBrickVariables(
-  brick: Brick
-): Record<string, BrickVariableValue> {
-  const variables = defaultBrickVariables(brick)
-  // Relay resolves the newest Velocity snapshot and its Java version at creation.
-  if (brick.metadata.id === "velocity") {
-    delete variables.version
-    delete variables.java_version
-  }
-  return variables
+  return brickAnswers(brickInputs(brick), {})
 }
 
 export function hydrateBrickVariables(
-  brick: Brick,
+  brick: Pick<Brick, "inputs">,
   stored: Readonly<Record<string, BrickVariableValue>> | null | undefined
 ): Record<string, BrickVariableValue> {
-  const variables = {
-    ...defaultBrickVariables(brick),
-    ...stored,
-  }
-  return stored && Object.hasOwn(stored, "java_version")
-    ? variables
-    : withRecommendedMinecraftJava(
-        brick.metadata.id,
-        brick.variables,
-        variables
-      )
+  const inputs = brickInputs(brick)
+  // An answer to an input this Brick doesn't have, as one kept from another
+  // Brick, would be refused.
+  const answered = Object.fromEntries(
+    Object.entries(stored ?? {}).filter(([name]) =>
+      inputs.some((input) => input.key === name)
+    )
+  )
+  // What was answered stays; what wasn't follows the answers there are.
+  return brickAnswers(inputs, answered)
+}
+
+/**
+ * Answers after `changed` was answered: everything that follows it, directly
+ * or through another input, is worked out again. Nothing else moves.
+ *
+ * Cleared, `changed` is worked out again too: its Relay gives an input
+ * nobody answered its rule or its default, so the form holds that, and what
+ * follows it follows the value the server will run with.
+ */
+export function withBrickVariableChanged(
+  definitions: BrickFields,
+  variables: Readonly<Record<string, BrickVariableValue>>,
+  changed: string
+): Record<string, BrickVariableValue> {
+  const inputs = Object.values(definitions)
+  const worked = brickFollowers(inputs, changed)
+  if (!Object.hasOwn(variables, changed)) worked.add(changed)
+  return brickAnswers(inputs, variables, worked)
 }
 
 const PUBLISHED_JAVA_EMBERS = ["11", "17", "21", "25"] as const
 
-function supportedJavaVersions(
-  definition: Brick["variables"][string]
-): Array<string> {
-  if (definition.type !== "string") return []
+function supportedJavaVersions(definition: BrickInput): Array<string> {
+  if (!isTextBrickField(definition)) return []
   const candidates = definition.options?.length
     ? definition.options.map(String)
     : PUBLISHED_JAVA_EMBERS
@@ -99,7 +117,7 @@ function supportedJavaVersions(
 }
 
 export function javaVersionSelectOptions(
-  definition: Brick["variables"][string],
+  definition: BrickInput,
   current?: string
 ): Array<string> {
   const listed = supportedJavaVersions(definition)
@@ -121,86 +139,13 @@ export function javaVersionSelectOptions(
   return options
 }
 
-export function recommendedSupportedJavaVersion(
-  brickId: string,
-  definition: Brick["variables"][string],
-  minecraftVersion: string
-): string | null {
-  const supported = javaVersionSelectOptions(definition)
-  if (supported.length === 0) return null
-  const required = requiredMinecraftJavaVersion(brickId, minecraftVersion)
-  if (required && supported.includes(required)) return required
-  if (required && stringVariableAllows(definition, required)) return required
-  const fallback =
-    definition.default === undefined ? null : String(definition.default)
-  if (fallback && stringVariableAllows(definition, fallback)) return fallback
-  return supported.at(-1) ?? null
-}
-
-export function withRecommendedMinecraftJava(
-  brickId: string,
-  definitions: Brick["variables"],
-  variables: Readonly<Record<string, BrickVariableValue>>
-): Record<string, BrickVariableValue> {
-  const updated = { ...variables }
-  const version = variables.version
-  const javaVersion =
-    typeof version === "string"
-      ? requiredMinecraftJavaVersion(brickId, version)
-      : null
-  const javaDefinition = definitions.java_version
-  if (
-    javaVersion &&
-    javaDefinition &&
-    stringVariableAllows(javaDefinition, javaVersion)
-  ) {
-    updated.java_version = javaVersion
-  }
-  return updated
-}
-
-export function unavailableMinecraftJavaVersion(
-  brickId: string,
-  definitions: Brick["variables"],
-  version: string,
-  selectedJavaVersion?: BrickVariableValue
-): string | null {
-  const javaVersion =
-    typeof selectedJavaVersion === "string"
-      ? selectedJavaVersion
-      : requiredMinecraftJavaVersion(brickId, version)
-  const javaDefinition = definitions.java_version
-  if (!javaVersion || javaDefinition?.type !== "string") return null
-  return stringVariableAllows(javaDefinition, javaVersion) ? null : javaVersion
-}
-
 export function stringVariableAllows(
-  definition: Brick["variables"][string],
+  definition: BrickInput,
   value: string
 ): boolean {
-  if (definition.type !== "string") return false
-  if (
-    definition.options &&
-    !definition.options.some((option) => option === value)
-  ) {
-    return false
-  }
-  if (
-    definition.rules?.minLength !== undefined &&
-    value.length < definition.rules.minLength
-  ) {
-    return false
-  }
-  if (
-    definition.rules?.maxLength !== undefined &&
-    value.length > definition.rules.maxLength
-  ) {
-    return false
-  }
-  const patternSource = definition.rules?.pattern
-  if (!patternSource) return true
-  const pattern = Result.try(() => new RegExp(patternSource, "u"))
-  return Result.isSuccess(pattern) && pattern.success.test(value)
+  return (
+    isTextBrickField(definition) && brickInputProblem(definition, value) === null
+  )
 }
 
 export function defaultBrickInstanceName(brick: Brick): string {
@@ -210,56 +155,19 @@ export function defaultBrickInstanceName(brick: Brick): string {
   return `${brickName}${BRICK_INSTANCE_NAME_SUFFIX}`
 }
 
-export function latestStableVersion(
-  versions: ReadonlyArray<string>
-): string | null {
-  const stableVersions = versions.flatMap((version) => {
-    const trimmed = version.trim()
-    return /^\d+(?:\.\d+)*$/u.test(trimmed) ? [trimmed] : []
-  })
-
-  if (stableVersions.length === 0) return null
-
-  return [...stableVersions].sort(compareNumericVersions)[0] ?? null
-}
-
-function compareNumericVersions(left: string, right: string): number {
-  const leftParts = left.split(".").map(Number)
-  const rightParts = right.split(".").map(Number)
-  const length = Math.max(leftParts.length, rightParts.length)
-
-  for (let index = 0; index < length; index += 1) {
-    const leftPart = leftParts[index] ?? 0
-    const rightPart = rightParts[index] ?? 0
-    if (leftPart !== rightPart) return rightPart - leftPart
-  }
-
-  return rightParts.length - leftParts.length
-}
-
 function interpolateBrickTemplate(
   template: string,
   values: Readonly<Record<string, BrickVariableValue>>,
   brick?: { id: string; name?: string }
 ): string {
-  return template.replace(
-    /\{\{\s*(variables\.([a-z][a-z0-9_]{0,47})|brick\.(id|name))\s*\}\}/gu,
-    (
-      match,
-      _expression: string,
-      variable: string | undefined,
-      field: string | undefined
-    ) => {
-      if (variable) {
-        if (!Object.hasOwn(values, variable)) return match
-        const value = values[variable]
-        return value === undefined ? match : String(value)
-      }
-      if (field === "name") return brick?.name ?? match
-      if (field === "id") return brick?.id ?? match
-      return match
-    }
-  )
+  // What isn't answered yet stays as it is written.
+  return fillBrickTemplate(template, (name) => {
+    if (name === "brick.id") return brick?.id
+    if (name === "brick.name") return brick?.name
+    if (!Object.hasOwn(values, name)) return undefined
+    const value = values[name]
+    return value === undefined ? undefined : String(value)
+  })
 }
 
 export function interpolateBrickEnvironment(

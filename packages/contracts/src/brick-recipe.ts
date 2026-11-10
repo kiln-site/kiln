@@ -615,82 +615,107 @@ function checkInstance(
   checkTemplates(recipe.database, known, [...path, "database"], issue)
 }
 
-export const brickRecipeV2Schema = z
-  .strictObject({
-    format: z.literal(BRICK_FORMAT),
-    kind: z.enum(brickKinds),
-    metadata: brickMetadataSchema,
-    inputs: inputsSchema.optional(),
-    ...instanceShape,
-    group: brickGroupSchema.optional(),
-  })
-  .superRefine((recipe, context) => {
-    const issue: Issue = (path, message) =>
-      context.addIssue({ code: "custom", message, path: [...path] })
-    if (recipe.kind !== "group") {
-      if (recipe.group !== undefined) {
-        issue(["group"], "Only a group has members")
-      }
-      checkInstance(
-        { ...recipe, kind: recipe.kind },
-        brickTemplateNames,
-        [],
+const recipeShape = {
+  format: z.literal(BRICK_FORMAT),
+  kind: z.enum(brickKinds),
+  metadata: brickMetadataSchema,
+  inputs: inputsSchema.optional(),
+  ...instanceShape,
+  group: brickGroupSchema.optional(),
+}
+
+function checkRecipe(
+  recipe: z.infer<z.ZodObject<typeof recipeShape>>,
+  context: z.RefinementCtx
+): void {
+  const issue: Issue = (path, message) =>
+    context.addIssue({ code: "custom", message, path: [...path] })
+  if (recipe.kind !== "group") {
+    if (recipe.group !== undefined) {
+      issue(["group"], "Only a group has members")
+    }
+    checkInstance(
+      { ...recipe, kind: recipe.kind },
+      brickTemplateNames,
+      [],
+      issue
+    )
+    return
+  }
+  for (const section of [
+    "type",
+    "deploy",
+    "game-server",
+    "database",
+    "minecraft",
+  ] as const) {
+    if (recipe[section] !== undefined) {
+      issue([section], "A group runs nothing itself; its members do")
+    }
+  }
+  const inputs = recipe.inputs ?? []
+  checkInputs(inputs, ["inputs"], issue)
+  if (!recipe.group) {
+    issue(["group"], "A group lists its members")
+    return
+  }
+  const groupTemplates = [
+    ...brickTemplateNames,
+    ...inputs.map((input) => input.key),
+  ]
+  const members = Object.keys(recipe.group.members)
+  for (const [name, member] of Object.entries(recipe.group.members)) {
+    const path = ["group", "members", name]
+    if ("brick" in member) {
+      checkTemplates(
+        member.inputs,
+        new Set(groupTemplates),
+        [...path, "inputs"],
         issue
       )
-      return
+    } else {
+      // Written here, it takes the group's inputs: it has none of its own.
+      checkInstance({ ...member, inputs }, brickTemplateNames, path, issue)
     }
-    for (const section of [
-      "type",
-      "deploy",
-      "game-server",
-      "database",
-      "minecraft",
-    ] as const) {
-      if (recipe[section] !== undefined) {
-        issue([section], "A group runs nothing itself; its members do")
+    for (const [target, variables] of Object.entries(member.connect ?? {})) {
+      const connectPath = [...path, "connect", target]
+      if (target === name) {
+        issue(connectPath, "A member can't connect to itself")
+      } else if (!members.includes(target)) {
+        issue(connectPath, `No member is named ${target}`)
       }
+      checkTemplates(
+        variables,
+        new Set([...groupTemplates, ...brickConnectionTemplateNames]),
+        connectPath,
+        issue
+      )
     }
-    const inputs = recipe.inputs ?? []
-    checkInputs(inputs, ["inputs"], issue)
-    if (!recipe.group) {
-      issue(["group"], "A group lists its members")
-      return
-    }
-    const groupTemplates = [
-      ...brickTemplateNames,
-      ...inputs.map((input) => input.key),
-    ]
-    const members = Object.keys(recipe.group.members)
-    for (const [name, member] of Object.entries(recipe.group.members)) {
-      const path = ["group", "members", name]
-      if ("brick" in member) {
-        checkTemplates(
-          member.inputs,
-          new Set(groupTemplates),
-          [...path, "inputs"],
-          issue
-        )
-      } else {
-        // Written here, it takes the group's inputs: it has none of its own.
-        checkInstance({ ...member, inputs }, brickTemplateNames, path, issue)
-      }
-      for (const [target, variables] of Object.entries(member.connect ?? {})) {
-        const connectPath = [...path, "connect", target]
-        if (target === name) {
-          issue(connectPath, "A member can't connect to itself")
-        } else if (!members.includes(target)) {
-          issue(connectPath, `No member is named ${target}`)
-        }
-        checkTemplates(
-          variables,
-          new Set([...groupTemplates, ...brickConnectionTemplateNames]),
-          connectPath,
-          issue
-        )
-      }
-    }
+  }
+}
+
+export const brickRecipeSchema = z
+  .strictObject(recipeShape)
+  .superRefine(checkRecipe)
+export type BrickRecipe = z.infer<typeof brickRecipeSchema>
+
+export const brickSourceSchema = z.string().trim().url().max(2_048)
+
+/**
+ * A recipe with where it was read from, and its icon as Kiln snapshotted it
+ * when that was an SVG mark.
+ */
+export const brickSchema = z
+  .strictObject({
+    ...recipeShape,
+    iconSvg: z
+      .string()
+      .max(64 * 1024)
+      .optional(),
+    source: brickSourceSchema,
   })
-export type BrickRecipeV2 = z.infer<typeof brickRecipeV2Schema>
+  .superRefine(checkRecipe)
+export type Brick = z.infer<typeof brickSchema>
 
 /** How a port is reached when it doesn't say. */
 export const brickDefaultExpose = {
@@ -802,6 +827,18 @@ function ruleApplies(rule: BrickSuggestRule, value: BrickInputValue): boolean {
   return true
 }
 
+/** The first of an input's `suggest` rules that applies to these answers. */
+function appliedSuggestRule(
+  input: BrickInput,
+  values: Readonly<Record<string, BrickInputValue>>
+): BrickSuggestRule | undefined {
+  return input.suggest?.find((rule) => {
+    if (!Object.hasOwn(values, rule.when)) return false
+    const value = values[rule.when]
+    return value !== undefined && ruleApplies(rule, value)
+  })
+}
+
 /**
  * The value an input's `suggest` rules give for the other answers: the first
  * rule that applies. Undefined when it has no rules or none applies, which
@@ -811,10 +848,202 @@ export function brickSuggestedValue(
   input: BrickInput,
   values: Readonly<Record<string, BrickInputValue>>
 ): BrickInputValue | undefined {
-  for (const rule of input.suggest ?? []) {
-    if (!Object.hasOwn(values, rule.when)) continue
-    const value = values[rule.when]
-    if (value !== undefined && ruleApplies(rule, value)) return rule.value
+  return appliedSuggestRule(input, values)?.value
+}
+
+/**
+ * Every input's answer. One that was given stands as it is. Any other is
+ * the first of its `suggest` rules that applies to the answers there are,
+ * else its own default, else nothing.
+ *
+ * Inputs can follow each other in any order of the form, and through one
+ * another, so they are worked out until nothing changes. The format refuses
+ * rules that go round in a circle, so that always ends; the pass per input
+ * is only a bound.
+ *
+ * It fills in what the rules say, allowed or not: `brickAnswersProblem`
+ * says what is wrong with the result.
+ *
+ * Without `worked`, every input that wasn't given an answer is worked out.
+ * With it, only those are, and the rest stay as given, unanswered included:
+ * a form uses that when one answer changes (`brickFollowers`).
+ */
+export function brickAnswers(
+  inputs: ReadonlyArray<BrickInput>,
+  given: Readonly<Record<string, BrickInputValue>>,
+  worked?: ReadonlySet<string>
+): Record<string, BrickInputValue> {
+  const answers: Record<string, BrickInputValue> = {}
+  const working = inputs.filter((input) =>
+    worked ? worked.has(input.key) : !Object.hasOwn(given, input.key)
+  )
+  for (const input of inputs) {
+    const value = working.includes(input)
+      ? input.default
+      : Object.hasOwn(given, input.key)
+        ? given[input.key]
+        : undefined
+    if (value !== undefined) answers[input.key] = value
   }
-  return undefined
+  for (let pass = 0; pass <= working.length; pass += 1) {
+    let changed = false
+    for (const input of working) {
+      const next = brickSuggestedValue(input, answers) ?? input.default
+      if (Object.is(next, answers[input.key])) continue
+      if (next === undefined) delete answers[input.key]
+      else answers[input.key] = next
+      changed = true
+    }
+    if (!changed) break
+  }
+  return answers
+}
+
+/**
+ * The inputs that follow `changed`, directly or through another input:
+ * the ones to work out again when its answer changes.
+ */
+export function brickFollowers(
+  inputs: ReadonlyArray<BrickInput>,
+  changed: string
+): Set<string> {
+  const followers = new Set<string>()
+  const sources = new Set([changed])
+  for (let grew = true; grew;) {
+    grew = false
+    for (const input of inputs) {
+      if (input.key === changed || followers.has(input.key)) continue
+      if (!input.suggest?.some((rule) => sources.has(rule.when))) continue
+      followers.add(input.key)
+      sources.add(input.key)
+      grew = true
+    }
+  }
+  return followers
+}
+
+/** Whether an input's answer is kept out of what Kiln shows: a secret's is. */
+export function brickInputSensitive(input: BrickInput): boolean {
+  return input.type === "secret" || input.sensitive === true
+}
+
+export interface BrickAnswerProblem {
+  readonly code: "missing" | "invalid" | "unsupported_suggestion"
+  readonly key: string
+  /** For whoever is installing it. Never holds a sensitive input's value. */
+  readonly message: string
+}
+
+/**
+ * The first thing wrong with a set of answers, or null: a required input
+ * with none, an answer its input refuses, or a value that an input's rules
+ * asked for and the input itself doesn't offer. That last one is refused
+ * and never replaced, so nothing runs on a value nobody chose.
+ */
+export function brickAnswersProblem(
+  inputs: ReadonlyArray<BrickInput>,
+  answers: Readonly<Record<string, BrickInputValue>>
+): BrickAnswerProblem | null {
+  for (const input of inputs) {
+    const { key } = input
+    if (!Object.hasOwn(answers, key) || answers[key] === undefined) {
+      // Kiln makes a generated secret when it installs the Brick.
+      const made = input.type === "secret" && input.generate === true
+      if (brickInputRequired(input) && !made) {
+        return { code: "missing", key, message: `${input.label} is required` }
+      }
+      continue
+    }
+    const value = answers[key]
+    const problem = brickInputProblem(input, value)
+    if (!problem) continue
+    // Refused because its rules asked for it, when that is where it is from.
+    const rule = appliedSuggestRule(input, answers)
+    const source =
+      rule && Object.is(rule.value, value)
+        ? inputs.find((other) => other.key === rule.when)
+        : undefined
+    if (!source) {
+      return { code: "invalid", key, message: `${input.label} ${problem}` }
+    }
+    const hidden = brickInputSensitive(input) || brickInputSensitive(source)
+    return {
+      code: "unsupported_suggestion",
+      key,
+      message: hidden
+        ? `${source.label} needs a ${input.label} this Brick doesn't offer`
+        : `${source.label} ${String(answers[source.key])} needs ${input.label} ${String(value)}, which this Brick doesn't offer`,
+    }
+  }
+  return null
+}
+
+/**
+ * A recipe's inputs as they may be shown: a sensitive input's default,
+ * options and suggested values are replaced, since a recipe can carry a real
+ * value in any of them.
+ */
+export function redactedBrickInputs(
+  inputs: ReadonlyArray<BrickInput>
+): Array<BrickInput> {
+  const redacted = "[redacted]"
+  return inputs.map((input) =>
+    brickInputSensitive(input)
+      ? {
+          ...input,
+          ...(input.default === undefined ? {} : { default: redacted }),
+          ...(input.options === undefined
+            ? {}
+            : { options: input.options.map(() => redacted) }),
+          ...(input.suggest === undefined
+            ? {}
+            : {
+                suggest: input.suggest.map((rule) => ({
+                  ...rule,
+                  value: redacted,
+                })),
+              }),
+        }
+      : input
+  )
+}
+
+/** A recipe's install form, in order. */
+export function brickInputs(
+  recipe: Pick<BrickRecipe, "inputs">
+): ReadonlyArray<BrickInput> {
+  return recipe.inputs ?? []
+}
+
+/** The game a game server Brick runs: its own name when it names none. */
+export function brickGame(
+  recipe: Pick<BrickRecipe, "game-server" | "metadata">
+): string {
+  return recipe["game-server"]?.game ?? recipe.metadata.name
+}
+
+/**
+ * The input a recipe's memory limit comes from, when it is one input's
+ * answer and nothing else, as recipes converted from v1 have. Hearth's own
+ * limit stands in for that input, which stays out of the form.
+ */
+export function brickMemoryInput(
+  recipe: Pick<BrickRecipe, "deploy">
+): string | null {
+  const memory = recipe.deploy?.memory
+  return memory === undefined ? null : brickTemplateInput(memory)
+}
+
+/**
+ * A template with each `{{ name }}` replaced by what `lookup` gives for it.
+ * A name it gives nothing for is left as written.
+ */
+export function fillBrickTemplate(
+  template: string,
+  lookup: (name: string) => string | undefined
+): string {
+  return template.replace(
+    templateExpression,
+    (match, name: string) => lookup(name) ?? match
+  )
 }

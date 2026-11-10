@@ -1,5 +1,8 @@
 # `kiln.brick/v1`
 
+> Retired. Kiln writes [`kiln.brick/v2`](brick-v2.md) and converts a v1
+> recipe when it reads one. This page describes what such a recipe says.
+
 The v1 recipe is a strict YAML or JSON document. Unknown keys are rejected.
 This prevents a misspelling from silently producing a less secure container.
 
@@ -109,4 +112,4 @@ a local `file:` catalog for development or air-gapped installations.
 
 ## Compatibility
 
-Relay accepts only `format: kiln.brick/v1`.
+A Relay reads `kiln.brick/v1` by converting it to `kiln.brick/v2`.

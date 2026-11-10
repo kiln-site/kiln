@@ -30,7 +30,6 @@ import {
 } from "@/components/brick-selector"
 import {
   defaultBrickInstanceName,
-  defaultProvisioningBrickVariables,
 } from "@/lib/brick-variables"
 import { randomIdempotencyKey } from "@/lib/idempotency-key"
 import { relayFleetInstance } from "@/lib/relay-fleet"
@@ -299,10 +298,10 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
     const formData = new FormData(event.currentTarget)
     const submittedName = formData.get("name")
     const name = typeof submittedName === "string" ? submittedName.trim() : ""
-    const variables =
-      selection.kind === "catalog"
-        ? defaultProvisioningBrickVariables(selection.brick)
-        : {}
+    // Nothing is answered here, so nothing is sent as an answer: the Relay
+    // works out each input from its rules and defaults, and refuses a value
+    // those ask for that the Brick doesn't offer.
+    const variables = {}
     const provisioningInput = {
       diskLimitBytes: DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
       name: name || selectionName || "New server",
@@ -482,7 +481,7 @@ function relaySupportsSelection(
   selection: BrickSelection | null
 ): boolean {
   if (selection?.kind !== "catalog" || !relay.nodeArch) return true
-  const architectures = selection.brick.constraints.architectures
+  const architectures = selection.brick.metadata.platforms
   if (!architectures || architectures.length === 0) return true
   const relayArchitecture = normalizeArchitecture(relay.nodeArch)
   return architectures.some(

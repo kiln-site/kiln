@@ -84,33 +84,27 @@ const principal: CliPrincipal = {
     twoFactorEnabled: false,
   },
 }
+// Its memory limit is one input's answer, as a recipe converted from
+// kiln.brick/v1 has it.
 const recipe = {
   ...builtinTailscaleBrick,
-  variables: {
-    memory: {
-      type: "string" as const,
+  inputs: [
+    {
+      key: "memory",
       label: "Memory",
-      description: "Memory",
-      sensitive: false,
-      required: false,
+      type: "text" as const,
+      optional: true,
       default: "1G",
     },
-    message: {
-      type: "string" as const,
+    {
+      key: "message",
       label: "Message",
-      description: "Message",
-      sensitive: false,
-      required: false,
+      type: "text" as const,
+      optional: true,
       default: "hello",
     },
-  },
-  runtime: {
-    ...builtinTailscaleBrick.runtime,
-    resources: {
-      ...builtinTailscaleBrick.runtime.resources,
-      memory: "{{ variables.memory }}",
-    },
-  },
+  ],
+  deploy: { ...builtinTailscaleBrick.deploy!, memory: "{{ memory }}" },
 }
 const instance = relayInstanceSchema.parse({
   id: instanceId,

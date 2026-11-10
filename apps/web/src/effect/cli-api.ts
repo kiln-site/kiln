@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 
 import type { CliPrincipal } from "@/effect/cli-access"
 import {
+  brickMemoryInput,
   brickSchema,
   type BrickRecipe,
   cliActivityResponseSchema,
@@ -913,7 +914,7 @@ export const updateCliServerStartupEffect = Effect.fn(
         instance.variables ?? {},
         variables
       )
-    const memoryVariable = brickMemoryVariable(nextRecipe)
+    const memoryVariable = brickMemoryInput(nextRecipe)
     const legacyMemory =
       memoryVariable && Object.hasOwn(input.variables, memoryVariable)
         ? dockerMemoryBytes(String(input.variables[memoryVariable]))
@@ -1752,15 +1753,6 @@ function cliResourceLimitsInput(
         ? {}
         : { memoryBytes }),
   }
-}
-
-/** The Brick variable its memory limit comes from, as in `{{ variables.memory }}`. */
-function brickMemoryVariable(recipe: BrickRecipe): string | null {
-  return (
-    recipe.runtime.resources.memory.match(
-      /^\{\{\s*variables\.([a-z][a-z0-9_]{0,47})\s*\}\}$/u
-    )?.[1] ?? null
-  )
 }
 
 function cliServerMetadata(instance: z.infer<typeof relayInstanceSchema>) {

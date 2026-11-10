@@ -9,7 +9,7 @@ import {
   brickIdExceedsRecommendedLength,
   kilnDefaultEmberImage,
   brickCatalogDocumentSchema,
-  brickRecipeSchema,
+  readBrickRecipe,
   relayCatalogSchema,
   resolveKilnGitRepository,
   validateBrickIconSvg,
@@ -96,7 +96,8 @@ export async function loadBrickCatalogSource(
     FETCH_CONCURRENCY,
     async (reference): Promise<Brick> => {
       const source = new URL(reference, resolvedSource.catalogUrl)
-      const parsedRecipe = brickRecipeSchema.parse(
+      // A kiln.brick/v1 recipe is read as the v2 Brick that runs the same.
+      const read = readBrickRecipe(
         parseYaml(
           await readDocument(
             source,
@@ -107,22 +108,39 @@ export async function loadBrickCatalogSource(
           source
         )
       )
-      if (options.distributionRepository) {
-        parsedRecipe.runtime.image = kilnDefaultEmberImage(
-          parsedRecipe.runtime.image,
-          options.distributionRepository
+      if (!read.success) {
+        throw new Error(
+          `${source.href}: ${read.error.issues
+            .slice(0, 4)
+            .map(
+              (issue) => `${issue.path.join(".") || "recipe"}: ${issue.message}`
+            )
+            .join("; ")}`
         )
       }
+      const parsedRecipe: BrickRecipe =
+        options.distributionRepository && read.data.deploy?.type === "image"
+          ? {
+              ...read.data,
+              deploy: {
+                ...read.data.deploy,
+                image: kilnDefaultEmberImage(
+                  read.data.deploy.image,
+                  options.distributionRepository
+                ),
+              },
+            }
+          : read.data
       const recipe = resolveRecipeIconSource(
         parsedRecipe,
         source,
         options.allowFile === true
       )
-      validateRecipeSemantics(recipe, source)
       return { ...recipe, source: source.href }
     }
   )
-  const bricks = loadedBricks
+  // Game servers are the kind Kiln installs from a Brick so far.
+  const bricks = loadedBricks.filter((brick) => brick.kind === "game-server")
   const ids = new Set<string>()
   for (const brick of bricks) {
     if (ids.has(brick.metadata.id)) {
@@ -574,45 +592,6 @@ function readHttpsDocument(
     )
     request.once("error", rejectDocument)
   })
-}
-
-function validateRecipeSemantics(recipe: BrickRecipe, source: URL): void {
-  if (
-    recipe.network.ports.filter(
-      (port) => port.name === recipe.network.primaryPort
-    ).length !== 1
-  ) {
-    throw new Error(
-      `${source.href}: network.primaryPort must name exactly one declared port`
-    )
-  }
-  const portNames = new Set<string>()
-  for (const port of recipe.network.ports) {
-    if (portNames.has(port.name)) {
-      throw new Error(`${source.href}: duplicate network port ${port.name}`)
-    }
-    portNames.add(port.name)
-  }
-  for (const [name, definition] of Object.entries(recipe.variables)) {
-    if (
-      definition.default !== undefined &&
-      typeof definition.default !== definition.type
-    ) {
-      throw new Error(`${source.href}: ${name}.default has the wrong type`)
-    }
-    if (
-      definition.options?.some((option) => typeof option !== definition.type)
-    ) {
-      throw new Error(`${source.href}: ${name}.options has the wrong type`)
-    }
-    const pattern = definition.rules?.pattern
-    if (pattern) {
-      const compiled = Result.try(() => new RegExp(pattern, "u"))
-      if (Result.isFailure(compiled)) {
-        throw new Error(`${source.href}: ${name}.rules.pattern is invalid`)
-      }
-    }
-  }
 }
 
 async function mapConcurrent<TInput, TResult>(

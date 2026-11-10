@@ -2,16 +2,18 @@ import type { z } from "zod"
 
 import {
   BRICK_FORMAT,
-  brickRecipeV2Schema,
+  brickRecipeSchema,
+  brickSchema,
+  type Brick,
   type BrickInput,
   type BrickPort,
-  type BrickRecipeV2,
+  type BrickRecipe,
   type BrickSuggestRule,
 } from "./brick-recipe.js"
 import {
-  brickRecipeSchema,
-  type BrickRecipe,
-  type BrickVariable,
+  brickRecipeV1Schema,
+  type BrickRecipeV1,
+  type BrickVariableV1,
 } from "./brick-v1.js"
 
 /**
@@ -20,18 +22,18 @@ import {
  * reads a recipe reads it through here, so nothing else knows v1.
  */
 export type BrickRecipeRead =
-  | { readonly success: true; readonly data: BrickRecipeV2 }
+  | { readonly success: true; readonly data: BrickRecipe }
   | { readonly success: false; readonly error: z.ZodError }
 
 export function readBrickRecipe(document: unknown): BrickRecipeRead {
   if (documentFormat(document) !== "kiln.brick/v1") {
-    return brickRecipeV2Schema.safeParse(document)
+    return brickRecipeSchema.safeParse(document)
   }
-  const v1 = brickRecipeSchema.safeParse(document)
+  const v1 = brickRecipeV1Schema.safeParse(document)
   if (!v1.success) return v1
   // A v1 recipe that says something v2 can't is refused as v2 would refuse
   // it, with the converted recipe's own paths.
-  return brickRecipeV2Schema.safeParse(convertedFromV1(v1.data))
+  return brickRecipeSchema.safeParse(convertedFromV1(v1.data))
 }
 
 function documentFormat(document: unknown): unknown {
@@ -41,8 +43,8 @@ function documentFormat(document: unknown): unknown {
 }
 
 /** A v1 recipe as the v2 recipe that runs the same thing. */
-export function brickRecipeFromV1(recipe: BrickRecipe): BrickRecipeV2 {
-  return brickRecipeV2Schema.parse(convertedFromV1(recipe))
+export function brickRecipeFromV1(recipe: BrickRecipeV1): BrickRecipe {
+  return brickRecipeSchema.parse(convertedFromV1(recipe))
 }
 
 // Which Java each release needs was written into Kiln for these four Bricks,
@@ -87,7 +89,7 @@ function template(value: string): string {
 
 // An input that refuses exactly the answers its variable refused: v1 checked
 // an answer's type, then its options, then the rules for that type.
-function inputFromVariable(key: string, variable: BrickVariable): BrickInput {
+function inputFromVariable(key: string, variable: BrickVariableV1): BrickInput {
   const rules = variable.rules
   const limits =
     variable.type === "string"
@@ -128,7 +130,7 @@ function inputFromVariable(key: string, variable: BrickVariable): BrickInput {
   }
 }
 
-function convertedFromV1(recipe: BrickRecipe): unknown {
+function convertedFromV1(recipe: BrickRecipeV1): unknown {
   const { metadata, runtime, network } = recipe
   const minecraft = network.mode === "minecraft-backend"
   const javaRules =
@@ -210,4 +212,27 @@ function convertedFromV1(recipe: BrickRecipe): unknown {
       ? { minecraft: { latestVersion: "velocity" } }
       : {}),
   }
+}
+
+export type BrickRead =
+  | { readonly success: true; readonly data: Brick }
+  | { readonly success: false; readonly error: z.ZodError }
+
+/**
+ * Reading a Brick as Hearth and a Relay hand it around: a recipe with its
+ * `source`, and its icon when one was snapshotted. One stored while recipes
+ * were v1 is converted.
+ */
+export function readBrick(document: unknown): BrickRead {
+  if (documentFormat(document) !== "kiln.brick/v1") {
+    return brickSchema.safeParse(document)
+  }
+  const { iconSvg, source, ...recipe } = document as Record<string, unknown>
+  const read = readBrickRecipe(recipe)
+  if (!read.success) return read
+  return brickSchema.safeParse({
+    ...read.data,
+    ...(iconSvg === undefined ? {} : { iconSvg }),
+    source,
+  })
 }

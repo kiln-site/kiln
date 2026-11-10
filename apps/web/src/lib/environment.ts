@@ -77,7 +77,7 @@ function webUrl(value: string | undefined): URL | null {
 export function kilnBrickCatalogUrl(): string {
   return (
     process.env.KILN_BRICKS_CATALOG_URL?.trim() ||
-    kilnGitRepositoryRawUrl(kilnGitRepository(), "apps/bricks/catalog.yml")
+    kilnGitRepositoryRawUrl(kilnGitRepository(), "apps/bricks/bricks.yml")
   )
 }
 

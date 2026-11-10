@@ -11,7 +11,7 @@ import { brickIdSchema, brickInputValueSchema } from "./brick-recipe.js"
  */
 const brickVariableValueSchema = brickInputValueSchema
 
-export const brickVariableSchema = z
+export const brickVariableV1Schema = z
   .object({
     type: z.enum(["string", "number", "boolean"]),
     label: z.string().min(1).max(80),
@@ -45,7 +45,7 @@ export const brickConsoleSchema = z
   })
   .strict()
 
-export const brickRecipeSchema = z
+export const brickRecipeV1Schema = z
   .object({
     format: z.literal("kiln.brick/v1"),
     metadata: z
@@ -69,7 +69,7 @@ export const brickRecipeSchema = z
       .strict(),
     variables: z.record(
       z.string().regex(/^[a-z][a-z0-9_]{0,47}$/u),
-      brickVariableSchema
+      brickVariableV1Schema
     ),
     runtime: z
       .object({
@@ -137,6 +137,6 @@ export const brickRecipeSchema = z
   })
   .strict()
 
-export type BrickVariable = z.infer<typeof brickVariableSchema>
+export type BrickVariableV1 = z.infer<typeof brickVariableV1Schema>
 export type BrickReadiness = z.infer<typeof brickReadinessSchema>
-export type BrickRecipe = z.infer<typeof brickRecipeSchema>
+export type BrickRecipeV1 = z.infer<typeof brickRecipeV1Schema>

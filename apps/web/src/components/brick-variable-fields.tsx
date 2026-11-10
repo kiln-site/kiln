@@ -1,5 +1,10 @@
 import * as React from "react"
-import type { BrickVariable, BrickVariableValue } from "@workspace/contracts"
+import {
+  brickInputRequired,
+  brickInputSensitive,
+  type BrickInput,
+  type BrickVariableValue,
+} from "@workspace/contracts"
 
 import { Input } from "@workspace/ui/components/input"
 import {
@@ -11,7 +16,10 @@ import {
 } from "@workspace/ui/components/select"
 import { Textarea } from "@workspace/ui/components/textarea"
 
-import { usesLongStringBrickField } from "@/lib/brick-variables"
+import {
+  isTextBrickField,
+  usesLongStringBrickField,
+} from "@/lib/brick-variables"
 import { notALoginField } from "@/lib/not-a-login-field"
 
 const NOT_SET_SELECT_VALUE = "not-set"
@@ -28,12 +36,18 @@ export const BrickVariableField = React.memo(function BrickVariableField({
   description?: string
   disabled?: boolean
   name: string
-  definition: BrickVariable
+  definition: BrickInput
   value: BrickVariableValue | undefined
   onChange: (value: BrickVariableValue | undefined) => void
 }) {
   const labelId = React.useId()
-  const fieldDescription = description ?? definition.description
+  const fieldDescription = description ?? definition.help
+  const required = brickInputRequired(definition)
+  const number = definition.type === "number"
+  // A text's bounds are its length; a number's are its range.
+  const length = isTextBrickField(definition)
+    ? { maxLength: definition.max, minLength: definition.min }
+    : {}
 
   if (definition.type === "boolean") {
     return (
@@ -60,7 +74,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
   )
   const selectValue =
     value === undefined
-      ? definition.required
+      ? required
         ? ""
         : NOT_SET_SELECT_VALUE
       : selectedOptionIndex !== undefined && selectedOptionIndex >= 0
@@ -80,7 +94,7 @@ export const BrickVariableField = React.memo(function BrickVariableField({
           disabled={disabled}
           value={selectValue}
           onValueChange={(nextValue) => {
-            if (nextValue === NOT_SET_SELECT_VALUE && !definition.required) {
+            if (nextValue === NOT_SET_SELECT_VALUE && !required) {
               onChange(undefined)
               return
             }
@@ -93,17 +107,17 @@ export const BrickVariableField = React.memo(function BrickVariableField({
                 : definition.options?.[optionIndex]
             if (option !== undefined) onChange(option)
           }}
-          required={definition.required}
+          required={required}
         >
           <SelectTrigger
             aria-labelledby={labelId}
-            aria-required={definition.required}
+            aria-required={required}
             className="h-8 w-full overflow-hidden px-3 text-xs [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:truncate"
           >
             <SelectValue placeholder="Select an option" />
           </SelectTrigger>
           <SelectContent className="w-max max-w-(--radix-select-content-available-width) min-w-(--radix-select-trigger-width)">
-            {!definition.required ? (
+            {!required ? (
               <SelectItem
                 className="whitespace-nowrap"
                 value={NOT_SET_SELECT_VALUE}
@@ -130,9 +144,8 @@ export const BrickVariableField = React.memo(function BrickVariableField({
           value={value === undefined ? "" : String(value)}
           onBlur={(event) => onChange(event.currentTarget.value)}
           onChange={(event) => onChange(event.target.value)}
-          minLength={definition.rules?.minLength}
-          maxLength={definition.rules?.maxLength}
-          required={definition.required}
+          {...length}
+          required={required}
           className="min-h-24 bg-input/18 font-mono text-xs md:text-xs"
         />
       ) : (
@@ -141,39 +154,26 @@ export const BrickVariableField = React.memo(function BrickVariableField({
           disabled={disabled}
           aria-labelledby={labelId}
           type={
-            definition.sensitive
+            brickInputSensitive(definition)
               ? "password"
-              : definition.type === "number"
+              : number
                 ? "number"
                 : "text"
           }
           value={value === undefined ? "" : String(value)}
           onBlur={(event) => {
             const next = event.currentTarget.value
-            onChange(
-              definition.type === "number"
-                ? next === ""
-                  ? undefined
-                  : Number(next)
-                : next
-            )
+            onChange(number ? (next === "" ? undefined : Number(next)) : next)
           }}
           onChange={(event) => {
             const next = event.target.value
-            onChange(
-              definition.type === "number"
-                ? next === ""
-                  ? undefined
-                  : Number(next)
-                : next
-            )
+            onChange(number ? (next === "" ? undefined : Number(next)) : next)
           }}
-          pattern={definition.rules?.pattern}
-          min={definition.rules?.min}
-          max={definition.rules?.max}
-          minLength={definition.rules?.minLength}
-          maxLength={definition.rules?.maxLength}
-          required={definition.required}
+          pattern={definition.pattern}
+          min={number ? definition.min : undefined}
+          max={number ? definition.max : undefined}
+          {...length}
+          required={required}
         />
       )}
       <span className="type-meta block font-normal">{fieldDescription}</span>
