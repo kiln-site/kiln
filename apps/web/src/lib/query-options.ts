@@ -5,7 +5,6 @@ import {
 } from "@tanstack/react-query"
 import type { QueryClient } from "@tanstack/react-query"
 import type {
-  RelayPlatformTarget,
   RelayConsoleResource,
   RelayFileEntry,
   RelayInstance,
@@ -22,7 +21,7 @@ import {
   getUnfinishedRestores,
 } from "@/server/backups"
 import { getBackupStorage } from "@/server/backup-storage"
-import { getKilnPlatform, getKilnPlatformLogs } from "@/server/platform"
+import { getKilnPlatform } from "@/server/platform"
 import {
   getBrickCatalog,
   getBrickIconPresentations,
@@ -311,8 +310,6 @@ export const queryKeys = {
   tailscaleStacks: ["tailscale", "stacks"] as const,
   kilnPlatform: {
     all: ["kiln-platform"] as const,
-    logs: (relayId: string, role: RelayPlatformTarget) =>
-      ["kiln-platform", "logs", relayId, role] as const,
   },
   // The eligibility and latest-release reads sit under the overview, so
   // invalidating it after updates reads them again too.
@@ -1017,18 +1014,6 @@ export function kilnPlatformQueryOptions() {
     refetchInterval: 10_000,
     retry: false,
     staleTime: 5_000,
-  })
-}
-
-export function kilnPlatformLogsQueryOptions(
-  relayId: string,
-  role: RelayPlatformTarget
-) {
-  return queryOptions({
-    queryKey: queryKeys.kilnPlatform.logs(relayId, role),
-    queryFn: () => getKilnPlatformLogs({ data: { lines: 500, relayId, role } }),
-    retry: false,
-    staleTime: 0,
   })
 }
 

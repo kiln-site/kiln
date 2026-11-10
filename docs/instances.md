@@ -118,7 +118,9 @@ check, SRV records and the picker's grouping stand in for a type.
 
 1. Kill on every instance, with one rule for stopped and failed. Done.
 2. One power permission for every kind. Done.
-3. Remove unused Relay requests and checks for older Relays.
+3. Remove unused Relay requests and checks for older Relays. Done for four
+   requests and the resource limit checks; other checks for older Relays go
+   as their code is touched.
 4. The new Brick format, with the v1 converter and the official recipes.
 5. `kind` and `type` in place of the Brick ID and game name checks.
 6. One redeploy for game servers and Apps.

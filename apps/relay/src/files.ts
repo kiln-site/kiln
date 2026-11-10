@@ -64,7 +64,6 @@ import type {
   RelayFileSearchPageInput,
   RelayFileTree,
   RelayIconReadResult,
-  RelayLatestLog,
   RelaySaveFileInput,
 } from "@workspace/contracts"
 import {
@@ -93,7 +92,6 @@ import type { FilesystemCapacity } from "./relay-capacity.js"
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024
 const MAX_FINGERPRINT_BYTES = 8 * 1024 * 1024
-const MAX_LOG_SHARE_BYTES = 10 * 1024 * 1024
 const MAX_TREE_ITEMS = 5_000
 const MAX_TREE_DEPTH = 10
 const MAX_ARCHIVE_ITEMS = 50_000
@@ -776,43 +774,6 @@ export class FilesystemDriver {
       ),
       Effect.withSpan("relay.files.write")
     )
-  }
-
-  latestLog(instance: FileRoot) {
-    return Effect.gen({ self: this }, function* () {
-      const requestedPath = "logs/latest.log" as const
-      const path = yield* this.#existingFile(instance, requestedPath)
-      const metadata = yield* filesystemOperation("latestLog.stat", () =>
-        stat(path)
-      )
-      if (metadata.size > MAX_LOG_SHARE_BYTES) {
-        return yield* filesystemFailure(
-          "log_too_large",
-          "latestLog",
-          `latest.log exceeds the ${MAX_LOG_SHARE_BYTES} byte sharing limit`
-        )
-      }
-      const source = yield* filesystemOperation("latestLog.read", () =>
-        readFile(path)
-      )
-      const content = yield* Effect.try({
-        try: () => new TextDecoder("utf-8", { fatal: true }).decode(source),
-        catch: (cause) =>
-          makeFilesystemError(
-            "unsupported_file",
-            "latestLog.decode",
-            "latest.log is not valid UTF-8 text",
-            cause
-          ),
-      })
-
-      return {
-        instanceId: instance.id,
-        path: requestedPath,
-        content,
-        size: source.byteLength,
-      } satisfies RelayLatestLog
-    }).pipe(Effect.withSpan("relay.files.latestLog"))
   }
 
   withDownload<TResult, TError, TRequirements>(

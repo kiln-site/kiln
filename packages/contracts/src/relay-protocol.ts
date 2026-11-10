@@ -44,14 +44,6 @@ export const relayResourcesV1Feature = "relay-resources-v1"
 export const relayBackupFailureCodesV1Feature = "backup-failure-codes-v1"
 // The Relay answers `instance.files.put`, creating or replacing one file.
 export const relayFilePutV1Feature = "files-put-v1"
-// The Relay applies memory, CPU, and disk limits from a request's `limits`,
-// where `null` means no limit.
-export const relayResourceLimitsV1Feature = "resource-limits-v1"
-// The Relay answers `database.limits.write` and reports databases' limits.
-export const relayDatabaseLimitsV1Feature = "database-limits-v1"
-// The Relay applies app configs' `serviceLimits`, and
-// answers `app.limits.write`.
-export const relayAppLimitsV1Feature = "app-limits-v1"
 // The Relay provisions databases in the background through
 // `database.provision.*`, showing a placeholder until each one exists.
 export const relayDatabaseProvisioningV1Feature = "database-provisioning-v1"
@@ -183,7 +175,6 @@ export const relayControlOperations = [
   "relay.clients.update",
   "relay.clients.revoke",
   "relay.platform.read",
-  "relay.platform.logs",
   "relay.platform.action",
   "relay.platform.database.read",
   "relay.platform.database.write",
@@ -200,7 +191,6 @@ export const relayControlOperations = [
   "database.list",
   "database.inspect",
   "database.resources.read",
-  "database.create",
   "database.provision.prepare",
   "database.provision.claim",
   "database.provision.cancel",
@@ -222,7 +212,6 @@ export const relayControlOperations = [
   "database.terminal.restart",
   "app.list",
   "app.resources.read",
-  "app.create",
   "app.provision.prepare",
   "app.provision.claim",
   "app.provision.cancel",
@@ -286,7 +275,6 @@ export const relayControlOperations = [
   "instance.console.write",
   "instance.console.complete",
   "instance.logs.share",
-  "instance.logs.latest",
   "instance.deployment.read",
   "instance.network.ports.reserve",
   "instance.network.ports.release",
@@ -354,7 +342,6 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "instance.network.ports.write",
   "instance.network.routes.write",
   "instance.network.databases.remove",
-  "database.create",
   "database.provision.prepare",
   "database.provision.claim",
   "database.provision.cancel",
@@ -369,7 +356,6 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "database.data.write",
   "database.terminal.attach",
   "database.terminal.restart",
-  "app.create",
   "app.provision.prepare",
   "app.provision.claim",
   "app.provision.cancel",
@@ -429,7 +415,6 @@ export function relayControlOperationChanges(
     case "relay.clients.list":
     case "relay.platform.read":
     case "relay.installation.read":
-    case "relay.platform.logs":
     case "relay.platform.database.read":
     case "relay.security.targets":
     case "relay.security.inventory":
@@ -465,7 +450,6 @@ export function relayControlOperationChanges(
     case "instance.icon.read":
     case "instance.files.database.read":
     case "instance.console.history":
-    case "instance.logs.latest":
     case "instance.deployment.read":
     case "instance.network.routes.read":
     case "relay.terminal.attach":
@@ -530,7 +514,6 @@ export function relayControlOperationChanges(
     case "relay.platform.database.write":
     case "relay.installation.replace":
     case "browser.authorization.revise":
-    case "database.create":
     case "database.provision.prepare":
     case "database.provision.claim":
     case "database.provision.cancel":
@@ -542,7 +525,6 @@ export function relayControlOperationChanges(
     case "database.network.import":
     case "database.dump.import":
     case "database.data.write":
-    case "app.create":
     case "app.provision.prepare":
     case "app.provision.claim":
     case "app.provision.cancel":
@@ -674,10 +656,8 @@ export function relayControlDeadlineMs(
   if (operation === "resource.freeze") return 240_000
   // Waits its turn behind a restart in progress.
   if (operation === "instance.limits.write") return 240_000
-  if (operation === "database.create") return 360_000
   if (operation === "database.delete") return 180_000
   if (operation === "app.delete") return 180_000
-  if (operation === "app.create") return 60_000
   // Up to four registry lookups at a time, each up to 20 seconds; Hearth
   // sends at most 16 apps per request.
   if (operation === "app.image.check") return 120_000

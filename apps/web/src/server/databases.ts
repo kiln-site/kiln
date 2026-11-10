@@ -26,7 +26,6 @@ import {
   relayDatabaseTerminalWriteSchema,
   relayDatabaseContainerSchema,
   relayDatabaseImportFileSchema,
-  relayDatabaseLimitsV1Feature,
   relayManagedDatabaseSchema,
   resourceLimitsInputSchema,
 } from "@workspace/contracts"
@@ -346,10 +345,6 @@ const changeDatabaseLimits = resourceOperation({
   permission: () => "database.limits.write",
   run: async (user, data) => {
     const relay = await requiredRelay(data.relayId)
-    const { relayConnectionFeatures } = await import("@/lib/relay-connection")
-    if (!relayConnectionFeatures(relay.id).has(relayDatabaseLimitsV1Feature)) {
-      throw new Error("Update this Relay to set database limits")
-    }
     const database = relayManagedDatabaseSchema.parse(
       await databaseRpc(
         relay,

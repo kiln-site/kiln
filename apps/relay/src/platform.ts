@@ -1729,38 +1729,6 @@ export const externalPlatformPresent = Effect.fn(
   )
 })
 
-const MAX_LOG_LINE_CHARACTERS = 8_192
-
-export const platformLogs = Effect.fn("Relay.platform.logs")(function* (
-  context: PlatformReadContext,
-  role: RelayPlatformTarget,
-  lines: number
-) {
-  const { engine } = context
-  const container = yield* platformTargetContainer(context, role)
-  if (!container) {
-    return yield* new PlatformError({
-      reason:
-        role === "proxy"
-          ? "No Traefik runs in front of Hearth on this Relay's host"
-          : `Kiln's ${role} container isn't on this Relay's host`,
-    })
-  }
-  const collected: Array<string> = []
-  yield* engine.containerLogLines(
-    container.Id,
-    { tail: lines, timeout: 15_000, tty: Boolean(container.Config.Tty) },
-    (line) => {
-      collected.push(
-        line.length > MAX_LOG_LINE_CHARACTERS
-          ? `${line.slice(0, MAX_LOG_LINE_CHARACTERS)}…`
-          : line
-      )
-    }
-  )
-  return { lines: collected.slice(-lines), role }
-})
-
 // ----------------------------------------------------------------- actions
 
 /**

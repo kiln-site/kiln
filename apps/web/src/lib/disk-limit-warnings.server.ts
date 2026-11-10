@@ -1,7 +1,6 @@
 import { Effect, Option, Schedule } from "effect"
 import {
   relayManagedDatabaseSchema,
-  relayResourceLimitsV1Feature,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -14,7 +13,7 @@ import {
 } from "@/effect/notifications"
 import { promiseEffect } from "@/effect/promise"
 import { forkAppEffect } from "@/effect/runtime"
-import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { relayConnectionState, relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelaysEffect } from "@/lib/relay-registry"
 import { notificationAudienceEffect } from "@/lib/resource-audience.server"
 import type { ResourceScope } from "@/lib/resource-permissions"
@@ -51,7 +50,7 @@ export const warnDatabasesOverDiskLimitEffect = Effect.fn(
   const relays = (yield* listPersistedRelaysEffect()).filter(
     (relay) =>
       relay.enabled &&
-      relayConnectionFeatures(relay.id).has(relayResourceLimitsV1Feature)
+      relayConnectionState(relay.id).status === "authenticated"
   )
   for (const relay of relays) {
     const listed = yield* promiseEffect(() =>

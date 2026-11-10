@@ -2,8 +2,6 @@ import { createServerFn } from "@tanstack/react-start"
 import {
   relayIdSchema,
   relayPlatformActionInputSchema,
-  relayPlatformLogsInputSchema,
-  relayPlatformLogsSchema,
   relayPlatformStatusSchema,
   relayPlatformTargetSchema,
   relayPlatformTerminalClaimSchema,
@@ -43,21 +41,6 @@ export const getKilnPlatform = createServerFn({ method: "GET" }).handler(
     }
   }
 )
-
-export const getKilnPlatformLogs = createServerFn({ method: "GET" })
-  .validator(relayPlatformLogsInputSchema.extend({ relayId: relayIdSchema }))
-  .handler(async ({ data: { relayId, ...input } }) => {
-    const { platformRelay, requirePlatformAdministrator } =
-      await import("@/server/platform-access.server")
-    await requirePlatformAdministrator()
-    const [relay, { relayRpc }] = await Promise.all([
-      platformRelay(relayId),
-      import("@/lib/relay-connection"),
-    ])
-    return relayPlatformLogsSchema.parse(
-      await relayRpc(relay, "relay.platform.logs", input, 20_000)
-    )
-  })
 
 export const runKilnPlatformAction = createServerFn({ method: "POST" })
   .validator(

@@ -32,7 +32,6 @@ import {
   cliSftpResponseSchema,
   cliUpdateServerStartupRequestSchema,
   databaseEngineSupportsLogicalBackups,
-  DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
   relayConsoleCommandResultSchema,
   relayConsoleSchema,
   relayFileContentSchema,
@@ -42,10 +41,8 @@ import {
   relayInstanceSchema,
   relayRemoteFileUploadSchema,
   relayRemoteFileUploadResultSchema,
-  relayResourceLimitsV1Feature,
   relaySnapshotSchema,
   type BackupTarget,
-  type ResourceLimits,
   type ResourceLimitsInput,
 } from "@workspace/contracts"
 import { Effect, Option, Result, Schedule } from "effect"
@@ -86,7 +83,7 @@ import { signS3BackupDownload } from "@/backups/destinations/s3"
 import type { AccessPermission } from "@/lib/permissions"
 import { grantHasPermission } from "@/lib/permissions"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
-import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { relayRpc } from "@/lib/relay-connection"
 import {
   dispatchBackupTask,
   cancelCreateForDelete,
@@ -812,13 +809,7 @@ export const createCliServerEffect = Effect.fn("cli.api.servers.create")(
       permission: "instance.create",
     })
     const brick = yield* resolveBrickSource(input.brick, principal)
-    const limits = yield* cliRelayLimitsRequest(
-      relay.id,
-      {
-        cpuMillis: null,
-        diskBytes: DEFAULT_INSTANCE_DISK_LIMIT_BYTES,
-        memoryBytes: null,
-      },
+    const limits = relayResourceLimitsRequest(
       cliResourceLimitsInput(input, undefined)
     )
     const result = yield* relayRpcEffect(
@@ -922,13 +913,7 @@ export const updateCliServerStartupEffect = Effect.fn(
         instance.variables ?? {},
         variables
       )
-    // A Relay without resource limits still sizes memory from the
-    // variable itself.
-    const memoryVariable = relayConnectionFeatures(relay.id).has(
-      relayResourceLimitsV1Feature
-    )
-      ? brickMemoryVariable(nextRecipe)
-      : null
+    const memoryVariable = brickMemoryVariable(nextRecipe)
     const legacyMemory =
       memoryVariable && Object.hasOwn(input.variables, memoryVariable)
         ? dockerMemoryBytes(String(input.variables[memoryVariable]))
@@ -964,9 +949,7 @@ export const updateCliServerStartupEffect = Effect.fn(
   }
   const powerPermission = startupPowerPermission(instance, input)
   if (powerPermission) yield* authorizeTarget(principal, input, powerPermission)
-  const limits = yield* cliRelayLimitsRequest(
-    relay.id,
-    instance.limits,
+  const limits = relayResourceLimitsRequest(
     cliResourceLimitsInput(input, legacyMemoryBytes)
   )
   const result = yield* relayRpcEffect(
@@ -1770,20 +1753,6 @@ function cliResourceLimitsInput(
         : { memoryBytes }),
   }
 }
-
-const cliRelayLimitsRequest = Effect.fnUntraced(function* (
-  relayId: string,
-  current: ResourceLimits,
-  limits: ResourceLimitsInput
-) {
-  return yield* Effect.try({
-    try: () => relayResourceLimitsRequest(relayId, current, limits),
-    catch: (cause) =>
-      cliConflict(
-        cause instanceof Error ? cause.message : "The Relay can't set limits."
-      ),
-  })
-})
 
 /** The Brick variable its memory limit comes from, as in `{{ variables.memory }}`. */
 function brickMemoryVariable(recipe: BrickRecipe): string | null {

@@ -791,14 +791,11 @@ const createDestination = (
     const diskLimitBytes =
       (options.limits ?? instance.pendingLimits ?? instance.limits).diskBytes ??
       DEFAULT_INSTANCE_DISK_LIMIT_BYTES
-    // A Relay that can't take these limits fails the copy.
     const create = yield* Effect.try({
       try: () =>
         relayCreateInstanceSchema.parse({
           diskLimitBytes,
           ...relayResourceLimitsRequest(
-            destination.id,
-            { cpuMillis: null, diskBytes: diskLimitBytes, memoryBytes: null },
             options.limits ?? instance.pendingLimits ?? instance.limits
           ),
           name: input.destination.name,

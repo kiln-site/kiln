@@ -278,15 +278,7 @@ async function createInstanceHandler(
   } = data
   const input = relayCreateInstanceSchema.parse({
     ...createInput,
-    ...relayResourceLimitsRequest(
-      relay.id,
-      {
-        cpuMillis: null,
-        diskBytes: createInput.diskLimitBytes,
-        memoryBytes: null,
-      },
-      limits
-    ),
+    ...relayResourceLimitsRequest(limits),
     recipeDefinition,
   })
   return provisionServer({
