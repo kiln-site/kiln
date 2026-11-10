@@ -156,6 +156,41 @@ whoever linked the repository, checked again each time; removing a database
 or a volume from the file detaches it and never deletes data; and a push
 that can't be applied leaves the last good state.
 
+### What other formats have that Bricks don't yet
+
+Read against Pterodactyl's and Pelican's eggs, Coolify's Compose services and
+Railpack, before v2 was merged. None of it changed the format; each is an
+addition for the step that needs it.
+
+- **Values Kiln supplies to a template**: the port it allocated, the public
+  host, a URL. Eggs have `{{server.build.default.port}}`; Coolify has
+  `SERVICE_URL_` and `SERVICE_FQDN_`. Kiln tells a container nothing about
+  the port it was given, so a game that advertises its own port can't (the
+  Palworld Brick hard-codes one). Not as small as it looks: a port can change
+  after a server exists, and its container is then rebuilt from the settings
+  it already has without reading the Brick again, so a value written into
+  its environment has to be worked out again there too. Apps need the same
+  for their own URL (step 8).
+- **Config files a recipe sets**: eggs set keys in `server.properties`, YAML,
+  JSON or INI on each start; Coolify writes a file's content. The Java Ember
+  does this in its entrypoint (the EULA, a first `server.properties`), which
+  a Brick on a stock image can't. When a Brick first needs it.
+- **An install step in a container of its own**: eggs' install script,
+  Railpack's steps. A Brick could then use a stock image and a script where
+  it needs an Ember image today, and it is what reinstalling a Brick does
+  (step 6).
+- **Generated values of a chosen form and length**: Coolify makes passwords,
+  hex and base64 of 32, 64 or 128. `generate` makes one kind. Apps often need
+  a key of an exact form (step 8).
+- **A build with no Dockerfile**: Railpack, for a repository that has neither
+  a Dockerfile nor a Compose file (step 8).
+
+Smaller: prompts that watch the console and offer a fix, as eggs' `eula` and
+`java_version` features do (extras for a `type`); several named start
+commands to choose from; files people can't edit; Compose services left out
+of an App's health; a category beside tags, where the picker guesses "Steam"
+from a tag or an image name today.
+
 ## Order of work
 
 1. Kill on every instance, with one rule for stopped and failed. Done.
