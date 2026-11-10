@@ -116,10 +116,11 @@ Object.freeze(legacyAccessPermissions)
  * backups, schedules) apply wherever they are assigned and carry the target's
  * visibility. App permissions are granted on a Relay, for all of its apps.
  *
- * What every kind of instance has takes one `instance.*` permission, which
- * reaches each instance its grant covers: `instance.files.*` is a game
- * server's files on that game server, and on a Relay every game server's and
- * every App's. Only what one kind alone has keeps that kind's name.
+ * every permissions are what every kind of instance has, under one
+ * `instance.*` name. They reach each instance their grant covers and carry
+ * that instance's visibility: `instance.files.*` is a game server's files on
+ * that game server, and on a Relay every game server's and every App's. Only
+ * what one kind alone has keeps that kind's name.
  */
 export type PermissionFamily =
   | "relay"
@@ -127,6 +128,7 @@ export type PermissionFamily =
   | "database"
   | "app"
   | "shared"
+  | "every"
 
 export interface PermissionDefinition {
   readonly key: AccessPermission
@@ -238,10 +240,10 @@ const permissionPlacement: Record<
   "instance.read": ["overview", "instance"],
   "instance.console.read": ["instance.console", "instance"],
   "instance.console.write": ["instance.console", "instance"],
-  "instance.files.read": ["instance.files", "instance"],
-  "instance.files.write": ["instance.files", "instance"],
-  "instance.files.delete": ["instance.files", "instance"],
-  "instance.files.chmod": ["instance.files", "instance"],
+  "instance.files.read": ["instance.files", "every"],
+  "instance.files.write": ["instance.files", "every"],
+  "instance.files.delete": ["instance.files", "every"],
+  "instance.files.chmod": ["instance.files", "every"],
   "instance.sftp.connect": ["instance.files", "instance"],
   "instance.delete": ["resource.deletion", "instance"],
   "instance.power": ["instance.power", "instance"],
@@ -280,7 +282,10 @@ const permissionPlacement: Record<
   "app.terminal": ["app.terminal", "app"],
 }
 
-const familyScopes: Record<PermissionFamily, readonly PermissionScopeType[]> = {
+const familyScopes: Record<
+  Exclude<PermissionFamily, "every">,
+  readonly PermissionScopeType[]
+> = {
   relay: relayScopes,
   instance: instanceScopes,
   database: databaseScopes,
@@ -297,6 +302,7 @@ const familyVisibility: Record<PermissionFamily, AccessPermission | null> = {
   database: "database.read",
   app: "app.read",
   shared: null,
+  every: null,
 }
 
 /**
@@ -309,12 +315,23 @@ const relayScopeChildVisibility: Record<string, readonly AccessPermission[]> = {
 }
 
 /**
- * Permissions every kind of instance takes reach more than game servers when
- * assigned on a Relay, so there they also reveal the other instances they
- * reach: file permissions cover Apps' files, and show the Apps.
+ * The blocks every kind of instance takes. `scopes` is where one can be
+ * granted: a Relay, and each kind of instance people can be invited to that
+ * has it. `reaches` is the kinds it covers from a Relay, which it reveals
+ * there. Files: a game server's and an App's, and an App is reached only
+ * through its Relay.
  */
-const relayScopeReach: Record<string, readonly AccessPermission[]> = {
-  "instance.files": ["app.read"],
+const everyInstanceBlocks: Record<
+  string,
+  {
+    readonly scopes: readonly PermissionScopeType[]
+    readonly reaches: readonly AccessPermission[]
+  }
+> = {
+  "instance.files": {
+    scopes: instanceScopes,
+    reaches: ["instance.read", "app.read"],
+  },
 }
 
 /**
@@ -656,6 +673,12 @@ const permissionCopy: Record<
   },
 }
 
+function everyInstanceScopes(block: string): readonly PermissionScopeType[] {
+  const scopes = everyInstanceBlocks[block]?.scopes
+  if (!scopes) throw new Error(`No scopes for every-instance block: ${block}`)
+  return scopes
+}
+
 /** Stable IDs are an allowlist, never wildcard patterns. */
 export const permissionCatalog: readonly PermissionDefinition[] = Object.freeze(
   accessPermissions.map((key) => {
@@ -668,7 +691,8 @@ export const permissionCatalog: readonly PermissionDefinition[] = Object.freeze(
       ...permissionCopy[key],
       block,
       family,
-      scopeTypes: familyScopes[family],
+      scopeTypes:
+        family === "every" ? everyInstanceScopes(block) : familyScopes[family],
       implies: Object.freeze([...new Set(implies)]),
       supportedCapabilities: Object.freeze(
         block === "database.dump"
@@ -685,6 +709,26 @@ export const permissionCatalog: readonly PermissionDefinition[] = Object.freeze(
 const definitions = new Map(
   permissionCatalog.map((entry) => [entry.key, entry])
 )
+
+/**
+ * The kinds of instance a permission reaches when granted on a Relay, for
+ * one every kind takes; none for any other.
+ */
+export function permissionRelayReach(
+  permission: AccessPermission
+): ReadonlyArray<"app" | "database" | "instance"> {
+  const definition = definitions.get(permission)
+  if (definition?.family !== "every") return []
+  return (everyInstanceBlocks[definition.block]?.reaches ?? []).map(
+    (visibility) =>
+      visibility === "app.read"
+        ? "app"
+        : visibility === "database.read"
+          ? "database"
+          : "instance"
+  )
+}
+
 export function accessPermissionSupported(
   permission: string,
   scopeType: PermissionScopeType,
@@ -894,8 +938,13 @@ export function expandPermissionSelections(
           for (const child of relayScopeChildVisibility[definition.block] ?? [])
             result.add(child)
       }
+      // What every instance has reveals the instance it is assigned to.
+      if (definition.family === "every" && selectedScope !== "relay")
+        result.add(`${selectedScope}.read`)
+      // From a Relay it reaches every kind that has it, and reveals those.
       if (scope === "relay")
-        for (const reached of relayScopeReach[definition.block] ?? [])
+        for (const reached of everyInstanceBlocks[definition.block]?.reaches ??
+          [])
           result.add(reached)
       return
     }
