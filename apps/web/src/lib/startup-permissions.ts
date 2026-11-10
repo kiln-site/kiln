@@ -9,7 +9,7 @@ import {
 
 export function startupPowerPermission(
   existing: Pick<RelayInstance, "desiredState" | "observedState">,
-  input: { start: boolean; reinstall?: boolean }
+  input: { start: boolean }
 ):
   | "instance.power.start"
   | "instance.power.stop"
@@ -18,9 +18,7 @@ export function startupPowerPermission(
   const running =
     existing.desiredState === "running" ||
     ["running", "starting", "stopping"].includes(existing.observedState)
-  const start = input.reinstall
-    ? existing.desiredState === "running"
-    : input.start
+  const { start } = input
   return running
     ? start
       ? "instance.power.restart"

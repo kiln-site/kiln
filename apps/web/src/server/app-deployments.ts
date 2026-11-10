@@ -103,7 +103,7 @@ const cancelQueuedDeploy = resourceOperation({
   id: (input: z.infer<typeof cancelDeployInputSchema>) => input.appId,
   name: "app.deploy.cancel",
   doing: "Cancelling this App's queued deploy",
-  permission: () => "app.manage",
+  permission: () => "instance.deploy",
   lock: "shared",
   run: cancelQueuedAppDeployHandler,
 })

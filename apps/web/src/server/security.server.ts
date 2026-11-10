@@ -303,14 +303,17 @@ async function securityFixes(
         return { kind: "game-server" }
       case "app": {
         const app = apps.get(target.resourceId)
-        const allowed = access.holds(target, "app.manage")
+        // Taking an update is a deploy; another version changes the App's
+        // configuration first.
+        const mayDeploy = access.holds(target, "instance.deploy")
+        const mayChange = mayDeploy && access.holds(target, "app.manage")
         const { sourceType } = app?.config ?? {}
         if (sourceType === "image") {
           const update = imageUpdates.get(target.resourceId)
           const image = app?.config.image ?? target.image ?? ""
           return update?.state === "available" && update.latestDigest
-            ? { allowed, image, kind: "deploy-update" }
-            : { allowed, image, kind: "change-version" }
+            ? { allowed: mayDeploy, image, kind: "deploy-update" }
+            : { allowed: mayChange, image, kind: "change-version" }
         }
         const source = sources.get(target.resourceId)
         return {

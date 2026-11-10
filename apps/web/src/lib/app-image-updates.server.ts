@@ -81,7 +81,8 @@ const announce = Effect.fnUntraced(function* (
   }
   const recipients = yield* notificationAudienceEffect(
     { relayId: relay.id, resourceId: update.appId, resourceType: "app" },
-    "app.manage",
+    // Whoever may take the update: deploying it is a deploy.
+    "instance.deploy",
     "app.image-update"
   )
   const delivered = yield* notifyUsersEffect(

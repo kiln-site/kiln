@@ -1065,7 +1065,7 @@ const askedDeployment = (input: DeployInput) =>
     const refused =
       userId !== null && !allowed
         ? new Error(
-            "Whoever asked for this deployment may no longer manage the app"
+            "Whoever asked for this deployment may no longer deploy the app"
           )
         : input.trigger === "redeploy"
           ? yield* redeployGone(input, app.config)
@@ -1073,7 +1073,7 @@ const askedDeployment = (input: DeployInput) =>
     return { refused, request }
   })
 
-// Whether whoever asked may still manage the app, as their account stands.
+// Whether whoever asked may still deploy the app, as their account stands.
 const mayDeploy = (input: DeployInput, userId: string) =>
   (userId === developmentBypassUserId
     ? Effect.void
@@ -1090,7 +1090,7 @@ const mayDeploy = (input: DeployInput, userId: string) =>
           promiseEffect(() =>
             requireRelayPermission({
               appId: input.appId,
-              permission: "app.manage",
+              permission: "instance.deploy",
               relayId: input.relayId,
               user,
             })

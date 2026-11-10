@@ -814,7 +814,7 @@ function parseUrl(value: string, base: string | URL): URL {
     () => new URL(value, base instanceof URL ? base : undefined)
   ).pipe(
     Result.getOrThrowWith(() =>
-      recipeError("invalid_recipe_url", value, `Invalid ${String(base)}`)
+      recipeError("invalid_recipe_url", value, "Invalid recipe URL")
     )
   )
 }

@@ -33,6 +33,7 @@ import {
   backupTargetSchema,
   backupTaskInputSchema,
   backupTaskResultSchema,
+  migratedDeployActions,
   migratedFileActions,
   migratedPowerActions,
   omitBackupSecrets,
@@ -1881,6 +1882,11 @@ const migrations = SqliteMigrator.fromRecord({
   // do. `database.power` covered every one, and so did `app.manage`, which
   // stays for configuring and deploying.
   "41_instance_power_actions": moveCustomActions(migratedPowerActions),
+  // Deploying an instance again takes an action of its own. It went with
+  // `app.manage` for an App and with `instance.create` for a game server's
+  // reinstall, which both stay for what else they cover; `database.create`
+  // replaces a database's container to change its limits, as a deploy does.
+  "42_instance_deploy_action": moveCustomActions(migratedDeployActions),
 })
 
 // Rewrites the actions of every client and invitation given actions of its

@@ -105,7 +105,7 @@ export async function deployAppImageUpdateHandler(
   user: AuthenticatedUser,
   data: AppInput
 ) {
-  const { app, relay } = await imageApp(user, data)
+  const { app, relay } = await imageApp(user, data, "instance.deploy")
   // Queued behind any deployment running, joining any deploy already asked
   // for; it deploys the update on offer when its turn comes.
   await runAppEffect(
@@ -120,10 +120,14 @@ export async function deployAppImageUpdateHandler(
   return { queued: true as const }
 }
 
-// Deciding an app's updates is configuring it, so it takes what deploying
-// it does.
-async function imageApp(user: AuthenticatedUser, data: AppInput) {
-  const authorized = await authorizedAppFor(user, data, "app.manage")
+// Deciding an app's updates is configuring it; deploying the one on offer is
+// a deploy.
+async function imageApp(
+  user: AuthenticatedUser,
+  data: AppInput,
+  permission: "app.manage" | "instance.deploy" = "app.manage"
+) {
+  const authorized = await authorizedAppFor(user, data, permission)
   if (authorized.app.config.sourceType !== "image") {
     throw new Error("Only apps deployed from an image check for updates")
   }

@@ -79,6 +79,7 @@ export const accessPermissions = [
   "instance.power.stop",
   "instance.power.restart",
   "instance.power.kill",
+  "instance.deploy",
   "instance.files.delete",
   "instance.files.chmod",
   "instance.logs.read",
@@ -250,6 +251,7 @@ const permissionPlacement: Record<
   "instance.power.stop": ["instance.power", "every"],
   "instance.power.restart": ["instance.power", "every"],
   "instance.power.kill": ["instance.power", "every"],
+  "instance.deploy": ["instance.deploy", "every"],
   "instance.settings": ["instance.configuration", "instance"],
   "instance.configuration.read": ["instance.configuration", "instance"],
   "instance.configuration.write": ["instance.configuration", "instance"],
@@ -317,7 +319,8 @@ const relayScopeChildVisibility: Record<string, readonly AccessPermission[]> = {
  * granted: a Relay, and each kind of instance people can be invited to that
  * has it. `reaches` is the kinds it covers from a Relay, which it reveals
  * there. Files: a game server's and an App's, and an App is reached only
- * through its Relay. Power: a game server's, a database's and an App's.
+ * through its Relay. Power and deploying: a game server's, a database's and
+ * an App's.
  */
 const everyInstanceBlocks: Record<
   string,
@@ -331,6 +334,10 @@ const everyInstanceBlocks: Record<
     reaches: ["instance.read", "app.read"],
   },
   "instance.power": {
+    scopes: grantScopes,
+    reaches: ["instance.read", "database.read", "app.read"],
+  },
+  "instance.deploy": {
     scopes: grantScopes,
     reaches: ["instance.read", "database.read", "app.read"],
   },
@@ -457,6 +464,11 @@ const permissionCopy: Record<
     label: "Force stop",
     description:
       "Stop it immediately. Also allows starting, stopping, and restarting it.",
+  },
+  "instance.deploy": {
+    label: "Deploy",
+    description:
+      "Deploy it again as it is set up: a game server, a database, or an App. Its image is pulled again and its container replaced.",
   },
   "instance.settings": {
     label: "Manage server settings",
@@ -744,6 +756,7 @@ export function accessPermissionSupported(
 const blockLabels: Record<string, string> = {
   overview: "Overview",
   "instance.power": "Power",
+  "instance.deploy": "Deployments",
   "instance.console": "Console",
   "instance.files": "Files",
   "instance.logs": "Logs",

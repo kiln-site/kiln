@@ -1,3 +1,4 @@
+import { publicBrickSource } from "@workspace/contracts"
 import { Schema } from "effect"
 
 export class CommandError extends Schema.TaggedError<CommandError>()(
@@ -57,8 +58,12 @@ export class BrickRecipeError extends Schema.TaggedError<BrickRecipeError>()(
     reason: Schema.String,
   }
 ) {
+  // The message reaches whoever asked, the deployment's log and Hearth's
+  // record of it, none of which may read the instance's configuration. A
+  // source can carry credentials, so it is named without them.
   override get message() {
-    return `${this.reason} (${this.source})`
+    const source = publicBrickSource(this.source)
+    return source === undefined ? this.reason : `${this.reason} (${source})`
   }
 }
 

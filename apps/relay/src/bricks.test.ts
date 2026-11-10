@@ -12,6 +12,8 @@ import {
 } from "./bricks.js"
 import type { BrickRecipe } from "@workspace/contracts"
 
+import { provisioningErrorMessage } from "./provisioning-errors.js"
+
 const recipe: BrickRecipe = brickRecipeSchema.parse({
   format: "kiln.brick/v2",
   kind: "game-server",
@@ -176,6 +178,30 @@ describe("Brick recipes", () => {
 })
 
 describe("the official Bricks", () => {
+  it("names a source it couldn't load without the credentials in it", async () => {
+    const catalog = new BrickCatalog(
+      "https://catalog.example/catalog.yml",
+      join(tmpdir(), "kiln-unused-brick-data")
+    )
+    // A private address, so it is refused before anything is fetched.
+    const failure = await catalog
+      .recipe("https://token:hunter2@127.0.0.1/private.yml?key=signed#part")
+      .then(
+        () => null,
+        (cause: unknown) => cause
+      )
+
+    // What whoever asked is told, and what the deployment's log keeps.
+    for (const told of [
+      (failure as Error).message,
+      provisioningErrorMessage(failure),
+    ]) {
+      expect(told).toContain("127.0.0.1/private.yml")
+      expect(told).not.toContain("hunter2")
+      expect(told).not.toContain("signed")
+    }
+  })
+
   it("load, and resolve with nothing answered", async () => {
     const { bricks } = await catalogAt("bricks.yml").catalog()
     expect(bricks.map((brick) => brick.metadata.id).sort()).toEqual([
