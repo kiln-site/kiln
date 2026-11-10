@@ -4,6 +4,7 @@ import type { AppConfig, AppMount } from "@workspace/contracts"
 import { Effect } from "effect"
 
 import {
+  listAppRecordsEffect,
   loadAppConfigEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
@@ -19,9 +20,10 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTable } from "@/lib/database-config"
 import { databasePool } from "@/lib/database"
 import { transferResourceOwnershipEffect } from "@/lib/platform-access"
-import { grantHasPermission } from "@/lib/permissions"
+import { accessPermissions, grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
+import { listPersistedRelays } from "@/lib/relay-registry"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { requiredRelay } from "@/server/managed-database-access"
 
@@ -170,6 +172,45 @@ export function hasAppPermission(
         (grant.resourceType === "app" && grant.resourceId === app.appId)) &&
       grantHasPermission(grant, permission)
   )
+}
+
+// What an App's pages check: what Apps alone have, and the file permissions
+// its files take as every instance's do.
+const appPermissions = accessPermissions.filter(
+  (permission) =>
+    permission.startsWith("app.") || permission.startsWith("instance.files.")
+)
+
+/** The Apps a person can see, each with what they may do to it. */
+export async function getAppDirectoryHandler(user: AuthenticatedUser) {
+  const [persistedRelays, grants, records] = await Promise.all([
+    listPersistedRelays(),
+    isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
+    runAppEffect("apps.directory", listAppRecordsEffect()),
+  ])
+  const relayNames = new Map(
+    persistedRelays
+      .filter((relay) => relay.enabled)
+      .map((relay) => [relay.id, relay.name])
+  )
+  return records.flatMap((record) => {
+    const relayName = relayNames.get(record.relayId)
+    if (!relayName || !hasAppPermission(user, grants, record, "app.read")) {
+      return []
+    }
+    return [
+      {
+        id: record.appId,
+        createdAt: record.createdAt,
+        permissions: appPermissions.filter((permission) =>
+          hasAppPermission(user, grants, record, permission)
+        ),
+        name: record.name,
+        relayId: record.relayId,
+        relayName,
+      },
+    ]
+  })
 }
 
 interface AppOwnerRow extends RowDataPacket {

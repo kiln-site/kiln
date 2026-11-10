@@ -7,7 +7,7 @@ import { afterAll } from "vite-plus/test"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
-import { getAppOwnerHandler } from "@/server/app-access"
+import { getAppDirectoryHandler, getAppOwnerHandler } from "@/server/app-access"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertGrant, insertRelay, insertRows, insertUser } from "@/test/seed"
 
@@ -96,6 +96,36 @@ const ownerFor = (userId: string) =>
 
 describeMysql("app owner", () => {
   layer(TestDatabase)((it) => {
+    it.effect(
+      "an App's pages learn who may use its files: people with file permissions on its Relay, never its owner",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* insertUser("files")
+          yield* grant("files", relayId, ["instance.files.write"])
+          const permissions = (user: AuthenticatedUser) =>
+            Effect.promise(() => getAppDirectoryHandler(user)).pipe(
+              Effect.map(([app]) => app?.permissions)
+            )
+
+          assert.deepStrictEqual(yield* permissions(sessionUser("files")), [
+            "instance.files.read",
+            "instance.files.write",
+            "app.read",
+          ])
+          assert.deepStrictEqual(yield* permissions(sessionUser("owner")), [
+            "app.read",
+            "app.delete",
+            "app.logs.read",
+          ])
+          assert.includeMembers(
+            (yield* permissions({ ...sessionUser("admin"), role: "admin" })) ??
+              [],
+            ["instance.files.write", "instance.files.delete", "app.manage"]
+          )
+        })
+    )
+
     it.effect(
       "someone who can only read apps gets the owner's name alone",
       () =>
