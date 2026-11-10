@@ -2325,7 +2325,7 @@ export class DockerDriver {
           !quotaStops.has(current.config.id)
         ) {
           // Waits for its lane apart from the scan, so a server busy
-          // reinstalling doesn't hold up every other server's scan. One
+          // redeploying doesn't hold up every other server's scan. One
           // waits per server at a time.
           const instanceId = current.config.id
           quotaStops.add(instanceId)

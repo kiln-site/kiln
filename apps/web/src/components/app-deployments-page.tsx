@@ -91,7 +91,7 @@ const ServerDeploymentLogDialog = React.lazy(() =>
   }))
 )
 
-// Every App's deployments, every game server's installs, reinstalls, and
+// Every App's deployments, every game server's installs, redeploys, and
 // changes of Brick, and every database's redeploys, newest first, across
 // the Relays the person can read. Scoped to one App or game server, this
 // is its history.
@@ -122,7 +122,8 @@ export type AppDeploymentsScope = DeploymentsScope
 const serverTriggerLabels: Record<ServerDeploymentView["trigger"], string> = {
   brick: "Brick change",
   install: "Install",
-  reinstall: "Reinstall",
+  // Stored under the name it had before every kind deployed again.
+  reinstall: "Redeploy",
 }
 
 function triggerLabel(deployment: Deployment): string {
@@ -434,7 +435,7 @@ function EmptyDeploymentTable({ searchActive }: { searchActive: boolean }) {
             ? "Try an app, game server, commit, Brick, or who deployed it."
             : awaitingFirstRelay
               ? "Pair a Relay and deploy an app or create a game server to see its deployments here."
-              : "Each time an app deploys, or a game server is installed, reinstalled, or changes its Brick, it shows here."}
+              : "Each time an app deploys, a game server is installed or changes its Brick, or anything is redeployed, it shows here."}
         </span>
       }
       icon={
