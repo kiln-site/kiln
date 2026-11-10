@@ -65,7 +65,7 @@ services:
       NODE_ENV: development
       npm_config_store_dir: /root/.local/share/pnpm/store
       # Upgrade-only read path for instances created from the old Relay catalog.
-      KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/catalog.yml
+      KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/bricks.yml
       # Platform backups dump this stack's database on the shared MySQL.
       KILN_RELAY_PLATFORM_DATABASE_CONTAINER: ${KILN_RELAY_PLATFORM_DATABASE_CONTAINER:-}
       KILN_RELAY_PLATFORM_DATABASE_NAME: ${KILN_RELAY_PLATFORM_DATABASE_NAME:-}
@@ -201,7 +201,7 @@ services:
       KILN_ENVIRONMENT: dev
       VITE_REACT_SCAN: ${VITE_REACT_SCAN:-false}
       KILN_GIT_REPO: ${KILN_GIT_REPO:-}
-      KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/catalog.yml
+      KILN_BRICKS_CATALOG_URL: file:///workspace/apps/bricks/bricks.yml
       KILN_MARKETING_URL: ${KILN_MARKETING_URL:-}
       KILN_INSTALLATION_ID: ${KILN_INSTALLATION_ID:-}
       CACHE_HOST: ${CACHE_HOST:-kiln-dev-cache}

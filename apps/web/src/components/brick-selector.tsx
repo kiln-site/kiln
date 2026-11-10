@@ -2,6 +2,7 @@ import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH,
+  brickGame,
   type Brick,
 } from "@workspace/contracts"
 import { Result } from "effect"
@@ -95,25 +96,21 @@ function brickCategory(brick: Brick): Exclude<BrickCategoryId, "all"> {
   const tags = new Set(
     (brick.metadata.tags ?? []).map((tag) => tag.toLowerCase())
   )
-  if (
-    tags.has("steam") ||
-    brick.runtime.image.toLowerCase().includes("steam")
-  ) {
+  const image = brick.deploy?.type === "image" ? brick.deploy.image : ""
+  if (tags.has("steam") || image.toLowerCase().includes("steam")) {
     return "steam"
   }
-  if (brick.metadata.game.trim().toLowerCase() === "minecraft") {
-    return "minecraft"
-  }
+  if (brick.type === "minecraft") return "minecraft"
   return "other"
 }
 
 function brickSearchText(brick: Brick): string {
   return [
     brick.metadata.name,
-    brick.metadata.game,
+    brickGame(brick),
     brick.metadata.id,
     brick.metadata.author,
-    brick.metadata.description,
+    brick.metadata.summary,
     ...(brick.metadata.tags ?? []),
   ]
     .join(" ")
@@ -122,9 +119,10 @@ function brickSearchText(brick: Brick): string {
 
 function formatGameLabel(brick: Brick): string {
   const tags = new Set(brick.metadata.tags ?? [])
-  if (tags.has("java")) return `${brick.metadata.game} - Java`
-  if (tags.has("bedrock")) return `${brick.metadata.game} - Bedrock`
-  return brick.metadata.game
+  const game = brickGame(brick)
+  if (tags.has("java")) return `${game} - Java`
+  if (tags.has("bedrock")) return `${game} - Bedrock`
+  return game
 }
 
 const PLATFORM_ARCHITECTURES = ["amd64", "arm64"] as const
@@ -825,7 +823,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
             <p className="type-support mt-2 text-muted-foreground">
               Example catalog can be found{" "}
               <a
-                href="https://github.com/kiln-site/kiln/blob/main/apps/bricks/catalog.yml"
+                href="https://github.com/kiln-site/kiln/blob/main/apps/bricks/bricks.yml"
                 target="_blank"
                 rel="noreferrer"
                 aria-label="View the example catalog on GitHub"
@@ -1312,7 +1310,7 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
   const custom = customBrickSources.has(brick.source)
   const verified = isVerifiedBrick(brick, gitRepositorySlug)
   const supportedArchitectures = new Set(
-    (brick.constraints.architectures ?? PLATFORM_ARCHITECTURES).map(
+    (brick.metadata.platforms ?? PLATFORM_ARCHITECTURES).map(
       normalizeArchitecture
     )
   )
@@ -1369,7 +1367,7 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
         </div>
 
         <p className="type-support mt-4 text-foreground">
-          {brick.metadata.description}
+          {brick.metadata.summary}
         </p>
 
         {tags.length > 0 ? (
@@ -1393,10 +1391,10 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
               View raw Brick
             </a>
           </Button>
-          {brick.metadata.documentation ? (
+          {brick.metadata.links?.docs ? (
             <Button asChild size="sm" variant="ghost">
               <a
-                href={brick.metadata.documentation}
+                href={brick.metadata.links.docs}
                 target="_blank"
                 rel="noreferrer"
               >

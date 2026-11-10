@@ -14,7 +14,7 @@ import { join, resolve as resolvePath, sep } from "node:path"
 import { Effect, Fiber, Schedule, Semaphore } from "effect"
 
 import type { DatabaseConnections } from "./database-connections.js"
-import { resolveBrick, resolveBrickForProvisioning } from "./bricks.js"
+import { resolveBrickForProvisioning } from "./bricks.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
 import { recoverPromise, tapPromiseError } from "./effect/promise.js"
@@ -64,7 +64,7 @@ import {
   relayTailscaleStackDnsSchema,
   relayTailscaleStackSchema,
 } from "@workspace/contracts"
-import type { BrickCatalog } from "./bricks.js"
+import type { BrickCatalog, GameServerBrick } from "./bricks.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
 import type { DockerDriver } from "./docker.js"
 import {
@@ -291,6 +291,23 @@ function dockerMemoryBytes(value: string): number {
   return bytes
 }
 
+// A Brick may name the CPU architectures it runs on.
+function requireSupportedArchitecture(
+  name: string,
+  server: Pick<GameServerBrick, "architectures">
+): void {
+  const architecture =
+    process.arch === "x64" ? "amd64" : process.arch === "arm64" ? "arm64" : null
+  if (
+    server.architectures &&
+    (!architecture || !server.architectures.includes(architecture))
+  ) {
+    throw new Error(
+      `${name} does not support Relay architecture ${architecture}`
+    )
+  }
+}
+
 /**
  * A game server's limits. Its Brick's memory is the default; a request
  * without `limits` comes from a Hearth that sent only a disk limit.
@@ -300,7 +317,7 @@ function gameServerLimits(
     diskLimitBytes: number
     limits?: ResourceLimitsInput
   },
-  brickMemory: string
+  brickMemory: string | null
 ): ResourceLimits {
   return {
     cpuMillis: input.limits?.cpuMillis ?? null,
@@ -310,7 +327,9 @@ function gameServerLimits(
         : input.limits.diskBytes,
     memoryBytes:
       input.limits?.memoryBytes === undefined
-        ? dockerMemoryBytes(brickMemory)
+        ? brickMemory === null
+          ? null
+          : dockerMemoryBytes(brickMemory)
         : input.limits.memoryBytes,
   }
 }
@@ -2462,27 +2481,12 @@ export class LifecycleDriver {
       input.variables,
       input.recipe
     )
-    const primaryPort = definition.network.ports.find(
-      (port) => port.name === definition.network.primaryPort
-    )
+    const server = resolved.server
+    const primaryPort = server.ports[0]
     if (!primaryPort) {
       throw new Error("Brick primary network port disappeared after validation")
     }
-    const architecture =
-      process.arch === "x64"
-        ? "amd64"
-        : process.arch === "arm64"
-          ? "arm64"
-          : null
-    if (
-      definition.constraints.architectures &&
-      (!architecture ||
-        !definition.constraints.architectures.includes(architecture))
-    ) {
-      throw new Error(
-        `${definition.metadata.name} does not support Relay architecture ${architecture}`
-      )
-    }
+    requireSupportedArchitecture(definition.metadata.name, server)
     const installationMarkerValue =
       resolved.environment[INSTALLATION_MARKER_ENV]
     if (
@@ -2499,17 +2503,17 @@ export class LifecycleDriver {
     return relayInstanceSchema.parse({
       brickFormat: definition.format,
       brickId: definition.metadata.id,
-      brickNetworkMode: definition.network.mode,
+      brickNetworkMode: server.networkMode,
       brickPrimaryPort: primaryPort.container,
       brickPrimaryPortProtocol: primaryPort.protocol,
       brickSnapshotSha256: snapshotSha256,
       brickSource: input.recipe,
-      brickSupportsSrv: definition.network.supportsSrv,
+      brickSupportsSrv: server.supportsSrv,
       connectAddress: this.#config.gameHost,
       containerId: null,
       desiredState: input.start ? "running" : "stopped",
       directory: id,
-      game: definition.metadata.game,
+      game: server.game,
       id,
       implementation: definition.metadata.name,
       javaVersion: resolved.runtimeName,
@@ -2666,7 +2670,14 @@ export class LifecycleDriver {
     }
     const definition =
       recipeDefinition ?? (await this.#bricks.recipe(recipe, snapshotSha256))
-    const resolved = resolveBrick(definition, variables, recipe)
+    // Worked out once, as provisioning would, while the server still runs:
+    // a refused answer or a version lookup that fails leaves it running. The
+    // answers found are the ones provisioning then takes as given.
+    const resolved = await resolveBrickForProvisioning(
+      definition,
+      variables,
+      recipe
+    )
     // Held from before the old container goes until the new one exists.
     return this.#holdingAllocation(
       {
@@ -2718,7 +2729,7 @@ export class LifecycleDriver {
               ...(onPhase ? { onPhase } : {}),
               start,
               tailscale,
-              variables,
+              variables: resolved.values,
             })
             // The new container joins its Tailscale networks where the old one
             // was.
@@ -2805,21 +2816,8 @@ export class LifecycleDriver {
         limits,
       },
       async () => {
-        const architecture =
-          process.arch === "x64"
-            ? "amd64"
-            : process.arch === "arm64"
-              ? "arm64"
-              : null
-        if (
-          definition.constraints.architectures &&
-          (!architecture ||
-            !definition.constraints.architectures.includes(architecture))
-        ) {
-          throw new Error(
-            `${definition.metadata.name} does not support Relay architecture ${architecture}`
-          )
-        }
+        const server = resolved.server
+        requireSupportedArchitecture(definition.metadata.name, server)
 
         const id = input.id
         const defaultInstanceName = `kiln-${physicalShortKey(id)}`
@@ -2834,9 +2832,7 @@ export class LifecycleDriver {
           "instances",
           physicalKey(id)
         )
-        const primaryPort = definition.network.ports.find(
-          (port) => port.name === definition.network.primaryPort
-        )
+        const primaryPort = server.ports[0]
         if (!primaryPort) {
           throw new Error(
             "Brick primary network port disappeared after validation"
@@ -2911,8 +2907,8 @@ export class LifecycleDriver {
 
           if (input.prepareDirectory) {
             await mkdir(directory, { recursive: true })
-            if (definition.runtime.user) {
-              const identity = definition.runtime.user.split(":")
+            if (server.user) {
+              const identity = server.user.split(":")
               const user = Number(identity[0])
               const group = identity.length === 2 ? Number(identity[1]) : user
               await chown(directory, user, group)
@@ -2933,9 +2929,7 @@ export class LifecycleDriver {
             input.ports ? [...input.ports] : []
           if (portAllocations.length === 0) {
             const publishedPorts =
-              definition.network.mode === "direct"
-                ? definition.network.ports
-                : [primaryPort]
+              server.networkMode === "direct" ? server.ports : [primaryPort]
             for (const port of publishedPorts) {
               const externalPort =
                 port.host ??
@@ -2946,7 +2940,7 @@ export class LifecycleDriver {
                   protocol: port.protocol,
                 })
               }
-              const primary = port.name === definition.network.primaryPort
+              const primary = port === primaryPort
               portAllocations.push({
                 externalPort,
                 id: primary ? "primary" : `brick-${port.name}`,
@@ -2978,39 +2972,37 @@ export class LifecycleDriver {
             "kiln.brick.source": input.recipe,
             "kiln.brick.snapshot-sha256": snapshotSha256,
             "kiln.brick.variables": variablesLabel,
-            "kiln.brick.network-mode": definition.network.mode,
-            "kiln.brick.supports-srv": String(definition.network.supportsSrv),
+            "kiln.brick.network-mode": server.networkMode,
+            "kiln.brick.supports-srv": String(server.supportsSrv),
             "kiln.traefik.managed": "true",
             "kiln.traefik.service.port": String(primaryAllocation.internalPort),
             "kiln.instance.name": defaultInstanceName,
             "kiln.instance.version": version,
             "kiln.instance.java": resolved.runtimeName,
-            "kiln.instance.game": definition.metadata.game,
+            "kiln.instance.game": server.game,
             "kiln.instance.public-host": this.#config.gameHost,
             "kiln.instance.directory": physicalKey(id),
             // Older Relays read these, with 0 for no limit.
             "kiln.instance.memory-bytes": String(limits.memoryBytes ?? 0),
             "kiln.instance.disk-bytes": String(limits.diskBytes ?? 0),
-            "kiln.instance.mount": definition.runtime.storage.mount,
+            "kiln.instance.mount": server.mount,
             ...resourceLimitLabels(limits),
           }
           if (managedInstallationMarker) {
             labels[INSTALLATION_MARKER_LABEL] = managedInstallationMarker
           }
           Object.assign(labels, portLabels)
-          if (definition.readiness) {
-            labels["kiln.brick.readiness"] = JSON.stringify(
-              definition.readiness
-            )
+          if (server.readiness) {
+            labels["kiln.brick.readiness"] = JSON.stringify(server.readiness)
           }
-          if (definition.console) {
+          if (server.stopCommands) {
             labels["kiln.brick.console-stop-commands"] = JSON.stringify(
-              definition.console.stopCommands
+              server.stopCommands
             )
           }
           if (hostname) {
             const privatePort =
-              definition.network.mode === "direct"
+              server.networkMode === "direct"
                 ? primaryAllocation.internalPort
                 : this.#config.connectPort
             labels["kiln.instance.hostname"] =
@@ -3042,14 +3034,14 @@ export class LifecycleDriver {
               : []
           })
           const spec: ContainerSpec = {
-            binds: [`${hostDirectory}:${definition.runtime.storage.mount}`],
+            binds: [`${hostDirectory}:${server.mount}`],
             capDrop: ["ALL"],
             command: [
-              ...(definition.runtime.entrypoint?.slice(1) ?? []),
-              ...(definition.runtime.command ?? []),
+              ...(server.entrypoint?.slice(1) ?? []),
+              ...server.command,
             ],
-            ...(definition.runtime.entrypoint?.[0] && {
-              entrypoint: definition.runtime.entrypoint[0],
+            ...(server.entrypoint?.[0] && {
+              entrypoint: server.entrypoint[0],
             }),
             env: resolved.environment,
             hostname: containerName,
@@ -3063,19 +3055,17 @@ export class LifecycleDriver {
               aliases: [containerName],
               name: this.#resources.gameNetwork,
             },
-            pidsLimit: definition.runtime.resources.pids,
+            pidsLimit: server.pids,
             ports,
             readOnly: true,
             restart: "no",
             securityOpt: ["no-new-privileges:true"],
-            ...(definition.runtime.stopSignal && {
-              stopSignal: definition.runtime.stopSignal,
-            }),
+            ...(server.stopSignal && { stopSignal: server.stopSignal }),
             tmpfs: { "/tmp": "rw,exec,nosuid,nodev,size=128m" },
             tty: true,
-            ...(definition.runtime.user && { user: definition.runtime.user }),
-            ...(definition.runtime.workingDirectory && {
-              workdir: definition.runtime.workingDirectory,
+            ...(server.user && { user: server.user }),
+            ...(server.workingDirectory && {
+              workdir: server.workingDirectory,
             }),
           }
 

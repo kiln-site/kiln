@@ -313,7 +313,7 @@ export function loadConfig(
     brickCatalogUrl:
       legacyFileCatalogUrl?.protocol === "file:"
         ? legacyFileCatalogUrl.href
-        : kilnGitRepositoryRawUrl(gitRepository, "apps/bricks/catalog.yml"),
+        : kilnGitRepositoryRawUrl(gitRepository, "apps/bricks/bricks.yml"),
     bootstrapToken: bootstrapToken(environment),
     join: joinLink(environment),
     browserOrigin:

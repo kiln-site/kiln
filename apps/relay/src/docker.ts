@@ -21,6 +21,7 @@ import {
   type DockerContainerSummary,
   type DockerLogOptions,
 } from "./docker-engine.js"
+import { gameServerBrick } from "./bricks.js"
 import type { BrickCatalog } from "./bricks.js"
 import type { DockerCleanup } from "./docker-cleanup.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
@@ -1559,8 +1560,9 @@ export class DockerDriver {
         configured: instance.brickConsoleStopCommands,
         instanceId: instance.id,
         load: async (source) =>
-          (await bricks.recipe(source, instance.brickSnapshotSha256)).console
-            ?.stopCommands ?? [],
+          gameServerBrick(
+            await bricks.recipe(source, instance.brickSnapshotSha256)
+          ).stopCommands ?? [],
         source: instance.brickSource,
       })
     )
@@ -2037,7 +2039,9 @@ export class DockerDriver {
     const readiness = await runEffect(
       promiseEffect(
         async () =>
-          (await bricks.recipe(source, instance.brickSnapshotSha256)).readiness
+          gameServerBrick(
+            await bricks.recipe(source, instance.brickSnapshotSha256)
+          ).readiness ?? undefined
       ).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("Could not recover legacy Brick readiness", {

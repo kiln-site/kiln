@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { readFile, mkdir } from "node:fs/promises"
 import { get } from "node:https"
 import { isIP } from "node:net"
@@ -8,24 +8,30 @@ import { fileURLToPath } from "node:url"
 import { parseDocument } from "yaml"
 import { Effect, Result } from "effect"
 import {
+  brickAnswers,
+  brickAnswersProblem,
   brickCatalogDocumentSchema,
+  brickGame,
+  brickInputs,
   brickRecipeSchema,
+  brickRecipeV1Schema,
   builtinTailscaleBrick,
   builtinTailscaleBrickSource,
-  requiredMinecraftJavaVersion,
+  fillBrickTemplate,
   latestVelocityVersion,
+  readBrickRecipe,
   relayCatalogSchema,
 } from "@workspace/contracts"
 
 import { BrickRecipeError } from "./effect/errors.js"
 import { writeFileAtomic } from "./effect/atomic-file.js"
-import { promiseEffect } from "./effect/promise.js"
+import { promiseEffect, recoverPromise } from "./effect/promise.js"
 import type { IncomingMessage } from "node:http"
 import type {
   Brick,
   BrickCatalogDocument,
+  BrickReadiness,
   BrickRecipe,
-  BrickVariable,
   BrickVariableValue,
   RelayCatalog,
 } from "@workspace/contracts"
@@ -45,13 +51,49 @@ interface CachedCatalog {
   value: RelayCatalog
 }
 
+export interface GameServerPort {
+  name: string
+  container: number
+  protocol: "tcp" | "udp" | "both"
+  host?: number
+}
+
+/**
+ * What the Relay runs of a game server Brick, with the format's defaults
+ * filled in. Everything past this module reads a recipe through it.
+ */
+export interface GameServerBrick {
+  architectures: ReadonlyArray<"amd64" | "arm64"> | null
+  command: ReadonlyArray<string>
+  entrypoint: ReadonlyArray<string> | null
+  game: string
+  /** Where its one volume is mounted. */
+  mount: string
+  /**
+   * `minecraft-backend` for the `minecraft` type: behind the Relay's
+   * Minecraft entry point, which publishes only its first port and checks
+   * readiness with a status ping. `direct` publishes every port.
+   */
+  networkMode: "direct" | "minecraft-backend"
+  pids: number
+  /** The primary port first. */
+  ports: ReadonlyArray<GameServerPort>
+  readiness: BrickReadiness | null
+  stopCommands: ReadonlyArray<string> | null
+  stopSignal: string | null
+  supportsSrv: boolean
+  user: string | null
+  workingDirectory: string | null
+}
+
 export interface ResolvedBrick {
   environment: Readonly<Record<string, string>>
   image: string
-  memory: string
-  memoryReservation: string
+  /** The memory limit it starts with, like `2G`, when it names one. */
+  memory: string | null
   recipe: BrickRecipe
   runtimeName: string
+  server: GameServerBrick
   values: Readonly<Record<string, BrickVariableValue>>
 }
 
@@ -73,16 +115,27 @@ export class BrickCatalog {
     const document = parseCatalog(
       await readDocument(this.#catalogUrl, this.#catalogUrl)
     )
-    const bricks = await Promise.all(
-      document.recipes.map(async (reference) => {
+    const listed = await Promise.all(
+      document.recipes.map(async (reference): Promise<Brick | null> => {
         const source = parseUrl(reference, this.#catalogUrl)
-        const recipe = await this.#loadRecipe(source, true)
-        return {
-          ...recipe,
-          source: source.href,
-        } satisfies Brick
+        // A kind this Relay can't run yet is left out, not an error that
+        // hides the rest of the catalog.
+        const recipe = await recoverPromise(
+          () => this.#loadRecipe(source, true),
+          (cause) => {
+            if (
+              cause instanceof BrickRecipeError &&
+              cause.code === "unsupported_brick"
+            ) {
+              return null
+            }
+            throw cause
+          }
+        )
+        return recipe && { ...recipe, source: source.href }
       })
     )
+    const bricks = listed.filter((brick) => brick !== null)
     const ids = new Set<string>()
     for (const brick of bricks) {
       if (ids.has(brick.metadata.id)) {
@@ -140,7 +193,7 @@ export class BrickCatalog {
         "Custom Brick recipes must use HTTPS"
       )
     }
-    const parsed = brickRecipeSchema.safeParse(
+    const parsed = readBrickRecipe(
       parseYaml(await readDocument(source, this.#catalogUrl), source)
     )
     if (!parsed.success) {
@@ -156,7 +209,7 @@ export class BrickCatalog {
       )
     }
     const recipe = resolveRecipeIconSource(parsed.data, source, fromCatalog)
-    validateRecipeSemantics(recipe, source)
+    gameServerBrick(recipe, source.href)
     return recipe
   }
 }
@@ -201,8 +254,30 @@ export async function saveBrickSnapshot(
   recipe: BrickRecipe
 ): Promise<string> {
   const parsed = brickRecipeSchema.parse(recipe)
-  validateRecipeSemantics(parsed, new URL("https://snapshot.invalid/brick.yml"))
-  const content = JSON.stringify(parsed)
+  gameServerBrick(parsed, "snapshot")
+  return writeBrickSnapshot(snapshotDirectory, JSON.stringify(parsed))
+}
+
+/**
+ * Keeps a recipe as a backup recorded it, under the checksum it had there:
+ * one recorded while recipes were `kiln.brick/v1` stays v1 on disk and is
+ * converted each time it is read.
+ */
+export async function saveRecordedBrickSnapshot(
+  snapshotDirectory: string,
+  document: unknown
+): Promise<string> {
+  const v1 = brickRecipeV1Schema.safeParse(document)
+  const recorded = v1.success ? v1.data : brickRecipeSchema.parse(document)
+  // Refused now, not when the server it belongs to next starts.
+  recordedBrickRecipe(recorded)
+  return writeBrickSnapshot(snapshotDirectory, JSON.stringify(recorded))
+}
+
+async function writeBrickSnapshot(
+  snapshotDirectory: string,
+  content: string
+): Promise<string> {
   const sha256 = createHash("sha256").update(content).digest("hex")
   await mkdir(snapshotDirectory, { mode: 0o700, recursive: true })
   const destination = brickSnapshotPath(snapshotDirectory, sha256)
@@ -210,15 +285,43 @@ export async function saveBrickSnapshot(
   return sha256
 }
 
+function recordedBrickRecipe(document: unknown): BrickRecipe {
+  const read = readBrickRecipe(document)
+  if (!read.success) {
+    throw recipeError(
+      "invalid_recipe",
+      "snapshot",
+      read.error.issues
+        .slice(0, 4)
+        .map((issue) => `${issue.path.join(".") || "recipe"}: ${issue.message}`)
+        .join("; ")
+    )
+  }
+  gameServerBrick(read.data, "snapshot")
+  return read.data
+}
+
 export async function readBrickSnapshot(
   directory: string,
   sha256: string
 ): Promise<BrickRecipe> {
+  return recordedBrickRecipe(await readRecordedBrickSnapshot(directory, sha256))
+}
+
+/**
+ * A snapshot as it is on disk, which is what its checksum names: a backup
+ * records this, so restoring it keeps the checksum the server was made
+ * with.
+ */
+export async function readRecordedBrickSnapshot(
+  directory: string,
+  sha256: string
+): Promise<unknown> {
   const path = brickSnapshotPath(directory, sha256)
   const content = await readFile(path, "utf8")
   const actual = createHash("sha256").update(content).digest("hex")
   if (actual !== sha256) throw new Error("Brick snapshot checksum is invalid")
-  return brickRecipeSchema.parse(JSON.parse(content) as unknown)
+  return JSON.parse(content) as unknown
 }
 
 function brickSnapshotPath(directory: string, sha256: string): string {
@@ -228,13 +331,78 @@ function brickSnapshotPath(directory: string, sha256: string): string {
   return join(directory, `${sha256}.json`)
 }
 
+/**
+ * A recipe as the game server the Relay runs. Refuses, as
+ * `unsupported_brick`, what the format describes and this Relay doesn't run
+ * yet: other kinds, and parts only they use.
+ */
+export function gameServerBrick(
+  recipe: BrickRecipe,
+  source = recipe.metadata.id
+): GameServerBrick {
+  const unsupported = (reason: string) =>
+    recipeError("unsupported_brick", source, reason)
+  if (recipe.kind !== "game-server") {
+    throw unsupported(`Kiln can't install ${recipe.kind} Bricks yet`)
+  }
+  const deploy = recipe.deploy
+  if (deploy?.type !== "image") {
+    throw unsupported("A game server Brick runs from an image")
+  }
+  const [mount, ...otherVolumes] = deploy.volumes ?? []
+  if (!mount || otherVolumes.length > 0) {
+    throw unsupported("A game server Brick keeps exactly one volume")
+  }
+  if (!deploy.ports?.length) {
+    throw unsupported("A game server Brick needs at least one port")
+  }
+  const ports = deploy.ports.map((port): GameServerPort => {
+    if (typeof port.port !== "number") {
+      throw unsupported(`Port ${port.name} must be a number for a game server`)
+    }
+    if (port.expose !== undefined && port.expose !== "public") {
+      throw unsupported(`Port ${port.name} must be public for a game server`)
+    }
+    return {
+      name: port.name,
+      container: port.port,
+      protocol: port.protocol ?? "tcp",
+      ...(port.host === undefined ? {} : { host: port.host }),
+    }
+  })
+  const ready = deploy.ready
+  if (ready && !("log" in ready)) {
+    throw unsupported("A game server is ready by its log, or its first port")
+  }
+  const server = recipe["game-server"]
+  return {
+    architectures: recipe.metadata.platforms ?? null,
+    command: deploy.command ?? [],
+    entrypoint: deploy.entrypoint ?? null,
+    game: brickGame(recipe),
+    mount,
+    networkMode: recipe.type === "minecraft" ? "minecraft-backend" : "direct",
+    pids: deploy.pids ?? 512,
+    ports,
+    readiness: ready ? { logs: ready.log } : null,
+    stopCommands: server?.stop ?? null,
+    stopSignal: deploy.stopSignal ?? null,
+    supportsSrv: server?.srv ?? false,
+    user: deploy.user ?? null,
+    workingDirectory: deploy.workingDirectory ?? null,
+  }
+}
+
 // Resolve once at creation, then persist the concrete version with the instance.
 export async function resolveBrickForProvisioning(
   recipe: BrickRecipe,
   input: Readonly<Record<string, BrickVariableValue>>,
   source: string
 ): Promise<ResolvedBrick> {
-  if (recipe.metadata.id !== "velocity" || Object.hasOwn(input, "version")) {
+  if (
+    recipe.minecraft?.latestVersion !== "velocity" ||
+    Object.hasOwn(input, "version")
+  ) {
     return resolveBrick(recipe, input, source)
   }
   const response = await fetch(
@@ -264,8 +432,13 @@ export function resolveBrick(
   input: Readonly<Record<string, BrickVariableValue>>,
   source = recipe.metadata.id
 ): ResolvedBrick {
+  const server = gameServerBrick(recipe, source)
+  const deploy = recipe.deploy
+  // `gameServerBrick` refused anything else.
+  if (deploy?.type !== "image") throw new Error("Not an image Brick")
+  const inputs = brickInputs(recipe)
   const unknown = Object.keys(input).filter(
-    (name) => !Object.hasOwn(recipe.variables, name)
+    (name) => !inputs.some((definition) => definition.key === name)
   )
   if (unknown.length > 0) {
     throw recipeError(
@@ -275,242 +448,66 @@ export function resolveBrick(
     )
   }
 
-  const values: Record<string, BrickVariableValue> = {}
-  for (const [name, definition] of Object.entries(recipe.variables)) {
-    const value = Object.hasOwn(input, name) ? input[name] : definition.default
-    if (value === undefined) {
-      if (definition.required) {
+  // What was given stands; the rest follows its rules, then its default.
+  // A secret Kiln makes comes last: the format lets nothing follow one.
+  const values = brickAnswers(inputs, input)
+  for (const definition of inputs) {
+    if (
+      definition.type === "secret" &&
+      definition.generate &&
+      !Object.hasOwn(values, definition.key)
+    ) {
+      values[definition.key] = randomBytes(24).toString("base64url")
+    }
+  }
+  const problem = brickAnswersProblem(inputs, values)
+  if (problem) {
+    throw recipeError(
+      problem.code === "missing"
+        ? "missing_variable"
+        : problem.code === "invalid"
+          ? "invalid_variable"
+          : "unsupported_suggestion",
+      source,
+      problem.message
+    )
+  }
+
+  const interpolate = (template: string): string =>
+    fillBrickTemplate(template, (name) => {
+      if (name === "brick.id") return recipe.metadata.id
+      if (name === "brick.name") return recipe.metadata.name
+      if (!Object.hasOwn(values, name)) {
         throw recipeError(
           "missing_variable",
           source,
-          `Brick variable ${name} is required`
+          `Template references unresolved variable ${name}`
         )
       }
-      continue
-    }
-    validateVariable(name, definition, value, source)
-    values[name] = value
+      return String(values[name])
+    })
+  const memory = deploy.memory === undefined ? null : interpolate(deploy.memory)
+  if (memory !== null && !/^\d+[bkmgt]$/iu.test(memory)) {
+    throw recipeError(
+      "invalid_resource",
+      source,
+      "Resolved memory must be a Docker memory value such as 2G"
+    )
   }
-  applyRecommendedMinecraftJava(recipe, input, values, source)
-
-  const interpolate = (template: string): string =>
-    interpolateTemplate(template, recipe, values, source)
-  const memory = interpolate(recipe.runtime.resources.memory)
-  const memoryReservation = interpolate(
-    recipe.runtime.resources.memoryReservation ??
-      recipe.runtime.resources.memory
-  )
-  for (const [name, value] of [
-    ["memory", memory],
-    ["memoryReservation", memoryReservation],
-  ] as const) {
-    if (!/^\d+[bkmgt]$/iu.test(value)) {
-      throw recipeError(
-        "invalid_resource",
-        source,
-        `Resolved ${name} must be a Docker memory value such as 2G`
-      )
-    }
-  }
+  const image = interpolate(deploy.image)
   return {
     environment: Object.fromEntries(
-      Object.entries(recipe.runtime.environment).map(([name, value]) => [
+      Object.entries(deploy.env ?? {}).map(([name, value]) => [
         name,
         interpolate(value),
       ])
     ),
-    image: interpolate(recipe.runtime.image),
+    image,
     memory,
-    memoryReservation,
     recipe,
-    runtimeName: interpolate(recipe.runtime.name),
+    runtimeName: deploy.runtime ? interpolate(deploy.runtime) : image,
+    server,
     values,
-  }
-}
-
-function applyRecommendedMinecraftJava(
-  recipe: BrickRecipe,
-  input: Readonly<Record<string, BrickVariableValue>>,
-  values: Record<string, BrickVariableValue>,
-  source: string
-): void {
-  if (Object.hasOwn(input, "java_version")) return
-  const version = values.version
-  const javaDefinition = recipe.variables.java_version
-  const javaVersion =
-    typeof version === "string"
-      ? requiredMinecraftJavaVersion(recipe.metadata.id, version)
-      : null
-  if (!javaVersion || javaDefinition?.type !== "string") return
-  const validation = Result.try(() =>
-    validateVariable("java_version", javaDefinition, javaVersion, source)
-  )
-  if (Result.isFailure(validation)) {
-    throw recipeError(
-      "unsupported_java_version",
-      source,
-      `Minecraft ${version} requires Java ${javaVersion}, but this Brick does not publish that Ember`
-    )
-  }
-  values.java_version = javaVersion
-}
-
-function interpolateTemplate(
-  template: string,
-  recipe: BrickRecipe,
-  values: Readonly<Record<string, BrickVariableValue>>,
-  source = recipe.metadata.id
-): string {
-  const resolved = template.replace(
-    /\{\{\s*(variables\.([a-z][a-z0-9_]{0,47})|brick\.(id|name))\s*\}\}/gu,
-    (
-      _match,
-      _expression: string,
-      variable: string | undefined,
-      field: string | undefined
-    ) => {
-      if (variable) {
-        if (!Object.hasOwn(values, variable)) {
-          throw recipeError(
-            "missing_variable",
-            source,
-            `Template references unresolved variable ${variable}`
-          )
-        }
-        const value = values[variable]
-        return String(value)
-      }
-      return field === "name" ? recipe.metadata.name : recipe.metadata.id
-    }
-  )
-  if (resolved.includes("{{") || resolved.includes("}}")) {
-    throw recipeError(
-      "invalid_template",
-      source,
-      `Unsupported template expression in ${template}`
-    )
-  }
-  return resolved
-}
-
-function validateVariable(
-  name: string,
-  definition: BrickVariable,
-  value: BrickVariableValue,
-  source: string
-): void {
-  if (typeof value !== definition.type) {
-    throw recipeError(
-      "invalid_variable",
-      source,
-      `${name} must be a ${definition.type}`
-    )
-  }
-  if (
-    definition.options &&
-    !definition.options.some((option) => Object.is(option, value))
-  ) {
-    throw recipeError(
-      "invalid_variable",
-      source,
-      `${name} must be one of the declared options`
-    )
-  }
-  if (typeof value === "string") {
-    const rules = definition.rules
-    if (rules?.minLength !== undefined && value.length < rules.minLength) {
-      throw recipeError(
-        "invalid_variable",
-        source,
-        `${name} must contain at least ${rules.minLength} characters`
-      )
-    }
-    if (rules?.maxLength !== undefined && value.length > rules.maxLength) {
-      throw recipeError(
-        "invalid_variable",
-        source,
-        `${name} must contain at most ${rules.maxLength} characters`
-      )
-    }
-    if (rules?.pattern && !new RegExp(rules.pattern, "u").test(value)) {
-      throw recipeError(
-        "invalid_variable",
-        source,
-        `${name} does not match its recipe rule`
-      )
-    }
-  }
-  if (typeof value === "number") {
-    if (definition.rules?.min !== undefined && value < definition.rules.min) {
-      throw recipeError(
-        "invalid_variable",
-        source,
-        `${name} must be at least ${definition.rules.min}`
-      )
-    }
-    if (definition.rules?.max !== undefined && value > definition.rules.max) {
-      throw recipeError(
-        "invalid_variable",
-        source,
-        `${name} must be at most ${definition.rules.max}`
-      )
-    }
-  }
-}
-
-function validateRecipeSemantics(recipe: BrickRecipe, source: URL): void {
-  const primaryPorts = recipe.network.ports.filter(
-    (port) => port.name === recipe.network.primaryPort
-  )
-  if (primaryPorts.length !== 1) {
-    throw recipeError(
-      "invalid_recipe",
-      source.href,
-      "network.primaryPort must name exactly one declared port"
-    )
-  }
-  const portNames = new Set<string>()
-  for (const port of recipe.network.ports) {
-    if (portNames.has(port.name)) {
-      throw recipeError(
-        "invalid_recipe",
-        source.href,
-        `Duplicate network port name ${port.name}`
-      )
-    }
-    portNames.add(port.name)
-  }
-  for (const [name, definition] of Object.entries(recipe.variables)) {
-    if (
-      definition.default !== undefined &&
-      typeof definition.default !== definition.type
-    ) {
-      throw recipeError(
-        "invalid_recipe",
-        source.href,
-        `${name}.default does not match its declared type`
-      )
-    }
-    for (const option of definition.options ?? []) {
-      if (typeof option !== definition.type) {
-        throw recipeError(
-          "invalid_recipe",
-          source.href,
-          `${name}.options does not match its declared type`
-        )
-      }
-    }
-    const pattern = definition.rules?.pattern
-    if (pattern) {
-      const compiledPattern = Result.try(() => new RegExp(pattern, "u"))
-      if (Result.isFailure(compiledPattern)) {
-        throw recipeError(
-          "invalid_recipe",
-          source.href,
-          `${name}.rules.pattern is not a valid regular expression`
-        )
-      }
-    }
   }
 }
 

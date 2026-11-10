@@ -111,7 +111,7 @@ The updater validates the configured distribution's exact image repositories,
 immutable digests, source labels, component labels, versions, and protocol. It
 never accepts upstream images just because a fork's manifest names them.
 
-The default catalog follows `apps/bricks/catalog.yml` on the fork's `main` branch.
+The default catalog follows `apps/bricks/bricks.yml` on the fork's `main` branch.
 Its bundled Java/SteamCMD references are resolved to the fork's Ember namespace,
 without editing recipes. An explicit `KILN_BRICKS_CATALOG_URL` retains that
 catalog's original images; use this to intentionally share upstream or another

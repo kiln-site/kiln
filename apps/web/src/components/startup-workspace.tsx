@@ -11,7 +11,13 @@ import {
   RotateCcw,
   Save,
 } from "lucide-react"
-import type { Brick, BrickVariableValue } from "@workspace/contracts"
+import {
+  brickAnswersProblem,
+  brickGame,
+  brickMemoryInput,
+  type Brick,
+  type BrickVariableValue,
+} from "@workspace/contracts"
 
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -40,11 +46,12 @@ import {
 } from "@/components/instance-workspace-context"
 import { WorkspaceSummaryCard } from "@/components/workspace-summary-card"
 import {
+  brickFields,
   canPairMinecraftJavaVersionFields,
   defaultBrickVariables,
-  unavailableMinecraftJavaVersion,
   updateBrickVariable,
-  withRecommendedMinecraftJava,
+  withBrickVariableChanged,
+  type BrickFields,
 } from "@/lib/brick-variables"
 import { managedJavaStartupFlags } from "@/lib/managed-java-flags"
 import {
@@ -63,28 +70,29 @@ const emptyBricks: Array<Brick> = []
 type BrickView = {
   color?: string | undefined
   description: string
-  environment: Brick["runtime"]["environment"]
+  environment: Readonly<Record<string, string>>
   game: string
   id: string
   iconSvg?: string | undefined
-  memoryTemplate: string
+  /** The input its memory limit comes from, as one converted from v1 has. */
+  memoryInput: string | null
   name: string
   source: string
-  variables: Brick["variables"]
+  variables: BrickFields
 }
 
 function brickViewFromBrick(brick: Brick, source = brick.source): BrickView {
   return {
     ...(brick.metadata.color ? { color: brick.metadata.color } : {}),
-    description: brick.metadata.description,
-    environment: brick.runtime.environment,
-    game: brick.metadata.game,
+    description: brick.metadata.summary,
+    environment: brick.deploy?.env ?? {},
+    game: brickGame(brick),
     id: brick.metadata.id,
     ...(brick.iconSvg ? { iconSvg: brick.iconSvg } : {}),
-    memoryTemplate: brick.runtime.resources.memory,
+    memoryInput: brickMemoryInput(brick),
     name: brick.metadata.name,
     source,
-    variables: brick.variables,
+    variables: brickFields(brick),
   }
 }
 
@@ -267,7 +275,7 @@ const StartupForm = React.memo(function StartupForm({
       environment: {},
       game: "Custom",
       id: "custom",
-      memoryTemplate: "",
+      memoryInput: null,
       name: "Custom Brick",
       source,
       variables: {},
@@ -280,20 +288,10 @@ const StartupForm = React.memo(function StartupForm({
     event.preventDefault()
     if (!canEdit || pending || submittingRef.current) return
     setError(null)
-    const minecraftVersion = variables.version
-    const unavailableJavaVersion =
-      typeof minecraftVersion === "string"
-        ? unavailableMinecraftJavaVersion(
-            view.id,
-            view.variables,
-            minecraftVersion,
-            variables.java_version
-          )
-        : null
-    if (unavailableJavaVersion) {
-      setError(
-        `Minecraft ${minecraftVersion} requires Java ${unavailableJavaVersion}, but that Ember is not published yet.`
-      )
+    // Said here as the Relay would say it, before anything is stopped.
+    const problem = brickAnswersProblem(Object.values(view.variables), variables)
+    if (problem) {
+      setError(`${problem.message}.`)
       return
     }
     submittingRef.current = true
@@ -371,7 +369,7 @@ const StartupForm = React.memo(function StartupForm({
 
   // The container's memory limit replaces the Brick's memory variable,
   // which stays out of the form.
-  const memoryVariable = brickMemoryVariable(view.memoryTemplate)
+  const memoryVariable = view.memoryInput
   const catalogBrick =
     [
       ...(catalogQuery.data?.bricks ?? emptyBricks),
@@ -405,10 +403,12 @@ const StartupForm = React.memo(function StartupForm({
           onVariableChange={(name, value) => {
             if (!canEdit) return
             setVariables((current) => {
-              const updated = updateBrickVariable(current, name, value)
-              return name === "version"
-                ? withRecommendedMinecraftJava(view.id, view.variables, updated)
-                : updated
+              // What follows this answer follows it now.
+              return withBrickVariableChanged(
+                view.variables,
+                updateBrickVariable(current, name, value),
+                name
+              )
             })
           }}
         />
@@ -525,7 +525,6 @@ function StartupSettingsForm({
             <div className="space-y-3 border-t border-border/65 p-4">
               {pairVersionAndJava ? (
                 <MinecraftJavaVersionFields
-                  brickId={view.id}
                   disabled={!canEdit || pending}
                   environment={view.environment}
                   javaVersion={
@@ -562,7 +561,7 @@ function StartupSettingsForm({
                 <>
                   <ManagedJavaFlagsField value={managedFlags ?? ""} />
                   <BrickVariableField
-                    description={javaArgsDefinition.description.replace(
+                    description={javaArgsDefinition.help?.replace(
                       /^Extra JVM flags\.\s*/u,
                       ""
                     )}
@@ -742,13 +741,6 @@ function BrickSummary({
 /** The memory limit as Java sizes its heap from it, like `2048m`. */
 function javaContainerMemory(bytes: number | null): string | undefined {
   return bytes === null ? undefined : `${Math.round(bytes / 1024 ** 2)}m`
-}
-
-function brickMemoryVariable(template: string): string | null {
-  return (
-    template.match(/^\{\{\s*variables\.([a-z][a-z0-9_]{0,47})\s*\}\}$/u)?.[1] ??
-    null
-  )
 }
 
 const StartupBrickSwapDialog = React.memo(function StartupBrickSwapDialog({

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 
-import { brickSchema, type Brick } from "@workspace/contracts"
+import { readBrick, type Brick } from "@workspace/contracts"
 import { Clock, Effect, Result } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
@@ -26,7 +26,8 @@ export const listCustomBricksEffect = Effect.fn("customBricks.list")(function* (
 
   return rows.flatMap((row) => {
     const value = decodeJson(row.recipe)
-    const parsed = brickSchema.safeParse(value)
+    // One saved while recipes were kiln.brick/v1 is converted.
+    const parsed = readBrick(value)
     return parsed.success ? [parsed.data] : []
   })
 })

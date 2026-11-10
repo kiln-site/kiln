@@ -49,7 +49,7 @@ import {
 } from "@workspace/contracts"
 
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
-import { brickSnapshotDirectory, readBrickSnapshot } from "./bricks.js"
+import { brickSnapshotDirectory, readRecordedBrickSnapshot } from "./bricks.js"
 import type { DatabaseDriver } from "./databases.js"
 import {
   createCompressedDatabaseBackup,
@@ -2507,8 +2507,9 @@ async function instanceBackupManifest(
   instance: RelayInstanceConfig,
   webRoutes: ReadonlyArray<RelayInstanceWebRoute>
 ): Promise<BackupArchiveManifest> {
+  // As it is on disk, so a restore keeps the checksum that names it.
   const recipe = instance.brickSnapshotSha256
-    ? await readBrickSnapshot(
+    ? await readRecordedBrickSnapshot(
         brickSnapshotDirectory(config.dataDirectory),
         instance.brickSnapshotSha256
       )

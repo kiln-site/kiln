@@ -5,6 +5,7 @@ import {
   type BrickRecipe,
   brickIdExceedsRecommendedLength,
   brickSchema,
+  redactedBrickInputs,
   brickSourceSchema,
   instanceIdSchema,
   relayCreateInstanceSchema,
@@ -505,22 +506,7 @@ function recipePreview(brick: z.infer<typeof brickSchema>) {
   const { iconSvg: _iconSvg, ...recipe } = brick
   return {
     ...recipe,
-    variables: Object.fromEntries(
-      Object.entries(brick.variables).map(([name, variable]) => [
-        name,
-        variable.sensitive
-          ? {
-              ...variable,
-              ...(variable.default === undefined
-                ? {}
-                : { default: "[redacted]" }),
-              ...(variable.options === undefined
-                ? {}
-                : { options: variable.options.map(() => "[redacted]") }),
-            }
-          : variable,
-      ])
-    ),
+    ...(recipe.inputs ? { inputs: redactedBrickInputs(recipe.inputs) } : {}),
   }
 }
 

@@ -29,27 +29,25 @@ const deletedServerId = "b".repeat(12)
 const image = "example.test/paper:latest"
 
 const recipe = brickRecipeSchema.parse({
-  format: "kiln.brick/v1",
+  format: "kiln.brick/v2",
+  kind: "game-server",
+  type: "minecraft",
   metadata: {
     author: "Kiln",
-    description: "Paper test recipe",
-    game: "Minecraft",
     id: "paper",
     name: "Paper",
+    summary: "Paper test recipe",
   },
-  variables: {},
-  runtime: {
-    environment: {},
+  deploy: {
+    type: "image",
     image,
-    name: "Paper",
-    resources: { memory: "512M", pids: 128 },
-    storage: { mount: "/server" },
+    runtime: "Paper",
+    memory: "512M",
+    pids: 128,
+    volumes: ["/server"],
+    ports: [{ name: "game", port: 25_565 }],
   },
-  network: {
-    mode: "minecraft-backend",
-    ports: [{ container: 25_565, name: "game", protocol: "tcp" }],
-    primaryPort: "game",
-  },
+  "game-server": { game: "Minecraft" },
 })
 
 // Runs a control request's work as the control socket admits it.
@@ -226,15 +224,16 @@ describe("game server provisioning", () => {
     const harness = await relayHarness({
       KILN_RELAY_GAME_PORT_RANGE: "30000-30001",
     })
+    // Without the minecraft type, every port it names is published.
+    const { type: _type, ...direct } = recipe
     const twoPorts = brickRecipeSchema.parse({
-      ...recipe,
-      network: {
-        mode: "direct",
+      ...direct,
+      deploy: {
+        ...recipe.deploy,
         ports: [
-          { container: 25_565, name: "game", protocol: "tcp" },
-          { container: 25_575, name: "rcon", protocol: "tcp" },
+          { name: "game", port: 25_565 },
+          { name: "rcon", port: 25_575 },
         ],
-        primaryPort: "game",
       },
     })
     const admitted = <A>(
@@ -284,7 +283,7 @@ describe("game server provisioning", () => {
         relayUpdateInstanceStartupSchema.parse({
           recipeDefinition: {
             ...twoPorts,
-            runtime: { ...twoPorts.runtime, image: nextImage },
+            deploy: { ...twoPorts.deploy, image: nextImage },
           },
           start: false,
           variables: {},
@@ -297,5 +296,62 @@ describe("game server provisioning", () => {
     await expect(create(deletedServerId, "Survival", recipe)).rejects.toThrow()
     pull.release()
     expect(ports(await changed)).toEqual([30_000, 30_001])
+  })
+
+  // A Brick that installs its newest release learns which that is from a
+  // lookup, and the answers that follow it can be ones it doesn't offer.
+  it("refuses a startup change it can't apply while the server still runs", async () => {
+    const harness = await relayHarness()
+    vi.stubGlobal("fetch", async () =>
+      Response.json(["3.5.0", "4.3.2-SNAPSHOT"])
+    )
+    onTestFinished(() => {
+      vi.unstubAllGlobals()
+    })
+    const proxy = brickRecipeSchema.parse({
+      ...recipe,
+      inputs: [
+        { key: "version", label: "Version", type: "text", default: "3.5.0" },
+        {
+          key: "java_version",
+          label: "Java",
+          type: "select",
+          options: ["21"],
+          default: "21",
+          suggest: [{ when: "version", from: "4", value: "25" }],
+        },
+      ],
+      minecraft: { latestVersion: "velocity" },
+    })
+    await harness.lifecycle.createInstanceWithId(
+      newServerId,
+      relayCreateInstanceSchema.parse({
+        diskLimitBytes: MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
+        name: "Proxy",
+        recipe: "https://bricks.test/velocity.yml",
+        recipeDefinition: proxy,
+        start: true,
+        variables: { version: "3.5.0" },
+      })
+    )
+    const container = () =>
+      fakeDocker.container(harness.resources.instanceContainer(newServerId))
+    const before = container()
+    expect(before?.state.running).toBe(true)
+
+    // With no version sent it looks the newest up, which needs a Java this
+    // Brick doesn't offer.
+    await expect(
+      harness.lifecycle.reconfigureInstance(
+        newServerId,
+        relayUpdateInstanceStartupSchema.parse({
+          recipeDefinition: proxy,
+          start: true,
+          variables: {},
+        })
+      )
+    ).rejects.toMatchObject({ code: "unsupported_suggestion" })
+    expect(container()).toBe(before)
+    expect(container()?.state.running).toBe(true)
   })
 })

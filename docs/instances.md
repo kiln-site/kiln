@@ -141,12 +141,14 @@ dumps, backups and permissions one has.
 
 The v1 format is retired, not kept beside v2. Copies already stored (a
 Relay's snapshots, Hearth's catalogs, backup manifests) are converted when
-read.
+read, through `readBrickRecipe` in the contracts, which is the only code
+that knows v1. Game servers are the kind installed from a Brick so far.
 
-The code still decides by a Brick's ID or a game's name in places a recipe
-should decide: `brickId === "tailscale"` stands in for a kind, and console
-completion, the Minecraft status check, SRV records and the picker's
-grouping stand in for a type.
+The code still decides by a Brick's ID or by what it was derived from in
+places a recipe should decide: `brickId === "tailscale"` stands in for a
+kind, and an instance's network mode (`minecraft-backend`), which the
+`minecraft` type sets, stands in for that type in the status check, SRV
+records and the proxy.
 
 Tied settings have four things to settle before they are built: secrets stay
 in Hearth and the file only names them; a push acts with the authority of
@@ -162,7 +164,8 @@ that can't be applied leaves the last good state.
    requests and the resource limit checks; other checks for older Relays go
    as their code is touched.
 4. The new Brick format, with the v1 converter and the official recipes.
-   The format and the official Bricks are written; nothing reads them yet.
+   Done for game servers: Hearth and Relays read `kiln.brick/v2`, and
+   convert v1 where it is stored.
 5. `kind` and `type` in place of the Brick ID and game name checks.
 6. One redeploy for game servers and Apps.
 7. Databases as Bricks.

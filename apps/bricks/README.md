@@ -1,26 +1,27 @@
 # Kiln Bricks
 
-Bricks are versioned, declarative packages that tell a Kiln Relay how to run a
-server. This Kiln monorepo app contains the official catalog, reusable Ember
-container runtimes, and the public recipe specification.
+Bricks are versioned, declarative recipes that tell Kiln how to run
+something. This Kiln monorepo app contains the official catalog, reusable
+Ember container runtimes, and the public specification.
 
 ```text
-catalog.yml          official kiln.brick/v1 recipe index
-recipes/             official kiln.brick/v1 recipes
-bricks.yml           official kiln.brick/v2 Brick index
-bricks/              official kiln.brick/v2 Bricks
+bricks.yml           the official catalog
+bricks/              the official Bricks, in kiln.brick/v2
 embers/              reusable OCI runtimes
 schema/              machine-readable format schemas
 docs/                format and authoring documentation
+catalog.yml          the kiln.brick/v1 catalog, kept for Relays not yet updated
+recipes/             its kiln.brick/v1 recipes
 ```
 
-`kiln.brick/v2` is the next format: one recipe shape for game servers,
-databases, Apps and groups of them. See [its specification](docs/brick-v2.md).
+A Brick is intentionally data, not Kiln code. It selects any OCI image,
+declares an install form, maps the answers into the environment, and
+describes ports and readiness. A Relay that understands the Brick's `format`
+can run a new one without being updated.
 
-A recipe is intentionally data, not Relay code. It selects any OCI image,
-declares user-configurable variables, maps them into environment and resource
-settings, and describes ports and routing. A Relay that understands the recipe's
-`format` can run a new Brick without being updated.
+`catalog.yml` and `recipes/` are frozen. Relays that haven't updated yet read
+them from this repository's `main` branch, so they stay until those Relays
+are gone. Change a Brick in `bricks/` only.
 
 ## Validate locally
 
@@ -29,7 +30,7 @@ pnpm --filter @kiln-site/bricks test
 ```
 
 The official catalog is published directly from
-`apps/bricks/catalog.yml` on this repository's `main` branch.
+`apps/bricks/bricks.yml` on this repository's `main` branch.
 
 ## Official Ember images
 
@@ -43,8 +44,8 @@ ghcr.io/kiln-site/bricks-java:25
 ghcr.io/kiln-site/bricks-steamcmd:latest
 ```
 
-Recipes may use these images or any other OCI image. Prebuilt official Embers
+Bricks may use these images or any other OCI image. Prebuilt official Embers
 keep deployments small and repeatable while leaving custom Bricks independent.
 
-See [the v1 specification](docs/recipe-v1.md) and
+See [the specification](docs/brick-v2.md) and the
 [contribution guide](CONTRIBUTING.md).
