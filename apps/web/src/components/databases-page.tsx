@@ -67,6 +67,7 @@ import {
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
 import {
   NewDatabaseDialog,
+  newDatabaseInput,
   type NewDatabaseValues,
 } from "@/components/database/new-database-dialog"
 import {
@@ -788,7 +789,7 @@ function CreateDatabaseDialog({
   } | null>(null)
   const create = useMutation({
     mutationFn: (values: NewDatabaseValues) => {
-      const input = { ...values, relayId }
+      const input = { ...newDatabaseInput(values), relayId }
       const fingerprint = JSON.stringify(input)
       const idempotencyKey =
         attemptRef.current?.fingerprint === fingerprint

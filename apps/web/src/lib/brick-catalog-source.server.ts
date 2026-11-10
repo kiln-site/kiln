@@ -139,8 +139,11 @@ export async function loadBrickCatalogSource(
       return { ...recipe, source: source.href }
     }
   )
-  // Game servers are the kind Kiln installs from a Brick so far.
-  const bricks = loadedBricks.filter((brick) => brick.kind === "game-server")
+  // Game servers and databases are the kinds Kiln installs from a Brick so
+  // far. Whatever lists them for one kind asks for that kind.
+  const bricks = loadedBricks.filter(
+    (brick) => brick.kind === "game-server" || brick.kind === "database"
+  )
   const ids = new Set<string>()
   for (const brick of bricks) {
     if (ids.has(brick.metadata.id)) {

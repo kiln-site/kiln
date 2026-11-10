@@ -6,7 +6,7 @@ import {
   databaseUsernameIssue,
   relayManagedDatabaseSchema,
 } from "@workspace/contracts"
-import type { DatabaseEngine } from "@workspace/contracts"
+import type { BrickVariableValue } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
 
@@ -14,6 +14,7 @@ import {
   createManagedDatabaseRecordEffect,
   deleteManagedDatabaseRecordEffect,
   managedDatabaseNameExistsEffect,
+  setManagedDatabaseImageEffect,
 } from "@/effect/managed-databases"
 import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
@@ -24,6 +25,7 @@ import {
   claimPreparedProvisioning,
 } from "@/lib/provisioning.server"
 import { exclusive, relayKey, resourceKey, shared } from "@/operations/lanes"
+import { requiredDatabaseBrick } from "@/server/database-bricks.server"
 import { operation, signedIn } from "@/operations/operation"
 import {
   databaseRpc,
@@ -32,9 +34,10 @@ import {
 } from "@/server/managed-database-access"
 
 export interface CreateDatabaseInput {
+  /** The Brick it runs, by its source in a catalog the person sees. */
+  brick: string
   /** Generated when left out. Ignored by an engine with no named databases. */
   databaseName?: string
-  engine: DatabaseEngine
   /**
    * Reserved before the operation runs (`reserveInstanceId`), so a retry and
    * every turn the operation takes name the same database.
@@ -44,6 +47,8 @@ export interface CreateDatabaseInput {
   relayId: string
   /** Generated when left out. */
   username?: string
+  /** Its Brick's answers, such as its version. */
+  variables?: Readonly<Record<string, BrickVariableValue>>
 }
 
 const cancelledSchema = z.object({ cancelled: z.boolean() })
@@ -86,6 +91,13 @@ async function createDatabaseHandler(
   id: string
 ) {
   const relay = await requiredRelay(data.relayId)
+  // Its engine is its Brick's type.
+  const { definition, engine } = await requiredDatabaseBrick(data.brick)
+  // A database listens on its Brick's first port.
+  const internalPort = definition.deploy?.ports?.[0]?.port
+  if (typeof internalPort !== "number") {
+    throw new Error("This database Brick doesn't say which port it listens on")
+  }
   const nameExists = await runAppEffect(
     "managedDatabases.name.preflight",
     managedDatabaseNameExistsEffect(relay.id, data.name)
@@ -98,11 +110,11 @@ async function createDatabaseHandler(
   const username = data.username ?? `kiln_${randomBytes(6).toString("hex")}`
   const password = randomBytes(36).toString("base64url")
   const databaseName =
-    (databaseEngineHasNamedDatabase(data.engine) ? data.databaseName : null) ??
+    (databaseEngineHasNamedDatabase(engine) ? data.databaseName : null) ??
     `kiln_${id}`
   const issue =
-    databaseNameIssue(data.engine, databaseName) ??
-    databaseUsernameIssue(data.engine, username)
+    databaseNameIssue(engine, databaseName) ??
+    databaseUsernameIssue(engine, username)
   if (issue) throw new Error(issue)
   // The Relay creates it in the background; it opens on its provisioning
   // page at once.
@@ -124,10 +136,13 @@ async function createDatabaseHandler(
   await runAppEffect(
     "managedDatabases.record.create",
     createManagedDatabaseRecordEffect({
+      brickId: definition.metadata.id,
+      brickSource: data.brick,
       createdBy: user.id,
       databaseId: id,
       databaseName,
-      engine: data.engine,
+      engine,
+      internalPort,
       name: data.name,
       password,
       relayId: relay.id,
@@ -141,18 +156,31 @@ async function createDatabaseHandler(
         "database.provision.prepare",
         {
           databaseName,
-          engine: data.engine,
           id,
           idempotencyKey: randomUUID(),
           name: data.name,
           password,
+          recipe: data.brick,
+          recipeDefinition: definition,
           username,
+          variables: data.variables ?? {},
         },
         30_000,
         user.id
       )
     ).pipe(
       Effect.map((value) => relayManagedDatabaseSchema.parse(value)),
+      // The image its Brick resolved to with its answers, which its Relay
+      // worked out. Part of preparing it: a job left unclaimed because
+      // this failed would hold its name with nothing to finish it.
+      Effect.tap((prepared) =>
+        promiseEffect(() =>
+          runAppEffect(
+            "managedDatabases.record.image",
+            setManagedDatabaseImageEffect(relay.id, id, prepared.image)
+          )
+        )
+      ),
       Effect.tapError(() => abandonPreparedProvisioning(cancel, unregister))
     )
   )

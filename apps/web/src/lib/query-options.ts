@@ -51,6 +51,7 @@ import {
 import { getHearthEdge } from "@/server/hearth-edge"
 import { getResourceLimitsCapacity } from "@/server/resource-limits"
 import {
+  getDatabaseBricks,
   getManagedDatabaseCredential,
   getManagedDatabaseContainer,
   getManagedDatabaseDirectory,
@@ -1100,6 +1101,15 @@ export function releaseHistoryInfiniteQueryOptions() {
     // so reopening the changelog shows them at once while they refresh.
     gcTime: 30 * 60_000,
     refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
+  })
+}
+
+/** The Bricks a database can be created from. */
+export function databaseBricksQueryOptions() {
+  return queryOptions({
+    queryKey: ["bricks", "databases"] as const,
+    queryFn: () => getDatabaseBricks(),
     staleTime: 5 * 60_000,
   })
 }

@@ -5,7 +5,8 @@ import {
   databaseConnectionMemberSchema,
   databaseEngineSupportsBrowsing,
   databaseEngineSupportsLogicalBackups,
-  databaseEngineSchema,
+  brickSourceSchema,
+  brickVariableValuesSchema,
   databaseMutateInputSchema,
   databaseMutateResultSchema,
   databaseOverviewSchema,
@@ -68,7 +69,6 @@ import { reserveInstanceId } from "@/effect/instance-ids"
 import { resourceOperation } from "@/server/resource-operation.server"
 import {
   authorizedDatabase,
-  databaseEngineDetails,
   databaseForViewer,
   databaseRpc,
   publishDatabaseChange,
@@ -78,7 +78,8 @@ import {
 
 const createDatabaseInputSchema = z.strictObject({
   ...newDatabaseNamesShape,
-  engine: databaseEngineSchema,
+  brick: brickSourceSchema,
+  variables: brickVariableValuesSchema.optional(),
   // The same for every try of one create, so a retry gets the same ID.
   idempotencyKey: z.uuid(),
   name: relayDatabaseNameSchema,
@@ -163,8 +164,9 @@ export const getManagedDatabaseDirectory = createServerFn({
         engine: record.engine,
         databaseName: record.databaseName,
         hostname: `database-${record.databaseId}`,
-        image: databaseEngineDetails[record.engine].image,
-        internalPort: databaseEngineDetails[record.engine].internalPort,
+        brickId: record.brickId,
+        image: record.image,
+        internalPort: record.internalPort,
         hasCredentials: true,
         permissions: databasePermissions.filter((permission) =>
           hasDatabasePermission(
@@ -203,7 +205,7 @@ export const getManagedDatabaseCredential = createServerFn({ method: "GET" })
     return {
       databaseName: credential.databaseName,
       hostname: `database-${credential.databaseId}`,
-      internalPort: databaseEngineDetails[credential.engine].internalPort,
+      internalPort: credential.internalPort,
       password: credential.password,
       username: credential.username,
     }
@@ -292,6 +294,15 @@ export const renameManagedDatabase = createServerFn({ method: "POST" })
       user: await requireEligibleResourceUser(),
     })
   )
+
+// The Bricks a database can be created from, for whoever is asked which.
+export const getDatabaseBricks = createServerFn({ method: "GET" }).handler(
+  async () => {
+    await requireEligibleResourceUser()
+    const { databaseBricks } = await import("@/server/database-bricks.server")
+    return databaseBricks()
+  }
+)
 
 export const createManagedDatabase = createServerFn({ method: "POST" })
   .validator(createDatabaseInputSchema)

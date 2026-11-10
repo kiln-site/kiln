@@ -3,7 +3,8 @@ import {
   appIdSchema,
   appNameSchema,
   appServiceNameSchema,
-  databaseEngineSchema,
+  brickSourceSchema,
+  brickVariableValuesSchema,
   databaseIdSchema,
   instancePowerPermission,
   newDatabaseNamesShape,
@@ -80,8 +81,9 @@ const createAppInputSchema = z.strictObject({
     .discriminatedUnion("kind", [
       z.strictObject({
         ...newDatabaseNamesShape,
-        engine: databaseEngineSchema,
+        brick: brickSourceSchema,
         kind: z.literal("new"),
+        variables: brickVariableValuesSchema.optional(),
         name: relayDatabaseNameSchema,
       }),
       z.strictObject({ id: databaseIdSchema, kind: z.literal("existing") }),
