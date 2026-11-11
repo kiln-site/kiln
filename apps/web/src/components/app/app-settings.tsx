@@ -20,7 +20,7 @@ import { StatusIndicator } from "@/components/status-indicator"
 import {
   appConfigQueryOptions,
   appDeploymentSummaryQueryOptions,
-  appWebRoutesQueryOptions,
+  webRoutesQueryOptions,
   queryKeys,
 } from "@/lib/query-options"
 import { deployApp } from "@/server/apps"
@@ -57,7 +57,13 @@ export function AppWebRouteSettings({
   app: App
   canManage: boolean
 }) {
-  const state = useQuery(appWebRoutesQueryOptions(app.relayId, app.id))
+  const state = useQuery(
+    webRoutesQueryOptions({
+      relayId: app.relayId,
+      resourceId: app.id,
+      resourceType: "app",
+    })
+  )
   const routes = state.data?.routes ?? []
   const empty = !state.data || routes.length === 0
   const primary = primaryWebRoute(routes)

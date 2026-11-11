@@ -2,7 +2,9 @@ import { createServerFn } from "@tanstack/react-start"
 import {
   appIdSchema,
   instanceIdSchema,
+  relayAppWebRouteInputsSchema,
   relayIdSchema,
+  relayInstanceWebRouteInputsSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -10,7 +12,10 @@ import {
   domainBlacklistPatternsSchema,
   domainNameSchema,
   vanityLabelSchema,
+  webRouteProxySchema,
 } from "@/lib/domain-schemas"
+import { runOperationPromise } from "@/operations/operation"
+import { requireEligibleResourceUser } from "@/server/auth"
 import {
   createInstanceDomainHandler,
   getInstanceDomainHandler,
@@ -31,6 +36,7 @@ import {
   getResourceWebHostnamesHandler,
   releaseWebHostnameHandler,
 } from "@/server/web-hostname-access.server"
+import { getWebRoutesHandler, saveWebRoutes } from "@/server/web-routes.server"
 
 const apiTokenSchema = z.string().trim().min(20).max(512)
 const zoneIdSchema = z.string().regex(/^[a-f0-9]{32}$/u)
@@ -93,6 +99,25 @@ const resourceWebHostnamesInputSchema = z.discriminatedUnion("resourceType", [
     relayId: relayIdSchema,
     resourceId: appIdSchema,
     resourceType: z.literal("app"),
+  }),
+])
+
+// An instance's web routes as they are saved: a game server's, or an
+// App's, which each name the service they reach.
+const saveWebRoutesInputSchema = z.discriminatedUnion("resourceType", [
+  z.object({
+    proxy: webRouteProxySchema.optional(),
+    relayId: relayIdSchema,
+    resourceId: instanceIdSchema,
+    resourceType: z.literal("instance"),
+    routes: relayInstanceWebRouteInputsSchema,
+  }),
+  z.object({
+    proxy: webRouteProxySchema.optional(),
+    relayId: relayIdSchema,
+    resourceId: appIdSchema,
+    resourceType: z.literal("app"),
+    routes: relayAppWebRouteInputsSchema,
   }),
 ])
 
@@ -333,6 +358,21 @@ export const updateInstanceDomain = createServerFn({ method: "POST" })
 export const removeInstanceDomain = createServerFn({ method: "POST" })
   .validator(removeInstanceDomainInputSchema)
   .handler(({ data }) => removeInstanceDomainHandler(data))
+
+/** An instance's web routes, and whether its Relay's proxy serves them. */
+export const getWebRoutes = createServerFn({ method: "GET" })
+  .validator(resourceWebHostnamesInputSchema)
+  .handler(async ({ data }) =>
+    getWebRoutesHandler(await requireEligibleResourceUser(), data)
+  )
+
+export const updateWebRoutes = createServerFn({ method: "POST" })
+  .validator(saveWebRoutesInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(saveWebRoutes, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
 
 export const getResourceWebHostnames = createServerFn({ method: "GET" })
   .validator(resourceWebHostnamesInputSchema)

@@ -55,7 +55,7 @@ import { appDestinations } from "@/lib/navigation-destinations"
 import {
   appConfigQueryOptions,
   appDirectoryQueryOptions,
-  appWebRoutesQueryOptions,
+  webRoutesQueryOptions,
 } from "@/lib/query-options"
 import { useAppDeployState } from "@/components/app/use-app-deploy-state"
 import { cancelQueuedAppDeploy } from "@/server/app-deployments"
@@ -294,7 +294,11 @@ function AppResourceMeters({ app }: { app: App }) {
 // the Relay's network when it has none.
 function AppHeaderAddress({ app }: { app: App }) {
   const url = useQuery({
-    ...appWebRoutesQueryOptions(app.relayId, app.id),
+    ...webRoutesQueryOptions({
+      relayId: app.relayId,
+      resourceId: app.id,
+      resourceType: "app",
+    }),
     select: selectPrimaryUrl,
   }).data
   return url ? (

@@ -15,14 +15,10 @@ import {
   relayAppTerminalClaimSchema,
   relayAppTerminalRestartSchema,
   relayAppTerminalWriteSchema,
-  relayAppWebRouteInputsSchema,
-  relayAppWebRouteStateSchema,
   relayDatabaseNameSchema,
   relayIdSchema,
-  webRouteHostnames,
 } from "@workspace/contracts"
 import type { RelayApp } from "@workspace/contracts"
-import { Effect } from "effect"
 import { z } from "zod"
 
 import {
@@ -30,11 +26,9 @@ import {
   renameAppRecordEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
-import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import type { AccessPermission } from "@/lib/permissions"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
-import { webRouteProxySchema } from "@/lib/domain-schemas"
 import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
 import {
   awaitResourceDeletion,
@@ -58,13 +52,8 @@ import { createAppFor } from "@/server/app-create.server"
 import { connectDatabase } from "@/server/database-connections.server"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import { databaseRpc } from "@/server/managed-database-access"
-import type { AuthenticatedUser } from "@/lib/auth-session"
-import { dnsKey } from "@/lib/dns-operations"
-import { exclusive } from "@/operations/lanes"
 import {
-  operation,
   runOperationPromise,
-  signedIn,
 } from "@/operations/operation"
 
 const appInputSchema = z.strictObject({
@@ -367,97 +356,6 @@ export const updateAppNetwork = createServerFn({ method: "POST" })
       { user: await requireEligibleResourceUser() }
     )
   )
-
-export const getAppWebRoutes = createServerFn({ method: "GET" })
-  .validator(appInputSchema)
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedApp(data, "app.read")
-    return relayAppWebRouteStateSchema.parse(
-      await databaseRpc(
-        relay,
-        "instance.network.routes.read",
-        { id: data.appId, kind: "app" },
-        30_000,
-        user.id
-      )
-    )
-  })
-
-// Saves the app's routes. Bundled Traefik serves them right away; an
-// external Traefik once a deploy labels the app's containers.
-const appWebRoutesSchema = appInputSchema.extend({
-  proxy: webRouteProxySchema.optional(),
-  routes: relayAppWebRouteInputsSchema,
-})
-
-const saveAppWebRoutes = operation<z.infer<typeof appWebRoutesSchema>>()({
-  name: "webRoutes.app.save",
-  doing: "Changing this App's web routes",
-  authorize: ({ input, user }) =>
-    signedIn(user).pipe(
-      Effect.tap((person) =>
-        promiseEffect(() => authorizedAppFor(person, input, "app.manage"))
-      )
-    ),
-  locks: ({ input }) => [
-    exclusive(
-      dnsKey({
-        relayId: input.relayId,
-        resourceId: input.appId,
-        resourceType: "app",
-      })
-    ),
-  ],
-  run: ({ context: user, input }) =>
-    promiseEffect(() => updateAppWebRoutesHandler(user, input)),
-  audit: ({ input }) => ({
-    id: input.appId,
-    kind: "app",
-    relayId: input.relayId,
-  }),
-})
-
-export const updateAppWebRoutes = createServerFn({ method: "POST" })
-  .validator(appWebRoutesSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(saveAppWebRoutes, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
-
-async function updateAppWebRoutesHandler(
-  user: AuthenticatedUser,
-  data: z.infer<typeof appWebRoutesSchema>
-) {
-  const { relay } = await authorizedAppFor(user, data, "app.manage")
-  const resource = {
-    relayId: relay.id,
-    resourceId: data.appId,
-    resourceType: "app" as const,
-  }
-  const { saveClaimingWebRouteHostnames, syncWebRouteHostnames } =
-    await import("@/server/web-hostname-access.server")
-  const state = await saveClaimingWebRouteHostnames(
-    user,
-    resource,
-    data.routes.flatMap(webRouteHostnames),
-    async () =>
-      relayAppWebRouteStateSchema.parse(
-        await databaseRpc(
-          relay,
-          "instance.network.routes.write",
-          { id: data.appId, kind: "app", routes: data.routes },
-          240_000,
-          user.id
-        )
-      ),
-    data.proxy
-  )
-  publishAppChange(relay.id, false)
-  // Kiln keeps the DNS records of hostnames in zones it manages.
-  await syncWebRouteHostnames(resource)
-  return state
-}
 
 export const deleteApp = createServerFn({ method: "POST" })
   .validator(
