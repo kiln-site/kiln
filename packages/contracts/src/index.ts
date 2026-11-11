@@ -261,6 +261,8 @@ export const relayManagedDatabaseSchema = z
      * read as the Brick of its engine.
      */
     brickId: z.string().min(1).max(64).optional(),
+    // Which revision of its Brick's recipe it was made from.
+    brickRevision: z.number().int().min(1).optional(),
   })
   .strict()
 
@@ -1260,6 +1262,16 @@ export const relayInstanceImageCheckSchema = z
   })
   .strict()
 
+// The Brick an instance was installed from, and which revision of it:
+// what Hearth compares with the catalog's to offer a newer recipe.
+export const relayInstalledBrickSchema = z.object({
+  revision: z.number().int().min(1),
+  source: brickSourceSchema,
+})
+
+// Said with every answer, whatever the image check found.
+const installedBrick = { brick: relayInstalledBrickSchema.optional() }
+
 export const relayInstanceImageCheckResultSchema = z.discriminatedUnion(
   "status",
   [
@@ -1267,6 +1279,7 @@ export const relayInstanceImageCheckResultSchema = z.discriminatedUnion(
     // runs: the one it deployed, or for a container Kiln didn't label with
     // one, the digests its image was pulled as.
     z.object({
+      ...installedBrick,
       id: instanceIdSchema,
       image: z.string().min(1).max(512),
       latestDigest: imageDigestSchema,
@@ -1275,13 +1288,14 @@ export const relayInstanceImageCheckResultSchema = z.discriminatedUnion(
     }),
     // Its container runs another image than the one named, as when an
     // App's config changed since it deployed.
-    z.object({ id: instanceIdSchema, status: z.literal("changed") }),
-    z.object({ id: instanceIdSchema, status: z.literal("not_deployed") }),
+    z.object({ ...installedBrick, id: instanceIdSchema, status: z.literal("changed") }),
+    z.object({ ...installedBrick, id: instanceIdSchema, status: z.literal("not_deployed") }),
     // A deployment is running; its outcome decides what runs.
-    z.object({ id: instanceIdSchema, status: z.literal("deploying") }),
+    z.object({ ...installedBrick, id: instanceIdSchema, status: z.literal("deploying") }),
     // It names a digest, which never moves.
-    z.object({ id: instanceIdSchema, status: z.literal("pinned") }),
+    z.object({ ...installedBrick, id: instanceIdSchema, status: z.literal("pinned") }),
     z.object({
+      ...installedBrick,
       error: z.string().max(500),
       id: instanceIdSchema,
       status: z.literal("error"),
@@ -2276,6 +2290,8 @@ export const relayInstanceSchema = z.object({
   status: z.string(),
   brickId: brickIdSchema.optional(),
   brickFormat: z.string().min(1).optional(),
+  // Which revision of its Brick's recipe it was installed from.
+  brickRevision: z.number().int().min(1).optional(),
   // What its Brick says it is. Anything that depends on what an instance is
   // reads these, never its Brick's ID or how its network is set up.
   brickKind: z.enum(["game-server", "database", "app"]).optional(),
