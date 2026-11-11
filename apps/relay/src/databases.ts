@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { pipeline } from "node:stream/promises"
 
 import type {
+  BrickVariableValue,
   DatabaseEngine,
   RelayCreateDatabase,
   RelayDatabaseExport,
@@ -26,6 +27,8 @@ import type {
   ResourceLimits,
 } from "@workspace/contracts"
 import {
+  brickInputSensitive,
+  brickInputs,
   databaseEngineSupportsLogicalBackups,
   databaseEngineSchema,
   databaseFileRootId,
@@ -36,6 +39,7 @@ import {
 } from "@workspace/contracts"
 import { Effect, Option, Result } from "effect"
 
+import { resolveDatabaseBrick, type ResolvedDatabaseBrick } from "./bricks.js"
 import { ensuringPromise } from "./effect/promise.js"
 import { traceRelayEffect, traceRelayPromise } from "./effect/runtime.js"
 import { collectProcessErrors } from "./database-backups.js"
@@ -114,6 +118,11 @@ interface DatabaseEngineSpec {
   internalPort: number
 }
 
+// What each engine's database ran with before databases ran Bricks. A
+// container from then says only its engine, so this stands for the Brick
+// it would have had. One made from a Brick records these on its labels.
+// Frozen: it describes containers that already exist, so it never follows
+// what the official Bricks come to say.
 const engineSpecs: Record<DatabaseEngine, DatabaseEngineSpec> = {
   mysql: {
     dataMount: "/var/lib/mysql",
@@ -183,18 +192,34 @@ interface DatabaseContainerInspect {
 
 function databaseRecoveryLabels(
   config: Pick<RelayConfig, "resourceNamespace">,
-  input: Pick<RelayCreateDatabase, "databaseName" | "engine" | "id" | "name">,
+  input: Pick<RelayCreateDatabase, "databaseName" | "id" | "name" | "recipe">,
+  brick: ResolvedDatabaseBrick,
   createdAt: string
 ): Record<string, string> {
-  const spec = engineSpecs[input.engine]
   const labels: Record<string, string> = {
+    // The Brick it runs, and its answers that aren't secret. The login and
+    // any secret Kiln made stay in the container's environment.
+    "kiln.brick.format": brick.recipe.format,
+    "kiln.brick.id": brick.recipe.metadata.id,
+    "kiln.brick.kind": "database",
+    "kiln.brick.source": input.recipe,
+    "kiln.brick.type": brick.engine,
+    "kiln.brick.variables": JSON.stringify(publicAnswers(brick)),
+    ...(brick.command.length === 0
+      ? {}
+      : { "kiln.database.command": JSON.stringify(brick.command) }),
     "kiln.database.created-at": createdAt,
+    // What its Brick said of its container, which a replacement is made
+    // from without reading the Brick again.
+    "kiln.database.data-mount": brick.dataMount,
     "kiln.database.database-name": input.databaseName,
-    "kiln.database.engine": input.engine,
+    "kiln.database.engine": brick.engine,
     "kiln.database.hostname": databaseHostname(input.id),
     "kiln.database.id": physicalKey(input.id),
-    "kiln.database.image": spec.image,
+    "kiln.database.image": brick.image,
     "kiln.database.name": input.name,
+    "kiln.database.port": String(brick.internalPort),
+    ...(brick.ready === null ? {} : { "kiln.database.ready": brick.ready }),
     "kiln.database.network": databaseResourceName(config, input.id, "network"),
     "kiln.database.volume": databaseResourceName(config, input.id, "data"),
     "kiln.relay.managed": "true",
@@ -306,24 +331,25 @@ export class DatabaseDriver {
 
   /** What a database shows from its create request until it exists. */
   placeholder(input: RelayCreateDatabase): RelayManagedDatabase {
-    const spec = engineSpecs[input.engine]
+    const brick = resolvedBrick(input)
     return relayManagedDatabaseSchema.parse({
+      brickId: brick.recipe.metadata.id,
       containerId: null,
       createdAt: new Date().toISOString(),
       databaseName: input.databaseName,
       diskUsedBytes: null,
-      engine: input.engine,
+      engine: brick.engine,
       hostname: databaseHostname(input.id),
       id: input.id,
-      image: spec.image,
-      internalPort: spec.internalPort,
+      image: brick.image,
+      internalPort: brick.internalPort,
       members: [],
       limits: NO_RESOURCE_LIMITS,
       name: input.name,
       observedState: "provisioning",
       provisioning: { attempt: 0, error: null, phase: "awaiting_claim" },
       status: provisioningStatus("awaiting_claim", "database"),
-      supportsImportExport: databaseEngineSupportsLogicalBackups(input.engine),
+      supportsImportExport: databaseEngineSupportsLogicalBackups(brick.engine),
     })
   }
 
@@ -472,9 +498,16 @@ export class DatabaseDriver {
     if ((await this.#discover([input.id])).length > 0) {
       throw new Error("Database already exists")
     }
-    const spec = engineSpecs[input.engine]
+    // Worked out before anything is made: a Brick this Relay can't run, or
+    // an answer it refuses, leaves nothing behind.
+    const brick = resolvedBrick(input)
     const createdAt = new Date().toISOString()
-    const labels = databaseRecoveryLabels(this.#config, input, createdAt)
+    const labels = databaseRecoveryLabels(
+      this.#config,
+      input,
+      brick,
+      createdAt
+    )
     const container = databaseResourceName(this.#config, input.id, "database")
     const network = labels["kiln.database.network"]
     const volume = labels["kiln.database.volume"]
@@ -484,7 +517,7 @@ export class DatabaseDriver {
 
     const created = await promiseResult(async () => {
       await onPhase("pulling_image")
-      await Effect.runPromise(ensureImage(this.#engine, spec.image))
+      await Effect.runPromise(ensureImage(this.#engine, brick.image))
       await onPhase("creating_container")
       await Effect.runPromise(
         this.#engine.createVolume({ labels, name: volume })
@@ -494,10 +527,10 @@ export class DatabaseDriver {
         this.#engine.createNetwork({ internal: true, labels, name: network })
       )
       networkCreated = true
-      if (input.engine === "redis" || input.engine === "valkey") {
+      if (brick.engine === "redis" || brick.engine === "valkey") {
         await writeAclFile(
           this.#engine,
-          spec.image,
+          brick.image,
           volume,
           input.username,
           input.password
@@ -505,13 +538,13 @@ export class DatabaseDriver {
       }
       await Effect.runPromise(
         createContainer(this.#engine, {
-          command: spec.command ?? [],
-          env: databaseEnvironment(input),
-          healthcheck: databaseHealthcheck(input.engine),
+          command: [...brick.command],
+          env: brick.environment,
+          healthcheck: databaseHealthcheck(brick.engine, brick.ready),
           hostname: databaseHostname(input.id),
-          image: spec.image,
+          image: brick.image,
           labels,
-          mounts: [{ source: volume, target: spec.dataMount, type: "volume" }],
+          mounts: [{ source: volume, target: brick.dataMount, type: "volume" }],
           name: container,
           network: { aliases: databaseHostnames(input.id), name: network },
           restart: "unless-stopped",
@@ -664,7 +697,7 @@ export class DatabaseDriver {
     const engine = databaseEngineSchema.parse(
       requiredLabel(labels, "kiln.database.engine")
     )
-    const spec = engineSpecs[engine]
+    const spec = recordedSpec(labels, engine)
     const name = container.Name.replace(/^\//u, "")
     const running = container.State.Running
     // The name says whether it was running, for recovery after a restart.
@@ -683,14 +716,17 @@ export class DatabaseDriver {
       }
       await Effect.runPromise(
         createContainer(docker, {
-          command: spec.command ?? [],
+          command: [...(spec.command ?? [])],
           env: Object.fromEntries(
             (container.Config.Env ?? []).map((entry) => {
               const separator = entry.indexOf("=")
               return [entry.slice(0, separator), entry.slice(separator + 1)]
             })
           ),
-          healthcheck: databaseHealthcheck(engine),
+          healthcheck: databaseHealthcheck(
+            engine,
+            labels["kiln.database.ready"] ?? null
+          ),
           hostname: databaseHostname(id),
           image: databaseImage(container),
           // What the old container's label said of it, not this one.
@@ -1335,8 +1371,10 @@ export class DatabaseDriver {
       // name its label recorded too.
       hostname: databaseHostname(id),
       id,
+      // One made before databases ran Bricks runs its engine's.
+      brickId: labels["kiln.brick.id"] ?? engine,
       image: labels["kiln.database.image"] ?? container.Config.Image,
-      internalPort: engineSpecs[engine].internalPort,
+      internalPort: recordedSpec(labels, engine).internalPort,
       members,
       limits: {
         ...containerResourceLimits(container),
@@ -1563,33 +1601,6 @@ function requiredContainerId(
   return database.containerId
 }
 
-function databaseEnvironment(
-  input: RelayCreateDatabase
-): Record<string, string> {
-  const rootPassword = randomBytes(36).toString("base64url")
-  return input.engine === "mysql"
-    ? {
-        MYSQL_DATABASE: input.databaseName,
-        MYSQL_PASSWORD: input.password,
-        MYSQL_ROOT_PASSWORD: rootPassword,
-        MYSQL_USER: input.username,
-      }
-    : input.engine === "mariadb"
-      ? {
-          MARIADB_DATABASE: input.databaseName,
-          MARIADB_PASSWORD: input.password,
-          MARIADB_ROOT_PASSWORD: rootPassword,
-          MARIADB_USER: input.username,
-        }
-      : input.engine === "postgres"
-        ? {
-            POSTGRES_DB: input.databaseName,
-            POSTGRES_PASSWORD: input.password,
-            POSTGRES_USER: input.username,
-          }
-        : {}
-}
-
 // Each check passes only once the database serves its network port. The
 // images first initialize on a temporary server that only listens on a local
 // socket, and checking that one would report ready before the restart.
@@ -1598,16 +1609,22 @@ function databaseEnvironment(
 //
 // Databases are checked twice a second while they start, so they're ready as
 // soon as they serve, and every five seconds after the first check passes.
-function databaseHealthcheck(engine: DatabaseEngine): ContainerHealthcheck {
+function databaseHealthcheck(
+  engine: DatabaseEngine,
+  // Its Brick's `ready` command. One made before databases ran Bricks has
+  // none recorded, and is checked as its engine always was.
+  ready: string | null
+): ContainerHealthcheck {
   return {
     command:
-      engine === "mysql"
+      ready ??
+      (engine === "mysql"
         ? "mysqladmin ping -h 127.0.0.1 --silent"
         : engine === "mariadb"
           ? "healthcheck.sh --connect --innodb_initialized"
           : engine === "postgres"
             ? 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-            : `${engine === "redis" ? "redis-cli" : "valkey-cli"} ping | grep -qE '^(PONG|NOAUTH)'`,
+            : `${engine === "redis" ? "redis-cli" : "valkey-cli"} ping | grep -qE '^(PONG|NOAUTH)'`),
     intervalMs: 5_000,
     retries: 24,
     startIntervalMs: 500,
@@ -1819,6 +1836,67 @@ async function writeAclFile(
 // Half the start interval of the health check, so a passing check is seen
 // soon after it lands. Inspecting a container is a cheap local request.
 const READY_POLL_MS = 250
+
+// A create's Brick with its answers and the login Kiln gives it.
+function resolvedBrick(input: RelayCreateDatabase): ResolvedDatabaseBrick {
+  return resolveDatabaseBrick(
+    input.recipeDefinition,
+    input.variables,
+    {
+      host: databaseHostname(input.id),
+      name: input.databaseName,
+      password: input.password,
+      username: input.username,
+    },
+    input.recipe
+  )
+}
+
+// A Brick's answers a label can keep: none of its secrets.
+function publicAnswers(
+  brick: ResolvedDatabaseBrick
+): Record<string, BrickVariableValue> {
+  const sensitive = new Set(
+    brickInputs(brick.recipe).flatMap((input) =>
+      brickInputSensitive(input) ? [input.key] : []
+    )
+  )
+  return Object.fromEntries(
+    Object.entries(brick.values).filter(([key]) => !sensitive.has(key))
+  )
+}
+
+// What a database's container is made with: what its Brick recorded on its
+// labels, or for one from before then, what its engine ran with.
+function recordedSpec(
+  labels: Record<string, string | undefined>,
+  engine: DatabaseEngine
+): Omit<DatabaseEngineSpec, "image"> {
+  const fallback = engineSpecs[engine]
+  const dataMount = labels["kiln.database.data-mount"]
+  const port = Number(labels["kiln.database.port"])
+  if (!dataMount || !Number.isInteger(port) || port <= 0) return fallback
+  return {
+    command: recordedCommand(labels) ?? fallback.command,
+    dataMount,
+    internalPort: port,
+  }
+}
+
+function recordedCommand(
+  labels: Record<string, string | undefined>
+): ReadonlyArray<string> | undefined {
+  const recorded = labels["kiln.database.command"]
+  if (recorded === undefined) return undefined
+  const parsed = Result.getOrElse(
+    Result.try(() => JSON.parse(recorded) as unknown),
+    () => null
+  )
+  return Array.isArray(parsed) &&
+    parsed.every((part): part is string => typeof part === "string")
+    ? parsed
+    : undefined
+}
 
 // The image a database's containers are made from: the tag it was created
 // with, whatever release of it a container runs.

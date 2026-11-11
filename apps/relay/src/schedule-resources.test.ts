@@ -8,6 +8,7 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 import { controlRequestLocks } from "./operation-plans.js"
 import type { ScheduleManager } from "./schedules.js"
 import { fakeDocker } from "./test/docker.js"
+import { databaseBrick } from "./test/database-bricks.js"
 import { relayHarness, scheduleWorker, TEST_NAMESPACE } from "./test/relay.js"
 
 const scheduleId = "14bb1e12-fab9-45f3-8f85-ae22d2f074e5"
@@ -67,7 +68,7 @@ describe("schedules and power", () => {
     await harness.databases.create(
       relayCreateDatabaseSchema.parse({
         databaseName: "kiln_app",
-        engine: "postgres",
+        ...databaseBrick("postgres"),
         id,
         name: "Main database",
         password: "correct-horse-battery-staple-1",
@@ -122,7 +123,7 @@ describe("schedules and power", () => {
     await harness.databases.create(
       relayCreateDatabaseSchema.parse({
         databaseName: "kiln_app",
-        engine: "postgres",
+        ...databaseBrick("postgres"),
         id,
         name: "Main database",
         password: "correct-horse-battery-staple-1",

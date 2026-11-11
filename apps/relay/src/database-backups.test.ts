@@ -17,6 +17,7 @@ import {
   restoreCompressedDatabaseBackup,
 } from "./database-backups.js"
 import { fakeDocker } from "./test/docker.js"
+import { databaseBrick } from "./test/database-bricks.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 
 const databaseId = "d".repeat(12)
@@ -28,7 +29,7 @@ async function harnessWithDatabase(engine: "mysql" | "postgres") {
   await harness.databases.create(
     relayCreateDatabaseSchema.parse({
       databaseName: "kiln_app",
-      engine,
+      ...databaseBrick(engine),
       id: databaseId,
       name: "Main database",
       password: "correct-horse-battery-staple-1",

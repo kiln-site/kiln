@@ -65,6 +65,7 @@ export * from "./cli.js"
 export * from "./instance-limits.js"
 export * from "./resource-limits.js"
 export * from "./database-login.js"
+export * from "./database-bricks.js"
 export * from "./security.js"
 export * from "./instance-overview.js"
 export * from "./icon-images.js"
@@ -255,17 +256,31 @@ export const relayManagedDatabaseSchema = z
     startedAt: z.string().datetime().nullable().default(null),
     status: z.string().min(1).max(280),
     supportsImportExport: z.boolean(),
+    /**
+     * The Brick it runs, by its ID. One made before databases ran Bricks is
+     * read as the Brick of its engine.
+     */
+    brickId: z.string().min(1).max(64).optional(),
   })
   .strict()
 
+/**
+ * A database to create: the Brick it runs, with its answers, and the name
+ * and login Kiln gives it. Hearth reads the Brick from its catalog and
+ * sends it whole, as it does a game server's.
+ */
 export const relayCreateDatabaseSchema = z
   .object({
     databaseName: databaseNameFieldSchema,
-    engine: databaseEngineSchema,
     id: databaseIdSchema,
     name: relayDatabaseNameSchema,
     password: z.string().min(24).max(256),
+    recipe: brickSourceSchema,
+    recipeDefinition: brickRecipeSchema,
     username: databaseUsernameSchema,
+    variables: z
+      .record(z.string().regex(/^[a-z][a-z0-9_]{0,47}$/u), brickInputValueSchema)
+      .default({}),
   })
   .strict()
 

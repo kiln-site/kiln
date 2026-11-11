@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vite-plus/test"
 vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { fakeDocker } from "./test/docker.js"
+import { databaseBrick } from "./test/database-bricks.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
 import { WORKLOAD_SLICE_LABEL } from "./docker-container-spec.js"
 
@@ -58,7 +59,7 @@ describe("moving workloads into the slice", () => {
     await harness.databases.create(
       relayCreateDatabaseSchema.parse({
         databaseName: "kiln_app",
-        engine: "postgres",
+        ...databaseBrick("postgres"),
         id: databaseId,
         name: "Main database",
         password: "correct-horse-battery-staple-1",

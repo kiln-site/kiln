@@ -13,6 +13,7 @@ import {
   databaseTerminalTarget,
 } from "./container-terminal.js"
 import { fakeDocker } from "./test/docker.js"
+import { databaseBrick } from "./test/database-bricks.js"
 import { relayHarness, type RelayHarness } from "./test/relay.js"
 
 const databaseId = "e".repeat(12)
@@ -29,7 +30,7 @@ async function runningDatabase(
   await harness.databases.create(
     relayCreateDatabaseSchema.parse({
       databaseName: "kiln_app",
-      engine,
+      ...databaseBrick(engine),
       id: databaseId,
       name: "Main database",
       ...credentials,
