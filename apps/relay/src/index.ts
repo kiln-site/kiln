@@ -48,12 +48,12 @@ import {
   RelayTransferReferenceSchema,
   RelayTransferSpaceRequestSchema,
   RelayTransferSourcePrepareSchema,
-  appIdSchema,
   appTailscaleMember,
   databaseTailscaleMemberId,
   instanceTailscaleMemberId,
   relayAppWebRouteStateSchema,
-  relayAppWebRoutesWriteSchema,
+  relayInstanceWebRoutesReadSchema,
+  relayInstanceWebRoutesWriteSchema,
   relayDeleteAppSchema,
   relayAppDeploymentAbortSchema,
   relayAppDeploymentReadSchema,
@@ -99,7 +99,6 @@ import {
   relayInstancePortLeaseReleaseSchema,
   relayInstancePortLeaseRequestSchema,
   relayInstancePortInputsSchema,
-  relayInstanceWebRouteInputsSchema,
   relayNetworkingSchema,
   relayProxyBrowserMetadataSchema,
   relayProxyReadInputSchema,
@@ -3199,64 +3198,6 @@ async function executeControlRequest(
       )
       return { appId: input.appId, volumeIds: input.volumeIds }
     }
-    case "app.network.routes.read": {
-      const appId = appIdSchema.parse(payload.appId)
-      return appWebRouteState(appId)
-    }
-    case "app.network.routes.write": {
-      const input = relayAppWebRoutesWriteSchema.parse(request.payload)
-      await apps.get(input.appId)
-      const owner = appRouteOwner(input.appId)
-      const configuredRoutes = await runRelayEffect(
-        "relay.apps.routes.collisionCheck",
-        startup.state.listWebRoutes()
-      )
-      const routes = assignRelayWebRouteIds(
-        owner,
-        input.routes,
-        configuredRoutes
-      )
-      const collision = webRouteCollision(owner, routes, configuredRoutes)
-      if (collision) {
-        throw new Error(
-          `Another server or app already uses https://${collision}. Hostname and path routes must be unique on a Relay.`
-        )
-      }
-      const previous = await runRelayEffect(
-        "relay.apps.routes.previous",
-        startup.state.listInstanceRoutes(owner)
-      )
-      await runRelayEffect(
-        "relay.apps.routes.replace",
-        startup.state.replaceInstanceRoutes(owner, routes)
-      )
-      await Effect.runPromise(
-        relayOperation(async () => {
-          await lifecycle.configureWebRoutes(
-            await runRelayEffect(
-              "relay.apps.routes.all",
-              startup.state.listWebRoutes()
-            )
-          )
-        }).pipe(
-          Effect.onError(() =>
-            cleanupOperation("app web route rollback", async () => {
-              await runRelayEffect(
-                "relay.apps.routes.rollback",
-                startup.state.replaceInstanceRoutes(owner, previous)
-              )
-              await lifecycle.configureWebRoutes(
-                await runRelayEffect(
-                  "relay.apps.routes.rollbackAll",
-                  startup.state.listWebRoutes()
-                )
-              )
-            })
-          )
-        )
-      )
-      return appWebRouteState(input.appId)
-    }
     case "app.terminal.attach": {
       const input = relayAppTerminalAttachSchema.parse(request.payload)
       return terminals.attach(
@@ -4017,14 +3958,8 @@ async function executeControlRequest(
         return relayInstanceWithStoredName(updated)
       })
     }
-    case "instance.network.routes.read": {
-      const instance = await requiredInstance(payload)
-      const routes = await runRelayEffect(
-        "relay.network.routes.read",
-        startup.state.listInstanceRoutes(instance.id)
-      )
-      return lifecycle.webRouteState(instance.id, routes)
-    }
+    case "instance.network.routes.read":
+      return webRouteState(relayInstanceWebRoutesReadSchema.parse(payload))
     case "instance.network.databases.remove": {
       const input = relayRemoveDatabaseConnectionSchema.parse(payload)
       const instance = await requiredInstance(payload)
@@ -4044,20 +3979,18 @@ async function executeControlRequest(
       )
     }
     case "instance.network.routes.write": {
-      const instance = await requiredInstance(payload)
-      const requestedRoutes = relayInstanceWebRouteInputsSchema.parse(
-        payload.routes
-      )
+      const input = relayInstanceWebRoutesWriteSchema.parse(payload)
+      const owner = await webRouteOwner(input)
       const configuredRoutes = await runRelayEffect(
         "relay.network.routes.collisionCheck",
         startup.state.listWebRoutes()
       )
       const routes = assignRelayWebRouteIds(
-        instance.id,
-        requestedRoutes,
+        owner,
+        input.routes,
         configuredRoutes
       )
-      const collision = webRouteCollision(instance.id, routes, configuredRoutes)
+      const collision = webRouteCollision(owner, routes, configuredRoutes)
       if (collision) {
         throw new Error(
           `Another server or app already uses https://${collision}. Hostname and path routes must be unique on a Relay.`
@@ -4065,25 +3998,26 @@ async function executeControlRequest(
       }
       const previous = await runRelayEffect(
         "relay.network.routes.previous",
-        startup.state.listInstanceRoutes(instance.id)
+        startup.state.listInstanceRoutes(owner)
       )
       await runRelayEffect(
         "relay.network.routes.replace",
-        startup.state.replaceInstanceRoutes(instance.id, routes)
+        startup.state.replaceInstanceRoutes(owner, routes)
       )
       await Effect.runPromise(
         relayOperation(async () => {
-          const allRoutes = await runRelayEffect(
-            "relay.network.routes.all",
-            startup.state.listWebRoutes()
+          await lifecycle.configureWebRoutes(
+            await runRelayEffect(
+              "relay.network.routes.all",
+              startup.state.listWebRoutes()
+            )
           )
-          await lifecycle.configureWebRoutes(allRoutes)
         }).pipe(
           Effect.onError(() =>
             cleanupOperation("web route rollback", async () => {
               await runRelayEffect(
                 "relay.network.routes.rollback",
-                startup.state.replaceInstanceRoutes(instance.id, previous)
+                startup.state.replaceInstanceRoutes(owner, previous)
               )
               await lifecycle.configureWebRoutes(
                 await runRelayEffect(
@@ -4095,7 +4029,7 @@ async function executeControlRequest(
           )
         )
       )
-      return lifecycle.webRouteState(instance.id, routes)
+      return webRouteState(input)
     }
     case "relay.installation.read":
       await requireFullAccess(client.id, "read this Relay's installation ID")
@@ -4634,7 +4568,32 @@ function systemUpdateTarget(value: unknown): {
   }
 }
 
-// An app's routes, and whether Traefik serves them yet.
+// What the Relay's state keeps an instance's routes under, once the
+// instance is known to be here: a game server's ID, or an App's with its
+// prefix.
+async function webRouteOwner(of: { id: string; kind: "app" | "instance" }) {
+  if (of.kind === "app") {
+    await apps.get(of.id)
+    return appRouteOwner(of.id)
+  }
+  return (await requiredInstance({ instanceId: of.id })).id
+}
+
+// An instance's routes, and whether Traefik serves them yet. Each kind
+// says that its own way: a game server's container carries its routes, and
+// an App's services each carry theirs.
+async function webRouteState(of: { id: string; kind: "app" | "instance" }) {
+  if (of.kind === "app") return appWebRouteState(of.id)
+  const instance = await requiredInstance({ instanceId: of.id })
+  return lifecycle.webRouteState(
+    instance.id,
+    await runRelayEffect(
+      "relay.network.routes.read",
+      startup.state.listInstanceRoutes(instance.id)
+    )
+  )
+}
+
 async function appWebRouteState(appId: string) {
   const [app, routes] = await Promise.all([
     apps.get(appId),

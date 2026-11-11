@@ -1562,7 +1562,8 @@ function auditDetailsForRequest(
   }
   if (
     request.operation === "instance.deploy" ||
-    request.operation === "instance.limits.write"
+    request.operation === "instance.limits.write" ||
+    request.operation === "instance.network.routes.write"
   ) {
     const target = kindAuditTarget(payload.kind)
     if (target && typeof payload.id === "string") details[target] = payload.id
@@ -1939,7 +1940,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "database.dump.import"
     case "app.list":
     case "app.resources.read":
-    case "app.network.routes.read":
       return "app.read"
     case "app.deployment.read":
       return "app.logs.read"
@@ -1966,8 +1966,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
               ? "relay.configure"
               : null
     }
-    case "app.network.routes.write":
-      return "app.manage"
     case "app.volumes.write":
       return null
     case "app.terminal.attach":
@@ -2106,11 +2104,28 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "instance.network.ports.release":
     case "instance.network.ports.write":
       return "instance.network.write"
-    case "instance.network.routes.read":
-      return "instance.network.read"
     case "instance.network.databases.remove":
-    case "instance.network.routes.write":
       return "instance.network.write"
+    // An instance's web routes take what each kind's did before they were
+    // one request: a game server's network, and an App's configuration.
+    case "instance.network.routes.read":
+      switch (objectString(request.payload, "kind")) {
+        case "instance":
+          return "instance.network.read"
+        case "app":
+          return "app.read"
+        default:
+          return null
+      }
+    case "instance.network.routes.write":
+      switch (objectString(request.payload, "kind")) {
+        case "instance":
+          return "instance.network.write"
+        case "app":
+          return "app.manage"
+        default:
+          return null
+      }
     case "sftp.authorization.resolve":
       return "instance.sftp.connect"
   }

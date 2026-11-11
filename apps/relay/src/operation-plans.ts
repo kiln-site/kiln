@@ -528,7 +528,6 @@ export function controlRequestLocks(
     case "database.data.read":
     case "app.list":
     case "app.resources.read":
-    case "app.network.routes.read":
     case "app.deployment.read":
     case "instance.image.check":
     case "instance.resources.read":
@@ -786,8 +785,6 @@ export function controlRequestLocks(
     // for any restore of a volume it mounts or owns.
     case "app.delete":
       return appWithVolumes(appReplaceLocks)
-    case "app.network.routes.write":
-      return app((id) => [...appLifecycleLocks(id), exclusive(laneKeys.routes)])
     // Apart from the App's lifecycle, so saving its configuration never
     // waits behind a deployment.
     case "app.volumes.write":
@@ -874,11 +871,28 @@ export function controlRequestLocks(
     case "instance.console.complete":
       return instance(instanceLifecycleLocks)
     case "instance.network.ports.write":
-    case "instance.network.routes.write":
       return instance((id) => [
         ...instanceLifecycleLocks(id),
         exclusive(laneKeys.routes),
       ])
+    // An instance's web routes, whatever kind's they are: held with its
+    // lifecycle, and with every route on the Relay, which they mustn't
+    // collide with.
+    case "instance.network.routes.write":
+      switch (stringField(payload, "kind")) {
+        case "instance":
+          return instance(
+            (id) => [...instanceLifecycleLocks(id), exclusive(laneKeys.routes)],
+            "id"
+          )
+        case "app":
+          return app(
+            (id) => [...appLifecycleLocks(id), exclusive(laneKeys.routes)],
+            "id"
+          )
+        default:
+          return null
+      }
     case "instance.files.write":
     case "instance.files.put":
     case "instance.files.upload-url":

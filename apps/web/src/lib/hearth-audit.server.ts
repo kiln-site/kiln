@@ -90,12 +90,13 @@ export function relayChangeTarget(
   ) {
     return { id: nested.id, kind: nested.kind }
   }
-  // Power and deploying name their target's kind beside its ID, for every
-  // kind alike.
+  // Power, deploying, limits and web routes name their target's kind beside
+  // its ID, for every kind alike.
   if (
     operation === "instance.action" ||
     operation === "instance.deploy" ||
-    operation === "instance.limits.write"
+    operation === "instance.limits.write" ||
+    operation === "instance.network.routes.write"
   ) {
     const kind = field("kind")
     const id = field("id")

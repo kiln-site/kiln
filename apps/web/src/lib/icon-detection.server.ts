@@ -247,7 +247,12 @@ const detectAppIconEffect = Effect.fn("Icons.detectApp")(function* (
   }
   const state = relayAppWebRouteStateSchema.parse(
     yield* promiseEffect(() =>
-      relayRpc(relay, "app.network.routes.read", { appId }, relayReadTimeoutMs)
+      relayRpc(
+        relay,
+        "instance.network.routes.read",
+        { id: appId, kind: "app" },
+        relayReadTimeoutMs
+      )
     )
   )
   // The primary route first; a redirect serves another site, not the app.

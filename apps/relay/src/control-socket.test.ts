@@ -347,6 +347,33 @@ describe("Relay control socket", () => {
     ).toEqual([])
   })
 
+  it("saves an instance's web routes with what its kind's network takes, and none for a kind without routes", async () => {
+    const relay = await startRelay()
+    const id = "0123456789ab"
+    // Which kinds' routes a client holding these actions may save.
+    const allowed = async (actions: ReadonlyArray<RelayAction>) => {
+      const { inbox, socket } = await relay.connect(
+        await relay.pair({ role: "custom", actions })
+      )
+      const kinds: Array<string> = []
+      for (const kind of ["instance", "database", "app", "relay"]) {
+        sendRequest(socket, "instance.network.routes.write", {
+          id,
+          kind,
+          routes: [],
+        })
+        const reply = (await inbox.next()) as { code?: string }
+        if (reply.code !== "forbidden") kinds.push(kind)
+      }
+      return kinds
+    }
+
+    expect(await allowed(["instance.network.write"])).toEqual(["instance"])
+    expect(await allowed(["app.manage"])).toEqual(["app"])
+    // Reading either doesn't save it.
+    expect(await allowed(["instance.network.read", "app.read"])).toEqual([])
+  })
+
   it("checks a certificate with what changing its route takes", async () => {
     const relay = await startRelay({
       execute: async () => ({ asked: false, pending: null }),

@@ -411,7 +411,7 @@ async function webRouteHostnames(
       relayRpc(
         relay,
         "instance.network.routes.read",
-        { instanceId },
+        { id: instanceId, kind: "instance" },
         15_000,
         user.id
       ),

@@ -15,7 +15,7 @@ import {
   relayAppTerminalClaimSchema,
   relayAppTerminalRestartSchema,
   relayAppTerminalWriteSchema,
-  relayAppWebRoutesWriteSchema,
+  relayAppWebRouteInputsSchema,
   relayAppWebRouteStateSchema,
   relayDatabaseNameSchema,
   relayIdSchema,
@@ -375,8 +375,8 @@ export const getAppWebRoutes = createServerFn({ method: "GET" })
     return relayAppWebRouteStateSchema.parse(
       await databaseRpc(
         relay,
-        "app.network.routes.read",
-        { appId: data.appId },
+        "instance.network.routes.read",
+        { id: data.appId, kind: "app" },
         30_000,
         user.id
       )
@@ -387,7 +387,7 @@ export const getAppWebRoutes = createServerFn({ method: "GET" })
 // external Traefik once a deploy labels the app's containers.
 const appWebRoutesSchema = appInputSchema.extend({
   proxy: webRouteProxySchema.optional(),
-  routes: relayAppWebRoutesWriteSchema.shape.routes,
+  routes: relayAppWebRouteInputsSchema,
 })
 
 const saveAppWebRoutes = operation<z.infer<typeof appWebRoutesSchema>>()({
@@ -445,11 +445,8 @@ async function updateAppWebRoutesHandler(
       relayAppWebRouteStateSchema.parse(
         await databaseRpc(
           relay,
-          "app.network.routes.write",
-          {
-            appId: data.appId,
-            routes: data.routes,
-          },
+          "instance.network.routes.write",
+          { id: data.appId, kind: "app", routes: data.routes },
           240_000,
           user.id
         )

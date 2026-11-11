@@ -209,11 +209,9 @@ export const relayControlOperations = [
   "app.provision.cancel",
   "app.delete",
   "app.volumes.write",
-  "app.network.routes.read",
   "app.deployment.read",
   "app.deployment.abort",
   "instance.image.check",
-  "app.network.routes.write",
   "app.terminal.attach",
   "app.terminal.heartbeat",
   "app.terminal.detach",
@@ -352,7 +350,6 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "app.provision.cancel",
   "app.delete",
   "app.volumes.write",
-  "app.network.routes.write",
   "app.terminal.attach",
   "app.terminal.restart",
   "backup.task.enqueue",
@@ -419,7 +416,6 @@ export function relayControlOperationChanges(
     case "database.dump.export":
     case "app.list":
     case "app.resources.read":
-    case "app.network.routes.read":
     case "app.deployment.read":
     case "instance.image.check":
     case "backup.task.get":
@@ -519,7 +515,6 @@ export function relayControlOperationChanges(
     case "app.delete":
     case "app.deployment.abort":
     case "app.volumes.write":
-    case "app.network.routes.write":
     case "backup.task.enqueue":
     case "backup.task.cancel":
     case "backup.restore.resolve":
@@ -684,8 +679,7 @@ export function relayControlDeadlineMs(
     return 360_000
   }
   return operation === "instance.network.ports.write" ||
-    operation === "instance.network.routes.write" ||
-    operation === "app.network.routes.write"
+    operation === "instance.network.routes.write"
     ? 240_000
     : 30_000
 }
