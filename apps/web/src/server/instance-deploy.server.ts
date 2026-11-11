@@ -13,8 +13,7 @@ import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { newestBrickRevision } from "@/lib/brick-revisions.server"
-import { dnsKey } from "@/lib/dns-operations"
+import { serverDeployDnsLocks } from "@/lib/dns-operations"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import type { PersistedRelay } from "@/lib/relay-registry"
@@ -22,7 +21,6 @@ import {
   asDatabaseDeployment,
   asServerDeployment,
 } from "@/lib/server-deployments.server"
-import { exclusive } from "@/operations/lanes"
 import {
   loadInstanceRecipe,
   requestRelay,
@@ -128,14 +126,11 @@ export async function redeployServer(
 export async function installServerBrickRevision(
   relay: PersistedRelay,
   instanceId: string,
+  /** The revision to install, and where its catalog reads it from now. */
+  newest: { definition: BrickRecipe; source: string },
   by: { userId: string | null }
 ): Promise<RelayInstance> {
   const existing = await requiredRelayInstance(relay, instanceId)
-  const newest = existing.brickSource
-    ? await newestBrickRevision(existing.brickSource)
-    : null
-  if (!newest) throw new Error("No catalog has this game server's Brick")
-  // Where the catalog reads it from now, which may be another commit.
   const { definition: recipeDefinition, source } = newest
   return instanceReplaced(
     relay,
@@ -222,11 +217,10 @@ export async function redeployDatabase(
 export async function installDatabaseBrickRevision(
   relay: PersistedRelay,
   databaseId: string,
-  source: string,
+  /** The revision to install, and where its catalog reads it from now. */
+  newest: { definition: BrickRecipe; source: string },
   by: { userId: string | null }
 ) {
-  const newest = await newestBrickRevision(source)
-  if (!newest) throw new Error("No catalog has this database's Brick")
   return redeployDatabase(
     relay,
     databaseId,
@@ -236,13 +230,6 @@ export async function installDatabaseBrickRevision(
   )
 }
 
-/** The locks a game server's deploy takes besides the server itself. */
-export const serverDeployLocks = (relayId: string, instanceId: string) => [
-  exclusive(
-    dnsKey({ relayId, resourceId: instanceId, resourceType: "instance" })
-  ),
-]
-
 // Its image pulled anew and its container replaced, with nothing about it
 // changed. It replaces the server, so everything else on it waits, and it
 // provisions its domains afterwards.
@@ -251,7 +238,7 @@ export const deployInstanceAgain = resourceOperation({
   id: (input: { instanceId: string; relayId: string }) => input.instanceId,
   name: "instance.deploy",
   lock: "whole",
-  alsoLocks: (input) => serverDeployLocks(input.relayId, input.instanceId),
+  alsoLocks: (input) => serverDeployDnsLocks(input.relayId, input.instanceId),
   doing: "Deploying this game server again",
   permission: () => "instance.deploy",
   run: redeployInstanceHandler,

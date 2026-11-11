@@ -4,7 +4,7 @@ import {
   type RelayInstanceImageCheckResult,
 } from "@workspace/contracts"
 import { logException } from "@workspace/telemetry"
-import { Cause, Clock, Effect, Fiber, Schedule } from "effect"
+import { Cause, Clock, Effect, Fiber, Schedule, Semaphore } from "effect"
 
 import { Database } from "@/effect/database"
 import { ExternalServiceError } from "@/effect/errors"
@@ -33,6 +33,7 @@ import { databaseTable } from "@/lib/database-config"
 import {
   updatedKind,
   updatedKinds,
+  type DueUpdate,
   type UpdateSubject,
 } from "@/lib/instance-update-kinds.server"
 import { relayRpc } from "@/lib/relay-connection"
@@ -284,7 +285,8 @@ const askImagesEffect = Effect.fnUntraced(function* <E, R>(
  * recorded for one being deleted: one about an image it no longer names
  * says nothing about it, so isn't. Checks may overlap; what one recorded is
  * judged where it's used (`currentImageUpdate`). Reports whether it changed
- * what Kiln knows.
+ * what Kiln knows, and what has waited long enough for Kiln to take on its
+ * own, which whoever called does once this lets go of the instance.
  */
 const recordImageAnswersEffect = Effect.fnUntraced(function* (
   kind: InstanceUpdateKind,
@@ -307,21 +309,33 @@ const recordImageAnswersEffect = Effect.fnUntraced(function* (
     )
   }
   let changed = false
+  const due: Array<DueUpdate> = []
   for (const { askedAt, result, subject } of asked.answers) {
     if (subject.id !== instanceId) continue
-    // Its Brick, whatever the image check found.
+    // Gone since it was asked about.
+    const named = yield* adapter.namedImage(relay.id, instanceId)
+    if (named === undefined) continue
+    // Its Brick, whatever the image check found. A newer revision due on
+    // its own replaces the container, and may run another image: the image
+    // is judged again once that has deployed, not now.
+    let installing = false
     if (result.brick) {
-      changed ||= yield* recordBrickAnswerEffect(
+      const brick = yield* recordBrickAnswerEffect(
         kind,
         relay,
         subject,
         result.brick,
+        askedAt,
         actorUserId
       )
+      changed ||= brick.changed
+      if (brick.due !== null) {
+        installing = true
+        due.push({ of: "brick", revision: brick.due })
+      }
     }
-    // Asked about an image it no longer names, or gone since.
-    const named = yield* adapter.namedImage(relay.id, instanceId)
-    if (named === undefined || named !== subject.image) continue
+    // Asked about an image it no longer names.
+    if (named !== subject.image) continue
     const recorded = yield* recordInstanceImageCheckEffect(
       kind,
       instanceId,
@@ -350,28 +364,39 @@ const recordImageAnswersEffect = Effect.fnUntraced(function* (
     // needs anyone's attention.
     yield* resolveInstanceUpdateNotificationsEffect(kind, relay.id, instanceId)
     const at = autoUpdateAt(recorded.update)
-    if (at !== null && at <= (yield* Clock.currentTimeMillis)) {
-      yield* adapter.deployUpdate(
-        relay,
-        instanceId,
-        null,
-        recorded.update.latestDigest
-      )
+    const digest = recorded.update.latestDigest
+    if (
+      !installing &&
+      digest !== null &&
+      at !== null &&
+      at <= (yield* Clock.currentTimeMillis)
+    ) {
+      due.push({ digest, of: "image" })
     }
   }
-  return changed
+  return { changed, due }
 })
 
 // Records which revision of its Brick an instance runs against the
 // catalog's, and tells whoever can deploy it about a newer one they
-// haven't heard of. Reports whether it changed what Kiln knows.
+// haven't heard of. Reports whether it changed what Kiln knows, and the
+// newer revision that has waited long enough to install on its own. An
+// answer older than one already recorded, or than a deployment, which may
+// have changed its Brick, says nothing of what it runs now.
 const recordBrickAnswerEffect = Effect.fnUntraced(function* (
   kind: InstanceUpdateKind,
   relay: PersistedRelay,
   subject: UpdateSubject,
   installed: { revision: number; source: string },
+  askedAt: number,
   actorUserId: string | null
 ) {
+  const startedAt = yield* updatedKind(kind).latestDeploymentStartedAt(
+    subject.id
+  )
+  if (startedAt !== null && Date.parse(startedAt) >= askedAt) {
+    return { changed: false, due: null }
+  }
   const catalog = yield* promiseEffect(() =>
     newestBrickRevision(installed.source)
   )
@@ -379,8 +404,10 @@ const recordBrickAnswerEffect = Effect.fnUntraced(function* (
     kind,
     subject.id,
     installed,
-    catalog?.revision ?? null
+    catalog?.revision ?? null,
+    askedAt
   )
+  if (recorded.stale) return { changed: false, due: null }
   const update = (yield* loadInstanceUpdatesEffect([subject.id])).get(
     subject.id
   )
@@ -422,17 +449,13 @@ const recordBrickAnswerEffect = Effect.fnUntraced(function* (
     )
   )
   const at = update ? autoBrickUpdateAt(update) : null
-  if (
-    offered !== null &&
-    at !== null &&
-    at <= (yield* Clock.currentTimeMillis)
-  ) {
-    yield* updatedKind(kind).installBrick?.(relay, subject.id, null, {
-      revision: offered,
-      source: installed.source,
-    }) ?? Effect.void
+  return {
+    changed: recorded.changed,
+    due:
+      offered !== null && at !== null && at <= (yield* Clock.currentTimeMillis)
+        ? offered
+        : null,
   }
-  return recorded.changed
 })
 
 // Whether an instance checks for image updates now: its image could move,
@@ -449,8 +472,51 @@ const checksForUpdates = Effect.fnUntraced(function* (
   return (update?.mode ?? defaultInstanceUpdatePolicy.mode) !== "off"
 })
 
-// Kiln's own checks: ask with no lane held, then record each instance's
-// answer holding the instance shared.
+// How many of Kiln's own updates deploy at once on each Relay.
+const ownUpdatesAtOnce = 2
+const ownUpdateTurns = new Map<string, Semaphore.Semaphore>()
+
+// Starts an update Kiln found due, apart from the check that found it: a
+// deploy takes minutes, and the instances checked next shouldn't wait for
+// it. A few run at once on each Relay. Nothing is kept of one that hasn't
+// started: its kind judges it again as it starts (`UpdatedKind.autoUpdate`),
+// and the next check that finds it due starts it again.
+function startOwnUpdate(
+  kind: InstanceUpdateKind,
+  relay: PersistedRelay,
+  instanceId: string,
+  due: DueUpdate
+): void {
+  let turns = ownUpdateTurns.get(relay.id)
+  if (!turns) {
+    turns = Semaphore.makeUnsafe(ownUpdatesAtOnce)
+    ownUpdateTurns.set(relay.id, turns)
+  }
+  const taking = turns.withPermits(1)(
+    updatedKind(kind).autoUpdate(relay, instanceId, due)
+  )
+  outsideOperation(() =>
+    forkAppWorker(
+      taking.pipe(
+        // Its deployment's record and log say how one that ran went.
+        Effect.catchCause((cause) =>
+          logException(Cause.squash(cause), {
+            operation: "Instances.updates.auto",
+            attributes: {
+              "instance.id": instanceId,
+              "instance.kind": kind,
+              "relay.id": relay.id,
+            },
+          })
+        )
+      )
+    )
+  )
+}
+
+// Kiln's own checks: ask with no lane held, record each instance's answer
+// holding the instance shared, then start what has waited long enough for
+// Kiln to take on its own, which deploys apart from the checks.
 const checkImagesEffect = (
   kind: InstanceUpdateKind,
   relay: PersistedRelay,
@@ -469,9 +535,16 @@ const checkImagesEffect = (
       [shared(resourceKey(adapter.resourceType, relay.id, instanceId))],
       recordImageAnswersEffect(kind, relay, instanceId, asked, actorUserId)
     ).pipe(
-      Effect.tap((instanceChanged) =>
+      Effect.tap((recorded) =>
         Effect.sync(() => {
-          changed ||= instanceChanged
+          changed ||= recorded.changed
+        })
+      ),
+      Effect.tap(({ due }) =>
+        Effect.sync(() => {
+          for (const update of due) {
+            startOwnUpdate(kind, relay, instanceId, update)
+          }
         })
       )
     )
@@ -570,11 +643,16 @@ export const recordCheckedImageEffect = Effect.fn("Instances.updates.record")(
     asked: { answers: ReadonlyArray<InstanceImageAnswer>; unchecked: boolean },
     actorUserId: string | null
   ) {
-    if (
-      yield* recordImageAnswersEffect(kind, relay, instanceId, asked, actorUserId)
-    ) {
-      updatedKind(kind).published(relay.id)
-    }
+    // Someone's own check, run holding the instance: it records, and
+    // leaves what is due for Kiln's next check, which holds nothing.
+    const recorded = yield* recordImageAnswersEffect(
+      kind,
+      relay,
+      instanceId,
+      asked,
+      actorUserId
+    )
+    if (recorded.changed) updatedKind(kind).published(relay.id)
     const updates = yield* loadInstanceUpdatesEffect([instanceId])
     return updates.get(instanceId) ?? null
   }
@@ -599,6 +677,10 @@ export function recheckInstanceImage(
         if (relay?.enabled) {
           yield* checkImagesEffect(kind, relay, instanceId, actorUserId)
         }
+        // A deployment makes what was known of it stale, and whoever
+        // looked meanwhile saw nothing on offer. Checked again, what it
+        // has may be what it had: said anyway, so they look again.
+        updatedKind(kind).published(relayId)
       }).pipe(
         Effect.catchCause((cause) =>
           logException(Cause.squash(cause), {

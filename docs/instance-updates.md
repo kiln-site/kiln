@@ -64,6 +64,25 @@ again for the same digest once it has run, however it went.
 - **A game server** deploys again as it is set up, which replaces its
   container and so restarts it.
 
+A database's or a game server's update is the operation a redeploy is,
+holding the instance whole. **Update now** is the person's own operation:
+it waits its turn like any change they start, and their page follows the
+deployment. One Kiln takes on its own starts from a check that found it
+due, only if nothing else holds the instance then, and decides again once
+it holds it: it deploys nothing if the instance is no longer set to update
+on its own, the update was skipped or replaced, or its wait was made
+longer. A busy instance is tried again by the next check that finds the
+update due. Kiln's own updates deploy apart from the checks that found
+them, two at a time on each Relay, so one that takes minutes doesn't hold
+up checking the rest. Those waiting their turn there are held in memory
+only: there is no durable queue, so a restart loses nothing that the next
+check won't find due again, and a change of mind has nothing to chase. Someone's own **Check now** only
+records what it finds.
+
+Deploying again pulls the tag, so these two kinds take whatever it names
+at that moment: a tag that moved in the hour since the last check is
+deployed without having waited.
+
 Each is recorded as a deployment with the trigger `update`, and has a log
 on the instance's Logs page. Every deployment, of any kind and for any
 reason, checks the instance's image again when it ends, so the row shows
@@ -85,9 +104,16 @@ whole number its author raises; see the
 [Brick format](../apps/bricks/docs/brick-v2.md#metadata)). An instance
 keeps the revision it was installed from on its container
 (`kiln.brick.revision`; 1 for one made before revisions), and the Relay
-says it, with the Brick's source, in every answer to a check. Hearth
-compares it with the revision the Brick has now in the catalogs it holds:
-Kiln's own first, then every catalog anyone added. A newer one is offered
+says it, with the Brick's source, in every answer to a check. What a check
+found of its Brick counts only until the instance's next deployment, which
+may have changed the Brick it runs, as a change of Brick does: nothing is
+offered or installed from what was seen before one. Hearth
+compares it with the newest revision of that Brick in the catalogs it
+holds. A catalog in a GitHub repository is read at a commit, which its
+Bricks' sources name, so a Brick is known by its repository and path
+whatever the commit (`brickSourceLineage`); any other source is itself.
+Where several catalogs hold the Brick, read at different times, the newest
+revision any of them has is the one offered. A newer one is offered
 the way an image is, under the same choice: a notification by default,
 installed on its own after the wait if the instance is set to Automatic,
 nothing when checks are off. **Skip** passes over one revision, not the
@@ -110,7 +136,21 @@ source, with the answers the instance already has:
 A recipe the saved answers no longer fit is refused the same way before
 anything stops: a new question with no default, or an answer the Brick no
 longer offers. So a Brick's author gives a new input a default, and keeps
-the options instances already chose.
+the options instances already chose. The saved answers are every input's
+value as it was resolved at install, defaults included: a revision that
+changes a default changes it for new installs only, so a database never
+moves to another version because its Brick's default did.
+
+Kiln's own install is of the revision that waited. If the catalog has a
+newer one by the time it starts, it installs nothing, and the newer one is
+offered and waits in its turn. A revision due on its own goes
+before an image due at the same time: installing it replaces the container
+and may run another image, so the image is judged again once it has
+deployed.
+
+A revision is published once. Raising it is what offers a change, so its
+author raises it for every change instances should take, and doesn't
+change what a revision already published deploys.
 
 The image and the Brick are separate offers on one instance: a newer
 image under the same recipe, and a newer recipe. Each is a deployment with

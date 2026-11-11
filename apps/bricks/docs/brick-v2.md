@@ -125,7 +125,11 @@ game-server:
 when a change is one that instances already installed from the Brick should
 be offered: a new image, a variable, a changed port. A change that only
 matters to new installs, such as a summary or an icon, leaves it alone. It
-isn't the version of what the Brick runs, which is usually an input.
+isn't the version of what the Brick runs, which is usually an input. A
+revision is published once: raise it again rather than change what one
+already published deploys. See
+[Instance updates](../../../docs/instance-updates.md#brick-revisions) for
+how an installed instance takes one.
 
 An SVG icon is a single-colour mark: a transparent, square canvas with one
 foreground colour and no text, rendered as a mask in `color`. It must be at

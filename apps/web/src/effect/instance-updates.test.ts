@@ -148,12 +148,14 @@ describeMysql("App image updates", () => {
         Effect.gen(function* () {
           yield* seedApp
           const source = "https://bricks.test/paper.yml"
+          let asked = 0
           const found = (installed: number, catalog: number | null) =>
             recordInstanceBrickCheckEffect(
               "server",
               appId,
               { revision: installed, source },
-              catalog
+              catalog,
+              ++asked
             )
           const offered = loadInstanceUpdateEffect(appId).pipe(
             Effect.map((update) => update && offeredBrickRevision(update))

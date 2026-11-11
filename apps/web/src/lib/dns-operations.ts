@@ -33,3 +33,13 @@ export function withDnsChange<A, E, R>(
     effect
   )
 }
+
+/**
+ * What a game server's deploy holds besides the server itself: its domains
+ * name its address, which a new container may change.
+ */
+export const serverDeployDnsLocks = (relayId: string, instanceId: string) => [
+  exclusive(
+    dnsKey({ relayId, resourceId: instanceId, resourceType: "instance" })
+  ),
+]

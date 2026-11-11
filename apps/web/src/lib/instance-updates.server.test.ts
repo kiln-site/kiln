@@ -18,6 +18,11 @@ import type { PersistedRelay } from "@/lib/relay-registry"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertUser } from "@/test/seed"
 
+// Catalogs are fetched over the network; none has these Bricks.
+vi.mock("@/lib/brick-revisions.server", () => ({
+  newestBrickRevision: async () => null,
+}))
+
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 
 const relayId = "1".repeat(12)
@@ -147,6 +152,67 @@ describeMysql("App image checks", () => {
           const taken = yield* found(2)
           assert.strictEqual(taken?.state, "current")
           assert.deepStrictEqual(yield* open, [])
+        })
+    )
+
+    // Checks overlap, and one may answer after something changed the
+    // instance's Brick: what it saw then mustn't be put back.
+    it.effect(
+      "keep the Brick a newer check found over an older one answering late",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          const databaseId = "d".repeat(12)
+          yield* createManagedDatabaseRecordEffect({
+            brickId: "postgres",
+            brickSource: "https://bricks.test/postgres.yml",
+            createdBy: "owner",
+            databaseId,
+            databaseName: "kiln_main",
+            engine: "postgres",
+            internalPort: 5432,
+            name: "Main",
+            password: "the-password",
+            relayId,
+            username: "kiln_user",
+          })
+          const answered = (
+            askedAt: number,
+            brick: { revision: number; source: string }
+          ) =>
+            recordCheckedImageEffect(
+              "database",
+              { id: relayId } as PersistedRelay,
+              databaseId,
+              {
+                answers: [
+                  {
+                    askedAt,
+                    result: { brick, id: databaseId, status: "not_deployed" },
+                    subject: { id: databaseId, image: null, name: "Main" },
+                  },
+                ],
+                unchecked: false,
+              },
+              null
+            )
+          const now = yield* Clock.currentTimeMillis
+
+          yield* answered(now, {
+            revision: 2,
+            source: "https://bricks.test/postgres.yml",
+          })
+          const late = yield* answered(now - 60_000, {
+            revision: 1,
+            source: "https://bricks.test/before.yml",
+          })
+
+          assert.deepInclude(late?.brick, {
+            revision: 2,
+            source: "https://bricks.test/postgres.yml",
+          })
         })
     )
 
