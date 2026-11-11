@@ -112,6 +112,7 @@ game-server:
 | ----------- | -------- | ------------------------------------------------------------------- |
 | `id`        | required | Lowercase letters, numbers, dots and dashes. Unique in its catalog. |
 | `name`      | required |                                                                     |
+| `revision`  |          | A whole number, 1 without it. See below.                            |
 | `summary`   | required | One line for the catalog.                                           |
 | `author`    | required |                                                                     |
 | `icon`      |          | A path beside the recipe, or an `https://` link.                    |
@@ -119,6 +120,12 @@ game-server:
 | `tags`      |          | For search.                                                         |
 | `links`     |          | `homepage`, `source`, `docs`, `support`.                            |
 | `platforms` |          | `amd64`, `arm64`. Any, without it.                                  |
+
+`revision` says which version of the recipe this is. Its author raises it
+when a change is one that instances already installed from the Brick should
+be offered: a new image, a variable, a changed port. A change that only
+matters to new installs, such as a summary or an icon, leaves it alone. It
+isn't the version of what the Brick runs, which is usually an input.
 
 An SVG icon is a single-colour mark: a transparent, square canvas with one
 foreground colour and no text, rendered as a mask in `color`. It must be at

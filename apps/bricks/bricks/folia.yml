@@ -4,6 +4,7 @@ type: minecraft
 metadata:
   id: folia
   name: Folia
+  revision: 1
   summary: Paper's regionized multithreaded server for concurrency-heavy worlds.
   author: Kiln
   icon: ../icons/folia.svg

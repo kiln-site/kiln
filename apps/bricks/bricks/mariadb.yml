@@ -4,6 +4,7 @@ type: mariadb
 metadata:
   id: mariadb
   name: MariaDB
+  revision: 1
   summary: A MySQL-compatible relational database, with Kiln's table viewer, dumps and restores.
   author: Kiln
   icon: ../icons/mariadb.svg

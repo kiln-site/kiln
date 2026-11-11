@@ -210,6 +210,12 @@ export type BrickDeploy = z.infer<typeof brickDeploySchema>
 export const brickMetadataSchema = z.strictObject({
   id: brickIdSchema,
   name: z.string().min(1).max(80),
+  /**
+   * Which revision of the recipe this is: a whole number its author raises
+   * when a change is one that instances already installed should be
+   * offered. 1 without it.
+   */
+  revision: z.number().int().min(1).max(1_000_000).optional(),
   /** One line for the catalog. */
   summary: z.string().min(1).max(280),
   author: z.string().min(1).max(80),
@@ -242,6 +248,13 @@ export const brickMetadataSchema = z.strictObject({
     .optional(),
 })
 export type BrickMetadata = z.infer<typeof brickMetadataSchema>
+
+/** A recipe's revision, which is 1 until its author says otherwise. */
+export function brickRevision(recipe: {
+  readonly metadata: Pick<BrickMetadata, "revision">
+}): number {
+  return recipe.metadata.revision ?? 1
+}
 
 /** What only a game server has. */
 export const brickGameServerSchema = z.strictObject({

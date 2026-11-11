@@ -4,6 +4,7 @@ type: redis
 metadata:
   id: redis
   name: Redis
+  revision: 1
   summary: An in-memory key-value store that keeps its data on disk.
   author: Kiln
   icon: ../icons/redis.svg

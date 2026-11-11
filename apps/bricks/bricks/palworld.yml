@@ -3,6 +3,7 @@ kind: game-server
 metadata:
   id: palworld
   name: Palworld
+  revision: 1
   summary: Native Linux dedicated server installed and updated through SteamCMD.
   author: Kiln
   icon: ../icons/palworld.svg
