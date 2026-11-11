@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { pipeline } from "node:stream/promises"
 
 import type { RelayInstanceImageCheckResult } from "@workspace/contracts"
-import { checkContainerImages } from "./image-checks.js"
+import { checkContainerImages, installedRevision } from "./image-checks.js"
 import type {
   BrickVariableValue,
   DatabaseEngine,
@@ -31,6 +31,7 @@ import type {
 import {
   brickInputSensitive,
   brickInputs,
+  brickRevision,
   databaseEngineSupportsLogicalBackups,
   databaseEngineSchema,
   databaseFileRootId,
@@ -202,6 +203,7 @@ function databaseRecoveryLabels(
     // The Brick it runs, and its answers that aren't secret. The login and
     // any secret Kiln made stay in the container's environment.
     "kiln.brick.format": brick.recipe.format,
+    "kiln.brick.revision": String(brickRevision(brick.recipe)),
     "kiln.brick.id": brick.recipe.metadata.id,
     "kiln.brick.kind": "database",
     "kiln.brick.source": input.recipe,
@@ -1265,7 +1267,12 @@ export class DatabaseDriver {
             instanceIdFrom(candidate.Config.Labels?.["kiln.database.id"]) ===
             id
         )
+        const labels = container?.Config.Labels ?? {}
+        const source = labels["kiln.brick.source"]
         return {
+          ...(source && {
+            brick: { revision: installedRevision(labels), source },
+          }),
           container: container
             ? {
                 image: databaseImage(container),
@@ -1406,6 +1413,7 @@ export class DatabaseDriver {
       id,
       // One made before databases ran Bricks runs its engine's.
       brickId: labels["kiln.brick.id"] ?? engine,
+      brickRevision: installedRevision(labels),
       image: labels["kiln.database.image"] ?? container.Config.Image,
       internalPort: recordedSpec(labels, engine).internalPort,
       members,

@@ -52,6 +52,7 @@ import type {
   BrickVariableValue,
 } from "@workspace/contracts"
 import {
+  brickRevision,
   appTailscaleMember,
   databaseTailscaleMember,
   instanceTailscaleMember,
@@ -2509,6 +2510,7 @@ export class LifecycleDriver {
       : "custom"
     const placeholder = relayInstanceSchema.parse({
       brickFormat: definition.format,
+      brickRevision: brickRevision(definition),
       brickId: definition.metadata.id,
       brickKind: definition.kind === "group" ? undefined : definition.kind,
       ...(server.type ? { brickType: server.type } : {}),
@@ -2989,6 +2991,7 @@ export class LifecycleDriver {
             "kiln.server.id": physicalKey(id),
             "kiln.brick.id": definition.metadata.id,
             "kiln.brick.format": definition.format,
+            "kiln.brick.revision": String(brickRevision(definition)),
             "kiln.brick.source": input.recipe,
             "kiln.brick.snapshot-sha256": snapshotSha256,
             "kiln.brick.variables": variablesLabel,

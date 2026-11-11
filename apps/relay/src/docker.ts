@@ -28,7 +28,7 @@ import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { ensuringPromise, recoverPromise } from "./effect/promise.js"
 import { reportRelayError } from "./effect/runtime.js"
 import type { RelayInstanceImageCheckResult } from "@workspace/contracts"
-import { checkContainerImages } from "./image-checks.js"
+import { checkContainerImages, installedRevision } from "./image-checks.js"
 import type {
   RelayStateStore,
   RelayStoredLifecycleSession,
@@ -2450,7 +2450,14 @@ export class DockerDriver {
         const container = containers.find(
           (candidate) => idOf(candidate.Config.Labels) === id
         )
+        const source = container?.Config.Labels?.["kiln.brick.source"]
         return {
+          ...(source && {
+            brick: {
+              revision: installedRevision(container?.Config.Labels ?? {}),
+              source,
+            },
+          }),
           container: container
             ? {
                 image: container.Config.Image,
@@ -2670,6 +2677,10 @@ export class DockerDriver {
     }
     return {
       brickFormat: labels["kiln.brick.format"],
+      // One made before Bricks had revisions was installed from the first.
+      ...(labels["kiln.brick.source"] && {
+        brickRevision: installedRevision(labels),
+      }),
       brickId: validBrickId,
       brickConsoleStopCommands: parseBrickConsoleStopCommandsLabel(
         labels["kiln.brick.console-stop-commands"]
