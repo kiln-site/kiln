@@ -1,0 +1,38 @@
+format: kiln.brick/v2
+kind: database
+type: mysql
+metadata:
+  id: mysql
+  name: MySQL
+  summary: A relational database, with Kiln's table viewer, dumps and restores.
+  author: Kiln
+  icon: ../icons/mysql.svg
+  color: "#2f9ab3"
+  tags: [sql]
+inputs:
+  - key: version
+    label: Version
+    help: The release line it runs. A redeploy takes that line's newer releases.
+    type: select
+    options: ["8.4"]
+    default: "8.4"
+  - key: root_password
+    label: Root password
+    help: Kiln makes one and uses the database's own login for everything else.
+    type: secret
+    generate: true
+deploy:
+  type: image
+  image: mysql:{{ version }}
+  env:
+    MYSQL_DATABASE: "{{ database.name }}"
+    MYSQL_USER: "{{ database.username }}"
+    MYSQL_PASSWORD: "{{ database.password }}"
+    MYSQL_ROOT_PASSWORD: "{{ root_password }}"
+  ports:
+    - { name: mysql, port: 3306 }
+  volumes: [/var/lib/mysql]
+  ready:
+    command: mysqladmin ping -h 127.0.0.1 --silent
+database:
+  connection: "mysql://{{ database.username }}:{{ database.password }}@{{ database.host }}:{{ database.port }}/{{ database.name }}"

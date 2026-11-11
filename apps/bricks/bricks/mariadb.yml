@@ -1,0 +1,38 @@
+format: kiln.brick/v2
+kind: database
+type: mariadb
+metadata:
+  id: mariadb
+  name: MariaDB
+  summary: A MySQL-compatible relational database, with Kiln's table viewer, dumps and restores.
+  author: Kiln
+  icon: ../icons/mariadb.svg
+  color: "#c0765a"
+  tags: [sql]
+inputs:
+  - key: version
+    label: Version
+    help: The release line it runs. A redeploy takes that line's newer releases.
+    type: select
+    options: ["11.8", "11.4", "10.11"]
+    default: "11.8"
+  - key: root_password
+    label: Root password
+    help: Kiln makes one and uses the database's own login for everything else.
+    type: secret
+    generate: true
+deploy:
+  type: image
+  image: mariadb:{{ version }}
+  env:
+    MARIADB_DATABASE: "{{ database.name }}"
+    MARIADB_USER: "{{ database.username }}"
+    MARIADB_PASSWORD: "{{ database.password }}"
+    MARIADB_ROOT_PASSWORD: "{{ root_password }}"
+  ports:
+    - { name: mysql, port: 3306 }
+  volumes: [/var/lib/mysql]
+  ready:
+    command: healthcheck.sh --connect --innodb_initialized
+database:
+  connection: "mysql://{{ database.username }}:{{ database.password }}@{{ database.host }}:{{ database.port }}/{{ database.name }}"
