@@ -1,4 +1,5 @@
 import {
+  brickInstallAnswers,
   brickRevision,
   groupBrickInstall,
   groupBrickProblem,
@@ -7,6 +8,7 @@ import {
   type GroupBrickApp,
 } from "@workspace/contracts"
 
+import { makeBrickSecret } from "@/server/app-bricks.server"
 import { defaultBrickCatalog } from "@/server/brick-catalogs.server"
 import { databaseBricks } from "@/server/database-bricks.server"
 
@@ -49,7 +51,10 @@ export async function installedGroupBrick(
   )
   if (!brick) throw new Error("This isn't one of Kiln's group Bricks")
   const { iconSvg: _iconSvg, source: _source, ...recipe } = brick
-  const installed = groupBrickInstall(recipe, answers)
+  const installed = groupBrickInstall(
+    recipe,
+    brickInstallAnswers(recipe, answers, makeBrickSecret)
+  )
   if ("problem" in installed) throw new Error(installed.problem)
   const offered = await databaseBricks()
   const databases = installed.install.databases.map((database) => {

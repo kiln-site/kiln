@@ -1,4 +1,5 @@
 import {
+  appEnvironmentWith,
   databaseConnectionUrl,
   groupConnectionEnvironment,
   type BrickVariableValue,
@@ -296,6 +297,8 @@ async function makeMembers(
   for (const app of plan.apps) {
     const connected = groupConnectionEnvironment(app, connections, plan.answers)
     if ("problem" in connected) throw new Error(connected.problem)
+    // What the Brick sets itself, then what reaches its databases.
+    const variables = { ...app.environment, ...connected.environment }
     await joining(
       plan.id,
       { instanceId: app.id, kind: "app", member: app.key, relayId: relay.id },
@@ -306,7 +309,7 @@ async function makeMembers(
           brick: {
             answers: {},
             connect: Object.keys(app.connect),
-            environment: Object.keys(connected.environment),
+            environment: Object.keys(variables),
             member: app.key,
             name: plan.brick.name,
             revision: plan.brick.revision,
@@ -315,10 +318,8 @@ async function makeMembers(
           databaseIds: Object.keys(app.connect).flatMap(
             (key) => ids[key] ?? []
           ),
-          deploys: { image: app.image, type: "image" },
-          environment: Object.entries(connected.environment)
-            .map(([name, value]) => `${name}=${value}\n`)
-            .join(""),
+          deploys: { environment: variables, image: app.image, type: "image" },
+          environment: appEnvironmentWith("", [], variables),
           id: app.id,
           name: app.name,
         }),

@@ -19,7 +19,12 @@ import {
  * never by the Brick.
  */
 export type AppBrickDeploy =
-  | { type: "image"; image: string }
+  | {
+      type: "image"
+      image: string
+      /** The variables the Brick sets, each with its template filled in. */
+      environment: Record<string, string>
+    }
   | { type: "dockerfile" | "compose"; path: string }
 
 /**
@@ -46,7 +51,7 @@ export const APP_IMAGE_MAX_LENGTH = 512
 const deployed: Record<AppBrickDeployType, ReadonlyArray<string>> = {
   compose: ["type", "path"],
   dockerfile: ["type", "path"],
-  image: ["type", "image"],
+  image: ["type", "image", "env"],
 }
 
 /**
@@ -64,20 +69,42 @@ export function appBrickProblem(recipe: BrickRecipe): string | null {
   if (unrun !== undefined) {
     return `Kiln doesn't run an App Brick's ${unrun} yet`
   }
-  // Nothing keeps an App's made secret yet, so one would change each time.
-  const made = brickInputs(recipe).find(
-    (input) => input.type === "secret" && input.generate === true
-  )
-  if (made !== undefined) {
-    return `Kiln doesn't make an App Brick's secrets yet (${made.label})`
-  }
   return null
+}
+
+/**
+ * A Brick's answers as an install keeps them: every input's value as it
+ * stands then, what was given, what follows another answer, and its
+ * default, with a secret made for each input that asks Kiln to make one.
+ * Kept that way, a later revision that changes a default changes it for new
+ * installs only, and a secret is made once.
+ */
+export function brickInstallAnswers(
+  recipe: Pick<BrickRecipe, "inputs">,
+  given: Readonly<Record<string, BrickInputValue>>,
+  make: () => string
+): Record<string, BrickInputValue> {
+  const inputs = brickInputs(recipe)
+  // An answer to no input stays, for whoever checks them to refuse.
+  const answers = { ...given, ...brickAnswers(inputs, given) }
+  for (const input of inputs) {
+    if (
+      input.type === "secret" &&
+      input.generate === true &&
+      !Object.hasOwn(answers, input.key)
+    ) {
+      answers[input.key] = make()
+    }
+  }
+  return answers
 }
 
 /**
  * What an App Brick deploys with these answers, or what is wrong with the
  * Brick or the answers. An input left unanswered follows its rules, then its
- * default.
+ * default. A secret Kiln makes is among the answers by then
+ * (`brickInstallAnswers`): a template that names one not given is a
+ * problem, as any unanswered template is.
  */
 export function appBrickDeploy(
   recipe: BrickRecipe,
@@ -102,15 +129,17 @@ export function appBrickDeploy(
     // Its file is in its source; `appBrickProblem` refused one written here.
     return { deploy: { path: deploy.path ?? "", type: deploy.type } }
   }
-  const image = fillBrickTemplate(deploy.image, (name) =>
-    name === "brick.id"
-      ? recipe.metadata.id
-      : name === "brick.name"
-        ? recipe.metadata.name
-        : Object.hasOwn(answers, name)
-          ? String(answers[name])
-          : undefined
-  ).trim()
+  const filled = (template: string) =>
+    fillBrickTemplate(template, (name) =>
+      name === "brick.id"
+        ? recipe.metadata.id
+        : name === "brick.name"
+          ? recipe.metadata.name
+          : Object.hasOwn(answers, name)
+            ? String(answers[name])
+            : undefined
+    )
+  const image = filled(deploy.image).trim()
   // An optional input left blank leaves its template as written.
   if (image === "" || image.includes("{{")) {
     return { problem: "This Brick's image needs an answer it wasn't given" }
@@ -118,5 +147,17 @@ export function appBrickDeploy(
   if (image.length > APP_IMAGE_MAX_LENGTH) {
     return { problem: "This Brick's image is longer than an App's can be" }
   }
-  return { deploy: { image, type: "image" } }
+  const environment: Record<string, string> = {}
+  for (const [name, template] of Object.entries(deploy.env ?? {})) {
+    const value = filled(template)
+    if (value.includes("{{")) {
+      return { problem: `${name} needs an answer this Brick wasn't given` }
+    }
+    // An App's environment is kept a line to a variable.
+    if (/[\r\n]/u.test(value)) {
+      return { problem: `${name} can't hold a line break` }
+    }
+    environment[name] = value
+  }
+  return { deploy: { environment, image, type: "image" } }
 }

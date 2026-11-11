@@ -1,6 +1,9 @@
+import { randomBytes } from "node:crypto"
+
 import {
   appBrickDeploy,
   appBrickProblem,
+  brickInstallAnswers,
   brickRevision,
   genericAppBrickIds,
   type AppBrickDeploy,
@@ -18,6 +21,9 @@ import { defaultBrickCatalog } from "@/server/brick-catalogs.server"
 // so one from elsewhere would be read as Kiln's own from then on. For the
 // same reason Kiln's catalog has one for each thing an App deploys and no
 // more, until an App records its Brick.
+
+/** A secret Kiln makes for a Brick that asks for one, as a Relay does. */
+export const makeBrickSecret = () => randomBytes(24).toString("base64url")
 
 /** Every App Brick an App may be installed from. */
 export async function appBricks(): Promise<Array<Brick>> {
@@ -57,15 +63,19 @@ export async function installedAppBrick(
   )
   if (!brick) throw new Error("This isn't one of Kiln's App Bricks")
   const { iconSvg: _iconSvg, source: _source, ...recipe } = brick
-  const installed = appBrickDeploy(recipe, answers)
+  const answered = brickInstallAnswers(recipe, answers, makeBrickSecret)
+  const installed = appBrickDeploy(recipe, answered)
   if ("problem" in installed) throw new Error(installed.problem)
   return {
     deploys: installed.deploy,
     follows: genericAppBrickIds.has(recipe.metadata.id)
       ? undefined
       : {
-          answers: { ...answers },
-          environment: [],
+          answers: answered,
+          environment:
+            installed.deploy.type === "image"
+              ? Object.keys(installed.deploy.environment)
+              : [],
           name: recipe.metadata.name,
           revision: brickRevision(recipe),
           source,

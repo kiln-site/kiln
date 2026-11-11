@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import {
   appBrickDeploy,
+  brickInstallAnswers,
   brickInputs,
   groupBrickInstall,
   type AppBrickDeployType,
@@ -49,6 +50,19 @@ import { createApp } from "@/server/apps"
 import { createInstanceGroup } from "@/server/instance-groups"
 
 const NO_RELAYS: ReadonlyArray<BrickRelayOption> = []
+
+// The inputs someone answers: not a secret Kiln makes.
+const asked = (brick: Brick) =>
+  brickInputs(brick).filter(
+    (input) => !(input.type === "secret" && input.generate)
+  )
+
+// A Brick's answers as they are checked here, before Kiln has made its
+// secrets: each stands in for the one it will make.
+const withSecretsToCome = (
+  brick: Brick,
+  variables: Record<string, BrickVariableValue>
+) => brickInstallAnswers(brick, variables, () => "made-when-installed")
 
 /** What a new App is asked to be. */
 interface NewAppValues {
@@ -243,7 +257,9 @@ function NewGroupForm({
   )
   const { compatible, connected } = useBrickRelayReady(relays, relayId, brick)
   const refused = React.useMemo(
-    () => "problem" in groupBrickInstall(brick, variables),
+    () =>
+      "problem" in
+      groupBrickInstall(brick, withSecretsToCome(brick, variables)),
     [brick, variables]
   )
   const blocked =
@@ -268,7 +284,7 @@ function NewGroupForm({
           onChange={(event) => setName(event.currentTarget.value)}
         />
       </label>
-      {brickInputs(brick).map((input) => (
+      {asked(brick).map((input) => (
         <BrickVariableField
           key={input.key}
           definition={input}
@@ -366,7 +382,8 @@ function NewAppForm({
     React.useState<AppDatabaseDraft>(noAppDatabase)
   // What it deploys with these answers, or why it can't yet.
   const installed = React.useMemo(
-    () => (brick ? appBrickDeploy(brick, variables) : null),
+    () =>
+      brick ? appBrickDeploy(brick, withSecretsToCome(brick, variables)) : null,
     [brick, variables]
   )
   // The file a Brick builds, which an image's doesn't.
@@ -422,7 +439,7 @@ function NewAppForm({
         />
       </label>
       {brick
-        ? brickInputs(brick).map((input) => (
+        ? asked(brick).map((input) => (
             <BrickVariableField
               key={input.key}
               definition={input}

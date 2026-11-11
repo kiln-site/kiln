@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test"
 
-import { appBrickDeploy, appBrickProblem } from "./app-bricks"
+import {
+  appBrickDeploy,
+  appBrickProblem,
+  brickInstallAnswers,
+} from "./app-bricks"
 import { brickRecipeSchema } from "./brick-recipe"
 
 const metadata = {
@@ -29,11 +33,50 @@ const image = recipe({
 describe("an App Brick", () => {
   it("deploys the image its answers make, a default standing in for one not given", () => {
     expect(appBrickDeploy(image, { name: "ghcr.io/acme/site" })).toEqual({
-      deploy: { image: "ghcr.io/acme/site:latest", type: "image" },
+      deploy: {
+        environment: {},
+        image: "ghcr.io/acme/site:latest",
+        type: "image",
+      },
     })
     expect(
       appBrickDeploy(image, { name: "ghcr.io/acme/site", tag: "2" })
-    ).toEqual({ deploy: { image: "ghcr.io/acme/site:2", type: "image" } })
+    ).toEqual({
+      deploy: { environment: {}, image: "ghcr.io/acme/site:2", type: "image" },
+    })
+  })
+
+  it("sets the variables its answers make, a secret Kiln made among them", () => {
+    const keyed = recipe({
+      inputs: [
+        { key: "mode", label: "Mode", type: "text", default: "production" },
+        { key: "key", label: "Key", type: "secret", generate: true },
+      ],
+      deploy: {
+        type: "image",
+        image: "nginx:1",
+        env: { MODE: "{{ mode }}", SECRET_KEY: "{{ key }}" },
+      },
+    })
+    // Kept as they stand at install, a default among them, and a secret
+    // made once: one given, as when it is installed again, is kept.
+    const made = brickInstallAnswers(keyed, {}, () => "made-once")
+    expect(made).toEqual({ key: "made-once", mode: "production" })
+    expect(brickInstallAnswers(keyed, made, () => "another")).toEqual(made)
+    expect(appBrickDeploy(keyed, made)).toEqual({
+      deploy: {
+        environment: { MODE: "production", SECRET_KEY: "made-once" },
+        image: "nginx:1",
+        type: "image",
+      },
+    })
+    // Never deployed with the secret's template left in its place.
+    expect(appBrickDeploy(keyed, {})).toEqual({
+      problem: "SECRET_KEY needs an answer this Brick wasn't given",
+    })
+    expect(appBrickDeploy(keyed, { ...made, mode: "a\nADMIN=1" })).toEqual({
+      problem: "MODE can't hold a line break",
+    })
   })
 
   it("deploys the file at its path in whatever source it is given", () => {
@@ -65,26 +108,16 @@ describe("an App Brick", () => {
           deploy: {
             type: "image",
             image: "nginx:1",
-            env: { MODE: "production" },
+            ports: [{ name: "web", port: 80 }],
           },
         })
       )
-    ).toBe("Kiln doesn't run an App Brick's env yet")
+    ).toBe("Kiln doesn't run an App Brick's ports yet")
     expect(
       appBrickProblem(
         recipe({ deploy: { type: "dockerfile", dockerfile: "FROM nginx:1" } })
       )
     ).toBe("Kiln doesn't run an App Brick's dockerfile yet")
-    expect(
-      appBrickProblem(
-        recipe({
-          inputs: [
-            { key: "key", label: "Key", type: "secret", generate: true },
-          ],
-          deploy: { type: "image", image: "nginx:1" },
-        })
-      )
-    ).toBe("Kiln doesn't make an App Brick's secrets yet (Key)")
     // Another kind's Brick is no App's, whatever it deploys.
     expect(
       appBrickProblem(

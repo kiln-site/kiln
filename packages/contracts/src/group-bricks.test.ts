@@ -49,6 +49,7 @@ describe("a group Brick", () => {
         apps: [
           {
             connect: web.connect,
+            environment: {},
             image: "ghcr.io/acme/analytics:2",
             key: "web",
           },
@@ -115,10 +116,10 @@ describe("a group Brick", () => {
         database: { brick: "postgres" },
         web: {
           ...web,
-          deploy: { ...web.deploy, env: { MODE: "production" } },
+          deploy: { ...web.deploy, ports: [{ name: "web", port: 3000 }] },
         },
       })
-    ).toBe("Kiln doesn't run an App Brick's env yet (web)")
+    ).toBe("Kiln doesn't run an App Brick's ports yet (web)")
     expect(
       refused({
         database: { brick: "postgres" },
@@ -132,12 +133,6 @@ describe("a group Brick", () => {
         worker: { ...web, connect: { web: { WEB_URL: "{{ host }}" } } },
       })
     ).toBe("Kiln connects an App to a group's databases only (worker)")
-    expect(
-      refused({ database: { brick: "postgres" }, web }, [
-        ...inputs,
-        { key: "key", label: "Key", type: "secret", generate: true },
-      ])
-    ).toBe("Kiln doesn't make a group Brick's secrets yet (Key)")
   })
 
   it("refuses answers it can't install from", () => {

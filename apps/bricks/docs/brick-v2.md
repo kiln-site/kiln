@@ -388,24 +388,26 @@ database with no type, which has neither a viewer nor files; without
 ### Apps
 
 An App is installed from an App Brick, and Hearth keeps what it turns into:
-the App's configuration, which someone can go on changing. So far Kiln runs
-what an App Brick deploys and nothing a Brick can say around that:
+the App's configuration. So far Kiln runs this much of an App Brick:
 
 | `deploy.type` | What Kiln takes from it                                      |
 | ------------- | ------------------------------------------------------------ |
-| `image`       | `image`, with its templates filled from the answers          |
+| `image`       | `image` and `env`, with their templates filled from the answers |
 | `dockerfile`  | `path`, the Dockerfile to build in the App's source          |
 | `compose`     | `path`, the Compose file to run from the App's source        |
 
 The source of a `path` is chosen when the Brick is installed: a repository
-from a connected source, or a file written in Hearth. An App Brick that
-sets anything else (`env`, `ports`, `ready`, `volumes`, a file written in
-the Brick, a secret Kiln makes) is refused until Kiln runs that part, as is
-one from another catalog.
+from a connected source, or a file written in Hearth. A `secret` input with
+`generate: true` is made by Kiln once, when the Brick is installed, and kept
+with the App's answers, so it is the same after every update. An App Brick
+that sets anything else (`ports`, `ready`, `volumes`, a file written in the
+Brick) is refused until Kiln runs that part, as is one from another catalog.
 
-Kiln's catalog has a Brick for each: `docker-image`, `dockerfile` and
-`compose`. An App that wasn't installed from a Brick is read as the one for
-what it deploys.
+Kiln's catalog has a generic Brick for each thing an App deploys:
+`docker-image`, `dockerfile` and `compose`. An App made from one is its
+owner's in every part and follows no Brick; an App that wasn't installed
+from a Brick is read as the one for what it deploys. An App made from any
+other Brick keeps which Brick and revision it came from, and its answers.
 
 ### Groups
 
@@ -455,8 +457,9 @@ does more, as it refuses one from another catalog:
 - A member that names a Brick is a database, made from that database Brick
   of the same catalog, by its ID. Its `inputs` are its answers.
 - A member written in place is an App that runs an image, with what an App
-  Brick may say so far and no more, so not yet the `env` and `ports` of the
-  example above.
+  Brick may say so far and no more, so not yet the `ports` of the example
+  above. A secret the group asks Kiln to make is made once and kept with the
+  group's answers.
 - `connect` gives an App its variables for a database of the group. In its
   templates `{{ connection }}` is the URL Kiln builds for the database's
   type, and `host`, `port`, `name`, `username` and `password` are its parts;
