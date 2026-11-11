@@ -1,0 +1,20 @@
+format: kiln.brick/v2
+kind: app
+metadata:
+  id: docker-image
+  name: Docker image
+  revision: 1
+  summary: Runs an image from a registry, and says when a newer one is out.
+  author: Kiln
+  icon: ../icons/docker.svg
+  color: "#4a9be8"
+  tags: [docker]
+inputs:
+  - key: image
+    label: Image
+    help: Where it is pulled from, with its tag, such as ghcr.io/acme/site:latest.
+    type: text
+    max: 255
+deploy:
+  type: image
+  image: "{{ image }}"

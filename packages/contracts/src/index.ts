@@ -6,6 +6,7 @@ import {
   MAXIMUM_INSTANCE_NAME_LENGTH,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
+import { APP_IMAGE_MAX_LENGTH } from "./app-bricks.js"
 import { readBrick } from "./brick-conversion.js"
 import {
   brickIdSchema,
@@ -65,6 +66,7 @@ export * from "./cli.js"
 export * from "./instance-limits.js"
 export * from "./resource-limits.js"
 export * from "./database-login.js"
+export * from "./app-bricks.js"
 export * from "./database-bricks.js"
 export * from "./security.js"
 export * from "./instance-overview.js"
@@ -1084,7 +1086,7 @@ export const appConfigSchema = z
     dockerfile: z.string().max(200_000),
     // KEY=VALUE lines, as in an env file.
     environment: z.string().max(65_536),
-    image: z.string().trim().max(512),
+    image: z.string().trim().max(APP_IMAGE_MAX_LENGTH),
     // Configs saved before mounts have none.
     mounts: appMountsSchema.default([]),
     ports: z.array(appPortSchema).max(32),

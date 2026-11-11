@@ -1,0 +1,14 @@
+format: kiln.brick/v2
+kind: app
+metadata:
+  id: dockerfile
+  name: Dockerfile
+  revision: 1
+  summary: Builds a Dockerfile from a repository, or one written in Hearth, and runs it.
+  author: Kiln
+  icon: ../icons/dockerfile.svg
+  color: "#4a9be8"
+  tags: [docker]
+deploy:
+  type: dockerfile
+  path: Dockerfile

@@ -1,0 +1,14 @@
+format: kiln.brick/v2
+kind: app
+metadata:
+  id: compose
+  name: Docker Compose
+  revision: 1
+  summary: Runs every service of a Compose file from a repository, or one written in Hearth.
+  author: Kiln
+  icon: ../icons/compose.svg
+  color: "#4a9be8"
+  tags: [docker]
+deploy:
+  type: compose
+  path: compose.yaml
