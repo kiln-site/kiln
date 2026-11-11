@@ -69,12 +69,11 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
   }),
   // An instance's image tag names a newer image than the one it runs: an
   // App's, a database's, a game server's. What happens next, deploying it
-  // or not, is on its page. The kind keeps the name it had while only Apps
-  // updated, since stored notifications and preferences carry it.
+  // or not, is on its page.
   z.object({
     digest: z.string(),
     image: z.string(),
-    kind: z.literal("app.image-update"),
+    kind: z.literal("instance.image-update"),
     resource: notificationResourceSchema,
   }),
   // The Brick an instance was installed from has a newer revision of its
@@ -179,6 +178,7 @@ export const storedNotificationContentSchema = z.union([
 export const formerNotificationKinds: Partial<
   Record<NotificationKind, ReadonlyArray<string>>
 > = {
+  "instance.image-update": ["app.image-update"],
   "kiln.updated": ["relay.updated"],
   "security.report": ["security.vulnerabilities"],
 }

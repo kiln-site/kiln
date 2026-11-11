@@ -302,7 +302,7 @@ function InstanceUpdatesDialog({
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Image updates</DialogTitle>
+          <DialogTitle>Updates</DialogTitle>
           <DialogDescription>
             Kiln checks{" "}
             {updates.image ? (

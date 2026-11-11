@@ -63,7 +63,7 @@ export function notificationHref(
     case "access.removed":
       return null
     case "resource.disk-limit":
-    case "app.image-update":
+    case "instance.image-update":
     case "instance.brick-update":
       return resourceInfoHref(content.resource)
     case "app.deployed":

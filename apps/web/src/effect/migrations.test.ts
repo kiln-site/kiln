@@ -1154,6 +1154,63 @@ describeMysql("database migrations", () => {
     )
 
     it.effect(
+      "keeps an update's notification when it takes every instance's name",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while the notification was an App's by name.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 68)
+          )
+          const appId = "a".repeat(12)
+          const digest = `sha256:${"2".repeat(64)}`
+          yield* insertUser("owner")
+          yield* insertRows("notification", {
+            created_at: 1,
+            data: JSON.stringify({
+              digest,
+              image: "ghcr.io/kiln-site/marketing:latest",
+              kind: "app.image-update",
+              resource: {
+                id: appId,
+                name: "Website",
+                relayId: "1".repeat(12),
+                type: "app",
+              },
+            }),
+            id: "11111111-1111-4111-8111-111111111111",
+            kind: "app.image-update",
+            source_key: `app.image-update:${appId}:${digest}`,
+            user_id: "owner",
+          })
+
+          yield* applyMigrations(migrations)
+
+          const rows = yield* sql<{
+            contentKind: string
+            image: string
+            kind: string
+            sourceKey: string
+          }>`
+            SELECT kind, source_key AS sourceKey,
+                   JSON_UNQUOTE(JSON_EXTRACT(data, '$.kind')) AS contentKind,
+                   JSON_UNQUOTE(JSON_EXTRACT(data, '$.image')) AS image
+              FROM ${sql(databaseTableName("notification"))}
+          `
+          expect(rows).toEqual([
+            {
+              contentKind: "instance.image-update",
+              image: "ghcr.io/kiln-site/marketing:latest",
+              kind: "instance.image-update",
+              sourceKey: `instance.image-update:${appId}:${digest}`,
+            },
+          ])
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
       "gives a database made before databases ran Bricks its engine's Brick, image and port",
       () =>
         Effect.gen(function* () {

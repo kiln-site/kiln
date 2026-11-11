@@ -128,8 +128,8 @@ describeMysql("App image checks", () => {
               )
             )
           const open = openSourceKeysEffect(
-            "app.image-update",
-            `app.image-update:${databaseId}:`
+            "instance.image-update",
+            `instance.image-update:${databaseId}:`
           )
 
           const offered = yield* found(1)
@@ -140,7 +140,7 @@ describeMysql("App image checks", () => {
             state: "available",
           })
           assert.deepStrictEqual(yield* open, [
-            `app.image-update:${databaseId}:${digest(2)}`,
+            `instance.image-update:${databaseId}:${digest(2)}`,
           ])
 
           // Deployed again, it runs what the tag names.
@@ -186,11 +186,11 @@ describeMysql("App image checks", () => {
             },
             yield* Clock.currentTimeMillis
           )
-          const sourceKey = `app.image-update:${appId}:${digest(2)}`
+          const sourceKey = `instance.image-update:${appId}:${digest(2)}`
           yield* notifyUsersEffect(["user"], sourceKey, {
             digest: digest(2),
             image,
-            kind: "app.image-update",
+            kind: "instance.image-update",
             resource: { id: appId, name: "Website", relayId, type: "app" },
           })
 
@@ -205,8 +205,8 @@ describeMysql("App image checks", () => {
 
           assert.deepStrictEqual(
             yield* openSourceKeysEffect(
-              "app.image-update",
-              `app.image-update:${appId}:`
+              "instance.image-update",
+              `instance.image-update:${appId}:`
             ),
             [sourceKey]
           )
