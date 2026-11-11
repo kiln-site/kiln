@@ -56,9 +56,6 @@ export const relayAppGitHubV1Feature = "app-github-v1"
 // The Relay lists, creates, renames, and deletes its Docker named volumes
 // through `relay.volumes.*`.
 export const relayVolumesV1Feature = "relay-volumes-v1"
-// The Relay answers `app.image.check`, and deploys an image app at the
-// digest `app.deploy`'s `imageDigest` names.
-export const relayAppImageUpdatesV1Feature = "app-image-updates-v1"
 // The Relay reports the Kiln services on its Docker host (Hearth, its
 // database, and its cache) through `relay.platform.*`, and, when it installed
 // them itself, restarts and repairs them.
@@ -219,7 +216,7 @@ export const relayControlOperations = [
   "app.network.routes.read",
   "app.deployment.read",
   "app.deployment.abort",
-  "app.image.check",
+  "instance.image.check",
   "app.network.routes.write",
   "app.terminal.attach",
   "app.terminal.heartbeat",
@@ -428,7 +425,7 @@ export function relayControlOperationChanges(
     case "app.resources.read":
     case "app.network.routes.read":
     case "app.deployment.read":
-    case "app.image.check":
+    case "instance.image.check":
     case "backup.task.get":
     case "backup.task.list":
     case "backup.restore.unfinished":
@@ -654,8 +651,8 @@ export function relayControlDeadlineMs(
   if (operation === "database.delete") return 180_000
   if (operation === "app.delete") return 180_000
   // Up to four registry lookups at a time, each up to 20 seconds; Hearth
-  // sends at most 16 apps per request.
-  if (operation === "app.image.check") return 120_000
+  // sends at most 16 instances per request.
+  if (operation === "instance.image.check") return 120_000
   if (operation === "database.credentials.rotate") return 180_000
   // Waits its turn behind changes to every App and database it names.
   if (operation === "database.network.import") return 120_000

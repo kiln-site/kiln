@@ -16,8 +16,7 @@ import type {
   RelayApp,
   RelayAppDeploymentLog,
   RelayAppDeploymentRead,
-  RelayAppImageCheck,
-  RelayAppImageCheckResult,
+  RelayInstanceImageCheckResult,
   RelayAppContainer,
   RelayAppDeployment,
   RelayAppLimits,
@@ -41,7 +40,7 @@ import {
   NO_RESOURCE_LIMITS,
   relayAppSchema,
 } from "@workspace/contracts"
-import { Effect, Predicate, Result, Semaphore } from "effect"
+import { Effect, Predicate, Result } from "effect"
 
 import { commandLines } from "./command.js"
 import {
@@ -50,6 +49,7 @@ import {
   repositoryName,
   type ImageReference,
 } from "./docker-reference.js"
+import { registryLookups, repositoryDigests } from "./image-checks.js"
 import type { RelayConfig } from "./config.js"
 import { consoleLineCharacters } from "./console-frames.js"
 import { parseConsoleLine } from "./console-parsing.js"
@@ -265,9 +265,6 @@ export class AppDriver {
   // How many deployments began replacing each app's containers this run.
   readonly #replacements = new Map<string, number>()
   readonly #lanes: OperationLanes
-  // Registries asked at once, whatever asks: overlapping checks share these
-  // rather than each asking four.
-  readonly #registryLookups = Semaphore.makeUnsafe(4)
   readonly #limits: AppLimitStores
   readonly #connections: DatabaseConnections
   readonly #cleanup: DockerCleanup
@@ -1371,15 +1368,15 @@ export class AppDriver {
    * the one named, needs none.
    */
   async checkImages(
-    input: RelayAppImageCheck,
+    apps: ReadonlyArray<{ appId: string; image: string }>,
     signal: AbortSignal
-  ): Promise<Array<RelayAppImageCheckResult>> {
+  ): Promise<Array<RelayInstanceImageCheckResult>> {
     const containers = await this.#containers(
       undefined,
-      input.apps.map((app) => app.appId),
+      apps.map((app) => app.appId),
       signal
     )
-    const checks = input.apps.map(({ appId, image }) => {
+    const checks = apps.map(({ appId, image }) => {
       const reference = Result.try(() => parseImageReference(image))
       // The container serving the app: a deployment's replacement only
       // takes over once it's healthy, and no check runs during one.
@@ -1405,7 +1402,7 @@ export class AppDriver {
         sameImage(container.image, reference.success)
           ? normalizedReference(reference.success)
           : null
-      return { appId, container, deploying, lookup, reference }
+      return { appId, container, deploying, image, lookup, reference }
     })
     const wanted = new Set(
       checks.flatMap(({ lookup }) => (lookup === null ? [] : [lookup]))
@@ -1415,7 +1412,7 @@ export class AppDriver {
         Effect.forEach(
           [...wanted],
           (name) =>
-            this.#registryLookups
+            registryLookups
               .withPermits(1)(this.#engine.distributionDigest(name))
               .pipe(
                 Effect.result,
@@ -1429,39 +1426,44 @@ export class AppDriver {
     return Promise.all(
       checks.map(
         async ({
-          appId,
+          appId: id,
           container,
           deploying,
+          image,
           lookup,
           reference,
-        }): Promise<RelayAppImageCheckResult> => {
+        }): Promise<RelayInstanceImageCheckResult> => {
           if (Result.isFailure(reference)) {
             return {
-              appId,
               error: "The image isn't a valid reference",
+              id,
               status: "error",
             }
           }
-          if (deploying) return { appId, status: "deploying" }
-          if (!container) return { appId, status: "not_deployed" }
+          if (deploying) return { id, status: "deploying" }
+          if (!container) return { id, status: "not_deployed" }
           // Its own lookup only: another app naming the same image says
           // nothing of what this one runs.
           const found = lookup === null ? undefined : latest.get(lookup)
-          if (!found) return { appId, status: "changed" }
+          if (!found) return { id, status: "changed" }
           if (Result.isFailure(found)) {
             return {
-              appId,
               error: found.failure.reason.slice(0, 500),
+              id,
               status: "error",
             }
           }
           return {
-            appId,
+            id,
+            image,
             latestDigest: found.success,
+            // The digest it deployed, or for a container deployed before
+            // Kiln labelled that, the digests its image was pulled as.
             runningDigests: container.imageDigest
               ? [container.imageDigest]
-              : await this.#repositoryDigests(
-                  container,
+              : await repositoryDigests(
+                  this.#engine,
+                  container.imageId ?? null,
                   reference.success,
                   signal
                 ),
@@ -1470,35 +1472,6 @@ export class AppDriver {
         }
       )
     )
-  }
-
-  /**
-   * The digests a container's image was pulled as from its repository, for
-   * one deployed before Kiln labelled the digest it runs.
-   */
-  async #repositoryDigests(
-    container: AppContainer,
-    reference: ImageReference,
-    signal: AbortSignal
-  ): Promise<Array<string>> {
-    if (!container.imageId) return []
-    const image = await docker(
-      this.#engine
-        .inspectImage<{
-          RepoDigests?: Array<string> | null
-        } | null>(container.imageId)
-        .pipe(Effect.catchIf(isDockerNotFound, () => Effect.succeed(null))),
-      signal
-    )
-    const repository = repositoryName(reference)
-    return (image?.RepoDigests ?? []).flatMap((entry) => {
-      const parsed = Result.try(() => parseImageReference(entry))
-      return Result.isSuccess(parsed) &&
-        parsed.success.digest !== undefined &&
-        repositoryName(parsed.success) === repository
-        ? [parsed.success.digest]
-        : []
-    })
   }
 
   #deploymentDirectory(appId: string): string {

@@ -48,7 +48,8 @@ describeMysql("App image checks", () => {
             appId,
             image,
             {
-              appId,
+              id: appId,
+              image,
               latestDigest: digest(3),
               runningDigests: [digest(1)],
               status: "checked",
@@ -61,7 +62,7 @@ describeMysql("App image checks", () => {
           const older = yield* recordAppImageCheckEffect(
             appId,
             image,
-            { appId, error: "registry timed out", status: "error" },
+            { id: appId, error: "registry timed out", status: "error" },
             askedAt - 60_000
           )
           assert.isFalse(older.newFailure)
@@ -100,7 +101,8 @@ describeMysql("App image checks", () => {
             appId,
             image,
             {
-              appId,
+              id: appId,
+              image,
               latestDigest: digest(2),
               runningDigests: [digest(1)],
               status: "checked",
