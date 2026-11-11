@@ -30,7 +30,23 @@ export type InstanceUpdateState =
   | "not_deployed"
   | "untracked"
 
+/**
+ * What Kiln knows of an instance's Brick: the revision it was installed
+ * from, and a newer one its catalog has, while there is one.
+ */
+export interface InstanceBrickUpdate {
+  latestRevision: number | null
+  /** When Kiln first saw `latestRevision`; the wait counts from here. */
+  latestSeenAt: number | null
+  revision: number
+  /** A revision someone chose not to take. */
+  skippedRevision: number | null
+  source: string
+}
+
 export interface InstanceUpdate {
+  /** Null until a check says which Brick it runs, or when it runs none. */
+  brick: InstanceBrickUpdate | null
   checkedAt: number | null
   checkError: string | null
   delayHours: number
@@ -55,6 +71,11 @@ export const defaultInstanceUpdatePolicy = {
 } as const satisfies Pick<InstanceUpdate, "delayHours" | "mode">
 
 interface UpdateRow extends RowDataPacket {
+  brick_revision: number | null
+  brick_source: string | null
+  latest_revision: number | null
+  revision_seen_at: number | string | null
+  skipped_revision: number | null
   instance_id: string
   instance_kind: InstanceUpdateKind
   check_error: string | null
@@ -71,7 +92,8 @@ interface UpdateRow extends RowDataPacket {
 
 const updateColumns = `instance_id, instance_kind, mode, delay_hours, state, image,
   running_digest, latest_digest, latest_seen_at, skipped_digest, checked_at,
-  check_error`
+  check_error, brick_source, brick_revision, latest_revision, revision_seen_at,
+  skipped_revision`
 
 /** What Kiln knows of each instance's updates, by its ID. */
 export const loadInstanceUpdatesEffect = Effect.fn("instances.updates.load")(
@@ -265,6 +287,7 @@ function nextUpdate(
 ): InstanceUpdate {
   const base: InstanceUpdate = previous ?? {
     ...defaultInstanceUpdatePolicy,
+    brick: null,
     checkedAt: null,
     checkError: null,
     image: null,
@@ -382,6 +405,135 @@ export function autoUpdateAt(update: InstanceUpdate): number | null {
 }
 
 /**
+ * Records which revision of its Brick an instance runs, and the newer one
+ * its catalog has (`catalogRevision`, null when the catalog no longer has
+ * the Brick). `newlySeen` is a revision Kiln hasn't offered before, which
+ * starts its wait.
+ */
+export const recordInstanceBrickCheckEffect = Effect.fn(
+  "instances.updates.recordBrick"
+)(function* (
+  kind: InstanceUpdateKind,
+  instanceId: string,
+  installed: { revision: number; source: string },
+  catalogRevision: number | null
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  return yield* database.transaction(
+    "instances.updates.recordBrick",
+    (transaction) =>
+      Effect.gen(function* () {
+        const [row] = yield* transaction.queryRows<UpdateRow>(
+          `SELECT ${updateColumns}
+             FROM ${databaseTable("instance_update")}
+            WHERE instance_id = ?
+              FOR UPDATE`,
+          [instanceId]
+        )
+        const previous = row ? toUpdate(row).brick : null
+        const latestRevision =
+          catalogRevision !== null && catalogRevision > installed.revision
+            ? catalogRevision
+            : null
+        const same =
+          previous !== null &&
+          previous.source === installed.source &&
+          previous.latestRevision === latestRevision
+        const brick: InstanceBrickUpdate = {
+          latestRevision,
+          latestSeenAt:
+            latestRevision === null
+              ? null
+              : same
+                ? previous.latestSeenAt
+                : now,
+          revision: installed.revision,
+          // What was passed over stays passed over, for the same Brick.
+          skippedRevision:
+            previous?.source === installed.source
+              ? previous.skippedRevision
+              : null,
+          source: installed.source,
+        }
+        yield* transaction.execute(
+          `INSERT INTO ${databaseTable("instance_update")}
+             (instance_id, instance_kind, mode, delay_hours, brick_source,
+              brick_revision, latest_revision, revision_seen_at,
+              skipped_revision, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             brick_source = VALUES(brick_source),
+             brick_revision = VALUES(brick_revision),
+             latest_revision = VALUES(latest_revision),
+             revision_seen_at = VALUES(revision_seen_at),
+             skipped_revision = VALUES(skipped_revision),
+             updated_at = VALUES(updated_at)`,
+          [
+            instanceId,
+            kind,
+            defaultInstanceUpdatePolicy.mode,
+            defaultInstanceUpdatePolicy.delayHours,
+            brick.source.slice(0, 2_048),
+            brick.revision,
+            brick.latestRevision,
+            brick.latestSeenAt,
+            brick.skippedRevision,
+            now,
+          ]
+        )
+        return {
+          brick,
+          changed: !same || previous.revision !== installed.revision,
+          newlySeen: latestRevision !== null && !same,
+        }
+      })
+  )
+})
+
+/**
+ * Passes over the Brick revision on offer, so it neither notifies nor
+ * installs on its own. False if that's no longer the one on offer.
+ */
+export const skipInstanceBrickUpdateEffect = Effect.fn(
+  "instances.updates.skipBrick"
+)(function* (instanceId: string, revision: number) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const result = yield* database.execute(
+    "instances.updates.skipBrick",
+    `UPDATE ${databaseTable("instance_update")}
+        SET skipped_revision = latest_revision, updated_at = ?
+      WHERE instance_id = ? AND latest_revision = ?`,
+    [now, instanceId, revision]
+  )
+  return result.affectedRows === 1
+})
+
+/** The Brick revision on offer: newer than what runs, and not passed over. */
+export function offeredBrickRevision(update: InstanceUpdate): number | null {
+  const brick = update.brick
+  return update.mode !== "off" &&
+    brick !== null &&
+    brick.latestRevision !== null &&
+    brick.latestRevision !== brick.skippedRevision
+    ? brick.latestRevision
+    : null
+}
+
+/** When a Brick revision installs on its own: once it has waited. */
+export function autoBrickUpdateAt(update: InstanceUpdate): number | null {
+  if (
+    update.mode !== "auto" ||
+    offeredBrickRevision(update) === null ||
+    update.brick?.latestSeenAt == null
+  ) {
+    return null
+  }
+  return update.brick.latestSeenAt + update.delayHours * 3_600_000
+}
+
+/**
  * Claims `digest` for the image update `deploymentId` deploys, before it's
  * sent to the Relay. False if another update already claimed it, however
  * that went, so an automatic update never deploys the same digest twice;
@@ -416,6 +568,20 @@ function toUpdate(row: UpdateRow): InstanceUpdate {
   const time = (value: number | string | null) =>
     value === null ? null : Number(value)
   return {
+    brick:
+      row.brick_source === null || row.brick_revision === null
+        ? null
+        : {
+            latestRevision:
+              row.latest_revision === null ? null : Number(row.latest_revision),
+            latestSeenAt: time(row.revision_seen_at),
+            revision: Number(row.brick_revision),
+            skippedRevision:
+              row.skipped_revision === null
+                ? null
+                : Number(row.skipped_revision),
+            source: row.brick_source,
+          },
     checkError: row.check_error,
     checkedAt: time(row.checked_at),
     delayHours: Number(row.delay_hours),

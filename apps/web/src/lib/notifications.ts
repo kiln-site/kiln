@@ -77,6 +77,14 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     kind: z.literal("app.image-update"),
     resource: notificationResourceSchema,
   }),
+  // The Brick an instance was installed from has a newer revision of its
+  // recipe. Taking it, or not, is on the instance's page.
+  z.object({
+    brickName: z.string(),
+    kind: z.literal("instance.brick-update"),
+    resource: notificationResourceSchema,
+    revision: z.number().int().positive(),
+  }),
   // An app finished deploying when someone else, or Kiln itself, started
   // it. `update` marks an image update, which says the app was updated. The
   // newest deployment replaces the App's last one, and `count` and `failures`

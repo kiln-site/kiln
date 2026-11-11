@@ -13,7 +13,9 @@ import { requireEligibleResourceUser } from "@/server/auth"
 import {
   askInstanceImageUpdateHandler,
   deployInstanceUpdateHandler,
+  installInstanceBrickHandler,
   instanceUpdatesHandler,
+  skipInstanceBrickUpdateHandler,
   recordInstanceImageCheckHandler,
   saveInstanceUpdatePolicyHandler,
   skipInstanceUpdateHandler,
@@ -35,6 +37,10 @@ const policyInputSchema = instanceInputSchema.extend({
 
 const skipInputSchema = instanceInputSchema.extend({
   digest: imageDigestSchema,
+})
+
+const skipBrickInputSchema = instanceInputSchema.extend({
+  revision: z.number().int().min(1),
 })
 
 // Each kind as lanes and access name it, and as copy does.
@@ -92,6 +98,17 @@ const skipUpdate = updateOperation(
   (user, input: z.infer<typeof skipInputSchema>) =>
     skipInstanceUpdateHandler(user, input)
 )
+const skipBrick = updateOperation(
+  "brick.skip",
+  (noun) => `Changing this ${noun}'s updates`,
+  (user, input: z.infer<typeof skipBrickInputSchema>) =>
+    skipInstanceBrickUpdateHandler(user, input)
+)
+const installBrick = updateOperation(
+  "brick.install",
+  (noun) => `Updating this ${noun}'s Brick`,
+  installInstanceBrickHandler
+)
 const deployUpdate = updateOperation(
   "deploy",
   (noun) => `Updating this ${noun}`,
@@ -126,6 +143,22 @@ export const skipInstanceUpdate = createServerFn({ method: "POST" })
   .validator(skipInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(skipUpdate(data), data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+export const skipInstanceBrickUpdate = createServerFn({ method: "POST" })
+  .validator(skipBrickInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(skipBrick(data), data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+export const installInstanceBrick = createServerFn({ method: "POST" })
+  .validator(instanceInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(installBrick(data), data, {
       user: await requireEligibleResourceUser(),
     })
   )

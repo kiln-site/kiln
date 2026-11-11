@@ -9,6 +9,10 @@ import { insertAppDeploymentEffect } from "@/effect/app-deployments"
 import {
   autoUpdateAt,
   claimImageUpdateEffect,
+  loadInstanceUpdateEffect,
+  offeredBrickRevision,
+  recordInstanceBrickCheckEffect,
+  skipInstanceBrickUpdateEffect,
   recordInstanceImageCheckEffect,
   saveInstanceUpdatePolicyEffect,
   skipInstanceUpdateEffect,
@@ -135,6 +139,44 @@ describeMysql("App image updates", () => {
           assert.isFalse(
             yield* claimImageUpdateEffect(appId, digest(3), "deployment-two")
           )
+        })
+    )
+
+    it.effect(
+      "offers a Brick's newer revision once, and not one passed over",
+      () =>
+        Effect.gen(function* () {
+          yield* seedApp
+          const source = "https://bricks.test/paper.yml"
+          const found = (installed: number, catalog: number | null) =>
+            recordInstanceBrickCheckEffect(
+              "server",
+              appId,
+              { revision: installed, source },
+              catalog
+            )
+          const offered = loadInstanceUpdateEffect(appId).pipe(
+            Effect.map((update) => update && offeredBrickRevision(update))
+          )
+
+          const first = yield* found(1, 2)
+          assert.isTrue(first.newlySeen)
+          assert.strictEqual(yield* offered, 2)
+          // Seen again, it's the same offer, waiting since it was first seen.
+          const again = yield* found(1, 2)
+          assert.isFalse(again.newlySeen)
+          assert.strictEqual(again.brick.latestSeenAt, first.brick.latestSeenAt)
+
+          assert.isTrue(yield* skipInstanceBrickUpdateEffect(appId, 2))
+          assert.isNull(yield* offered)
+          // Passing over one revision doesn't pass over the next.
+          assert.isTrue((yield* found(1, 3)).newlySeen)
+          assert.strictEqual(yield* offered, 3)
+
+          // Installed, or gone from its catalog, there is nothing to offer.
+          assert.isNull((yield* found(3, 3)).brick.latestRevision)
+          assert.isNull((yield* found(3, null)).brick.latestRevision)
+          assert.isNull(yield* offered)
         })
     )
   })

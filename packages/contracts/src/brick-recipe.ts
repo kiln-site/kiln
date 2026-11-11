@@ -249,6 +249,23 @@ export const brickMetadataSchema = z.strictObject({
 })
 export type BrickMetadata = z.infer<typeof brickMetadataSchema>
 
+/**
+ * What stays the same about where a Brick comes from, from one revision of
+ * it to the next: which is how an instance installed from an older revision
+ * finds the newer one. A catalog in a GitHub repository is read at a
+ * commit, so its Bricks' sources name that commit; the same file at
+ * another commit is the same Brick. Any other source is itself.
+ */
+export function brickSourceLineage(source: string): string {
+  const match =
+    /^https:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/[^/]+\/(.+)$/iu.exec(
+      source
+    )
+  return match
+    ? `github:${match[1]!.toLowerCase()}/${match[2]!.toLowerCase()}:${match[3]}`
+    : source
+}
+
 /** A recipe's revision, which is 1 until its author says otherwise. */
 export function brickRevision(recipe: {
   readonly metadata: Pick<BrickMetadata, "revision">

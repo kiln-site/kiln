@@ -64,6 +64,7 @@ export function notificationHref(
       return null
     case "resource.disk-limit":
     case "app.image-update":
+    case "instance.brick-update":
       return resourceInfoHref(content.resource)
     case "app.deployed":
       return content.status === "failed"
