@@ -16,31 +16,21 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 
+import {
+  BrickRelayField,
+  useBrickRelayReady,
+} from "@/components/brick-relay-field"
 import {
   BrickCatalogBrowser,
   type BrickSelection,
 } from "@/components/brick-selector"
-import {
-  defaultBrickInstanceName,
-} from "@/lib/brick-variables"
-import { randomIdempotencyKey } from "@/lib/idempotency-key"
+import { defaultBrickInstanceName } from "@/lib/brick-variables"
 import { relayFleetInstance } from "@/lib/relay-fleet"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import {
-  brickCatalogQueryOptions,
-  queryKeys,
-  relayConnectionQueryOptions,
-} from "@/lib/query-options"
+import { brickCatalogQueryOptions, queryKeys } from "@/lib/query-options"
 import { applyProvisioningInstance } from "@/lib/realtime-client"
-import { selectRelayConnected } from "@/lib/relay-selectors"
+import { useIdempotencyKey } from "@/lib/use-idempotency-key"
 import { createBrickInstance } from "@/server/bricks"
 
 type AddServerDialogState = { kind: "closed" } | { kind: "open" }
@@ -55,7 +45,6 @@ export interface AddServerDialogStore {
 }
 
 const closedState: AddServerDialogState = { kind: "closed" }
-const NO_RELAY_OPTION_VALUE = "__no-relay-option__"
 
 export function createAddServerDialogStore(): AddServerDialogStore {
   let state = closedState
@@ -199,6 +188,7 @@ const AddServerForm = React.memo(function AddServerForm({
 
   return (
     <BrickCatalogBrowser
+      kind="game-server"
       relayId={relayId}
       bricks={bricks}
       canAddCustomBrick={canAddCustomBrick}
@@ -255,20 +245,12 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
   } | null>(null)
   const error =
     failure?.selectionIdentity === selectionIdentity ? failure.message : null
-  const compatibleRelays = relays.filter((relay) =>
-    relaySupportsSelection(relay, selection)
-  )
-  const selectedRelay = relays.find((relay) => relay.id === relayId)
-  const relayCompatible =
-    selectedRelay !== undefined &&
-    relaySupportsSelection(selectedRelay, selection)
-  const relayConnected = useSelectedRelayConnected(relayId)
+  const brick = selection?.kind === "catalog" ? selection.brick : null
+  const { compatible: relayCompatible, connected: relayConnected } =
+    useBrickRelayReady(relays, relayId, brick)
 
   const submittingRef = React.useRef(false)
-  const provisioningAttemptRef = React.useRef<{
-    fingerprint: string
-    idempotencyKey: string
-  } | null>(null)
+  const idempotencyKeyFor = useIdempotencyKey()
 
   async function provision(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -310,13 +292,7 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
       start: false,
       variables,
     }
-    const fingerprint = JSON.stringify(provisioningInput)
-    const previousAttempt = provisioningAttemptRef.current
-    const idempotencyKey =
-      previousAttempt?.fingerprint === fingerprint
-        ? previousAttempt.idempotencyKey
-        : randomIdempotencyKey()
-    provisioningAttemptRef.current = { fingerprint, idempotencyKey }
+    const idempotencyKey = idempotencyKeyFor(provisioningInput)
 
     submittingRef.current = true
     await Effect.runPromise(
@@ -372,81 +348,18 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
           required
         />
       </label>
-      <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
-        <span>Relay</span>
-        <Select
-          value={relayId}
-          onValueChange={(value) => {
-            if (value !== NO_RELAY_OPTION_VALUE) onRelayIdChange(value)
-          }}
-          disabled={pending}
-          required
-        >
-          <SelectTrigger className="h-8 w-full [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:flex-1 [&_[data-slot=select-value]]:overflow-hidden [&_[data-slot=select-value]]:text-left [&_[data-slot=select-value]]:text-ellipsis [&_[data-slot=select-value]]:whitespace-nowrap">
-            <SelectValue
-              placeholder={
-                relays.length === 0
-                  ? "No Relays available"
-                  : compatibleRelays.length === 0
-                    ? "No compatible Relays"
-                    : "Select a Relay"
-              }
-            />
-          </SelectTrigger>
-          <SelectContent>
-            {relays.length === 0 ? (
-              <SelectItem value={NO_RELAY_OPTION_VALUE} disabled>
-                No Relays available
-              </SelectItem>
-            ) : (
-              <>
-                {compatibleRelays.length === 0 ? (
-                  <SelectItem value={NO_RELAY_OPTION_VALUE} disabled>
-                    No compatible Relays
-                  </SelectItem>
-                ) : null}
-                {relays.map((relay) => {
-                  const compatible = relaySupportsSelection(relay, selection)
-                  return (
-                    <SelectItem
-                      key={relay.id}
-                      value={relay.id}
-                      disabled={!compatible}
-                    >
-                      {relay.name}
-                      {compatible
-                        ? ""
-                        : ` — incompatible (${displayArchitecture(relay.nodeArch)})`}
-                    </SelectItem>
-                  )
-                })}
-              </>
-            )}
-          </SelectContent>
-        </Select>
-      </label>
+      <BrickRelayField
+        brick={brick}
+        disabled={pending}
+        relays={relays}
+        value={relayId}
+        onChange={onRelayIdChange}
+      />
 
       {error ? (
         <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs text-destructive light:bg-destructive/16">
           <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
           {error}
-        </div>
-      ) : null}
-
-      {relayCompatible && !relayConnected && relayId ? (
-        <p className="text-xs leading-relaxed text-amber-300 light:text-amber-700">
-          Selected Relay is not connected.
-        </p>
-      ) : null}
-
-      {selectedRelay && !relayCompatible ? (
-        <div className="flex items-start gap-2 rounded-lg border border-amber-400/30 bg-amber-400/8 px-3 py-2 text-xs leading-relaxed text-amber-200 light:bg-amber-400/16 light:text-amber-800">
-          <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-          <span>
-            {selectedRelay.name} runs{" "}
-            {displayArchitecture(selectedRelay.nodeArch)}, which this Brick does
-            not support. Choose a compatible Relay to provision.
-          </span>
         </div>
       ) : null}
 
@@ -462,46 +375,3 @@ const AddServerConfiguration = React.memo(function AddServerConfiguration({
     </form>
   )
 })
-
-function useSelectedRelayConnected(relayId: string): boolean {
-  const queryClient = useQueryClient()
-  const selectConnected = React.useMemo(
-    () => selectRelayConnected(relayId),
-    [relayId]
-  )
-  const { data = false } = useQuery({
-    ...relayConnectionQueryOptions(queryClient),
-    select: selectConnected,
-  })
-  return data
-}
-
-function relaySupportsSelection(
-  relay: PersistedRelay,
-  selection: BrickSelection | null
-): boolean {
-  if (selection?.kind !== "catalog" || !relay.nodeArch) return true
-  const architectures = selection.brick.metadata.platforms
-  if (!architectures || architectures.length === 0) return true
-  const relayArchitecture = normalizeArchitecture(relay.nodeArch)
-  return architectures.some(
-    (architecture) => normalizeArchitecture(architecture) === relayArchitecture
-  )
-}
-
-function normalizeArchitecture(architecture: string): string {
-  switch (architecture.trim().toLowerCase()) {
-    case "x64":
-    case "x86-64":
-    case "x86_64":
-      return "amd64"
-    case "aarch64":
-      return "arm64"
-    default:
-      return architecture.trim().toLowerCase()
-  }
-}
-
-function displayArchitecture(architecture: string | null): string {
-  return architecture ? normalizeArchitecture(architecture) : "unknown"
-}

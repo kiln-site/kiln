@@ -2,7 +2,6 @@ import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH,
-  brickGame,
   type Brick,
 } from "@workspace/contracts"
 import { Result } from "effect"
@@ -45,7 +44,13 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import { BrickIcon } from "@/components/brick-icon"
+import {
+  brickKindPresentations,
+  type BrickKindPresentation,
+  type PickableBrickKind,
+} from "@/components/brick-kinds"
 import { isVerifiedBrick } from "@/components/brick-trust"
+import { normalizeArchitecture } from "@/lib/architecture"
 import { useKilnGitRepositorySlug } from "@/lib/git-repository"
 import {
   brickCatalogDetailsQueryOptions,
@@ -63,17 +68,15 @@ export type BrickSelection =
   | { kind: "catalog"; brick: Brick }
   | { kind: "custom"; source: string }
 
-type BrickCategoryId = "all" | "minecraft" | "steam" | "other"
-type BrickTabId = BrickCategoryId | "catalogs" | "custom"
+// Every Brick of the kind, before its kind's own categories.
+const ALL_CATEGORY = "all"
+// "all", one of the kind's categories, or one of the two that aren't lists
+// of the catalogs' Bricks.
+type BrickTabId = string
+const CATALOGS_TAB = "catalogs"
+const CUSTOM_TAB = "custom"
 type BrickSourceFilter = "all" | "verified" | "community"
 type BrickSort = "featured" | "name-asc" | "name-desc"
-
-const CATEGORIES: ReadonlyArray<{ id: BrickCategoryId; label: string }> = [
-  { id: "all", label: "All" },
-  { id: "minecraft", label: "Minecraft" },
-  { id: "steam", label: "Steam" },
-  { id: "other", label: "Other" },
-]
 
 const SOURCE_FILTERS: ReadonlyArray<{
   id: BrickSourceFilter
@@ -92,22 +95,13 @@ const SORT_OPTIONS: ReadonlyArray<{ id: BrickSort; label: string }> = [
 
 const EMPTY_BRICKS: Array<Brick> = []
 
-function brickCategory(brick: Brick): Exclude<BrickCategoryId, "all"> {
-  const tags = new Set(
-    (brick.metadata.tags ?? []).map((tag) => tag.toLowerCase())
-  )
-  const image = brick.deploy?.type === "image" ? brick.deploy.image : ""
-  if (tags.has("steam") || image.toLowerCase().includes("steam")) {
-    return "steam"
-  }
-  if (brick.type === "minecraft") return "minecraft"
-  return "other"
-}
-
-function brickSearchText(brick: Brick): string {
+function brickSearchText(
+  brick: Brick,
+  presentation: BrickKindPresentation
+): string {
   return [
     brick.metadata.name,
-    brickGame(brick),
+    presentation.label(brick),
     brick.metadata.id,
     brick.metadata.author,
     brick.metadata.summary,
@@ -115,14 +109,6 @@ function brickSearchText(brick: Brick): string {
   ]
     .join(" ")
     .toLowerCase()
-}
-
-function formatGameLabel(brick: Brick): string {
-  const tags = new Set(brick.metadata.tags ?? [])
-  const game = brickGame(brick)
-  if (tags.has("java")) return `${game} - Java`
-  if (tags.has("bedrock")) return `${game} - Bedrock`
-  return game
 }
 
 const PLATFORM_ARCHITECTURES = ["amd64", "arm64"] as const
@@ -153,19 +139,6 @@ const ArchitectureTag = React.memo(function ArchitectureTag({
   )
 })
 
-function normalizeArchitecture(architecture: string): string {
-  switch (architecture.trim().toLowerCase()) {
-    case "x64":
-    case "x86-64":
-    case "x86_64":
-      return "amd64"
-    case "aarch64":
-      return "arm64"
-    default:
-      return architecture.trim().toLowerCase()
-  }
-}
-
 function sourceLabel(brick: Brick, gitRepositorySlug: string): string {
   return isVerifiedBrick(brick, gitRepositorySlug) ? "Verified" : "Community"
 }
@@ -175,12 +148,14 @@ function filterAndSortBricks(
   {
     category,
     gitRepositorySlug,
+    presentation,
     query,
     sort,
     sourceFilter,
   }: {
-    category: BrickCategoryId
+    category: string
     gitRepositorySlug: string
+    presentation: BrickKindPresentation
     query: string
     sort: BrickSort
     sourceFilter: BrickSourceFilter
@@ -189,11 +164,12 @@ function filterAndSortBricks(
   const normalized = query.trim().toLowerCase()
   const searchTextBySource = new Map<string, string>()
   for (const brick of bricks) {
-    searchTextBySource.set(brick.source, brickSearchText(brick))
+    searchTextBySource.set(brick.source, brickSearchText(brick, presentation))
   }
 
   const filtered = bricks.filter((brick) => {
-    if (category !== "all" && brickCategory(brick) !== category) return false
+    if (category !== ALL_CATEGORY && presentation.category(brick) !== category)
+      return false
     if (
       sourceFilter === "verified" &&
       !isVerifiedBrick(brick, gitRepositorySlug)
@@ -228,12 +204,15 @@ function filterAndSortBricks(
 
 function filterAndSortCustomBricks(
   bricks: Array<Brick>,
-  query: string
+  query: string,
+  presentation: BrickKindPresentation
 ): Array<Brick> {
   const normalized = query.trim().toLowerCase()
   return normalized
     ? bricks.reduce<Array<Brick>>((matches, brick) => {
-        if (brickSearchText(brick).includes(normalized)) matches.push(brick)
+        if (brickSearchText(brick, presentation).includes(normalized)) {
+          matches.push(brick)
+        }
         return matches
       }, [])
     : [...bricks]
@@ -241,22 +220,28 @@ function filterAndSortCustomBricks(
 
 const BrickTabSidebar = React.memo(function BrickTabSidebar({
   canAddCustomBrick,
+  categories,
   disabled,
   tab,
   onTabChange,
 }: {
   canAddCustomBrick: boolean
+  categories: BrickKindPresentation["categories"]
   disabled: boolean
   tab: BrickTabId
   onTabChange: (tab: BrickTabId) => void
 }) {
+  const items = React.useMemo(
+    () => [{ id: ALL_CATEGORY, label: "All" }, ...categories],
+    [categories]
+  )
   return (
     <aside className="flex min-h-0 flex-col border-b border-border/60 max-md:min-h-max md:border-r md:border-b-0">
       <p className="type-technical-label px-3 pt-3 pb-2 text-muted-foreground">
         Categories
       </p>
       <nav className="flex gap-1 overflow-x-auto px-2 pb-2 md:flex-col md:overflow-y-auto md:pb-3">
-        {CATEGORIES.map((item) => {
+        {items.map((item) => {
           const active = tab === item.id
           return (
             <button
@@ -284,10 +269,10 @@ const BrickTabSidebar = React.memo(function BrickTabSidebar({
         <button
           type="button"
           disabled={disabled}
-          onClick={() => onTabChange("catalogs")}
+          onClick={() => onTabChange(CATALOGS_TAB)}
           className={cn(
             "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors duration-150",
-            tab === "catalogs"
+            tab === CATALOGS_TAB
               ? "bg-primary/12 font-medium text-foreground"
               : "text-muted-foreground hover:bg-accent/55 hover:text-foreground",
             disabled && "pointer-events-none opacity-50"
@@ -300,10 +285,10 @@ const BrickTabSidebar = React.memo(function BrickTabSidebar({
           <button
             type="button"
             disabled={disabled}
-            onClick={() => onTabChange("custom")}
+            onClick={() => onTabChange(CUSTOM_TAB)}
             className={cn(
               "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors duration-150",
-              tab === "custom"
+              tab === CUSTOM_TAB
                 ? "bg-primary/12 font-medium text-foreground"
                 : "text-muted-foreground hover:bg-accent/55 hover:text-foreground",
               disabled && "pointer-events-none opacity-50"
@@ -353,7 +338,11 @@ function useSaveCustomBrick(
   })
 }
 
+// Browsing the Bricks of one kind of instance: its categories, a search, the
+// list, and the chosen Brick's details over whatever `configuration` asks
+// before creating from it.
 export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
+  kind,
   relayId,
   bricks,
   canAddCustomBrick,
@@ -365,6 +354,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
   configuration,
   emptyMessage = "No bricks match these filters.",
 }: {
+  kind: PickableBrickKind
   relayId: string
   bricks: Array<Brick>
   canAddCustomBrick: boolean
@@ -377,6 +367,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
   emptyMessage?: string
 }) {
   const gitRepositorySlug = useKilnGitRepositorySlug()
+  const presentation = brickKindPresentations[kind]
   const customBrickSources = React.useMemo(
     () => new Set(customBricks.map((brick) => brick.source)),
     [customBricks]
@@ -385,8 +376,8 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
     selection?.kind === "custom" ||
     (selection?.kind === "catalog" &&
       customBrickSources.has(selection.brick.source))
-      ? "custom"
-      : "all"
+      ? CUSTOM_TAB
+      : ALL_CATEGORY
   )
   const [query, setQuery] = React.useState("")
   const [sourceFilter, setSourceFilter] =
@@ -395,13 +386,14 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
 
   const catalogBricks = bricks.length > 0 ? bricks : EMPTY_BRICKS
   const visibleBricks = React.useMemo(() => {
-    if (tab === "catalogs") return EMPTY_BRICKS
-    if (tab === "custom") {
-      return filterAndSortCustomBricks(customBricks, query)
+    if (tab === CATALOGS_TAB) return EMPTY_BRICKS
+    if (tab === CUSTOM_TAB) {
+      return filterAndSortCustomBricks(customBricks, query, presentation)
     }
     return filterAndSortBricks(catalogBricks, {
       category: tab,
       gitRepositorySlug,
+      presentation,
       query,
       sort,
       sourceFilter,
@@ -410,6 +402,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
     catalogBricks,
     customBricks,
     gitRepositorySlug,
+    presentation,
     query,
     sort,
     sourceFilter,
@@ -419,17 +412,17 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
   const saveMutation = useSaveCustomBrick(relayId, onSelectionChange)
 
   const selectedCatalog = selection?.kind === "catalog" ? selection.brick : null
-  const customOpen = tab === "custom"
+  const customOpen = tab === CUSTOM_TAB
   const selectTab = React.useCallback(
     (nextTab: BrickTabId) => {
-      if (nextTab === "catalogs") {
+      if (nextTab === CATALOGS_TAB) {
         setTab(nextTab)
         onSelectionChange(null)
         return
       }
-      if (nextTab === "custom" && tab === "custom") return
+      if (nextTab === CUSTOM_TAB && tab === CUSTOM_TAB) return
       setTab(nextTab)
-      if (nextTab === "custom") {
+      if (nextTab === CUSTOM_TAB) {
         const next = customBricks[0]
         onSelectionChange(
           next
@@ -446,6 +439,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
         filterAndSortBricks(catalogBricks, {
           category: nextTab,
           gitRepositorySlug,
+          presentation,
           query,
           sort,
           sourceFilter,
@@ -457,6 +451,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
       customBricks,
       gitRepositorySlug,
       onSelectionChange,
+      presentation,
       query,
       selection,
       sort,
@@ -474,12 +469,13 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
     >
       <BrickTabSidebar
         canAddCustomBrick={canAddCustomBrick}
+        categories={presentation.categories}
         disabled={disabled}
         tab={tab}
         onTabChange={selectTab}
       />
 
-      {tab === "catalogs" ? (
+      {tab === CATALOGS_TAB ? (
         <BrickCatalogManager disabled={disabled} />
       ) : (
         <>
@@ -632,7 +628,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
                               {custom
                                 ? "Custom"
                                 : sourceLabel(brick, gitRepositorySlug)}{" "}
-                              · {formatGameLabel(brick)}
+                              · {presentation.label(brick)}
                             </span>
                           </span>
                           {custom ? (
@@ -1417,6 +1413,7 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
 export const BrickSelectDialog = React.memo(function BrickSelectDialog({
   open,
   onOpenChange,
+  kind,
   relayId,
   bricks,
   canAddCustomBrick,
@@ -1429,6 +1426,7 @@ export const BrickSelectDialog = React.memo(function BrickSelectDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  kind: PickableBrickKind
   relayId: string
   bricks: Array<Brick>
   canAddCustomBrick: boolean
@@ -1480,6 +1478,7 @@ export const BrickSelectDialog = React.memo(function BrickSelectDialog({
         <DialogTitle className="sr-only">{title}</DialogTitle>
         <DialogDescription className="sr-only">{description}</DialogDescription>
         <BrickCatalogBrowser
+          kind={kind}
           relayId={relayId}
           bricks={bricks}
           canAddCustomBrick={canAddCustomBrick}
