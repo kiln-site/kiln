@@ -173,17 +173,9 @@ guide doesn't cover, search through the source code in `node_modules/effect/src`
 - Before changing core components, start `pnpm dev:docker` and confirm Hearth
   loads at the printed URL. Validate user-visible changes in the browser.
   Docs-only work does not need a stack.
-- Match validation to the change's risk, not its line count. For simple,
-  low-risk changes (docs, copy, or CI runner selection), review the diff and
-  run only relevant checks, such as formatting or Actionlint. Do not install
-  dependencies, start a dev stack, or run the full application test/build
-  suite solely for these changes. This exception also applies to the full
-  verification requirement in the development guide.
-- For substantial application changes, or changes affecting security, data
-  integrity, concurrency, or release/update behavior, run `pnpm verify`
-  before pushing, including real-MySQL tests, builds, and generated routes.
-  Use individual stages or targeted tests while iterating. Report which
-  checks ran and any limitations. Follow
+- Validate the changed behavior with checks proportionate to the change.
+  For simple changes, run only relevant checks; use `pnpm verify` when the
+  scope or risk warrants the full suite. Follow
   [Contributing](CONTRIBUTING.md) for PR conventions. When asked to deliver a PR,
   commit, push, and open it ready for review. Never merge it yourself.
 - CI tests each PR merged with the latest `main`, so a branch built on an
