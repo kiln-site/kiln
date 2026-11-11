@@ -70,7 +70,10 @@ export const brickKindPresentations: Record<
     categories: [],
     category: () => "",
     label: (brick) =>
-      brick.deploy ? appDeployLabels[brick.deploy.type] : "App",
+      brick.deploy
+        ? appDeployLabels[brick.deploy.type]
+        : // A group, offered here for the App it makes.
+          "App with a database",
   },
   database: {
     name: "Database",

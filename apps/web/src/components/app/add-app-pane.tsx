@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router"
 import {
   appBrickDeploy,
   brickInputs,
+  groupBrickInstall,
   type AppBrickDeployType,
   type Brick,
   type BrickVariableValue,
@@ -45,6 +46,7 @@ import { appBricksQueryOptions, queryKeys } from "@/lib/query-options"
 import { useIdempotencyKey } from "@/lib/use-idempotency-key"
 import { saveAppGitHubSource } from "@/server/app-deployments"
 import { createApp } from "@/server/apps"
+import { createInstanceGroup } from "@/server/instance-groups"
 
 const NO_RELAYS: ReadonlyArray<BrickRelayOption> = []
 
@@ -128,10 +130,42 @@ export const AddAppPane = React.memo(function AddAppPane({
     },
   })
 
+  // A group Brick makes an App with what it needs beside it.
+  const install = useMutation({
+    mutationFn: (values: NewGroupValues) =>
+      createInstanceGroup({
+        data: { ...values, idempotencyKey: idempotencyKeyFor(values) },
+      }),
+    onSuccess: async (created) => {
+      if (created.deployError) {
+        showToast({
+          message: `Installed, but not deployed: ${created.deployError}`,
+          type: "error",
+        })
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.all }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.databases.all }),
+      ])
+      onClose()
+      const [app] = created.apps
+      const [database] = created.databases
+      if (app) {
+        await navigate({ params: { appId: app.id }, to: "/app/$appId/info" })
+      } else if (database) {
+        await navigate({
+          params: { databaseId: database.id },
+          to: "/db/$databaseId/info",
+        })
+      }
+    },
+  })
+  const pending = create.isPending || install.isPending
+
   return (
     <OfferedBrickBrowser
       bricks={bricksQuery.data}
-      disabled={create.isPending}
+      disabled={pending}
       emptyMessage="No App Bricks are in your catalogs."
       error={bricksQuery.error?.message}
       kind="app"
@@ -139,26 +173,144 @@ export const AddAppPane = React.memo(function AddAppPane({
       pending={bricksQuery.isPending}
       onKindChange={onKindChange}
     >
-      {(brick) => (
-        <NewAppForm
-          // Another Brick asks other things, of another source.
-          key={brick?.source ?? ""}
-          brick={brick}
-          // What went wrong creating from another Brick isn't this one's.
-          error={
-            create.variables?.brick === brick?.source
-              ? create.error?.message
-              : undefined
-          }
-          pending={create.isPending}
-          relays={relays}
-          onClose={onClose}
-          onSubmit={create.mutate}
-        />
-      )}
+      {(brick) =>
+        brick?.kind === "group" ? (
+          <NewGroupForm
+            key={brick.source}
+            brick={brick}
+            error={
+              install.variables?.brick === brick.source
+                ? install.error?.message
+                : undefined
+            }
+            pending={pending}
+            relays={relays}
+            onClose={onClose}
+            onSubmit={install.mutate}
+          />
+        ) : (
+          <NewAppForm
+            // Another Brick asks other things, of another source.
+            key={brick?.source ?? ""}
+            brick={brick}
+            // What went wrong creating from another Brick isn't this one's.
+            error={
+              create.variables?.brick === brick?.source
+                ? create.error?.message
+                : undefined
+            }
+            pending={pending}
+            relays={relays}
+            onClose={onClose}
+            onSubmit={create.mutate}
+          />
+        )
+      }
     </OfferedBrickBrowser>
   )
 })
+
+/** What installing a group Brick asks. */
+interface NewGroupValues {
+  brick: string
+  name: string
+  relayId: string
+  variables: Record<string, BrickVariableValue>
+}
+
+// A group Brick brings what its App needs, so it asks only what to call it,
+// where it goes, and its own questions.
+function NewGroupForm({
+  brick,
+  error,
+  onClose,
+  onSubmit,
+  pending,
+  relays,
+}: {
+  brick: Brick
+  error: string | undefined
+  onClose: () => void
+  onSubmit: (values: NewGroupValues) => void
+  pending: boolean
+  relays: ReadonlyArray<BrickRelayOption>
+}) {
+  const [name, setName] = React.useState(brick.metadata.name)
+  const [chosenRelayId, setRelayId] = React.useState<string | null>(null)
+  const relayId = chosenRelayId ?? relays[0]?.id ?? ""
+  const [variables, setVariables] = React.useState(() =>
+    defaultBrickVariables(brick)
+  )
+  const { compatible, connected } = useBrickRelayReady(relays, relayId, brick)
+  const refused = React.useMemo(
+    () => "problem" in groupBrickInstall(brick, variables),
+    [brick, variables]
+  )
+  const blocked =
+    pending || !name.trim() || !relayId || !compatible || !connected || refused
+
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (blocked) return
+        onSubmit({ brick: brick.source, name: name.trim(), relayId, variables })
+      }}
+    >
+      <p className="type-technical-label text-muted-foreground">App details</p>
+      <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
+        <span>Name</span>
+        <Input
+          maxLength={120}
+          disabled={pending}
+          value={name}
+          onChange={(event) => setName(event.currentTarget.value)}
+        />
+      </label>
+      {brickInputs(brick).map((input) => (
+        <BrickVariableField
+          key={input.key}
+          definition={input}
+          disabled={pending}
+          name={input.key}
+          value={variables[input.key]}
+          onChange={(value) =>
+            setVariables((current) =>
+              updateBrickVariable(current, input.key, value)
+            )
+          }
+        />
+      ))}
+      <BrickRelayField
+        brick={brick}
+        disabled={pending}
+        relays={relays}
+        value={relayId}
+        onChange={setRelayId}
+      />
+      <FormError error={error} />
+      <div className="grid grid-cols-2 gap-2 pt-1">
+        <Button type="button" variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button disabled={blocked} type="submit">
+          {pending ? <LoaderCircle className="animate-spin" /> : <Rocket />}
+          Deploy
+        </Button>
+      </div>
+    </form>
+  )
+}
+
+function FormError({ error }: { error: string | undefined }) {
+  return error ? (
+    <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs text-destructive light:bg-destructive/16">
+      <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+      {error}
+    </div>
+  ) : null
+}
 
 function creatableRelays({
   relays,
@@ -341,12 +493,7 @@ function NewAppForm({
           onChange={setDatabase}
         />
       ) : null}
-      {error ? (
-        <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs text-destructive light:bg-destructive/16">
-          <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-          {error}
-        </div>
-      ) : null}
+      <FormError error={error} />
       <div className="grid grid-cols-2 gap-2 pt-1">
         <Button type="button" variant="outline" onClick={onClose}>
           Cancel

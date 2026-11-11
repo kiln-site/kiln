@@ -1,0 +1,31 @@
+format: kiln.brick/v2
+kind: group
+metadata:
+  id: umami
+  name: Umami
+  revision: 1
+  summary: Privacy-focused web analytics, with a PostgreSQL database of its own.
+  author: Kiln
+  icon: ../icons/umami.svg
+  color: "#8a8f98"
+  tags: [analytics]
+  links:
+    homepage: "https://umami.is"
+    source: "https://github.com/umami-software/umami"
+    docs: "https://umami.is/docs"
+# Umami asks for nothing but its database. It makes its first account
+# itself (admin, with the password umami), to change at first sign-in, and
+# derives its signing secret from its database's address until a Brick can
+# make an App a secret of its own.
+group:
+  members:
+    database:
+      brick: postgres
+    web:
+      kind: app
+      deploy:
+        type: image
+        image: ghcr.io/umami-software/umami:latest
+      connect:
+        database:
+          DATABASE_URL: "{{ connection }}"

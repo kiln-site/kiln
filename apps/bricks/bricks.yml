@@ -18,3 +18,4 @@ recipes:
   - bricks/docker-image.yml
   - bricks/dockerfile.yml
   - bricks/compose.yml
+  - bricks/umami.yml
