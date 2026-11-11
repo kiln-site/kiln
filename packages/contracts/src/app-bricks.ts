@@ -2,15 +2,26 @@ import {
   brickAnswers,
   brickAnswersProblem,
   brickInputs,
+  brickTemplateInput,
   fillBrickTemplate,
   type BrickInputValue,
+  type BrickPort,
   type BrickRecipe,
 } from "./brick-recipe.js"
 
-// What Kiln runs of an App Brick so far: what it deploys, and nothing a
-// Brick can say around that. Hearth keeps an App's configuration, so Hearth
-// turns the Brick and its answers into it, and the Relay deploys that
-// configuration as it always has.
+// What Kiln runs of an App Brick so far: what it deploys, the variables it
+// sets, and the port its website answers on. Hearth keeps an App's
+// configuration, so Hearth turns the Brick and its answers into it, and the
+// Relay deploys that configuration as it always has.
+
+/**
+ * Where an App's website answers: the port, and for a Compose project the
+ * service that listens on it. Kiln routes the App's address to it.
+ */
+export interface AppBrickWeb {
+  port: number
+  service?: string
+}
 
 /**
  * What an App Brick deploys once its answers are in: an image, or the
@@ -18,7 +29,7 @@ import {
  * when the Brick is installed (a repository, or a file written in Hearth),
  * never by the Brick.
  */
-export type AppBrickDeploy =
+export type AppBrickDeploy = (
   | {
       type: "image"
       image: string
@@ -26,6 +37,10 @@ export type AppBrickDeploy =
       environment: Record<string, string>
     }
   | { type: "dockerfile" | "compose"; path: string }
+) & {
+  /** Where its website answers, when the Brick and its answers say. */
+  web?: AppBrickWeb
+}
 
 /**
  * What an App can deploy. Kiln's catalog has a Brick for each, and an App
@@ -49,9 +64,32 @@ export const APP_IMAGE_MAX_LENGTH = 512
 
 // The parts of `deploy` Kiln runs for an App, by type.
 const deployed: Record<AppBrickDeployType, ReadonlyArray<string>> = {
-  compose: ["type", "path"],
-  dockerfile: ["type", "path"],
-  image: ["type", "image", "env"],
+  compose: ["type", "path", "ports"],
+  dockerfile: ["type", "path", "ports"],
+  image: ["type", "image", "env", "ports"],
+}
+
+// The one port of an App Brick Kiln runs: where its website answers.
+// Anything a port says beyond that is refused until Kiln runs it.
+function webPortProblem(
+  type: AppBrickDeployType,
+  ports: ReadonlyArray<BrickPort>
+): string | null {
+  const [port, another] = ports
+  if (port === undefined) return null
+  if (another !== undefined) {
+    return "Kiln gives an App Brick one web port for now"
+  }
+  if ((port.expose ?? "http") !== "http") {
+    return "Kiln only routes an App Brick's web port for now"
+  }
+  if (port.protocol !== undefined && port.protocol !== "tcp") {
+    return "A web port is TCP"
+  }
+  if (type === "compose" && port.service === undefined) {
+    return "A Compose project's web port names its service"
+  }
+  return null
 }
 
 /**
@@ -69,7 +107,7 @@ export function appBrickProblem(recipe: BrickRecipe): string | null {
   if (unrun !== undefined) {
     return `Kiln doesn't run an App Brick's ${unrun} yet`
   }
-  return null
+  return webPortProblem(deploy.type, deploy.ports ?? [])
 }
 
 /**
@@ -125,9 +163,38 @@ export function appBrickDeploy(
   const answers = brickAnswers(inputs, given)
   const refused = brickAnswersProblem(inputs, answers)
   if (refused !== null) return { problem: refused.message }
+  // Its web port, as written or as an input answers it. An optional input
+  // left blank says it has none.
+  const [port] = deploy.ports ?? []
+  const answered =
+    port === undefined
+      ? undefined
+      : typeof port.port === "number"
+        ? port.port
+        : answers[brickTemplateInput(port.port) ?? ""]
+  if (
+    answered !== undefined &&
+    !(
+      typeof answered === "number" &&
+      Number.isInteger(answered) &&
+      answered >= 1 &&
+      answered <= 65_535
+    )
+  ) {
+    return { problem: "This Brick's web port isn't a port" }
+  }
+  const web =
+    answered === undefined
+      ? {}
+      : {
+          web: {
+            port: answered,
+            ...(port?.service === undefined ? {} : { service: port.service }),
+          },
+        }
   if (deploy.type !== "image") {
     // Its file is in its source; `appBrickProblem` refused one written here.
-    return { deploy: { path: deploy.path ?? "", type: deploy.type } }
+    return { deploy: { path: deploy.path ?? "", type: deploy.type, ...web } }
   }
   const filled = (template: string) =>
     fillBrickTemplate(template, (name) =>
@@ -159,5 +226,5 @@ export function appBrickDeploy(
     }
     environment[name] = value
   }
-  return { deploy: { environment, image, type: "image" } }
+  return { deploy: { environment, image, type: "image", ...web } }
 }

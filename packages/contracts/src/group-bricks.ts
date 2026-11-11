@@ -1,4 +1,8 @@
-import { appBrickDeploy, appBrickProblem } from "./app-bricks.js"
+import {
+  appBrickDeploy,
+  appBrickProblem,
+  type AppBrickWeb,
+} from "./app-bricks.js"
 import {
   BRICK_FORMAT,
   brickAnswers,
@@ -42,6 +46,8 @@ export interface GroupBrickApp {
   key: string
   /** What it is called. Without one, it takes the group's name. */
   name?: string
+  /** Where its website answers, when its recipe says. */
+  web?: AppBrickWeb
 }
 
 export interface GroupBrickInstall {
@@ -162,6 +168,9 @@ export function groupBrickInstall(
       image: installed.deploy.image,
       key,
       ...(member.name === undefined ? {} : { name: member.name }),
+      ...(installed.deploy.web === undefined
+        ? {}
+        : { web: installed.deploy.web }),
     })
   }
   return { install }

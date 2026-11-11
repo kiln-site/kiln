@@ -131,8 +131,14 @@ change the route can click the status to have the Relay check again now.
 In a connection, any of its zones can be marked **vanity**, and one marked
 the default (★). New game servers and apps then get an address under the
 default: `<name>.<domain>`, with an SRV record for game servers that support
-it, and a record pointing at the Relay for an app, ready for its first web
-route. An owner with vanity domains of their own uses their default;
+it, and a record pointing at the Relay for an app. An App whose Brick says
+which port its website answers on is served there from the start: making it
+saves its first web route, from that address to the port, before its first
+deployment, so a Relay behind someone else's proxy carries the route in the
+containers it starts. That route takes what making the App does, not
+`instance.network.write`, and is then the App's like any other. An App that
+doesn't say has the address ready for a route someone adds. An owner with
+vanity domains of their own uses their default;
 everyone else gets Kiln's default. With no vanity domain at all, nothing
 is assigned. Unmarking a domain stops new addresses under it without
 touching existing ones.

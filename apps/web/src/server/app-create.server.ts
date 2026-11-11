@@ -4,6 +4,7 @@ import {
   appEnvironmentWith,
   relayAppSchema,
   type AppBrickDeploy,
+  type AppBrickWeb,
   type BrickVariableValue,
 } from "@workspace/contracts"
 import { Effect } from "effect"
@@ -26,7 +27,6 @@ import {
   abandonPreparedProvisioning,
   claimPreparedProvisioning,
 } from "@/lib/provisioning.server"
-import { outsideOperation } from "@/operations/current"
 import {
   exclusive,
   partKey,
@@ -181,11 +181,12 @@ export async function createAppFor(
   user: AuthenticatedUser,
   data: CreateAppInput
 ) {
-  const { deployable, ...created } = await runOperationPromise(
+  const { deployable, web, ...created } = await runOperationPromise(
     createAppOperation,
     await withNewAppIds(data, user.id),
     { user }
   )
+  await addressNewApp(user, { ...created, web })
   if (!deployable) return { ...created, deployError: null }
   const deployError = await recoverPromise(
     () =>
@@ -264,6 +265,8 @@ async function createAppHandler(
     deployable: deploys.type === "image",
     id: made.id,
     relayId: relay.id,
+    /** Where its Brick says its website answers. */
+    web: deploys.web,
   }
 }
 
@@ -344,24 +347,49 @@ export async function provisionApp(
     unregister,
   })
   publishAppChange(relay.id, true)
-  generateAppHostname(relay.id, id)
   return { id: placeholder.id }
 }
 
-// A new app gets an address under a vanity domain, as game servers do. In
-// the background: it calls Cloudflare, and the app opens without it.
-function generateAppHostname(relayId: string, appId: string) {
-  // Creating the App doesn't wait for it: it takes the App's DNS lane on
-  // its own, once creating it is done.
-  outsideOperation(
-    () =>
-      void import("@/server/web-hostname-access.server").then(
-        ({ generateAppHostnameBestEffort }) =>
-          generateAppHostnameBestEffort({
-            relayId,
-            resourceId: appId,
-            resourceType: "app",
-          })
-      )
+// As long as creating an App waits for its address to be routed, so its
+// first deployment carries the route. Cloudflare is asked along the way;
+// when it is slow, the route follows the App instead.
+const ADDRESS_WAIT_MS = 8_000
+
+/**
+ * Gives a new App its address under a vanity domain, as game servers get
+ * one, once it is made. One whose Brick says where its website answers is
+ * routed there too, and that is waited for a little, since a Relay behind
+ * someone else's proxy only takes a route with a deployment. Creating the
+ * App never fails for its address: without one it opens all the same.
+ */
+export async function addressNewApp(
+  user: AuthenticatedUser,
+  app: { id: string; relayId: string; web?: AppBrickWeb | undefined }
+) {
+  const { web } = app
+  // An address alone changes nothing a deployment carries, so it follows
+  // the App, in the background.
+  if (web === undefined) {
+    void import("@/server/web-hostname-access.server").then(
+      ({ generateAppHostnameBestEffort }) =>
+        generateAppHostnameBestEffort({
+          relayId: app.relayId,
+          resourceId: app.id,
+          resourceType: "app",
+        })
+    )
+    return
+  }
+  const addressed = import("@/server/web-routes.server").then(
+    ({ serveNewAppBestEffort }) =>
+      serveNewAppBestEffort(user, {
+        appId: app.id,
+        relayId: app.relayId,
+        web,
+      })
   )
+  await Promise.race([
+    addressed,
+    new Promise((resolve) => setTimeout(resolve, ADDRESS_WAIT_MS)),
+  ])
 }

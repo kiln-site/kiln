@@ -35,7 +35,7 @@ import {
   runOperationPromise,
   signedIn,
 } from "@/operations/operation"
-import { provisionApp } from "@/server/app-create.server"
+import { addressNewApp, provisionApp } from "@/server/app-create.server"
 import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { createDatabase } from "@/server/database-create.server"
 import { publishGroupChange } from "@/server/instance-group-access.server"
@@ -229,7 +229,7 @@ async function createInstanceGroupHandler(
   )
   publishGroupChange({ members: [{ relayId: relay.id }] })
   return {
-    apps: plan.apps.map(({ id, name }) => ({ id, name })),
+    apps: plan.apps.map(({ id, name, web }) => ({ id, name, web })),
     databases: plan.databases.map(({ id, name }) => ({ id, name })),
     id: plan.id,
     relayId: relay.id,
@@ -373,6 +373,13 @@ export async function createInstanceGroupFor(
     createInstanceGroup,
     { ...data, plan },
     { user }
+  )
+  // Each App gets its address, routed to its website when the Brick says
+  // where that answers, before its first deployment.
+  await Promise.all(
+    created.apps.map((app) =>
+      addressNewApp(user, { ...app, relayId: created.relayId })
+    )
   )
   let deployError: string | null = null
   for (const app of created.apps) {

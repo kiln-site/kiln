@@ -28,7 +28,7 @@ The format describes every kind. Kiln reads them in stages.
 | Database Bricks of a known type  | Run from Kiln's own catalog, on that type's image |
 | A database's `connection`        | Defined here; Kiln builds a type's URL itself |
 | A database Brick with no type    | Defined here; not installable yet     |
-| App Bricks                       | Run from Kiln's own catalog: what they deploy, and no more yet |
+| App Bricks                       | Run from Kiln's own catalog: what they deploy, their variables and one web port |
 | Group Bricks                     | Run from Kiln's own catalog: databases, and Apps from an image connected to them |
 | `dockerfile` and `compose`       | Run for Apps from `path` in a source; one written in the Brick isn't yet |
 | `ready` by command               | Run for databases; game servers use logs |
@@ -399,9 +399,19 @@ the App's configuration. So far Kiln runs this much of an App Brick:
 The source of a `path` is chosen when the Brick is installed: a repository
 from a connected source, or a file written in Hearth. A `secret` input with
 `generate: true` is made by Kiln once, when the Brick is installed, and kept
-with the App's answers, so it is the same after every update. An App Brick
-that sets anything else (`ports`, `ready`, `volumes`, a file written in the
-Brick) is refused until Kiln runs that part, as is one from another catalog.
+with the App's answers, so it is the same after every update.
+
+Of `ports`, Kiln runs one: the port the App's website answers on, which is
+an App Brick's port unless it says another `expose`. A new App gets an
+address under a vanity domain, when one applies, and its first web route
+sends that address to the port, before its first deployment. An input can
+answer the port (`port: "{{ port }}"`); an optional one left blank means
+the App has no website, and gets no route. A `compose` Brick's port names
+its `service`. Later revisions leave an App's routes alone.
+
+An App Brick that sets anything else (a second port, one published on the
+host, `ready`, `volumes`, a file written in the Brick) is refused until
+Kiln runs that part, as is one from another catalog.
 
 Kiln's catalog has a generic Brick for each thing an App deploys:
 `docker-image`, `dockerfile` and `compose`. An App made from one is its
@@ -457,9 +467,9 @@ does more, as it refuses one from another catalog:
 - A member that names a Brick is a database, made from that database Brick
   of the same catalog, by its ID. Its `inputs` are its answers.
 - A member written in place is an App that runs an image, with what an App
-  Brick may say so far and no more, so not yet the `ports` of the example
-  above. A secret the group asks Kiln to make is made once and kept with the
-  group's answers.
+  Brick may say so far and no more: its web port gets the App its address
+  and first route, as an App Brick's does. A secret the group asks Kiln to
+  make is made once and kept with the group's answers.
 - `connect` gives an App its variables for a database of the group. In its
   templates `{{ connection }}` is the URL Kiln builds for the database's
   type, and `host`, `port`, `name`, `username` and `password` are its parts;

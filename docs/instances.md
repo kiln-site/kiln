@@ -313,8 +313,9 @@ from a tag or an image name today.
    the one Add dialog, and Umami from a group Brick that brings its database
    (instance groups, pulled forward from step 11). An App made from a
    catalog Brick follows it: it is offered the Brick's newer revisions, and
-   can be detached. Still to come of what a Brick says: its ports, volumes
-   and health check, and App and group Bricks from other catalogs.
+   can be detached. Its web port gets a new App its address and first web
+   route. Still to come of what a Brick says: its other ports, volumes and
+   health check, and App and group Bricks from other catalogs.
 9. Domains for every kind.
 10. One instance page, with each kind's own tabs.
 11. Tailscale as its own kind, with the instance group.
