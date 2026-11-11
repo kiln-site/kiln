@@ -2,6 +2,7 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 
 import { AddServerPane } from "@/components/add-server-pane"
+import { AddAppPane } from "@/components/app/add-app-pane"
 import {
   pickableBrickKinds,
   type PickableBrickKind,
@@ -91,9 +92,18 @@ function AddInstancePane({
   store: AddInstanceDialogStore
 }) {
   const kinds = useCreatableKinds(kind)
-  const Pane = kind === "database" ? AddDatabasePane : AddServerPane
-  return <Pane kinds={kinds} onClose={store.close} onKindChange={store.choose} />
+  const Pane = panes[kind]
+  return (
+    <Pane kinds={kinds} onClose={store.close} onKindChange={store.choose} />
+  )
 }
+
+// What each kind asks, beside its Bricks.
+const panes = {
+  app: AddAppPane,
+  database: AddDatabasePane,
+  "game-server": AddServerPane,
+} satisfies Record<PickableBrickKind, unknown>
 
 const someRelayCreates = ({
   relays,
@@ -113,12 +123,18 @@ function useCreatableKinds(
     ...infraRelayOptionsQueryOptions("database"),
     select: someRelayCreates,
   })
-  return React.useMemo(
-    () =>
-      pickableBrickKinds.filter(
-        (kind) =>
-          kind === shown || (kind === "database" ? databases : gameServers)
-      ),
-    [databases, gameServers, shown]
-  )
+  const { data: apps = false } = useQuery({
+    ...infraRelayOptionsQueryOptions("app"),
+    select: someRelayCreates,
+  })
+  return React.useMemo(() => {
+    const creatable = {
+      app: apps,
+      database: databases,
+      "game-server": gameServers,
+    }
+    return pickableBrickKinds.filter(
+      (kind) => kind === shown || creatable[kind]
+    )
+  }, [apps, databases, gameServers, shown])
 }

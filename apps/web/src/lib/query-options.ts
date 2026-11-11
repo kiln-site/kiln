@@ -129,6 +129,7 @@ import {
   getServerDeploymentLog,
 } from "@/server/app-deployments"
 import {
+  getAppBricks,
   getAppConfig,
   getAppDirectory,
   getAppOwner,
@@ -1113,6 +1114,15 @@ export function databaseBricksQueryOptions() {
   return queryOptions({
     queryKey: ["bricks", "databases"] as const,
     queryFn: () => getDatabaseBricks(),
+    staleTime: 5 * 60_000,
+  })
+}
+
+/** The Bricks an App can be installed from. */
+export function appBricksQueryOptions() {
+  return queryOptions({
+    queryKey: ["bricks", "apps"] as const,
+    queryFn: () => getAppBricks(),
     staleTime: 5 * 60_000,
   })
 }

@@ -54,7 +54,7 @@ import {
 import { requireEligibleResourceUser } from "@/server/auth"
 import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { resourceOperation } from "@/server/resource-operation.server"
-import { createAppOperation, withNewAppIds } from "@/server/app-create.server"
+import { createAppFor } from "@/server/app-create.server"
 import { connectDatabase } from "@/server/database-connections.server"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import { databaseRpc } from "@/server/managed-database-access"
@@ -75,6 +75,8 @@ const deployAppInputSchema = appInputSchema.extend({
   noCache: z.boolean().optional(),
 })
 const createAppInputSchema = z.strictObject({
+  // The App Brick it is installed from, and its answers.
+  brick: brickSourceSchema,
   // A database to connect it to from the start, a new one or one on its
   // Relay, whose credentials go in its environment.
   database: z
@@ -92,6 +94,7 @@ const createAppInputSchema = z.strictObject({
   idempotencyKey: z.uuid(),
   name: appNameSchema,
   relayId: relayIdSchema,
+  variables: brickVariableValuesSchema.optional(),
 })
 const appActionInputSchema = appInputSchema.extend({
   action: relayPowerActionSchema,
@@ -138,16 +141,20 @@ export const getAppOwner = createServerFn({ method: "GET" })
     getAppOwnerHandler(await requireEligibleResourceUser(), data)
   )
 
+// The Bricks an App can be installed from, for whoever is asked which.
+export const getAppBricks = createServerFn({ method: "GET" }).handler(
+  async () => {
+    await requireEligibleResourceUser()
+    const { appBricks } = await import("@/server/app-bricks.server")
+    return appBricks()
+  }
+)
+
 export const createApp = createServerFn({ method: "POST" })
   .validator(createAppInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    return runOperationPromise(
-      createAppOperation,
-      await withNewAppIds(data, user.id),
-      { user }
-    )
-  })
+  .handler(async ({ data }) =>
+    createAppFor(await requireEligibleResourceUser(), data)
+  )
 
 // A host mount it adds also needs relay.files.write, which the run checks.
 const changeAppConfig = resourceOperation({
@@ -522,4 +529,3 @@ function publishRelayVolumesChange(relayId: string): void {
     type: "hearth.invalidate",
   })
 }
-

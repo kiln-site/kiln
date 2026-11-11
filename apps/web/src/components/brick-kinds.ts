@@ -5,13 +5,16 @@ import { brickGame, type Brick, type BrickKind } from "@workspace/contracts"
 // Everything else about browsing Bricks is the same for every kind.
 
 /** The kinds of instance someone picks a Brick for. */
-export type PickableBrickKind = Extract<BrickKind, "database" | "game-server">
+export type PickableBrickKind = Extract<
+  BrickKind,
+  "app" | "database" | "game-server"
+>
 
 export interface BrickKindPresentation {
   /** What the kind is called where someone chooses between kinds. */
   name: string
   /** The kind as the rest of Hearth knows it, for its icon and colour. */
-  instanceKind: "database" | "server"
+  instanceKind: "app" | "database" | "server"
   /** Offered after "All", in this order. */
   categories: ReadonlyArray<{ id: string; label: string }>
   /** Which of them a Brick is in. */
@@ -47,12 +50,28 @@ const keyValueTypes: ReadonlySet<string> = new Set(["redis", "valkey"])
 export const pickableBrickKinds: ReadonlyArray<PickableBrickKind> = [
   "game-server",
   "database",
+  "app",
 ]
+
+// What an App Brick deploys, which is all that tells Kiln's own apart.
+const appDeployLabels = {
+  compose: "Compose project",
+  dockerfile: "Built from a Dockerfile",
+  image: "Image",
+} as const
 
 export const brickKindPresentations: Record<
   PickableBrickKind,
   BrickKindPresentation
 > = {
+  app: {
+    name: "App",
+    instanceKind: "app",
+    categories: [],
+    category: () => "",
+    label: (brick) =>
+      brick.deploy ? appDeployLabels[brick.deploy.type] : "App",
+  },
   database: {
     name: "Database",
     instanceKind: "database",

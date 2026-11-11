@@ -15,12 +15,8 @@ import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 
 import type { PickableBrickKind } from "@/components/brick-kinds"
-import {
-  BrickCatalogBrowser,
-  BrickCatalogUnavailable,
-  type BrickSelection,
-} from "@/components/brick-selector"
 import { BrickVariableField } from "@/components/brick-variable-fields"
+import { OfferedBrickBrowser } from "@/components/offered-brick-browser"
 import {
   defaultBrickVariables,
   updateBrickVariable,
@@ -75,77 +71,28 @@ export const DatabaseBrickBrowser = React.memo(function DatabaseBrickBrowser({
   onKindChange?: (kind: PickableBrickKind) => void
 }) {
   const bricksQuery = useQuery(databaseBricksQueryOptions())
-  if (!bricksQuery.data) {
-    return (
-      <BrickCatalogUnavailable
-        error={bricksQuery.error?.message}
-        kind="database"
-        kinds={kinds}
-        pending={bricksQuery.isPending}
-        onKindChange={onKindChange}
-      />
-    )
-  }
+  const initial = React.useCallback(
+    (bricks: ReadonlyArray<Brick>) =>
+      bricks.find((candidate) => candidate.source === initialBrick) ??
+      bricks.find((candidate) => candidate.type === "postgres"),
+    [initialBrick]
+  )
   return (
-    <LoadedDatabaseBrickBrowser
+    <OfferedBrickBrowser
       bricks={bricksQuery.data}
       disabled={disabled}
-      initialBrick={initialBrick}
+      emptyMessage="No database Bricks are in your catalogs."
+      error={bricksQuery.error?.message}
+      initial={initial}
+      kind="database"
       kinds={kinds}
+      pending={bricksQuery.isPending}
       onKindChange={onKindChange}
     >
       {children}
-    </LoadedDatabaseBrickBrowser>
+    </OfferedBrickBrowser>
   )
 })
-
-function LoadedDatabaseBrickBrowser({
-  bricks,
-  children,
-  disabled,
-  initialBrick,
-  kinds,
-  onKindChange,
-}: {
-  bricks: Array<Brick>
-  children: (brick: Brick | null) => React.ReactNode
-  disabled: boolean
-  initialBrick: string | undefined
-  kinds: ReadonlyArray<PickableBrickKind> | undefined
-  onKindChange: ((kind: PickableBrickKind) => void) | undefined
-}) {
-  const [selection, setSelection] = React.useState<BrickSelection | null>(
-    () => {
-      const brick =
-        bricks.find((candidate) => candidate.source === initialBrick) ??
-        bricks.find((candidate) => candidate.type === "postgres") ??
-        bricks[0]
-      return brick ? { kind: "catalog", brick } : null
-    }
-  )
-  return (
-    <BrickCatalogBrowser
-      kind="database"
-      kinds={kinds}
-      onKindChange={onKindChange}
-      relayId=""
-      bricks={bricks}
-      canAddCustomBrick={false}
-      selection={selection}
-      onSelectionChange={setSelection}
-      disabled={disabled}
-      className="h-full rounded-none border-0 bg-transparent"
-      emptyMessage={
-        bricks.length === 0
-          ? "No database Bricks are in your catalogs."
-          : "No bricks match these filters."
-      }
-      configuration={children(
-        selection?.kind === "catalog" ? selection.brick : null
-      )}
-    />
-  )
-}
 
 /** What a new database is asked, of the Brick chosen for it. */
 export function NewDatabaseForm({
