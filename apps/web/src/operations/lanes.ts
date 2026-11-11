@@ -107,6 +107,12 @@ export const resourceKey = (
  */
 export const relayKey = (id: string) => `relay:${id}`
 
+/**
+ * A group of instances: who is in it and what it is called. Its members
+ * have keys of their own.
+ */
+export const instanceGroupKey = (id: string) => `instance-group:${id}`
+
 /** Hearth itself: updating it replaces its container. */
 export const hearthKey = "hearth"
 

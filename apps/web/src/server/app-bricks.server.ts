@@ -23,6 +23,23 @@ export async function appBricks(): Promise<Array<Brick>> {
   )
 }
 
+/**
+ * What someone adding an App picks from: the App Bricks, and the groups
+ * that make an App with what it needs beside it.
+ */
+export async function offeredAppBricks(): Promise<Array<Brick>> {
+  const { groupBricks } = await import("@/server/group-bricks.server")
+  const [apps, groups] = await Promise.all([appBricks(), groupBricks()])
+  return [
+    ...apps,
+    ...groups.filter((group) =>
+      Object.values(group.group?.members ?? {}).some(
+        (member) => "kind" in member && member.kind === "app"
+      )
+    ),
+  ]
+}
+
 /** What the App Brick at a source deploys with these answers. */
 export async function installedAppBrick(
   source: string,

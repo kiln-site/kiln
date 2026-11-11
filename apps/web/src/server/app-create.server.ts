@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto"
 
-import { relayAppSchema, type BrickVariableValue } from "@workspace/contracts"
+import {
+  relayAppSchema,
+  type AppBrickDeploy,
+  type BrickVariableValue,
+} from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
 
@@ -14,6 +18,7 @@ import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import type { PersistedRelay } from "@/lib/relay-registry"
 import type { AccessPermission } from "@/lib/permissions"
 import {
   abandonPreparedProvisioning,
@@ -236,6 +241,39 @@ async function createAppHandler(
     databaseId === null
       ? undefined
       : appDatabaseEnvironment(await requiredCredential(relay.id, databaseId))
+  const made = await provisionApp(user, relay, {
+    databaseIds: databaseId === null ? [] : [databaseId],
+    deploys,
+    environment,
+    id,
+    name: data.name,
+  })
+  return {
+    // An image is all it needs to deploy; a file's source is still to come.
+    deployable: deploys.type === "image",
+    id: made.id,
+    relayId: relay.id,
+  }
+}
+
+/**
+ * Records an App and has its Relay make it, connected to the databases
+ * named, whatever it was installed from. Whoever calls it holds the App
+ * and has checked the person may create it.
+ */
+export async function provisionApp(
+  user: AuthenticatedUser,
+  relay: PersistedRelay,
+  app: {
+    /** Databases on its Relay it starts connected to. */
+    databaseIds: ReadonlyArray<string>
+    deploys: AppBrickDeploy
+    environment: string | undefined
+    id: string
+    name: string
+  }
+) {
+  const { id } = app
   const cancel = () =>
     databaseRpc(
       relay,
@@ -254,27 +292,27 @@ async function createAppHandler(
       appId: id,
       createdBy: user.id,
       deploys:
-        deploys.type === "image"
-          ? { image: deploys.image, sourceType: "image" }
-          : { sourceType: deploys.type },
-      environment,
-      name: data.name,
+        app.deploys.type === "image"
+          ? { image: app.deploys.image, sourceType: "image" }
+          : { sourceType: app.deploys.type },
+      environment: app.environment,
+      name: app.name,
       relayId: relay.id,
     })
   )
-  // The Relay creates it in the background, and connects its database then,
-  // whether or not that's still provisioning; it opens on its provisioning
-  // page at once.
+  // The Relay creates it in the background, and connects its databases
+  // then, whether or not they're still provisioning; it opens on its
+  // provisioning page at once.
   const placeholder = await Effect.runPromise(
     promiseEffect(() =>
       databaseRpc(
         relay,
         "app.provision.prepare",
         {
-          databaseIds: databaseId === null ? [] : [databaseId],
+          databaseIds: [...app.databaseIds],
           id,
           idempotencyKey: randomUUID(),
-          name: data.name,
+          name: app.name,
         },
         30_000,
         user.id
@@ -293,12 +331,7 @@ async function createAppHandler(
   })
   publishAppChange(relay.id, true)
   generateAppHostname(relay.id, id)
-  return {
-    // An image is all it needs to deploy; a file's source is still to come.
-    deployable: deploys.type === "image",
-    id: placeholder.id,
-    relayId: relay.id,
-  }
+  return { id: placeholder.id }
 }
 
 // A new app gets an address under a vanity domain, as game servers do. In

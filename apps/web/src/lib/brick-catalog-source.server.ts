@@ -139,9 +139,8 @@ export async function loadBrickCatalogSource(
       return { ...recipe, source: source.href }
     }
   )
-  // A group is the kind Kiln doesn't install from a Brick yet. Whatever
-  // lists the others for one kind asks for that kind.
-  const bricks = loadedBricks.filter((brick) => brick.kind !== "group")
+  // Every kind: whatever lists them for one kind asks for that kind.
+  const bricks = loadedBricks
   const ids = new Set<string>()
   for (const brick of bricks) {
     if (ids.has(brick.metadata.id)) {

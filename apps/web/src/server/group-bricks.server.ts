@@ -1,0 +1,62 @@
+import {
+  groupBrickInstall,
+  groupBrickProblem,
+  type Brick,
+  type BrickVariableValue,
+  type GroupBrickApp,
+} from "@workspace/contracts"
+
+import { defaultBrickCatalog } from "@/server/brick-catalogs.server"
+import { databaseBricks } from "@/server/database-bricks.server"
+
+// The group Bricks Kiln installs: those of its own catalog that do only
+// what Kiln does for a group so far, each of whose databases is made from
+// one of that catalog's database Bricks. Another catalog's aren't offered
+// or accepted yet, as its App and database Bricks aren't.
+
+/** Every group Brick a group may be installed from. */
+export async function groupBricks(): Promise<Array<Brick>> {
+  const catalog = await defaultBrickCatalog()
+  return (catalog?.bricks ?? []).filter(
+    (brick) => groupBrickProblem(brick) === null
+  )
+}
+
+/** What a group Brick makes, with each database's Brick found. */
+export interface InstalledGroupBrick {
+  answers: Record<string, BrickVariableValue>
+  apps: Array<GroupBrickApp>
+  databases: Array<{
+    /** Its database Brick, by its source. */
+    brick: string
+    key: string
+    variables: Record<string, BrickVariableValue>
+  }>
+}
+
+/** What the group Brick at a source makes with these answers. */
+export async function installedGroupBrick(
+  source: string,
+  answers: Readonly<Record<string, BrickVariableValue>>
+): Promise<InstalledGroupBrick> {
+  const brick = (await groupBricks()).find(
+    (candidate) => candidate.source === source
+  )
+  if (!brick) throw new Error("This isn't one of Kiln's group Bricks")
+  const { iconSvg: _iconSvg, source: _source, ...recipe } = brick
+  const installed = groupBrickInstall(recipe, answers)
+  if ("problem" in installed) throw new Error(installed.problem)
+  const offered = await databaseBricks()
+  const databases = installed.install.databases.map((database) => {
+    const found = offered.find(
+      (candidate) => candidate.metadata.id === database.brick
+    )
+    if (!found) {
+      throw new Error(
+        `${database.key} isn't one of Kiln's database Bricks (${database.brick})`
+      )
+    }
+    return { ...database, brick: found.source }
+  })
+  return { ...installed.install, databases }
+}

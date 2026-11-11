@@ -29,7 +29,7 @@ The format describes every kind. Kiln reads them in stages.
 | A database's `connection`        | Defined here; Kiln builds a type's URL itself |
 | A database Brick with no type    | Defined here; not installable yet     |
 | App Bricks                       | Run from Kiln's own catalog: what they deploy, and no more yet |
-| Group Bricks                     | Defined here; not installable yet     |
+| Group Bricks                     | Run from Kiln's own catalog: databases, and Apps from an image connected to them |
 | `dockerfile` and `compose`       | Run for Apps from `path` in a source; one written in the Brick isn't yet |
 | `ready` by command               | Run for databases; game servers use logs |
 | `ready` by HTTP                  | Defined here; Apps use it later       |
@@ -448,6 +448,28 @@ group:
 A database inside a Compose project is only a container. As a group member it
 is a database of its own, with the viewer, dumps, backups and permissions a
 database has.
+
+So far Kiln installs this much of a group, and refuses a group Brick that
+does more, as it refuses one from another catalog:
+
+- A member that names a Brick is a database, made from that database Brick
+  of the same catalog, by its ID. Its `inputs` are its answers.
+- A member written in place is an App that runs an image, with what an App
+  Brick may say so far and no more, so not yet the `env` and `ports` of the
+  example above.
+- `connect` gives an App its variables for a database of the group. In its
+  templates `{{ connection }}` is the URL Kiln builds for the database's
+  type, and `host`, `port`, `name`, `username` and `password` are its parts;
+  the group's answers are there too.
+- Those variables are written once, when the group is installed. Rotating
+  a database's password afterwards doesn't change what its App was given.
+- The databases are made first, then the Apps, all on one Relay. A member
+  takes the group's name unless it has one of its own, or shares its kind
+  with another member.
+- A member that can't be made ends the install. What was made before it
+  stays, in the group, to keep or delete.
+
+Kiln's catalog has one: `umami`.
 
 ## Settings
 

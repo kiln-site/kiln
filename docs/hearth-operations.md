@@ -204,6 +204,7 @@ request is answered once.
 | `github-connection:<id>`            | A GitHub connection; what reads through it, shared     |
 | `schedule:<id>`                     | A schedule: deleting it; `#settings` saving or running |
 | `tailscale-network:<id>`            | A Tailscale network; `#settings` its members and DNS   |
+| `instance-group:<id>`               | A group of instances: who is in it, and its name       |
 | `brick-catalog:<id>`                | A Brick catalog: deleting it; `#visibility` publishing |
 | `brick-library:<user>#contents`     | A person's catalogs and custom Bricks: adding them     |
 | `file-activity:<relay>/<root>#pins` | A file root's pinned files, under their limit          |

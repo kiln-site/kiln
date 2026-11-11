@@ -145,8 +145,8 @@ export const getAppOwner = createServerFn({ method: "GET" })
 export const getAppBricks = createServerFn({ method: "GET" }).handler(
   async () => {
     await requireEligibleResourceUser()
-    const { appBricks } = await import("@/server/app-bricks.server")
-    return appBricks()
+    const { offeredAppBricks } = await import("@/server/app-bricks.server")
+    return offeredAppBricks()
   }
 )
 

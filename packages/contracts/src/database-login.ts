@@ -26,6 +26,29 @@ export function databaseEngineHasNamedDatabase(
   return engine !== "redis" && engine !== "valkey"
 }
 
+/**
+ * The URL something connects to a database with. The password is already
+ * encoded for a URL, or is a mask shown in its place.
+ */
+export function databaseConnectionUrl(database: {
+  databaseName: string
+  engine: DatabaseEngine
+  host: string
+  password: string
+  port: number
+  username: string
+}): string {
+  const scheme =
+    database.engine === "postgres"
+      ? "postgresql"
+      : databaseEngineHasNamedDatabase(database.engine)
+        ? "mysql"
+        : "redis"
+  const path =
+    scheme === "redis" ? "" : `/${encodeURIComponent(database.databaseName)}`
+  return `${scheme}://${encodeURIComponent(database.username)}:${database.password}@${database.host}:${database.port}${path}`
+}
+
 // Names the engine keeps for itself, or that Kiln's own work depends on: a
 // wipe drops and recreates the database from `postgres`.
 const reservedDatabaseNames: Record<DatabaseEngine, ReadonlySet<string>> = {

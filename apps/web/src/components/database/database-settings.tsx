@@ -2,6 +2,7 @@ import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
 import {
+  databaseConnectionUrl,
   databaseEngineHasNamedDatabase,
   type ResourceLimits,
 } from "@workspace/contracts"
@@ -193,11 +194,14 @@ export function DatabaseCredentialsSection({
           <CopyConnectionUrlButton
             url={
               values
-                ? databaseConnectionUrl(
-                    database,
-                    values.username,
-                    encodeURIComponent(values.password)
-                  )
+                ? databaseConnectionUrl({
+                    databaseName: database.databaseName,
+                    engine: database.engine,
+                    host: database.hostname,
+                    password: encodeURIComponent(values.password),
+                    port: database.internalPort,
+                    username: values.username,
+                  })
                 : null
             }
           />
@@ -535,26 +539,6 @@ export function DatabaseConnectionSettings({
 
 function hasNamedDatabase(database: Pick<ManagedDatabase, "engine">): boolean {
   return databaseEngineHasNamedDatabase(database.engine)
-}
-
-function databaseConnectionUrl(
-  database: Pick<
-    ManagedDatabase,
-    "databaseName" | "engine" | "hostname" | "internalPort"
-  >,
-  username: string,
-  // Already encoded, or a mask shown in its place.
-  password: string
-): string {
-  const scheme =
-    database.engine === "postgres"
-      ? "postgresql"
-      : hasNamedDatabase(database)
-        ? "mysql"
-        : "redis"
-  const path =
-    scheme === "redis" ? "" : `/${encodeURIComponent(database.databaseName)}`
-  return `${scheme}://${encodeURIComponent(username)}:${password}@${database.hostname}:${database.internalPort}${path}`
 }
 
 // A database's container: what it is, its usage against its limits, and

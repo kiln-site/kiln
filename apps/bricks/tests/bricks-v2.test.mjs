@@ -56,7 +56,7 @@ test("the official catalog lists every v2 Brick, and each fits the format", asyn
     )
     assert.equal(ids.has(brick.metadata.id), false, `${path}: duplicate ID`)
     ids.add(brick.metadata.id)
-    const marker = brick.deploy.env?.KILN_INSTALLATION_MARKER
+    const marker = brick.deploy?.env?.KILN_INSTALLATION_MARKER
     if (marker) assert.match(marker, /^\.kiln-[a-zA-Z0-9._-]{1,58}$/u)
   }
 })
@@ -67,7 +67,7 @@ test("Java Bricks keep heap sizing and the start command to the Ember", async ()
   const catalog = await loadYaml("bricks.yml")
   for (const path of catalog.recipes) {
     const brick = await loadYaml(path)
-    if (!brick.deploy.image?.includes("bricks-java:")) continue
+    if (!brick.deploy?.image?.includes("bricks-java:")) continue
     const jar = input(brick, "server_jar_file")
     assert.equal(jar?.type, "text", `${path}: needs server_jar_file`)
     assert.equal(brick.deploy.env.KILN_ARTIFACT_FILE, "{{ server_jar_file }}")
