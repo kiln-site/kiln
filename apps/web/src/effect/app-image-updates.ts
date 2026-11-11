@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2/promise"
-import type { RelayAppImageCheckResult } from "@workspace/contracts"
+import type { RelayInstanceImageCheckResult } from "@workspace/contracts"
 import { Clock, Effect } from "effect"
 
 import { Database } from "@/effect/database"
@@ -138,7 +138,7 @@ export const recordAppImageCheckEffect = Effect.fn("apps.imageUpdates.record")(
   function* (
     appId: string,
     image: string,
-    result: Exclude<RelayAppImageCheckResult, { status: "deploying" }>,
+    result: Exclude<RelayInstanceImageCheckResult, { status: "deploying" }>,
     askedAt: number
   ) {
     const database = yield* Database
@@ -220,7 +220,7 @@ function nextUpdate(
   previous: AppImageUpdate | null,
   appId: string,
   image: string,
-  result: Exclude<RelayAppImageCheckResult, { status: "deploying" }>,
+  result: Exclude<RelayInstanceImageCheckResult, { status: "deploying" }>,
   now: number
 ): AppImageUpdate {
   const base: AppImageUpdate = previous ?? {
@@ -250,6 +250,9 @@ function nextUpdate(
         runningDigest: null,
         state: result.status,
       }
+    // A digest never moves, so there is never an update to offer.
+    case "pinned":
+      return { ...checked, ...cleared, runningDigest: null, state: "current" }
     case "checked": {
       const running = result.runningDigests
       if (running.length === 0) {

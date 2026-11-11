@@ -1,9 +1,8 @@
 import type { RowDataPacket } from "mysql2/promise"
 import {
-  relayAppImageCheckResultsSchema,
-  relayAppImageUpdatesV1Feature,
+  relayInstanceImageCheckResultsSchema,
   type AppConfig,
-  type RelayAppImageCheckResult,
+  type RelayInstanceImageCheckResult,
 } from "@workspace/contracts"
 import { logException } from "@workspace/telemetry"
 import { Cause, Clock, Effect, Fiber, Schedule } from "effect"
@@ -38,7 +37,7 @@ import {
   askAppDeploymentEffect,
   publishAppDeploymentChange,
 } from "@/lib/app-deployments.server"
-import { relayConnectionFeatures, relayRpc } from "@/lib/relay-connection"
+import { relayRpc } from "@/lib/relay-connection"
 import {
   listPersistedRelaysEffect,
   type PersistedRelay,
@@ -186,7 +185,7 @@ export interface AppImageAnswer {
   readonly app: { appId: string; config: AppConfig; name: string }
   readonly askedAt: number
   // One mid-deployment isn't recorded: its outcome decides what runs.
-  readonly result: Exclude<RelayAppImageCheckResult, { status: "deploying" }>
+  readonly result: Exclude<RelayInstanceImageCheckResult, { status: "deploying" }>
 }
 
 /**
@@ -234,12 +233,13 @@ const askAppImagesEffect = Effect.fnUntraced(function* <E, R>(
       try: (signal) =>
         relayRpc(
           relay,
-          "app.image.check",
+          "instance.image.check",
           {
-            apps: batch.map((app) => ({
-              appId: app.appId,
+            instances: batch.map((app) => ({
+              id: app.appId,
               image: app.config.image,
             })),
+            kind: "app",
           },
           checkTimeoutMs,
           undefined,
@@ -252,11 +252,11 @@ const askAppImagesEffect = Effect.fnUntraced(function* <E, R>(
           service: "Relay",
         }),
     }).pipe(
-      Effect.map((response) => relayAppImageCheckResultsSchema.parse(response))
+      Effect.map((response) => relayInstanceImageCheckResultsSchema.parse(response))
     )
     const answers: Array<AppImageAnswer> = []
     for (const result of results) {
-      const app = batch.find((item) => item.appId === result.appId)
+      const app = batch.find((item) => item.appId === result.id)
       // Mid-deployment, its outcome decides what runs.
       if (app && result.status !== "deploying") {
         answers.push({ app, askedAt, result })
@@ -438,10 +438,7 @@ export function stopAppImageUpdateChecks(): Promise<void> {
 if (import.meta.hot) import.meta.hot.dispose(() => stopAppImageUpdateChecks())
 
 function checksImages(relay: PersistedRelay): boolean {
-  return (
-    relay.enabled &&
-    relayConnectionFeatures(relay.id).has(relayAppImageUpdatesV1Feature)
-  )
+  return relay.enabled
 }
 
 /**
@@ -451,9 +448,7 @@ function checksImages(relay: PersistedRelay): boolean {
 export const askAppImageEffect = Effect.fn("Apps.imageUpdates.askApp")(
   function* (relay: PersistedRelay, appId: string) {
     if (!checksImages(relay)) {
-      return yield* Effect.fail(
-        new Error("Update this Relay to check apps for image updates")
-      )
+      return yield* Effect.fail(new Error("This Relay is turned off"))
     }
     const answers: Array<AppImageAnswer> = []
     const unchecked = yield* askAppImagesEffect(relay, appId, (batch) =>

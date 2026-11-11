@@ -1237,47 +1237,60 @@ export const relayDeployInstanceSchema = z.discriminatedUnion("kind", [
 
 // What image apps' tags name in their registries now, against the images
 // their containers run. Each app names the image its saved config deploys.
-export const relayAppImageCheckSchema = z
+// Asks what each of these instances' image tags name now, against what
+// their containers run. One kind a request, since reading each kind is its
+// own permission.
+export const relayInstanceImageCheckSchema = z
   .object({
-    apps: z
+    instances: z
       .array(
         z
           .object({
-            appId: appIdSchema,
-            image: z.string().trim().min(1).max(512),
+            id: instanceIdSchema,
+            // An App's image as its config names it, which may have changed
+            // since it deployed. A game server and a database run what
+            // their container was made from, which the Relay reads itself.
+            image: z.string().trim().min(1).max(512).optional(),
           })
           .strict()
       )
       .min(1)
       .max(16),
+    kind: z.enum(["app", "database", "instance"]),
   })
   .strict()
 
-export const relayAppImageCheckResultSchema = z.discriminatedUnion("status", [
-  // The tag's digest now, and the digest the app runs: the one it
-  // deployed, or for a container deployed before Kiln labelled that, the
-  // digests its image was pulled as.
-  z.object({
-    appId: appIdSchema,
-    latestDigest: imageDigestSchema,
-    runningDigests: z.array(imageDigestSchema),
-    status: z.literal("checked"),
-  }),
-  // The app's container runs another image than the one named, as when
-  // its config changed since it deployed.
-  z.object({ appId: appIdSchema, status: z.literal("changed") }),
-  z.object({ appId: appIdSchema, status: z.literal("not_deployed") }),
-  // A deployment is running; its outcome decides what runs.
-  z.object({ appId: appIdSchema, status: z.literal("deploying") }),
-  z.object({
-    appId: appIdSchema,
-    error: z.string().max(500),
-    status: z.literal("error"),
-  }),
-])
+export const relayInstanceImageCheckResultSchema = z.discriminatedUnion(
+  "status",
+  [
+    // The image it runs by tag, that tag's digest now, and the digest it
+    // runs: the one it deployed, or for a container Kiln didn't label with
+    // one, the digests its image was pulled as.
+    z.object({
+      id: instanceIdSchema,
+      image: z.string().min(1).max(512),
+      latestDigest: imageDigestSchema,
+      runningDigests: z.array(imageDigestSchema),
+      status: z.literal("checked"),
+    }),
+    // Its container runs another image than the one named, as when an
+    // App's config changed since it deployed.
+    z.object({ id: instanceIdSchema, status: z.literal("changed") }),
+    z.object({ id: instanceIdSchema, status: z.literal("not_deployed") }),
+    // A deployment is running; its outcome decides what runs.
+    z.object({ id: instanceIdSchema, status: z.literal("deploying") }),
+    // It names a digest, which never moves.
+    z.object({ id: instanceIdSchema, status: z.literal("pinned") }),
+    z.object({
+      error: z.string().max(500),
+      id: instanceIdSchema,
+      status: z.literal("error"),
+    }),
+  ]
+)
 
-export const relayAppImageCheckResultsSchema = z.array(
-  relayAppImageCheckResultSchema
+export const relayInstanceImageCheckResultsSchema = z.array(
+  relayInstanceImageCheckResultSchema
 )
 
 // One of the app's recent deployments, with its log: the running one, or one
@@ -3467,9 +3480,11 @@ export type RelayAppDeploymentRead = z.infer<
   typeof relayAppDeploymentReadSchema
 >
 export type RelayAppDeploymentLog = z.infer<typeof relayAppDeploymentLogSchema>
-export type RelayAppImageCheck = z.infer<typeof relayAppImageCheckSchema>
-export type RelayAppImageCheckResult = z.infer<
-  typeof relayAppImageCheckResultSchema
+export type RelayInstanceImageCheck = z.infer<
+  typeof relayInstanceImageCheckSchema
+>
+export type RelayInstanceImageCheckResult = z.infer<
+  typeof relayInstanceImageCheckResultSchema
 >
 export type RelayDeleteApp = z.infer<typeof relayDeleteAppSchema>
 export type RelayAppWebRoute = z.infer<typeof relayAppWebRouteSchema>

@@ -1,7 +1,6 @@
 import {
   relayAppGitHubV1Feature,
   relayAppDeploymentLogSchema,
-  relayAppImageUpdatesV1Feature,
   relayAppSchema,
   relayManagedDatabaseSchema,
   type AppConfig,
@@ -217,15 +216,10 @@ const prepareAppDeploymentEffect = Effect.fn("Apps.deploy.prepare")(function* (
         new Error("The app no longer deploys from an image")
       )
     }
-    if (!relayConnectionFeatures(relay.id).has(relayAppImageUpdatesV1Feature)) {
-      return yield* Effect.fail(
-        new Error("Update this Relay to deploy an image by its digest")
-      )
-    }
   }
   const imageDigest =
     request.trigger === "update"
-      ? yield* imageUpdateDigest(relay, app.config, request, id)
+      ? yield* imageUpdateDigest(app.config, request, id)
       : request.imageDigest
   if (imageDigest === null) return null
   const github =
@@ -556,16 +550,10 @@ const checkoutToken = Effect.fnUntraced(function* (
  * an update already tried, however it went.
  */
 const imageUpdateDigest = Effect.fnUntraced(function* (
-  relay: PersistedRelay,
   config: AppConfig,
   request: AppDeploymentRequest,
   deploymentId: string
 ) {
-  if (!relayConnectionFeatures(relay.id).has(relayAppImageUpdatesV1Feature)) {
-    return yield* Effect.fail(
-      new Error("Update this Relay to deploy image updates")
-    )
-  }
   // What a check found counts only while it still describes the App.
   const [recorded, { latest }] = yield* Effect.all([
     loadAppImageUpdateEffect(request.appId),

@@ -46,7 +46,8 @@ const record = (result: Parameters<typeof recordAppImageCheckEffect>[2]) =>
 
 const checked = (latest: number, running: Array<number>) =>
   record({
-    appId,
+    id: appId,
+    image,
     latestDigest: digest(latest),
     runningDigests: running.map(digest),
     status: "checked",
@@ -76,7 +77,7 @@ describeMysql("App image updates", () => {
           // A failed check can't say the tag still names it, so it waits for
           // one that gets through, its wait kept.
           const failed = yield* record({
-            appId,
+            id: appId,
             error: "ghcr.io answered 503",
             status: "error",
           })

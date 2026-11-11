@@ -57,7 +57,7 @@ import {
   relayDeleteAppSchema,
   relayAppDeploymentAbortSchema,
   relayAppDeploymentReadSchema,
-  relayAppImageCheckSchema,
+  relayInstanceImageCheckSchema,
   relayHostPackagesRequestSchema,
   relaySecurityInventoryRequestSchema,
   relayDeployInstanceSchema,
@@ -3181,11 +3181,26 @@ async function executeControlRequest(
       apps.abortDeployment(appId)
       return { aborted: true }
     }
-    case "app.image.check":
-      return apps.checkImages(
-        relayAppImageCheckSchema.parse(request.payload),
-        signal
-      )
+    // What each instance's image tag names now, for every kind, each read
+    // from where that kind keeps what it runs.
+    case "instance.image.check": {
+      const input = relayInstanceImageCheckSchema.parse(request.payload)
+      const ids = input.instances.map(({ id }) => id)
+      switch (input.kind) {
+        case "app":
+          // An App is asked about the image its config names.
+          return apps.checkImages(
+            input.instances.flatMap(({ id, image }) =>
+              image === undefined ? [] : [{ appId: id, image }]
+            ),
+            signal
+          )
+        case "database":
+          return databases.checkImages(ids, signal)
+        case "instance":
+          return docker.checkImages(ids, signal)
+      }
+    }
     case "app.volumes.write": {
       const input = relayAppVolumesWriteSchema.parse(request.payload)
       await runRelayEffect(

@@ -530,7 +530,7 @@ export function controlRequestLocks(
     case "app.resources.read":
     case "app.network.routes.read":
     case "app.deployment.read":
-    case "app.image.check":
+    case "instance.image.check":
     case "instance.resources.read":
     case "instance.files.list":
     case "instance.files.directory.list":

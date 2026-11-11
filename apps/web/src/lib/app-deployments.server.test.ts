@@ -77,6 +77,8 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       return [{ app: relayApp(id), id, view: "detail" }]
     }
     if (operation === "database.list") return []
+    // Every deployment checks its image again afterwards.
+    if (operation === "instance.image.check") return []
     return {}
   },
 }))
@@ -415,15 +417,11 @@ describeMysql("App deployments", () => {
           yield* ended(yield* ask(third, "update"))
           assert.isNull((yield* latestAppDeploymentsEffect(third)).latest)
 
-          // The deletion was cancelled: the next update is taken up afresh,
-          // as far as this Relay can, which can't deploy updates.
+          // The deletion was cancelled: what's asked next deploys as usual.
           const sql = yield* SqlClient.SqlClient
           yield* sql`UPDATE ${sql(databaseTableName("resource_deletion"))} SET status = 'cancelled'`
-          yield* ended(yield* ask(third, "update"))
-          assert.strictEqual(
-            (yield* latestAppDeploymentsEffect(third)).latest?.status,
-            "failed"
-          )
+          yield* ask(third, "manual")
+          yield* until(() => sentTo(third) === 1)
         }).pipe(TestClock.withLive),
       60_000
     )

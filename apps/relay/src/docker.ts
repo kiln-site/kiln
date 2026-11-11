@@ -27,6 +27,8 @@ import type { DockerCleanup } from "./docker-cleanup.js"
 import { directoryApparentSizeEffect } from "./disk-usage.js"
 import { ensuringPromise, recoverPromise } from "./effect/promise.js"
 import { reportRelayError } from "./effect/runtime.js"
+import type { RelayInstanceImageCheckResult } from "@workspace/contracts"
+import { checkContainerImages } from "./image-checks.js"
 import type {
   RelayStateStore,
   RelayStoredLifecycleSession,
@@ -122,6 +124,8 @@ interface DockerInspect {
     Tty?: boolean
   }
   Id: string
+  /** The image it runs, by ID. */
+  Image?: string
   HostConfig?: {
     Memory?: number
     NanoCpus?: number
@@ -2420,6 +2424,46 @@ export class DockerDriver {
    * Inspects the server containers this Relay owns that `select` picks from
    * their listing, by container id.
    */
+  /**
+   * What each game server's image tag names now, against what its
+   * container runs. A deploy pulls that tag again.
+   */
+  async checkImages(
+    ids: ReadonlyArray<string>,
+    signal?: AbortSignal
+  ): Promise<Array<RelayInstanceImageCheckResult>> {
+    const serverIdLabel = this.#config.serverIdLabel
+    const idOf = (labels: Record<string, string | undefined> | null) =>
+      instanceIdFrom(labels?.[serverIdLabel])
+    const containers = await this.#inspectManaged(
+      (owned) =>
+        owned.flatMap((container) =>
+          ids.includes(idOf(container.Labels ?? null) ?? "")
+            ? [container.Id]
+            : []
+        ),
+      signal
+    )
+    return checkContainerImages(
+      this.#engine,
+      ids.map((id) => {
+        const container = containers.find(
+          (candidate) => idOf(candidate.Config.Labels) === id
+        )
+        return {
+          container: container
+            ? {
+                image: container.Config.Image,
+                imageId: container.Image ?? null,
+              }
+            : null,
+          id,
+        }
+      }),
+      signal
+    )
+  }
+
   #inspectManaged(
     select: (
       owned: ReadonlyArray<DockerContainerSummary>

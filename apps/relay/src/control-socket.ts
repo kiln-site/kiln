@@ -48,7 +48,6 @@ import {
   relayResourcesV1Feature,
   relayFilePutV1Feature,
   relayAppGitHubV1Feature,
-  relayAppImageUpdatesV1Feature,
   relaySecurityInventoryV1Feature,
   relayIconReadV1Feature,
   relayPlatformV1Feature,
@@ -1349,7 +1348,6 @@ function authenticateSocket(
           relayAppProvisioningV1Feature,
           relayAppGitHubV1Feature,
           relayVolumesV1Feature,
-          relayAppImageUpdatesV1Feature,
           relayPlatformV1Feature,
           relayPlatformV2Feature,
           relayPlatformDatabaseV1Feature,
@@ -1649,6 +1647,18 @@ function deployAction(kind: string | null): RelayAction | null {
   return isInstanceKind(kind) ? "instance.deploy" : null
 }
 
+// The one place that says which action reading an instance takes: each
+// kind's own, and none for anything else.
+function readAction(kind: string | null): RelayAction | null {
+  return kind === "instance"
+    ? "instance.read"
+    : kind === "database"
+      ? "database.read"
+      : kind === "app"
+        ? "app.read"
+        : null
+}
+
 // The kinds of instance a request that names its kind can be for.
 function isInstanceKind(
   kind: string | null
@@ -1932,7 +1942,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "app.list":
     case "app.resources.read":
     case "app.network.routes.read":
-    case "app.image.check":
       return "app.read"
     case "app.deployment.read":
       return "app.logs.read"
@@ -2042,6 +2051,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       )
     case "instance.deploy":
       return deployAction(objectString(request.payload, "kind"))
+    case "instance.image.check":
+      return readAction(objectString(request.payload, "kind"))
     case "instance.files.list":
     case "instance.files.directory.list":
     case "instance.files.directory.sizes":
