@@ -28,8 +28,9 @@ The format describes every kind. Kiln reads them in stages.
 | Database Bricks of a known type  | Run from Kiln's own catalog, on that type's image |
 | A database's `connection`        | Defined here; Kiln builds a type's URL itself |
 | A database Brick with no type    | Defined here; not installable yet     |
-| App and group Bricks             | Defined here; not installable yet     |
-| `dockerfile` and `compose`       | Defined here; Apps use them later     |
+| App Bricks                       | Run from Kiln's own catalog: what they deploy, and no more yet |
+| Group Bricks                     | Defined here; not installable yet     |
+| `dockerfile` and `compose`       | Run for Apps from `path` in a source; one written in the Brick isn't yet |
 | `ready` by command               | Run for databases; game servers use logs |
 | `ready` by HTTP                  | Defined here; Apps use it later       |
 | Ports that aren't `public`       | Defined here; not for game servers    |
@@ -383,6 +384,28 @@ A typed database's connection URL is the one Kiln builds for its type;
 A type brings its own export and import. `export` and `import` are for a
 database with no type, which has neither a viewer nor files; without
 `export`, its backups copy the volume.
+
+### Apps
+
+An App is installed from an App Brick, and Hearth keeps what it turns into:
+the App's configuration, which someone can go on changing. So far Kiln runs
+what an App Brick deploys and nothing a Brick can say around that:
+
+| `deploy.type` | What Kiln takes from it                                      |
+| ------------- | ------------------------------------------------------------ |
+| `image`       | `image`, with its templates filled from the answers          |
+| `dockerfile`  | `path`, the Dockerfile to build in the App's source          |
+| `compose`     | `path`, the Compose file to run from the App's source        |
+
+The source of a `path` is chosen when the Brick is installed: a repository
+from a connected source, or a file written in Hearth. An App Brick that
+sets anything else (`env`, `ports`, `ready`, `volumes`, a file written in
+the Brick, a secret Kiln makes) is refused until Kiln runs that part, as is
+one from another catalog.
+
+Kiln's catalog has a Brick for each: `docker-image`, `dockerfile` and
+`compose`. An App that wasn't installed from a Brick is read as the one for
+what it deploys.
 
 ### Groups
 

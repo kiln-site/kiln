@@ -67,7 +67,7 @@ test("Java Bricks keep heap sizing and the start command to the Ember", async ()
   const catalog = await loadYaml("bricks.yml")
   for (const path of catalog.recipes) {
     const brick = await loadYaml(path)
-    if (!brick.deploy.image.includes("bricks-java:")) continue
+    if (!brick.deploy.image?.includes("bricks-java:")) continue
     const jar = input(brick, "server_jar_file")
     assert.equal(jar?.type, "text", `${path}: needs server_jar_file`)
     assert.equal(brick.deploy.env.KILN_ARTIFACT_FILE, "{{ server_jar_file }}")
