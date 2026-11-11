@@ -1,6 +1,6 @@
 import type { AccessPermission } from "@workspace/contracts"
 
-import { loadAppImageUpdatesEffect } from "@/effect/app-image-updates"
+import { loadInstanceUpdatesEffect } from "@/effect/instance-updates"
 import { loadAppGitHubSourceEffect } from "@/effect/app-deployments"
 import { listRelayAppConfigsEffect } from "@/effect/managed-apps"
 import { listRegistryTagsEffect } from "@/effect/registry-tags"
@@ -265,7 +265,7 @@ async function securityFixes(
   )
   const imageUpdates = await runAppEffect(
     "security.fixes.imageUpdates",
-    loadAppImageUpdatesEffect(
+    loadInstanceUpdatesEffect(
       [...apps.values()]
         .filter((app) => app.config.sourceType === "image")
         .map((app) => app.appId)

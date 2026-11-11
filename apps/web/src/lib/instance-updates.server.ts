@@ -1,0 +1,524 @@
+import type { RowDataPacket } from "mysql2/promise"
+import {
+  relayInstanceImageCheckResultsSchema,
+  type RelayInstanceImageCheckResult,
+} from "@workspace/contracts"
+import { logException } from "@workspace/telemetry"
+import { Cause, Clock, Effect, Fiber, Schedule } from "effect"
+
+import { Database } from "@/effect/database"
+import { ExternalServiceError } from "@/effect/errors"
+import {
+  autoUpdateAt,
+  defaultInstanceUpdatePolicy,
+  describesInstance,
+  loadInstanceUpdatesEffect,
+  recordInstanceImageCheckEffect,
+  type InstanceUpdate,
+  type InstanceUpdateKind,
+} from "@/effect/instance-updates"
+import {
+  notifyUsersEffect,
+  openSourceKeysEffect,
+  publishNotificationChange,
+  resolveNotificationsEffect,
+} from "@/effect/notifications"
+import { forkAppWorker } from "@/effect/runtime"
+import { databaseTable } from "@/lib/database-config"
+import {
+  updatedKind,
+  updatedKinds,
+  type UpdateSubject,
+} from "@/lib/instance-update-kinds.server"
+import { relayRpc } from "@/lib/relay-connection"
+import {
+  listPersistedRelaysEffect,
+  type PersistedRelay,
+} from "@/lib/relay-registry"
+import { notificationAudienceEffect } from "@/lib/resource-audience.server"
+import { outsideOperation } from "@/operations/current"
+import { resourceKey, shared } from "@/operations/lanes"
+import { inLanes } from "@/operations/operation"
+
+// Checks whether instances' image tags name newer images than the ones
+// they run, an hour apart, by asking each Relay about each kind's
+// instances at once. A new image tells everyone who can deploy the
+// instance, and deploys itself once it's been out as long as the instance
+// waits, if it's set to. What differs by kind (which instances check, and
+// how one takes an update) is in `instance-update-kinds.server.ts`.
+
+// How often Hearth looks for Relays due a check, and how far apart an
+// instance's checks are.
+const sweepInterval = "5 minutes"
+const checkIntervalMs = 60 * 60_000
+// Instances per request, which the Relay checks four registries at a time.
+const batchSize = 16
+const checkTimeoutMs = 120_000
+
+declare global {
+  var kilnInstanceUpdateChecker: Fiber.Fiber<void> | undefined
+}
+
+// Tells everyone who can deploy the instance about an image they haven't
+// heard of, unless it was skipped. Whoever asked for the check sees what it
+// found.
+const announce = Effect.fnUntraced(function* (
+  relay: PersistedRelay,
+  name: string,
+  update: InstanceUpdate,
+  actorUserId: string | null
+) {
+  const digest = update.latestDigest
+  if (
+    update.mode === "off" ||
+    digest === null ||
+    update.image === null ||
+    digest === update.skippedDigest
+  ) {
+    return
+  }
+  const { resourceType } = updatedKind(update.kind)
+  const recipients = yield* notificationAudienceEffect(
+    { relayId: relay.id, resourceId: update.instanceId, resourceType },
+    // Whoever may take the update: deploying it is a deploy.
+    "instance.deploy",
+    "app.image-update"
+  )
+  const delivered = yield* notifyUsersEffect(
+    recipients,
+    `${updateSourceKeyPrefix(update.instanceId)}${digest}`,
+    {
+      digest,
+      image: update.image,
+      kind: "app.image-update",
+      resource: {
+        id: update.instanceId,
+        name,
+        relayId: relay.id,
+        type: resourceType,
+      },
+    },
+    { actorUserId }
+  )
+  if (delivered > 0) publishNotificationChange(recipients)
+})
+
+// The notification kind keeps the name it had while only Apps updated.
+function updateSourceKeyPrefix(instanceId: string) {
+  return `app.image-update:${instanceId}:`
+}
+
+/**
+ * Clears an instance's update notifications that no longer offer anything:
+ * all but the update Kiln has on offer now, read with its row locked, so
+ * two clearing at once agree. What a check found offers an update only
+ * while it still describes the instance (`currentImageUpdate`).
+ * `installedDigest` was just deployed, so it's no longer on offer;
+ * `unchecked` means it no longer checks for updates, so none is.
+ */
+export const resolveInstanceUpdateNotificationsEffect = Effect.fn(
+  "Instances.updates.resolveNotifications"
+)(function* (
+  kind: InstanceUpdateKind,
+  relayId: string,
+  instanceId: string,
+  settled: { installedDigest?: string; unchecked?: boolean } = {}
+) {
+  const database = yield* Database
+  const prefix = updateSourceKeyPrefix(instanceId)
+  const adapter = updatedKind(kind)
+  const [named, startedAt] = yield* Effect.all([
+    adapter.namedImage(relayId, instanceId),
+    adapter.latestDeploymentStartedAt(instanceId),
+  ])
+  const resolved = yield* database.transaction(
+    "Instances.updates.resolveNotifications",
+    () =>
+      Effect.gen(function* () {
+        const [offer] = yield* database.queryRows<
+          RowDataPacket & {
+            checked_at: number | string | null
+            image: string | null
+            latest_digest: string | null
+            mode: string
+            skipped_digest: string | null
+            state: string | null
+          }
+        >(
+          "Instances.updates.offer",
+          `SELECT state, mode, image, checked_at, latest_digest, skipped_digest
+             FROM ${databaseTable("instance_update")}
+            WHERE instance_id = ?
+              FOR UPDATE`,
+          [instanceId]
+        )
+        const current =
+          named !== undefined &&
+          offer !== undefined &&
+          describesInstance(
+            {
+              checkedAt:
+                offer.checked_at === null ? null : Number(offer.checked_at),
+              image: offer.image,
+            },
+            named,
+            startedAt
+          )
+        const offered =
+          !settled.unchecked &&
+          current &&
+          offer?.state === "available" &&
+          offer.mode !== "off" &&
+          offer.latest_digest !== offer.skipped_digest &&
+          offer.latest_digest !== settled.installedDigest
+            ? offer.latest_digest
+            : null
+        const open = yield* openSourceKeysEffect("app.image-update", prefix)
+        return yield* resolveNotificationsEffect(
+          "app.image-update",
+          open.filter((key) => key !== `${prefix}${offered}`)
+        )
+      })
+  )
+  publishNotificationChange(resolved)
+})
+
+// What a Relay answered about one instance, and when it was asked.
+export interface InstanceImageAnswer {
+  readonly askedAt: number
+  // One mid-deployment isn't recorded: its outcome decides what runs.
+  readonly result: Exclude<
+    RelayInstanceImageCheckResult,
+    { status: "deploying" }
+  >
+  readonly subject: UpdateSubject
+}
+
+/**
+ * Asks the Relay about a kind's instances, or just `onlyId`, that check for
+ * updates: those whose image could move, and haven't turned checks off. No
+ * lane is held: registries may take a while. Each batch's answers go to
+ * `answered` before the next is asked, so a batch that fails later doesn't
+ * lose them. Reports whether `onlyId`, asked about on its own, no longer
+ * checks.
+ */
+const askImagesEffect = Effect.fnUntraced(function* <E, R>(
+  kind: InstanceUpdateKind,
+  relay: PersistedRelay,
+  onlyId: string | undefined,
+  answered: (
+    answers: ReadonlyArray<InstanceImageAnswer>
+  ) => Effect.Effect<void, E, R>
+) {
+  const adapter = updatedKind(kind)
+  const now = yield* Clock.currentTimeMillis
+  const subjects = (yield* adapter.subjects(relay)).filter(
+    (subject) => onlyId === undefined || subject.id === onlyId
+  )
+  const updates = yield* loadInstanceUpdatesEffect(
+    subjects.map((subject) => subject.id)
+  )
+  // Kiln's own checks ask about each instance once an hour, by when it was
+  // last asked; one someone asks for, at once.
+  const due = subjects.filter((subject) => {
+    const update = updates.get(subject.id)
+    if ((update?.mode ?? defaultInstanceUpdatePolicy.mode) === "off") {
+      return false
+    }
+    const checkedAt = update?.checkedAt ?? null
+    return (
+      onlyId !== undefined ||
+      checkedAt === null ||
+      now - checkedAt >= checkIntervalMs
+    )
+  })
+  for (let start = 0; start < due.length; start += batchSize) {
+    const batch = due.slice(start, start + batchSize)
+    const askedAt = yield* Clock.currentTimeMillis
+    const results = yield* Effect.tryPromise({
+      try: (signal) =>
+        relayRpc(
+          relay,
+          "instance.image.check",
+          {
+            instances: batch.map((subject) => ({
+              id: subject.id,
+              ...(subject.image !== null && { image: subject.image }),
+            })),
+            kind: adapter.relayKind,
+          },
+          checkTimeoutMs,
+          undefined,
+          signal
+        ),
+      catch: (cause) =>
+        ExternalServiceError.make({
+          cause,
+          message: "Could not check the Relay's instances for image updates",
+          service: "Relay",
+        }),
+    }).pipe(
+      Effect.map((response) =>
+        relayInstanceImageCheckResultsSchema.parse(response)
+      )
+    )
+    const answers: Array<InstanceImageAnswer> = []
+    for (const result of results) {
+      const subject = batch.find((item) => item.id === result.id)
+      // Mid-deployment, its outcome decides what runs.
+      if (subject && result.status !== "deploying") {
+        answers.push({ askedAt, result, subject })
+      }
+    }
+    yield* answered(answers)
+  }
+  return onlyId !== undefined && !due.some((subject) => subject.id === onlyId)
+})
+
+/**
+ * Records what a check found of an instance, holding it shared so it isn't
+ * recorded for one being deleted: one about an image it no longer names
+ * says nothing about it, so isn't. Checks may overlap; what one recorded is
+ * judged where it's used (`currentImageUpdate`). Reports whether it changed
+ * what Kiln knows.
+ */
+const recordImageAnswersEffect = Effect.fnUntraced(function* (
+  kind: InstanceUpdateKind,
+  relay: PersistedRelay,
+  instanceId: string,
+  asked: { answers: ReadonlyArray<InstanceImageAnswer>; unchecked: boolean },
+  actorUserId: string | null
+) {
+  const adapter = updatedKind(kind)
+  // One checked on its own that no longer checks, as an App now pinned to a
+  // digest or deployed from elsewhere, has no update on offer: read again
+  // here, holding it, since checks may have been turned on since and a
+  // newer check announced an update.
+  if (asked.unchecked && !(yield* checksForUpdates(kind, relay.id, instanceId))) {
+    yield* resolveInstanceUpdateNotificationsEffect(
+      kind,
+      relay.id,
+      instanceId,
+      { unchecked: true }
+    )
+  }
+  let changed = false
+  for (const { askedAt, result, subject } of asked.answers) {
+    if (subject.id !== instanceId) continue
+    // Asked about an image it no longer names, or gone since.
+    const named = yield* adapter.namedImage(relay.id, instanceId)
+    if (named === undefined || named !== subject.image) continue
+    const recorded = yield* recordInstanceImageCheckEffect(
+      kind,
+      instanceId,
+      // What Hearth knows it names, or what the Relay found it running.
+      subject.image ?? (result.status === "checked" ? result.image : null),
+      result,
+      askedAt
+    )
+    changed ||= recorded.changed
+    if (recorded.newFailure) {
+      yield* Effect.logWarning(
+        "Could not check an instance for image updates"
+      ).pipe(
+        Effect.annotateLogs({
+          "error.message": recorded.update.checkError,
+          "instance.id": instanceId,
+          "instance.kind": kind,
+          "relay.id": relay.id,
+        })
+      )
+    }
+    if (recorded.newlySeen) {
+      yield* announce(relay, subject.name, recorded.update, actorUserId)
+    }
+    // An update that's gone, skipped, or replaced by a newer image no longer
+    // needs anyone's attention.
+    yield* resolveInstanceUpdateNotificationsEffect(kind, relay.id, instanceId)
+    const at = autoUpdateAt(recorded.update)
+    if (at !== null && at <= (yield* Clock.currentTimeMillis)) {
+      yield* adapter.deployUpdate(relay, instanceId, null)
+    }
+  }
+  return changed
+})
+
+// Whether an instance checks for image updates now: its image could move,
+// and it hasn't turned checks off.
+const checksForUpdates = Effect.fnUntraced(function* (
+  kind: InstanceUpdateKind,
+  relayId: string,
+  instanceId: string
+) {
+  if ((yield* updatedKind(kind).namedImage(relayId, instanceId)) === undefined) {
+    return false
+  }
+  const update = (yield* loadInstanceUpdatesEffect([instanceId])).get(instanceId)
+  return (update?.mode ?? defaultInstanceUpdatePolicy.mode) !== "off"
+})
+
+// Kiln's own checks: ask with no lane held, then record each instance's
+// answer holding the instance shared.
+const checkImagesEffect = (
+  kind: InstanceUpdateKind,
+  relay: PersistedRelay,
+  onlyId?: string,
+  actorUserId: string | null = null
+) => {
+  const adapter = updatedKind(kind)
+  let changed = false
+  const record = (
+    instanceId: string,
+    asked: { answers: ReadonlyArray<InstanceImageAnswer>; unchecked: boolean }
+  ) =>
+    inLanes(
+      "instance.image.check.record",
+      "Checking this instance's image",
+      [shared(resourceKey(adapter.resourceType, relay.id, instanceId))],
+      recordImageAnswersEffect(kind, relay, instanceId, asked, actorUserId)
+    ).pipe(
+      Effect.tap((instanceChanged) =>
+        Effect.sync(() => {
+          changed ||= instanceChanged
+        })
+      )
+    )
+  return Effect.gen(function* () {
+    // Each batch is recorded before the next is asked for.
+    const unchecked = yield* askImagesEffect(kind, relay, onlyId, (answers) =>
+      Effect.forEach(
+        answers,
+        (answer) =>
+          record(answer.subject.id, { answers: [answer], unchecked: false }),
+        { discard: true }
+      )
+    )
+    if (unchecked && onlyId) {
+      yield* record(onlyId, { answers: [], unchecked: true })
+    }
+  }).pipe(
+    // What was recorded shows, even when a later batch failed.
+    Effect.ensuring(
+      Effect.sync(() => {
+        if (changed) adapter.published(relay.id)
+      })
+    )
+  )
+}
+
+export function startInstanceUpdateChecks(): void {
+  const sweep = Effect.gen(function* () {
+    for (const relay of yield* listPersistedRelaysEffect()) {
+      if (!relay.enabled) continue
+      for (const { kind } of updatedKinds) {
+        yield* checkImagesEffect(kind, relay).pipe(
+          Effect.catchCause((cause) =>
+            logException(Cause.squash(cause), {
+              operation: "Instances.updates.check",
+              attributes: { "instance.kind": kind, "relay.id": relay.id },
+            })
+          )
+        )
+      }
+    }
+  }).pipe(
+    Effect.catchCause((cause) =>
+      logException(Cause.squash(cause), {
+        operation: "Instances.updates.sweep",
+      })
+    )
+  )
+  // The first sweep waits a little, so Relays have connected.
+  globalThis.kilnInstanceUpdateChecker ??= forkAppWorker(
+    Effect.sleep("1 minute").pipe(
+      Effect.andThen(sweep.pipe(Effect.repeat(Schedule.spaced(sweepInterval)))),
+      Effect.asVoid
+    )
+  )
+}
+
+export function stopInstanceUpdateChecks(): Promise<void> {
+  const checker = globalThis.kilnInstanceUpdateChecker
+  globalThis.kilnInstanceUpdateChecker = undefined
+  return checker
+    ? Effect.runPromise(Fiber.interrupt(checker))
+    : Promise.resolve()
+}
+
+if (import.meta.hot) import.meta.hot.dispose(() => stopInstanceUpdateChecks())
+
+/**
+ * Asks about one instance now, as when someone asks, with no lane held;
+ * record the answer holding the instance (`recordCheckedImageEffect`).
+ */
+export const askInstanceImageEffect = Effect.fn("Instances.updates.ask")(
+  function* (kind: InstanceUpdateKind, relay: PersistedRelay, id: string) {
+    if (!relay.enabled) {
+      return yield* Effect.fail(new Error("This Relay is turned off"))
+    }
+    const answers: Array<InstanceImageAnswer> = []
+    const unchecked = yield* askImagesEffect(kind, relay, id, (batch) =>
+      Effect.sync(() => {
+        answers.push(...batch)
+      })
+    )
+    return { answers, unchecked }
+  }
+)
+
+/**
+ * Records what asking about one instance found, run holding it, and answers
+ * what Kiln knows of its updates after.
+ */
+export const recordCheckedImageEffect = Effect.fn("Instances.updates.record")(
+  function* (
+    kind: InstanceUpdateKind,
+    relay: PersistedRelay,
+    instanceId: string,
+    asked: { answers: ReadonlyArray<InstanceImageAnswer>; unchecked: boolean },
+    actorUserId: string | null
+  ) {
+    if (
+      yield* recordImageAnswersEffect(kind, relay, instanceId, asked, actorUserId)
+    ) {
+      updatedKind(kind).published(relay.id)
+    }
+    const updates = yield* loadInstanceUpdatesEffect([instanceId])
+    return updates.get(instanceId) ?? null
+  }
+)
+
+/**
+ * Checks again after an instance deploys, so it shows what it runs, or
+ * after someone (`actorUserId`) changed how it updates.
+ */
+export function recheckInstanceImage(
+  kind: InstanceUpdateKind,
+  relayId: string,
+  instanceId: string,
+  actorUserId: string | null
+): void {
+  // Asked for by whatever changed it, which doesn't wait for it.
+  outsideOperation(() =>
+    forkAppWorker(
+      Effect.gen(function* () {
+        const relays = yield* listPersistedRelaysEffect()
+        const relay = relays.find((item) => item.id === relayId)
+        if (relay?.enabled) {
+          yield* checkImagesEffect(kind, relay, instanceId, actorUserId)
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          logException(Cause.squash(cause), {
+            operation: "Instances.updates.recheck",
+            attributes: {
+              "instance.id": instanceId,
+              "instance.kind": kind,
+              "relay.id": relayId,
+            },
+          })
+        )
+      )
+    )
+  )
+}

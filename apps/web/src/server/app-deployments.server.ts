@@ -11,10 +11,10 @@ import {
 import {
   autoUpdateAt,
   currentImageUpdate,
-  defaultAppImageUpdatePolicy,
-  loadAppImageUpdateEffect,
-  type AppImageUpdate,
-} from "@/effect/app-image-updates"
+  defaultInstanceUpdatePolicy,
+  loadInstanceUpdateEffect,
+  type InstanceUpdate,
+} from "@/effect/instance-updates"
 import {
   latestAppDeploymentsEffect,
   listDeploymentsEffect,
@@ -411,7 +411,7 @@ export async function getAppDeploymentSummaryHandler(data: {
     app.config.sourceType === "image"
       ? runAppEffect(
           "apps.imageUpdates.load",
-          loadAppImageUpdateEffect(data.appId)
+          loadInstanceUpdateEffect(data.appId)
         )
       : null,
   ])
@@ -456,12 +456,12 @@ export async function getAppDeploymentSummaryHandler(data: {
 // describes the app (`currentImageUpdate`).
 function imageUpdatesView(
   image: string,
-  saved: AppImageUpdate | null,
-  current: AppImageUpdate | null
+  saved: InstanceUpdate | null,
+  current: InstanceUpdate | null
 ) {
   const policy = {
-    delayHours: saved?.delayHours ?? defaultAppImageUpdatePolicy.delayHours,
-    mode: saved?.mode ?? defaultAppImageUpdatePolicy.mode,
+    delayHours: saved?.delayHours ?? defaultInstanceUpdatePolicy.delayHours,
+    mode: saved?.mode ?? defaultInstanceUpdatePolicy.mode,
   }
   // A digest never moves, so there's nothing to check.
   const pinned = image.includes("@")

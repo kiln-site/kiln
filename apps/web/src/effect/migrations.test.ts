@@ -1072,6 +1072,88 @@ describeMysql("database migrations", () => {
     )
 
     it.effect(
+      "keeps what each App decided about its updates when they become every instance's",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while only image Apps took updates.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 66)
+          )
+          const relayId = "1".repeat(12)
+          const appId = "a".repeat(12)
+          const digest = `sha256:${"2".repeat(64)}`
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("app", {
+            app_id: appId,
+            config_ciphertext: "ciphertext",
+            created_at: 1,
+            created_by: "owner",
+            name: "Website",
+            owner_id: "owner",
+            relay_id: relayId,
+            updated_at: 1,
+          })
+          yield* insertRows("app_image_update", {
+            app_id: appId,
+            delay_hours: 24,
+            image: "ghcr.io/kiln-site/marketing:latest",
+            latest_digest: digest,
+            latest_seen_at: 5,
+            mode: "auto",
+            skipped_digest: digest,
+            state: "available",
+            updated_at: 1,
+          })
+          yield* insertRows("app_image_update_attempt", {
+            app_id: appId,
+            attempted_at: 7,
+            deployment_id: "d".repeat(36),
+            digest,
+          })
+
+          yield* applyMigrations(migrations)
+
+          const updates = yield* sql<Record<string, unknown>>`
+            SELECT instance_id, instance_kind, mode, delay_hours, state,
+                   latest_digest, skipped_digest
+              FROM ${sql(databaseTableName("instance_update"))}
+          `
+          expect(
+            updates.map((row) => ({ ...row, delay_hours: Number(row.delay_hours) }))
+          ).toEqual([
+            {
+              delay_hours: 24,
+              instance_id: appId,
+              instance_kind: "app",
+              latest_digest: digest,
+              mode: "auto",
+              skipped_digest: digest,
+              state: "available",
+            },
+          ])
+          const attempts = yield* sql<Record<string, unknown>>`
+            SELECT instance_id, digest, deployment_id
+              FROM ${sql(databaseTableName("instance_update_attempt"))}
+          `
+          expect(attempts).toEqual([
+            { deployment_id: "d".repeat(36), digest, instance_id: appId },
+          ])
+          // Its rows are its own now: gone when it is deleted, not with the
+          // App table's row.
+          yield* sql`DELETE FROM ${sql(databaseTableName("app"))}`
+          const kept = yield* sql<{ count: number }>`
+            SELECT COUNT(*) AS count
+              FROM ${sql(databaseTableName("instance_update"))}
+          `
+          expect(Number(kept[0]?.count)).toBe(1)
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
       "gives a database made before databases ran Bricks its engine's Brick, image and port",
       () =>
         Effect.gen(function* () {

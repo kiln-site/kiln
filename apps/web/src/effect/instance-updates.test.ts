@@ -9,10 +9,10 @@ import { insertAppDeploymentEffect } from "@/effect/app-deployments"
 import {
   autoUpdateAt,
   claimImageUpdateEffect,
-  recordAppImageCheckEffect,
-  saveAppImageUpdatePolicyEffect,
-  skipAppImageUpdateEffect,
-} from "@/effect/app-image-updates"
+  recordInstanceImageCheckEffect,
+  saveInstanceUpdatePolicyEffect,
+  skipInstanceUpdateEffect,
+} from "@/effect/instance-updates"
 import { createAppRecordEffect } from "@/effect/managed-apps"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay } from "@/test/seed"
@@ -37,10 +37,12 @@ const seedApp = Effect.gen(function* () {
 })
 
 // A check asked about the image now.
-const record = (result: Parameters<typeof recordAppImageCheckEffect>[2]) =>
+const record = (result: Parameters<typeof recordInstanceImageCheckEffect>[3]) =>
   Clock.currentTimeMillis.pipe(
     Effect.flatMap((now) =>
-      recordAppImageCheckEffect(appId, image, result, now)
+      recordInstanceImageCheckEffect(
+            "app",
+            appId, image, result, now)
     )
   )
 
@@ -67,7 +69,7 @@ describeMysql("App image updates", () => {
           const notified = yield* checked(2, [1])
           assert.isNull(autoUpdateAt(notified.update))
 
-          yield* saveAppImageUpdatePolicyEffect(appId, {
+          yield* saveInstanceUpdatePolicyEffect("app", appId, {
             delayHours: 72,
             mode: "auto",
           })
@@ -85,14 +87,14 @@ describeMysql("App image updates", () => {
           const recovered = yield* checked(2, [1])
           assert.strictEqual(autoUpdateAt(recovered.update), start + 72 * hour)
 
-          assert.isTrue(yield* skipAppImageUpdateEffect(appId, digest(2)))
+          assert.isTrue(yield* skipInstanceUpdateEffect(appId, digest(2)))
           const skipped = yield* checked(2, [1])
           assert.isNull(autoUpdateAt(skipped.update))
           // A newer image than the one skipped is offered as any other.
           const newer = yield* checked(3, [1])
           assert.strictEqual(autoUpdateAt(newer.update), start + 72 * hour)
           // Skipping what's no longer on offer does nothing.
-          assert.isFalse(yield* skipAppImageUpdateEffect(appId, digest(2)))
+          assert.isFalse(yield* skipInstanceUpdateEffect(appId, digest(2)))
 
           // One update claims each digest, before the Relay hears of it; the
           // same deployment, run again after a restart, still has it.

@@ -38,9 +38,9 @@ import {
 import { resumeTailscaleNetworkDeletion } from "./lib/tailscale-cleanup.server"
 import { reconcileResourceDeletions } from "./lib/resource-deletion.server"
 import {
-  startAppImageUpdateChecks,
-  stopAppImageUpdateChecks,
-} from "./lib/app-image-updates.server"
+  startInstanceUpdateChecks,
+  stopInstanceUpdateChecks,
+} from "./lib/instance-updates.server"
 import {
   startIconDetection,
   stopIconDetection,
@@ -78,7 +78,7 @@ await loadInstallationId()
 startInstanceDirectorySync()
 startGitHubSyncPolling()
 startAppDeploymentPolling()
-startAppImageUpdateChecks()
+startInstanceUpdateChecks()
 startIconDetection()
 startSecurityScans()
 startRelayMetrics(relayConnectionsCapacity, relayPassthroughUsages)
@@ -209,7 +209,7 @@ export function shutdownHearth(): Promise<void> {
     stopInstanceDirectorySync(),
     stopGitHubSyncPolling(),
     stopAppDeploymentPolling(),
-    stopAppImageUpdateChecks(),
+    stopInstanceUpdateChecks(),
     stopIconDetection(),
     stopBackupMaintenance(),
     stopPollingWorkers(),

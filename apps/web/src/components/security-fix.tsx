@@ -20,7 +20,7 @@ import {
   securityImageVersionsQueryOptions,
   securityQueryKeys,
 } from "@/lib/security-queries"
-import { deployAppImageUpdate } from "@/server/app-image-updates"
+import { deployInstanceUpdate } from "@/server/instance-updates"
 import { deployApp, updateAppConfig } from "@/server/apps"
 import { updateRelayHostPackages } from "@/server/relay-host"
 import { scanSecurityNow } from "@/server/security"
@@ -329,8 +329,8 @@ function DeployUpdate({
   const { use } = props
   const { isPending, mutate } = useMutation({
     mutationFn: () =>
-      deployAppImageUpdate({
-        data: { appId: use.resourceId, relayId: use.relayId },
+      deployInstanceUpdate({
+        data: { instanceId: use.resourceId, kind: "app", relayId: use.relayId },
       }),
     onError: failedToast,
     onSuccess: () => deployingToast(use.name),

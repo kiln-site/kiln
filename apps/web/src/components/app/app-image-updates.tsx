@@ -24,15 +24,15 @@ import {
 import { Field } from "@/components/github-sync-dialogs"
 import { InfoFact } from "@/components/info-page"
 import { RelativeTime } from "@/components/relative-time"
-import type { AppImageUpdateMode } from "@/effect/app-image-updates"
+import type { InstanceUpdateMode } from "@/effect/instance-updates"
 import { queryKeys } from "@/lib/query-options"
 import type { getAppDeploymentSummary } from "@/server/app-deployments"
 import {
-  checkAppImageUpdate,
-  deployAppImageUpdate,
-  saveAppImageUpdatePolicy,
-  skipAppImageUpdate,
-} from "@/server/app-image-updates"
+  checkInstanceUpdate,
+  deployInstanceUpdate,
+  saveInstanceUpdatePolicy,
+  skipInstanceUpdate,
+} from "@/server/instance-updates"
 
 // Whether an image app's tag names a newer image than the one it runs, and
 // what Kiln does about it: the Deployment card's Updates row, and the
@@ -52,7 +52,7 @@ const modes = [
   ["auto", "Automatic", "Deploy updates once they've waited"],
   ["off", "Off", "Don't check for updates"],
 ] as const satisfies ReadonlyArray<
-  readonly [AppImageUpdateMode, string, string]
+  readonly [InstanceUpdateMode, string, string]
 >
 
 // The row's one-line answer, and whether it asks for attention.
@@ -146,11 +146,16 @@ function AppImageUpdatesDialog({
 }) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
-  const canManage = app.permissions.includes("app.manage")
+  // Whoever may deploy it decides when it deploys.
+  const canManage = app.permissions.includes("instance.deploy")
   // Skipping an update decides the App's updates; taking it is a deploy.
   const canDeploy = app.permissions.includes("instance.deploy")
-  const input = { appId: app.id, relayId: app.relayId }
-  const [mode, setMode] = React.useState<AppImageUpdateMode>(updates.mode)
+  const input = {
+    instanceId: app.id,
+    kind: "app" as const,
+    relayId: app.relayId,
+  }
+  const [mode, setMode] = React.useState<InstanceUpdateMode>(updates.mode)
   const [waitDays, setWaitDays] = React.useState(() =>
     String(Math.round((updates.delayHours / 24) * 10) / 10)
   )
@@ -169,13 +174,13 @@ function AppImageUpdatesDialog({
     })
 
   const check = useMutation({
-    mutationFn: () => checkAppImageUpdate({ data: input }),
+    mutationFn: () => checkInstanceUpdate({ data: input }),
     onSuccess: refresh,
     onError: (error) => showAppOperationError("Could not check", error),
   })
   const save = useMutation({
     mutationFn: () =>
-      saveAppImageUpdatePolicy({
+      saveInstanceUpdatePolicy({
         data: {
           ...input,
           delayHours: mode === "auto" ? delayHours : updates.delayHours,
@@ -190,12 +195,12 @@ function AppImageUpdatesDialog({
   })
   const skip = useMutation({
     mutationFn: (digest: string) =>
-      skipAppImageUpdate({ data: { ...input, digest } }),
+      skipInstanceUpdate({ data: { ...input, digest } }),
     onSuccess: refresh,
     onError: (error) => showAppOperationError("Could not skip", error),
   })
   const deploy = useMutation({
-    mutationFn: () => deployAppImageUpdate({ data: input }),
+    mutationFn: () => deployInstanceUpdate({ data: input }),
     onSuccess: async () => {
       // It runs once any deployment running ends.
       showToast({ message: "Update deploy queued", type: "success" })
