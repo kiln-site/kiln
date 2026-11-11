@@ -178,7 +178,10 @@ export const resolveInstanceUpdateNotificationsEffect = Effect.fn(
           offer.latest_digest !== settled.installedDigest
             ? offer.latest_digest
             : null
-        const open = yield* openSourceKeysEffect("instance.image-update", prefix)
+        const open = yield* openSourceKeysEffect(
+          "instance.image-update",
+          prefix
+        )
         return yield* resolveNotificationsEffect(
           "instance.image-update",
           open.filter((key) => key !== `${prefix}${offered}`)
@@ -300,7 +303,10 @@ const recordImageAnswersEffect = Effect.fnUntraced(function* (
   // digest or deployed from elsewhere, has no update on offer: read again
   // here, holding it, since checks may have been turned on since and a
   // newer check announced an update.
-  if (asked.unchecked && !(yield* checksForUpdates(kind, relay.id, instanceId))) {
+  if (
+    asked.unchecked &&
+    !(yield* checksForUpdates(kind, relay.id, instanceId))
+  ) {
     yield* resolveInstanceUpdateNotificationsEffect(
       kind,
       relay.id,
@@ -319,7 +325,12 @@ const recordImageAnswersEffect = Effect.fnUntraced(function* (
     // its own replaces the container, and may run another image: the image
     // is judged again once that has deployed, not now.
     let installing = false
-    if (result.brick) {
+    if (
+      result.brick &&
+      // One detached from its Brick still runs what the Brick deployed.
+      (!adapter.followsBrick ||
+        (yield* adapter.followsBrick(relay.id, instanceId)))
+    ) {
       const brick = yield* recordBrickAnswerEffect(
         kind,
         relay,
@@ -465,10 +476,14 @@ const checksForUpdates = Effect.fnUntraced(function* (
   relayId: string,
   instanceId: string
 ) {
-  if ((yield* updatedKind(kind).namedImage(relayId, instanceId)) === undefined) {
+  if (
+    (yield* updatedKind(kind).namedImage(relayId, instanceId)) === undefined
+  ) {
     return false
   }
-  const update = (yield* loadInstanceUpdatesEffect([instanceId])).get(instanceId)
+  const update = (yield* loadInstanceUpdatesEffect([instanceId])).get(
+    instanceId
+  )
   return (update?.mode ?? defaultInstanceUpdatePolicy.mode) !== "off"
 })
 
@@ -657,6 +672,22 @@ export const recordCheckedImageEffect = Effect.fn("Instances.updates.record")(
     return updates.get(instanceId) ?? null
   }
 )
+
+/**
+ * Settles what was said of an instance's Brick, for one that follows it no
+ * longer: nobody needs to hear of a revision it won't take.
+ */
+export const settleInstanceBrickNotificationsEffect = Effect.fn(
+  "Instances.updates.settleBrick"
+)(function* (instanceId: string) {
+  const open = yield* openSourceKeysEffect(
+    "instance.brick-update",
+    `instance.brick-update:${instanceId}:`
+  )
+  publishNotificationChange(
+    yield* resolveNotificationsEffect("instance.brick-update", open)
+  )
+})
 
 /**
  * Checks again after an instance deploys, so it shows what it runs, or

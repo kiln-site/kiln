@@ -1,6 +1,5 @@
 import {
   appEnvironmentWith,
-  databaseConnectionUrl,
   groupConnectionEnvironment,
   type BrickVariableValue,
   type GroupConnection,
@@ -41,13 +40,11 @@ import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { createDatabase } from "@/server/database-create.server"
 import { publishGroupChange } from "@/server/instance-group-access.server"
 import {
+  groupDatabaseConnection,
   installedGroupBrick,
   type InstalledGroupBrick,
 } from "@/server/group-bricks.server"
-import {
-  requiredCredential,
-  requiredRelay,
-} from "@/server/managed-database-access"
+import { requiredRelay } from "@/server/managed-database-access"
 
 export interface CreateInstanceGroupInput {
   /** The group Brick it is installed from, by its source. */
@@ -275,24 +272,11 @@ async function makeMembers(
           loadManagedDatabaseCredentialEffect(relay.id, database.id)
         ).then((kept) => kept !== null)
     )
-    const credential = await requiredCredential(relay.id, database.id)
-    const host = `database-${credential.databaseId}`
     ids[database.key] = database.id
-    connections[database.key] = {
-      connection: databaseConnectionUrl({
-        databaseName: credential.databaseName,
-        engine: credential.engine,
-        host,
-        password: encodeURIComponent(credential.password),
-        port: credential.internalPort,
-        username: credential.username,
-      }),
-      host,
-      name: credential.databaseName,
-      password: credential.password,
-      port: String(credential.internalPort),
-      username: credential.username,
-    }
+    connections[database.key] = await groupDatabaseConnection(
+      relay.id,
+      database.id
+    )
   }
   for (const app of plan.apps) {
     const connected = groupConnectionEnvironment(app, connections, plan.answers)

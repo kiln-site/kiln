@@ -136,11 +136,12 @@ A Brick makes one today, and only that:
   deletes the group from there: the members checked are deleted with it, the
   others stay in no group.
 
-A group doesn't record the Brick it came from, its answers, or which of
-the Brick's members each instance is. Recording them comes with Brick
-revisions for Apps; a group installed before then is installed again. What
-an App was given to reach its database is written once, at install, and
-doesn't follow a password rotated later.
+A group a Brick made keeps the Brick, its answers, and which of the Brick's
+members each instance is, so its Apps can be made again from a newer
+revision ([Instance updates](instance-updates.md#brick-revisions)). What an
+App was given to reach its database is written at install and again when
+the App takes a revision of its Brick; it doesn't follow a password rotated
+in between.
 
 Still to come: a group's page, a group someone makes by hand, an icon,
 members on more than one Relay, and the groups Kiln makes itself, for a
@@ -207,12 +208,15 @@ has one for each (`docker-image`, `dockerfile`, `compose`), and for now only
 those are offered and accepted. Hearth keeps an App's configuration, so
 Hearth turns the Brick and its answers into it
 (`appBrickDeploy` in the contracts) and the Relay deploys that
-configuration as it always has. An App doesn't record its Brick yet: it is
-read as the one for what it deploys, as are Apps made before Apps ran
-Bricks, and nothing about their containers changed. Still to come for a
-catalog of Apps: what a Brick says around what it deploys (its environment,
-ports, volumes and health check), an App that records its Brick and is
-offered its newer revisions, and App Bricks from other catalogs.
+configuration as it always has. An App made from one of those generic
+Bricks keeps no Brick: it is read as the one for what it deploys, as are
+Apps made before Apps ran Bricks, and nothing about their containers
+changed. An App made from any other Brick, alone or in a group, keeps the
+Brick, its revision and its answers, follows it, and can be detached from
+it ([Instance updates](instance-updates.md#which-apps-follow-a-brick)). A
+Brick sets an App's image and its variables, and Kiln makes the secrets it
+asks for. Still to come: its ports, volumes and health check, and App
+Bricks from other catalogs.
 
 Adding any of them opens the same dialog (`AddInstanceDialogHost`): pick
 the kind, pick its Brick, then answer what that kind asks. Each page's Add
@@ -305,9 +309,10 @@ from a tag or an image name today.
    created, and moving one to another major version is not built.
 8. Apps as Bricks. Apps are installed from Kiln's three generic Bricks, in
    the one Add dialog, and Umami from a group Brick that brings its database
-   (instance groups, pulled forward from step 11). Still to come: an App that
-   records its Brick and is offered its newer revisions, and what a Brick
-   says around what it deploys.
+   (instance groups, pulled forward from step 11). An App made from a
+   catalog Brick follows it: it is offered the Brick's newer revisions, and
+   can be detached. Still to come of what a Brick says: its ports, volumes
+   and health check, and App and group Bricks from other catalogs.
 9. Domains for every kind.
 10. One instance page, with each kind's own tabs.
 11. Tailscale as its own kind, with the instance group.

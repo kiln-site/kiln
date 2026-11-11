@@ -1,16 +1,19 @@
 import {
   brickInstallAnswers,
   brickRevision,
+  databaseConnectionUrl,
   groupBrickInstall,
   groupBrickProblem,
   type Brick,
   type BrickVariableValue,
   type GroupBrickApp,
+  type GroupConnection,
 } from "@workspace/contracts"
 
 import { makeBrickSecret } from "@/server/app-bricks.server"
 import { defaultBrickCatalog } from "@/server/brick-catalogs.server"
 import { databaseBricks } from "@/server/database-bricks.server"
+import { requiredCredential } from "@/server/managed-database-access"
 
 // The group Bricks Kiln installs: those of its own catalog that do only
 // what Kiln does for a group so far, each of whose databases is made from
@@ -76,5 +79,32 @@ export async function installedGroupBrick(
       source,
     },
     databases,
+  }
+}
+
+/**
+ * What reaching a database gives an App connected to it, as it is now: its
+ * address on its Relay, and the login Hearth keeps for it.
+ */
+export async function groupDatabaseConnection(
+  relayId: string,
+  databaseId: string
+): Promise<GroupConnection> {
+  const credential = await requiredCredential(relayId, databaseId)
+  const host = `database-${credential.databaseId}`
+  return {
+    connection: databaseConnectionUrl({
+      databaseName: credential.databaseName,
+      engine: credential.engine,
+      host,
+      password: encodeURIComponent(credential.password),
+      port: credential.internalPort,
+      username: credential.username,
+    }),
+    host,
+    name: credential.databaseName,
+    password: credential.password,
+    port: String(credential.internalPort),
+    username: credential.username,
   }
 }

@@ -95,6 +95,7 @@ const third = "c".repeat(12)
 const fourth = "d".repeat(12)
 const fifth = "e".repeat(12)
 const seventh = "7".repeat(12)
+const eighth = "8".repeat(12)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -150,12 +151,14 @@ const seedApp = (appId: string) =>
 const ask = (
   appId: string,
   trigger: "manual" | "update" = "manual",
-  userId: string | null = null
+  userId: string | null = null,
+  brick = false
 ) =>
   Effect.promise(() => import("@/lib/app-deployments.server")).pipe(
     Effect.flatMap(({ askAppDeploymentEffect }) =>
       askAppDeploymentEffect({
         appId,
+        ...(brick && { brick: true }),
         relayId,
         trigger,
         userId,
@@ -236,6 +239,47 @@ describeMysql("App deployments", () => {
             history.succeeded?.relayDeploymentId,
             "deployment-1"
           )
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    // A revision of its Brick is already written into its configuration
+    // when its deployment is asked for. Joined to a deployment that waits,
+    // it still deploys that configuration: taken for an image update, with
+    // no newer image on offer, it would deploy nothing.
+    it.effect(
+      "deploy a Brick's revision that joined a deployment already waiting",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.count = 0
+          relay.deployments.clear()
+          relay.journal.clear()
+          relay.sent.length = 0
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* seedApp(eighth)
+
+          yield* deploy(eighth)
+          yield* until(() => sentTo(eighth) === 1)
+          // An image update waits behind it, and Kiln's own install of a
+          // revision joins that. So does a deploy, and then another image
+          // update: whatever joins, the revision is still to deploy.
+          yield* ask(eighth, "update")
+          yield* ask(eighth, "update", null, true)
+          yield* ask(eighth, "manual")
+          yield* ask(eighth, "update")
+
+          relay.deployments.set(eighth, {
+            ...relay.deployments.get(eighth)!,
+            state: "succeeded",
+          })
+          yield* until(() => sentTo(eighth) === 2)
         }).pipe(TestClock.withLive),
       60_000
     )

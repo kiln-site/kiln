@@ -4,7 +4,7 @@ import { Clock, Effect } from "effect"
 import { brickInputValuesSchema } from "@workspace/contracts"
 import { z } from "zod"
 
-import { encryptWithKeyring } from "../../keyring.mjs"
+import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { CredentialError } from "@/effect/errors"
 import { databaseTable } from "@/lib/database-config"
@@ -89,6 +89,75 @@ const encryptGroupBrick = (brick: InstanceGroupBrick) =>
         cause,
       }),
   })
+
+const decryptGroupBrick = (ciphertext: string) =>
+  Effect.try({
+    try: () =>
+      groupBrickSchema.parse(
+        JSON.parse(
+          decryptWithKeyring(
+            ciphertext,
+            betterAuthSecrets(),
+            GROUP_BRICK_PURPOSE
+          ).plaintext
+        )
+      ),
+    catch: (cause) =>
+      CredentialError.make({
+        operation: "decrypt_instance_group_brick",
+        cause,
+      }),
+  })
+
+/**
+ * Changes what a group keeps of the Brick that made it, against what is
+ * kept now, as a newer revision leaves it: the group is held from reading
+ * what it keeps until what `change` keeps is saved, so each of its Apps
+ * taking a revision starts from what the one before it left, such as a
+ * secret made for it. Gives what `change` made, or null for a group no
+ * Brick made.
+ */
+export const changeInstanceGroupBrickEffect = Effect.fn(
+  "instanceGroups.changeBrick"
+)(function* <A, E, R>(
+  groupId: string,
+  change: (
+    kept: InstanceGroupBrick
+  ) => Effect.Effect<{ keep: InstanceGroupBrick; made: A }, E, R>
+) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  return yield* database.transaction(
+    "instance_group_brick_change",
+    (transaction) =>
+      Effect.gen(function* () {
+        const [row] = yield* transaction.queryRows<
+          RowDataPacket & {
+            brick_ciphertext: string | null
+            brick_source: string | null
+          }
+        >(
+          `SELECT brick_source, brick_ciphertext
+             FROM ${databaseTable("instance_group")}
+            WHERE id = ?
+              FOR UPDATE`,
+          [groupId]
+        )
+        const ciphertext = row?.brick_ciphertext
+        if (!row?.brick_source || !ciphertext) return null
+        const { keep, made } = yield* change(
+          yield* decryptGroupBrick(ciphertext)
+        )
+        yield* transaction.execute(
+          `UPDATE ${databaseTable("instance_group")}
+              SET brick_ciphertext = ?, updated_at = ?
+            WHERE id = ?`,
+          [yield* encryptGroupBrick(keep), now, groupId]
+        )
+        return made
+      })
+  )
+})
 
 export const createInstanceGroupEffect = Effect.fn("instanceGroups.create")(
   function* (group: {

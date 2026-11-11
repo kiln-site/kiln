@@ -47,7 +47,8 @@ export const deploymentTriggerLabels: Record<AppDeploymentTrigger, string> = {
   poll: "New commit",
   push: "Push",
   redeploy: "Redeploy",
-  update: "Image update",
+  // Its image's, or its Brick's.
+  update: "Update",
 }
 
 export const serverDeploymentTriggerLabels: Record<

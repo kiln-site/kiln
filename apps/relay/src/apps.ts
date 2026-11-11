@@ -49,7 +49,11 @@ import {
   repositoryName,
   type ImageReference,
 } from "./docker-reference.js"
-import { registryLookups, repositoryDigests } from "./image-checks.js"
+import {
+  installedRevision,
+  registryLookups,
+  repositoryDigests,
+} from "./image-checks.js"
 import type { RelayConfig } from "./config.js"
 import { consoleLineCharacters } from "./console-frames.js"
 import { parseConsoleLine } from "./console-parsing.js"
@@ -1442,18 +1446,35 @@ export class AppDriver {
           }
           if (deploying) return { id, status: "deploying" }
           if (!container) return { id, status: "not_deployed" }
+          // The Brick its container was deployed from, said with whatever
+          // the image check finds.
+          const source = container.labels["kiln.brick.source"]
+          const brick = source
+            ? {
+                brick: {
+                  revision: installedRevision(container.labels),
+                  source,
+                },
+              }
+            : {}
+          // A digest never moves.
+          if (reference.success.digest !== undefined) {
+            return { ...brick, id, status: "pinned" }
+          }
           // Its own lookup only: another app naming the same image says
           // nothing of what this one runs.
           const found = lookup === null ? undefined : latest.get(lookup)
-          if (!found) return { id, status: "changed" }
+          if (!found) return { ...brick, id, status: "changed" }
           if (Result.isFailure(found)) {
             return {
+              ...brick,
               error: found.failure.reason.slice(0, 500),
               id,
               status: "error",
             }
           }
           return {
+            ...brick,
             id,
             image,
             latestDigest: found.success,
@@ -1739,7 +1760,8 @@ export class AppDriver {
             input.appId,
             APP_SERVICE,
             deployment.id,
-            deployment.commit
+            deployment.commit,
+            input.brick
           ),
         },
         mounts: mounts.map((mount) => ({
@@ -3141,10 +3163,17 @@ export class AppDriver {
     appId: string,
     service: string,
     deploymentId: string,
-    commit: string | null
+    commit: string | null,
+    // The Brick its configuration was made from, which only an App that
+    // runs one container follows so far.
+    brick?: RelayDeployApp["brick"]
   ): Record<string, string> {
     return {
       ...this.#resourceLabels(appId),
+      ...(brick && {
+        "kiln.brick.revision": String(brick.revision),
+        "kiln.brick.source": brick.source,
+      }),
       ...(commit && { [COMMIT_LABEL]: commit }),
       [DEPLOYMENT_LABEL]: deploymentId,
       [SERVICE_LABEL]: service,
