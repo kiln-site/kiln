@@ -189,6 +189,8 @@ export interface DockerBuildCacheRecord {
 
 export interface DockerImage {
   readonly Config?: {
+    /** The ports it says it listens on, as `80/tcp`. */
+    readonly ExposedPorts?: Readonly<Record<string, unknown>> | null
     readonly Labels?: Readonly<Record<string, string>> | null
   } | null
   readonly Id: string

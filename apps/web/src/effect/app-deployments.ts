@@ -514,6 +514,22 @@ export const finishAppDeploymentEffect = Effect.fn("apps.deployment.finish")(
   }
 )
 
+/** Whether an App has ever had a deployment succeed. */
+export const appHasDeployedEffect = Effect.fn("apps.deployment.any")(
+  function* (relayId: string, appId: string) {
+    const database = yield* Database
+    const rows = yield* database.queryRows<RowDataPacket>(
+      "apps.deployment.any",
+      `SELECT 1 FROM ${deploymentTable()}
+        WHERE relay_id = ? AND instance_id = ? AND instance_kind = 'app'
+          AND status = 'succeeded'
+        LIMIT 1`,
+      [relayId, appId]
+    )
+    return rows.length > 0
+  }
+)
+
 export const loadAppDeploymentEffect = Effect.fn("apps.deployment.load")(
   function* (id: string) {
     const database = yield* Database

@@ -14,20 +14,29 @@ import {
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
+import {
+  insertWebHostnameEffect,
+  setWebHostnamesRoutedEffect,
+} from "@/effect/web-hostnames"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { databaseTableName } from "@/lib/database-config"
 import { operationsTablePrefix } from "@/operations/engine"
 import { readmitWaitingOperations } from "@/operations/durable"
 import { loadOperation } from "@/operations/records"
 import { testOperationsEngine } from "@/operations/test/engine"
+import { unservedAppAddressEffect } from "@/server/web-hostnames.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertRows, insertUser } from "@/test/seed"
 
 // The Relay is the only fake: one deployment per app, refusing another
 // while it runs, as the Relay does, and an outcome journal by command ID.
 const relay = vi.hoisted(() => ({
+  // The address each deployment was told, for its Relay to route.
+  addresses: [] as Array<string | undefined>,
   count: 0,
   configs: [] as Array<{ environment?: string } | undefined>,
+  // The hostnames of the routes each app has on it.
+  routes: new Map<string, Array<string>>(),
   deployments: new Map<string, { id: string; state: string }>(),
   journal: new Map<string, { result: unknown; status: "succeeded" }>(),
   sent: [] as Array<string>,
@@ -41,6 +50,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     _relay: unknown,
     operation: string,
     payload: {
+      address?: string
       appId?: string
       config?: { environment?: string }
       id?: string
@@ -65,6 +75,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       const deployment = { id: `deployment-${++relay.count}`, state: "running" }
       relay.deployments.set(appId, deployment)
       relay.sent.push(appId)
+      relay.addresses.push(payload.address)
       relay.configs.push(payload.config)
       const result = relayApp(appId)
       if (frame.operationId) {
@@ -77,6 +88,30 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       return [{ app: relayApp(id), id, view: "detail" }]
     }
     if (operation === "database.list") return []
+    if (operation === "instance.network.routes.read") {
+      return {
+        edgeConnected: true,
+        message: "Ready",
+        proxyConnected: true,
+        requiresRestart: false,
+        routes: (relay.routes.get(payload.id!) ?? []).map(
+          (hostname, index) => ({
+            hostname,
+            httpsRedirect: true,
+            id: `0000000${index}`,
+            name: "",
+            path: null,
+            primary: true,
+            redirect: null,
+            service: "app",
+            stripPrefix: true,
+            targetPort: 3000,
+            www: "none",
+          })
+        ),
+        status: "ready",
+      }
+    }
     // Every deployment checks its image again afterwards.
     if (operation === "instance.image.check") return []
     return {}
@@ -96,6 +131,7 @@ const fourth = "d".repeat(12)
 const fifth = "e".repeat(12)
 const seventh = "7".repeat(12)
 const eighth = "8".repeat(12)
+const ninth = "9".repeat(12)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -280,6 +316,88 @@ describeMysql("App deployments", () => {
             state: "succeeded",
           })
           yield* until(() => sentTo(eighth) === 2)
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    // A new App's address serves nothing until a route uses it. Its first
+    // deployment tells its Relay, which routes it to what its image serves.
+    it.effect(
+      "tell an App's first deployment its unserved address, and take up the route its Relay made",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.count = 0
+          relay.deployments.clear()
+          relay.journal.clear()
+          relay.sent.length = 0
+          relay.addresses.length = 0
+          relay.routes.clear()
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* seedApp(ninth)
+          const app = {
+            relayId,
+            resourceId: ninth,
+            resourceType: "app",
+          } as const
+          const address = "quiet-otter.play.example.test"
+          yield* insertRows("domain_integration", {
+            api_token_ciphertext: "token",
+            blacklist_patterns: "[]",
+            created_at: 0,
+            id: "cloudflare",
+            name: "Kiln",
+            owner_id: null,
+            provider: "cloudflare",
+            updated_at: 0,
+            zones: "[]",
+          })
+          yield* insertWebHostnameEffect({
+            ...app,
+            connectionId: "cloudflare",
+            generated: true,
+            hostname: address,
+            id: "11111111-2222-4333-8444-555555555555",
+            vanityDomain: "play.example.test",
+            zoneId: "z".repeat(32),
+          })
+          const served = Effect.map(
+            unservedAppAddressEffect(app),
+            (unserved) => unserved === null
+          )
+
+          yield* deploy(ninth)
+          yield* until(() => sentTo(ninth) === 1)
+          assert.deepStrictEqual(relay.addresses, [address])
+          assert.isFalse(yield* served)
+
+          // The Relay routed it while deploying. Once that ends, Hearth
+          // keeps the address as in use.
+          relay.routes.set(ninth, [address])
+          relay.deployments.set(ninth, {
+            ...relay.deployments.get(ninth)!,
+            state: "succeeded",
+          })
+          yield* served.pipe(
+            Effect.repeat({
+              schedule: Schedule.spaced("100 millis"),
+              until: (done) => done,
+            }),
+            Effect.timeout("20 seconds")
+          )
+
+          // It is the App's from then on: nothing is told again, even once
+          // its owner has removed the route.
+          yield* setWebHostnamesRoutedEffect(app, [])
+          yield* deploy(ninth)
+          yield* until(() => sentTo(ninth) === 2)
+          assert.deepStrictEqual(relay.addresses, [address, undefined])
         }).pipe(TestClock.withLive),
       60_000
     )

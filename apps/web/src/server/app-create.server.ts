@@ -350,44 +350,44 @@ export async function provisionApp(
   return { id: placeholder.id }
 }
 
-// As long as creating an App waits for its address to be routed, so its
-// first deployment carries the route. Cloudflare is asked along the way;
-// when it is slow, the route follows the App instead.
+// As long as creating an App waits for its address, so its first
+// deployment carries the route to it. Cloudflare is asked along the way;
+// when it is slow, the address follows the App instead, for someone to
+// route.
 const ADDRESS_WAIT_MS = 8_000
 
 /**
  * Gives a new App its address under a vanity domain, as game servers get
- * one, once it is made. One whose Brick says where its website answers is
- * routed there too, and that is waited for a little, since a Relay behind
- * someone else's proxy only takes a route with a deployment. Creating the
- * App never fails for its address: without one it opens all the same.
+ * one, once it is made, and waits a little for it, so the App's first
+ * deployment knows it. One whose Brick says where its website answers is
+ * routed there now. Any other has its address told to its Relay with that
+ * deployment, which routes it to the website its image says it serves. A
+ * Relay behind someone else's proxy only takes a route with a deployment,
+ * so either way the first one carries it. Creating the App never fails for
+ * its address: without one it opens all the same.
  */
 export async function addressNewApp(
   user: AuthenticatedUser,
   app: { id: string; relayId: string; web?: AppBrickWeb | undefined }
 ) {
   const { web } = app
-  // An address alone changes nothing a deployment carries, so it follows
-  // the App, in the background.
-  if (web === undefined) {
-    void import("@/server/web-hostname-access.server").then(
-      ({ generateAppHostnameBestEffort }) =>
-        generateAppHostnameBestEffort({
-          relayId: app.relayId,
-          resourceId: app.id,
-          resourceType: "app",
-        })
-    )
-    return
-  }
-  const addressed = import("@/server/web-routes.server").then(
-    ({ serveNewAppBestEffort }) =>
-      serveNewAppBestEffort(user, {
-        appId: app.id,
-        relayId: app.relayId,
-        web,
-      })
-  )
+  const addressed =
+    web === undefined
+      ? import("@/server/web-hostname-access.server").then(
+          ({ generateAppHostnameBestEffort }) =>
+            generateAppHostnameBestEffort({
+              relayId: app.relayId,
+              resourceId: app.id,
+              resourceType: "app",
+            })
+        )
+      : import("@/server/web-routes.server").then(({ serveNewAppBestEffort }) =>
+          serveNewAppBestEffort(user, {
+            appId: app.id,
+            relayId: app.relayId,
+            web,
+          })
+        )
   await Promise.race([
     addressed,
     new Promise((resolve) => setTimeout(resolve, ADDRESS_WAIT_MS)),

@@ -1215,8 +1215,23 @@ export const relayInstalledBrickSchema = z.object({
   source: brickSourceSchema,
 })
 
+const webRouteHostnameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(1)
+  .max(253)
+  .regex(
+    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u,
+    "Enter a fully qualified hostname without a scheme or path"
+  )
+
 export const relayDeployAppSchema = z
   .object({
+    // The App's own address, while it has yet to deploy and no route uses
+    // it. The Relay routes it to the website its image says it serves,
+    // when the image says so plainly, as the first route the App has.
+    address: webRouteHostnameSchema.optional(),
     appId: appIdSchema,
     // The Brick its configuration was made from, for an App that follows
     // one. The Relay keeps it on the containers it deploys, to say which
@@ -1833,17 +1848,6 @@ export const relayProxyBrowserMetadataSchema = z
     mode: relayProxyModeSchema,
   })
   .strict()
-
-const webRouteHostnameSchema = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .min(1)
-  .max(253)
-  .regex(
-    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u,
-    "Enter a fully qualified hostname without a scheme or path"
-  )
 
 export const relayInstanceWebRouteShortIdSchema = z
   .string()

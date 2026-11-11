@@ -25,6 +25,7 @@ import { Effect, ManagedRuntime } from "effect"
 import { onTestFinished } from "vite-plus/test"
 
 import { RelayVolumes } from "../volumes.js"
+import { routeAppAddress } from "../app-address-route.js"
 import { AppDriver } from "../apps.js"
 import { BrickCatalog } from "../bricks.js"
 import { loadConfig, type RelayConfig } from "../config.js"
@@ -177,6 +178,14 @@ export async function relayHarness(
               state.listInstanceRoutes(appRouteOwner(appId))
             )
           ),
+        serve: routeAppAddress({
+          configure: (routes) => lifecycle.configureWebRoutes(routes),
+          list: () => Effect.runPromise(state.listWebRoutes()),
+          // Nothing else changes routes here, so there is nothing to hold.
+          locked: (_label, change) => change(),
+          replace: (owner, routes) =>
+            Effect.runPromise(state.replaceInstanceRoutes(owner, routes)),
+        }),
         tailscale: async (appId) =>
           (
             await lifecycle.tailscaleMemberships(

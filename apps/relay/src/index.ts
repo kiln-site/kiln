@@ -341,6 +341,7 @@ import {
 } from "./platform.js"
 import { ScheduleManager } from "./schedules.js"
 import { migrateInstanceIds } from "./instance-id-migration.js"
+import { routeAppAddress } from "./app-address-route.js"
 import { assignRelayWebRouteIds, webRouteCollision } from "./web-route-ids.js"
 import { planWebRouteRecovery } from "./web-route-labels.js"
 import type {
@@ -726,6 +727,20 @@ const apps = new AppDriver(
           startupCore.state.listInstanceRoutes(appRouteOwner(appId))
         )
       ),
+    serve: routeAppAddress({
+      configure: (routes) => lifecycle.configureWebRoutes(routes),
+      list: () =>
+        runRelayEffect(
+          "relay.apps.address.routes",
+          startupCore.state.listWebRoutes()
+        ),
+      locked: withRoutesLock,
+      replace: (owner, routes) =>
+        runRelayEffect(
+          "relay.apps.address.route",
+          startupCore.state.replaceInstanceRoutes(owner, routes)
+        ),
+    }),
     reattachTailscale: (appId) =>
       lifecycle.reattachTailscaleMembers(
         (memberId) => appTailscaleMember(memberId)?.appId === appId

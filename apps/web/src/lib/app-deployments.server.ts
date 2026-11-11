@@ -20,6 +20,7 @@ import {
 import { Activity } from "effect/workflow"
 
 import {
+  appHasDeployedEffect,
   finishAppDeploymentEffect,
   insertAppDeploymentEffect,
   latestAppDeploymentsEffect,
@@ -60,6 +61,7 @@ import {
 } from "@/effect/resource-deletions"
 import { forkAppWorker } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
+import { outsideOperation } from "@/operations/current"
 import {
   durableOperation,
   queueDurableOperation,
@@ -630,6 +632,7 @@ const checkAppDeploymentEffect = Effect.fn("Apps.deployment.check")(function* (
     if (finished) {
       publishAppDeploymentChange(record.relayId)
       yield* announceDeploymentEffect(record, deployment.state)
+      yield* adoptAddressRoute(record)
     }
     return true
   }
@@ -649,6 +652,7 @@ const checkAppDeploymentEffect = Effect.fn("Apps.deployment.check")(function* (
     if (finished) {
       publishAppDeploymentChange(record.relayId)
       yield* announceDeploymentEffect(record, kept.state)
+      yield* adoptAddressRoute(record)
     }
     return true
   }
@@ -1303,8 +1307,10 @@ const asSent = (plan: DeployPlan) =>
         new Error("Auto-deploy was turned off before this deployment was sent")
       )
     }
+    const address = yield* unservedAddress(plan.record)
     const payload = {
       ...plan.payload,
+      ...(address !== null && { address }),
       // The Brick its configuration was made from, which the Relay keeps
       // on what it deploys, to say which revision runs.
       ...(app.brick && {
@@ -1317,6 +1323,62 @@ const asSent = (plan: DeployPlan) =>
       Effect.mapError(sendError("github_token"))
     )
     return { ...payload, github: { ...payload.github, token } }
+  })
+
+// The App's own address, for its Relay to route to the website its image
+// serves: only while no route uses it and the App has never deployed, so a
+// route its owner removed isn't made again. Best effort, like the route.
+const unservedAddress = (record: Pick<AppDeploymentRecord, "appId" | "relayId">) =>
+  Effect.gen(function* () {
+    if (yield* appHasDeployedEffect(record.relayId, record.appId)) return null
+    const { unservedAppAddressEffect } = yield* Effect.promise(
+      () => import("@/server/web-hostnames.server")
+    )
+    return yield* unservedAppAddressEffect({
+      relayId: record.relayId,
+      resourceId: record.appId,
+      resourceType: "app",
+    })
+  }).pipe(Effect.catchCause(() => Effect.succeed(null)))
+
+// A deployment may have had the Relay route the App's address. Hearth
+// takes that route up once the deployment ends, however it ended: the
+// route was made before the App's container was. As work of its own, not
+// the deployment's: it holds the App's DNS, which a deployment doesn't.
+const adoptAddressRoute = (
+  record: Pick<AppDeploymentRecord, "appId" | "relayId">
+): Effect.Effect<void> =>
+  Effect.sync(() => {
+    outsideOperation(() =>
+      forkAppWorker(
+        Effect.gen(function* () {
+          const { adoptAppAddressRouteEffect, publishWebHostnameChange } =
+            yield* Effect.promise(
+              () => import("@/server/web-hostnames.server")
+            )
+          const adopted = yield* adoptAppAddressRouteEffect({
+            relayId: record.relayId,
+            resourceId: record.appId,
+            resourceType: "app",
+          })
+          if (!adopted) return
+          publishWebHostnameChange([record.relayId])
+          publishRealtimeChange({
+            audience: { kind: "relays", relayIds: [record.relayId] },
+            scope: { instanceId: record.appId, relayId: record.relayId },
+            topics: ["instance-web-routes"],
+            type: "hearth.invalidate",
+          })
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning(
+              "Could not take up the route a Relay made for an App's address",
+              Cause.squash(cause)
+            )
+          )
+        )
+      )
+    )
   })
 
 const sendError = (code: string) => (cause: unknown) =>

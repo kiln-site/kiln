@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { DockerEngine } from "./docker-engine.js"
+import { appRouteOwner } from "./relay-resources.js"
 import { fakeDocker } from "./test/docker.js"
 import { databaseBrick } from "./test/database-bricks.js"
 import { RelayVolumes } from "./volumes.js"
@@ -261,6 +262,52 @@ describe("an App that follows a Brick", () => {
     expect(await revision(2)).toEqual({ revision: 2, source })
     // Detached: deployed since as its own, it says nothing of a Brick.
     expect(await revision(null)).toBeUndefined()
+  })
+})
+
+// Nothing said where its website answers, so its image does, in the
+// deployment that first runs it.
+describe("an App whose address nothing serves yet", () => {
+  const address = "quiet-otter.play.example.test"
+  // The App's routes after a deployment told its address, of an image that
+  // exposes these ports.
+  const routed = async (
+    harness: RelayHarness,
+    exposed: ReadonlyArray<string>
+  ) => {
+    fakeDocker.imageConfigs.set("nginx:alpine", {
+      ExposedPorts: Object.fromEntries(exposed.map((port) => [port, {}])),
+    })
+    useDeploymentClock()
+    await harness.apps.deploy({ ...deployment({}), address })
+    await settledDeployment(harness)
+    return (
+      await Effect.runPromise(
+        harness.state.listInstanceRoutes(appRouteOwner(appId))
+      )
+    ).map(({ hostname, primary, service, targetPort }) => ({
+      hostname,
+      primary,
+      service,
+      targetPort,
+    }))
+  }
+
+  it("is routed to the one port its image exposes that could be a website's, and only then", async () => {
+    const harness = await createdApp()
+    // Which of several it is can't be told, and a database's isn't one.
+    expect(await routed(harness, ["3000/tcp", "9090/tcp"])).toEqual([])
+    expect(await routed(harness, ["5432/tcp"])).toEqual([])
+    expect(await routed(harness, [])).toEqual([])
+    // One that could be: the address goes there, as its primary route.
+    const first = [
+      { hostname: address, primary: true, service: "app", targetPort: 3000 },
+    ]
+    expect(await routed(harness, ["3000/tcp", "3000/udp", "5432/tcp"])).toEqual(
+      first
+    )
+    // It is the App's from then on: a later image doesn't move it.
+    expect(await routed(harness, ["8080/tcp"])).toEqual(first)
   })
 })
 

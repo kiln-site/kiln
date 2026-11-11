@@ -136,8 +136,20 @@ which port its website answers on is served there from the start: making it
 saves its first web route, from that address to the port, before its first
 deployment, so a Relay behind someone else's proxy carries the route in the
 containers it starts. That route takes what making the App does, not
-`instance.network.write`, and is then the App's like any other. An App that
-doesn't say has the address ready for a route someone adds. An owner with
+`instance.network.write`, and is then the App's like any other.
+
+An App that doesn't say is asked of its image. Its first deployment tells
+its Relay the address, while no route uses it and the App has never
+deployed. Once the image is pulled or built, and before its container is
+made, the Relay reads the ports the image exposes
+(`apps/relay/src/app-address-route.ts`): when exactly one could be a
+website's, it routes the address there, as the first route the App has.
+Several, none, or only ports of other protocols (a database's, SSH, 443)
+leave the address for someone to route. Hearth takes the route up when the
+deployment ends, however it ended, and from then on it is the App's:
+removing it doesn't bring it back. A Compose project isn't asked yet.
+
+An owner with
 vanity domains of their own uses their default;
 everyone else gets Kiln's default. With no vanity domain at all, nothing
 is assigned. Unmarking a domain stops new addresses under it without

@@ -119,6 +119,7 @@ import {
   relayResourceNames,
   type RelayResourceNames,
 } from "./relay-resources.js"
+import { imageWebPort } from "./app-address-route.js"
 import { appVolumeOwner, relayVolumeDockerName } from "./volumes.js"
 
 // Apps are found by their labels, like databases: the Relay keeps nothing
@@ -242,6 +243,15 @@ export interface AppNetworking {
    */
   readonly reattachTailscale: (appId: string) => Promise<void>
   readonly routes: (appId: string) => Promise<AppRoutePlan>
+  /**
+   * Routes an app's own address to its website, as the first route it has.
+   * Whether it did: an app that has a route already keeps what it has.
+   */
+  readonly serve: (
+    appId: string,
+    hostname: string,
+    target: { readonly port: number; readonly service: string }
+  ) => Promise<boolean>
   readonly tailscale: (
     appId: string
   ) => Promise<
@@ -1178,6 +1188,7 @@ export class AppDriver {
                 : await traceRelayPromise("relay.apps.deployment.build", () =>
                     this.#buildImage(input, deployment, checkout)
                   ).then((reference) => ({ labels: {}, reference }))
+            await this.#serveAddress(input, deployment, image.reference)
             // Its one service's limits count once the image is ready.
             await this.#reserving(
               input.appId,
@@ -1702,6 +1713,42 @@ export class AppDriver {
       )
     )
     return tag
+  }
+
+  // An App whose address nothing serves yet gets its first route from its
+  // image: to the one port it exposes that could be a website's. Before its
+  // container is made, so the route is on it. Best effort: an image that
+  // doesn't say plainly, or a route that can't be made, leaves the address
+  // for someone to route.
+  async #serveAddress(
+    input: RelayDeployApp,
+    deployment: Deployment,
+    image: string
+  ): Promise<void> {
+    const { address } = input
+    if (address === undefined) return
+    const port = await Effect.runPromise(
+      this.#engine.inspectImage(image).pipe(
+        Effect.map((found) => imageWebPort(found.Config?.ExposedPorts)),
+        Effect.catch(() => Effect.succeed(null))
+      )
+    )
+    if (port === null) return
+    const served = await Effect.runPromise(
+      Effect.tryPromise(() =>
+        this.#networking.serve(input.appId, address, {
+          port,
+          service: APP_SERVICE,
+        })
+      ).pipe(Effect.catch(() => Effect.succeed(false)))
+    )
+    if (served) {
+      this.#log(
+        input.appId,
+        deployment,
+        `Serving ${address} from port ${port}, the one its image exposes`
+      )
+    }
   }
 
   async #replaceContainer(

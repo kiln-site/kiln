@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto"
 
+import {
+  relayAppWebRouteStateSchema,
+  webRouteHostnames,
+} from "@workspace/contracts"
 import { Clock, Effect } from "effect"
 
 import {
@@ -59,7 +63,7 @@ import { promiseEffect } from "@/effect/promise"
 import { domainInZone } from "@/lib/domain-schemas"
 import { vanityLabelAllowed } from "@/server/reserved-names"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { relayConnectionSnapshot } from "@/lib/relay-connection"
+import { relayConnectionSnapshot, relayRpc } from "@/lib/relay-connection"
 import { withDnsChange } from "@/lib/dns-operations"
 import { activeRelay } from "@/lib/relay-registry"
 import {
@@ -624,6 +628,59 @@ export const generateAppHostnameEffect = Effect.fn("webHostnames.generate")(
   },
   (effect, resource) =>
     withDnsChange("dns.appAddress.generate", resource, effect)
+)
+
+/**
+ * A new App's address while nothing serves it: the hostname Kiln generated
+ * for it, which no route uses yet. Null once one does, and for an App with
+ * no address.
+ */
+export const unservedAppAddressEffect = Effect.fn("webHostnames.unserved")(
+  function* (resource: WebHostnameResource) {
+    const rows = yield* listResourceWebHostnamesEffect(resource)
+    return (
+      rows.find(
+        (row) => row.generated && !row.routed && row.status !== "removing"
+      )?.hostname ?? null
+    )
+  }
+)
+
+/**
+ * Takes up the route an App's Relay made for its address while deploying
+ * it: when one of the App's routes there uses the address, Hearth keeps the
+ * address as in use, as it would had the route been saved through it.
+ * Says whether it found one. An App whose address is served, or that has
+ * none, costs it only the look at what Hearth keeps.
+ */
+export const adoptAppAddressRouteEffect = Effect.fn("webHostnames.adopt")(
+  function* (resource: WebHostnameResource) {
+    if ((yield* unservedAppAddressEffect(resource)) === null) return false
+    return yield* withDnsChange(
+      "dns.appAddress.adopt",
+      resource,
+      Effect.gen(function* () {
+        // Read again holding its DNS: a save meanwhile settled it.
+        const address = yield* unservedAppAddressEffect(resource)
+        if (address === null) return false
+        const relay = yield* promiseEffect(() => activeRelay(resource.relayId))
+        const { routes } = relayAppWebRouteStateSchema.parse(
+          yield* promiseEffect(() =>
+            relayRpc(
+              relay,
+              "instance.network.routes.read",
+              { id: resource.resourceId, kind: "app" },
+              15_000
+            )
+          )
+        )
+        const hostnames = routes.flatMap(webRouteHostnames)
+        if (!hostnames.includes(address)) return false
+        yield* setWebHostnamesRoutedEffect(resource, hostnames)
+        return true
+      })
+    )
+  }
 )
 
 /**
