@@ -16,9 +16,9 @@ import {
 import type { KilnNotification } from "@/lib/notifications"
 import { redeployAppDeployment } from "@/server/app-deployments"
 import {
-  deployAppImageUpdate,
-  skipAppImageUpdate,
-} from "@/server/app-image-updates"
+  deployInstanceUpdate,
+  skipInstanceUpdate,
+} from "@/server/instance-updates"
 import { decideResourceInvitation } from "@/server/resource-access"
 
 /** What a notification offers beside it, the same in a row and a toast. */
@@ -112,8 +112,15 @@ export function notificationCommands(
     case "resource.disk-limit":
       return open(notificationHref(content, platformAdmin), "Limits")
     case "app.image-update": {
-      const app = {
-        appId: content.resource.id,
+      // A game server is an `instance` to notifications, a `server` here.
+      const instance = {
+        instanceId: content.resource.id,
+        kind:
+          content.resource.type === "app"
+            ? ("app" as const)
+            : content.resource.type === "database"
+              ? ("database" as const)
+              : ("server" as const),
         relayId: content.resource.relayId,
       }
       return [
@@ -122,7 +129,9 @@ export function notificationCommands(
           label: "Skip",
           pendingLabel: "Skipping…",
           run: () =>
-            skipAppImageUpdate({ data: { ...app, digest: content.digest } }),
+            skipInstanceUpdate({
+              data: { ...instance, digest: content.digest },
+            }),
         },
         {
           key: "deploy",
@@ -130,7 +139,7 @@ export function notificationCommands(
           pendingLabel: "Deploying…",
           primary: true,
           run: async () => {
-            await deployAppImageUpdate({ data: app })
+            await deployInstanceUpdate({ data: instance })
             // It runs once any deployment running ends.
             showToast({ message: "Update deploy queued", type: "success" })
           },

@@ -38,8 +38,8 @@ import {
   autoUpdateAt,
   currentImageUpdate,
   claimImageUpdateEffect,
-  loadAppImageUpdateEffect,
-} from "@/effect/app-image-updates"
+  loadInstanceUpdateEffect,
+} from "@/effect/instance-updates"
 import { DatabaseError, ExternalServiceError } from "@/effect/errors"
 import {
   getGitHubCommitEffect,
@@ -428,9 +428,10 @@ const announceDeploymentEffect = Effect.fnUntraced(
       record.imageDigest !== null
     ) {
       // Imported here, since image updates deploy through this module.
-      const { resolveAppImageUpdateNotificationsEffect } =
-        yield* Effect.promise(() => import("@/lib/app-image-updates.server"))
-      yield* resolveAppImageUpdateNotificationsEffect(
+      const { resolveInstanceUpdateNotificationsEffect } =
+        yield* Effect.promise(() => import("@/lib/instance-updates.server"))
+      yield* resolveInstanceUpdateNotificationsEffect(
+        "app",
         record.relayId,
         record.appId,
         {
@@ -556,7 +557,7 @@ const imageUpdateDigest = Effect.fnUntraced(function* (
 ) {
   // What a check found counts only while it still describes the App.
   const [recorded, { latest }] = yield* Effect.all([
-    loadAppImageUpdateEffect(request.appId),
+    loadInstanceUpdateEffect(request.appId),
     latestAppDeploymentsEffect(request.appId),
   ])
   const update =
@@ -1200,10 +1201,15 @@ const deployPlanned = (input: DeployInput, plan: DeployPlan) =>
     yield* Activity.make({
       name: "recheck",
       execute: Effect.promise(
-        () => import("@/lib/app-image-updates.server")
+        () => import("@/lib/instance-updates.server")
       ).pipe(
-        Effect.map(({ recheckAppImage }) =>
-          recheckAppImage(record.relayId, record.appId, record.triggeredBy)
+        Effect.map(({ recheckInstanceImage }) =>
+          recheckInstanceImage(
+            "app",
+            record.relayId,
+            record.appId,
+            record.triggeredBy
+          )
         )
       ),
     })

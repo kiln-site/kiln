@@ -3,16 +3,16 @@ import { Clock, Effect } from "effect"
 import { vi } from "vite-plus/test"
 
 import {
-  loadAppImageUpdateEffect,
-  recordAppImageCheckEffect,
-  saveAppImageUpdatePolicyEffect,
-} from "@/effect/app-image-updates"
+  loadInstanceUpdateEffect,
+  recordInstanceImageCheckEffect,
+  saveInstanceUpdatePolicyEffect,
+} from "@/effect/instance-updates"
 import {
   createAppRecordEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
 import { notifyUsersEffect, openSourceKeysEffect } from "@/effect/notifications"
-import { recordCheckedAppImageEffect } from "@/lib/app-image-updates.server"
+import { recordCheckedImageEffect } from "@/lib/instance-updates.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertUser } from "@/test/seed"
@@ -39,12 +39,13 @@ describeMysql("App image checks", () => {
             name: "Website",
             relayId,
           })
-          yield* saveAppImageUpdatePolicyEffect(appId, {
+          yield* saveInstanceUpdatePolicyEffect("app", appId, {
             delayHours: 0,
             mode: "notify",
           })
           const askedAt = 1_800_000_000_000
-          const newer = yield* recordAppImageCheckEffect(
+          const newer = yield* recordInstanceImageCheckEffect(
+            "app",
             appId,
             image,
             {
@@ -59,7 +60,8 @@ describeMysql("App image checks", () => {
           assert.isTrue(newer.newlySeen)
 
           // Asked earlier, it answers after: it says nothing new.
-          const older = yield* recordAppImageCheckEffect(
+          const older = yield* recordInstanceImageCheckEffect(
+            "app",
             appId,
             image,
             { id: appId, error: "registry timed out", status: "error" },
@@ -68,7 +70,7 @@ describeMysql("App image checks", () => {
           assert.isFalse(older.newFailure)
           assert.isFalse(older.newlySeen)
 
-          const kept = yield* loadAppImageUpdateEffect(appId)
+          const kept = yield* loadInstanceUpdateEffect(appId)
           assert.strictEqual(kept?.latestDigest, digest(3))
           assert.strictEqual(kept?.checkedAt, askedAt)
         })
@@ -93,11 +95,12 @@ describeMysql("App image checks", () => {
             sourceType: "image",
           }))
           // Checks are on, and a newer check found and announced an update.
-          yield* saveAppImageUpdatePolicyEffect(appId, {
+          yield* saveInstanceUpdatePolicyEffect("app", appId, {
             delayHours: 0,
             mode: "notify",
           })
-          yield* recordAppImageCheckEffect(
+          yield* recordInstanceImageCheckEffect(
+            "app",
             appId,
             image,
             {
@@ -118,7 +121,8 @@ describeMysql("App image checks", () => {
           })
 
           // An older check, which found checks off, records after it.
-          yield* recordCheckedAppImageEffect(
+          yield* recordCheckedImageEffect(
+            "app",
             { id: relayId } as PersistedRelay,
             appId,
             { answers: [], unchecked: true },

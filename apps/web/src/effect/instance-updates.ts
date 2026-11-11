@@ -5,154 +5,185 @@ import { Clock, Effect } from "effect"
 import { Database } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 
-// Whether each image app's tag names a newer image than the one it runs,
-// and what its people asked Kiln to do about it. The Relay compares
-// digests; Hearth keeps when it first saw each one, which is how long an
-// update has been out, since registries don't say when a tag moved.
+// Whether each instance's image tag names a newer image than the one it
+// runs, and what its people asked Kiln to do about it: an App deployed
+// from an image, a database, a game server. The Relay compares digests;
+// Hearth keeps when it first saw each one, which is how long an update has
+// been out, since registries don't say when a tag moved.
 
-/** Off, tell who can deploy the app, or deploy it once it's waited. */
-export type AppImageUpdateMode = "auto" | "notify" | "off"
+/** The kinds that take updates, as a deployment names its kind. */
+export type InstanceUpdateKind = "app" | "database" | "server"
+
+/** Off, tell who can deploy it, or deploy it once it's waited. */
+export type InstanceUpdateMode = "auto" | "notify" | "off"
 
 /**
- * What the last check found: the app runs what its tag names (`current`),
- * the tag names another image (`available`), the app runs another image
- * than its config names (`changed`), or Kiln can't tell which digest it
- * runs until it deploys again (`untracked`).
+ * What the last check found: it runs what its tag names (`current`), the
+ * tag names another image (`available`), it runs another image than the
+ * one named (`changed`), or Kiln can't tell which digest it runs until it
+ * deploys again (`untracked`).
  */
-export type AppImageUpdateState =
+export type InstanceUpdateState =
   | "available"
   | "changed"
   | "current"
   | "not_deployed"
   | "untracked"
 
-export interface AppImageUpdate {
-  appId: string
+export interface InstanceUpdate {
   checkedAt: number | null
   checkError: string | null
   delayHours: number
-  /** The image the last check named, as the app's config gave it. */
+  /** The image the last check named, by its tag. */
   image: string | null
+  instanceId: string
+  kind: InstanceUpdateKind
   /** The digest the tag names, while it isn't the one running. */
   latestDigest: string | null
   /** When Kiln first saw `latestDigest`; the wait counts from here. */
   latestSeenAt: number | null
-  mode: AppImageUpdateMode
+  mode: InstanceUpdateMode
   runningDigest: string | null
   /** A digest someone chose not to deploy; it neither notifies nor deploys. */
   skippedDigest: string | null
-  state: AppImageUpdateState | null
+  state: InstanceUpdateState | null
 }
 
-export const defaultAppImageUpdatePolicy = {
+export const defaultInstanceUpdatePolicy = {
   delayHours: 72,
   mode: "notify",
-} as const satisfies Pick<AppImageUpdate, "delayHours" | "mode">
+} as const satisfies Pick<InstanceUpdate, "delayHours" | "mode">
 
 interface UpdateRow extends RowDataPacket {
-  app_id: string
+  instance_id: string
+  instance_kind: InstanceUpdateKind
   check_error: string | null
   checked_at: number | string | null
   delay_hours: number
   image: string | null
   latest_digest: string | null
   latest_seen_at: number | string | null
-  mode: AppImageUpdateMode
+  mode: InstanceUpdateMode
   running_digest: string | null
   skipped_digest: string | null
-  state: AppImageUpdateState | null
+  state: InstanceUpdateState | null
 }
 
-const updateColumns = `app_id, mode, delay_hours, state, image,
+const updateColumns = `instance_id, instance_kind, mode, delay_hours, state, image,
   running_digest, latest_digest, latest_seen_at, skipped_digest, checked_at,
   check_error`
 
-export const loadAppImageUpdatesEffect = Effect.fn("apps.imageUpdates.load")(
-  function* (appIds: ReadonlyArray<string>) {
-    if (appIds.length === 0) return new Map<string, AppImageUpdate>()
+/** What Kiln knows of each instance's updates, by its ID. */
+export const loadInstanceUpdatesEffect = Effect.fn("instances.updates.load")(
+  function* (instanceIds: ReadonlyArray<string>) {
+    if (instanceIds.length === 0) return new Map<string, InstanceUpdate>()
     const database = yield* Database
     const rows = yield* database.queryRows<UpdateRow>(
-      "apps.imageUpdates.load",
+      "instances.updates.load",
       `SELECT ${updateColumns}
-         FROM ${databaseTable("app_image_update")}
-        WHERE app_id IN (${appIds.map(() => "?").join(", ")})`,
-      [...appIds]
+         FROM ${databaseTable("instance_update")}
+        WHERE instance_id IN (${instanceIds.map(() => "?").join(", ")})`,
+      [...instanceIds]
     )
-    return new Map(rows.map((row) => [row.app_id, toUpdate(row)]))
+    return new Map(rows.map((row) => [row.instance_id, toUpdate(row)]))
   }
 )
 
-export const loadAppImageUpdateEffect = (appId: string) =>
-  loadAppImageUpdatesEffect([appId]).pipe(
-    Effect.map((updates) => updates.get(appId) ?? null)
+export const loadInstanceUpdateEffect = (instanceId: string) =>
+  loadInstanceUpdatesEffect([instanceId]).pipe(
+    Effect.map((updates) => updates.get(instanceId) ?? null)
   )
 
-/** Sets what Kiln does when the app's tag moves. */
-export const saveAppImageUpdatePolicyEffect = Effect.fn(
-  "apps.imageUpdates.policy"
+/** Sets what Kiln does when the instance's tag moves. */
+export const saveInstanceUpdatePolicyEffect = Effect.fn(
+  "instances.updates.policy"
 )(function* (
-  appId: string,
-  policy: Pick<AppImageUpdate, "delayHours" | "mode">
+  kind: InstanceUpdateKind,
+  instanceId: string,
+  policy: Pick<InstanceUpdate, "delayHours" | "mode">
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
-    "apps.imageUpdates.policy",
-    `INSERT INTO ${databaseTable("app_image_update")}
-       (app_id, mode, delay_hours, updated_at)
-     VALUES (?, ?, ?, ?)
+    "instances.updates.policy",
+    `INSERT INTO ${databaseTable("instance_update")}
+       (instance_id, instance_kind, mode, delay_hours, updated_at)
+     VALUES (?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        mode = VALUES(mode),
        delay_hours = VALUES(delay_hours),
        updated_at = VALUES(updated_at)`,
-    [appId, policy.mode, policy.delayHours, now]
+    [instanceId, kind, policy.mode, policy.delayHours, now]
+  )
+})
+
+/** Forgets an instance's updates, as when it is deleted. */
+export const deleteInstanceUpdatesEffect = Effect.fn(
+  "instances.updates.delete"
+)(function* (instanceId: string) {
+  const database = yield* Database
+  yield* database.execute(
+    "instances.updates.delete",
+    `DELETE FROM ${databaseTable("instance_update")} WHERE instance_id = ?`,
+    [instanceId]
+  )
+  yield* database.execute(
+    "instances.updates.attempts.delete",
+    `DELETE FROM ${databaseTable("instance_update_attempt")}
+      WHERE instance_id = ?`,
+    [instanceId]
   )
 })
 
 /**
- * Passes over the update the app's tag names now, so it neither notifies
- * nor deploys on its own. False if that's no longer the update on offer.
+ * Passes over the update the instance's tag names now, so it neither
+ * notifies nor deploys on its own. False if that's no longer the update on
+ * offer.
  */
-export const skipAppImageUpdateEffect = Effect.fn("apps.imageUpdates.skip")(
-  function* (appId: string, digest: string) {
+export const skipInstanceUpdateEffect = Effect.fn("instances.updates.skip")(
+  function* (instanceId: string, digest: string) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     const result = yield* database.execute(
-      "apps.imageUpdates.skip",
-      `UPDATE ${databaseTable("app_image_update")}
+      "instances.updates.skip",
+      `UPDATE ${databaseTable("instance_update")}
           SET skipped_digest = latest_digest, updated_at = ?
-        WHERE app_id = ? AND latest_digest = ?`,
-      [now, appId, digest]
+        WHERE instance_id = ? AND latest_digest = ?`,
+      [now, instanceId, digest]
     )
     return result.affectedRows === 1
   }
 )
 
 /**
- * Records what a check of the app found, against what the last one did.
+ * Records what a check of the instance found, against what the last one did.
  * `newlySeen` is a digest Kiln hasn't offered before, which restarts the
  * wait: a tag that moves again before an update deploys offers its newest
  * image, never one it has moved past.
  */
-export const recordAppImageCheckEffect = Effect.fn("apps.imageUpdates.record")(
+export const recordInstanceImageCheckEffect = Effect.fn(
+  "instances.updates.record"
+)(
   function* (
-    appId: string,
-    image: string,
+    kind: InstanceUpdateKind,
+    instanceId: string,
+    /** The image it names, or null to keep the one last recorded. */
+    image: string | null,
     result: Exclude<RelayInstanceImageCheckResult, { status: "deploying" }>,
     askedAt: number
   ) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     return yield* database.transaction(
-      "apps.imageUpdates.record",
+      "instances.updates.record",
       (transaction) =>
         Effect.gen(function* () {
           const [row] = yield* transaction.queryRows<UpdateRow>(
             `SELECT ${updateColumns}
-               FROM ${databaseTable("app_image_update")}
-              WHERE app_id = ?
+               FROM ${databaseTable("instance_update")}
+              WHERE instance_id = ?
                 FOR UPDATE`,
-            [appId]
+            [instanceId]
           )
           const previous = row ? toUpdate(row) : null
           // One asked before what's recorded, answering later, says less
@@ -167,13 +198,20 @@ export const recordAppImageCheckEffect = Effect.fn("apps.imageUpdates.record")(
           }
           // Checked when it was asked, which is what what it found
           // describes; a deployment since makes it stale.
-          const next = nextUpdate(previous, appId, image, result, askedAt)
+          const next = nextUpdate(
+            previous,
+            kind,
+            instanceId,
+            image,
+            result,
+            askedAt
+          )
           yield* transaction.execute(
-            `INSERT INTO ${databaseTable("app_image_update")}
-               (app_id, mode, delay_hours, state, image, running_digest,
-                latest_digest, latest_seen_at, skipped_digest, checked_at,
-                check_error, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO ${databaseTable("instance_update")}
+               (instance_id, instance_kind, mode, delay_hours, state, image,
+                running_digest, latest_digest, latest_seen_at, skipped_digest,
+                checked_at, check_error, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
                state = VALUES(state),
                image = VALUES(image),
@@ -184,7 +222,8 @@ export const recordAppImageCheckEffect = Effect.fn("apps.imageUpdates.record")(
                check_error = VALUES(check_error),
                updated_at = VALUES(updated_at)`,
             [
-              appId,
+              instanceId,
+              kind,
               next.mode,
               next.delayHours,
               next.state,
@@ -217,24 +256,27 @@ export const recordAppImageCheckEffect = Effect.fn("apps.imageUpdates.record")(
 )
 
 function nextUpdate(
-  previous: AppImageUpdate | null,
-  appId: string,
-  image: string,
+  previous: InstanceUpdate | null,
+  kind: InstanceUpdateKind,
+  instanceId: string,
+  named: string | null,
   result: Exclude<RelayInstanceImageCheckResult, { status: "deploying" }>,
   now: number
-): AppImageUpdate {
-  const base: AppImageUpdate = previous ?? {
-    ...defaultAppImageUpdatePolicy,
-    appId,
+): InstanceUpdate {
+  const base: InstanceUpdate = previous ?? {
+    ...defaultInstanceUpdatePolicy,
     checkedAt: null,
     checkError: null,
     image: null,
+    instanceId,
+    kind,
     latestDigest: null,
     latestSeenAt: null,
     runningDigest: null,
     skippedDigest: null,
     state: null,
   }
+  const image = named ?? base.image
   const checked = { ...base, checkError: null, checkedAt: now, image }
   const cleared = { latestDigest: null, latestSeenAt: null }
   switch (result.status) {
@@ -285,30 +327,34 @@ function nextUpdate(
 }
 
 /**
- * What a check found, if it still describes the App: it asked about the
- * image the App names now, and no deployment has started since it asked,
+ * What a check found, if it still describes the instance: it asked about
+ * the image it names now, and no deployment has started since it asked,
  * which may have changed what runs. Checks take no lock, so what one
  * recorded is judged here, where it's used, rather than kept from being
  * recorded.
  */
 export function currentImageUpdate(
-  update: AppImageUpdate | null,
-  image: string,
+  update: InstanceUpdate | null,
+  image: string | null,
   latestDeploymentStartedAt: string | null
-): AppImageUpdate | null {
-  return update && describesApp(update, image, latestDeploymentStartedAt)
+): InstanceUpdate | null {
+  return update && describesInstance(update, image, latestDeploymentStartedAt)
     ? update
     : null
 }
 
-/** Whether a check's record still describes the App, as above. */
-export function describesApp(
+/**
+ * Whether a check's record still describes the instance, as above. A kind
+ * whose image Hearth doesn't keep passes none, and is judged by its
+ * deployments alone.
+ */
+export function describesInstance(
   checked: { readonly checkedAt: number | null; readonly image: string | null },
-  image: string,
+  image: string | null,
   latestDeploymentStartedAt: string | null
 ): boolean {
   return (
-    checked.image === image &&
+    (image === null || checked.image === image) &&
     !(
       latestDeploymentStartedAt !== null &&
       checked.checkedAt !== null &&
@@ -321,7 +367,7 @@ export function describesApp(
  * When an update deploys on its own: once it's been out the app's wait,
  * and the last check got through, so it's still what the tag names.
  */
-export function autoUpdateAt(update: AppImageUpdate): number | null {
+export function autoUpdateAt(update: InstanceUpdate): number | null {
   if (
     update.mode !== "auto" ||
     update.state !== "available" ||
@@ -343,38 +389,39 @@ export function autoUpdateAt(update: AppImageUpdate): number | null {
  * restart, still has it. Kept apart from the deployment history, which is
  * pruned.
  */
-export const claimImageUpdateEffect = Effect.fn("apps.imageUpdates.claim")(
-  function* (appId: string, digest: string, deploymentId: string) {
+export const claimImageUpdateEffect = Effect.fn("instances.updates.claim")(
+  function* (instanceId: string, digest: string, deploymentId: string) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
     yield* database.execute(
-      "apps.imageUpdates.claim",
-      `INSERT IGNORE INTO ${databaseTable("app_image_update_attempt")}
-         (app_id, digest, attempted_at, deployment_id)
+      "instances.updates.claim",
+      `INSERT IGNORE INTO ${databaseTable("instance_update_attempt")}
+         (instance_id, digest, attempted_at, deployment_id)
        VALUES (?, ?, ?, ?)`,
-      [appId, digest, now, deploymentId]
+      [instanceId, digest, now, deploymentId]
     )
     const [claim] = yield* database.queryRows<
       RowDataPacket & { deployment_id: string | null }
     >(
-      "apps.imageUpdates.claim",
-      `SELECT deployment_id FROM ${databaseTable("app_image_update_attempt")}
-        WHERE app_id = ? AND digest = ?`,
-      [appId, digest]
+      "instances.updates.claim",
+      `SELECT deployment_id FROM ${databaseTable("instance_update_attempt")}
+        WHERE instance_id = ? AND digest = ?`,
+      [instanceId, digest]
     )
     return claim?.deployment_id === deploymentId
   }
 )
 
-function toUpdate(row: UpdateRow): AppImageUpdate {
+function toUpdate(row: UpdateRow): InstanceUpdate {
   const time = (value: number | string | null) =>
     value === null ? null : Number(value)
   return {
-    appId: row.app_id,
     checkError: row.check_error,
     checkedAt: time(row.checked_at),
     delayHours: Number(row.delay_hours),
     image: row.image,
+    instanceId: row.instance_id,
+    kind: row.instance_kind,
     latestDigest: row.latest_digest,
     latestSeenAt: time(row.latest_seen_at),
     mode: row.mode,

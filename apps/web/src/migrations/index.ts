@@ -64,6 +64,7 @@ import { instanceDeployPermission } from "./0063_instance_deploy_permission"
 import { databaseDeployments } from "./0064_database_deployments"
 import { instanceLimitsPermission } from "./0065_instance_limits_permission"
 import { databaseBricks } from "./0066_database_bricks"
+import { instanceUpdates } from "./0067_instance_updates"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -131,4 +132,5 @@ export const migrations: ReadonlyArray<Migration> = [
   databaseDeployments,
   instanceLimitsPermission,
   databaseBricks,
+  instanceUpdates,
 ]
