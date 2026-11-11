@@ -1131,6 +1131,8 @@ export const relayAppContainerMountSchema = z.object({
 export const relayAppContainerSchema = z.object({
   createdAt: z.string().datetime().nullable(),
   exitCode: z.number().int().nullable(),
+  // The TCP ports it says it listens on, published on the Relay or not.
+  exposedPorts: z.array(z.number().int().min(1).max(65_535)).default([]),
   id: z.string().min(1),
   image: z.string(),
   labels: z.record(z.string(), z.string()),

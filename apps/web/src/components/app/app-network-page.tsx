@@ -3,7 +3,7 @@ import { instanceInventoryScope } from "@/lib/instance-inventory"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { appTailscaleMemberId } from "@workspace/contracts"
+import { appTailscaleMemberId, webPortCandidates } from "@workspace/contracts"
 import type { AppPort } from "@workspace/contracts"
 import {
   Cable,
@@ -40,6 +40,7 @@ import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
+import { useGeneratedHostname } from "@/components/web-hostname-dns"
 import {
   WebRoutesSection,
   type WebRouteProxyChange,
@@ -152,6 +153,7 @@ function AppWebRoutes({
     [app.id, app.relayId]
   )
   const state = useQuery(webRoutesQueryOptions(dnsResource))
+  const generated = useGeneratedHostname(dnsResource)
   const services = React.useMemo(
     () => appServiceOptions(app, compose),
     [app, compose]
@@ -178,10 +180,29 @@ function AppWebRoutes({
     [app.id, app.relayId, dnsResource, queryClient, services]
   )
 
+  // Its own address, while nothing serves it: offered to the ports its
+  // running services listen on that could be its website's.
+  const address = React.useMemo(() => {
+    if (!generated || generated.status === "removing") return undefined
+    const targets = services
+      .filter((service) => service.running)
+      .flatMap((service) =>
+        webPortCandidates(service.ports).map((port) => ({
+          port,
+          service: service.name,
+        }))
+      )
+      .slice(0, 6)
+    return targets.length > 0
+      ? { hostname: generated.hostname, targets }
+      : undefined
+  }, [generated, services])
+
   return (
     <WebRoutesSection
       // Another app's routes start fresh, Undo included.
       key={`${app.relayId}:${app.id}`}
+      address={address}
       canWrite={
         appRelayAvailable(app) &&
         app.permissions.includes("instance.network.write")
@@ -230,11 +251,14 @@ function appServiceOptions(
   const options = [...byService].map(([name, containers]) => ({
     image: containers[0]?.image ?? "",
     name,
+    // What it publishes, and what it only says it listens on that could
+    // be a website's.
     ports: [
       ...new Set(
-        containers.flatMap((container) =>
-          container.ports.map(({ containerPort }) => containerPort)
-        )
+        containers.flatMap((container) => [
+          ...container.ports.map(({ containerPort }) => containerPort),
+          ...webPortCandidates(container.exposedPorts),
+        ])
       ),
     ],
     running: containers.some((container) => container.running),

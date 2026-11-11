@@ -161,6 +161,8 @@ const RESERVED_ENVIRONMENT =
 
 interface ContainerInspect {
   Config: {
+    /** The ports it says it listens on, as `80/tcp`. */
+    ExposedPorts?: Record<string, unknown> | null
     Image: string
     Labels: Record<string, string | undefined> | null
     Tty?: boolean
@@ -2870,6 +2872,7 @@ export class AppDriver {
         .map((container) => ({
           createdAt: container.createdAt,
           exitCode: container.exitCode,
+          exposedPorts: container.exposedPorts,
           id: container.id,
           image: container.image,
           labels: container.labels,
@@ -2957,6 +2960,14 @@ export class AppDriver {
         createdAt: isoTime(container.Created),
         deploymentId: labels[DEPLOYMENT_LABEL] ?? null,
         exitCode: state.Running ? null : state.ExitCode,
+        exposedPorts: [
+          ...new Set(
+            exposedTcpPorts({
+              ...container.Config.ExposedPorts,
+              ...container.NetworkSettings?.Ports,
+            })
+          ),
+        ],
         health: state.Health?.Status ?? null,
         id: container.Id,
         image: labels[IMAGE_LABEL] ?? container.Config.Image,
@@ -3449,6 +3460,18 @@ function unquote(value: string): string {
     return trimmed.slice(1, -1)
   }
   return trimmed
+}
+
+// The TCP ports a container says it listens on, from Docker's `80/tcp`
+// keys: what its image exposes, and what it publishes.
+function exposedTcpPorts(
+  exposed: Readonly<Record<string, unknown>> | null | undefined
+): Array<number> {
+  return Object.keys(exposed ?? {}).flatMap((key) => {
+    const [, number, protocol = "tcp"] =
+      /^(\d{1,5})(?:\/([a-z]+))?$/u.exec(key) ?? []
+    return number !== undefined && protocol === "tcp" ? [Number(number)] : []
+  })
 }
 
 function publishedPorts(container: ContainerInspect): Array<AppPort> {

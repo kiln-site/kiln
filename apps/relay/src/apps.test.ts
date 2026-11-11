@@ -264,6 +264,21 @@ describe("an App that follows a Brick", () => {
   })
 })
 
+// What an App's containers listen on is said whether or not they publish
+// it on the Relay, for whoever routes a domain to it.
+describe("an App's containers", () => {
+  it("say the TCP ports they listen on, published or not", async () => {
+    const harness = await createdApp()
+    fakeDocker.imageConfigs.set("nginx:alpine", {
+      ExposedPorts: { "8080/tcp": {}, "9090/tcp": {}, "53/udp": {} },
+    })
+    const app = await deploy(harness, {})
+    expect(
+      app.containers.find((container) => container.running)?.exposedPorts
+    ).toEqual([8080, 9090])
+  })
+})
+
 describe("deployment logs", () => {
   it("reads the latest deployment's log and those the Relay kept, and nothing outside them", async () => {
     const harness = await createdApp()
