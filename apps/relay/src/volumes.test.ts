@@ -80,6 +80,7 @@ describe("Relay volumes", () => {
 
     const dockerName = `${TEST_NAMESPACE}-kiln-3f9a21c4-postgres-data`
     expect(fakeDocker.volumes.get(dockerName)?.labels).toEqual({
+      "kiln.relay.owned": "true",
       "kiln.relay.owner": TEST_NAMESPACE,
       "kiln.resource.kind": "volume",
       "kiln.volume.id": volumeId,
