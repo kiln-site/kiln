@@ -26,6 +26,7 @@ import { Effect } from "effect"
 import { z } from "zod"
 
 import {
+  detachAppBrickEffect,
   renameAppRecordEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
@@ -177,6 +178,35 @@ export const updateAppConfig = createServerFn({ method: "POST" })
   .validator(appConfigInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(changeAppConfig, data, {
+      user: await requireEligibleResourceUser(),
+    })
+  )
+
+// Stops the App following its Brick: it stays as it is, every part of it
+// becomes its owner's to change, and it is offered no more of the Brick's
+// revisions. There is no following it again.
+const detachBrick = resourceOperation({
+  kind: "app",
+  id: (input: z.infer<typeof appInputSchema>) => input.appId,
+  name: "app.brick.detach",
+  lock: { part: "config" },
+  doing: "Detaching this App from its Brick",
+  permission: () => "app.manage",
+  run: async (user, data) => {
+    const { relay } = await authorizedAppFor(user, data, "app.manage")
+    await runAppEffect(
+      "apps.brick.detach",
+      detachAppBrickEffect(relay.id, data.appId)
+    )
+    publishAppChange(relay.id, false)
+    return { detached: true as const }
+  },
+})
+
+export const detachAppBrick = createServerFn({ method: "POST" })
+  .validator(appInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(detachBrick, data, {
       user: await requireEligibleResourceUser(),
     })
   )
