@@ -258,7 +258,7 @@ export function activityLabelForAudit(audit: RelayAuditRecord): string {
   if (operation === "instance.network.databases.remove")
     return "Removed a saved database connection"
   if (operation === "instance.network.routes.write") {
-    return "Updated game server network routes"
+    return "Updated web routes"
   }
   if (operation === "relay.rename") return "Renamed a Relay"
   if (operation === "relay.proxy.write") return "Updated Relay proxy settings"

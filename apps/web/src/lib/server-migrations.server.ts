@@ -1042,7 +1042,8 @@ const moveWebRoutes = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
     const [source, destination] = yield* relays(input)
     const state = relayInstanceWebRouteStateSchema.parse(
       yield* rpc(source, "instance.network.routes.read", actor.id, {
-        instanceId: input.source.instanceId,
+        id: input.source.instanceId,
+        kind: "instance",
       })
     )
     // Run again after the routes moved, it finds none, and still hands the
@@ -1050,11 +1051,13 @@ const moveWebRoutes = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
     if (state.routes.length > 0) {
       const routes = state.routes.map(({ id: _id, ...route }) => route)
       yield* rpc(destination, "instance.network.routes.write", actor.id, {
-        instanceId: input.destination.instanceId,
+        id: input.destination.instanceId,
+        kind: "instance",
         routes,
       })
       yield* rpc(source, "instance.network.routes.write", actor.id, {
-        instanceId: input.source.instanceId,
+        id: input.source.instanceId,
+        kind: "instance",
         routes: [],
       })
     }

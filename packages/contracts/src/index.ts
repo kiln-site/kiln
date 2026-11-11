@@ -2012,12 +2012,36 @@ export const relayAppWebRouteStateSchema =
     routes: relayInstanceWebRouteArraySchema(relayAppWebRouteSchema),
   })
 
-export const relayAppWebRoutesWriteSchema = z
-  .object({
-    appId: appIdSchema,
-    routes: relayInstanceWebRouteArraySchema(relayAppWebRouteInputSchema),
-  })
-  .strict()
+export const relayAppWebRouteInputsSchema = relayInstanceWebRouteArraySchema(
+  relayAppWebRouteInputSchema
+)
+
+/**
+ * An instance's web routes: one request reads them and one saves them, for
+ * every kind that has any, naming the kind beside its ID. An App's routes
+ * each name the service of it they reach.
+ */
+export const relayInstanceWebRoutesReadSchema = z.discriminatedUnion("kind", [
+  z.object({ id: instanceIdSchema, kind: z.literal("instance") }).strict(),
+  z.object({ id: appIdSchema, kind: z.literal("app") }).strict(),
+])
+
+export const relayInstanceWebRoutesWriteSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      id: instanceIdSchema,
+      kind: z.literal("instance"),
+      routes: relayInstanceWebRouteInputsSchema,
+    })
+    .strict(),
+  z
+    .object({
+      id: appIdSchema,
+      kind: z.literal("app"),
+      routes: relayAppWebRouteInputsSchema,
+    })
+    .strict(),
+])
 
 export const RELAY_PROXY_TRIAL_PATH = "/.well-known/kiln-route"
 
