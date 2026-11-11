@@ -33,6 +33,7 @@ const VOLUME_KIND = "volume"
 const ID_LABEL = "kiln.volume.id"
 // The name it was made with, for when the Relay's own record of it is gone.
 const NAME_LABEL = "kiln.volume.name"
+const OWNED_LABEL = "kiln.relay.owned"
 const APP_ID_LABEL = "kiln.app.id"
 const APP_SERVICE_LABEL = "kiln.app.service"
 // Compose labels the volumes it makes with their project and the key the
@@ -345,6 +346,9 @@ export class RelayVolumes {
           [KIND_LABEL]: VOLUME_KIND,
           [ID_LABEL]: id,
           [NAME_LABEL]: name,
+          // Kiln made it, as everything else it makes says. Volumes from
+          // before this lack it, so the kind is still what tells one.
+          [OWNED_LABEL]: "true",
           ...relayOwnerLabels(this.#config),
         },
         name: dockerName,
