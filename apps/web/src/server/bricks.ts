@@ -149,9 +149,12 @@ export const getBrickCatalog = createServerFn({ method: "GET" }).handler(
     })
     const catalogs = await catalogsPromise
     const sources = new Set<string>()
+    // Game servers', which this lists the Relays for.
     const bricks = catalogs.flatMap((catalog) =>
       catalog.bricks.filter((brick) => {
-        if (sources.has(brick.source)) return false
+        if (brick.kind !== "game-server" || sources.has(brick.source)) {
+          return false
+        }
         sources.add(brick.source)
         return true
       })
@@ -643,10 +646,14 @@ async function visibleRecipeDefinition(
       ? runAppEffect("customBricks.list", listCustomBricksEffect(user.id))
       : Promise.resolve([]),
   ])
+  // A game server's: another kind's Brick isn't one a game server runs.
   const brick = [
     ...catalogs.flatMap((catalog) => catalog.bricks),
     ...customBricks,
-  ].find((candidate) => candidate.source === source)
+  ].find(
+    (candidate) =>
+      candidate.source === source && candidate.kind === "game-server"
+  )
   if (!brick) return null
   return brickRecipeDefinition(brick)
 }

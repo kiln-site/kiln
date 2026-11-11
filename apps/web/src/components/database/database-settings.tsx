@@ -52,6 +52,7 @@ import {
   InstanceProfileBrick,
 } from "@/components/instance-profile"
 import { DatabaseKindIcon } from "@/components/instance-kind-icon"
+import { LiveServerBrickIcon } from "@/components/server-brick-icon"
 import { RenameButton } from "@/components/rename-dialog"
 import { useCopyFeedback } from "@/components/workspace-header"
 import { formatBytes } from "@/lib/format-bytes"
@@ -99,7 +100,15 @@ export function DatabaseProfile({
   return (
     <InstanceProfile
       brick={
-        <InstanceProfileBrick icon={<DatabaseKindIcon />}>
+        <InstanceProfileBrick
+          icon={
+            <LiveServerBrickIcon
+              brickId={database.brickId}
+              className="size-4 shrink-0"
+              implementation={database.engine}
+            />
+          }
+        >
           {engineProductLabel(database)}
         </InstanceProfileBrick>
       }

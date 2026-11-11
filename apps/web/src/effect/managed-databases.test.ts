@@ -19,6 +19,10 @@ const insertManagedDatabase = (
     relay_id: relayId,
     name,
     engine,
+    // As one made before databases ran Bricks is left: its engine's.
+    brick_id: engine,
+    image: engine === "redis" ? "redis:8" : "postgres:17",
+    internal_port: engine === "redis" ? 6379 : 5432,
     database_name: `db_${databaseId}`,
     username: `user_${databaseId}`,
     password_ciphertext: "password-ciphertext",
@@ -40,20 +44,26 @@ describeMysql("managed database persistence", () => {
 
         assert.deepStrictEqual(records, [
           {
+            brickId: "postgres",
             createdAt: new Date(now).toISOString(),
             createdBy: "user-one",
             databaseId: "postgres-id",
             databaseName: "db_postgres-id",
             engine: "postgres",
+            image: "postgres:17",
+            internalPort: 5432,
             name: "Postgres",
             relayId: relayOne,
           },
           {
+            brickId: "redis",
             createdAt: new Date(now).toISOString(),
             createdBy: "user-one",
             databaseId: "redis-id",
             databaseName: "db_redis-id",
             engine: "redis",
+            image: "redis:8",
+            internalPort: 6379,
             name: "Redis",
             relayId: relayOne,
           },

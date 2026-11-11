@@ -246,6 +246,26 @@ export async function setBrickCatalogCommunityHandler(data: {
   })
 }
 
+/**
+ * Kiln's own catalog, the one this installation is set up with, or null
+ * while it can't be loaded.
+ */
+export async function defaultBrickCatalog() {
+  const catalog = await recoverPromise(
+    () => loadDefaultCatalog(),
+    () => null
+  )
+  if (!catalog) return null
+  return hydrateBrickCatalogIcons(catalog.snapshot, {
+    allowFile: catalog.snapshot.bricks.some((brick) =>
+      brick.source.startsWith("file:")
+    ),
+    ...(catalog.source.startsWith("file:")
+      ? { catalogUrl: new URL(catalog.source) }
+      : {}),
+  })
+}
+
 export async function visibleBrickCatalogs(user: AuthenticatedUser) {
   const [defaultCatalog, records] = await Promise.all([
     recoverPromise(

@@ -1689,8 +1689,12 @@ const resolveBrickSource = Effect.fn("cli.api.brick.resolve")(function* (
         cause,
       }),
   })
+  // The CLI installs game servers.
   const matches = catalogs.flatMap((catalog) =>
-    catalog.bricks.filter((candidate) => candidate.metadata.id === brick)
+    catalog.bricks.filter(
+      (candidate) =>
+        candidate.metadata.id === brick && candidate.kind === "game-server"
+    )
   )
   if (matches.length === 0) {
     return yield* CliAccessError.make({

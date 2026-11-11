@@ -50,7 +50,7 @@ export interface CreateAppInput {
   database?:
     | (Pick<
         CreateDatabaseInput,
-        "databaseName" | "engine" | "name" | "username"
+        "brick" | "databaseName" | "name" | "username" | "variables"
       > & { kind: "new" })
     | { id: string; kind: "existing" }
   // The same for every try of one create, so a retry gets the same IDs.
@@ -179,12 +179,13 @@ async function createAppHandler(
     await runOperationPromise(
       createDatabase,
       {
+        brick: data.database.brick,
         databaseName: data.database.databaseName,
-        engine: data.database.engine,
         id: databaseId,
         name: data.database.name,
         relayId: relay.id,
         username: data.database.username,
+        variables: data.database.variables,
       },
       { user }
     )

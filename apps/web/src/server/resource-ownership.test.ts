@@ -29,6 +29,8 @@ const insertDatabase = (
     relay_id: relay,
     name: id,
     engine: "mysql",
+    brick_id: "mysql",
+    internal_port: 3306,
     database_name: `db_${id.slice(0, 8)}`,
     username: `u_${id.slice(0, 8)}`,
     password_ciphertext: "ciphertext",

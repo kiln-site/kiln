@@ -1072,6 +1072,79 @@ describeMysql("database migrations", () => {
     )
 
     it.effect(
+      "gives a database made before databases ran Bricks its engine's Brick, image and port",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while a database's image and port followed
+          // from its engine.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 65)
+          )
+          const relayId = "1".repeat(12)
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          const database = (id: string, engine: string) => ({
+            created_at: 1,
+            created_by: "owner",
+            database_id: id.repeat(12),
+            database_name: `db_${engine}`,
+            engine,
+            name: engine,
+            owner_id: "owner",
+            password_ciphertext: "ciphertext",
+            relay_id: relayId,
+            updated_at: 1,
+            username: `user_${engine}`,
+          })
+          yield* insertRows("database", database("a", "postgres"))
+          yield* insertRows("database", database("b", "mariadb"))
+          yield* insertRows("database", database("c", "valkey"))
+
+          yield* applyMigrations(migrations)
+
+          const rows = yield* sql<{
+            brick: string
+            engine: string
+            image: string
+            port: number
+            source: string | null
+          }>`
+            SELECT engine, brick_id AS brick, brick_source AS source, image,
+                   internal_port AS port
+              FROM ${sql(databaseTableName("database"))} ORDER BY engine
+          `
+          expect(
+            rows.map((row) => ({ ...row, port: Number(row.port) }))
+          ).toEqual([
+            {
+              brick: "mariadb",
+              engine: "mariadb",
+              image: "mariadb:11.8",
+              port: 3306,
+              source: null,
+            },
+            {
+              brick: "postgres",
+              engine: "postgres",
+              image: "postgres:17",
+              port: 5432,
+              source: null,
+            },
+            {
+              brick: "valkey",
+              engine: "valkey",
+              image: "valkey/valkey:8",
+              port: 6379,
+              source: null,
+            },
+          ])
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
       "keeps who could change a database's or an App's limits, as the limits permission every instance takes",
       () =>
         Effect.gen(function* () {

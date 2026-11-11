@@ -8,6 +8,7 @@ import { Button } from "@workspace/ui/components/button"
 import { engineLabel } from "@/components/database/database-presentation"
 import {
   NewDatabaseDialog,
+  newDatabaseInput,
   type NewDatabaseValues,
 } from "@/components/database/new-database-dialog"
 import {
@@ -43,7 +44,11 @@ export function appDatabaseInput(draft: AppDatabaseDraft, appName: string) {
     case "none":
       return undefined
     case "new":
-      return { ...draft, name: draft.name || appName }
+      return {
+        ...newDatabaseInput(draft),
+        kind: "new" as const,
+        name: draft.name || appName,
+      }
     case "existing":
       return { id: draft.id, kind: "existing" as const }
   }

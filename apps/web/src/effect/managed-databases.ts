@@ -16,11 +16,14 @@ import { betterAuthSecrets } from "@/lib/environment"
 const DATABASE_PASSWORD_PURPOSE = "kiln-managed-database-password"
 
 interface ManagedDatabaseRow extends RowDataPacket {
+  brick_id: string
   created_at: number
   created_by: string
   database_id: string
   database_name: string
   engine: string
+  image: string | null
+  internal_port: number
   name: string
   relay_id: string
 }
@@ -35,20 +38,32 @@ interface ManagedDatabaseIdRow extends RowDataPacket {
 }
 
 interface ManagedDatabaseDirectoryRow extends RowDataPacket {
+  brick_id: string
   created_at: number
   database_name: string
   database_id: string
   engine: string
+  image: string | null
+  internal_port: number
   name: string
   relay_id: string
 }
 
 export interface ManagedDatabaseRecord {
+  /** The Brick it runs, by its ID. */
+  brickId: string
   createdAt: string
   createdBy: string
   databaseId: string
   databaseName: string
   engine: DatabaseEngine
+  /**
+   * The image its Brick resolved to. Its engine's name, with no tag, from
+   * when it is recorded until its Relay says what it runs.
+   */
+  image: string
+  /** The port it listens on, as its Brick says. */
+  internalPort: number
   name: string
   relayId: string
 }
@@ -66,8 +81,8 @@ export const listManagedDatabaseRecordsEffect = Effect.fn(
   const database = yield* Database
   const rows = yield* database.queryRows<ManagedDatabaseRow>(
     "managed_databases_list",
-    `SELECT database_id, relay_id, name, engine, database_name, created_by,
-            created_at
+    `SELECT database_id, relay_id, name, engine, brick_id, image,
+            internal_port, database_name, created_by, created_at
        FROM ${databaseTable("database")}
       ORDER BY name ASC, created_at ASC`
   )
@@ -80,17 +95,21 @@ export const listManagedDatabaseDirectoryEffect = Effect.fn(
   const database = yield* Database
   const rows = yield* database.queryRows<ManagedDatabaseDirectoryRow>(
     "managed_databases_directory",
-    `SELECT database_id, relay_id, name, engine, database_name, created_at
+    `SELECT database_id, relay_id, name, engine, brick_id, image,
+            internal_port, database_name, created_at
        FROM ${databaseTable("database")}
       ORDER BY name ASC, created_at ASC`
   )
   return rows.map((row) => {
     const engine = databaseEngineSchema.parse(row.engine)
     return {
+      brickId: row.brick_id,
       createdAt: new Date(row.created_at).toISOString(),
       databaseId: row.database_id,
       databaseName: row.database_name,
       engine,
+      image: row.image ?? engine,
+      internalPort: Number(row.internal_port),
       name: row.name,
       relayId: row.relay_id,
       supportsImportExport: databaseEngineSupportsLogicalBackups(engine),
@@ -116,10 +135,15 @@ export const managedDatabaseNameExistsEffect = Effect.fn(
 export const createManagedDatabaseRecordEffect = Effect.fn(
   "managedDatabases.create"
 )(function* (input: {
+  /** The Brick it runs, and where that came from. */
+  brickId: string
+  brickSource: string
   createdBy: string
   databaseId: string
   databaseName: string
   engine: DatabaseEngine
+  /** The port its Brick says it listens on. */
+  internalPort: number
   name: string
   password: string
   relayId: string
@@ -131,14 +155,18 @@ export const createManagedDatabaseRecordEffect = Effect.fn(
   yield* database.execute(
     "managed_databases_create",
     `INSERT INTO ${databaseTable("database")}
-      (database_id, relay_id, name, engine, database_name, username,
-       password_ciphertext, created_by, owner_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (database_id, relay_id, name, engine, brick_id, brick_source,
+       internal_port, database_name, username, password_ciphertext,
+       created_by, owner_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       input.databaseId,
       input.relayId,
       input.name,
       input.engine,
+      input.brickId,
+      input.brickSource,
+      input.internalPort,
       input.databaseName,
       input.username,
       ciphertext,
@@ -150,14 +178,33 @@ export const createManagedDatabaseRecordEffect = Effect.fn(
   )
 })
 
+/**
+ * Records the image a database's Brick resolved to, once its Relay has
+ * worked that out from its answers.
+ */
+export const setManagedDatabaseImageEffect = Effect.fn(
+  "managedDatabases.setImage"
+)(function* (relayId: string, databaseId: string, image: string) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "managed_database_set_image",
+    `UPDATE ${databaseTable("database")}
+        SET image = ?, updated_at = ?
+      WHERE relay_id = ? AND database_id = ?`,
+    [image, now, relayId, databaseId]
+  )
+})
+
 export const loadManagedDatabaseCredentialEffect = Effect.fn(
   "managedDatabases.credential"
 )(function* (relayId: string, databaseId: string) {
   const database = yield* Database
   const rows = yield* database.queryRows<ManagedDatabaseCredentialRow>(
     "managed_database_credential",
-    `SELECT database_id, relay_id, name, engine, database_name, username,
-            password_ciphertext, created_by, created_at
+    `SELECT database_id, relay_id, name, engine, brick_id, image,
+            internal_port, database_name, username, password_ciphertext,
+            created_by, created_at
        FROM ${databaseTable("database")}
       WHERE relay_id = ? AND database_id = ?
       LIMIT 1`,
@@ -249,12 +296,16 @@ export const deleteManagedDatabaseRecordEffect = Effect.fn(
 })
 
 function toRecord(row: ManagedDatabaseRow): ManagedDatabaseRecord {
+  const engine = databaseEngineSchema.parse(row.engine)
   return {
+    brickId: row.brick_id,
     createdAt: new Date(row.created_at).toISOString(),
     createdBy: row.created_by,
     databaseId: row.database_id,
     databaseName: row.database_name,
-    engine: databaseEngineSchema.parse(row.engine),
+    engine,
+    image: row.image ?? engine,
+    internalPort: Number(row.internal_port),
     name: row.name,
     relayId: row.relay_id,
   }
