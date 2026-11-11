@@ -7,6 +7,7 @@ import { afterAll, vi } from "vite-plus/test"
 
 import {
   createAppRecordEffect,
+  detachAppBrickEffect,
   loadAppConfigEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
@@ -186,6 +187,59 @@ describeMysql("app config", () => {
         assert.isNotNull(error)
         assert.deepStrictEqual((yield* saved).mounts[0], fileMount)
       })
+    )
+    // What a Brick set is the Brick's while the App follows it: its next
+    // revision would put it back. Everything else stays the owner's.
+    it.effect(
+      "holds what its Brick set until it is detached from the Brick",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertUser("manager")
+          yield* insertRelay(relayId, { created_by: "manager" })
+          yield* grant("manager", ["app.read", "app.manage"])
+          yield* createAppRecordEffect({
+            appId,
+            brick: {
+              answers: {},
+              environment: ["SECRET_KEY"],
+              name: "Blog",
+              revision: 1,
+              source: "https://bricks.test/blog.yml",
+            },
+            createdBy: "manager",
+            deploys: { image: "ghcr.io/acme/blog:1", sourceType: "image" },
+            environment: "SECRET_KEY=made-once\n",
+            name: "Journal",
+            relayId,
+          })
+
+          for (const held of [
+            { image: "ghcr.io/acme/blog:2" },
+            { sourceType: "compose" },
+            { command: "sh" },
+            { environment: "SECRET_KEY=mine\n" },
+            { environment: "" },
+          ]) {
+            assert.include(String(yield* update("manager", held)), "Blog")
+          }
+          // Its own variables, written around the Brick's, are its own.
+          const own =
+            "# Mail\nSMTP_HOST=mail.example.test\nSECRET_KEY=made-once\n"
+          assert.isNull(yield* update("manager", { environment: own }))
+          assert.strictEqual((yield* saved).environment, own)
+          assert.strictEqual((yield* saved).image, "ghcr.io/acme/blog:1")
+
+          yield* detachAppBrickEffect(relayId, appId)
+          assert.isNull((yield* loadAppConfigEffect(relayId, appId))?.brick)
+          assert.isNull(
+            yield* update("manager", {
+              environment: "SECRET_KEY=mine\n",
+              image: "ghcr.io/acme/blog:2",
+            })
+          )
+          assert.strictEqual((yield* saved).image, "ghcr.io/acme/blog:2")
+        })
     )
   })
 })

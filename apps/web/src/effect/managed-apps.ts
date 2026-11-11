@@ -4,6 +4,7 @@ import { Cause, Clock, Effect, Predicate } from "effect"
 import type { AppConfig } from "@workspace/contracts"
 import {
   appConfigSchema,
+  appEnvironmentVariables,
   brickInputValueSchema,
   brickSourceSchema,
   databaseIdSchema,
@@ -214,19 +215,78 @@ export const listRelayAppConfigsEffect = Effect.fn("apps.configs")(function* (
  * save is made good by the next save, or by the import when Hearth next
  * connects to the Relay.
  */
-export const updateAppConfigEffect = Effect.fn("apps.updateConfig")(function* (
+export const updateAppConfigEffect = (
   relayId: string,
   appId: string,
   update: (config: AppConfig) => AppConfig
+) =>
+  changeAppEffect(relayId, appId, ({ brick, config }) => {
+    const next = update(config)
+    // What its Brick set stays as the Brick set it, for as long as the App
+    // follows the Brick: the next revision would put it back anyway.
+    const held = brick ? heldByAppBrick(config, next, brick) : null
+    return held === null
+      ? Effect.succeed({ brick, config: next })
+      : Effect.fail(
+          new Error(
+            `${held} is set by its Brick, ${brick?.name}. Detach it from the Brick to change it.`
+          )
+        )
+  }).pipe(Effect.map(({ config }) => config))
+
+/**
+ * What a change would alter that an App's Brick set, or null: what it
+ * deploys and how it starts, and the variables the Brick wrote. Everything
+ * else about an App is its owner's, following a Brick or not.
+ */
+export function heldByAppBrick(
+  saved: AppConfig,
+  next: AppConfig,
+  brick: Pick<AppBrickRecord, "environment">
+): string | null {
+  if (next.sourceType !== saved.sourceType) return "What it deploys"
+  if (next.image !== saved.image) return "Its image"
+  if (next.command !== saved.command) return "Its start command"
+  if (next.environment === saved.environment) return null
+  const before = appEnvironmentVariables(saved.environment)
+  const after = appEnvironmentVariables(next.environment)
+  return brick.environment.find((name) => before[name] !== after[name]) ?? null
+}
+
+/** What an App is: its configuration, and the Brick it follows, if any. */
+export interface AppFollowing {
+  brick: AppBrickRecord | null
+  config: AppConfig
+}
+
+/**
+ * Stops an App following its Brick. It stays as it is, and every part of
+ * it becomes its owner's to change.
+ */
+export const detachAppBrickEffect = (relayId: string, appId: string) =>
+  changeAppEffect(relayId, appId, ({ config }) =>
+    Effect.succeed({ brick: null, config })
+  )
+
+/**
+ * Changes an App's configuration, and the Brick it follows, against what
+ * is saved now. For the changes its Brick makes itself: what someone edits
+ * goes through `updateAppConfigEffect`, which holds what the Brick set.
+ */
+export const changeAppEffect = Effect.fn("apps.change")(function* <E, R>(
+  relayId: string,
+  appId: string,
+  change: (app: AppFollowing) => Effect.Effect<AppFollowing, E, R>
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  const config = yield* database.transaction(
+  const changed = yield* database.transaction(
     "app_config_update",
     (transaction) =>
       Effect.gen(function* () {
         const rows = yield* transaction.queryRows<AppConfigRow>(
-          `SELECT app_id, relay_id, name, config_ciphertext, created_by, created_at
+          `SELECT app_id, relay_id, name, config_ciphertext, brick_ciphertext,
+                  created_by, created_at
              FROM ${databaseTable("app")}
             WHERE relay_id = ? AND app_id = ?
             LIMIT 1
@@ -236,7 +296,10 @@ export const updateAppConfigEffect = Effect.fn("apps.updateConfig")(function* (
         const row = rows.at(0)
         if (!row) return yield* Effect.fail(new Error("App not found"))
         const { databaseIds, ...previous } = yield* decryptStoredConfig(row)
-        const config = update(previous)
+        const { brick, config } = yield* change({
+          brick: yield* decryptBrick(row),
+          config: previous,
+        })
         const before = configuredVolumeIds(previous)
         const after = configuredVolumeIds(config)
         if (after.some((id) => !before.includes(id))) {
@@ -246,18 +309,19 @@ export const updateAppConfigEffect = Effect.fn("apps.updateConfig")(function* (
         }
         yield* transaction.execute(
           `UPDATE ${databaseTable("app")}
-              SET config_ciphertext = ?, updated_at = ?
+              SET config_ciphertext = ?, brick_ciphertext = ?, updated_at = ?
             WHERE relay_id = ? AND app_id = ?`,
           [
             yield* encryptConfig(
               databaseIds === undefined ? config : { ...config, databaseIds }
             ),
+            brick ? yield* encryptBrick(brick) : null,
             now,
             relayId,
             appId,
           ]
         )
-        return config
+        return { brick, config }
       })
   )
   // Saved either way: until the Relay hears, it only keeps a volume too
@@ -270,7 +334,7 @@ export const updateAppConfigEffect = Effect.fn("apps.updateConfig")(function* (
       )
     )
   )
-  return config
+  return changed
 })
 
 // Tells the Relay the volumes the saved config names, holding its row so a

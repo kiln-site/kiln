@@ -445,7 +445,6 @@ export async function getAppDeploymentSummaryHandler(data: {
   }
 }
 
-
 /**
  * The Dockerfile or Compose file a GitHub app deploys, at its branch's
  * head, for anyone who can read the app. Only that file: the path comes
@@ -527,7 +526,14 @@ export async function saveAppGitHubSourceHandler(
     repository: string
   }
 ) {
-  const { relay } = await authorizedAppFor(user, data, "app.manage")
+  const { app, relay } = await authorizedAppFor(user, data, "app.manage")
+  // Before the repository is saved: what an App deploys is its Brick's to
+  // say while it follows one.
+  if (app.brick) {
+    throw new Error(
+      `What it deploys is set by its Brick, ${app.brick.name}. Detach it from the Brick to change it.`
+    )
+  }
   // Changing its source is configuring it; deploying it at once is a deploy.
   if (data.deploy) await authorizedAppFor(user, data, "instance.deploy")
   if (!relayConnectionFeatures(relay.id).has(relayAppGitHubV1Feature)) {
@@ -597,11 +603,7 @@ export async function redeployAppDeploymentHandler(
   data: { deploymentId: string }
 ) {
   const record = await recordFor(data.deploymentId)
-  const { app, relay } = await authorizedAppFor(
-    user,
-    record,
-    "instance.deploy"
-  )
+  const { app, relay } = await authorizedAppFor(user, record, "instance.deploy")
   // A commit only of the repository the app deploys from now, which its
   // deployment names, and again once its turn comes.
   if (record.commitSha) {

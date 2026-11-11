@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { appFileRootId, type AppBrickDeployType } from "@workspace/contracts"
 import {
   Box,
@@ -8,9 +8,19 @@ import {
   Layers,
   LoaderCircle,
   Settings2,
+  Unlink,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
+import { showToast } from "@workspace/ui/components/sonner"
 
 import {
   AppDocumentDialog,
@@ -44,7 +54,7 @@ import {
 } from "@/lib/query-options"
 import type { AppGitHubSourceView } from "@/server/app-deployments.server"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
-import { renameApp } from "@/server/apps"
+import { detachAppBrick, renameApp } from "@/server/apps"
 
 const APP_NAME_MAX_LENGTH = 120
 
@@ -59,6 +69,7 @@ export function AppProfile({
   canManage: boolean
 }) {
   const brick = useAppBrick(app, canManage)
+  const follows = brick.state === "ready" ? brick.follows : undefined
   const canRename = app.permissions.includes("app.manage")
   const editor = useAppIconEditor(app)
   return (
@@ -70,7 +81,14 @@ export function AppProfile({
           <p className="mt-1 h-5 text-sm text-muted-foreground">…</p>
         )
       }
-      brickAction={canManage ? <AppBrickConfigureButton app={app} /> : null}
+      brickAction={
+        !canManage ? null : follows === undefined ? (
+          <AppBrickConfigureButton app={app} />
+        ) : (
+          // What it deploys is its Brick's to say while it follows one.
+          <AppBrickDetachButton app={app} brick={follows} />
+        )
+      }
       favorite={
         <InstanceFavoriteToggle
           id={app.id}
@@ -133,6 +151,88 @@ function AppRenameButton({ app }: { app: App }) {
       noun="app"
       rename={rename}
     />
+  )
+}
+
+// Stops the App following its Brick, once that is confirmed: it can't be
+// undone.
+function AppBrickDetachButton({ app, brick }: { app: App; brick: string }) {
+  const queryClient = useQueryClient()
+  const [confirming, setConfirming] = React.useState(false)
+  const detach = useMutation({
+    mutationFn: () =>
+      detachAppBrick({ data: { appId: app.id, relayId: app.relayId } }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.apps.config(app.relayId, app.id),
+      })
+      showToast({
+        message: `${app.name} detached from ${brick}`,
+        type: "success",
+      })
+      setConfirming(false)
+    },
+  })
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        onClick={() => setConfirming(true)}
+      >
+        <Unlink />
+        Detach
+      </Button>
+      {confirming ? (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!detach.isPending) setConfirming(open)
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>
+                Detach {app.name} from {brick}?
+              </DialogTitle>
+              <DialogDescription>
+                It keeps running as it is, and what {brick} set becomes yours to
+                change: its image, its start command and its variables. It is no
+                longer offered {brick}&apos;s updates, and can&apos;t be
+                attached again.
+              </DialogDescription>
+            </DialogHeader>
+            {detach.error ? (
+              <p className="text-xs text-destructive">{detach.error.message}</p>
+            ) : null}
+            <DialogFooter>
+              <Button
+                disabled={detach.isPending}
+                type="button"
+                variant="ghost"
+                onClick={() => setConfirming(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                disabled={detach.isPending}
+                type="button"
+                variant="destructive"
+                onClick={() => detach.mutate()}
+              >
+                {detach.isPending ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : (
+                  <Unlink />
+                )}
+                Detach
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+    </>
   )
 }
 
