@@ -96,7 +96,6 @@ import {
   type RelayTransferRequest,
 } from "@/server/relay-transfers.server"
 import { moveResourceWebHostnamesEffect } from "@/server/web-hostnames.server"
-import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 
 // Waits look again this often, in memory, and store one step a window, so a
 // long one keeps few; a window cut off, as when Hearth stops, starts again.
@@ -1049,12 +1048,7 @@ const moveWebRoutes = (input: ServerMigrationInput, actor: AuthenticatedUser) =>
     // Run again after the routes moved, it finds none, and still hands the
     // hostnames over.
     if (state.routes.length > 0) {
-      const routes = yield* Effect.try(() =>
-        webRoutesForRelay(
-          destination.id,
-          state.routes.map(({ id: _id, ...route }) => route)
-        )
-      )
+      const routes = state.routes.map(({ id: _id, ...route }) => route)
       yield* rpc(destination, "instance.network.routes.write", actor.id, {
         instanceId: input.destination.instanceId,
         routes,
