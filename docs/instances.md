@@ -15,8 +15,8 @@ work. Update it as each step lands.
 | ----------- | ---------------- | --------------------------------------------------- |
 | Relay       | The installer    | The host node. An instance, but never from a Brick. |
 | Game server | A Brick          | Called `instance` in permissions and the protocol.  |
-| Database    | A Brick (target) | Today a fixed list of engines in code.              |
-| App         | A Brick (target) | Today a source the person supplies.                 |
+| Database    | A Brick          | One of Kiln's own, of an engine Kiln knows.         |
+| App         | A Brick          | One of Kiln's own, for what it deploys.             |
 | Tailscale   | A Brick (target) | Today a built-in Brick that runs as a game server.  |
 
 A Tailscale network is an [instance group](#instance-groups). The group has
@@ -172,18 +172,32 @@ dumps, backups and permissions one has.
 The v1 format is retired, not kept beside v2. Copies already stored (a
 Relay's snapshots, Hearth's catalogs, backup manifests) are converted when
 read, through `readBrickRecipe` in the contracts, which is the only code
-that knows v1. Game servers and databases are installed from a Brick; Apps
-aren't yet.
+that knows v1. Game servers, databases and Apps are installed from a Brick.
 
-Adding either opens the same dialog (`AddInstanceDialogHost`): pick the
-kind, pick its Brick, then answer what that kind asks. Each page's Add
+An App is installed from an App Brick, which so far says only what it
+deploys: an image, or a Dockerfile or a Compose file in a source chosen at
+install, which is a repository or a file written in Hearth. Kiln's catalog
+has one for each (`docker-image`, `dockerfile`, `compose`), and for now only
+those are offered and accepted. Hearth keeps an App's configuration, so
+Hearth turns the Brick and its answers into it
+(`appBrickDeploy` in the contracts) and the Relay deploys that
+configuration as it always has. An App doesn't record its Brick yet: it is
+read as the one for what it deploys, as are Apps made before Apps ran
+Bricks, and nothing about their containers changed. Still to come for a
+catalog of Apps: what a Brick says around what it deploys (its environment,
+ports, volumes and health check), an App that records its Brick and is
+offered its newer revisions, and App Bricks from other catalogs.
+
+Adding any of them opens the same dialog (`AddInstanceDialogHost`): pick
+the kind, pick its Brick, then answer what that kind asks. Each page's Add
 button opens it on its own kind. Everything about browsing Bricks is shared;
 a kind adds one row to `brickKindPresentations`
 (`apps/web/src/components/brick-kinds.ts`) for its categories and labels,
 and one pane for what it asks before creating. A game server asks a name
 and a Relay, and its Brick's inputs are answered on its Startup page; a
 database answers its Brick's inputs there, since its version is chosen
-once.
+once; an App answers its Brick's inputs there too, and where a Brick that
+builds a file finds it.
 
 An instance carries what its Brick says it is: `brickKind` and `brickType`,
 from the `kiln.brick.kind` and `kiln.brick.type` labels on its container.
@@ -263,7 +277,9 @@ from a tag or an image name today.
    servers and databases are added from one dialog. Only those five Bricks
    run, not another catalog's; a database's version is chosen when it is
    created, and moving one to another major version is not built.
-8. Apps as Bricks.
+8. Apps as Bricks. Apps are installed from Kiln's three generic Bricks, in
+   the one Add dialog. A catalog of Apps waits on instance groups, pulled
+   forward from step 11 for an App that comes with a database.
 9. Domains for every kind.
 10. One instance page, with each kind's own tabs.
 11. Tailscale as its own kind, with the instance group.
