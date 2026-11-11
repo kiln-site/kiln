@@ -67,6 +67,7 @@ export * from "./instance-limits.js"
 export * from "./resource-limits.js"
 export * from "./database-login.js"
 export * from "./app-bricks.js"
+export * from "./app-environment.js"
 export * from "./database-bricks.js"
 export * from "./group-bricks.js"
 export * from "./security.js"
@@ -284,7 +285,10 @@ export const relayCreateDatabaseSchema = z
     recipeDefinition: brickRecipeSchema,
     username: databaseUsernameSchema,
     variables: z
-      .record(z.string().regex(/^[a-z][a-z0-9_]{0,47}$/u), brickInputValueSchema)
+      .record(
+        z.string().regex(/^[a-z][a-z0-9_]{0,47}$/u),
+        brickInputValueSchema
+      )
       .default({}),
   })
   .strict()
@@ -1300,12 +1304,28 @@ export const relayInstanceImageCheckResultSchema = z.discriminatedUnion(
     }),
     // Its container runs another image than the one named, as when an
     // App's config changed since it deployed.
-    z.object({ ...installedBrick, id: instanceIdSchema, status: z.literal("changed") }),
-    z.object({ ...installedBrick, id: instanceIdSchema, status: z.literal("not_deployed") }),
+    z.object({
+      ...installedBrick,
+      id: instanceIdSchema,
+      status: z.literal("changed"),
+    }),
+    z.object({
+      ...installedBrick,
+      id: instanceIdSchema,
+      status: z.literal("not_deployed"),
+    }),
     // A deployment is running; its outcome decides what runs.
-    z.object({ ...installedBrick, id: instanceIdSchema, status: z.literal("deploying") }),
+    z.object({
+      ...installedBrick,
+      id: instanceIdSchema,
+      status: z.literal("deploying"),
+    }),
     // It names a digest, which never moves.
-    z.object({ ...installedBrick, id: instanceIdSchema, status: z.literal("pinned") }),
+    z.object({
+      ...installedBrick,
+      id: instanceIdSchema,
+      status: z.literal("pinned"),
+    }),
     z.object({
       ...installedBrick,
       error: z.string().max(500),

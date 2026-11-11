@@ -1,4 +1,4 @@
-import { appBrickDeploy } from "./app-bricks.js"
+import { appBrickDeploy, appBrickProblem } from "./app-bricks.js"
 import {
   BRICK_FORMAT,
   brickAnswers,
@@ -14,7 +14,8 @@ import {
 
 // What Kiln installs of a group Brick so far: databases, each from a
 // database Brick of the same catalog, and Apps written in the group that
-// run an image and are connected to those databases. Everything else a
+// run an image, set their own variables and are connected to those
+// databases. Everything else a
 // group can say is refused until Kiln installs it.
 
 /** What reaching a member gives the member connected to it, by template name. */
@@ -35,6 +36,8 @@ export interface GroupBrickDatabase {
 export interface GroupBrickApp {
   /** The members it reaches, and the variables it gets for each. */
   connect: Readonly<Record<string, Readonly<Record<string, string>>>>
+  /** The variables its recipe sets itself, each with its template filled. */
+  environment: Record<string, string>
   image: string
   key: string
   /** What it is called. Without one, it takes the group's name. */
@@ -76,12 +79,6 @@ export function groupBrickProblem(recipe: BrickRecipe): string | null {
   if (recipe.kind !== "group" || recipe.group === undefined) {
     return "This isn't a group Brick"
   }
-  const made = brickInputs(recipe).find(
-    (input) => input.type === "secret" && input.generate === true
-  )
-  if (made !== undefined) {
-    return `Kiln doesn't make a group Brick's secrets yet (${made.label})`
-  }
   const members = Object.entries(recipe.group.members)
   for (const [key, member] of members) {
     if (isBrickMember(member)) {
@@ -99,14 +96,8 @@ export function groupBrickProblem(recipe: BrickRecipe): string | null {
     if (member.deploy?.type !== "image") {
       return `Kiln installs an App written in a group from an image only (${key})`
     }
-    const installed = appBrickDeploy(memberRecipe(recipe, member), {})
-    // What an answer would fix isn't the Brick's problem.
-    if (
-      "problem" in installed &&
-      installed.problem.startsWith("Kiln doesn't")
-    ) {
-      return `${installed.problem} (${key})`
-    }
+    const unrun = appBrickProblem(memberRecipe(recipe, member))
+    if (unrun !== null) return `${unrun} (${key})`
     for (const target of Object.keys(member.connect ?? {})) {
       const reached = recipe.group.members[target]
       if (!reached || !isBrickMember(reached)) {
@@ -167,6 +158,7 @@ export function groupBrickInstall(
     }
     install.apps.push({
       connect: member.connect ?? {},
+      environment: installed.deploy.environment,
       image: installed.deploy.image,
       key,
       ...(member.name === undefined ? {} : { name: member.name }),

@@ -116,12 +116,17 @@ vi.mock("@/server/brick-catalogs.server", async () => {
       summary: "An App with a database of its own.",
       author: "Kiln",
     },
+    inputs: [{ key: "key", label: "Key", type: "secret", generate: true }],
     group: {
       members: {
         database: { brick: "postgres" },
         web: {
           kind: "app",
-          deploy: { type: "image", image: "ghcr.io/acme/analytics:1" },
+          deploy: {
+            type: "image",
+            image: "ghcr.io/acme/analytics:1",
+            env: { SECRET_KEY: "{{ key }}" },
+          },
           connect: { database: { DATABASE_URL: "{{ connection }}" } },
         },
       },
@@ -221,20 +226,21 @@ describeMysql("Installing a group Brick", () => {
           // start, at the name its Relay gives the database.
           const config = yield* loadAppConfigEffect(relayId, app?.id ?? "")
           assert.strictEqual(config?.config.image, "ghcr.io/acme/analytics:1")
+          // A secret Kiln made for it is there too.
           assert.match(
             config?.config.environment ?? "",
             new RegExp(
-              `^DATABASE_URL=postgresql://[^:]+:[^@]+@database-${database?.id}:5432/[^\\n]+\\n$`,
+              `^SECRET_KEY=[\\w-]{32}\\nDATABASE_URL=postgresql://[^:]+:[^@]+@database-${database?.id}:5432/[^\\n]+\\n$`,
               "u"
             )
           )
           // What it keeps of its Brick, to be offered its revisions: the
-          // App follows the group's Brick as its `web`, with the variable
+          // App follows the group's Brick as its `web`, with the variables
           // the Brick set as the Brick's.
           assert.deepStrictEqual(config?.brick, {
             answers: {},
             connect: ["database"],
-            environment: ["DATABASE_URL"],
+            environment: ["SECRET_KEY", "DATABASE_URL"],
             member: "web",
             name: "Analytics",
             revision: 1,

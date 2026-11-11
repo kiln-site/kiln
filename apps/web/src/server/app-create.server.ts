@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 
 import {
+  appEnvironmentWith,
   relayAppSchema,
   type AppBrickDeploy,
   type BrickVariableValue,
@@ -241,10 +242,15 @@ async function createAppHandler(
       { user }
     )
   }
-  const environment =
+  const connected =
     databaseId === null
-      ? undefined
+      ? ""
       : appDatabaseEnvironment(await requiredCredential(relay.id, databaseId))
+  // What its Brick sets goes in beside what reaches its database.
+  const environment =
+    deploys.type === "image"
+      ? appEnvironmentWith(connected, [], deploys.environment)
+      : connected
   const made = await provisionApp(user, relay, {
     brick: follows,
     databaseIds: databaseId === null ? [] : [databaseId],

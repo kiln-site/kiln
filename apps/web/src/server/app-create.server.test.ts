@@ -132,7 +132,28 @@ vi.mock("@/server/brick-catalogs.server", async () => {
       source: `https://bricks.test/${id}.yml`,
     })
   )
-  return { defaultBrickCatalog: async () => ({ bricks }) }
+  // An App Brick that sets its own variables, one a secret Kiln makes.
+  const blog = brickSchema.parse({
+    format: "kiln.brick/v2",
+    kind: "app",
+    metadata: {
+      id: "blog",
+      name: "Blog",
+      summary: "An example.",
+      author: "Kiln",
+    },
+    inputs: [
+      { key: "mode", label: "Mode", type: "text", default: "production" },
+      { key: "key", label: "Key", type: "secret", generate: true },
+    ],
+    deploy: {
+      type: "image",
+      image: "ghcr.io/acme/blog:1",
+      env: { MODE: "{{ mode }}", SECRET_KEY: "{{ key }}" },
+    },
+    source: "https://bricks.test/blog.yml",
+  })
+  return { defaultBrickCatalog: async () => ({ bricks: [...bricks, blog] }) }
 })
 vi.mock("@/server/web-hostname-access.server", () => ({
   generateAppHostnameBestEffort: () => Promise.resolve(),
@@ -388,6 +409,32 @@ describeMysql("Creating an App with a database", () => {
           assert.strictEqual(saved?.config.sourceType, "image")
           assert.strictEqual(saved?.config.image, "ghcr.io/acme/site:1")
           assert.isTrue(created.deployable)
+          // One of Kiln's generic Bricks: the App is its owner's, and
+          // follows nothing.
+          assert.isNull(saved?.brick)
+
+          // A catalog Brick sets its variables, makes its secret once, and
+          // is kept, with its answers, to be followed.
+          const blog = yield* createApp({
+            brick: "https://bricks.test/blog.yml",
+            name: "Journal",
+          })
+          const followed = yield* loadAppConfigEffect(relayId, blog.id)
+          const secret = String(followed?.brick?.answers.key)
+          assert.match(secret, /^[\w-]{32}$/u)
+          assert.strictEqual(
+            followed?.config.environment,
+            `MODE=production\nSECRET_KEY=${secret}\n`
+          )
+          // Its answers are kept as they stood, a default among them, so
+          // a later revision's other default doesn't change this App.
+          assert.deepStrictEqual(followed?.brick, {
+            answers: { key: secret, mode: "production" },
+            environment: ["MODE", "SECRET_KEY"],
+            name: "Blog",
+            revision: 1,
+            source: "https://bricks.test/blog.yml",
+          })
 
           for (const refused of [
             // Another kind's Brick, one from no catalog of Kiln's, and one
@@ -400,10 +447,10 @@ describeMysql("Creating an App with a database", () => {
             yield* createApp({ ...refused, name: "Other" }).pipe(Effect.flip)
           }
           assert.deepStrictEqual(
-            (yield* apps).map((app) => app.app_id),
-            [created.id]
+            (yield* apps).map((app) => app.app_id).sort(),
+            [created.id, blog.id].sort()
           )
-          assert.deepStrictEqual(relay.jobs, [created.id])
+          assert.deepStrictEqual(relay.jobs, [created.id, blog.id])
         })
     )
 
