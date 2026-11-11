@@ -1,0 +1,209 @@
+import type { RowDataPacket } from "mysql2/promise"
+import { Clock, Effect } from "effect"
+
+import { Database, type DatabaseTransaction } from "@/effect/database"
+import { databaseTable } from "@/lib/database-config"
+
+// An instance group keeps instances together: a name, and members of any
+// kind on any Relay. It is its own record, not a feature of one kind. An
+// instance is in one group at most, and a group with no members left is
+// gone.
+
+/** The kinds of instance a group keeps, as the rest of Hearth names them. */
+export type InstanceGroupMemberKind = "app" | "database" | "server"
+
+export interface InstanceGroupMember {
+  instanceId: string
+  kind: InstanceGroupMemberKind
+  relayId: string
+}
+
+export interface InstanceGroup {
+  id: string
+  /** Game servers, then Apps, then databases. */
+  members: ReadonlyArray<InstanceGroupMember>
+  name: string
+}
+
+interface GroupRow extends RowDataPacket {
+  id: string
+  name: string
+}
+
+interface MemberRow extends RowDataPacket {
+  group_id: string
+  instance_id: string
+  instance_kind: InstanceGroupMemberKind
+  relay_id: string
+}
+
+export const createInstanceGroupEffect = Effect.fn("instanceGroups.create")(
+  function* (group: { createdBy: string; id: string; name: string }) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    // Trying the same create again makes the same group, once.
+    yield* database.execute(
+      "instance_group_create",
+      `INSERT IGNORE INTO ${databaseTable("instance_group")}
+         (id, name, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [group.id, group.name, group.createdBy, now, now]
+    )
+  }
+)
+
+/** Puts an instance in a group, which takes it out of any other. */
+export const addInstanceGroupMemberEffect = Effect.fn(
+  "instanceGroups.addMember"
+)(function* (groupId: string, member: InstanceGroupMember) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  yield* database.execute(
+    "instance_group_member_add",
+    `INSERT INTO ${databaseTable("instance_group_member")}
+       (instance_id, group_id, instance_kind, relay_id, created_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       group_id = VALUES(group_id),
+       instance_kind = VALUES(instance_kind),
+       relay_id = VALUES(relay_id)`,
+    [member.instanceId, groupId, member.kind, member.relayId, now]
+  )
+})
+
+const membersOf = Effect.fn("instanceGroups.members")(function* (
+  groupId: string
+) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<MemberRow>(
+    "instance_group_members",
+    `SELECT instance_id, group_id, instance_kind, relay_id
+       FROM ${databaseTable("instance_group_member")}
+      WHERE group_id = ?
+      ORDER BY instance_kind ASC, instance_id ASC`,
+    [groupId]
+  )
+  return rows.map((row): InstanceGroupMember => ({
+    instanceId: row.instance_id,
+    kind: row.instance_kind,
+    relayId: row.relay_id,
+  }))
+})
+
+export const loadInstanceGroupEffect = Effect.fn("instanceGroups.load")(
+  function* (groupId: string) {
+    const database = yield* Database
+    const rows = yield* database.queryRows<GroupRow>(
+      "instance_group",
+      `SELECT id, name FROM ${databaseTable("instance_group")} WHERE id = ?`,
+      [groupId]
+    )
+    const group = rows.at(0)
+    if (!group) return null
+    return {
+      id: group.id,
+      members: yield* membersOf(group.id),
+      name: group.name,
+    } satisfies InstanceGroup
+  }
+)
+
+/** The group an instance is in, with everything else in it, or null. */
+export const instanceGroupOfEffect = Effect.fn("instanceGroups.of")(function* (
+  instanceId: string
+) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<MemberRow>(
+    "instance_group_of",
+    `SELECT group_id FROM ${databaseTable("instance_group_member")}
+      WHERE instance_id = ?`,
+    [instanceId]
+  )
+  const membership = rows.at(0)
+  return membership ? yield* loadInstanceGroupEffect(membership.group_id) : null
+})
+
+// A group is its members: without any, nothing keeps it. Only a group that
+// just lost a member is looked at: one being installed has none yet.
+const dropIfEmpty = (transaction: DatabaseTransaction, groupId: string) =>
+  transaction.execute(
+    `DELETE FROM ${databaseTable("instance_group")}
+      WHERE id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM ${databaseTable("instance_group_member")}
+           WHERE group_id = ?
+        )`,
+    [groupId, groupId]
+  )
+
+/**
+ * Takes an instance out of its group, as when it is deleted. Safe to run
+ * again, and for an instance in no group.
+ */
+export const removeInstanceGroupMemberEffect = Effect.fn(
+  "instanceGroups.removeMember"
+)(function* (instanceId: string) {
+  const database = yield* Database
+  yield* database.transaction("instanceGroups.removeMember", (transaction) =>
+    Effect.gen(function* () {
+      const [membership] = yield* transaction.queryRows<MemberRow>(
+        `SELECT group_id FROM ${databaseTable("instance_group_member")}
+          WHERE instance_id = ?`,
+        [instanceId]
+      )
+      if (!membership) return
+      yield* transaction.execute(
+        `DELETE FROM ${databaseTable("instance_group_member")}
+          WHERE instance_id = ?`,
+        [instanceId]
+      )
+      yield* dropIfEmpty(transaction, membership.group_id)
+    })
+  )
+})
+
+/** Forgets a group. Its members stay as they are, in no group. */
+export const deleteInstanceGroupEffect = Effect.fn("instanceGroups.delete")(
+  function* (groupId: string) {
+    const database = yield* Database
+    yield* database.transaction("instanceGroups.delete", (transaction) =>
+      Effect.gen(function* () {
+        yield* transaction.execute(
+          `DELETE FROM ${databaseTable("instance_group_member")}
+            WHERE group_id = ?`,
+          [groupId]
+        )
+        yield* transaction.execute(
+          `DELETE FROM ${databaseTable("instance_group")} WHERE id = ?`,
+          [groupId]
+        )
+      })
+    )
+  }
+)
+
+/**
+ * The statements that take a removed Relay's instances out of their groups,
+ * for the transaction that removes the Relay.
+ */
+export const removeRelayFromInstanceGroups = (
+  transaction: DatabaseTransaction,
+  relayId: string
+) =>
+  Effect.gen(function* () {
+    const left = yield* transaction.queryRows<MemberRow>(
+      `SELECT DISTINCT group_id
+         FROM ${databaseTable("instance_group_member")}
+        WHERE relay_id = ?`,
+      [relayId]
+    )
+    if (left.length === 0) return
+    yield* transaction.execute(
+      `DELETE FROM ${databaseTable("instance_group_member")}
+        WHERE relay_id = ?`,
+      [relayId]
+    )
+    for (const { group_id: groupId } of left) {
+      yield* dropIfEmpty(transaction, groupId)
+    }
+  })

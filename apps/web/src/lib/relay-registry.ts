@@ -33,6 +33,7 @@ import type {
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { loadedKilnInstallationId } from "@/effect/installation"
+import { removeRelayFromInstanceGroups } from "@/effect/instance-groups"
 import {
   mapPairingHttpResponse,
   mapPairingTransportError,
@@ -1266,6 +1267,8 @@ export const deletePersistedRelayEffect = Effect.fn("relay.deletePersisted")(
             WHERE relay_id = ?`,
           [id]
         )
+        // Its instances leave their groups with it.
+        yield* removeRelayFromInstanceGroups(transaction, id)
         const result = yield* transaction.execute(
           `DELETE FROM ${databaseTable("relay")} WHERE id = ?`,
           [id]

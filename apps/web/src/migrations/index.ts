@@ -68,6 +68,7 @@ import { instanceUpdates } from "./0067_instance_updates"
 import { instanceBrickUpdates } from "./0068_instance_brick_updates"
 import { instanceUpdateNotifications } from "./0069_instance_update_notifications"
 import { instanceBrickCheckTime } from "./0070_instance_brick_check_time"
+import { instanceGroups } from "./0071_instance_groups"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -139,4 +140,5 @@ export const migrations: ReadonlyArray<Migration> = [
   instanceBrickUpdates,
   instanceUpdateNotifications,
   instanceBrickCheckTime,
+  instanceGroups,
 ]
