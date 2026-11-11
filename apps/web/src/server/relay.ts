@@ -90,7 +90,6 @@ import {
   provisionInstanceDomainBestEffort,
 } from "@/server/domains.server"
 import { syncInstanceDomainAfterPortUpdateBestEffort } from "@/server/relay-port-update.server"
-import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
 import { webRouteProxySchema } from "@/lib/domain-schemas"
 import {
@@ -792,7 +791,7 @@ async function updateInstanceWebRoutesHandler(
             `/v1/instances/${encodeURIComponent(data.instanceId)}/web-routes`,
             {
               body: JSON.stringify({
-                routes: webRoutesForRelay(data.relayId, data.routes),
+                routes: data.routes,
               }),
               headers: { "Content-Type": "application/json" },
               method: "PUT",

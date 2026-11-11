@@ -82,10 +82,6 @@ export const relayInstallationV1Feature = "relay-installation-v1"
 // so Hearth can check them for known vulnerabilities. `relay.security.cancel`
 // stops the inventory running and those waiting, as when scans are paused.
 export const relaySecurityInventoryV1Feature = "security-inventory-v1"
-// Web routes take a www counterpart, plain HTTP, a primary flag, an optional
-// label, and redirects to another URL. Older Relays need a name and a port
-// on every route.
-export const relayWebRouteOptionsV1Feature = "web-route-options-v1"
 // The Relay answers `instance.icon.read` with a small image's bytes, from a
 // file root or from inside one of an app's containers.
 export const relayIconReadV1Feature = "icon-read-v1"

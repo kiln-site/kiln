@@ -41,7 +41,6 @@ import {
   requestResourceDeletion,
 } from "@/lib/resource-deletion.server"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { webRoutesForRelay } from "@/server/web-route-compatibility.server"
 import {
   appConfigPatchSchema,
   authorizedApp,
@@ -449,7 +448,7 @@ async function updateAppWebRoutesHandler(
           "app.network.routes.write",
           {
             appId: data.appId,
-            routes: webRoutesForRelay(relay.id, data.routes),
+            routes: data.routes,
           },
           240_000,
           user.id
