@@ -1228,7 +1228,18 @@ export const relayDeployInstanceSchema = z.discriminatedUnion("kind", [
     .object({
       deploymentId: z.uuid(),
       id: instanceIdSchema,
-      kind: z.enum(["instance", "database"]),
+      kind: z.literal("instance"),
+    })
+    .strict(),
+  z
+    .object({
+      deploymentId: z.uuid(),
+      id: instanceIdSchema,
+      kind: z.literal("database"),
+      // A newer revision of its Brick to install with the deploy, in place
+      // of deploying it again as it is.
+      recipe: brickSourceSchema.optional(),
+      recipeDefinition: brickRecipeSchema.optional(),
     })
     .strict(),
   relayDeployAppSchema
@@ -1237,8 +1248,6 @@ export const relayDeployInstanceSchema = z.discriminatedUnion("kind", [
     .strict(),
 ])
 
-// What image apps' tags name in their registries now, against the images
-// their containers run. Each app names the image its saved config deploys.
 // Asks what each of these instances' image tags name now, against what
 // their containers run. One kind a request, since reading each kind is its
 // own permission.

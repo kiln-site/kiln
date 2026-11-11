@@ -3584,8 +3584,21 @@ async function executeControlRequest(
           return databaseDeploymentLogs.run(
             input.id,
             input.deploymentId,
-            "Redeploying the database",
-            (onPhase, note) => databases.redeploy(input.id, onPhase, note),
+            input.recipeDefinition
+              ? "Updating the database's Brick"
+              : "Redeploying the database",
+            (onPhase, note) =>
+              databases.redeploy(
+                input.id,
+                onPhase,
+                note,
+                input.recipe && input.recipeDefinition
+                  ? {
+                      recipe: input.recipe,
+                      recipeDefinition: input.recipeDefinition,
+                    }
+                  : undefined
+              ),
             "database"
           )
         case "instance": {
