@@ -100,7 +100,8 @@ A capability usually moves in two steps: first onto one path with no key
 change, then onto one permission with a migration on Hearth and on each
 Relay.
 
-Updates follow the same shape with one more piece. Checking, recording,
+Updates follow the same shape with one more piece, for a newer image and
+for a newer revision of an instance's Brick alike. Checking, recording,
 notifying and waiting are the same for every kind; what differs (which
 instances check, and how one takes an update) is one adapter per kind in
 `apps/web/src/lib/instance-update-kinds.server.ts`. See

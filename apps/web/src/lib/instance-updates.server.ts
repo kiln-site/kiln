@@ -9,10 +9,13 @@ import { Cause, Clock, Effect, Fiber, Schedule } from "effect"
 import { Database } from "@/effect/database"
 import { ExternalServiceError } from "@/effect/errors"
 import {
+  autoBrickUpdateAt,
   autoUpdateAt,
   defaultInstanceUpdatePolicy,
   describesInstance,
   loadInstanceUpdatesEffect,
+  offeredBrickRevision,
+  recordInstanceBrickCheckEffect,
   recordInstanceImageCheckEffect,
   type InstanceUpdate,
   type InstanceUpdateKind,
@@ -23,7 +26,9 @@ import {
   publishNotificationChange,
   resolveNotificationsEffect,
 } from "@/effect/notifications"
+import { promiseEffect } from "@/effect/promise"
 import { forkAppWorker } from "@/effect/runtime"
+import { newestBrickRevision } from "@/lib/brick-revisions.server"
 import { databaseTable } from "@/lib/database-config"
 import {
   updatedKind,
@@ -305,6 +310,16 @@ const recordImageAnswersEffect = Effect.fnUntraced(function* (
   let changed = false
   for (const { askedAt, result, subject } of asked.answers) {
     if (subject.id !== instanceId) continue
+    // Its Brick, whatever the image check found.
+    if (result.brick) {
+      changed ||= yield* recordBrickAnswerEffect(
+        kind,
+        relay,
+        subject,
+        result.brick,
+        actorUserId
+      )
+    }
     // Asked about an image it no longer names, or gone since.
     const named = yield* adapter.namedImage(relay.id, instanceId)
     if (named === undefined || named !== subject.image) continue
@@ -346,6 +361,79 @@ const recordImageAnswersEffect = Effect.fnUntraced(function* (
     }
   }
   return changed
+})
+
+// Records which revision of its Brick an instance runs against the
+// catalog's, and tells whoever can deploy it about a newer one they
+// haven't heard of. Reports whether it changed what Kiln knows.
+const recordBrickAnswerEffect = Effect.fnUntraced(function* (
+  kind: InstanceUpdateKind,
+  relay: PersistedRelay,
+  subject: UpdateSubject,
+  installed: { revision: number; source: string },
+  actorUserId: string | null
+) {
+  const catalog = yield* promiseEffect(() =>
+    newestBrickRevision(installed.source)
+  )
+  const recorded = yield* recordInstanceBrickCheckEffect(
+    kind,
+    subject.id,
+    installed,
+    catalog?.revision ?? null
+  )
+  const update = (yield* loadInstanceUpdatesEffect([subject.id])).get(
+    subject.id
+  )
+  const offered = update ? offeredBrickRevision(update) : null
+  const prefix = `instance.brick-update:${subject.id}:`
+  if (recorded.newlySeen && offered !== null && catalog) {
+    const { resourceType } = updatedKind(kind)
+    const recipients = yield* notificationAudienceEffect(
+      { relayId: relay.id, resourceId: subject.id, resourceType },
+      // Whoever may take it: installing a newer recipe is a deploy.
+      "instance.deploy",
+      "instance.brick-update"
+    )
+    const delivered = yield* notifyUsersEffect(
+      recipients,
+      `${prefix}${offered}`,
+      {
+        brickName: catalog.name,
+        kind: "instance.brick-update",
+        resource: {
+          id: subject.id,
+          name: subject.name,
+          relayId: relay.id,
+          type: resourceType,
+        },
+        revision: offered,
+      },
+      { actorUserId }
+    )
+    if (delivered > 0) publishNotificationChange(recipients)
+  }
+  // A revision that's installed, skipped, or replaced by a newer one no
+  // longer needs anyone's attention.
+  const open = yield* openSourceKeysEffect("instance.brick-update", prefix)
+  publishNotificationChange(
+    yield* resolveNotificationsEffect(
+      "instance.brick-update",
+      open.filter((key) => key !== `${prefix}${offered}`)
+    )
+  )
+  const at = update ? autoBrickUpdateAt(update) : null
+  if (
+    offered !== null &&
+    at !== null &&
+    at <= (yield* Clock.currentTimeMillis)
+  ) {
+    yield* updatedKind(kind).installBrick?.(relay, subject.id, null, {
+      revision: offered,
+      source: installed.source,
+    }) ?? Effect.void
+  }
+  return recorded.changed
 })
 
 // Whether an instance checks for image updates now: its image could move,

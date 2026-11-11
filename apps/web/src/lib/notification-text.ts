@@ -73,6 +73,8 @@ export function notificationTitle(content: NotificationContent): string {
     // Every kind's, under the name it had while only Apps updated.
     case "app.image-update":
       return `Your ${resourceTypeLabels[content.resource.type]} has an update available`
+    case "instance.brick-update":
+      return `Your ${resourceTypeLabels[content.resource.type]}'s Brick has an update`
     case "app.deployed": {
       if (content.status === "failed") return "Your App failed to deploy"
       const times = (content.count ?? 1) > 1 ? ` ${content.count} times` : ""
@@ -118,6 +120,8 @@ export function notificationDetail(
       return `${content.resource.name} - ${formatBytes(content.usedBytes)} of ${formatBytes(content.limitBytes)}`
     case "app.image-update":
       return `${content.resource.name} - ${content.image}`
+    case "instance.brick-update":
+      return `${content.resource.name} - ${content.brickName}, revision ${content.revision}`
     case "app.deployed": {
       const { count = 1, failures, resource, status } = content
       if (failures && count > 1)

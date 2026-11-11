@@ -410,6 +410,7 @@ const notificationIcons = {
   "kiln.updated": PackageCheck,
   "resource.disk-limit": HardDrive,
   "app.image-update": PackagePlus,
+  "instance.brick-update": PackagePlus,
   "app.deployed": CloudUpload,
   "security.report": ShieldAlert,
   "server.migration": ArrowRightLeft,

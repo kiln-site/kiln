@@ -76,10 +76,52 @@ An update is one notification per instance and image, with **Deploy** and
 newer one, or no longer on offer. Its kind is still `app.image-update` in
 stored notifications and preferences, from when only Apps updated.
 
+## Brick revisions
+
+A Brick says which revision of its recipe it is (`metadata.revision`, a
+whole number its author raises; see the
+[Brick format](../apps/bricks/docs/brick-v2.md#metadata)). An instance
+keeps the revision it was installed from on its container
+(`kiln.brick.revision`; 1 for one made before revisions), and the Relay
+says it, with the Brick's source, in every answer to a check. Hearth
+compares it with the revision the Brick has now in the catalogs it holds:
+Kiln's own first, then every catalog anyone added. A newer one is offered
+the way an image is, under the same choice: a notification by default,
+installed on its own after the wait if the instance is set to Automatic,
+nothing when checks are off. **Skip** passes over one revision, not the
+next.
+
+**Update Brick** installs the recipe the catalog has now, at the same
+source, with the answers the instance already has:
+
+- **A game server** takes it as a change of Brick: the Relay resolves the
+  new recipe with its saved startup answers, pins the new copy, and
+  replaces the container, running again if it was.
+- **A database** deploys with the new recipe: the Relay resolves it with the
+  database's saved answers, such as its version, and replaces the container
+  over the same data volume. Its login stays exactly as the engine was
+  first given it: the variables it takes its name, user, password and root
+  password from are carried over, never made again. The Relay refuses a
+  revision that keeps its data somewhere else, listens on another port, or
+  is another engine, and changes nothing.
+
+A recipe the saved answers no longer fit is refused the same way before
+anything stops: a new question with no default, or an answer the Brick no
+longer offers. So a Brick's author gives a new input a default, and keeps
+the options instances already chose.
+
+The image and the Brick are separate offers on one instance: a newer
+image under the same recipe, and a newer recipe. Each is a deployment with
+the trigger `update`.
+
+Kiln's own catalog is read from its source every few minutes. A catalog
+someone added is as current as its last sync.
+
 ## Not built yet
 
-- Updates to an instance's Brick. A Brick will carry a `revision`, and an
-  instance installed from an older one will be offered the newer recipe the
-  same way: notify by default, automatic if chosen.
-- Apps built from a Dockerfile, a Compose file or a repository aren't
-  checked: they have no single tag to watch.
+- Apps aren't installed from Bricks yet, so they have no revision. Apps
+  built from a Dockerfile, a Compose file or a repository aren't checked
+  for images either: they have no single tag to watch.
+- A changelog or a view of what a revision changes in the recipe.
+- Keeping some of a Brick's own lines changed by hand across a revision.
+  An App will follow its Brick or be detached from it.

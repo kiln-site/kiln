@@ -31,7 +31,9 @@ import {
   checkInstanceUpdate,
   deployInstanceUpdate,
   getInstanceUpdates,
+  installInstanceBrick,
   saveInstanceUpdatePolicy,
+  skipInstanceBrickUpdate,
   skipInstanceUpdate,
 } from "@/server/instance-updates"
 
@@ -87,8 +89,16 @@ function updateStatus(updates: InstanceUpdates): {
   label: string
   tone: "attention" | "muted" | "plain" | "problem"
 } {
-  if (updates.pinned) return { label: "Pinned to a digest", tone: "muted" }
   if (updates.mode === "off") return { label: "Off", tone: "muted" }
+  // A newer recipe is the larger change, so it is said first.
+  const brick = updates.brick
+  if (
+    brick?.latestRevision != null &&
+    brick.latestRevision !== brick.skippedRevision
+  ) {
+    return { label: "Brick update available", tone: "attention" }
+  }
+  if (updates.pinned) return { label: "Pinned to a digest", tone: "muted" }
   if (updates.state === "available") {
     if (updates.latestDigest === updates.skippedDigest) {
       return { label: "Skipped", tone: "muted" }
@@ -259,8 +269,32 @@ function InstanceUpdatesDialog({
     },
     onError: failed("Could not update"),
   })
+  const skipBrick = useMutation({
+    mutationFn: (revision: number) =>
+      skipInstanceBrickUpdate({ data: { ...input, revision } }),
+    onSuccess: refresh,
+    onError: failed("Could not skip"),
+  })
+  const installBrick = useMutation({
+    mutationFn: () => installInstanceBrick({ data: input }),
+    onSuccess: async () => {
+      showToast({ message: "Brick update queued", type: "success" })
+      await refresh()
+      onOpenChange(false)
+      await instance.followDeployment?.()
+    },
+    onError: failed("Could not update its Brick"),
+  })
   const busy =
-    check.isPending || save.isPending || skip.isPending || deploy.isPending
+    check.isPending ||
+    save.isPending ||
+    skip.isPending ||
+    deploy.isPending ||
+    skipBrick.isPending ||
+    installBrick.isPending
+  const brickRevision = updates.brick?.latestRevision ?? null
+  const brickSkipped =
+    brickRevision !== null && brickRevision === updates.brick?.skippedRevision
   const available = updates.state === "available" ? updates.latestDigest : null
   const skipped = available !== null && available === updates.skippedDigest
 
@@ -334,6 +368,20 @@ function InstanceUpdatesDialog({
               {updates.checkError}
             </p>
           ) : null}
+          {updates.brick ? (
+            <DialogFact label="Brick">
+              <span>Revision {updates.brick.revision}</span>
+              {updates.brick.latestRevision !== null ? (
+                <span className="text-muted-foreground">
+                  · revision {updates.brick.latestRevision} is out
+                  {updates.brick.latestRevision ===
+                  updates.brick.skippedRevision
+                    ? ", skipped"
+                    : ""}
+                </span>
+              ) : null}
+            </DialogFact>
+          ) : null}
         </dl>
 
         {available && (canManage || canDeploy) ? (
@@ -367,6 +415,39 @@ function InstanceUpdatesDialog({
                   Update now
                 </Button>
               ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {brickRevision !== null && canDeploy ? (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              {brickSkipped
+                ? "Its Brick's newer revision was skipped; it won't install on its own."
+                : "Its Brick has a newer revision. It installs with the answers this one already has."}
+              {cost ? ` ${cost}` : null}
+            </p>
+            <div className="flex shrink-0 gap-2">
+              {brickSkipped ? null : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => skipBrick.mutate(brickRevision)}
+                >
+                  Skip
+                </Button>
+              )}
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() => installBrick.mutate()}
+              >
+                {installBrick.isPending ? (
+                  <LoaderCircle className="animate-spin" />
+                ) : null}
+                Update Brick
+              </Button>
             </div>
           </div>
         ) : null}

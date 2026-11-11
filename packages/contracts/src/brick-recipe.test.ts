@@ -5,6 +5,7 @@ import {
   brickAnswers,
   brickAnswersProblem,
   brickFollowers,
+  brickSourceLineage,
   brickRecipeSchema,
   brickSuggestedValue,
   redactedBrickInputs,
@@ -445,5 +446,28 @@ describe("the schema editors read", () => {
     await expect(
       `${JSON.stringify(z.toJSONSchema(brickRecipeSchema), null, 2)}\n`
     ).toMatchFileSnapshot("../../../apps/bricks/schema/brick-v2.schema.json")
+  })
+})
+
+describe("where a Brick comes from", () => {
+  // A catalog in a GitHub repository is read at a commit, which its Bricks'
+  // sources name: an instance installed at one commit has to find its
+  // Brick's newer revision at another.
+  it("knows a Brick read at another commit of its repository as the same one", () => {
+    const at = (commit: string, file = "bricks/paper.yml", repository = "kiln-site/kiln") =>
+      `https://raw.githubusercontent.com/${repository}/${commit}/apps/bricks/${file}`
+    const installed = brickSourceLineage(at("a".repeat(40)))
+    expect(brickSourceLineage(at("b".repeat(40)))).toBe(installed)
+    expect(brickSourceLineage(at("main"))).toBe(installed)
+    expect(brickSourceLineage(at("a".repeat(40), "bricks/folia.yml"))).not.toBe(
+      installed
+    )
+    expect(
+      brickSourceLineage(at("a".repeat(40), "bricks/paper.yml", "someone/kiln"))
+    ).not.toBe(installed)
+    // Anywhere else, a source is only itself.
+    expect(brickSourceLineage("https://example.com/v1/paper.yml")).not.toBe(
+      brickSourceLineage("https://example.com/v2/paper.yml")
+    )
   })
 })

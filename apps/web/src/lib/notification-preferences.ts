@@ -40,8 +40,13 @@ export const notificationScopeLabels = {
 /** What a person can turn off about one resource, by what it can send. */
 export const resourceNotificationKinds = {
   app: ["app.deployed", "app.image-update", "security.report"],
-  database: ["resource.disk-limit", "app.image-update", "security.report"],
-  instance: ["app.image-update", "security.report"],
+  database: [
+    "resource.disk-limit",
+    "app.image-update",
+    "instance.brick-update",
+    "security.report",
+  ],
+  instance: ["app.image-update", "instance.brick-update", "security.report"],
   relay: ["kiln.updated", "security.report"],
 } as const satisfies Record<
   NotificationResource["type"],
@@ -98,6 +103,11 @@ export const notificationPreferenceGroups = [
         description: "An instance's image has a newer version.",
         kind: "app.image-update",
         label: "Updates available",
+      },
+      {
+        description: "An instance's Brick has a newer revision of its recipe.",
+        kind: "instance.brick-update",
+        label: "Brick updates available",
       },
       {
         description: "A scan found new vulnerabilities.",
@@ -193,6 +203,7 @@ const allKinds: ReadonlyArray<NotificationKind> = [
   "access.removed",
   "resource.disk-limit",
   "app.image-update",
+  "instance.brick-update",
   "app.deployed",
   "security.report",
   "server.migration",

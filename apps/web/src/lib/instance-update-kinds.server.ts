@@ -77,6 +77,17 @@ export interface UpdatedKind {
     userId: string | null,
     digest: string | null
   ) => Effect.Effect<void, unknown, Database>
+  /**
+   * Asks for the newer `revision` of its Brick, the recipe a catalog has at
+   * `source`, to be installed: by someone, or by Kiln (`userId` null) once
+   * it has waited. Left out for a kind that doesn't run Bricks yet.
+   */
+  installBrick?: (
+    relay: PersistedRelay,
+    instanceId: string,
+    userId: string | null,
+    brick: { revision: number; source: string }
+  ) => Effect.Effect<void, unknown, Database>
   /** Tells whoever watches the kind that what Kiln knows changed. */
   published: (relayId: string) => void
 }
@@ -124,30 +135,32 @@ const apps: UpdatedKind = {
   published: publishAppDeploymentChange,
 }
 
-// A game server and a database take an update by deploying again, which
-// pulls the tag their container was made from. That replaces the container,
-// so it waits for everything else on the instance, in a turn of its own:
-// whatever asks holds the instance already, and can't wait for it here.
-const redeployForUpdate =
+// A game server and a database take an update by deploying again: the
+// same recipe, which pulls the tag their container was made from, or a
+// newer revision of it. That replaces the container, so it waits for
+// everything else on the instance, in a turn of its own: whatever asks
+// holds the instance already, and can't wait for it here.
+const inOwnTurn =
   (definition: {
     doing: string
     locks: (relayId: string, instanceId: string) => ReadonlyArray<LaneLock>
     name: string
-    redeploy: (
-      relay: PersistedRelay,
-      instanceId: string,
-      by: { trigger: "update"; userId: string | null }
-    ) => Promise<unknown>
-  }): UpdatedKind["deployUpdate"] =>
-  (relay, instanceId, userId, digest) =>
+  }) =>
+  (
+    relay: PersistedRelay,
+    instanceId: string,
+    userId: string | null,
+    /** What Kiln's own update is of, which it deploys once however it goes. */
+    claim: string | null,
+    deploy: () => Promise<unknown>
+  ) =>
     Effect.gen(function* () {
-      // Kiln's own update deploys each image once, however that went.
       if (userId === null) {
         if (
-          digest === null ||
+          claim === null ||
           !(yield* claimImageUpdateEffect(
             instanceId,
-            digest,
+            claim,
             crypto.randomUUID()
           ))
         ) {
@@ -160,12 +173,7 @@ const redeployForUpdate =
             definition.name,
             definition.doing,
             definition.locks(relay.id, instanceId),
-            promiseEffect(() =>
-              definition.redeploy(relay, instanceId, {
-                trigger: "update",
-                userId,
-              })
-            )
+            promiseEffect(deploy)
           ).pipe(
             Effect.asVoid,
             // Its deployment's record and log say how it went.
@@ -182,6 +190,29 @@ const redeployForUpdate =
         )
       )
     })
+
+// What an attempt at a Brick revision is kept as, beside image digests.
+const revisionClaim = (revision: number) => `revision:${revision}`
+
+const databaseTurn = inOwnTurn({
+  doing: "Updating this database",
+  locks: (relayId, databaseId) => [
+    exclusive(resourceKey("database", relayId, databaseId)),
+  ],
+  name: "database.deploy",
+})
+
+const serverTurn = inOwnTurn({
+  doing: "Updating this game server",
+  // Its domains name its address, as for any deploy of one.
+  locks: (relayId, instanceId) => [
+    exclusive(resourceKey("instance", relayId, instanceId)),
+    exclusive(
+      dnsKey({ relayId, resourceId: instanceId, resourceType: "instance" })
+    ),
+  ],
+  name: "instance.deploy",
+})
 
 // A Relay's game servers, as it lists them: Hearth keeps no record of its
 // own of what each runs.
@@ -223,18 +254,26 @@ const databases: UpdatedKind = {
     ),
   latestDeploymentStartedAt: (databaseId) =>
     latestDeploymentStartedAtEffect("database", databaseId),
-  deployUpdate: redeployForUpdate({
-    doing: "Updating this database",
-    locks: (relayId, databaseId) => [
-      exclusive(resourceKey("database", relayId, databaseId)),
-    ],
-    name: "database.deploy",
-    redeploy: async (relay, databaseId, by) => {
+  deployUpdate: (relay, databaseId, userId, digest) =>
+    databaseTurn(relay, databaseId, userId, digest, async () => {
       const { redeployDatabase } =
         await import("@/server/instance-deploy.server")
-      return redeployDatabase(relay, databaseId, by)
-    },
-  }),
+      return redeployDatabase(relay, databaseId, { trigger: "update", userId })
+    }),
+  installBrick: (relay, databaseId, userId, brick) =>
+    databaseTurn(
+      relay,
+      databaseId,
+      userId,
+      revisionClaim(brick.revision),
+      async () => {
+        const { installDatabaseBrickRevision } =
+          await import("@/server/instance-deploy.server")
+        return installDatabaseBrickRevision(relay, databaseId, brick.source, {
+          userId,
+        })
+      }
+    ),
   published: publishServerDeploymentChange,
 }
 
@@ -262,21 +301,23 @@ const servers: UpdatedKind = {
     ),
   latestDeploymentStartedAt: (instanceId) =>
     latestDeploymentStartedAtEffect("server", instanceId),
-  deployUpdate: redeployForUpdate({
-    doing: "Updating this game server",
-    // Its domains name its address, as for any deploy of one.
-    locks: (relayId, instanceId) => [
-      exclusive(resourceKey("instance", relayId, instanceId)),
-      exclusive(
-        dnsKey({ relayId, resourceId: instanceId, resourceType: "instance" })
-      ),
-    ],
-    name: "instance.deploy",
-    redeploy: async (relay, instanceId, by) => {
+  deployUpdate: (relay, instanceId, userId, digest) =>
+    serverTurn(relay, instanceId, userId, digest, async () => {
       const { redeployServer } = await import("@/server/instance-deploy.server")
-      return redeployServer(relay, instanceId, by)
-    },
-  }),
+      return redeployServer(relay, instanceId, { trigger: "update", userId })
+    }),
+  installBrick: (relay, instanceId, userId, brick) =>
+    serverTurn(
+      relay,
+      instanceId,
+      userId,
+      revisionClaim(brick.revision),
+      async () => {
+        const { installServerBrickRevision } =
+          await import("@/server/instance-deploy.server")
+        return installServerBrickRevision(relay, instanceId, { userId })
+      }
+    ),
   published: publishServerDeploymentChange,
 }
 

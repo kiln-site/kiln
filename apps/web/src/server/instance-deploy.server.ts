@@ -1,15 +1,19 @@
 import {
+  type BrickRecipe,
   projectRelayInstanceOverview,
   relayControlDeadlineMs,
   relayInstanceSchema,
   relayManagedDatabaseSchema,
+  relayUpdateInstanceStartupSchema,
 } from "@workspace/contracts"
 import type { z } from "zod"
 
+import { setManagedDatabaseImageEffect } from "@/effect/managed-databases"
 import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { newestBrickRevision } from "@/lib/brick-revisions.server"
 import { dnsKey } from "@/lib/dns-operations"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
@@ -115,6 +119,64 @@ export async function redeployServer(
 }
 
 /**
+ * Installs the newer revision of a game server's Brick: the recipe its
+ * catalog has now, at the same source, with the answers it already has.
+ * The Relay refuses a recipe those answers no longer fit, as one with a new
+ * question that has no default, and changes nothing. Whoever calls holds
+ * the server whole and has checked that they may.
+ */
+export async function installServerBrickRevision(
+  relay: PersistedRelay,
+  instanceId: string,
+  by: { userId: string | null }
+): Promise<RelayInstance> {
+  const existing = await requiredRelayInstance(relay, instanceId)
+  const newest = existing.brickSource
+    ? await newestBrickRevision(existing.brickSource)
+    : null
+  if (!newest) throw new Error("No catalog has this game server's Brick")
+  // Where the catalog reads it from now, which may be another commit.
+  const { definition: recipeDefinition, source } = newest
+  return instanceReplaced(
+    relay,
+    relayInstanceSchema.parse(
+      await asServerDeployment(
+        {
+          brickId: recipeDefinition.metadata.id,
+          brickName: recipeDefinition.metadata.name,
+          instanceId,
+          relayId: relay.id,
+          trigger: "update",
+          userId: by.userId,
+        },
+        (deploymentId) =>
+          requestRelay(
+            relay,
+            `/v1/instances/${encodeURIComponent(instanceId)}/startup`,
+            {
+              method: "PUT",
+              body: JSON.stringify(
+                relayUpdateInstanceStartupSchema.parse({
+                  deploymentId,
+                  recipe: source,
+                  recipeDefinition,
+                  // Left as it was: running again if it was running.
+                  start:
+                    existing.observedState === "running" ||
+                    existing.observedState === "starting",
+                  variables: existing.variables ?? {},
+                })
+              ),
+            },
+            360_000,
+            by.userId ?? undefined
+          )
+      )
+    )
+  )
+}
+
+/**
  * Deploys a database again as it is: its image pulled anew and its
  * container replaced over the same data. Whoever calls holds the database
  * whole and has checked that they may.
@@ -122,7 +184,9 @@ export async function redeployServer(
 export async function redeployDatabase(
   relay: PersistedRelay,
   databaseId: string,
-  by: { trigger: "redeploy" | "update"; userId: string | null }
+  by: { trigger: "redeploy" | "update"; userId: string | null },
+  /** A newer revision of its Brick to install with the deploy. */
+  brick?: { recipe: string; recipeDefinition: BrickRecipe }
 ) {
   const database = relayManagedDatabaseSchema.parse(
     await asDatabaseDeployment(
@@ -131,14 +195,45 @@ export async function redeployDatabase(
         databaseRpc(
           relay,
           "instance.deploy",
-          { deploymentId, id: databaseId, kind: "database" },
+          { deploymentId, id: databaseId, kind: "database", ...brick },
           relayControlDeadlineMs("instance.deploy"),
           by.userId ?? undefined
         )
     )
   )
+  // A newer recipe may run another image.
+  if (brick) {
+    await runAppEffect(
+      "managedDatabases.record.image",
+      setManagedDatabaseImageEffect(relay.id, databaseId, database.image)
+    )
+  }
   publishDatabaseChange(relay.id, false)
   return database
+}
+
+/**
+ * Installs the newer revision of a database's Brick: the recipe its catalog
+ * has now at `source`, with the answers the database already has. Its login
+ * and its data stay as they are; the Relay refuses a recipe that would
+ * change either, and changes nothing. Whoever calls holds the database
+ * whole and has checked that they may.
+ */
+export async function installDatabaseBrickRevision(
+  relay: PersistedRelay,
+  databaseId: string,
+  source: string,
+  by: { userId: string | null }
+) {
+  const newest = await newestBrickRevision(source)
+  if (!newest) throw new Error("No catalog has this database's Brick")
+  return redeployDatabase(
+    relay,
+    databaseId,
+    { trigger: "update", userId: by.userId },
+    // Where the catalog reads it from now, which may be another commit.
+    { recipe: newest.source, recipeDefinition: newest.definition }
+  )
 }
 
 /** The locks a game server's deploy takes besides the server itself. */

@@ -58,7 +58,8 @@ export const serverDeploymentTriggerLabels: Record<
   install: "Install",
   // Stored under the name it had before every kind deployed again.
   reinstall: "Redeploy",
-  update: "Image update",
+  // A newer image, or a newer revision of its Brick.
+  update: "Update",
 }
 
 export const databaseDeploymentTriggerLabels: Record<
@@ -66,7 +67,8 @@ export const databaseDeploymentTriggerLabels: Record<
   string
 > = {
   redeploy: "Redeploy",
-  update: "Image update",
+  // A newer image, or a newer revision of its Brick.
+  update: "Update",
 }
 
 /** An image digest as people compare them: its first 12 hex digits. */

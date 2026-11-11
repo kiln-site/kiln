@@ -1,14 +1,22 @@
+import { Effect } from "effect"
+
 import {
+  autoBrickUpdateAt,
   autoUpdateAt,
   currentImageUpdate,
   defaultInstanceUpdatePolicy,
   loadInstanceUpdateEffect,
   saveInstanceUpdatePolicyEffect,
+  skipInstanceBrickUpdateEffect,
   skipInstanceUpdateEffect,
   type InstanceUpdate,
   type InstanceUpdateKind,
   type InstanceUpdateMode,
 } from "@/effect/instance-updates"
+import {
+  publishNotificationChange,
+  resolveNotificationsEffect,
+} from "@/effect/notifications"
 import { runAppEffect } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -50,6 +58,17 @@ export function updatesView(
   const pinned = named?.includes("@") ?? false
   return {
     ...policy,
+    // Its Brick's revision, which a deployment doesn't make stale as it
+    // does an image's digest: only a check says another.
+    brick: saved?.brick
+      ? {
+          autoUpdateAt: autoBrickUpdateAt(saved),
+          latestRevision: saved.brick.latestRevision,
+          latestSeenAt: saved.brick.latestSeenAt,
+          revision: saved.brick.revision,
+          skippedRevision: saved.brick.skippedRevision,
+        }
+      : null,
     autoUpdateAt: current && autoUpdateAt(current),
     checkError: current?.checkError ?? null,
     checkedAt: current?.checkedAt ?? null,
@@ -207,6 +226,56 @@ export async function skipInstanceUpdateHandler(
     )
   )
   updatedKind(data.kind).published(relay.id)
+}
+
+/** Passes over the Brick revision on offer. */
+export async function skipInstanceBrickUpdateHandler(
+  _user: AuthenticatedUser,
+  data: UpdatedInstanceInput & { revision: number }
+) {
+  const relay = await updatedInstance(data)
+  const skipped = await runAppEffect(
+    "instances.updates.skipBrick",
+    skipInstanceBrickUpdateEffect(data.instanceId, data.revision)
+  )
+  if (!skipped) throw new Error("That revision is no longer on offer")
+  // Its notification has nothing left to offer.
+  await runAppEffect(
+    "instances.updates.skipBrick.resolveNotifications",
+    resolveNotificationsEffect("instance.brick-update", [
+      `instance.brick-update:${data.instanceId}:${data.revision}`,
+    ]).pipe(Effect.map(publishNotificationChange))
+  )
+  updatedKind(data.kind).published(relay.id)
+}
+
+/**
+ * Installs the newer revision of its Brick now, skipped or not, whatever
+ * its wait, with the answers the instance already has.
+ */
+export async function installInstanceBrickHandler(
+  user: AuthenticatedUser,
+  data: UpdatedInstanceInput
+) {
+  const relay = await updatedInstance(data)
+  const adapter = updatedKind(data.kind)
+  const brick = (
+    await runAppEffect(
+      "instances.updates.load",
+      loadInstanceUpdateEffect(data.instanceId)
+    )
+  )?.brick
+  if (!adapter.installBrick || !brick || brick.latestRevision === null) {
+    throw new Error("Its Brick has no newer revision on offer")
+  }
+  await runAppEffect(
+    "instances.updates.installBrick",
+    adapter.installBrick(relay, data.instanceId, user.id, {
+      revision: brick.latestRevision,
+      source: brick.source,
+    })
+  )
+  return { queued: true as const }
 }
 
 /** Deploys the update on offer now, skipped or not, whatever its wait. */
