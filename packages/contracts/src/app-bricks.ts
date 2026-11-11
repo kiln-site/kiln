@@ -28,6 +28,17 @@ export type AppBrickDeploy =
  */
 export type AppBrickDeployType = AppBrickDeploy["type"]
 
+/**
+ * Kiln's own Brick for each thing an App can deploy, by ID. An App made
+ * from one is its owner's in every part, so it follows no Brick: it keeps
+ * none, and is never offered a revision.
+ */
+export const genericAppBrickIds: ReadonlySet<string> = new Set([
+  "compose",
+  "docker-image",
+  "dockerfile",
+])
+
 /** As long as the image an App's configuration names may be. */
 export const APP_IMAGE_MAX_LENGTH = 512
 

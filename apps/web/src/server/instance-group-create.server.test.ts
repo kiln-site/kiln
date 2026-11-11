@@ -228,8 +228,24 @@ describeMysql("Installing a group Brick", () => {
               "u"
             )
           )
+          // What it keeps of its Brick, to be offered its revisions: the
+          // App follows the group's Brick as its `web`, with the variable
+          // the Brick set as the Brick's.
+          assert.deepStrictEqual(config?.brick, {
+            answers: {},
+            connect: ["database"],
+            environment: ["DATABASE_URL"],
+            member: "web",
+            name: "Analytics",
+            revision: 1,
+            source: "https://bricks.test/analytics.yml",
+          })
           const group = yield* instanceGroupOfEffect(app?.id ?? "")
           assert.strictEqual(group?.name, "Stats")
+          assert.deepStrictEqual(
+            group?.members.map((member) => member.member),
+            ["web", "database"]
+          )
           assert.deepStrictEqual(
             group?.members.map((member) => member.instanceId),
             [app?.id, database?.id]

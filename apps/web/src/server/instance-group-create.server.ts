@@ -64,6 +64,7 @@ export interface CreateInstanceGroupInput {
 // What it makes, each with the ID it was given and the name it takes.
 interface GroupPlan {
   answers: InstalledGroupBrick["answers"]
+  brick: InstalledGroupBrick["brick"]
   apps: Array<
     InstalledGroupBrick["apps"][number] & { id: string; name: string }
   >
@@ -116,7 +117,13 @@ const planGroupEffect = Effect.fn("instanceGroups.create.plan")(function* (
       })
     )
   )
-  return { answers: installed.answers, apps, databases, id } satisfies GroupPlan
+  return {
+    answers: installed.answers,
+    apps,
+    brick: installed.brick,
+    databases,
+    id,
+  } satisfies GroupPlan
 })
 
 // Holds the group it makes and every member, by the IDs they were given,
@@ -200,6 +207,16 @@ async function createInstanceGroupHandler(
   await runAppEffect(
     "instanceGroups.create",
     createInstanceGroupEffect({
+      brick: {
+        answers: plan.answers,
+        databases: Object.fromEntries(
+          plan.databases.map((database) => [
+            database.key,
+            { brick: database.brickId, variables: database.variables },
+          ])
+        ),
+        source: plan.brick.source,
+      },
       createdBy: user.id,
       id: plan.id,
       name: data.name,
@@ -233,7 +250,12 @@ async function makeMembers(
   for (const database of plan.databases) {
     await joining(
       plan.id,
-      { instanceId: database.id, kind: "database", relayId: relay.id },
+      {
+        instanceId: database.id,
+        kind: "database",
+        member: database.key,
+        relayId: relay.id,
+      },
       () =>
         runOperationPromise(
           createDatabase,
@@ -276,9 +298,20 @@ async function makeMembers(
     if ("problem" in connected) throw new Error(connected.problem)
     await joining(
       plan.id,
-      { instanceId: app.id, kind: "app", relayId: relay.id },
+      { instanceId: app.id, kind: "app", member: app.key, relayId: relay.id },
       () =>
         provisionApp(user, relay, {
+          // It follows the group's Brick, as the App of it that it is. Its
+          // answers are the group's.
+          brick: {
+            answers: {},
+            connect: Object.keys(app.connect),
+            environment: Object.keys(connected.environment),
+            member: app.key,
+            name: plan.brick.name,
+            revision: plan.brick.revision,
+            source: plan.brick.source,
+          },
           databaseIds: Object.keys(app.connect).flatMap(
             (key) => ids[key] ?? []
           ),

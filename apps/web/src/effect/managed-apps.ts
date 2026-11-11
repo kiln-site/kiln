@@ -4,6 +4,8 @@ import { Cause, Clock, Effect, Predicate } from "effect"
 import type { AppConfig } from "@workspace/contracts"
 import {
   appConfigSchema,
+  brickInputValueSchema,
+  brickSourceSchema,
   databaseIdSchema,
   defaultAppConfig,
 } from "@workspace/contracts"
@@ -43,8 +45,38 @@ interface AppRow extends RowDataPacket {
 }
 
 interface AppConfigRow extends AppRow {
+  /** Only where it was asked for. */
+  brick_ciphertext?: string | null
   config_ciphertext: string
 }
+
+const APP_BRICK_PURPOSE = "kiln-app-brick"
+
+/**
+ * What an App keeps of the Brick it follows, beside its configuration: the
+ * Brick and the revision its configuration was last made from, the answers
+ * that made it, and which of its variables are the Brick's. An App made
+ * from one of Kiln's generic Bricks keeps none: everything about it is its
+ * owner's.
+ */
+export const appBrickRecordSchema = z.strictObject({
+  /** Its answers, a secret Kiln made among them. A group's are the group's. */
+  answers: z.record(z.string(), brickInputValueSchema).default({}),
+  /**
+   * The databases of its group the Brick connected it to, by what the Brick
+   * calls them. A revision writes it their addresses, and connects nothing.
+   */
+  connect: z.array(z.string()).optional(),
+  /** The variables of its environment the Brick set. */
+  environment: z.array(z.string()).default([]),
+  /** Which App of a group Brick it is. */
+  member: z.string().min(1).max(64).optional(),
+  /** The Brick's name, as it was when installed. */
+  name: z.string().min(1).max(80),
+  revision: z.number().int().min(1),
+  source: brickSourceSchema,
+})
+export type AppBrickRecord = z.infer<typeof appBrickRecordSchema>
 
 export interface AppRecord {
   appId: string
@@ -83,6 +115,8 @@ export const appNameExistsEffect = Effect.fn("apps.nameExists")(function* (
 export const createAppRecordEffect = Effect.fn("apps.create")(
   function* (input: {
     appId: string
+    /** The Brick it follows, when it follows one. */
+    brick?: AppBrickRecord
     createdBy: string
     /** What its Brick deploys. Without one, nothing yet. */
     deploys?: Pick<AppConfig, "sourceType"> & { image?: string }
@@ -102,14 +136,15 @@ export const createAppRecordEffect = Effect.fn("apps.create")(
     yield* database.execute(
       "app_create",
       `INSERT INTO ${databaseTable("app")}
-      (app_id, relay_id, name, config_ciphertext, created_by, owner_id,
-       created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      (app_id, relay_id, name, config_ciphertext, brick_ciphertext,
+       created_by, owner_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.appId,
         input.relayId,
         input.name,
         ciphertext,
+        input.brick ? yield* encryptBrick(input.brick) : null,
         input.createdBy,
         input.createdBy,
         now,
@@ -126,7 +161,8 @@ export const loadAppConfigEffect = Effect.fn("apps.config")(function* (
   const database = yield* Database
   const rows = yield* database.queryRows<AppConfigRow>(
     "app_config",
-    `SELECT app_id, relay_id, name, config_ciphertext, created_by, created_at
+    `SELECT app_id, relay_id, name, config_ciphertext, brick_ciphertext,
+            created_by, created_at
        FROM ${databaseTable("app")}
       WHERE relay_id = ? AND app_id = ?
       LIMIT 1`,
@@ -134,7 +170,11 @@ export const loadAppConfigEffect = Effect.fn("apps.config")(function* (
   )
   const row = rows.at(0)
   if (!row) return null
-  return { ...toRecord(row), config: yield* decryptConfig(row) }
+  return {
+    ...toRecord(row),
+    brick: yield* decryptBrick(row),
+    config: yield* decryptConfig(row),
+  }
 })
 
 /**
@@ -147,14 +187,15 @@ export const listRelayAppConfigsEffect = Effect.fn("apps.configs")(function* (
   const database = yield* Database
   const rows = yield* database.queryRows<AppConfigRow>(
     "app_configs",
-    `SELECT app_id, relay_id, name, config_ciphertext, created_by, created_at
+    `SELECT app_id, relay_id, name, config_ciphertext, brick_ciphertext,
+            created_by, created_at
        FROM ${databaseTable("app")}
       WHERE relay_id = ?`,
     [relayId]
   )
   return yield* Effect.forEach(rows, (row) =>
-    decryptConfig(row).pipe(
-      Effect.map((config) => [{ ...toRecord(row), config }]),
+    Effect.all({ brick: decryptBrick(row), config: decryptConfig(row) }).pipe(
+      Effect.map((read) => [{ ...toRecord(row), ...read }]),
       Effect.catchCause(() => Effect.succeed([]))
     )
   ).pipe(Effect.map((apps) => apps.flat()))
@@ -460,6 +501,38 @@ function toRecord(row: AppRow): AppRecord {
     name: row.name,
     relayId: row.relay_id,
   }
+}
+
+function encryptBrick(brick: AppBrickRecord) {
+  return Effect.try({
+    try: () =>
+      encryptWithKeyring(
+        JSON.stringify(brick),
+        betterAuthSecrets(),
+        APP_BRICK_PURPOSE
+      ),
+    catch: (cause) =>
+      CredentialError.make({ operation: "encrypt_app_brick", cause }),
+  })
+}
+
+// The Brick an App follows, or null for one that follows none.
+function decryptBrick(row: AppConfigRow) {
+  const ciphertext = row.brick_ciphertext
+  if (ciphertext === null || ciphertext === undefined) {
+    return Effect.succeed(null)
+  }
+  return Effect.try({
+    try: () =>
+      appBrickRecordSchema.parse(
+        JSON.parse(
+          decryptWithKeyring(ciphertext, betterAuthSecrets(), APP_BRICK_PURPOSE)
+            .plaintext
+        )
+      ),
+    catch: (cause) =>
+      CredentialError.make({ operation: "decrypt_app_brick", cause }),
+  })
 }
 
 function encryptConfig(config: StoredAppConfig) {

@@ -1,10 +1,14 @@
 import {
   appBrickDeploy,
   appBrickProblem,
+  brickRevision,
+  genericAppBrickIds,
   type AppBrickDeploy,
   type Brick,
   type BrickVariableValue,
 } from "@workspace/contracts"
+
+import type { AppBrickRecord } from "@/effect/managed-apps"
 
 import { defaultBrickCatalog } from "@/server/brick-catalogs.server"
 
@@ -40,11 +44,14 @@ export async function offeredAppBricks(): Promise<Array<Brick>> {
   ]
 }
 
-/** What the App Brick at a source deploys with these answers. */
+/**
+ * What the App Brick at a source deploys with these answers, and what an
+ * App made from it keeps of it: nothing for one of Kiln's generic Bricks.
+ */
 export async function installedAppBrick(
   source: string,
   answers: Readonly<Record<string, BrickVariableValue>>
-): Promise<AppBrickDeploy> {
+): Promise<{ deploys: AppBrickDeploy; follows: AppBrickRecord | undefined }> {
   const brick = (await appBricks()).find(
     (candidate) => candidate.source === source
   )
@@ -52,5 +59,16 @@ export async function installedAppBrick(
   const { iconSvg: _iconSvg, source: _source, ...recipe } = brick
   const installed = appBrickDeploy(recipe, answers)
   if ("problem" in installed) throw new Error(installed.problem)
-  return installed.deploy
+  return {
+    deploys: installed.deploy,
+    follows: genericAppBrickIds.has(recipe.metadata.id)
+      ? undefined
+      : {
+          answers: { ...answers },
+          environment: [],
+          name: recipe.metadata.name,
+          revision: brickRevision(recipe),
+          source,
+        },
+  }
 }

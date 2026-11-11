@@ -1,8 +1,14 @@
 import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect } from "effect"
 
+import { brickInputValuesSchema } from "@workspace/contracts"
+import { z } from "zod"
+
+import { encryptWithKeyring } from "../../keyring.mjs"
 import { Database, type DatabaseTransaction } from "@/effect/database"
+import { CredentialError } from "@/effect/errors"
 import { databaseTable } from "@/lib/database-config"
+import { betterAuthSecrets } from "@/lib/environment"
 
 // An instance group keeps instances together: a name, and members of any
 // kind on any Relay. It is its own record, not a feature of one kind. An
@@ -15,6 +21,8 @@ export type InstanceGroupMemberKind = "app" | "database" | "server"
 export interface InstanceGroupMember {
   instanceId: string
   kind: InstanceGroupMemberKind
+  /** What its group's Brick calls it, for a group a Brick made. */
+  member?: string | null
   relayId: string
 }
 
@@ -40,21 +48,80 @@ interface MemberRow extends RowDataPacket {
   group_id: string
   instance_id: string
   instance_kind: InstanceGroupMemberKind
+  member: string | null
   name: string | null
   relay_id: string
 }
 
+const GROUP_BRICK_PURPOSE = "kiln-instance-group-brick"
+
+/**
+ * What a group keeps of the Brick that made it, kept encrypted since an
+ * answer can be a secret: its answers as they stood at install, a secret
+ * Kiln made among them, and what each of its databases was made from. Its
+ * Apps are made again from these when the Brick is revised; a revision
+ * that would make a database from something else isn't one of an App's.
+ */
+const groupBrickSchema = z.strictObject({
+  answers: brickInputValuesSchema,
+  databases: z.record(
+    z.string(),
+    z.strictObject({
+      /** Its database Brick, by its ID in the group Brick's catalog. */
+      brick: z.string(),
+      variables: brickInputValuesSchema,
+    })
+  ),
+})
+export type InstanceGroupBrick = z.infer<typeof groupBrickSchema>
+
+const encryptGroupBrick = (brick: InstanceGroupBrick) =>
+  Effect.try({
+    try: () =>
+      encryptWithKeyring(
+        JSON.stringify(groupBrickSchema.parse(brick)),
+        betterAuthSecrets(),
+        GROUP_BRICK_PURPOSE
+      ),
+    catch: (cause) =>
+      CredentialError.make({
+        operation: "encrypt_instance_group_brick",
+        cause,
+      }),
+  })
+
 export const createInstanceGroupEffect = Effect.fn("instanceGroups.create")(
-  function* (group: { createdBy: string; id: string; name: string }) {
+  function* (group: {
+    /** The Brick that makes it, and what the group keeps of it. */
+    brick?: InstanceGroupBrick & { source: string }
+    createdBy: string
+    id: string
+    name: string
+  }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
+    const kept = group.brick
+      ? yield* encryptGroupBrick({
+          answers: group.brick.answers,
+          databases: group.brick.databases,
+        })
+      : null
     // Trying the same create again makes the same group, once.
     yield* database.execute(
       "instance_group_create",
       `INSERT IGNORE INTO ${databaseTable("instance_group")}
-         (id, name, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      [group.id, group.name, group.createdBy, now, now]
+         (id, name, brick_source, brick_ciphertext, created_by, created_at,
+          updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        group.id,
+        group.name,
+        group.brick?.source ?? null,
+        kept,
+        group.createdBy,
+        now,
+        now,
+      ]
     )
   }
 )
@@ -68,13 +135,21 @@ export const addInstanceGroupMemberEffect = Effect.fn(
   yield* database.execute(
     "instance_group_member_add",
     `INSERT INTO ${databaseTable("instance_group_member")}
-       (instance_id, group_id, instance_kind, relay_id, created_at)
-     VALUES (?, ?, ?, ?, ?)
+       (instance_id, group_id, instance_kind, relay_id, member, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
        group_id = VALUES(group_id),
        instance_kind = VALUES(instance_kind),
-       relay_id = VALUES(relay_id)`,
-    [member.instanceId, groupId, member.kind, member.relayId, now]
+       relay_id = VALUES(relay_id),
+       member = VALUES(member)`,
+    [
+      member.instanceId,
+      groupId,
+      member.kind,
+      member.relayId,
+      member.member ?? null,
+      now,
+    ]
   )
 })
 
@@ -85,7 +160,8 @@ const membersOf = Effect.fn("instanceGroups.members")(function* (
   const rows = yield* database.queryRows<MemberRow>(
     "instance_group_members",
     `SELECT member.instance_id, member.group_id, member.instance_kind,
-            member.relay_id, COALESCE(app.name, managed.name) AS name
+            member.relay_id, member.member,
+            COALESCE(app.name, managed.name) AS name
        FROM ${databaseTable("instance_group_member")} member
        LEFT JOIN ${databaseTable("app")} app
          ON member.instance_kind = 'app' AND app.app_id = member.instance_id
@@ -99,6 +175,7 @@ const membersOf = Effect.fn("instanceGroups.members")(function* (
   return rows.map((row): NamedInstanceGroupMember => ({
     instanceId: row.instance_id,
     kind: row.instance_kind,
+    member: row.member,
     name: row.name,
     relayId: row.relay_id,
   }))

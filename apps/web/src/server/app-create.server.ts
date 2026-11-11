@@ -12,6 +12,7 @@ import {
   appNameExistsEffect,
   createAppRecordEffect,
   deleteAppRecordEffect,
+  type AppBrickRecord,
 } from "@/effect/managed-apps"
 import { reserveInstanceIdEffect } from "@/effect/instance-ids"
 import { promiseEffect, recoverPromise } from "@/effect/promise"
@@ -210,7 +211,10 @@ async function createAppHandler(
   const relay = await requiredRelay(data.relayId)
   // Before anything is made: a Brick or an answer Kiln can't install from
   // leaves nothing behind.
-  const deploys = await installedAppBrick(data.brick, data.variables ?? {})
+  const { deploys, follows } = await installedAppBrick(
+    data.brick,
+    data.variables ?? {}
+  )
   const nameExists = await runAppEffect(
     "apps.name.preflight",
     appNameExistsEffect(relay.id, data.name)
@@ -242,6 +246,7 @@ async function createAppHandler(
       ? undefined
       : appDatabaseEnvironment(await requiredCredential(relay.id, databaseId))
   const made = await provisionApp(user, relay, {
+    brick: follows,
     databaseIds: databaseId === null ? [] : [databaseId],
     deploys,
     environment,
@@ -265,6 +270,8 @@ export async function provisionApp(
   user: AuthenticatedUser,
   relay: PersistedRelay,
   app: {
+    /** The Brick it follows, when it follows one. */
+    brick?: AppBrickRecord | undefined
     /** Databases on its Relay it starts connected to. */
     databaseIds: ReadonlyArray<string>
     deploys: AppBrickDeploy
@@ -290,6 +297,7 @@ export async function provisionApp(
     "apps.record.create",
     createAppRecordEffect({
       appId: id,
+      ...(app.brick ? { brick: app.brick } : {}),
       createdBy: user.id,
       deploys:
         app.deploys.type === "image"
