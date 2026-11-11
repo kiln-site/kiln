@@ -897,6 +897,13 @@ export function canAccessActivity(
   )
 }
 
+/** Whether some Relay lets this person create a game server on it. */
+export function canCreateGameServers(
+  capabilities: NavigationAccessCapabilities
+): boolean {
+  return hasScopedPermission(capabilities, "instance.create", ["relay"])
+}
+
 export function firstAccessibleAppHref(
   capabilities: NavigationAccessCapabilities
 ): string {

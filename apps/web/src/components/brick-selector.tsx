@@ -9,6 +9,7 @@ import {
   BadgeCheck,
   BookOpen,
   Check,
+  CircleAlert,
   ExternalLink,
   FileCode2,
   Globe2,
@@ -49,6 +50,7 @@ import {
   type BrickKindPresentation,
   type PickableBrickKind,
 } from "@/components/brick-kinds"
+import { instanceKindIcons } from "@/components/instance-kind-icon"
 import { isVerifiedBrick } from "@/components/brick-trust"
 import { normalizeArchitecture } from "@/lib/architecture"
 import { useKilnGitRepositorySlug } from "@/lib/git-repository"
@@ -218,17 +220,26 @@ function filterAndSortCustomBricks(
     : [...bricks]
 }
 
+const EMPTY_KINDS: ReadonlyArray<PickableBrickKind> = []
+
 const BrickTabSidebar = React.memo(function BrickTabSidebar({
   canAddCustomBrick,
   categories,
   disabled,
+  kind,
+  kinds,
   tab,
+  onKindChange,
   onTabChange,
 }: {
   canAddCustomBrick: boolean
   categories: BrickKindPresentation["categories"]
   disabled: boolean
+  kind: PickableBrickKind
+  /** The kinds to choose between, when there's more than this one. */
+  kinds: ReadonlyArray<PickableBrickKind>
   tab: BrickTabId
+  onKindChange: ((kind: PickableBrickKind) => void) | undefined
   onTabChange: (tab: BrickTabId) => void
 }) {
   const items = React.useMemo(
@@ -237,6 +248,44 @@ const BrickTabSidebar = React.memo(function BrickTabSidebar({
   )
   return (
     <aside className="flex min-h-0 flex-col border-b border-border/60 max-md:min-h-max md:border-r md:border-b-0">
+      {kinds.length > 1 && onKindChange ? (
+        <>
+          <p className="type-technical-label px-3 pt-3 pb-2 text-muted-foreground">
+            Kind
+          </p>
+          <nav
+            aria-label="Kind of instance"
+            className="flex gap-1 overflow-x-auto border-b border-border/60 px-2 pb-2 md:flex-col"
+          >
+            {kinds.map((item) => {
+              const presentation = brickKindPresentations[item]
+              const Icon = instanceKindIcons[presentation.instanceKind]
+              const active = item === kind
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  aria-pressed={active}
+                  disabled={disabled}
+                  onClick={() => {
+                    if (!active) onKindChange(item)
+                  }}
+                  className={cn(
+                    "flex shrink-0 items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors duration-150",
+                    active
+                      ? "bg-primary/12 font-medium text-foreground"
+                      : "text-muted-foreground hover:bg-accent/55 hover:text-foreground",
+                    disabled && "pointer-events-none opacity-50"
+                  )}
+                >
+                  <Icon className="size-3.5 shrink-0" />
+                  {presentation.name}
+                </button>
+              )
+            })}
+          </nav>
+        </>
+      ) : null}
       <p className="type-technical-label px-3 pt-3 pb-2 text-muted-foreground">
         Categories
       </p>
@@ -340,9 +389,12 @@ function useSaveCustomBrick(
 
 // Browsing the Bricks of one kind of instance: its categories, a search, the
 // list, and the chosen Brick's details over whatever `configuration` asks
-// before creating from it.
+// before creating from it. Given more `kinds` than its own, it also offers
+// the others, and whoever renders it shows that kind's Bricks instead.
 export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
   kind,
+  kinds = EMPTY_KINDS,
+  onKindChange,
   relayId,
   bricks,
   canAddCustomBrick,
@@ -353,8 +405,13 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
   className,
   configuration,
   emptyMessage = "No bricks match these filters.",
+  unavailable,
 }: {
   kind: PickableBrickKind
+  kinds?: ReadonlyArray<PickableBrickKind>
+  onKindChange?: (kind: PickableBrickKind) => void
+  /** Stands in for the Bricks while they load, or when they can't. */
+  unavailable?: React.ReactNode
   relayId: string
   bricks: Array<Brick>
   canAddCustomBrick: boolean
@@ -471,11 +528,18 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
         canAddCustomBrick={canAddCustomBrick}
         categories={presentation.categories}
         disabled={disabled}
+        kind={kind}
+        kinds={kinds}
         tab={tab}
+        onKindChange={onKindChange}
         onTabChange={selectTab}
       />
 
-      {tab === CATALOGS_TAB ? (
+      {unavailable && tab !== CATALOGS_TAB ? (
+        <div className="grid min-h-56 place-items-center p-6 text-center md:col-span-2">
+          {unavailable}
+        </div>
+      ) : tab === CATALOGS_TAB ? (
         <BrickCatalogManager disabled={disabled} />
       ) : (
         <>
@@ -1224,7 +1288,7 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
     return (
       <aside className="flex min-h-96 flex-col md:min-h-0">
         <form
-          className="min-h-0 flex-1 overflow-y-auto p-4 pr-11"
+          className="min-h-0 flex-1 overflow-y-auto p-4 pr-11 max-md:flex-none max-md:overflow-visible"
           onSubmit={(event) => {
             event.preventDefault()
             const source = selection.source.trim()
@@ -1314,7 +1378,7 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
 
   return (
     <aside className="flex min-h-96 flex-col md:min-h-0">
-      <div className="min-h-0 flex-1 overflow-y-auto p-4 pr-11">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4 pr-11 max-md:flex-none max-md:overflow-visible">
         <div className="flex items-start gap-3">
           <span className="grid size-[40px] shrink-0 place-items-center rounded-lg border border-border/70 bg-background/70 text-muted-foreground">
             <BrickIcon
@@ -1410,6 +1474,86 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
   )
 })
 
+/** The dialog every Brick browser fills. */
+export function BrickBrowserDialog({
+  children,
+  description,
+  onOpenChange,
+  open,
+  title,
+}: {
+  children: React.ReactNode
+  description?: string
+  onOpenChange: (open: boolean) => void
+  open: boolean
+  title: string
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="h-[min(40rem,calc(100dvh-2rem))] max-h-none gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] xl:max-w-5xl"
+        // Without a description, the title says all there is.
+        {...(description === undefined && { "aria-describedby": undefined })}
+      >
+        <DialogTitle className="sr-only">{title}</DialogTitle>
+        {description === undefined ? null : (
+          <DialogDescription className="sr-only">{description}</DialogDescription>
+        )}
+        {children}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const noSelection = () => {}
+
+/**
+ * A kind's browser before its Bricks arrive, or when they can't: the other
+ * kinds stay a click away.
+ */
+export function BrickCatalogUnavailable({
+  error,
+  kind,
+  kinds,
+  onKindChange,
+  pending,
+}: {
+  error: string | undefined
+  kind: PickableBrickKind
+  kinds?: ReadonlyArray<PickableBrickKind>
+  onKindChange?: (kind: PickableBrickKind) => void
+  pending: boolean
+}) {
+  return (
+    <BrickCatalogBrowser
+      kind={kind}
+      kinds={kinds}
+      onKindChange={onKindChange}
+      relayId=""
+      bricks={EMPTY_BRICKS}
+      canAddCustomBrick={false}
+      selection={null}
+      onSelectionChange={noSelection}
+      className="h-full rounded-none border-0 bg-transparent"
+      unavailable={
+        pending ? (
+          <LoaderCircle className="size-5 animate-spin text-primary-ink" />
+        ) : (
+          <div className="max-w-sm">
+            <CircleAlert className="mx-auto size-5 text-amber-300 light:text-amber-700" />
+            <p className="mt-2 text-sm font-semibold">
+              Brick catalog unavailable
+            </p>
+            <p className="type-support mt-1 text-muted-foreground">
+              {error ?? "Connect a Relay to load verified Bricks."}
+            </p>
+          </div>
+        )
+      }
+    />
+  )
+}
+
 export const BrickSelectDialog = React.memo(function BrickSelectDialog({
   open,
   onOpenChange,
@@ -1473,10 +1617,12 @@ export const BrickSelectDialog = React.memo(function BrickSelectDialog({
   )
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="h-[min(36rem,calc(100dvh-2rem))] max-h-none gap-0 overflow-hidden p-0 sm:max-w-[calc(100%-2rem)] xl:max-w-5xl">
-        <DialogTitle className="sr-only">{title}</DialogTitle>
-        <DialogDescription className="sr-only">{description}</DialogDescription>
+    <BrickBrowserDialog
+      description={description}
+      open={open}
+      title={title}
+      onOpenChange={onOpenChange}
+    >
         <BrickCatalogBrowser
           kind={kind}
           relayId={relayId}
@@ -1491,7 +1637,6 @@ export const BrickSelectDialog = React.memo(function BrickSelectDialog({
           }
           configuration={actions}
         />
-      </DialogContent>
-    </Dialog>
+    </BrickBrowserDialog>
   )
 })
