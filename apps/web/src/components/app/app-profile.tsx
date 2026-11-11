@@ -1,10 +1,11 @@
 import * as React from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { appFileRootId, type AppSourceType } from "@workspace/contracts"
+import { appFileRootId, type AppBrickDeployType } from "@workspace/contracts"
 import {
   Box,
   FileCode2,
   GitBranch,
+  Layers,
   LoaderCircle,
   Settings2,
 } from "lucide-react"
@@ -64,7 +65,7 @@ export function AppProfile({
     <InstanceProfile
       brick={
         brick.state === "ready" ? (
-          <BrickKind type={brick.type} />
+          <AppBrickName deploys={brick.deploys} />
         ) : (
           <p className="mt-1 h-5 text-sm text-muted-foreground">…</p>
         )
@@ -185,9 +186,10 @@ type Brick =
   | { state: "loading" }
   | { error: string; state: "error" }
   | {
+      /** What its Brick deploys. Unknown while its repository loads. */
+      deploys: AppBrickDeployType | undefined
       facts: ReadonlyArray<BrickFact>
       state: "ready"
-      type: AppSourceType
     }
 
 function BrickFacts({
@@ -235,14 +237,36 @@ function FactPairs({ facts }: { facts: ReadonlyArray<BrickFact> }) {
   )
 }
 
-// GitHub or Docker, as Add App offers them.
-function BrickKind({ type }: { type: AppSourceType }) {
-  const github = type === "github"
+// Kiln's own Brick for each thing an App deploys, as its catalog names them
+// (`apps/bricks/bricks`). An App is read as the one for what it deploys.
+const appBricks: Record<
+  AppBrickDeployType,
+  { icon: React.ReactNode; name: string }
+> = {
+  compose: { icon: <Layers />, name: "Docker Compose" },
+  dockerfile: { icon: <FileCode2 />, name: "Dockerfile" },
+  image: { icon: <Box />, name: "Docker image" },
+}
+
+function AppBrickName({
+  deploys,
+}: {
+  deploys: AppBrickDeployType | undefined
+}) {
+  if (deploys === undefined) {
+    return <p className="mt-1 h-5 text-sm text-muted-foreground">…</p>
+  }
+  const brick = appBricks[deploys]
   return (
-    <InstanceProfileBrick icon={github ? <GitHubMark /> : <Box />}>
-      {github ? "GitHub" : "Docker"}
-    </InstanceProfileBrick>
+    <InstanceProfileBrick icon={brick.icon}>{brick.name}</InstanceProfileBrick>
   )
+}
+
+// Where a Brick that builds a file finds it.
+const writtenInHearth: BrickFact = {
+  key: "source",
+  label: "Source",
+  value: "Written in Hearth",
 }
 
 const muted = (text: string) => (
@@ -262,12 +286,18 @@ function useAppBrick(app: App, canManage: boolean): Brick {
   if (config.isError) return { error: config.error.message, state: "error" }
   if (!saved) return { state: "loading" }
   return {
+    deploys:
+      saved.sourceType !== "github"
+        ? saved.sourceType
+        : // With no repository chosen yet, a Dockerfile is what it would build.
+          source === null
+          ? "dockerfile"
+          : source?.build,
     facts:
       saved.sourceType === "github"
         ? githubFacts(app, source)
         : dockerFacts(app, canManage, saved),
     state: "ready",
-    type: saved.sourceType,
   }
 }
 
@@ -287,7 +317,6 @@ function dockerFacts(
   }
   if (config.sourceType === "image") {
     return [
-      { key: "type", label: "Type", value: "Image" },
       {
         key: "registry",
         label: "Registry",
@@ -327,7 +356,7 @@ function dockerFacts(
   if (kind === "dockerfile") {
     const bases = baseImages(config.dockerfile)
     return [
-      { key: "type", label: "Type", value: "Dockerfile" },
+      writtenInHearth,
       {
         key: "base",
         label: "Base image",
@@ -361,7 +390,7 @@ function dockerFacts(
   ).length
   const images = [...new Set(app.containers.map(({ image }) => image))]
   return [
-    { key: "type", label: "Type", value: "Compose" },
+    writtenInHearth,
     { key: "file", label: "Compose file", value: file },
     {
       key: "services",
@@ -400,13 +429,14 @@ function githubFacts(
   const pending = source === undefined ? muted("…") : muted("—")
   return [
     {
-      key: "type",
-      label: "Type",
-      value: source
-        ? source.build === "compose"
-          ? "Compose"
-          : "Dockerfile"
-        : pending,
+      key: "source",
+      label: "Source",
+      value: (
+        <span className="flex min-w-0 items-center gap-1.5">
+          <GitHubMark className="size-3.5 shrink-0" />
+          GitHub
+        </span>
+      ),
     },
     {
       key: "repository",
