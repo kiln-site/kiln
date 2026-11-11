@@ -4,7 +4,10 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
-import { instanceGroupOfEffect } from "@/effect/instance-groups"
+import {
+  instanceGroupOfEffect,
+  changeInstanceGroupBrickEffect,
+} from "@/effect/instance-groups"
 import { loadAppConfigEffect } from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -248,6 +251,16 @@ describeMysql("Installing a group Brick", () => {
           })
           const group = yield* instanceGroupOfEffect(app?.id ?? "")
           assert.strictEqual(group?.name, "Stats")
+          // The group keeps its answers and what its database was made
+          // from, which a later revision is held to.
+          const kept = yield* changeInstanceGroupBrickEffect(
+            group?.id ?? "",
+            (keep) => Effect.succeed({ keep, made: keep })
+          )
+          assert.match(String(kept?.answers.key), /^[\w-]{32}$/u)
+          assert.deepStrictEqual(kept?.databases, {
+            database: { brick: "postgres", variables: {} },
+          })
           assert.deepStrictEqual(
             group?.members.map((member) => member.member),
             ["web", "database"]

@@ -102,6 +102,8 @@ const provisionWindows = 2
 
 export interface AppDeploymentRequest {
   appId: string
+  /** An update that is a newer revision of its Brick, already saved. */
+  brick?: boolean
   /** A commit to build again; otherwise the head of the app's branch. */
   commit?: string
   /**
@@ -217,8 +219,10 @@ const prepareAppDeploymentEffect = Effect.fn("Apps.deploy.prepare")(function* (
       )
     }
   }
+  // An image update deploys the digest on offer. A revision of its Brick
+  // deploys the configuration the revision just made, as any deploy does.
   const imageDigest =
-    request.trigger === "update"
+    request.trigger === "update" && !request.brick
       ? yield* imageUpdateDigest(app.config, request, id)
       : request.imageDigest
   if (imageDigest === null) return null
@@ -744,6 +748,11 @@ const DeployInput = Schema.Struct({
   requestedBy: Schema.NullOr(Schema.String),
   /** A new app's first deploy, once its Relay has provisioned it. */
   awaitProvisioning: Schema.optionalKey(Schema.Boolean),
+  /**
+   * An update that is a newer revision of its Brick, already written into
+   * its configuration, not a newer image for the configuration it has.
+   */
+  brick: Schema.optionalKey(Schema.Boolean),
   /** Builds without the cache, whatever joins it: it's how, not what. */
   noCache: Schema.optionalKey(Schema.Boolean),
 })
@@ -776,6 +785,11 @@ export const deployAppOperation = durableOperation({
           ...((waiting.awaitProvisioning || asked.awaitProvisioning) && {
             awaitProvisioning: true,
           }),
+          // A revision of its Brick is in its configuration by the time
+          // it's asked for, and stays to deploy whatever joins: an update
+          // that ends up the newest ask deploys that configuration, pulling
+          // its image as it stands, not the image offered for the one before.
+          ...((waiting.brick || asked.brick) && { brick: true }),
           ...((waiting.noCache || asked.noCache) && { noCache: true }),
         },
   doing: () => "Deploying this App",
@@ -1041,7 +1055,11 @@ const askedDeployment = (input: DeployInput) =>
             ...(input.image && { imageDigest: input.image.value }),
             trigger: "redeploy",
           }
-        : { ...base, trigger: input.trigger }
+        : {
+            ...base,
+            ...(input.brick && { brick: true }),
+            trigger: input.trigger,
+          }
     // Kiln's own asks of an app that deploys from elsewhere now.
     if (userId === null && automatic && sourceType !== "github") return null
     if (
@@ -1285,7 +1303,15 @@ const asSent = (plan: DeployPlan) =>
         new Error("Auto-deploy was turned off before this deployment was sent")
       )
     }
-    const payload = { ...plan.payload, config: app.config }
+    const payload = {
+      ...plan.payload,
+      // The Brick its configuration was made from, which the Relay keeps
+      // on what it deploys, to say which revision runs.
+      ...(app.brick && {
+        brick: { revision: app.brick.revision, source: app.brick.source },
+      }),
+      config: app.config,
+    }
     if (plan.token === null || payload.github === undefined) return payload
     const token = yield* checkoutToken(plan.token).pipe(
       Effect.mapError(sendError("github_token"))
@@ -1356,6 +1382,8 @@ export const askAppDeploymentEffect = Effect.fn("Apps.deploy.ask")(
     appId: string
     /** A new app's first deploy waits for its Relay to provision it. */
     awaitProvisioning?: boolean
+    /** An update that is a newer revision of its Brick, already saved. */
+    brick?: boolean
     commit?: { sha: string; source: string }
     image?: { digest: string; source: string }
     noCache?: boolean
@@ -1377,6 +1405,7 @@ export const askAppDeploymentEffect = Effect.fn("Apps.deploy.ask")(
         }),
         requestedBy: ask.userId ?? null,
         ...(ask.awaitProvisioning && { awaitProvisioning: true }),
+        ...(ask.brick && { brick: true }),
         ...(ask.noCache && { noCache: true }),
       },
       { key: appDeployKey(ask.relayId, ask.appId) }

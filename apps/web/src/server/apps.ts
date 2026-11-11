@@ -198,6 +198,13 @@ const detachBrick = resourceOperation({
       "apps.brick.detach",
       detachAppBrickEffect(relay.id, data.appId)
     )
+    // A revision it was told of is no longer its to take.
+    const { settleInstanceBrickNotificationsEffect } =
+      await import("@/lib/instance-updates.server")
+    await runAppEffect(
+      "apps.brick.detach.settle",
+      settleInstanceBrickNotificationsEffect(data.appId)
+    )
     publishAppChange(relay.id, false)
     return { detached: true as const }
   },

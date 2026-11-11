@@ -1208,9 +1208,20 @@ export const relayProvisionAppSchema = z.object({ appId: appIdSchema }).strict()
 /** A manifest digest, as registries name an image's exact content. */
 export const imageDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u)
 
+// The Brick an instance was installed from, and which revision of it:
+// what Hearth compares with the catalog's to offer a newer recipe.
+export const relayInstalledBrickSchema = z.object({
+  revision: z.number().int().min(1),
+  source: brickSourceSchema,
+})
+
 export const relayDeployAppSchema = z
   .object({
     appId: appIdSchema,
+    // The Brick its configuration was made from, for an App that follows
+    // one. The Relay keeps it on the containers it deploys, to say which
+    // revision runs.
+    brick: relayInstalledBrickSchema.optional(),
     config: appConfigSchema,
     // Required when the config's source is GitHub.
     github: relayAppGitHubCheckoutSchema.optional(),
@@ -1277,13 +1288,6 @@ export const relayInstanceImageCheckSchema = z
     kind: z.enum(["app", "database", "instance"]),
   })
   .strict()
-
-// The Brick an instance was installed from, and which revision of it:
-// what Hearth compares with the catalog's to offer a newer recipe.
-export const relayInstalledBrickSchema = z.object({
-  revision: z.number().int().min(1),
-  source: brickSourceSchema,
-})
 
 // Said with every answer, whatever the image check found.
 const installedBrick = { brick: relayInstalledBrickSchema.optional() }

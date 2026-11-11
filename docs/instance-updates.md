@@ -18,7 +18,8 @@ What "the image it runs" is depends on the kind:
 - **An App** deploys at a digest Kiln chose, kept on its container
   (`kiln.app.image.digest`). Hearth asks about the image its config names; a
   container running another image, or a config naming a digest, has nothing
-  to compare. For a container deployed before Kiln labelled its digest, the
+  to compare. An App is checked while its image is a tag that can move, or
+  while it follows a Brick. For a container deployed before Kiln labelled its digest, the
   Relay uses the digests Docker recorded when it pulled the image.
 - **A database and a game server** run the tag their container was made
   from, which deploying again pulls. The Relay reads that tag from the
@@ -125,6 +126,35 @@ source, with the answers the instance already has:
 - **A game server** takes it as a change of Brick: the Relay resolves the
   new recipe with its saved startup answers, pins the new copy, and
   replaces the container, running again if it was.
+- **An App** that follows a Brick is made again from it: Hearth works out
+  what the new recipe sets with the App's saved answers, replaces the image
+  and the variables the Brick set before with the revision's, and asks the
+  App's deployment queue to deploy the result. Everything its owner added
+  stays: other lines of its environment, domains, volumes, limits. A secret
+  Kiln made is the same after, and one the revision newly asks for is made
+  then; an input it newly asks is kept from then on at what it came to. A
+  revision that newly sets a variable the App's owner already set
+  themselves is refused until they remove theirs: it doesn't take over what
+  they wrote. In a group, the App is made from the group's Brick and
+  answers, and given again what reaches the group's databases as they are
+  now. A revision is an App's only while the group stays what it is: one
+  that makes other members than the group has, makes a database from
+  another Brick or with other answers, such as another version, or
+  connects the App to other databases than it was installed with, is
+  refused and says to install it again. The group's database follows its
+  own database Brick, and each App of a group takes a revision on its own:
+  what the revision's answers come to is decided and kept for the group as
+  one step, so a secret it newly asks for is made once, whichever App
+  takes it first and however many take it at once.
+
+  The revision is written into the App's configuration before it deploys.
+  If that deployment fails, the App runs on as it was with the new
+  configuration saved: its container still says the old revision, so the
+  offer stays, and deploying again, by Update Brick or Deploy, tries the
+  new one again. Detaching then leaves it with the new configuration.
+  Kiln's own install is judged where the configuration is written, holding
+  it: whether it is still Automatic, still offered and has waited. The
+  deployment that follows isn't judged again.
 - **A database** deploys with the new recipe: the Relay resolves it with the
   database's saved answers, such as its version, and replaces the container
   over the same data volume. Its login stays exactly as the engine was
@@ -159,11 +189,29 @@ the trigger `update`.
 Kiln's own catalog is read from its source every few minutes. A catalog
 someone added is as current as its last sync.
 
+### Which Apps follow a Brick
+
+An App made from a catalog Brick, alone or as one of a group's, keeps the
+Brick, the revision its configuration was made from and its answers, and
+the Relay keeps the Brick and revision on the container it deploys
+(`kiln.brick.source`, `kiln.brick.revision`), so what is offered is judged
+against what runs, not what was last saved. An App made from one of Kiln's
+generic Bricks (`docker-image`, `dockerfile`, `compose`) keeps none: every
+part of it is its owner's, and it is offered only its image.
+
+While an App follows a Brick, what the Brick set is the Brick's: what it
+deploys, its image, its start command, and the variables the Brick wrote.
+A change to one of those is refused, since the next revision would put it
+back. **Detach** on its Info page stops it following: it stays as it is,
+all of it becomes its owner's to change, it is offered no more revisions,
+and it can't be attached again.
+
 ## Not built yet
 
-- Apps aren't installed from Bricks yet, so they have no revision. Apps
-  built from a Dockerfile, a Compose file or a repository aren't checked
-  for images either: they have no single tag to watch.
+- Apps built from a Dockerfile, a Compose file or a repository aren't
+  checked for images: they have no single tag to watch. No Brick makes one
+  that follows it yet either.
 - A changelog or a view of what a revision changes in the recipe.
-- Keeping some of a Brick's own lines changed by hand across a revision.
-  An App will follow its Brick or be detached from it.
+- Keeping some of a Brick's own lines changed by hand across a revision:
+  an App follows its Brick or is detached from it.
+- App and group Bricks from catalogs other than Kiln's own.

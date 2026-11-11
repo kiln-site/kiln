@@ -9,6 +9,7 @@ import {
 } from "@workspace/contracts"
 
 import {
+  currentBrickUpdate,
   currentImageUpdate,
   loadInstanceUpdateEffect,
 } from "@/effect/instance-updates"
@@ -439,7 +440,16 @@ export async function getAppDeploymentSummaryHandler(data: {
               imageUpdate,
               app.config.image,
               latest.latest?.startedAt ?? null
-            )
+            ),
+            // The Brick it follows, as a check since its last deployment
+            // found it running. One detached from its Brick has none,
+            // whatever its container still says.
+            app.brick
+              ? currentBrickUpdate(
+                  imageUpdate,
+                  latest.latest?.startedAt ?? null
+                )
+              : null
           )
         : null,
   }

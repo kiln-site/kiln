@@ -237,6 +237,33 @@ describe("rolling deployments", () => {
   })
 })
 
+// The label a deployment leaves outlives the Relay's memory of it, so a
+// check after a restart still says which revision runs.
+describe("an App that follows a Brick", () => {
+  it("says which revision of its Brick it runs, as its last deployment left it", async () => {
+    const harness = await createdApp()
+    const source = "https://bricks.test/blog.yml"
+    const revision = async (number: number | null) => {
+      useDeploymentClock()
+      await harness.apps.deploy({
+        ...deployment({}),
+        ...(number === null ? {} : { brick: { revision: number, source } }),
+      })
+      await settledDeployment(harness)
+      const [answer] = await harness.apps.checkImages(
+        [{ appId, image: "nginx:alpine" }],
+        new AbortController().signal
+      )
+      return answer?.brick
+    }
+
+    expect(await revision(1)).toEqual({ revision: 1, source })
+    expect(await revision(2)).toEqual({ revision: 2, source })
+    // Detached: deployed since as its own, it says nothing of a Brick.
+    expect(await revision(null)).toBeUndefined()
+  })
+})
+
 describe("deployment logs", () => {
   it("reads the latest deployment's log and those the Relay kept, and nothing outside them", async () => {
     const harness = await createdApp()

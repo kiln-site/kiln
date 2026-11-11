@@ -29,6 +29,7 @@ import {
 } from "@/effect/managed-apps"
 import { listManagedDatabaseRecordsEffect } from "@/effect/managed-databases"
 import { promiseEffect } from "@/effect/promise"
+import { runAppEffect } from "@/effect/runtime"
 import { newestBrickRevision } from "@/lib/brick-revisions.server"
 import {
   askAppDeploymentEffect,
@@ -37,7 +38,12 @@ import {
 import { serverDeployDnsLocks } from "@/lib/dns-operations"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { publishServerDeploymentChange } from "@/lib/server-deployments.server"
-import { exclusive, resourceKey, type LaneLock } from "@/operations/lanes"
+import {
+  exclusive,
+  partKey,
+  resourceKey,
+  type LaneLock,
+} from "@/operations/lanes"
 import { inLanes, OperationBusyError } from "@/operations/operation"
 
 // What differs by kind about updates: which instances have an image that
@@ -79,6 +85,15 @@ export interface UpdatedKind {
     relayId: string,
     instanceId: string
   ) => Effect.Effect<string | null | undefined, unknown, Database>
+  /**
+   * Whether it still follows the Brick its container says it was deployed
+   * from. Left out for a kind that always does: an App can be detached from
+   * its Brick, and runs on as it was until it next deploys.
+   */
+  followsBrick?: (
+    relayId: string,
+    instanceId: string
+  ) => Effect.Effect<boolean, unknown, Database>
   /** When its newest deployment started, which may have changed what runs. */
   latestDeploymentStartedAt: (
     instanceId: string
@@ -134,6 +149,42 @@ const movingAppImage = (config: { image: string; sourceType: string }) =>
   config.image !== "" &&
   !config.image.includes("@")
 
+// It checks too while it follows a Brick, whose revisions it is offered
+// whatever its image names.
+const checkedApp = (app: {
+  brick: unknown
+  config: { image: string; sourceType: string }
+}) =>
+  movingAppImage(app.config) ||
+  (app.brick !== null &&
+    app.config.sourceType === "image" &&
+    app.config.image !== "")
+
+// An App takes a revision of its Brick as a database or a game server
+// does, with what installing one is for an App: its configuration made
+// again, and a deployment asked of its queue.
+const appsFollow = () =>
+  deploysAgain({
+    doing: "Updating this App's Brick",
+    install: async (relay, appId, newest, by) =>
+      (
+        await import("@/server/app-brick-revision.server")
+      ).installAppBrickRevision(relay, appId, newest, by),
+    kind: "app",
+    locks: appConfigLocks,
+    name: "app.updates.auto",
+    redeploy: (relay, appId, by) =>
+      runAppEffect(
+        "apps.deploy",
+        askAppDeploymentEffect({ appId, relayId: relay.id, ...by })
+      ),
+  })
+
+// Making an App again from its Brick changes its configuration.
+const appConfigLocks = (relayId: string, appId: string) => [
+  exclusive(partKey(resourceKey("app", relayId, appId), "config")),
+]
+
 const apps: UpdatedKind = {
   kind: "app",
   relayKind: "app",
@@ -142,7 +193,7 @@ const apps: UpdatedKind = {
     listRelayAppConfigsEffect(relay.id).pipe(
       Effect.map((records) =>
         records.flatMap((app) =>
-          movingAppImage(app.config)
+          checkedApp(app)
             ? [{ id: app.appId, image: app.config.image, name: app.name }]
             : []
         )
@@ -151,8 +202,12 @@ const apps: UpdatedKind = {
   namedImage: (relayId, appId) =>
     loadAppConfigEffect(relayId, appId).pipe(
       Effect.map((app) =>
-        app && movingAppImage(app.config) ? app.config.image : undefined
+        app && checkedApp(app) ? app.config.image : undefined
       )
+    ),
+  followsBrick: (relayId, appId) =>
+    loadAppConfigEffect(relayId, appId).pipe(
+      Effect.map((app) => (app?.brick ?? null) !== null)
     ),
   latestDeploymentStartedAt: (appId) =>
     latestAppDeploymentsEffect(appId).pipe(
@@ -162,6 +217,9 @@ const apps: UpdatedKind = {
   // running, joining any deploy already asked for. The queue deploys the
   // update on offer when its turn comes, and judges Kiln's own again then.
   updateLock: "shared",
+  // A revision of its Brick makes its configuration again, which is held
+  // while it does.
+  updateAlsoLocks: appConfigLocks,
   deployUpdate: (relay, appId, userId) =>
     askAppDeploymentEffect({
       appId,
@@ -169,12 +227,16 @@ const apps: UpdatedKind = {
       trigger: "update",
       userId,
     }).pipe(Effect.asVoid),
-  autoUpdate: (relay, appId) =>
-    askAppDeploymentEffect({
-      appId,
-      relayId: relay.id,
-      trigger: "update",
-    }).pipe(Effect.asVoid),
+  installBrick: (relay, appId, userId) =>
+    appsFollow().installBrick?.(relay, appId, userId) ?? Effect.void,
+  autoUpdate: (relay, appId, due) =>
+    due.of === "brick"
+      ? appsFollow().autoUpdate(relay, appId, due)
+      : askAppDeploymentEffect({
+          appId,
+          relayId: relay.id,
+          trigger: "update",
+        }).pipe(Effect.asVoid),
   published: publishAppDeploymentChange,
 }
 
@@ -190,10 +252,15 @@ const deploysAgain = (definition: {
   install: (
     relay: PersistedRelay,
     instanceId: string,
-    newest: { definition: BrickRecipe; source: string },
+    newest: {
+      definition: BrickRecipe
+      name: string
+      revision: number
+      source: string
+    },
     by: { userId: string | null }
   ) => Promise<unknown>
-  kind: "database" | "server"
+  kind: "app" | "database" | "server"
   locks: (relayId: string, instanceId: string) => ReadonlyArray<LaneLock>
   name: string
   redeploy: (

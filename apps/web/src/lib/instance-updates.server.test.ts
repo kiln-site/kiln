@@ -9,6 +9,7 @@ import {
 } from "@/effect/instance-updates"
 import {
   createAppRecordEffect,
+  detachAppBrickEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
 import { createManagedDatabaseRecordEffect } from "@/effect/managed-databases"
@@ -276,6 +277,61 @@ describeMysql("App image checks", () => {
             ),
             [sourceKey]
           )
+        })
+    )
+    // Its container says which Brick deployed it until it next deploys,
+    // whatever became of the App since.
+    it.effect(
+      "offer a Brick's revision only to an App that still follows the Brick",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(relayId)
+          yield* insertUser("user")
+          const source = "https://bricks.test/blog.yml"
+          yield* createAppRecordEffect({
+            appId,
+            brick: {
+              answers: {},
+              environment: [],
+              name: "Blog",
+              revision: 1,
+              source,
+            },
+            createdBy: "user",
+            deploys: { image, sourceType: "image" },
+            name: "Journal",
+            relayId,
+          })
+          const seen = (askedAt: number) =>
+            recordCheckedImageEffect(
+              "app",
+              { id: relayId } as PersistedRelay,
+              appId,
+              {
+                answers: [
+                  {
+                    askedAt,
+                    result: {
+                      brick: { revision: 1, source },
+                      id: appId,
+                      status: "changed",
+                    },
+                    subject: { id: appId, image, name: "Journal" },
+                  },
+                ],
+                unchecked: false,
+              },
+              null
+            )
+          const now = yield* Clock.currentTimeMillis
+
+          assert.strictEqual((yield* seen(now))?.brick?.revision, 1)
+
+          yield* detachAppBrickEffect(relayId, appId)
+          const after = yield* seen(now + 60_000)
+          // Nothing newer was recorded of it: what it has is from before.
+          assert.strictEqual(after?.brick?.checkedAt, now)
         })
     )
   })
