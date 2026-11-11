@@ -87,7 +87,7 @@ const announce = Effect.fnUntraced(function* (
     { relayId: relay.id, resourceId: update.instanceId, resourceType },
     // Whoever may take the update: deploying it is a deploy.
     "instance.deploy",
-    "app.image-update"
+    "instance.image-update"
   )
   const delivered = yield* notifyUsersEffect(
     recipients,
@@ -95,7 +95,7 @@ const announce = Effect.fnUntraced(function* (
     {
       digest,
       image: update.image,
-      kind: "app.image-update",
+      kind: "instance.image-update",
       resource: {
         id: update.instanceId,
         name,
@@ -108,9 +108,8 @@ const announce = Effect.fnUntraced(function* (
   if (delivered > 0) publishNotificationChange(recipients)
 })
 
-// The notification kind keeps the name it had while only Apps updated.
 function updateSourceKeyPrefix(instanceId: string) {
-  return `app.image-update:${instanceId}:`
+  return `instance.image-update:${instanceId}:`
 }
 
 /**
@@ -178,9 +177,9 @@ export const resolveInstanceUpdateNotificationsEffect = Effect.fn(
           offer.latest_digest !== settled.installedDigest
             ? offer.latest_digest
             : null
-        const open = yield* openSourceKeysEffect("app.image-update", prefix)
+        const open = yield* openSourceKeysEffect("instance.image-update", prefix)
         return yield* resolveNotificationsEffect(
-          "app.image-update",
+          "instance.image-update",
           open.filter((key) => key !== `${prefix}${offered}`)
         )
       })

@@ -71,10 +71,12 @@ what it runs.
 
 ## Notifications
 
-An update is one notification per instance and image, with **Deploy** and
-**Skip** on it. It clears once the image is deployed, skipped, replaced by a
-newer one, or no longer on offer. Its kind is still `app.image-update` in
-stored notifications and preferences, from when only Apps updated.
+An image update is one notification per instance and image
+(`instance.image-update`), with **Deploy** and **Skip** on it. A Brick
+revision is one per instance and revision (`instance.brick-update`), which
+opens the instance's page, where what it would install is shown. Each
+clears once it is deployed, skipped, replaced by a newer one, or no longer
+on offer.
 
 ## Brick revisions
 

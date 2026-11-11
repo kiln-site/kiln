@@ -114,7 +114,7 @@ export function notificationCommands(
     // Taken or passed over from its page, which shows what it would change.
     case "instance.brick-update":
       return open(notificationHref(content, platformAdmin), "Updates")
-    case "app.image-update": {
+    case "instance.image-update": {
       // A game server is an `instance` to notifications, a `server` here.
       const instance = {
         instanceId: content.resource.id,

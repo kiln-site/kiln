@@ -70,8 +70,7 @@ export function notificationTitle(content: NotificationContent): string {
         ? `Your ${type} was stopped at its disk limit`
         : `Your ${type} is over its disk limit`
     }
-    // Every kind's, under the name it had while only Apps updated.
-    case "app.image-update":
+    case "instance.image-update":
       return `Your ${resourceTypeLabels[content.resource.type]} has an update available`
     case "instance.brick-update":
       return `Your ${resourceTypeLabels[content.resource.type]}'s Brick has an update`
@@ -118,7 +117,7 @@ export function notificationDetail(
       return `${content.resource.name} - by ${content.actorName}`
     case "resource.disk-limit":
       return `${content.resource.name} - ${formatBytes(content.usedBytes)} of ${formatBytes(content.limitBytes)}`
-    case "app.image-update":
+    case "instance.image-update":
       return `${content.resource.name} - ${content.image}`
     case "instance.brick-update":
       return `${content.resource.name} - ${content.brickName}, revision ${content.revision}`

@@ -107,7 +107,7 @@ const InfoRailNotifications = React.memo(function InfoRailNotifications({
           { id, relayId },
           "instance.deploy"
         )
-          ? (["app.image-update"] as const)
+          ? (["instance.image-update"] as const)
           : []),
         ...(canAccessInstancePermission(
           capabilities,
@@ -130,7 +130,7 @@ const InfoRailNotifications = React.memo(function InfoRailNotifications({
         { id, relayId },
         "instance.deploy"
       )
-        ? (["app.image-update"] as const)
+        ? (["instance.image-update"] as const)
         : []),
       ...(canAccessDatabasePermission(
         capabilities,
