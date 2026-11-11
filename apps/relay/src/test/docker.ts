@@ -840,9 +840,14 @@ export class FakeDocker {
         Env: Object.entries(container.env).map(
           ([name, value]) => `${name}=${value}`
         ),
-        ExposedPorts: Object.fromEntries(
-          Object.keys(container.portBindings).map((port) => [port, {}])
-        ),
+        // What its image exposes, and what it publishes.
+        ExposedPorts: {
+          ...(this.imageConfigs.get(this.#imageKey(container.image) ?? "")
+            ?.ExposedPorts as Record<string, object> | undefined),
+          ...Object.fromEntries(
+            Object.keys(container.portBindings).map((port) => [port, {}])
+          ),
+        },
         Hostname: container.hostname,
         Image: container.image,
         Labels: container.labels,

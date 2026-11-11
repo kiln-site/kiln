@@ -67,3 +67,29 @@ export function primaryWebRoute<
   const serving = routes.filter((route) => !route.redirect)
   return serving.find((route) => route.primary) ?? serving[0]
 }
+
+// Ports a container listens on that are never the website Kiln would route
+// to: other protocols' well-known ports, and 443, since Kiln reaches a
+// service over plain HTTP.
+const notAWebsite = new Set([
+  21, 22, 23, 25, 53, 110, 143, 389, 443, 465, 587, 636, 993, 995, 1433, 1521,
+  1883, 2375, 2376, 3306, 5432, 5672, 6379, 9042, 9092, 11211, 27017,
+])
+
+/**
+ * The ports among those a container listens on, over TCP, that could be a
+ * website's, lowest first. They are only ever offered, one or several: a
+ * port a container listens on isn't known to be a website, or meant to be
+ * public, until someone picks it.
+ */
+export function webPortCandidates(ports: Iterable<number>): Array<number> {
+  return [...new Set(ports)]
+    .filter(
+      (port) =>
+        Number.isInteger(port) &&
+        port >= 1 &&
+        port <= 65_535 &&
+        !notAWebsite.has(port)
+    )
+    .sort((left, right) => left - right)
+}

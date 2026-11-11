@@ -136,8 +136,23 @@ which port its website answers on is served there from the start: making it
 saves its first web route, from that address to the port, before its first
 deployment, so a Relay behind someone else's proxy carries the route in the
 containers it starts. That route takes what making the App does, not
-`instance.network.write`, and is then the App's like any other. An App that
-doesn't say has the address ready for a route someone adds. An owner with
+`instance.network.write`, and is then the App's like any other. Making an
+App waits up to eight seconds for that, since Cloudflare is asked along the
+way; a route saved later than the App's containers shows, on a Relay behind
+someone else's proxy, as waiting for a deployment.
+
+An App that doesn't say has the address ready for a route, and is offered
+one on its Network page while it has none: each port its running services
+say they listen on that could be a website's, of any service, as a button
+that serves the address from it. Ports of other protocols (a database's,
+SSH, 443) aren't offered. Nothing is routed until someone picks one: a port
+an image exposes says it listens there, not that it is a website or meant
+to be public, and several candidates, or a Compose project's services,
+can't be told apart from their ports. The ports come from what each
+container exposes, published or not; Kiln doesn't check that anything
+answers HTTP on them.
+
+An owner with
 vanity domains of their own uses their default;
 everyone else gets Kiln's default. With no vanity domain at all, nothing
 is assigned. Unmarking a domain stops new addresses under it without

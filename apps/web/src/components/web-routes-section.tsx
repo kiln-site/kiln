@@ -79,7 +79,14 @@ export type { WebRouteServiceOption }
 
 // Domains Traefik serves for a game server or an app, in one table. Each
 // change saves the whole list, and the table shows it while it saves.
+/** An address nothing serves yet, and where its website might answer. */
+export interface UnservedAddress {
+  hostname: string
+  targets: ReadonlyArray<{ port: number; service: string }>
+}
+
 export function WebRoutesSection({
+  address,
   canWrite,
   dnsResource,
   error,
@@ -90,6 +97,9 @@ export function WebRoutesSection({
   statusAction,
   onSave,
 }: {
+  // An App's own address while it has no route, with the ports its running
+  // services listen on that could be its website's: one click serves it.
+  address?: UnservedAddress | undefined
   canWrite: boolean
   // Whose DNS records the domains' badges read.
   dnsResource: WebHostnameResourceRef
@@ -264,6 +274,29 @@ export function WebRoutesSection({
   const edit = React.useCallback((route: DisplayedRoute) => {
     setEditing({ mode: "edit", route })
   }, [])
+  const serve = React.useCallback(
+    (hostname: string, target: UnservedAddress["targets"][number]) => {
+      if (!saved || save.isPending) return
+      commit(
+        [
+          {
+            hostname,
+            httpsRedirect: true,
+            name: "",
+            path: null,
+            primary: true,
+            redirect: null,
+            service: target.service,
+            stripPrefix: true,
+            targetPort: target.port,
+            www: "none",
+          },
+        ],
+        "Could not route the address"
+      )
+    },
+    [commit, save.isPending, saved]
+  )
 
   const busy = !canWrite || !saved || save.isPending
 
@@ -292,6 +325,29 @@ export function WebRoutesSection({
           ) : null}
         </div>
       </div>
+      {address && canWrite && saved?.length === 0 && !save.isPending ? (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border/70 bg-muted/25 px-4 py-2.5 text-xs text-muted-foreground">
+          <span>
+            Nothing answers at{" "}
+            <span className="font-medium text-foreground">
+              {address.hostname}
+            </span>{" "}
+            yet. Serve it from
+          </span>
+          {address.targets.map((target) => (
+            <Button
+              key={`${target.service}:${target.port}`}
+              className="h-6 px-2 font-mono text-xs"
+              size="sm"
+              type="button"
+              variant="outline"
+              onClick={() => serve(address.hostname, target)}
+            >
+              {target.service}:{target.port}
+            </Button>
+          ))}
+        </div>
+      ) : null}
       <WebRoutesTable
         adoptable={adoptable}
         canWrite={canWrite}
