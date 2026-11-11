@@ -297,6 +297,7 @@ describeMysql("App image checks", () => {
               name: "Blog",
               revision: 1,
               source,
+              volumes: [],
             },
             createdBy: "user",
             deploys: { image, sourceType: "image" },

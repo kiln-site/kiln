@@ -409,9 +409,26 @@ answer the port (`port: "{{ port }}"`); an optional one left blank means
 the App has no website, and gets no route. A `compose` Brick's port names
 its `service`. Later revisions leave an App's routes alone.
 
+`volumes` are the folders of its container an App keeps, for an `image` or
+a `dockerfile`; a Compose file declares its own. Installing the App makes a
+Kiln volume for each, named after the App and the folder, and mounts it
+there before the first deployment, so nothing the App writes is kept in a
+container a deployment replaces. Each is a path a volume can be mounted at
+(`/var/www/html`, never `/`, and no `:`), named once.
+
+- They are ordinary Kiln volumes: no App's, so another App can mount one
+  too, and deleting the App leaves them.
+- While the App follows the Brick, each folder stays on a writable volume.
+  Which volume is its owner's to say, so a site can be moved onto another
+  one, and whatever else the App mounts is its owner's too.
+- A revision keeps the folders the App was installed with. One that keeps
+  others is refused: install it again to take it.
+- A volume made for an App that then couldn't be made stays, empty, on its
+  Relay's volumes; the same install tried again uses it.
+
 An App Brick that sets anything else (a second port, one published on the
-host, `ready`, `volumes`, a file written in the Brick) is refused until
-Kiln runs that part, as is one from another catalog.
+host, `ready`, a file written in the Brick) is refused until Kiln runs
+that part, as is one from another catalog.
 
 Kiln's catalog has a generic Brick for each thing an App deploys:
 `docker-image`, `dockerfile` and `compose`. An App made from one is its
@@ -468,7 +485,8 @@ does more, as it refuses one from another catalog:
   of the same catalog, by its ID. Its `inputs` are its answers.
 - A member written in place is an App that runs an image, with what an App
   Brick may say so far and no more: its web port gets the App its address
-  and first route, as an App Brick's does. A secret the group asks Kiln to
+  and first route, and each folder it keeps gets a volume, as an App
+  Brick's do. A secret the group asks Kiln to
   make is made once and kept with the group's answers.
 - `connect` gives an App its variables for a database of the group. In its
   templates `{{ connection }}` is the URL Kiln builds for the database's
@@ -482,7 +500,8 @@ does more, as it refuses one from another catalog:
 - A member that can't be made ends the install. What was made before it
   stays, in the group, to keep or delete.
 
-Kiln's catalog has one: `umami`.
+Kiln's catalog has two: `umami`, and `wordpress`, which keeps its site in
+`/var/www/html` beside a MySQL database.
 
 ## Settings
 

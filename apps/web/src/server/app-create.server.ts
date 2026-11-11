@@ -14,6 +14,7 @@ import {
   appNameExistsEffect,
   createAppRecordEffect,
   deleteAppRecordEffect,
+  sendSavedAppVolumeReferencesEffect,
   type AppBrickRecord,
 } from "@/effect/managed-apps"
 import { reserveInstanceIdEffect } from "@/effect/instance-ids"
@@ -40,7 +41,14 @@ import {
   signedIn,
 } from "@/operations/operation"
 import { publishAppChange } from "@/server/app-access"
-import { installedAppBrick } from "@/server/app-bricks.server"
+import {
+  brickVolumeLocks,
+  brickVolumeMounts,
+  brickVolumes,
+  makeBrickVolumes,
+  type BrickVolume,
+} from "@/server/app-brick-volumes.server"
+import { appBrickFolders, installedAppBrick } from "@/server/app-bricks.server"
 import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { appDatabaseEnvironment } from "@/server/app-database-environment.server"
 import {
@@ -76,13 +84,18 @@ interface CreateAppIds {
   /** The App's and a new database's, settled as it's asked for. */
   databaseId: string | null
   id: string
+  /** A volume for each folder its Brick keeps, settled with them. */
+  volumes: ReadonlyArray<BrickVolume>
 }
 
 // Settled once, not in `authorize`, which runs again after a wait: new IDs
 // would be new lanes, and it would keep taking its turn again. Reserved for
 // the person's request, so retrying the same create reserves nothing new.
+// The volumes its Brick's folders are kept on are settled with them: they
+// are lanes it holds too.
 export const withNewAppIdsEffect = Effect.fn("apps.create.reserveIds")(
   function* (input: CreateAppInput, userId: string) {
+    const folders = yield* promiseEffect(() => appBrickFolders(input.brick))
     const requestKey = `app.create:${userId}:${input.idempotencyKey}`
     const id = yield* reserveInstanceIdEffect("app", requestKey)
     const databaseId =
@@ -91,7 +104,12 @@ export const withNewAppIdsEffect = Effect.fn("apps.create.reserveIds")(
         : input.database
           ? yield* reserveInstanceIdEffect("database", `${requestKey}:database`)
           : null
-    return { ...input, databaseId, id } satisfies CreateAppInput & CreateAppIds
+    return {
+      ...input,
+      databaseId,
+      id,
+      volumes: brickVolumes({ id, name: input.name }, folders),
+    } satisfies CreateAppInput & CreateAppIds
   }
 )
 
@@ -152,6 +170,7 @@ export const createAppOperation = operation<CreateAppInput & CreateAppIds>()({
     return [
       exclusive(resourceKey("app", input.relayId, id)),
       shared(relayKey(input.relayId)),
+      ...brickVolumeLocks(input.relayId, input.volumes),
       ...(database === null
         ? []
         : input.database?.kind === "new"
@@ -217,6 +236,13 @@ async function createAppHandler(
     data.brick,
     data.variables ?? {}
   )
+  // What it holds was settled from the folders the Brick kept then.
+  if (
+    JSON.stringify(deploys.volumes) !==
+    JSON.stringify(data.volumes.map(({ folder }) => folder))
+  ) {
+    throw new Error("This Brick changed while it was installed. Try again.")
+  }
   const nameExists = await runAppEffect(
     "apps.name.preflight",
     appNameExistsEffect(relay.id, data.name)
@@ -259,6 +285,7 @@ async function createAppHandler(
     environment,
     id,
     name: data.name,
+    volumes: data.volumes,
   })
   return {
     // An image is all it needs to deploy; a file's source is still to come.
@@ -287,9 +314,16 @@ export async function provisionApp(
     environment: string | undefined
     id: string
     name: string
+    /**
+     * A volume for each folder its Brick keeps, which whoever calls holds
+     * too. Made first, so the App is never kept without them.
+     */
+    volumes?: ReadonlyArray<BrickVolume>
   }
 ) {
   const { id } = app
+  const volumes = app.volumes ?? []
+  await makeBrickVolumes(user, relay, volumes)
   const cancel = () =>
     databaseRpc(
       relay,
@@ -298,8 +332,19 @@ export async function provisionApp(
       30_000,
       user.id
     ).then((result) => cancelledSchema.parse(result).cancelled)
+  // Its Relay is told too that it names no volume any more: one made for
+  // it stays, empty, and nothing should keep it from being deleted.
   const unregister = () =>
-    runAppEffect("apps.record.delete", deleteAppRecordEffect(relay.id, id))
+    runAppEffect(
+      "apps.record.delete",
+      deleteAppRecordEffect(relay.id, id).pipe(
+        Effect.andThen(
+          volumes.length > 0
+            ? sendSavedAppVolumeReferencesEffect(relay.id, id)
+            : Effect.void
+        )
+      )
+    )
   // Recorded first, so a job the Relay holds always has an app in Hearth to
   // show it and delete it from.
   await runAppEffect(
@@ -313,6 +358,7 @@ export async function provisionApp(
           ? { image: app.deploys.image, sourceType: "image" }
           : { sourceType: app.deploys.type },
       environment: app.environment,
+      mounts: brickVolumeMounts(volumes),
       name: app.name,
       relayId: relay.id,
     })

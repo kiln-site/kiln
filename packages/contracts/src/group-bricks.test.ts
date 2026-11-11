@@ -52,6 +52,7 @@ describe("a group Brick", () => {
             environment: {},
             image: "ghcr.io/acme/analytics:2",
             key: "web",
+            volumes: [],
           },
         ],
         databases: [
@@ -116,10 +117,10 @@ describe("a group Brick", () => {
         database: { brick: "postgres" },
         web: {
           ...web,
-          deploy: { ...web.deploy, volumes: ["/data"] },
+          deploy: { ...web.deploy, memory: "2G" },
         },
       })
-    ).toBe("Kiln doesn't run an App Brick's volumes yet (web)")
+    ).toBe("Kiln doesn't run an App Brick's memory yet (web)")
     expect(
       refused({
         database: { brick: "postgres" },

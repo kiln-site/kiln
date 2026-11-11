@@ -19,3 +19,4 @@ recipes:
   - bricks/dockerfile.yml
   - bricks/compose.yml
   - bricks/umami.yml
+  - bricks/wordpress.yml

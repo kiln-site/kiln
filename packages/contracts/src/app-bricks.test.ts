@@ -37,12 +37,13 @@ describe("an App Brick", () => {
         environment: {},
         image: "ghcr.io/acme/site:latest",
         type: "image",
+        volumes: [],
       },
     })
     expect(
       appBrickDeploy(image, { name: "ghcr.io/acme/site", tag: "2" })
     ).toEqual({
-      deploy: { environment: {}, image: "ghcr.io/acme/site:2", type: "image" },
+      deploy: { environment: {}, image: "ghcr.io/acme/site:2", type: "image", volumes: [] },
     })
   })
 
@@ -68,6 +69,7 @@ describe("an App Brick", () => {
         environment: { MODE: "production", SECRET_KEY: "made-once" },
         image: "nginx:1",
         type: "image",
+        volumes: [],
       },
     })
     // Never deployed with the secret's template left in its place.
@@ -94,7 +96,7 @@ describe("an App Brick", () => {
       deploy: { web: { port: 8080 } },
     })
     expect(appBrickDeploy(asked, {})).toEqual({
-      deploy: { environment: {}, image: "nginx:1", type: "image" },
+      deploy: { environment: {}, image: "nginx:1", type: "image", volumes: [] },
     })
     expect(appBrickDeploy(asked, { port: 70_000 })).toEqual({
       problem: "This Brick's web port isn't a port",
@@ -110,6 +112,7 @@ describe("an App Brick", () => {
       deploy: {
         path: "compose.yaml",
         type: "compose",
+        volumes: [],
         web: { port: 80, service: "site" },
       },
     })
@@ -136,7 +139,36 @@ describe("an App Brick", () => {
         recipe({ deploy: { type: "compose", path: "deploy/compose.yaml" } }),
         {}
       )
-    ).toEqual({ deploy: { path: "deploy/compose.yaml", type: "compose" } })
+    ).toEqual({
+      deploy: { path: "deploy/compose.yaml", type: "compose", volumes: [] },
+    })
+  })
+
+  it("keeps the folders it names, each a path a volume can be mounted at", () => {
+    const keeping = (volumes: ReadonlyArray<string>) =>
+      recipe({ deploy: { type: "image", image: "nginx:1", volumes } })
+    expect(
+      appBrickDeploy(keeping(["/var/www/html", "/var/www/html/uploads"]), {})
+    ).toMatchObject({
+      deploy: { volumes: ["/var/www/html", "/var/www/html/uploads"] },
+    })
+    // Nothing that names a mount's options, climbs out of its folder, takes
+    // the whole container, or is the same folder written another way.
+    for (const folder of [
+      "/data:ro",
+      "/data/../etc",
+      "/",
+      "/data/",
+      "//data",
+      "/a\n/b",
+    ]) {
+      expect(appBrickProblem(keeping([folder]))).toBe(
+        `An App Brick keeps folders by their path, such as /data (${folder})`
+      )
+    }
+    expect(appBrickProblem(keeping(["/data", "/data"]))).toBe(
+      "An App Brick keeps each folder once (/data)"
+    )
   })
 
   it("refuses answers it can't deploy from", () => {
@@ -156,10 +188,10 @@ describe("an App Brick", () => {
     expect(
       appBrickProblem(
         recipe({
-          deploy: { type: "image", image: "nginx:1", volumes: ["/data"] },
+          deploy: { type: "image", image: "nginx:1", memory: "2G" },
         })
       )
-    ).toBe("Kiln doesn't run an App Brick's volumes yet")
+    ).toBe("Kiln doesn't run an App Brick's memory yet")
     expect(
       appBrickProblem(
         recipe({ deploy: { type: "dockerfile", dockerfile: "FROM nginx:1" } })

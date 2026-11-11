@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto"
 import {
   appBrickDeploy,
   appBrickProblem,
+  appBrickVolumes,
   brickInstallAnswers,
   brickRevision,
   genericAppBrickIds,
@@ -51,6 +52,20 @@ export async function offeredAppBricks(): Promise<Array<Brick>> {
 }
 
 /**
+ * The folders the App Brick at a source keeps, which no answer changes: an
+ * install makes a volume for each, settled before it runs.
+ */
+export async function appBrickFolders(
+  source: string
+): Promise<ReadonlyArray<string>> {
+  const brick = (await appBricks()).find(
+    (candidate) => candidate.source === source
+  )
+  if (!brick) throw new Error("This isn't one of Kiln's App Bricks")
+  return appBrickVolumes(brick)
+}
+
+/**
  * What the App Brick at a source deploys with these answers, and what an
  * App made from it keeps of it: nothing for one of Kiln's generic Bricks.
  */
@@ -79,6 +94,7 @@ export async function installedAppBrick(
           name: recipe.metadata.name,
           revision: brickRevision(recipe),
           source,
+          volumes: [...installed.deploy.volumes],
         },
   }
 }
