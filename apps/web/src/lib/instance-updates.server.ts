@@ -337,7 +337,12 @@ const recordImageAnswersEffect = Effect.fnUntraced(function* (
     yield* resolveInstanceUpdateNotificationsEffect(kind, relay.id, instanceId)
     const at = autoUpdateAt(recorded.update)
     if (at !== null && at <= (yield* Clock.currentTimeMillis)) {
-      yield* adapter.deployUpdate(relay, instanceId, null)
+      yield* adapter.deployUpdate(
+        relay,
+        instanceId,
+        null,
+        recorded.update.latestDigest
+      )
     }
   }
   return changed

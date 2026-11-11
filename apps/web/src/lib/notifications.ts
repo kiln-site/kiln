@@ -67,8 +67,10 @@ export const notificationContentSchema = z.discriminatedUnion("kind", [
     resource: notificationResourceSchema,
     usedBytes: z.number(),
   }),
-  // An image app's tag names a newer image than the one it runs. What
-  // happens next, deploying it or not, is on the app's page.
+  // An instance's image tag names a newer image than the one it runs: an
+  // App's, a database's, a game server's. What happens next, deploying it
+  // or not, is on its page. The kind keeps the name it had while only Apps
+  // updated, since stored notifications and preferences carry it.
   z.object({
     digest: z.string(),
     image: z.string(),

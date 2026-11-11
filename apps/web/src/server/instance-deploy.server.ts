@@ -1,6 +1,8 @@
 import {
   projectRelayInstanceOverview,
+  relayControlDeadlineMs,
   relayInstanceSchema,
+  relayManagedDatabaseSchema,
 } from "@workspace/contracts"
 import type { z } from "zod"
 
@@ -12,7 +14,10 @@ import { dnsKey } from "@/lib/dns-operations"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { asServerDeployment } from "@/lib/server-deployments.server"
+import {
+  asDatabaseDeployment,
+  asServerDeployment,
+} from "@/lib/server-deployments.server"
 import { exclusive } from "@/operations/lanes"
 import {
   loadInstanceRecipe,
@@ -21,6 +26,10 @@ import {
   requiredRelayInstance,
 } from "@/server/bricks.server"
 import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
+import {
+  databaseRpc,
+  publishDatabaseChange,
+} from "@/server/managed-database-access"
 import { resourceOperation } from "@/server/resource-operation.server"
 
 type RelayInstance = z.infer<typeof relayInstanceSchema>
@@ -63,31 +72,81 @@ export async function redeployInstanceHandler(
     relayId: relay.id,
     user,
   })
-  const existing = await requiredRelayInstance(relay, data.instanceId)
-  const instance = await instanceReplaced(
+  const instance = await redeployServer(relay, data.instanceId, {
+    trigger: "reinstall",
+    userId: user.id,
+  })
+  return { ...projectRelayInstanceOverview(instance), relayId: relay.id }
+}
+
+/**
+ * Deploys a game server again as it is set up, for someone or, taking an
+ * update on its own, for Kiln. Whoever calls holds the server whole and
+ * has checked that they may.
+ */
+export async function redeployServer(
+  relay: PersistedRelay,
+  instanceId: string,
+  by: { trigger: "reinstall" | "update"; userId: string | null }
+): Promise<RelayInstance> {
+  const existing = await requiredRelayInstance(relay, instanceId)
+  return instanceReplaced(
     relay,
     relayInstanceSchema.parse(
       await asServerDeployment(
         {
           ...(await currentBrick(relay, existing)),
-          instanceId: data.instanceId,
+          instanceId,
           relayId: relay.id,
-          trigger: "reinstall",
-          userId: user.id,
+          trigger: by.trigger,
+          userId: by.userId,
         },
         (deploymentId) =>
           requestRelay(
             relay,
-            `/v1/instances/${encodeURIComponent(data.instanceId)}/deployments`,
+            `/v1/instances/${encodeURIComponent(instanceId)}/deployments`,
             { method: "POST", body: JSON.stringify({ deploymentId }) },
             360_000,
-            user.id
+            by.userId ?? undefined
           )
       )
     )
   )
-  return { ...projectRelayInstanceOverview(instance), relayId: relay.id }
 }
+
+/**
+ * Deploys a database again as it is: its image pulled anew and its
+ * container replaced over the same data. Whoever calls holds the database
+ * whole and has checked that they may.
+ */
+export async function redeployDatabase(
+  relay: PersistedRelay,
+  databaseId: string,
+  by: { trigger: "redeploy" | "update"; userId: string | null }
+) {
+  const database = relayManagedDatabaseSchema.parse(
+    await asDatabaseDeployment(
+      { databaseId, relayId: relay.id, ...by },
+      (deploymentId) =>
+        databaseRpc(
+          relay,
+          "instance.deploy",
+          { deploymentId, id: databaseId, kind: "database" },
+          relayControlDeadlineMs("instance.deploy"),
+          by.userId ?? undefined
+        )
+    )
+  )
+  publishDatabaseChange(relay.id, false)
+  return database
+}
+
+/** The locks a game server's deploy takes besides the server itself. */
+export const serverDeployLocks = (relayId: string, instanceId: string) => [
+  exclusive(
+    dnsKey({ relayId, resourceId: instanceId, resourceType: "instance" })
+  ),
+]
 
 // Its image pulled anew and its container replaced, with nothing about it
 // changed. It replaces the server, so everything else on it waits, and it
@@ -97,15 +156,7 @@ export const deployInstanceAgain = resourceOperation({
   id: (input: { instanceId: string; relayId: string }) => input.instanceId,
   name: "instance.deploy",
   lock: "whole",
-  alsoLocks: (input) => [
-    exclusive(
-      dnsKey({
-        relayId: input.relayId,
-        resourceId: input.instanceId,
-        resourceType: "instance",
-      })
-    ),
-  ],
+  alsoLocks: (input) => serverDeployLocks(input.relayId, input.instanceId),
   doing: "Deploying this game server again",
   permission: () => "instance.deploy",
   run: redeployInstanceHandler,

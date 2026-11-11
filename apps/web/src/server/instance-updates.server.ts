@@ -1,6 +1,11 @@
 import {
+  autoUpdateAt,
+  currentImageUpdate,
+  defaultInstanceUpdatePolicy,
+  loadInstanceUpdateEffect,
   saveInstanceUpdatePolicyEffect,
   skipInstanceUpdateEffect,
+  type InstanceUpdate,
   type InstanceUpdateKind,
   type InstanceUpdateMode,
 } from "@/effect/instance-updates"
@@ -24,6 +29,70 @@ export interface UpdatedInstanceInput {
   instanceId: string
   kind: InstanceUpdateKind
   relayId: string
+}
+
+/**
+ * What an instance's Updates row shows: its saved policy, and what the last
+ * check found, if that still describes it (`currentImageUpdate`). `image`
+ * is the one it names, when Hearth knows; otherwise the one last checked.
+ */
+export function updatesView(
+  image: string | null,
+  saved: InstanceUpdate | null,
+  current: InstanceUpdate | null
+) {
+  const policy = {
+    delayHours: saved?.delayHours ?? defaultInstanceUpdatePolicy.delayHours,
+    mode: saved?.mode ?? defaultInstanceUpdatePolicy.mode,
+  }
+  const named = image ?? current?.image ?? null
+  // A digest never moves, so there's nothing to check.
+  const pinned = named?.includes("@") ?? false
+  return {
+    ...policy,
+    autoUpdateAt: current && autoUpdateAt(current),
+    checkError: current?.checkError ?? null,
+    checkedAt: current?.checkedAt ?? null,
+    image: named,
+    latestDigest: current?.latestDigest ?? null,
+    latestSeenAt: current?.latestSeenAt ?? null,
+    pinned,
+    runningDigest: current?.runningDigest ?? null,
+    skippedDigest: current?.skippedDigest ?? null,
+    state: pinned ? null : (current?.state ?? null),
+  }
+}
+
+export type InstanceUpdatesView = ReturnType<typeof updatesView>
+
+/** An instance's updates, for whoever can read it; null if it has none. */
+export async function instanceUpdatesHandler(
+  user: AuthenticatedUser,
+  data: UpdatedInstanceInput
+): Promise<InstanceUpdatesView | null> {
+  const adapter = updatedKind(data.kind)
+  await requireRelayPermission({
+    [`${adapter.resourceType}Id`]: data.instanceId,
+    permission: `${adapter.resourceType}.read`,
+    relayId: data.relayId,
+    user,
+  })
+  const [named, saved, startedAt] = await Promise.all([
+    runAppEffect(
+      "instances.updates.named",
+      adapter.namedImage(data.relayId, data.instanceId)
+    ),
+    runAppEffect(
+      "instances.updates.load",
+      loadInstanceUpdateEffect(data.instanceId)
+    ),
+    runAppEffect(
+      "instances.updates.latestDeployment",
+      adapter.latestDeploymentStartedAt(data.instanceId)
+    ),
+  ])
+  if (named === undefined) return null
+  return updatesView(named, saved, currentImageUpdate(saved, named, startedAt))
 }
 
 // The Relay it is on, once it's known to be something that checks.
@@ -148,7 +217,7 @@ export async function deployInstanceUpdateHandler(
   const relay = await updatedInstance(data)
   await runAppEffect(
     "instances.updates.deploy",
-    updatedKind(data.kind).deployUpdate(relay, data.instanceId, user.id)
+    updatedKind(data.kind).deployUpdate(relay, data.instanceId, user.id, null)
   )
   return { queued: true as const }
 }

@@ -70,8 +70,9 @@ export function notificationTitle(content: NotificationContent): string {
         ? `Your ${type} was stopped at its disk limit`
         : `Your ${type} is over its disk limit`
     }
+    // Every kind's, under the name it had while only Apps updated.
     case "app.image-update":
-      return "Your App has an update available"
+      return `Your ${resourceTypeLabels[content.resource.type]} has an update available`
     case "app.deployed": {
       if (content.status === "failed") return "Your App failed to deploy"
       const times = (content.count ?? 1) > 1 ? ` ${content.count} times` : ""

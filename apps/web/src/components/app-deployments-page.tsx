@@ -34,6 +34,7 @@ import {
   deploymentDuration,
   deploymentStatusPresentation,
   deploymentTriggerLabels,
+  databaseDeploymentTriggerLabels,
   serverDeploymentTriggerLabels,
   shortCommit,
   shortDigest,
@@ -118,7 +119,7 @@ function triggerLabel(deployment: Deployment): string {
   return deployment.kind === "server"
     ? serverDeploymentTriggerLabels[deployment.trigger]
     : deployment.kind === "database"
-      ? "Redeploy"
+      ? databaseDeploymentTriggerLabels[deployment.trigger]
       : deploymentTriggerLabels[deployment.trigger]
 }
 

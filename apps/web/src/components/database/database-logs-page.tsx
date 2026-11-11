@@ -10,6 +10,7 @@ import {
   type InstanceLogsLinks,
   type LogSource,
 } from "@/components/console/instance-logs-page"
+import { databaseDeploymentTriggerLabels } from "@/components/app/app-deployment-presentation"
 import { DEPLOYMENT_STREAM } from "@/components/console/log-sources"
 import { ResourceLogsSession } from "@/components/console/resource-logs"
 import {
@@ -46,7 +47,15 @@ export function DatabaseLogsPage() {
     select: listedDeployments,
   })
   const deployments = React.useMemo(
-    () => records.map((record) => requestDeploymentEntry(record, "Redeploy")),
+    () =>
+      records.map((record) =>
+        requestDeploymentEntry(
+          record,
+          record.kind === "database"
+            ? databaseDeploymentTriggerLabels[record.trigger]
+            : "Redeploy"
+        )
+      ),
     [records]
   )
   const links = React.useMemo((): InstanceLogsLinks => {

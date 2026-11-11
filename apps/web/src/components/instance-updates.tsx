@@ -1,6 +1,9 @@
 import * as React from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { useNavigate } from "@tanstack/react-router"
+import {
+  queryOptions,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { LoaderCircle, RefreshCw } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -17,30 +20,54 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { shortDigest } from "@/components/app/app-deployment-presentation"
-import {
-  showAppOperationError,
-  type App,
-} from "@/components/app/app-presentation"
 import { Field } from "@/components/github-sync-dialogs"
-import { InfoFact } from "@/components/info-page"
 import { RelativeTime } from "@/components/relative-time"
-import type { InstanceUpdateMode } from "@/effect/instance-updates"
+import type {
+  InstanceUpdateKind,
+  InstanceUpdateMode,
+} from "@/effect/instance-updates"
 import { queryKeys } from "@/lib/query-options"
-import type { getAppDeploymentSummary } from "@/server/app-deployments"
 import {
   checkInstanceUpdate,
   deployInstanceUpdate,
+  getInstanceUpdates,
   saveInstanceUpdatePolicy,
   skipInstanceUpdate,
 } from "@/server/instance-updates"
 
-// Whether an image app's tag names a newer image than the one it runs, and
-// what Kiln does about it: the Deployment card's Updates row, and the
-// dialog it opens.
+// Whether an instance's image tag names a newer image than the one it
+// runs, and what Kiln does about it: the Updates row every kind's Info page
+// has, and the dialog it opens.
 
-export type AppImageUpdates = NonNullable<
-  Awaited<ReturnType<typeof getAppDeploymentSummary>>["imageUpdates"]
+export type InstanceUpdates = NonNullable<
+  Awaited<ReturnType<typeof getInstanceUpdates>>
 >
+
+/** The instance an Updates row is for, and what this person may do. */
+export interface UpdatedInstance {
+  /** Whoever may deploy it decides when it deploys. */
+  canDeploy: boolean
+  /** Opens where its deployment can be followed, for whoever can. */
+  followDeployment?: (() => Promise<void>) | undefined
+  id: string
+  kind: InstanceUpdateKind
+  relayId: string
+}
+
+// What taking an update does to each kind while it happens.
+const updateCost: Record<InstanceUpdateKind, string | null> = {
+  app: null,
+  database:
+    "Updating replaces its container over the same data. It is away while the new one starts.",
+  server: "Updating replaces its container, which restarts the server.",
+}
+
+const failed = (message: string) => (error: unknown) =>
+  showToast({
+    description: error instanceof Error ? error.message : undefined,
+    message,
+    type: "error",
+  })
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",
@@ -56,7 +83,7 @@ const modes = [
 >
 
 // The row's one-line answer, and whether it asks for attention.
-function updateStatus(updates: AppImageUpdates): {
+function updateStatus(updates: InstanceUpdates): {
   label: string
   tone: "attention" | "muted" | "plain" | "problem"
 } {
@@ -92,18 +119,18 @@ function updateStatus(updates: AppImageUpdates): {
   }
 }
 
-/** The Deployment card's Updates row, which opens the dialog. */
-export const AppImageUpdatesFact = React.memo(function AppImageUpdatesFact({
-  app,
+/** What an Updates row says, which opens the dialog. */
+export const InstanceUpdatesStatus = React.memo(function InstanceUpdatesStatus({
+  instance,
   updates,
 }: {
-  app: Pick<App, "id" | "name" | "permissions" | "relayId">
-  updates: AppImageUpdates
+  instance: UpdatedInstance
+  updates: InstanceUpdates
 }) {
   const [open, setOpen] = React.useState(false)
   const status = updateStatus(updates)
   return (
-    <InfoFact label="Updates">
+    <>
       {updates.pinned ? (
         <span className="text-muted-foreground">{status.label}</span>
       ) : (
@@ -125,35 +152,52 @@ export const AppImageUpdatesFact = React.memo(function AppImageUpdatesFact({
         </button>
       )}
       {open ? (
-        <AppImageUpdatesDialog
-          app={app}
+        <InstanceUpdatesDialog
+          instance={instance}
           updates={updates}
           onOpenChange={setOpen}
         />
       ) : null}
-    </InfoFact>
+    </>
   )
 })
 
-function AppImageUpdatesDialog({
-  app,
+/** A game server's or a database's updates, as its page asks for them. */
+export function instanceUpdatesQueryOptions(
+  instance: Pick<UpdatedInstance, "id" | "kind" | "relayId">
+) {
+  return queryOptions({
+    queryKey: queryKeys.appDeployments.updates(instance.relayId, instance.id),
+    queryFn: () =>
+      getInstanceUpdates({
+        data: {
+          instanceId: instance.id,
+          kind: instance.kind,
+          relayId: instance.relayId,
+        },
+      }),
+    staleTime: 30_000,
+  })
+}
+
+function InstanceUpdatesDialog({
+  instance,
   onOpenChange,
   updates,
 }: {
-  app: Pick<App, "id" | "name" | "permissions" | "relayId">
+  instance: UpdatedInstance
   onOpenChange: (open: boolean) => void
-  updates: AppImageUpdates
+  updates: InstanceUpdates
 }) {
   const queryClient = useQueryClient()
-  const navigate = useNavigate()
-  // Whoever may deploy it decides when it deploys.
-  const canManage = app.permissions.includes("instance.deploy")
-  // Skipping an update decides the App's updates; taking it is a deploy.
-  const canDeploy = app.permissions.includes("instance.deploy")
+  // Whoever may deploy it decides when it deploys, and may skip an update.
+  const canManage = instance.canDeploy
+  const canDeploy = instance.canDeploy
+  const cost = updateCost[instance.kind]
   const input = {
-    instanceId: app.id,
-    kind: "app" as const,
-    relayId: app.relayId,
+    instanceId: instance.id,
+    kind: instance.kind,
+    relayId: instance.relayId,
   }
   const [mode, setMode] = React.useState<InstanceUpdateMode>(updates.mode)
   const [waitDays, setWaitDays] = React.useState(() =>
@@ -168,15 +212,19 @@ function AppImageUpdatesDialog({
   const policyChanged =
     mode !== updates.mode ||
     (mode === "auto" && delayHours !== updates.delayHours)
+  // An App's updates come with its summary; another kind's on their own.
   const refresh = () =>
     queryClient.invalidateQueries({
-      queryKey: queryKeys.appDeployments.summary(app.relayId, app.id),
+      queryKey:
+        instance.kind === "app"
+          ? queryKeys.appDeployments.summary(instance.relayId, instance.id)
+          : queryKeys.appDeployments.updates(instance.relayId, instance.id),
     })
 
   const check = useMutation({
     mutationFn: () => checkInstanceUpdate({ data: input }),
     onSuccess: refresh,
-    onError: (error) => showAppOperationError("Could not check", error),
+    onError: failed("Could not check"),
   })
   const save = useMutation({
     mutationFn: () =>
@@ -191,32 +239,25 @@ function AppImageUpdatesDialog({
       await refresh()
       showToast({ message: "Saved", type: "success" })
     },
-    onError: (error) => showAppOperationError("Could not save", error),
+    onError: failed("Could not save"),
   })
   const skip = useMutation({
     mutationFn: (digest: string) =>
       skipInstanceUpdate({ data: { ...input, digest } }),
     onSuccess: refresh,
-    onError: (error) => showAppOperationError("Could not skip", error),
+    onError: failed("Could not skip"),
   })
   const deploy = useMutation({
     mutationFn: () => deployInstanceUpdate({ data: input }),
     onSuccess: async () => {
-      // It runs once any deployment running ends.
-      showToast({ message: "Update deploy queued", type: "success" })
+      // It runs once anything else on the instance ends.
+      showToast({ message: "Update queued", type: "success" })
       await refresh()
       onOpenChange(false)
       // Follow the deployment as it happens.
-      if (app.permissions.includes("app.logs.read")) {
-        await navigate({
-          params: { appId: app.id },
-          search: { stream: "deployment" },
-          to: "/app/$appId/logs",
-        })
-        return
-      }
+      await instance.followDeployment?.()
     },
-    onError: (error) => showAppOperationError("Could not deploy", error),
+    onError: failed("Could not update"),
   })
   const busy =
     check.isPending || save.isPending || skip.isPending || deploy.isPending
@@ -230,8 +271,12 @@ function AppImageUpdatesDialog({
           <DialogTitle>Image updates</DialogTitle>
           <DialogDescription>
             Kiln checks{" "}
-            <span className="font-mono text-foreground">{updates.image}</span>{" "}
-            every hour for a newer image.
+            {updates.image ? (
+              <span className="font-mono text-foreground">{updates.image}</span>
+            ) : (
+              "its image"
+            )}{" "}
+            every hour for a newer one.
           </DialogDescription>
         </DialogHeader>
 
@@ -297,6 +342,7 @@ function AppImageUpdatesDialog({
               {skipped
                 ? "Skipped; it won't deploy on its own."
                 : "A newer image is out."}
+              {cost ? ` ${cost}` : null}
             </p>
             <div className="flex shrink-0 gap-2">
               {skipped || !canManage ? null : (

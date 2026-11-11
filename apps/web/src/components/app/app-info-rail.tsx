@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Link } from "@tanstack/react-router"
+import { Link, useNavigate } from "@tanstack/react-router"
 import {
   Archive,
   ArrowRightLeft,
@@ -15,7 +15,11 @@ import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 
 import { AppDocumentDialog } from "@/components/app/app-config-dialogs"
-import { AppImageUpdatesFact } from "@/components/app/app-image-updates"
+import {
+  InstanceUpdatesStatus,
+  type InstanceUpdates,
+  type UpdatedInstance,
+} from "@/components/instance-updates"
 import { InfoRailSecurityLink } from "@/components/resource-security-link"
 import { ResourceNotificationsCard } from "@/components/resource-notifications-card"
 import { resourceNotificationKinds } from "@/lib/notification-preferences"
@@ -369,7 +373,9 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
         </InfoFact>
       ) : null}
       {summary?.imageUpdates ? (
-        <AppImageUpdatesFact app={app} updates={summary.imageUpdates} />
+        <InfoFact label="Updates">
+          <AppUpdatesStatus app={app} updates={summary.imageUpdates} />
+        </InfoFact>
       ) : null}
       <InfoFact
         label={latest?.status === "running" ? "Started" : "Last deploy"}
@@ -388,3 +394,34 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
 
 const railFooterLinkClassName =
   "flex h-9 items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors outline-none hover:bg-muted/60 hover:text-foreground focus-visible:bg-muted/60 focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset [&_svg]:size-3.5"
+
+// The App's updates, which whoever may deploy it decides, and its Logs
+// page to follow one deploying.
+function AppUpdatesStatus({
+  app,
+  updates,
+}: {
+  app: App
+  updates: InstanceUpdates
+}) {
+  const navigate = useNavigate()
+  const canReadLogs = app.permissions.includes("app.logs.read")
+  const instance = React.useMemo(
+    (): UpdatedInstance => ({
+      canDeploy: app.permissions.includes("instance.deploy"),
+      followDeployment: canReadLogs
+        ? () =>
+            navigate({
+              params: { appId: app.id },
+              search: { stream: "deployment" },
+              to: "/app/$appId/logs",
+            })
+        : undefined,
+      id: app.id,
+      kind: "app",
+      relayId: app.relayId,
+    }),
+    [app.id, app.permissions, app.relayId, canReadLogs, navigate]
+  )
+  return <InstanceUpdatesStatus instance={instance} updates={updates} />
+}
