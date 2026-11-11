@@ -16,8 +16,15 @@ import { runAppEffect } from "./runtime"
  * idempotency key) returns the same ID however often that request is
  * retried. A random ID that's already taken is replaced by another.
  */
+
+/**
+ * What the directory reserves IDs for: every kind of instance, and a group
+ * of them, which has an ID of its own that no Relay ever holds.
+ */
+export type DirectoryKind = InstanceIdKind | "group"
+
 export const reserveInstanceIdEffect = Effect.fn("instanceIds.reserve")(
-  function* (kind: InstanceIdKind, requestKey: string | null = null) {
+  function* (kind: DirectoryKind, requestKey: string | null = null) {
     const database = yield* Database
     if (requestKey !== null) {
       const existing = yield* reservedFor(requestKey)
@@ -112,7 +119,7 @@ const reservedFor = Effect.fn("instanceIds.reservedFor")(function* (
 })
 
 export function reserveInstanceId(
-  kind: InstanceIdKind,
+  kind: DirectoryKind,
   requestKey: string | null = null
 ): Promise<string> {
   return runAppEffect(
