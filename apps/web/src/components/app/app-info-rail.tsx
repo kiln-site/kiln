@@ -43,6 +43,7 @@ import {
   InfoRailLink,
   InfoRailRow,
 } from "@/components/info-page"
+import { InfoRailGroupRow } from "@/components/instance-group"
 import { DatabaseKindIcon } from "@/components/instance-kind-icon"
 import { OwnerCard } from "@/components/owner-card"
 import { RelativeTime } from "@/components/relative-time"
@@ -92,6 +93,9 @@ export function AppInfoRail({ app }: { app: App }) {
         >
           Databases
         </InfoRailLink>
+        <InfoRailGroupRow
+          member={{ instanceId: app.id, kind: "app", relayId: app.relayId }}
+        />
         {app.permissions.includes("app.read") ? (
           <InfoRailLink
             to="/backups/runs"

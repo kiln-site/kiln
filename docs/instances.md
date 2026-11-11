@@ -118,7 +118,33 @@ kind on any Relay. It is its own record, not a feature of one kind:
   Relay that needs it, and for its own services (a Relay, Hearth, its cache
   and its database), which people can't edit.
 
-Groups don't exist yet. The Brick format already describes one.
+The record is built (`apps/web/src/effect/instance-groups.ts`): a group has
+an ID of its own in the instance directory, an instance is in one group at
+most, and a group goes when its last member does. Deleting an instance, or
+removing its Relay, takes it out of its group.
+
+A Brick makes one today, and only that:
+
+- Installing a group Brick (`createInstanceGroupFor`) makes its databases,
+  then its Apps connected to them, each with the variables the Brick's
+  `connect` gives it for reaching a database, and keeps them as a group. It
+  takes the permission making each member alone does. A member that can't
+  be made ends it; what was made before it stays, in the group.
+- A group has no people of its own. Someone sees the members they may read,
+  and may delete the group when they may delete every member.
+- A member's Info page says which group it is part of, lists the rest, and
+  deletes the group from there: the members checked are deleted with it, the
+  others stay in no group.
+
+A group doesn't record the Brick it came from, its answers, or which of
+the Brick's members each instance is. Recording them comes with Brick
+revisions for Apps; a group installed before then is installed again. What
+an App was given to reach its database is written once, at install, and
+doesn't follow a password rotated later.
+
+Still to come: a group's page, a group someone makes by hand, an icon,
+members on more than one Relay, and the groups Kiln makes itself, for a
+Tailscale network and for its own services.
 
 ## Bricks
 
@@ -278,8 +304,10 @@ from a tag or an image name today.
    run, not another catalog's; a database's version is chosen when it is
    created, and moving one to another major version is not built.
 8. Apps as Bricks. Apps are installed from Kiln's three generic Bricks, in
-   the one Add dialog. A catalog of Apps waits on instance groups, pulled
-   forward from step 11 for an App that comes with a database.
+   the one Add dialog, and Umami from a group Brick that brings its database
+   (instance groups, pulled forward from step 11). Still to come: an App that
+   records its Brick and is offered its newer revisions, and what a Brick
+   says around what it deploys.
 9. Domains for every kind.
 10. One instance page, with each kind's own tabs.
 11. Tailscale as its own kind, with the instance group.

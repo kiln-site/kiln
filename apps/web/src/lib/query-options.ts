@@ -128,6 +128,7 @@ import {
   getDeployments,
   getServerDeploymentLog,
 } from "@/server/app-deployments"
+import { getInstanceGroup } from "@/server/instance-groups"
 import {
   getAppBricks,
   getAppConfig,
@@ -243,6 +244,11 @@ export const queryKeys = {
     directory: ["apps", "directory"] as const,
     webRoutes: (relayId: string, appId: string) =>
       ["apps", relayId, appId, "web-routes"] as const,
+  },
+  instanceGroups: {
+    all: ["instance-groups"] as const,
+    of: (kind: string, relayId: string, instanceId: string) =>
+      ["instance-groups", relayId, kind, instanceId] as const,
   },
   databases: {
     all: ["databases"] as const,
@@ -1115,6 +1121,23 @@ export function databaseBricksQueryOptions() {
     queryKey: ["bricks", "databases"] as const,
     queryFn: () => getDatabaseBricks(),
     staleTime: 5 * 60_000,
+  })
+}
+
+/** The group an instance is in, or null. */
+export function instanceGroupQueryOptions(member: {
+  instanceId: string
+  kind: "app" | "database" | "server"
+  relayId: string
+}) {
+  return queryOptions({
+    queryKey: queryKeys.instanceGroups.of(
+      member.kind,
+      member.relayId,
+      member.instanceId
+    ),
+    queryFn: () => getInstanceGroup({ data: member }),
+    staleTime: 60_000,
   })
 }
 

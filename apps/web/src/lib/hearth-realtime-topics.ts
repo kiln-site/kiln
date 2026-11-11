@@ -18,6 +18,7 @@ export const hearthRealtimeTopics = [
   "file-activity",
   "github-sync",
   "instance-directory",
+  "instance-groups",
   "instance-web-routes",
   "notifications",
   "operations",
