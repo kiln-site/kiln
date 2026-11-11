@@ -3,7 +3,9 @@ import { Effect } from "effect"
 import { afterAll, afterEach, vi } from "vite-plus/test"
 
 import { disposeAppRuntime } from "@/effect/runtime"
+import type { AuthenticatedUser } from "@/lib/auth-session"
 import { betterAuthSecrets } from "@/lib/environment"
+import { runOperationPromise } from "@/operations/operation"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertInstance,
@@ -29,6 +31,7 @@ import {
   saveWebRouteHostnamesEffect,
 } from "./web-hostnames.server"
 import { getResourceWebHostnamesHandler } from "./web-hostname-access.server"
+import { serveNewApp } from "./web-routes.server"
 
 // Who's signed in, and what they may change, for the network page's read.
 const access = vi.hoisted(() => ({ canManage: true }))
@@ -43,6 +46,38 @@ vi.mock("@/lib/access-control", async (importOriginal) => ({
       throw new Error("Forbidden")
     }
   },
+}))
+
+// The Relay keeps the routes it is sent. Anything else finds it offline,
+// so where it is reached falls back to the address Hearth has for it.
+const relay = vi.hoisted(() => ({
+  routes: [] as Array<{ id: string; kind: string; routes: Array<object> }>,
+}))
+vi.mock("@/lib/relay-connection", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
+  relayRpc: async (
+    _relay: unknown,
+    operation: string,
+    payload: { id: string; kind: string; routes: Array<object> }
+  ) => {
+    if (operation !== "instance.network.routes.write")
+      throw new Error("Relay is offline")
+    relay.routes.push(payload)
+    return {
+      edgeConnected: true,
+      message: "Ready",
+      proxyConnected: true,
+      requiresRestart: false,
+      routes: payload.routes.map((route, index) => ({
+        ...route,
+        id: `0000000${index}`,
+      })),
+      status: "ready",
+    }
+  },
+}))
+vi.mock("@/lib/realtime-source.server", () => ({
+  publishRealtimeChange: () => undefined,
 }))
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
@@ -570,6 +605,47 @@ describeMysql("web route hostnames", () => {
               message: "free.play.kiln.site is already in use",
             }
           )
+        })
+    )
+
+    it.effect(
+      "routes a new App's address to its website, as the first route it has",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          relay.routes.length = 0
+          const cloudflare = fakeCloudflare([ownerZone, platformZone])
+          const hostname = yield* Effect.promise(() =>
+            runOperationPromise(
+              serveNewApp,
+              { appId, relayId, web: { port: 3000 } },
+              { user: { id: owner.id, role: "user" } as AuthenticatedUser }
+            )
+          )
+          // Under the vanity domain its owner gets, at a name Kiln chose.
+          assert.match(String(hostname), /^[a-z0-9-]+\.play\.kiln\.site$/u)
+          // Its Relay serves the address from the App's website.
+          assert.strictEqual(relay.routes.length, 1)
+          assert.deepInclude(relay.routes[0], { id: appId, kind: "app" })
+          assert.deepInclude(relay.routes[0]?.routes[0], {
+            hostname,
+            primary: true,
+            service: "app",
+            targetPort: 3000,
+          })
+          // And the name points at that Relay, held as the App's own address
+          // with a route using it.
+          assert.deepStrictEqual(cloudflare.dns(), {
+            [String(hostname)]: "relay-one.relay.test",
+          })
+          const row = yield* loadWebHostnameByNameEffect(String(hostname))
+          assert.deepInclude(row, {
+            generated: true,
+            resourceId: appId,
+            resourceType: "app",
+            routed: true,
+            status: "active",
+          })
         })
     )
   })

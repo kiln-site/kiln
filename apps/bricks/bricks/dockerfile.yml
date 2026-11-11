@@ -3,12 +3,23 @@ kind: app
 metadata:
   id: dockerfile
   name: Dockerfile
-  revision: 1
+  revision: 2
   summary: Builds a Dockerfile from a repository, or one written in Hearth, and runs it.
   author: Kiln
   icon: ../icons/dockerfile.svg
   color: "#4a9be8"
   tags: [docker]
+inputs:
+  - key: port
+    label: Web port
+    help: The port its website answers on, if it has one. Kiln routes its address there.
+    type: number
+    optional: true
+    min: 1
+    max: 65535
 deploy:
   type: dockerfile
   path: Dockerfile
+  ports:
+    - name: web
+      port: "{{ port }}"

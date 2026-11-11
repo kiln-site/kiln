@@ -116,10 +116,10 @@ describe("a group Brick", () => {
         database: { brick: "postgres" },
         web: {
           ...web,
-          deploy: { ...web.deploy, ports: [{ name: "web", port: 3000 }] },
+          deploy: { ...web.deploy, volumes: ["/data"] },
         },
       })
-    ).toBe("Kiln doesn't run an App Brick's ports yet (web)")
+    ).toBe("Kiln doesn't run an App Brick's volumes yet (web)")
     expect(
       refused({
         database: { brick: "postgres" },

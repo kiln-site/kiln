@@ -3,7 +3,7 @@ kind: app
 metadata:
   id: docker-image
   name: Docker image
-  revision: 1
+  revision: 2
   summary: Runs an image from a registry, and says when a newer one is out.
   author: Kiln
   icon: ../icons/docker.svg
@@ -15,6 +15,16 @@ inputs:
     help: Where it is pulled from, with its tag, such as ghcr.io/acme/site:latest.
     type: text
     max: 255
+  - key: port
+    label: Web port
+    help: The port its website answers on, if it has one. Kiln routes its address there.
+    type: number
+    optional: true
+    min: 1
+    max: 65535
 deploy:
   type: image
   image: "{{ image }}"
+  ports:
+    - name: web
+      port: "{{ port }}"
