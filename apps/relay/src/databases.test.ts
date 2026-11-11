@@ -186,6 +186,82 @@ describe("managed database redeploy", () => {
     expect(database).toMatchObject({ id, observedState: "running" })
   })
 
+  it("installs a newer revision of its Brick over the same data and login", async () => {
+    const harness = await relayHarness()
+    const id = "e".repeat(12)
+    await createDatabase(harness, id, "mariadb")
+    const before = databaseContainer(id)
+    const { recipe, recipeDefinition } = databaseBrick("mariadb")
+    if (recipeDefinition.deploy?.type !== "image") throw new Error("No image")
+
+    const database = await harness.databases.redeploy(
+      id,
+      undefined,
+      undefined,
+      {
+        recipe,
+        recipeDefinition: {
+          ...recipeDefinition,
+          deploy: {
+            ...recipeDefinition.deploy,
+            env: { ...recipeDefinition.deploy.env, TZ: "UTC" },
+          },
+          metadata: { ...recipeDefinition.metadata, revision: 2 },
+        },
+      }
+    )
+
+    const after = databaseContainer(id)
+    expect(after.id).not.toBe(before.id)
+    expect(after.mounts).toEqual(before.mounts)
+    // What the new recipe adds, and the login exactly as the engine was
+    // first given it: the root password is not made again.
+    expect(after.env).toMatchObject({
+      MARIADB_DATABASE: before.env.MARIADB_DATABASE,
+      MARIADB_PASSWORD: before.env.MARIADB_PASSWORD,
+      MARIADB_ROOT_PASSWORD: before.env.MARIADB_ROOT_PASSWORD,
+      MARIADB_USER: before.env.MARIADB_USER,
+      TZ: "UTC",
+    })
+    expect(before.env.MARIADB_ROOT_PASSWORD).toBeTruthy()
+    expect(after.labels).toMatchObject({
+      "kiln.brick.revision": "2",
+      "kiln.database.volume": volumeOf(id),
+    })
+    expect(database).toMatchObject({
+      brickRevision: 2,
+      id,
+      observedState: "running",
+    })
+  })
+
+  it("leaves a database as it is when a newer revision would leave its data behind", async () => {
+    const harness = await relayHarness()
+    const id = "e".repeat(12)
+    await createDatabase(harness, id)
+    const before = databaseContainer(id)
+    const { recipe, recipeDefinition } = databaseBrick("postgres")
+    if (recipeDefinition.deploy?.type !== "image") throw new Error("No image")
+
+    await expect(
+      harness.databases.redeploy(id, undefined, undefined, {
+        recipe,
+        recipeDefinition: {
+          ...recipeDefinition,
+          deploy: {
+            ...recipeDefinition.deploy,
+            volumes: ["/var/lib/postgresql"],
+          },
+          metadata: { ...recipeDefinition.metadata, revision: 2 },
+        },
+      })
+    ).rejects.toThrow(/keeps its data in/u)
+
+    const after = databaseContainer(id)
+    expect(after.id).toBe(before.id)
+    expect(after.state.running).toBe(true)
+  })
+
   it("leaves a stopped database stopped, in its new container", async () => {
     const harness = await relayHarness()
     const id = "e".repeat(12)

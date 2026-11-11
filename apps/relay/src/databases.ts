@@ -4,7 +4,10 @@ import { mkdir, open, rename, rm, stat, statfs } from "node:fs/promises"
 import { join } from "node:path"
 import { pipeline } from "node:stream/promises"
 
-import type { RelayInstanceImageCheckResult } from "@workspace/contracts"
+import type {
+  BrickRecipe,
+  RelayInstanceImageCheckResult,
+} from "@workspace/contracts"
 import { checkContainerImages, installedRevision } from "./image-checks.js"
 import type {
   BrickVariableValue,
@@ -32,6 +35,7 @@ import {
   brickInputSensitive,
   brickInputs,
   brickRevision,
+  databaseEngineRuntimes,
   databaseEngineSupportsLogicalBackups,
   databaseEngineSchema,
   databaseFileRootId,
@@ -653,14 +657,24 @@ export class DatabaseDriver {
     databaseId: string,
     onPhase: (phase: ProvisioningWorkPhase) => Promise<void> = async () => {},
     /** Says what it found, for the deployment's log. */
-    note: (text: string) => Promise<void> = async () => {}
+    note: (text: string) => Promise<void> = async () => {},
+    /** A newer revision of its Brick to install, in place of what it has. */
+    brick?: { recipe: string; recipeDefinition: BrickRecipe }
   ): Promise<RelayManagedDatabase> {
     const container = await this.#container(databaseId)
     const { limits } = await this.#toManagedDatabase(
       container,
       await this.#diskLimits()
     )
-    const image = databaseImage(container)
+    // Worked out before anything is pulled or stopped, so a recipe its
+    // answers no longer fit leaves the database as it is.
+    const revision = brick ? newRevision(container, brick) : undefined
+    if (revision) {
+      await note(
+        `Installing revision ${revision.labels["kiln.brick.revision"]} of its Brick`
+      )
+    }
+    const image = revision?.image ?? databaseImage(container)
     // Pulled before anything stops, so a registry that can't be reached
     // leaves the database running.
     await onPhase("pulling_image")
@@ -683,7 +697,7 @@ export class DatabaseDriver {
     await onPhase("creating_container")
     await traceRelayPromise(
       "relay.databases.replaceContainer",
-      () => this.#replaceContainer(container, limits),
+      () => this.#replaceContainer(container, limits, revision),
       { "relay.database_id": databaseId }
     )
     return this.#required(databaseId)
@@ -694,9 +708,13 @@ export class DatabaseDriver {
   // put back if it never is.
   async #replaceContainer(
     container: DatabaseContainerInspect,
-    limits: ResourceLimits
+    limits: ResourceLimits,
+    /** What a newer revision of its Brick runs, in place of what it has. */
+    revision?: DatabaseRevision
   ): Promise<void> {
-    const labels = container.Config.Labels ?? {}
+    const recorded = container.Config.Labels ?? {}
+    // The old container's labels, or those its new revision gives it.
+    const labels = revision?.labels ?? recorded
     const id = databaseIdOf(labels)
     const engine = databaseEngineSchema.parse(
       requiredLabel(labels, "kiln.database.engine")
@@ -721,18 +739,13 @@ export class DatabaseDriver {
       await Effect.runPromise(
         createContainer(docker, {
           command: [...(spec.command ?? [])],
-          env: Object.fromEntries(
-            (container.Config.Env ?? []).map((entry) => {
-              const separator = entry.indexOf("=")
-              return [entry.slice(0, separator), entry.slice(separator + 1)]
-            })
-          ),
+          env: revision?.environment ?? containerEnvironment(container),
           healthcheck: databaseHealthcheck(
             engine,
             labels["kiln.database.ready"] ?? null
           ),
           hostname: databaseHostname(id),
-          image: databaseImage(container),
+          image: revision?.image ?? databaseImage(container),
           // What the old container's label said of it, not this one.
           labels: Object.fromEntries(
             Object.entries(stringLabels(labels)).filter(
@@ -1891,6 +1904,138 @@ function resolvedBrick(input: RelayCreateDatabase): ResolvedDatabaseBrick {
     },
     input.recipe
   )
+}
+
+/** A container's environment, by name. */
+function containerEnvironment(
+  container: DatabaseContainerInspect
+): Record<string, string> {
+  return Object.fromEntries(
+    (container.Config.Env ?? []).map((entry) => {
+      const separator = entry.indexOf("=")
+      return [entry.slice(0, separator), entry.slice(separator + 1)]
+    })
+  )
+}
+
+/** What a database's container is made with under a newer Brick revision. */
+interface DatabaseRevision {
+  environment: Record<string, string>
+  image: string
+  labels: Record<string, string | undefined>
+}
+
+/**
+ * A database's container under a newer revision of its Brick: the recipe
+ * resolved with the answers it already has. Its login stays exactly as it
+ * is, since the engine made it once from those variables and Kiln's own
+ * commands read them back; so does its data, which must be where the new
+ * recipe looks for it. Throws, changing nothing, when the recipe can't run
+ * that way.
+ */
+function newRevision(
+  container: DatabaseContainerInspect,
+  brick: { recipe: string; recipeDefinition: BrickRecipe }
+): DatabaseRevision {
+  const labels = container.Config.Labels ?? {}
+  const id = databaseIdOf(labels)
+  const engine = databaseEngineSchema.parse(
+    requiredLabel(labels, "kiln.database.engine")
+  )
+  const spec = recordedSpec(labels, engine)
+  const environment = containerEnvironment(container)
+  const login = databaseEngineRuntimes[engine].env
+  const variable = (supplied: string) =>
+    Object.entries(login).find(([, value]) => value === supplied)?.[0]
+  const kept = (supplied: string) => {
+    const name = variable(supplied)
+    return (name === undefined ? undefined : environment[name]) ?? ""
+  }
+  const inputs = brickInputs(brick.recipeDefinition)
+  // The answers it has that the recipe still asks, and each secret Kiln
+  // made, read back from the variable the recipe gives it to.
+  const saved = Result.getOrElse(
+    Result.try(
+      () =>
+        JSON.parse(labels["kiln.brick.variables"] ?? "{}") as Record<
+          string,
+          BrickVariableValue
+        >
+    ),
+    () => ({})
+  )
+  const answers: Record<string, BrickVariableValue> = Object.fromEntries(
+    Object.entries(saved).filter(([key]) =>
+      inputs.some((input) => input.key === key)
+    )
+  )
+  const deploy = brick.recipeDefinition.deploy
+  for (const [name, supplied] of Object.entries(login)) {
+    if (supplied !== "generated") continue
+    const key = /^\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}$/u.exec(
+      (deploy?.type === "image" ? deploy.env?.[name] : undefined) ?? ""
+    )?.[1]
+    if (key !== undefined && environment[name] !== undefined) {
+      answers[key] = environment[name]
+    }
+  }
+  const resolved = resolveDatabaseBrick(
+    brick.recipeDefinition,
+    answers,
+    {
+      host: databaseHostname(id),
+      name:
+        kept("database.name") || (labels["kiln.database.database-name"] ?? ""),
+      password: kept("database.password"),
+      username: kept("database.username"),
+    },
+    brick.recipe
+  )
+  const refused = (reason: string) =>
+    new Error(`This revision of its Brick can't be installed: ${reason}`)
+  if (resolved.engine !== engine) {
+    throw refused(`it is a ${resolved.engine} database, not ${engine}`)
+  }
+  // Its data would be left where the old recipe kept it.
+  if (resolved.dataMount !== spec.dataMount) {
+    throw refused(
+      `it keeps its data in ${resolved.dataMount}, and this database's is in ${spec.dataMount}`
+    )
+  }
+  if (resolved.internalPort !== spec.internalPort) {
+    throw refused(`it listens on port ${resolved.internalPort}`)
+  }
+  const { "kiln.database.command": _command, "kiln.database.ready": _ready, ...rest } =
+    labels
+  return {
+    environment: {
+      ...resolved.environment,
+      // Its login as the engine was first given it.
+      ...Object.fromEntries(
+        Object.keys(login).flatMap((name) =>
+          environment[name] === undefined ? [] : [[name, environment[name]]]
+        )
+      ),
+    },
+    image: resolved.image,
+    labels: {
+      ...rest,
+      "kiln.brick.format": resolved.recipe.format,
+      "kiln.brick.id": resolved.recipe.metadata.id,
+      "kiln.brick.kind": "database",
+      "kiln.brick.revision": String(brickRevision(resolved.recipe)),
+      "kiln.brick.source": brick.recipe,
+      "kiln.brick.type": resolved.engine,
+      "kiln.brick.variables": JSON.stringify(publicAnswers(resolved)),
+      ...(resolved.command.length === 0
+        ? {}
+        : { "kiln.database.command": JSON.stringify(resolved.command) }),
+      "kiln.database.image": resolved.image,
+      ...(resolved.ready === null
+        ? {}
+        : { "kiln.database.ready": resolved.ready }),
+    },
+  }
 }
 
 // A Brick's answers a label can keep: none of its secrets.
