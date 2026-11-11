@@ -39,7 +39,7 @@ vi.mock("@/server/auth", async (importOriginal) => ({
 vi.mock("@/lib/access-control", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/access-control")>()),
   requireRelayPermission: async ({ permission }: { permission: string }) => {
-    if (permission === "app.manage" && !access.canManage) {
+    if (permission === "instance.network.write" && !access.canManage) {
       throw new Error("Forbidden")
     }
   },

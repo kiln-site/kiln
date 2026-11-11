@@ -36,6 +36,7 @@ import {
   migratedDeployActions,
   migratedFileActions,
   migratedLimitActions,
+  migratedRouteActions,
   migratedPowerActions,
   omitBackupSecrets,
   relayBackupTaskSchema,
@@ -1892,6 +1893,10 @@ const migrations = SqliteMigrator.fromRecord({
   // went with `instance.create` and `database.create`, and with
   // `app.manage` for an App, which all stay for what else they cover.
   "43_instance_limits_action": moveCustomActions(migratedLimitActions),
+  // Saving an instance's web routes takes changing its network, whatever
+  // kind it is. An App's went with `app.manage`, which stays for what else
+  // it covers.
+  "44_instance_route_action": moveCustomActions(migratedRouteActions),
 })
 
 // Rewrites the actions of every client and invitation given actions of its

@@ -257,7 +257,7 @@ const permissionPlacement: Record<
   "instance.logs.read": ["instance.logs", "instance"],
   "instance.logs.share": ["instance.logs", "instance"],
   "instance.network.read": ["instance.network", "instance"],
-  "instance.network.write": ["instance.network", "instance"],
+  "instance.network.write": ["instance.network", "every"],
   "instance.network.public-port.write": ["instance.network", "instance"],
   "database.read": ["overview", "database"],
   "database.credentials.read": ["database.credentials", "database"],
@@ -316,8 +316,10 @@ const relayScopeChildVisibility: Record<string, readonly AccessPermission[]> = {
  * granted: a Relay, and each kind of instance people can be invited to that
  * has it. `reaches` is the kinds it covers from a Relay, which it reveals
  * there. Files: a game server's and an App's, and an App is reached only
- * through its Relay. Power, deploying and resource limits: a game server's,
- * a database's and an App's.
+ * through its Relay. Changing its network: a game server's ports and web
+ * routes, and an App's web routes; where an App is served is read with the
+ * App itself. Power, deploying and resource limits: a game server's, a
+ * database's and an App's.
  */
 const everyInstanceBlocks: Record<
   string,
@@ -327,6 +329,10 @@ const everyInstanceBlocks: Record<
   }
 > = {
   "instance.files": {
+    scopes: instanceScopes,
+    reaches: ["instance.read", "app.read"],
+  },
+  "instance.network": {
     scopes: instanceScopes,
     reaches: ["instance.read", "app.read"],
   },
@@ -502,8 +508,9 @@ const permissionCopy: Record<
     description: "See the server’s addresses, ports, and routes.",
   },
   "instance.network.write": {
-    label: "Manage server network",
-    description: "Change the server’s network settings and routes.",
+    label: "Manage network",
+    description:
+      "Change a game server’s network settings and web routes, and an App’s web routes.",
   },
   "instance.network.public-port.write": {
     label: "Assign public ports",
@@ -571,7 +578,7 @@ const permissionCopy: Record<
   "app.manage": {
     label: "Configure and deploy apps",
     description:
-      "Change an app's source, environment, and networking, and deploy it. Apps can run any container, with the access that gives on the Relay's host.",
+      "Change an app's source, environment, and published ports, and deploy it. Apps can run any container, with the access that gives on the Relay's host.",
   },
   "app.delete": {
     label: "Delete apps",

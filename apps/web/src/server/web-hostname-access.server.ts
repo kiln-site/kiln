@@ -49,22 +49,22 @@ import {
   type WebHostnameProxyChange,
 } from "@/server/web-hostnames.server"
 
+// Changing web routes and their hostnames takes one permission, whatever
+// kind of instance they belong to. Reading a game server's goes with its
+// network; where an App is served is read with the App itself.
 function permissionFor(
   resource: Pick<WebHostnameResource, "resourceType">,
   change: boolean
 ) {
+  if (change) return "instance.network.write" as const
   return resource.resourceType === "app"
-    ? change
-      ? ("app.manage" as const)
-      : ("app.read" as const)
-    : change
-      ? ("instance.network.write" as const)
-      : ("instance.network.read" as const)
+    ? ("app.read" as const)
+    : ("instance.network.read" as const)
 }
 
 /**
- * What reading or changing an instance's web routes and their hostnames
- * takes of someone: its kind's own permission, on that instance.
+ * Refuses someone who may not read, or change, an instance's web routes
+ * and their hostnames.
  */
 export function requireResourcePermission(
   user: AuthenticatedUser,

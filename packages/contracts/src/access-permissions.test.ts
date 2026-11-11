@@ -175,6 +175,44 @@ describe("the deploy permission", () => {
   })
 })
 
+describe("changing an instance's network", () => {
+  const expand = (key: string, scope: "database" | "instance" | "relay") =>
+    expandPermissionSelections(
+      [{ kind: key.endsWith(".all") ? "collection" : "permission", key }],
+      scope
+    )
+
+  it("reaches a game server's and an App's from a Relay, and no database's", () => {
+    const relay = expand("instance.network.write", "relay")
+    expect(relay).toEqual(
+      expect.arrayContaining([
+        "instance.read",
+        "app.read",
+        "instance.network.read",
+      ])
+    )
+    expect(relay).not.toContain("database.read")
+    // On one game server it is that game server's, and no App's.
+    const server = expand("instance.network.write", "instance")
+    expect(server).toContain("instance.read")
+    expect(server).not.toContain("app.read")
+    // A database's network is its own.
+    expect(accessPermissionSupported("instance.network.write", "database")).toBe(
+      false
+    )
+  })
+
+  it("doesn't come with configuring an App, nor configure one", () => {
+    expect(expand("app.manage", "relay")).not.toContain(
+      "instance.network.write"
+    )
+    expect(expand("app.all", "relay")).not.toContain("instance.network.write")
+    expect(expand("instance.network.write", "relay")).not.toContain(
+      "app.manage"
+    )
+  })
+})
+
 describe("the limits permission", () => {
   const expand = (key: string, scope: "database" | "instance" | "relay") =>
     expandPermissionSelections(

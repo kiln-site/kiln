@@ -17,6 +17,10 @@
  * Resource limits: a database's took `database.limits.write`, and an App's
  * went with configuring it. A game server's already had the name every
  * kind's now take.
+ *
+ * Web routes: saving an App's went with configuring it. A game server's
+ * already took changing its network, which every kind's now take. Reading
+ * an App's stays with seeing the App.
  */
 const fileActions: Readonly<Record<string, ReadonlyArray<string>>> = {
   "app.files.read": ["instance.files.list", "instance.files.read"],
@@ -129,3 +133,19 @@ export function migratedLimitActions(
 
 /** The permission that changes the resource limits of any kind of instance. */
 export const migratedLimitsPermission = "instance.limits.write"
+
+// On a Relay, saving an App's web routes went with configuring it.
+const routeActions: Readonly<Record<string, ReadonlyArray<string>>> = {
+  // Still what configuring an App takes.
+  "app.manage": ["app.manage", "instance.network.write"],
+}
+
+/** A Relay client's actions, with saving web routes beside what covered it. */
+export function migratedRouteActions(
+  actions: ReadonlyArray<string>
+): Array<string> {
+  return replaced(actions, routeActions)
+}
+
+/** The permission that saves the web routes of any kind of instance. */
+export const migratedRoutesPermission = "instance.network.write"

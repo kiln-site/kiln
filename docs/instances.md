@@ -34,7 +34,7 @@ Every kind gets these from the platform.
 | Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases and Apps: one Relay request and one permission         |
 | Deployments | One redeploy for every kind                     | Done for game servers, databases and Apps: one Relay request and one permission         |
 | Limits      | One request and one permission for every kind   | Done for game servers, databases and Apps: one Relay request and one permission         |
-| Domains     | Every kind, automatic for an App's web services | Game servers only                                                                       |
+| Domains     | Every kind, automatic for an App's web services | Web routes are one request, one operation and one permission for game servers and Apps; their addresses are still made per kind |
 | Networking  | One page for every kind                         | A page per kind, on a few shared sections                                               |
 | Files       | One file browser and one permission             | Done for game servers and Apps                                                          |
 | Info page   | One page shell                                  | One profile and container section for every kind; a Relay's page is its own             |
@@ -63,7 +63,7 @@ Kiln's own, replacing the mclo.gs upload game servers have now.
 - A Relay's own host keeps `relay.*`: its files and its shell are the
   machine's.
 
-Files, power, deploying and resource limits follow this now. `instance.files.*` is a game
+Files, power, deploying, resource limits and saving web routes follow this now. `instance.files.*` is a game
 server's files on that game server, and every game server's and App's on a
 Relay.
 `instance.power.*` is the power of a game server or database it is granted
@@ -73,8 +73,10 @@ is granted on, and everything on a Relay; it is no longer part of
 `app.manage`, nor of changing a game server's configuration.
 `instance.limits.write` changes the limits of what it is granted on, and
 of everything on a Relay; a database's no longer has a permission of its
-own, and an App's is no longer part of `app.manage`. See
-[Access control](access-control.md).
+own, and an App's is no longer part of `app.manage`.
+`instance.network.write` saves the web routes of a game server it is
+granted on, and of every game server and App on a Relay; an App's is no
+longer part of `app.manage`. See [Access control](access-control.md).
 
 In the catalog (`packages/contracts/src/access-permissions.ts`) these are
 the `every` family, and `everyInstanceBlocks` says where each can be granted
