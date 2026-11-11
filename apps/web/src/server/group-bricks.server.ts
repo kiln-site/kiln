@@ -1,4 +1,5 @@
 import {
+  brickRevision,
   groupBrickInstall,
   groupBrickProblem,
   type Brick,
@@ -25,10 +26,14 @@ export async function groupBricks(): Promise<Array<Brick>> {
 /** What a group Brick makes, with each database's Brick found. */
 export interface InstalledGroupBrick {
   answers: Record<string, BrickVariableValue>
+  /** The Brick itself, as what it makes keeps it. */
+  brick: { name: string; revision: number; source: string }
   apps: Array<GroupBrickApp>
   databases: Array<{
     /** Its database Brick, by its source. */
     brick: string
+    /** And by its ID in the group Brick's catalog, as the group keeps it. */
+    brickId: string
     key: string
     variables: Record<string, BrickVariableValue>
   }>
@@ -56,7 +61,15 @@ export async function installedGroupBrick(
         `${database.key} isn't one of Kiln's database Bricks (${database.brick})`
       )
     }
-    return { ...database, brick: found.source }
+    return { ...database, brick: found.source, brickId: database.brick }
   })
-  return { ...installed.install, databases }
+  return {
+    ...installed.install,
+    brick: {
+      name: recipe.metadata.name,
+      revision: brickRevision(recipe),
+      source,
+    },
+    databases,
+  }
 }

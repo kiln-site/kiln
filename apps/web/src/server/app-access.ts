@@ -11,6 +11,7 @@ import {
   listAppRecordsEffect,
   loadAppConfigEffect,
   updateAppConfigEffect,
+  type AppBrickRecord,
 } from "@/effect/managed-apps"
 import { ownerDisplayName } from "@/effect/relay-owners"
 import { runAppEffect } from "@/effect/runtime"
@@ -76,7 +77,12 @@ export const appConfigPatchSchema = appConfigSchema
 export async function getAppConfigHandler(
   user: AuthenticatedUser,
   data: { appId: string; relayId: string }
-): Promise<{ config: AppConfig; environmentHidden: boolean }> {
+): Promise<{
+  /** The Brick it follows, for an App that follows one. */
+  brick: Pick<AppBrickRecord, "member" | "name" | "revision"> | null
+  config: AppConfig
+  environmentHidden: boolean
+}> {
   const { app } = await authorizedAppFor(user, data, "app.read")
   const canManage = await Effect.runPromise(
     Effect.tryPromise({
@@ -94,6 +100,14 @@ export async function getAppConfigHandler(
     )
   )
   return {
+    // Not its answers, which can be secrets, nor where it came from.
+    brick: app.brick
+      ? {
+          member: app.brick.member,
+          name: app.brick.name,
+          revision: app.brick.revision,
+        }
+      : null,
     config: canManage
       ? app.config
       : {

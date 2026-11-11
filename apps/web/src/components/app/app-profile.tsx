@@ -65,7 +65,7 @@ export function AppProfile({
     <InstanceProfile
       brick={
         brick.state === "ready" ? (
-          <AppBrickName deploys={brick.deploys} />
+          <AppBrickName deploys={brick.deploys} follows={brick.follows} />
         ) : (
           <p className="mt-1 h-5 text-sm text-muted-foreground">…</p>
         )
@@ -188,6 +188,8 @@ type Brick =
   | {
       /** What its Brick deploys. Unknown while its repository loads. */
       deploys: AppBrickDeployType | undefined
+      /** The Brick it follows, by name, for an App that follows one. */
+      follows: string | undefined
       facts: ReadonlyArray<BrickFact>
       state: "ready"
     }
@@ -250,9 +252,15 @@ const appBricks: Record<
 
 function AppBrickName({
   deploys,
+  follows,
 }: {
   deploys: AppBrickDeployType | undefined
+  follows: string | undefined
 }) {
+  // An App that follows a Brick is that Brick's, whatever it deploys.
+  if (follows !== undefined) {
+    return <InstanceProfileBrick icon={<Box />}>{follows}</InstanceProfileBrick>
+  }
   if (deploys === undefined) {
     return <p className="mt-1 h-5 text-sm text-muted-foreground">…</p>
   }
@@ -297,6 +305,7 @@ function useAppBrick(app: App, canManage: boolean): Brick {
       saved.sourceType === "github"
         ? githubFacts(app, source)
         : dockerFacts(app, canManage, saved),
+    follows: config.data?.brick?.name,
     state: "ready",
   }
 }
