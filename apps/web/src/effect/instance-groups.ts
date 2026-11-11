@@ -18,10 +18,16 @@ export interface InstanceGroupMember {
   relayId: string
 }
 
+/** A member as a group lists it, by the name Hearth keeps for it. */
+export interface NamedInstanceGroupMember extends InstanceGroupMember {
+  /** Null for a game server, whose name its Relay keeps. */
+  name: string | null
+}
+
 export interface InstanceGroup {
   id: string
   /** Game servers, then Apps, then databases. */
-  members: ReadonlyArray<InstanceGroupMember>
+  members: ReadonlyArray<NamedInstanceGroupMember>
   name: string
 }
 
@@ -34,6 +40,7 @@ interface MemberRow extends RowDataPacket {
   group_id: string
   instance_id: string
   instance_kind: InstanceGroupMemberKind
+  name: string | null
   relay_id: string
 }
 
@@ -77,15 +84,22 @@ const membersOf = Effect.fn("instanceGroups.members")(function* (
   const database = yield* Database
   const rows = yield* database.queryRows<MemberRow>(
     "instance_group_members",
-    `SELECT instance_id, group_id, instance_kind, relay_id
-       FROM ${databaseTable("instance_group_member")}
-      WHERE group_id = ?
-      ORDER BY instance_kind ASC, instance_id ASC`,
+    `SELECT member.instance_id, member.group_id, member.instance_kind,
+            member.relay_id, COALESCE(app.name, managed.name) AS name
+       FROM ${databaseTable("instance_group_member")} member
+       LEFT JOIN ${databaseTable("app")} app
+         ON member.instance_kind = 'app' AND app.app_id = member.instance_id
+       LEFT JOIN ${databaseTable("database")} managed
+         ON member.instance_kind = 'database'
+        AND managed.database_id = member.instance_id
+      WHERE member.group_id = ?
+      ORDER BY member.instance_kind ASC, member.instance_id ASC`,
     [groupId]
   )
-  return rows.map((row): InstanceGroupMember => ({
+  return rows.map((row): NamedInstanceGroupMember => ({
     instanceId: row.instance_id,
     kind: row.instance_kind,
+    name: row.name,
     relayId: row.relay_id,
   }))
 })

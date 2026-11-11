@@ -46,6 +46,7 @@ const confirmedDeletions = [
   "relay.ts:deleteInstance",
   "databases.ts:deleteManagedDatabase",
   "apps.ts:deleteApp",
+  "instance-groups.ts:deleteInstanceGroup",
   "relay-volumes.ts:deleteRelayVolume",
   "resource-deletions.ts:retryResourceDeletion",
   // A move that deletes the old server it leaves.

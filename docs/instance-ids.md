@@ -13,7 +13,9 @@ has one ID: 12 lowercase hexadecimal characters, such as `a7c39f204bd1`.
   key, returns the same ID however often that request is retried. An ID
   something else chose, such as a Relay's own, is claimed with
   `claimInstanceIdEffect`. Deleted instances keep their reservation, so an old
-  reference never comes to mean a new instance.
+  reference never comes to mean a new instance. An
+  [instance group](instances.md#instance-groups) takes its ID from the same
+  directory, so a group's ID is never an instance's.
 - What kind of instance it is comes from the instance, never from the ID.
   Keys that mix kinds name the kind: `app:<id>`, `database:<id>`,
   `relay:<id>` (a Relay's host files), and a game server's bare ID.

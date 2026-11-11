@@ -52,7 +52,11 @@ const hearthRealtimeQueryScopes = {
   ],
   activity: [prefix(["activity"])],
   "app-deployments": [prefix(["app-deployments"])],
-  "app-directory": [exact(queryKeys.apps.directory)],
+  "app-directory": [
+    exact(queryKeys.apps.directory),
+    // A deleted App leaves its group.
+    prefix(queryKeys.instanceGroups.all),
+  ],
   apps: [
     prefix(["apps"]),
     prefix(["instance-inventory", "app"]),
@@ -74,6 +78,8 @@ const hearthRealtimeQueryScopes = {
   "database-directory": [
     exact(queryKeys.databases.directory),
     exact(queryKeys.schedules.options),
+    // A deleted database leaves its group.
+    prefix(queryKeys.instanceGroups.all),
   ],
   databases: [prefix(["instance-inventory", "database"])],
   domains: [
@@ -90,7 +96,11 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.servers.directory),
     prefix(queryKeys.servers.navigation),
     exact(queryKeys.schedules.options),
+    // A deleted game server leaves its group.
+    prefix(queryKeys.instanceGroups.all),
   ],
+  // Which group an instance is in, on the pages of its members.
+  "instance-groups": [prefix(queryKeys.instanceGroups.all)],
   "instance-web-routes": [prefix(["web-routes"])],
   notifications: [exact(queryKeys.notifications)],
   operations: [prefix(["operations"])],

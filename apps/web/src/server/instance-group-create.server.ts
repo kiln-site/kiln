@@ -38,6 +38,7 @@ import {
 import { provisionApp } from "@/server/app-create.server"
 import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { createDatabase } from "@/server/database-create.server"
+import { publishGroupChange } from "@/server/instance-group-access.server"
 import {
   installedGroupBrick,
   type InstalledGroupBrick,
@@ -211,6 +212,7 @@ async function createInstanceGroupHandler(
       Effect.tapError(() => forgetEmptyGroup(plan.id))
     )
   )
+  publishGroupChange({ members: [{ relayId: relay.id }] })
   return {
     apps: plan.apps.map(({ id, name }) => ({ id, name })),
     databases: plan.databases.map(({ id, name }) => ({ id, name })),

@@ -17,6 +17,7 @@ import {
   InfoRailLink,
   InfoRailRow,
 } from "@/components/info-page"
+import { InfoRailGroupRow } from "@/components/instance-group"
 import { RelayKindIcon } from "@/components/instance-kind-icon"
 import {
   InstanceUpdatesStatus,
@@ -73,6 +74,13 @@ export function InstanceInfoRail({
         <InfoRailActivityLink resource={resource} />
         <InfoRailBackupsLink resource={resource} />
         <InfoRailUpdatesRow resource={resource} />
+        <InfoRailGroupRow
+          member={{
+            instanceId: resource.id,
+            kind: resource.kind === "instance" ? "server" : resource.kind,
+            relayId: resource.relayId,
+          }}
+        />
         <InfoRailSecurityLink
           relayId={resource.relayId}
           resourceId={resource.id}
