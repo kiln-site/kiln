@@ -2,7 +2,9 @@
 
 1. Copy the closest Brick in `bricks/`.
 2. Give it a globally recognizable lowercase `metadata.id`.
-3. Pin or deliberately channel the container image tag.
+3. Pin or deliberately channel the container image tag. An App or group
+   Brick names the version it runs, such as `:3.4.1`, never `latest`: a
+   newer version is a new `revision`, which installs are then offered.
 4. Expose every per-deployment customization through `inputs`; never bake
    credentials or server-specific values into a Brick.
 5. Add its path to `bricks.yml` and run

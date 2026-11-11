@@ -3,7 +3,7 @@ kind: group
 metadata:
   id: umami
   name: Umami
-  revision: 3
+  revision: 4
   summary: Privacy-focused web analytics, with a PostgreSQL database of its own.
   author: Kiln
   icon: ../icons/umami.svg
@@ -29,7 +29,7 @@ group:
       kind: app
       deploy:
         type: image
-        image: ghcr.io/umami-software/umami:latest
+        image: ghcr.io/umami-software/umami:3.4.1
         env:
           APP_SECRET: "{{ app_secret }}"
         ports:
