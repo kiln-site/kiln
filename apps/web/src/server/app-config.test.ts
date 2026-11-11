@@ -206,6 +206,7 @@ describeMysql("app config", () => {
               name: "Blog",
               revision: 1,
               source: "https://bricks.test/blog.yml",
+              volumes: [],
             },
             createdBy: "manager",
             deploys: { image: "ghcr.io/acme/blog:1", sourceType: "image" },

@@ -3,6 +3,7 @@ import { Cause, Clock, Effect, Predicate } from "effect"
 
 import type { AppConfig } from "@workspace/contracts"
 import {
+  APP_SERVICE,
   appConfigSchema,
   appEnvironmentVariables,
   brickInputValueSchema,
@@ -76,6 +77,11 @@ export const appBrickRecordSchema = z.strictObject({
   name: z.string().min(1).max(80),
   revision: z.number().int().min(1),
   source: brickSourceSchema,
+  /**
+   * The folders the Brick keeps, each on a volume mounted there. Which
+   * volume is its owner's to say.
+   */
+  volumes: z.array(z.string()).default([]),
 })
 export type AppBrickRecord = z.infer<typeof appBrickRecordSchema>
 
@@ -122,19 +128,37 @@ export const createAppRecordEffect = Effect.fn("apps.create")(
     /** What its Brick deploys. Without one, nothing yet. */
     deploys?: Pick<AppConfig, "sourceType"> & { image?: string }
     environment?: string
+    /** What it mounts from the start: the volumes its Brick keeps. */
+    mounts?: AppConfig["mounts"]
     name: string
     relayId: string
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    const ciphertext = yield* encryptConfig(
-      appConfigSchema.parse({
-        ...defaultAppConfig,
-        ...input.deploys,
-        environment: input.environment ?? "",
-      })
-    )
-    yield* database.execute(
+    const config = appConfigSchema.parse({
+      ...defaultAppConfig,
+      ...input.deploys,
+      environment: input.environment ?? "",
+      mounts: input.mounts ?? [],
+    })
+    // Its Relay hears of the volumes it mounts before it is kept, as before
+    // any save that takes one up (`changeAppEffect`): a Relay that can't
+    // take them keeps the App from being made.
+    const mounted = configuredVolumeIds(config)
+    if (mounted.length > 0) {
+      yield* sendAppVolumeReferencesEffect(input.relayId, input.appId, mounted)
+    }
+    const ciphertext = yield* encryptConfig(config)
+    // One that isn't kept after all names what is saved for it, if
+    // anything is: nothing, unless this ID's App was already there.
+    const unkept =
+      mounted.length === 0
+        ? Effect.void
+        : sendSavedAppVolumeReferencesEffect(input.relayId, input.appId).pipe(
+            Effect.catchCause(() => Effect.void)
+          )
+    yield* database
+      .execute(
       "app_create",
       `INSERT INTO ${databaseTable("app")}
       (app_id, relay_id, name, config_ciphertext, brick_ciphertext,
@@ -151,7 +175,8 @@ export const createAppRecordEffect = Effect.fn("apps.create")(
         now,
         now,
       ]
-    )
+      )
+      .pipe(Effect.tapError(() => unkept))
   }
 )
 
@@ -236,17 +261,33 @@ export const updateAppConfigEffect = (
 
 /**
  * What a change would alter that an App's Brick set, or null: what it
- * deploys and how it starts, and the variables the Brick wrote. Everything
- * else about an App is its owner's, following a Brick or not.
+ * deploys and how it starts, the variables the Brick wrote, and that each
+ * folder the Brick keeps is on a volume. Which volume that is, and
+ * everything else about an App, is its owner's, following a Brick or not.
  */
 export function heldByAppBrick(
   saved: AppConfig,
   next: AppConfig,
-  brick: Pick<AppBrickRecord, "environment">
+  brick: Pick<AppBrickRecord, "environment" | "volumes">
 ): string | null {
   if (next.sourceType !== saved.sourceType) return "What it deploys"
   if (next.image !== saved.image) return "Its image"
   if (next.command !== saved.command) return "Its start command"
+  if (next.mounts !== saved.mounts) {
+    const unkept = brick.volumes.find(
+      (folder) =>
+        !next.mounts.some(
+          (mount) =>
+            mount.target === folder &&
+            mount.source.type === "volume" &&
+            !mount.readOnly &&
+            // In the one container an image or a Dockerfile runs: a mount
+            // for another service is mounted nowhere.
+            (mount.service === null || mount.service === APP_SERVICE)
+        )
+    )
+    if (unkept !== undefined) return `The volume at ${unkept}`
+  }
   if (next.environment === saved.environment) return null
   const before = appEnvironmentVariables(saved.environment)
   const after = appEnvironmentVariables(next.environment)
@@ -337,9 +378,12 @@ export const changeAppEffect = Effect.fn("apps.change")(function* <E, R>(
   return changed
 })
 
-// Tells the Relay the volumes the saved config names, holding its row so a
-// save meanwhile can't reach the Relay out of order.
-const sendSavedAppVolumeReferencesEffect = Effect.fn(
+/**
+ * Tells the Relay the volumes the saved config names, holding its row so a
+ * save meanwhile can't reach the Relay out of order. An App Hearth keeps no
+ * record of names none.
+ */
+export const sendSavedAppVolumeReferencesEffect = Effect.fn(
   "apps.volumeReferences.sendSaved"
 )(function* (relayId: string, appId: string) {
   const database = yield* Database
@@ -354,11 +398,10 @@ const sendSavedAppVolumeReferencesEffect = Effect.fn(
         [relayId, appId]
       )
       const row = rows.at(0)
-      if (!row) return
       yield* sendAppVolumeReferencesEffect(
         relayId,
         appId,
-        configuredVolumeIds(yield* decryptConfig(row))
+        row ? configuredVolumeIds(yield* decryptConfig(row)) : []
       )
     })
   )

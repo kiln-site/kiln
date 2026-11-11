@@ -128,6 +128,7 @@ describeMysql("An App taking a newer revision of its Brick", () => {
               name: "Blog",
               revision: 1,
               source: "https://bricks.test/blog.yml",
+              volumes: [],
             },
             createdBy: "owner",
             deploys: { image: "ghcr.io/acme/blog:1", sourceType: "image" },
@@ -157,6 +158,19 @@ describeMysql("An App taking a newer revision of its Brick", () => {
           assert.deepStrictEqual(queue.asked, [])
           yield* withOwn(written)
 
+          // Nor does a revision change which folders it keeps: one it newly
+          // kept would have no volume to be kept on.
+          assert.include(
+            yield* install(
+              brickRecipeSchema.parse({
+                ...blog,
+                deploy: { ...blog.deploy, volumes: ["/data"] },
+              })
+            ),
+            "keeps other folders than this App was installed with"
+          )
+          assert.strictEqual((yield* saved).config.image, "ghcr.io/acme/blog:1")
+
           assert.isNull(yield* install(blog))
 
           const app = yield* saved
@@ -177,6 +191,7 @@ describeMysql("An App taking a newer revision of its Brick", () => {
             name: "Blog",
             revision: 2,
             source: "https://bricks.test/blog.yml",
+            volumes: [],
           })
           // Its configuration deploys as an update, not an image's.
           assert.deepStrictEqual(queue.asked, [
@@ -225,6 +240,7 @@ describeMysql("An App taking a newer revision of its Brick", () => {
               name: "Analytics",
               revision: 1,
               source: "https://bricks.test/analytics.yml",
+              volumes: [],
             },
             createdBy: "owner",
             deploys: { image: "ghcr.io/acme/analytics:1", sourceType: "image" },
@@ -353,6 +369,7 @@ describeMysql("An App taking a newer revision of its Brick", () => {
                 name: "Analytics",
                 revision: 1,
                 source: "https://bricks.test/analytics.yml",
+                volumes: [],
               },
               createdBy: "owner",
               deploys: {

@@ -10,9 +10,9 @@ import {
 } from "./brick-recipe.js"
 
 // What Kiln runs of an App Brick so far: what it deploys, the variables it
-// sets, and the port its website answers on. Hearth keeps an App's
-// configuration, so Hearth turns the Brick and its answers into it, and the
-// Relay deploys that configuration as it always has.
+// sets, the port its website answers on, and the folders it keeps. Hearth
+// keeps an App's configuration, so Hearth turns the Brick and its answers
+// into it, and the Relay deploys that configuration as it always has.
 
 /**
  * Where an App's website answers: the port, and for a Compose project the
@@ -38,6 +38,11 @@ export type AppBrickDeploy = (
     }
   | { type: "dockerfile" | "compose"; path: string }
 ) & {
+  /**
+   * The folders of its container it keeps across deployments, each on a
+   * volume made when it is installed. A Compose project keeps its own.
+   */
+  volumes: ReadonlyArray<string>
   /** Where its website answers, when the Brick and its answers say. */
   web?: AppBrickWeb
 }
@@ -65,8 +70,31 @@ export const APP_IMAGE_MAX_LENGTH = 512
 // The parts of `deploy` Kiln runs for an App, by type.
 const deployed: Record<AppBrickDeployType, ReadonlyArray<string>> = {
   compose: ["type", "path", "ports"],
-  dockerfile: ["type", "path", "ports"],
-  image: ["type", "image", "env", "ports"],
+  dockerfile: ["type", "path", "ports", "volumes"],
+  image: ["type", "image", "env", "ports", "volumes"],
+}
+
+// A folder an App Brick keeps: a path a volume can be mounted at, as an
+// App's own mounts are, written one way so the same folder is the same
+// path. Never the whole container, nor a path that climbs out of itself,
+// nor one with a line break or another control character in it.
+const keptFolderPattern = /^(?:\/[^:/]+)+$/u
+const keptFolder = (folder: string) =>
+  folder.length <= 512 &&
+  keptFolderPattern.test(folder) &&
+  ![...folder].some((character) => character < " " || character === "\u007f") &&
+  !folder.split("/").some((part) => part === "." || part === "..")
+
+// The folders a Brick keeps, each on a volume of its own.
+function volumesProblem(volumes: ReadonlyArray<string>): string | null {
+  const unusable = volumes.find((folder) => !keptFolder(folder))
+  if (unusable !== undefined) {
+    return `An App Brick keeps folders by their path, such as /data (${unusable})`
+  }
+  const twice = volumes.find((folder, index) => volumes.indexOf(folder) < index)
+  return twice === undefined
+    ? null
+    : `An App Brick keeps each folder once (${twice})`
 }
 
 // The one port of an App Brick Kiln runs: where its website answers.
@@ -107,7 +135,23 @@ export function appBrickProblem(recipe: BrickRecipe): string | null {
   if (unrun !== undefined) {
     return `Kiln doesn't run an App Brick's ${unrun} yet`
   }
-  return webPortProblem(deploy.type, deploy.ports ?? [])
+  return (
+    webPortProblem(deploy.type, deploy.ports ?? []) ??
+    volumesProblem(appBrickVolumes(recipe))
+  )
+}
+
+/**
+ * The folders an App Brick keeps across deployments, as it writes them.
+ * They are the Brick's alone to say: no answer changes them.
+ */
+export function appBrickVolumes(
+  recipe: Pick<BrickRecipe, "deploy">
+): ReadonlyArray<string> {
+  const { deploy } = recipe
+  return deploy !== undefined && deploy.type !== "compose"
+    ? (deploy.volumes ?? [])
+    : []
 }
 
 /**
@@ -192,9 +236,12 @@ export function appBrickDeploy(
             ...(port?.service === undefined ? {} : { service: port.service }),
           },
         }
+  const volumes = appBrickVolumes(recipe)
   if (deploy.type !== "image") {
     // Its file is in its source; `appBrickProblem` refused one written here.
-    return { deploy: { path: deploy.path ?? "", type: deploy.type, ...web } }
+    return {
+      deploy: { path: deploy.path ?? "", type: deploy.type, volumes, ...web },
+    }
   }
   const filled = (template: string) =>
     fillBrickTemplate(template, (name) =>
@@ -226,5 +273,5 @@ export function appBrickDeploy(
     }
     environment[name] = value
   }
-  return { deploy: { environment, image, type: "image", ...web } }
+  return { deploy: { environment, image, type: "image", volumes, ...web } }
 }

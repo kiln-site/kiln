@@ -434,6 +434,7 @@ describeMysql("Creating an App with a database", () => {
             name: "Blog",
             revision: 1,
             source: "https://bricks.test/blog.yml",
+            volumes: [],
           })
 
           for (const refused of [

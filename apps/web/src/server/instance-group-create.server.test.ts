@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
+import type { AppMount } from "@workspace/contracts"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
@@ -8,7 +9,11 @@ import {
   instanceGroupOfEffect,
   changeInstanceGroupBrickEffect,
 } from "@/effect/instance-groups"
-import { loadAppConfigEffect } from "@/effect/managed-apps"
+import {
+  detachAppBrickEffect,
+  loadAppConfigEffect,
+  updateAppConfigEffect,
+} from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
@@ -25,11 +30,16 @@ vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
 afterAll(() => disposeAppRuntime())
 
 // The Relay control channel is the only external boundary here. It keeps
-// each new instance's job in the order they were asked for, and the
-// databases an App's job would connect it to.
+// each new instance's job in the order they were asked for, the databases
+// an App's job would connect it to, the volumes it was asked to make, and
+// which of them each App's configuration names.
 const relay = vi.hoisted(() => ({
   connections: new Map<string, ReadonlyArray<string>>(),
   jobs: [] as Array<string>,
+  // Each App's volumes as they stood when its job was asked for.
+  mounted: new Map<string, ReadonlyArray<string>>(),
+  named: new Map<string, ReadonlyArray<string>>(),
+  volumes: new Map<string, string>(),
   // The Relay turning a new App away.
   refusesApps: false,
   // The kind whose claim, and the cancel after it, never get an answer.
@@ -43,13 +53,39 @@ vi.mock("@/lib/relay-connection", () => ({
     payload: Record<string, unknown> & {
       databaseIds?: Array<string>
       recipeDefinition?: { type?: string }
+      volumeIds?: Array<string>
     }
   ) => {
     switch (operation) {
+      case "relay.volumes.create":
+        relay.volumes.set(String(payload.id), String(payload.name))
+        return {
+          createdAt: null,
+          dockerName: `kiln-${String(payload.id).slice(0, 8)}`,
+          id: payload.id,
+          kind: "kiln",
+          mountpoint: null,
+          mounts: [],
+          name: payload.name,
+          owner: null,
+          sizeBytes: null,
+          users: [],
+        }
+      // As a Relay does, it names only volumes it has.
+      case "app.volumes.write":
+        if ((payload.volumeIds ?? []).some((id) => !relay.volumes.has(id))) {
+          throw new Error("A volume it mounts no longer exists")
+        }
+        relay.named.set(String(payload.appId), payload.volumeIds ?? [])
+        return {}
       case "app.provision.prepare":
         if (relay.refusesApps) throw new Error("The Relay is out of room")
         relay.jobs.push(`app:${String(payload.id)}`)
         relay.connections.set(String(payload.id), payload.databaseIds ?? [])
+        relay.mounted.set(
+          String(payload.id),
+          relay.named.get(String(payload.id)) ?? []
+        )
         return {
           connectedDatabaseIds: [],
           containers: [],
@@ -129,6 +165,7 @@ vi.mock("@/server/brick-catalogs.server", async () => {
             type: "image",
             image: "ghcr.io/acme/analytics:1",
             env: { SECRET_KEY: "{{ key }}" },
+            volumes: ["/data"],
           },
           connect: { database: { DATABASE_URL: "{{ connection }}" } },
         },
@@ -165,6 +202,9 @@ const seed = (permissions: ReadonlyArray<AccessPermission>) =>
     yield* resetDatabase
     relay.connections.clear()
     relay.jobs.length = 0
+    relay.mounted.clear()
+    relay.named.clear()
+    relay.volumes.clear()
     relay.refusesApps = false
     relay.silentAbout = null
     yield* insertRelay(relayId, { enabled: 1 })
@@ -248,6 +288,7 @@ describeMysql("Installing a group Brick", () => {
             name: "Analytics",
             revision: 1,
             source: "https://bricks.test/analytics.yml",
+            volumes: ["/data"],
           })
           const group = yield* instanceGroupOfEffect(app?.id ?? "")
           assert.strictEqual(group?.name, "Stats")
@@ -272,6 +313,76 @@ describeMysql("Installing a group Brick", () => {
         })
     )
 
+    // What an App writes there has to outlast its containers from its
+    // first deployment on, and go on doing so while it follows the Brick.
+    it.effect(
+      "keeps each folder its Brick names on a volume made before the App is, held while it follows the Brick",
+      () =>
+        Effect.gen(function* () {
+          yield* seed(["app.create", "database.create"])
+
+          const { created } = yield* install()
+
+          const appId = created?.apps[0]?.id ?? ""
+          const volumeId = [...relay.volumes.keys()][0] ?? ""
+          assert.strictEqual(relay.volumes.get(volumeId), "Stats data")
+          // Its Relay had the volume, named as the App's, before the App.
+          assert.deepStrictEqual(relay.mounted.get(appId), [volumeId])
+          const mounts = () =>
+            Effect.map(
+              loadAppConfigEffect(relayId, appId),
+              (app) => app?.config.mounts ?? []
+            )
+          const [mount] = yield* mounts()
+          assert.deepInclude(mount, {
+            readOnly: false,
+            source: { type: "volume", volumeId },
+            target: "/data",
+          })
+
+          const saves = (change: (kept: AppMount) => Array<AppMount>) =>
+            updateAppConfigEffect(relayId, appId, (config) => ({
+              ...config,
+              mounts: change(mount!),
+            })).pipe(
+              Effect.as(null),
+              Effect.catch((cause) => Effect.succeed(String(cause)))
+            )
+          // Unmounted, read-only, or a path on the node in its place, the
+          // folder would no longer be kept.
+          for (const unkept of [
+            () => [],
+            (kept: AppMount) => [{ ...kept, readOnly: true }],
+            (kept: AppMount) => [{ ...kept, target: "/elsewhere" }],
+            // An image runs one container: a mount for another service
+            // is mounted nowhere.
+            (kept: AppMount) => [{ ...kept, service: "other" }],
+            (kept: AppMount) => [
+              { ...kept, source: { path: "/srv/data", type: "host" as const } },
+            ],
+          ]) {
+            assert.include(
+              yield* saves(unkept),
+              "The volume at /data is set by its Brick, Analytics"
+            )
+          }
+          // Which volume keeps it is its owner's to say, as is whatever
+          // else it mounts.
+          const other = "b".repeat(40)
+          relay.volumes.set(other, "Restored")
+          assert.isNull(
+            yield* saves((kept) => [
+              { ...kept, source: { type: "volume", volumeId: other } },
+              { ...kept, id: "ownmount01", target: "/cache" },
+            ])
+          )
+          assert.lengthOf(yield* mounts(), 2)
+          // Detached, nothing of it is the Brick's.
+          yield* detachAppBrickEffect(relayId, appId)
+          assert.isNull(yield* saves(() => []))
+        })
+    )
+
     // Its database is real by then: it stays, in the group, for whoever
     // installed it to keep or delete.
     it.effect("keeps what it made when a later member can't be made", () =>
@@ -290,6 +401,10 @@ describeMysql("Installing a group Brick", () => {
           group?.members.map((member) => member.instanceId),
           [database?.database_id]
         )
+        // The volume made for the App stays, empty, and its Relay is told
+        // no App names it any more, so nothing keeps it from being deleted.
+        assert.strictEqual(relay.volumes.size, 1)
+        assert.deepStrictEqual([...relay.named.values()], [[]])
       })
     )
 

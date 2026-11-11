@@ -1,0 +1,38 @@
+format: kiln.brick/v2
+kind: group
+metadata:
+  id: wordpress
+  name: WordPress
+  revision: 1
+  summary: A website and blog, with a MySQL database of its own.
+  author: Kiln
+  icon: ../icons/wordpress.svg
+  color: "#3858e9"
+  tags: [website]
+  links:
+    homepage: "https://wordpress.org"
+    source: "https://github.com/WordPress/WordPress"
+    docs: "https://wordpress.org/documentation/"
+# WordPress asks for its site's name and first account when its address is
+# first opened, and takes that address as its own. It keeps itself, its
+# themes, plugins and uploads in /var/www/html, and updates itself there:
+# the image is what a new install starts from.
+group:
+  members:
+    database:
+      brick: mysql
+    web:
+      kind: app
+      deploy:
+        type: image
+        image: wordpress:7.1.4-php8.3-apache
+        ports:
+          - name: web
+            port: 80
+        volumes: [/var/www/html]
+      connect:
+        database:
+          WORDPRESS_DB_HOST: "{{ host }}:{{ port }}"
+          WORDPRESS_DB_NAME: "{{ name }}"
+          WORDPRESS_DB_USER: "{{ username }}"
+          WORDPRESS_DB_PASSWORD: "{{ password }}"

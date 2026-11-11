@@ -35,6 +35,11 @@ import {
   runOperationPromise,
   signedIn,
 } from "@/operations/operation"
+import {
+  brickVolumeLocks,
+  brickVolumes,
+  type BrickVolume,
+} from "@/server/app-brick-volumes.server"
 import { addressNewApp, provisionApp } from "@/server/app-create.server"
 import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { createDatabase } from "@/server/database-create.server"
@@ -64,7 +69,12 @@ interface GroupPlan {
   answers: InstalledGroupBrick["answers"]
   brick: InstalledGroupBrick["brick"]
   apps: Array<
-    InstalledGroupBrick["apps"][number] & { id: string; name: string }
+    InstalledGroupBrick["apps"][number] & {
+      id: string
+      /** A volume for each folder it keeps. */
+      keeps: Array<BrickVolume>
+      name: string
+    }
   >
   databases: Array<
     InstalledGroupBrick["databases"][number] & { id: string; name: string }
@@ -108,11 +118,15 @@ const planGroupEffect = Effect.fn("instanceGroups.create.plan")(function* (
   const apps = yield* Effect.forEach(installed.apps, (app) =>
     Effect.map(
       reserveInstanceIdEffect("app", `${requestKey}:${app.key}`),
-      (reserved) => ({
-        ...app,
-        id: reserved,
-        name: memberName(input.name, app, installed.apps.length === 1),
-      })
+      (reserved) => {
+        const name = memberName(input.name, app, installed.apps.length === 1)
+        return {
+          ...app,
+          id: reserved,
+          keeps: brickVolumes({ id: reserved, name }, app.volumes),
+          name,
+        }
+      }
     )
   )
   return {
@@ -160,9 +174,10 @@ const createInstanceGroup = operation<
     ...input.plan.databases.map((database) =>
       exclusive(resourceKey("database", input.relayId, database.id))
     ),
-    ...input.plan.apps.map((app) =>
-      exclusive(resourceKey("app", input.relayId, app.id))
-    ),
+    ...input.plan.apps.flatMap((app) => [
+      exclusive(resourceKey("app", input.relayId, app.id)),
+      ...brickVolumeLocks(input.relayId, app.keeps),
+    ]),
   ],
   run: ({ context: user, input }) =>
     promiseEffect(() => createInstanceGroupHandler(user, input)),
@@ -298,14 +313,21 @@ async function makeMembers(
             name: plan.brick.name,
             revision: plan.brick.revision,
             source: plan.brick.source,
+            volumes: [...app.volumes],
           },
           databaseIds: Object.keys(app.connect).flatMap(
             (key) => ids[key] ?? []
           ),
-          deploys: { environment: variables, image: app.image, type: "image" },
+          deploys: {
+            environment: variables,
+            image: app.image,
+            type: "image",
+            volumes: app.volumes,
+          },
           environment: appEnvironmentWith("", [], variables),
           id: app.id,
           name: app.name,
+          volumes: app.keeps,
         }),
       () =>
         runAppEffect(

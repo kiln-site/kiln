@@ -49,6 +49,24 @@ interface Revised {
   record: AppBrickRecord
 }
 
+// A revision changes what an App runs, never which folders it keeps: a
+// folder it newly kept would have no volume, and one it dropped would
+// leave its volume mounted for nothing.
+function sameFolders(
+  newest: NewestBrick,
+  kept: ReadonlyArray<string>,
+  keeps: ReadonlyArray<string>
+) {
+  // As lists: a folder's name isn't held to what a member's key is.
+  if (JSON.stringify([...kept].sort()) !== JSON.stringify([...keeps].sort())) {
+    throw refused(
+      newest,
+      "it keeps other folders than this App was installed with. Install it again to take it."
+    )
+  }
+  return [...kept]
+}
+
 // A revision's answers: those the App already has that it still asks for,
 // kept as they are, and for an input it newly asks, what that comes to
 // now, its default or a secret made for it. An answer to an input it
@@ -64,6 +82,9 @@ function answersFor(
     makeBrickSecret
   )
 }
+
+const sameKeys = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
+  [...left].sort().join("\n") === [...right].sort().join("\n")
 
 const refused = (newest: NewestBrick, why: string) =>
   new Error(
@@ -89,12 +110,10 @@ function revisedAlone(brick: AppBrickRecord, newest: NewestBrick): Revised {
       name: newest.name,
       revision: newest.revision,
       source: newest.source,
+      volumes: sameFolders(newest, brick.volumes, installed.deploy.volumes),
     },
   }
 }
-
-const sameKeys = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
-  [...left].sort().join("\n") === [...right].sort().join("\n")
 
 // An App that is one of a group Brick's: made again from the group's
 // answers, and given again the addresses of the databases it is connected
@@ -203,6 +222,7 @@ async function revisedInGroup(
                 name: newest.name,
                 revision: newest.revision,
                 source: newest.source,
+                volumes: sameFolders(newest, follows.volumes, app.volumes),
               },
             } satisfies Revised,
           }
