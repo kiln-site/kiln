@@ -27,7 +27,8 @@ export async function resourceAccess(user: AuthenticatedUser) {
         user,
         grants,
         { appId, relayId },
-        manage ? "app.manage" : "app.read"
+        // Changing web routes takes the same of every kind.
+        manage ? "instance.network.write" : "app.read"
       ),
     instance: (relayId: string, instanceId: string, write: boolean) =>
       effectiveScopePermissions(grants, {

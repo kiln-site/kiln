@@ -1658,6 +1658,11 @@ function readAction(kind: string | null): RelayAction | null {
         : null
 }
 
+// The kinds of instance that have web routes.
+function routeKind(kind: string | null): kind is "app" | "instance" {
+  return kind === "instance" || kind === "app"
+}
+
 // The kinds of instance a request that names its kind can be for.
 function isInstanceKind(
   kind: string | null
@@ -1850,11 +1855,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     // route takes. Hearth checks the person may.
     case "relay.certificates.check": {
       const kind = objectString(objectRecord(request.payload, "owner"), "kind")
-      return kind === "app"
-        ? "app.manage"
-        : kind === "server"
-          ? "instance.network.write"
-          : null
+      return kind === "app" || kind === "server"
+        ? "instance.network.write"
+        : null
     }
     case "relay.volumes.read":
     case "relay.docker.storage":
@@ -2106,8 +2109,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "instance.network.write"
     case "instance.network.databases.remove":
       return "instance.network.write"
-    // An instance's web routes take what each kind's did before they were
-    // one request: a game server's network, and an App's configuration.
+    // A game server's web routes are read with its network. Where an App
+    // is served is read with the App itself.
     case "instance.network.routes.read":
       switch (objectString(request.payload, "kind")) {
         case "instance":
@@ -2117,15 +2120,11 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
         default:
           return null
       }
+    // Saving web routes takes one action, whatever kind's they are.
     case "instance.network.routes.write":
-      switch (objectString(request.payload, "kind")) {
-        case "instance":
-          return "instance.network.write"
-        case "app":
-          return "app.manage"
-        default:
-          return null
-      }
+      return routeKind(objectString(request.payload, "kind"))
+        ? "instance.network.write"
+        : null
     case "sftp.authorization.resolve":
       return "instance.sftp.connect"
   }

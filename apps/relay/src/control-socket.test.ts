@@ -347,7 +347,7 @@ describe("Relay control socket", () => {
     ).toEqual([])
   })
 
-  it("saves an instance's web routes with what its kind's network takes, and none for a kind without routes", async () => {
+  it("saves web routes with the same action for every kind that has them, not what configures an App", async () => {
     const relay = await startRelay()
     const id = "0123456789ab"
     // Which kinds' routes a client holding these actions may save.
@@ -368,9 +368,14 @@ describe("Relay control socket", () => {
       return kinds
     }
 
-    expect(await allowed(["instance.network.write"])).toEqual(["instance"])
-    expect(await allowed(["app.manage"])).toEqual(["app"])
-    // Reading either doesn't save it.
+    // A database and a Relay have none.
+    expect(await allowed(["instance.network.write"])).toEqual([
+      "instance",
+      "app",
+    ])
+    // Configuring an App no longer saves its routes, and reading either
+    // never did.
+    expect(await allowed(["app.manage"])).toEqual([])
     expect(await allowed(["instance.network.read", "app.read"])).toEqual([])
   })
 
@@ -378,25 +383,25 @@ describe("Relay control socket", () => {
     const relay = await startRelay({
       execute: async () => ({ asked: false, pending: null }),
     })
-    const hearth = await relay.pair({ role: "custom", actions: ["app.manage"] })
-    const { inbox, socket } = await relay.connect(hearth)
-    const app = sendRequest(socket, "relay.certificates.check", {
-      hostname: "shop.example.com",
-      owner: { id: "a".repeat(12), kind: "app" },
-    })
-    expect(await inbox.next()).toMatchObject({
-      replyTo: app,
-      type: "response",
-    })
-    const server = sendRequest(socket, "relay.certificates.check", {
-      hostname: "play.example.com",
-      owner: { id: "a".repeat(12), kind: "server" },
-    })
-    expect(await inbox.next()).toMatchObject({
-      code: "forbidden",
-      replyTo: server,
-      type: "error",
-    })
+    // Which kinds' certificates a client holding these actions may check.
+    const allowed = async (actions: ReadonlyArray<RelayAction>) => {
+      const { inbox, socket } = await relay.connect(
+        await relay.pair({ role: "custom", actions })
+      )
+      const kinds: Array<string> = []
+      for (const kind of ["server", "app", "database"]) {
+        sendRequest(socket, "relay.certificates.check", {
+          hostname: `${kind}.example.com`,
+          owner: { id: "a".repeat(12), kind },
+        })
+        const reply = (await inbox.next()) as { code?: string }
+        if (reply.code !== "forbidden") kinds.push(kind)
+      }
+      return kinds
+    }
+
+    expect(await allowed(["instance.network.write"])).toEqual(["server", "app"])
+    expect(await allowed(["app.manage"])).toEqual([])
   })
 
   it("takes a database's network permission to create an App connected to it", async () => {

@@ -420,9 +420,10 @@ describe("Relay state", () => {
                   "instance.files.delete",
                   "instance.files.rename",
                   "instance.files.upload-url",
-                  // Configuring an App stays, with the limits, the
-                  // deploying and the power it covered.
+                  // Configuring an App stays, with the web routes, the
+                  // limits, the deploying and the power it covered.
                   "app.manage",
+                  "instance.network.write",
                   "instance.limits.write",
                   "instance.deploy",
                   "instance.power.start",

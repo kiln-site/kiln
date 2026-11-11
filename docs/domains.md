@@ -15,6 +15,11 @@ a game server's address always is, since players connect to it directly.
 
 ## Web route hostnames
 
+A game server's and an App's web routes are the same thing, read and saved
+the same way: one request to the Relay that keeps them, and one operation in
+Hearth, which takes `instance.network.write` of whoever saves them, whatever
+kind of instance they belong to.
+
 Saving a game server's or app's web routes brings its DNS records in line,
 for every hostname a route answers on, its `www` counterpart included:
 

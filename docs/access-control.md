@@ -153,11 +153,19 @@ reveals those kinds there.
   disk limits of a game server, a database or an App. It doesn't read a
   game server's configuration, and configuring an App (`app.manage`)
   doesn't include it.
+- **Changing the network**: `instance.network.write` changes a game
+  server's ports and web routes, and an App's web routes, with the DNS
+  records and certificates that go with them. Configuring an App
+  (`app.manage`) doesn't include it. Reading them isn't shared: a game
+  server's are read with its network (`instance.network.read`), and where
+  an App is served is read with the App (`app.read`), since its pages show
+  it. A database has no web routes, and its connections keep
+  `database.network.*`.
 
 Only what one kind alone has keeps that kind's name. `database.all` covers a
 database's power, since power can be granted on one database; selected on a
 Relay, that power reaches every instance there. `app.all` covers what Apps
-alone have, not their files, power, deploying or limits.
+alone have, not their files, power, deploying, limits or web routes.
 
 **Presets** come in two kinds:
 

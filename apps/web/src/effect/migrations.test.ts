@@ -704,6 +704,7 @@ describeMysql("database migrations", () => {
             "instance.files.delete",
             "instance.files.write",
             "instance.limits.write",
+            "instance.network.write",
             "instance.power.kill",
           ])
           expect(yield* granted("server")).toEqual(["instance.console.read"])
@@ -845,6 +846,7 @@ describeMysql("database migrations", () => {
             "app.manage",
             "instance.deploy",
             "instance.limits.write",
+            "instance.network.write",
             "instance.power.kill",
           ])
           expect(yield* granted("observer")).toEqual(["app.logs.read"])
@@ -899,6 +901,7 @@ describeMysql("database migrations", () => {
             "instance.power.restart",
             "instance.power.kill",
             "app.manage",
+            "instance.network.write",
             "instance.limits.write",
             "instance.deploy",
           ])
@@ -1000,11 +1003,13 @@ describeMysql("database migrations", () => {
             "app.manage",
             "instance.deploy",
             "instance.limits.write",
+            "instance.network.write",
           ])
           expect(yield* granted("everyApp")).toEqual([
             "app.all",
             "instance.deploy",
             "instance.limits.write",
+            "instance.network.write",
           ])
           expect(yield* granted("server")).toEqual([
             "instance.configuration.write",
@@ -1359,6 +1364,7 @@ describeMysql("database migrations", () => {
           expect(yield* granted("apps")).toEqual([
             "app.manage",
             "instance.limits.write",
+            "instance.network.write",
           ])
           expect(yield* granted("server")).toEqual([
             "instance.configuration.read",
@@ -1405,6 +1411,102 @@ describeMysql("database migrations", () => {
             "database.create",
             "instance.limits.write",
           ])
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
+      "keeps who could save an App's web routes, as the network permission every instance takes",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while saving an App's web routes went with
+          // configuring it.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 72)
+          )
+          const relayId = "1".repeat(12)
+          const serverId = "5".repeat(12)
+          yield* insertRelay(relayId, {
+            client_actions: JSON.stringify(["app.read", "app.manage"]),
+            client_role: "custom",
+          })
+          const grant = Effect.fnUntraced(function* (
+            id: string,
+            resourceType: "instance" | "relay",
+            resourceId: string,
+            keys: ReadonlyArray<string>
+          ) {
+            yield* insertUser(id)
+            yield* insertGrant({
+              id,
+              relayId,
+              resourceId,
+              resourceType,
+              userId: id,
+            })
+            yield* insertRows(
+              "access_selection",
+              keys.map((key) => ({
+                access_id: id,
+                selection_kind: key.endsWith(".all")
+                  ? "collection"
+                  : "permission",
+                selection_key: key,
+              }))
+            )
+          })
+          yield* grant("configures", "relay", relayId, ["app.manage"])
+          yield* grant("everything", "relay", relayId, ["app.all"])
+          // Seeing Apps never saved their routes, and a game server's
+          // network already took this.
+          yield* grant("viewer", "relay", relayId, ["app.read"])
+          yield* grant("server", "instance", serverId, [
+            "instance.network.read",
+          ])
+
+          yield* applyMigrations(migrations)
+
+          const granted = (id: string) =>
+            sql<{ key: string }>`
+              SELECT selection_key AS \`key\`
+                FROM ${sql(databaseTableName("access_selection"))}
+               WHERE access_id = ${id} ORDER BY selection_key
+            `.pipe(Effect.map((rows) => rows.map((row) => row.key)))
+          expect(yield* granted("configures")).toEqual([
+            "app.manage",
+            "instance.network.write",
+          ])
+          expect(yield* granted("everything")).toEqual([
+            "app.all",
+            "instance.network.write",
+          ])
+          expect(yield* granted("viewer")).toEqual(["app.read"])
+          expect(yield* granted("server")).toEqual(["instance.network.read"])
+
+          // What was stored now loads, and saves the routes it could.
+          expect(
+            expandStoredSelections(
+              (yield* granted("configures")).map((key) => ({
+                key,
+                kind: "permission" as const,
+              })),
+              "relay"
+            )
+          ).toEqual(
+            expect.arrayContaining(["app.manage", "instance.network.write"])
+          )
+
+          const [relay] = yield* sql<{ actions: unknown }>`
+            SELECT client_actions AS actions
+              FROM ${sql(databaseTableName("relay"))} WHERE id = ${relayId}
+          `
+          expect(
+            typeof relay?.actions === "string"
+              ? JSON.parse(relay.actions)
+              : relay?.actions
+          ).toEqual(["app.read", "app.manage", "instance.network.write"])
         }),
       schemaBuildTimeout
     )

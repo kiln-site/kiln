@@ -182,7 +182,10 @@ function AppWebRoutes({
     <WebRoutesSection
       // Another app's routes start fresh, Undo included.
       key={`${app.relayId}:${app.id}`}
-      canWrite={canManage}
+      canWrite={
+        appRelayAvailable(app) &&
+        app.permissions.includes("instance.network.write")
+      }
       dnsResource={dnsResource}
       error={state.error}
       kind="app"
