@@ -2,6 +2,7 @@ import type { IdentityStatusPresentation } from "@/components/identity-name"
 import type {
   AppDeploymentStatus,
   AppDeploymentTrigger,
+  DatabaseDeploymentTrigger,
   ServerDeploymentTrigger,
 } from "@/effect/app-deployments"
 
@@ -57,6 +58,15 @@ export const serverDeploymentTriggerLabels: Record<
   install: "Install",
   // Stored under the name it had before every kind deployed again.
   reinstall: "Redeploy",
+  update: "Image update",
+}
+
+export const databaseDeploymentTriggerLabels: Record<
+  DatabaseDeploymentTrigger,
+  string
+> = {
+  redeploy: "Redeploy",
+  update: "Image update",
 }
 
 /** An image digest as people compare them: its first 12 hex digits. */

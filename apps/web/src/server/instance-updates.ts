@@ -13,6 +13,7 @@ import { requireEligibleResourceUser } from "@/server/auth"
 import {
   askInstanceImageUpdateHandler,
   deployInstanceUpdateHandler,
+  instanceUpdatesHandler,
   recordInstanceImageCheckHandler,
   saveInstanceUpdatePolicyHandler,
   skipInstanceUpdateHandler,
@@ -96,6 +97,13 @@ const deployUpdate = updateOperation(
   (noun) => `Updating this ${noun}`,
   deployInstanceUpdateHandler
 )
+
+/** What an instance's Updates row shows, for whoever can read it. */
+export const getInstanceUpdates = createServerFn({ method: "GET" })
+  .validator(instanceInputSchema)
+  .handler(async ({ data }) =>
+    instanceUpdatesHandler(await requireEligibleResourceUser(), data)
+  )
 
 export const saveInstanceUpdatePolicy = createServerFn({ method: "POST" })
   .validator(policyInputSchema)

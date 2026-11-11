@@ -230,6 +230,9 @@ export const queryKeys = {
       ["app-deployments", "server-log", instanceId, deploymentId] as const,
     summary: (relayId: string, appId: string) =>
       ["app-deployments", "summary", relayId, appId] as const,
+    // A game server's or a database's updates; an App's are in its summary.
+    updates: (relayId: string, instanceId: string) =>
+      ["app-deployments", "updates", relayId, instanceId] as const,
     states: ["app-deployments", "states"] as const,
   },
   apps: {

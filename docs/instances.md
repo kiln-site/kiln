@@ -86,8 +86,8 @@ entry there.
 Two patterns are in place. Follow them when a capability moves.
 
 - **One Relay request that names the kind.** `instance.action`,
-  `instance.deploy`, `instance.limits.write` and `resource.freeze` take
-  `{ kind, id, ... }` rather
+  `instance.deploy`, `instance.limits.write`, `instance.image.check` and
+  `resource.freeze` take `{ kind, id, ... }` rather
   than one request per kind. The Relay picks the permission and the work
   from the same `kind`.
 - **One place that picks the permission, on each side.** Hearth has
@@ -99,6 +99,12 @@ Two patterns are in place. Follow them when a capability moves.
 A capability usually moves in two steps: first onto one path with no key
 change, then onto one permission with a migration on Hearth and on each
 Relay.
+
+Updates follow the same shape with one more piece. Checking, recording,
+notifying and waiting are the same for every kind; what differs (which
+instances check, and how one takes an update) is one adapter per kind in
+`apps/web/src/lib/instance-update-kinds.server.ts`. See
+[Instance updates](instance-updates.md).
 
 ## Instance groups
 

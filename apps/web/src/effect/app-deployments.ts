@@ -20,9 +20,14 @@ export type AppDeploymentTrigger =
   | "update"
 export type AppDeploymentStatus = "failed" | "running" | "succeeded" | "unknown"
 /** A game server's first install, a reinstall, or a change of its Brick. */
-export type ServerDeploymentTrigger = "brick" | "install" | "reinstall"
-/** A database deployed again as it is. */
-export type DatabaseDeploymentTrigger = "redeploy"
+export type ServerDeploymentTrigger =
+  | "brick"
+  | "install"
+  | "reinstall"
+  // Deployed again to take the image its tag names now.
+  | "update"
+/** A database deployed again as it is, asked for or to take an update. */
+export type DatabaseDeploymentTrigger = "redeploy" | "update"
 export type DeploymentKind = "app" | "database" | "server"
 /** The kinds a deployment is one request to the Relay for. */
 export type RequestDeploymentKind = Exclude<DeploymentKind, "app">
@@ -642,6 +647,27 @@ export const latestAppDeploymentsEffect = Effect.fn("apps.deployments.latest")(
     }
   }
 )
+
+/**
+ * When an instance's newest deployment started, of any kind: what it runs
+ * may have changed since anything found before then.
+ */
+export const latestDeploymentStartedAtEffect = Effect.fn(
+  "deployments.latestStartedAt"
+)(function* (kind: DeploymentKind, instanceId: string) {
+  const database = yield* Database
+  const [row] = yield* database.queryRows<
+    RowDataPacket & { started_at: number | string }
+  >(
+    "deployments.latestStartedAt",
+    `SELECT started_at FROM ${deploymentTable()}
+      WHERE instance_kind = ? AND instance_id = ?
+      ORDER BY started_at DESC, id DESC
+      LIMIT 1`,
+    [kind, instanceId]
+  )
+  return row ? new Date(Number(row.started_at)).toISOString() : null
+})
 
 export const loadRunningAppDeploymentsEffect = Effect.fn(
   "apps.deployments.running"

@@ -9,12 +9,10 @@ import {
 } from "@workspace/contracts"
 
 import {
-  autoUpdateAt,
   currentImageUpdate,
-  defaultInstanceUpdatePolicy,
   loadInstanceUpdateEffect,
-  type InstanceUpdate,
 } from "@/effect/instance-updates"
+import { updatesView } from "@/server/instance-updates.server"
 import {
   latestAppDeploymentsEffect,
   listDeploymentsEffect,
@@ -434,7 +432,7 @@ export async function getAppDeploymentSummaryHandler(data: {
     // Nothing to check until it names an image.
     imageUpdates:
       app.config.sourceType === "image" && app.config.image !== ""
-        ? imageUpdatesView(
+        ? updatesView(
             app.config.image,
             imageUpdate,
             currentImageUpdate(
@@ -447,38 +445,6 @@ export async function getAppDeploymentSummaryHandler(data: {
   }
 }
 
-/**
- * What an image app's Deployment card shows of its updates. Only what the
- * last check found for the image its config names now; one saved since
- * hasn't been checked.
- */
-// The app's saved policy, and what the last check found, if it still
-// describes the app (`currentImageUpdate`).
-function imageUpdatesView(
-  image: string,
-  saved: InstanceUpdate | null,
-  current: InstanceUpdate | null
-) {
-  const policy = {
-    delayHours: saved?.delayHours ?? defaultInstanceUpdatePolicy.delayHours,
-    mode: saved?.mode ?? defaultInstanceUpdatePolicy.mode,
-  }
-  // A digest never moves, so there's nothing to check.
-  const pinned = image.includes("@")
-  return {
-    ...policy,
-    autoUpdateAt: current && autoUpdateAt(current),
-    checkError: current?.checkError ?? null,
-    checkedAt: current?.checkedAt ?? null,
-    image,
-    latestDigest: current?.latestDigest ?? null,
-    latestSeenAt: current?.latestSeenAt ?? null,
-    pinned,
-    runningDigest: current?.runningDigest ?? null,
-    skippedDigest: current?.skippedDigest ?? null,
-    state: pinned ? null : (current?.state ?? null),
-  }
-}
 
 /**
  * The Dockerfile or Compose file a GitHub app deploys, at its branch's

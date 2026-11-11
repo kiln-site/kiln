@@ -1,10 +1,12 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
+import { useNavigate } from "@tanstack/react-router"
 import {
   Activity,
   Archive,
   Check,
   Copy,
+  PackagePlus,
   Users,
 } from "lucide-react"
 
@@ -16,6 +18,11 @@ import {
   InfoRailRow,
 } from "@/components/info-page"
 import { RelayKindIcon } from "@/components/instance-kind-icon"
+import {
+  InstanceUpdatesStatus,
+  instanceUpdatesQueryOptions,
+  type UpdatedInstance,
+} from "@/components/instance-updates"
 import { OwnerCard } from "@/components/owner-card"
 import { ResourceNotificationsCard } from "@/components/resource-notifications-card"
 import { InfoRailSecurityLink } from "@/components/resource-security-link"
@@ -65,6 +72,7 @@ export function InstanceInfoRail({
         <InfoRailUsersLink resource={resource} />
         <InfoRailActivityLink resource={resource} />
         <InfoRailBackupsLink resource={resource} />
+        <InfoRailUpdatesRow resource={resource} />
         <InfoRailSecurityLink
           relayId={resource.relayId}
           resourceId={resource.id}
@@ -91,14 +99,24 @@ const InfoRailNotifications = React.memo(function InfoRailNotifications({
   )
   const kinds = React.useMemo((): ReadonlyArray<NotificationKind> => {
     if (!capabilities) return []
+    // An update is told to whoever may take it.
     if (kind === "instance")
-      return canAccessInstancePermission(
-        capabilities,
-        { id, relayId },
-        "instance.configuration.write"
-      )
-        ? ["security.report"]
-        : []
+      return [
+        ...(canAccessInstancePermission(
+          capabilities,
+          { id, relayId },
+          "instance.deploy"
+        )
+          ? (["app.image-update"] as const)
+          : []),
+        ...(canAccessInstancePermission(
+          capabilities,
+          { id, relayId },
+          "instance.configuration.write"
+        )
+          ? (["security.report"] as const)
+          : []),
+      ]
     return [
       ...(canAccessDatabasePermission(
         capabilities,
@@ -110,6 +128,13 @@ const InfoRailNotifications = React.memo(function InfoRailNotifications({
       ...(canAccessDatabasePermission(
         capabilities,
         { id, relayId },
+        "instance.deploy"
+      )
+        ? (["app.image-update"] as const)
+        : []),
+      ...(canAccessDatabasePermission(
+        capabilities,
+        { id, relayId },
         "instance.power.restart"
       )
         ? (["security.report"] as const)
@@ -117,6 +142,67 @@ const InfoRailNotifications = React.memo(function InfoRailNotifications({
     ]
   }, [capabilities, id, kind, relayId])
   return <ResourceNotificationsCard kinds={kinds} resource={subject} />
+})
+
+// Whether its image has a newer release out, and what Kiln does about it.
+// Whoever may deploy it decides that, and takes an update.
+const InfoRailUpdatesRow = React.memo(function InfoRailUpdatesRow({
+  resource,
+}: {
+  resource: RailResource
+}) {
+  const navigate = useNavigate()
+  const { id, kind, relayId } = resource
+  const updatedKind = kind === "instance" ? "server" : "database"
+  const { data: updates } = useQuery(
+    instanceUpdatesQueryOptions({ id, kind: updatedKind, relayId })
+  )
+  const select = React.useCallback(
+    (capabilities: NavigationAccessCapabilities) =>
+      kind === "database"
+        ? canAccessDatabasePermission(
+            capabilities,
+            { id, relayId },
+            "instance.deploy"
+          )
+        : canAccessInstancePermission(
+            capabilities,
+            { id, relayId },
+            "instance.deploy"
+          ),
+    [id, kind, relayId]
+  )
+  const { data: canDeploy = false } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select,
+  })
+  const instance = React.useMemo(
+    (): UpdatedInstance => ({
+      canDeploy,
+      // Its Logs page lists its deployments.
+      followDeployment: () =>
+        kind === "database"
+          ? navigate({
+              params: { databaseId: id },
+              search: { stream: "deployment" },
+              to: "/db/$databaseId/logs",
+            })
+          : navigate({ params: { serverId: id }, to: "/server/$serverId/logs" }),
+      id,
+      kind: updatedKind,
+      relayId,
+    }),
+    [canDeploy, id, kind, navigate, relayId, updatedKind]
+  )
+  if (!updates) return null
+  return (
+    <InfoRailRow
+      action={<InstanceUpdatesStatus instance={instance} updates={updates} />}
+      leading={<PackagePlus />}
+    >
+      Updates
+    </InfoRailRow>
+  )
 })
 
 function railScope(resource: RailResource) {

@@ -58,7 +58,6 @@ import {
 import { accessPermissions, grantHasPermission } from "@/lib/permissions"
 import type { AccessPermission } from "@/lib/permissions"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { asDatabaseDeployment } from "@/lib/server-deployments.server"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { partKey, resourceKey, shared } from "@/operations/lanes"
 import { runOperationPromise } from "@/operations/operation"
@@ -384,21 +383,15 @@ const deployDatabaseAgain = resourceOperation({
   permission: () => "instance.deploy",
   run: async (user, data) => {
     const relay = await requiredRelay(data.relayId)
-    const database = relayManagedDatabaseSchema.parse(
-      await asDatabaseDeployment(
-        { databaseId: data.databaseId, relayId: relay.id, userId: user.id },
-        (deploymentId) =>
-          databaseRpc(
-            relay,
-            "instance.deploy",
-            { deploymentId, id: data.databaseId, kind: "database" },
-            relayControlDeadlineMs("instance.deploy"),
-            user.id
-          )
-      )
+    const { redeployDatabase } = await import("@/server/instance-deploy.server")
+    return databaseForViewer(
+      user,
+      relay.id,
+      await redeployDatabase(relay, data.databaseId, {
+        trigger: "redeploy",
+        userId: user.id,
+      })
     )
-    publishDatabaseChange(relay.id, false)
-    return databaseForViewer(user, relay.id, database)
   },
 })
 

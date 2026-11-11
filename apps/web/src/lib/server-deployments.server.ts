@@ -45,8 +45,8 @@ interface ServerDeploymentStart {
   brickName: string | null
   instanceId: string
   relayId: string
-  /** Who asked. */
-  userId: string
+  /** Who asked, or null when Kiln did, as for an automatic update. */
+  userId: string | null
 }
 
 /**
@@ -84,11 +84,11 @@ export async function finishServerInstall(
  * before `run` asks the Relay, and ended as it answers.
  */
 export async function asServerDeployment<T>(
-  input: ServerDeploymentStart & { trigger: "brick" | "reinstall" },
+  input: ServerDeploymentStart & { trigger: "brick" | "reinstall" | "update" },
   run: (deploymentId: string) => Promise<T>
 ): Promise<T> {
   return following(
-    input.relayId,
+    { ...input, kind: "server" },
     await insertRunning({ ...input, kind: "server" }),
     run
   )
@@ -96,18 +96,28 @@ export async function asServerDeployment<T>(
 
 /** Runs a database's redeploy as a deployment, as a game server's is. */
 export async function asDatabaseDeployment<T>(
-  input: { databaseId: string; relayId: string; userId: string },
+  input: {
+    databaseId: string
+    relayId: string
+    trigger: "redeploy" | "update"
+    userId: string | null
+  },
   run: (deploymentId: string) => Promise<T>
 ): Promise<T> {
   return following(
-    input.relayId,
+    {
+      instanceId: input.databaseId,
+      kind: "database",
+      relayId: input.relayId,
+      userId: input.userId,
+    },
     await insertRunning({
       brickId: null,
       brickName: null,
       instanceId: input.databaseId,
       kind: "database",
       relayId: input.relayId,
-      trigger: "redeploy",
+      trigger: input.trigger,
       userId: input.userId,
     }),
     run
@@ -117,10 +127,16 @@ export async function asDatabaseDeployment<T>(
 // Asks the Relay for a deployment recorded as running, and ends it as the
 // Relay answers.
 function following<T>(
-  relayId: string,
+  of: {
+    instanceId: string
+    kind: "database" | "server"
+    relayId: string
+    userId: string | null
+  },
   id: string,
   run: (deploymentId: string) => Promise<T>
 ): Promise<T> {
+  const { relayId } = of
   return Effect.runPromise(
     promiseEffect(() => run(id)).pipe(
       Effect.tap(() =>
@@ -136,6 +152,16 @@ function following<T>(
             status: "failed",
           })
         ).pipe(Effect.ignore)
+      ),
+      // Its updates follow what it runs now, however the deployment went.
+      // Imported here, since updates deploy through this module.
+      Effect.ensuring(
+        Effect.promise(() => import("@/lib/instance-updates.server")).pipe(
+          Effect.map(({ recheckInstanceImage }) =>
+            recheckInstanceImage(of.kind, relayId, of.instanceId, of.userId)
+          ),
+          Effect.ignore
+        )
       )
     )
   )
@@ -185,8 +211,8 @@ export const settleStaleServerDeploymentsEffect = Effect.fn(
 async function insertRunning(
   input: ServerDeploymentStart &
     (
-      | { kind: "database"; trigger: "redeploy" }
-      | { kind: "server"; trigger: "brick" | "install" | "reinstall" }
+      | { kind: "database"; trigger: "redeploy" | "update" }
+      | { kind: "server"; trigger: "brick" | "install" | "reinstall" | "update" }
     )
 ): Promise<string> {
   const id = crypto.randomUUID()

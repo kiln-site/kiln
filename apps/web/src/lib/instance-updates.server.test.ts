@@ -11,6 +11,7 @@ import {
   createAppRecordEffect,
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
+import { createManagedDatabaseRecordEffect } from "@/effect/managed-databases"
 import { notifyUsersEffect, openSourceKeysEffect } from "@/effect/notifications"
 import { recordCheckedImageEffect } from "@/lib/instance-updates.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
@@ -73,6 +74,79 @@ describeMysql("App image checks", () => {
           const kept = yield* loadInstanceUpdateEffect(appId)
           assert.strictEqual(kept?.latestDigest, digest(3))
           assert.strictEqual(kept?.checkedAt, askedAt)
+        })
+    )
+
+    // A database runs what its container was made from, which only its
+    // Relay knows: the check says which image, and who may deploy it hears.
+    it.effect(
+      "tell whoever can deploy a database that its image moved, until it's taken",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          const databaseId = "d".repeat(12)
+          yield* createManagedDatabaseRecordEffect({
+            brickId: "postgres",
+            brickSource: "https://bricks.test/postgres.yml",
+            createdBy: "owner",
+            databaseId,
+            databaseName: "kiln_main",
+            engine: "postgres",
+            internalPort: 5432,
+            name: "Main",
+            password: "the-password",
+            relayId,
+            username: "kiln_user",
+          })
+          const found = (running: number) =>
+            Clock.currentTimeMillis.pipe(
+              Effect.flatMap((askedAt) =>
+                recordCheckedImageEffect(
+                  "database",
+                  { id: relayId } as PersistedRelay,
+                  databaseId,
+                  {
+                    answers: [
+                      {
+                        askedAt,
+                        result: {
+                          id: databaseId,
+                          image: "postgres:17",
+                          latestDigest: digest(2),
+                          runningDigests: [digest(running)],
+                          status: "checked",
+                        },
+                        subject: { id: databaseId, image: null, name: "Main" },
+                      },
+                    ],
+                    unchecked: false,
+                  },
+                  null
+                )
+              )
+            )
+          const open = openSourceKeysEffect(
+            "app.image-update",
+            `app.image-update:${databaseId}:`
+          )
+
+          const offered = yield* found(1)
+          assert.deepInclude(offered, {
+            image: "postgres:17",
+            kind: "database",
+            latestDigest: digest(2),
+            state: "available",
+          })
+          assert.deepStrictEqual(yield* open, [
+            `app.image-update:${databaseId}:${digest(2)}`,
+          ])
+
+          // Deployed again, it runs what the tag names.
+          const taken = yield* found(2)
+          assert.strictEqual(taken?.state, "current")
+          assert.deepStrictEqual(yield* open, [])
         })
     )
 
