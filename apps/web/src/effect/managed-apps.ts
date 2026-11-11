@@ -84,16 +84,21 @@ export const createAppRecordEffect = Effect.fn("apps.create")(
   function* (input: {
     appId: string
     createdBy: string
+    /** What its Brick deploys. Without one, nothing yet. */
+    deploys?: Pick<AppConfig, "sourceType"> & { image?: string }
     environment?: string
     name: string
     relayId: string
   }) {
     const database = yield* Database
     const now = yield* Clock.currentTimeMillis
-    const ciphertext = yield* encryptConfig({
-      ...defaultAppConfig,
-      environment: input.environment ?? "",
-    })
+    const ciphertext = yield* encryptConfig(
+      appConfigSchema.parse({
+        ...defaultAppConfig,
+        ...input.deploys,
+        environment: input.environment ?? "",
+      })
+    )
     yield* database.execute(
       "app_create",
       `INSERT INTO ${databaseTable("app")}

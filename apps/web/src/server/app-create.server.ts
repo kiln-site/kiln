@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 
-import { relayAppSchema } from "@workspace/contracts"
+import { relayAppSchema, type BrickVariableValue } from "@workspace/contracts"
 import { Effect } from "effect"
 import { z } from "zod"
 
@@ -10,7 +10,7 @@ import {
   deleteAppRecordEffect,
 } from "@/effect/managed-apps"
 import { reserveInstanceIdEffect } from "@/effect/instance-ids"
-import { promiseEffect } from "@/effect/promise"
+import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -33,6 +33,8 @@ import {
   signedIn,
 } from "@/operations/operation"
 import { publishAppChange } from "@/server/app-access"
+import { installedAppBrick } from "@/server/app-bricks.server"
+import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { appDatabaseEnvironment } from "@/server/app-database-environment.server"
 import {
   createDatabase,
@@ -45,6 +47,8 @@ import {
 } from "@/server/managed-database-access"
 
 export interface CreateAppInput {
+  /** The App Brick it is installed from, by its source. */
+  brick: string
   // A database to connect it to from the start, a new one or one on its
   // Relay, whose credentials go in its environment.
   database?:
@@ -57,6 +61,8 @@ export interface CreateAppInput {
   idempotencyKey: string
   name: string
   relayId: string
+  /** Its Brick's answers. */
+  variables?: Record<string, BrickVariableValue>
 }
 
 interface CreateAppIds {
@@ -82,7 +88,7 @@ export const withNewAppIdsEffect = Effect.fn("apps.create.reserveIds")(
   }
 )
 
-export function withNewAppIds(input: CreateAppInput, userId: string) {
+function withNewAppIds(input: CreateAppInput, userId: string) {
   return runAppEffect(
     "apps.create.reserveIds",
     withNewAppIdsEffect(input, userId)
@@ -158,12 +164,48 @@ export const createAppOperation = operation<CreateAppInput & CreateAppIds>()({
   }),
 })
 
+/**
+ * Creates an App for someone and, when its Brick gave it something to run,
+ * asks for its first deployment once its Relay has made it. That is a
+ * deploy of its own, which whoever created it may not be allowed: the App
+ * exists either way, and says why it wasn't deployed.
+ */
+export async function createAppFor(
+  user: AuthenticatedUser,
+  data: CreateAppInput
+) {
+  const { deployable, ...created } = await runOperationPromise(
+    createAppOperation,
+    await withNewAppIds(data, user.id),
+    { user }
+  )
+  if (!deployable) return { ...created, deployError: null }
+  const deployError = await recoverPromise(
+    () =>
+      runOperationPromise(
+        askAppDeploy,
+        {
+          appId: created.id,
+          awaitProvisioning: true,
+          relayId: created.relayId,
+          trigger: "manual",
+        },
+        { user }
+      ).then(() => null),
+    (cause) => (cause instanceof Error ? cause.message : String(cause))
+  )
+  return { ...created, deployError }
+}
+
 async function createAppHandler(
   user: AuthenticatedUser,
   data: CreateAppInput & CreateAppIds
 ) {
   const { databaseId, id } = data
   const relay = await requiredRelay(data.relayId)
+  // Before anything is made: a Brick or an answer Kiln can't install from
+  // leaves nothing behind.
+  const deploys = await installedAppBrick(data.brick, data.variables ?? {})
   const nameExists = await runAppEffect(
     "apps.name.preflight",
     appNameExistsEffect(relay.id, data.name)
@@ -211,6 +253,10 @@ async function createAppHandler(
     createAppRecordEffect({
       appId: id,
       createdBy: user.id,
+      deploys:
+        deploys.type === "image"
+          ? { image: deploys.image, sourceType: "image" }
+          : { sourceType: deploys.type },
       environment,
       name: data.name,
       relayId: relay.id,
@@ -248,6 +294,8 @@ async function createAppHandler(
   publishAppChange(relay.id, true)
   generateAppHostname(relay.id, id)
   return {
+    // An image is all it needs to deploy; a file's source is still to come.
+    deployable: deploys.type === "image",
     id: placeholder.id,
     relayId: relay.id,
   }

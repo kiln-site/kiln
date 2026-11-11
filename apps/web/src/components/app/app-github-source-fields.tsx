@@ -42,13 +42,16 @@ const defaultPaths: Record<AppGitHubBuild, string> = {
   dockerfile: "Dockerfile",
 }
 
-export function emptyGitHubSourceDraft(): GitHubSourceDraft {
+export function emptyGitHubSourceDraft(
+  build: AppGitHubBuild = "dockerfile",
+  path: string = defaultPaths[build]
+): GitHubSourceDraft {
   return {
     autoDeploy: true,
     branch: "",
-    build: "dockerfile",
+    build,
     connectionId: "",
-    path: defaultPaths.dockerfile,
+    path,
     repository: "",
   }
 }
@@ -64,9 +67,12 @@ export function githubSourceDraftReady(draft: GitHubSourceDraft): boolean {
 
 export function GitHubSourceFields({
   draft,
+  fixedBuild = false,
   onChange,
 }: {
   draft: GitHubSourceDraft
+  /** What it builds is already decided, as by its Brick, so isn't asked. */
+  fixedBuild?: boolean
   onChange: (draft: GitHubSourceDraft) => void
 }) {
   const sources = useQuery(githubSourcesQueryOptions())
@@ -185,44 +191,46 @@ export function GitHubSourceFields({
           </Select>
         </Field>
       </div>
-      <div
-        role="radiogroup"
-        aria-label="Build"
-        className="grid grid-cols-2 gap-2"
-      >
-        {(
-          [
-            ["dockerfile", "Dockerfile", "Builds one container"],
-            ["compose", "Docker Compose", "Runs every service in the file"],
-          ] as const
-        ).map(([build, label, detail]) => (
-          <button
-            key={build}
-            role="radio"
-            aria-checked={draft.build === build}
-            type="button"
-            className={cn(
-              "flex flex-col gap-0.5 border px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-1 focus-visible:ring-ring",
-              draft.build === build
-                ? "border-primary/60 bg-primary/10"
-                : "hover:bg-muted/40"
-            )}
-            onClick={() =>
-              update({
-                build,
-                // The other build's default follows the switch.
-                path:
-                  draft.path === defaultPaths[draft.build]
-                    ? defaultPaths[build]
-                    : draft.path,
-              })
-            }
-          >
-            <span className="text-[0.8125rem] font-medium">{label}</span>
-            <span className="text-xs text-muted-foreground">{detail}</span>
-          </button>
-        ))}
-      </div>
+      {fixedBuild ? null : (
+        <div
+          role="radiogroup"
+          aria-label="Build"
+          className="grid grid-cols-2 gap-2"
+        >
+          {(
+            [
+              ["dockerfile", "Dockerfile", "Builds one container"],
+              ["compose", "Docker Compose", "Runs every service in the file"],
+            ] as const
+          ).map(([build, label, detail]) => (
+            <button
+              key={build}
+              role="radio"
+              aria-checked={draft.build === build}
+              type="button"
+              className={cn(
+                "flex flex-col gap-0.5 border px-3 py-2.5 text-left transition-colors outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                draft.build === build
+                  ? "border-primary/60 bg-primary/10"
+                  : "hover:bg-muted/40"
+              )}
+              onClick={() =>
+                update({
+                  build,
+                  // The other build's default follows the switch.
+                  path:
+                    draft.path === defaultPaths[draft.build]
+                      ? defaultPaths[build]
+                      : draft.path,
+                })
+              }
+            >
+              <span className="text-[0.8125rem] font-medium">{label}</span>
+              <span className="text-xs text-muted-foreground">{detail}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <Field
         label={draft.build === "compose" ? "Compose file" : "Dockerfile"}
         hint="From the repository's root"

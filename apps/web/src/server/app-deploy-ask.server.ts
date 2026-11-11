@@ -5,6 +5,8 @@ import { resourceOperation } from "@/server/resource-operation.server"
 
 export interface AppDeployAsk {
   appId: string
+  /** A new App's first deploy waits for its Relay to provision it. */
+  awaitProvisioning?: boolean
   /** A redeploy's commit, and the repository it was of. */
   commit?: { sha: string; source: string }
   /** A redeploy's digest, and the image it was of. */

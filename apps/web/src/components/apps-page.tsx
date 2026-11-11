@@ -5,9 +5,8 @@ import type { getAppDirectory } from "@/server/apps"
 import * as React from "react"
 import { useLiveSuspenseQuery } from "@tanstack/react-db"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { Link, useNavigate } from "@tanstack/react-router"
+import { Link } from "@tanstack/react-router"
 import {
-  Container,
   EllipsisVertical,
   LoaderCircle,
   Play,
@@ -21,29 +20,13 @@ import {
 import { Button } from "@workspace/ui/components/button"
 import { cn } from "@workspace/ui/lib/utils"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@workspace/ui/components/dialog"
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
-import { Input } from "@workspace/ui/components/input"
 import { showToast } from "@workspace/ui/components/sonner"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 import {
   Tooltip,
   TooltipContent,
@@ -55,20 +38,12 @@ import {
   type App,
 } from "@/components/app/app-presentation"
 import { useAppDeployState } from "@/components/app/use-app-deploy-state"
+import {
+  AddInstanceDialogHost,
+  createAddInstanceDialogStore,
+} from "@/components/add-instance-dialog"
 import { DeleteAppDialog } from "@/components/app/app-dialogs"
-import {
-  AppDatabaseFields,
-  appDatabaseInput,
-  noAppDatabase,
-  type AppDatabaseDraft,
-} from "@/components/app/app-database-fields"
-import {
-  GitHubSourceFields,
-  emptyGitHubSourceDraft,
-  githubSourceDraftReady,
-} from "@/components/app/app-github-source-fields"
 import { CopyIdentifierMenuItem } from "@/components/copy-identifier-menu-item"
-import { GitHubMark } from "@/components/github-mark"
 import {
   DataTableActionGroup,
   DataTableInlineActions,
@@ -124,17 +99,9 @@ import {
 import type { DataTableSource } from "@/lib/data-table-source"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import { heldPowerActions } from "@/lib/use-instance-power"
-import { useIdempotencyKey } from "@/lib/use-idempotency-key"
-import { queryKeys, relayWebRoutesQueryOptions } from "@/lib/query-options"
-import { recoverPromise } from "@/effect/promise"
-import { saveAppGitHubSource } from "@/server/app-deployments"
-import { createApp, deployApp, runAppAction } from "@/server/apps"
+import { relayWebRoutesQueryOptions } from "@/lib/query-options"
+import { deployApp, runAppAction } from "@/server/apps"
 import type { getRelayWebRoutes } from "@/server/relays"
-import type { getInfraRelayOptions } from "@/server/infra-directory"
-
-type AppRelay = Awaited<
-  ReturnType<typeof getInfraRelayOptions>
->["relays"][number]
 
 type AppDirectory = Awaited<ReturnType<typeof getAppDirectory>>[number]
 type AppDirectoryRow = InfraInstanceRow<AppDirectory, AppTableInventory>
@@ -165,9 +132,9 @@ export const AppsPage = React.memo(function AppsPage({
   searchStore: DataTableSearchStore
 }) {
   const { data } = useQuery(infraRelayOptionsQueryOptions("app"))
-  const [createOpen, setCreateOpen] = React.useState(false)
+  const [addStore] = React.useState(() => createAddInstanceDialogStore("app"))
   const [deleting, setDeleting] = React.useState<AppDeleteTarget | null>(null)
-  const openCreate = React.useCallback(() => setCreateOpen(true), [])
+  const openCreate = addStore.open
   const canCreate = data?.relays.some((relay) => relay.canCreate)
 
   return (
@@ -201,9 +168,7 @@ export const AppsPage = React.memo(function AppsPage({
         </React.Suspense>
       </DataTableWorkspace>
 
-      {createOpen && data ? (
-        <CreateAppDialog relays={data.relays} onOpenChange={setCreateOpen} />
-      ) : null}
+      {canCreate ? <AddInstanceDialogHost store={addStore} /> : null}
       {deleting ? (
         <DeleteAppDialog
           key={`${deleting.relayId}:${deleting.id}`}
@@ -691,215 +656,6 @@ const AppLinkCell = React.memo(function AppLinkCell({
     </a>
   )
 })
-
-// What an app can run as. GitHub builds a repository's Dockerfile or
-// Compose file; Docker takes an image, or a file pasted in later.
-const appKinds = [
-  {
-    description: "Builds a repository, and redeploys on push",
-    icon: GitHubMark,
-    id: "github",
-    label: "GitHub",
-  },
-  {
-    description: "An image, Dockerfile, or Compose file",
-    icon: Container,
-    id: "docker",
-    label: "Docker",
-  },
-] as const
-
-function CreateAppDialog({
-  onOpenChange,
-  relays,
-}: {
-  onOpenChange: (open: boolean) => void
-  relays: Array<AppRelay>
-}) {
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-  const availableRelays = relays.filter((relay) => relay.canCreate)
-  const [kind, setKind] = React.useState<(typeof appKinds)[number]["id"]>(
-    appKinds[0].id
-  )
-  const [name, setName] = React.useState("")
-  const [relayId, setRelayId] = React.useState(
-    () => availableRelays.at(0)?.id ?? ""
-  )
-  const [github, setGitHub] = React.useState(emptyGitHubSourceDraft)
-  const [database, setDatabase] =
-    React.useState<AppDatabaseDraft>(noAppDatabase)
-  const relayLabelId = React.useId()
-  // Trying the same create again reuses its key, so it reuses its IDs.
-  const idempotencyKeyFor = useIdempotencyKey()
-  const create = useMutation({
-    mutationFn: async () => {
-      const input = {
-        database: appDatabaseInput(database, name.trim()),
-        name: name.trim(),
-        relayId,
-      }
-      const idempotencyKey = idempotencyKeyFor(input)
-      const created = await createApp({ data: { ...input, idempotencyKey } })
-      if (kind !== "github") return { created, sourceError: null }
-      // The app exists by now; a source it can't save is set on its page.
-      const saved = await recoverPromise(
-        () =>
-          saveAppGitHubSource({
-            data: {
-              ...github,
-              appId: created.id,
-              deploy: true,
-              path: github.path.trim(),
-              relayId,
-            },
-          }).then(() => null),
-        (cause) => (cause instanceof Error ? cause : new Error(String(cause)))
-      )
-      return { created, sourceError: saved }
-    },
-    onSuccess: async ({ created, sourceError }) => {
-      if (sourceError) {
-        showToast({
-          message: `App created, but its repository wasn't saved: ${sourceError.message}`,
-          type: "error",
-        })
-      }
-      // The app's page resolves it from the directory, so the directory has
-      // it before the page opens.
-      await queryClient.invalidateQueries({ queryKey: queryKeys.apps.all })
-      // Leaving the list closes the dialog with it.
-      await navigate({
-        params: { appId: created.id },
-        to: "/app/$appId/info",
-      })
-    },
-  })
-  const ready =
-    name.trim() !== "" &&
-    relayId !== "" &&
-    (kind !== "github" || githubSourceDraftReady(github))
-
-  return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[min(92dvh,56rem)] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Add App</DialogTitle>
-          <DialogDescription>
-            {kind === "github"
-              ? "Hearth creates the app with its own network and data directory, then deploys the branch."
-              : "Hearth creates the app with its own network and data directory. Choose what it runs on the next page, then deploy it."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <fieldset>
-            <legend className="mb-2 text-xs font-medium">Type</legend>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {appKinds.map((option) => (
-                <button
-                  key={option.id}
-                  aria-pressed={kind === option.id}
-                  className={`flex items-start gap-2.5 rounded-lg border px-3 py-3 text-left transition-colors ${
-                    kind === option.id
-                      ? "border-primary/60 bg-primary/10 text-foreground"
-                      : "border-border/70 bg-background/30 text-muted-foreground hover:bg-accent/30"
-                  }`}
-                  type="button"
-                  onClick={() => setKind(option.id)}
-                >
-                  <option.icon className="mt-0.5 size-4 shrink-0 text-primary-ink" />
-                  <span>
-                    <span className="type-card-title block">
-                      {option.label}
-                    </span>
-                    <span className="type-meta mt-0.5 block">
-                      {option.description}
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </fieldset>
-          <label className="block">
-            <span className="mb-2 block text-xs font-medium">Name</span>
-            <Input
-              autoFocus
-              maxLength={120}
-              placeholder="Website"
-              value={name}
-              onChange={(event) => setName(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && ready) create.mutate()
-              }}
-            />
-          </label>
-          <div>
-            <span id={relayLabelId} className="mb-2 block text-xs font-medium">
-              Relay
-            </span>
-            <Select
-              value={relayId}
-              onValueChange={(next) => {
-                setRelayId(next)
-                // What's on one Relay, or allowed there, isn't on another.
-                setDatabase(noAppDatabase)
-              }}
-            >
-              <SelectTrigger
-                aria-labelledby={relayLabelId}
-                className="h-9 w-full px-3"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {availableRelays.map((relay) => (
-                  <SelectItem key={relay.id} value={relay.id}>
-                    {relay.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <AppDatabaseFields
-            appName={name.trim()}
-            draft={database}
-            relayId={relayId}
-            onChange={setDatabase}
-          />
-          {kind === "github" ? (
-            <GitHubSourceFields draft={github} onChange={setGitHub} />
-          ) : null}
-          {create.error ? (
-            <p className="text-xs text-destructive">{create.error.message}</p>
-          ) : null}
-        </div>
-        <DialogFooter>
-          <Button
-            variant="ghost"
-            type="button"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            disabled={create.isPending || !ready}
-            type="button"
-            onClick={() => create.mutate()}
-          >
-            {create.isPending ? (
-              <LoaderCircle className="animate-spin" />
-            ) : kind === "github" ? (
-              <Rocket />
-            ) : (
-              <Plus />
-            )}
-            {kind === "github" ? "Create and deploy" : "Create app"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 function EmptyAppTable({
   canCreate,

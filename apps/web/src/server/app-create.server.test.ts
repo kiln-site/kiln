@@ -4,6 +4,7 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
+import { loadAppConfigEffect } from "@/effect/managed-apps"
 import { createManagedDatabaseRecordEffect } from "@/effect/managed-databases"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -115,12 +116,12 @@ vi.mock("@/lib/realtime-source.server", () => ({
   publishRealtimeChange: () => undefined,
 }))
 // Catalogs are fetched over the network. This is Kiln's own, with its
-// database Bricks as the repository has them.
+// Bricks as the repository has them.
 vi.mock("@/server/brick-catalogs.server", async () => {
   const { readFileSync } = await import("node:fs")
   const { parse } = await import("yaml")
   const { brickSchema } = await import("@workspace/contracts")
-  const bricks = ["mysql", "postgres"].map((id) =>
+  const bricks = ["mysql", "postgres", "docker-image", "compose"].map((id) =>
     brickSchema.parse({
       ...parse(
         readFileSync(
@@ -138,6 +139,7 @@ vi.mock("@/server/web-hostname-access.server", () => ({
 }))
 
 import {
+  createAppFor,
   createAppOperation,
   withNewAppIdsEffect,
   type CreateAppInput,
@@ -215,10 +217,13 @@ const seed = (permissions: ReadonlyArray<AccessPermission>) =>
   })
 
 const createApp = (
-  input: Pick<CreateAppInput, "database"> & { name?: string }
+  input: Partial<Pick<CreateAppInput, "brick" | "database" | "variables">> & {
+    name?: string
+  }
 ) =>
   withNewAppIdsEffect(
     {
+      brick: "https://bricks.test/compose.yml",
       idempotencyKey: crypto.randomUUID(),
       name: "Blog",
       relayId,
@@ -365,6 +370,66 @@ describeMysql("Creating an App with a database", () => {
         assert.deepStrictEqual(yield* apps, [])
         assert.deepStrictEqual(relay.jobs, [])
       })
+    )
+
+    it.effect(
+      "installs what its Brick deploys, and nothing from a Brick or answers it can't install",
+      () =>
+        Effect.gen(function* () {
+          yield* seed(["app.create"])
+          const image = "https://bricks.test/docker-image.yml"
+
+          const created = yield* createApp({
+            brick: image,
+            variables: { image: "ghcr.io/acme/site:1" },
+          })
+
+          const saved = yield* loadAppConfigEffect(relayId, created.id)
+          assert.strictEqual(saved?.config.sourceType, "image")
+          assert.strictEqual(saved?.config.image, "ghcr.io/acme/site:1")
+          assert.isTrue(created.deployable)
+
+          for (const refused of [
+            // Another kind's Brick, one from no catalog of Kiln's, and one
+            // with the answer it needs left out.
+            { brick: "https://bricks.test/postgres.yml" },
+            { brick: "https://elsewhere.test/docker-image.yml" },
+            { brick: image },
+            { brick: image, variables: { image: "nginx:1", command: "sh" } },
+          ]) {
+            yield* createApp({ ...refused, name: "Other" }).pipe(Effect.flip)
+          }
+          assert.deepStrictEqual(
+            (yield* apps).map((app) => app.app_id),
+            [created.id]
+          )
+          assert.deepStrictEqual(relay.jobs, [created.id])
+        })
+    )
+
+    // Deploying is its own permission: creating an App doesn't carry it.
+    it.effect(
+      "leaves an App its creator may not deploy created, and says why it wasn't deployed",
+      () =>
+        Effect.gen(function* () {
+          yield* seed(["app.create"])
+
+          const created = yield* Effect.promise(() =>
+            createAppFor(person("alice"), {
+              brick: "https://bricks.test/docker-image.yml",
+              idempotencyKey: crypto.randomUUID(),
+              name: "Blog",
+              relayId,
+              variables: { image: "ghcr.io/acme/site:1" },
+            })
+          )
+
+          assert.include(created.deployError, "permission")
+          assert.deepStrictEqual(
+            (yield* apps).map((app) => app.app_id),
+            [created.id]
+          )
+        })
     )
 
     it.effect("makes neither when the database can't be made", () =>
