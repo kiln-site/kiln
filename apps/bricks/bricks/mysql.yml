@@ -4,6 +4,7 @@ type: mysql
 metadata:
   id: mysql
   name: MySQL
+  revision: 1
   summary: A relational database, with Kiln's table viewer, dumps and restores.
   author: Kiln
   icon: ../icons/mysql.svg

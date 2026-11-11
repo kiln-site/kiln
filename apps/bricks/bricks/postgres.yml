@@ -4,6 +4,7 @@ type: postgres
 metadata:
   id: postgres
   name: PostgreSQL
+  revision: 1
   summary: A relational database, with Kiln's table viewer, dumps and restores.
   author: Kiln
   icon: ../icons/postgres.svg

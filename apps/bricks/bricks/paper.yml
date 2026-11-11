@@ -4,6 +4,7 @@ type: minecraft
 metadata:
   id: paper
   name: Paper
+  revision: 1
   summary: Fast, plugin-compatible Minecraft server for most projects.
   author: Kiln
   icon: ../icons/paper.svg

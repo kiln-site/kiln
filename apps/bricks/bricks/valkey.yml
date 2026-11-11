@@ -4,6 +4,7 @@ type: valkey
 metadata:
   id: valkey
   name: Valkey
+  revision: 1
   summary: An open source, Redis-compatible key-value store that keeps its data on disk.
   author: Kiln
   icon: ../icons/valkey.svg

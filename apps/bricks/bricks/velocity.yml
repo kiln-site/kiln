@@ -4,6 +4,7 @@ type: minecraft
 metadata:
   id: velocity
   name: Velocity
+  revision: 1
   summary: Modern Minecraft proxy running on Kiln's standard Java Ember.
   author: Kiln
   icon: ../icons/velocity.svg
