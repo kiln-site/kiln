@@ -35,6 +35,8 @@ export type InstanceUpdateState =
  * from, and a newer one its catalog has, while there is one.
  */
 export interface InstanceBrickUpdate {
+  /** When the check that found this was asked. */
+  checkedAt: number | null
   latestRevision: number | null
   /** When Kiln first saw `latestRevision`; the wait counts from here. */
   latestSeenAt: number | null
@@ -71,6 +73,7 @@ export const defaultInstanceUpdatePolicy = {
 } as const satisfies Pick<InstanceUpdate, "delayHours" | "mode">
 
 interface UpdateRow extends RowDataPacket {
+  brick_checked_at: number | string | null
   brick_revision: number | null
   brick_source: string | null
   latest_revision: number | null
@@ -93,7 +96,7 @@ interface UpdateRow extends RowDataPacket {
 const updateColumns = `instance_id, instance_kind, mode, delay_hours, state, image,
   running_digest, latest_digest, latest_seen_at, skipped_digest, checked_at,
   check_error, brick_source, brick_revision, latest_revision, revision_seen_at,
-  skipped_revision`
+  skipped_revision, brick_checked_at`
 
 /** What Kiln knows of each instance's updates, by its ID. */
 export const loadInstanceUpdatesEffect = Effect.fn("instances.updates.load")(
@@ -408,7 +411,9 @@ export function autoUpdateAt(update: InstanceUpdate): number | null {
  * Records which revision of its Brick an instance runs, and the newer one
  * its catalog has (`catalogRevision`, null when the catalog no longer has
  * the Brick). `newlySeen` is a revision Kiln hasn't offered before, which
- * starts its wait.
+ * starts its wait. Checks overlap: one asked before what is already
+ * recorded says less than it, and is kept out (`stale`), decided with the
+ * row held so two recording at once agree.
  */
 export const recordInstanceBrickCheckEffect = Effect.fn(
   "instances.updates.recordBrick"
@@ -416,7 +421,8 @@ export const recordInstanceBrickCheckEffect = Effect.fn(
   kind: InstanceUpdateKind,
   instanceId: string,
   installed: { revision: number; source: string },
-  catalogRevision: number | null
+  catalogRevision: number | null,
+  askedAt: number
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -432,6 +438,14 @@ export const recordInstanceBrickCheckEffect = Effect.fn(
           [instanceId]
         )
         const previous = row ? toUpdate(row).brick : null
+        if (previous?.checkedAt != null && askedAt < previous.checkedAt) {
+          return {
+            brick: previous,
+            changed: false,
+            newlySeen: false,
+            stale: true,
+          }
+        }
         const latestRevision =
           catalogRevision !== null && catalogRevision > installed.revision
             ? catalogRevision
@@ -441,6 +455,7 @@ export const recordInstanceBrickCheckEffect = Effect.fn(
           previous.source === installed.source &&
           previous.latestRevision === latestRevision
         const brick: InstanceBrickUpdate = {
+          checkedAt: askedAt,
           latestRevision,
           latestSeenAt:
             latestRevision === null
@@ -460,9 +475,10 @@ export const recordInstanceBrickCheckEffect = Effect.fn(
           `INSERT INTO ${databaseTable("instance_update")}
              (instance_id, instance_kind, mode, delay_hours, brick_source,
               brick_revision, latest_revision, revision_seen_at,
-              skipped_revision, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              skipped_revision, brick_checked_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
+             brick_checked_at = VALUES(brick_checked_at),
              brick_source = VALUES(brick_source),
              brick_revision = VALUES(brick_revision),
              latest_revision = VALUES(latest_revision),
@@ -479,6 +495,7 @@ export const recordInstanceBrickCheckEffect = Effect.fn(
             brick.latestRevision,
             brick.latestSeenAt,
             brick.skippedRevision,
+            brick.checkedAt,
             now,
           ]
         )
@@ -486,6 +503,7 @@ export const recordInstanceBrickCheckEffect = Effect.fn(
           brick,
           changed: !same || previous.revision !== installed.revision,
           newlySeen: latestRevision !== null && !same,
+          stale: false,
         }
       })
   )
@@ -509,6 +527,26 @@ export const skipInstanceBrickUpdateEffect = Effect.fn(
   )
   return result.affectedRows === 1
 })
+
+/**
+ * What a check found of an instance's Brick, if it still describes the
+ * instance: no deployment has started since it was asked, which may have
+ * changed the Brick it runs, as a change of Brick does.
+ */
+export function currentBrickUpdate(
+  update: InstanceUpdate | null,
+  latestDeploymentStartedAt: string | null
+): InstanceBrickUpdate | null {
+  const brick = update?.brick ?? null
+  return brick &&
+    !(
+      latestDeploymentStartedAt !== null &&
+      brick.checkedAt !== null &&
+      Date.parse(latestDeploymentStartedAt) >= brick.checkedAt
+    )
+    ? brick
+    : null
+}
 
 /** The Brick revision on offer: newer than what runs, and not passed over. */
 export function offeredBrickRevision(update: InstanceUpdate): number | null {
@@ -572,6 +610,7 @@ function toUpdate(row: UpdateRow): InstanceUpdate {
       row.brick_source === null || row.brick_revision === null
         ? null
         : {
+            checkedAt: time(row.brick_checked_at),
             latestRevision:
               row.latest_revision === null ? null : Number(row.latest_revision),
             latestSeenAt: time(row.revision_seen_at),

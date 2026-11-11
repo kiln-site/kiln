@@ -3,12 +3,14 @@ import { Effect } from "effect"
 import {
   autoBrickUpdateAt,
   autoUpdateAt,
+  currentBrickUpdate,
   currentImageUpdate,
   defaultInstanceUpdatePolicy,
   loadInstanceUpdateEffect,
   saveInstanceUpdatePolicyEffect,
   skipInstanceBrickUpdateEffect,
   skipInstanceUpdateEffect,
+  type InstanceBrickUpdate,
   type InstanceUpdate,
   type InstanceUpdateKind,
   type InstanceUpdateMode,
@@ -47,7 +49,9 @@ export interface UpdatedInstanceInput {
 export function updatesView(
   image: string | null,
   saved: InstanceUpdate | null,
-  current: InstanceUpdate | null
+  current: InstanceUpdate | null,
+  /** Its Brick as a check since its last deployment found it, if one has. */
+  brick: InstanceBrickUpdate | null = null
 ) {
   const policy = {
     delayHours: saved?.delayHours ?? defaultInstanceUpdatePolicy.delayHours,
@@ -58,17 +62,16 @@ export function updatesView(
   const pinned = named?.includes("@") ?? false
   return {
     ...policy,
-    // Its Brick's revision, which a deployment doesn't make stale as it
-    // does an image's digest: only a check says another.
-    brick: saved?.brick
-      ? {
-          autoUpdateAt: autoBrickUpdateAt(saved),
-          latestRevision: saved.brick.latestRevision,
-          latestSeenAt: saved.brick.latestSeenAt,
-          revision: saved.brick.revision,
-          skippedRevision: saved.brick.skippedRevision,
-        }
-      : null,
+    brick:
+      saved && brick
+        ? {
+            autoUpdateAt: autoBrickUpdateAt(saved),
+            latestRevision: brick.latestRevision,
+            latestSeenAt: brick.latestSeenAt,
+            revision: brick.revision,
+            skippedRevision: brick.skippedRevision,
+          }
+        : null,
     autoUpdateAt: current && autoUpdateAt(current),
     checkError: current?.checkError ?? null,
     checkedAt: current?.checkedAt ?? null,
@@ -111,7 +114,12 @@ export async function instanceUpdatesHandler(
     ),
   ])
   if (named === undefined) return null
-  return updatesView(named, saved, currentImageUpdate(saved, named, startedAt))
+  return updatesView(
+    named,
+    saved,
+    currentImageUpdate(saved, named, startedAt),
+    currentBrickUpdate(saved, startedAt)
+  )
 }
 
 // The Relay it is on, once it's known to be something that checks.
@@ -270,15 +278,15 @@ export async function installInstanceBrickHandler(
   }
   await runAppEffect(
     "instances.updates.installBrick",
-    adapter.installBrick(relay, data.instanceId, user.id, {
-      revision: brick.latestRevision,
-      source: brick.source,
-    })
+    adapter.installBrick(relay, data.instanceId, user.id)
   )
-  return { queued: true as const }
 }
 
-/** Deploys the update on offer now, skipped or not, whatever its wait. */
+/**
+ * Takes the update on offer now, skipped or not, whatever its wait. An App's
+ * is asked of its deployment queue; a database's or a game server's deploys
+ * here, in this operation, which holds it whole.
+ */
 export async function deployInstanceUpdateHandler(
   user: AuthenticatedUser,
   data: UpdatedInstanceInput
@@ -286,7 +294,6 @@ export async function deployInstanceUpdateHandler(
   const relay = await updatedInstance(data)
   await runAppEffect(
     "instances.updates.deploy",
-    updatedKind(data.kind).deployUpdate(relay, data.instanceId, user.id, null)
+    updatedKind(data.kind).deployUpdate(relay, data.instanceId, user.id)
   )
-  return { queued: true as const }
 }

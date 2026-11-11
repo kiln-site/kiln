@@ -257,15 +257,24 @@ function InstanceUpdatesDialog({
     onSuccess: refresh,
     onError: failed("Could not skip"),
   })
+  // An App's update is queued behind its other deployments, so asking for
+  // it answers at once. A database's or a game server's deploys while the
+  // request waits, as a redeploy does, so its page is opened to follow it.
+  const queued = instance.kind === "app"
+  const follow = async () => {
+    onOpenChange(false)
+    await instance.followDeployment?.()
+  }
   const deploy = useMutation({
     mutationFn: () => deployInstanceUpdate({ data: input }),
+    onMutate: queued ? undefined : follow,
     onSuccess: async () => {
-      // It runs once anything else on the instance ends.
-      showToast({ message: "Update queued", type: "success" })
+      showToast({
+        message: queued ? "Update deploy queued" : "Updated",
+        type: "success",
+      })
       await refresh()
-      onOpenChange(false)
-      // Follow the deployment as it happens.
-      await instance.followDeployment?.()
+      if (queued) await follow()
     },
     onError: failed("Could not update"),
   })
@@ -277,11 +286,10 @@ function InstanceUpdatesDialog({
   })
   const installBrick = useMutation({
     mutationFn: () => installInstanceBrick({ data: input }),
+    onMutate: follow,
     onSuccess: async () => {
-      showToast({ message: "Brick update queued", type: "success" })
+      showToast({ message: "Brick updated", type: "success" })
       await refresh()
-      onOpenChange(false)
-      await instance.followDeployment?.()
     },
     onError: failed("Could not update its Brick"),
   })

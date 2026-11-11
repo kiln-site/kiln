@@ -8,6 +8,7 @@ import { z } from "zod"
 
 import type { InstanceUpdateKind } from "@/effect/instance-updates"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { updatedKind } from "@/lib/instance-update-kinds.server"
 import { runOperationPromise } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import {
@@ -53,28 +54,40 @@ const kinds = {
   { noun: string; resource: "app" | "database" | "instance" }
 >
 
-// Each holds the instance shared: its updates are its own settings and what
-// a check found. Deploying an update asks for a deployment, which takes its
-// own turn. Whoever may deploy it decides when it deploys, so every one of
-// these takes that one permission, for every kind.
+// Whoever may deploy an instance decides when it deploys, so every one of
+// these takes that one permission, for every kind. Its settings, and what
+// a check found, hold the instance shared. Taking an update holds it as its
+// kind takes one (`UpdatedKind.updateLock`): shared for an App, whose
+// deployment queue does the deploying, and whole for a database or a game
+// server, whose container is replaced in the operation itself, as a
+// redeploy's is.
 const updateOperation = <Input extends UpdatedInstanceInput, A>(
   name: string,
   doing: (noun: string) => string,
-  run: (user: AuthenticatedUser, input: Input) => Promise<A>
+  run: (user: AuthenticatedUser, input: Input) => Promise<A>,
+  holds: "settings" | "update" = "settings"
 ) => {
   const operations = Object.fromEntries(
-    Object.entries(kinds).map(([kind, { noun, resource }]) => [
-      kind,
-      resourceOperation({
-        kind: resource,
-        id: (input: Input) => input.instanceId,
-        name: `${resource}.updates.${name}`,
-        doing: doing(noun),
-        permission: () => "instance.deploy",
-        lock: "shared",
-        run,
-      }),
-    ])
+    Object.entries(kinds).map(([kind, { noun, resource }]) => {
+      const adapter = updatedKind(kind as InstanceUpdateKind)
+      return [
+        kind,
+        resourceOperation({
+          kind: resource,
+          id: (input: Input) => input.instanceId,
+          name: `${resource}.updates.${name}`,
+          doing: doing(noun),
+          permission: () => "instance.deploy",
+          lock: holds === "update" ? adapter.updateLock : "shared",
+          ...(holds === "update" &&
+            adapter.updateAlsoLocks && {
+              alsoLocks: (input: Input) =>
+                adapter.updateAlsoLocks!(input.relayId, input.instanceId),
+            }),
+          run,
+        }),
+      ]
+    })
   ) as Record<InstanceUpdateKind, ReturnType<typeof resourceOperation<Input, A>>>
   return (input: Input) => operations[input.kind]
 }
@@ -107,12 +120,14 @@ const skipBrick = updateOperation(
 const installBrick = updateOperation(
   "brick.install",
   (noun) => `Updating this ${noun}'s Brick`,
-  installInstanceBrickHandler
+  installInstanceBrickHandler,
+  "update"
 )
 const deployUpdate = updateOperation(
   "deploy",
   (noun) => `Updating this ${noun}`,
-  deployInstanceUpdateHandler
+  deployInstanceUpdateHandler,
+  "update"
 )
 
 /** What an instance's Updates row shows, for whoever can read it. */

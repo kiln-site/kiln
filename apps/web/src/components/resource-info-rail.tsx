@@ -176,23 +176,47 @@ const InfoRailUpdatesRow = React.memo(function InfoRailUpdatesRow({
     ...accessCapabilitiesQueryOptions(),
     select,
   })
+  // Its Logs page lists its deployments, for whoever can read its logs.
+  const selectLogs = React.useCallback(
+    (capabilities: NavigationAccessCapabilities) =>
+      kind === "database"
+        ? canAccessDatabasePermission(
+            capabilities,
+            { id, relayId },
+            "database.logs.read"
+          )
+        : canAccessInstancePermission(
+            capabilities,
+            { id, relayId },
+            "instance.logs.read"
+          ),
+    [id, kind, relayId]
+  )
+  const { data: canReadLogs = false } = useQuery({
+    ...accessCapabilitiesQueryOptions(),
+    select: selectLogs,
+  })
   const instance = React.useMemo(
     (): UpdatedInstance => ({
       canDeploy,
-      // Its Logs page lists its deployments.
-      followDeployment: () =>
-        kind === "database"
-          ? navigate({
-              params: { databaseId: id },
-              search: { stream: "deployment" },
-              to: "/db/$databaseId/logs",
-            })
-          : navigate({ params: { serverId: id }, to: "/server/$serverId/logs" }),
+      followDeployment: canReadLogs
+        ? () =>
+            kind === "database"
+              ? navigate({
+                  params: { databaseId: id },
+                  search: { stream: "deployment" },
+                  to: "/db/$databaseId/logs",
+                })
+              : navigate({
+                  params: { serverId: id },
+                  to: "/server/$serverId/logs",
+                })
+        : undefined,
       id,
       kind: updatedKind,
       relayId,
     }),
-    [canDeploy, id, kind, navigate, relayId, updatedKind]
+    [canDeploy, canReadLogs, id, kind, navigate, relayId, updatedKind]
   )
   if (!updates) return null
   return (
