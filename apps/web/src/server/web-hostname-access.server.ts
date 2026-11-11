@@ -62,7 +62,11 @@ function permissionFor(
       : ("instance.network.read" as const)
 }
 
-function requireResourcePermission(
+/**
+ * What reading or changing an instance's web routes and their hostnames
+ * takes of someone: its kind's own permission, on that instance.
+ */
+export function requireResourcePermission(
   user: AuthenticatedUser,
   resource: WebHostnameResource,
   change: boolean

@@ -85,7 +85,7 @@ import {
 } from "@/components/workspace-table"
 import {
   accessCapabilitiesQueryOptions,
-  instanceWebRoutesQueryOptions,
+  webRoutesQueryOptions,
   queryKeys,
   replaceRelaySnapshotInstance,
 } from "@/lib/query-options"
@@ -103,8 +103,8 @@ import {
   releaseInstancePort,
   reserveInstancePort,
   updateInstancePorts,
-  updateInstanceWebRoutes,
 } from "@/server/relay"
+import { updateWebRoutes } from "@/server/domains"
 
 export function InstanceNetworkPage({
   editGamePort = false,
@@ -159,7 +159,7 @@ function WebRoutesNetworkPage({
     [instance.id, instance.relayId]
   )
   const routes = useQuery({
-    ...instanceWebRoutesQueryOptions(instance.relayId, instance.id),
+    ...webRoutesQueryOptions(dnsResource),
     enabled: permissions.networkRead,
   })
   const update = useMutation({
@@ -170,14 +170,7 @@ function WebRoutesNetworkPage({
       proxy?: WebRouteProxyChange
       routes: Array<RelayInstanceWebRouteInput>
     }) =>
-      updateInstanceWebRoutes({
-        data: {
-          instanceId: instance.id,
-          proxy,
-          relayId: instance.relayId,
-          routes: next,
-        },
-      }),
+      updateWebRoutes({ data: { ...dnsResource, proxy, routes: next } }),
     onSuccess: (next) => queryClient.setQueryData(queryKey, next),
   })
   const restart = useMutation({

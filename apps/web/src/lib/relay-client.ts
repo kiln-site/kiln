@@ -433,17 +433,6 @@ function relayControlRequest(path: string, init?: RequestInit) {
       payload: { ...body, instanceId },
     }
   }
-  if (resource === "web-routes") {
-    return method === "PUT"
-      ? {
-          operation: "instance.network.routes.write" as const,
-          payload: { id: instanceId, kind: "instance", routes: body.routes },
-        }
-      : {
-          operation: "instance.network.routes.read" as const,
-          payload: { id: instanceId, kind: "instance" },
-        }
-  }
   throw new Error("Unsupported Relay request")
 }
 

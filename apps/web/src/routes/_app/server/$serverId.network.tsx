@@ -5,7 +5,7 @@ import { InstanceNetworkPage } from "@/components/instance-network-page"
 import { pageTitle } from "@/lib/page-title"
 import {
   accessCapabilitiesQueryOptions,
-  instanceWebRoutesQueryOptions,
+  webRoutesQueryOptions,
   tailscaleStacksQueryOptions,
 } from "@/lib/query-options"
 import { requireServerDestinationAccess } from "@/lib/route-access"
@@ -28,7 +28,11 @@ export const Route = createFileRoute("/_app/server/$serverId/network")({
     const { instance, queryClient } = context
     if (typeof window === "undefined" || !instance) return
     void queryClient.prefetchQuery(
-      instanceWebRoutesQueryOptions(instance.relayId, instance.id)
+      webRoutesQueryOptions({
+        relayId: instance.relayId,
+        resourceId: instance.id,
+        resourceType: "instance",
+      })
     )
     const capabilities = queryClient.getQueryData(
       accessCapabilitiesQueryOptions().queryKey

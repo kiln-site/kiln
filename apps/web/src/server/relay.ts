@@ -28,8 +28,6 @@ import {
   relayInstancePortLeaseSchema,
   relayInstancePortInputsSchema,
   relayInstanceResourceSnapshotSchema,
-  relayInstanceWebRouteInputsSchema,
-  relayInstanceWebRouteStateSchema,
   relayMclogsUploadResultSchema,
   relayIdSchema,
   relayInstanceSchema,
@@ -46,7 +44,6 @@ import {
   type DatabaseReadRequest,
   type DatabaseWriteRequest,
   relaySnapshotSchema,
-  webRouteHostnames,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -91,7 +88,6 @@ import {
 } from "@/server/domains.server"
 import { syncInstanceDomainAfterPortUpdateBestEffort } from "@/server/relay-port-update.server"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
-import { webRouteProxySchema } from "@/lib/domain-schemas"
 import {
   instanceDeletionName,
   requireDeleteConfirmation,
@@ -224,11 +220,6 @@ const fileMutationInputSchema = z.intersection(
 
 const actionInputSchema = instanceInputSchema.extend({
   action: relayPowerActionSchema,
-})
-
-const webRoutesInputSchema = instanceInputSchema.extend({
-  proxy: webRouteProxySchema.optional(),
-  routes: relayInstanceWebRouteInputsSchema,
 })
 
 const portsInputSchema = instanceInputSchema.extend({
@@ -689,19 +680,6 @@ async function removeInstanceDatabaseConnectionHandler(
   return { ...relayInstanceSchema.parse(value), relayId: data.relayId }
 }
 
-export const getInstanceWebRoutes = createServerFn({ method: "GET" })
-  .validator(instanceInputSchema)
-  .handler(async ({ data }) => {
-    const value = await relayRequest(
-      `/v1/instances/${encodeURIComponent(data.instanceId)}/web-routes`,
-      undefined,
-      "instance.network.read",
-      data.instanceId,
-      data.relayId
-    )
-    return relayInstanceWebRouteStateSchema.parse(value)
-  })
-
 export const getRelayInstanceResources = createServerFn({ method: "GET" })
   .validator(instanceInputSchema)
   .handler(async ({ data }) => {
@@ -718,101 +696,6 @@ export const getRelayInstanceResources = createServerFn({ method: "GET" })
       instance: projectRelayInstanceOverview(snapshot.instance),
     }
   })
-
-const instanceWebRoutesSchema = webRoutesInputSchema
-
-const saveInstanceWebRoutes = operation<
-  z.infer<typeof instanceWebRoutesSchema>
->()({
-  name: "webRoutes.instance.save",
-  doing: "Changing this game server's web routes",
-  authorize: ({ input, user }) =>
-    signedIn(user).pipe(
-      Effect.tap((person) =>
-        promiseEffect(() =>
-          requireRelayPermission({
-            instanceId: input.instanceId,
-            permission: "instance.network.write",
-            relayId: input.relayId,
-            user: person,
-          })
-        )
-      )
-    ),
-  locks: ({ input }) => [
-    exclusive(
-      dnsKey({
-        relayId: input.relayId,
-        resourceId: input.instanceId,
-        resourceType: "instance",
-      })
-    ),
-  ],
-  run: ({ context: user, input }) =>
-    promiseEffect(() => updateInstanceWebRoutesHandler(user, input)),
-  audit: ({ input }) => ({
-    id: input.instanceId,
-    kind: "instance",
-    relayId: input.relayId,
-  }),
-})
-
-export const updateInstanceWebRoutes = createServerFn({ method: "POST" })
-  .validator(instanceWebRoutesSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(saveInstanceWebRoutes, data, {
-      user: await instanceSessionUser(),
-    })
-  )
-
-async function updateInstanceWebRoutesHandler(
-  user: AuthenticatedUser,
-  data: z.infer<typeof instanceWebRoutesSchema>
-) {
-  // Checked as the operation was authorized. The person is passed in: code
-  // inside an operation never reads the request's session.
-  const relay = await activeRelay(data.relayId)
-  const resource = {
-    relayId: data.relayId,
-    resourceId: data.instanceId,
-    resourceType: "instance" as const,
-  }
-  const { saveClaimingWebRouteHostnames, syncWebRouteHostnames } =
-    await import("@/server/web-hostname-access.server")
-  const routes = await saveClaimingWebRouteHostnames(
-    user,
-    resource,
-    data.routes.flatMap(webRouteHostnames),
-    async () =>
-      relayInstanceWebRouteStateSchema.parse(
-        await (
-          await relayFetch(
-            relay,
-            `/v1/instances/${encodeURIComponent(data.instanceId)}/web-routes`,
-            {
-              body: JSON.stringify({
-                routes: data.routes,
-              }),
-              headers: { "Content-Type": "application/json" },
-              method: "PUT",
-            },
-            240_000,
-            user.id
-          )
-        ).json()
-      ),
-    data.proxy
-  )
-  publishRealtimeChange({
-    audience: { kind: "relays", relayIds: [data.relayId] },
-    scope: { instanceId: data.instanceId, relayId: data.relayId },
-    topics: ["instance-web-routes"],
-    type: "hearth.invalidate",
-  })
-  // Kiln keeps the DNS records of hostnames in zones it manages.
-  await syncWebRouteHostnames(resource)
-  return routes
-}
 
 const changeInstancePorts = resourceOperation({
   kind: "instance",

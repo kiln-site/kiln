@@ -49,16 +49,16 @@ import {
 import {
   accessCapabilitiesQueryOptions,
   appConfigQueryOptions,
-  appWebRoutesQueryOptions,
   managedDatabaseDirectoryQueryOptions,
   queryKeys,
+  webRoutesQueryOptions,
 } from "@/lib/query-options"
 import {
   deployApp,
   updateAppConfig,
   updateAppNetwork,
-  updateAppWebRoutes,
 } from "@/server/apps"
+import { updateWebRoutes } from "@/server/domains"
 import { useAppDeployState } from "@/components/app/use-app-deploy-state"
 
 export function AppNetworkPage() {
@@ -143,7 +143,6 @@ function AppWebRoutes({
   compose: boolean
 }) {
   const queryClient = useQueryClient()
-  const state = useQuery(appWebRoutesQueryOptions(app.relayId, app.id))
   const dnsResource = React.useMemo(
     () => ({
       relayId: app.relayId,
@@ -152,17 +151,17 @@ function AppWebRoutes({
     }),
     [app.id, app.relayId]
   )
+  const state = useQuery(webRoutesQueryOptions(dnsResource))
   const services = React.useMemo(
     () => appServiceOptions(app, compose),
     [app, compose]
   )
   const save = React.useCallback(
     async (routes: Array<WebRouteRow>, proxy?: WebRouteProxyChange) => {
-      const next = await updateAppWebRoutes({
+      const next = await updateWebRoutes({
         data: {
-          appId: app.id,
+          ...dnsResource,
           proxy,
-          relayId: app.relayId,
           routes: routes.map((route) => ({
             ...route,
             // A redirect reaches no service; it rides on the first one's
@@ -172,11 +171,11 @@ function AppWebRoutes({
         },
       })
       queryClient.setQueryData(
-        queryKeys.apps.webRoutes(app.relayId, app.id),
+        queryKeys.relay.webRoutes(app.relayId, app.id),
         next
       )
     },
-    [app.id, app.relayId, queryClient, services]
+    [app.id, app.relayId, dnsResource, queryClient, services]
   )
 
   return (
