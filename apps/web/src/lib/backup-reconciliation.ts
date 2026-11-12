@@ -15,6 +15,7 @@ import {
   settleUndispatchableBackupTaskEffect,
   type BackupDispatch,
 } from "@/effect/backups"
+import { isDeadlock } from "@/effect/database-deadlocks"
 import { BackupStorageError, CredentialError } from "@/effect/errors"
 import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
@@ -102,17 +103,35 @@ const reconcileRelayBackupsEffect = Effect.fnUntraced(
       )
     )
     const relayTasksById = new Map(tasks.map((task) => [task.taskId, task]))
-    const changed = yield* Effect.forEach(
+    // Tasks Hearth hasn't seen, as a schedule's backups whose news never
+    // reached it, are cataloged side by side, each locking where its rows
+    // will go, and MySQL ends one of two that wait on each other. Those run
+    // again one at a time, where none is left to wait on another: without
+    // that the pass failed the same way every time, and none of a batch was
+    // ever cataloged.
+    const settled = yield* Effect.forEach(
       tasks,
       (task) =>
         reconcileBackupTaskEffect(task, relay.id).pipe(
-          Effect.map((updated) => (updated ? task : null))
+          Effect.map((updated) => ({ ended: false, task, updated })),
+          Effect.catchIf(isDeadlock, () =>
+            Effect.succeed({ ended: true, task, updated: false })
+          )
         ),
       { concurrency: 8 }
-    ).pipe(
-      Effect.map((results) =>
-        results.filter((task): task is RelayBackupTask => task !== null)
-      )
+    )
+    const again = yield* Effect.forEach(
+      settled.filter(({ ended }) => ended),
+      ({ task }) =>
+        reconcileBackupTaskEffect(task, relay.id).pipe(
+          // Another pass may still be cataloging beside this one.
+          Effect.retry({ times: 3, while: isDeadlock }),
+          Effect.map((updated) => ({ task, updated }))
+        ),
+      { concurrency: 1 }
+    )
+    const changed = [...settled, ...again].flatMap(({ task, updated }) =>
+      updated ? [task] : []
     )
     publishBackupChanges(
       relay.id,
