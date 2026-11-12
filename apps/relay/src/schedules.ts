@@ -16,6 +16,8 @@ import {
   relayScheduleProjectionSchema,
   scheduleActionAppliesToTarget,
   scheduleActionSupportsTarget,
+  SCHEDULED_APP_BACKUP_GROUP_MAX,
+  scheduledAppBackupGroup,
   scheduleDeterministicUuid,
   scheduleRunSchema,
   scheduleStableId,
@@ -940,10 +942,12 @@ export class ScheduleManager {
   }
 
   /**
-   * Backs up an App as Hearth projected it: its folder and each volume its
-   * Compose project owns, each a backup of its own, started together.
-   * Stopped, they share one stopped window, so the App stops once and its
-   * folder and volumes agree.
+   * Backs up an App as Hearth projected it: its folder and each volume it
+   * uses, each a backup of its own, started together. Apps of the step that
+   * share a volume are backed up together, as one batch, so the volume is
+   * backed up once; each of them asks for the same batch and waits for it.
+   * Stopped, the batch shares one stopped window, so each App stops once
+   * and its folder and volumes agree.
    */
   async #backUpApp(
     schedule: RelayScheduleProjection,
@@ -952,27 +956,43 @@ export class ScheduleManager {
     scheduledAt: number,
     signal?: AbortSignal
   ) {
-    const executions = appBackupExecutions(action, target)
+    const { apps, executions } = appBackupGroup(action, target)
     if (
       executions.length === 0 ||
       executions.some((execution) => !execution.destination)
     ) {
       throw new Error("Scheduled backup destination is not deployed")
     }
-    // What its backup takes now, a Kiln volume it has taken up or let go
-    // of among them, against what Hearth admitted.
-    const taken = await this.#options.listAppBackupVolumeIds(target.id)
-    const projected = new Set(
+    const volumesOf = (appId: string) =>
       executions
-        .filter((execution) => execution.targetKind === "volume")
+        .filter(
+          (execution) =>
+            execution.targetKind === "volume" &&
+            execution.appIds?.includes(appId)
+        )
         .map((execution) => execution.targetId)
-    )
-    if (
-      taken.length !== projected.size ||
-      taken.some((id) => !projected.has(id))
-    ) {
+    // What each App's backup takes now, a Kiln volume it has taken up or
+    // let go of among them, against what Hearth admitted: every App of the
+    // batch its own folder, and exactly the volumes it uses.
+    for (const appId of apps) {
+      const taken = await this.#options.listAppBackupVolumeIds(appId)
+      const projected = new Set(volumesOf(appId))
+      if (
+        !executions.some(
+          (execution) =>
+            execution.targetKind === "app" && execution.targetId === appId
+        ) ||
+        taken.length !== projected.size ||
+        taken.some((id) => !projected.has(id))
+      ) {
+        throw new Error(
+          "App backup coverage changed; waiting for Hearth to refresh the schedule"
+        )
+      }
+    }
+    if (executions.length > SCHEDULED_APP_BACKUP_GROUP_MAX) {
       throw new Error(
-        "App backup coverage changed; waiting for Hearth to refresh the schedule"
+        "These Apps share volumes with more others than one backup run takes"
       )
     }
     const runId = scheduleStableId(
@@ -980,15 +1000,22 @@ export class ScheduleManager {
       scheduledAt,
       this.#options.relayId
     )
+    // An App alone keeps the batch it always had; Apps together are one.
     const batchId = scheduleDeterministicUuid(
       "schedule-backup-batch",
       schedule.id,
       scheduledAt,
-      target.id,
+      apps.join(","),
       action.id
     )
     const stopped = action.consistency === "stopped"
     const inputs = executions.map((execution): BackupTaskInput => {
+      // The App a member is named and checked for: its own, or for a
+      // volume the first of those that use it, whichever App asks.
+      const of =
+        execution.targetKind === "app"
+          ? execution.targetId
+          : ([...(execution.appIds ?? [])].sort()[0] ?? target.id)
       const backupId = scheduleDeterministicUuid(
         "schedule-backup",
         schedule.id,
@@ -1004,7 +1031,7 @@ export class ScheduleManager {
           batchId,
           name: resolveScheduleBackupName(action.name, {
             backupId,
-            instanceId: target.id,
+            instanceId: of,
             runId,
             scheduleId: schedule.id,
             scheduleName: schedule.name,
@@ -1015,12 +1042,7 @@ export class ScheduleManager {
               ? action.destination.storageId
               : null,
         },
-        appCoverage: {
-          appId: target.id,
-          volumeIds: executions
-            .filter((entry) => entry.targetKind === "volume")
-            .map((entry) => entry.targetId),
-        },
+        appCoverage: { appId: of, volumeIds: volumesOf(of) },
         ...(stopped ? { consistency: "stopped" as const } : {}),
         ...(executions.length >= 2
           ? { batch: { id: batchId, size: executions.length } }
@@ -1044,7 +1066,9 @@ export class ScheduleManager {
       }
     })
     // Every member is queued before any is waited for, as a stopped
-    // window starts only once its whole batch has arrived.
+    // window starts only once its whole batch has arrived. Each App of a
+    // batch queues the same tasks, by the same IDs: the first makes them,
+    // and the others, now or after a restart, find them there.
     const queued = await Promise.all(
       inputs.map((input) => this.#options.enqueueBackup(input))
     )
@@ -1294,17 +1318,13 @@ function backupExecution(
   )
 }
 
-// What Hearth admitted of an App's backup: its folder's and each owned
-// volume's.
-function appBackupExecutions(
+// What Hearth admitted of an App's backup: its folder's, each volume's it
+// uses, and those of the step's Apps it shares a volume with.
+function appBackupGroup(
   action: Extract<TargetScheduleAction, { type: "backup" }>,
   target: ScheduleTarget
 ) {
-  return action.executions.filter(
-    (candidate) =>
-      (candidate.targetKind === "app" && candidate.targetId === target.id) ||
-      (candidate.targetKind === "volume" && candidate.appId === target.id)
-  )
+  return scheduledAppBackupGroup(action.executions, target.id)
 }
 
 // Why Hearth refused a backup step for a target, as it would a manual one.
@@ -1315,7 +1335,7 @@ function backupRefusal(
 ): string | null {
   const executions =
     target.kind === "app"
-      ? appBackupExecutions(action, target)
+      ? appBackupGroup(action, target).executions
       : [backupExecution(action, target)]
   return executions.find((execution) => execution?.refusal)?.refusal ?? null
 }

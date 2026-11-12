@@ -8,6 +8,7 @@ import { Effect, Fiber, ManagedRuntime } from "effect"
 import { SqlClient } from "effect/sql"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
+import type { RelayBackupTask } from "@workspace/contracts"
 import type { RelayScheduleProjection } from "@workspace/contracts/schedules"
 
 import { makeRelayStateLayer, RelayStateStore } from "./effect/state.js"
@@ -61,6 +62,9 @@ async function advanceUntil(assertion: () => void | Promise<void>, stepMs = 0) {
 
 async function manager(
   overrides: Partial<{
+    enqueueBackup: ScheduleManagerOptions["enqueueBackup"]
+    listAppBackupVolumeIds: ScheduleManagerOptions["listAppBackupVolumeIds"]
+    listAppIds: ScheduleManagerOptions["listAppIds"]
     findInstance: (instanceId: string) => Promise<object | null>
     sendConsoleCommand: (instanceId: string, command: string) => Promise<void>
     listDatabaseIds: ScheduleManagerOptions["listDatabaseIds"]
@@ -71,13 +75,16 @@ async function manager(
   const directory = await mkdtemp(join(tmpdir(), "kiln-schedules-"))
   directories.push(directory)
   const options: Omit<ScheduleManagerOptions, "state"> = {
-    enqueueBackup: async () => {
-      throw new Error("not used")
-    },
+    enqueueBackup:
+      overrides.enqueueBackup ??
+      (async () => {
+        throw new Error("not used")
+      }),
     findInstance: overrides.findInstance ?? (async () => null),
     getBackup: async () => null,
-    listAppBackupVolumeIds: async () => [],
-    listAppIds: async () => new Set(),
+    listAppBackupVolumeIds:
+      overrides.listAppBackupVolumeIds ?? (async () => []),
+    listAppIds: overrides.listAppIds ?? (async () => new Set()),
     listDatabaseIds: overrides.listDatabaseIds ?? (async () => new Set()),
     platformTargetId: () => "platform",
     relayId: "relay-a",
@@ -347,5 +354,119 @@ describe("Relay schedule commands in containers", () => {
     } finally {
       await Effect.runPromise(Fiber.interrupt(worker))
     }
+  })
+})
+
+// Apps that use the same volume are backed up together: asked for once for
+// each App, the volume would be one backup made twice, or one App's backup
+// said done without it.
+describe("Relay scheduled App backups", () => {
+  const [site, blog] = ["a".repeat(12), "b".repeat(12)] as [string, string]
+  const [media, uploads] = ["1".repeat(40), "2".repeat(40)] as [string, string]
+  const local = { destination: { kind: "local" as const }, mode: "full" as const }
+  const nightly: RelayScheduleProjection = {
+    ...projection,
+    actions: [
+      {
+        destination: { kind: "local" },
+        executions: [
+          { ...local, targetId: site, targetKind: "app" },
+          { ...local, targetId: blog, targetKind: "app" },
+          { ...local, appIds: [site, blog], targetId: media, targetKind: "volume" },
+          { ...local, appIds: [site], targetId: uploads, targetKind: "volume" },
+        ],
+        id: "c5a1b9d2-3e4f-4a6b-8c7d-9e0f1a2b3c4d",
+        mode: "full",
+        name: "Nightly",
+        type: "backup",
+      },
+    ],
+    targets: [site, blog].map((id) => ({
+      id,
+      kind: "app" as const,
+      name: id.slice(0, 4),
+      relayId: "relay-a",
+    })),
+  }
+  // The backup queue: a task for each backup asked for, by its ID, done at
+  // once.
+  const queue = () => {
+    const tasks = new Map<string, RelayBackupTask>()
+    const enqueueBackup: ScheduleManagerOptions["enqueueBackup"] = async (
+      input
+    ) => {
+      const known = tasks.get(input.taskId)
+      if (known) return known
+      const task = {
+        backupId: input.backupId,
+        input,
+        status: "succeeded",
+        taskId: input.taskId,
+      } as unknown as RelayBackupTask
+      tasks.set(input.taskId, task)
+      return task
+    }
+    return { enqueueBackup, tasks }
+  }
+  const uses: Record<string, Array<string>> = {
+    [blog]: [media],
+    [site]: [media, uploads],
+  }
+
+  it("backs up Apps that share a volume as one batch, the volume once", async () => {
+    const { enqueueBackup, tasks } = queue()
+    const { schedules } = await manager({
+      enqueueBackup,
+      listAppBackupVolumeIds: async (appId) => uses[appId] ?? [],
+      listAppIds: async () => new Set([site, blog]),
+    })
+    await schedules.apply(nightly)
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("succeeded")
+    )
+    const made = [...tasks.values()].map(({ input }) => input)
+    expect(made.map((input) => input.target.id).sort()).toEqual(
+      [site, blog, media, uploads].sort()
+    )
+    // One batch of the four, whichever App asked first.
+    expect(new Set(made.map((input) => "batch" in input && input.batch?.id)).size).toBe(1)
+    expect(made.map((input) => "batch" in input && input.batch?.size)).toEqual([
+      4, 4, 4, 4,
+    ])
+    // Each App is checked for the volumes it uses.
+    const coverage = Object.fromEntries(
+      made.flatMap((input) =>
+        "appCoverage" in input && input.appCoverage && input.target.kind === "app"
+          ? [[input.appCoverage.appId, input.appCoverage.volumeIds]]
+          : []
+      )
+    )
+    expect(coverage).toEqual({ [blog]: [media], [site]: [media, uploads] })
+    expect((await latestRun(schedules))?.targetRuns).toMatchObject([
+      { status: "succeeded" },
+      { status: "succeeded" },
+    ])
+  })
+
+  it("backs up none of them when one has taken up a volume since the schedule was sent", async () => {
+    const { enqueueBackup, tasks } = queue()
+    const { schedules } = await manager({
+      enqueueBackup,
+      // The second App mounts another volume now.
+      listAppBackupVolumeIds: async (appId) =>
+        appId === blog ? [media, uploads] : (uses[appId] ?? []),
+      listAppIds: async () => new Set([site, blog]),
+    })
+    await schedules.apply(nightly)
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("failed")
+    )
+    expect(tasks.size).toBe(0)
   })
 })
