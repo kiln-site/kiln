@@ -120,10 +120,7 @@ import {
   relayVolumesQueryOptions,
 } from "@/lib/query-options"
 import {
-  createResourceBackup,
-  createDatabaseBackup,
-  createInstanceBackup,
-  createPlatformBackup,
+  createBackupRun,
   deleteBackup,
   getBackupDownloadUrl,
   getBackupExportState,
@@ -1682,40 +1679,28 @@ function CreateBackupDialog({
   const queryClient = useQueryClient()
   const create = useMutation({
     mutationFn: async (configuration: BackupConfiguration) => {
-      const target = targets.find(
-        (candidate) => candidate.key === configuration.targetKey
-      )
-      if (!target) throw new Error("Choose a backup target")
-      const data = {
-        name: configuration.name,
-        relayId: target.relayId,
-        storageIds: configuration.destinationKeys.map((destination) =>
-          destination === "local" ? null : destination
-        ),
-      }
-      if (target.kind === "instance") {
-        return createInstanceBackup({
-          data: {
-            ...data,
-            instanceId: target.id,
-            mode: configuration.mode,
-          },
-        })
-      }
-      if (target.kind === "database") {
-        return createDatabaseBackup({
-          data: { ...data, databaseId: target.id },
-        })
-      }
-      if (target.kind === "volume")
-        return createResourceBackup({
-          data: {
-            ...data,
-            target: { kind: target.kind, id: target.id },
-            consistency: configuration.consistency,
-          },
-        })
-      return createPlatformBackup({ data })
+      const keys = new Set(configuration.targetKeys)
+      const chosen = targets.filter((target) => keys.has(target.key))
+      if (chosen.length === 0) throw new Error("Choose what to back up")
+      // Each chosen is a backup of its own; together they are one run.
+      return createBackupRun({
+        data: {
+          consistency: configuration.consistency,
+          // A game server's choice; anything else is a full archive.
+          ...(chosen.every((target) => target.kind === "instance")
+            ? { mode: configuration.mode }
+            : {}),
+          name: configuration.name,
+          storageIds: configuration.destinationKeys.map((destination) =>
+            destination === "local" ? null : destination
+          ),
+          targets: chosen.flatMap((target) =>
+            target.kind === "app"
+              ? []
+              : [{ id: target.id, kind: target.kind, relayId: target.relayId }]
+          ),
+        },
+      })
     },
     onSuccess: async (result, configuration) => {
       await resetActiveBackupRunsToFirstPage(queryClient)

@@ -1,20 +1,15 @@
-import { randomUUID } from "node:crypto"
-
 import {
   appBackupVolumes,
   backupUnfinishedRestoresSchema,
   relayVolumesSchema,
-  type BackupConsistency,
   type BackupTarget,
   type BackupUnfinishedRestore,
   type RelayVolumes,
 } from "@workspace/contracts"
 
-import { loadBackupStorageEffect } from "@/backups/destinations/s3"
 import {
   getBackupForTaskEffect,
   listTargetBackupsEffect,
-  reserveBackupBatchEffect,
   type BackupCatalogRecord,
 } from "@/effect/backups"
 import { loadAppConfigEffect } from "@/effect/managed-apps"
@@ -24,10 +19,7 @@ import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { configuredVolumeIds } from "@/lib/app-volume-references.server"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
-import {
-  dispatchBackupTask,
-  reconcileRelayBackups,
-} from "@/lib/backup-reconciliation"
+import { reconcileRelayBackups } from "@/lib/backup-reconciliation"
 import type { BackupRun } from "@/lib/backup-runs"
 import { grantsAllowBackup } from "@/lib/backup-target-permissions"
 import { relayRpc } from "@/lib/relay-connection"
@@ -37,7 +29,6 @@ import {
   type PersistedRelay,
 } from "@/lib/relay-registry"
 import {
-  requireAppsPermission,
   requireBackupTargetPermission,
   requireBackupTargetRestore,
 } from "@/server/backup-target-access.server"
@@ -169,140 +160,6 @@ export function missingAppVolumes(
       ),
     ]),
   ]
-}
-
-/**
- * Settles what backing up an App takes before its operation runs, for
- * someone who may back it up: the volumes are lanes it holds too.
- */
-export async function settleAppBackup<
-  Input extends { appId: string; relayId: string },
->(user: AuthenticatedUser, data: Input) {
-  const relay = await activeRelay(data.relayId)
-  await requireBackupTargetPermission(
-    user,
-    relay.id,
-    { id: data.appId, kind: "app" },
-    "backup.create"
-  )
-  const { targets } = await coveredAppTargets(relay, data.appId, user.id)
-  return {
-    ...data,
-    volumeIds: targets.flatMap((target) =>
-      target.kind === "volume" ? [target.id] : []
-    ),
-  }
-}
-
-// Everything an App's backup takes, or why it can't take all the App keeps.
-async function coveredAppTargets(
-  relay: PersistedRelay,
-  appId: string,
-  userId: string
-) {
-  const plan = await appBackupPlan(relay.id, appId)
-  if (!plan) throw new Error("App not found on this Relay")
-  const listing = await readRelayVolumes(relay, userId)
-  const [missing] = missingAppVolumes(appId, plan.configured, listing)
-  if (missing !== undefined) {
-    throw new Error(
-      `A volume this App mounts is missing on its Relay (${missing.slice(0, 8)}). Restore it or remove its mount, then back up again.`
-    )
-  }
-  return { listing, targets: appTargets(appId, listing, plan.configured) }
-}
-
-/**
- * Backs up an App, which is to back up each volume it uses, each a backup
- * of its own, started together as one batch. Stopped, each stops and starts again
- * every App that uses what it backs up.
- */
-export async function createAppBackupsHandler(
-  user: AuthenticatedUser,
-  data: {
-    appId: string
-    consistency: BackupConsistency
-    name: string
-    relayId: string
-    storageIds: Array<string | null>
-    /** The volumes it was settled to take, which its operation holds. */
-    volumeIds: ReadonlyArray<string>
-  }
-) {
-  const relay = await activeRelay(data.relayId)
-  const app = { id: data.appId, kind: "app" as const }
-  await requireBackupTargetPermission(user, relay.id, app, "backup.create")
-  const { listing, targets } = await coveredAppTargets(
-    relay,
-    data.appId,
-    user.id
-  )
-  if (targets.length === 0) {
-    throw new Error("This App has no volumes to back up")
-  }
-  const taken = targets.map((target) => target.id)
-  if ([...taken].sort().join() !== [...data.volumeIds].sort().join()) {
-    throw new Error(
-      "This App's volumes changed while its backup was starting. Try again."
-    )
-  }
-  if (data.consistency === "stopped") {
-    if (!listing.protection.ready) {
-      throw new Error(
-        `The Relay doesn't know yet which Apps use this App's volumes${listing.protection.reason ? `: ${listing.protection.reason}` : ""}`
-      )
-    }
-    const users = new Set([data.appId])
-    for (const volume of listing.volumes) {
-      if (!targets.some((target) => target.id === volume.id)) continue
-      for (const user of volume.users) users.add(user.appId)
-    }
-    await requireAppsPermission(
-      user,
-      relay.id,
-      [...users],
-      "instance.power.stop",
-      "A stopped backup stops and starts every App that uses what it backs up; you need permission to stop each"
-    )
-  }
-  // A personal destination exports each member, the volumes among them.
-  for (const { id, kind } of targets) {
-    await requirePersonalStorage(data.storageIds, user, relay.id, { id, kind })
-  }
-  const batchId = randomUUID()
-  // All of the App's backups, or none: one refused, as by a ceiling of no
-  // backups, refuses the batch rather than leave it short of a member.
-  const reserved = await runAppEffect(
-    "backups.reserveAppBatch",
-    reserveBackupBatchEffect(
-      targets.map((target) => ({
-        artifactKind: "tar_archive" as const,
-        backupId: randomUUID(),
-        batchId,
-        batchSize: targets.length,
-        consistency: data.consistency,
-        createdBy: user.id,
-        exclude: [],
-        mode: "full" as const,
-        name: data.name,
-        relayId: relay.id,
-        requestedMaxBytes: null,
-        storageIds: data.storageIds,
-        targetId: target.id,
-        targetKind: target.kind,
-        taskId: randomUUID(),
-      }))
-    )
-  )
-  for (const input of reserved) publishBackupChange(relay.id, input.backupId)
-  const dispatched = await Promise.allSettled(
-    reserved.map((input) => dispatchBackupTask(relay, input, user.id))
-  )
-  return {
-    backupIds: reserved.map((input) => input.backupId),
-    batchId,
-    relayAccepted: dispatched.every((result) => result.status === "fulfilled"),
-  }
 }
 
 /**
@@ -447,38 +304,6 @@ export function appTargets(
     kind: "volume" as const,
     name: volume.name,
   }))
-}
-
-// A personal destination exports the backup, so it takes download too.
-async function requirePersonalStorage(
-  storageIds: ReadonlyArray<string | null>,
-  user: AuthenticatedUser,
-  relayId: string,
-  target: ResourceTarget
-) {
-  for (const storageId of new Set(storageIds)) {
-    if (storageId === null) continue
-    const storage = await runAppEffect(
-      "backups.loadSelectedStorage",
-      loadBackupStorageEffect(storageId)
-    )
-    if (
-      !storage ||
-      !storage.enabled ||
-      storage.deleting ||
-      (storage.ownerUserId !== null && storage.ownerUserId !== user.id)
-    ) {
-      throw new Error("Backup destination is unavailable")
-    }
-    if (storage.ownerUserId !== null) {
-      await requireBackupTargetPermission(
-        user,
-        relayId,
-        target,
-        "backup.download"
-      )
-    }
-  }
 }
 
 function publicBackup(record: BackupCatalogRecord): BackupRun {

@@ -32,7 +32,7 @@ import {
   relayVolumesQueryOptions,
 } from "@/lib/query-options"
 import {
-  createResourceBackup,
+  createBackupRun,
   resolveUnfinishedRestore,
   restoreResourceBackup,
 } from "@/server/backups"
@@ -62,7 +62,7 @@ export function ResourceBackupDialog({
   open: boolean
   relayId: string
   stoppedUnavailable: string | null
-  target: ResourceTarget
+  target: { id: string; kind: "volume" }
   title: string
 }) {
   const queryClient = useQueryClient()
@@ -71,13 +71,12 @@ export function ResourceBackupDialog({
     mutationFn: (
       configuration: BackupConfiguration
     ): Promise<{ relayAccepted: boolean }> =>
-      createResourceBackup({
+      createBackupRun({
         data: {
           consistency: configuration.consistency,
           name: configuration.name,
-          relayId,
-          target,
           storageIds: storageIds(configuration),
+          targets: [{ ...target, relayId }],
         },
       }),
     onSuccess: async (result, configuration) => {

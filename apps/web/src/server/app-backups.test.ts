@@ -12,14 +12,13 @@ import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
 import {
-  createAppBackupsHandler,
   getAppBackupsHandler,
   listUnfinishedRestoresHandler,
   resolveUnfinishedRestoreHandler,
-  settleAppBackup,
 } from "@/server/app-backups.server"
+import { createBackupRunHandler } from "@/server/backup-runs.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertGrant, insertRelay, insertRows, selectRows } from "@/test/seed"
+import { insertGrant, insertRelay, insertRows } from "@/test/seed"
 
 const relayId = "1".repeat(12)
 const appId = "a".repeat(12)
@@ -161,17 +160,20 @@ const seed = Effect.gen(function* () {
   relay.unfinished = []
 })
 
-// Backing up the App as its server function does: settled, then run.
-const backUp = Effect.promise(async () =>
-  createAppBackupsHandler(
-    user,
-    await settleAppBackup(user, {
-      appId,
-      consistency: "live" as const,
+// Both volumes backed up, by an administrator.
+const backUp = Effect.promise(() =>
+  createBackupRunHandler(
+    { ...user, id: "administrator", role: "admin" },
+    {
+      consistency: "live",
       name: "Before the upgrade",
-      relayId,
       storageIds: [null],
-    })
+      targets: [ownVolumeId, kilnVolumeId].map((id) => ({
+        id,
+        kind: "volume" as const,
+        relayId,
+      })),
+    }
   )
 )
 
@@ -183,62 +185,11 @@ const rejection = (run: () => Promise<unknown>) =>
 
 describeMysql("App backups", () => {
   layer(TestDatabase)((it) => {
-    // An App is a group of what it keeps: backing it up backs up its
-    // volumes, and there is no backup of the App itself.
-    it.effect("backs up an App as its volumes, and nothing of its own", () =>
-      Effect.gen(function* () {
-        yield* seed
-        yield* createAppRecordEffect({
-          appId,
-          createdBy: "someone-else",
-          name: "Website",
-          relayId,
-        })
-        yield* grant(["instance.files.read"])
-
-        yield* backUp
-
-        const backups = yield* selectRows<{
-          batch_id: string | null
-          target_id: string
-          target_kind: string
-        }>("backup")
-        assert.sameDeepMembers(
-          backups.map(({ target_id, target_kind }) => [target_kind, target_id]),
-          [["volume", ownVolumeId]]
-        )
-        assert.isNotNull(backups[0]?.batch_id)
-
-        // One that uses no volume has nothing to back up, and says so.
-        const bare = "f".repeat(12)
-        yield* createAppRecordEffect({
-          appId: bare,
-          createdBy: "someone-else",
-          name: "Proxy",
-          relayId,
-        })
-        const asked = {
-          appId: bare,
-          consistency: "live" as const,
-          name: "Before the upgrade",
-          relayId,
-          storageIds: [null],
-        }
-        assert.include(
-          yield* rejection(async () =>
-            createAppBackupsHandler(user, await settleAppBackup(user, asked))
-          ),
-          "has no volumes to back up"
-        )
-        assert.lengthOf(yield* selectRows("backup"), 1)
-      })
-    )
-
-    // What an App keeps is on the volumes it mounts, so its backup takes
-    // each of them, one another App uses too, and none is made that would
-    // leave one out.
+    // What an App keeps is on the volumes it mounts, one another App uses
+    // too. Each volume's backups are its own to see, and one the App mounts
+    // that its Relay doesn't have is said to be missing.
     it.effect(
-      "takes every volume the App uses, and none of them when one is missing",
+      "shows each volume an App uses, its backups only to who may see them, and one that is missing",
       () =>
         Effect.gen(function* () {
           yield* seed
@@ -258,37 +209,21 @@ describeMysql("App backups", () => {
             relayId,
           })
           const access = yield* grant(["app.read", "instance.files.read"])
-
           yield* backUp
 
-          const taken = () =>
-            Effect.map(
-              selectRows<{ target_id: string; target_kind: string }>("backup"),
-              (rows) =>
-                rows.map(({ target_id, target_kind }) => [
-                  target_kind,
-                  target_id,
-                ])
-            )
-          assert.sameDeepMembers(yield* taken(), [
-            ["volume", ownVolumeId],
-            ["volume", kilnVolumeId],
-          ])
-          // The volume's backups are its own to see: someone who may only
-          // see the App's is shown that the volume is taken, not its backups.
-          const shown = () =>
-            Effect.map(
-              Effect.promise(() =>
-                getAppBackupsHandler(user, { appId, relayId })
-              ),
-              ({ targets }) =>
-                targets.map((target) => [
-                  target.id,
-                  target.readable,
-                  target.latest !== null,
-                ])
-            )
-          assert.sameDeepMembers(yield* shown(), [
+          const read = Effect.promise(() =>
+            getAppBackupsHandler(user, { appId, relayId })
+          )
+          const shown = Effect.map(read, ({ targets }) =>
+            targets.map((target) => [
+              target.id,
+              target.readable,
+              target.latest !== null,
+            ])
+          )
+          // Someone who may only see the App's is shown that the volume is
+          // one of its, not its backups.
+          assert.sameDeepMembers(yield* shown, [
             [ownVolumeId, false, false],
             [kilnVolumeId, false, false],
           ])
@@ -297,12 +232,13 @@ describeMysql("App backups", () => {
             selection_kind: "permission",
             selection_key: "backup.read",
           })
-          assert.sameDeepMembers(yield* shown(), [
+          assert.sameDeepMembers(yield* shown, [
             [ownVolumeId, true, true],
             [kilnVolumeId, true, true],
           ])
 
           // A volume its configuration mounts that its Relay doesn't have.
+          assert.deepStrictEqual((yield* read).missing, [])
           yield* updateAppConfigEffect(relayId, appId, (config) => ({
             ...config,
             mounts: [
@@ -310,12 +246,7 @@ describeMysql("App backups", () => {
               mount("gonemount001", goneVolumeId, "/uploads"),
             ],
           }))
-          const before = (yield* taken()).length
-          assert.include(
-            yield* rejection(() => Effect.runPromise(backUp)),
-            "A volume this App mounts is missing"
-          )
-          assert.lengthOf(yield* taken(), before)
+          assert.deepStrictEqual((yield* read).missing, [goneVolumeId])
         })
     )
 

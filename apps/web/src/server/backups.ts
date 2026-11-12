@@ -17,11 +17,7 @@ import {
 import { runOperationPromise } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import {
-  backUpApp,
-  backUpDatabase,
-  backUpInstance,
-  backUpPlatform,
-  backUpResource,
+  backUpTargets,
   cancelBackup as cancelBackupOperation,
   changeBackupExcludes,
   changeBackupLimits,
@@ -43,74 +39,39 @@ import {
   getBackupRunsPageHandler,
 } from "@/server/backups.server"
 
-const instanceBackupInputSchema = z.strictObject({
-  instanceId: z.string().min(1).max(120),
-  maxBytes: z
-    .number()
-    .int()
-    .positive()
-    .max(Number.MAX_SAFE_INTEGER)
-    .nullable()
-    .optional(),
-  mode: z.enum(["full", "incremental"]).optional(),
-  name: z.string().trim().min(1).max(120),
-  relayId: relayIdSchema,
-  storageIds: z.array(z.uuid().nullable()).min(1).max(16),
-})
-
-const databaseBackupInputSchema = z.strictObject({
-  databaseId: z.string().min(1).max(120),
-  maxBytes: z
-    .number()
-    .int()
-    .positive()
-    .max(Number.MAX_SAFE_INTEGER)
-    .nullable()
-    .optional(),
-  name: z.string().trim().min(1).max(120),
-  relayId: relayIdSchema,
-  storageIds: z.array(z.uuid().nullable()).min(1).max(16),
-})
-
-const platformBackupInputSchema = z.strictObject({
-  maxBytes: z
-    .number()
-    .int()
-    .positive()
-    .max(Number.MAX_SAFE_INTEGER)
-    .nullable()
-    .optional(),
-  name: z.string().trim().min(1).max(120),
-  relayId: relayIdSchema,
-  storageIds: z.array(z.uuid().nullable()).min(1).max(16),
-})
-
-// An App's folder, or a volume: one Kiln made, or `<App ID>/<key>` for one
-// an App's Compose project declares.
-const resourceBackupInputSchema = z.strictObject({
-  consistency: backupConsistencySchema.optional(),
-  maxBytes: z
-    .number()
-    .int()
-    .positive()
-    .max(Number.MAX_SAFE_INTEGER)
-    .nullable()
-    .optional(),
-  name: z.string().trim().min(1).max(120),
-  relayId: relayIdSchema,
-  storageIds: z.array(z.uuid().nullable()).min(1).max(16),
-  target: backupTargetSchema.extend({ kind: z.enum(["app", "volume"]) }),
-})
-
 const appBackupsInputSchema = z.strictObject({
   appId: appIdSchema,
   relayId: relayIdSchema,
 })
 
-const createAppBackupsInputSchema = appBackupsInputSchema.extend({
+// Several things chosen together: each a backup of its own, as one run.
+const backupRunInputSchema = z.strictObject({
+  // For the volumes among them.
   consistency: backupConsistencySchema.default("live"),
+  // For the game servers among them.
+  mode: z.enum(["full", "incremental"]).optional(),
   name: z.string().trim().min(1).max(120),
   storageIds: z.array(z.uuid().nullable()).min(1).max(16),
+  targets: z
+    .array(
+      z.strictObject({
+        id: z.string().min(1).max(120),
+        kind: z.enum(["database", "instance", "platform", "volume"]),
+        relayId: relayIdSchema,
+      })
+    )
+    .min(1)
+    .max(64)
+    .refine(
+      (targets) =>
+        new Set(
+          targets.map(({ id, kind, relayId }) =>
+            // Kiln's own is one target on a Relay, whatever it is called.
+            [relayId, kind, kind === "platform" ? "" : id].join("\u0000")
+          )
+        ).size === targets.length,
+      { message: "Choose each target once" }
+    ),
 })
 
 const resolveRestoreInputSchema = z.strictObject({
@@ -196,10 +157,6 @@ const backupPolicyInputSchema = z.strictObject({
   target: backupTargetSchema,
 })
 
-export type InstanceBackupInput = z.infer<typeof instanceBackupInputSchema>
-export type DatabaseBackupInput = z.infer<typeof databaseBackupInputSchema>
-export type PlatformBackupInput = z.infer<typeof platformBackupInputSchema>
-export type ResourceBackupInput = z.infer<typeof resourceBackupInputSchema>
 export type BackupIdInput = z.infer<typeof backupIdInputSchema>
 export type BackupRunForQueryInput = z.infer<typeof backupRunForQuerySchema>
 export type BackupRemovalInput = z.infer<typeof backupRemovalInputSchema>
@@ -214,38 +171,6 @@ export type BackupPolicyInput = z.infer<typeof backupPolicyInputSchema>
 // Each server function authenticates, then hands the user to its handler in
 // ./backups.server.
 
-export const createInstanceBackup = createServerFn({ method: "POST" })
-  .validator(instanceBackupInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(backUpInstance, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
-
-export const createDatabaseBackup = createServerFn({ method: "POST" })
-  .validator(databaseBackupInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(backUpDatabase, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
-
-export const createPlatformBackup = createServerFn({ method: "POST" })
-  .validator(platformBackupInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(backUpPlatform, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
-
-export const createResourceBackup = createServerFn({ method: "POST" })
-  .validator(resourceBackupInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(backUpResource, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
-
 // An App's backup settings: its folder and the volumes its Compose project
 // owns, each with its newest backup, and what it mounts that isn't covered.
 export const getAppBackups = createServerFn({ method: "GET" })
@@ -256,16 +181,14 @@ export const getAppBackups = createServerFn({ method: "GET" })
     return getAppBackupsHandler(user, data)
   })
 
-// Backs up an App's folder and the volumes it uses together.
-export const createAppBackups = createServerFn({ method: "POST" })
-  .validator(createAppBackupsInputSchema)
-  .handler(async ({ data }) => {
-    const user = await requireEligibleResourceUser()
-    const { settleAppBackup } = await import("@/server/app-backups.server")
-    return runOperationPromise(backUpApp, await settleAppBackup(user, data), {
-      user,
+// Backs up everything chosen as one run, each a backup of its own.
+export const createBackupRun = createServerFn({ method: "POST" })
+  .validator(backupRunInputSchema)
+  .handler(async ({ data }) =>
+    runOperationPromise(backUpTargets, data, {
+      user: await requireEligibleResourceUser(),
     })
-  })
+  )
 
 // Restores whose swap didn't finish, which fence their targets.
 export const getUnfinishedRestores = createServerFn({ method: "GET" }).handler(

@@ -100,13 +100,12 @@ the authority reading or writing that data does
   and replaces only files `instance.files.write` could already change, and
   the Compose file isn't among them (Hearth sends it with each deployment).
 - A Kiln volume, shared by design, takes `backup.*` on the Relay.
-- Backing up an App takes its backup with every volume it uses, on the
-  App's permission alone: reading the App's files
-  already reaches the volumes it mounts. Each volume's backup is still the
-  volume's: seeing, downloading, restoring or deleting it takes `backup.*`
-  on the Relay, so someone with the App's permissions only is shown that
-  the volume was taken, not its backups, and can't restore that part. A
-  personal destination takes `backup.download` on every member.
+- A run of several things takes what backing each up alone takes, on every
+  one of them, or none is made. Each volume's backup is the volume's:
+  making, seeing, downloading, restoring or deleting it takes `backup.*` on
+  the Relay, so someone with an App's permissions only is shown which
+  volumes it uses, not their backups. A personal destination takes
+  `backup.download` on every member.
 - A stopped backup also takes `instance.power.stop` on every App it stops
   and starts again, as stopping them does.
 - Restoring a volume also takes `instance.files.write` on every App that uses
@@ -259,7 +258,7 @@ since it may be partly stopped. The Apps a stopped backup or a restore of a
 volume locks are looked up before it waits its turn and checked again once
 it has it; if they changed meanwhile, or can't be looked up, the task fails
 rather than run beside an App it doesn't hold. Stopped backups started together as a batch (`batch: {id, size}`, as
-backing up an App starts its folder's and each volume's it uses) share one
+the volumes of one run on a Relay are) share one
 stopped window: the Relay claims the batch's queued backups together, waiting
 a few moments for any still arriving, holds all their locks at once, stops
 every App that uses any of them once (journaled under the first backup, as a
@@ -607,7 +606,18 @@ file written in Hearth. Those paths, like any path on the node, are not
 backed up, and the App's Volumes say so; data to back up belongs in a
 volume. An App that uses no volume has nothing to back up.
 
-New Backup offers each Kiln volume alongside game servers, databases and
+New Backup takes one thing or several (`createBackupRun`,
+`apps/web/src/server/backup-runs.server.ts`): each chosen is a backup of its
+own, as if made alone, and those of one run share its name and its ID
+(`batch_id`). They are reserved together or not at all, so a run never
+comes up short of something chosen without saying; up to 64 at once, on any
+Relays. Live or Stopped is the volumes' choice: stopped, the volumes of a
+run on one Relay share one stopped window, so every App that uses any of
+them stops once, while game servers, databases and Kiln are taken as they
+run. Incremental is a game server's choice, offered when only game servers
+are chosen; chosen with anything else, each is a full archive.
+
+It offers each Kiln volume alongside game servers, databases and
 Kiln, and no App: every row is one thing a backup keeps. Volumes are a type
 to filter by, each says which Apps use it, and searching an App's name or
 ID finds the volumes it uses. With the page scoped to an App, its volumes

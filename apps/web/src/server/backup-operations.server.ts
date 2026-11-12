@@ -9,7 +9,6 @@ import { promiseEffect } from "@/effect/promise"
 import {
   isPlatformAdmin,
   listUserGrants,
-  requireRelayPermission,
 } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { hasBackupPermission } from "@/lib/backup-access"
@@ -30,18 +29,16 @@ import {
   type LockPolicy,
 } from "@/operations/lanes"
 import { operation, signedIn } from "@/operations/operation"
+import { resolveUnfinishedRestoreHandler } from "@/server/app-backups.server"
 import {
-  createAppBackupsHandler,
-  resolveUnfinishedRestoreHandler,
-} from "@/server/app-backups.server"
+  createBackupRunHandler,
+  requireRunTargetPermission,
+  type BackupRunInput,
+} from "@/server/backup-runs.server"
 import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import {
   cancelBackupHandler,
   copyBackupToDestinationHandler,
-  createDatabaseBackupHandler,
-  createInstanceBackupHandler,
-  createPlatformBackupHandler,
-  createResourceBackupHandler,
   deleteBackupHandler,
   getBackupDownloadUrlHandler,
   renameBackupHandler,
@@ -62,11 +59,7 @@ import type {
   BackupRemovalInput,
   BackupRestoreInput,
   CopyBackupInput,
-  DatabaseBackupInput,
   RenameBackupInput,
-  InstanceBackupInput,
-  PlatformBackupInput,
-  ResourceBackupInput,
 } from "@/server/backups"
 
 // Backups and restores as operations (docs/hearth-operations.md). Each holds
@@ -93,163 +86,37 @@ const permitted = (
     Effect.tap((person) => promiseEffect(() => check(person)))
   )
 
-export const backUpInstance = operation<InstanceBackupInput>()({
-  name: "backup.instance.create",
-  doing: "Backing up this game server",
+// Several things chosen together, each a backup of its own. Each is held
+// as backing it up alone holds it, and the person must be allowed every
+// one: a run takes all of them or none.
+export const backUpTargets = operation<BackupRunInput>()({
+  name: "backup.run.create",
+  doing: "Backing up what was chosen",
   authorize: ({ input, user }) =>
-    permitted(user, (person) =>
-      requireRelayPermission({
-        instanceId: input.instanceId,
-        permission: "backup.create",
-        relayId: input.relayId,
-        user: person,
-      })
-    ),
+    permitted(user, async (person) => {
+      for (const target of input.targets) {
+        await requireRunTargetPermission(person, target, "backup.create")
+      }
+    }),
   locks: ({ input }) => [
-    shared(
-      backupTargetKey(input.relayId, { id: input.instanceId, kind: "instance" })
-    ),
-    ...destinations(input.storageIds),
-  ],
-  run: ({ context, input }) =>
-    promiseEffect(() =>
-      createInstanceBackupHandler(context, input)
-    ),
-  audit: ({ input }) => ({
-    id: input.instanceId,
-    kind: "instance",
-    relayId: input.relayId,
-  }),
-})
-
-export const backUpDatabase = operation<DatabaseBackupInput>()({
-  name: "backup.database.create",
-  doing: "Backing up this database",
-  authorize: ({ input, user }) =>
-    permitted(user, (person) =>
-      requireRelayPermission({
-        databaseId: input.databaseId,
-        permission: "backup.create",
-        relayId: input.relayId,
-        user: person,
-      })
-    ),
-  locks: ({ input }) => [
-    shared(
-      backupTargetKey(input.relayId, { id: input.databaseId, kind: "database" })
-    ),
-    ...destinations(input.storageIds),
-  ],
-  run: ({ context, input }) =>
-    promiseEffect(() =>
-      createDatabaseBackupHandler(context, input)
-    ),
-  audit: ({ input }) => ({
-    id: input.databaseId,
-    kind: "database",
-    relayId: input.relayId,
-  }),
-})
-
-// An App's folder or a volume.
-export const backUpResource = operation<ResourceBackupInput>()({
-  name: "backup.resource.create",
-  doing: (input) =>
-    input.target.kind === "app"
-      ? "Backing up this App's folder"
-      : "Backing up this volume",
-  authorize: ({ input, user }) =>
-    permitted(user, (person) =>
-      requireBackupTargetPermission(
-        person,
-        input.relayId,
-        input.target,
-        "backup.create"
-      )
-    ),
-  locks: ({ input }) => [
-    shared(backupTargetKey(input.relayId, input.target)),
-    ...destinations(input.storageIds),
-  ],
-  run: ({ context, input }) =>
-    promiseEffect(() =>
-      createResourceBackupHandler(context, input)
-    ),
-  audit: ({ input }) => ({
-    id: input.target.id,
-    kind: input.target.kind,
-    relayId: input.relayId,
-  }),
-})
-
-// An App's folder and the volumes it uses, together, to the destinations
-// chosen for them. Which volumes is settled before it runs
-// (`settleAppBackup`), so it holds each of them with the App.
-export const backUpApp = operation<{
-  appId: string
-  consistency: "live" | "stopped"
-  name: string
-  relayId: string
-  storageIds: Array<string | null>
-  volumeIds: ReadonlyArray<string>
-}>()({
-  name: "backup.app.create",
-  doing: "Backing up this App",
-  authorize: ({ input, user }) =>
-    permitted(user, (person) =>
-      requireBackupTargetPermission(
-        person,
-        input.relayId,
-        { id: input.appId, kind: "app" },
-        "backup.create"
-      )
-    ),
-  locks: ({ input }) => [
-    // An App's own volume is held with the App, so each key once.
     ...[
       ...new Set(
-        [
-          { id: input.appId, kind: "app" as const },
-          ...input.volumeIds.map((id) => ({ id, kind: "volume" as const })),
-        ].map((target) => backupTargetKey(input.relayId, target))
+        input.targets.map((target) =>
+          backupTargetKey(target.relayId, target)
+        )
       ),
     ].map((key) => shared(key)),
     ...destinations(input.storageIds),
   ],
   run: ({ context, input }) =>
-    promiseEffect(() =>
-      createAppBackupsHandler(context, input)
-    ),
-  audit: ({ input }) => ({
-    id: input.appId,
-    kind: "app",
-    relayId: input.relayId,
-  }),
-})
-
-export const backUpPlatform = operation<PlatformBackupInput>()({
-  name: "backup.platform.create",
-  doing: "Backing up Kiln",
-  authorize: ({ user }) =>
-    signedIn(user).pipe(
-      Effect.filterOrFail(
-        isPlatformAdmin,
-        () => new Error("Platform backups require administrator access")
-      )
-    ),
-  locks: ({ input }) => [
-    shared(backupTargetKey(input.relayId, { id: "", kind: "platform" })),
-    ...destinations(input.storageIds),
-  ],
-  run: ({ context, input }) =>
-    promiseEffect(() =>
-      createPlatformBackupHandler(context, input)
-    ),
-  audit: ({ input }) => ({
-    id: "platform",
-    kind: "platform",
-    relayId: input.relayId,
-  }),
+    promiseEffect(() => createBackupRunHandler(context, input)),
+  // One target is what it backed up; of several, the first stands for them.
+  audit: ({ input }) => {
+    const [first] = input.targets
+    return first
+      ? { id: first.id, kind: first.kind, relayId: first.relayId }
+      : null
+  },
 })
 
 // A restore replaces the data of the resource it goes into, the backup's
