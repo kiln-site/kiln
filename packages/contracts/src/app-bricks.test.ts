@@ -213,4 +213,31 @@ describe("an App Brick", () => {
       )
     ).toBe("This isn't an App Brick")
   })
+
+  // Its container's health check: Docker runs it inside the container, so
+  // only a command can be one.
+  it("is ready by a command, which it deploys with, and by nothing else", () => {
+    const ready = (how: object, type: "image" | "compose" = "image") =>
+      recipe({
+        deploy:
+          type === "image"
+            ? { type, image: "nginx:1", ready: how }
+            : { type, path: "compose.yaml", ready: how },
+      })
+    const command = "wget -qO- http://127.0.0.1/ >/dev/null"
+
+    expect(appBrickDeploy(ready({ command }), {})).toMatchObject({
+      deploy: { ready: command },
+    })
+    expect(appBrickDeploy(image, {})).not.toHaveProperty("deploy.ready")
+    for (const other of [{ http: "/" }, { log: ["Listening"] }]) {
+      expect(appBrickProblem(ready(other))).toBe(
+        "Kiln checks an App Brick is ready by a command for now"
+      )
+    }
+    // A Compose project says each service's in its own file.
+    expect(appBrickProblem(ready({ command }, "compose"))).toBe(
+      "Kiln doesn't run an App Brick's ready yet"
+    )
+  })
 })

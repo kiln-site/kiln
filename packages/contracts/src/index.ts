@@ -1090,6 +1090,13 @@ export const appConfigSchema = z
     dockerfile: z.string().max(200_000),
     // KEY=VALUE lines, as in an env file.
     environment: z.string().max(65_536),
+    // How its container is checked, for images and Dockerfiles: a command
+    // run in it with its shell, which succeeds once the App is ready. It
+    // takes the place of a health check the image has. A Compose project
+    // says each service's in its own file.
+    healthcheck: z
+      .strictObject({ command: z.string().min(1).max(2_048) })
+      .optional(),
     image: z.string().trim().max(APP_IMAGE_MAX_LENGTH),
     // Configs saved before mounts have none.
     mounts: appMountsSchema.default([]),

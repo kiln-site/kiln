@@ -212,6 +212,59 @@ describeMysql("An App taking a newer revision of its Brick", () => {
         })
     )
 
+    // Its Brick says how to tell it is ready, which is its container's
+    // health check. A stale one would fail every deployment after it.
+    it.effect(
+      "takes the health check its revision gives, which is the Brick's while it follows it",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* createAppRecordEffect({
+            appId,
+            brick: {
+              answers: { key: "made-once", token: "made-too" },
+              environment: ["API_TOKEN", "SECRET_KEY"],
+              name: "Blog",
+              revision: 1,
+              source: "https://bricks.test/blog.yml",
+              volumes: [],
+            },
+            createdBy: "owner",
+            deploys: {
+              healthcheck: { command: "old-check" },
+              image: "ghcr.io/acme/blog:1",
+              sourceType: "image",
+            },
+            environment: "API_TOKEN=made-too\nSECRET_KEY=made-once\n",
+            name: "Journal",
+            relayId,
+          })
+          const command = "wget -qO- http://127.0.0.1/ >/dev/null"
+
+          assert.isNull(
+            yield* install(
+              brickRecipeSchema.parse({
+                ...blog,
+                deploy: { ...blog.deploy, ready: { command } },
+              })
+            )
+          )
+          assert.deepStrictEqual((yield* saved).config.healthcheck, { command })
+
+          // Its owner's to change only once it follows no Brick.
+          const refused = yield* updateAppConfigEffect(
+            relayId,
+            appId,
+            (config) => ({ ...config, healthcheck: { command: "true" } })
+          ).pipe(Effect.flip)
+          assert.include(String(refused), "Its health check is set by its Brick")
+
+          // A revision that gives none takes it away.
+          assert.isNull(yield* install(blog, 3))
+          assert.isUndefined((yield* saved).config.healthcheck)
+        })
+    )
+
     it.effect(
       "in a group, is connected again to the database the group has, and never to other members",
       () =>

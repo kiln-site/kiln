@@ -41,11 +41,13 @@ export interface NewestBrick {
   source: string
 }
 
-// What a revision sets: the App's image, its variables, and what the App
-// keeps of the Brick from then on.
+// What a revision sets: the App's image, its variables, how it is checked,
+// and what the App keeps of the Brick from then on.
 interface Revised {
   environment: Record<string, string>
   image: string
+  /** The command it is ready by, or none: its health check either way. */
+  ready: string | undefined
   record: AppBrickRecord
 }
 
@@ -104,6 +106,7 @@ function revisedAlone(brick: AppBrickRecord, newest: NewestBrick): Revised {
   return {
     environment: installed.deploy.environment,
     image: installed.deploy.image,
+    ready: installed.deploy.ready,
     record: {
       answers,
       environment: Object.keys(installed.deploy.environment),
@@ -214,6 +217,7 @@ async function revisedInGroup(
             made: {
               environment,
               image: app.image,
+              ready: app.ready,
               record: {
                 answers: {},
                 connect: follows.connect ?? [],
@@ -239,8 +243,8 @@ async function revisedInGroup(
 /**
  * Makes an App again from a newer revision of the Brick it follows, and
  * asks for the deployment that puts it to work. What the Brick set is the
- * revision's: its image, and its variables in place of those the Brick set
- * before. Every other line of its environment, and everything else about
+ * revision's: its image, its health check, and its variables in place of
+ * those the Brick set before. Every other line of its environment, and everything else about
  * it, stays. Whoever calls it holds the App's configuration.
  */
 export async function installAppBrickRevision(
@@ -281,15 +285,20 @@ export async function installAppBrickRevision(
           )
         )
       }
+      // Its health check is the revision's, one it gives or none.
+      const { healthcheck: _checked, ...rest } = config
       return Effect.succeed({
         brick: revised.record,
         config: {
-          ...config,
+          ...rest,
           environment: appEnvironmentWith(
             config.environment,
             brick.environment,
             revised.environment
           ),
+          ...(revised.ready === undefined
+            ? {}
+            : { healthcheck: { command: revised.ready } }),
           image: revised.image,
         },
       })

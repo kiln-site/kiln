@@ -46,6 +46,8 @@ export interface GroupBrickApp {
   key: string
   /** What it is called. Without one, it takes the group's name. */
   name?: string
+  /** The command it is ready by, when its recipe gives one. */
+  ready?: string
   /** The folders it keeps across deployments, each on a volume. */
   volumes: ReadonlyArray<string>
   /** Where its website answers, when its recipe says. */
@@ -170,6 +172,9 @@ export function groupBrickInstall(
       image: installed.deploy.image,
       key,
       ...(member.name === undefined ? {} : { name: member.name }),
+      ...(installed.deploy.ready === undefined
+        ? {}
+        : { ready: installed.deploy.ready }),
       volumes: installed.deploy.volumes,
       ...(installed.deploy.web === undefined
         ? {}

@@ -321,6 +321,7 @@ async function makeMembers(
           deploys: {
             environment: variables,
             image: app.image,
+            ...(app.ready === undefined ? {} : { ready: app.ready }),
             type: "image",
             volumes: app.volumes,
           },

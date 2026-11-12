@@ -127,7 +127,10 @@ export const createAppRecordEffect = Effect.fn("apps.create")(
     brick?: AppBrickRecord
     createdBy: string
     /** What its Brick deploys. Without one, nothing yet. */
-    deploys?: Pick<AppConfig, "sourceType"> & { image?: string }
+    deploys?: Pick<AppConfig, "sourceType"> & {
+      healthcheck?: NonNullable<AppConfig["healthcheck"]>
+      image?: string
+    }
     environment?: string
     /** What it mounts from the start: the volumes its Brick keeps. */
     mounts?: AppConfig["mounts"]
@@ -262,8 +265,8 @@ export const updateAppConfigEffect = (
 
 /**
  * What a change would alter that an App's Brick set, or null: what it
- * deploys and how it starts, the variables the Brick wrote, and that each
- * folder the Brick keeps is on a volume. Which volume that is, and
+ * deploys, how it starts and how it is checked, the variables the Brick
+ * wrote, and that each folder the Brick keeps is on a volume. Which volume that is, and
  * everything else about an App, is its owner's, following a Brick or not.
  */
 export function heldByAppBrick(
@@ -274,6 +277,9 @@ export function heldByAppBrick(
   if (next.sourceType !== saved.sourceType) return "What it deploys"
   if (next.image !== saved.image) return "Its image"
   if (next.command !== saved.command) return "Its start command"
+  if (next.healthcheck?.command !== saved.healthcheck?.command) {
+    return "Its health check"
+  }
   if (next.mounts !== saved.mounts) {
     const unkept = brick.volumes.find(
       (folder) =>

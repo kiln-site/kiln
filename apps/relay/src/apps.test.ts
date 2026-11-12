@@ -237,6 +237,42 @@ describe("rolling deployments", () => {
   })
 })
 
+// An App's Brick says how to tell it is ready, and its configuration
+// carries that as its container's health check. A deployment waits on it:
+// a new container that never passes it must not take the place of the one
+// that works.
+describe("an App whose configuration gives a health check", () => {
+  const healthcheck = { command: "wget -qO- http://127.0.0.1/ >/dev/null" }
+
+  it("checks its container with it, though its image has no health check", async () => {
+    const harness = await createdApp()
+
+    const app = await deploy(harness, { healthcheck })
+
+    expect(app.deployment).toMatchObject({ state: "succeeded" })
+    expect(appContainers().map((container) => container.state.health)).toEqual([
+      "healthy",
+    ])
+  })
+
+  it("keeps the running container when the new one fails it", async () => {
+    const harness = await createdApp()
+    await deploy(harness, {})
+    const [running] = appContainers()
+    // Whatever checks this image finds it unhealthy.
+    fakeDocker.unhealthyImages.add("nginx:alpine")
+
+    const failed = await deploy(harness, { command: "serve --v2", healthcheck })
+
+    expect(failed.deployment).toMatchObject({ state: "failed" })
+    expect(failed.deployment?.error).toContain("health check")
+    expect(appContainers().map((container) => container.id)).toEqual([
+      running!.id,
+    ])
+    expect(running!.state.running).toBe(true)
+  })
+})
+
 // The label a deployment leaves outlives the Relay's memory of it, so a
 // check after a restart still says which revision runs.
 describe("an App that follows a Brick", () => {
