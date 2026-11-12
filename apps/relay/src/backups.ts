@@ -27,7 +27,6 @@ import ZipStream from "zip-stream"
 
 import {
   backupArtifactFilename,
-  INSTANCE_ID_SOURCE,
   type BackupArchiveCreateTaskResult,
   type BackupArchiveManifest,
   type BackupCreateTaskInput,
@@ -195,7 +194,7 @@ export interface BackupVolumes {
   ): Effect.Effect<
     Pick<
       RelayVolume,
-      "dockerName" | "kind" | "mounts" | "name" | "owner" | "users"
+      "dockerName" | "kind" | "mounts" | "name" | "users"
     > | null,
     unknown
   >
@@ -1095,7 +1094,7 @@ export class BackupManager {
         ],
         manifestVolume: {
           dockerName: volume.dockerName,
-          kind: volume.kind === "app" ? ("app" as const) : ("kiln" as const),
+          kind: "kiln" as const,
           name: volume.name,
         },
         source: { kind: "volume", name: volume.dockerName } satisfies TarSource,
@@ -1135,7 +1134,6 @@ export class BackupManager {
   // The Apps whose lifecycles a volume's stopped backup or restore holds:
   // its owner, and every App that uses it.
   #volumeApps(volumeId: string) {
-    const owner = APP_OWNED_VOLUME_OWNER.exec(volumeId)?.[1]
     return Effect.gen({ self: this }, function* () {
       const volume = this.#volumes
         ? yield* this.#volumes.find(volumeId).pipe(
@@ -1149,12 +1147,7 @@ export class BackupManager {
             )
           )
         : null
-      return [
-        ...new Set([
-          ...(owner ? [owner] : []),
-          ...(volume?.users.map((user) => user.appId) ?? []),
-        ]),
-      ]
+      return [...new Set(volume?.users.map((user) => user.appId) ?? [])]
     })
   }
 
@@ -4175,13 +4168,7 @@ function isSkippableFilesystemChange(cause: unknown): boolean {
 }
 
 // The resource a final backup's deletion is of, the only App it may find
-// using what it backs up: the App itself, or the App whose Compose project
-// made the volume. A Kiln volume being deleted has none.
+// using what it backs up: the App itself. A volume being deleted has none.
 function finalBackupOwner(target: BackupTarget): string | null {
-  if (target.kind === "app") return target.id
-  if (target.kind !== "volume") return null
-  return APP_OWNED_VOLUME_OWNER.exec(target.id)?.[1] ?? null
+  return target.kind === "app" ? target.id : null
 }
-
-// An App-owned volume's ID is `<appId>/<key>`.
-const APP_OWNED_VOLUME_OWNER = new RegExp(`^(${INSTANCE_ID_SOURCE})/`, "u")

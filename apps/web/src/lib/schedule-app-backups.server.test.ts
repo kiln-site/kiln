@@ -30,13 +30,12 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       volumes: [
         {
           createdAt: null,
-          dockerName: "kiln-app_data",
-          id: `${appId}/data`,
-          kind: "app",
+          dockerName: "kiln-c0ffee00-data",
+          id: "c".repeat(40),
+          kind: "kiln",
           mountpoint: null,
           mounts: [],
           name: "data",
-          owner: { appId, volume: "data" },
           sizeBytes: null,
           users: [
             { appId, configured: true, mounted: true },

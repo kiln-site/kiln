@@ -5,7 +5,6 @@ import type { RelayVolume } from "@workspace/contracts"
 import {
   Archive,
   EllipsisVertical,
-  FileCode2,
   HardDrive,
   LoaderCircle,
   Lock,
@@ -54,7 +53,6 @@ import {
   VOLUME_ACTIONS_WIDTH,
   VolumeAction,
   VolumeActionGap,
-  VolumeActionLink,
   VolumeDeleteAction,
   VolumeFilesButton,
   VolumeSize,
@@ -337,23 +335,19 @@ function selectSupported(data: { supported: boolean }): boolean {
 
 const noApps: ReadonlyArray<string> = []
 
-// The Apps that own or use any volume, to filter the table by.
+// The Apps that use any volume, to filter the table by.
 function selectVolumeApps(data: {
   volumes: ReadonlyArray<RelayVolume>
 }): ReadonlyArray<string> {
   const apps = new Set<string>()
   for (const volume of data.volumes) {
-    if (volume.owner) apps.add(volume.owner.appId)
     for (const user of volume.users) apps.add(user.appId)
   }
   return apps.size ? [...apps].sort() : noApps
 }
 
 function volumeBelongsTo(volume: RelayVolume, appId: string): boolean {
-  return (
-    volume.owner?.appId === appId ||
-    volume.users.some((user) => user.appId === appId)
-  )
+  return volume.users.some((user) => user.appId === appId)
 }
 
 const VolumeAppFilter = React.memo(function VolumeAppFilter({
@@ -696,20 +690,16 @@ const VolumeActions = React.memo(function VolumeActions({
   const kiln = volume.kind === "kiln"
   const deleteBlocked = own
     ? "The Relay keeps its data here"
-    : !kiln
-      ? "Its App's Compose file declares it; deleting the App deletes it"
-      : protectionPending !== null
+    : protectionPending !== null
         ? `The Relay doesn't know yet which Apps use it${protectionPending ? `: ${protectionPending}` : ""}`
         : volume.users.some((user) => user.configured)
-          ? "An App's configuration mounts it; remove it there first"
+          ? "An App's configuration or Compose file names it; remove it there first"
           : volume.mounts.length > 0
             ? "Remove what mounts it first"
             : null
   return (
     <DataTableActionGroup>
-      {volume.owner ? (
-        <VolumeComposeAction appId={volume.owner.appId} name={volume.name} />
-      ) : canManage && kiln ? (
+      {canManage && kiln ? (
         <VolumeAction
           label={`Rename ${volume.name}`}
           tooltip="Rename"
@@ -761,28 +751,6 @@ const VolumeActions = React.memo(function VolumeActions({
     </DataTableActionGroup>
   )
 })
-
-// A Compose file's volume changes there, on its App.
-function VolumeComposeAction({ appId, name }: { appId: string; name: string }) {
-  const selectName = React.useCallback(
-    (apps: ReadonlyArray<{ id: string; name: string }>) =>
-      apps.find((app) => app.id === appId)?.name,
-    [appId]
-  )
-  const { data: owner } = useQuery({
-    ...appDirectoryQueryOptions(),
-    select: selectName,
-  })
-  return (
-    <VolumeActionLink
-      label={`Open the App that defines ${name}`}
-      link={{ params: { appId }, to: "/app/$appId/info" }}
-      tooltip={`Defined in ${owner ?? "its App"}'s Compose file`}
-    >
-      <FileCode2 />
-    </VolumeActionLink>
-  )
-}
 
 const VolumeIdentifiers = React.memo(function VolumeIdentifiers({
   relayId,

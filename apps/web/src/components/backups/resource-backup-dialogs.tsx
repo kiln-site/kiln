@@ -172,9 +172,7 @@ export function ResourceRestoreDialog({
           : [
               {
                 id: candidate.id,
-                name: candidate.owner
-                  ? `${appName(candidate.owner.appId)} · ${candidate.owner.volume}`
-                  : candidate.name,
+                name: candidate.name,
               },
             ]
       )
@@ -210,12 +208,9 @@ export function ResourceRestoreDialog({
     const found = volumes.data.volumes.find(
       (candidate) => candidate.id === destinationId
     )
-    return [
-      ...new Set([
-        ...(found?.owner ? [found.owner.appId] : []),
-        ...(found?.users.map((user) => user.appId) ?? []),
-      ]),
-    ].map(appName)
+    return [...new Set(found?.users.map((user) => user.appId) ?? [])].map(
+      appName
+    )
   }, [appName, destinationId, volume, volumes.data])
   const restore = useMutation({
     mutationFn: () =>

@@ -113,39 +113,66 @@ reserves both copies' memory.
 
 ## Volumes
 
-The Relay manages two kinds of Docker named volume, each with an ID that
-backups and deletion name it by:
+The Relay manages one kind of Docker named volume: a **Kiln volume**, with
+an ID that backups and deletion name it by. No app owns one, and any app
+may mount it. It comes to be one of three ways, and is the same thing each
+time:
 
-- **Kiln volumes**, made on the Relay's Volumes page or while adding one to
-  an app, and mounted from an app's Volumes section, which also reads a line
-  from a Compose file such as `site-data:/var/www/data:ro`. A Kiln volume's
-  ID is the one it was made with. No
-  app owns one: any app's configuration may mount it.
-- **An app's Compose volumes**, those its Compose file declares. The app
-  owns them, and their ID is the app's ID and the volume's key in the file,
-  `<app ID>/<key>`. Compose labels each volume with its project and key, and
-  the Relay reads the owner from those labels, so the ID holds whatever
-  Docker name the file gives the volume.
+- made on the Relay's Volumes page or while adding one to an app, and
+  mounted from the app's Volumes section, which also reads a line from a
+  Compose file such as `site-data:/var/www/data:ro`;
+- made when an app is installed from a Brick that keeps a folder
+  ([Bricks](../apps/bricks/docs/brick-v2.md));
+- declared in the app's Compose file. When the app deploys, the Relay
+  makes a Kiln volume for each volume a service mounts that the file leaves
+  to Compose to make, named after the app and the file's key, and points
+  the file at it as `external`. The volume's ID comes from the app's ID and
+  the key, so every deployment finds the same one, whatever the app is
+  called by then.
 
-A volume an app owns or uses opens in that app's Files page, as a file root
-of its own, `app:<app ID>:volume:<volume ID>`. It takes the app's file
-permissions, and the Relay refuses any volume the app neither owns nor uses.
-Docker keeps volumes on the host, so this needs the Relay's host files
-mounted, as the Relay's own Files page does.
+A volume the file names itself (`name:`), marks `external`, or gives a
+driver or driver options is the file's own: it stays as the file says, and
+Kiln neither manages nor backs it up.
 
-A redeploy keeps an app's Compose volumes: Compose runs under the app's own
-project name and finds them again. A rolled deployment runs as a project of
-its own, `<project>-<deployment>`, which would make new volumes, so a
-Compose file that keeps data in a volume never rolls; it deploys under the
-app's own project, as above. A rolled deployment therefore makes no volume
-an app's services use, and the app's volumes keep their data and IDs
-across deployments of either kind. If a file renames a volume's Docker name
-(its `name:`), the key's ID goes to the volume the app's containers mount,
-and the old one stays listed as the app's, without an ID, until the app is
-deleted.
+The Relay keeps which Kiln volumes an app's Compose file declares, as it
+keeps what each Hearth says an app's configuration mounts, so one is in use,
+and can't be deleted, whether or not a container mounts it. It names them
+before a deployment starts, names exactly the file's once one has taken
+over, and none once the app deploys from something else. A volume a file
+stops declaring stays, no app's. One the Relay has deployed before that is
+gone refuses the deployment, since making another would start the app empty
+without saying so: restore it, or take the key out of the file.
 
-An app **uses** a volume when its configuration mounts it, deployed or not,
-or one of its containers mounts it now. Configurations live in Hearth, so
+### Volumes made by Compose
+
+Before Compose files' volumes were Kiln volumes, Compose made them itself,
+as `<project>_<key>`. Kiln no longer manages those. An app that still has
+one for a key its file declares is refused its deployment, which names the
+old volume and the new one, since deploying would start it empty beside its
+data. To carry the data over, with the app stopped:
+
+```sh
+docker run --rm -v <old volume>:/from:ro -v <new volume>:/to alpine \
+  sh -c 'cp -a /from/. /to/ && ls -la /to'
+docker volume rm <old volume>
+```
+
+Check what was copied before removing the old volume. The deployment goes
+ahead once it is gone. An app with nothing to keep there needs only the
+`docker volume rm`.
+
+A volume an app uses opens in that app's Files page, as a file root of its
+own, `app:<app ID>:volume:<volume ID>`. It takes the app's file
+permissions, and the Relay refuses any volume the app doesn't use. Docker
+keeps volumes on the host, so this needs the Relay's host files mounted, as
+the Relay's own Files page does.
+
+A Compose file that keeps data in a named volume never rolls: two copies
+can't share it, so it deploys under the app's own project, stopping the
+running containers first.
+
+An app **uses** a volume when its configuration mounts it or its Compose
+file declares it, deployed or not, or one of its containers mounts it now. Configurations live in Hearth, so
 the Relay keeps which Kiln volumes each app's configuration names, as each
 paired Hearth says. Each message replaces an app's whole set: before saving
 a configuration that mounts a new volume, Hearth sends the old and new
@@ -176,9 +203,10 @@ owes them again. A Hearth paired since owes them before deletion works
 again; a revoked one no longer counts, nor does what it sent. The volumes
 page says what the Relay waits for.
 
-Deleting an app with its data removes only the volumes its own Compose
-projects made, never a Kiln volume, and never one of its volumes another
-container mounts, as another app's file can by naming it `external`.
+Deleting an app never removes a volume. The volumes it used stay, with
+their data, and are deleted from Volumes by whoever decides to; the Relay
+forgets that the app named them, so nothing keeps one from being deleted
+once no other app uses it.
 
 What an app's containers mount that no managed volume or the app's folder
 holds isn't covered by its backups, and the Relay's volume listing reports

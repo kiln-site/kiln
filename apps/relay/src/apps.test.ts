@@ -5,7 +5,6 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
-  appVolumeId,
   defaultAppConfig,
   relayDeployAppSchema,
   type AppConfig,
@@ -19,7 +18,7 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 import { DockerEngine } from "./docker-engine.js"
 import { fakeDocker } from "./test/docker.js"
 import { databaseBrick } from "./test/database-bricks.js"
-import { RelayVolumes } from "./volumes.js"
+import { composeVolumeId, RelayVolumes } from "./volumes.js"
 import {
   relayHarness,
   TEST_NAMESPACE,
@@ -341,21 +340,31 @@ describe("App volumes", () => {
     await removeCompose()
   })
 
-  it("keeps a Compose volume's ID and data through redeploys and a rolled deployment", async () => {
+  // What a Compose file declares is kept on a Kiln volume like any other:
+  // found again by its ID however often it deploys, never made twice, and
+  // never started empty beside its data.
+  it("keeps what a Compose file declares on a Kiln volume, through redeploys", async () => {
     const removeCompose = await composeConfigCommand()
     const harness = await createdApp()
     const volumes = relayVolumes(harness)
-    const owned = async () =>
-      (await Effect.runPromise(volumes.list())).volumes.filter(
-        (volume) => volume.kind === "app"
-      )
+    const listed = async () => (await Effect.runPromise(volumes.list())).volumes
 
     await deploy(harness, { compose: declaresVolume, sourceType: "compose" })
-    const [made] = await owned()
+    const [made] = await listed()
+    const id = composeVolumeId(appId, "data")
     expect(made).toMatchObject({
-      id: `${appId}/data`,
-      owner: { appId, volume: "data" },
+      id,
+      kind: "kiln",
+      name: "Website data",
+      // Its file names it, whether or not a container mounts it.
+      users: [{ appId, configured: true, mounted: true }],
     })
+    expect(fakeDocker.volumes.get(made!.dockerName)?.labels).toMatchObject({
+      "kiln.resource.kind": "volume",
+      "kiln.volume.id": id,
+    })
+    // Compose made none of its own.
+    expect([...fakeDocker.volumes.keys()]).toEqual([made!.dockerName])
     fakeDocker.volumes.get(made!.dockerName)!.files.set("/rows", "kept")
 
     // Running, so a deployment would roll over, but two copies can't share
@@ -368,129 +377,159 @@ describe("App volumes", () => {
       rolling: false,
       state: "succeeded",
     })
-    // Without the volume it rolls over to a project of its own.
-    const rolled = await deploy(harness, {
-      compose: "services:\n  db:\n    image: nginx:alpine\n",
-      sourceType: "compose",
-    })
-    expect(rolled.deployment).toMatchObject({
-      rolling: true,
-      state: "succeeded",
-    })
-    const back = await deploy(harness, {
-      compose: declaresVolume,
-      sourceType: "compose",
-    })
-    expect(back.deployment).toMatchObject({ state: "succeeded" })
-
-    expect(await owned()).toEqual([
-      expect.objectContaining({
-        dockerName: made!.dockerName,
-        id: `${appId}/data`,
-        users: [{ appId, configured: false, mounted: true }],
-      }),
+    expect(await listed()).toEqual([
+      expect.objectContaining({ dockerName: made!.dockerName, id }),
     ])
     expect(fakeDocker.volumes.get(made!.dockerName)?.files.get("/rows")).toBe(
       "kept"
     )
+    // Named by its file, it can't be deleted from under the App.
+    await expect(Effect.runPromise(volumes.delete(id))).rejects.toThrow(
+      "configuration mounts this volume"
+    )
+
+    // A file that no longer declares it lets go of it, and it stays.
+    await deploy(harness, {
+      compose: "services:\n  db:\n    image: nginx:alpine\n",
+      sourceType: "compose",
+    })
+    expect(await listed()).toEqual([
+      expect.objectContaining({ id, users: [] }),
+    ])
     await removeCompose()
   })
 
-  it("deletes only the volumes its own Compose project made that its deletion names, never one another App mounts", async () => {
+  // Whatever key Compose takes is kept: one left to Compose would be a
+  // volume no backup takes, beside others that say the App is backed up.
+  it("keeps a volume under any key Compose takes, beside the others", async () => {
     const removeCompose = await composeConfigCommand()
     const harness = await createdApp()
-    const otherId = "d".repeat(12)
-    await harness.apps.create({ id: otherId, name: "Other app" })
-    const kilnId = "3f9a21c4".padEnd(40, "0")
-    const kilnVolume = `${TEST_NAMESPACE}-kiln-3f9a21c4-media`
-    fakeDocker.addVolume({
-      labels: {
-        "kiln.relay.owner": TEST_NAMESPACE,
-        "kiln.resource.kind": "volume",
-        "kiln.volume.id": kilnId,
-      },
-      name: kilnVolume,
-    })
-    const project = `${TEST_NAMESPACE}-kiln-app-${appId}`
+    const volumes = relayVolumes(harness)
+    const long = "k".repeat(129)
+
     await deploy(harness, {
       compose: [
         "services:",
-        "  web:",
+        "  db:",
         "    image: nginx:alpine",
         "    volumes:",
-        "      - type: volume",
-        "        source: data",
-        "        target: /data",
-        "      - type: volume",
-        "        source: shared",
-        "        target: /shared",
+        ...["data", "_data", long].flatMap((key, index) => [
+          "      - type: volume",
+          `        source: ${key}`,
+          `        target: /keep${index}`,
+        ]),
         "volumes:",
         "  data: {}",
-        "  shared: {}",
+        "  _data: {}",
+        `  ${long}: {}`,
         "",
       ].join("\n"),
-      mounts: [
-        {
-          id: "media0001",
-          readOnly: false,
-          service: null,
-          source: { type: "volume", volumeId: kilnId },
-          target: "/media",
-        },
-      ],
       sourceType: "compose",
     })
-    // The other App mounts one of this App's volumes by its Docker name.
-    await deploy(
-      harness,
-      {
-        compose: [
-          "services:",
-          "  web:",
-          "    image: nginx:alpine",
-          "    volumes:",
-          "      - type: volume",
-          "        source: cache",
-          "        target: /cache",
-          "      - type: volume",
-          "        source: shared",
-          "        target: /shared",
-          "volumes:",
-          "  cache: {}",
-          "  shared:",
-          "    external: true",
-          `    name: ${project}_shared`,
-          "",
-        ].join("\n"),
-        sourceType: "compose",
-      },
-      otherId
-    )
-    expect(fakeDocker.volumes.has(`${project}_data`)).toBe(true)
 
-    // Its deletion planned to take only `data`; `cache` came since.
+    const listed = (await Effect.runPromise(volumes.list())).volumes
+    expect(new Set(listed.map((volume) => volume.id))).toEqual(
+      new Set(["data", "_data", long].map((key) => composeVolumeId(appId, key)))
+    )
+    for (const volume of listed) {
+      expect(volume).toMatchObject({
+        kind: "kiln",
+        users: [{ appId, configured: true }],
+      })
+    }
+    // Compose made none of its own.
+    expect(new Set(fakeDocker.volumes.keys())).toEqual(
+      new Set(listed.map((volume) => volume.dockerName))
+    )
+    await removeCompose()
+  })
+
+  it("refuses to deploy onto an empty volume when the one it kept is gone", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    await deploy(harness, { compose: declaresVolume, sourceType: "compose" })
+    const [dockerName] = [...fakeDocker.volumes.keys()]
+    // Removed behind Kiln's back.
+    fakeDocker.volumes.delete(dockerName!)
+
+    const refused = await deploy(harness, {
+      compose: declaresVolume,
+      sourceType: "compose",
+    })
+
+    expect(refused.deployment).toMatchObject({ state: "failed" })
+    expect(refused.deployment?.error).toContain("is gone from its Relay")
+    expect(fakeDocker.volumes.size).toBe(0)
+    await removeCompose()
+  })
+
+  it("refuses to deploy beside a volume Compose made for the same key before", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    const old = `${TEST_NAMESPACE}-kiln-app-${appId}_data`
     fakeDocker.addVolume({
       labels: {
-        "com.docker.compose.project": project,
-        "com.docker.compose.volume": "cache",
+        "com.docker.compose.project": `${TEST_NAMESPACE}-kiln-app-${appId}`,
+        "com.docker.compose.volume": "data",
       },
-      name: `${project}_cache`,
-    })
-    await harness.apps.delete({
-      appId,
-      deleteData: true,
-      volumeIds: [appVolumeId(appId, "data"), appVolumeId(appId, "shared")],
+      name: old,
     })
 
-    expect(fakeDocker.volumes.has(`${project}_data`)).toBe(false)
-    // On the list, but another App mounts it.
-    expect(fakeDocker.volumes.has(`${project}_shared`)).toBe(true)
-    // Its own and unmounted, but not on the list.
-    expect(fakeDocker.volumes.has(`${project}_cache`)).toBe(true)
-    expect(fakeDocker.volumes.has(kilnVolume)).toBe(true)
+    const refused = await deploy(harness, {
+      compose: declaresVolume,
+      sourceType: "compose",
+    })
+
+    expect(refused.deployment).toMatchObject({ state: "failed" })
+    expect(refused.deployment?.error).toContain(old)
+    // Nothing runs, and its data is where it was.
+    expect(appContainers()).toEqual([])
+    expect(fakeDocker.volumes.has(old)).toBe(true)
+    // The volume made to move it to is no App's yet: a backup of the App
+    // would take it, empty, for the data still in the old one.
+    const made = (await Effect.runPromise(relayVolumes(harness).list()))
+      .volumes
+    expect(made).toEqual([
+      expect.objectContaining({
+        id: composeVolumeId(appId, "data"),
+        users: [],
+      }),
+    ])
+    expect(refused.deployment?.error).toContain(made[0]!.dockerName)
+
+    // With the old one gone, it deploys onto that volume, the App's now.
+    fakeDocker.volumes.delete(old)
+    const deployed = await deploy(harness, {
+      compose: declaresVolume,
+      sourceType: "compose",
+    })
+    expect(deployed.deployment).toMatchObject({ state: "succeeded" })
     expect(
-      fakeDocker.volumes.has(`${TEST_NAMESPACE}-kiln-app-${otherId}_cache`)
-    ).toBe(true)
+      (await Effect.runPromise(relayVolumes(harness).list())).volumes
+    ).toEqual([
+      expect.objectContaining({
+        dockerName: made[0]!.dockerName,
+        users: [expect.objectContaining({ appId })],
+      }),
+    ])
+    await removeCompose()
+  })
+
+  it("deletes an App without any volume it used", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    const volumes = relayVolumes(harness)
+    await deploy(harness, { compose: declaresVolume, sourceType: "compose" })
+    const [dockerName] = [...fakeDocker.volumes.keys()]
+    const id = composeVolumeId(appId, "data")
+
+    await harness.apps.delete({ appId, deleteData: true })
+    await Effect.runPromise(volumes.forgetApp("hearth-a", appId))
+
+    expect(fakeDocker.volumes.has(dockerName!)).toBe(true)
+    // No App's now, it can be deleted by whoever decides to.
+    await Effect.runPromise(volumes.delete(id))
+    expect(fakeDocker.volumes.has(dockerName!)).toBe(false)
     await removeCompose()
   })
 })

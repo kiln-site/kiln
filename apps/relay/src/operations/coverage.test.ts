@@ -38,6 +38,8 @@ const directAdmissions: Record<string, string> = {
     "The deployment worker, holding the App's lifecycle for the build",
   "apps.ts:app.allocations": "Nested; declared up front with deploys",
   "apps.ts:app.deployment.volumes": "Nested; declared up front with deploys",
+  "apps.ts:app.deployment.volumes.keep":
+    "Nested; a volume its Compose file declares, made as the file is read",
   "lifecycle.ts:instance.allocations":
     "Nested; declared up front with game server changes",
   "lifecycle.ts:instance.dns":

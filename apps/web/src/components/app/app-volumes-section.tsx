@@ -65,6 +65,7 @@ import {
 } from "@/components/volumes/volume-parts"
 import {
   mountAwaitsDeploy,
+  mountedSource,
   mountsLeftBehind,
   type WantedMount,
 } from "@/lib/app-mount-drift"
@@ -178,6 +179,7 @@ export function AppVolumesSection({
   const rows = React.useMemo((): Array<MountRow> => {
     const context: RowContext = {
       app,
+      containers: appContainers(app),
       // A path in the App's folder is backed up with the App.
       canReadBackups: Boolean(
         capabilities &&
@@ -723,6 +725,8 @@ function MountActions({
 
 interface RowContext {
   app: App
+  // What its containers mount now.
+  containers: ReturnType<typeof appContainers>
   canReadBackups: boolean
   canReadFiles: boolean
   canReadHost: boolean
@@ -851,14 +855,19 @@ function configRow(context: RowContext, mount: AppMount): MountRow {
 function composeRow(context: RowContext, mount: ComposeMount): MountRow {
   const relative = mount.kind === "bind" && mount.source.startsWith(".")
   const file = context.composeFile?.path ?? "compose.yaml"
-  const volume =
+  // A named volume is a Kiln volume when Kiln keeps it for the file, found
+  // by what the service's container mounts there, or when the file names
+  // one itself.
+  const dockerName =
     mount.kind === "volume" && mount.source
-      ? context.volumes?.find(
-          (candidate) =>
-            candidate.owner?.appId === context.app.id &&
-            candidate.owner.volume === mount.source
+      ? (mount.dockerName ?? mountedSource(context.containers, mount))
+      : null
+  const volume =
+    dockerName === null
+      ? undefined
+      : context.volumes?.find(
+          (candidate) => candidate.dockerName === dockerName
         )
-      : undefined
   const volumeId = volume?.id
   const files =
     mount.kind === "volume"
@@ -908,7 +917,7 @@ function composeRow(context: RowContext, mount: ComposeMount): MountRow {
       service: mount.service,
       source:
         mount.kind === "volume"
-          ? mount.dockerName
+          ? (mount.dockerName ?? volume?.dockerName ?? null)
           : mount.kind === "bind" && mount.source.startsWith("/")
             ? mount.source
             : null,
@@ -926,10 +935,7 @@ function appFolderLink({ appId }: RowContext, source: string): VolumeLink {
   }
 }
 
-type MountVolume = Pick<
-  RelayVolume,
-  "dockerName" | "id" | "name" | "owner" | "sizeBytes"
->
+type MountVolume = Pick<RelayVolume, "dockerName" | "id" | "name" | "sizeBytes">
 
 // Only what the rows show, so anything else about a volume can't repaint them.
 function mountVolumeDetails(data: {
@@ -941,11 +947,10 @@ function mountVolumeDetails(data: {
     filesAvailable: data.filesAvailable,
     referencesKnown: data.referencesKnown,
     volumes: data.volumes.map(
-      ({ dockerName, id, name, owner, sizeBytes }): MountVolume => ({
+      ({ dockerName, id, name, sizeBytes }): MountVolume => ({
         dockerName,
         id,
         name,
-        owner,
         sizeBytes,
       })
     ),

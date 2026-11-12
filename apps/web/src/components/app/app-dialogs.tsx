@@ -55,8 +55,8 @@ export function DeleteAppDialog({
       await queryClient.invalidateQueries({ queryKey: queryKeys.apps.all })
       showToast({
         description: createBackup
-          ? "Its final backups were saved and the App was removed."
-          : "The App and its data were removed without a final backup.",
+          ? "Its final backup was saved and the App was removed. The volumes it used stay."
+          : "The App and its folder were removed without a final backup. The volumes it used stay.",
         message: `${app.name} deleted`,
         type: "success",
       })
@@ -82,16 +82,16 @@ export function DeleteAppDialog({
           <DialogHeader>
             <DialogTitle>Delete {app.name}?</DialogTitle>
             <DialogDescription>
-              Its containers, networks, built images, folder, and the volumes
-              its Compose project made will be permanently removed. Kiln volumes
-              it mounts, and volumes other Apps also use, stay. Schedules left
+              Its containers, networks, built images and folder will be
+              permanently removed. The volumes it uses stay, with their data:
+              delete the ones you no longer want from Volumes. Schedules left
               with nothing else to run on are deleted too.
             </DialogDescription>
           </DialogHeader>
           <FinalBackupFields
             createBackup={createBackup}
             destination={backupDestination}
-            hint="Its folder and each volume only it uses, one backup each."
+            hint="Its folder. Its volumes stay, so they aren't part of it."
             label="Back up App before deleting"
             open={open}
             pending={remove.isPending}

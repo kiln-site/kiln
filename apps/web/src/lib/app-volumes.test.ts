@@ -27,25 +27,19 @@ const volume = (fields: Partial<RelayVolume>): RelayVolume => ({
   mountpoint: "/var/lib/docker/volumes/kiln-volume/_data",
   mounts: [],
   name: "Volume",
-  owner: null,
   sizeBytes: 0,
   users: [],
   ...fields,
 })
 
 describe("appVolumesOf", () => {
-  it("shows an App only what it owns or uses", () => {
-    const owned = volume({
-      id: `${app}/data`,
-      kind: "app",
-      name: "owned",
-      owner: { appId: app, volume: "data" },
-    })
+  it("shows an App only what it uses", () => {
+    const own = volume({ name: "own", users: [user(app)] })
     const shared = volume({ name: "shared", users: [user(app), user(other)] })
     const elsewhere = volume({ name: "elsewhere", users: [user(other)] })
     expect(
-      appVolumesOf([owned, shared, elsewhere], app).map(({ name }) => name)
-    ).toEqual(["owned", "shared"])
+      appVolumesOf([own, shared, elsewhere], app).map(({ name }) => name)
+    ).toEqual(["own", "shared"])
   })
 
   it("leaves out the host, and what else uses a shared volume", () => {
@@ -53,7 +47,6 @@ describe("appVolumesOf", () => {
       [
         volume({
           mounts: [mount(app), mount(other)],
-          owner: { appId: other, volume: "data" },
           users: [user(app), user(other)],
         }),
       ],
@@ -62,7 +55,6 @@ describe("appVolumesOf", () => {
     expect(shared).toMatchObject({
       mountpoint: null,
       mounts: [mount(app)],
-      owner: null,
       users: [user(app)],
     })
   })

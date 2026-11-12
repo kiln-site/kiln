@@ -103,9 +103,7 @@ function appFileRoots(
   appId: string
 ): ReadonlyArray<VolumeFileRoot & { path: string }> {
   return volumes.flatMap((volume) =>
-    volume.id !== null &&
-    (volume.owner?.appId === appId ||
-      volume.users.some((user) => user.appId === appId))
+    volume.id !== null && volume.users.some((user) => user.appId === appId)
       ? [
           {
             dockerName: volume.dockerName,

@@ -47,6 +47,28 @@ function newestByService(containers: ReadonlyArray<MountedContainer>) {
 }
 
 /**
+ * What a service's newest container mounts at a path, by its name in
+ * Docker: how a volume a Compose file leaves Kiln to keep is told, since
+ * only its Relay knows which Kiln volume that is.
+ */
+export function mountedSource(
+  containers: ReadonlyArray<MountedContainer>,
+  wanted: { service: string | null; target: string }
+): string | null {
+  const target = withoutTrailingSlash(wanted.target)
+  for (const [service, mounts] of newestByService(containers)) {
+    if (wanted.service !== null && wanted.service !== service) continue
+    const found = mounts.find(
+      (mount) =>
+        mount.type === "volume" &&
+        withoutTrailingSlash(mount.destination) === target
+    )
+    if (found) return found.source
+  }
+  return null
+}
+
+/**
  * Whether a mount has yet to reach a container that should have it. A
  * service with no container isn't running to compare, and an app with none
  * has nothing to apply it to.

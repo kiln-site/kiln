@@ -35,7 +35,6 @@ import type {
 import {
   appMountFileName,
   appServiceNameSchema,
-  appVolumeId,
   CPU_LIMIT_MILLIS_PER_CORE,
   NO_RESOURCE_LIMITS,
   relayAppSchema,
@@ -119,7 +118,30 @@ import {
   relayResourceNames,
   type RelayResourceNames,
 } from "./relay-resources.js"
-import { appVolumeOwner, relayVolumeDockerName } from "./volumes.js"
+import { composeMadeVolume, relayVolumeDockerName } from "./volumes.js"
+
+/**
+ * The Kiln volumes Apps' Compose files declare, as the Relay's volumes keep
+ * them (`RelayVolumes.composeVolumes`).
+ */
+export interface AppComposeVolumes {
+  /** The ID of the volume an App's file keeps `key` on. */
+  id(appId: string, key: string): string
+  /** Which of those IDs have no volume yet, so making it holds its lane. */
+  absent(ids: ReadonlyArray<string>): Promise<ReadonlyArray<string>>
+  /**
+   * The volume for each key, made on first use, and named as the App's
+   * unless `named` is false.
+   */
+  ensure(
+    appId: string,
+    appName: string,
+    keys: ReadonlyArray<string>,
+    named: boolean
+  ): Promise<ReadonlyMap<string, { dockerName: string; id: string }>>
+  /** Names exactly these once a deployment has taken over. */
+  settle(appId: string, keys: ReadonlyArray<string>): Promise<void>
+}
 
 // Apps are found by their labels, like databases: the Relay keeps nothing
 // about them besides their data directory and the logs of their recent
@@ -277,6 +299,7 @@ export class AppDriver {
   readonly #volumeIds: (
     dockerNames: ReadonlyArray<string>
   ) => Promise<ReadonlyArray<string>>
+  readonly #composeVolumes: AppComposeVolumes
 
   /**
    * Callers hold the App's lane locks for each change; a deployment's build
@@ -293,10 +316,12 @@ export class AppDriver {
     volumeIds: (
       dockerNames: ReadonlyArray<string>
     ) => Promise<ReadonlyArray<string>>,
+    composeVolumes: AppComposeVolumes,
     cleanup: DockerCleanup
   ) {
     this.#cleanup = cleanup
     this.#volumeIds = volumeIds
+    this.#composeVolumes = composeVolumes
     this.#config = config
     this.#engine = new DockerEngine(config.dockerSocket)
     this.#resources = relayResourceNames(config)
@@ -885,8 +910,8 @@ export class AppDriver {
   }
 
   /**
-   * Deletes an App: its containers, networks, the volumes of its own it may
-   * take, built images, and its folder. Safe to run again after it stopped
+   * Deletes an App: its containers, networks, built images, and its folder.
+   * Never a volume: the Kiln volumes it used are no App's, and stay. Safe to run again after it stopped
    * partway, as when the Relay stopped after its containers went: each step
    * finds what's left. Says it's deleted only once its folder is gone.
    */
@@ -908,38 +933,6 @@ export class AppDriver {
     )
     // Rolled deployments' projects too.
     await this.#removeComposeNetworks(input.appId, null)
-    if (input.deleteData) {
-      // Only the volumes the App's own Compose projects made, never a Kiln
-      // volume it mounted. One another App's containers mount, as a file
-      // that names it can, stays: it's that App's data now too. With a
-      // list, only those on it go, as its deletion planned and backed them
-      // up; the list never adds one.
-      const allowed = input.volumeIds ? new Set(input.volumeIds) : null
-      const [volumes, remaining] = await docker(
-        Effect.all([
-          engine.listVolumes({ filters: { label: [COMPOSE_PROJECT_LABEL] } }),
-          engine.listContainers({ all: true }),
-        ])
-      )
-      const mounted = new Set(
-        remaining.flatMap((container) =>
-          (container.Mounts ?? []).flatMap((mount) =>
-            mount.Type === "volume" && mount.Name ? [mount.Name] : []
-          )
-        )
-      )
-      for (const volume of volumes) {
-        const owner = appVolumeOwner(this.#config, volume.Labels)
-        if (
-          owner?.appId !== input.appId ||
-          mounted.has(volume.Name) ||
-          (allowed && !allowed.has(appVolumeId(owner.appId, owner.volume)))
-        ) {
-          continue
-        }
-        await docker(engine.removeVolume(volume.Name).pipe(Effect.ignore))
-      }
-    }
     await this.#removeNetwork(this.#networkName(input.appId))
     await this.#connections.forgetMember({ id: input.appId, kind: "app" })
     // Built images are only cleanup; failing to remove them doesn't stop
@@ -1146,6 +1139,8 @@ export class AppDriver {
     const startedAt = Date.now()
     const log = (text: string, level: RelayConsoleLevel = "info") =>
       this.#log(input.appId, deployment, text, level)
+    // The volumes its Compose file declares that Kiln keeps, by their keys.
+    let declared: ReadonlyArray<string> = []
     const outcome = await Effect.runPromise(
       Effect.result(
         promiseEffect(async () => {
@@ -1170,7 +1165,13 @@ export class AppDriver {
             config.sourceType === "compose" ||
             input.github?.build === "compose"
           ) {
-            await this.#deployCompose(input, deployment, host, checkout, mounts)
+            declared = await this.#deployCompose(
+              input,
+              deployment,
+              host,
+              checkout,
+              mounts
+            )
           } else {
             const image =
               config.sourceType === "image"
@@ -1220,6 +1221,10 @@ export class AppDriver {
     if (message === null) log(`Deployment finished in ${seconds}s`)
     else log(`Deployment failed after ${seconds}s: ${message}`, "error")
     if (message === null) {
+      // It names the volumes its Compose file declares now, and no others:
+      // none, deployed from an image or a Dockerfile. A failed deployment
+      // leaves those named before, which its old containers may mount.
+      await this.#composeVolumes.settle(input.appId, declared)
       // Its images are kept while it's among the newest few; older
       // deployments' go once it's finished, in the background
       // (docker-cleanup.ts).
@@ -2125,10 +2130,12 @@ export class AppDriver {
       )
     log("Reading Compose file")
     const normalized = await readConfig(base)
+    const kept = await this.#keepComposeVolumes(input, base, normalized)
     await this.#holdingComposeVolumes(
       input.appId,
       base,
       normalized,
+      kept,
       async () => {
         const databases = await this.#connectableDatabases(
           input.appId,
@@ -2142,6 +2149,7 @@ export class AppDriver {
           commit: deployment.commit,
           databases,
           deploymentId: deployment.id,
+          kept,
           mounts,
           noCache: input.noCache === true,
           routes,
@@ -2236,6 +2244,70 @@ export class AppDriver {
         await this.#removeComposeNetworks(input.appId, base)
       }
     )
+    return [...kept.keys()]
+  }
+
+  /**
+   * The Kiln volume each plain volume a Compose file declares is kept on,
+   * made the first time its key is deployed. A volume Compose made for the
+   * same key before Kiln kept them this way refuses the deployment: it
+   * would start empty beside its data.
+   */
+  async #keepComposeVolumes(
+    input: RelayDeployApp,
+    project: string,
+    normalized: ComposeProject
+  ) {
+    const keys = plainComposeVolumes(normalized, project)
+    if (keys.length === 0) {
+      return new Map<string, { dockerName: string; id: string }>()
+    }
+    // A volume Compose made for one of these keys, from before Kiln kept
+    // them. Looked for first: the volumes made for a deployment it refuses
+    // are there to move the data to, and aren't named as the App's, or a
+    // backup would take them, empty, for its data.
+    const old = (
+      await docker(
+        this.#engine.listVolumes({
+          filters: { label: [COMPOSE_PROJECT_LABEL] },
+        })
+      )
+    ).flatMap((volume) => {
+      const from = composeMadeVolume(this.#config, volume.Labels)
+      return from?.appId === input.appId && keys.includes(from.volume)
+        ? [{ key: from.volume, name: volume.Name }]
+        : []
+    })[0]
+    // Making a volume holds its lane; one already there is only read.
+    const absent = await this.#composeVolumes.absent(
+      keys.map((key) => this.#composeVolumes.id(input.appId, key))
+    )
+    const kept = await Effect.runPromise(
+      traceRelayEffect(
+        "relay.apps.deployment.keepVolumes",
+        this.#lanes.runNested(
+          {
+            label: "app.deployment.volumes.keep",
+            locks: absent.map((id) => exclusive(laneKeys.volume(id))),
+          },
+          promiseEffect(() =>
+            this.#composeVolumes.ensure(
+              input.appId,
+              input.name,
+              keys,
+              old === undefined
+            )
+          )
+        ),
+        { "relay.app_id": input.appId }
+      )
+    )
+    if (old) {
+      throw new Error(
+        `"${old.key}" still has a volume from before Kiln kept a Compose file's volumes as Kiln volumes (${old.name}). Deploying would start it empty on ${kept.get(old.key)?.dockerName}. Move its data across and remove ${old.name} first: docs/app-deployments.md, "Volumes made by Compose".`
+      )
+    }
+    return kept
   }
 
   /**
@@ -2252,6 +2324,7 @@ export class AppDriver {
     appId: string,
     project: string,
     normalized: ComposeProject,
+    kept: ReadonlyMap<string, { dockerName: string }>,
     run: () => Promise<A>
   ): Promise<A> {
     const projectName = Predicate.isString(normalized.name)
@@ -2259,6 +2332,9 @@ export class AppDriver {
       : project
     const names = Object.entries(normalized.volumes ?? {}).map(
       ([key, volume]) => {
+        // One Kiln keeps for it is the volume it runs with.
+        const held = kept.get(key)
+        if (held) return held.dockerName
         if (!Predicate.isObject(volume)) return `${projectName}_${key}`
         const external = volume.external
         if (Predicate.isObject(external) && Predicate.isString(external.name)) {
@@ -2498,6 +2574,8 @@ export class AppDriver {
       databases: ReadonlyArray<string>
       deferAliases: boolean
       deploymentId: string
+      /** The Kiln volume each key the file declares is kept on. */
+      kept: ReadonlyMap<string, { dockerName: string }>
       // The config's mounts, beside the Compose file's own.
       mounts: ReadonlyArray<ConfigMount>
       noCache: boolean
@@ -2635,10 +2713,17 @@ export class AppDriver {
     const volumes = options.mounts.filter((mount) => mount.type === "volume")
     return {
       ...normalized,
-      ...(volumes.length > 0 && {
-        // Kiln's volumes exist already, outside the project.
+      ...((volumes.length > 0 || options.kept.size > 0) && {
+        // Kiln's volumes exist already, outside the project: those the
+        // file declares, by its own keys, and those Kiln's mounts add.
         volumes: {
           ...normalized.volumes,
+          ...Object.fromEntries(
+            [...options.kept].map(([key, { dockerName }]) => [
+              key,
+              { external: true, name: dockerName },
+            ])
+          ),
           ...Object.fromEntries(
             volumes.map((mount) => [
               mount.source,
@@ -3226,6 +3311,44 @@ interface ComposeService {
   restart?: string
   volumes?: Array<{ source?: unknown; type?: string; [key: string]: unknown }>
   [key: string]: unknown
+}
+
+/**
+ * The volumes a Compose file declares that Kiln keeps as Kiln volumes, by
+ * their keys: those a service mounts that the file leaves to Compose to
+ * make, under the name Compose would give them. One the file names itself,
+ * marks external, or gives a driver or its options is the file's own, and
+ * stays as it says.
+ */
+function plainComposeVolumes(
+  normalized: ComposeProject,
+  project: string
+): Array<string> {
+  const projectName = Predicate.isString(normalized.name)
+    ? normalized.name
+    : project
+  const mounted = new Set(
+    Object.values(normalized.services ?? {}).flatMap((service) =>
+      (service.volumes ?? []).flatMap((volume) =>
+        volume.type === "volume" && typeof volume.source === "string"
+          ? [volume.source]
+          : []
+      )
+    )
+  )
+  return Object.entries(normalized.volumes ?? {}).flatMap(([key, volume]) => {
+    // Any key Compose took, which read the file before this did.
+    if (!mounted.has(key)) return []
+    if (!Predicate.isObject(volume)) return [key]
+    const options = volume.driver_opts
+    return volume.external ||
+      (Predicate.isString(volume.name) &&
+        volume.name !== `${projectName}_${key}`) ||
+      (volume.driver !== undefined && volume.driver !== "local") ||
+      (Predicate.isObject(options) && Object.keys(options).length > 0)
+      ? []
+      : [key]
+  })
 }
 
 interface ComposeProject {

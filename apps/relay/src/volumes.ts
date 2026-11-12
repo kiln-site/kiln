@@ -1,10 +1,10 @@
+import { createHash } from "node:crypto"
 import { join } from "node:path"
 
 import { Effect, Schema, Semaphore } from "effect"
 import {
   appBackupVolumes,
-  appVolumeId,
-  composeVolumeNameSchema,
+  RELAY_VOLUME_NAME_MAX_LENGTH,
   RELAY_VOLUME_REFERENCES_PENDING,
   relayVolumeSlug,
   type RelayUncoveredMount,
@@ -50,32 +50,50 @@ const REFERENCE_PERMITS = 1_024
 const APP_MOUNTPOINT_TTL_MS = 5_000
 const APP_MOUNTPOINT_MAX_ENTRIES = 256
 
+// Whose record names the Kiln volumes an App's Compose file declares: the
+// Relay's own, kept beside what each Hearth says its Apps' configurations
+// mount, since only the Relay reads a file that comes from a repository.
+const COMPOSE_REFERENCES = "relay:compose"
+
+/**
+ * The ID of the Kiln volume an App's Compose file keeps `key` on: the same
+ * for every deployment of it, whatever the App is called then.
+ */
+export function composeVolumeId(appId: string, key: string): string {
+  return createHash("sha1")
+    .update(`kiln.compose.volume\n${appId}\n${key}`)
+    .digest("hex")
+}
+
 export class RelayVolumeError extends Schema.TaggedError<RelayVolumeError>()(
   "RelayVolumeError",
   { message: Schema.String }
 ) {}
 
-/** The App whose Compose project made a volume, and its name there. */
-export interface AppVolumeOwner {
+/**
+ * A volume Compose made for one of this Relay's Apps, from before a
+ * Compose file's volumes were Kiln volumes: the App, and the key its file
+ * declared it under. Kiln doesn't manage one; a deployment that would
+ * leave its data behind is refused while it is there.
+ */
+export interface ComposeMadeVolume {
   readonly appId: string
   readonly volume: string
-  // Made by a rolled deployment's project rather than the App's own.
-  readonly rolled: boolean
 }
 
 /**
  * The App a volume's Compose labels say made it, if one of this Relay's
- * Apps did. Kiln's own volumes are never an App's, whatever labels they
- * carry.
+ * Apps did. Kiln's own volumes are never one, whatever labels they carry.
  */
-export function appVolumeOwner(
+export function composeMadeVolume(
   config: Pick<RelayConfig, "resourceNamespace">,
   labels: Readonly<Record<string, string | undefined>> | null
-): AppVolumeOwner | null {
+): ComposeMadeVolume | null {
   if (!labels || labels[KIND_LABEL] === VOLUME_KIND) return null
   const project = labels[COMPOSE_PROJECT_LABEL]
-  const volume = composeVolumeNameSchema.safeParse(labels[COMPOSE_VOLUME_LABEL])
-  if (!project || !volume.success) return null
+  // Whatever key Compose took: any it accepts is one a file may declare.
+  const volume = labels[COMPOSE_VOLUME_LABEL]
+  if (!project || !volume) return null
   const base = relayResourceNames(config).appComposeProject("")
   if (!project.startsWith(base)) return null
   // `<base><App ID>`, or `<base><App ID>-<deployment>` for a rolled one.
@@ -85,15 +103,11 @@ export function appVolumeOwner(
   )
   const appId = instanceIdFrom(match?.[1])
   if (!match || !appId) return null
-  return {
-    appId,
-    rolled: match[2] !== undefined,
-    volume: volume.data,
-  }
+  return { appId, volume }
 }
 
-// The Relay's Docker named volumes: those Kiln made for Apps to share,
-// those Apps' Compose projects made, and the Relay's own data volume.
+// The Relay's Docker named volumes: those Kiln made, which Apps mount and
+// share, and the Relay's own data volume.
 // Docker can't rename a volume or change its labels, so a Kiln volume's
 // name is fixed when it's made and the name it's shown by lives in the
 // Relay's state. Callers hold the volume's lane lock for each change.
@@ -240,7 +254,6 @@ export class RelayVolumes {
                     id: null,
                     kind: "relay",
                     name: "Relay data",
-                    owner: null,
                   })
                 ),
               ]
@@ -272,12 +285,9 @@ export class RelayVolumes {
   // daemon and what each mounts.
   #inventory() {
     return Effect.gen({ self: this }, function* () {
-      const [kiln, composed, containers, names, uses] = yield* Effect.all(
+      const [kiln, containers, names, uses] = yield* Effect.all(
         [
           this.#volumes(),
-          this.#engine.listVolumes({
-            filters: { label: [COMPOSE_PROJECT_LABEL] },
-          }),
           this.#engine.listContainers({ all: true }),
           this.#state.listVolumeNames(),
           this.#configuredUses(),
@@ -293,33 +303,22 @@ export class RelayVolumes {
           use.appId,
         ])
       }
-      const volumes = [
-        ...kiln.map((volume) => {
-          const id = volume.Labels?.[ID_LABEL] ?? null
-          return volumeView(
-            volume,
-            mounts,
-            {
-              id,
-              kind: "kiln",
-              name:
-                (id ? named.get(id) : undefined) ??
-                volume.Labels?.[NAME_LABEL] ??
-                volume.Name,
-              owner: null,
-            },
-            id ? configured.get(id) : []
-          )
-        }),
-        ...this.#ownedVolumes(composed, mounts).map(({ id, owner, volume }) =>
-          volumeView(volume, mounts, {
+      const volumes = kiln.map((volume) => {
+        const id = volume.Labels?.[ID_LABEL] ?? null
+        return volumeView(
+          volume,
+          mounts,
+          {
             id,
-            kind: "app",
-            name: owner.volume,
-            owner: { appId: owner.appId, volume: owner.volume },
-          })
-        ),
-      ]
+            kind: "kiln",
+            name:
+              (id ? named.get(id) : undefined) ??
+              volume.Labels?.[NAME_LABEL] ??
+              volume.Name,
+          },
+          id ? configured.get(id) : []
+        )
+      })
       return { containers, mounts, volumes }
     })
   }
@@ -369,7 +368,6 @@ export class RelayVolumes {
         mountpoint: created.Mountpoint ?? null,
         mounts: [],
         name,
-        owner: null,
         sizeBytes: null,
         users: [],
       } satisfies RelayVolume
@@ -400,6 +398,85 @@ export class RelayVolumes {
       this.#references.shared,
       Effect.withSpan("RelayVolumes.delete")
     )
+  }
+
+  /**
+   * The Kiln volume each volume an App's Compose file declares is kept on,
+   * by its key there. One is made the first time a key is deployed, named
+   * after the App and the key, and found by its ID from then on. A key
+   * this Relay has deployed before whose volume is gone is refused: making
+   * another would start the App empty without saying so. They are named as
+   * the App's from here on, with those it named before, which the
+   * containers a deployment is replacing may still mount; unless
+   * `asTheApps` is false, for a deployment about to be refused: what it
+   * made is no App's, so no backup takes an empty volume for the App's
+   * data. Callers hold each volume's lane lock.
+   */
+  composeVolumes(
+    appId: string,
+    appName: string,
+    keys: ReadonlyArray<string>,
+    asTheApps = true
+  ) {
+    return Effect.gen({ self: this }, function* () {
+      yield* Effect.annotateCurrentSpan({ "relay.app_id": appId })
+      const existing = yield* this.#volumes()
+      const named = new Set(
+        (yield* this.#state.listAppVolumeReferences()).flatMap((use) =>
+          use.clientId === COMPOSE_REFERENCES && use.appId === appId
+            ? [use.volumeId]
+            : []
+        )
+      )
+      const kept = new Map<string, { dockerName: string; id: string }>()
+      for (const key of keys) {
+        const id = composeVolumeId(appId, key)
+        const found = existing.find((volume) => volume.Labels?.[ID_LABEL] === id)
+        if (found) {
+          kept.set(key, { dockerName: found.Name, id })
+          continue
+        }
+        if (named.has(id)) {
+          return yield* new RelayVolumeError({
+            message: `The volume this App keeps "${key}" on is gone from its Relay. Restore it, or take ${key} out of the Compose file, then deploy again.`,
+          })
+        }
+        const room = Math.max(0, RELAY_VOLUME_NAME_MAX_LENGTH - key.length - 1)
+        const made = yield* this.create(
+          id,
+          `${appName.slice(0, room)} ${key}`
+            .trim()
+            .slice(0, RELAY_VOLUME_NAME_MAX_LENGTH)
+        )
+        kept.set(key, { dockerName: made.dockerName, id })
+      }
+      if (asTheApps) {
+        yield* this.#state.replaceAppVolumeReferences(
+          COMPOSE_REFERENCES,
+          appId,
+          [...new Set([...named, ...[...kept.values()].map(({ id }) => id)])]
+        )
+      }
+      return kept
+    }).pipe(
+      Effect.tap(() => this.#forgetAppMountpoints),
+      Effect.withSpan("RelayVolumes.composeVolumes")
+    )
+  }
+
+  /**
+   * Names exactly the volumes an App's Compose file declares, once a
+   * deployment of it has taken over: none, for an App that no longer
+   * deploys one. A volume it stopped declaring stays, no App's.
+   */
+  settleComposeVolumes(appId: string, keys: ReadonlyArray<string>) {
+    return this.#state
+      .replaceAppVolumeReferences(
+        COMPOSE_REFERENCES,
+        appId,
+        keys.map((key) => composeVolumeId(appId, key))
+      )
+      .pipe(Effect.tap(() => this.#forgetAppMountpoints))
   }
 
   /**
@@ -454,17 +531,16 @@ export class RelayVolumes {
   }
 
   /**
-   * The managed volumes an App's containers or its configuration mount, and
-   * those its Compose project owns, by ID: what starting or deleting it
-   * reads or removes.
+   * The Kiln volumes an App uses, by ID: those its configuration or its
+   * Compose file names and those its containers mount. What starting or
+   * deleting it reads.
    */
   appVolumeIds(appId: string) {
     return this.#inventory().pipe(
       Effect.map(({ volumes }) =>
         volumes.flatMap((volume) =>
           volume.id !== null &&
-          (volume.owner?.appId === appId ||
-            volume.users.some((user) => user.appId === appId))
+          volume.users.some((user) => user.appId === appId)
             ? [volume.id]
             : []
         )
@@ -476,7 +552,7 @@ export class RelayVolumes {
   }
 
   /**
-   * Where a volume an App owns or uses keeps its files on the host. Refused
+   * Where a volume an App uses keeps its files on the host. Refused
    * for any other volume, so an App's file access reaches only its own.
    * Changing who uses a volume forgets what's known at once.
    */
@@ -493,10 +569,7 @@ export class RelayVolumes {
           const volume = volumes.find((candidate) => candidate.id === id)
           if (
             !volume?.mountpoint ||
-            !(
-              volume.owner?.appId === appId ||
-              volume.users.some((user) => user.appId === appId)
-            )
+            !volume.users.some((user) => user.appId === appId)
           ) {
             return Effect.fail(
               new RelayVolumeError({
@@ -528,14 +601,24 @@ export class RelayVolumes {
   })
 
   /**
-   * The volumes an App's backup takes with its folder: those its Compose
-   * project made and every Kiln volume it uses, as Hearth works out too.
+   * The volumes an App's backup takes with its folder: every Kiln volume
+   * it uses, as Hearth works out too.
    */
   appBackupVolumeIds(appId: string) {
     return this.#inventory().pipe(
       Effect.map(({ volumes }) =>
         appBackupVolumes(appId, volumes).map((volume) => volume.id)
       )
+    )
+  }
+
+  /** Which of these IDs no Kiln volume has. */
+  idsMissing(ids: ReadonlyArray<string>) {
+    return this.#volumes().pipe(
+      Effect.map((volumes) => {
+        const known = new Set(volumes.map((volume) => volume.Labels?.[ID_LABEL]))
+        return ids.filter((id) => !known.has(id))
+      })
     )
   }
 
@@ -703,9 +786,14 @@ export class RelayVolumes {
    * deleted it said; other Hearths' records go when they next send theirs.
    */
   forgetApp(clientId: string, appId: string) {
-    return this.#state
-      .deleteAppVolumeReferences(clientId, appId)
-      .pipe(Effect.tap(() => this.#forgetAppMountpoints))
+    return this.#state.deleteAppVolumeReferences(clientId, appId).pipe(
+      // And what its own Compose file declared, which was the Relay's to
+      // keep.
+      Effect.andThen(
+        this.#state.deleteAppVolumeReferences(COMPOSE_REFERENCES, appId)
+      ),
+      Effect.tap(() => this.#forgetAppMountpoints)
+    )
   }
 
   /**
@@ -785,49 +873,6 @@ export class RelayVolumes {
       )
   }
 
-  /**
-   * The volumes this Relay's Apps' Compose projects made. Each App's name
-   * for a volume is one ID, given to one Docker volume: the one its
-   * containers mount, else the one its own project made, else the newest.
-   * Another under the same name, as a file that changed the volume's Docker
-   * name leaves behind, is still the App's, without an ID.
-   */
-  #ownedVolumes(
-    volumes: ReadonlyArray<DockerVolume>,
-    mounts: ReadonlyMap<string, ReadonlyArray<RelayVolumeMount>>
-  ): Array<{ id: string | null; owner: AppVolumeOwner; volume: DockerVolume }> {
-    const candidates = volumes.flatMap((volume) => {
-      const owner = appVolumeOwner(this.#config, volume.Labels)
-      return owner ? [{ owner, volume }] : []
-    })
-    const rank = ({ owner, volume }: (typeof candidates)[number]) => [
-      (mounts.get(volume.Name) ?? []).some(
-        (mount) => mount.kind === "app" && mount.resourceId === owner.appId
-      )
-        ? 0
-        : 1,
-      owner.rolled ? 1 : 0,
-    ]
-    const ordered = [...candidates].sort((left, right) => {
-      const [leftMounted, leftRolled] = rank(left)
-      const [rightMounted, rightRolled] = rank(right)
-      return (
-        leftMounted! - rightMounted! ||
-        leftRolled! - rightRolled! ||
-        (right.volume.CreatedAt ?? "").localeCompare(
-          left.volume.CreatedAt ?? ""
-        )
-      )
-    })
-    const taken = new Set<string>()
-    return ordered.map((candidate) => {
-      const id = appVolumeId(candidate.owner.appId, candidate.owner.volume)
-      if (taken.has(id)) return { ...candidate, id: null }
-      taken.add(id)
-      return { ...candidate, id }
-    })
-  }
-
   // The Kiln volumes Apps' configurations name, as paired Hearths sent
   // them, of Apps still on the Relay: every App has its network from when
   // it's made until it's deleted, so a deleted App's leftover record
@@ -844,7 +889,11 @@ export class RelayVolumes {
       { concurrency: "unbounded" }
     ).pipe(
       Effect.map(([allUses, clients, networks]) => {
-        const paired = new Set(clients.map((client) => client.id))
+        // What the Relay recorded of Apps' Compose files is its own.
+        const paired = new Set([
+          COMPOSE_REFERENCES,
+          ...clients.map((client) => client.id),
+        ])
         const uses = allUses.filter((use) => paired.has(use.clientId))
         const apps = new Set(
           networks.flatMap((network) =>
@@ -920,7 +969,7 @@ function ownContainerId(): string | null {
 function volumeView(
   volume: DockerVolume,
   mounts: ReadonlyMap<string, ReadonlyArray<RelayVolumeMount>>,
-  fields: Pick<RelayVolume, "id" | "kind" | "name" | "owner">,
+  fields: Pick<RelayVolume, "id" | "kind" | "name">,
   configuredBy: ReadonlyArray<string> = []
 ): Omit<RelayVolume, "sizeBytes"> {
   const mounted = mounts.get(volume.Name) ?? []

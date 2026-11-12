@@ -9,12 +9,9 @@ import { INSTANCE_ID_PATTERN } from "./instance-id.js"
 // a server's ID, so the file browser, its caches, and its Relay operations
 // serve both.
 const APP_FILE_ROOT_PREFIX = "app:"
-// A volume an App owns or uses opens as a root of that App's own,
+// A volume an App uses opens as a root of that App's own,
 // `app:<appId>:volume:<volume ID>`, so it takes the App's file permissions.
-// An App-owned volume's ID is `<appId>/<key>`, its `/` written `:`, since a
-// root's ID travels in URLs; any other volume's is 40 hex characters.
-const APP_VOLUME_FILE_ROOT =
-  /^app:([a-f0-9]{12}):volume:([a-f0-9]{40}|[a-f0-9]{12}:[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127})$/u
+const APP_VOLUME_FILE_ROOT = /^app:([a-f0-9]{12}):volume:([a-f0-9]{40})$/u
 // A database's dumps travel as files under `database:<databaseId>`, a folder
 // the Relay keeps for them, so they go through the same transfers.
 const DATABASE_FILE_ROOT_PREFIX = "database:"
@@ -31,7 +28,7 @@ export const appServiceNameSchema = z
 export const fileRootIdSchema = z
   .string()
   .regex(
-    /^(?:(?:app:|database:|relay:)?[a-f0-9]{12}|app:[a-f0-9]{12}:volume:(?:[a-f0-9]{40}|[a-f0-9]{12}:[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}))$/u
+    /^(?:(?:app:|database:|relay:)?[a-f0-9]{12}|app:[a-f0-9]{12}:volume:[a-f0-9]{40})$/u
   )
 export function relayFileRootId(relayId: string): string {
   return `${RELAY_FILE_ROOT_PREFIX}${relayId}`
@@ -48,7 +45,7 @@ export function appFileRootId(appId: string): string {
 }
 
 export function appVolumeFileRootId(appId: string, volumeId: string): string {
-  return `${APP_FILE_ROOT_PREFIX}${appId}:volume:${volumeId.replace("/", ":")}`
+  return `${APP_FILE_ROOT_PREFIX}${appId}:volume:${volumeId}`
 }
 
 /** The App and volume of a volume's root; null for any other root. */
@@ -57,7 +54,7 @@ export function appVolumeFromFileRoot(
 ): { appId: string; volumeId: string } | null {
   const match = APP_VOLUME_FILE_ROOT.exec(id)
   if (!match) return null
-  return { appId: match[1]!, volumeId: match[2]!.replace(":", "/") }
+  return { appId: match[1]!, volumeId: match[2]! }
 }
 
 // The App a root belongs to: its folder's, or one of its volumes'.

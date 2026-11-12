@@ -90,8 +90,7 @@ the authority reading or writing that data does
 (`lib/backup-target-permissions.ts`):
 
 - Game servers and databases take `backup.*` on the Relay or on themselves.
-- An App's folder, and a volume its Compose project owns, follow the App's
-  files: seeing its backups takes `app.read`; making or downloading one
+- An App's folder follows the App's files: seeing its backups takes `app.read`; making or downloading one
   `instance.files.read`, as reading its files does; restoring or deleting
   one `instance.files.write`, as replacing them does. The Relay's `backup.*`
   grants don't reach them. App owners hold neither file permission, since
@@ -101,8 +100,8 @@ the authority reading or writing that data does
   and replaces only files `instance.files.write` could already change, and
   the Compose file isn't among them (Hearth sends it with each deployment).
 - A Kiln volume, shared by design, takes `backup.*` on the Relay.
-- Backing up an App takes its backup with every volume it uses, a Kiln
-  volume among them, on the App's permission alone: reading the App's files
+- Backing up an App takes its backup with every volume it uses, on the
+  App's permission alone: reading the App's files
   already reaches the volumes it mounts. Each volume's backup is still the
   volume's: seeing, downloading, restoring or deleting it takes `backup.*`
   on the Relay, so someone with the App's permissions only is shown that
@@ -260,7 +259,7 @@ since it may be partly stopped. The Apps a stopped backup or a restore of a
 volume locks are looked up before it waits its turn and checked again once
 it has it; if they changed meanwhile, or can't be looked up, the task fails
 rather than run beside an App it doesn't hold. Stopped backups started together as a batch (`batch: {id, size}`, as
-backing up an App starts its folder's and each owned volume's) share one
+backing up an App starts its folder's and each volume's it uses) share one
 stopped window: the Relay claims the batch's queued backups together, waiting
 a few moments for any still arriving, holds all their locks at once, stops
 every App that uses any of them once (journaled under the first backup, as a
@@ -514,23 +513,19 @@ operation `resource.delete` (`apps/web/src/lib/resource-deletion.server.ts`),
 one row per resource in `resource_deletion`. It checks the person who asked
 may still delete it, freezes it on its Relay, takes a `final_delete` full
 backup if one was asked for, recording the backup's ID on the deletion in the
-reservation's transaction, and follows that backup to its end. What an App's
-deletion takes is decided once, after the freeze, and kept in its journal:
-its folder, and each volume its Compose project made that nothing else uses.
-Its final backup is those parts, one backup at a time as steps of the
-deletion, each recorded on the deletion in place of the one before, and its
-Relay deletes only the volumes on that list, so a volume something else
-used then stays even if nothing does by the time it's deleted. A volume
-another App or container also mounts isn't backed up: a final backup never
-starts what it stopped, so the Relay refuses one, stopping nothing, that
-finds an App other than the one being deleted using what it backs up, as
-one deployed since. Deleting an App on its Relay is safe to send again, and
+reservation's transaction, and follows that backup to its end. An App's
+deletion takes the App and its folder, and never a volume: the volumes it
+used are no App's, stay with their data, and are deleted from Volumes by
+whoever decides to. Its final backup is of its folder alone, and says so.
+The deletion's journal still has a place for volumes a deletion names; no
+deletion fills it. A final backup never starts what it stopped, so the
+Relay refuses one, stopping nothing, that finds an App other than the one
+being deleted using what it backs up, as one deployed since. Deleting an App on its Relay is safe to send again, and
 says it's done only once the App's folder is gone, so a deletion the Relay
 stopped partway, after the App's containers went, is sent again rather than
 taken as done. Before any resource's Relay is asked to delete it, the
-deletion records that it's asking, with an App's volume list: from then on it
-can't be kept, since its data may be gone, and trying again finishes it with
-that list and no new final backup. A failed, cancelled, or missing backup, of
+deletion records that it's asking: from then on it can't be kept, since its
+data may be gone, and trying again finishes it with no new final backup. A failed, cancelled, or missing backup, of
 any part, stops
 the deletion with nothing deleted and the resource still frozen; its page offers to try again, to delete it without a final backup, or
 to keep it. A game server keeps a final backup that finished for its next
@@ -591,9 +586,9 @@ the target must be stopped and defaults to "Take a safety backup first."
 Storage configuration clearly separates platform destinations from "My S3"
 destinations and never redisplays a saved secret.
 
-The picker also scopes to an App, showing the backups of what it owns or
-uses: its folder, the volumes its Compose project owns, and the Kiln volumes
-its configuration names or its containers mount. A row of an App's folder
+The picker also scopes to an App, showing the backups of what it keeps: its
+folder, and the volumes its configuration mounts, its Compose file declares
+or its containers use. A row of an App's folder
 or a volume says whether it was taken live or stopped, and its restore
 dialog says what must be stopped (the App, or every container that mounts
 the volume, listing those running and the Apps that use it).
@@ -604,8 +599,8 @@ volume filter; the picker still shows the App. Backup settings retain the
 App's Folder and Volume sections.
 
 New Backup offers Apps alongside game servers, databases and Kiln. An App
-backup includes its folder and every volume it uses together: those its
-Compose project made and each Kiln volume its configuration mounts or its
+backup includes its folder and every volume it uses together: each Kiln
+volume its configuration mounts, its Compose file declares or its
 containers use, one another App uses too. A Kiln volume its configuration
 mounts that its Relay doesn't have refuses the backup, manual or scheduled,
 since it would leave that data out. A schedule is sent again when an App

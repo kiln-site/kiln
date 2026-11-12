@@ -124,7 +124,7 @@ export const ResourceDeletionAlert = React.memo(function ResourceDeletionAlert({
                   : "Kiln can't change it meanwhile, though game servers and Apps connected to it can still write to it."
                 : deletion.status === "backing_up"
                   ? target.kind === "app"
-                    ? "Its final backups are running: its folder, then each volume only it uses. Nothing can change it meanwhile."
+                    ? "Its final backup is running: its folder. Nothing can change it meanwhile."
                     : "Its final backup is running. Nothing can change it meanwhile."
                   : "Nothing can change it meanwhile."}
         </p>

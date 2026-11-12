@@ -45,16 +45,13 @@ export const invalidateScheduleDeploymentsEffect = Effect.fnUntraced(function* (
     )
     return
   }
-  // Compose volume IDs are <owning App ID>/<volume name>. A Kiln volume is
-  // no App's, and any App on its Relay may be backed up with it: every
-  // App's backup schedules there are sent again.
+  // A volume is no App's, and any App on its Relay may be backed up with
+  // it: every App's backup schedules there are sent again.
   const target: { id: string | null; kind: string } =
     scope.target.kind === "platform"
       ? { id: scope.relayId, kind: "relay" }
       : scope.target.kind === "volume"
-        ? scope.target.id.includes("/")
-          ? { id: scope.target.id.split("/")[0]!, kind: "app" }
-          : { id: null, kind: "app" }
+        ? { id: null, kind: "app" }
         : scope.target
   const backupOnly = scope.backupOnly || target.id === null
   yield* transaction.execute(
