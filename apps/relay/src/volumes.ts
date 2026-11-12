@@ -2,6 +2,7 @@ import { join } from "node:path"
 
 import { Effect, Schema, Semaphore } from "effect"
 import {
+  appBackupVolumes,
   appVolumeId,
   composeVolumeNameSchema,
   RELAY_VOLUME_REFERENCES_PENDING,
@@ -526,13 +527,14 @@ export class RelayVolumes {
     this.#appMountpoints.clear()
   })
 
-  /** Only volumes owned by the Compose project, excluding shared mounts. */
-  ownedAppVolumeIds(appId: string) {
+  /**
+   * The volumes an App's backup takes with its folder: those its Compose
+   * project made and every Kiln volume it uses, as Hearth works out too.
+   */
+  appBackupVolumeIds(appId: string) {
     return this.#inventory().pipe(
       Effect.map(({ volumes }) =>
-        volumes.flatMap((volume) =>
-          volume.id !== null && volume.owner?.appId === appId ? [volume.id] : []
-        )
+        appBackupVolumes(appId, volumes).map((volume) => volume.id)
       )
     )
   }

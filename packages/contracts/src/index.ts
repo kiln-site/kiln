@@ -820,6 +820,27 @@ export const relayVolumesSchema = z.object({
   uncovered: z.array(relayUncoveredMountSchema),
   volumes: z.array(relayVolumeSchema),
 })
+/**
+ * The volumes an App's backup takes with it: those its Compose project
+ * made, and every Kiln volume it uses, whichever other Apps use that one
+ * too. A volume with no ID is one no backup can name.
+ */
+export function appBackupVolumes<
+  Volume extends Pick<
+    z.infer<typeof relayVolumeSchema>,
+    "id" | "kind" | "owner" | "users"
+  >,
+>(appId: string, volumes: ReadonlyArray<Volume>): Array<Volume & { id: string }> {
+  return volumes.flatMap((volume) =>
+    volume.id !== null &&
+    (volume.owner?.appId === appId ||
+      (volume.kind === "kiln" &&
+        volume.users.some((user) => user.appId === appId)))
+      ? [{ ...volume, id: volume.id }]
+      : []
+  )
+}
+
 // The part of a volume's Docker name its name gives: lowercase letters,
 // digits, and dashes, as Docker allows.
 export function relayVolumeSlug(name: string): string {

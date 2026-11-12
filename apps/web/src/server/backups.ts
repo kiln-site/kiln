@@ -256,14 +256,16 @@ export const getAppBackups = createServerFn({ method: "GET" })
     return getAppBackupsHandler(user, data)
   })
 
-// Backs up an App's folder and owned volumes together.
+// Backs up an App's folder and the volumes it uses together.
 export const createAppBackups = createServerFn({ method: "POST" })
   .validator(createAppBackupsInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(backUpApp, data, {
-      user: await requireEligibleResourceUser(),
+  .handler(async ({ data }) => {
+    const user = await requireEligibleResourceUser()
+    const { settleAppBackup } = await import("@/server/app-backups.server")
+    return runOperationPromise(backUpApp, await settleAppBackup(user, data), {
+      user,
     })
-  )
+  })
 
 // Restores whose swap didn't finish, which fence their targets.
 export const getUnfinishedRestores = createServerFn({ method: "GET" }).handler(

@@ -49,7 +49,7 @@ function storageIds(configuration: BackupConfiguration) {
 }
 
 /**
- * Backs up an App, its folder and each volume it owns together, or one App
+ * Backs up an App, its folder and each volume it uses together, or one App
  * folder or volume, live or with what uses it stopped.
  */
 export function ResourceBackupDialog({

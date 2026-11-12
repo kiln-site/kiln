@@ -665,10 +665,18 @@ function useBackupScopeVolumes(filters: BackupFilters) {
   const volume = React.useMemo(() => {
     const found = relay.data?.volumes.find((volume) => volume.id === id)
     if (!owner) {
+      // A Kiln volume the App uses is one of its backup's targets.
       const used = app.data?.available
-        ? app.data.used.find((volume) => volume.id === id)
+        ? app.data.targets.find(
+            (target) => target.kind === "volume" && target.id === id
+          )
         : undefined
-      return found ?? (used ? { ...used, owner: null } : undefined)
+      return (
+        found ??
+        (used
+          ? { id: used.id, name: used.name ?? used.id, owner: null }
+          : undefined)
+      )
     }
     const target = app.data?.targets.find(
       (target) => target.kind === "volume" && target.id === id
@@ -1818,8 +1826,9 @@ function TargetSettings({
   )
 }
 
-// An App's folder and each volume its Compose project owns, each with
-// settings of its own.
+// An App's folder and each volume it uses, each with settings of its own.
+// A volume's settings are the volume's: someone who may not see its backups
+// is told so, in place of them.
 function AppTargetsSettings({
   appId,
   isPlatformAdmin,
@@ -1841,20 +1850,30 @@ function AppTargetsSettings({
   }
   return (
     <div className="grid gap-6">
-      {targets.data.targets.map((target) => (
-        <TargetSettings
-          key={`${target.kind}:${target.id}`}
-          isPlatformAdmin={isPlatformAdmin}
-          name={
-            target.kind === "app"
-              ? "Folder"
-              : `Volume ${target.name ?? target.id}`
-          }
-          relayId={relayId}
-          target={{ id: target.id, kind: target.kind }}
-          titled
-        />
-      ))}
+      {targets.data.targets.map((target) => {
+        const name =
+          target.kind === "app"
+            ? "Folder"
+            : `Volume ${target.name ?? target.id}`
+        return target.readable ? (
+          <TargetSettings
+            key={`${target.kind}:${target.id}`}
+            isPlatformAdmin={isPlatformAdmin}
+            name={name}
+            relayId={relayId}
+            target={{ id: target.id, kind: target.kind }}
+            titled
+          />
+        ) : (
+          <section key={`${target.kind}:${target.id}`}>
+            <h2 className="mb-3 font-heading text-sm font-semibold">{name}</h2>
+            <p className="rounded-xl border border-dashed p-5 text-center text-xs text-muted-foreground">
+              Backed up with this App. Its backups and their settings take
+              backup permission on its Relay.
+            </p>
+          </section>
+        )
+      })}
     </div>
   )
 }

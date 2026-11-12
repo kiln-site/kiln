@@ -187,7 +187,7 @@ export interface BackupApps {
 
 /** A managed volume as backups find it, by its ID. */
 export interface BackupVolumes {
-  ownedAppVolumeIds(
+  appBackupVolumeIds(
     appId: string
   ): Effect.Effect<ReadonlyArray<string>, unknown>
   find(
@@ -1575,14 +1575,14 @@ export class BackupManager {
     return Effect.gen({ self: this }, function* () {
       if (input.kind !== "create" || !input.appCoverage) return
       const { appId, volumeIds } = input.appCoverage
-      const owned = this.#volumes
-        ? yield* this.#volumes.ownedAppVolumeIds(appId)
+      const taken = this.#volumes
+        ? yield* this.#volumes.appBackupVolumeIds(appId)
         : null
       const projected = new Set(volumeIds)
       if (
-        !owned ||
-        owned.length !== projected.size ||
-        owned.some((id) => !projected.has(id))
+        !taken ||
+        taken.length !== projected.size ||
+        taken.some((id) => !projected.has(id))
       ) {
         return yield* backupFailure(
           "volume_users_changed",

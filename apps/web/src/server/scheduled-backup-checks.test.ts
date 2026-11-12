@@ -8,6 +8,10 @@ import {
   saveBackupStorageEffect,
 } from "@/backups/destinations/s3"
 import { Database } from "@/effect/database"
+import {
+  createAppRecordEffect,
+  updateAppConfigEffect,
+} from "@/effect/managed-apps"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { requestResourceDeletionRowEffect } from "@/effect/resource-deletions"
 import { invalidateScheduleDeploymentsEffect } from "@/effect/schedule-invalidation"
@@ -40,6 +44,8 @@ const relay = vi.hoisted(() => ({
     generation?: number
   }>,
   meanwhile: null as null | (() => Promise<void>),
+  // The Kiln volumes it has, each with the Apps that use it.
+  volumes: [] as Array<{ id: string; users: Array<string> }>,
 }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
@@ -54,9 +60,26 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
         measuring: false,
         protection: { ready: true, reason: null },
         uncovered: [],
-        volumes: [],
+        volumes: relay.volumes.map(({ id, users }) => ({
+          createdAt: null,
+          dockerName: `kiln-${id.slice(0, 8)}`,
+          id,
+          kind: "kiln",
+          mountpoint: null,
+          mounts: [],
+          name: "media",
+          owner: null,
+          sizeBytes: null,
+          users: users.map((appId) => ({
+            appId,
+            configured: true,
+            mounted: false,
+          })),
+        })),
       }
     }
+    // It takes whichever volumes a configuration says it mounts.
+    if (operation === "app.volumes.write") return {}
     if (operation !== "schedule.apply") {
       throw new Error(`Unexpected Relay operation ${operation}`)
     }
@@ -97,6 +120,9 @@ afterAll(async () => {
   await disposeAppRuntime()
 })
 
+// App configurations are kept encrypted.
+vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
+
 const relayId = "relay-one"
 const owner = {
   email: "owner@example.test",
@@ -114,16 +140,17 @@ const beingDeleted = "b".repeat(12)
 const capped = "c".repeat(12)
 const storageId = "11111111-1111-4111-8111-111111111111"
 
-const target = (id: string) => ({
+const target = (id: string, kind: "app" | "instance" = "instance") => ({
   id,
-  kind: "instance" as const,
+  kind,
   name: id.slice(0, 4),
   relayId,
 })
 
 const backupSchedule = (
   destination: { kind: "local" } | { kind: "storage"; storageId: string },
-  targets: ReadonlyArray<string>
+  targets: ReadonlyArray<string>,
+  kind: "app" | "instance" = "instance"
 ): ScheduleDefinition => ({
   actions: [
     {
@@ -140,7 +167,7 @@ const backupSchedule = (
   id: "33333333-3333-4333-8333-333333333333",
   name: "Nightly backups",
   revision: 1,
-  targets: targets.map(target),
+  targets: targets.map((id) => target(id, kind)),
 })
 
 // The schedule saved, as Hearth keeps it, then sent to its Relay.
@@ -170,6 +197,7 @@ const seed = Effect.gen(function* () {
   yield* resetDatabase
   relay.applied.length = 0
   relay.meanwhile = null
+  relay.volumes = []
   yield* insertRelay(relayId)
 })
 
@@ -328,6 +356,90 @@ describeMysql("Scheduled backups, checked before they run", () => {
             "backups are turned off for it"
           )
           assert.strictEqual(afterResend?.status, "applied")
+        })
+    )
+
+    // What an App keeps is on the volumes it mounts. A schedule that left
+    // one out, or asked for one twice, would say an App was backed up
+    // when it wasn't.
+    it.effect(
+      "sends an App's backup with every volume it uses, and refuses one that would run short",
+      () =>
+        Effect.gen(function* () {
+          const [site, blog, shop] = ["d", "e", "f"].map((letter) =>
+            letter.repeat(12)
+          ) as [string, string, string]
+          const [media, uploads, gone] = ["1", "2", "3"].map((digit) =>
+            digit.repeat(40)
+          ) as [string, string, string]
+          const mounting = (appId: string, volumeIds: ReadonlyArray<string>) =>
+            createAppRecordEffect({
+              appId,
+              createdBy: "owner",
+              mounts: volumeIds.map((volumeId, index) => ({
+                id: `mount${index}${appId.slice(0, 6)}`,
+                readOnly: false,
+                service: null,
+                source: { type: "volume" as const, volumeId },
+                target: `/data${index}`,
+              })),
+              name: appId.slice(0, 4),
+              relayId,
+            })
+          const refusals = () =>
+            Object.fromEntries(
+              Object.values(executions()).map((execution) => [
+                execution.targetId,
+                execution.refusal ?? null,
+              ])
+            )
+
+          // Its own volume and one another App uses too: each is sent, with
+          // somewhere to go.
+          yield* seed
+          relay.volumes = [
+            { id: media, users: [site, blog] },
+            { id: uploads, users: [site] },
+          ]
+          yield* mounting(site, [media, uploads])
+          yield* deploy(backupSchedule({ kind: "local" }, [site], "app"))
+          assert.deepStrictEqual(refusals(), {
+            [media]: null,
+            [site]: null,
+            [uploads]: null,
+          })
+          // It lets go of one: what was sent no longer holds, and is owed
+          // again.
+          const owed = Effect.map(
+            selectRows<{ status: string }>("schedule_deployment"),
+            ([row]) => row?.status
+          )
+          assert.strictEqual(yield* owed, "applied")
+          yield* updateAppConfigEffect(relayId, site, (config) => ({
+            ...config,
+            mounts: config.mounts.slice(0, 1),
+          }))
+          assert.strictEqual(yield* owed, "pending")
+
+          // Two Apps of one step that use the same volume would ask for
+          // its backup twice: neither runs.
+          yield* seed
+          relay.volumes = [{ id: media, users: [site, blog] }]
+          yield* mounting(site, [media])
+          yield* mounting(blog, [media])
+          yield* deploy(backupSchedule({ kind: "local" }, [site, blog], "app"))
+          for (const refusal of Object.values(refusals())) {
+            assert.include(refusal, "another App that uses one of this App's")
+          }
+
+          // A volume its configuration mounts that its Relay doesn't have.
+          yield* seed
+          relay.volumes = [{ id: uploads, users: [shop] }]
+          yield* mounting(shop, [uploads, gone])
+          yield* deploy(backupSchedule({ kind: "local" }, [shop], "app"))
+          for (const refusal of Object.values(refusals())) {
+            assert.include(refusal, "A volume this App mounts is missing")
+          }
         })
     )
   })

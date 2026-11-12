@@ -76,7 +76,7 @@ async function manager(
     },
     findInstance: overrides.findInstance ?? (async () => null),
     getBackup: async () => null,
-    listAppOwnedVolumeIds: async () => [],
+    listAppBackupVolumeIds: async () => [],
     listAppIds: async () => new Set(),
     listDatabaseIds: overrides.listDatabaseIds ?? (async () => new Set()),
     platformTargetId: () => "platform",
