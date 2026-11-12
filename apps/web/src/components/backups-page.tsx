@@ -120,7 +120,6 @@ import {
   relayVolumesQueryOptions,
 } from "@/lib/query-options"
 import {
-  createAppBackups,
   createResourceBackup,
   createDatabaseBackup,
   createInstanceBackup,
@@ -163,7 +162,7 @@ import {
 import { forkPromise } from "@/effect/promise"
 import { reportBrowserError } from "@/lib/browser-telemetry"
 type BackupStorage = Awaited<ReturnType<typeof getBackupStorage>>[number]
-type CreateTarget = BackupConfigurationTarget & { wholeApp?: boolean }
+type CreateTarget = BackupConfigurationTarget
 
 const completedDeleteFeedbackMs = 1_000
 const backupDataTableRowKey = (backup: Backup) => backup.id
@@ -635,7 +634,7 @@ const ScopedBackupToolbar = React.memo(function ScopedBackupToolbar({
       ? null
       : loading
         ? "Finding the volume…"
-        : "The volume can’t be found right now. Clear its filter to back up the App."
+        : "The volume can’t be found right now."
   return <BackupToolbar {...props} createDisabledReason={reason} />
 })
 
@@ -687,6 +686,45 @@ function useVolumeNames(
   )
 }
 
+type VolumeListings = Readonly<
+  Record<
+    string,
+    Pick<import("@workspace/contracts").RelayVolumes, "protection" | "volumes">
+  >
+>
+
+// Each Relay's volumes, for whoever may read them: what a backup can be made
+// of. Shares what the page already asked to name its backups' volumes.
+function useVolumeListings(
+  relays: ReadonlyArray<{ relayId: string }>,
+  capabilities: Awaited<ReturnType<typeof getAccessCapabilities>>
+): VolumeListings {
+  return useQueries({
+    combine: (results) =>
+      Object.fromEntries(
+        results.flatMap((result, index) =>
+          result.data ? [[relays[index]!.relayId, result.data]] : []
+        )
+      ),
+    queries: relays.map(({ relayId }) => ({
+      ...relayVolumesQueryOptions(relayId),
+      enabled:
+        capabilities.isPlatformAdmin ||
+        capabilities.grants.some(
+          (grant) =>
+            grant.relayId === relayId &&
+            grant.resourceType === "relay" &&
+            grantHasPermission(grant, "relay.read")
+        ),
+      refetchInterval: false as const,
+      staleTime: 5 * 60_000,
+    })),
+  })
+}
+
+type ScopedVolume = { id: string; name: string }
+const noScopedVolumes: ReadonlyArray<ScopedVolume> = []
+
 // App-owned volume identities are readable with app.read. Only a successful
 // inventory can establish deletion; an offline Relay or denied read cannot.
 function useBackupScopeVolumes(filters: BackupFilters) {
@@ -700,9 +738,13 @@ function useBackupScopeVolumes(filters: BackupFilters) {
         grant.resourceType === "relay" &&
         grantHasPermission(grant, "relay.read")
     )
+  const scopedApp =
+    filters.kind === "app" && filters.relay ? filters.server : undefined
+  // The App says which volumes it uses to someone who can't list its
+  // Relay's; whoever can is told by that list.
   const app = useQuery({
     ...appBackupsQueryOptions(filters.relay ?? "", filters.server ?? ""),
-    enabled: Boolean(id && filters.server && filters.relay),
+    enabled: Boolean(scopedApp && (id || (capabilities && !canReadRelay))),
     refetchInterval: false,
     staleTime: 5 * 60_000,
   })
@@ -725,10 +767,25 @@ function useBackupScopeVolumes(filters: BackupFilters) {
       found ?? (used ? { id: used.id, name: used.name ?? used.id } : undefined)
     )
   }, [app.data, relay.data, id])
+  // The volumes the App the page is scoped to uses.
+  const appVolumes = React.useMemo((): ReadonlyArray<ScopedVolume> => {
+    if (!scopedApp) return noScopedVolumes
+    if (relay.data) {
+      return appBackupVolumes(scopedApp, relay.data.volumes).map(
+        ({ id, name }) => ({ id, name })
+      )
+    }
+    return app.data?.available
+      ? app.data.targets.map((target) => ({
+          id: target.id,
+          name: target.name ?? target.id,
+        }))
+      : noScopedVolumes
+  }, [app.data, relay.data, scopedApp])
   const known = relay.isSuccess
   return {
+    appVolumes,
     volume,
-    listing: relay.data,
     deleted: Boolean(id && known && !volume),
     loading: Boolean(id && (relay.isLoading || app.isLoading)),
   }
@@ -814,19 +871,33 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       ) ?? null,
     [filters.kind, filters.relay, filters.server, scopeOptions]
   )
-  const { volume: scopedVolume, listing: volumeListing } =
-    useBackupScopeVolumes(filters)
+  const { appVolumes, volume: scopedVolume } = useBackupScopeVolumes(filters)
+  // What the page is scoped to: the volume it's filtered to, or each volume
+  // of its App.
+  const scopedVolumes = React.useMemo(
+    () =>
+      scopedVolume?.id
+        ? [{ id: scopedVolume.id, name: scopedVolume.name }]
+        : appVolumes,
+    [appVolumes, scopedVolume]
+  )
+  const { data: relays } = useSuspenseQuery({
+    ...relaySnapshotQueryOptions(),
+    notifyOnChangeProps: ["data"],
+    select: selectBackupRelays,
+  })
+  const volumes = useVolumeListings(relays, capabilities)
   const createTargets = React.useMemo(
     () =>
       availableCreateTargets({
         apps,
-        volume: scopedVolume,
-        volumeAppId: filters.kind === "app" ? filters.server : undefined,
-        volumeListing,
-        volumeRelayId: filters.relay,
+        scopedRelayId: filters.relay,
+        scopedVolumes,
+        volumes,
         capabilities,
         databases,
         kiln,
+        relays,
         servers: backupScope.servers,
       }),
     [
@@ -835,12 +906,10 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       capabilities,
       databases,
       kiln,
-      filters.kind,
       filters.relay,
-      filters.server,
-      filters.volume,
-      scopedVolume,
-      volumeListing,
+      relays,
+      scopedVolumes,
+      volumes,
     ]
   )
   // The game servers and databases a person may restore into, which a
@@ -902,9 +971,14 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       new Map(storage.map((destination) => [destination.id, destination.name])),
     [storage]
   )
+  // An App isn't backed up, its volumes are: the one the page is filtered
+  // to, or its only one. With several, which is for whoever asks to say.
+  const [onlyScopedVolume] = scopedVolumes.length === 1 ? scopedVolumes : []
   const scopedCreateTargetKey =
-    selectedServer?.kind === "app" && scopedVolume?.id
-      ? targetKey("volume", selectedServer.relayId, scopedVolume.id)
+    selectedServer?.kind === "app"
+      ? onlyScopedVolume?.id
+        ? targetKey("volume", selectedServer.relayId, onlyScopedVolume.id)
+        : undefined
       : selectedServer
         ? selectedBackupCreateTargetKey(selectedServer)
         : undefined
@@ -915,9 +989,17 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
     : undefined
   const canManageSelectedTarget = Boolean(
     selectedServer &&
-    createTargets.some(
-      (target) => target.key === selectedBackupCreateTargetKey(selectedServer)
-    )
+    (selectedServer.kind === "app"
+      ? hasBackupResourcePermission(
+          capabilities,
+          selectedServer.relayId,
+          "app",
+          selectedServer.id
+        )
+      : createTargets.some(
+          (target) =>
+            target.key === selectedBackupCreateTargetKey(selectedServer)
+        ))
   )
   const selectServer = React.useCallback(
     (server: BackupScopeOption | null) => {
@@ -1625,15 +1707,7 @@ function CreateBackupDialog({
           data: { ...data, databaseId: target.id },
         })
       }
-      if (target.kind === "app" && target.wholeApp)
-        return createAppBackups({
-          data: {
-            ...data,
-            appId: target.id,
-            consistency: configuration.consistency,
-          },
-        })
-      if (target.kind === "volume" || target.kind === "app")
+      if (target.kind === "volume")
         return createResourceBackup({
           data: {
             ...data,
@@ -2794,125 +2868,132 @@ function selectedBackupCreateTargetKey(selected: BackupScopeOption): string {
   )
 }
 
+const noVolumeListings: VolumeListings = {}
+const noRelays: ReadonlyArray<{ relayId: string; relayName: string }> = []
+
 function availableCreateTargets({
   apps,
-  volume,
-  volumeAppId,
-  volumeRelayId,
-  volumeListing,
+  scopedRelayId,
+  scopedVolumes = noScopedVolumes,
+  volumes = noVolumeListings,
   capabilities,
   databases,
   kiln,
+  relays = noRelays,
   servers,
 }: {
   apps: Awaited<ReturnType<typeof getAppDirectory>>
-  /** The App the page is scoped to, whose volumes are each offered. */
-  volumeAppId?: string | undefined
-  volume?:
-    | Pick<import("@workspace/contracts").RelayVolume, "id" | "name">
-    | undefined
-  volumeListing?:
-    | Pick<import("@workspace/contracts").RelayVolumes, "protection" | "volumes">
-    | undefined
-  volumeRelayId?: string | undefined
+  /**
+   * The volumes the page is scoped to, on `scopedRelayId`: its App's, or the
+   * one it's filtered to. Listed first, and known to someone who may back
+   * them up yet can't list their Relay's volumes.
+   */
+  scopedVolumes?: ReadonlyArray<ScopedVolume>
+  scopedRelayId?: string | undefined
+  /** Each Relay's volumes, where they could be listed. */
+  volumes?: VolumeListings
+  relays?: ReadonlyArray<{ relayId: string; relayName: string }>
   capabilities: Awaited<ReturnType<typeof getAccessCapabilities>>
   databases: Awaited<ReturnType<typeof getManagedDatabaseDirectory>>
   kiln: KilnBackupHost | null
   servers: ReturnType<typeof selectBackupScope>["servers"]
 }): Array<CreateTarget> {
   const targets: Array<CreateTarget> = []
-  const consistencyChoice = (
-    relayId: string,
-    appIds: ReadonlyArray<string> | undefined,
-    wholeApp = false
-  ) => ({
-    ...(wholeApp
-      ? {
-          stoppedDescription:
-            "Stops every App using its folder or volumes, then starts them again",
-        }
-      : {}),
-    // An App-scoped reader may not list Relay consumers. Unknown consumers
-    // leave Stopped enabled; the server checks all of them before dispatch.
-    stoppedUnavailable:
-      capabilities.isPlatformAdmin ||
-      appIds === undefined ||
-      appIds.every((appId) =>
-        capabilities.grants.some(
-          (grant) =>
-            grant.relayId === relayId &&
-            grantHasPermission(grant, "instance.power.stop") &&
-            (grant.resourceType === "relay" ||
-              (grant.resourceType === "app" && grant.resourceId === appId))
-        )
-      )
-        ? null
-        : "Stopping it takes permission to stop every App that uses it",
-  })
-  const listing = volumeListing?.protection.ready ? volumeListing : undefined
-  const users = (volume: import("@workspace/contracts").RelayVolume) =>
-    volume.users.map((user) => user.appId)
-  for (const app of apps) {
-    if (hasBackupResourcePermission(capabilities, app.relayId, "app", app.id))
-      targets.push(
-        {
-          ...app,
-          kind: "app",
-          wholeApp: true,
-          description: "All its volumes",
-          key: targetKey("app", app.relayId, app.id),
-          consistencyChoice: consistencyChoice(
-            app.relayId,
-            listing && volumeRelayId === app.relayId
-              ? [
-                  app.id,
-                  // Every App that uses a volume its backup takes.
-                  ...appBackupVolumes(app.id, listing.volumes).flatMap(users),
-                ]
-              : undefined,
-            true
-          ),
-        }
-      )
-  }
-  // Each volume of the App the page is scoped to, on its own, and the one
-  // the page is filtered to.
-  const offered = new Map<string, { id: string; name: string }>()
-  // Which volumes it uses is known whether or not the Relay can yet say
-  // every App that uses each: that only decides what stopping one stops.
-  if (volumeListing && volumeAppId) {
-    for (const used of appBackupVolumes(volumeAppId, volumeListing.volumes)) {
-      offered.set(used.id, used)
-    }
-  }
-  if (volume?.id) offered.set(volume.id, { id: volume.id, name: volume.name })
-  for (const one of volumeRelayId ? offered.values() : []) {
+  // Who uses each volume is settled once every Hearth has told the Relay.
+  const settled = (relayId: string) =>
+    volumes[relayId]?.protection.ready ? volumes[relayId] : undefined
+  const appNames = new Map(
+    apps.map((app) => [`${app.relayId}/${app.id}`, app.name])
+  )
+  // An App is no target: what a backup keeps is each volume, so each is
+  // listed, and found by the name or ID of an App that uses it.
+  const offered = new Set<string>()
+  const offer = (
+    relay: { relayId: string; relayName: string },
+    one: ScopedVolume,
+    listed: import("@workspace/contracts").RelayVolume | undefined
+  ) => {
+    const key = targetKey("volume", relay.relayId, one.id)
     if (
-      !volumeRelayId ||
+      offered.has(key) ||
       !hasBackupResourcePermission(
         capabilities,
-        volumeRelayId,
+        relay.relayId,
         "volume",
         one.id
       )
     ) {
-      continue
+      return
     }
-    const listed = listing?.volumes.find((item) => item.id === one.id)
+    offered.add(key)
+    const users = listed?.users.map((user) => ({
+      id: user.appId,
+      name: appNames.get(`${relay.relayId}/${user.appId}`) ?? user.appId,
+    }))
+    // Said only once it's settled: "not used" must never be a guess.
+    const usedBy = settled(relay.relayId) ? users : undefined
     targets.push({
+      ...(usedBy
+        ? {
+            description:
+              usedBy.length > 0
+                ? `Used by ${usedBy.map((user) => user.name).join(", ")}`
+                : "Not used by an App",
+          }
+        : {}),
       id: one.id,
-      key: targetKey("volume", volumeRelayId, one.id),
+      key,
       kind: "volume",
-      name: `Volume ${one.name}`,
-      relayId: volumeRelayId,
-      relayName:
-        apps.find((app) => app.relayId === volumeRelayId)?.relayName ??
-        volumeRelayId,
-      consistencyChoice: consistencyChoice(
-        volumeRelayId,
-        listed ? users(listed) : undefined
-      ),
+      name: one.name,
+      relayId: relay.relayId,
+      relayName: relay.relayName,
+      searchText: (users ?? [])
+        .map((user) => `${user.id} ${user.name}`)
+        .join(" "),
+      consistencyChoice: {
+        // An App-scoped reader may not list Relay consumers. Unknown
+        // consumers leave Stopped enabled; the server checks all of them
+        // before dispatch.
+        stoppedUnavailable:
+          capabilities.isPlatformAdmin ||
+          !usedBy ||
+          usedBy.every((user) =>
+            capabilities.grants.some(
+              (grant) =>
+                grant.relayId === relay.relayId &&
+                grantHasPermission(grant, "instance.power.stop") &&
+                (grant.resourceType === "relay" ||
+                  (grant.resourceType === "app" &&
+                    grant.resourceId === user.id))
+            )
+          )
+            ? null
+            : "Stopping it takes permission to stop every App that uses it",
+      },
     })
+  }
+  const scopedRelay = scopedRelayId
+    ? (relays.find((relay) => relay.relayId === scopedRelayId) ?? {
+        relayId: scopedRelayId,
+        relayName:
+          apps.find((app) => app.relayId === scopedRelayId)?.relayName ??
+          scopedRelayId,
+      })
+    : undefined
+  for (const one of scopedRelay ? scopedVolumes : []) {
+    offer(
+      scopedRelay!,
+      one,
+      volumes[scopedRelay!.relayId]?.volumes.find(
+        (listed) => listed.id === one.id
+      )
+    )
+  }
+  for (const relay of relays) {
+    for (const listed of volumes[relay.relayId]?.volumes ?? []) {
+      if (listed.id !== null && listed.kind === "kiln")
+        offer(relay, { id: listed.id, name: listed.name }, listed)
+    }
   }
   for (const server of servers) {
     if (

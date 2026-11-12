@@ -607,9 +607,14 @@ file written in Hearth. Those paths, like any path on the node, are not
 backed up, and the App's Volumes say so; data to back up belongs in a
 volume. An App that uses no volume has nothing to back up.
 
-New Backup offers Apps alongside game servers, databases and Kiln: an App
-as all its volumes together, and, with the page scoped to an App, each of
-its volumes on its own. An App's volumes are each Kiln
+New Backup offers each Kiln volume alongside game servers, databases and
+Kiln, and no App: every row is one thing a backup keeps. Volumes are a type
+to filter by, each says which Apps use it, and searching an App's name or
+ID finds the volumes it uses. With the page scoped to an App, its volumes
+come first and its only one is chosen already; someone who can't list the
+Relay's volumes is offered those of the App the page is scoped to. A
+schedule still names an App, as the group of whatever volumes it uses when
+it runs. An App's volumes are each Kiln
 volume its configuration mounts, its Compose file declares or its
 containers use, one another App uses too. A Kiln volume its configuration
 mounts or its Compose file declares that its Relay doesn't have refuses the
@@ -631,10 +636,8 @@ this App uses no volume"): a run that backed nothing up never reads as a
 backup made. Whether the schedule's
 author may stop each App a stopped step stops is checked when the schedule
 is saved; an App that takes up one of those volumes afterwards is stopped
-with them. A volume scope
-also offers that volume on its own. Both offer Live or Stopped, subject to
-permission to manage the App (or, for a Kiln volume, Apps on the Relay).
-Stopped App backups run as one batch, stopping the App once for all targets.
+with them. A volume's backup is taken Live or Stopped, Stopped subject to
+permission to stop every App that uses it.
 
 The Settings page configures an App's folder and each volume it uses
 (choosing the App) and each Kiln volume on a Relay ("Kiln volumes on …"),

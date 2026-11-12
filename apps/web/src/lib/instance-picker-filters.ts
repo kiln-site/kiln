@@ -76,6 +76,12 @@ export const instancePickerFilters: ReadonlyArray<InstancePickerFilter> = [
   },
   {
     group: "type",
+    id: "volume",
+    label: "Volumes",
+    matches: (item) => item.identity.kind === "volume",
+  },
+  {
+    group: "type",
     id: "relay",
     label: "Relays",
     matches: (item) => item.identity.kind === "relay",
