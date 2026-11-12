@@ -222,33 +222,66 @@ export const addInstanceGroupMemberEffect = Effect.fn(
   )
 })
 
+// Members with the names Hearth keeps for them, of one group or of all.
+const memberRows = (where: string) =>
+  `SELECT member.instance_id, member.group_id, member.instance_kind,
+          member.relay_id, member.member,
+          COALESCE(app.name, managed.name) AS name
+     FROM ${databaseTable("instance_group_member")} member
+     LEFT JOIN ${databaseTable("app")} app
+       ON member.instance_kind = 'app' AND app.app_id = member.instance_id
+     LEFT JOIN ${databaseTable("database")} managed
+       ON member.instance_kind = 'database'
+      AND managed.database_id = member.instance_id
+    ${where}
+    ORDER BY member.instance_kind ASC, member.instance_id ASC`
+
+const named = (row: MemberRow): NamedInstanceGroupMember => ({
+  instanceId: row.instance_id,
+  kind: row.instance_kind,
+  member: row.member,
+  name: row.name,
+  relayId: row.relay_id,
+})
+
 const membersOf = Effect.fn("instanceGroups.members")(function* (
   groupId: string
 ) {
   const database = yield* Database
   const rows = yield* database.queryRows<MemberRow>(
     "instance_group_members",
-    `SELECT member.instance_id, member.group_id, member.instance_kind,
-            member.relay_id, member.member,
-            COALESCE(app.name, managed.name) AS name
-       FROM ${databaseTable("instance_group_member")} member
-       LEFT JOIN ${databaseTable("app")} app
-         ON member.instance_kind = 'app' AND app.app_id = member.instance_id
-       LEFT JOIN ${databaseTable("database")} managed
-         ON member.instance_kind = 'database'
-        AND managed.database_id = member.instance_id
-      WHERE member.group_id = ?
-      ORDER BY member.instance_kind ASC, member.instance_id ASC`,
+    memberRows("WHERE member.group_id = ?"),
     [groupId]
   )
-  return rows.map((row): NamedInstanceGroupMember => ({
-    instanceId: row.instance_id,
-    kind: row.instance_kind,
-    member: row.member,
-    name: row.name,
-    relayId: row.relay_id,
-  }))
+  return rows.map(named)
 })
+
+/** Every group, each with its members, by name. */
+export const listInstanceGroupsEffect = Effect.fn("instanceGroups.list")(
+  function* () {
+    const database = yield* Database
+    const [groups, members] = yield* Effect.all([
+      database.queryRows<GroupRow>(
+        "instance_group_list",
+        `SELECT id, name FROM ${databaseTable("instance_group")}
+          ORDER BY name ASC, id ASC`
+      ),
+      database.queryRows<MemberRow>(
+        "instance_group_list_members",
+        memberRows("")
+      ),
+    ])
+    return groups.map(
+      (group): InstanceGroup => ({
+        id: group.id,
+        members: members
+          .filter((member) => member.group_id === group.id)
+          .map(named),
+        name: group.name,
+      })
+    )
+  }
+)
 
 export const loadInstanceGroupEffect = Effect.fn("instanceGroups.load")(
   function* (groupId: string) {

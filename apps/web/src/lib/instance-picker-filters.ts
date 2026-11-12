@@ -13,7 +13,16 @@ export interface VolumePickerIdentity {
   relayId: string
 }
 
-export type InstancePickerIdentity = InstanceNameInstance | VolumePickerIdentity
+/** A group of instances, listed for what it keeps together. */
+export interface GroupPickerIdentity {
+  id: string
+  kind: "group"
+}
+
+export type InstancePickerIdentity =
+  | InstanceNameInstance
+  | VolumePickerIdentity
+  | GroupPickerIdentity
 
 export interface InstancePickerItem<
   Identity extends InstancePickerIdentity = InstanceNameInstance,
@@ -29,6 +38,12 @@ export interface InstancePickerItem<
   name: string
   /** Extra text matched by search, such as IDs or versions. */
   searchText?: string
+  /**
+   * Other rows this one stands for, by key, in a list where several are
+   * chosen: it is ticked when all of them are, part-ticked when some are,
+   * and choosing it is choosing them.
+   */
+  stands?: ReadonlyArray<string>
   /** A status in place of the instance's live state, such as Kiln's. */
   status?: IdentityStatusPresentation
 }
@@ -73,6 +88,12 @@ export const instancePickerFilters: ReadonlyArray<InstancePickerFilter> = [
     id: "app",
     label: "Apps",
     matches: (item) => item.identity.kind === "app",
+  },
+  {
+    group: "type",
+    id: "group",
+    label: "Groups",
+    matches: (item) => item.identity.kind === "group",
   },
   {
     group: "type",

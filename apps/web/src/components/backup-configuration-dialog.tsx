@@ -27,6 +27,8 @@ import {
   DrawerPopoverContent,
   DrawerPopoverTrigger,
 } from "@/components/drawer-popover"
+import { IdentityName } from "@/components/identity-name"
+import { GroupKindIcon } from "@/components/instance-kind-icon"
 import { InstancePickerContent } from "@/components/instance-picker"
 import { InstanceCard } from "@/components/instance-card"
 import { VolumePickerCard } from "@/components/volumes/volume-field"
@@ -47,6 +49,24 @@ export interface BackupConfigurationTarget {
   relayId: string
   relayName: string
   /** More that finding it matches, such as the Apps that use a volume. */
+  searchText?: string
+}
+
+/**
+ * A row that stands for several targets: an App for the volumes it uses, or
+ * a group of instances for what each keeps. Choosing it chooses them, and
+ * what is backed up is them, never the group.
+ */
+export interface BackupConfigurationGroup {
+  /** What it stands for, or why it can't be chosen. */
+  description: string
+  id: string
+  key: string
+  kind: "app" | "group"
+  /** The targets it stands for, by key. None when it can't be chosen. */
+  members: ReadonlyArray<string>
+  name: string
+  relayId: string
   searchText?: string
 }
 
@@ -76,11 +96,12 @@ export function BackupConfigurationDialog({
   consistencyChoice: fixedConsistencyChoice,
   description = "Relay runs this job in its single durable queue. Servers remain online while their data is archived.",
   error,
+  groups = noGroups,
   initialConsistency = "live",
   initialDestinationKeys,
   initialMode = "incremental",
   initialName,
-  initialTargetKey,
+  initialTargetKeys,
   onOpenChange,
   onSubmit,
   open,
@@ -105,11 +126,17 @@ export function BackupConfigurationDialog({
   }
   description?: React.ReactNode
   error?: string
+  /** Rows that stand for several of `targets`. */
+  groups?: ReadonlyArray<BackupConfigurationGroup>
   initialConsistency?: "live" | "stopped"
   initialDestinationKeys?: ReadonlyArray<string>
   initialMode?: "full" | "incremental"
   initialName?: string
-  initialTargetKey?: string
+  /**
+   * The targets chosen as it opens, as what the page is looking at. Left
+   * unsaid, the only target there is, if there is only one.
+   */
+  initialTargetKeys?: ReadonlyArray<string> | undefined
   onOpenChange: (open: boolean) => void
   onSubmit: (configuration: BackupConfiguration) => void
   open: boolean
@@ -124,9 +151,9 @@ export function BackupConfigurationDialog({
   const [name, setName] = React.useState(
     () => initialName ?? timestampedBackupName("manual")
   )
-  const [targetKeys, setTargetKeys] = React.useState(() =>
-    initialBackupTargetKeys(targets, initialTargetKey)
-  )
+  const openingKeys = (): ReadonlyArray<string> =>
+    initialTargetKeys ?? (targets.length === 1 ? [targets[0]!.key] : [])
+  const [selectedKeys, setSelectedKeys] = React.useState(openingKeys)
   const [destinationKeys, setDestinationKeys] = React.useState<Array<string>>(
     () => [...(initialDestinationKeys ?? ["local"])]
   )
@@ -137,9 +164,9 @@ export function BackupConfigurationDialog({
   // What is chosen, in the order it is listed.
   const chosen = React.useMemo(() => {
     if (!showTarget) return noTargets
-    const keys = new Set(targetKeys)
+    const keys = new Set(selectedKeys)
     return targets.filter((candidate) => keys.has(candidate.key))
-  }, [showTarget, targetKeys, targets])
+  }, [selectedKeys, showTarget, targets])
   const consistencyChoice = showTarget
     ? chosenConsistencyChoice(chosen)
     : fixedConsistencyChoice
@@ -188,7 +215,7 @@ export function BackupConfigurationDialog({
 
   const resetConfiguration = () => {
     setName(initialName ?? timestampedBackupName("manual"))
-    setTargetKeys(initialBackupTargetKeys(targets, initialTargetKey))
+    setSelectedKeys(openingKeys())
     setDestinationKeys([...(initialDestinationKeys ?? ["local"])])
     setMode(initialMode)
     setConsistency("live")
@@ -244,8 +271,9 @@ export function BackupConfigurationDialog({
               <span className="mb-2 block text-xs font-medium">Targets</span>
               <BackupTargetPicker
                 chosen={chosen}
+                groups={groups}
                 targets={targets}
-                onChange={setTargetKeys}
+                onChange={setSelectedKeys}
               />
               {tooMany ? (
                 <p role="alert" className="mt-1.5 text-xs text-destructive">
@@ -520,15 +548,21 @@ function BackupDestinationChoice({
 
 const BackupTargetPicker = React.memo(function BackupTargetPicker({
   chosen,
+  groups,
   onChange,
   targets,
 }: {
   chosen: ReadonlyArray<BackupConfigurationTarget>
-  onChange: (keys: Array<string>) => void
+  groups: ReadonlyArray<BackupConfigurationGroup>
+  onChange: (keys: ReadonlyArray<string>) => void
   targets: ReadonlyArray<BackupConfigurationTarget>
 }) {
   const [open, setOpen] = React.useState(false)
-  const items = React.useMemo(() => targets.map(backupTargetItem), [targets])
+  // Groups first: each is a quick way to what follows it.
+  const items = React.useMemo(
+    () => [...groups.map(backupGroupItem), ...targets.map(backupTargetItem)],
+    [groups, targets]
+  )
   const [only] = chosen.length === 1 ? chosen : []
   const onlyItem = React.useMemo(
     () => (only ? backupTargetItem(only) : null),
@@ -537,16 +571,6 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
   const selectedKeys = React.useMemo(
     () => new Set(chosen.map(({ key }) => key)),
     [chosen]
-  )
-  // Several can be chosen, so the list stays open as each is ticked.
-  const toggleItem = React.useCallback(
-    (item: AnyInstancePickerItem) =>
-      onChange(
-        selectedKeys.has(item.key)
-          ? [...selectedKeys].filter((key) => key !== item.key)
-          : [...selectedKeys, item.key]
-      ),
-    [onChange, selectedKeys]
   )
   const toggleMany = React.useCallback(
     (keys: ReadonlyArray<string>, selected: boolean) => {
@@ -558,6 +582,17 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
       onChange([...next])
     },
     [onChange, selectedKeys]
+  )
+  // Several can be chosen, so the list stays open as each is ticked. A
+  // row that stands for others only ticks them: all of them, or none when
+  // they all are already.
+  const toggleItem = React.useCallback(
+    (item: AnyInstancePickerItem) => {
+      const keys = groups.find((group) => group.key === item.key)
+        ?.members ?? [item.key]
+      toggleMany(keys, !keys.every((key) => selectedKeys.has(key)))
+    },
+    [groups, selectedKeys, toggleMany]
   )
 
   return (
@@ -580,7 +615,7 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
               meta={onlyItem.meta}
               name={onlyItem.name}
             />
-          ) : onlyItem ? (
+          ) : onlyItem && onlyItem.identity.kind !== "group" ? (
             <InstanceCard
               className="min-w-0 flex-1 gap-2 text-left"
               iconClassName="size-7 border-0 bg-muted/55"
@@ -630,6 +665,7 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
 })
 
 const noTargets: ReadonlyArray<BackupConfigurationTarget> = []
+const noGroups: ReadonlyArray<BackupConfigurationGroup> = []
 
 // Whether what is chosen can be taken stopped: the volumes among it, which
 // stop the Apps that use them, and why not when one of them can't be.
@@ -649,23 +685,36 @@ function chosenConsistencyChoice(
   }
 }
 
-/**
- * The target a new backup starts on: the one the page is looking at, or the
- * only one there is. Anything else waits for a choice, so a backup never
- * quietly lands on whichever resource happens to sort first.
- */
-function initialBackupTargetKeys(
-  targets: ReadonlyArray<BackupConfigurationTarget>,
-  initialTargetKey: string | undefined
-): Array<string> {
-  if (
-    initialTargetKey !== undefined &&
-    targets.some((target) => target.key === initialTargetKey)
-  ) {
-    return [initialTargetKey]
+// A group's row: an App's own card, or a group's, saying what it stands for.
+function backupGroupItem(group: BackupConfigurationGroup): AnyInstancePickerItem {
+  const row = {
+    disabled: group.members.length === 0,
+    key: group.key,
+    meta: group.description,
+    name: group.name,
+    searchText: `${group.id} ${group.searchText ?? ""}`,
+    stands: group.members,
   }
-  const [only] = targets.length === 1 ? targets : []
-  return only ? [only.key] : []
+  return group.kind === "app"
+    ? {
+        ...row,
+        identity: { id: group.id, kind: "app", relayId: group.relayId },
+      }
+    : {
+        ...row,
+        card: (
+          <IdentityName
+            className="min-w-0 flex-1 gap-2"
+            icon={<GroupKindIcon className="size-4" aria-hidden="true" />}
+            iconClassName="border-0 bg-muted/55"
+            meta={group.description}
+            metaClassName="font-mono"
+            name={group.name}
+            nameClassName="type-control-sm"
+          />
+        ),
+        identity: { id: group.id, kind: "group" },
+      }
 }
 
 function backupTargetItem(

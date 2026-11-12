@@ -14,6 +14,7 @@ import { requireEligibleResourceUser } from "@/server/auth"
 import {
   deleteInstanceGroup as deleteInstanceGroupOperation,
   getInstanceGroupHandler,
+  listInstanceGroupsHandler,
 } from "@/server/instance-group-access.server"
 import { createInstanceGroupFor } from "@/server/instance-group-create.server"
 
@@ -51,6 +52,11 @@ export const getInstanceGroup = createServerFn({ method: "GET" })
   .handler(async ({ data }) =>
     getInstanceGroupHandler(await requireEligibleResourceUser(), data)
   )
+
+// Every group, each with the members this person may see.
+export const getInstanceGroups = createServerFn({ method: "GET" }).handler(
+  async () => listInstanceGroupsHandler(await requireEligibleResourceUser())
+)
 
 // Forgets a group, deleting the members chosen. Asks the group's name and
 // the account password, as deleting any one of them does.

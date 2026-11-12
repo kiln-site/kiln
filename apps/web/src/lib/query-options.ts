@@ -130,7 +130,7 @@ import {
   getDeployments,
   getServerDeploymentLog,
 } from "@/server/app-deployments"
-import { getInstanceGroup } from "@/server/instance-groups"
+import { getInstanceGroup, getInstanceGroups } from "@/server/instance-groups"
 import {
   getAppBricks,
   getAppConfig,
@@ -246,6 +246,7 @@ export const queryKeys = {
   },
   instanceGroups: {
     all: ["instance-groups"] as const,
+    list: ["instance-groups", "list"] as const,
     of: (kind: string, relayId: string, instanceId: string) =>
       ["instance-groups", relayId, kind, instanceId] as const,
   },
@@ -1128,6 +1129,15 @@ export function instanceGroupQueryOptions(member: {
       member.instanceId
     ),
     queryFn: () => getInstanceGroup({ data: member }),
+    staleTime: 60_000,
+  })
+}
+
+/** Every group, each with the members this person may see. */
+export function instanceGroupsQueryOptions() {
+  return queryOptions({
+    queryKey: queryKeys.instanceGroups.list,
+    queryFn: () => getInstanceGroups(),
     staleTime: 60_000,
   })
 }

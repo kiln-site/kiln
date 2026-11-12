@@ -61,13 +61,14 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
       return {
         filesAvailable: false,
         measuring: false,
+        missing: [],
         protection: { ready: true, reason: null, retrying: false },
         supported: false,
         uncovered: [],
         volumes: [],
       }
     }
-    const { filesAvailable, measuring, protection, uncovered, volumes } =
+    const { filesAvailable, measuring, missing, protection, uncovered, volumes } =
       relayVolumesSchema.parse(
         await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
       )
@@ -79,6 +80,8 @@ export const getRelayVolumes = createServerFn({ method: "GET" })
     return {
       filesAvailable,
       measuring,
+      // Volumes Apps name that the Relay doesn't have.
+      missing,
       protection: { ...protection, retrying },
       supported: true,
       uncovered,

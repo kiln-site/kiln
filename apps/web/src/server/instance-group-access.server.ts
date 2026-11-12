@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import {
   deleteInstanceGroupEffect,
   instanceGroupOfEffect,
+  listInstanceGroupsEffect,
   loadInstanceGroupEffect,
   type InstanceGroup,
   type InstanceGroupMember,
@@ -107,6 +108,33 @@ export async function getInstanceGroupHandler(
     members,
     name: group.name,
   }
+}
+
+/**
+ * Every group, as this person may see it: with the members they may read,
+ * and left out when they may read none of them.
+ */
+export async function listInstanceGroupsHandler(user: AuthenticatedUser) {
+  const groups = await runAppEffect(
+    "instanceGroups.list",
+    listInstanceGroupsEffect()
+  )
+  const seen = await Promise.all(
+    groups.map(async (group) => {
+      const read = await Promise.all(
+        group.members.map((member) => may(user, member, "read"))
+      )
+      const members = group.members.filter((_, index) => read[index])
+      return {
+        /** Members this person may not see, so can't choose with it. */
+        hidden: group.members.length - members.length,
+        id: group.id,
+        members,
+        name: group.name,
+      }
+    })
+  )
+  return seen.filter((group) => group.members.length > 0)
 }
 
 export interface DeleteInstanceGroupInput {
