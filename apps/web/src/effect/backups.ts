@@ -1063,7 +1063,11 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       catalog.name,
       objectKey,
       repositoryId,
-      input.target.kind === "volume" ? (input.consistency ?? "live") : null,
+      // A volume's is live or stopped; a database's says so only when it
+      // was dumped in a stopped batch.
+      input.target.kind === "volume"
+        ? (input.consistency ?? "live")
+        : (input.consistency ?? null),
       catalog.batchId ?? input.batch?.id ?? null,
       task.createdAt,
       now,
