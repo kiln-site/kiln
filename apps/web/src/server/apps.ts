@@ -10,6 +10,7 @@ import {
   newDatabaseNamesShape,
   appServiceLimitsSchema,
   relayControlDeadlineMs,
+  relayVolumeIdSchema,
   relayPowerActionSchema,
   relayAppSchema,
   relayAppTerminalClaimSchema,
@@ -27,7 +28,11 @@ import {
   updateAppConfigEffect,
 } from "@/effect/managed-apps"
 import { runAppEffect } from "@/effect/runtime"
+import { requireRelayPermission } from "@/lib/access-control"
+import { appOwnsVolume } from "@/lib/app-volumes"
+import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
+import type { PersistedRelay } from "@/lib/relay-registry"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
 import { requireDeleteConfirmation } from "@/lib/delete-confirmation.server"
 import {
@@ -45,6 +50,7 @@ import {
   publishAppChange,
   updateAppConfigHandler,
 } from "@/server/app-access"
+import { readRelayVolumes } from "@/server/app-backups.server"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { resourceOperation } from "@/server/resource-operation.server"
@@ -356,9 +362,41 @@ export const updateAppNetwork = createServerFn({ method: "POST" })
     )
   )
 
+// Deleting volumes with an App takes what deleting each alone does, and
+// only volumes nothing else uses: one another App names or mounts stays.
+async function requireOwnVolumes(
+  user: AuthenticatedUser,
+  relay: PersistedRelay,
+  appId: string,
+  volumeIds: ReadonlyArray<string>
+): Promise<void> {
+  await requireRelayPermission({
+    permission: "relay.configure",
+    relayId: relay.id,
+    user,
+  })
+  const listing = await readRelayVolumes(relay, user.id)
+  if (!listing.protection.ready) {
+    throw new Error(
+      "The Relay doesn't know yet which Apps use these volumes; delete them from Volumes once it does"
+    )
+  }
+  for (const volumeId of volumeIds) {
+    const volume = listing.volumes.find(({ id }) => id === volumeId)
+    if (!volume || !appOwnsVolume(volume, appId)) {
+      throw new Error(
+        `${volume?.name ?? "A volume"} isn't this App's alone, so it can't be deleted with it`
+      )
+    }
+  }
+}
+
 export const deleteApp = createServerFn({ method: "POST" })
   .validator(
-    appInputSchema.extend(deleteConfirmationSchema.shape)
+    appInputSchema.extend(deleteConfirmationSchema.shape).extend({
+      // Volumes to delete with it, of those only it uses.
+      volumeIds: z.array(relayVolumeIdSchema).max(32).default([]),
+    })
   )
   .handler(async ({ data }) => {
     const { app, relay, user } = await authorizedApp(data, "app.delete")
@@ -368,9 +406,14 @@ export const deleteApp = createServerFn({ method: "POST" })
       password: data.password,
       user,
     })
+    if (data.volumeIds.length > 0) {
+      await requireOwnVolumes(user, relay, data.appId, data.volumeIds)
+    }
     // Frozen, then deleted, as one operation that goes on in the
     // background if it outlasts this request. Nothing is backed up first:
-    // what an App keeps is on its volumes, which stay.
+    // what an App keeps is on its volumes, which stay unless named here:
+    // those are deleted once the App is gone, each as deleting it from
+    // Volumes does.
     const deletion = await requestResourceDeletion({
       finalBackup: false,
       kind: "app",
@@ -378,6 +421,7 @@ export const deleteApp = createServerFn({ method: "POST" })
       resourceId: data.appId,
       storageId: null,
       user,
+      volumeIds: data.volumeIds,
     })
     await awaitResourceDeletion(deletion)
     return { deleted: true }

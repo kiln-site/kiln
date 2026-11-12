@@ -4,6 +4,10 @@ import { TestClock } from "effect/testing"
 import { afterAll, vi } from "vite-plus/test"
 
 import { Database } from "@/effect/database"
+import {
+  requestNamedVolumeDeletionRowEffect,
+  requestResourceDeletionRowEffect,
+} from "@/effect/resource-deletions"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { exclusive, partKey, resourceKey } from "@/operations/lanes"
 import { inLanes } from "@/operations/operation"
@@ -200,6 +204,112 @@ describeMysql("Deleting a game server or database", () => {
             [volumeId, shared]
           )
           assert.lengthOf(yield* selectRows("backup"), 0)
+        }).pipe(TestClock.withLive),
+      90_000
+    )
+
+    // Asked to, an App's deletion deletes volumes after it: those named,
+    // once the App is gone from its Relay, and no other.
+    it.effect(
+      "deletes the volumes named with an App once it is gone, and no other",
+      () =>
+        Effect.gen(function* () {
+          const otherApp = "c".repeat(12)
+          const shared = "d".repeat(40)
+          yield* seed
+          yield* seedApp([
+            { id: volumeId, users: [{ appId, configured: true }] },
+            {
+              id: shared,
+              users: [
+                { appId, configured: false },
+                { appId: otherApp, configured: false },
+              ],
+            },
+          ])
+
+          yield* requestResourceDeletionEffect({
+            finalBackup: false,
+            kind: "app",
+            relayId,
+            resourceId: appId,
+            storageId: null,
+            user: owner,
+            volumeIds: [volumeId],
+          })
+          const app = yield* until(appId, ["completed", "failed"])
+          const volume = yield* until(volumeId, ["completed", "failed"])
+
+          assert.strictEqual(app?.status, "completed")
+          assert.strictEqual(volume?.status, "completed")
+          assert.deepStrictEqual(
+            relay.volumes.map((candidate) => candidate.id),
+            [shared]
+          )
+          // The volume goes only after the App that used it.
+          assert.isBelow(
+            relay.changes.indexOf("app.delete"),
+            relay.changes.indexOf("relay.volumes.delete")
+          )
+        }).pipe(TestClock.withLive),
+      90_000
+    )
+
+    // An App's deletion that stopped after handing a volume off is tried
+    // again to hand off the rest. The volume handed off has its own
+    // deletion by then, which may have failed and been kept: asking again
+    // must not start it again and delete what someone chose to keep.
+    it.effect(
+      "asks for a named volume's deletion once, and never again after it is kept",
+      () =>
+        Effect.gen(function* () {
+          const other = "e".repeat(40)
+          yield* seed
+          yield* seedApp([
+            { id: volumeId, users: [{ appId, configured: true }] },
+            { id: other, users: [{ appId, configured: true }] },
+          ])
+          const parent = yield* requestResourceDeletionRowEffect({
+            finalBackup: false,
+            kind: "app",
+            relayId,
+            resourceId: appId,
+            storageId: null,
+            user: owner,
+            volumeIds: [volumeId, other],
+          })
+          const ask = requestNamedVolumeDeletionRowEffect({
+            namedBy: parent.id,
+            relayId,
+            user: owner,
+            volumeId,
+          })
+
+          const first = yield* ask
+          assert.strictEqual(first?.status, "pending")
+          // Its own deletion failed, and someone kept the volume.
+          const database = yield* Database
+          yield* database.execute(
+            "test.keepVolume",
+            `UPDATE kiln_resource_deletion
+                SET status = 'cancelled' WHERE id = ?`,
+            [first!.id]
+          )
+
+          assert.isNull(yield* ask)
+          const rows = yield* selectRows<{
+            attempt: number
+            resource_id: string
+            status: string
+            volume_ids: unknown
+          }>("resource_deletion")
+          const kept = rows.find((row) => row.resource_id === volumeId)
+          assert.deepInclude(kept, { attempt: 1, status: "cancelled" })
+          // The other is still the App's deletion's to hand off.
+          assert.deepStrictEqual(
+            rows.find((row) => row.resource_id === appId)?.volume_ids,
+            [other]
+          )
         }).pipe(TestClock.withLive),
       90_000
     )

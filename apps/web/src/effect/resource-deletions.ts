@@ -206,7 +206,73 @@ export const listResourceDeletionsToReconcileEffect = Effect.fnUntraced(
  */
 export const requestResourceDeletionRowEffect = Effect.fn(
   "resourceDeletions.request"
+)(function* (input: DeletionRequest) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const request = database.transaction(
+    "resource_deletion_request",
+    (transaction) => requestRowIn(transaction, input, now)
+  )
+  return yield* request.pipe(Effect.catchIf(isDeadlock, () => request))
+})
+
+/**
+ * Asks for the deletion of a volume an App's deletion named, once: the
+ * volume is taken off the App's deletion in the transaction that asks for
+ * its own. Asked again, by a retry of the App's deletion or a step run
+ * twice, it is no longer named and nothing is asked for (null), so a
+ * volume's deletion that failed or was kept since is left to its own
+ * controls, never started again from here.
+ */
+export const requestNamedVolumeDeletionRowEffect = Effect.fn(
+  "resourceDeletions.requestNamedVolume"
 )(function* (input: {
+  /** The App's deletion that named it. */
+  namedBy: string
+  relayId: string
+  user: AuthenticatedUser
+  volumeId: string
+}) {
+  const database = yield* Database
+  const now = yield* Clock.currentTimeMillis
+  const request = database.transaction(
+    "resource_deletion_request_named_volume",
+    (transaction) =>
+      Effect.gen(function* () {
+        const [parent] = yield* transaction.queryRows<ResourceDeletionRow>(
+          `${select} WHERE id = ? LIMIT 1 FOR UPDATE`,
+          [input.namedBy]
+        )
+        const named = parent ? (toResourceDeletion(parent).volumeIds ?? []) : []
+        if (!named.includes(input.volumeId)) return null
+        yield* transaction.execute(
+          `UPDATE ${databaseTable("resource_deletion")}
+              SET volume_ids = JSON_EXTRACT(?, '$'), updated_at = ?
+            WHERE id = ?`,
+          [
+            JSON.stringify(named.filter((id) => id !== input.volumeId)),
+            now,
+            input.namedBy,
+          ]
+        )
+        return yield* requestRowIn(
+          transaction,
+          {
+            finalBackup: false,
+            kind: "volume",
+            relayId: input.relayId,
+            resourceId: input.volumeId,
+            storageId: null,
+            user: input.user,
+          },
+          now
+        )
+      })
+  )
+  return yield* request.pipe(Effect.catchIf(isDeadlock, () => request))
+})
+
+interface DeletionRequest {
   finalBackup: boolean
   kind: ResourceDeletionKind
   relayId: string
@@ -214,110 +280,121 @@ export const requestResourceDeletionRowEffect = Effect.fn(
   retryOf?: number
   storageId: string | null
   user: AuthenticatedUser
-}) {
-  const database = yield* Database
-  const now = yield* Clock.currentTimeMillis
-  const request = database.transaction(
-    "resource_deletion_request",
-    (transaction) =>
-      Effect.gen(function* () {
-        const id = randomUUID()
-        const actor = JSON.stringify(input.user)
-        // On the resource's existing row, a no-op that locks it.
-        yield* transaction.execute(
-          `INSERT INTO ${databaseTable("resource_deletion")}
-          (id, relay_id, resource_kind, resource_id, final_backup,
-           storage_id, backup_id, status, error, attempt, relay_deleted_at,
-           requested_by, actor, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, 'pending', NULL, 1, NULL, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE id = id`,
-          [
-            id,
-            input.relayId,
-            input.kind,
-            input.resourceId,
-            input.finalBackup,
-            input.finalBackup ? input.storageId : null,
-            input.user.id,
-            actor,
-            now,
-            now,
-          ]
-        )
-        const [existing] = yield* transaction.queryRows<ResourceDeletionRow>(
-          `${select}
-          WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
-          LIMIT 1
-          FOR UPDATE`,
-          [input.relayId, input.kind, input.resourceId]
-        )
-        if (!existing) return yield* Effect.die("The deletion was not recorded")
-        if (
-          input.retryOf !== undefined &&
-          (existing.id === id ||
-            existing.status !== "failed" ||
-            Number(existing.attempt) !== input.retryOf)
-        ) {
-          return yield* new ResourceDeletionConflictError({
-            message:
-              "Its deletion changed since you looked, as when someone kept it. Reload to see where it is now.",
-          })
-        }
-        if (existing.id === id) {
-          yield* invalidateSchedulesOf(transaction, existing)
-          return toResourceDeletion(existing)
-        }
-        if (existing.status === "cancelling") {
-          return yield* new ResourceDeletionConflictError({
-            message:
-              "It's still being kept after its last deletion stopped. Try again once that finishes.",
-          })
-        }
-        if (existing.status !== "failed" && existing.status !== "cancelled") {
-          return toResourceDeletion(existing)
-        }
-        let backupId: string | null = null
-        if (
-          existing.status === "failed" &&
-          existing.resource_kind === "instance" &&
-          input.finalBackup &&
-          existing.backup_id
-        ) {
-          const [backup] = yield* transaction.queryRows<
-            RowDataPacket & { status: string }
-          >(
-            `SELECT status FROM ${databaseTable("backup")} WHERE id = ? LIMIT 1`,
-            [existing.backup_id]
-          )
-          if (backup?.status === "available") backupId = existing.backup_id
-        }
-        yield* transaction.execute(
-          `UPDATE ${databaseTable("resource_deletion")}
-            SET attempt = attempt + 1, status = 'pending', error = NULL,
-                final_backup = ?, storage_id = ?, backup_id = ?,
-                requested_by = ?, actor = ?, updated_at = ?
-          WHERE id = ?`,
-          [
-            input.finalBackup,
-            input.finalBackup ? input.storageId : null,
-            backupId,
-            input.user.id,
-            actor,
-            now,
-            existing.id,
-          ]
-        )
-        yield* invalidateSchedulesOf(transaction, existing)
-        const [row] = yield* transaction.queryRows<ResourceDeletionRow>(
-          `${select} WHERE id = ? LIMIT 1`,
-          [existing.id]
-        )
-        if (!row) return yield* Effect.die("The deletion was not recorded")
-        return toResourceDeletion(row)
+  /**
+   * The volumes an App's deletion deletes after it, as whoever asked chose.
+   * Kept as first asked: a retry deletes the same.
+   */
+  volumeIds?: ReadonlyArray<string>
+}
+
+const requestRowIn = (
+  transaction: DatabaseTransaction,
+  input: DeletionRequest,
+  now: number
+) =>
+  Effect.gen(function* () {
+    const id = randomUUID()
+    const actor = JSON.stringify(input.user)
+    // On the resource's existing row, a no-op that locks it.
+    yield* transaction.execute(
+      `INSERT INTO ${databaseTable("resource_deletion")}
+      (id, relay_id, resource_kind, resource_id, final_backup,
+       storage_id, backup_id, status, error, attempt, relay_deleted_at,
+       volume_ids, requested_by, actor, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, NULL, 'pending', NULL, 1, NULL,
+             JSON_EXTRACT(?, '$'), ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE id = id`,
+      [
+        id,
+        input.relayId,
+        input.kind,
+        input.resourceId,
+        input.finalBackup,
+        input.finalBackup ? input.storageId : null,
+        input.volumeIds?.length ? JSON.stringify(input.volumeIds) : null,
+        input.user.id,
+        actor,
+        now,
+        now,
+      ]
+    )
+    const [existing] = yield* transaction.queryRows<ResourceDeletionRow>(
+      `${select}
+      WHERE relay_id = ? AND resource_kind = ? AND resource_id = ?
+      LIMIT 1
+      FOR UPDATE`,
+      [input.relayId, input.kind, input.resourceId]
+    )
+    if (!existing) return yield* Effect.die("The deletion was not recorded")
+    if (
+      input.retryOf !== undefined &&
+      (existing.id === id ||
+        existing.status !== "failed" ||
+        Number(existing.attempt) !== input.retryOf)
+    ) {
+      return yield* new ResourceDeletionConflictError({
+        message:
+          "Its deletion changed since you looked, as when someone kept it. Reload to see where it is now.",
       })
-  )
-  return yield* request.pipe(Effect.catchIf(isDeadlock, () => request))
-})
+    }
+    if (existing.id === id) {
+      yield* invalidateSchedulesOf(transaction, existing)
+      return toResourceDeletion(existing)
+    }
+    if (existing.status === "cancelling") {
+      return yield* new ResourceDeletionConflictError({
+        message:
+          "It's still being kept after its last deletion stopped. Try again once that finishes.",
+      })
+    }
+    if (existing.status !== "failed" && existing.status !== "cancelled") {
+      return toResourceDeletion(existing)
+    }
+    let backupId: string | null = null
+    if (
+      existing.status === "failed" &&
+      existing.resource_kind === "instance" &&
+      input.finalBackup &&
+      existing.backup_id
+    ) {
+      const [backup] = yield* transaction.queryRows<
+        RowDataPacket & { status: string }
+      >(
+        `SELECT status FROM ${databaseTable("backup")} WHERE id = ? LIMIT 1`,
+        [existing.backup_id]
+      )
+      if (backup?.status === "available") backupId = existing.backup_id
+    }
+    yield* transaction.execute(
+      `UPDATE ${databaseTable("resource_deletion")}
+        SET attempt = attempt + 1, status = 'pending', error = NULL,
+            final_backup = ?, storage_id = ?, backup_id = ?,
+            -- Asked again with volumes named, or none: as asked now,
+            -- unless its Relay was already asked to delete it.
+            volume_ids = IF(? = 1 AND relay_deleting_at IS NULL,
+                            JSON_EXTRACT(?, '$'), volume_ids),
+            requested_by = ?, actor = ?, updated_at = ?
+      WHERE id = ?`,
+      [
+        input.finalBackup,
+        input.finalBackup ? input.storageId : null,
+        backupId,
+        input.volumeIds === undefined ? 0 : 1,
+        input.volumeIds?.length ? JSON.stringify(input.volumeIds) : null,
+        input.user.id,
+        actor,
+        now,
+        existing.id,
+      ]
+    )
+    yield* invalidateSchedulesOf(transaction, existing)
+    const [row] = yield* transaction.queryRows<ResourceDeletionRow>(
+      `${select} WHERE id = ? LIMIT 1`,
+      [existing.id]
+    )
+    if (!row) return yield* Effect.die("The deletion was not recorded")
+    return toResourceDeletion(row)
+  })
 
 /**
  * Records that someone wants to keep a resource whose deletion failed

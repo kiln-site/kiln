@@ -516,8 +516,16 @@ reservation's transaction, and follows that backup to its end. An App's
 deletion takes the App and its folder, and never a volume: the volumes it
 used are no App's, stay with their data, and are deleted from Volumes by
 whoever decides to. An App has no final backup: what it keeps is on those
-volumes. The deletion's journal still has a place for volumes a deletion
-names; no deletion fills it. A final backup never starts what it stopped,
+volumes. Whoever deletes an App may tick "Delete its volumes too", which
+names the volumes only it uses on its deletion (`volume_ids`): once the App
+is gone from its Relay, each is deleted as deleting it from Volumes does, a
+deletion of its own that takes `relay.configure`, so one something else
+came to use meanwhile stays, and says so on its Relay's Volumes. Each is
+asked for on its own, and again if that fails; if one still can't be, the
+App's deletion stops and says which are left, rather than end as if they
+went. A volume is asked for once: it is taken off the App's deletion as its
+own is recorded, so trying the App's again asks only for the rest, and
+never starts again a volume's deletion that failed or was kept since. A final backup never starts what it stopped,
 so the Relay refuses one, stopping nothing, that finds an App using the
 volume it backs up, as one deployed since. Deleting an App on its Relay is safe to send again, and
 says it's done only once the App's folder is gone, so a deletion the Relay

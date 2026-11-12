@@ -22,3 +22,20 @@ export function appVolumesOf(
     ]
   })
 }
+
+/**
+ * Whether a volume is one App's alone: a Kiln volume that App uses, which
+ * no other App names or mounts and no other container mounts. Such a volume
+ * can be deleted once its App is gone.
+ */
+export function appOwnsVolume(volume: RelayVolume, appId: string): boolean {
+  return (
+    volume.kind === "kiln" &&
+    volume.id !== null &&
+    volume.users.length > 0 &&
+    volume.users.every((user) => user.appId === appId) &&
+    volume.mounts.every(
+      (mount) => mount.kind === "app" && mount.resourceId === appId
+    )
+  )
+}
