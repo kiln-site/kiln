@@ -7,10 +7,7 @@ import { afterAll, vi } from "vite-plus/test"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { AccessPermission } from "@/lib/permissions"
-import {
-  createResourceBackupHandler,
-  restoreResourceBackupHandler,
-} from "@/server/backups.server"
+import { restoreResourceBackupHandler } from "@/server/backups.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertBackup,
@@ -153,9 +150,6 @@ const rejection = (run: () => Promise<unknown>) =>
     Effect.map((error) => error.message)
   )
 
-const count = (table: string) =>
-  selectRows(table).pipe(Effect.map((rows) => rows.length))
-
 const addPermission = (access: string, permission: AccessPermission) =>
   insertRows("access_selection", {
     access_id: access,
@@ -169,26 +163,6 @@ const restoreTasks = selectRows<{ task_kind: string }>("backup_task").pipe(
 
 describeMysql("App and volume backup authorization", () => {
   layer(TestDatabase)((it) => {
-    it.effect(
-      "an App's backup takes permission to read its files, not the Relay's backup permissions",
-      () =>
-        Effect.gen(function* () {
-          yield* seed
-          yield* grant(["backup.create", "backup.download", "backup.read"])
-
-          const message = yield* rejection(() =>
-            createResourceBackupHandler(user, {
-              name: "Before the upgrade",
-              relayId,
-              storageIds: [null],
-              target: { id: appId, kind: "app" },
-            })
-          )
-          assert.include(message, "do not have permission to back up")
-          assert.strictEqual(yield* count("backup"), 0)
-        })
-    )
-
     it.effect(
       "a volume isn't restored while the Relay can't tell which Apps use it",
       () =>

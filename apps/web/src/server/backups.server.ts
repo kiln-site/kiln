@@ -1,7 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 
 import {
-  databaseEngineSupportsLogicalBackups,
   relayBackupTaskSchema,
   relaySnapshotSchema,
   relayVolumesSchema,
@@ -24,7 +23,6 @@ import {
   reserveBackupRestoreEffect,
   reserveDatabaseBackupEffect,
   reserveInstanceBackupEffect,
-  reservePlatformBackupEffect,
   reserveResourceBackupEffect,
   updateBackupExcludesEffect,
   updateBackupLimitsEffect,
@@ -44,18 +42,11 @@ import {
   requireRelayPermission,
   type AccessGrant,
 } from "@/lib/access-control"
-import {
-  instanceScope,
-  resolveScopeAuthorization,
-} from "@/lib/scope-authorization.server"
 import { hasBackupPermission } from "@/lib/backup-access"
 import {
   appBackupPermission,
-  backupTargetApp,
 } from "@/lib/backup-target-permissions"
 import {
-  backupTargetUsers,
-  requireAppsPermission,
   requireBackupTargetPermission,
   requireBackupTargetRestore,
 } from "@/server/backup-target-access.server"
@@ -106,223 +97,13 @@ import type {
   BackupRestoreInput,
   BackupRunForQueryInput,
   CopyBackupInput,
-  DatabaseBackupInput,
-  InstanceBackupInput,
-  PlatformBackupInput,
   RenameBackupInput,
-  ResourceBackupInput,
 } from "@/server/backups"
 
 // The backup server functions in ./backups authenticate the caller and hand
 // the signed-in user to these handlers, which do everything else.
 
 const backupRunsPageSize = 50
-
-export async function createInstanceBackupHandler(
-  user: AuthenticatedUser,
-  data: InstanceBackupInput
-) {
-  const relay = await requireBackupRelay(data.relayId)
-  // Create and the personal-destination download rule share one grant load.
-  const authorization = await resolveScopeAuthorization({
-    scope: instanceScope(relay.id, data.instanceId),
-    user,
-  })
-  authorization.require("backup.create")
-  await validateRequestedStorage(data, user.id, false, async () =>
-    authorization.require("backup.download")
-  )
-  const snapshot = relaySnapshotSchema.parse(
-    await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
-  )
-  if (!snapshot.instances.some((instance) => instance.id === data.instanceId)) {
-    throw new Error("Server not found on this Relay")
-  }
-
-  const input = await runAppEffect(
-    "backups.reserve",
-    reserveInstanceBackupEffect({
-      backupId: randomUUID(),
-      createdBy: user.id,
-      name: data.name,
-      ...(data.mode === undefined ? {} : { mode: data.mode }),
-      relayId: relay.id,
-      requestedMaxBytes: data.maxBytes ?? null,
-      storageIds: data.storageIds,
-      targetId: data.instanceId,
-      taskId: randomUUID(),
-    })
-  )
-  publishBackupChange(relay.id, input.backupId)
-  return dispatchAndLoadReservedBackup(
-    relay,
-    input,
-    user.id,
-    "backups.getAfterCreate"
-  )
-}
-
-export async function createDatabaseBackupHandler(
-  user: AuthenticatedUser,
-  data: DatabaseBackupInput
-) {
-  const relay = await requireBackupRelay(data.relayId)
-  // Create and the personal-destination download rule share one grant load.
-  const authorization = await resolveScopeAuthorization({
-    scope: {
-      relayId: relay.id,
-      resourceId: data.databaseId,
-      resourceType: "database",
-    },
-    user,
-  })
-  authorization.require("backup.create")
-  await validateRequestedStorage(data, user.id, false, async () =>
-    authorization.require("backup.download")
-  )
-  const records = await runAppEffect(
-    "backups.databaseTarget",
-    listManagedDatabaseRecordsEffect()
-  )
-  const database = records.find(
-    (record) =>
-      record.relayId === relay.id && record.databaseId === data.databaseId
-  )
-  if (!database) {
-    throw new Error("Database not found on this Relay")
-  }
-  if (!databaseEngineSupportsLogicalBackups(database.engine)) {
-    throw new Error(`${database.engine} logical backups are not supported yet`)
-  }
-  const input = await runAppEffect(
-    "backups.reserveDatabase",
-    reserveDatabaseBackupEffect({
-      backupId: randomUUID(),
-      createdBy: user.id,
-      name: data.name,
-      relayId: relay.id,
-      requestedMaxBytes: data.maxBytes ?? null,
-      storageIds: data.storageIds,
-      targetId: data.databaseId,
-      taskId: randomUUID(),
-    })
-  )
-  publishBackupChange(relay.id, input.backupId)
-  return dispatchAndLoadReservedBackup(
-    relay,
-    input,
-    user.id,
-    "backups.getAfterDatabaseCreate"
-  )
-}
-
-export async function createPlatformBackupHandler(
-  user: AuthenticatedUser,
-  data: PlatformBackupInput
-) {
-  if (!isPlatformAdmin(user)) {
-    throw new Error("Platform backups require administrator access")
-  }
-  const relay = await requireBackupRelay(data.relayId)
-  await validateRequestedStorage(data, user.id, true)
-  const input = await runAppEffect(
-    "backups.reservePlatform",
-    reservePlatformBackupEffect({
-      backupId: randomUUID(),
-      createdBy: user.id,
-      name: data.name,
-      relayId: relay.id,
-      requestedMaxBytes: data.maxBytes ?? null,
-      storageIds: data.storageIds,
-      targetId: kilnInstallationId(),
-      taskId: randomUUID(),
-    })
-  )
-  publishBackupChange(relay.id, input.backupId)
-  return dispatchAndLoadReservedBackup(
-    relay,
-    input,
-    user.id,
-    "backups.getAfterPlatformCreate"
-  )
-}
-
-/**
- * Backs up an App's folder or a volume, live or with every App that uses it
- * stopped, which takes permission to start and stop each of them.
- */
-export async function createResourceBackupHandler(
-  user: AuthenticatedUser,
-  data: ResourceBackupInput
-) {
-  const relay = await requireBackupRelay(data.relayId)
-  const { target } = data
-  await requireBackupTargetPermission(user, relay.id, target, "backup.create")
-  const app = backupTargetApp(target)
-  if (
-    app &&
-    !(await runAppEffect(
-      "backups.appTarget",
-      loadAppConfigEffect(relay.id, app)
-    ))
-  ) {
-    throw new Error("App not found on this Relay")
-  }
-  if (data.consistency === "stopped") {
-    await requireAppsPermission(
-      user,
-      relay.id,
-      await backupTargetUsers(relay, target, user.id),
-      "instance.power.stop",
-      "A stopped backup stops and starts every App that uses what it backs up; you need permission to stop each"
-    )
-  }
-  await validateRequestedStorage(data, user.id, false, () =>
-    requireBackupTargetPermission(user, relay.id, target, "backup.download")
-  )
-  const input = await runAppEffect(
-    "backups.reserveResource",
-    reserveResourceBackupEffect({
-      backupId: randomUUID(),
-      consistency: data.consistency ?? "live",
-      createdBy: user.id,
-      name: data.name,
-      relayId: relay.id,
-      requestedMaxBytes: data.maxBytes ?? null,
-      storageIds: data.storageIds,
-      targetId: target.id,
-      targetKind: target.kind,
-      taskId: randomUUID(),
-    })
-  )
-  publishBackupChange(relay.id, input.backupId)
-  return dispatchAndLoadReservedBackup(
-    relay,
-    input,
-    user.id,
-    "backups.getAfterResourceCreate"
-  )
-}
-
-async function dispatchAndLoadReservedBackup(
-  relay: PersistedRelay,
-  input: BackupDispatch,
-  userId: string,
-  operation: string
-): Promise<{ backup: BackupCatalogRecord; relayAccepted: boolean }> {
-  const [dispatchResult, backupResult] = await Promise.allSettled([
-    dispatchBackupTask(relay, input, userId),
-    runAppEffect(operation, getBackupCatalogRecordEffect(input.backupId)),
-  ])
-  if (backupResult.status === "rejected") throw backupResult.reason
-  if (!backupResult.value) {
-    throw new Error("Backup catalog record was not created")
-  }
-  return {
-    backup: backupResult.value,
-    relayAccepted: dispatchResult.status === "fulfilled",
-  }
-}
 
 export async function getBackupRunsPageHandler(
   user: AuthenticatedUser,

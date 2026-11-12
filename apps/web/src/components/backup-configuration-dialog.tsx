@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@workspace/ui/components/dialog"
 import { Input } from "@workspace/ui/components/input"
+import { cn } from "@workspace/ui/lib/utils"
 
 import {
   DrawerPopover,
@@ -55,8 +56,12 @@ export interface BackupConfiguration {
   destinationKeys: ReadonlyArray<string>
   mode: "full" | "incremental"
   name: string
-  targetKey?: string
+  /** What was chosen to back up, where the dialog offers targets. */
+  targetKeys?: ReadonlyArray<string>
 }
+
+/** As many targets as one run takes. */
+const MAX_TARGETS = 64
 
 interface BackupStorageOption {
   deleting: boolean
@@ -119,8 +124,8 @@ export function BackupConfigurationDialog({
   const [name, setName] = React.useState(
     () => initialName ?? timestampedBackupName("manual")
   )
-  const [targetKeyValue, setTargetKeyValue] = React.useState(() =>
-    initialBackupTargetKey(targets, initialTargetKey)
+  const [targetKeys, setTargetKeys] = React.useState(() =>
+    initialBackupTargetKeys(targets, initialTargetKey)
   )
   const [destinationKeys, setDestinationKeys] = React.useState<Array<string>>(
     () => [...(initialDestinationKeys ?? ["local"])]
@@ -129,17 +134,26 @@ export function BackupConfigurationDialog({
   const [consistency, setConsistency] = React.useState<"live" | "stopped">(
     initialConsistency
   )
-  const target = showTarget
-    ? targets.find((candidate) => candidate.key === targetKeyValue)
-    : undefined
+  // What is chosen, in the order it is listed.
+  const chosen = React.useMemo(() => {
+    if (!showTarget) return noTargets
+    const keys = new Set(targetKeys)
+    return targets.filter((candidate) => keys.has(candidate.key))
+  }, [showTarget, targetKeys, targets])
   const consistencyChoice = showTarget
-    ? target?.consistencyChoice
+    ? chosenConsistencyChoice(chosen)
     : fixedConsistencyChoice
   const effectiveConsistency =
     consistencyChoice?.stoppedUnavailable === null ? consistency : "live"
+  // A game server's choice. Chosen with anything else, each is a full
+  // archive, as the rest of them are.
+  const onlyInstances =
+    chosen.length > 0 && chosen.every(({ kind }) => kind === "instance")
   const incrementalAllowed = showTarget
-    ? target?.kind === "instance"
+    ? onlyInstances
     : (allowIncremental ?? false)
+  // Kiln's own backup goes only where the platform keeps its own.
+  const platformChosen = chosen.some(({ kind }) => kind === "platform")
   const effectiveMode =
     mode === "incremental" && incrementalAllowed ? "incremental" : "full"
   const availableStorage = React.useMemo(
@@ -148,9 +162,9 @@ export function BackupConfigurationDialog({
         (destination) =>
           destination.enabled &&
           !destination.deleting &&
-          (target?.kind !== "platform" || destination.ownerUserId === null)
+          (!platformChosen || destination.ownerUserId === null)
       ),
-    [storage, target?.kind]
+    [platformChosen, storage]
   )
   const destinationKeysInUse = React.useMemo(() => {
     const allowed = new Set([
@@ -169,12 +183,12 @@ export function BackupConfigurationDialog({
     () => new Set(destinationKeysInUse),
     [destinationKeysInUse]
   )
-  const showMode =
-    !consistencyChoice && (showTarget ? target?.kind === "instance" : true)
+  const showMode = !consistencyChoice && (showTarget ? onlyInstances : true)
+  const tooMany = chosen.length > MAX_TARGETS
 
   const resetConfiguration = () => {
     setName(initialName ?? timestampedBackupName("manual"))
-    setTargetKeyValue(initialBackupTargetKey(targets, initialTargetKey))
+    setTargetKeys(initialBackupTargetKeys(targets, initialTargetKey))
     setDestinationKeys([...(initialDestinationKeys ?? ["local"])])
     setMode(initialMode)
     setConsistency("live")
@@ -199,12 +213,21 @@ export function BackupConfigurationDialog({
 
   return (
     <Dialog open={open} onOpenChange={changeOpen}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent
+        className={cn(
+          "sm:max-w-xl",
+          // What is chosen adds and removes options below it. Its top stays
+          // where it would be at its tallest, so it grows downward and the
+          // list of targets, open beneath its field, never moves.
+          showTarget &&
+            "top-[max(1rem,calc(50dvh-18.25rem))] max-h-[calc(100dvh-1rem-max(1rem,calc(50dvh-18.25rem)))] translate-y-0"
+        )}
+      >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <label className="block">
             <span className="mb-2 block text-xs font-medium">Name</span>
             <Input
@@ -218,18 +241,28 @@ export function BackupConfigurationDialog({
           </label>
           {showTarget ? (
             <div>
-              <span className="mb-2 block text-xs font-medium">Target</span>
+              <span className="mb-2 block text-xs font-medium">Targets</span>
               <BackupTargetPicker
-                selected={target}
+                chosen={chosen}
                 targets={targets}
-                onSelect={setTargetKeyValue}
+                onChange={setTargetKeys}
               />
+              {tooMany ? (
+                <p role="alert" className="mt-1.5 text-xs text-destructive">
+                  One backup takes up to {MAX_TARGETS} targets.
+                </p>
+              ) : null}
             </div>
           ) : null}
           {consistencyChoice ? (
             <BackupConsistencyChoices
               consistency={effectiveConsistency}
-              stoppedDescription={consistencyChoice.stoppedDescription}
+              stoppedDescription={
+                consistencyChoice.stoppedDescription ??
+                (chosen.length > 1
+                  ? "Stops the Apps that use the volumes, then starts them again"
+                  : undefined)
+              }
               stoppedUnavailable={consistencyChoice.stoppedUnavailable}
               onConsistencyChange={setConsistency}
             />
@@ -246,7 +279,7 @@ export function BackupConfigurationDialog({
             effectiveMode={effectiveMode}
             selectedDestinations={selectedDestinations}
             singleDestination={singleDestination}
-            targetKind={target?.kind}
+            targetKind={platformChosen ? "platform" : undefined}
             onToggleDestination={toggleDestination}
           />
           {error ? (
@@ -264,7 +297,11 @@ export function BackupConfigurationDialog({
             Cancel
           </Button>
           <Button
-            disabled={pending || !name.trim() || (showTarget && !target)}
+            disabled={
+              pending ||
+              !name.trim() ||
+              (showTarget && (chosen.length === 0 || tooMany))
+            }
             type="button"
             onClick={() =>
               onSubmit({
@@ -272,8 +309,8 @@ export function BackupConfigurationDialog({
                 destinationKeys: destinationKeysInUse,
                 mode: effectiveMode,
                 name: name.trim(),
-                ...(showTarget && targetKeyValue
-                  ? { targetKey: targetKeyValue }
+                ...(showTarget
+                  ? { targetKeys: chosen.map(({ key }) => key) }
                   : {}),
               })
             }
@@ -482,30 +519,45 @@ function BackupDestinationChoice({
 }
 
 const BackupTargetPicker = React.memo(function BackupTargetPicker({
-  onSelect,
-  selected,
+  chosen,
+  onChange,
   targets,
 }: {
-  onSelect: (key: string) => void
-  selected: BackupConfigurationTarget | undefined
+  chosen: ReadonlyArray<BackupConfigurationTarget>
+  onChange: (keys: Array<string>) => void
   targets: ReadonlyArray<BackupConfigurationTarget>
 }) {
   const [open, setOpen] = React.useState(false)
   const items = React.useMemo(() => targets.map(backupTargetItem), [targets])
-  const selectedItem = React.useMemo(
-    () => (selected ? backupTargetItem(selected) : null),
-    [selected]
+  const [only] = chosen.length === 1 ? chosen : []
+  const onlyItem = React.useMemo(
+    () => (only ? backupTargetItem(only) : null),
+    [only]
   )
   const selectedKeys = React.useMemo(
-    () => new Set(selected ? [selected.key] : []),
-    [selected]
+    () => new Set(chosen.map(({ key }) => key)),
+    [chosen]
   )
-  const selectItem = React.useCallback(
-    (item: AnyInstancePickerItem) => {
-      onSelect(item.key)
-      setOpen(false)
+  // Several can be chosen, so the list stays open as each is ticked.
+  const toggleItem = React.useCallback(
+    (item: AnyInstancePickerItem) =>
+      onChange(
+        selectedKeys.has(item.key)
+          ? [...selectedKeys].filter((key) => key !== item.key)
+          : [...selectedKeys, item.key]
+      ),
+    [onChange, selectedKeys]
+  )
+  const toggleMany = React.useCallback(
+    (keys: ReadonlyArray<string>, selected: boolean) => {
+      const next = new Set(selectedKeys)
+      for (const key of keys) {
+        if (selected) next.add(key)
+        else next.delete(key)
+      }
+      onChange([...next])
     },
-    [onSelect]
+    [onChange, selectedKeys]
   )
 
   return (
@@ -516,33 +568,43 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          aria-label="Backup target"
+          aria-label="Backup targets"
           disabled={targets.length === 0}
-          className="h-auto min-h-10 w-full justify-between gap-3 px-2 py-1.5 font-normal"
+          // One height whatever is chosen, and no wider than its field.
+          className="h-12.5 w-full min-w-0 justify-between gap-3 px-2 py-1.5 font-normal"
         >
-          {selectedItem?.identity.kind === "volume" ? (
+          {onlyItem?.identity.kind === "volume" ? (
             <VolumePickerCard
               className="min-w-0 flex-1 gap-2 text-left"
               iconClassName="size-7 border-0 bg-muted/55"
-              meta={selectedItem.meta}
-              name={selectedItem.name}
+              meta={onlyItem.meta}
+              name={onlyItem.name}
             />
-          ) : selectedItem ? (
+          ) : onlyItem ? (
             <InstanceCard
               className="min-w-0 flex-1 gap-2 text-left"
               iconClassName="size-7 border-0 bg-muted/55"
-              instance={selectedItem.identity}
-              meta={selectedItem.meta}
+              instance={onlyItem.identity}
+              meta={onlyItem.meta}
               metaClassName="font-mono"
-              name={selectedItem.name}
+              name={onlyItem.name}
               nameClassName="type-control-sm"
               statusClassName="ring-background"
             />
+          ) : chosen.length > 1 ? (
+            <span className="min-w-0 flex-1 px-1 text-left">
+              <span className="type-control-sm block">
+                {chosen.length} targets
+              </span>
+              <span className="type-meta block truncate text-muted-foreground">
+                {chosen.map(({ name }) => name).join(", ")}
+              </span>
+            </span>
           ) : (
             <span className="px-1 text-muted-foreground">
               {targets.length === 0
                 ? "No targets available"
-                : "Choose a target"}
+                : "Choose what to back up"}
             </span>
           )}
           <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
@@ -557,26 +619,53 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
           ariaLabel="Backup targets"
           emptyMessage="No targets available"
           items={items}
+          multiple
           selectedKeys={selectedKeys}
-          onSelect={selectItem}
+          onSelect={toggleItem}
+          onSelectMany={toggleMany}
         />
       </DrawerPopoverContent>
     </DrawerPopover>
   )
 })
 
+const noTargets: ReadonlyArray<BackupConfigurationTarget> = []
+
+// Whether what is chosen can be taken stopped: the volumes among it, which
+// stop the Apps that use them, and why not when one of them can't be.
+function chosenConsistencyChoice(
+  chosen: ReadonlyArray<BackupConfigurationTarget>
+): { stoppedDescription?: string | undefined; stoppedUnavailable: string | null } | undefined {
+  const choices = chosen.flatMap(({ consistencyChoice }) =>
+    consistencyChoice ? [consistencyChoice] : []
+  )
+  const [first] = choices
+  if (!first) return undefined
+  return {
+    ...(choices.length === 1 ? first : {}),
+    stoppedUnavailable:
+      choices.find((choice) => choice.stoppedUnavailable !== null)
+        ?.stoppedUnavailable ?? null,
+  }
+}
+
 /**
  * The target a new backup starts on: the one the page is looking at, or the
  * only one there is. Anything else waits for a choice, so a backup never
  * quietly lands on whichever resource happens to sort first.
  */
-function initialBackupTargetKey(
+function initialBackupTargetKeys(
   targets: ReadonlyArray<BackupConfigurationTarget>,
   initialTargetKey: string | undefined
-): string {
-  if (targets.some((target) => target.key === initialTargetKey))
-    return initialTargetKey ?? ""
-  return targets.length === 1 ? (targets[0]?.key ?? "") : ""
+): Array<string> {
+  if (
+    initialTargetKey !== undefined &&
+    targets.some((target) => target.key === initialTargetKey)
+  ) {
+    return [initialTargetKey]
+  }
+  const [only] = targets.length === 1 ? targets : []
+  return only ? [only.key] : []
 }
 
 function backupTargetItem(

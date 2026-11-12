@@ -2169,6 +2169,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
                WHERE backup.batch_id IS NOT NULL
                  AND batch_member.relay_id = backup.relay_id
                  AND batch_member.batch_id = backup.batch_id
+                 AND batch_member.consistency = 'stopped'
             ) AS batch_size,
             COALESCE(policy.exclude_patterns, JSON_ARRAY()) AS exclude_patterns
        FROM ${databaseTable("backup")} backup
