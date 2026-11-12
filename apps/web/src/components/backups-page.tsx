@@ -2,6 +2,7 @@ import * as React from "react"
 import {
   useInfiniteQuery,
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
   useSuspenseQuery,
@@ -422,8 +423,13 @@ export const BackupsPage = React.memo(function BackupsPage({
     for (const app of apps) keys.add(targetKey("app", app.relayId, app.id))
     return keys
   }, [apps, databases, topology.servers])
+  const volumeNames = useVolumeNames(topology.nodes, capabilities)
   const targetInstances = React.useMemo(() => {
     const instances = new Map<string, BackupTargetIdentity>()
+    // A volume is shown by its name, as everything else is.
+    for (const [key, volume] of volumeNames) {
+      instances.set(key, { ...volume, kind: "server" })
+    }
     for (const server of topology.servers) {
       instances.set(targetKey("instance", server.relayId, server.id), {
         ...server,
@@ -456,7 +462,7 @@ export const BackupsPage = React.memo(function BackupsPage({
       })
     }
     return instances
-  }, [apps, databases, topology.nodes, topology.servers])
+  }, [apps, databases, topology.nodes, topology.servers, volumeNames])
   const availableRelayIds = React.useMemo(
     () =>
       new Set(
@@ -632,6 +638,54 @@ const ScopedBackupToolbar = React.memo(function ScopedBackupToolbar({
         : "The volume can’t be found right now. Clear its filter to back up the App."
   return <BackupToolbar {...props} createDisabledReason={reason} />
 })
+
+const selectVolumeNames = (data: {
+  volumes: ReadonlyArray<{ id: string | null; name: string }>
+}) =>
+  data.volumes.flatMap((volume) =>
+    volume.id === null ? [] : [{ id: volume.id, name: volume.name }]
+  )
+
+// A volume is named on its Relay, so a backup of one shows that name while
+// its Relay can be asked, and the volume's ID otherwise. Asked once for each
+// Relay a person may read, and kept a while: names seldom change.
+function useVolumeNames(
+  relays: ReadonlyArray<{ relayId: string }>,
+  capabilities: Awaited<ReturnType<typeof getAccessCapabilities>>
+) {
+  const named = useQueries({
+    combine: (results) =>
+      Object.fromEntries(
+        results.flatMap((result, index) =>
+          (result.data ?? []).map(({ id, name }) => [
+            targetKey("volume", relays[index]!.relayId, id),
+            { id, name, relayId: relays[index]!.relayId },
+          ])
+        )
+      ),
+    queries: relays.map(({ relayId }) => ({
+      ...relayVolumesQueryOptions(relayId),
+      enabled:
+        capabilities.isPlatformAdmin ||
+        capabilities.grants.some(
+          (grant) =>
+            grant.relayId === relayId &&
+            grant.resourceType === "relay" &&
+            grantHasPermission(grant, "relay.read")
+        ),
+      refetchInterval: false as const,
+      select: selectVolumeNames,
+      staleTime: 5 * 60_000,
+    })),
+  })
+  return React.useMemo(
+    () =>
+      new Map<string, { id: string; name: string; relayId: string }>(
+        Object.entries(named)
+      ),
+    [named]
+  )
+}
 
 // App-owned volume identities are readable with app.read. Only a successful
 // inventory can establish deletion; an offline Relay or denied read cannot.
