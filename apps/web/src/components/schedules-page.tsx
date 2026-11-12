@@ -3435,13 +3435,13 @@ const ActionEditor = React.memo(function ActionEditor({
         <BackupConfigurationDialog
           allowIncremental
           // A step that backs up only Apps takes them live or stopped, each
-          // App's folder and owned volumes together; Hearth checks stopping
+          // App's folder and the volumes it uses together; Hearth checks stopping
           // them as it saves.
           consistencyChoice={
             backsUpAppsOnly
               ? {
                   stoppedDescription:
-                    "Stops each App once for its folder and every volume it owns",
+                    "Stops each App once for its folder and every volume it uses",
                   stoppedUnavailable: null,
                 }
               : undefined

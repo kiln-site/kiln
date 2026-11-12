@@ -85,7 +85,7 @@ export interface ScheduleManagerOptions {
     effect: Effect.Effect<void, never>
   ) => Fiber.Fiber<void, unknown>
   readonly getBackup: (taskId: string) => Promise<RelayBackupTask | null>
-  readonly listAppOwnedVolumeIds: (
+  readonly listAppBackupVolumeIds: (
     appId: string
   ) => Promise<ReadonlyArray<string>>
   readonly listAppIds: () => Promise<ReadonlySet<string>>
@@ -959,15 +959,17 @@ export class ScheduleManager {
     ) {
       throw new Error("Scheduled backup destination is not deployed")
     }
-    const owned = await this.#options.listAppOwnedVolumeIds(target.id)
+    // What its backup takes now, a Kiln volume it has taken up or let go
+    // of among them, against what Hearth admitted.
+    const taken = await this.#options.listAppBackupVolumeIds(target.id)
     const projected = new Set(
       executions
         .filter((execution) => execution.targetKind === "volume")
         .map((execution) => execution.targetId)
     )
     if (
-      owned.length !== projected.size ||
-      owned.some((id) => !projected.has(id))
+      taken.length !== projected.size ||
+      taken.some((id) => !projected.has(id))
     ) {
       throw new Error(
         "App backup coverage changed; waiting for Hearth to refresh the schedule"

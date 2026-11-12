@@ -182,14 +182,16 @@ export const backUpResource = operation<ResourceBackupInput>()({
   }),
 })
 
-// An App's folder and the volumes it owns, together, to the destinations
-// chosen for them.
+// An App's folder and the volumes it uses, together, to the destinations
+// chosen for them. Which volumes is settled before it runs
+// (`settleAppBackup`), so it holds each of them with the App.
 export const backUpApp = operation<{
   appId: string
   consistency: "live" | "stopped"
   name: string
   relayId: string
   storageIds: Array<string | null>
+  volumeIds: ReadonlyArray<string>
 }>()({
   name: "backup.app.create",
   doing: "Backing up this App",
@@ -203,7 +205,15 @@ export const backUpApp = operation<{
       )
     ),
   locks: ({ input }) => [
-    shared(backupTargetKey(input.relayId, { id: input.appId, kind: "app" })),
+    // An App's own volume is held with the App, so each key once.
+    ...[
+      ...new Set(
+        [
+          { id: input.appId, kind: "app" as const },
+          ...input.volumeIds.map((id) => ({ id, kind: "volume" as const })),
+        ].map((target) => backupTargetKey(input.relayId, target))
+      ),
+    ].map((key) => shared(key)),
     ...destinations(input.storageIds),
   ],
   run: ({ context, input }) =>

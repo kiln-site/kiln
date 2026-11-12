@@ -37,7 +37,10 @@ import { databaseTable } from "@/lib/database-config"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
 import { relayRpc } from "@/lib/relay-connection"
 import { listPersistedRelays, type PersistedRelay } from "@/lib/relay-registry"
-import { appTargets, readRelayVolumes } from "@/server/app-backups.server"
+import {
+  readRelayVolumes,
+  scheduledAppTargets,
+} from "@/server/app-backups.server"
 import type { RelayVolumes } from "@workspace/contracts"
 import { defaultKilnBackupsSettingId } from "@/migrations/0024_default_kiln_backups"
 
@@ -402,44 +405,87 @@ async function prepareRelayScheduleActions(
   owner: string | null,
   relay: PersistedRelay
 ): Promise<Array<RelayScheduleAction>> {
-  // An App's backup is of its folder and the volumes it owns, as the Relay
+  // An App's backup is of its folder and the volumes it uses, as the Relay
   // lists them now; asked once for every App the schedule backs up.
   let listing: Promise<RelayVolumes> | null = null
-  const members = async (target: ScheduleTarget) => {
-    if (target.kind !== "app") return [target]
-    listing ??= readRelayVolumes(relay, owner ?? undefined)
-    return appTargets(target.id, await listing).map(
-      ({ id, kind }): BackupMember => ({
-        id,
-        kind,
-        relayId: target.relayId,
-        ...(kind === "volume" ? { appId: target.id } : {}),
-      })
-    )
+  const planned = new Map<string, Promise<TargetMembers>>()
+  const membersOf = (target: ScheduleTarget) => {
+    if (target.kind !== "app") {
+      return Promise.resolve({ members: [target], refusal: null })
+    }
+    const known = planned.get(target.id)
+    if (known) return known
+    const made = (async (): Promise<TargetMembers> => {
+      listing ??= readRelayVolumes(relay, owner ?? undefined)
+      const { missing, targets: taken } = await scheduledAppTargets(
+        relay.id,
+        target.id,
+        await listing
+      )
+      return {
+        members: taken.map(({ id, kind }) => ({
+          id,
+          kind,
+          relayId: target.relayId,
+          ...(kind === "volume" ? { appId: target.id } : {}),
+        })),
+        refusal:
+          missing === null
+            ? null
+            : `A volume this App mounts is missing on its Relay (${missing.slice(0, 8)})`,
+      }
+    })()
+    planned.set(target.id, made)
+    return made
   }
   return Effect.runPromise(
     Effect.forEach(
       actions.map((action) => forRelayTargets(action, targets)),
       (action): Effect.Effect<RelayScheduleAction, unknown> => {
         if (action.type !== "backup") return Effect.succeed(action)
-        return Effect.forEach(
-          targets,
-          (target) =>
-            !scheduleActionAppliesToTarget(action, target)
-              ? Effect.succeed([])
-              : promiseEffect(async () =>
-                  Promise.all(
-                    (await members(target)).map((member) =>
-                      scheduledBackupExecution(action, member, owner)
-                    )
-                  )
+        return promiseEffect(async () => {
+          const taken = await Promise.all(
+            targets
+              .filter((target) => scheduleActionAppliesToTarget(action, target))
+              .map(membersOf)
+          )
+          // A volume two of the step's Apps use would be one backup asked
+          // for twice: neither App's runs until a step backs them up
+          // together.
+          const uses = new Map<string, number>()
+          for (const { members } of taken) {
+            for (const member of members) {
+              if (member.kind !== "volume") continue
+              uses.set(member.id, (uses.get(member.id) ?? 0) + 1)
+            }
+          }
+          const shares = ({ members }: TargetMembers) =>
+            members.some(
+              (member) =>
+                member.kind === "volume" && (uses.get(member.id) ?? 0) > 1
+            )
+          return taken.flatMap((target) =>
+            target.members.map((member) => ({
+              member,
+              refusal:
+                target.refusal ??
+                (shares(target)
+                  ? "This step backs up another App that uses one of this App's volumes. Back them up in separate steps for now."
+                  : null),
+            }))
+          )
+        }).pipe(
+          Effect.flatMap((members) =>
+            Effect.forEach(
+              members,
+              ({ member, refusal }) =>
+                promiseEffect(() =>
+                  scheduledBackupExecution(action, member, owner, refusal)
                 ),
-          { concurrency: scheduleReconciliationConcurrency }
-        ).pipe(
-          Effect.map((executions) => ({
-            ...action,
-            executions: executions.flat(),
-          }))
+              { concurrency: scheduleReconciliationConcurrency }
+            )
+          ),
+          Effect.map((executions) => ({ ...action, executions }))
         )
       },
       { concurrency: 1 }
@@ -447,10 +493,19 @@ async function prepareRelayScheduleActions(
   )
 }
 
+// What a schedule's target backs up, and why it can't be, when Hearth
+// already knows: an App's backup that would run short.
+interface TargetMembers {
+  members: ReadonlyArray<BackupMember>
+  refusal: string | null
+}
+
 async function scheduledBackupExecution(
   action: Extract<ScheduleAction, { type: "backup" }>,
   target: BackupMember,
-  owner: string | null
+  owner: string | null,
+  /** Why it doesn't run, known before it is admitted. */
+  refused: string | null = null
 ) {
   const targetKind = target.kind === "relay" ? "platform" : target.kind
   const execution = {
@@ -458,6 +513,15 @@ async function scheduledBackupExecution(
     mode: action.mode,
     targetId: target.id,
     targetKind: target.kind,
+  }
+  if (refused !== null) {
+    return {
+      ...execution,
+      destination: null,
+      maxBytes: null,
+      refusal: refused,
+      repositoryId: null,
+    }
   }
   const admission = await runAppEffect(
     "schedules.backupAdmission",

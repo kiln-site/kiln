@@ -45,17 +45,18 @@ export const invalidateScheduleDeploymentsEffect = Effect.fnUntraced(function* (
     )
     return
   }
-  // Compose volume IDs are <owning App ID>/<volume name>. Kiln volumes
-  // have no owner and aren't schedule targets.
-  const target =
+  // Compose volume IDs are <owning App ID>/<volume name>. A Kiln volume is
+  // no App's, and any App on its Relay may be backed up with it: every
+  // App's backup schedules there are sent again.
+  const target: { id: string | null; kind: string } =
     scope.target.kind === "platform"
       ? { id: scope.relayId, kind: "relay" }
       : scope.target.kind === "volume"
         ? scope.target.id.includes("/")
           ? { id: scope.target.id.split("/")[0]!, kind: "app" }
-          : null
+          : { id: null, kind: "app" }
         : scope.target
-  if (!target) return
+  const backupOnly = scope.backupOnly || target.id === null
   yield* transaction.execute(
     `UPDATE ${databaseTable("schedule_deployment")} deployment
          JOIN ${databaseTable("schedule_target")} target
@@ -65,9 +66,9 @@ export const invalidateScheduleDeploymentsEffect = Effect.fnUntraced(function* (
               deployment.desired_generation = deployment.desired_generation + 1,
               deployment.updated_at = ?
         WHERE target.relay_id = ? AND target.target_kind = ?
-          AND target.target_id = ?
+          ${target.id === null ? "" : "AND target.target_id = ?"}
           ${
-            scope.backupOnly
+            backupOnly
               ? `AND EXISTS (
             SELECT 1 FROM ${databaseTable("schedule_action")} action
              WHERE action.schedule_id = deployment.schedule_id
@@ -75,6 +76,11 @@ export const invalidateScheduleDeploymentsEffect = Effect.fnUntraced(function* (
           )`
               : ""
           }`,
-    [now, scope.relayId, target.kind, target.id]
+    [
+      now,
+      scope.relayId,
+      target.kind,
+      ...(target.id === null ? [] : [target.id]),
+    ]
   )
 })

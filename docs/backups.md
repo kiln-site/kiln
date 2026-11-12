@@ -101,6 +101,13 @@ the authority reading or writing that data does
   and replaces only files `instance.files.write` could already change, and
   the Compose file isn't among them (Hearth sends it with each deployment).
 - A Kiln volume, shared by design, takes `backup.*` on the Relay.
+- Backing up an App takes its backup with every volume it uses, a Kiln
+  volume among them, on the App's permission alone: reading the App's files
+  already reaches the volumes it mounts. Each volume's backup is still the
+  volume's: seeing, downloading, restoring or deleting it takes `backup.*`
+  on the Relay, so someone with the App's permissions only is shown that
+  the volume was taken, not its backups, and can't restore that part. A
+  personal destination takes `backup.download` on every member.
 - A stopped backup also takes `instance.power.stop` on every App it stops
   and starts again, as stopping them does.
 - Restoring a volume also takes `instance.files.write` on every App that uses
@@ -597,12 +604,18 @@ volume filter; the picker still shows the App. Backup settings retain the
 App's Folder and Volume sections.
 
 New Backup offers Apps alongside game servers, databases and Kiln. An App
-backup includes its folder and every volume it owns together. A volume scope
+backup includes its folder and every volume it uses together: those its
+Compose project made and each Kiln volume its configuration mounts or its
+containers use, one another App uses too. A Kiln volume its configuration
+mounts that its Relay doesn't have refuses the backup, manual or scheduled,
+since it would leave that data out. A schedule is sent again when an App
+takes up or lets go of a volume, and a step that backs up two Apps using
+the same volume is refused for both until one step backs them up together. A volume scope
 also offers that volume on its own. Both offer Live or Stopped, subject to
 permission to manage the App (or, for a Kiln volume, Apps on the Relay).
 Stopped App backups run as one batch, stopping the App once for all targets.
 
-The Settings page configures an App's folder and each volume it owns
+The Settings page configures an App's folder and each volume it uses
 (choosing the App) and each Kiln volume on a Relay ("Kiln volumes on …"),
 with the same permissions as backing them up: retention, the platform
 ceiling, the destination, and exclusions, which apply to an App's folder

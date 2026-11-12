@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 
 import {
+  appBackupVolumes,
   backupUnfinishedRestoresSchema,
   relayVolumesSchema,
   type BackupConsistency,
@@ -21,6 +22,7 @@ import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
+import { configuredVolumeIds } from "@/lib/app-volume-references.server"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
 import {
   dispatchBackupTask,
@@ -57,59 +59,150 @@ export async function getAppBackupsHandler(
     { id: data.appId, kind: "app" },
     "backup.read"
   )
-  const [listing, unfinished] = await Promise.all([
+  const [listing, unfinished, plan] = await Promise.all([
     recoverPromise(
       () => readRelayVolumes(relay, user.id),
       () => null
     ),
     unfinishedRestores(relay, user.id),
+    appBackupPlan(relay.id, data.appId),
   ])
-  const targets = appTargets(data.appId, listing)
-  const { batch, latest, restores } = await runAppEffect(
+  const targets = appTargets(data.appId, listing, plan?.configured)
+  // A volume's backups are its own to see, whichever App's backup made
+  // them: someone who may only see the App's is shown the volume without
+  // them.
+  const grants = isPlatformAdmin(user)
+    ? null
+    : await listUserGrants(user.id, relay.id)
+  const readable = (target: BackupTarget) =>
+    grants === null ||
+    grantsAllowBackup(grants, { ...target, relayId: relay.id }, "backup.read")
+  const { latest, restores } = await runAppEffect(
     "backups.appTargets",
-    listTargetBackupsEffect(relay.id, targets)
+    listTargetBackupsEffect(relay.id, targets.filter(readable))
   )
   const same = (left: BackupTarget, right: BackupTarget) =>
     left.kind === right.kind && left.id === right.id
   return {
     // The Relay's volumes, unless it couldn't be asked.
     available: listing !== null,
-    batch: batch.map(publicBackup),
+    // A volume its configuration mounts that its Relay doesn't have: its
+    // backup would leave that data out, so none is made until it's back.
+    missing: listing && plan ? missingAppVolumes(plan.configured, listing) : [],
     targets: targets.map((target) => {
+      const shown = readable(target)
       const backup = latest.find((record) =>
         same(target, { id: record.targetId, kind: record.targetKind })
       )
       return {
         ...target,
         latest: backup ? publicBackup(backup) : null,
+        readable: shown,
         restore: (() => {
           const restore = restores.find((record) =>
             same(target, { id: record.targetId, kind: record.targetKind })
           )
           return restore ? publicBackup(restore) : null
         })(),
-        unfinished:
-          unfinished.find((restore) => same(target, restore.target)) ?? null,
+        unfinished: shown
+          ? (unfinished.find((restore) => same(target, restore.target)) ??
+            null)
+          : null,
       }
     }),
     uncovered:
       listing?.uncovered.filter((mount) => mount.appId === data.appId) ?? [],
-    // Kiln volumes it uses, which are backed up on their own.
-    used:
-      listing?.volumes.flatMap((volume) =>
-        volume.kind === "kiln" &&
-        volume.id !== null &&
-        volume.users.some((user) => user.appId === data.appId)
-          ? [{ id: volume.id, name: volume.name }]
-          : []
-      ) ?? [],
   }
 }
 
 /**
- * Backs up an App: its folder and each volume its Compose project owns, each
- * a backup of its own, started together as one batch. Stopped, each stops
- * and starts again every App that uses what it backs up.
+ * What decides which volumes an App's backup takes besides what its Relay
+ * lists: the Kiln volumes its saved configuration mounts. Null when Hearth
+ * keeps no such App.
+ */
+async function appBackupPlan(relayId: string, appId: string) {
+  const app = await runAppEffect(
+    "backups.appTarget",
+    loadAppConfigEffect(relayId, appId)
+  )
+  return app ? { configured: configuredVolumeIds(app.config) } : null
+}
+
+/**
+ * What a scheduled backup of an App takes, as its Relay lists its volumes
+ * now, and a volume its configuration mounts that the Relay doesn't have:
+ * with one missing, the backup is refused rather than run short.
+ */
+export async function scheduledAppTargets(
+  relayId: string,
+  appId: string,
+  listing: RelayVolumes
+) {
+  const plan = await appBackupPlan(relayId, appId)
+  const configured = plan?.configured ?? []
+  return {
+    missing: missingAppVolumes(configured, listing)[0] ?? null,
+    targets: appTargets(appId, listing, configured),
+  }
+}
+
+/**
+ * The Kiln volumes an App's configuration mounts that its Relay doesn't
+ * have. A backup that went ahead would leave their data out without saying.
+ */
+export function missingAppVolumes(
+  configured: ReadonlyArray<string>,
+  listing: RelayVolumes
+): Array<string> {
+  const known = new Set(listing.volumes.map((volume) => volume.id))
+  return configured.filter((id) => !known.has(id))
+}
+
+/**
+ * Settles what backing up an App takes before its operation runs, for
+ * someone who may back it up: the volumes are lanes it holds too.
+ */
+export async function settleAppBackup<
+  Input extends { appId: string; relayId: string },
+>(user: AuthenticatedUser, data: Input) {
+  const relay = await activeRelay(data.relayId)
+  await requireBackupTargetPermission(
+    user,
+    relay.id,
+    { id: data.appId, kind: "app" },
+    "backup.create"
+  )
+  const { targets } = await coveredAppTargets(relay, data.appId, user.id)
+  return {
+    ...data,
+    volumeIds: targets.flatMap((target) =>
+      target.kind === "volume" ? [target.id] : []
+    ),
+  }
+}
+
+// Everything an App's backup takes, or why it can't take all the App keeps.
+async function coveredAppTargets(
+  relay: PersistedRelay,
+  appId: string,
+  userId: string
+) {
+  const plan = await appBackupPlan(relay.id, appId)
+  if (!plan) throw new Error("App not found on this Relay")
+  const listing = await readRelayVolumes(relay, userId)
+  const [missing] = missingAppVolumes(plan.configured, listing)
+  if (missing !== undefined) {
+    throw new Error(
+      `A volume this App mounts is missing on its Relay (${missing.slice(0, 8)}). Restore it or remove its mount, then back up again.`
+    )
+  }
+  return { listing, targets: appTargets(appId, listing, plan.configured) }
+}
+
+/**
+ * Backs up an App: its folder and each volume it uses, each a backup of its
+ * own, started together as one batch. Stopped, each stops and starts again
+ * every App that uses what it backs up.
  */
 export async function createAppBackupsHandler(
   user: AuthenticatedUser,
@@ -119,21 +212,26 @@ export async function createAppBackupsHandler(
     name: string
     relayId: string
     storageIds: Array<string | null>
+    /** The volumes it was settled to take, which its operation holds. */
+    volumeIds: ReadonlyArray<string>
   }
 ) {
   const relay = await activeRelay(data.relayId)
   const app = { id: data.appId, kind: "app" as const }
   await requireBackupTargetPermission(user, relay.id, app, "backup.create")
-  if (
-    !(await runAppEffect(
-      "backups.appTarget",
-      loadAppConfigEffect(relay.id, data.appId)
-    ))
-  ) {
-    throw new Error("App not found on this Relay")
+  const { listing, targets } = await coveredAppTargets(
+    relay,
+    data.appId,
+    user.id
+  )
+  const taken = targets.flatMap((target) =>
+    target.kind === "volume" ? [target.id] : []
+  )
+  if ([...taken].sort().join() !== [...data.volumeIds].sort().join()) {
+    throw new Error(
+      "This App's volumes changed while its backup was starting. Try again."
+    )
   }
-  const listing = await readRelayVolumes(relay, user.id)
-  const targets = appTargets(data.appId, listing)
   if (data.consistency === "stopped") {
     if (!listing.protection.ready) {
       throw new Error(
@@ -153,7 +251,10 @@ export async function createAppBackupsHandler(
       "A stopped backup stops and starts every App that uses what it backs up; you need permission to stop each"
     )
   }
-  await requirePersonalStorage(data.storageIds, user, relay.id, app)
+  // A personal destination exports each member, the volumes among them.
+  for (const { id, kind } of targets) {
+    await requirePersonalStorage(data.storageIds, user, relay.id, { id, kind })
+  }
   const batchId = randomUUID()
   // All of the App's backups, or none: one refused, as by a ceiling of no
   // backups, refuses the batch rather than leave it short of a member.
@@ -307,26 +408,33 @@ async function unfinishedRestores(
 }
 
 /**
- * What backing up an App backs up: its folder, then each volume its Compose
- * project owns that has an ID, as manual and scheduled backups both do.
+ * What backing up an App backs up, as manual and scheduled backups both
+ * do: its folder, then each volume its Compose project made and each Kiln
+ * volume it uses, whichever other Apps use that one too. A Kiln volume its
+ * saved configuration mounts counts whether or not its Relay has heard.
  */
 export function appTargets(
   appId: string,
-  listing: RelayVolumes | null
+  listing: RelayVolumes | null,
+  configured: ReadonlyArray<string> = []
 ): Array<ResourceTarget & { name: string | null }> {
+  const volumes = listing?.volumes ?? []
+  const taken = appBackupVolumes(appId, volumes)
+  const named = volumes.flatMap((volume) =>
+    volume.id !== null &&
+    volume.kind === "kiln" &&
+    configured.includes(volume.id) &&
+    !taken.some((member) => member.id === volume.id)
+      ? [{ ...volume, id: volume.id }]
+      : []
+  )
   return [
     { id: appId, kind: "app", name: null },
-    ...(listing?.volumes ?? []).flatMap((volume) =>
-      volume.owner?.appId === appId && volume.id !== null
-        ? [
-            {
-              id: volume.id,
-              kind: "volume" as const,
-              name: volume.owner.volume,
-            },
-          ]
-        : []
-    ),
+    ...[...taken, ...named].map((volume) => ({
+      id: volume.id,
+      kind: "volume" as const,
+      name: volume.owner?.volume ?? volume.name,
+    })),
   ]
 }
 

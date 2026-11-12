@@ -17,6 +17,7 @@ import { decryptWithKeyring, encryptWithKeyring } from "../../keyring.mjs"
 import { Database } from "@/effect/database"
 import { CredentialError } from "@/effect/errors"
 import { removeIconsEffect } from "@/effect/icons"
+import { invalidateScheduleDeploymentsEffect } from "@/effect/schedule-invalidation"
 import {
   configuredVolumeIds,
   importAppVolumeReferencesEffect,
@@ -343,6 +344,15 @@ export const changeAppEffect = Effect.fn("apps.change")(function* <E, R>(
         })
         const before = configuredVolumeIds(previous)
         const after = configuredVolumeIds(config)
+        // Its backup takes the volumes it uses, so one taken up or let go
+        // of changes what a schedule backing it up was sent.
+        if (before.join() !== after.join()) {
+          yield* invalidateScheduleDeploymentsEffect(transaction, {
+            backupOnly: true,
+            relayId,
+            target: { id: appId, kind: "app" },
+          })
+        }
         if (after.some((id) => !before.includes(id))) {
           yield* sendAppVolumeReferencesEffect(relayId, appId, [
             ...new Set([...before, ...after]),
