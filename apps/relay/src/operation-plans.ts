@@ -261,7 +261,9 @@ export function backupCoverageLocks(input: BackupTaskInput): Array<LaneLock> {
     input.appCoverage &&
     input.consistency !== "stopped" &&
     input.reason !== "final_delete"
-    ? [exclusive(laneKeys.appLifecycle(input.appCoverage.appId))]
+    ? input.appCoverage.map(({ appId }) =>
+        exclusive(laneKeys.appLifecycle(appId))
+      )
     : []
 }
 

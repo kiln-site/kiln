@@ -598,22 +598,37 @@ its Volumes table also opens Backups scoped to that volume, with a clearable
 volume filter; the picker still shows the App. Backup settings retain the
 App's Folder and Volume sections.
 
-New Backup offers Apps alongside game servers, databases and Kiln. An App
-backup includes its folder and every volume it uses together: each Kiln
+What is backed up of an App is its volumes. An App is not a backup target
+itself: it is a group of what it keeps, so backing up an App backs up every
+volume it uses, each a backup of its own, started together. There is no
+backup of "the App", and none of its folder on its Relay, which holds
+nothing the App keeps: what it is built from, or the paths beside a Compose
+file written in Hearth. Those paths, like any path on the node, are not
+backed up, and the App's Volumes say so; data to back up belongs in a
+volume. An App that uses no volume has nothing to back up.
+
+New Backup offers Apps alongside game servers, databases and Kiln: an App
+as all its volumes together, and, with the page scoped to an App, each of
+its volumes on its own. An App's volumes are each Kiln
 volume its configuration mounts, its Compose file declares or its
 containers use, one another App uses too. A Kiln volume its configuration
-mounts that its Relay doesn't have refuses the backup, manual or scheduled,
-since it would leave that data out. A schedule is sent again when an App
+mounts or its Compose file declares that its Relay doesn't have refuses the
+backup, manual or scheduled, since it would leave that data out: the Relay
+lists each volume an App names that it doesn't have (`missing`), and counts
+it among what the App's backup must take. A schedule is sent again when an App
 takes up or lets go of a volume.
 
 A scheduled step works out what it backs up before it runs, each thing
-once: every App's folder, and each volume once however many of the step's
-Apps use it. Apps that share a volume are backed up together, as one batch
+once: for its Apps, each volume once however many of them use it. Apps that share a volume are backed up together, as one batch
 (`scheduledAppBackupGroup`): each of them asks its Relay for the same
 batch, by the same IDs, so the first makes it and the others wait for it,
 and a stopped step stops them all once. What refuses one of them refuses
 each, a batch is at most 64 backups, and the Relay checks every App of it
-against the volumes it uses now before any is made. Whether the schedule's
+against the volumes it uses now before any is made: each backup of the
+batch carries what every App was sent to take. An App with no volumes is
+sent nothing, and its step is skipped and says so ("Nothing to back up:
+this App uses no volume"): a run that backed nothing up never reads as a
+backup made. Whether the schedule's
 author may stop each App a stopped step stops is checked when the schedule
 is saved; an App that takes up one of those volumes afterwards is stopped
 with them. A volume scope

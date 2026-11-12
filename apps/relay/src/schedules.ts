@@ -680,6 +680,26 @@ export class ScheduleManager {
       )
       return
     }
+    // An App is backed up by its volumes. One that uses none has nothing
+    // to back up, and its step says so rather than pass for a backup made.
+    if (
+      action.type === "backup" &&
+      state.target.kind === "app" &&
+      appBackupGroup(action, state.target).executions.length === 0
+    ) {
+      state.attempts.push(
+        attempt({
+          action,
+          error: "Nothing to back up: this App uses no volume",
+          scheduledAt,
+          scheduleId: schedule.id,
+          startedAt: actionStartedAt,
+          status: "skipped_unsupported",
+          target: state.target,
+        })
+      )
+      return
+    }
     // A command may run from the moment it's sent, so it's recorded as
     // unknown first: a restart before it ends leaves it that way, and the
     // interrupted occurrence never runs again.
@@ -942,12 +962,13 @@ export class ScheduleManager {
   }
 
   /**
-   * Backs up an App as Hearth projected it: its folder and each volume it
-   * uses, each a backup of its own, started together. Apps of the step that
-   * share a volume are backed up together, as one batch, so the volume is
-   * backed up once; each of them asks for the same batch and waits for it.
-   * Stopped, the batch shares one stopped window, so each App stops once
-   * and its folder and volumes agree.
+   * Backs up an App as Hearth projected it. An App is a group of what it
+   * keeps: backing it up backs up each volume it uses, each a backup of
+   * its own, started together. Apps of the step that share a volume are
+   * backed up together, as one batch, so the volume is backed up once;
+   * each of them asks for the same batch and waits for it. Stopped, the
+   * batch shares one stopped window, so each App stops once and its
+   * volumes agree.
    */
   async #backUpApp(
     schedule: RelayScheduleProjection,
@@ -957,10 +978,10 @@ export class ScheduleManager {
     signal?: AbortSignal
   ) {
     const { apps, executions } = appBackupGroup(action, target)
-    if (
-      executions.length === 0 ||
-      executions.some((execution) => !execution.destination)
-    ) {
+    // An App that uses no volume was sent nothing to back up, and its step
+    // was skipped before it got here.
+    if (executions.length === 0) return
+    if (executions.some((execution) => !execution.destination)) {
       throw new Error("Scheduled backup destination is not deployed")
     }
     const volumesOf = (appId: string) =>
@@ -971,17 +992,13 @@ export class ScheduleManager {
             execution.appIds?.includes(appId)
         )
         .map((execution) => execution.targetId)
-    // What each App's backup takes now, a Kiln volume it has taken up or
-    // let go of among them, against what Hearth admitted: every App of the
-    // batch its own folder, and exactly the volumes it uses.
+    // What each App's backup takes now, a volume it has taken up or let go
+    // of among them, against what Hearth admitted: every App of the batch
+    // exactly the volumes it uses.
     for (const appId of apps) {
       const taken = await this.#options.listAppBackupVolumeIds(appId)
       const projected = new Set(volumesOf(appId))
       if (
-        !executions.some(
-          (execution) =>
-            execution.targetKind === "app" && execution.targetId === appId
-        ) ||
         taken.length !== projected.size ||
         taken.some((id) => !projected.has(id))
       ) {
@@ -990,7 +1007,10 @@ export class ScheduleManager {
         )
       }
     }
-    if (executions.length > SCHEDULED_APP_BACKUP_GROUP_MAX) {
+    if (
+      executions.length > SCHEDULED_APP_BACKUP_GROUP_MAX ||
+      apps.length > SCHEDULED_APP_BACKUP_GROUP_MAX
+    ) {
       throw new Error(
         "These Apps share volumes with more others than one backup run takes"
       )
@@ -1009,13 +1029,16 @@ export class ScheduleManager {
       action.id
     )
     const stopped = action.consistency === "stopped"
+    // What every App of the batch was sent to take, carried by each backup
+    // of it.
+    const appCoverage = apps.map((appId) => ({
+      appId,
+      volumeIds: volumesOf(appId),
+    }))
     const inputs = executions.map((execution): BackupTaskInput => {
-      // The App a member is named and checked for: its own, or for a
-      // volume the first of those that use it, whichever App asks.
-      const of =
-        execution.targetKind === "app"
-          ? execution.targetId
-          : ([...(execution.appIds ?? [])].sort()[0] ?? target.id)
+      // The App a volume's backup is named for: the first of those that
+      // use it, whichever App asks.
+      const of = [...(execution.appIds ?? [])].sort()[0] ?? target.id
       const backupId = scheduleDeterministicUuid(
         "schedule-backup",
         schedule.id,
@@ -1042,7 +1065,7 @@ export class ScheduleManager {
               ? action.destination.storageId
               : null,
         },
-        appCoverage: { appId: of, volumeIds: volumesOf(of) },
+        appCoverage,
         ...(stopped ? { consistency: "stopped" as const } : {}),
         ...(executions.length >= 2
           ? { batch: { id: batchId, size: executions.length } }

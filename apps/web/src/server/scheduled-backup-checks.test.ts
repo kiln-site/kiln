@@ -45,6 +45,8 @@ const relay = vi.hoisted(() => ({
     generation?: number
   }>,
   meanwhile: null as null | (() => Promise<void>),
+  // Volumes its Apps name that it doesn't have.
+  missing: [] as Array<{ appId: string; volumeId: string }>,
   // The Kiln volumes it has, each with the Apps that use it.
   volumes: [] as Array<{ id: string; users: Array<string> }>,
 }))
@@ -59,6 +61,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       return {
         filesAvailable: false,
         measuring: false,
+        missing: relay.missing,
         protection: { ready: true, reason: null },
         uncovered: [],
         volumes: relay.volumes.map(({ id, users }) => ({
@@ -198,6 +201,7 @@ const seed = Effect.gen(function* () {
   yield* resetDatabase
   relay.applied.length = 0
   relay.meanwhile = null
+  relay.missing = []
   relay.volumes = []
   yield* insertRelay(relayId)
 })
@@ -405,9 +409,9 @@ describeMysql("Scheduled backups, checked before they run", () => {
           ]
           yield* mounting(site, [media, uploads])
           yield* deploy(backupSchedule({ kind: "local" }, [site], "app"))
+          // Its volumes, and nothing of the App itself.
           assert.deepStrictEqual(refusals(), {
             [media]: null,
-            [site]: null,
             [uploads]: null,
           })
           // It lets go of one: what was sent no longer holds, and is owed
@@ -433,26 +437,47 @@ describeMysql("Scheduled backups, checked before they run", () => {
           const sent = relay.applied.at(-1)?.actions[0]?.executions ?? []
           assert.sameMembers(
             sent.map((execution) => execution.targetId),
-            [site, blog, media]
+            [media]
           )
           assert.deepStrictEqual(executions()[media]?.appIds, [site, blog])
-          assert.deepStrictEqual(refusals(), {
-            [blog]: null,
-            [media]: null,
-            [site]: null,
-          })
+          assert.deepStrictEqual(refusals(), { [media]: null })
 
-          // A volume its configuration mounts that its Relay doesn't have:
-          // it isn't backed up short, nor is the App it shares one with.
+          // A volume its configuration mounts that its Relay doesn't have is
+          // sent refused, so the App isn't backed up short, nor is the App
+          // it shares another with.
           yield* seed
           relay.volumes = [{ id: uploads, users: [shop, site] }]
           yield* mounting(shop, [uploads, gone])
           yield* mounting(site, [uploads])
           yield* deploy(backupSchedule({ kind: "local" }, [shop, site], "app"))
-          assert.lengthOf(Object.keys(refusals()), 3)
+          assert.sameMembers(Object.keys(refusals()), [uploads, gone])
           for (const refusal of Object.values(refusals())) {
             assert.include(refusal, "A volume this App mounts is missing")
           }
+
+          // A volume its Compose file declares, which only its Relay knows
+          // of, is gone from the Relay: refused the same, where a backup
+          // of the one left would pass for all the App keeps.
+          yield* seed
+          relay.volumes = [{ id: media, users: [site] }]
+          relay.missing = [{ appId: site, volumeId: gone }]
+          yield* mounting(site, [])
+          yield* deploy(backupSchedule({ kind: "local" }, [site], "app"))
+          assert.sameMembers(Object.keys(refusals()), [media, gone])
+          for (const refusal of Object.values(refusals())) {
+            assert.include(refusal, "A volume this App mounts is missing")
+          }
+
+          // More Apps share a volume than one backup names: sent refused,
+          // where the Relay would take a backup naming them all for none.
+          yield* seed
+          const many = Array.from({ length: 65 }, (_, index) =>
+            index.toString(16).padStart(2, "0").padEnd(12, "0")
+          )
+          relay.volumes = [{ id: media, users: many }]
+          for (const appId of many) yield* mounting(appId, [media])
+          yield* deploy(backupSchedule({ kind: "local" }, many, "app"))
+          assert.include(refusals()[media], "65 Apps, more than the 64")
         })
     )
   })

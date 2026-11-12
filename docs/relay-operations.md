@@ -329,10 +329,10 @@ checked them for every target they reach. A step stored before was saved,
 and authorized, when it skipped them, even one that named a database, so it
 still does.
 
-A Backup step on an App backs up its folder and every volume it uses, as a
-manual App backup does: Hearth sends one admitted execution per member
-(`targetKind` `app` or `volume`, a volume once with the `appIds` of every
-App of the step that uses it), from the volumes the Relay reported when the
+A Backup step on an App backs up every volume it uses, as a manual App
+backup does, and nothing of the App itself: Hearth sends one admitted
+execution per volume (`targetKind` `volume`, once, with the `appIds` of
+every App of the step that uses it), from the volumes the Relay reported when the
 schedule was sent. Apps that share a volume are one batch, which each of
 them enqueues by the same IDs before waiting on any. A member Hearth refused skips the whole step, recorded as not
 run. A stopped one is a batch, so the App and every App using its volumes

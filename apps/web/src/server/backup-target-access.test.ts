@@ -37,6 +37,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       protection: relay.protectionReady
         ? { ready: true, reason: null }
         : { ready: false, reason: "waiting for Hearth B to connect" },
+      missing: [],
       uncovered: [],
       volumes: [
         {

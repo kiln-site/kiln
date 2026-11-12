@@ -821,6 +821,7 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       availableCreateTargets({
         apps,
         volume: scopedVolume,
+        volumeAppId: filters.kind === "app" ? filters.server : undefined,
         volumeListing,
         volumeRelayId: filters.relay,
         capabilities,
@@ -836,6 +837,7 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       kiln,
       filters.kind,
       filters.relay,
+      filters.server,
       filters.volume,
       scopedVolume,
       volumeListing,
@@ -1862,7 +1864,7 @@ function TargetSettings({
   )
 }
 
-// An App's folder and each volume it uses, each with settings of its own.
+// Each volume an App uses, with settings of its own.
 // A volume's settings are the volume's: someone who may not see its backups
 // is told so, in place of them.
 function AppTargetsSettings({
@@ -1887,10 +1889,7 @@ function AppTargetsSettings({
   return (
     <div className="grid gap-6">
       {targets.data.targets.map((target) => {
-        const name =
-          target.kind === "app"
-            ? "Folder"
-            : `Volume ${target.name ?? target.id}`
+        const name = `Volume ${target.name}`
         return target.readable ? (
           <TargetSettings
             key={`${target.kind}:${target.id}`}
@@ -2798,6 +2797,7 @@ function selectedBackupCreateTargetKey(selected: BackupScopeOption): string {
 function availableCreateTargets({
   apps,
   volume,
+  volumeAppId,
   volumeRelayId,
   volumeListing,
   capabilities,
@@ -2806,10 +2806,14 @@ function availableCreateTargets({
   servers,
 }: {
   apps: Awaited<ReturnType<typeof getAppDirectory>>
+  /** The App the page is scoped to, whose volumes are each offered. */
+  volumeAppId?: string | undefined
   volume?:
     | Pick<import("@workspace/contracts").RelayVolume, "id" | "name">
     | undefined
-  volumeListing?: import("@workspace/contracts").RelayVolumes | undefined
+  volumeListing?:
+    | Pick<import("@workspace/contracts").RelayVolumes, "protection" | "volumes">
+    | undefined
   volumeRelayId?: string | undefined
   capabilities: Awaited<ReturnType<typeof getAccessCapabilities>>
   databases: Awaited<ReturnType<typeof getManagedDatabaseDirectory>>
@@ -2855,7 +2859,7 @@ function availableCreateTargets({
           ...app,
           kind: "app",
           wholeApp: true,
-          description: "The whole App: its folder and its volumes",
+          description: "All its volumes",
           key: targetKey("app", app.relayId, app.id),
           consistencyChoice: consistencyChoice(
             app.relayId,
@@ -2868,40 +2872,45 @@ function availableCreateTargets({
               : undefined,
             true
           ),
-        },
-        {
-          ...app,
-          kind: "app",
-          name: `${app.name} folder`,
-          key: `${targetKey("app", app.relayId, app.id)}:folder`,
-          consistencyChoice: consistencyChoice(app.relayId, [app.id]),
         }
       )
   }
-  if (
-    volume?.id &&
-    volumeRelayId &&
-    hasBackupResourcePermission(
-      capabilities,
-      volumeRelayId,
-      "volume",
-      volume.id
-    )
-  ) {
+  // Each volume of the App the page is scoped to, on its own, and the one
+  // the page is filtered to.
+  const offered = new Map<string, { id: string; name: string }>()
+  // Which volumes it uses is known whether or not the Relay can yet say
+  // every App that uses each: that only decides what stopping one stops.
+  if (volumeListing && volumeAppId) {
+    for (const used of appBackupVolumes(volumeAppId, volumeListing.volumes)) {
+      offered.set(used.id, used)
+    }
+  }
+  if (volume?.id) offered.set(volume.id, { id: volume.id, name: volume.name })
+  for (const one of volumeRelayId ? offered.values() : []) {
+    if (
+      !volumeRelayId ||
+      !hasBackupResourcePermission(
+        capabilities,
+        volumeRelayId,
+        "volume",
+        one.id
+      )
+    ) {
+      continue
+    }
+    const listed = listing?.volumes.find((item) => item.id === one.id)
     targets.push({
-      id: volume.id,
-      key: targetKey("volume", volumeRelayId, volume.id),
+      id: one.id,
+      key: targetKey("volume", volumeRelayId, one.id),
       kind: "volume",
-      name: `Volume ${volume.name}`,
+      name: `Volume ${one.name}`,
       relayId: volumeRelayId,
       relayName:
         apps.find((app) => app.relayId === volumeRelayId)?.relayName ??
         volumeRelayId,
       consistencyChoice: consistencyChoice(
         volumeRelayId,
-        listing?.volumes.find((item) => item.id === volume.id)
-          ? users(listing.volumes.find((item) => item.id === volume.id)!)
-          : undefined
+        listed ? users(listed) : undefined
       ),
     })
   }

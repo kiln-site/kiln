@@ -112,7 +112,8 @@ async function composeConfigCommand(): Promise<() => Promise<void>> {
       'if (args.at(-3) !== "config") process.exit(1)',
       'let input = ""',
       'process.stdin.on("data", (chunk) => (input += chunk))',
-      'process.stdin.on("end", () => process.stdout.write(JSON.stringify({ name: args[args.indexOf("-p") + 1], ...parse(input) })))',
+      // The project it is run as names it, whatever name the file gives.
+      'process.stdin.on("end", () => process.stdout.write(JSON.stringify({ ...parse(input), name: args[args.indexOf("-p") + 1] })))',
     ].join("\n")
   )
   await chmod(join(bin, "docker-compose"), 0o755)
@@ -451,6 +452,16 @@ describe("App volumes", () => {
     const [dockerName] = [...fakeDocker.volumes.keys()]
     // Removed behind Kiln's back.
     fakeDocker.volumes.delete(dockerName!)
+    // The App still names it: its backup must take it, and can't, where
+    // one of what is left would pass for all the App keeps.
+    const volumes = relayVolumes(harness)
+    const gone = composeVolumeId(appId, "data")
+    expect((await Effect.runPromise(volumes.list())).missing).toEqual([
+      { appId, volumeId: gone },
+    ])
+    expect(await Effect.runPromise(volumes.appBackupVolumeIds(appId))).toEqual(
+      [gone]
+    )
 
     const refused = await deploy(harness, {
       compose: declaresVolume,

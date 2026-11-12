@@ -3434,14 +3434,13 @@ const ActionEditor = React.memo(function ActionEditor({
       {action.type === "backup" ? (
         <BackupConfigurationDialog
           allowIncremental
-          // A step that backs up only Apps takes them live or stopped, each
-          // App's folder and the volumes it uses together; Hearth checks stopping
-          // them as it saves.
+          // A step that backs up only Apps takes the volumes they use, live
+          // or stopped; Hearth checks stopping them as it saves.
           consistencyChoice={
             backsUpAppsOnly
               ? {
                   stoppedDescription:
-                    "Stops each App once for its folder and every volume it uses",
+                    "Stops each App once for every volume it uses",
                   stoppedUnavailable: null,
                 }
               : undefined
@@ -3449,7 +3448,7 @@ const ActionEditor = React.memo(function ActionEditor({
           {...(backsUpAppsOnly
             ? {
                 description:
-                  "Relay runs this job in its single durable queue. Each App's folder and every volume it uses are backed up together, a volume several of them share once.",
+                  "Relay runs this job in its single durable queue. Every volume each App uses is backed up, a volume several of them share once. An App that uses no volume is skipped.",
               }
             : {})}
           initialConsistency={action.consistency ?? "live"}
@@ -3645,7 +3644,7 @@ function scheduleTargetPickerItem(option: ScheduleOption): InstancePickerItem {
 }
 
 // The targets the backup dialog lists. It names game servers, databases,
-// and Kiln; an App's backups are of its folder and volumes, set live or
+// and Kiln; an App's backups are of the volumes it uses, set live or
 // stopped there instead.
 function isBackupOption(
   target: ScheduleOption
