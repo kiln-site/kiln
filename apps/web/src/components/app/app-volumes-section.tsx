@@ -116,6 +116,9 @@ interface MountRow {
   filesUnavailable: string | null
   icon: "file" | "folder" | "volume"
   id: string
+  // Why what's written there may be lost, where it may: nothing is said of
+  // what Kiln keeps and backs up.
+  kept: MountKept | null
   // A volume the config mounts that no longer exists.
   missing: boolean
   name: string
@@ -126,6 +129,41 @@ interface MountRow {
   // What a container should show for it, to tell it's been deployed.
   wanted: WantedMount
 }
+
+// What a row warns of: data that isn't kept across deploys, or that no
+// backup takes. A row says nothing while Kiln keeps and backs up its data.
+interface MountKept {
+  detail: string
+  label: string
+}
+
+const KEPT = {
+  anonymous: {
+    detail:
+      "Docker makes a new, empty volume here on every deploy. Name it, or add a volume at this path, to keep what's written there.",
+    label: "Not kept",
+  },
+  checkout: {
+    detail:
+      "A path in the repository's checkout, which each deployment replaces. What's written there is lost on the next deploy, and no backup takes it.",
+    label: "Not kept",
+  },
+  node: {
+    detail:
+      "A path on the node. Kiln holds no copy of it, and no backup takes it.",
+    label: "Not backed up",
+  },
+  unmanaged: {
+    detail:
+      "A volume the Compose file names or configures itself. Kiln doesn't manage it, and no backup takes it.",
+    label: "Not backed up",
+  },
+  writableFile: {
+    detail:
+      "Its contents are written again from this App's settings on each deploy, so changes the App makes to it are lost then.",
+    label: "Changes not kept",
+  },
+} as const satisfies Record<string, MountKept>
 
 type Dialog =
   // The Compose file, at a mount's definition if it's opened for one.
@@ -173,8 +211,12 @@ export function AppVolumesSection({
     select: mountVolumeDetails,
     refetchInterval: false,
     staleTime: 5 * 60_000,
+    // Asked of an App that runs too: its image may keep data where nothing
+    // is mounted.
     enabled:
-      composeVolumes || mounts.some((mount) => mount.source.type !== "file"),
+      composeVolumes ||
+      mounts.some((mount) => mount.source.type !== "file") ||
+      (app.containers?.length ?? 0) > 0,
   })
   const rows = React.useMemo((): Array<MountRow> => {
     const context: RowContext = {
@@ -222,7 +264,21 @@ export function AppVolumesSection({
     composeFile,
     mounts,
   ])
-  const empty = rows.length === 0
+  // Where its image writes that no row keeps: a Compose file's own anonymous
+  // volumes are rows already.
+  const unkept = React.useMemo(
+    () =>
+      (appVolumes?.unkept ?? []).filter(
+        (mount) =>
+          !rows.some(
+            (row) =>
+              row.target === mount.path &&
+              (row.service === null || row.service === mount.service)
+          )
+      ),
+    [appVolumes?.unkept, rows]
+  )
+  const empty = rows.length === 0 && unkept.length === 0
   const configRows = React.useMemo(
     () => rows.filter((row) => row.entry.kind === "config"),
     [rows]
@@ -313,6 +369,23 @@ export function AppVolumesSection({
                 onDialog={setDialog}
               />
             </>
+          ) : null}
+          {unkept.length > 0 ? (
+            <ul
+              className={cn(
+                "grid gap-1 px-4 py-3 text-[0.8125rem] text-amber-400 light:text-amber-700",
+                rows.length > 0 && "border-t"
+              )}
+            >
+              {unkept.map((mount) => (
+                <li key={`${mount.service}:${mount.path}`}>
+                  <span className="font-mono">{mount.path}</span> isn't kept:
+                  the image writes there and nothing is mounted, so it starts
+                  empty on every deploy and no backup takes it. Add a volume at
+                  that path to keep it.
+                </li>
+              ))}
+            </ul>
           ) : null}
         </div>
       )}
@@ -612,7 +685,19 @@ function MountIdentity({ pending, row }: { pending: boolean; row: MountRow }) {
       metaClassName="font-mono"
       name={row.name}
       nameClassName={row.missing ? "text-destructive" : undefined}
-      nameAccessory={row.readOnly ? <VolumeTag>Read-only</VolumeTag> : null}
+      nameAccessory={
+        <>
+          {row.readOnly ? <VolumeTag>Read-only</VolumeTag> : null}
+          {row.kept && !row.missing ? (
+            <VolumeTag
+              className="border-amber-400/40 text-amber-400 light:text-amber-700"
+              title={row.kept.detail}
+            >
+              {row.kept.label}
+            </VolumeTag>
+          ) : null}
+        </>
+      }
     />
   )
 }
@@ -808,6 +893,7 @@ function configRow(context: RowContext, mount: AppMount): MountRow {
         ...volumeFiles(context, missing ? null : source.volumeId),
         backups: volumeBackups(context, source.volumeId),
         icon: "volume",
+        kept: null,
         missing,
         name: missing
           ? "Volume deleted"
@@ -826,6 +912,7 @@ function configRow(context: RowContext, mount: AppMount): MountRow {
         filesLink: hostFilesLink(context, source.path),
         filesUnavailable: null,
         icon: "folder",
+        kept: KEPT.node,
         name: source.path,
         sizeBytes: null,
         wanted: wanted({ readOnly: mount.readOnly, source: source.path }),
@@ -837,6 +924,7 @@ function configRow(context: RowContext, mount: AppMount): MountRow {
         filesLink: null,
         filesUnavailable: null,
         icon: "file",
+        kept: mount.readOnly ? null : KEPT.writableFile,
         name: fileName(mount.target),
         sizeBytes: null,
         // Kept on the node under its deployment, so its name is what shows.
@@ -898,6 +986,23 @@ function composeRow(context: RowContext, mount: ComposeMount): MountRow {
           ? "folder"
           : "file",
     id: `compose:${mount.key}`,
+    kept:
+      mount.kind === "volume"
+        ? !mount.source
+          ? KEPT.anonymous
+          : // Kiln keeps it for the file, or the file names a Kiln volume.
+            mount.dockerName === null || volume
+            ? null
+            : KEPT.unmanaged
+        : mount.kind === "bind"
+          ? !relative
+            ? KEPT.node
+            : // A pasted file's paths are in the App's folder; a
+              // repository's in its checkout.
+              (context.composeFile?.editable ?? false)
+              ? null
+              : KEPT.checkout
+          : null,
     missing: false,
     name:
       mount.kind === "volume"
@@ -941,11 +1046,13 @@ type MountVolume = Pick<RelayVolume, "dockerName" | "id" | "name" | "sizeBytes">
 function mountVolumeDetails(data: {
   filesAvailable: boolean
   referencesKnown: boolean
+  unkept: ReadonlyArray<{ path: string; service: string }>
   volumes: ReadonlyArray<RelayVolume>
 }) {
   return {
     filesAvailable: data.filesAvailable,
     referencesKnown: data.referencesKnown,
+    unkept: data.unkept,
     volumes: data.volumes.map(
       ({ dockerName, id, name, sizeBytes }): MountVolume => ({
         dockerName,

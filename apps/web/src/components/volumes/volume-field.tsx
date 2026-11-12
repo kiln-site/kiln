@@ -282,7 +282,7 @@ export function VolumePickerList({
             {onHost ? (
               <InstancePickerFooterAction
                 icon={FolderTree}
-                label="A folder on the node"
+                label="A path on the node"
                 onClick={() => startMounting(onHost)}
               />
             ) : null}

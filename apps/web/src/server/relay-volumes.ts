@@ -100,10 +100,11 @@ export const getAppVolumes = createServerFn({ method: "GET" })
         filesAvailable: false,
         measuring: false,
         referencesKnown: true,
+        unkept: [],
         volumes: [],
       }
     }
-    const { filesAvailable, measuring, protection, volumes } =
+    const { filesAvailable, measuring, protection, uncovered, volumes } =
       relayVolumesSchema.parse(
         await databaseRpc(relay, "relay.volumes.read", {}, 30_000)
       )
@@ -112,6 +113,13 @@ export const getAppVolumes = createServerFn({ method: "GET" })
       filesAvailable,
       measuring,
       referencesKnown: protection.ready,
+      // Where its image keeps data that nothing is mounted at: Docker makes
+      // a new, empty volume there on every deploy.
+      unkept: uncovered.flatMap((mount) =>
+        mount.appId === data.appId && mount.kind === "anonymous"
+          ? [{ path: mount.destination, service: mount.service }]
+          : []
+      ),
       volumes: appVolumesOf(volumes, data.appId),
     }
   })

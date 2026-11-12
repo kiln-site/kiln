@@ -208,6 +208,27 @@ their data, and are deleted from Volumes by whoever decides to; the Relay
 forgets that the app named them, so nothing keeps one from being deleted
 once no other app uses it.
 
+An app's Volumes section says nothing of what Kiln keeps and backs up: a
+Kiln volume, mounted in Hearth or declared in the Compose file, and a
+relative path in a Compose file written in Hearth. A row speaks up only
+where what is written there may be lost:
+
+| Row | It says |
+| --- | --- |
+| A relative path in a repository's Compose file | Not kept: each deployment replaces the checkout |
+| A volume with no name in a Compose file | Not kept: Docker makes a new one on every deploy |
+| A path on the node | Not backed up |
+| A volume the Compose file names or configures itself | Not backed up |
+| A typed file the app may write to | Changes not kept: it is written again on each deploy |
+
+Below the rows it lists each path the app's image declares as a volume
+with nothing mounted there, which starts empty on every deploy. It can't
+see other paths a container writes to; what isn't in a volume or the app's
+folder isn't kept.
+
+On the Backups page a volume's backups show the volume's name, read from
+its Relay, and its ID while the Relay can't be asked.
+
 What an app's containers mount that no managed volume or the app's folder
 holds isn't covered by its backups, and the Relay's volume listing reports
 it per app: volumes Docker named itself, such as those an image declares,
