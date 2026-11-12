@@ -129,7 +129,7 @@ export function useAppConfigSave(
 
 export const appDocuments = {
   compose: {
-    hint: "Services reach each other by name. Containers keep nothing across deploys; mount a volume from the Volumes section to keep data.",
+    hint: "Services reach each other by name. A named volume the file declares is kept on a Kiln volume; anything else a container writes is lost on the next deploy.",
     noun: "Compose file",
     path: "compose.yaml",
     placeholder:

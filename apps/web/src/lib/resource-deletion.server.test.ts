@@ -163,21 +163,19 @@ describeMysql("Deleting a game server or database", () => {
       90_000
     )
 
+    // The volumes an App used are no App's: its deletion backs up and
+    // removes the App alone, whoever else uses them or doesn't.
     it.effect(
-      "keeps an App's volume its deletion didn't plan to take, though nothing else uses it any more",
+      "deletes an App without any volume it used, backing up its folder alone",
       () =>
         Effect.gen(function* () {
           const otherApp = "c".repeat(12)
+          const shared = "d".repeat(40)
           yield* seed
           yield* seedApp([
+            { id: volumeId, users: [{ appId, configured: true }] },
             {
-              id: `${appId}/data`,
-              owner: appId,
-              users: [{ appId, configured: false }],
-            },
-            {
-              id: `${appId}/shared`,
-              owner: appId,
+              id: shared,
               users: [
                 { appId, configured: false },
                 { appId: otherApp, configured: false },
@@ -193,42 +191,35 @@ describeMysql("Deleting a game server or database", () => {
             storageId: null,
             user: owner,
           })
-          const folder = yield* nextBackup(appId, null)
-          // The other App goes while the folder is backed up: the volume
-          // it used is no longer anyone else's, but wasn't backed up.
-          const shared = relay.volumes.find(
-            (volume) => volume.id === `${appId}/shared`
-          )!
-          shared.users = [{ appId, configured: false }]
-          yield* finishBackup(folder)
-          yield* finishBackup(yield* nextBackup(appId, folder))
+          yield* finishBackup(yield* nextBackup(appId, null))
           const done = yield* until(appId, ["completed", "failed"])
 
           assert.strictEqual(done?.status, "completed")
-          assert.deepStrictEqual(relay.appDeletes, [[`${appId}/data`]])
+          assert.isFalse(relay.apps.has(appId))
           assert.deepStrictEqual(
             relay.volumes.map((volume) => volume.id),
-            [`${appId}/shared`]
+            [volumeId, shared]
+          )
+          const backups = yield* selectRows<{
+            target_id: string
+            target_kind: string
+          }>("backup")
+          assert.deepStrictEqual(
+            backups.map((backup) => [backup.target_kind, backup.target_id]),
+            [["app", appId]]
           )
         }).pipe(TestClock.withLive),
       90_000
     )
 
     it.effect(
-      "deletes nothing of an App or a volume when any of its final backups fails",
+      "deletes nothing of an App or a volume when its final backup fails",
       () =>
         Effect.gen(function* () {
           yield* seed
-          yield* seedApp([
-            {
-              id: `${appId}/data`,
-              owner: appId,
-              users: [{ appId, configured: false }],
-            },
-            { id: volumeId },
-          ])
+          yield* seedApp([{ id: volumeId }])
 
-          // The App's folder is backed up, then its volume's backup fails.
+          // The App's final backup fails.
           yield* requestResourceDeletionEffect({
             finalBackup: true,
             kind: "app",
@@ -237,9 +228,7 @@ describeMysql("Deleting a game server or database", () => {
             storageId: null,
             user: owner,
           })
-          const folder = yield* nextBackup(appId, null)
-          yield* finishBackup(folder)
-          yield* failBackup(yield* nextBackup(appId, folder))
+          yield* failBackup(yield* nextBackup(appId, null))
           const app = yield* until(appId, ["completed", "failed"])
           // A Kiln volume's only backup fails.
           yield* requestResourceDeletionEffect({
@@ -265,7 +254,7 @@ describeMysql("Deleting a game server or database", () => {
           assert.isTrue(relay.apps.has(appId))
           assert.deepStrictEqual(
             relay.volumes.map((candidate) => candidate.id),
-            [`${appId}/data`, volumeId]
+            [volumeId]
           )
           assert.deepStrictEqual(yield* appRecords, [appId])
         }).pipe(TestClock.withLive),

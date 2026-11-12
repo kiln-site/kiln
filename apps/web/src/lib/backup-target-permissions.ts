@@ -1,4 +1,4 @@
-import { INSTANCE_ID_SOURCE, type BackupTargetKind } from "@workspace/contracts"
+import type { BackupTargetKind } from "@workspace/contracts"
 
 import { grantHasPermission, type AccessPermission } from "@/lib/permissions"
 
@@ -6,8 +6,7 @@ import { grantHasPermission, type AccessPermission } from "@/lib/permissions"
  * Who may do what with a target's backups. A backup's contents are its
  * resource's data, so acting on it takes the authority reading or writing
  * that data does. Game servers and databases take `backup.*` on the Relay
- * or on themselves. An App's folder, and a volume its Compose project owns,
- * follow what its files take: listing its backups takes `app.read`, making
+ * or on themselves. An App's folder follows what its files take: listing its backups takes `app.read`, making
  * or downloading one `instance.files.read`, as reading its files does, and
  * restoring or deleting one `instance.files.write`, as replacing them does.
  * App owners hold neither file permission, since an App's files reach the
@@ -34,17 +33,15 @@ const appPermissions: Record<BackupAction, AccessPermission> = {
   "backup.restore": "instance.files.write",
 }
 
-// An App's own volume is `<appId>/<key>`.
-const appVolumeOwnerPattern = new RegExp(`^(${INSTANCE_ID_SOURCE})/`, "u")
-
-/** The App whose permissions a target's backups follow, if any. */
+/**
+ * The App whose permissions a target's backups follow, if any: an App's
+ * own. A volume is no App's.
+ */
 export function backupTargetApp(target: {
   id: string
   kind: BackupTargetKind
 }): string | null {
-  if (target.kind === "app") return target.id
-  if (target.kind !== "volume") return null
-  return appVolumeOwnerPattern.exec(target.id)?.[1] ?? null
+  return target.kind === "app" ? target.id : null
 }
 
 /** The App permission a backup action on an App's target takes. */

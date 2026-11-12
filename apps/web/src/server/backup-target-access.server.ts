@@ -72,12 +72,7 @@ export async function backupTargetUsers(
       `The Relay doesn't know yet which Apps use this volume${protection.reason ? `: ${protection.reason}` : ""}`
     )
   }
-  return [
-    ...new Set([
-      ...(volume.owner ? [volume.owner.appId] : []),
-      ...volume.users.map((user) => user.appId),
-    ]),
-  ]
+  return [...new Set(volume.users.map((user) => user.appId))]
 }
 
 /**

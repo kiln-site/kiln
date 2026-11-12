@@ -221,8 +221,8 @@ deletion that runs once the copy ends. See
 [Moving and duplicating game servers](server-migrations.md#how-it-runs).
 
 A backup or restore holds what its data belongs to: the game server or
-database, or the App for its folder and the volumes it owns, since deleting
-the App takes them with it.
+database, the App for its folder, or the volume. An App's backup takes the
+volumes it uses, so it holds each of them as well as the App.
 
 An App's changes take its parts too: `#config` for its configuration and
 limits, `#name`, `#power`, and `#deploy` for starting a deployment. Its image

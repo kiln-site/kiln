@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router"
 import {
   appFileRootId,
   appVolumeFileRootId,
-  relayManagedVolumeIdSchema,
+  relayVolumeIdSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -18,7 +18,7 @@ export const Route = createFileRoute("/_app/app/$appId/files")({
       .string()
       .optional()
       .transform((volume) =>
-        relayManagedVolumeIdSchema.safeParse(volume).success
+        relayVolumeIdSchema.safeParse(volume).success
           ? volume
           : undefined
       ),

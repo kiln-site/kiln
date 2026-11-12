@@ -18,8 +18,10 @@ export interface ComposeMount {
   // anonymous volume.
   source: string
   target: string
-  // A volume's name in Docker: the project's, or the name the file gives
-  // it. Null for an anonymous volume and anything but a volume.
+  // A volume's name in Docker, when the file decides it: the name it gives
+  // the volume, or its key for an external one. Null for a volume the file
+  // leaves to be made, which Kiln keeps on a Kiln volume when it deploys,
+  // for an anonymous volume, and for anything but a volume.
   dockerName: string | null
   // Where a config or secret is read from, as the file says.
   origin: string | null
@@ -173,11 +175,24 @@ function volumeName(
 ): string | null {
   if (!source) return null
   const declared = isRecord(file.volumes) ? file.volumes[source] : undefined
-  if (isRecord(declared) && typeof declared.name === "string") {
+  // Named as Compose would name it anyway, it is still left to be made.
+  // That is under the project the Relay runs it as, whatever name the file
+  // gives itself.
+  if (
+    isRecord(declared) &&
+    typeof declared.name === "string" &&
+    declared.name !== `${project}_${source}`
+  ) {
     return declared.name
   }
   if (isRecord(declared) && declared.external) return source
-  return `${project}_${source}`
+  // One with a driver of its own is Compose's to make, under the project.
+  const options = isRecord(declared) ? declared.driver_opts : undefined
+  return isRecord(declared) &&
+    ((declared.driver !== undefined && declared.driver !== "local") ||
+      (isRecord(options) && Object.keys(options).length > 0))
+    ? `${project}_${source}`
+    : null
 }
 
 function defaultFileTarget(section: "configs" | "secrets", name: string) {

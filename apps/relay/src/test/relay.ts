@@ -24,7 +24,7 @@ import {
 import { Effect, ManagedRuntime } from "effect"
 import { onTestFinished } from "vite-plus/test"
 
-import { RelayVolumes } from "../volumes.js"
+import { composeVolumeId, RelayVolumes } from "../volumes.js"
 import { AppDriver } from "../apps.js"
 import { BrickCatalog } from "../bricks.js"
 import { loadConfig, type RelayConfig } from "../config.js"
@@ -191,6 +191,17 @@ export async function relayHarness(
       { allocations: docker.allocations, state },
       databaseConnections,
       (dockerNames) => Effect.runPromise(volumes.idsByDockerName(dockerNames)),
+      {
+        absent: (ids) =>
+          Effect.runPromise(volumes.idsMissing(ids)),
+        ensure: (appId, appName, keys, named) =>
+          Effect.runPromise(
+            volumes.composeVolumes(appId, appName, keys, named)
+          ),
+        id: composeVolumeId,
+        settle: (appId, keys) =>
+          Effect.runPromise(volumes.settleComposeVolumes(appId, keys)),
+      },
       cleanup
     )
     lifecycle.useAppServiceContainers(async (appId, service) => {

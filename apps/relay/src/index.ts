@@ -224,7 +224,7 @@ import {
 } from "./effect/promise.js"
 import { DockerCleanup } from "./docker-cleanup.js"
 import { DockerEngine } from "./docker-engine.js"
-import { RelayVolumes } from "./volumes.js"
+import { composeVolumeId, RelayVolumes } from "./volumes.js"
 import {
   inspectEncryptedPlatformBackup,
   restoreEncryptedPlatformBackup,
@@ -745,6 +745,18 @@ const apps = new AppDriver(
   databaseConnections,
   (dockerNames) =>
     runRelayEffect("relay.apps.volumes", volumes.idsByDockerName(dockerNames)),
+  {
+    absent: (ids) =>
+      runRelayEffect("relay.apps.composeVolumes", volumes.idsMissing(ids)),
+    ensure: (appId, appName, keys, named) =>
+      runRelayEffect(
+        "relay.apps.composeVolumes",
+        volumes.composeVolumes(appId, appName, keys, named)
+      ),
+    id: composeVolumeId,
+    settle: (appId, keys) =>
+      runRelayEffect("relay.apps.composeVolumes", volumes.settleComposeVolumes(appId, keys)),
+  },
   dockerCleanup
 )
 lifecycle.useAppServiceContainers(async (appId, service) => {

@@ -235,7 +235,7 @@ lifecycle lock, which its build takes again when it runs:
   **restore** runs alone (exclusive), so it waits for file writes and power
   changes and nothing starts the server mid-restore.
   An App's folder or a volume backed up **stopped** also holds the
-  lifecycle of each App it stops (for a volume, its owner and every App
+  lifecycle of each App it stops (for a volume, every App
   that uses it), so nothing starts them meanwhile, and holds a volume
   exclusively, so no App that begins using it deploys or starts either. A volume's restore holds
   the volume exclusively with every such App's lifecycle; an App folder's
@@ -244,8 +244,11 @@ lifecycle lock, which its build takes again when it runs:
   that start, deploy, or replace an App using the volume, until its
   recovery (`backup.restore.recover`) finishes or abandons it. Starting
   or deleting an App holds every managed volume it mounts shared, and a
-  deployment holds every one its Compose file declares too, by Docker name, in a
-  nested step before it makes containers, checked against the same fences.
+  deployment holds every one its Compose file declares too, in a nested step
+  before it makes containers, checked against the same fences. Making the
+  Kiln volume a file's key is kept on, the first time it deploys, holds
+  that volume exclusively in a nested step of its own
+  (`app.deployment.volumes.keep`).
 - **Provisioning** holds the new server exclusively while it's created,
   and a game server takes the routes once its image is downloaded, for
   what game servers share: the game network, the Relay's CoreDNS, and
@@ -326,11 +329,12 @@ checked them for every target they reach. A step stored before was saved,
 and authorized, when it skipped them, even one that named a database, so it
 still does.
 
-A Backup step on an App backs up its folder and every volume only it uses,
-as a manual App backup does: Hearth sends one admitted execution per member
-(`targetKind` `app` or `volume`, with `appId`), from the volumes the Relay
-reported when the schedule was sent, and the Relay enqueues them all before
-waiting on any. A member Hearth refused skips the whole step, recorded as not
+A Backup step on an App backs up its folder and every volume it uses, as a
+manual App backup does: Hearth sends one admitted execution per member
+(`targetKind` `app` or `volume`, a volume once with the `appIds` of every
+App of the step that uses it), from the volumes the Relay reported when the
+schedule was sent. Apps that share a volume are one batch, which each of
+them enqueues by the same IDs before waiting on any. A member Hearth refused skips the whole step, recorded as not
 run. A stopped one is a batch, so the App and every App using its volumes
 stop once for all of them. A volume the App starts using after the schedule
 was sent is backed up from the next time Hearth sends it.

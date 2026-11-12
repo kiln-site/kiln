@@ -26,6 +26,7 @@ const appId = "a".repeat(12)
 const otherAppId = "b".repeat(12)
 const kilnVolumeId = "c".repeat(40)
 const goneVolumeId = "d".repeat(40)
+const ownVolumeId = "e".repeat(40)
 const taskId = "0b7c9d2e-4f1a-4c3b-9d8e-7f6a5b4c3d2e"
 
 // The Relay is the only network boundary: it lists volumes and unfinished
@@ -62,17 +63,16 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     if (operation !== "relay.volumes.read") throw new Error("Relay is offline")
     const volume = (
       id: string,
-      owner: { appId: string; volume: string } | null,
+      name: string,
       users: ReadonlyArray<string>
     ) => ({
       createdAt: null,
-      dockerName: `docker-${id.replace("/", "-")}`,
+      dockerName: `kiln-${id.slice(0, 8)}`,
       id,
-      kind: owner ? "app" : "kiln",
+      kind: "kiln",
       mountpoint: null,
       mounts: [],
-      name: owner?.volume ?? "media",
-      owner,
+      name,
       sizeBytes: null,
       users: users.map((user) => ({
         appId: user,
@@ -86,8 +86,9 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       protection: { ready: true, reason: null },
       uncovered: [],
       volumes: [
-        volume(`${appId}/pgdata`, { appId, volume: "pgdata" }, [appId]),
-        volume(kilnVolumeId, null, relay.kilnUsers),
+        // One only the App uses, as its Compose file's or its Brick's is.
+        volume(ownVolumeId, "pgdata", [appId]),
+        volume(kilnVolumeId, "media", relay.kilnUsers),
       ],
     }
   },
@@ -181,7 +182,7 @@ const rejection = (run: () => Promise<unknown>) =>
 
 describeMysql("App backups", () => {
   layer(TestDatabase)((it) => {
-    it.effect("backs up an App's folder and its own volumes as one batch", () =>
+    it.effect("backs up an App's folder and its volumes as one batch", () =>
       Effect.gen(function* () {
         yield* seed
         yield* createAppRecordEffect({
@@ -203,7 +204,7 @@ describeMysql("App backups", () => {
           backups.map(({ target_id, target_kind }) => [target_kind, target_id]),
           [
             ["app", appId],
-            ["volume", `${appId}/pgdata`],
+            ["volume", ownVolumeId],
           ]
         )
         assert.strictEqual(new Set(backups.map((row) => row.batch_id)).size, 1)
@@ -249,7 +250,7 @@ describeMysql("App backups", () => {
             )
           assert.sameDeepMembers(yield* taken(), [
             ["app", appId],
-            ["volume", `${appId}/pgdata`],
+            ["volume", ownVolumeId],
             ["volume", kilnVolumeId],
           ])
           // The volume's backups are its own to see: someone who may only
@@ -268,7 +269,7 @@ describeMysql("App backups", () => {
             )
           assert.sameDeepMembers(yield* shown(), [
             [appId, true, true],
-            [`${appId}/pgdata`, true, true],
+            [ownVolumeId, false, false],
             [kilnVolumeId, false, false],
           ])
           yield* insertRows("access_selection", {
@@ -276,7 +277,11 @@ describeMysql("App backups", () => {
             selection_kind: "permission",
             selection_key: "backup.read",
           })
-          assert.deepInclude(yield* shown(), [kilnVolumeId, true, true])
+          assert.sameDeepMembers(yield* shown(), [
+            [appId, true, true],
+            [ownVolumeId, true, true],
+            [kilnVolumeId, true, true],
+          ])
 
           // A volume its configuration mounts that its Relay doesn't have.
           yield* updateAppConfigEffect(relayId, appId, (config) => ({

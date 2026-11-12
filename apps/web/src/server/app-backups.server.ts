@@ -409,9 +409,9 @@ async function unfinishedRestores(
 
 /**
  * What backing up an App backs up, as manual and scheduled backups both
- * do: its folder, then each volume its Compose project made and each Kiln
- * volume it uses, whichever other Apps use that one too. A Kiln volume its
- * saved configuration mounts counts whether or not its Relay has heard.
+ * do: its folder, then each Kiln volume it uses, whichever other Apps use
+ * that one too. One its saved configuration mounts counts whether or not
+ * its Relay has heard.
  */
 export function appTargets(
   appId: string,
@@ -433,7 +433,7 @@ export function appTargets(
     ...[...taken, ...named].map((volume) => ({
       id: volume.id,
       kind: "volume" as const,
-      name: volume.owner?.volume ?? volume.name,
+      name: volume.name,
     })),
   ]
 }

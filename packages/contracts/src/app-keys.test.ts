@@ -15,13 +15,10 @@ const volumeId = "b".repeat(40)
 // A root's ID is how a Relay decides whose files a request reaches and which
 // permission it takes, so a volume's must stay an App's.
 describe("App volume file roots", () => {
-  it.each([
-    ["a Kiln volume", volumeId],
-    ["a Compose file's volume", `${appId}/site_data.v2`],
-  ])("round trips %s as a root of its App", (_, id) => {
-    const root = appVolumeFileRootId(appId, id)
+  it("round trips a volume as a root of its App", () => {
+    const root = appVolumeFileRootId(appId, volumeId)
     expect(fileRootIdSchema.safeParse(root).success).toBe(true)
-    expect(appVolumeFromFileRoot(root)).toEqual({ appId, volumeId: id })
+    expect(appVolumeFromFileRoot(root)).toEqual({ appId, volumeId })
     expect(appIdFromFileRoot(root)).toBe(appId)
     expect(isServerFileRoot(root)).toBe(false)
   })
@@ -36,6 +33,8 @@ describe("App volume file roots", () => {
     `app:${appId}:volume:${volumeId}/../x`,
     `app:${appId}:volume:${volumeId}:..%2f`,
     `app:${appId}:volume:`,
+    // A volume is named by its ID alone, never by an App and a key.
+    `app:${appId}:volume:${appId}:site_data`,
   ])("refuses %s", (root) => {
     expect(fileRootIdSchema.safeParse(root).success).toBe(false)
     expect(appVolumeFromFileRoot(root)).toBeNull()

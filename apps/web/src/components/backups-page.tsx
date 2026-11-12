@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react"
 import {
+  appBackupVolumes,
   backupStorageProviderName,
   type BackupTargetKind,
 } from "@workspace/contracts"
@@ -103,7 +104,6 @@ import { BackupToolbar } from "@/components/backups/toolbar"
 import { notALoginField } from "@/lib/not-a-login-field"
 import { grantHasPermission } from "@/lib/permissions"
 import {
-  backupTargetApp,
   grantsAllowBackup,
 } from "@/lib/backup-target-permissions"
 import {
@@ -637,7 +637,6 @@ const ScopedBackupToolbar = React.memo(function ScopedBackupToolbar({
 // inventory can establish deletion; an offline Relay or denied read cannot.
 function useBackupScopeVolumes(filters: BackupFilters) {
   const id = filters.kind === "app" ? filters.volume : undefined
-  const owner = id ? backupTargetApp({ kind: "volume", id }) : null
   const { data: capabilities } = useQuery(accessCapabilitiesQueryOptions())
   const canReadRelay =
     capabilities?.isPlatformAdmin ||
@@ -648,11 +647,8 @@ function useBackupScopeVolumes(filters: BackupFilters) {
         grantHasPermission(grant, "relay.read")
     )
   const app = useQuery({
-    ...appBackupsQueryOptions(
-      filters.relay ?? "",
-      owner ?? filters.server ?? ""
-    ),
-    enabled: Boolean(id && (owner || filters.server) && filters.relay),
+    ...appBackupsQueryOptions(filters.relay ?? "", filters.server ?? ""),
+    enabled: Boolean(id && filters.server && filters.relay),
     refetchInterval: false,
     staleTime: 5 * 60_000,
   })
@@ -664,37 +660,23 @@ function useBackupScopeVolumes(filters: BackupFilters) {
   })
   const volume = React.useMemo(() => {
     const found = relay.data?.volumes.find((volume) => volume.id === id)
-    if (!owner) {
-      // A Kiln volume the App uses is one of its backup's targets.
-      const used = app.data?.available
-        ? app.data.targets.find(
-            (target) => target.kind === "volume" && target.id === id
-          )
-        : undefined
-      return (
-        found ??
-        (used
-          ? { id: used.id, name: used.name ?? used.id, owner: null }
-          : undefined)
-      )
-    }
-    const target = app.data?.targets.find(
-      (target) => target.kind === "volume" && target.id === id
-    )
-    return target && app.data?.available
-      ? {
-          id: target.id,
-          name: target.name ?? id!,
-          owner: { appId: owner, volume: target.name ?? id! },
-        }
+    // A volume the App uses is one of its backup's targets, known to
+    // someone who can't read its Relay's volumes.
+    const used = app.data?.available
+      ? app.data.targets.find(
+          (target) => target.kind === "volume" && target.id === id
+        )
       : undefined
-  }, [app.data, relay.data, id, owner])
-  const known = owner ? app.data?.available === true : relay.isSuccess
+    return (
+      found ?? (used ? { id: used.id, name: used.name ?? used.id } : undefined)
+    )
+  }, [app.data, relay.data, id])
+  const known = relay.isSuccess
   return {
     volume,
     listing: relay.data,
     deleted: Boolean(id && known && !volume),
-    loading: Boolean(id && (owner ? app.isLoading : relay.isLoading)),
+    loading: Boolean(id && (relay.isLoading || app.isLoading)),
   }
 }
 
@@ -719,7 +701,7 @@ const BackupVolumeFilter = React.memo(function BackupVolumeFilter({
       aria-label="Clear volume filter"
       onClick={() => onFiltersChange({ volume: undefined })}
     >
-      Volume {found?.owner?.volume ?? found?.name ?? volume.split("/").at(-1)}
+      Volume {found?.name ?? volume.slice(0, 8)}
       {resolved.deleted
         ? " (deleted)"
         : !found
@@ -2771,7 +2753,7 @@ function availableCreateTargets({
 }: {
   apps: Awaited<ReturnType<typeof getAppDirectory>>
   volume?:
-    | Pick<import("@workspace/contracts").RelayVolume, "id" | "name" | "owner">
+    | Pick<import("@workspace/contracts").RelayVolume, "id" | "name">
     | undefined
   volumeListing?: import("@workspace/contracts").RelayVolumes | undefined
   volumeRelayId?: string | undefined
@@ -2810,10 +2792,8 @@ function availableCreateTargets({
         : "Stopping it takes permission to stop every App that uses it",
   })
   const listing = volumeListing?.protection.ready ? volumeListing : undefined
-  const users = (volume: import("@workspace/contracts").RelayVolume) => [
-    ...(volume.owner ? [volume.owner.appId] : []),
-    ...volume.users.map((user) => user.appId),
-  ]
+  const users = (volume: import("@workspace/contracts").RelayVolume) =>
+    volume.users.map((user) => user.appId)
   for (const app of apps) {
     if (hasBackupResourcePermission(capabilities, app.relayId, "app", app.id))
       targets.push(
@@ -2828,12 +2808,8 @@ function availableCreateTargets({
             listing && volumeRelayId === app.relayId
               ? [
                   app.id,
-                  ...listing.volumes
-                    .filter(
-                      (volume) =>
-                        volume.id !== null && volume.owner?.appId === app.id
-                    )
-                    .flatMap(users),
+                  // Every App that uses a volume its backup takes.
+                  ...appBackupVolumes(app.id, listing.volumes).flatMap(users),
                 ]
               : undefined,
             true
@@ -2862,7 +2838,7 @@ function availableCreateTargets({
       id: volume.id,
       key: targetKey("volume", volumeRelayId, volume.id),
       kind: "volume",
-      name: `Volume ${volume.owner?.volume ?? volume.name}`,
+      name: `Volume ${volume.name}`,
       relayId: volumeRelayId,
       relayName:
         apps.find((app) => app.relayId === volumeRelayId)?.relayName ??

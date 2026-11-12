@@ -47,7 +47,6 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
           mountpoint: null,
           mounts: [],
           name: "media",
-          owner: null,
           sizeBytes: null,
           users: relay.volumeUsers.map((appId) => ({
             appId,
@@ -176,20 +175,15 @@ describeMysql("App and volume backup authorization", () => {
           yield* seed
           yield* grant(["backup.create", "backup.download", "backup.read"])
 
-          for (const target of [
-            { id: appId, kind: "app" as const },
-            { id: `${appId}/pgdata`, kind: "volume" as const },
-          ]) {
-            const message = yield* rejection(() =>
-              createResourceBackupHandler(user, {
-                name: "Before the upgrade",
-                relayId,
-                storageIds: [null],
-                target,
-              })
-            )
-            assert.include(message, "do not have permission to back up")
-          }
+          const message = yield* rejection(() =>
+            createResourceBackupHandler(user, {
+              name: "Before the upgrade",
+              relayId,
+              storageIds: [null],
+              target: { id: appId, kind: "app" },
+            })
+          )
+          assert.include(message, "do not have permission to back up")
           assert.strictEqual(yield* count("backup"), 0)
         })
     )

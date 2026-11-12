@@ -183,8 +183,6 @@ export const serverRecords = selectRows<{ instance_id: string }>(
  * socket keeps.
  */
 export const deletionRelay = {
-  // The volumes each App deletion was allowed to take.
-  appDeletes: [] as Array<ReadonlyArray<string> | undefined>,
   apps: new Set<string>(),
   changes: [] as Array<string>,
   frozen: new Map<string, string>(),
@@ -203,7 +201,6 @@ export interface FakeVolume {
   id: string
   // Another App's, or a container's, of kind and resource.
   mounts?: Array<{ kind: "app" | "other"; resourceId: string | null }>
-  owner?: string
   users?: Array<{ appId: string; configured: boolean }>
 }
 
@@ -239,7 +236,6 @@ export const appRecords = selectRows<{ app_id: string }>("app").pipe(
 )
 
 function resetDeletionRelay(servers: ReadonlyArray<string>): void {
-  deletionRelay.appDeletes.length = 0
   deletionRelay.apps.clear()
   deletionRelay.changes.length = 0
   deletionRelay.frozen.clear()
@@ -312,19 +308,9 @@ export const deletionRelayConnection = {
       case "app.delete":
       case "relay.volumes.delete":
         if (operation === "app.delete") {
-          const allowed = payload.volumeIds as ReadonlyArray<string> | undefined
-          state.appDeletes.push(allowed)
+          // It goes without any volume it used.
           state.apps.delete(id)
           leaveNetworks(id)
-          // It takes the volumes only it uses that its deletion names.
-          state.volumes = state.volumes.filter(
-            (volume) =>
-              !(
-                volume.owner === id &&
-                onlyUsedBy(volume, id) &&
-                (allowed ?? [volume.id]).includes(volume.id)
-              )
-          )
         } else {
           state.volumes = state.volumes.filter((volume) => volume.id !== id)
         }
@@ -380,15 +366,6 @@ function leaveNetworks(resourceId: string) {
   }
 }
 
-function onlyUsedBy(volume: FakeVolume, appId: string): boolean {
-  return (
-    (volume.users ?? []).every((user) => user.appId === appId) &&
-    (volume.mounts ?? []).every(
-      (mount) => mount.kind === "app" && mount.resourceId === appId
-    )
-  )
-}
-
 function listedVolumes() {
   return {
     filesAvailable: false,
@@ -397,9 +374,9 @@ function listedVolumes() {
     uncovered: [],
     volumes: deletionRelay.volumes.map((volume) => ({
       createdAt: null,
-      dockerName: `volume-${volume.id.replace("/", "_")}`,
+      dockerName: `kiln-${volume.id.slice(0, 8)}`,
       id: volume.id,
-      kind: volume.owner ? "app" : "kiln",
+      kind: "kiln",
       mountpoint: null,
       mounts: (volume.mounts ?? []).map((mount) => ({
         container: `${mount.kind}-container`,
@@ -409,10 +386,7 @@ function listedVolumes() {
         resourceId: mount.resourceId,
         running: false,
       })),
-      name: volume.id.split("/").at(-1),
-      owner: volume.owner
-        ? { appId: volume.owner, volume: volume.id.split("/").at(-1) }
-        : null,
+      name: volume.id.slice(0, 8),
       sizeBytes: null,
       users: (volume.users ?? []).map((user) => ({
         ...user,

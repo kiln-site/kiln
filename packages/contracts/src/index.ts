@@ -718,36 +718,17 @@ export const relayDesktopDetachSchema = z.object({
   ticket: relayDesktopTicketSchema,
 })
 
-// A Docker named volume on a Relay. Kiln manages two kinds, each with a
-// stable ID that names it to backups and deletion:
-//
-// - `kiln`: one Kiln made for Apps to share, named `kiln-<short ID>-<slug>`
-//   after its ID and the name it was made with. No App owns it; any App's
-//   configuration may mount it.
-// - `app`: one an App's Compose project declares, owned by that App. Its ID
-//   is `<App ID>/<name in the Compose file>`, which redeploys keep.
+// A Docker named volume on a Relay. A Kiln volume, kind `kiln`, is one Kiln
+// made, named `kiln-<short ID>-<slug>` after its ID and the name it was
+// made with, however it came to be: added in Hearth, kept by a Brick, or
+// declared in an App's Compose file, which its Relay points at the volume
+// when it deploys. No App owns one; any App may mount it, and its ID names
+// it to backups and deletion.
 //
 // The Relay's own data volume, kind `relay`, is the platform backup's and
 // has no ID.
 export const relayVolumeIdSchema = z.string().regex(/^[a-f0-9]{40}$/u)
-// The key a Compose file declares a volume under.
-export const composeVolumeNameSchema = z
-  .string()
-  .regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u)
-  .max(128)
 const volumeAppIdSchema = instanceIdSchema
-export const appVolumeIdSchema = z
-  .string()
-  .regex(/^[a-f0-9]{12}\/[a-zA-Z0-9][a-zA-Z0-9_.-]*$/u)
-  .max(169)
-export const relayManagedVolumeIdSchema = z.union([
-  relayVolumeIdSchema,
-  appVolumeIdSchema,
-])
-/** The ID of the volume an App's Compose project declares under `name`. */
-export function appVolumeId(appId: string, name: string): string {
-  return `${appId}/${name}`
-}
 export const RELAY_VOLUME_NAME_MAX_LENGTH = 64
 export const relayVolumeNameSchema = z
   .string()
@@ -775,19 +756,13 @@ export const relayVolumeUserSchema = z.object({
 export const relayVolumeSchema = z.object({
   createdAt: z.string().nullable(),
   dockerName: z.string().min(1),
-  // Null for the Relay's own data volume, and for a volume an App's project
-  // made under a name another of its volumes now holds, such as after the
-  // Compose file renamed it.
-  id: relayManagedVolumeIdSchema.nullable(),
-  kind: z.enum(["app", "kiln", "relay"]),
+  // Null for the Relay's own data volume.
+  id: relayVolumeIdSchema.nullable(),
+  kind: z.enum(["kiln", "relay"]),
   // Where its files are on the host.
   mountpoint: z.string().nullable(),
   mounts: z.array(relayVolumeMountSchema),
   name: z.string(),
-  // The App whose Compose project made it, and the name it has there.
-  owner: z
-    .object({ appId: volumeAppIdSchema, volume: composeVolumeNameSchema })
-    .nullable(),
   // Null until Docker has measured it.
   sizeBytes: z.number().int().nonnegative().nullable(),
   users: z.array(relayVolumeUserSchema),
@@ -821,21 +796,19 @@ export const relayVolumesSchema = z.object({
   volumes: z.array(relayVolumeSchema),
 })
 /**
- * The volumes an App's backup takes with it: those its Compose project
- * made, and every Kiln volume it uses, whichever other Apps use that one
- * too. A volume with no ID is one no backup can name.
+ * The volumes an App's backup takes with it: every Kiln volume it uses,
+ * whichever other Apps use that one too.
  */
 export function appBackupVolumes<
   Volume extends Pick<
     z.infer<typeof relayVolumeSchema>,
-    "id" | "kind" | "owner" | "users"
+    "id" | "kind" | "users"
   >,
 >(appId: string, volumes: ReadonlyArray<Volume>): Array<Volume & { id: string }> {
   return volumes.flatMap((volume) =>
     volume.id !== null &&
-    (volume.owner?.appId === appId ||
-      (volume.kind === "kiln" &&
-        volume.users.some((user) => user.appId === appId)))
+    volume.kind === "kiln" &&
+    volume.users.some((user) => user.appId === appId)
       ? [{ ...volume, id: volume.id }]
       : []
   )
@@ -1381,10 +1354,6 @@ export const relayDeleteAppSchema = z
   .object({
     appId: appIdSchema,
     deleteData: z.boolean().default(true),
-    // The App's own volumes its deletion may take, by ID: those it planned
-    // to, and backed up if asked. Any other stays. Left out, every volume
-    // only the App's own Compose projects made and nothing mounts goes.
-    volumeIds: z.array(appVolumeIdSchema).max(256).optional(),
   })
   .strict()
 
