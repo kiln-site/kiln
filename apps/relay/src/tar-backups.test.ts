@@ -91,10 +91,6 @@ function backups(
     BackupManager.make({
       ...(instead.databases ? { databases: instead.databases } : {}),
       apps: {
-        hostFolder: async (id) =>
-          (await harness.apps.list()).some((app) => app.id === id)
-            ? join(await harness.lifecycle.hostDataDirectory(), "apps", id)
-            : null,
         isRunning: async (id) =>
           (await harness.apps.get(id)).containers.some(
             (container) => container.running

@@ -34,8 +34,8 @@ import {
 import { currentId } from "../instance-keys.js"
 
 /**
- * Backs up and restores what Docker mounts: a volume, or an App's folder as
- * a bind. Docker reads and writes the files, through its archive API, in a
+ * Backs up and restores what Docker mounts: a volume, or a folder as a
+ * bind. Docker reads and writes the files, through its archive API, in a
  * short-lived helper container that mounts them at `/volume`, so each file
  * keeps its owner, mode, and extended attributes, and symlinks stay links.
  *

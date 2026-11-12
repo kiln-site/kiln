@@ -37,8 +37,8 @@ import {
   restoreResourceBackup,
 } from "@/server/backups"
 
-/** What a backup of an App's folder or a volume names. */
-export type ResourceTarget = { id: string; kind: "app" | "volume" }
+/** What a backup of a volume names. */
+export type ResourceTarget = { id: string; kind: "volume" }
 
 // The destinations a configuration chose.
 function storageIds(configuration: BackupConfiguration) {
@@ -112,9 +112,8 @@ export function ResourceBackupDialog({
 }
 
 /**
- * Restores an App's folder or a volume, saying first what must be stopped:
- * the App, or every container that mounts the volume, which the Relay
- * checks too.
+ * Restores a volume, saying first what must be stopped: every container
+ * that mounts it, which the Relay checks too.
  */
 export function ResourceRestoreDialog({
   backup,
@@ -129,7 +128,6 @@ export function ResourceRestoreDialog({
 }) {
   const queryClient = useQueryClient()
   const [safetyBackup, setSafetyBackup] = React.useState(true)
-  const volume = backup.targetKind === "volume"
   const volumes = useQuery({
     ...relayVolumesQueryOptions(backup.relayId),
     enabled: open,
@@ -140,56 +138,43 @@ export function ResourceRestoreDialog({
       apps.data?.find((app) => app.id === appId)?.name ?? appId,
     [apps.data]
   )
-  // The App folders or volumes on its Relay it can go into: its own while
+  // The volumes on its Relay it can go into: its own while
   // it exists, or another, as when its own is gone.
-  const destinations = React.useMemo((): Array<RestoreDestination> => {
-    if (volume) {
-      return (volumes.data?.volumes ?? []).flatMap((candidate) =>
+  const destinations = React.useMemo(
+    (): Array<RestoreDestination> =>
+      (volumes.data?.volumes ?? []).flatMap((candidate) =>
         candidate.id === null
           ? []
-          : [
-              {
-                id: candidate.id,
-                name: candidate.name,
-              },
-            ]
-      )
-    }
-    return (apps.data ?? []).flatMap((app) =>
-      app.relayId === backup.relayId
-        ? [{ id: app.id, name: `${app.name} folder` }]
-        : []
-    )
-  }, [apps.data, appName, backup.relayId, volume, volumes.data])
+          : [{ id: candidate.id, name: candidate.name }]
+      ),
+    [volumes.data]
+  )
   const { destination, elsewhere, ownExists, setDestination } =
     useRestoreDestination(backup.targetId, destinations)
   const destinationId = destination?.id ?? backup.targetId
   const shownName = destination?.name ?? targetName
   const running = React.useMemo(() => {
     if (!volumes.data) return null
-    if (volume) {
-      const found = volumes.data.volumes.find(
-        (candidate) => candidate.id === destinationId
+    const found = volumes.data.volumes.find(
+      (candidate) => candidate.id === destinationId
+    )
+    return (found?.mounts ?? [])
+      .filter((mount) => mount.running)
+      .map((mount) =>
+        mount.kind === "app" && mount.resourceId
+          ? `${appName(mount.resourceId)} (${mount.container})`
+          : mount.container
       )
-      return (found?.mounts ?? [])
-        .filter((mount) => mount.running)
-        .map((mount) =>
-          mount.kind === "app" && mount.resourceId
-            ? `${appName(mount.resourceId)} (${mount.container})`
-            : mount.container
-        )
-    }
-    return null
-  }, [appName, destinationId, volume, volumes.data])
+  }, [appName, destinationId, volumes.data])
   const users = React.useMemo(() => {
-    if (!volume || !volumes.data) return []
+    if (!volumes.data) return []
     const found = volumes.data.volumes.find(
       (candidate) => candidate.id === destinationId
     )
     return [...new Set(found?.users.map((user) => user.appId) ?? [])].map(
       appName
     )
-  }, [appName, destinationId, volume, volumes.data])
+  }, [appName, destinationId, volumes.data])
   const restore = useMutation({
     mutationFn: () =>
       restoreResourceBackup({
@@ -221,22 +206,20 @@ export function ResourceRestoreDialog({
         <DialogHeader>
           <DialogTitle>Restore {shownName}</DialogTitle>
           <DialogDescription>
-            {volume
-              ? `This replaces everything in the volume with “${backup.name}”. Every container that mounts it must be stopped, and the Apps that use it can’t start until the restore is done.`
-              : `This replaces the App’s folder with “${backup.name}”. Stop the App first; it can’t start until the restore is done.`}
+            {`This replaces everything in the volume with “${backup.name}”. Every container that mounts it must be stopped, and the Apps that use it can’t start until the restore is done.`}
           </DialogDescription>
         </DialogHeader>
         {!ownExists || destinations.length > 1 ? (
           <RestoreDestinationSelect
             destinations={destinations}
             disabled={restore.isPending}
-            kindLabel={volume ? "volumes" : "Apps"}
+            kindLabel="volumes"
             ownId={backup.targetId}
             value={destination?.id ?? null}
             onChange={setDestination}
           />
         ) : null}
-        {volume && users.length > 0 ? (
+        {users.length > 0 ? (
           <p className="type-meta text-muted-foreground">
             Apps that use it: {users.join(", ")}. Restoring it takes permission
             to change each one’s files.

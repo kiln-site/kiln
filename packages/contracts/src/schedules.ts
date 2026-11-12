@@ -312,12 +312,13 @@ const relayScheduleBackupExecutionSchema = z
     /** An incremental backup's repository, which catalogs it. */
     repositoryId: z.uuid().nullable().optional(),
     /**
-     * The App targets of the step whose backups take this volume: each
-     * App's folder and each volume are executions of their own, and a
-     * volume several of them use is one execution, backed up once.
+     * The App targets of the step whose backups take this volume: a volume
+     * several of them use is one execution, backed up once.
      */
     appIds: z.array(z.string().min(1).max(120)).min(1).max(2_000).optional(),
     targetId: z.string().min(1).max(120),
+    // `app` is no longer sent. A Relay reads back the schedules it stored,
+    // and one from when an App's folder was an execution still names it.
     targetKind: z.enum(["instance", "database", "relay", "app", "volume"]),
   })
   .strict()
@@ -329,7 +330,7 @@ const relayScheduleBackupExecutionSchema = z
 export const SCHEDULED_APP_BACKUP_GROUP_MAX = 64
 
 /**
- * What one App's scheduled backup runs with: its own folder, each volume
+ * What one App's scheduled backup runs with: each volume
  * it uses, and the same of every App of the step that shares a volume with
  * it, however far that reaches. They are backed up together, each once, so
  * a shared volume is one backup whichever of its Apps asks first.
@@ -361,11 +362,7 @@ export function scheduledAppBackupGroup<
   }
   return {
     apps: [...apps].sort(),
-    executions: executions.filter(
-      (execution) =>
-        (execution.targetKind === "app" && apps.has(execution.targetId)) ||
-        taken(execution)
-    ),
+    executions: executions.filter(taken),
   }
 }
 

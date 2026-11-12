@@ -175,7 +175,7 @@ export const restoreDatabase = restoreOperation(
 )
 export const restoreResource = restoreOperation(
   "backup.resource.restore",
-  "Restoring this App's folder or volume",
+  "Restoring this volume",
   restoreResourceBackupHandler
 )
 

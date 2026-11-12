@@ -202,7 +202,6 @@ describe("Kiln platform backups deployed by Coolify", () => {
     const manager = await Effect.runPromise(
       BackupManager.make({
         apps: {
-          hostFolder: async () => null,
           isRunning: async () => false,
           start: async () => {},
           stop: async () => {},

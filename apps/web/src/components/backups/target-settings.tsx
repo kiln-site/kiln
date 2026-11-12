@@ -348,9 +348,8 @@ function gibibytes(bytes: number): number {
   return Math.round((bytes / GIB) * 100) / 100
 }
 
-// A game server's folder, an App's, and a volume are archived file by file,
-// so their backups can leave paths out; a database's dump and Kiln's
-// bundle can't.
+// A game server's folder and a volume are archived file by file, so their
+// backups can leave paths out; a database's dump and Kiln's bundle can't.
 function excludable(kind: BackupTarget["kind"]): boolean {
-  return kind === "instance" || kind === "app" || kind === "volume"
+  return kind === "instance" || kind === "volume"
 }

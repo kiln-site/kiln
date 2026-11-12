@@ -33,7 +33,7 @@ export const backupIdSchema = z.uuid()
 export const backupTaskIdSchema = z.uuid()
 
 /**
- * Finishes or abandons a restore of an App's folder or a volume whose swap
+ * Finishes or abandons a restore of a volume whose swap
  * didn't finish, which keeps its target fenced until then.
  */
 export const backupRestoreResolveSchema = z.strictObject({
@@ -59,18 +59,16 @@ export const backupFilenameSchema = z
     { message: "Backup filenames must be a single safe path segment" }
   )
 
-// `app` is an App's folder; `volume` is a volume Kiln manages, named by its
-// ID: a Kiln volume's, or `<App ID>/<key>` for one an App's Compose project
-// declares.
+// `volume` is a volume Kiln manages, named by its ID. An App is no target:
+// it is backed up as the volumes it uses.
 export const backupTargetKindSchema = z.enum([
   "instance",
   "database",
   "platform",
-  "app",
   "volume",
 ])
 
-// `tar_archive` is an App's folder or a volume as Docker reads it, gzipped,
+// `tar_archive` is a volume as Docker reads it, gzipped,
 // with each file's owner, mode, and extended attributes, and its symlinks.
 export const backupArtifactKindSchema = z.enum([
   "archive",
@@ -215,14 +213,12 @@ export const backupTargetSchema = z
   .strict()
 
 /**
- * A restore of an App's folder or a volume whose swap began and didn't
- * finish, fencing its target until it's finished or abandoned.
+ * A restore of a volume whose swap began and didn't finish, fencing its
+ * target until it's finished or abandoned.
  */
 export const backupUnfinishedRestoreSchema = z.strictObject({
   phase: z.enum(["clearing", "installing"]),
-  target: backupTargetSchema.refine(
-    (target) => target.kind === "app" || target.kind === "volume"
-  ),
+  target: backupTargetSchema.refine((target) => target.kind === "volume"),
   taskId: backupTaskIdSchema,
 })
 export const backupUnfinishedRestoresSchema = z.array(
@@ -375,7 +371,7 @@ const backupCreateTaskInputObjectSchema = z
     catalog: z
       .object({
         name: z.string().trim().min(1).max(120),
-        // The App's batch a scheduled backup of its folder or a volume it
+        // The App's batch a scheduled backup of a volume it
         // owns belongs to, which Hearth catalogs it under.
         batchId: z.uuid().optional(),
         // The repository an incremental scheduled backup goes to.
@@ -385,8 +381,8 @@ const backupCreateTaskInputObjectSchema = z
       .strict()
       .optional(),
     /**
-     * A stopped backup of an App's folder or a volume started with others,
-     * as backing up an App starts its folder's and each owned volume's: the
+     * A stopped backup of a volume started with others,
+     * as backing up an App starts each owned volume's: the
      * Relay copies them all within one stopped window, so they agree.
      */
     batch: z
@@ -418,11 +414,11 @@ function refineResticCreateInput(
   input: z.infer<typeof backupCreateTaskInputObjectSchema>,
   context: z.RefinementCtx
 ) {
-  const resource = input.target.kind === "app" || input.target.kind === "volume"
+  const resource = input.target.kind === "volume"
   if (resource !== (input.artifactKind === "tar_archive")) {
     context.addIssue({
       code: "custom",
-      message: "Apps and volumes, and only they, are backed up as tar archives",
+      message: "Volumes, and only they, are backed up as tar archives",
       path: ["artifactKind"],
     })
   }
@@ -433,7 +429,7 @@ function refineResticCreateInput(
     context.addIssue({
       code: "custom",
       message:
-        "Only Apps and volumes are stopped for a backup, or a database backed up in a batch with them",
+        "Only volumes are backed up stopped, or a database backed up in a batch with them",
       path: ["consistency"],
     })
   }
@@ -847,7 +843,7 @@ export const backupArchiveManifestSchema = z.discriminatedUnion(
 )
 
 /**
- * The manifest a tar archive of an App's folder or a volume begins with, at
+ * The manifest a tar archive of a volume begins with, at
  * `.kiln-backup/manifest.json`. Its data follows under `data/`.
  */
 export const backupTarManifestSchema = z
@@ -858,11 +854,10 @@ export const backupTarManifestSchema = z
     createdAt: z.string().datetime(),
     formatVersion: z.literal(1),
     mode: z.literal("full"),
-    target: backupTargetSchema.refine(
-      (target) => target.kind === "app" || target.kind === "volume",
-      { message: "Tar archive manifests require an App or volume target" }
-    ),
-    // The volume as it was when backed up; null for an App's folder.
+    target: backupTargetSchema.refine((target) => target.kind === "volume", {
+      message: "Tar archive manifests require a volume target",
+    }),
+    // The volume as it was when backed up.
     volume: z
       .object({
         dockerName: z.string().min(1).max(255),

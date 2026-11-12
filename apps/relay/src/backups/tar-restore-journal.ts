@@ -7,7 +7,7 @@ import { writeFileAtomic } from "../effect/atomic-file.js"
 import { laneKeys, type LaneLock } from "../operation-lanes.js"
 
 /**
- * What a restore of an App's folder or a volume has done so far, kept on
+ * What a restore of a volume has done so far, kept on
  * disk so a Relay that stops midway, or a swap that fails, finishes or undoes
  * it. Once a restore begins clearing the old files, its target holds neither
  * the old copy nor the restored one, so the journal also fences the target:
@@ -36,7 +36,7 @@ const TarRestoreJournalSchema = Schema.Struct({
   source: TarSourceSchema,
   target: Schema.Struct({
     id: Schema.String,
-    kind: Schema.Literals(["app", "volume"]),
+    kind: Schema.Literal("volume"),
   }),
   taskId: Schema.String.check(
     Schema.isPattern(
@@ -160,11 +160,6 @@ export class TarRestoreFences {
     return [...this.#fences.values()]
   }
 
-  /** The unfinished restore fencing a target, if one is. */
-  find(kind: "app" | "volume", id: string): TarRestoreJournal | null {
-    return this.#fences.get(targetKey({ id, kind })) ?? null
-  }
-
   /**
    * Why an operation may not run: it touches a fenced target, or starts,
    * deploys, or replaces an App that uses a fenced volume. Lock keys name
@@ -176,14 +171,13 @@ export class TarRestoreFences {
       return null
     }
     for (const lock of locks) {
-      for (const [key, journal] of this.#fences) {
+      for (const key of this.#fences.keys()) {
         if (lock.key === key || lock.key.startsWith(`${key}/`)) {
-          return refusalMessage(journal)
+          return refusalMessage
         }
       }
       for (const journal of this.#fences.values()) {
         if (
-          journal.target.kind === "volume" &&
           journal.consumers.some(
             (appId) =>
               lock.key === laneKeys.appLifecycle(appId) ||
@@ -198,16 +192,11 @@ export class TarRestoreFences {
   }
 }
 
-function refusalMessage(journal: TarRestoreJournal): string {
-  return journal.target.kind === "app"
-    ? "This App's folder is partway through a restore that didn't finish; the restore must finish first"
-    : "This volume is partway through a restore that didn't finish; the restore must finish first"
-}
+const refusalMessage =
+  "This volume is partway through a restore that didn't finish; the restore must finish first"
 
-function targetKey(target: { id: string; kind: "app" | "volume" }): string {
-  return target.kind === "app"
-    ? laneKeys.app(target.id)
-    : laneKeys.volume(target.id)
+function targetKey(target: { id: string }): string {
+  return laneKeys.volume(target.id)
 }
 
 function decodeJournal(text: string): TarRestoreJournal | null {

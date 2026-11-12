@@ -234,12 +234,10 @@ lifecycle lock, which its build takes again when it runs:
 - **Backups** run alongside other work on their target (shared lock). A
   **restore** runs alone (exclusive), so it waits for file writes and power
   changes and nothing starts the server mid-restore.
-  An App's folder or a volume backed up **stopped** also holds the
-  lifecycle of each App it stops (for a volume, every App
-  that uses it), so nothing starts them meanwhile, and holds a volume
+  A volume backed up **stopped** also holds the lifecycle of each App it
+  stops (every App that uses it), so nothing starts them meanwhile, and holds a volume
   exclusively, so no App that begins using it deploys or starts either. A volume's restore holds
-  the volume exclusively with every such App's lifecycle; an App folder's
-  restore replaces the App. A restore whose swap didn't finish keeps its
+  the volume exclusively with every such App's lifecycle. A restore whose swap didn't finish keeps its
   target fenced: the lanes refuse every operation that locks it, and those
   that start, deploy, or replace an App using the volume, until its
   recovery (`backup.restore.recover`) finishes or abandons it. Starting

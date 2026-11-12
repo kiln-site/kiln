@@ -686,7 +686,7 @@ export async function restoreDatabaseBackupHandler(
 }
 
 /**
- * Restores an App's folder or a volume. It takes permission to restore the
+ * Restores a volume. It takes permission to restore the
  * target and to change the files of every App that uses it; the Relay
  * refuses while anything that mounts it runs.
  */
@@ -701,11 +701,11 @@ export async function restoreResourceBackupHandler(
   if (
     !backup ||
     backup.status !== "available" ||
-    (backup.targetKind !== "app" && backup.targetKind !== "volume") ||
+    backup.targetKind !== "volume" ||
     backup.artifactKind !== "tar_archive" ||
     backup.backupMode !== "full"
   ) {
-    throw new Error("Backup is not available for an App or volume restore")
+    throw new Error("Backup is not available for a volume restore")
   }
   const relay = await requireBackupRelay(backup.relayId)
   const destination = {
@@ -737,7 +737,6 @@ export async function restoreResourceBackupHandler(
           requestedMaxBytes: null,
           storageIds: [null],
           targetId: destination.id,
-          targetKind: destination.kind,
           taskId: randomUUID(),
         })
       )
@@ -957,7 +956,7 @@ async function validateRequestedStorage(
 }
 
 /**
- * What one App owns or uses, to filter backups by: its folder, the volumes
+ * What one App owns or uses, to filter backups by: the volumes
  * its Compose project owns (by ID), and the Kiln volumes its configuration
  * names or, as its Relay says, its containers mount.
  */

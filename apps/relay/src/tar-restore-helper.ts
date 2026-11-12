@@ -1,5 +1,5 @@
 // Runs in the short-lived helper a tar restore starts, as root, with the
-// volume or App folder it restores mounted at `/volume`: one step of
+// volume it restores mounted at `/volume`: one step of
 // swapping the restored copy in (see `./backups/tar-restore-steps.ts`).
 import {
   runTarRestoreStep,

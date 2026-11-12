@@ -15,7 +15,11 @@ import {
 import { loadAppConfigEffect } from "@/effect/managed-apps"
 import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
-import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
+import {
+  isPlatformAdmin,
+  listUserGrants,
+  requireRelayPermission,
+} from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { configuredVolumeIds } from "@/lib/app-volume-references.server"
 import { publishBackupChange } from "@/lib/backup-realtime.server"
@@ -28,15 +32,12 @@ import {
   listPersistedRelays,
   type PersistedRelay,
 } from "@/lib/relay-registry"
-import {
-  requireBackupTargetPermission,
-  requireBackupTargetRestore,
-} from "@/server/backup-target-access.server"
+import { requireBackupTargetRestore } from "@/server/backup-target-access.server"
 
 // Server-only work behind an App's backup settings and unfinished restores; the
 // server functions in ./backups authenticate the caller first.
 
-type ResourceTarget = BackupTarget & { kind: "app" | "volume" }
+type ResourceTarget = BackupTarget & { kind: "volume" }
 
 /** What an App's backup settings show: what's backed up, and what isn't. */
 export async function getAppBackupsHandler(
@@ -44,12 +45,13 @@ export async function getAppBackupsHandler(
   data: { appId: string; relayId: string }
 ) {
   const relay = await activeRelay(data.relayId)
-  await requireBackupTargetPermission(
+  // What an App keeps is shown to those who may read the App.
+  await requireRelayPermission({
+    appId: data.appId,
+    permission: "app.read",
+    relayId: relay.id,
     user,
-    relay.id,
-    { id: data.appId, kind: "app" },
-    "backup.read"
-  )
+  })
   const [listing, unfinished, plan] = await Promise.all([
     recoverPromise(
       () => readRelayVolumes(relay, user.id),
@@ -163,7 +165,7 @@ export function missingAppVolumes(
 }
 
 /**
- * Restores of Apps' folders and volumes whose swap didn't finish, fencing
+ * Restores of volumes whose swap didn't finish, fencing
  * their targets, on every Relay the user can see backups of them on.
  */
 export async function listUnfinishedRestoresHandler(user: AuthenticatedUser) {

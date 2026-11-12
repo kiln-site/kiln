@@ -43,9 +43,7 @@ export function DeleteAppDialog({
         data: {
           ...confirmation.input,
           appId: app.id,
-          createBackup: false,
           relayId: app.relayId,
-          storageId: null,
         },
       }),
     onSuccess: async () => {

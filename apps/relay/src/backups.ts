@@ -67,7 +67,6 @@ import {
 import type { OperationLanes } from "./operation-lanes.js"
 import {
   appLifecycleLocks,
-  appReplaceLocks,
   appStartLocks,
   backupTaskLocks,
 } from "./operation-plans.js"
@@ -172,10 +171,8 @@ type BackupTaskEnd = {
   failure: BackupFailureCode | null
 }
 
-/** What backups of Apps' folders and their power need of the App driver. */
+/** What backups of the volumes Apps use need of the App driver. */
 export interface BackupApps {
-  /** The App's folder on the Docker host, or null when it isn't here. */
-  hostFolder(appId: string): Promise<string | null>
   isRunning(appId: string): Promise<boolean>
   start(appId: string): Promise<void>
   stop(appId: string): Promise<void>
@@ -299,7 +296,7 @@ export class BackupManager {
           Date.now()
         )
       }
-      // Restores of Apps' folders and volumes a stop or a failed swap left
+      // Restores of volumes a stop or a failed swap left
       // midway, finished or undone, and Apps a stopped backup left stopped,
       // started again. Neither keeps the Relay from starting when Docker
       // can't answer; a restore that can't finish keeps its target fenced.
@@ -349,7 +346,7 @@ export class BackupManager {
   }
 
   /**
-   * Finishes or abandons a restore of an App's folder or a volume whose swap
+   * Finishes or abandons a restore of a volume whose swap
    * didn't finish, which fences its target until then. Finishing stops the
    * Apps running on the target first; abandoning keeps what the target
    * holds now.
@@ -370,7 +367,7 @@ export class BackupManager {
     }).pipe(Effect.withSpan("Backups.resolveTarRestore"))
   }
 
-  /** The restores of Apps' folders and volumes fencing their targets. */
+  /** The restores of volumes fencing their targets. */
   unfinishedTarRestores(): Array<BackupUnfinishedRestore> {
     return this.#fences.list().flatMap((journal) =>
       journal.phase === "staging"
@@ -608,7 +605,7 @@ export class BackupManager {
   }
 
   /**
-   * Runs a stopped batch, as backing up an App starts its folder's and each
+   * Runs a stopped batch, as backing up an App starts each
    * owned volume's: every backup in it within one stopped window, holding
    * all their locks, so the copies agree. The Apps that use any of them stop
    * once, journaled as a single stopped backup's are, and those that ran
@@ -729,12 +726,6 @@ export class BackupManager {
       for (const member of members) {
         const apps = yield* this.#lockedVolumeApps(member.input)
         for (const appId of apps) lockedApps.add(appId)
-        if (
-          member.input.kind === "create" &&
-          member.input.target.kind === "app"
-        ) {
-          lockedApps.add(member.input.target.id)
-        }
         locks.push(
           ...(yield* promiseEffect(async () =>
             backupTaskLocks(
@@ -767,7 +758,7 @@ export class BackupManager {
           // its own start or deployment. The whole window fails instead.
           const consumers = new Set<string>()
           for (const member of members) {
-            // An App's folder or a volume has Apps to stop. A database of
+            // A volume has Apps to stop. A database of
             // the batch has none: it is dumped once theirs are stopped.
             if (
               member.input.kind !== "create" ||
@@ -819,7 +810,7 @@ export class BackupManager {
   }
 
   /**
-   * Backs up an App's folder or a volume through Docker. Stopped, it stops
+   * Backs up a volume through Docker. Stopped, it stops
    * each App that uses it first, recording which in a journal so a Relay
    * that stops midway starts them again, and starts them again after,
    * unless it's a final backup. An App that won't start again is a warning
@@ -848,9 +839,7 @@ export class BackupManager {
       // finds another App using what it backs up, as one deployed since the
       // deletion planned it, is refused before it stops anything.
       if (final) {
-        const deleting = finalBackupOwner(input.target)
-        const other = consumers.find((appId) => appId !== deleting)
-        if (other !== undefined) {
+        if (consumers.length > 0) {
           return yield* backupFailure(
             "volume_users_changed",
             "lookup",
@@ -987,14 +976,13 @@ export class BackupManager {
   }
 
   /**
-   * Restores an App's folder or a volume through Docker. Nothing that uses
-   * it may run: an App's folder needs the App stopped, and a volume every
-   * container that mounts it.
+   * Restores a volume through Docker. Nothing that uses it may run: every
+   * container that mounts it is stopped first.
    */
   #restoreTar(
     input: BackupRestoreTaskInput & {
       kind: "restore"
-      target: BackupTarget & { kind: "app" | "volume" }
+      target: BackupTarget & { kind: "volume" }
     },
     signal: AbortSignal,
     beginInstall: RestoreInstallGate,
@@ -1003,29 +991,16 @@ export class BackupManager {
     return Effect.gen({ self: this }, function* () {
       yield* this.#requireLockedApps(input.target, lockedApps)
       const { source } = yield* this.#tarSource(input.target, false, true)
-      if (input.target.kind === "app") {
-        const running = yield* promiseEffect(() =>
-          this.#apps!.isRunning(input.target.id)
+      const mounted = yield* this.#requiredVolume(input.target.id, true)
+      const running = mounted.mounts.filter((mount) => mount.running)
+      if (running.length > 0) {
+        return yield* backupFailure(
+          "volume_in_use",
+          "restore.preflight",
+          running.length === 1
+            ? `Stop ${running[0]!.container}, which mounts this volume, before restoring it`
+            : `Stop the ${running.length} containers that mount this volume before restoring it`
         )
-        if (running) {
-          return yield* backupFailure(
-            "app_running",
-            "restore.preflight",
-            "Stop the App before restoring its folder"
-          )
-        }
-      } else {
-        const volume = yield* this.#requiredVolume(input.target.id, true)
-        const running = volume.mounts.filter((mount) => mount.running)
-        if (running.length > 0) {
-          return yield* backupFailure(
-            "volume_in_use",
-            "restore.preflight",
-            running.length === 1
-              ? `Stop ${running[0]!.container}, which mounts this volume, before restoring it`
-              : `Stop the ${running.length} containers that mount this volume before restoring it`
-          )
-        }
       }
       const temporary = resolve(
         this.#config.dataDirectory,
@@ -1075,36 +1050,12 @@ export class BackupManager {
     })
   }
 
-  // What Docker mounts for an App's folder or a volume, the Apps a stopped
+  // What Docker mounts for a volume, the Apps a stopped
   // backup stops, and the volume as its manifest records it. A stopped
   // backup of a volume a container other than an App's runs from is
   // refused: Kiln can't stop and start it as its owner would.
   #tarSource(target: BackupTarget, stopping: boolean, restoring = false) {
     return Effect.gen({ self: this }, function* () {
-      if (target.kind === "app") {
-        if (!this.#apps) {
-          return yield* backupFailure(
-            "app_driver_unavailable",
-            "lookup",
-            "The App backup driver is unavailable"
-          )
-        }
-        const folder = yield* promiseEffect(() =>
-          this.#apps!.hostFolder(target.id)
-        )
-        if (!folder) {
-          return yield* backupFailure(
-            "app_not_found",
-            "lookup",
-            "The App no longer exists on this Relay"
-          )
-        }
-        return {
-          consumers: [target.id],
-          manifestVolume: null,
-          source: { kind: "bind", path: folder } satisfies TarSource,
-        }
-      }
       const volume = yield* this.#requiredVolume(target.id, restoring)
       const others = volume.mounts.filter(
         (mount) => mount.running && mount.kind !== "app"
@@ -1396,7 +1347,7 @@ export class BackupManager {
   }
 
   /**
-   * Settles every restore of an App's folder or a volume a stop or a failed
+   * Settles every restore of a volume a stop or a failed
    * swap left unfinished, as the Relay starts. One that can't finish now,
    * as when something runs on its target, keeps it fenced.
    */
@@ -1412,7 +1363,7 @@ export class BackupManager {
         yield* this.#settleTarRestore(journal, "finish", false).pipe(
           Effect.catch((cause) =>
             Effect.logWarning(
-              "An unfinished volume or App folder restore couldn't be settled; its target stays fenced",
+              "An unfinished volume restore couldn't be settled; its target stays fenced",
               { cause, taskId: journal.taskId }
             )
           )
@@ -1421,7 +1372,7 @@ export class BackupManager {
     }).pipe(
       Effect.catch((cause) =>
         Effect.logWarning(
-          "Couldn't settle unfinished volume and App folder restores",
+          "Couldn't settle unfinished volume restores",
           { cause }
         )
       )
@@ -1441,19 +1392,14 @@ export class BackupManager {
   ) {
     return Effect.gen({ self: this }, function* () {
       const { target } = journal
-      let locks: ReadonlyArray<LaneLock>
-      if (target.kind === "app") {
-        locks = appReplaceLocks(target.id)
-      } else {
-        const apps = new Set([
-          ...journal.consumers,
-          ...(yield* this.#volumeApps(target.id)),
-        ])
-        locks = [
-          exclusive(laneKeys.volume(target.id)),
-          ...[...apps].flatMap((appId) => appLifecycleLocks(appId)),
-        ]
-      }
+      const apps = new Set([
+        ...journal.consumers,
+        ...(yield* this.#volumeApps(target.id)),
+      ])
+      const locks: ReadonlyArray<LaneLock> = [
+        exclusive(laneKeys.volume(target.id)),
+        ...[...apps].flatMap((appId) => appLifecycleLocks(appId)),
+      ]
       yield* this.#lanes.run(
         { label: TAR_RESTORE_RECOVERY_LABEL, locks },
         Effect.gen({ self: this }, function* () {
@@ -1523,24 +1469,12 @@ export class BackupManager {
       }
       const runningApps: Array<string> = []
       const others: Array<string> = []
-      if (target.kind === "app") {
-        const found = yield* promiseEffect(() =>
-          this.#apps!.hostFolder(target.id)
-        )
-        if (
-          found &&
-          (yield* promiseEffect(() => this.#apps!.isRunning(target.id)))
-        ) {
-          runningApps.push(target.id)
-        }
-      } else {
-        const volume = yield* this.#requiredVolume(target.id, true)
-        for (const mount of volume.mounts) {
-          if (!mount.running) continue
-          if (mount.kind === "app" && mount.resourceId) {
-            runningApps.push(mount.resourceId)
-          } else others.push(mount.container)
-        }
+      const volume = yield* this.#requiredVolume(target.id, true)
+      for (const mount of volume.mounts) {
+        if (!mount.running) continue
+        if (mount.kind === "app" && mount.resourceId) {
+          runningApps.push(mount.resourceId)
+        } else others.push(mount.container)
       }
       if (others.length > 0) {
         return yield* backupFailure(
@@ -1639,7 +1573,7 @@ export class BackupManager {
       if (task.input.kind === "restore") {
         const input = task.input
         const target = input.target
-        if (target.kind === "app" || target.kind === "volume") {
+        if (target.kind === "volume") {
           const result = yield* this.#restoreTar(
             { ...input, target: { ...target, kind: target.kind } },
             signal,
@@ -4161,10 +4095,4 @@ function isSkippableFilesystemChange(cause: unknown): boolean {
   return ["EACCES", "ELOOP", "ENOENT", "ENOTDIR", "EPERM"].includes(
     String(cause.code)
   )
-}
-
-// The resource a final backup's deletion is of, the only App it may find
-// using what it backs up: the App itself. A volume being deleted has none.
-function finalBackupOwner(target: BackupTarget): string | null {
-  return target.kind === "app" ? target.id : null
 }

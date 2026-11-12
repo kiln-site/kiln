@@ -413,7 +413,11 @@ async function prepareRelayScheduleActions(
   const planned = new Map<string, Promise<TargetMembers>>()
   const membersOf = (target: ScheduleTarget) => {
     if (target.kind !== "app") {
-      return Promise.resolve({ appId: null, members: [target], refusal: null })
+      return Promise.resolve({
+        appId: null,
+        members: [{ id: target.id, kind: target.kind, relayId: target.relayId }],
+        refusal: null,
+      })
     }
     const known = planned.get(target.id)
     if (known) return known
@@ -665,7 +669,7 @@ interface BackupMember {
   /** For a volume: the step's Apps whose backups take it. */
   readonly appIds?: ReadonlyArray<string>
   readonly id: string
-  readonly kind: Exclude<ScheduleTarget["kind"], "app"> | "app" | "volume"
+  readonly kind: Exclude<ScheduleTarget["kind"], "app"> | "volume"
   readonly relayId: string
 }
 

@@ -1054,10 +1054,7 @@ export class ScheduleManager {
         maxBytes: execution.maxBytes ?? null,
         mode: "full",
         reason: "scheduled",
-        target: {
-          id: execution.targetId,
-          kind: execution.targetKind === "volume" ? "volume" : "app",
-        },
+        target: { id: execution.targetId, kind: "volume" },
         taskId: scheduleDeterministicUuid("task", backupId),
       }
     })
@@ -1322,7 +1319,7 @@ function backupExecution(
   )
 }
 
-// What Hearth admitted of an App's backup: its folder's, each volume's it
+// What Hearth admitted of an App's backup: each volume's it
 // uses, and those of the step's Apps it shares a volume with.
 function appBackupGroup(
   action: Extract<TargetScheduleAction, { type: "backup" }>,

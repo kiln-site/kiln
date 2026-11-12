@@ -46,7 +46,6 @@ import {
   backupShowsArchivedLocalArtifact,
   backupTaskUploadProgressPercent,
 } from "@/lib/backup-progress-presentation"
-import { backupTargetApp } from "@/lib/backup-target-permissions"
 import { resetActiveBackupRunsToFirstPage } from "@/lib/backup-runs-cache"
 import {
   cancelBackup,
@@ -420,7 +419,7 @@ export const BackupRowActions = React.memo(function BackupRowActions({
       backup.targetKind === "database" ||
       (backup.targetKind === "platform" &&
         backup.artifactKind === "platform_bundle") ||
-      ((backup.targetKind === "app" || backup.targetKind === "volume") &&
+      (backup.targetKind === "volume" &&
         backup.artifactKind === "tar_archive"))
   const restore = (
     <Button
@@ -932,12 +931,7 @@ export const BackupTargetLink = React.memo(function BackupTargetLink({
       ? { id: relayId, kind: "relay", platform: true, relayId }
       : {
           id: targetId,
-          kind:
-            targetKind === "database"
-              ? "database"
-              : targetKind === "app"
-                ? "app"
-                : "server",
+          kind: targetKind === "database" ? "database" : "server",
           relayId,
         }
   const identity = (
@@ -1025,23 +1019,7 @@ const BackupTargetAnchor = React.memo(function BackupTargetAnchor({
     )
   }
 
-  // App targets open their App's Info page; Kiln volumes open the Relay.
-  const owner =
-    targetKind === "app" || targetKind === "volume"
-      ? backupTargetApp({ id: targetId, kind: targetKind })
-      : null
-  if (owner) {
-    return (
-      <Link
-        className={className}
-        params={{ appId: owner }}
-        preload="intent"
-        to="/app/$appId/info"
-      >
-        {children}
-      </Link>
-    )
-  }
+  // A volume opens its Relay's Volumes.
   if (targetKind === "volume") {
     return (
       <Link
@@ -1187,7 +1165,7 @@ export const BackupSizeDetails = React.memo(function BackupSizeDetails({
   warnings,
 }: {
   bytes: number | null
-  /** An App's folder or a volume: taken live, or with what uses it stopped. */
+  /** A volume: taken live, or with what uses it stopped. */
   consistency?: Backup["consistency"]
   mode: Backup["backupMode"]
   warnings: ReadonlyArray<string>
@@ -1258,14 +1236,7 @@ function backupTargetPresentation(
       name: "Kiln",
     }
   }
-  // An App's own volume is named by the App and its name in Compose.
-  const owner =
-    backup.targetKind === "volume"
-      ? backupTargetApp({ id: backup.targetId, kind: "volume" })
-      : null
-  const shownId = owner
-    ? backup.targetId.slice(owner.length + 1)
-    : backup.targetId
+  const shownId = backup.targetId
   return {
     id: backup.targetId,
     kindLabel: targetKindLabels[backup.targetKind],
@@ -1295,7 +1266,6 @@ export function backupTargetAvailable(
 }
 
 const targetKindLabels: Record<Backup["targetKind"], string> = {
-  app: "App",
   database: "Database",
   instance: "Game Server",
   platform: "Kiln",
@@ -1304,7 +1274,6 @@ const targetKindLabels: Record<Backup["targetKind"], string> = {
 
 function missingTargetMessage(kind: Backup["targetKind"]): string {
   if (kind === "database") return "This database no longer exists"
-  if (kind === "app") return "This App no longer exists"
   if (kind === "volume") return "This volume no longer exists"
   if (kind === "platform") return "The Relay Kiln was backed up on is gone"
   return "This game server no longer exists"
@@ -1514,8 +1483,9 @@ function availabilityStateLabel(state: BackupAvailabilityState): string {
   return "Not available"
 }
 
+// `app` keys an App the page is scoped to, which is no backup target.
 export function targetKey(
-  kind: Backup["targetKind"],
+  kind: Backup["targetKind"] | "app",
   relayId: string,
   targetId: string
 ): string {
