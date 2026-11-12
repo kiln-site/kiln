@@ -35,7 +35,6 @@ import {
   BackupStorageError,
   CredentialError,
 } from "@/effect/errors"
-import { backupTargetApp } from "@/lib/backup-target-permissions"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets } from "@/lib/environment"
 import {
@@ -184,7 +183,7 @@ export interface BackupCatalogPageInput {
    */
   appScopes: ReadonlyArray<{ appId: string | null; relayId: string }>
   /**
-   * Only backups of what an App owns or uses: its folder, the volumes its
+   * Only backups of what an App owns or uses: the volumes its
    * Compose project owns, and the Kiln volumes it uses.
    */
   app?: {
@@ -273,12 +272,12 @@ export interface BackupCatalogRecord {
   artifacts: Array<BackupArtifactRecord>
   artifactKind: BackupRow["artifact_kind"]
   backupMode: BackupRow["backup_mode"]
-  /** The backups started with it, as an App's folder's and volumes' are. */
+  /** The backups started with it, as an App's volumes are. */
   batchId: string | null
   bytes: number | null
   checksumSha256: string | null
   completedAt: string | null
-  /** An App's folder or a volume: taken live, or with what uses it stopped. */
+  /** A volume: taken live, or with what uses it stopped. */
   consistency: BackupConsistency | null
   createdBy: string | null
   createdAt: string
@@ -434,7 +433,7 @@ export interface BackupCreateReservation {
   batchId?: string
   /** How many; stopped, they share one stopped window on the Relay. */
   batchSize?: number
-  /** An App's folder or a volume's; absent is live. */
+  /** A volume's; absent is live. */
   consistency?: BackupConsistency
   createdBy: string
   /** The deletion a final-delete backup is for, which records it. */
@@ -867,8 +866,8 @@ export const reservePlatformBackupEffect = Effect.fn("backups.reservePlatform")(
 )
 
 /**
- * Reserves a backup of an App's folder or a volume, archived through Docker
- * on its Relay, live or with what uses it stopped. Always full.
+ * Reserves a backup of a volume, archived through Docker on its Relay, live
+ * or with what uses it stopped. Always full.
  */
 export const reserveResourceBackupEffect = Effect.fn("backups.reserveResource")(
   (input: {
@@ -887,12 +886,12 @@ export const reserveResourceBackupEffect = Effect.fn("backups.reserveResource")(
     requestedMaxBytes: number | null
     storageIds: ReadonlyArray<string | null>
     targetId: string
-    targetKind: "app" | "volume"
     taskId: string
   }) =>
     reserveBackupCreateEffect({
       ...input,
       artifactKind: "tar_archive",
+      targetKind: "volume",
       exclude: [],
       mode: "full",
     })
@@ -1064,9 +1063,7 @@ const adoptScheduledBackupTask = Effect.fnUntraced(function* (
       catalog.name,
       objectKey,
       repositoryId,
-      input.target.kind === "app" || input.target.kind === "volume"
-        ? (input.consistency ?? "live")
-        : null,
+      input.target.kind === "volume" ? (input.consistency ?? "live") : null,
       catalog.batchId ?? input.batch?.id ?? null,
       task.createdAt,
       now,
@@ -1709,7 +1706,7 @@ const catalogRecordsWhere = Effect.fnUntraced(function* (
 
 /**
  * The newest backup of each of a Relay's targets, and every backup of the
- * newest batch among them, as an App's page shows its folder and volumes.
+ * newest batch among them, as an App's page shows its volumes.
  */
 export const listTargetBackupsEffect = Effect.fn("backups.targets")(function* (
   relayId: string,
@@ -1868,7 +1865,7 @@ export const getBackupCatalogRecordEffect = Effect.fn("backups.get")(function* (
   return backupCatalogRecordFromRow(row, artifacts.map(backupArtifactFromRow))
 })
 
-// Backups that follow an App: its folder's, and those of volumes its Compose
+// Backups that follow an App: those of volumes its Compose
 // project owns, whose IDs are `<App ID>/<key>`.
 const appBackupSql = `(backup.target_kind = 'app'
   OR (backup.target_kind = 'volume' AND backup.target_id LIKE '%/%'))`
@@ -2346,7 +2343,7 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
 })
 
 // A stopped batch's backups share one stopped window on the Relay, so an
-// App's folder and volumes are copied from the same quiet moment.
+// App's volumes are copied from the same quiet moment.
 function stoppedBatch(
   consistency: BackupConsistency | undefined,
   batchId: string | undefined,
@@ -4270,23 +4267,17 @@ const refuseIfFinalDeletionInProgress = Effect.fnUntraced(function* (
   }
 ) {
   if (input.targetKind === "platform") return
-  // An App's own volume is deleted with its App.
-  const owner =
-    input.targetKind === "volume"
-      ? backupTargetApp({ id: input.targetId, kind: input.targetKind })
-      : null
   const rows = yield* transaction.queryRows<RowDataPacket>(
     `SELECT id
        FROM ${databaseTable("resource_deletion")}
       WHERE relay_id = ?
-        AND ((resource_kind = ? AND resource_id = ?)
-          OR (resource_kind = 'app' AND resource_id = ?))
+        AND resource_kind = ? AND resource_id = ?
         AND (status IN ('pending', 'backing_up', 'deleting', 'cancelling')
           -- Its Relay began deleting it: what's left of it only goes.
           OR (relay_deleting_at IS NOT NULL AND status <> 'completed'))
       LIMIT 1
       FOR UPDATE`,
-    [input.relayId, input.targetKind, input.targetId, owner ?? ""]
+    [input.relayId, input.targetKind, input.targetId]
   )
   if (rows[0]) {
     return yield* BackupStorageError.make({

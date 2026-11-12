@@ -7,7 +7,6 @@ import {
 import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
-  backupTargetApp,
   grantsAllowBackup,
   type BackupAction,
 } from "@/lib/backup-target-permissions"
@@ -27,7 +26,6 @@ const actionVerbs: Record<BackupAction, string> = {
 }
 
 const kindNames: Record<BackupTargetKind, string> = {
-  app: "this App",
   database: "this database",
   instance: "this game server",
   platform: "Kiln",
@@ -51,17 +49,15 @@ export async function requireBackupTargetPermission(
 }
 
 /**
- * The Apps that use an App's folder or a volume, as its Relay says: the App
- * itself, or a volume's owner and every App whose configuration or
- * containers mount it. Fails while the Relay can't tell, rather than
- * answering too few.
+ * The Apps that use a volume, as its Relay says: every App whose
+ * configuration or containers mount it. Fails while the Relay can't tell,
+ * rather than answering too few.
  */
 export async function backupTargetUsers(
   relay: PersistedRelay,
-  target: BackupTarget & { kind: "app" | "volume" },
+  target: BackupTarget & { kind: "volume" },
   userId: string
 ): Promise<Array<string>> {
-  if (target.kind === "app") return [target.id]
   const { protection, volumes } = relayVolumesSchema.parse(
     await relayRpc(relay, "relay.volumes.read", {}, 30_000, userId)
   )
@@ -110,17 +106,13 @@ export async function requireAppsPermission(
 export async function requireBackupTargetRestore(
   user: AuthenticatedUser,
   relay: PersistedRelay,
-  target: BackupTarget & { kind: "app" | "volume" }
+  target: BackupTarget & { kind: "volume" }
 ): Promise<void> {
   await requireBackupTargetPermission(user, relay.id, target, "backup.restore")
-  const owner = backupTargetApp(target)
-  const users = (await backupTargetUsers(relay, target, user.id)).filter(
-    (appId) => appId !== owner
-  )
   await requireAppsPermission(
     user,
     relay.id,
-    users,
+    await backupTargetUsers(relay, target, user.id),
     "instance.files.write",
     "Restoring this volume replaces files every App that uses it reads; you need permission to change each App's files"
   )

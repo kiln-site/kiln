@@ -171,7 +171,7 @@ export type BackupPolicyInput = z.infer<typeof backupPolicyInputSchema>
 // Each server function authenticates, then hands the user to its handler in
 // ./backups.server.
 
-// An App's backup settings: its folder and the volumes its Compose project
+// An App's backup settings: the volumes its Compose project
 // owns, each with its newest backup, and what it mounts that isn't covered.
 export const getAppBackups = createServerFn({ method: "GET" })
   .validator(appBackupsInputSchema)

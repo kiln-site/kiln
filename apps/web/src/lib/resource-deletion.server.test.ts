@@ -16,7 +16,6 @@ import {
   appRecords,
   deletionRelay as relay,
   deletionUntil as until,
-  finishBackup,
   nextBackup,
   operationsEnded,
   owner,
@@ -163,10 +162,11 @@ describeMysql("Deleting a game server or database", () => {
       90_000
     )
 
-    // The volumes an App used are no App's: its deletion backs up and
-    // removes the App alone, whoever else uses them or doesn't.
+    // The volumes an App used are no App's: its deletion removes the App
+    // alone, whoever else uses them or doesn't. What it keeps is on them,
+    // so nothing is backed up first, even when a final backup is asked for.
     it.effect(
-      "deletes an App without any volume it used, backing up its folder alone",
+      "deletes an App without any volume it used, and takes no backup of it",
       () =>
         Effect.gen(function* () {
           const otherApp = "c".repeat(12)
@@ -191,7 +191,6 @@ describeMysql("Deleting a game server or database", () => {
             storageId: null,
             user: owner,
           })
-          yield* finishBackup(yield* nextBackup(appId, null))
           const done = yield* until(appId, ["completed", "failed"])
 
           assert.strictEqual(done?.status, "completed")
@@ -200,36 +199,18 @@ describeMysql("Deleting a game server or database", () => {
             relay.volumes.map((volume) => volume.id),
             [volumeId, shared]
           )
-          const backups = yield* selectRows<{
-            target_id: string
-            target_kind: string
-          }>("backup")
-          assert.deepStrictEqual(
-            backups.map((backup) => [backup.target_kind, backup.target_id]),
-            [["app", appId]]
-          )
+          assert.lengthOf(yield* selectRows("backup"), 0)
         }).pipe(TestClock.withLive),
       90_000
     )
 
     it.effect(
-      "deletes nothing of an App or a volume when its final backup fails",
+      "deletes nothing of a volume when its final backup fails",
       () =>
         Effect.gen(function* () {
           yield* seed
           yield* seedApp([{ id: volumeId }])
 
-          // The App's final backup fails.
-          yield* requestResourceDeletionEffect({
-            finalBackup: true,
-            kind: "app",
-            relayId,
-            resourceId: appId,
-            storageId: null,
-            user: owner,
-          })
-          yield* failBackup(yield* nextBackup(appId, null))
-          const app = yield* until(appId, ["completed", "failed"])
           // A Kiln volume's only backup fails.
           yield* requestResourceDeletionEffect({
             finalBackup: true,
@@ -242,15 +223,9 @@ describeMysql("Deleting a game server or database", () => {
           yield* failBackup(yield* nextBackup(volumeId, null))
           const volume = yield* until(volumeId, ["completed", "failed"])
 
-          assert.strictEqual(app?.status, "failed")
           assert.strictEqual(volume?.status, "failed")
-          // The App's build stopped, both frozen, and nothing deleted, on the
-          // Relay or in Hearth.
-          assert.deepStrictEqual(relay.changes, [
-            "app.deployment.abort",
-            "resource.freeze",
-            "resource.freeze",
-          ])
+          // Frozen, and nothing deleted, on the Relay or in Hearth.
+          assert.deepStrictEqual(relay.changes, ["resource.freeze"])
           assert.isTrue(relay.apps.has(appId))
           assert.deepStrictEqual(
             relay.volumes.map((candidate) => candidate.id),

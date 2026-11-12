@@ -92,6 +92,8 @@ async function requireFinalBackupPermission(
     await authorize(target, ["backup.create"])
     return
   }
+  // An App has no final backup.
+  if (target.kind === "app") return
   await requireBackupTargetPermission(
     user,
     target.relayId,
@@ -172,7 +174,7 @@ export async function retryResourceDeletionHandler(
   }
   const started =
     deletion.relayDeletingAt !== null || deletion.relayDeletedAt !== null
-  const finalBackup = input.finalBackup && !started
+  const finalBackup = input.finalBackup && !started && input.kind !== "app"
   if (finalBackup) await requireFinalBackupPermission(input, user)
   if (!finalBackup && deletion.finalBackup && !started) {
     await requireDeleteConfirmation({

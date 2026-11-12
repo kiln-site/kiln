@@ -519,8 +519,9 @@ export const BackupsPage = React.memo(function BackupsPage({
             filters.volume
           )
         )) ||
+      // An App is backed up as its volumes, which its Relay's grants cover.
       apps.some((app) =>
-        hasBackupResourcePermission(capabilities, app.relayId, "app", app.id)
+        hasBackupResourcePermission(capabilities, app.relayId, "volume", app.id)
       ) ||
       databases.some(
         (database) =>
@@ -1020,7 +1021,7 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       ? hasBackupResourcePermission(
           capabilities,
           selectedServer.relayId,
-          "app",
+          "volume",
           selectedServer.id
         )
       : createTargets.some(
@@ -1387,8 +1388,7 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
   }
   if (
     dialog.kind === "restore" &&
-    (dialog.backup.targetKind === "app" ||
-      dialog.backup.targetKind === "volume")
+    dialog.backup.targetKind === "volume"
   ) {
     return (
       <ResourceRestoreDialog
@@ -1803,18 +1803,18 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
       servers: backupScope.servers,
     })
     const targetKeys = new Set(targets.map((target) => target.key))
-    const allowed = (target: {
-      id: string
-      kind: "app" | "volume"
-      relayId: string
-    }) =>
+    // Volumes are the Relay's: its backup grants cover every one of them,
+    // and so the volumes of each App on it.
+    const allowed = (relayId: string) =>
       capabilities.isPlatformAdmin ||
-      grantsAllowBackup(capabilities.grants, target, "backup.create")
+      grantsAllowBackup(
+        capabilities.grants,
+        { id: "0".repeat(40), kind: "volume", relayId },
+        "backup.create"
+      )
     return [
       ...backupScopeOptions({
-        apps: apps.filter((app) =>
-          allowed({ id: app.id, kind: "app", relayId: app.relayId })
-        ),
+        apps: apps.filter((app) => allowed(app.relayId)),
         databases,
         kiln: capabilities.isPlatformAdmin ? kiln : null,
         servers: backupScope.servers,
@@ -1825,8 +1825,7 @@ export const BackupSettingsPage = React.memo(function BackupSettingsPage({
       ),
       // A Relay's Kiln volumes, which its backup permissions cover.
       ...relays.flatMap((relay) =>
-        allowed({ id: "0".repeat(40), kind: "volume", relayId: relay.relayId })
-          ? [kilnVolumesScopeOption(relay)]
+        allowed(relay.relayId) ? [kilnVolumesScopeOption(relay)]
           : []
       ),
     ]
@@ -1920,7 +1919,7 @@ function BackupSettingsSurface({
 }
 
 // One target's settings, once its policy loads; titled when it's one of
-// several, as an App's folder and volumes are.
+// several, as an App's volumes are.
 function TargetSettings({
   isPlatformAdmin,
   name,
@@ -2843,7 +2842,7 @@ function backupScopeOptions({
   }
   for (const app of apps) {
     options.push({
-      description: `App · ${app.relayName} · its folder and the volumes it owns or uses`,
+      description: `App · ${app.relayName} · the volumes it uses`,
       id: app.id,
       kind: "app",
       name: app.name,
@@ -2868,11 +2867,16 @@ function kilnScopeOption(kiln: KilnBackupHost): ServerPickerOption {
   }
 }
 
+// A game server, a database or Kiln: an App's settings are its volumes'.
 function backupPolicyTarget(target: BackupScopeOption): BackupTarget {
-  const kind = target.kind ?? "server"
   return {
     id: target.id,
-    kind: kind === "server" ? "instance" : kind === "relay" ? "platform" : kind,
+    kind:
+      target.kind === "database"
+        ? "database"
+        : target.kind === "relay"
+          ? "platform"
+          : "instance",
   }
 }
 
@@ -3095,7 +3099,8 @@ function backupRunTargetKind(
   kind: BackupScopeOption["kind"]
 ): BackupRunScope["kind"] {
   if (kind === "database") return "database"
-  if (kind === "app") return "app"
+  // Apps are backed up as their volumes.
+  if (kind === "app") return "volume"
   if (kind === "relay") return "platform"
   return "instance"
 }

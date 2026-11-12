@@ -199,7 +199,7 @@ export function fileRootWriteLocks(
  * A backup reads its target as it runs and a restore replaces it. Exports,
  * prunes, and deletes touch only stored artifacts.
  *
- * An App's folder or a volume backed up live is read beside other work. One
+ * A volume backed up live is read beside other work. One
  * backed up stopped, as a final backup always is, also holds the lifecycle
  * of each App it stops, so nothing starts them meanwhile; a volume's are
  * the Apps that own or use it, and it holds the volume alone, so no App
@@ -218,10 +218,6 @@ export function backupTaskLocks(
   const stopped =
     input.kind === "create" &&
     (input.consistency === "stopped" || input.reason === "final_delete")
-  if (kind === "app") {
-    if (restore) return appReplaceLocks(id)
-    return stopped ? appLifecycleLocks(id) : [shared(laneKeys.app(id))]
-  }
   if (kind === "volume") {
     const locks = (apps: ReadonlyArray<string>) => [
       // Stopped, nothing may mount it meanwhile, even an App that begins

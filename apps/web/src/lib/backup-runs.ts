@@ -27,7 +27,7 @@ export const backupRunScopeSchema = z.union([
   z.strictObject({ kind: backupRunTargetKindSchema }),
 ])
 
-/** What one App owns or uses: its folder, its own volumes, and Kiln volumes. */
+/** What one App owns or uses: its own volumes and Kiln volumes. */
 export const backupRunAppSchema = z.strictObject({
   appId: appIdSchema,
   relayId: relayIdSchema,
@@ -72,12 +72,12 @@ export interface BackupRun {
     | "restic_snapshot"
     | "tar_archive"
   backupMode: "full" | "incremental"
-  /** The backups started with it, as an App's folder's and volumes' are. */
+  /** The backups started with it, as an App's volumes are. */
   batchId: string | null
   bytes: number | null
   checksumSha256: string | null
   completedAt: string | null
-  /** An App's folder or a volume: taken live, or with what uses it stopped. */
+  /** A volume: taken live, or with what uses it stopped. */
   consistency: "live" | "stopped" | null
   createdAt: string
   filename: string | null

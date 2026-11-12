@@ -22,11 +22,13 @@ afterEach(async () => {
   }
 })
 
-it("fences what an unfinished swap left, an App's own volume and its folder included, from the journals alone", async () => {
+it("fences what an unfinished swap left, from the journals alone", async () => {
   const dataDirectory = await mkdtemp(join(tmpdir(), "kiln-tar-fences-"))
   directories.push(dataDirectory)
   const config = { dataDirectory } as RelayConfig
   const volumeId = `${appId}/pgdata`
+  const clearing = `${"c".repeat(12)}/data`
+  const staging = `${"d".repeat(12)}/data`
   await writeTarRestoreJournal(config, {
     consumers: [appId, userId],
     phase: "installing",
@@ -40,8 +42,8 @@ it("fences what an unfinished swap left, an App's own volume and its folder incl
     consumers: [],
     phase: "clearing",
     root: null,
-    source: { kind: "bind", path: "/srv/apps/c" },
-    target: { id: "c".repeat(12), kind: "app" },
+    source: { kind: "volume", name: "shop_data" },
+    target: { id: clearing, kind: "volume" },
     taskId: "1b7c9d2e-4f1a-4c3b-9d8e-7f6a5b4c3d2e",
     version: 1,
   })
@@ -50,8 +52,8 @@ it("fences what an unfinished swap left, an App's own volume and its folder incl
     consumers: [],
     phase: "staging",
     root: null,
-    source: { kind: "bind", path: "/srv/apps/d" },
-    target: { id: "d".repeat(12), kind: "app" },
+    source: { kind: "volume", name: "blog_data" },
+    target: { id: staging, kind: "volume" },
     taskId: "2b7c9d2e-4f1a-4c3b-9d8e-7f6a5b4c3d2e",
     version: 1,
   })
@@ -65,10 +67,11 @@ it("fences what an unfinished swap left, an App's own volume and its folder incl
     "can't start until the restore finishes"
   )
   expect(
-    fences.refusal("app.files.write", [
-      shared(laneKeys.appFiles("c".repeat(12))),
-    ])
+    fences.refusal("backup.create", [shared(laneKeys.volume(clearing))])
   ).toContain("the restore must finish first")
+  expect(
+    fences.refusal("backup.create", [shared(laneKeys.volume(staging))])
+  ).toBeNull()
   expect(
     fences.refusal(TAR_RESTORE_RECOVERY_LABEL, [
       exclusive(laneKeys.volume(volumeId)),

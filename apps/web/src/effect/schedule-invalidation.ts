@@ -13,7 +13,8 @@ export type ScheduleInvalidationScope =
   | {
       backupOnly?: boolean
       relayId: string
-      target: { id: string; kind: BackupTargetKind }
+      // An App is no backup target, and a schedule still names one.
+      target: { id: string; kind: BackupTargetKind | "app" }
     }
 
 /**

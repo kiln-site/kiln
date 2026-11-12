@@ -907,8 +907,8 @@ export function appBackupsQueryOptions(relayId: string, appId: string) {
   })
 }
 
-// Restores whose swap didn't finish, each fencing its App's folder or
-// volume until someone finishes or abandons it.
+// Restores whose swap didn't finish, each fencing its volume until someone
+// finishes or abandons it.
 export function unfinishedRestoresQueryOptions() {
   return queryOptions({
     queryFn: () => getUnfinishedRestores(),

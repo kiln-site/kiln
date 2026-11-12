@@ -14,8 +14,6 @@ import {
 import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 import { TestDatabase, describeMysql } from "@/test/database"
 import {
-  appId,
-  appRecords,
   deletionRelay as relay,
   deletionUntil as until,
   finishBackup,
@@ -88,41 +86,30 @@ const stopHearth = (scope: Scope.Closeable) =>
 describeMysql("A deletion across a Hearth restart", () => {
   layer(TestDatabase)((it) => {
     it.effect(
-      "takes an App's final backup across a restart, once, then deletes it without its volumes",
+      "takes a volume's final backup across a restart, once, then deletes it",
       () =>
         Effect.gen(function* () {
           const { service, startHearth } = yield* hearths
-          const otherApp = "c".repeat(12)
           yield* seed
-          const shared = "d".repeat(40)
-          yield* seedApp([
-            // One only it uses, and one another App mounts too: both stay.
-            { id: volumeId, users: [{ appId, configured: true }] },
-            {
-              id: shared,
-              users: [
-                { appId, configured: false },
-                { appId: otherApp, configured: false },
-              ],
-            },
-          ])
+          // A volume nothing uses, and so one that may be deleted.
+          yield* seedApp([{ id: volumeId }])
 
           const first = yield* startHearth
           yield* requestResourceDeletionEffect({
             finalBackup: true,
-            kind: "app",
+            kind: "volume",
             relayId,
-            resourceId: appId,
+            resourceId: volumeId,
             storageId: null,
             user: owner,
           }).pipe(Effect.provideService(OperationsEngineService, service))
-          const folder = yield* nextBackup(appId, null)
+          const archive = yield* nextBackup(volumeId, null)
           // Hearth stops while its backup runs.
           yield* stopHearth(first)
 
           const second = yield* startHearth
-          yield* finishBackup(folder)
-          const done = yield* until(appId, ["completed", "failed"])
+          yield* finishBackup(archive)
+          const done = yield* until(volumeId, ["completed", "failed"])
           yield* stopHearth(second)
 
           assert.strictEqual(done?.status, "completed")
@@ -137,19 +124,14 @@ describeMysql("A deletion across a Hearth restart", () => {
               backup.target_id,
               backup.reason,
             ]),
-            [["app", appId, "final_delete"]]
+            [["volume", volumeId, "final_delete"]]
           )
-          // Its build stopped first, then frozen and deleted.
+          // Frozen, backed up, then deleted.
           assert.deepStrictEqual(relay.changes, [
-            "app.deployment.abort",
             "resource.freeze",
-            "app.delete",
+            "relay.volumes.delete",
           ])
-          assert.sameMembers(
-            relay.volumes.map((volume) => volume.id),
-            [shared, volumeId]
-          )
-          assert.deepStrictEqual(yield* appRecords, [])
+          assert.deepStrictEqual(relay.volumes, [])
         }).pipe(TestClock.withLive),
       120_000
     )

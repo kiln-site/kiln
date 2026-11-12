@@ -75,7 +75,7 @@ import { deliverPendingSchedules } from "@/server/schedule-deployment.server"
 // nothing. A reconciler starts any attempt whose operation is missing.
 //
 // A final backup is taken as steps of this operation, never as an operation
-// of its own: an App's folder, then each of its volumes, one after another.
+// of its own.
 
 /** A step of a deletion that stopped it, with what to tell its person. */
 export class ResourceDeletionError extends Schema.TaggedError<ResourceDeletionError>()(
@@ -317,32 +317,37 @@ const checkAccess = (input: DeletionInput) =>
           : { databaseId: input.resourceId }),
       })
     } else {
-      // A Kiln volume is the Relay's, shared by design. An App's own
-      // volumes are backed up as the App is.
+      // A Kiln volume is the Relay's, shared by design. An App has no
+      // final backup: what it keeps is on its volumes.
       yield* requireRelayPermissionsEffect({
         permissions: [input.kind === "app" ? "app.delete" : "relay.configure"],
         relayId: input.relayId,
         user,
         ...(input.kind === "app" ? { appId: input.resourceId } : {}),
       })
-      if (deletion.finalBackup) {
+      if (deletion.finalBackup && input.kind === "volume") {
         yield* promiseEffect(() =>
           requireBackupTargetPermission(
             user,
             input.relayId,
-            { id: input.resourceId, kind: input.kind },
+            { id: input.resourceId, kind: "volume" },
             "backup.create"
           )
         )
       }
     }
-    if (deletion.finalBackup && deletion.storageId !== null) {
+    if (
+      deletion.finalBackup &&
+      deletion.storageId !== null &&
+      input.kind !== "app"
+    ) {
+      const targetKind = input.kind
       yield* promiseEffect(() =>
         requireBackupStorageSelection({
           relayId: input.relayId,
           storageIds: [deletion.storageId],
           targetId: input.resourceId,
-          targetKind: input.kind,
+          targetKind,
           user,
         })
       )
@@ -398,15 +403,16 @@ const finalBackup = (
     }
   })
 
-// What a deletion takes: the resource itself. An App's is the App and its
-// folder, never a volume: the Kiln volumes it used are no App's, stay when
-// it goes, and are deleted from Volumes by whoever decides to. No deletion
-// names volumes any more; the plan keeps the place for them empty.
+// What a deletion takes: the resource itself. An App has nothing of its
+// own to back up first: what it keeps is on its volumes, which are no
+// App's, stay when it goes, and are deleted from Volumes by whoever decides
+// to. No deletion names volumes; the plan keeps the place for them empty.
 const deletionPlan = (
   input: DeletionInput
 ): Effect.Effect<DeletionPlan, ResourceDeletionError> =>
   Effect.succeed({
-    parts: [{ id: input.resourceId, kind: input.kind }],
+    parts:
+      input.kind === "app" ? [] : [{ id: input.resourceId, kind: input.kind }],
     volumeIds: [],
   })
 
@@ -420,6 +426,13 @@ const reserveFinalBackup = (
       Effect.orDie
     )
     if (!deletion) return yield* Effect.die("The deletion is gone")
+    // Only a plan made before Apps stopped being backed up names one.
+    if (part.kind === "app") {
+      return yield* new ResourceDeletionError({
+        message:
+          "An App has no final backup any more; nothing was deleted. Delete it again.",
+      })
+    }
     // Reserved before, by this attempt or one before it while the resource
     // stayed frozen: followed, not taken again.
     if (deletion.backupId !== null && deletion.backupId !== previous) {
@@ -449,7 +462,6 @@ const reserveFinalBackup = (
               reserveResourceBackupEffect({
                 ...reservation,
                 consistency: "stopped",
-                targetKind: part.kind,
               })
       )
     ).pipe(
@@ -938,20 +950,24 @@ export const requestResourceDeletionEffect = Effect.fn(
   storageId: string | null
   user: AuthenticatedUser
 }) {
-  const storageId = input.finalBackup ? input.storageId : null
-  if (input.finalBackup) {
+  // An App has nothing of its own to back up first: what it keeps is on
+  // its volumes, which stay.
+  const finalBackup = input.finalBackup && input.kind !== "app"
+  const storageId = finalBackup ? input.storageId : null
+  if (input.finalBackup && input.kind !== "app") {
+    const targetKind = input.kind
     yield* promiseEffect(() =>
       requireBackupStorageSelection({
         relayId: input.relayId,
         storageIds: [input.storageId],
         targetId: input.resourceId,
-        targetKind: input.kind,
+        targetKind,
         user: input.user,
       })
     )
   }
   const deletion = yield* requestResourceDeletionRowEffect({
-    finalBackup: input.finalBackup,
+    finalBackup,
     kind: input.kind,
     relayId: input.relayId,
     resourceId: input.resourceId,

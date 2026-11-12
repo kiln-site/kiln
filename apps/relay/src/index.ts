@@ -429,7 +429,7 @@ const resourceFreezes = await runRelayEffect(
 // Every change to a game server, App, or database waits its turn here,
 // whichever actor asks for it. See operation-plans.ts.
 const lanes = new OperationLanes({ frozen: resourceFreezes })
-// Restores of Apps' folders and volumes that began swapping and didn't
+// Restores of volumes that began swapping and didn't
 // finish fence their targets: read before any work is admitted.
 const restoreFences = await TarRestoreFences.load(config)
 lanes.addRefusal((label, locks) => restoreFences.refusal(label, locks))
@@ -1015,15 +1015,6 @@ const backupManager = await runRelayEffect(
   "relay.startup.backups",
   BackupManager.make({
     apps: {
-      hostFolder: async (appId) => {
-        const found = await recoverPromise(
-          async () => (await apps.get(appId)).id,
-          () => null
-        )
-        return found
-          ? join(await lifecycle.hostDataDirectory(), "apps", found)
-          : null
-      },
       isRunning: async (appId) =>
         (await apps.get(appId)).containers.some(
           (container) => container.running

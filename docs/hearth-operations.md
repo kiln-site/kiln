@@ -221,7 +221,7 @@ deletion that runs once the copy ends. See
 [Moving and duplicating game servers](server-migrations.md#how-it-runs).
 
 A backup or restore holds what its data belongs to: the game server or
-database, the App for its folder, or the volume. A run of several
+database, or the volume. A run of several
 (`backup.run.create`) holds each thing chosen.
 
 An App's changes take its parts too: `#config` for its configuration and

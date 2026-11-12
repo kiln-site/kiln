@@ -1,6 +1,5 @@
 import type { BackupTargetKind } from "@workspace/contracts"
 
-import { backupTargetApp } from "@/lib/backup-target-permissions"
 import { hearthKey, partKey, resourceKey } from "@/operations/lanes"
 
 /**
@@ -23,8 +22,7 @@ export const backupStorageSettingsKey = (id: string) =>
   partKey(backupStorageKey(id), "settings")
 
 /**
- * What a backup target's data belongs to: its resource, or the App that owns
- * it, whose deletion takes its folder and volumes with it. The platform's is
+ * What a backup target's data belongs to: its resource. The platform's is
  * Hearth itself.
  */
 export function backupTargetKey(
@@ -32,12 +30,5 @@ export function backupTargetKey(
   target: { id: string; kind: BackupTargetKind }
 ): string {
   if (target.kind === "platform") return hearthKey
-  const app = backupTargetApp(target)
-  return app
-    ? resourceKey("app", relayId, app)
-    : resourceKey(
-        target.kind as "database" | "instance" | "volume",
-        relayId,
-        target.id
-      )
+  return resourceKey(target.kind, relayId, target.id)
 }

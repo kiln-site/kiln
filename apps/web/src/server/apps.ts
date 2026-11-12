@@ -50,7 +50,6 @@ import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { resourceOperation } from "@/server/resource-operation.server"
 import { createAppFor } from "@/server/app-create.server"
 import { connectDatabase } from "@/server/database-connections.server"
-import { requireBackupTargetPermission } from "@/server/backup-target-access.server"
 import { databaseRpc } from "@/server/managed-database-access"
 import {
   runOperationPromise,
@@ -359,10 +358,7 @@ export const updateAppNetwork = createServerFn({ method: "POST" })
 
 export const deleteApp = createServerFn({ method: "POST" })
   .validator(
-    appInputSchema.extend(deleteConfirmationSchema.shape).extend({
-      createBackup: z.boolean().default(true),
-      storageId: z.uuid().nullable(),
-    })
+    appInputSchema.extend(deleteConfirmationSchema.shape)
   )
   .handler(async ({ data }) => {
     const { app, relay, user } = await authorizedApp(data, "app.delete")
@@ -372,23 +368,15 @@ export const deleteApp = createServerFn({ method: "POST" })
       password: data.password,
       user,
     })
-    if (data.createBackup) {
-      await requireBackupTargetPermission(
-        user,
-        relay.id,
-        { id: data.appId, kind: "app" },
-        "backup.create"
-      )
-    }
-    // Frozen, its folder and the volumes only it uses backed up if asked,
-    // then deleted, as one operation that goes on in the background if it
-    // outlasts this request.
+    // Frozen, then deleted, as one operation that goes on in the
+    // background if it outlasts this request. Nothing is backed up first:
+    // what an App keeps is on its volumes, which stay.
     const deletion = await requestResourceDeletion({
-      finalBackup: data.createBackup,
+      finalBackup: false,
       kind: "app",
       relayId: relay.id,
       resourceId: data.appId,
-      storageId: data.storageId,
+      storageId: null,
       user,
     })
     await awaitResourceDeletion(deletion)

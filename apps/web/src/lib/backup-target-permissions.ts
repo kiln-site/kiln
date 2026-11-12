@@ -6,14 +6,10 @@ import { grantHasPermission, type AccessPermission } from "@/lib/permissions"
  * Who may do what with a target's backups. A backup's contents are its
  * resource's data, so acting on it takes the authority reading or writing
  * that data does. Game servers and databases take `backup.*` on the Relay
- * or on themselves. An App's folder follows what its files take: listing its backups takes `app.read`, making
- * or downloading one `instance.files.read`, as reading its files does, and
- * restoring or deleting one `instance.files.write`, as replacing them does.
- * App owners hold neither file permission, since an App's files reach the
- * node through its Compose file, so like its configuration only people
- * with file permissions on the Relay back it up. A Kiln volume, shared by
- * design, takes `backup.*` on the Relay. The platform's is an
- * administrator's alone.
+ * or on themselves. A Kiln volume, shared by design, takes `backup.*` on
+ * the Relay. The platform's is an administrator's alone. An App is no
+ * target: what a schedule that names one takes of it follows what its
+ * files take (`appBackupPermission`).
  *
  * Stopping Apps for a backup, and restoring what Apps use, take more,
  * which only the server checks (`backup-target-access.server`).
@@ -33,18 +29,7 @@ const appPermissions: Record<BackupAction, AccessPermission> = {
   "backup.restore": "instance.files.write",
 }
 
-/**
- * The App whose permissions a target's backups follow, if any: an App's
- * own. A volume is no App's.
- */
-export function backupTargetApp(target: {
-  id: string
-  kind: BackupTargetKind
-}): string | null {
-  return target.kind === "app" ? target.id : null
-}
-
-/** The App permission a backup action on an App's target takes. */
+/** The App permission a backup action on an App takes. */
 export function appBackupPermission(action: BackupAction): AccessPermission {
   return appPermissions[action]
 }
@@ -64,17 +49,6 @@ export function grantsAllowBackup(
   action: BackupAction
 ): boolean {
   if (target.kind === "platform") return false
-  const appId = backupTargetApp(target)
-  if (appId) {
-    const permission = appPermissions[action]
-    return grants.some(
-      (grant) =>
-        grant.relayId === target.relayId &&
-        grantHasPermission(grant, permission) &&
-        (grant.resourceType === "relay" ||
-          (grant.resourceType === "app" && grant.resourceId === appId))
-    )
-  }
   return grants.some(
     (grant) =>
       grant.relayId === target.relayId &&
