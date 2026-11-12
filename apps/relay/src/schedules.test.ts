@@ -467,6 +467,101 @@ describe("Relay scheduled App backups", () => {
     // It shares a volume with the other, and uses none of what is gone.
     expect(blogRun).toMatchObject({ status: "succeeded" })
   })
+  // Stopped is chosen so an App's files and its database agree. Dumped as
+  // the App runs, the database would be of another moment than the files.
+  it("takes a stopped step's database in one batch with its App's volumes", async () => {
+    const database = "d".repeat(12)
+    const { enqueueBackup, tasks } = queue()
+    const { schedules } = await manager({
+      enqueueBackup,
+      listAppIds: async () => new Set([site]),
+      listDatabaseIds: async () => new Set([database]),
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [
+        {
+          consistency: "stopped",
+          destination: { kind: "local" },
+          executions: [
+            { ...local, appIds: [site], targetId: uploads, targetKind: "volume" },
+            { ...local, targetId: database, targetKind: "database" },
+          ],
+          id: "e7c3d1f4-5a6b-4c8d-9e0f-1a2b3c4d5e6f",
+          mode: "full",
+          name: "Nightly",
+          type: "backup",
+        },
+      ],
+      targets: [
+        { id: site, kind: "app", name: "Site", relayId: "relay-a" },
+        { id: database, kind: "database", name: "Site", relayId: "relay-a" },
+      ],
+    })
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("succeeded")
+    )
+    const made = [...tasks.values()].map(({ input }) => input)
+    expect(made.map((input) => input.target.kind).sort()).toEqual([
+      "database",
+      "volume",
+    ])
+    // One stopped window for the two: the dump waits for the App to stop.
+    const batches = made.map((input) => ("batch" in input ? input.batch : null))
+    expect(new Set(batches.map((batch) => batch?.id)).size).toBe(1)
+    expect(batches.map((batch) => batch?.size)).toEqual([2, 2])
+    expect(
+      made.map((input) => "consistency" in input && input.consistency)
+    ).toEqual(["stopped", "stopped"])
+  })
+  // A target the step doesn't run on in an occurrence, as one that is gone
+  // or whose earlier step failed, is backed up by no other target's run.
+  it("leaves a database the step skips out of the batch its App asks for", async () => {
+    const database = "d".repeat(12)
+    const { enqueueBackup, tasks } = queue()
+    const { schedules } = await manager({
+      enqueueBackup,
+      listAppIds: async () => new Set([site]),
+      // The database is gone from the Relay.
+      listDatabaseIds: async () => new Set(),
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [
+        {
+          consistency: "stopped",
+          destination: { kind: "local" },
+          executions: [
+            { ...local, appIds: [site], targetId: uploads, targetKind: "volume" },
+            { ...local, targetId: database, targetKind: "database" },
+          ],
+          id: "f8d4e2a5-6b7c-4d9e-8f1a-2b3c4d5e6f7a",
+          mode: "full",
+          name: "Nightly",
+          type: "backup",
+        },
+      ],
+      targets: [
+        { id: site, kind: "app", name: "Site", relayId: "relay-a" },
+        { id: database, kind: "database", name: "Site", relayId: "relay-a" },
+      ],
+    })
+
+    await runNow(schedules)
+
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.targetRuns).toHaveLength(2)
+    )
+    const made = [...tasks.values()].map(({ input }) => input)
+    expect(made.map((input) => input.target)).toEqual([
+      { id: uploads, kind: "volume" },
+    ])
+    // Alone, it is the App's stopped backup, in no batch.
+    expect("batch" in made[0]! && made[0].batch).toBeFalsy()
+  })
 })
 
 describe("Relay scheduled App backups, of an App that keeps nothing", () => {

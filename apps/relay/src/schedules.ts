@@ -481,6 +481,24 @@ export class ScheduleManager {
             continue
           }
 
+          // What a stopped backup step takes together is settled once, of
+          // the targets the step still runs on in this occurrence: one
+          // skipped, as after an earlier step of its failed, is backed up
+          // by no other target's run either.
+          const together =
+            action.type === "backup"
+              ? stoppedTogether(
+                  targetStates
+                    .filter(
+                      (state) =>
+                        state.activeKey !== null &&
+                        !state.missing &&
+                        !(state.failure && !schedule.continueOnFailure)
+                    )
+                    .map((state) => state.target),
+                  action
+                )
+              : null
           await Effect.runPromise(
             Effect.forEach(
               targetStates,
@@ -493,6 +511,7 @@ export class ScheduleManager {
                     scheduledAt,
                     sequenceFailure,
                     recordProgress,
+                    together,
                     signal
                   )
                 ),
@@ -570,6 +589,7 @@ export class ScheduleManager {
     scheduledAt: number,
     sequenceFailure: string | null,
     recordProgress: (required: boolean) => Promise<boolean>,
+    together: StoppedTogether | null,
     signal?: AbortSignal
   ) {
     if (state.activeKey === null) return
@@ -747,6 +767,7 @@ export class ScheduleManager {
                 state.target,
                 scheduledAt,
                 state.powerIntent,
+                together,
                 signal
               )
             )
@@ -838,6 +859,7 @@ export class ScheduleManager {
     target: ScheduleTarget,
     scheduledAt: number,
     powerIntent: string,
+    together: StoppedTogether | null,
     signal?: AbortSignal
   ): Promise<ContainerCommandResult | undefined> {
     if (action.type === "console_command") {
@@ -872,89 +894,112 @@ export class ScheduleManager {
       return
     }
     if (action.type === "backup") {
-      if (target.kind === "app") {
-        await this.#backUpApp(schedule, action, target, scheduledAt, signal)
+      if (
+        target.kind === "app" ||
+        together?.databases.some(({ id }) => id === target.id)
+      ) {
+        await this.#backUpTogether(
+          schedule,
+          action,
+          target,
+          together,
+          scheduledAt,
+          signal
+        )
         return
       }
-      const execution = backupExecution(action, target)
-      const deployedDestination =
-        execution?.destination ??
-        (action.mode === "full" && action.destination.kind === "local"
-          ? ({ kind: "local" } as const)
-          : null)
-      if (!deployedDestination) {
-        throw new Error("Scheduled backup destination is not deployed")
-      }
-      const backupId = scheduleDeterministicUuid(
-        "schedule-backup",
-        schedule.id,
-        scheduledAt,
-        target.kind,
-        target.id,
-        action.id
-      )
-      const runId = scheduleStableId(
-        schedule.id,
-        scheduledAt,
-        this.#options.relayId
-      )
-      const taskId = scheduleDeterministicUuid("task", backupId)
-      const artifactId = scheduleDeterministicUuid("artifact", backupId)
-      const targetKind = target.kind === "relay" ? "platform" : target.kind
-      const artifactKind =
-        action.mode === "incremental"
-          ? ("restic_snapshot" as const)
-          : targetKind === "instance"
-            ? ("archive" as const)
-            : targetKind === "database"
-              ? ("database_dump" as const)
-              : ("platform_bundle" as const)
-      const destination = scheduledBackupDestination(
-        deployedDestination,
-        backupId,
-        artifactId,
-        artifactKind
-      )
-      const input: BackupTaskInput = {
-        artifactKind,
-        backupId,
-        catalog: {
-          name: resolveScheduleBackupName(action.name, {
-            backupId,
-            instanceId: target.kind === "instance" ? target.id : "",
-            runId,
-            scheduleId: schedule.id,
-            scheduleName: schedule.name,
-            timestamp: scheduledAt,
-          }),
-          ...(action.mode === "incremental" && execution?.repositoryId
-            ? { repositoryId: execution.repositoryId }
-            : {}),
-          storageId:
-            action.destination.kind === "storage"
-              ? action.destination.storageId
-              : null,
-        },
-        destination,
-        exclude: [],
-        kind: "create",
-        maxBytes: execution?.maxBytes ?? null,
-        mode: action.mode,
-        reason: "scheduled",
-        target: {
-          id:
-            targetKind === "platform"
-              ? this.#options.platformTargetId()
-              : target.id,
-          kind: targetKind,
-        },
-        taskId,
-      }
+      const input = this.#targetBackup(schedule, action, target, scheduledAt)
       const queued = await this.#options.enqueueBackup(input)
       await Effect.runPromise(
         this.#waitForBackup(queued),
         signal ? { signal } : undefined
       )
+    }
+  }
+
+  // The backup of a game server, a database or Kiln a step asks for, as
+  // Hearth projected it.
+  #targetBackup(
+    schedule: RelayScheduleProjection,
+    action: Extract<TargetScheduleAction, { type: "backup" }>,
+    target: ScheduleTarget,
+    scheduledAt: number
+  ): Extract<BackupTaskInput, { kind: "create" }> {
+    // An App is backed up as its volumes (`#backUpTogether`).
+    if (target.kind === "app") throw new Error("An App is no backup target")
+    const execution = backupExecution(action, target)
+    const deployedDestination =
+      execution?.destination ??
+      (action.mode === "full" && action.destination.kind === "local"
+        ? ({ kind: "local" } as const)
+        : null)
+    if (!deployedDestination) {
+      throw new Error("Scheduled backup destination is not deployed")
+    }
+    const backupId = scheduleDeterministicUuid(
+      "schedule-backup",
+      schedule.id,
+      scheduledAt,
+      target.kind,
+      target.id,
+      action.id
+    )
+    const runId = scheduleStableId(
+      schedule.id,
+      scheduledAt,
+      this.#options.relayId
+    )
+    const taskId = scheduleDeterministicUuid("task", backupId)
+    const artifactId = scheduleDeterministicUuid("artifact", backupId)
+    const targetKind = target.kind === "relay" ? "platform" : target.kind
+    const artifactKind =
+      action.mode === "incremental"
+        ? ("restic_snapshot" as const)
+        : targetKind === "instance"
+          ? ("archive" as const)
+          : targetKind === "database"
+            ? ("database_dump" as const)
+            : ("platform_bundle" as const)
+    const destination = scheduledBackupDestination(
+      deployedDestination,
+      backupId,
+      artifactId,
+      artifactKind
+    )
+    return {
+      artifactKind,
+      backupId,
+      catalog: {
+        name: resolveScheduleBackupName(action.name, {
+          backupId,
+          instanceId: target.kind === "instance" ? target.id : "",
+          runId,
+          scheduleId: schedule.id,
+          scheduleName: schedule.name,
+          timestamp: scheduledAt,
+        }),
+        ...(action.mode === "incremental" && execution?.repositoryId
+          ? { repositoryId: execution.repositoryId }
+          : {}),
+        storageId:
+          action.destination.kind === "storage"
+            ? action.destination.storageId
+            : null,
+      },
+      destination,
+      exclude: [],
+      kind: "create",
+      maxBytes: execution?.maxBytes ?? null,
+      mode: action.mode,
+      reason: "scheduled",
+      target: {
+        id:
+          targetKind === "platform"
+            ? this.#options.platformTargetId()
+            : target.id,
+        kind: targetKind,
+      },
+      taskId,
     }
   }
 
@@ -971,27 +1016,44 @@ export class ScheduleManager {
    * the App is deployed. A run that falls between the two takes those all
    * the same: a volume the App has taken up since waits for the next run,
    * and one that is gone fails alone, the rest still backed up.
+   *
+   * A stopped step that backs up a database beside Apps takes them all
+   * together (`stoppedTogether`): one batch of every volume and database
+   * of the step on this Relay, so the databases are dumped while the Apps
+   * are stopped. Each target of it, App or database, asks for the same
+   * batch and waits for its own.
    */
-  async #backUpApp(
+  async #backUpTogether(
     schedule: RelayScheduleProjection,
     action: Extract<TargetScheduleAction, { type: "backup" }>,
     target: ScheduleTarget,
+    together: StoppedTogether | null,
     scheduledAt: number,
     signal?: AbortSignal
   ) {
-    const { apps, executions } = appBackupGroup(action, target)
+    const whole =
+      together && (target.kind !== "app" || together.apps.includes(target.id))
+        ? together
+        : null
+    const { apps, executions } = whole
+      ? { apps: whole.apps, executions: whole.volumes }
+      : appBackupGroup(action, target)
+    const databases = whole?.databases ?? []
     // An App that uses no volume was sent nothing to back up, and its step
     // was skipped before it got here.
     if (executions.length === 0) return
     if (executions.some((execution) => !execution.destination)) {
       throw new Error("Scheduled backup destination is not deployed")
     }
+    const members = executions.length + databases.length
     if (
-      executions.length > SCHEDULED_APP_BACKUP_GROUP_MAX ||
+      members > SCHEDULED_APP_BACKUP_GROUP_MAX ||
       apps.length > SCHEDULED_APP_BACKUP_GROUP_MAX
     ) {
       throw new Error(
-        "These Apps share volumes with more others than one backup run takes"
+        whole
+          ? "This stopped step backs up more together than one backup run takes; split it across steps"
+          : "These Apps share volumes with more others than one backup run takes"
       )
     }
     const runId = scheduleStableId(
@@ -1004,11 +1066,13 @@ export class ScheduleManager {
       "schedule-backup-batch",
       schedule.id,
       scheduledAt,
-      apps.join(","),
+      whole ? ["stopped", ...apps].join(",") : apps.join(","),
       action.id
     )
     const stopped = action.consistency === "stopped"
-    const inputs = executions.map((execution): BackupTaskInput => {
+    const batch =
+      stopped && members >= 2 ? { batch: { id: batchId, size: members } } : {}
+    const volumes = executions.map((execution): BackupTaskInput => {
       // The App a volume's backup is named for: the first of those that
       // use it, whichever App asks.
       const of = [...(execution.appIds ?? [])].sort()[0] ?? target.id
@@ -1040,9 +1104,7 @@ export class ScheduleManager {
         },
         // Stopped, they share one stopped window; live, each runs alone.
         ...(stopped ? { consistency: "stopped" as const } : {}),
-        ...(stopped && executions.length >= 2
-          ? { batch: { id: batchId, size: executions.length } }
-          : {}),
+        ...batch,
         destination: scheduledBackupDestination(
           execution.destination!,
           backupId,
@@ -1058,20 +1120,29 @@ export class ScheduleManager {
         taskId: scheduleDeterministicUuid("task", backupId),
       }
     })
+    // A database of the batch is dumped within its stopped window.
+    const dumps = databases.map((database): BackupTaskInput => {
+      const input = this.#targetBackup(schedule, action, database, scheduledAt)
+      return {
+        ...input,
+        ...batch,
+        catalog: { ...input.catalog!, batchId },
+        consistency: "stopped",
+      }
+    })
     // Every member is queued before any is waited for, as a stopped
-    // window starts only once its whole batch has arrived. Each App of a
-    // batch queues the same tasks, by the same IDs: the first makes them,
-    // and the others, now or after a restart, find them there.
+    // window starts only once its whole batch has arrived. Each target of
+    // a batch queues the same tasks, by the same IDs: the first makes
+    // them, and the others, now or after a restart, find them there.
     const queued = await Promise.all(
-      inputs.map((input) => this.#options.enqueueBackup(input))
+      [...volumes, ...dumps].map((input) => this.#options.enqueueBackup(input))
     )
-    // Each App answers for its own: one of another App's that fails, as
-    // of a volume that is gone, fails that App's step and not this one's.
+    // Each target answers for its own: one of another's that fails, as of
+    // a volume that is gone, fails that target's step and not this one's.
     const own = queued.filter((_, index) => {
-      const execution = executions[index]!
-      return execution.targetKind === "volume"
-        ? execution.appIds?.includes(target.id)
-        : execution.targetId === target.id
+      const execution = executions[index]
+      if (!execution) return databases[index - executions.length]!.id === target.id
+      return target.kind === "app" && execution.appIds?.includes(target.id)
     })
     await Effect.runPromise(
       Effect.all(
@@ -1317,6 +1388,53 @@ function backupExecution(
     (candidate) =>
       candidate.targetId === target.id && candidate.targetKind === target.kind
   )
+}
+
+/**
+ * What a stopped step takes together on this Relay when it backs up a
+ * database beside Apps: every volume its Apps use, and those databases, as
+ * one batch, so each database is dumped while the Apps are stopped. That
+ * is what choosing Stopped for an App and its database means. It is of the
+ * targets the step runs on in this occurrence, and only what Hearth
+ * admitted: an App or a database refused runs or doesn't as it would alone,
+ * so a database is dumped while the Apps that are backed up are stopped,
+ * not one that was left out. Every App of it is stopped for as long as the
+ * whole batch takes. Null when there is no database, or no volume, for it
+ * to be: then each App is backed up as it always was.
+ */
+interface StoppedTogether {
+  readonly apps: ReadonlyArray<string>
+  readonly databases: ReadonlyArray<ScheduleTarget>
+  readonly volumes: ReturnType<typeof appBackupGroup>["executions"]
+}
+
+function stoppedTogether(
+  running: ReadonlyArray<ScheduleTarget>,
+  action: Extract<TargetScheduleAction, { type: "backup" }>
+): StoppedTogether | null {
+  if (action.consistency !== "stopped" || action.mode !== "full") return null
+  const targets = running.filter(
+    (target) =>
+      scheduleActionAppliesToTarget(action, target) &&
+      backupRefusal(action, target) === null
+  )
+  const databases = targets.filter(
+    (target) =>
+      target.kind === "database" && backupExecution(action, target)?.destination
+  )
+  if (databases.length === 0) return null
+  const apps = targets
+    .filter((target) => target.kind === "app")
+    .map((target) => target.id)
+    .sort()
+  // The volumes those Apps use, and no other App's.
+  const volumes = action.executions.filter(
+    (execution) =>
+      execution.targetKind === "volume" &&
+      execution.appIds?.some((appId) => apps.includes(appId))
+  )
+  if (volumes.length === 0) return null
+  return { apps, databases, volumes }
 }
 
 // What Hearth admitted of an App's backup: each volume's it

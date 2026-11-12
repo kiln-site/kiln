@@ -3299,6 +3299,16 @@ const ActionEditor = React.memo(function ActionEditor({
     action.type === "backup" &&
     selectedActionTargets.length > 0 &&
     selectedActionTargets.every((target) => target.kind === "app")
+  // Apps, with or without databases beside them, can be backed up stopped:
+  // each database on an App's Relay is then dumped while the Apps are.
+  const backsUpDatabasesToo =
+    action.type === "backup" &&
+    selectedActionTargets.some((target) => target.kind === "app") &&
+    selectedActionTargets.some((target) => target.kind === "database") &&
+    selectedActionTargets.every(
+      (target) => target.kind === "app" || target.kind === "database"
+    )
+  const stoppable = backsUpAppsOnly || backsUpDatabasesToo
   const changeAction = React.useCallback(
     (next: ScheduleActionDraft) =>
       onChange(namingNewTargets(action, next, selectedOptions, permissionKey)),
@@ -3486,18 +3496,19 @@ const ActionEditor = React.memo(function ActionEditor({
       {action.type === "backup" ? (
         <BackupConfigurationDialog
           allowIncremental
-          // A step that backs up only Apps takes the volumes they use, live
-          // or stopped; Hearth checks stopping them as it saves.
+          // A step that backs up Apps takes the volumes they use, live or
+          // stopped; Hearth checks stopping them as it saves.
           consistencyChoice={
-            backsUpAppsOnly
+            stoppable
               ? {
-                  stoppedDescription:
-                    "Stops each App once for every volume it uses",
+                  stoppedDescription: backsUpDatabasesToo
+                    ? "Stops each App once, and dumps the databases while they are stopped"
+                    : "Stops each App once for every volume it uses",
                   stoppedUnavailable: null,
                 }
               : undefined
           }
-          {...(backsUpAppsOnly
+          {...(stoppable
             ? {
                 description:
                   "Relay runs this job in its single durable queue. Every volume each App uses is backed up, a volume several of them share once. An App that uses no volume is skipped.",
@@ -3516,13 +3527,13 @@ const ActionEditor = React.memo(function ActionEditor({
             const { consistency: _consistency, ...rest } = action
             onChange({
               ...rest,
-              ...(backsUpAppsOnly && configuration.consistency === "stopped"
+              ...(stoppable && configuration.consistency === "stopped"
                 ? { consistency: "stopped" as const }
                 : {}),
               destination: scheduleBackupDestination(
                 configuration.destinationKeys[0]
               ),
-              mode: backsUpAppsOnly ? "full" : configuration.mode,
+              mode: stoppable ? "full" : configuration.mode,
               name: configuration.name,
             })
             setBackupConfigOpen(false)

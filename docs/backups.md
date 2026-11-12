@@ -677,8 +677,18 @@ A scheduled step works out what it backs up before it runs, each thing
 once: for its Apps, each volume once however many of them use it. Apps that share a volume are backed up together, as one batch
 (`scheduledAppBackupGroup`): each of them asks its Relay for the same
 batch, by the same IDs, so the first makes it and the others wait for it,
-and a stopped step stops them all once. What refuses one of them refuses
-each, and a batch is at most 64 backups. The volumes are those Hearth last
+and a stopped step stops them all once. A stopped step that backs up
+databases beside Apps takes all of them on a Relay as one batch
+(`stoppedTogether`, `apps/relay/src/schedules.ts`): every volume its Apps
+use and each of those databases, so a database is dumped while the Apps are
+stopped, as a manual stopped run dumps it. The batch is settled once for
+the step, of the targets it still runs on in that occurrence and that
+Hearth admitted: one skipped or refused is left out and backed up by no
+other target's run, so a database is dumped while the Apps that are backed
+up are stopped. Every App of the batch stays stopped for as long as all of
+it takes; separate steps keep Apps that needn't wait on each other apart. The editor offers Stopped for a
+step of Apps, with or without databases beside them. What refuses one of
+them refuses each, and a batch is at most 64 backups. The volumes are those Hearth last
 sent. It sends the schedule again as soon as a deployment of the App ends,
 and if that send fails, at its next sweep, every ten minutes, or when
 someone opens the Schedules page. A run that falls before that takes the
