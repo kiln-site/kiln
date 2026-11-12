@@ -618,6 +618,10 @@ export class BackupManager {
    * once, journaled as a single stopped backup's are, and those that ran
    * start again once every archive is taken. Coverage-bearing batches must
    * arrive completely: no fragment may succeed before coverage is checked.
+   * So must a batch with a database in it: a database dumped without the
+   * batch's volumes would be taken with nothing stopped and still say it
+   * was, and a volume archived again after a restart, its database's dump
+   * already taken, would be of another stopped window than that dump.
    */
   #runBatch(leader: RelayBackupTask, batch: { id: string; size: number }) {
     return Effect.gen({ self: this }, function* () {
@@ -630,14 +634,16 @@ export class BackupManager {
       }
       if (
         members.length !== batch.size &&
-        members.some(
+        (members.some(
           (member) => member.input.kind === "create" && member.input.appCoverage
-        )
+        ) ||
+          // Whether or not the database is among those here now.
+          (yield* this.#state.batchHoldsDatabase(batch.id)))
       ) {
         for (const member of members) {
           yield* this.#state.failBackupTask(
             member.taskId,
-            "App backup batch is incomplete; no backups were started",
+            "This backup's batch is incomplete; no backups were started",
             Date.now()
           )
         }
@@ -742,7 +748,14 @@ export class BackupManager {
           // its own start or deployment. The whole window fails instead.
           const consumers = new Set<string>()
           for (const member of members) {
-            if (member.input.kind !== "create") continue
+            // An App's folder or a volume has Apps to stop. A database of
+            // the batch has none: it is dumped once theirs are stopped.
+            if (
+              member.input.kind !== "create" ||
+              member.input.artifactKind !== "tar_archive"
+            ) {
+              continue
+            }
             yield* this.#requireLockedApps(member.input.target, lockedApps)
             const source = yield* this.#tarSource(member.input.target, true)
             for (const appId of source.consumers) consumers.add(appId)
@@ -2013,6 +2026,11 @@ export class BackupManager {
             "The database backup driver is unavailable"
           )
         }
+        // In a stopped batch, it is dumped within the batch's window: once
+        // every App that uses the batch's volumes is stopped, so it and
+        // their archives are taken while those Apps write nothing. The
+        // window starts them again when the last of the batch has left.
+        if (window && input.consistency === "stopped") yield* window.begin
         const progress: BackupProgress = {
           completed: 0,
           currentArtifactId: null,
@@ -2066,6 +2084,21 @@ export class BackupManager {
             }),
         }).pipe(
           Effect.withSpan("Backups.database.dump"),
+          // In a batch's window it waits, its dump taken, until every
+          // archive of the batch is, as each of them does: none is finished
+          // before all are taken, so a Relay that stops midway runs the
+          // whole batch again rather than part of it in another window.
+          // What starting the Apps again left to say is said on it too.
+          Effect.flatMap((created) =>
+            window && input.consistency === "stopped"
+              ? window.arrive(task.taskId).pipe(
+                  Effect.map((restarted) => ({
+                    ...created,
+                    warnings: [...created.warnings, ...restarted],
+                  }))
+                )
+              : Effect.succeed(created)
+          ),
           Effect.flatMap((created) =>
             storeCreatedBackup(
               this.#config,

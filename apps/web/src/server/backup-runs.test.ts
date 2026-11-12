@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
+import {
+  builtinTailscaleBrick,
+  relayInstanceSchema,
+  relaySnapshotSchema,
+} from "@workspace/contracts"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
@@ -12,10 +17,18 @@ import {
   type BackupRunInput,
 } from "@/server/backup-runs.server"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
-import { insertGrant, insertRelay, insertRows, selectRows } from "@/test/seed"
+import {
+  insertBackupStorage,
+  insertGrant,
+  insertRelay,
+  insertRows,
+  selectRows,
+} from "@/test/seed"
 
 const relayId = "1".repeat(12)
 const databaseId = "d".repeat(12)
+const serverId = "e".repeat(12)
+const storageId = "11111111-1111-4111-8111-111111111111"
 const media = "a".repeat(40)
 const uploads = "b".repeat(40)
 const at = Date.UTC(2026, 10, 1)
@@ -27,10 +40,15 @@ const relay = vi.hoisted(() => ({
     batch?: { id: string; size: number }
     target: { id: string; kind: string }
   }>,
+  // The game servers it has.
+  snapshot: null as unknown,
 }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
   relayRpc: async (_relay: unknown, operation: string) => {
+    if (operation === "relay.snapshot") return relay.snapshot
+    // It takes whichever volumes a configuration says it mounts.
+    if (operation === "app.volumes.write") return {}
     if (operation !== "relay.volumes.read") {
       throw new Error(`Unexpected Relay request ${operation}`)
     }
@@ -75,7 +93,45 @@ vi.mock("@/lib/backup-reconciliation", () => ({
   },
 }))
 
+// App configurations are kept encrypted.
+vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
+
 afterAll(() => disposeAppRuntime())
+
+relay.snapshot = relaySnapshotSchema.parse({
+  instances: [
+    relayInstanceSchema.parse({
+      brickSource: builtinTailscaleBrick.source,
+      connectAddress: "play.example.test:25565",
+      containerId: "container",
+      desiredState: "stopped",
+      directory: "/data/server",
+      game: "Minecraft",
+      id: serverId,
+      implementation: "paper",
+      javaVersion: "21",
+      limits: { diskBytes: 1024 ** 3, memoryBytes: 1024 ** 3 },
+      name: "Survival",
+      observedState: "stopped",
+      service: "server",
+      status: "stopped",
+      variables: {},
+      version: "1.21",
+    }),
+  ],
+  node: {
+    arch: "arm64",
+    connectedAt: new Date(at).toISOString(),
+    cpu: { cores: 4, loadPercent: 0 },
+    docker: { available: true, version: "test" },
+    id: relayId,
+    memory: { totalBytes: 8 * 1024 ** 3, usedBytes: 0 },
+    name: "Relay",
+    platform: "linux",
+    storage: { totalBytes: 20 * 1024 ** 3, usedBytes: 0 },
+    version: "test",
+  },
+})
 
 const user: AuthenticatedUser = {
   email: "member@example.test",
@@ -204,6 +260,48 @@ describeMysql("Backup runs", () => {
         })
     )
 
+    // A game server alone is incremental unless told otherwise, to the one
+    // place its snapshots go. Chosen with anything else it is a full
+    // archive, as the dialog says, which goes wherever the rest go: left
+    // incremental, the run would be refused for its two destinations, or
+    // make a snapshot nobody asked for.
+    it.effect(
+      "takes a game server as a full archive when it is chosen with anything else",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          yield* insertBackupStorage(storageId)
+          yield* grant(["backup.create"])
+
+          yield* run({
+            consistency: "live",
+            name: "Before the upgrade",
+            storageIds: [null, storageId],
+            targets: [
+              { id: serverId, kind: "instance", relayId },
+              { id: media, kind: "volume", relayId },
+            ],
+          })
+
+          const rows = yield* selectRows<{
+            artifact_kind: string
+            backup_mode: string
+            target_kind: string
+          }>("backup")
+          assert.sameDeepMembers(
+            rows.map(({ artifact_kind, backup_mode, target_kind }) => [
+              target_kind,
+              backup_mode,
+              artifact_kind,
+            ]),
+            [
+              ["instance", "full", "archive"],
+              ["volume", "full", "tar_archive"],
+            ]
+          )
+        })
+    )
+
     it.effect(
       "takes nothing for someone who may not back up everything chosen",
       () =>
@@ -235,7 +333,7 @@ describeMysql("Backup runs", () => {
     // permission to stop each; and the volumes stop them once, together,
     // which the Relay does for backups that say they are one batch.
     it.effect(
-      "stops the Apps of a run's volumes once, for someone who may stop each of them",
+      "stops the Apps of a run's volumes once, its databases dumped meanwhile, for someone who may stop each",
       () =>
         Effect.gen(function* () {
           yield* seed
@@ -252,15 +350,27 @@ describeMysql("Backup runs", () => {
           })
           const made = yield* run(chosen("stopped"))
 
-          const window = { id: made.batchId, size: 2 }
+          // The database is dumped within their window, with those Apps
+          // stopped, so it and the volumes are taken while they write nothing.
+          const window = { id: made.batchId, size: 3 }
           assert.sameDeepMembers<unknown>(
             relay.dispatched.map(({ batch, target }) => [target.id, batch]),
             [
               [media, window],
               [uploads, window],
-              // A database is dumped as it runs, outside their window.
-              [databaseId, undefined],
+              [databaseId, window],
             ]
+          )
+
+          // A database with no volume beside it has nothing to stop for.
+          relay.dispatched = []
+          yield* run({
+            ...chosen("stopped"),
+            targets: [{ id: databaseId, kind: "database", relayId }],
+          })
+          assert.deepStrictEqual(
+            relay.dispatched.map(({ batch }) => batch),
+            [undefined]
           )
         })
     )

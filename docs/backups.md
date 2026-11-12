@@ -266,8 +266,18 @@ single stopped backup's are, so a Relay that stops midway starts them again
 and the backups rerun), takes every archive, and only then starts again those
 that ran, so the copies agree. A backup of the batch that arrives later runs
 in a window of its own. Live batches are independent backups. A final backup is always
-stopped, and nothing starts again. Game servers, databases, and Kiln are
-always backed up live.
+stopped, and nothing starts again. Game servers and Kiln are
+always backed up live. A database isn't stopped either, but one that is
+part of a stopped batch (`consistency: "stopped"` with `batch`, which only a
+database or a tar archive may carry) is dumped within the batch's window:
+it waits until the Apps that use the batch's volumes are stopped, and they
+start again only once it has left. Like each archive, its dump taken, it
+waits for every other of the batch before it is finished, so a Relay that
+stops midway runs the whole batch again. Such a batch must reach the Relay
+whole, and run whole: what arrives of one with a database in it, short of
+the rest, is failed rather than dumped with nothing stopped, and so is
+what is left of one whose dump was already finished, rather than archived
+in a stopped window of its own.
 
 A volume an App's Compose project made without an ID, as a file that
 changed the volume's Docker name leaves behind, isn't backed up: the App
@@ -606,15 +616,20 @@ file written in Hearth. Those paths, like any path on the node, are not
 backed up, and the App's Volumes say so; data to back up belongs in a
 volume. An App that uses no volume has nothing to back up.
 
-New Backup takes one thing or several (`createBackupRun`,
-`apps/web/src/server/backup-runs.server.ts`): each chosen is a backup of its
+New Backup in Hearth takes one thing or several (`createBackupRun`,
+`apps/web/src/server/backup-runs.server.ts`; the CLI makes its backups one
+at a time, by its own path): each chosen is a backup of its
 own, as if made alone, and those of one run share its name and its ID
 (`batch_id`). They are reserved together or not at all, so a run never
 comes up short of something chosen without saying; up to 64 at once, on any
 Relays. Live or Stopped is the volumes' choice: stopped, the volumes of a
 run on one Relay share one stopped window, so every App that uses any of
-them stops once, while game servers, databases and Kiln are taken as they
-run. Incremental is a game server's choice, offered when only game servers
+them stops once, and the run's databases on that Relay are dumped within
+it, while those Apps are stopped. That is all it promises: nothing else
+that writes to the database is stopped, nothing is coordinated between
+Relays, and each backup is still restored on its own. Game
+servers and Kiln are taken as they run, as is a database with no volume
+beside it. Incremental is a game server's choice, offered when only game servers
 are chosen; chosen with anything else, each is a full archive.
 
 It offers each Kiln volume alongside game servers, databases and
