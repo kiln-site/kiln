@@ -783,6 +783,14 @@ export class RelayStateStore extends Context.Service<
       now: number
     ) => Effect.Effect<ReadonlyArray<RelayBackupTask>, RelayStateError>
     /**
+     * Whether a batch has a database among its backups, finished or not:
+     * what is left of one that does can't run as a stopped window of its
+     * own beside the dump the first one took.
+     */
+    readonly batchHoldsDatabase: (
+      batchId: string
+    ) => Effect.Effect<boolean, RelayStateError>
+    /**
      * Marks a restore that startup recovery finished as succeeded: one a
      * stop cut off while running, or one that failed while swapping its
      * files in, which recovery finished, saying so.
@@ -3269,6 +3277,18 @@ const makeRelayStateStore = Effect.gen(function* () {
             return claimed
           })
         )
+      ),
+    batchHoldsDatabase: (batchId) =>
+      run(
+        "batch_holds_database",
+        sql<{ found: number }>`
+          SELECT 1 AS found
+          FROM relay_backup_tasks
+          WHERE kind = 'create'
+            AND json_extract(input_json, '$.batch.id') = ${batchId}
+            AND json_extract(input_json, '$.target.kind') = 'database'
+          LIMIT 1
+        `.pipe(Effect.map((rows) => rows.length > 0))
       ),
     returnBackupTask: (taskId, now) =>
       run(

@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { createWriteStream } from "node:fs"
 import { mkdir, readdir, readFile, stat } from "node:fs/promises"
 import { join } from "node:path"
+import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { createGzip } from "node:zlib"
 
@@ -17,6 +18,7 @@ import { expect, it, vi } from "vite-plus/test"
 vi.mock("./command.js", () => import("./test/docker.js"))
 
 import { BackupManager } from "./backups.js"
+import type { DatabaseDriver } from "./databases.js"
 import { backupArchivePath } from "./backups/destinations/index.js"
 import { TarRestoreFences } from "./backups/tar-restore-journal.js"
 import { DockerEngine } from "./docker-engine.js"
@@ -54,9 +56,40 @@ async function relay() {
 
 const fencesOf = new WeakMap<RelayHarness, TarRestoreFences>()
 
-function backups(harness: RelayHarness, volumes: RelayVolumes) {
+// A database driver whose dump is a few bytes, in place of a database's
+// own client run in its container. `asked` is told as each dump starts.
+function dumping(asked: () => void = () => undefined) {
+  return {
+    backupTarget: async (id: string) => {
+      asked()
+      return { engine: "mysql", id }
+    },
+    process: async () => ({
+      kill: () => undefined,
+      stderr: Readable.from([]),
+      stdout: Readable.from(["-- MySQL dump\n"]),
+      waitFor: async () => 0,
+    }),
+  } as unknown as DatabaseDriver
+}
+
+function backups(
+  harness: RelayHarness,
+  volumes: RelayVolumes,
+  // In place of the Relay's own: Apps whose power a test watches, and a
+  // database driver.
+  instead: {
+    apps?: {
+      isRunning: (id: string) => Promise<boolean>
+      start: (id: string) => Promise<void>
+      stop: (id: string) => Promise<void>
+    }
+    databases?: DatabaseDriver
+  } = {}
+) {
   return Effect.runPromise(
     BackupManager.make({
+      ...(instead.databases ? { databases: instead.databases } : {}),
       apps: {
         hostFolder: async (id) =>
           (await harness.apps.list()).some((app) => app.id === id)
@@ -73,6 +106,7 @@ function backups(harness: RelayHarness, volumes: RelayVolumes) {
           await harness.apps.action({ action: "stop", appId: id })
         },
         volumes: (id) => Effect.runPromise(volumes.appVolumeIds(id)),
+        ...instead.apps,
       },
       config: harness.config,
       fences: fencesOf.get(harness)!,
@@ -346,3 +380,182 @@ async function writeArchive(
     taskId: randomUUID(),
   }
 }
+
+// Stopped together, a volume and the database beside it are of one quiet
+// moment: the database is dumped only once the Apps that use the volume
+// are stopped, and they start again only when both have left. A dump taken
+// as the App runs would not match the files archived while it was stopped.
+it("dumps a database of a stopped batch while the Apps of its volumes are stopped", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  fakeDocker.addContainer({
+    labels: {
+      "kiln.app.id": "a".repeat(12),
+      "kiln.relay.owner": TEST_NAMESPACE,
+      "kiln.resource.kind": "app",
+    },
+    mounts: [{ destination: "/data", source: volume.name, type: "volume" }],
+    name: "site",
+  })
+  let running = true
+  const seen: Array<string> = []
+  const manager = await backups(harness, volumes, {
+    apps: {
+      isRunning: async () => running,
+      start: async () => {
+        running = true
+        seen.push("started")
+      },
+      stop: async () => {
+        running = false
+        seen.push("stopped")
+      },
+    },
+    databases: dumping(() =>
+      seen.push(running ? "dump, running" : "dump, stopped")
+    ),
+  })
+  const batch = { id: randomUUID(), size: 2 }
+  const archive = createInput(
+    { id: volumeId, kind: "volume" },
+    { batch, consistency: "stopped" }
+  )
+  const dump = createInput(
+    { id: "d".repeat(12), kind: "database" },
+    { artifactKind: "database_dump", batch, consistency: "stopped" }
+  )
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* manager.enqueue(archive)
+      yield* manager.enqueue(dump)
+      yield* manager.runPending()
+    })
+  )
+
+  expect(seen).toEqual(["stopped", "dump, stopped", "started"])
+  expect(
+    await Effect.runPromise(manager.get(archive.taskId))
+  ).toMatchObject({ result: { consistency: "stopped" }, status: "succeeded" })
+  expect(await Effect.runPromise(manager.get(dump.taskId))).toMatchObject({
+    status: "succeeded",
+  })
+})
+
+// A database is "stopped" only as one of a batch whose volumes are. Left
+// without them, as when the rest never reached the Relay, a dump would be
+// taken with nothing stopped and still say it was, so none is taken.
+it("takes no dump for a stopped batch that arrives without its volumes", async () => {
+  const { harness, volumes } = await relay()
+  let dumps = 0
+  const manager = await backups(harness, volumes, {
+    databases: dumping(() => (dumps += 1)),
+  })
+  const dump = createInput(
+    { id: "d".repeat(12), kind: "database" },
+    {
+      artifactKind: "database_dump",
+      batch: { id: randomUUID(), size: 2 },
+      consistency: "stopped",
+    }
+  )
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  const ran = Effect.runPromise(
+    Effect.gen(function* () {
+      yield* manager.enqueue(dump)
+      yield* manager.runPending()
+      return yield* manager.get(dump.taskId)
+    })
+  )
+  // The Relay waits a few moments for the rest of a batch to arrive.
+  let done = false
+  void ran.finally(() => {
+    done = true
+  })
+  while (!done) await vi.advanceTimersByTimeAsync(250)
+  vi.useRealTimers()
+
+  expect(await ran).toMatchObject({
+    error: "This backup's batch is incomplete; no backups were started",
+    status: "failed",
+  })
+  expect(dumps).toBe(0)
+})
+
+// A Relay that stops after the dump is finished and before the volume's
+// archive is runs the archive again when it starts. Alone, it would stop
+// the App a second time: a later moment than the dump's, in a run that
+// would read as one. So what is left of the batch is failed instead.
+it("fails the rest of a stopped batch whose database was already dumped", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  fakeDocker.addContainer({
+    labels: {
+      "kiln.app.id": "a".repeat(12),
+      "kiln.relay.owner": TEST_NAMESPACE,
+      "kiln.resource.kind": "app",
+    },
+    mounts: [{ destination: "/data", source: volume.name, type: "volume" }],
+    name: "site",
+  })
+  const stops: Array<string> = []
+  const manager = await backups(harness, volumes, {
+    apps: {
+      isRunning: async () => true,
+      start: async () => undefined,
+      stop: async (id) => {
+        stops.push(id)
+      },
+    },
+    databases: dumping(),
+  })
+  const batch = { id: randomUUID(), size: 2 }
+  // The dump, taken and finished before the Relay stopped.
+  const dump = createInput(
+    { id: "d".repeat(12), kind: "database" },
+    { artifactKind: "database_dump", batch, consistency: "stopped" }
+  )
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      yield* manager.enqueue(dump)
+      yield* harness.state.claimBatchBackupTasks(batch.id, Date.now())
+      yield* harness.state.completeBackupTask(
+        dump.taskId,
+        {
+          bytes: 1,
+          checksumSha256: "0".repeat(64),
+          filename: "dump.sql.gz",
+          warnings: [],
+        },
+        Date.now()
+      )
+    })
+  )
+  // The volume's archive, back in line as the Relay starts again.
+  const archive = createInput(
+    { id: volumeId, kind: "volume" },
+    { batch, consistency: "stopped" }
+  )
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  const ran = Effect.runPromise(
+    Effect.gen(function* () {
+      yield* manager.enqueue(archive)
+      yield* manager.runPending()
+      return yield* manager.get(archive.taskId)
+    })
+  )
+  let done = false
+  void ran.finally(() => {
+    done = true
+  })
+  while (!done) await vi.advanceTimersByTimeAsync(250)
+  vi.useRealTimers()
+
+  expect(await ran).toMatchObject({
+    error: "This backup's batch is incomplete; no backups were started",
+    status: "failed",
+  })
+  expect(stops).toEqual([])
+})

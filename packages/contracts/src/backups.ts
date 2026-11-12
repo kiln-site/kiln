@@ -445,10 +445,14 @@ function refineResticCreateInput(
       path: ["artifactKind"],
     })
   }
-  if (input.consistency === "stopped" && !resource) {
+  // A database isn't stopped. In a stopped batch it is dumped within the
+  // batch's stopped window, with the Apps of the batch's volumes stopped.
+  const withStopped = input.target.kind === "database" && input.batch
+  if (input.consistency === "stopped" && !resource && !withStopped) {
     context.addIssue({
       code: "custom",
-      message: "Only Apps and volumes can be stopped for a backup",
+      message:
+        "Only Apps and volumes are stopped for a backup, or a database backed up in a batch with them",
       path: ["consistency"],
     })
   }

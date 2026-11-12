@@ -2315,16 +2315,22 @@ export const listDispatchableBackupTasksEffect = Effect.fn(
         taskId: row.task_id,
       }
     }
+    const batch = stoppedBatch(
+      row.consistency ?? undefined,
+      row.batch_id ?? undefined,
+      Number(row.batch_size)
+    )
     return {
       artifacts: artifacts.map(dispatchArtifact),
       artifactKind: row.artifact_kind,
       backupId: row.backup_id,
-      ...(row.consistency ? { consistency: row.consistency } : {}),
-      ...stoppedBatch(
-        row.consistency ?? undefined,
-        row.batch_id ?? undefined,
-        Number(row.batch_size)
-      ),
+      // A database is stopped only as one of a stopped batch: left alone in
+      // it, as when the rest are gone, it is dumped as it runs.
+      ...(row.consistency &&
+      (row.target_kind !== "database" || "batch" in batch)
+        ? { consistency: row.consistency }
+        : {}),
+      ...batch,
       exclude: parseExcludes(row.exclude_patterns),
       kind: "create",
       maxBytes: nullableDatabaseNumber(

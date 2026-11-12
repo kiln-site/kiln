@@ -124,6 +124,13 @@ async function relayMembers(
   const members: Array<Member> = []
 
   const instances = of("instance")
+  // Incremental or full is a game server's choice, for a run of game
+  // servers alone: left unsaid there, it is incremental, as it always was.
+  // In a run with anything else each is a full archive, as the rest are,
+  // which is what choosing them together offers.
+  const mode = data.targets.every((target) => target.kind === "instance")
+    ? data.mode
+    : "full"
   if (instances.length > 0) {
     const snapshot = relaySnapshotSchema.parse(
       await relayRpc(relay, "relay.snapshot", {}, 15_000, user.id)
@@ -133,7 +140,7 @@ async function relayMembers(
       if (!known.has(id)) throw new Error("Server not found on this Relay")
       members.push({
         artifactKind: "archive",
-        ...(data.mode === undefined ? {} : { mode: data.mode }),
+        ...(mode === undefined ? {} : { mode }),
         relay,
         targetId: id,
         targetKind: "instance",
@@ -141,6 +148,11 @@ async function relayMembers(
     }
   }
 
+  const volumes = of("volume")
+  // Stopped with volumes of its Relay, a database is dumped within their
+  // stopped window: once the Apps that use them are stopped, so it and
+  // their archives are taken while those Apps write nothing.
+  const withStopped = data.consistency === "stopped" && volumes.length > 0
   const databases = of("database")
   if (databases.length > 0) {
     const records = await runAppEffect(
@@ -159,6 +171,7 @@ async function relayMembers(
       }
       members.push({
         artifactKind: "database_dump",
+        ...(withStopped ? { consistency: "stopped" as const } : {}),
         relay,
         targetId: id,
         targetKind: "database",
@@ -166,7 +179,6 @@ async function relayMembers(
     }
   }
 
-  const volumes = of("volume")
   if (volumes.length > 0 && data.consistency === "stopped") {
     // Every App that uses any of them stops, so each takes permission.
     const listing = await readRelayVolumes(relay, user.id)
@@ -215,7 +227,7 @@ async function relayMembers(
  * Backs up everything chosen as one run: each a backup of its own, reserved
  * together or not at all, and started together. The volumes of a stopped
  * run on one Relay share one stopped window there, so every App that uses
- * any of them stops once.
+ * any of them stops once, and its databases there are dumped within it.
  */
 export async function createBackupRunHandler(
   user: AuthenticatedUser,
