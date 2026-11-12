@@ -209,14 +209,15 @@ forgets that the app named them, so nothing keeps one from being deleted
 once no other app uses it.
 
 An app's Volumes section says nothing of what Kiln keeps and backs up: a
-Kiln volume, mounted in Hearth or declared in the Compose file, and a
-relative path in a Compose file written in Hearth. A row speaks up only
-where what is written there may be lost:
+Kiln volume, mounted in Hearth or declared in the Compose file. Only
+volumes are backed up, and a row speaks up where what is written there may
+be lost:
 
 | Row | It says |
 | --- | --- |
 | A relative path in a repository's Compose file | Not kept: each deployment replaces the checkout |
 | A volume with no name in a Compose file | Not kept: Docker makes a new one on every deploy |
+| A relative path in a Compose file written in Hearth | Not backed up: it is kept on the node, beside the file |
 | A path on the node | Not backed up |
 | A volume the Compose file names or configures itself | Not backed up |
 | A typed file the app may write to | Changes not kept: it is written again on each deploy |

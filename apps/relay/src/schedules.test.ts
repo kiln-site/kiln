@@ -357,9 +357,9 @@ describe("Relay schedule commands in containers", () => {
   })
 })
 
-// Apps that use the same volume are backed up together: asked for once for
-// each App, the volume would be one backup made twice, or one App's backup
-// said done without it.
+// An App is backed up by its volumes. Apps that use the same volume are
+// backed up together: asked for once for each App, the volume would be one
+// backup made twice, or one App's backup said done without it.
 describe("Relay scheduled App backups", () => {
   const [site, blog] = ["a".repeat(12), "b".repeat(12)] as [string, string]
   const [media, uploads] = ["1".repeat(40), "2".repeat(40)] as [string, string]
@@ -370,8 +370,6 @@ describe("Relay scheduled App backups", () => {
       {
         destination: { kind: "local" },
         executions: [
-          { ...local, targetId: site, targetKind: "app" },
-          { ...local, targetId: blog, targetKind: "app" },
           { ...local, appIds: [site, blog], targetId: media, targetKind: "volume" },
           { ...local, appIds: [site], targetId: uploads, targetKind: "volume" },
         ],
@@ -428,23 +426,27 @@ describe("Relay scheduled App backups", () => {
       expect((await latestRun(schedules))?.status).toBe("succeeded")
     )
     const made = [...tasks.values()].map(({ input }) => input)
-    expect(made.map((input) => input.target.id).sort()).toEqual(
-      [site, blog, media, uploads].sort()
+    // Its volumes, and nothing else: no backup of an App itself.
+    expect(made.map((input) => input.target)).toEqual(
+      expect.arrayContaining([
+        { id: media, kind: "volume" },
+        { id: uploads, kind: "volume" },
+      ])
     )
-    // One batch of the four, whichever App asked first.
+    expect(made).toHaveLength(2)
+    // One batch of the two, whichever App asked first.
     expect(new Set(made.map((input) => "batch" in input && input.batch?.id)).size).toBe(1)
     expect(made.map((input) => "batch" in input && input.batch?.size)).toEqual([
-      4, 4, 4, 4,
+      2, 2,
     ])
-    // Each App is checked for the volumes it uses.
-    const coverage = Object.fromEntries(
-      made.flatMap((input) =>
-        "appCoverage" in input && input.appCoverage && input.target.kind === "app"
-          ? [[input.appCoverage.appId, input.appCoverage.volumeIds]]
-          : []
-      )
-    )
-    expect(coverage).toEqual({ [blog]: [media], [site]: [media, uploads] })
+    // Each backup of it says what every App was sent to take, so whichever
+    // starts the batch checks them all.
+    for (const input of made) {
+      expect("appCoverage" in input && input.appCoverage).toEqual([
+        { appId: site, volumeIds: [media, uploads] },
+        { appId: blog, volumeIds: [media] },
+      ])
+    }
     expect((await latestRun(schedules))?.targetRuns).toMatchObject([
       { status: "succeeded" },
       { status: "succeeded" },
@@ -468,5 +470,44 @@ describe("Relay scheduled App backups", () => {
       expect((await latestRun(schedules))?.status).toBe("failed")
     )
     expect(tasks.size).toBe(0)
+  })
+})
+
+describe("Relay scheduled App backups, of an App that keeps nothing", () => {
+  it("skips an App with no volumes, and doesn't pass for a backup made", async () => {
+    const appId = "c".repeat(12)
+    const { schedules } = await manager({
+      listAppIds: async () => new Set([appId]),
+    })
+    await schedules.apply({
+      ...projection,
+      actions: [
+        {
+          destination: { kind: "local" },
+          executions: [],
+          id: "d6b2c0e3-4f5a-4b7c-9d8e-0f1a2b3c4d5e",
+          mode: "full",
+          name: "Nightly",
+          type: "backup",
+        },
+      ],
+      targets: [{ id: appId, kind: "app", name: "Site", relayId: "relay-a" }],
+    })
+
+    await runNow(schedules)
+
+    // Nothing was asked of the backup queue, which would refuse it here,
+    // and the run doesn't say a backup succeeded.
+    await advanceUntil(async () =>
+      expect((await latestRun(schedules))?.status).toBe("noop")
+    )
+    expect((await latestRun(schedules))?.targetRuns[0]?.attempts).toMatchObject(
+      [
+        {
+          error: "Nothing to back up: this App uses no volume",
+          status: "skipped_unsupported",
+        },
+      ]
+    )
   })
 })

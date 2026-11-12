@@ -15,8 +15,8 @@ const at = Date.UTC(2026, 10, 1)
 const id = (member: number, part: number) =>
   `0000000${member}-0000-4000-8000-00000000000${part}`
 
-// A schedule's backup of an App and five volumes it uses, queued on the
-// Relay as one batch, which Hearth was never told of as each was made.
+// A schedule's backup of an App that uses six volumes, queued on the Relay
+// as one batch, which Hearth was never told of as each was made.
 const members = Array.from({ length: 6 }, (_, member) => {
   const backupId = id(member, 1)
   const taskId = id(member, 2)
@@ -31,7 +31,7 @@ const members = Array.from({ length: 6 }, (_, member) => {
     errorCode: null,
     finishedAt: null,
     input: {
-      appCoverage: { appId, volumeIds: [] },
+      appCoverage: [{ appId, volumeIds: [] }],
       artifactKind: "tar_archive",
       backupId,
       batch: { id: batchId, size: 6 },
@@ -42,10 +42,7 @@ const members = Array.from({ length: 6 }, (_, member) => {
       maxBytes: null,
       mode: "full",
       reason: "scheduled",
-      target:
-        member === 0
-          ? { id: appId, kind: "app" }
-          : { id: String(member).repeat(40), kind: "volume" },
+      target: { id: String(member + 1).repeat(40), kind: "volume" },
       taskId,
     },
     inputRefreshRequired: false,

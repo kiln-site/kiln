@@ -407,8 +407,8 @@ async function prepareRelayScheduleActions(
   owner: string | null,
   relay: PersistedRelay
 ): Promise<Array<RelayScheduleAction>> {
-  // An App's backup is of its folder and the volumes it uses, as the Relay
-  // lists them now; asked once for every App the schedule backs up.
+  // An App's backup is of the volumes it uses, as the Relay lists them
+  // now; asked once for every App the schedule backs up.
   let listing: Promise<RelayVolumes> | null = null
   const planned = new Map<string, Promise<TargetMembers>>()
   const membersOf = (target: ScheduleTarget) => {
@@ -424,17 +424,19 @@ async function prepareRelayScheduleActions(
         target.id,
         await listing
       )
+      // A volume it mounts that its Relay doesn't have is sent all the
+      // same, refused: it carries why none of the App's backups run.
       return {
         appId: target.id,
-        members: taken.map(({ id, kind }) => ({
+        members: [...taken.map(({ id }) => id), ...missing].map((id) => ({
           id,
-          kind,
+          kind: "volume" as const,
           relayId: target.relayId,
         })),
         refusal:
-          missing === null
+          missing[0] === undefined
             ? null
-            : `A volume this App mounts is missing on its Relay (${missing.slice(0, 8)})`,
+            : `A volume this App mounts is missing on its Relay (${missing[0].slice(0, 8)})`,
       }
     })()
     planned.set(target.id, made)
@@ -481,9 +483,9 @@ interface TargetMembers {
 }
 
 /**
- * What one backup step backs up on a Relay, each thing once: every
- * target's own member, and each volume once however many of the step's
- * Apps use it, naming them all. Apps that share a volume are backed up
+ * What one backup step backs up on a Relay, each thing once: a game
+ * server, a database or Kiln itself, and for an App its volumes, each once
+ * however many of the step's Apps use it, naming them all. Apps that share a volume are backed up
  * together (`scheduledAppBackupGroup`), so what refuses one of them refuses
  * each, as does being more than one run takes.
  */
@@ -529,9 +531,12 @@ function stepManifest(
           target.refusal !== null &&
           group.apps.includes(target.appId)
       )?.refusal ??
+      // One run takes so many backups, and names so many Apps on each.
       (group.executions.length > SCHEDULED_APP_BACKUP_GROUP_MAX
         ? `It shares volumes with other Apps of this step: together they are ${group.executions.length} backups, more than the ${SCHEDULED_APP_BACKUP_GROUP_MAX} one run takes`
-        : null)
+        : group.apps.length > SCHEDULED_APP_BACKUP_GROUP_MAX
+          ? `It shares volumes with other Apps of this step: together they are ${group.apps.length} Apps, more than the ${SCHEDULED_APP_BACKUP_GROUP_MAX} one run takes`
+          : null)
     for (const id of group.apps) refused.set(id, why)
     return why
   }
@@ -654,8 +659,7 @@ function forRelayTargets(
 
 /**
  * What one of a backup step's executions backs up: a schedule's target, or
- * an App's folder or a volume it owns, admitted each as a manual backup of
- * it would be.
+ * a volume its Apps use, admitted each as a manual backup of it would be.
  */
 interface BackupMember {
   /** For a volume: the step's Apps whose backups take it. */

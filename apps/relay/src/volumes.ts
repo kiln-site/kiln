@@ -239,6 +239,7 @@ export class RelayVolumes {
       )
       return {
         measuring,
+        missing: inventory.missing,
         protection,
         uncovered: uncoveredMounts(
           this.#config,
@@ -319,7 +320,15 @@ export class RelayVolumes {
           id ? configured.get(id) : []
         )
       })
-      return { containers, mounts, volumes }
+      // A volume an App names that isn't here: removed behind Kiln's back,
+      // so what the App kept on it is in no backup of the App.
+      const here = new Set(volumes.map((volume) => volume.id))
+      const missing = [...configured].flatMap(([volumeId, appIds]) =>
+        here.has(volumeId)
+          ? []
+          : [...new Set(appIds)].sort().map((appId) => ({ appId, volumeId }))
+      )
+      return { containers, missing, mounts, volumes }
     })
   }
 
@@ -601,14 +610,18 @@ export class RelayVolumes {
   })
 
   /**
-   * The volumes an App's backup takes with its folder: every Kiln volume
-   * it uses, as Hearth works out too.
+   * The volumes an App's backup takes: every Kiln volume it uses, as Hearth
+   * works out too, and any it names that isn't here, which no backup can
+   * take: one that left it out would pass for all the App keeps.
    */
   appBackupVolumeIds(appId: string) {
     return this.#inventory().pipe(
-      Effect.map(({ volumes }) =>
-        appBackupVolumes(appId, volumes).map((volume) => volume.id)
-      )
+      Effect.map(({ missing, volumes }) => [
+        ...appBackupVolumes(appId, volumes).map((volume) => volume.id),
+        ...missing.flatMap((gone) =>
+          gone.appId === appId ? [gone.volumeId] : []
+        ),
+      ])
     )
   }
 

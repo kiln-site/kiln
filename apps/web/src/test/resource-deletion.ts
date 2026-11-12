@@ -371,6 +371,7 @@ function listedVolumes() {
     filesAvailable: false,
     measuring: false,
     protection: { ready: true, reason: null },
+    missing: [],
     uncovered: [],
     volumes: deletionRelay.volumes.map((volume) => ({
       createdAt: null,

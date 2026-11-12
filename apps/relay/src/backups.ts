@@ -1539,24 +1539,26 @@ export class BackupManager {
     inputs: ReadonlyArray<BackupTaskInput>,
     held: ReadonlyArray<LaneLock>
   ) {
-    const byApp = new Map<string, BackupTaskInput>()
+    // Every App the batch backs up, once, with the volumes it was sent to
+    // take: each backup of the batch says the same.
+    const byApp = new Map<string, ReadonlyArray<string>>()
+    const wanted = new Map<string, LaneLock>()
     for (const input of inputs) {
-      if (input.kind === "create" && input.appCoverage) {
-        byApp.set(input.appCoverage.appId, input)
+      if (input.kind !== "create" || !input.appCoverage) continue
+      for (const { appId, volumeIds } of input.appCoverage) {
+        byApp.set(appId, volumeIds)
       }
+      for (const lock of backupCoverageLocks(input)) wanted.set(lock.key, lock)
     }
-    const locks = [...byApp.values()]
-      .flatMap(backupCoverageLocks)
-      .filter(
-        (lock) =>
-          !held.some(
-            (current) =>
-              current.key === lock.key && current.mode === "exclusive"
-          )
-      )
+    const locks = [...wanted.values()].filter(
+      (lock) =>
+        !held.some(
+          (current) => current.key === lock.key && current.mode === "exclusive"
+        )
+    )
     const validate = Effect.forEach(
-      byApp.values(),
-      (input) => this.#validateAppCoverage(input),
+      byApp,
+      ([appId, volumeIds]) => this.#validateAppCoverage(appId, volumeIds),
       { discard: true }
     )
     return locks.length === 0
@@ -1564,10 +1566,8 @@ export class BackupManager {
       : this.#lanes.runNested({ label: "backup.coverage", locks }, validate)
   }
 
-  #validateAppCoverage(input: BackupTaskInput) {
+  #validateAppCoverage(appId: string, volumeIds: ReadonlyArray<string>) {
     return Effect.gen({ self: this }, function* () {
-      if (input.kind !== "create" || !input.appCoverage) return
-      const { appId, volumeIds } = input.appCoverage
       const taken = this.#volumes
         ? yield* this.#volumes.appBackupVolumeIds(appId)
         : null

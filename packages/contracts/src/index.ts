@@ -792,6 +792,11 @@ export const relayVolumesSchema = z.object({
     ready: z.boolean(),
     reason: z.string().nullable(),
   }),
+  // Kiln volumes Apps name, in a configuration or a Compose file, that
+  // the Relay doesn't have: data a backup of the App would leave out.
+  missing: z.array(
+    z.object({ appId: volumeAppIdSchema, volumeId: relayVolumeIdSchema })
+  ),
   uncovered: z.array(relayUncoveredMountSchema),
   volumes: z.array(relayVolumeSchema),
 })

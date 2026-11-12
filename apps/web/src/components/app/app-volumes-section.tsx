@@ -148,6 +148,11 @@ const KEPT = {
       "A path in the repository's checkout, which each deployment replaces. What's written there is lost on the next deploy, and no backup takes it.",
     label: "Not kept",
   },
+  beside: {
+    detail:
+      "A path beside the Compose file, kept on the node. No backup takes it: keep data to back up in a volume.",
+    label: "Not backed up",
+  },
   node: {
     detail:
       "A path on the node. Kiln holds no copy of it, and no backup takes it.",
@@ -222,16 +227,6 @@ export function AppVolumesSection({
     const context: RowContext = {
       app,
       containers: appContainers(app),
-      // A path in the App's folder is backed up with the App.
-      canReadBackups: Boolean(
-        capabilities &&
-        (capabilities.isPlatformAdmin ||
-          grantsAllowBackup(
-            capabilities.grants,
-            { id: app.id, kind: "app", relayId: app.relayId },
-            "backup.read"
-          ))
-      ),
       canReadFiles,
       canReadHost,
       composeFile,
@@ -812,7 +807,6 @@ interface RowContext {
   app: App
   // What its containers mount now.
   containers: ReturnType<typeof appContainers>
-  canReadBackups: boolean
   canReadFiles: boolean
   canReadHost: boolean
   composeFile: AppComposeMounts | null
@@ -970,12 +964,8 @@ function composeRow(context: RowContext, mount: ComposeMount): MountRow {
         : { filesLink: null, filesUnavailable: null }
   return {
     ...files,
-    backups:
-      mount.kind === "volume"
-        ? volumeBackups(context, volumeId)
-        : relative && context.canReadBackups
-          ? {}
-          : null,
+    // Only a volume has backups.
+    backups: mount.kind === "volume" ? volumeBackups(context, volumeId) : null,
     composeEditable: context.composeFile?.editable ?? false,
     composeFile: file,
     entry: { kind: "compose", mount },
@@ -997,10 +987,10 @@ function composeRow(context: RowContext, mount: ComposeMount): MountRow {
         : mount.kind === "bind"
           ? !relative
             ? KEPT.node
-            : // A pasted file's paths are in the App's folder; a
-              // repository's in its checkout.
+            : // A file written in Hearth keeps its paths beside it on the
+              // node; a repository's are in its checkout.
               (context.composeFile?.editable ?? false)
-              ? null
+              ? KEPT.beside
               : KEPT.checkout
           : null,
     missing: false,

@@ -88,7 +88,10 @@ export async function getAppBackupsHandler(
     available: listing !== null,
     // A volume its configuration mounts that its Relay doesn't have: its
     // backup would leave that data out, so none is made until it's back.
-    missing: listing && plan ? missingAppVolumes(plan.configured, listing) : [],
+    missing:
+      listing && plan
+        ? missingAppVolumes(data.appId, plan.configured, listing)
+        : [],
     targets: targets.map((target) => {
       const shown = readable(target)
       const backup = latest.find((record) =>
@@ -141,21 +144,31 @@ export async function scheduledAppTargets(
   const plan = await appBackupPlan(relayId, appId)
   const configured = plan?.configured ?? []
   return {
-    missing: missingAppVolumes(configured, listing)[0] ?? null,
+    missing: missingAppVolumes(appId, configured, listing),
     targets: appTargets(appId, listing, configured),
   }
 }
 
 /**
- * The Kiln volumes an App's configuration mounts that its Relay doesn't
- * have. A backup that went ahead would leave their data out without saying.
+ * The Kiln volumes an App's configuration mounts, or its Compose file
+ * declares, that its Relay doesn't have. A backup that went ahead would
+ * leave their data out without saying.
  */
 export function missingAppVolumes(
+  appId: string,
   configured: ReadonlyArray<string>,
   listing: RelayVolumes
 ): Array<string> {
   const known = new Set(listing.volumes.map((volume) => volume.id))
-  return configured.filter((id) => !known.has(id))
+  return [
+    ...new Set([
+      ...configured.filter((id) => !known.has(id)),
+      // What the Relay knows the App names, its Compose file's included.
+      ...listing.missing.flatMap((gone) =>
+        gone.appId === appId ? [gone.volumeId] : []
+      ),
+    ]),
+  ]
 }
 
 /**
@@ -190,7 +203,7 @@ async function coveredAppTargets(
   const plan = await appBackupPlan(relay.id, appId)
   if (!plan) throw new Error("App not found on this Relay")
   const listing = await readRelayVolumes(relay, userId)
-  const [missing] = missingAppVolumes(plan.configured, listing)
+  const [missing] = missingAppVolumes(appId, plan.configured, listing)
   if (missing !== undefined) {
     throw new Error(
       `A volume this App mounts is missing on its Relay (${missing.slice(0, 8)}). Restore it or remove its mount, then back up again.`
@@ -200,8 +213,8 @@ async function coveredAppTargets(
 }
 
 /**
- * Backs up an App: its folder and each volume it uses, each a backup of its
- * own, started together as one batch. Stopped, each stops and starts again
+ * Backs up an App, which is to back up each volume it uses, each a backup
+ * of its own, started together as one batch. Stopped, each stops and starts again
  * every App that uses what it backs up.
  */
 export async function createAppBackupsHandler(
@@ -224,9 +237,10 @@ export async function createAppBackupsHandler(
     data.appId,
     user.id
   )
-  const taken = targets.flatMap((target) =>
-    target.kind === "volume" ? [target.id] : []
-  )
+  if (targets.length === 0) {
+    throw new Error("This App has no volumes to back up")
+  }
+  const taken = targets.map((target) => target.id)
   if ([...taken].sort().join() !== [...data.volumeIds].sort().join()) {
     throw new Error(
       "This App's volumes changed while its backup was starting. Try again."
@@ -409,15 +423,15 @@ async function unfinishedRestores(
 
 /**
  * What backing up an App backs up, as manual and scheduled backups both
- * do: its folder, then each Kiln volume it uses, whichever other Apps use
- * that one too. One its saved configuration mounts counts whether or not
- * its Relay has heard.
+ * do. An App is a group of what it keeps: each volume it uses, whichever
+ * other Apps use that one too, and nothing of its own. One its saved
+ * configuration mounts counts whether or not its Relay has heard.
  */
 export function appTargets(
   appId: string,
   listing: RelayVolumes | null,
   configured: ReadonlyArray<string> = []
-): Array<ResourceTarget & { name: string | null }> {
+): Array<{ id: string; kind: "volume"; name: string }> {
   const volumes = listing?.volumes ?? []
   const taken = appBackupVolumes(appId, volumes)
   const named = volumes.flatMap((volume) =>
@@ -428,14 +442,11 @@ export function appTargets(
       ? [{ ...volume, id: volume.id }]
       : []
   )
-  return [
-    { id: appId, kind: "app", name: null },
-    ...[...taken, ...named].map((volume) => ({
-      id: volume.id,
-      kind: "volume" as const,
-      name: volume.name,
-    })),
-  ]
+  return [...taken, ...named].map((volume) => ({
+    id: volume.id,
+    kind: "volume" as const,
+    name: volume.name,
+  }))
 }
 
 // A personal destination exports the backup, so it takes download too.

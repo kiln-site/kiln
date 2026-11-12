@@ -24,8 +24,8 @@ Steps, each run on every target it supports:
   schedule is saved.
 - **Power**: start, stop, restart, or kill a game server, database, or App.
 - **Backup**: a full backup of any target, to the Relay or an S3
-  destination, or an incremental one of a game server. An App's backs up its
-  folder and every volume it uses, live or stopped; Kiln's is a
+  destination, or an incremental one of a game server. An App's backs up every
+  volume it uses, live or stopped; Kiln's is a
   platform bundle. See [Backups](backups.md#scheduled-backups) for how
   scheduled backups are admitted, named, and cataloged.
 - **Wait**: pauses the whole sequence, from milliseconds to days.

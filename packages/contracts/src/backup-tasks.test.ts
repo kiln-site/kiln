@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
+  backupTaskInputSchema,
   omitBackupSecrets,
   redactBackupTaskInput,
   resticRepositoryLocationSchema,
@@ -23,6 +24,27 @@ const s3Repository = {
 }
 
 describe("Relay backup task inputs", () => {
+  // A Relay reads back every backup it made, however long ago.
+  it("reads a backup made when it carried one App's volumes alone", () => {
+    const stored = {
+      appCoverage: { appId: "a".repeat(12), volumeIds: ["v".repeat(40)] },
+      artifactKind: "tar_archive",
+      backupId,
+      destination: { kind: "local" },
+      exclude: [],
+      kind: "create",
+      maxBytes: null,
+      mode: "full",
+      reason: "scheduled",
+      target: { id: "c".repeat(40), kind: "volume" },
+      taskId,
+    }
+    const read = backupTaskInputSchema.parse(stored)
+    expect(read.kind === "create" && read.appCoverage).toEqual([
+      stored.appCoverage,
+    ])
+  })
+
   it("rejects S3 repositories with plaintext endpoints, invalid ports, or escaping prefixes", () => {
     expect(resticRepositoryLocationSchema.safeParse(s3Repository).success).toBe(
       true

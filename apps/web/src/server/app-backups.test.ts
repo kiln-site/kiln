@@ -84,6 +84,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
       filesAvailable: false,
       measuring: false,
       protection: { ready: true, reason: null },
+      missing: [],
       uncovered: [],
       volumes: [
         // One only the App uses, as its Compose file's or its Brick's is.
@@ -182,7 +183,9 @@ const rejection = (run: () => Promise<unknown>) =>
 
 describeMysql("App backups", () => {
   layer(TestDatabase)((it) => {
-    it.effect("backs up an App's folder and its volumes as one batch", () =>
+    // An App is a group of what it keeps: backing it up backs up its
+    // volumes, and there is no backup of the App itself.
+    it.effect("backs up an App as its volumes, and nothing of its own", () =>
       Effect.gen(function* () {
         yield* seed
         yield* createAppRecordEffect({
@@ -202,13 +205,32 @@ describeMysql("App backups", () => {
         }>("backup")
         assert.sameDeepMembers(
           backups.map(({ target_id, target_kind }) => [target_kind, target_id]),
-          [
-            ["app", appId],
-            ["volume", ownVolumeId],
-          ]
+          [["volume", ownVolumeId]]
         )
-        assert.strictEqual(new Set(backups.map((row) => row.batch_id)).size, 1)
         assert.isNotNull(backups[0]?.batch_id)
+
+        // One that uses no volume has nothing to back up, and says so.
+        const bare = "f".repeat(12)
+        yield* createAppRecordEffect({
+          appId: bare,
+          createdBy: "someone-else",
+          name: "Proxy",
+          relayId,
+        })
+        const asked = {
+          appId: bare,
+          consistency: "live" as const,
+          name: "Before the upgrade",
+          relayId,
+          storageIds: [null],
+        }
+        assert.include(
+          yield* rejection(async () =>
+            createAppBackupsHandler(user, await settleAppBackup(user, asked))
+          ),
+          "has no volumes to back up"
+        )
+        assert.lengthOf(yield* selectRows("backup"), 1)
       })
     )
 
@@ -249,7 +271,6 @@ describeMysql("App backups", () => {
                 ])
             )
           assert.sameDeepMembers(yield* taken(), [
-            ["app", appId],
             ["volume", ownVolumeId],
             ["volume", kilnVolumeId],
           ])
@@ -268,7 +289,6 @@ describeMysql("App backups", () => {
                 ])
             )
           assert.sameDeepMembers(yield* shown(), [
-            [appId, true, true],
             [ownVolumeId, false, false],
             [kilnVolumeId, false, false],
           ])
@@ -278,7 +298,6 @@ describeMysql("App backups", () => {
             selection_key: "backup.read",
           })
           assert.sameDeepMembers(yield* shown(), [
-            [appId, true, true],
             [ownVolumeId, true, true],
             [kilnVolumeId, true, true],
           ])

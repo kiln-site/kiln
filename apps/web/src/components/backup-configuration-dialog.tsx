@@ -592,16 +592,21 @@ function backupTargetItem(
   return {
     identity: {
       id: target.id,
+      // A volume is listed with the Apps, whose data it holds.
       kind:
         target.kind === "instance"
           ? "server"
           : target.kind === "volume"
-            ? "relay"
+            ? "app"
             : target.kind,
       relayId: target.relayId,
     },
     key: target.key,
-    meta: target.description ?? `${target.relayName} · ${target.id}`,
+    meta:
+      target.description ??
+      (target.kind === "volume"
+        ? `Volume · ${target.id.slice(0, 8)}`
+        : `${target.relayName} · ${target.id}`),
     name: target.name,
     searchText: `${target.id} ${target.relayName}`,
   }

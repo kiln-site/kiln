@@ -322,7 +322,10 @@ const relayScheduleBackupExecutionSchema = z
   })
   .strict()
 
-/** As many backups as one scheduled run of Apps takes together. */
+/**
+ * As many backups as one scheduled run of Apps takes together, and as many
+ * Apps as it takes them for: each backup names every one of them.
+ */
 export const SCHEDULED_APP_BACKUP_GROUP_MAX = 64
 
 /**
@@ -576,7 +579,7 @@ export function scheduleActionSupportsTarget(
   // container's shell, and an App's in one of its services'.
   if (action.type === "console_command") return target.kind !== "relay"
   if (action.type === "power") return target.kind !== "relay"
-  // An App's folder and owned volumes are archives, never restic snapshots.
+  // An App's volumes are archives, never restic snapshots.
   if (action.mode === "incremental") return target.kind === "instance"
   return true
 }
