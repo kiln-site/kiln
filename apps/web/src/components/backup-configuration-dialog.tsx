@@ -27,8 +27,7 @@ import {
   DrawerPopoverContent,
   DrawerPopoverTrigger,
 } from "@/components/drawer-popover"
-import { IdentityName } from "@/components/identity-name"
-import { GroupKindIcon } from "@/components/instance-kind-icon"
+import { GroupPickerCard } from "@/components/group-picker-card"
 import { InstancePickerContent } from "@/components/instance-picker"
 import { InstanceCard } from "@/components/instance-card"
 import { VolumePickerCard } from "@/components/volumes/volume-field"
@@ -702,17 +701,7 @@ function backupGroupItem(group: BackupConfigurationGroup): AnyInstancePickerItem
       }
     : {
         ...row,
-        card: (
-          <IdentityName
-            className="min-w-0 flex-1 gap-2"
-            icon={<GroupKindIcon className="size-4" aria-hidden="true" />}
-            iconClassName="border-0 bg-muted/55"
-            meta={group.description}
-            metaClassName="font-mono"
-            name={group.name}
-            nameClassName="type-control-sm"
-          />
-        ),
+        card: <GroupPickerCard meta={group.description} name={group.name} />,
         identity: { id: group.id, kind: "group" },
       }
 }
