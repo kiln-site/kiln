@@ -70,7 +70,7 @@ export async function getAppBackupsHandler(
   const readable = (target: BackupTarget) =>
     grants === null ||
     grantsAllowBackup(grants, { ...target, relayId: relay.id }, "backup.read")
-  const { latest, restores } = await runAppEffect(
+  const { available, latest, restores } = await runAppEffect(
     "backups.appTargets",
     listTargetBackupsEffect(relay.id, targets.filter(readable))
   )
@@ -92,6 +92,12 @@ export async function getAppBackupsHandler(
       )
       return {
         ...target,
+        // When its newest backup that finished was made: what says it is
+        // backed up, which one that failed or still runs doesn't.
+        backedUpAt:
+          available.find((record) =>
+            same(target, { id: record.targetId, kind: record.targetKind })
+          )?.createdAt ?? null,
         latest: backup ? publicBackup(backup) : null,
         readable: shown,
         restore: (() => {

@@ -601,7 +601,13 @@ that mounts the volume, listing those running and the Apps that use it).
 
 An App's Info rail opens Backups scoped to the App. Each named volume in
 its Volumes table also opens Backups scoped to that volume, with a clearable
-volume filter; the picker still shows the App.
+volume filter; the picker still shows the App. The Volumes section's
+header says whether what the App keeps is backed up, by each volume's
+newest backup that finished: "Backed up" with the age of the oldest of
+them, how many of them are, or "Not backed up". An App that also keeps
+something outside its volumes, as a row there warns of, reads "Volumes
+backed up" instead: only its volumes are. It says nothing of an App with no
+volumes, or to someone who can't see its volumes' backups.
 
 What is backed up of an App is its volumes. An App is not a backup target
 itself: it is a group of what it keeps, so backing up an App backs up every
