@@ -1705,14 +1705,17 @@ const catalogRecordsWhere = Effect.fnUntraced(function* (
 })
 
 /**
- * The newest backup of each of a Relay's targets, and every backup of the
+ * The newest backup of each of a Relay's targets, the newest of each that
+ * finished and can be restored (`available`), and every backup of the
  * newest batch among them, as an App's page shows its volumes.
  */
 export const listTargetBackupsEffect = Effect.fn("backups.targets")(function* (
   relayId: string,
   targets: ReadonlyArray<{ id: string; kind: BackupTargetKind }>
 ) {
-  if (targets.length === 0) return { batch: [], latest: [], restores: [] }
+  if (targets.length === 0) {
+    return { available: [], batch: [], latest: [], restores: [] }
+  }
   const where = `backup.relay_id = ? AND (${targets
     .map(() => "(backup.target_kind = ? AND backup.target_id = ?)")
     .join(" OR ")})`
@@ -1722,9 +1725,13 @@ export const listTargetBackupsEffect = Effect.fn("backups.targets")(function* (
   ]
   const recent = yield* catalogRecordsWhere(where, values, 500)
   const latest = new Map<string, BackupCatalogRecord>()
+  const available = new Map<string, BackupCatalogRecord>()
   for (const record of recent) {
     const key = `${record.targetKind}:${record.targetId}`
     if (!latest.has(key)) latest.set(key, record)
+    if (record.status === "available" && !available.has(key)) {
+      available.set(key, record)
+    }
   }
   const batchId = recent.find((record) => record.batchId !== null)?.batchId
   const batch = batchId
@@ -1789,6 +1796,7 @@ export const listTargetBackupsEffect = Effect.fn("backups.targets")(function* (
     }
   }
   return {
+    available: [...available.values()],
     batch,
     latest: [...latest.values()],
     restores: [...restores.values()],

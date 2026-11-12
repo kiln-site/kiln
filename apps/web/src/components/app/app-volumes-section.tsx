@@ -50,6 +50,8 @@ import {
 } from "@/components/drawer-popover"
 import { InfoCopyValue, InfoSection } from "@/components/info-page"
 import { useRelayPermission } from "@/components/relay/relay-settings"
+import { shortRelativeFileTime } from "@/components/files/file-time"
+import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { StatusIndicator } from "@/components/status-indicator"
 import { VolumeCard } from "@/components/volumes/volume-card"
 import {
@@ -79,6 +81,7 @@ import type { DataTableSource } from "@/lib/data-table-source"
 import { grantsAllowBackup } from "@/lib/backup-target-permissions"
 import {
   accessCapabilitiesQueryOptions,
+  appBackupsQueryOptions,
   appVolumesQueryOptions,
 } from "@/lib/query-options"
 import { warmSyntaxCodeEditorModule } from "@/lib/syntax-editor-module-preload"
@@ -188,6 +191,62 @@ const PENDING_DEPLOY = {
   tone: "warning",
 } as const
 
+type AppBackups = Awaited<
+  ReturnType<NonNullable<ReturnType<typeof appBackupsQueryOptions>["queryFn"]>>
+>
+
+// Whether what the App keeps is backed up: each volume it uses, by its
+// newest backup that finished. Nothing is said of an App with no volumes,
+// or to someone who can't see its volumes' backups, or while its Relay
+// can't be asked. An App that also keeps something outside its volumes, as
+// a row here warns of, is never said to be backed up: only its volumes are.
+function appBackupStatus(
+  backups: AppBackups | undefined,
+  keepsElsewhere: boolean
+): IdentityStatusPresentation | null {
+  if (!backups?.available) return null
+  const { missing, targets } = backups
+  const total = targets.length + missing.length
+  if (total === 0 || targets.some((target) => !target.readable)) return null
+  const times = targets.flatMap((target) =>
+    target.backedUpAt ? [Date.parse(target.backedUpAt)] : []
+  )
+  if (times.length === 0) {
+    return {
+      detail: "None of the volumes it uses has a backup.",
+      label: "Not backed up",
+      tone: "warning",
+    }
+  }
+  if (times.length < total) {
+    return {
+      detail: "Some of the volumes it uses have no backup.",
+      label: `${times.length} of ${total} backed up`,
+      tone: "warning",
+    }
+  }
+  // As old as the oldest of them.
+  const oldest = Math.min(...times)
+  const when =
+    shortRelativeFileTime(oldest) ??
+    new Date(oldest).toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+    })
+  return keepsElsewhere
+    ? {
+        detail:
+          "Every volume it uses has a backup. What it mounts outside volumes isn't backed up.",
+        label: `Volumes backed up ${when}`,
+        tone: "neutral",
+      }
+    : {
+        detail: "Every volume it uses has a backup.",
+        label: `Backed up ${when}`,
+        tone: "success",
+      }
+}
+
 // What the app mounts: the Relay's volumes, paths on the node, and files
 // kept in its config, then what its Compose file mounts itself. Its
 // containers keep nothing else across deploys. Changes apply on the next
@@ -222,6 +281,12 @@ export function AppVolumesSection({
       composeVolumes ||
       mounts.some((mount) => mount.source.type !== "file") ||
       (app.containers?.length ?? 0) > 0,
+  })
+  const usesVolumes =
+    composeVolumes || mounts.some((mount) => mount.source.type === "volume")
+  const { data: appBackups } = useQuery({
+    ...appBackupsQueryOptions(app.relayId, app.id),
+    enabled: Boolean(usesVolumes),
   })
   const rows = React.useMemo((): Array<MountRow> => {
     const context: RowContext = {
@@ -274,6 +339,15 @@ export function AppVolumesSection({
     [appVolumes?.unkept, rows]
   )
   const empty = rows.length === 0 && unkept.length === 0
+  // What a row warns isn't kept or backed up, or the image writes with
+  // nothing mounted there.
+  const keepsElsewhere =
+    unkept.length > 0 ||
+    rows.some((row) => row.kept !== null && row.kept !== KEPT.writableFile)
+  const backupStatus = React.useMemo(
+    () => appBackupStatus(appBackups, keepsElsewhere),
+    [appBackups, keepsElsewhere]
+  )
   const configRows = React.useMemo(
     () => rows.filter((row) => row.entry.kind === "config"),
     [rows]
@@ -315,7 +389,13 @@ export function AppVolumesSection({
     <InfoSection
       icon={<HardDrive />}
       title="Volumes"
-      status={pending ? <StatusIndicator status={PENDING_DEPLOY} /> : null}
+      status={
+        pending ? (
+          <StatusIndicator status={PENDING_DEPLOY} />
+        ) : backupStatus ? (
+          <StatusIndicator status={backupStatus} />
+        ) : null
+      }
       action={
         <>
           {pending && canManage && appRelayAvailable(app) ? (
