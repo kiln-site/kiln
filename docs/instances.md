@@ -134,6 +134,9 @@ A Brick makes one today, and only that:
   be made ends it; what was made before it stays, in the group.
 - A group has no people of its own. Someone sees the members they may read,
   and may delete the group when they may delete every member.
+- New Backup lists a group as a row that ticks what its members keep
+  (`getInstanceGroups`): each is still a backup of its own, and the group
+  is never backed up itself. See [Backups](backups.md).
 - A member's Info page says which group it is part of, lists the rest, and
   deletes the group from there: the members checked are deleted with it, the
   others stay in no group.

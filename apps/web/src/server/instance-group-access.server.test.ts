@@ -44,6 +44,7 @@ vi.mock("@/lib/auth-password", async () => {
 import {
   deleteInstanceGroup,
   getInstanceGroupHandler,
+  listInstanceGroupsHandler,
 } from "./instance-group-access.server"
 
 const relayId = "1".repeat(12)
@@ -174,6 +175,24 @@ describeMysql("An instance group, to someone", () => {
           "refused"
         )
         assert.isNull(yield* seen({ instanceId: database, kind: "app" }))
+
+        // Listed with the rest the same way: the members they may read.
+        const listed = Effect.promise(() =>
+          listInstanceGroupsHandler(person("alice"))
+        )
+        // It says it holds more than they see, so choosing it for what it
+        // keeps never passes for choosing all of it.
+        assert.deepStrictEqual(
+          (yield* listed).map(({ hidden, members, name }) => [
+            name,
+            members.map((member) => member.instanceId),
+            hidden,
+          ]),
+          [["Stats", [app], 1]]
+        )
+        // A group none of whose members they may read isn't listed at all.
+        yield* seed([])
+        assert.deepStrictEqual(yield* listed, [])
       })
     )
 

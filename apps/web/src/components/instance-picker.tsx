@@ -38,6 +38,7 @@ import { InstanceCard, isKilnIdentity } from "@/components/instance-card"
 import {
   AppKindIcon,
   DatabaseKindIcon,
+  GroupKindIcon,
   RelayKindIcon,
   ServerKindIcon,
   VolumeKindIcon,
@@ -133,6 +134,7 @@ const kindPresentation: Record<
     label: "Game Server",
     plural: "game servers",
   },
+  group: { Icon: GroupKindIcon, label: "Group", plural: "groups" },
   volume: { Icon: VolumeKindIcon, label: "Volume", plural: "volumes" },
 }
 
@@ -340,14 +342,20 @@ function InstancePickerContentView<
   )
 
   const selectableVisibleKeys = React.useMemo(
-    () => visibleItems.flatMap((item) => (item.disabled ? [] : [item.key])),
+    () =>
+      // A row that stands for others is chosen through them.
+      visibleItems.flatMap((item) =>
+        item.disabled || item.stands ? [] : [item.key]
+      ),
     [visibleItems]
   )
   const onlyTypeId =
     activeTypeFilters.length === 1 ? activeTypeFilters[0]?.id : undefined
   // Volumes are a type to filter by, with no list of their own to view.
   const filteredKind =
-    onlyTypeId === undefined || onlyTypeId === "volume"
+    onlyTypeId === undefined ||
+    onlyTypeId === "volume" ||
+    onlyTypeId === "group"
       ? undefined
       : (onlyTypeId as InstancePickerKind)
   // Search results span every type, so a type filter can't name them.
@@ -503,7 +511,7 @@ function InstancePickerContentView<
                     locked={pendingKey !== undefined}
                     multiple={multiple}
                     pending={pendingKey === item.key}
-                    selected={selectedKeys.has(item.key)}
+                    checked={rowChecked(item, selectedKeys)}
                     showKind={showKind}
                     onSelect={onSelect as (item: AnyInstancePickerItem) => void}
                   />
@@ -575,7 +583,7 @@ const kilnFavoriteKey = instanceFavoriteKey(kilnFavorite)
 function instancePickerFavoriteKey(item: AnyInstancePickerItem): string {
   const { identity } = item
   // Only an instance can be a favorite.
-  if (identity.kind === "volume") return ""
+  if (identity.kind === "volume" || identity.kind === "group") return ""
   return isKilnIdentity(identity)
     ? kilnFavoriteKey
     : instanceFavoriteKey(identity)
@@ -585,7 +593,9 @@ function instancePickerFavoriteKey(item: AnyInstancePickerItem): string {
 function listableKind({
   identity,
 }: AnyInstancePickerItem): ReadonlyArray<InstancePickerKind> {
-  return identity.kind === "volume" || isKilnIdentity(identity)
+  return identity.kind === "volume" ||
+    identity.kind === "group" ||
+    isKilnIdentity(identity)
     ? []
     : [identity.kind]
 }
@@ -969,22 +979,25 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
   multiple,
   onSelect,
   pending,
-  selected,
+  checked,
   showKind,
 }: {
   active: boolean
+  /** Chosen, or for a row that stands for others, how many of them are. */
+  checked: "all" | "none" | "some"
   id: string
   item: AnyInstancePickerItem
   locked: boolean
   multiple: boolean
   onSelect: (item: AnyInstancePickerItem) => void
   pending: boolean
-  selected: boolean
   showKind: boolean
 }) {
   const { identity } = item
   const kind = kindPresentation[identity.kind]
-  const kiln = identity.kind !== "volume" && isKilnIdentity(identity)
+  const selected = checked === "all"
+  const plain = identity.kind !== "volume" && identity.kind !== "group"
+  const kiln = plain && isKilnIdentity(identity)
 
   return (
     <button
@@ -1005,10 +1018,10 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
       onClick={() => onSelect(item)}
     >
       {multiple ? (
-        <InstancePickerCheckbox state={selected ? "all" : "none"} />
+        <InstancePickerCheckbox state={checked} />
       ) : null}
       {item.card ??
-        (identity.kind === "volume" ? null : (
+        (identity.kind === "volume" || identity.kind === "group" ? null : (
           <InstanceCard
             className="min-w-0 flex-1 gap-2"
             iconClassName="border-0 bg-muted/55"
@@ -1039,6 +1052,20 @@ const InstancePickerRowButton = React.memo(function InstancePickerRowButton({
     </button>
   )
 })
+
+// A row is chosen or not; one that stands for others is as chosen as they.
+function rowChecked(
+  item: AnyInstancePickerItem,
+  selectedKeys: ReadonlySet<string>
+): "all" | "none" | "some" {
+  if (!item.stands) return selectedKeys.has(item.key) ? "all" : "none"
+  const chosen = item.stands.filter((key) => selectedKeys.has(key)).length
+  return chosen === 0
+    ? "none"
+    : chosen === item.stands.length
+      ? "all"
+      : "some"
+}
 
 function InstancePickerCheckbox({ state }: { state: "all" | "none" | "some" }) {
   return (

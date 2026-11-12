@@ -1,5 +1,12 @@
 import type { ComponentType } from "react"
-import { Boxes, Database, HardDrive, RadioTower, Server } from "lucide-react"
+import {
+  Boxes,
+  Database,
+  Group,
+  HardDrive,
+  RadioTower,
+  Server,
+} from "lucide-react"
 import type { LucideProps } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -23,6 +30,16 @@ export function VolumeKindIcon({ className, ...props }: LucideProps) {
   return (
     <HardDrive
       className={cn(className, "text-violet-600 dark:text-violet-300")}
+      {...props}
+    />
+  )
+}
+
+// A group is no kind of instance: it keeps instances of any kind together.
+export function GroupKindIcon({ className, ...props }: LucideProps) {
+  return (
+    <Group
+      className={cn(className, "text-amber-600 dark:text-amber-300")}
       {...props}
     />
   )

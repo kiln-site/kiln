@@ -618,10 +618,33 @@ run. Incremental is a game server's choice, offered when only game servers
 are chosen; chosen with anything else, each is a full archive.
 
 It offers each Kiln volume alongside game servers, databases and
-Kiln, and no App: every row is one thing a backup keeps. Volumes are a type
-to filter by, each says which Apps use it, and searching an App's name or
-ID finds the volumes it uses. With the page scoped to an App, its volumes
-come first and its only one is chosen already; someone who can't list the
+Kiln: every row that is chosen is one thing a backup keeps. An App, and a
+group of instances, are listed too, as rows that stand for others and are
+never targets themselves: an App for each volume it uses, a group for what
+each of its members keeps (an App's volumes, a database, a game server). A
+group is only offered whole: one with a member that can't be backed up
+here, or that this person can't see, can't be chosen as a group, since
+ticking part of it would pass for backing all of it up. Nor can an App, or
+a group with one, while its Relay doesn't yet know which volumes every App
+names: the volumes listed for it may not be all it uses
+(`apps/web/src/lib/backup-target-groups.ts`). Each volume can still be
+chosen on its own. The page asks such a Relay again every few moments, so
+the rows come back when it is settled. With the page scoped to an App, its
+volumes are chosen as the dialog opens only when its row could be chosen:
+all of them, or none.
+
+A row is only a quick way to tick: nothing remembers that it was used, and
+what is backed up is the targets ticked when the backup is made. An App
+that takes up another volume after its row was ticked is backed up without
+it, as it would be had its volumes been ticked one by one.
+Choosing one ticks what it stands for, which can then be unticked one by
+one; the row says what that is, and shows as part-ticked when only some of
+it is chosen. A row whose choice would leave out something it keeps can't
+be chosen and says why: an App with a volume missing on its Relay, or one
+with no volumes at all. With the page scoped to an App, its volumes
+come first and each is chosen as the dialog opens. Volumes and groups are
+types to filter by, each volume says which Apps use it, and searching an
+App's name or ID finds the volumes it uses. Someone who can't list the
 Relay's volumes is offered those of the App the page is scoped to. A
 schedule still names an App, as the group of whatever volumes it uses when
 it runs. An App's volumes are each Kiln

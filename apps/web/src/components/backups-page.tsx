@@ -100,6 +100,10 @@ import {
   BackupActionButton,
   targetKey,
 } from "@/components/backups/table-row"
+import {
+  backupTargetGroups,
+  type BackupVolumeListing,
+} from "@/lib/backup-target-groups"
 import { formatBytes } from "@/lib/format-bytes"
 import { BackupToolbar } from "@/components/backups/toolbar"
 import { notALoginField } from "@/lib/not-a-login-field"
@@ -111,6 +115,7 @@ import {
   accessCapabilitiesQueryOptions,
   appBackupsQueryOptions,
   appDirectoryQueryOptions,
+  instanceGroupsQueryOptions,
   backupRunsInfiniteQueryOptions,
   backupStorageQueryOptions,
   backupPolicyQueryOptions,
@@ -137,9 +142,11 @@ import {
 import {
   BackupConfigurationDialog,
   type BackupConfiguration,
+  type BackupConfigurationGroup,
   type BackupConfigurationTarget,
 } from "@/components/backup-configuration-dialog"
 import type { getAppDirectory } from "@/server/apps"
+import type { getInstanceGroups } from "@/server/instance-groups"
 import type { getManagedDatabaseDirectory } from "@/server/databases"
 import type { getRelaySnapshot } from "@/server/relay"
 import {
@@ -683,12 +690,7 @@ function useVolumeNames(
   )
 }
 
-type VolumeListings = Readonly<
-  Record<
-    string,
-    Pick<import("@workspace/contracts").RelayVolumes, "protection" | "volumes">
-  >
->
+type VolumeListings = Readonly<Record<string, BackupVolumeListing>>
 
 // Each Relay's volumes, for whoever may read them: what a backup can be made
 // of. Shares what the page already asked to name its backups' volumes.
@@ -713,7 +715,12 @@ function useVolumeListings(
             grant.resourceType === "relay" &&
             grantHasPermission(grant, "relay.read")
         ),
-      refetchInterval: false as const,
+      // Asked again while the Relay doesn't yet know which volumes every
+      // App names, which another Hearth's telling it settles without this
+      // one hearing of it; an App's row waits on that.
+      refetchInterval: (query: {
+        state: { data?: { protection: { ready: boolean } } | undefined }
+      }) => (query.state.data?.protection.ready === false ? 10_000 : false),
       staleTime: 5 * 60_000,
     })),
   })
@@ -968,22 +975,45 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       new Map(storage.map((destination) => [destination.id, destination.name])),
     [storage]
   )
-  // An App isn't backed up, its volumes are: the one the page is filtered
-  // to, or its only one. With several, which is for whoever asks to say.
-  const [onlyScopedVolume] = scopedVolumes.length === 1 ? scopedVolumes : []
-  const scopedCreateTargetKey =
-    selectedServer?.kind === "app"
-      ? onlyScopedVolume?.id
-        ? targetKey("volume", selectedServer.relayId, onlyScopedVolume.id)
-        : undefined
-      : selectedServer
-        ? selectedBackupCreateTargetKey(selectedServer)
-        : undefined
-  const selectedCreateTargetKey = createTargets.some(
-    (target) => target.key === scopedCreateTargetKey
+  // Apps, and groups of instances, as rows that stand for what they keep.
+  const { data: instanceGroups } = useQuery(instanceGroupsQueryOptions())
+  const createGroups = React.useMemo(
+    () =>
+      backupTargetGroups({
+        apps,
+        groups: instanceGroups ?? noInstanceGroups,
+        keyOf: targetKey,
+        targets: createTargets,
+        volumes,
+      }),
+    [apps, createTargets, instanceGroups, volumes]
   )
-    ? scopedCreateTargetKey
-    : undefined
+  // What a new backup starts on: what the page is looking at. An App isn't
+  // backed up, its volumes are: the one the page is filtered to, or each of
+  // them.
+  const createSelection = React.useMemo(():
+    | ReadonlyArray<string>
+    | undefined => {
+    // Looking at nothing in particular, nothing is asked for.
+    if (!selectedServer) return undefined
+    if (selectedServer.kind !== "app") {
+      return [selectedBackupCreateTargetKey(selectedServer)]
+    }
+    // The one volume the page is filtered to was asked for by name.
+    if (scopedVolume?.id) {
+      return [targetKey("volume", selectedServer.relayId, scopedVolume.id)]
+    }
+    // An App starts as its row would tick: all its volumes, or none while
+    // its row can't be chosen, as with one missing or its Relay's volumes
+    // not listed yet. Some of them, ticked already, would pass for all.
+    return createGroups.flatMap((row) =>
+      row.kind === "app" &&
+      row.id === selectedServer.id &&
+      row.relayId === selectedServer.relayId
+        ? row.members
+        : []
+    )
+  }, [createGroups, scopedVolume, selectedServer])
   const canManageSelectedTarget = Boolean(
     selectedServer &&
     (selectedServer.kind === "app"
@@ -1070,7 +1100,8 @@ const BackupScopeControls = React.memo(function BackupScopeControls({
       <BackupDialogHost
         deleteFeedbackStore={deleteFeedbackStore}
         dialogStore={dialogStore}
-        selectedCreateTargetKey={selectedCreateTargetKey}
+        groups={createGroups}
+        createSelection={createSelection}
         storage={storage}
         storageNames={storageNames}
         restoreTargets={restoreTargets}
@@ -1303,10 +1334,11 @@ function captureBackupRunsBackgroundError(
 }
 
 const BackupDialogHost = React.memo(function BackupDialogHost({
+  createSelection,
   deleteFeedbackStore,
   dialogStore,
+  groups,
   restoreTargets,
-  selectedCreateTargetKey,
   storage,
   storageNames,
   targetNames,
@@ -1314,8 +1346,10 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
 }: {
   deleteFeedbackStore: BackupDeleteFeedbackStore
   dialogStore: BackupDialogStore
+  /** What a new backup starts on; nothing in particular when undefined. */
+  createSelection: ReadonlyArray<string> | undefined
+  groups: ReadonlyArray<BackupConfigurationGroup>
   restoreTargets: ReadonlyArray<RestoreTarget>
-  selectedCreateTargetKey?: string
   storage: Array<BackupStorage>
   storageNames: ReadonlyMap<string, string>
   targetNames: ReadonlyMap<string, string>
@@ -1337,7 +1371,8 @@ const BackupDialogHost = React.memo(function BackupDialogHost({
   if (dialog.kind === "create") {
     return (
       <CreateBackupDialog
-        initialTargetKey={selectedCreateTargetKey}
+        groups={groups}
+        initialTargetKeys={createSelection}
         open
         storage={storage}
         targets={targets}
@@ -1664,13 +1699,15 @@ function DownloadBackupDialog({
 }
 
 function CreateBackupDialog({
-  initialTargetKey,
+  groups,
+  initialTargetKeys,
   onOpenChange,
   open,
   storage,
   targets,
 }: {
-  initialTargetKey?: string
+  groups: ReadonlyArray<BackupConfigurationGroup>
+  initialTargetKeys: ReadonlyArray<string> | undefined
   onOpenChange: (open: boolean) => void
   open: boolean
   storage: Array<BackupStorage>
@@ -1718,7 +1755,8 @@ function CreateBackupDialog({
     <BackupConfigurationDialog
       description="Choose what to back up and where to keep it. The Relay queues the backup durably."
       error={create.error?.message}
-      initialTargetKey={initialTargetKey}
+      groups={groups}
+      initialTargetKeys={initialTargetKeys}
       onOpenChange={onOpenChange}
       onSubmit={(configuration) => create.mutate(configuration)}
       open={open}
@@ -2854,6 +2892,9 @@ function selectedBackupCreateTargetKey(selected: BackupScopeOption): string {
 }
 
 const noVolumeListings: VolumeListings = {}
+type InstanceGroups = Awaited<ReturnType<typeof getInstanceGroups>>
+const noInstanceGroups: InstanceGroups = []
+
 const noRelays: ReadonlyArray<{ relayId: string; relayName: string }> = []
 
 function availableCreateTargets({
