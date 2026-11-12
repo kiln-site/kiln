@@ -26,11 +26,10 @@ import {
   DrawerPopoverContent,
   DrawerPopoverTrigger,
 } from "@/components/drawer-popover"
-import {
-  InstancePickerContent,
-  type InstancePickerItem,
-} from "@/components/instance-picker"
+import { InstancePickerContent } from "@/components/instance-picker"
 import { InstanceCard } from "@/components/instance-card"
+import { VolumePickerCard } from "@/components/volumes/volume-field"
+import type { AnyInstancePickerItem } from "@/lib/instance-picker-filters"
 import { timestampedBackupName } from "@/lib/backup-name"
 import { notALoginField } from "@/lib/not-a-login-field"
 
@@ -46,6 +45,8 @@ export interface BackupConfigurationTarget {
   description?: string
   relayId: string
   relayName: string
+  /** More that finding it matches, such as the Apps that use a volume. */
+  searchText?: string
 }
 
 export interface BackupConfiguration {
@@ -500,7 +501,7 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
     [selected]
   )
   const selectItem = React.useCallback(
-    (item: InstancePickerItem) => {
+    (item: AnyInstancePickerItem) => {
       onSelect(item.key)
       setOpen(false)
     },
@@ -519,7 +520,14 @@ const BackupTargetPicker = React.memo(function BackupTargetPicker({
           disabled={targets.length === 0}
           className="h-auto min-h-10 w-full justify-between gap-3 px-2 py-1.5 font-normal"
         >
-          {selectedItem ? (
+          {selectedItem?.identity.kind === "volume" ? (
+            <VolumePickerCard
+              className="min-w-0 flex-1 gap-2 text-left"
+              iconClassName="size-7 border-0 bg-muted/55"
+              meta={selectedItem.meta}
+              name={selectedItem.name}
+            />
+          ) : selectedItem ? (
             <InstanceCard
               className="min-w-0 flex-1 gap-2 text-left"
               iconClassName="size-7 border-0 bg-muted/55"
@@ -573,7 +581,7 @@ function initialBackupTargetKey(
 
 function backupTargetItem(
   target: BackupConfigurationTarget
-): InstancePickerItem {
+): AnyInstancePickerItem {
   if (target.kind === "platform") {
     return {
       identity: {
@@ -589,24 +597,27 @@ function backupTargetItem(
       searchText: `kiln hearth platform ${target.relayName} ${target.relayId}`,
     }
   }
+  if (target.kind === "volume") {
+    // A volume's own card, as its Relay's volumes and an App's show it.
+    const meta =
+      target.description ?? `${target.relayName} · ${target.id.slice(0, 8)}`
+    return {
+      card: <VolumePickerCard meta={meta} name={target.name} />,
+      identity: { id: target.id, kind: "volume", relayId: target.relayId },
+      key: target.key,
+      meta,
+      name: target.name,
+      searchText: `${target.id} ${target.relayName} ${target.searchText ?? ""}`,
+    }
+  }
   return {
     identity: {
       id: target.id,
-      // A volume is listed with the Apps, whose data it holds.
-      kind:
-        target.kind === "instance"
-          ? "server"
-          : target.kind === "volume"
-            ? "app"
-            : target.kind,
+      kind: target.kind === "instance" ? "server" : target.kind,
       relayId: target.relayId,
     },
     key: target.key,
-    meta:
-      target.description ??
-      (target.kind === "volume"
-        ? `Volume · ${target.id.slice(0, 8)}`
-        : `${target.relayName} · ${target.id}`),
+    meta: target.description ?? `${target.relayName} · ${target.id}`,
     name: target.name,
     searchText: `${target.id} ${target.relayName}`,
   }

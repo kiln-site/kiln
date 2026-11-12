@@ -32,7 +32,6 @@ import {
   relayVolumesQueryOptions,
 } from "@/lib/query-options"
 import {
-  createAppBackups,
   createResourceBackup,
   resolveUnfinishedRestore,
   restoreResourceBackup,
@@ -48,10 +47,7 @@ function storageIds(configuration: BackupConfiguration) {
   )
 }
 
-/**
- * Backs up an App, its folder and each volume it uses together, or one App
- * folder or volume, live or with what uses it stopped.
- */
+/** Backs up one volume, live or with what uses it stopped. */
 export function ResourceBackupDialog({
   description,
   onOpenChange,
@@ -66,8 +62,7 @@ export function ResourceBackupDialog({
   open: boolean
   relayId: string
   stoppedUnavailable: string | null
-  /** A whole App, or one of its folder or a volume. */
-  target: { appId: string; kind: "whole-app" } | ResourceTarget
+  target: ResourceTarget
   title: string
 }) {
   const queryClient = useQueryClient()
@@ -76,25 +71,15 @@ export function ResourceBackupDialog({
     mutationFn: (
       configuration: BackupConfiguration
     ): Promise<{ relayAccepted: boolean }> =>
-      target.kind === "whole-app"
-        ? createAppBackups({
-            data: {
-              appId: target.appId,
-              consistency: configuration.consistency,
-              name: configuration.name,
-              relayId,
-              storageIds: storageIds(configuration),
-            },
-          })
-        : createResourceBackup({
-            data: {
-              consistency: configuration.consistency,
-              name: configuration.name,
-              relayId,
-              target,
-              storageIds: storageIds(configuration),
-            },
-          }),
+      createResourceBackup({
+        data: {
+          consistency: configuration.consistency,
+          name: configuration.name,
+          relayId,
+          target,
+          storageIds: storageIds(configuration),
+        },
+      }),
     onSuccess: async (result, configuration) => {
       await Promise.all([
         resetActiveBackupRunsToFirstPage(queryClient),
@@ -111,13 +96,7 @@ export function ResourceBackupDialog({
   })
   return (
     <BackupConfigurationDialog
-      consistencyChoice={{
-        stoppedDescription:
-          target.kind === "whole-app"
-            ? "Stops it once for its folder and every volume"
-            : undefined,
-        stoppedUnavailable,
-      }}
+      consistencyChoice={{ stoppedUnavailable }}
       description={description}
       error={create.error?.message}
       onOpenChange={onOpenChange}

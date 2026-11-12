@@ -343,10 +343,13 @@ function InstancePickerContentView<
     () => visibleItems.flatMap((item) => (item.disabled ? [] : [item.key])),
     [visibleItems]
   )
+  const onlyTypeId =
+    activeTypeFilters.length === 1 ? activeTypeFilters[0]?.id : undefined
+  // Volumes are a type to filter by, with no list of their own to view.
   const filteredKind =
-    activeTypeFilters.length === 1
-      ? (activeTypeFilters[0]?.id as InstancePickerKind)
-      : undefined
+    onlyTypeId === undefined || onlyTypeId === "volume"
+      ? undefined
+      : (onlyTypeId as InstancePickerKind)
   // Search results span every type, so a type filter can't name them.
   const activeKind = query ? undefined : filteredKind
   // "View all" follows the top search result, then the type filter.
