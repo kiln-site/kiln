@@ -16,6 +16,15 @@ enabled, and **Continue on failure**. Cron takes five fields, or `hourly`,
 forms. A schedule has up to 2,000 targets, and each step can be limited to
 some of them.
 
+The target picker lists each group of instances as a row that ticks its
+members: a quick way to choose them, and no more. The schedule keeps those
+members, each a target of its own, and nothing of the group, so it goes on
+naming them whatever becomes of the group, and names no instance that joins
+it later. A group is only offered whole: one with a member that can't be
+chosen, or that this person can't see, is listed and can't be picked. An
+App among the members is still backed up as whatever volumes it uses when
+the step runs.
+
 Steps, each run on every target it supports:
 
 - **Command**: on a game server, typed into its console; on a database, run

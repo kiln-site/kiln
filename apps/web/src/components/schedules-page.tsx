@@ -132,6 +132,7 @@ import {
   DrawerPopoverContent,
   DrawerPopoverTrigger,
 } from "@/components/drawer-popover"
+import { GroupPickerCard } from "@/components/group-picker-card"
 import {
   InstancePickerContent,
   type InstancePickerItem,
@@ -150,7 +151,10 @@ import {
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
-import type { InstancePickerKind } from "@/lib/instance-picker-filters"
+import type {
+  AnyInstancePickerItem,
+  InstancePickerKind,
+} from "@/lib/instance-picker-filters"
 import { notALoginField } from "@/lib/not-a-login-field"
 import { scheduleBackupDestination } from "@/lib/schedule-backup-configuration"
 import {
@@ -178,6 +182,7 @@ import {
   relaySnapshotQueryOptions,
   scheduleOptionsQueryOptions,
   schedulesQueryOptions,
+  instanceGroupsQueryOptions,
 } from "@/lib/query-options"
 import { instanceInventoryQueryOptions } from "@/lib/instance-inventory"
 import { getBackupStorage } from "@/server/backup-storage"
@@ -2917,20 +2922,65 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
   onToggle: (keys: ReadonlyArray<string>, checked: boolean) => void
 }) {
   const [open, setOpen] = React.useState(false)
-  const pickerItems = React.useMemo(
-    () =>
-      options.map((option): InstancePickerItem => {
-        const key = targetKey(option)
-        return {
-          ...scheduleTargetPickerItem(option),
-          // Unavailable targets stay removable so stale schedules can be fixed.
-          disabled:
-            (!option[permissionKey] || !option.available) &&
-            !(selectedTargets.has(key) && !option.available),
-        }
-      }),
-    [options, permissionKey, selectedTargets]
-  )
+  const { data: groups } = useQuery(instanceGroupsQueryOptions())
+  const pickerItems = React.useMemo((): Array<AnyInstancePickerItem> => {
+    const targets = options.map((option): InstancePickerItem => {
+      const key = targetKey(option)
+      return {
+        ...scheduleTargetPickerItem(option),
+        // Unavailable targets stay removable so stale schedules can be fixed.
+        disabled:
+          (!option[permissionKey] || !option.available) &&
+          !(selectedTargets.has(key) && !option.available),
+      }
+    })
+    // A group of instances is a row that ticks its members: the schedule
+    // keeps them, each a target of its own, and never the group.
+    const choosable = new Map(
+      targets.flatMap((item, index) =>
+        item.disabled ? [] : [[item.key, options[index]!] as const]
+      )
+    )
+    const rows = (groups ?? []).map((group): AnyInstancePickerItem => {
+      const members = group.members.flatMap((member) => {
+        const key = targetKey({
+          id: member.instanceId,
+          kind: member.kind === "server" ? "instance" : member.kind,
+          relayId: member.relayId,
+        })
+        return choosable.has(key) ? [key] : []
+      })
+      // It stands for all it holds or isn't chosen as one: ticking it for
+      // some of its members would pass for scheduling all of them.
+      const whole =
+        group.hidden === 0 && members.length === group.members.length
+      // Each says what it is: a database is often called what its App is.
+      const meta =
+        group.hidden > 0
+          ? "Holds instances you can't see"
+          : !whole
+            ? "Not every member can be chosen"
+            : members
+              .map((key) => {
+                const { kind, name } = choosable.get(key)!
+                return `${name} (${kind === "instance" ? "game server" : kind === "app" ? "App" : "database"})`
+              })
+              .join(", ")
+      return {
+        card: <GroupPickerCard meta={meta} name={group.name} />,
+        disabled: !whole,
+        identity: { id: group.id, kind: "group" },
+        key: `group:${group.id}`,
+        meta,
+        name: group.name,
+        searchText: group.members
+          .map((member) => `${member.instanceId} ${member.name ?? ""}`)
+          .join(" "),
+        stands: whole ? members : [],
+      }
+    })
+    return [...rows, ...targets]
+  }, [groups, options, permissionKey, selectedTargets])
   const selectedNames = React.useMemo(() => {
     const names: Array<string> = []
     for (const option of options) {
@@ -2940,8 +2990,10 @@ const ScheduleTargetSelector = React.memo(function ScheduleTargetSelector({
     return names
   }, [options, selectedTargets])
   const selectTarget = React.useCallback(
-    (item: InstancePickerItem) => {
-      onToggle([item.key], !selectedTargets.has(item.key))
+    (item: AnyInstancePickerItem) => {
+      // A group ticks every member, or unticks them once all are.
+      const keys = item.stands ?? [item.key]
+      onToggle(keys, !keys.every((key) => selectedTargets.has(key)))
     },
     [onToggle, selectedTargets]
   )
