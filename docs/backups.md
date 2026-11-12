@@ -609,8 +609,19 @@ Compose project made and each Kiln volume its configuration mounts or its
 containers use, one another App uses too. A Kiln volume its configuration
 mounts that its Relay doesn't have refuses the backup, manual or scheduled,
 since it would leave that data out. A schedule is sent again when an App
-takes up or lets go of a volume, and a step that backs up two Apps using
-the same volume is refused for both until one step backs them up together. A volume scope
+takes up or lets go of a volume.
+
+A scheduled step works out what it backs up before it runs, each thing
+once: every App's folder, and each volume once however many of the step's
+Apps use it. Apps that share a volume are backed up together, as one batch
+(`scheduledAppBackupGroup`): each of them asks its Relay for the same
+batch, by the same IDs, so the first makes it and the others wait for it,
+and a stopped step stops them all once. What refuses one of them refuses
+each, a batch is at most 64 backups, and the Relay checks every App of it
+against the volumes it uses now before any is made. Whether the schedule's
+author may stop each App a stopped step stops is checked when the schedule
+is saved; an App that takes up one of those volumes afterwards is stopped
+with them. A volume scope
 also offers that volume on its own. Both offer Live or Stopped, subject to
 permission to manage the App (or, for a Kiln volume, Apps on the Relay).
 Stopped App backups run as one batch, stopping the App once for all targets.

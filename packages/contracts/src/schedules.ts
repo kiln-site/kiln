@@ -312,14 +312,59 @@ const relayScheduleBackupExecutionSchema = z
     /** An incremental backup's repository, which catalogs it. */
     repositoryId: z.uuid().nullable().optional(),
     /**
-     * The App target an App's backup is of. Its folder's and each owned
-     * volume's backups are executions of their own, run together.
+     * The App targets of the step whose backups take this volume: each
+     * App's folder and each volume are executions of their own, and a
+     * volume several of them use is one execution, backed up once.
      */
-    appId: z.string().min(1).max(120).optional(),
+    appIds: z.array(z.string().min(1).max(120)).min(1).max(2_000).optional(),
     targetId: z.string().min(1).max(120),
     targetKind: z.enum(["instance", "database", "relay", "app", "volume"]),
   })
   .strict()
+
+/** As many backups as one scheduled run of Apps takes together. */
+export const SCHEDULED_APP_BACKUP_GROUP_MAX = 64
+
+/**
+ * What one App's scheduled backup runs with: its own folder, each volume
+ * it uses, and the same of every App of the step that shares a volume with
+ * it, however far that reaches. They are backed up together, each once, so
+ * a shared volume is one backup whichever of its Apps asks first.
+ */
+export function scheduledAppBackupGroup<
+  Execution extends {
+    appIds?: ReadonlyArray<string> | undefined
+    targetId: string
+    targetKind: string
+  },
+>(
+  executions: ReadonlyArray<Execution>,
+  appId: string
+): { apps: Array<string>; executions: Array<Execution> } {
+  const apps = new Set([appId])
+  const taken = (execution: Execution) =>
+    execution.targetKind === "volume" &&
+    (execution.appIds?.some((id) => apps.has(id)) ?? false)
+  for (let grown = true; grown; ) {
+    grown = false
+    for (const execution of executions) {
+      if (!taken(execution)) continue
+      for (const id of execution.appIds ?? []) {
+        if (apps.has(id)) continue
+        apps.add(id)
+        grown = true
+      }
+    }
+  }
+  return {
+    apps: [...apps].sort(),
+    executions: executions.filter(
+      (execution) =>
+        (execution.targetKind === "app" && apps.has(execution.targetId)) ||
+        taken(execution)
+    ),
+  }
+}
 
 export const relayScheduleBackupActionSchema = scheduleBackupActionSchema
   .safeExtend({

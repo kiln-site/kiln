@@ -6,7 +6,9 @@ import { z } from "zod"
 
 import {
   relayScheduleDeploymentSchema,
+  SCHEDULED_APP_BACKUP_GROUP_MAX,
   scheduleActionAppliesToTarget,
+  scheduledAppBackupGroup,
   scheduleTargetKey,
   scheduleActionSchema,
   scheduleDefinitionSchema,
@@ -411,7 +413,7 @@ async function prepareRelayScheduleActions(
   const planned = new Map<string, Promise<TargetMembers>>()
   const membersOf = (target: ScheduleTarget) => {
     if (target.kind !== "app") {
-      return Promise.resolve({ members: [target], refusal: null })
+      return Promise.resolve({ appId: null, members: [target], refusal: null })
     }
     const known = planned.get(target.id)
     if (known) return known
@@ -423,11 +425,11 @@ async function prepareRelayScheduleActions(
         await listing
       )
       return {
+        appId: target.id,
         members: taken.map(({ id, kind }) => ({
           id,
           kind,
           relayId: target.relayId,
-          ...(kind === "volume" ? { appId: target.id } : {}),
         })),
         refusal:
           missing === null
@@ -449,31 +451,7 @@ async function prepareRelayScheduleActions(
               .filter((target) => scheduleActionAppliesToTarget(action, target))
               .map(membersOf)
           )
-          // A volume two of the step's Apps use would be one backup asked
-          // for twice: neither App's runs until a step backs them up
-          // together.
-          const uses = new Map<string, number>()
-          for (const { members } of taken) {
-            for (const member of members) {
-              if (member.kind !== "volume") continue
-              uses.set(member.id, (uses.get(member.id) ?? 0) + 1)
-            }
-          }
-          const shares = ({ members }: TargetMembers) =>
-            members.some(
-              (member) =>
-                member.kind === "volume" && (uses.get(member.id) ?? 0) > 1
-            )
-          return taken.flatMap((target) =>
-            target.members.map((member) => ({
-              member,
-              refusal:
-                target.refusal ??
-                (shares(target)
-                  ? "This step backs up another App that uses one of this App's volumes. Back them up in separate steps for now."
-                  : null),
-            }))
-          )
+          return stepManifest(taken)
         }).pipe(
           Effect.flatMap((members) =>
             Effect.forEach(
@@ -496,8 +474,77 @@ async function prepareRelayScheduleActions(
 // What a schedule's target backs up, and why it can't be, when Hearth
 // already knows: an App's backup that would run short.
 interface TargetMembers {
+  /** The App it is, when it is one. */
+  appId: string | null
   members: ReadonlyArray<BackupMember>
   refusal: string | null
+}
+
+/**
+ * What one backup step backs up on a Relay, each thing once: every
+ * target's own member, and each volume once however many of the step's
+ * Apps use it, naming them all. Apps that share a volume are backed up
+ * together (`scheduledAppBackupGroup`), so what refuses one of them refuses
+ * each, as does being more than one run takes.
+ */
+function stepManifest(
+  targets: ReadonlyArray<TargetMembers>
+): Array<{ member: BackupMember; refusal: string | null }> {
+  const volumes = new Map<string, BackupMember & { appIds: Array<string> }>()
+  const own: Array<{ appId: string | null; member: BackupMember }> = []
+  for (const { appId, members } of targets) {
+    for (const member of members) {
+      if (member.kind !== "volume" || appId === null) {
+        own.push({ appId, member })
+        continue
+      }
+      const known = volumes.get(member.id) ?? { ...member, appIds: [] }
+      known.appIds.push(appId)
+      volumes.set(member.id, known)
+    }
+  }
+  const shared = [...volumes.values()].map((volume) => ({
+    ...volume,
+    appIds: [...volume.appIds].sort(),
+  }))
+  const executions = [
+    ...own.map(({ member }) => ({
+      targetId: member.id,
+      targetKind: member.kind,
+    })),
+    ...shared.map((volume) => ({
+      appIds: volume.appIds,
+      targetId: volume.id,
+      targetKind: volume.kind,
+    })),
+  ]
+  const refused = new Map<string, string | null>()
+  const refusalOf = (appId: string) => {
+    if (refused.has(appId)) return refused.get(appId) ?? null
+    const group = scheduledAppBackupGroup(executions, appId)
+    const why =
+      targets.find(
+        (target) =>
+          target.appId !== null &&
+          target.refusal !== null &&
+          group.apps.includes(target.appId)
+      )?.refusal ??
+      (group.executions.length > SCHEDULED_APP_BACKUP_GROUP_MAX
+        ? `It shares volumes with other Apps of this step: together they are ${group.executions.length} backups, more than the ${SCHEDULED_APP_BACKUP_GROUP_MAX} one run takes`
+        : null)
+    for (const id of group.apps) refused.set(id, why)
+    return why
+  }
+  return [
+    ...own.map(({ appId, member }) => ({
+      member,
+      refusal: appId === null ? null : refusalOf(appId),
+    })),
+    ...shared.map((member) => ({
+      member,
+      refusal: refusalOf(member.appIds[0]!),
+    })),
+  ]
 }
 
 async function scheduledBackupExecution(
@@ -509,7 +556,7 @@ async function scheduledBackupExecution(
 ) {
   const targetKind = target.kind === "relay" ? "platform" : target.kind
   const execution = {
-    ...(target.appId ? { appId: target.appId } : {}),
+    ...(target.appIds ? { appIds: [...target.appIds] } : {}),
     mode: action.mode,
     targetId: target.id,
     targetKind: target.kind,
@@ -611,7 +658,8 @@ function forRelayTargets(
  * it would be.
  */
 interface BackupMember {
-  readonly appId?: string
+  /** For a volume: the step's Apps whose backups take it. */
+  readonly appIds?: ReadonlyArray<string>
   readonly id: string
   readonly kind: Exclude<ScheduleTarget["kind"], "app"> | "app" | "volume"
   readonly relayId: string

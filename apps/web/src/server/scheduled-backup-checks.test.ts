@@ -35,6 +35,7 @@ const relay = vi.hoisted(() => ({
   applied: [] as Array<{
     actions: Array<{
       executions?: Array<{
+        appIds?: Array<string>
         destination: unknown
         maxBytes?: number | null
         refusal?: string | null
@@ -360,10 +361,11 @@ describeMysql("Scheduled backups, checked before they run", () => {
     )
 
     // What an App keeps is on the volumes it mounts. A schedule that left
-    // one out, or asked for one twice, would say an App was backed up
-    // when it wasn't.
+    // one out would say an App was backed up when it wasn't, and one that
+    // asked for a volume once for each App that uses it would back it up
+    // more than once.
     it.effect(
-      "sends an App's backup with every volume it uses, and refuses one that would run short",
+      "sends an App's backup with every volume it uses, each once, and refuses one that would run short",
       () =>
         Effect.gen(function* () {
           const [site, blog, shop] = ["d", "e", "f"].map((letter) =>
@@ -421,22 +423,33 @@ describeMysql("Scheduled backups, checked before they run", () => {
           }))
           assert.strictEqual(yield* owed, "pending")
 
-          // Two Apps of one step that use the same volume would ask for
-          // its backup twice: neither runs.
+          // Two Apps of one step that use the same volume: it is sent
+          // once, naming both.
           yield* seed
           relay.volumes = [{ id: media, users: [site, blog] }]
           yield* mounting(site, [media])
           yield* mounting(blog, [media])
           yield* deploy(backupSchedule({ kind: "local" }, [site, blog], "app"))
-          for (const refusal of Object.values(refusals())) {
-            assert.include(refusal, "another App that uses one of this App's")
-          }
+          const sent = relay.applied.at(-1)?.actions[0]?.executions ?? []
+          assert.sameMembers(
+            sent.map((execution) => execution.targetId),
+            [site, blog, media]
+          )
+          assert.deepStrictEqual(executions()[media]?.appIds, [site, blog])
+          assert.deepStrictEqual(refusals(), {
+            [blog]: null,
+            [media]: null,
+            [site]: null,
+          })
 
-          // A volume its configuration mounts that its Relay doesn't have.
+          // A volume its configuration mounts that its Relay doesn't have:
+          // it isn't backed up short, nor is the App it shares one with.
           yield* seed
-          relay.volumes = [{ id: uploads, users: [shop] }]
+          relay.volumes = [{ id: uploads, users: [shop, site] }]
           yield* mounting(shop, [uploads, gone])
-          yield* deploy(backupSchedule({ kind: "local" }, [shop], "app"))
+          yield* mounting(site, [uploads])
+          yield* deploy(backupSchedule({ kind: "local" }, [shop, site], "app"))
+          assert.lengthOf(Object.keys(refusals()), 3)
           for (const refusal of Object.values(refusals())) {
             assert.include(refusal, "A volume this App mounts is missing")
           }

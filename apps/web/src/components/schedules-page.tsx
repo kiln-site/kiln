@@ -3449,7 +3449,7 @@ const ActionEditor = React.memo(function ActionEditor({
           {...(backsUpAppsOnly
             ? {
                 description:
-                  "Relay runs this job in its single durable queue. Each App's folder and every volume it owns are backed up together.",
+                  "Relay runs this job in its single durable queue. Each App's folder and every volume it uses are backed up together, a volume several of them share once.",
               }
             : {})}
           initialConsistency={action.consistency ?? "live"}
