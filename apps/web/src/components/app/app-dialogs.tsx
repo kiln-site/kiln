@@ -1,5 +1,6 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { CircleAlert, LoaderCircle, Trash2 } from "lucide-react"
+import * as React from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { CircleAlert, HardDrive, LoaderCircle, Trash2 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
 import {
@@ -17,7 +18,9 @@ import {
   DeleteConfirmationFields,
   useDeleteConfirmation,
 } from "@/components/delete-confirmation-fields"
-import { queryKeys } from "@/lib/query-options"
+import { useRelayPermission } from "@/components/relay/relay-settings"
+import { appOwnsVolume } from "@/lib/app-volumes"
+import { queryKeys, relayVolumesQueryOptions } from "@/lib/query-options"
 import { deleteApp } from "@/server/apps"
 
 export function DeleteAppDialog({
@@ -35,8 +38,24 @@ export function DeleteAppDialog({
 }) {
   const queryClient = useQueryClient()
   const confirmation = useDeleteConfirmation(app.name)
-  // Nothing an App keeps goes with it: its data is on its volumes, which
-  // stay, so there is nothing to back up first.
+  // What an App keeps is on its volumes, which stay unless whoever may
+  // delete volumes on its Relay asks for those only it uses to go with it.
+  const canDeleteVolumes = useRelayPermission(app.relayId, "relay.configure")
+  const volumes = useQuery({
+    ...relayVolumesQueryOptions(app.relayId),
+    enabled: open && canDeleteVolumes,
+  })
+  const ownVolumes = React.useMemo(
+    () =>
+      volumes.data?.protection.ready
+        ? volumes.data.volumes.filter((volume) => appOwnsVolume(volume, app.id))
+        : [],
+    [app.id, volumes.data]
+  )
+  const [deleteVolumes, setDeleteVolumes] = React.useState(false)
+  const volumeIds = deleteVolumes
+    ? ownVolumes.flatMap((volume) => (volume.id ? [volume.id] : []))
+    : []
   const remove = useMutation({
     mutationFn: () =>
       deleteApp({
@@ -44,13 +63,22 @@ export function DeleteAppDialog({
           ...confirmation.input,
           appId: app.id,
           relayId: app.relayId,
+          volumeIds,
         },
       }),
     onSuccess: async () => {
       onDeleted?.()
-      await queryClient.invalidateQueries({ queryKey: queryKeys.apps.all })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.apps.all }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.relayVolumes(app.relayId),
+        }),
+      ])
       showToast({
-        description: "The volumes it used stay, with their data.",
+        description:
+          volumeIds.length > 0
+            ? "Its volumes are being deleted too."
+            : "The volumes it used stay, with their data.",
         message: `${app.name} deleted`,
         type: "success",
       })
@@ -86,6 +114,29 @@ export function DeleteAppDialog({
             <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
             This action cannot be undone.
           </div>
+          {ownVolumes.length > 0 ? (
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border/80 bg-background/45 p-3">
+              <input
+                aria-label="Delete its volumes too"
+                checked={deleteVolumes}
+                className="mt-0.5 size-4 rounded-[3px] border-input accent-primary"
+                disabled={remove.isPending}
+                type="checkbox"
+                onChange={(event) =>
+                  setDeleteVolumes(event.currentTarget.checked)
+                }
+              />
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2 text-sm font-medium">
+                  <HardDrive className="size-4 text-muted-foreground" />
+                  Delete its volumes too
+                </span>
+                <span className="type-meta mt-1 block text-muted-foreground">
+                  {ownVolumes.map((volume) => volume.name).join(", ")}
+                </span>
+              </span>
+            </label>
+          ) : null}
           <DeleteConfirmationFields
             confirmation={confirmation}
             disabled={remove.isPending}

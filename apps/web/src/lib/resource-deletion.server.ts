@@ -23,6 +23,7 @@ import {
   recordRelayDeletedEffect,
   recordRelayDeletingEffect,
   recordResourceDeletionStatusEffect,
+  requestNamedVolumeDeletionRowEffect,
   requestResourceDeletionRowEffect,
   requestResourceKeepRowEffect,
   unfinishedDeletionStatuses,
@@ -31,6 +32,8 @@ import {
   type ResourceDeletionStatus,
 } from "@/effect/resource-deletions"
 import { runAppEffect } from "@/effect/runtime"
+import type { Database } from "@/effect/database"
+import type { OperationsEngineService } from "@/operations/engine-service"
 import { requireRelayPermissionsEffect } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { timestampedBackupName } from "@/lib/backup-name"
@@ -102,8 +105,7 @@ type FinalBackupPart = typeof FinalBackupPart.Type
 /**
  * What a deletion takes, decided once, after the freeze, and kept in its
  * journal: what its final backup is made of, if it takes one, and the
- * volumes of an App's own its Relay may delete. Nothing that comes to use
- * them later adds to either; a volume something else came to use stays.
+ * volumes an App's deletion was asked to delete after it.
  */
 const DeletionPlan = Schema.Struct({
   parts: Schema.Array(FinalBackupPart),
@@ -240,6 +242,7 @@ const deletionSteps = (input: DeletionInput) =>
         name: `cleanup/retry/${round}`,
       })
     }
+    if (input.kind === "app") yield* deleteNamedVolumes(input)
     yield* Activity.make({
       name: "completed",
       execute: recordStatus(input, "completed", null).pipe(
@@ -325,6 +328,14 @@ const checkAccess = (input: DeletionInput) =>
         user,
         ...(input.kind === "app" ? { appId: input.resourceId } : {}),
       })
+      // Deleting volumes with an App takes what deleting them alone does.
+      if (input.kind === "app" && (deletion.volumeIds?.length ?? 0) > 0) {
+        yield* requireRelayPermissionsEffect({
+          permissions: ["relay.configure"],
+          relayId: input.relayId,
+          user,
+        })
+      }
       if (deletion.finalBackup && input.kind === "volume") {
         yield* promiseEffect(() =>
           requireBackupTargetPermission(
@@ -405,16 +416,102 @@ const finalBackup = (
 
 // What a deletion takes: the resource itself. An App has nothing of its
 // own to back up first: what it keeps is on its volumes, which are no
-// App's, stay when it goes, and are deleted from Volumes by whoever decides
-// to. No deletion names volumes; the plan keeps the place for them empty.
-const deletionPlan = (
-  input: DeletionInput
-): Effect.Effect<DeletionPlan, ResourceDeletionError> =>
-  Effect.succeed({
-    parts:
-      input.kind === "app" ? [] : [{ id: input.resourceId, kind: input.kind }],
-    volumeIds: [],
+// App's and stay when it goes, but for those its deletion was asked to
+// delete after it.
+const deletionPlan = (input: DeletionInput) =>
+  loadResourceDeletionEffect(input.deletionId).pipe(
+    Effect.orDie,
+    Effect.map(
+      (deletion): DeletionPlan => ({
+        parts:
+          input.kind === "app"
+            ? []
+            : [{ id: input.resourceId, kind: input.kind }],
+        volumeIds: [...(deletion?.volumeIds ?? [])],
+      })
+    )
+  )
+
+// Deletes the volumes an App's deletion named, once the App is gone from
+// its Relay, each as deleting it from Volumes does: a deletion of its own,
+// queued, which shows on its Relay's Volumes and can be tried again or
+// kept there. One the Relay finds something else using stays, and says so
+// there. Each is asked for on its own, so one that can't be doesn't hold
+// back the rest, and is asked for again like cleanup that failed; if it
+// still can't be, the App's deletion stops and says which are left, rather
+// than end as if they went. One already asked for is no longer named on
+// the App's deletion, so trying that again asks only for the rest.
+const deleteNamedVolumes = (input: DeletionInput) =>
+  Effect.gen(function* () {
+    const named = yield* Activity.make({
+      name: "volumes",
+      success: Schema.Array(Schema.String),
+      execute: loadResourceDeletionEffect(input.deletionId).pipe(
+        Effect.orDie,
+        Effect.map((deletion) => [...(deletion?.volumeIds ?? [])])
+      ),
+    })
+    let left = named.map((id, index) => ({ id, index }))
+    for (let round = 1; left.length > 0; round++) {
+      const failed: typeof left = []
+      let failure = ""
+      for (const volume of left) {
+        const refused = yield* Activity.make({
+          name: `volumes/${volume.index}/${round}`,
+          success: Schema.NullOr(Schema.String),
+          execute: queueVolumeDeletion(input, volume.id),
+        })
+        if (refused === null) continue
+        failed.push(volume)
+        failure ||= refused
+      }
+      left = failed
+      if (left.length === 0) return
+      const retryAfter = CLEANUP_RETRY_AFTER[round - 1]
+      if (!retryAfter) {
+        return yield* new ResourceDeletionError({
+          message: `The App was deleted, but ${left.length === 1 ? "one of its volumes wasn't" : `${left.length} of its volumes weren't`}: ${failure}. Delete ${left.length === 1 ? "it" : "them"} from the Relay's Volumes.`,
+        })
+      }
+      yield* DurableClock.sleep({
+        duration: retryAfter,
+        name: `volumes/retry/${round}`,
+      })
+    }
   })
+
+// Asks for one volume's deletion, for whoever asked for the App's. Why it
+// couldn't be asked for, or null. It is asked for once: taken off the
+// App's deletion as its own is recorded, so a retry of the App's, or this
+// step run twice, never starts again a volume's deletion that failed or
+// that someone chose to keep since.
+const queueVolumeDeletion = (
+  input: DeletionInput,
+  volumeId: string
+): Effect.Effect<string | null, never, Database | OperationsEngineService> =>
+  Effect.gen(function* () {
+    const deletion = yield* loadResourceDeletionEffect(input.deletionId)
+    if (!deletion) return null
+    const user = yield* currentActingUser(deletion.requestedBy, deletion.actor)
+    const asked = yield* requestNamedVolumeDeletionRowEffect({
+      namedBy: deletion.id,
+      relayId: input.relayId,
+      user,
+      volumeId,
+    })
+    if (!asked) return null
+    yield* deliverSchedules
+    // Recorded, so the reconciler starts it if this doesn't.
+    if (unfinishedDeletionStatuses.some((status) => status === asked.status)) {
+      yield* startAttempt(asked, "person", true).pipe(Effect.ignore)
+    }
+    publishDeletionChange(asked)
+    return null
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Effect.succeed(messageOf(Cause.squash(cause)))
+    )
+  )
 
 const reserveFinalBackup = (
   input: DeletionInput,
@@ -949,6 +1046,8 @@ export const requestResourceDeletionEffect = Effect.fn(
   retryOf?: number
   storageId: string | null
   user: AuthenticatedUser
+  /** The volumes an App's deletion deletes after it. */
+  volumeIds?: ReadonlyArray<string>
 }) {
   // An App has nothing of its own to back up first: what it keeps is on
   // its volumes, which stay.
@@ -974,6 +1073,7 @@ export const requestResourceDeletionEffect = Effect.fn(
     ...(input.retryOf === undefined ? {} : { retryOf: input.retryOf }),
     storageId,
     user: input.user,
+    ...(input.volumeIds === undefined ? {} : { volumeIds: input.volumeIds }),
   })
   yield* deliverSchedules
   if (unfinishedDeletionStatuses.some((status) => status === deletion.status)) {
