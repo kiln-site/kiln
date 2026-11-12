@@ -3,7 +3,7 @@ kind: group
 metadata:
   id: umami
   name: Umami
-  revision: 4
+  revision: 5
   summary: Privacy-focused web analytics, with a PostgreSQL database of its own.
   author: Kiln
   icon: ../icons/umami.svg
@@ -35,6 +35,10 @@ group:
         ports:
           - name: web
             port: 3000
+        # Its image has no health check of its own. This answers once it
+        # serves, which is after it has set up its database.
+        ready:
+          command: curl -fsS -o /dev/null http://127.0.0.1:3000/api/heartbeat
       connect:
         database:
           DATABASE_URL: "{{ connection }}"
