@@ -452,16 +452,12 @@ describe("App volumes", () => {
     const [dockerName] = [...fakeDocker.volumes.keys()]
     // Removed behind Kiln's back.
     fakeDocker.volumes.delete(dockerName!)
-    // The App still names it: its backup must take it, and can't, where
-    // one of what is left would pass for all the App keeps.
+    // The App still names it, and its Relay says so.
     const volumes = relayVolumes(harness)
     const gone = composeVolumeId(appId, "data")
     expect((await Effect.runPromise(volumes.list())).missing).toEqual([
       { appId, volumeId: gone },
     ])
-    expect(await Effect.runPromise(volumes.appBackupVolumeIds(appId))).toEqual(
-      [gone]
-    )
 
     const refused = await deploy(harness, {
       compose: declaresVolume,

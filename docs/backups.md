@@ -265,7 +265,10 @@ every App that uses any of them once (journaled under the first backup, as a
 single stopped backup's are, so a Relay that stops midway starts them again
 and the backups rerun), takes every archive, and only then starts again those
 that ran, so the copies agree. A backup of the batch that arrives later runs
-in a window of its own. Live batches are independent backups. A final backup is always
+in a window of its own, and one whose volume is gone by the batch's turn
+fails alone, the rest still taken. A scheduled batch is queued whole, on
+the Relay, so one that is short of a member is failed rather than taken in
+pieces. Live batches are independent backups. A final backup is always
 stopped, and nothing starts again. Game servers and Kiln are
 always backed up live. A database isn't stopped either, but one that is
 part of a stopped batch (`consistency: "stopped"` with `batch`, which only a
@@ -676,9 +679,15 @@ once: for its Apps, each volume once however many of them use it. Apps that shar
 (`scheduledAppBackupGroup`): each of them asks its Relay for the same
 batch, by the same IDs, so the first makes it and the others wait for it,
 and a stopped step stops them all once. What refuses one of them refuses
-each, a batch is at most 64 backups, and the Relay checks every App of it
-against the volumes it uses now before any is made: each backup of the
-batch carries what every App was sent to take. An App with no volumes is
+each, and a batch is at most 64 backups. The volumes are those Hearth last
+sent. It sends the schedule again as soon as a deployment of the App ends,
+and if that send fails, at its next sweep, every ten minutes, or when
+someone opens the Schedules page. A run that falls before that takes the
+volumes it was sent all the same: a volume the App has taken up since is
+backed up once the schedule has been sent again, and one
+that is gone fails alone ("The volume no longer exists on this Relay"),
+failing the step of each App that used it, while every other volume is
+still backed up and the schedule carries on. An App with no volumes is
 sent nothing, and its step is skipped and says so ("Nothing to back up:
 this App uses no volume"): a run that backed nothing up never reads as a
 backup made. Whether the schedule's

@@ -87,9 +87,6 @@ export interface ScheduleManagerOptions {
     effect: Effect.Effect<void, never>
   ) => Fiber.Fiber<void, unknown>
   readonly getBackup: (taskId: string) => Promise<RelayBackupTask | null>
-  readonly listAppBackupVolumeIds: (
-    appId: string
-  ) => Promise<ReadonlyArray<string>>
   readonly listAppIds: () => Promise<ReadonlySet<string>>
   readonly listDatabaseIds: () => Promise<ReadonlySet<string>>
   // Read per run: Hearth can give the Relay its installation ID at any time.
@@ -969,6 +966,11 @@ export class ScheduleManager {
    * each of them asks for the same batch and waits for it. Stopped, the
    * batch shares one stopped window, so each App stops once and its
    * volumes agree.
+   *
+   * The volumes are those Hearth last sent, which it sends again whenever
+   * the App is deployed. A run that falls between the two takes those all
+   * the same: a volume the App has taken up since waits for the next run,
+   * and one that is gone fails alone, the rest still backed up.
    */
   async #backUpApp(
     schedule: RelayScheduleProjection,
@@ -983,29 +985,6 @@ export class ScheduleManager {
     if (executions.length === 0) return
     if (executions.some((execution) => !execution.destination)) {
       throw new Error("Scheduled backup destination is not deployed")
-    }
-    const volumesOf = (appId: string) =>
-      executions
-        .filter(
-          (execution) =>
-            execution.targetKind === "volume" &&
-            execution.appIds?.includes(appId)
-        )
-        .map((execution) => execution.targetId)
-    // What each App's backup takes now, a volume it has taken up or let go
-    // of among them, against what Hearth admitted: every App of the batch
-    // exactly the volumes it uses.
-    for (const appId of apps) {
-      const taken = await this.#options.listAppBackupVolumeIds(appId)
-      const projected = new Set(volumesOf(appId))
-      if (
-        taken.length !== projected.size ||
-        taken.some((id) => !projected.has(id))
-      ) {
-        throw new Error(
-          "App backup coverage changed; waiting for Hearth to refresh the schedule"
-        )
-      }
     }
     if (
       executions.length > SCHEDULED_APP_BACKUP_GROUP_MAX ||
@@ -1029,12 +1008,6 @@ export class ScheduleManager {
       action.id
     )
     const stopped = action.consistency === "stopped"
-    // What every App of the batch was sent to take, carried by each backup
-    // of it.
-    const appCoverage = apps.map((appId) => ({
-      appId,
-      volumeIds: volumesOf(appId),
-    }))
     const inputs = executions.map((execution): BackupTaskInput => {
       // The App a volume's backup is named for: the first of those that
       // use it, whichever App asks.
@@ -1065,9 +1038,9 @@ export class ScheduleManager {
               ? action.destination.storageId
               : null,
         },
-        appCoverage,
+        // Stopped, they share one stopped window; live, each runs alone.
         ...(stopped ? { consistency: "stopped" as const } : {}),
-        ...(executions.length >= 2
+        ...(stopped && executions.length >= 2
           ? { batch: { id: batchId, size: executions.length } }
           : {}),
         destination: scheduledBackupDestination(
@@ -1095,9 +1068,17 @@ export class ScheduleManager {
     const queued = await Promise.all(
       inputs.map((input) => this.#options.enqueueBackup(input))
     )
+    // Each App answers for its own: one of another App's that fails, as
+    // of a volume that is gone, fails that App's step and not this one's.
+    const own = queued.filter((_, index) => {
+      const execution = executions[index]!
+      return execution.targetKind === "volume"
+        ? execution.appIds?.includes(target.id)
+        : execution.targetId === target.id
+    })
     await Effect.runPromise(
       Effect.all(
-        queued.map((task) => this.#waitForBackup(task)),
+        own.map((task) => this.#waitForBackup(task)),
         { concurrency: "unbounded", discard: true }
       ),
       signal ? { signal } : undefined

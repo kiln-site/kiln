@@ -9,7 +9,6 @@ import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, selectRows } from "@/test/seed"
 
 const relayId = "1".repeat(12)
-const appId = "a".repeat(12)
 const batchId = "22222222-2222-4222-8222-222222222222"
 const at = Date.UTC(2026, 10, 1)
 const id = (member: number, part: number) =>
@@ -31,10 +30,8 @@ const members = Array.from({ length: 6 }, (_, member) => {
     errorCode: null,
     finishedAt: null,
     input: {
-      appCoverage: [{ appId, volumeIds: [] }],
       artifactKind: "tar_archive",
       backupId,
-      batch: { id: batchId, size: 6 },
       catalog: { batchId, name: "Nightly", storageId: null },
       destination: { artifactId: id(member, 3), kind: "local" },
       exclude: [],

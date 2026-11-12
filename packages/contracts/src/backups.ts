@@ -393,29 +393,10 @@ const backupCreateTaskInputObjectSchema = z
       .object({ id: z.uuid(), size: z.number().int().min(2).max(64) })
       .strict()
       .optional(),
-    // What a scheduled backup of Apps was sent to take: every App its
-    // batch backs up, each with all the volumes it uses. Every backup of
-    // the batch carries the same, so whichever starts it can check them all.
-    // A Relay keeps the backups it made: one from when a backup carried one
-    // App's alone is read as that list of one.
-    appCoverage: z
-      .preprocess(
-        (stored) =>
-          typeof stored === "object" && stored !== null && !Array.isArray(stored)
-            ? [stored]
-            : stored,
-        z
-          .array(
-            z
-              .object({ appId: z.string(), volumeIds: z.array(z.string()) })
-              .strict()
-          )
-          .min(1)
-          // As many Apps as one scheduled run takes backups for
-          // (`SCHEDULED_APP_BACKUP_GROUP_MAX`).
-          .max(64)
-      )
-      .optional(),
+    // No longer sent or used. A Relay keeps the backups it made, and a
+    // scheduled backup of an App once carried the volumes it was sent to
+    // take, so one stored with them is still read.
+    appCoverage: z.unknown().optional(),
     // Absent is live.
     consistency: backupConsistencySchema.optional(),
     destination: z.union([
@@ -456,6 +437,8 @@ function refineResticCreateInput(
       path: ["consistency"],
     })
   }
+  // A stored scheduled backup of an App, from when a live one carried a
+  // batch too, is still read.
   if (input.batch && input.consistency !== "stopped" && !input.appCoverage) {
     context.addIssue({
       code: "custom",

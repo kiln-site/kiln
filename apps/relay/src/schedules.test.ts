@@ -63,7 +63,6 @@ async function advanceUntil(assertion: () => void | Promise<void>, stepMs = 0) {
 async function manager(
   overrides: Partial<{
     enqueueBackup: ScheduleManagerOptions["enqueueBackup"]
-    listAppBackupVolumeIds: ScheduleManagerOptions["listAppBackupVolumeIds"]
     listAppIds: ScheduleManagerOptions["listAppIds"]
     findInstance: (instanceId: string) => Promise<object | null>
     sendConsoleCommand: (instanceId: string, command: string) => Promise<void>
@@ -82,8 +81,6 @@ async function manager(
       }),
     findInstance: overrides.findInstance ?? (async () => null),
     getBackup: async () => null,
-    listAppBackupVolumeIds:
-      overrides.listAppBackupVolumeIds ?? (async () => []),
     listAppIds: overrides.listAppIds ?? (async () => new Set()),
     listDatabaseIds: overrides.listDatabaseIds ?? (async () => new Set()),
     platformTargetId: () => "platform",
@@ -406,16 +403,10 @@ describe("Relay scheduled App backups", () => {
     }
     return { enqueueBackup, tasks }
   }
-  const uses: Record<string, Array<string>> = {
-    [blog]: [media],
-    [site]: [media, uploads],
-  }
-
-  it("backs up Apps that share a volume as one batch, the volume once", async () => {
+  it("backs up Apps that share a volume together, the volume once", async () => {
     const { enqueueBackup, tasks } = queue()
     const { schedules } = await manager({
       enqueueBackup,
-      listAppBackupVolumeIds: async (appId) => uses[appId] ?? [],
       listAppIds: async () => new Set([site, blog]),
     })
     await schedules.apply(nightly)
@@ -434,32 +425,29 @@ describe("Relay scheduled App backups", () => {
       ])
     )
     expect(made).toHaveLength(2)
-    // One batch of the two, whichever App asked first.
-    expect(new Set(made.map((input) => "batch" in input && input.batch?.id)).size).toBe(1)
-    expect(made.map((input) => "batch" in input && input.batch?.size)).toEqual([
-      2, 2,
-    ])
-    // Each backup of it says what every App was sent to take, so whichever
-    // starts the batch checks them all.
-    for (const input of made) {
-      expect("appCoverage" in input && input.appCoverage).toEqual([
-        { appId: site, volumeIds: [media, uploads] },
-        { appId: blog, volumeIds: [media] },
-      ])
-    }
+    // Cataloged as one batch of the two, whichever App asked first.
+    expect(
+      new Set(made.map((input) => "catalog" in input && input.catalog?.batchId))
+        .size
+    ).toBe(1)
     expect((await latestRun(schedules))?.targetRuns).toMatchObject([
       { status: "succeeded" },
       { status: "succeeded" },
     ])
   })
 
-  it("backs up none of them when one has taken up a volume since the schedule was sent", async () => {
-    const { enqueueBackup, tasks } = queue()
+  // The schedule is sent again whenever an App is deployed. A run that
+  // falls just before that may name a volume the App has since let go of.
+  it("fails only the App whose volume is gone, the rest still backed up", async () => {
+    const { enqueueBackup: succeed, tasks } = queue()
+    const gone = "The volume no longer exists on this Relay"
     const { schedules } = await manager({
-      enqueueBackup,
-      // The second App mounts another volume now.
-      listAppBackupVolumeIds: async (appId) =>
-        appId === blog ? [media, uploads] : (uses[appId] ?? []),
+      enqueueBackup: async (input) => {
+        const task = await succeed(input)
+        return input.kind === "create" && input.target.id === uploads
+          ? { ...task, error: gone, status: "failed" }
+          : task
+      },
       listAppIds: async () => new Set([site, blog]),
     })
     await schedules.apply(nightly)
@@ -467,9 +455,17 @@ describe("Relay scheduled App backups", () => {
     await runNow(schedules)
 
     await advanceUntil(async () =>
-      expect((await latestRun(schedules))?.status).toBe("failed")
+      expect((await latestRun(schedules))?.status).toBe("partial")
     )
-    expect(tasks.size).toBe(0)
+    // Both were asked for: the one that is there was not held back.
+    expect(tasks.size).toBe(2)
+    const [siteRun, blogRun] = (await latestRun(schedules))?.targetRuns ?? []
+    expect(siteRun).toMatchObject({
+      attempts: [{ error: gone, status: "failed" }],
+      status: "failed",
+    })
+    // It shares a volume with the other, and uses none of what is gone.
+    expect(blogRun).toMatchObject({ status: "succeeded" })
   })
 })
 

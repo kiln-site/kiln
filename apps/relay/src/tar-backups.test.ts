@@ -442,6 +442,66 @@ it("dumps a database of a stopped batch while the Apps of its volumes are stoppe
   })
 })
 
+// A schedule names the volumes its App used when it was last sent. One
+// that is gone by the time it runs is that backup's failure alone: the
+// rest of the batch is still taken, its Apps stopped once and started again.
+it("fails only the backup of a volume that is gone from a stopped batch", async () => {
+  const { harness, volumes } = await relay()
+  const volume = kilnVolume()
+  fakeDocker.addContainer({
+    labels: {
+      "kiln.app.id": "a".repeat(12),
+      "kiln.relay.owner": TEST_NAMESPACE,
+      "kiln.resource.kind": "app",
+    },
+    mounts: [{ destination: "/data", source: volume.name, type: "volume" }],
+    name: "site",
+  })
+  let running = true
+  const seen: Array<string> = []
+  const manager = await backups(harness, volumes, {
+    apps: {
+      isRunning: async () => running,
+      start: async () => {
+        running = true
+        seen.push("started")
+      },
+      stop: async () => {
+        running = false
+        seen.push("stopped")
+      },
+    },
+  })
+  const batch = { id: randomUUID(), size: 2 }
+  const kept = createInput(
+    { id: volumeId, kind: "volume" },
+    { batch, consistency: "stopped" }
+  )
+  const gone = createInput(
+    { id: "9".repeat(40), kind: "volume" },
+    { batch, consistency: "stopped" }
+  )
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      // The one that is gone first, so it is the one the batch starts from.
+      yield* manager.enqueue(gone)
+      yield* manager.enqueue(kept)
+      yield* manager.runPending()
+    })
+  )
+
+  expect(await Effect.runPromise(manager.get(gone.taskId))).toMatchObject({
+    error: "The volume no longer exists on this Relay",
+    status: "failed",
+  })
+  expect(await Effect.runPromise(manager.get(kept.taskId))).toMatchObject({
+    result: { consistency: "stopped" },
+    status: "succeeded",
+  })
+  expect(seen).toEqual(["stopped", "started"])
+})
+
 // A database is "stopped" only as one of a batch whose volumes are. Left
 // without them, as when the rest never reached the Relay, a dump would be
 // taken with nothing stopped and still say it was, so none is taken.
@@ -481,6 +541,43 @@ it("takes no dump for a stopped batch that arrives without its volumes", async (
     status: "failed",
   })
   expect(dumps).toBe(0)
+})
+
+// A schedule queues every backup of a stopped step at once. Part of one,
+// as a Relay that stopped midway is left with, taken in a window of its own
+// would be of another moment than the rest, in a run that reads as one.
+it("takes no archive for a scheduled stopped batch that is short of a member", async () => {
+  const { harness, volumes } = await relay()
+  kilnVolume()
+  const manager = await backups(harness, volumes)
+  const archive = createInput(
+    { id: volumeId, kind: "volume" },
+    {
+      batch: { id: randomUUID(), size: 2 },
+      consistency: "stopped",
+      reason: "scheduled",
+    }
+  )
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  const ran = Effect.runPromise(
+    Effect.gen(function* () {
+      yield* manager.enqueue(archive)
+      yield* manager.runPending()
+      return yield* manager.get(archive.taskId)
+    })
+  )
+  let done = false
+  void ran.finally(() => {
+    done = true
+  })
+  while (!done) await vi.advanceTimersByTimeAsync(250)
+  vi.useRealTimers()
+
+  expect(await ran).toMatchObject({
+    error: "This backup's batch is incomplete; no backups were started",
+    status: "failed",
+  })
 })
 
 // A Relay that stops after the dump is finished and before the volume's
