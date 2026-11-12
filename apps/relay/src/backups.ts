@@ -70,7 +70,6 @@ import {
   appReplaceLocks,
   appStartLocks,
   backupTaskLocks,
-  backupCoverageLocks,
 } from "./operation-plans.js"
 import { backupPathIsExcluded } from "./backups/exclude.js"
 import {
@@ -186,9 +185,6 @@ export interface BackupApps {
 
 /** A managed volume as backups find it, by its ID. */
 export interface BackupVolumes {
-  appBackupVolumeIds(
-    appId: string
-  ): Effect.Effect<ReadonlyArray<string>, unknown>
   find(
     id: string
   ): Effect.Effect<
@@ -616,31 +612,37 @@ export class BackupManager {
    * owned volume's: every backup in it within one stopped window, holding
    * all their locks, so the copies agree. The Apps that use any of them stop
    * once, journaled as a single stopped backup's are, and those that ran
-   * start again once every archive is taken. Coverage-bearing batches must
-   * arrive completely: no fragment may succeed before coverage is checked.
-   * So must a batch with a database in it: a database dumped without the
-   * batch's volumes would be taken with nothing stopped and still say it
-   * was, and a volume archived again after a restart, its database's dump
-   * already taken, would be of another stopped window than that dump.
+   * start again once every archive is taken. A scheduled batch must arrive
+   * completely, since its pieces taken in windows of their own would not
+   * agree. So must a batch with a database in it: a database dumped without the batch's volumes
+   * would be taken with nothing stopped and still say it was, and a volume
+   * archived again after a restart, its database's dump already taken,
+   * would be of another stopped window than that dump. A volume that is
+   * gone by the batch's turn fails alone, as it would backed up alone, and
+   * the rest are still taken.
    */
   #runBatch(leader: RelayBackupTask, batch: { id: string; size: number }) {
     return Effect.gen({ self: this }, function* () {
-      const members = [leader]
-      for (let wait = 0; members.length < batch.size && wait < 20; wait += 1) {
-        members.push(
+      const claimed = [leader]
+      for (let wait = 0; claimed.length < batch.size && wait < 20; wait += 1) {
+        claimed.push(
           ...(yield* this.#state.claimBatchBackupTasks(batch.id, Date.now()))
         )
-        if (members.length < batch.size) yield* Effect.sleep("250 millis")
+        if (claimed.length < batch.size) yield* Effect.sleep("250 millis")
       }
       if (
-        members.length !== batch.size &&
-        (members.some(
-          (member) => member.input.kind === "create" && member.input.appCoverage
+        claimed.length !== batch.size &&
+        // A schedule queues its whole batch at once, here on the Relay:
+        // one short of a member is broken, not still arriving.
+        (claimed.some(
+          (member) =>
+            member.input.kind === "create" &&
+            member.input.reason === "scheduled"
         ) ||
           // Whether or not the database is among those here now.
           (yield* this.#state.batchHoldsDatabase(batch.id)))
       ) {
-        for (const member of members) {
+        for (const member of claimed) {
           yield* this.#state.failBackupTask(
             member.taskId,
             "This backup's batch is incomplete; no backups were started",
@@ -649,6 +651,27 @@ export class BackupManager {
         }
         return undefined
       }
+      const members: Array<RelayBackupTask> = []
+      for (const member of claimed) {
+        const found =
+          member.input.kind === "create" &&
+          member.input.target.kind === "volume"
+            ? yield* Effect.result(this.#requiredVolume(member.input.target.id))
+            : null
+        if (
+          found &&
+          Result.isFailure(found) &&
+          found.failure.code === "volume_not_found"
+        ) {
+          yield* this.#state.failBackupTask(
+            member.taskId,
+            backupErrorMessage(found.failure),
+            Date.now()
+          )
+        } else members.push(member)
+      }
+      const [first] = members
+      if (!first) return undefined
       const prepared = yield* Effect.result(this.#batchLocks(members))
       if (Result.isFailure(prepared)) {
         for (const member of members) {
@@ -661,15 +684,11 @@ export class BackupManager {
         return undefined
       }
       const { lockedApps, locks } = prepared.success
-      const window = yield* this.#stoppedWindow(leader, members, lockedApps)
+      const window = yield* this.#stoppedWindow(first, members, lockedApps)
       const run = yield* Effect.result(
         this.#lanes.run(
           { label: "backup.batch", locks },
           Effect.gen({ self: this }, function* () {
-            yield* this.#admitAppCoverage(
-              members.map((member) => member.input),
-              locks
-            )
             yield* Effect.forEach(
               members,
               (member) => this.#runTask(member, window),
@@ -1544,61 +1563,6 @@ export class BackupManager {
     })
   }
 
-  // The batch's target locks are already held. Take only the missing
-  // lifecycle locks as a nested operation, so a queued replacement waiting
-  // on this batch cannot deadlock admission. Release them before copying or
-  // uploading: later deployments may change the inventory after this start.
-  #admitAppCoverage(
-    inputs: ReadonlyArray<BackupTaskInput>,
-    held: ReadonlyArray<LaneLock>
-  ) {
-    // Every App the batch backs up, once, with the volumes it was sent to
-    // take: each backup of the batch says the same.
-    const byApp = new Map<string, ReadonlyArray<string>>()
-    const wanted = new Map<string, LaneLock>()
-    for (const input of inputs) {
-      if (input.kind !== "create" || !input.appCoverage) continue
-      for (const { appId, volumeIds } of input.appCoverage) {
-        byApp.set(appId, volumeIds)
-      }
-      for (const lock of backupCoverageLocks(input)) wanted.set(lock.key, lock)
-    }
-    const locks = [...wanted.values()].filter(
-      (lock) =>
-        !held.some(
-          (current) => current.key === lock.key && current.mode === "exclusive"
-        )
-    )
-    const validate = Effect.forEach(
-      byApp,
-      ([appId, volumeIds]) => this.#validateAppCoverage(appId, volumeIds),
-      { discard: true }
-    )
-    return locks.length === 0
-      ? validate
-      : this.#lanes.runNested({ label: "backup.coverage", locks }, validate)
-  }
-
-  #validateAppCoverage(appId: string, volumeIds: ReadonlyArray<string>) {
-    return Effect.gen({ self: this }, function* () {
-      const taken = this.#volumes
-        ? yield* this.#volumes.appBackupVolumeIds(appId)
-        : null
-      const projected = new Set(volumeIds)
-      if (
-        !taken ||
-        taken.length !== projected.size ||
-        taken.some((id) => !projected.has(id))
-      ) {
-        return yield* backupFailure(
-          "volume_users_changed",
-          "lookup",
-          "App backup coverage changed; waiting for Hearth to refresh the schedule"
-        )
-      }
-    })
-  }
-
   #execute(
     task: RelayBackupTask,
     signal: AbortSignal,
@@ -1607,7 +1571,6 @@ export class BackupManager {
     window: StoppedWindow | null
   ) {
     return Effect.gen({ self: this }, function* () {
-      if (!window) yield* this.#admitAppCoverage([task.input], [])
       const createSignal = signal
       if (task.input.kind === "export") {
         const result = yield* runResticExport(
@@ -2357,7 +2320,7 @@ function stoppedBatch(
   task: RelayBackupTask
 ): { id: string; size: number } | null {
   return task.input.kind === "create" &&
-    (task.input.consistency === "stopped" || task.input.appCoverage) &&
+    task.input.consistency === "stopped" &&
     task.input.batch
     ? task.input.batch
     : null

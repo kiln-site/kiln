@@ -3,7 +3,6 @@ import { join } from "node:path"
 
 import { Effect, Schema, Semaphore } from "effect"
 import {
-  appBackupVolumes,
   RELAY_VOLUME_NAME_MAX_LENGTH,
   RELAY_VOLUME_REFERENCES_PENDING,
   relayVolumeSlug,
@@ -608,22 +607,6 @@ export class RelayVolumes {
     this.#appMountpointsEpoch += 1
     this.#appMountpoints.clear()
   })
-
-  /**
-   * The volumes an App's backup takes: every Kiln volume it uses, as Hearth
-   * works out too, and any it names that isn't here, which no backup can
-   * take: one that left it out would pass for all the App keeps.
-   */
-  appBackupVolumeIds(appId: string) {
-    return this.#inventory().pipe(
-      Effect.map(({ missing, volumes }) => [
-        ...appBackupVolumes(appId, volumes).map((volume) => volume.id),
-        ...missing.flatMap((gone) =>
-          gone.appId === appId ? [gone.volumeId] : []
-        ),
-      ])
-    )
-  }
 
   /** Which of these IDs no Kiln volume has. */
   idsMissing(ids: ReadonlyArray<string>) {

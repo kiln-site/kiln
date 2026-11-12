@@ -603,6 +603,14 @@ const enabledRelay = Effect.fnUntraced(function* (relayId: string) {
   return relay
 })
 
+// A deployment can change the volumes its App uses, and its ending marked
+// the schedules that back the App up as owed (`finishAppDeploymentEffect`).
+// They are sent now, not at the next sweep: until they are, a schedule
+// backs up the volumes the App had.
+const sendOwedSchedules = Effect.promise(
+  () => import("@/server/schedule-deployment.server")
+).pipe(Effect.map(({ deliverPendingSchedules }) => deliverPendingSchedules()))
+
 /**
  * Whether a recorded deployment ended on its Relay, recording how if so.
  * One the Relay no longer knows, because it restarted or moved on, ends as
@@ -629,6 +637,7 @@ const checkAppDeploymentEffect = Effect.fn("Apps.deployment.check")(function* (
     })
     if (finished) {
       publishAppDeploymentChange(record.relayId)
+      yield* sendOwedSchedules
       yield* announceDeploymentEffect(record, deployment.state)
     }
     return true
@@ -648,6 +657,7 @@ const checkAppDeploymentEffect = Effect.fn("Apps.deployment.check")(function* (
     })
     if (finished) {
       publishAppDeploymentChange(record.relayId)
+      yield* sendOwedSchedules
       yield* announceDeploymentEffect(record, kept.state)
     }
     return true
@@ -660,7 +670,10 @@ const checkAppDeploymentEffect = Effect.fn("Apps.deployment.check")(function* (
     rolling: null,
     status: app ? "unknown" : "failed",
   })
-  if (finished) publishAppDeploymentChange(record.relayId)
+  if (finished) {
+    publishAppDeploymentChange(record.relayId)
+    yield* sendOwedSchedules
+  }
   return true
 })
 

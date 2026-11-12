@@ -251,23 +251,6 @@ export function backupTaskLocks(
 }
 
 /**
- * Briefly exclude deployments while a live App backup checks its start-time
- * coverage. The batch already holds shared target locks; deployments take
- * volumes shared too, so a lifecycle holder never waits on those read locks.
- * Stopped backups already hold the lifecycle through their stopped window.
- */
-export function backupCoverageLocks(input: BackupTaskInput): Array<LaneLock> {
-  return input.kind === "create" &&
-    input.appCoverage &&
-    input.consistency !== "stopped" &&
-    input.reason !== "final_delete"
-    ? input.appCoverage.map(({ appId }) =>
-        exclusive(laneKeys.appLifecycle(appId))
-      )
-    : []
-}
-
-/**
  * Streaming a file into a root, as a browser upload does. It runs alongside
  * other file work and waits only for work that replaces the whole root, such
  * as a restore or delete; putting the file in place then takes

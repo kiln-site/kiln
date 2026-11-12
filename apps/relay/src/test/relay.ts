@@ -325,8 +325,6 @@ export async function scheduleWorker(harness: RelayHarness) {
     findInstance: (instanceId) => harness.docker.findInstance(instanceId),
     getBackup: async () => null,
     isPaused: () => harness.lanes.paused,
-    listAppBackupVolumeIds: (appId) =>
-      Effect.runPromise(harness.volumes.appBackupVolumeIds(appId)),
     listAppIds: async () =>
       new Set((await harness.apps.list()).map(({ id }) => id)),
     listDatabaseIds: async () =>

@@ -50,7 +50,6 @@ const directAdmissions: Record<string, string> = {
     "The backup worker's tasks, withdrawn if cancelled while they wait",
   "backups.ts:backup.batch":
     "Stopped backup batches, stopping each App once for every member",
-  "backups.ts:backup.coverage": "Nested; declared up front with backups",
   "backups.ts:backup.app.restart":
     "Starting, as the Relay starts, Apps a stopped backup still owes a start",
   "backups.ts:#settleTarRestore":

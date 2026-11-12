@@ -337,7 +337,9 @@ schedule was sent. Apps that share a volume are one batch, which each of
 them enqueues by the same IDs before waiting on any. A member Hearth refused skips the whole step, recorded as not
 run. A stopped one is a batch, so the App and every App using its volumes
 stop once for all of them. A volume the App starts using after the schedule
-was sent is backed up from the next time Hearth sends it.
+was sent is backed up from the next time Hearth sends it, and one that is
+gone by then fails alone: each App's step waits on its own volumes, and the
+rest are still backed up.
 
 - It has 10 minutes to exit. The step records its exit code and the last
   4 KiB of what it printed, stdout and stderr together; a non-zero code
