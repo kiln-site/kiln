@@ -210,8 +210,10 @@ An App is installed from an App Brick, which says what it deploys: an
 image, or a Dockerfile or a Compose file. The Brick carries that file,
 written in its recipe or kept beside it, or names one in a source chosen
 at install, which is a repository or a file written in Hearth. Kiln's catalog
-has one for each (`docker-image`, `dockerfile`, `compose`), and for now only
-those are offered and accepted. Hearth keeps an App's configuration, so
+has one for each (`docker-image`, `dockerfile`, `compose`). An App Brick is
+offered and accepted from any catalog whoever installs it sees: Kiln's own,
+one they added, or one published to everyone
+(`apps/web/src/server/visible-bricks.server.ts`). Hearth keeps an App's configuration, so
 Hearth turns the Brick and its answers into it
 (`appBrickDeploy` in the contracts) and the Relay deploys that
 configuration as it always has. An App made from one of those generic
@@ -225,7 +227,9 @@ Kiln makes the secrets it asks for. The folders it keeps are each on a Kiln volu
 App and mounted before its first deployment. Its `ready` command is its
 container's health check, which a deployment waits on. Its `command` is the
 App's start command, and its public ports are published on its Relay.
-Still to come: App Bricks from other catalogs.
+A Brick goes by its ID after whose it is (`billy:paper`), from where its
+recipe is kept; Kiln's own go by their ID alone
+(`brickReference` in the contracts).
 
 Adding any of them opens the same dialog (`AddInstanceDialogHost`): pick
 the kind, pick its Brick, then answer what that kind asks. Each page's Add
@@ -325,8 +329,8 @@ from a tag or an image name today.
    `ready` command is its container's health check. Its `command` starts
    it, and its public ports are published on its Relay. A Brick can carry
    the Compose file or Dockerfile its App runs, as Beszel's hub and agent
-   do. Still to come:
-   App and group Bricks from other catalogs.
+   do. An App Brick is installed from any catalog its installer sees.
+   Still to come: group Bricks from other catalogs.
 9. Domains for every kind.
 10. One instance page, with each kind's own tabs.
 11. Tailscale as its own kind, with the instance group.

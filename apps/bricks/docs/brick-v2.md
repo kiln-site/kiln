@@ -28,7 +28,7 @@ The format describes every kind. Kiln reads them in stages.
 | Database Bricks of a known type  | Run from Kiln's own catalog, on that type's image |
 | A database's `connection`        | Defined here; Kiln builds a type's URL itself |
 | A database Brick with no type    | Defined here; not installable yet     |
-| App Bricks                       | Run from Kiln's own catalog: what they deploy, how they start, their variables, one web port and the ports they publish |
+| App Bricks                       | Run from any catalog: what they deploy, how they start, their variables, one web port and the ports they publish |
 | Group Bricks                     | Run from Kiln's own catalog: databases, and Apps connected to them that run an image or a file the recipe carries |
 | `dockerfile` and `compose`       | Run for Apps: written in the Brick, kept beside its recipe (`file`), or from `path` in a source |
 | `ready` by command               | Run for databases, and for Apps from an image or a Dockerfile; game servers use logs |
@@ -530,14 +530,18 @@ the Brick's: a revision changes it or takes it away, and its owner can't.
 
 An App Brick that sets anything else (a second web port, a private port,
 `ready` another way or for a Compose project, an entrypoint) is refused
-until Kiln runs that part, as is one from another
-catalog.
+until Kiln runs that part.
+
+An App is installed from an App Brick of any catalog whoever installs it
+sees: Kiln's own, one they added, or one published to everyone.
 
 Kiln's catalog has a generic Brick for each thing an App deploys:
 `docker-image`, `dockerfile` and `compose`. An App made from one is its
 owner's in every part and follows no Brick; an App that wasn't installed
 from a Brick is read as the one for what it deploys. An App made from any
 other Brick keeps which Brick and revision it came from, and its answers.
+Those three are Kiln's by its catalog and not by their IDs: another
+catalog's Brick by one of those IDs is followed like any other.
 
 ### Groups
 
@@ -660,8 +664,10 @@ privileged mode or the Docker socket.
 An App Brick that carries a Compose file is held to none of that: a Compose
 file can bind the node's files, join its network and mount the Docker
 socket, which is the node itself however it is mounted. So installing one
-takes `app.manage` on the Relay, and Kiln installs App Bricks from its own
-catalog only.
+takes `app.manage` on the Relay, which is what writing that file into an App
+by hand takes, whichever catalog the Brick is in. A catalog's author decides
+what its Bricks run, and what their later revisions run: read a Compose
+Brick's file before installing it, as you would one you were handed.
 
 Custom Brick sources must use HTTPS. A Relay operator may configure a local
 `file:` catalog for development or air-gapped installations.

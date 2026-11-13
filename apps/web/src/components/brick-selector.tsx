@@ -61,6 +61,7 @@ import {
   useKilnGitRepositorySlug,
 } from "@/lib/git-repository"
 import {
+  appBricksQueryOptions,
   brickCatalogDetailsQueryOptions,
   brickCatalogsQueryOptions,
   queryKeys,
@@ -809,6 +810,10 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
           queryKey: queryKeys.brickCatalogs.all,
         }),
         queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
+        // An App is installed from them too.
+        queryClient.invalidateQueries({
+          queryKey: appBricksQueryOptions().queryKey,
+        }),
         queryClient.invalidateQueries({ queryKey: queryKeys.brickIcons }),
       ])
     },
@@ -840,6 +845,10 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
           queryKey: queryKeys.brickCatalogs.all,
         }),
         queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
+        // An App is installed from them too.
+        queryClient.invalidateQueries({
+          queryKey: appBricksQueryOptions().queryKey,
+        }),
         queryClient.invalidateQueries({ queryKey: queryKeys.brickIcons }),
       ])
     },
@@ -857,6 +866,10 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
           queryKey: queryKeys.brickCatalogs.all,
         }),
         queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
+        // An App is installed from them too.
+        queryClient.invalidateQueries({
+          queryKey: appBricksQueryOptions().queryKey,
+        }),
         queryClient.invalidateQueries({ queryKey: queryKeys.brickIcons }),
       ])
     },
