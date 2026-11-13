@@ -24,12 +24,13 @@ import type {
 import { Effect, Result } from "effect"
 import { parseDocument } from "yaml"
 
-import { promiseEffect } from "@/effect/promise"
+import { promiseEffect, recoverPromise } from "@/effect/promise"
 import {
   isPublicRemoteAddress,
   secureRemoteLookup,
 } from "@/lib/public-remote-address.server"
 
+const GITHUB_RAW_HOST = "raw.githubusercontent.com"
 const MAX_DOCUMENT_BYTES = 1024 * 1024
 const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
 const MAX_REDIRECTS = 5
@@ -65,6 +66,8 @@ export interface LoadedBrickCatalog {
 
 interface ResolvedCatalogSource {
   catalogUrl: URL
+  /** Where its recipes are, for one on GitHub. */
+  tree: string | null
   revisionSha: string | null
   revisionUrl: string | null
   source: string
@@ -102,6 +105,11 @@ export async function loadBrickCatalogSource(
     FETCH_CONCURRENCY,
     async (reference): Promise<Brick> => {
       const source = new URL(reference, resolvedSource.catalogUrl)
+      if (!listedByItsRepository(source, resolvedSource.tree)) {
+        throw new Error(
+          `${source.href}: a recipe on GitHub is listed by a catalog of its own repository`
+        )
+      }
       // A kiln.brick/v1 recipe is read as the v2 Brick that runs the same.
       const read = readBrickRecipe(
         parseYaml(
@@ -190,6 +198,63 @@ export async function loadBrickCatalogSource(
         : []
     ),
   }
+}
+
+/**
+ * Whether a catalog may list a recipe at this address. One on GitHub is in
+ * the catalog's own repository, at the commit the catalog was read at
+ * (`tree`): a link into another repository could name a commit only one of
+ * its forks has, and pass a stranger's recipe off as that repository's.
+ * Anywhere else, an address is served by whoever it names.
+ */
+function listedByItsRepository(recipe: URL, tree: string | null): boolean {
+  return (
+    recipe.hostname.toLowerCase() !== GITHUB_RAW_HOST ||
+    (tree !== null && recipe.href.startsWith(tree))
+  )
+}
+
+// Where a catalog on GitHub keeps its recipes: its repository at the
+// commit it was read at. Null for a catalog kept anywhere else.
+function githubTree(slug: string, sha: string): string {
+  return `https://${GITHUB_RAW_HOST}/${slug}/${sha}/`
+}
+
+/**
+ * Why a catalog Hearth stored can't be trusted to hold only its own
+ * recipes, or null when it can. One stored before Kiln checked this may
+ * name a commit only a fork has, or list another repository's recipe; it
+ * is added again, which reads it under the rules above.
+ */
+export function storedCatalogProblem(stored: {
+  revisionSha: string | null
+  revisionUrl: string | null
+  snapshot: RelayCatalog
+  source: string
+}): string | null {
+  const again = "Add this catalog again: Kiln now checks whose its recipes are"
+  const given = URL.canParse(stored.source)
+    ? githubCatalogUrl(new URL(stored.source))
+    : null
+  // Read by name, as it has to be now. What an older Kiln read by anything
+  // else may be a commit only a fork has.
+  if (given && !namesBranchOrTag(given.reference)) return again
+  // As `githubCatalogRevisionUrl` wrote it: the repository, then the commit.
+  const read =
+    /^https:\/\/github\.com\/([^/]+\/[^/]+)\/blob\/([a-f0-9]{40})\//u.exec(
+      stored.revisionUrl ?? ""
+    )
+  const tree =
+    read && read[2] === stored.revisionSha
+      ? githubTree(read[1]!, read[2]!)
+      : null
+  return stored.snapshot.bricks.every(
+    (brick) =>
+      URL.canParse(brick.source) &&
+      listedByItsRepository(new URL(brick.source), tree)
+  )
+    ? null
+    : again
 }
 
 /**
@@ -446,6 +511,7 @@ async function resolveCatalogSource(
       revisionSha: null,
       revisionUrl: null,
       source: url.href,
+      tree: null,
     }
   }
   if (url.protocol !== "https:") {
@@ -468,6 +534,7 @@ async function resolveCatalogSource(
     revisionSha: null,
     revisionUrl: null,
     source: url.href,
+    tree: null,
   }
 }
 
@@ -520,6 +587,73 @@ function githubCatalogUrl(
   return null
 }
 
+const githubApiHeaders = {
+  Accept: "application/vnd.github+json",
+  "User-Agent": "Kiln-Hearth",
+  "X-GitHub-Api-Version": "2022-11-28",
+}
+
+async function githubApi(slug: string, path: string, signal: AbortSignal) {
+  const url = new URL(`https://api.github.com/repos/${slug}/${path}`)
+  return JSON.parse(
+    await readHttpsDocument(url, url, 0, signal, githubApiHeaders)
+  ) as unknown
+}
+
+const commitSha = (commit: unknown): string | null =>
+  typeof commit === "object" &&
+  commit !== null &&
+  "sha" in commit &&
+  typeof commit.sha === "string" &&
+  /^[a-f0-9]{40}$/u.test(commit.sha)
+    ? commit.sha
+    : null
+
+// A reference that can only be a branch or a tag, by its name: not a commit
+// ID, whole or shortened, and nothing Git reads as a way to reach one
+// (`main~1`, `<commit>^0`, `a..b`, `HEAD@{1}`). GitHub serves any commit of
+// a repository's forks at the repository's own address, so a commit can't
+// be told from the repository's own by how it is named.
+const namesBranchOrTag = (reference: string) =>
+  /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(reference) &&
+  !reference.includes("..") &&
+  !/^[a-f0-9]{4,40}$/iu.test(reference)
+
+/**
+ * The commit a catalog on GitHub is read at, which is one its repository
+ * published: its default branch, or a branch or tag of its own, looked up
+ * by name. A commit ID is refused, as is any other way to name one: read at a commit
+ * only a fork has, or at a pull request's, a stranger's recipe would be the
+ * repository's. Kiln keeps the commit it read, so naming a branch still
+ * leaves a catalog as it was when it was added.
+ */
+async function githubCatalogCommit(
+  slug: string,
+  reference: string,
+  signal: AbortSignal
+): Promise<string> {
+  if (!namesBranchOrTag(reference)) {
+    throw new Error(
+      `Name a branch or a tag of ${slug}, not a commit: Kiln keeps the commit it reads`
+    )
+  }
+  const named = encodeURIComponent(reference)
+  const commit =
+    reference === "HEAD"
+      ? await githubApi(slug, "commits/HEAD", signal)
+      : await recoverPromise(
+          () => githubApi(slug, `commits/heads/${named}`, signal),
+          () =>
+            recoverPromise(
+              () => githubApi(slug, `commits/tags/${named}`, signal),
+              () => null
+            )
+        )
+  const sha = commitSha(commit)
+  if (!sha) throw new Error(`${reference} isn't a branch or tag of ${slug}`)
+  return sha
+}
+
 async function pinGithubCatalog(
   repository: string,
   reference: string,
@@ -528,25 +662,7 @@ async function pinGithubCatalog(
 ): Promise<ResolvedCatalogSource> {
   const parsed = new URL(resolveKilnGitRepository(repository))
   const slug = parsed.pathname.slice(1)
-  const commitUrl = new URL(
-    `https://api.github.com/repos/${slug}/commits/${encodeURIComponent(reference)}`
-  )
-  const commit = JSON.parse(
-    await readHttpsDocument(commitUrl, commitUrl, 0, signal, {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "Kiln-Hearth",
-      "X-GitHub-Api-Version": "2022-11-28",
-    })
-  ) as unknown
-  const sha =
-    typeof commit === "object" &&
-    commit !== null &&
-    "sha" in commit &&
-    typeof commit.sha === "string" &&
-    /^[a-f0-9]{40}$/u.test(commit.sha)
-      ? commit.sha
-      : null
-  if (!sha) throw new Error("GitHub did not return a valid catalog commit")
+  const sha = await githubCatalogCommit(slug, reference, signal)
   return {
     catalogUrl: new URL(
       `https://raw.githubusercontent.com/${slug}/${sha}/${path.replace(/^\/+/, "")}`
@@ -554,6 +670,7 @@ async function pinGithubCatalog(
     revisionSha: sha,
     revisionUrl: githubCatalogRevisionUrl(repository, sha, path),
     source: repository,
+    tree: githubTree(slug, sha),
   }
 }
 

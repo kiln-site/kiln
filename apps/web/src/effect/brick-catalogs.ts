@@ -6,6 +6,7 @@ import { Clock, Effect, Result } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
+import { storedCatalogProblem } from "@/lib/brick-catalog-source.server"
 import { databaseTable } from "@/lib/database-config"
 
 export const PERSONAL_CATALOG_LIMIT = 10
@@ -245,7 +246,17 @@ function decodeCatalogRows(rows: ReadonlyArray<CatalogRow>) {
 }
 
 function decodeCatalogRow(row: CatalogRow) {
-  const snapshot = readRelayCatalog(decodeJson(row.snapshot))
+  const read = readRelayCatalog(decodeJson(row.snapshot))
+  // One that reads, but may hold a recipe that isn't its own repository's,
+  // is kept out of everything a catalog is used for until it is added again.
+  const untrusted = read.success
+    ? storedCatalogProblem({
+        revisionSha: row.revision_sha,
+        revisionUrl: row.revision_url,
+        snapshot: read.data,
+        source: row.source,
+      })
+    : null
   const record = {
     id: row.id,
     ownerEmail: row.owner_email,
@@ -258,15 +269,20 @@ function decodeCatalogRow(row: CatalogRow) {
     publishedBy: row.published_by,
     revisionSha: row.revision_sha,
     revisionUrl: row.revision_url,
-    snapshot: snapshot.success ? snapshot.data : null,
+    snapshot: read.success && untrusted === null ? read.data : null,
     snapshotSha256: row.snapshot_sha256,
     source: row.source,
-    statusError: snapshot.success ? null : "Stored catalog snapshot is invalid",
+    statusError: read.success
+      ? untrusted
+      : "Stored catalog snapshot is invalid",
     updatedAt: new Date(row.updated_at).toISOString(),
     visibility: row.visibility,
   } satisfies BrickCatalogRecord
-  if (!snapshot.success) {
-    return { error: snapshot.error, record, success: false } as const
+  if (!read.success) {
+    return { error: read.error, record, success: false } as const
+  }
+  if (untrusted !== null) {
+    return { error: untrusted, record, success: false } as const
   }
   return {
     record,

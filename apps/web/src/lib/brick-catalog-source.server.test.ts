@@ -178,3 +178,116 @@ describe("a file a Brick carries beside its recipe", () => {
     expect(remote.asked).not.toContain(elsewhere)
   })
 })
+
+// GitHub serves any commit of a repository's forks at the repository's own
+// address. A Brick is whose its address says, and an instance takes a newer
+// revision from that address, so a catalog on GitHub is only ever read at a
+// commit the repository itself published.
+describe("a catalog on GitHub", () => {
+  const published = "a".repeat(40)
+  const forked = "f".repeat(40)
+  const api = "https://api.github.com/repos/billy/bricks"
+  const raw = "https://raw.githubusercontent.com/billy/bricks"
+  const recipe = (id: string) =>
+    [
+      "format: kiln.brick/v2",
+      "kind: game-server",
+      `metadata: { id: ${id}, name: ${id}, summary: An example., author: Billy }`,
+      "deploy: { type: image, image: ghcr.io/acme/game:1 }",
+      "",
+    ].join("\n")
+  const github = (recipes: ReadonlyArray<string> = ["bricks/paper.yml"]) => {
+    remote.asked.length = 0
+    remote.answers.clear()
+    remote.answers.set(`${api}/commits/HEAD`, `{"sha":"${published}"}`)
+    remote.answers.set(`${api}/commits/heads/main`, `{"sha":"${published}"}`)
+    remote.answers.set(`${api}/commits/tags/v1`, `{"sha":"${published}"}`)
+    // What GitHub answers for any commit of a fork, and for a pull request.
+    remote.answers.set(`${api}/commits/${forked}`, `{"sha":"${forked}"}`)
+    remote.answers.set(`${api}/commits/pull`, `{"sha":"${forked}"}`)
+    for (const commit of [published, forked]) {
+      remote.answers.set(
+        `${raw}/${commit}/catalog.yml`,
+        [
+          "format: kiln.catalog/v1",
+          "name: Billy's",
+          "recipes:",
+          ...recipes.map((entry) => `  - ${entry}`),
+          "",
+        ].join("\n")
+      )
+      remote.answers.set(`${raw}/${commit}/bricks/paper.yml`, recipe("paper"))
+    }
+  }
+  const sources = async (catalog: string) =>
+    (await loadBrickCatalogSource(catalog)).snapshot.bricks.map(
+      (brick) => brick.source
+    )
+
+  it("is read at its default branch, or a branch or tag of its own", async () => {
+    for (const catalog of [
+      "billy/bricks",
+      `${raw}/main/catalog.yml`,
+      `${raw}/v1/catalog.yml`,
+    ]) {
+      github()
+      expect(await sources(catalog)).toEqual([
+        `${raw}/${published}/bricks/paper.yml`,
+      ])
+    }
+  })
+
+  it("is never read at a commit by its ID, or at a pull request's", async () => {
+    // Nor by anything Git reads as a way to reach one.
+    for (const commit of [
+      forked,
+      forked.slice(0, 7),
+      published,
+      `${forked}~0`,
+      `${forked}^0`,
+      "main~1",
+      "main@{1}",
+    ]) {
+      github()
+      await expect(sources(`${raw}/${commit}/catalog.yml`)).rejects.toThrow(
+        "not a commit"
+      )
+      expect(remote.asked).toEqual([])
+    }
+    // A pull request's ref holds a fork's commits; only branches and tags
+    // are looked up by name.
+    github()
+    await expect(sources(`${raw}/pull/catalog.yml`)).rejects.toThrow(
+      "isn't a branch or tag of billy/bricks"
+    )
+    expect(remote.asked.filter((asked) => asked.startsWith(raw))).toEqual([])
+  })
+
+  it("lists no recipe from another repository on GitHub, nor from another commit of its own", async () => {
+    const theirs = `https://raw.githubusercontent.com/kiln-site/kiln/${forked}/apps/bricks/bricks/paper.yml`
+    for (const elsewhere of [
+      theirs,
+      `${raw}/${forked}/bricks/paper.yml`,
+      `../../../kiln-site/kiln/${forked}/apps/bricks/bricks/paper.yml`,
+    ]) {
+      github([elsewhere])
+      remote.answers.set(theirs, recipe("paper"))
+      await expect(sources("billy/bricks")).rejects.toThrow(
+        "listed by a catalog of its own repository"
+      )
+      expect(remote.asked.filter((asked) => asked.includes(forked))).toEqual([])
+    }
+    // Nor does a catalog kept anywhere else.
+    remote.asked.length = 0
+    remote.answers.clear()
+    remote.answers.set(
+      "https://bricks.test/billy/catalog.yml",
+      `format: kiln.catalog/v1\nname: Billy's\nrecipes:\n  - ${theirs}\n`
+    )
+    remote.answers.set(theirs, recipe("paper"))
+    await expect(
+      sources("https://bricks.test/billy/catalog.yml")
+    ).rejects.toThrow("listed by a catalog of its own repository")
+    expect(remote.asked).not.toContain(theirs)
+  })
+})

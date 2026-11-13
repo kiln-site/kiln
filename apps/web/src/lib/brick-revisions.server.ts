@@ -16,11 +16,17 @@ import { runAppEffect } from "@/effect/runtime"
 const cacheMs = 60_000
 let cached: { at: number; bricks: Map<string, Brick> } | undefined
 
+// Whose copy of a Brick says what its newest revision is, when several
+// catalogs hold it: Kiln's own catalog, then one published to everyone,
+// then one somebody added for themselves. Adding a newer copy of a catalog
+// for oneself never moves what everyone else's instances are offered.
+const authority = { own: 0, community: 1, personal: 2 } as const
+
 /**
  * Each catalog Brick at its newest revision, by its lineage. Several
- * catalogs may hold the same Brick, read at different times; the newest
- * revision any of them has is the Brick's. A sweep asks once a minute at
- * most.
+ * catalogs may hold the same Brick, read at different times; the Brick's is
+ * the newest revision among the copies with the most say (`authority`). A
+ * sweep asks once a minute at most.
  */
 async function newestBricks(): Promise<ReadonlyMap<string, Brick>> {
   if (cached && Date.now() - cached.at < cacheMs) return cached.bricks
@@ -29,19 +35,30 @@ async function newestBricks(): Promise<ReadonlyMap<string, Brick>> {
     defaultBrickCatalog(),
     runAppEffect("brickCatalogs.all", listBrickCatalogsEffect("", true)),
   ])
-  const bricks = new Map<string, Brick>()
+  const held = new Map<string, { brick: Brick; rank: number }>()
   for (const catalog of [
-    own,
-    ...added.map((record) => record.snapshot ?? null),
+    { bricks: own?.bricks ?? [], rank: authority.own },
+    ...added.map((record) => ({
+      bricks: record.snapshot?.bricks ?? [],
+      rank: authority[record.visibility],
+    })),
   ]) {
-    for (const brick of catalog?.bricks ?? []) {
+    for (const brick of catalog.bricks) {
       const lineage = brickSourceLineage(brick.source)
-      const held = bricks.get(lineage)
-      if (!held || brickRevision(brick) > brickRevision(held)) {
-        bricks.set(lineage, brick)
+      const current = held.get(lineage)
+      if (
+        !current ||
+        catalog.rank < current.rank ||
+        (catalog.rank === current.rank &&
+          brickRevision(brick) > brickRevision(current.brick))
+      ) {
+        held.set(lineage, { brick, rank: catalog.rank })
       }
     }
   }
+  const bricks = new Map(
+    [...held].map(([lineage, { brick }]) => [lineage, brick])
+  )
   cached = { at: Date.now(), bricks }
   return bricks
 }
