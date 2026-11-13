@@ -206,9 +206,10 @@ Relay's snapshots, Hearth's catalogs, backup manifests) are converted when
 read, through `readBrickRecipe` in the contracts, which is the only code
 that knows v1. Game servers, databases and Apps are installed from a Brick.
 
-An App is installed from an App Brick, which so far says only what it
-deploys: an image, or a Dockerfile or a Compose file in a source chosen at
-install, which is a repository or a file written in Hearth. Kiln's catalog
+An App is installed from an App Brick, which says what it deploys: an
+image, or a Dockerfile or a Compose file. The Brick carries that file,
+written in its recipe, or names one in a source chosen at install, which
+is a repository or a file written in Hearth. Kiln's catalog
 has one for each (`docker-image`, `dockerfile`, `compose`), and for now only
 those are offered and accepted. Hearth keeps an App's configuration, so
 Hearth turns the Brick and its answers into it
@@ -219,8 +220,8 @@ Apps made before Apps ran Bricks, and nothing about their containers
 changed. An App made from any other Brick, alone or in a group, keeps the
 Brick, its revision and its answers, follows it, and can be detached from
 it ([Instance updates](instance-updates.md#which-apps-follow-a-brick)). A
-Brick sets an App's image and its variables, and Kiln makes the secrets it
-asks for. The folders it keeps are each on a Kiln volume, made with the
+Brick sets an App's image, or the file it carries, and its variables, and
+Kiln makes the secrets it asks for. The folders it keeps are each on a Kiln volume, made with the
 App and mounted before its first deployment. Its `ready` command is its
 container's health check, which a deployment waits on. Its `command` is the
 App's start command, and its public ports are published on its Relay.
@@ -322,7 +323,8 @@ from a tag or an image name today.
    can be detached. Its web port gets a new App its address and first web
    route, each folder it keeps is on a volume from the start, and its
    `ready` command is its container's health check. Its `command` starts
-   it, and its public ports are published on its Relay. Still to come:
+   it, and its public ports are published on its Relay. A Brick can carry
+   the Compose file or Dockerfile its App runs. Still to come:
    App and group Bricks from other catalogs.
 9. Domains for every kind.
 10. One instance page, with each kind's own tabs.

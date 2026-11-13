@@ -32,20 +32,27 @@ export interface AppBrickPublishedPort {
 }
 
 /**
- * What an App Brick deploys once its answers are in: an image, or the
- * Dockerfile or Compose file at a path in its source. The source is chosen
- * when the Brick is installed (a repository, or a file written in Hearth),
- * never by the Brick.
+ * What an App Brick deploys once its answers are in: an image, or a
+ * Dockerfile or Compose file. The Brick either carries the file, or names
+ * its path in a source chosen when the Brick is installed (a repository,
+ * or a file written in Hearth).
  */
 export type AppBrickDeploy = (
+  | { type: "image"; image: string }
   | {
-      type: "image"
-      image: string
-      /** The variables the Brick sets, each with its template filled in. */
-      environment: Record<string, string>
+      type: "dockerfile" | "compose"
+      /** The file itself, as written, when the Brick carries it. */
+      content?: string
+      /** Where it is in the App's source; empty when the Brick carries it. */
+      path: string
     }
-  | { type: "dockerfile" | "compose"; path: string }
 ) & {
+  /**
+   * The variables the Brick sets, each with its template filled in. They
+   * are how an answer reaches a file the Brick carries: a Compose file
+   * reads them as `${NAME}`, and a container has them when it runs.
+   */
+  environment: Record<string, string>
   /**
    * The folders of its container it keeps across deployments, each on a
    * volume made when it is installed. A Compose project keeps its own.
@@ -94,8 +101,17 @@ export const APP_COMMAND_MAX_LENGTH = 4_000
 
 // The parts of `deploy` Kiln runs for an App, by type.
 const deployed: Record<AppBrickDeployType, ReadonlyArray<string>> = {
-  compose: ["type", "path", "ports"],
-  dockerfile: ["type", "path", "command", "ports", "ready", "volumes"],
+  compose: ["type", "path", "compose", "env", "ports"],
+  dockerfile: [
+    "type",
+    "path",
+    "dockerfile",
+    "command",
+    "env",
+    "ports",
+    "ready",
+    "volumes",
+  ],
   image: ["type", "image", "command", "env", "ports", "ready", "volumes"],
 }
 
@@ -368,19 +384,6 @@ export function appBrickDeploy(
           ...(published.length === 0 ? {} : { ports: published }),
         }
   const volumes = appBrickVolumes(recipe)
-  if (deploy.type !== "image") {
-    // Its file is in its source; `appBrickProblem` refused one written here.
-    return {
-      deploy: {
-        path: deploy.path ?? "",
-        type: deploy.type,
-        volumes,
-        ...appBrickReady(recipe),
-        ...runs,
-        ...web,
-      },
-    }
-  }
   const filled = (template: string) =>
     fillBrickTemplate(template, (name) =>
       name === "brick.id"
@@ -391,14 +394,6 @@ export function appBrickDeploy(
             ? String(answers[name])
             : undefined
     )
-  const image = filled(deploy.image).trim()
-  // An optional input left blank leaves its template as written.
-  if (image === "" || image.includes("{{")) {
-    return { problem: "This Brick's image needs an answer it wasn't given" }
-  }
-  if (image.length > APP_IMAGE_MAX_LENGTH) {
-    return { problem: "This Brick's image is longer than an App's can be" }
-  }
   const environment: Record<string, string> = {}
   for (const [name, template] of Object.entries(deploy.env ?? {})) {
     const value = filled(template)
@@ -410,6 +405,32 @@ export function appBrickDeploy(
       return { problem: `${name} can't hold a line break` }
     }
     environment[name] = value
+  }
+  if (deploy.type !== "image") {
+    // The file the Brick carries, passed on as it is written: no template
+    // is filled in it. Without one, its file is in its source.
+    const content =
+      deploy.type === "compose" ? deploy.compose : deploy.dockerfile
+    return {
+      deploy: {
+        ...(content === undefined ? {} : { content }),
+        environment,
+        path: deploy.path ?? "",
+        type: deploy.type,
+        volumes,
+        ...appBrickReady(recipe),
+        ...runs,
+        ...web,
+      },
+    }
+  }
+  const image = filled(deploy.image).trim()
+  // An optional input left blank leaves its template as written.
+  if (image === "" || image.includes("{{")) {
+    return { problem: "This Brick's image needs an answer it wasn't given" }
+  }
+  if (image.length > APP_IMAGE_MAX_LENGTH) {
+    return { problem: "This Brick's image is longer than an App's can be" }
   }
   return {
     deploy: {

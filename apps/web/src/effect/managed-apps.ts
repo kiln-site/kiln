@@ -89,6 +89,11 @@ export const appBrickRecordSchema = z.strictObject({
    * volume is its owner's to say.
    */
   volumes: z.array(z.string()).default([]),
+  /**
+   * Whether the Brick carries the Compose file or Dockerfile the App runs.
+   * It is the Brick's then, as an image is: a revision replaces it.
+   */
+  written: z.boolean().optional(),
 })
 export type AppBrickRecord = z.infer<typeof appBrickRecordSchema>
 
@@ -135,6 +140,8 @@ export const createAppRecordEffect = Effect.fn("apps.create")(
     /** What its Brick deploys. Without one, nothing yet. */
     deploys?: Pick<AppConfig, "sourceType"> & {
       command?: string
+      compose?: string
+      dockerfile?: string
       healthcheck?: NonNullable<AppConfig["healthcheck"]>
       image?: string
       ports?: AppConfig["ports"]
@@ -273,17 +280,22 @@ export const updateAppConfigEffect = (
 
 /**
  * What a change would alter that an App's Brick set, or null: what it
- * deploys, how it starts and how it is checked, the variables the Brick
- * wrote, and that each folder the Brick keeps is on a volume. Which volume that is, and
+ * deploys, the file it runs when the Brick carries it, how it starts and
+ * how it is checked, the variables the Brick wrote, and that each folder
+ * the Brick keeps is on a volume. Which volume that is, and
  * everything else about an App, is its owner's, following a Brick or not.
  */
 export function heldByAppBrick(
   saved: AppConfig,
   next: AppConfig,
-  brick: Pick<AppBrickRecord, "environment" | "volumes">
+  brick: Pick<AppBrickRecord, "environment" | "volumes" | "written">
 ): string | null {
   if (next.sourceType !== saved.sourceType) return "What it deploys"
   if (next.image !== saved.image) return "Its image"
+  if (brick.written) {
+    if (next.compose !== saved.compose) return "Its Compose file"
+    if (next.dockerfile !== saved.dockerfile) return "Its Dockerfile"
+  }
   if (next.command !== saved.command) return "Its start command"
   if (next.healthcheck?.command !== saved.healthcheck?.command) {
     return "Its health check"

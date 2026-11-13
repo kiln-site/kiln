@@ -312,26 +312,36 @@ function InstanceUpdatesDialog({
         <DialogHeader>
           <DialogTitle>Updates</DialogTitle>
           <DialogDescription>
-            Kiln checks{" "}
-            {updates.image ? (
-              <span className="font-mono text-foreground">{updates.image}</span>
+            {updates.brickOnly ? (
+              "Kiln checks its Brick every hour for a newer revision."
             ) : (
-              "its image"
-            )}{" "}
-            every hour for a newer one.
+              <>
+                Kiln checks{" "}
+                {updates.image ? (
+                  <span className="font-mono text-foreground">
+                    {updates.image}
+                  </span>
+                ) : (
+                  "its image"
+                )}{" "}
+                every hour for a newer one.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
 
         <dl className="divide-y divide-border/60 border-y border-border/60 text-[0.8125rem]">
-          <DialogFact label="Running">
-            {updates.runningDigest ? (
-              <span className="font-mono text-xs">
-                {shortDigest(updates.runningDigest)}
-              </span>
-            ) : (
-              <span className="text-muted-foreground">Unknown</span>
-            )}
-          </DialogFact>
+          {updates.brickOnly ? null : (
+            <DialogFact label="Running">
+              {updates.runningDigest ? (
+                <span className="font-mono text-xs">
+                  {shortDigest(updates.runningDigest)}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">Unknown</span>
+              )}
+            </DialogFact>
+          )}
           {available ? (
             <DialogFact label="Available">
               <span className="font-mono text-xs">

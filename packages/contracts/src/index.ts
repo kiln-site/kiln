@@ -1335,7 +1335,8 @@ export const relayInstanceImageCheckResultSchema = z.discriminatedUnion(
       id: instanceIdSchema,
       status: z.literal("deploying"),
     }),
-    // It names a digest, which never moves.
+    // It names a digest, which never moves, or no image at all: an App
+    // built from a Dockerfile, or run as a Compose project.
     z.object({
       ...installedBrick,
       id: instanceIdSchema,

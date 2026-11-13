@@ -417,9 +417,14 @@ function NewAppForm({
       brick ? appBrickDeploy(brick, withSecretsToCome(brick, variables)) : null,
     [brick, variables]
   )
-  // The file a Brick builds, which an image's doesn't.
+  // The file a Brick builds from a source, which an image's doesn't, nor
+  // one the Brick carries itself.
   const file =
-    brick?.deploy && brick.deploy.type !== "image" ? brick.deploy : null
+    brick?.deploy &&
+    brick.deploy.type !== "image" &&
+    brick.deploy.path !== undefined
+      ? brick.deploy
+      : null
   const builds = file?.type ?? null
   const [fileSource, setFileSource] = React.useState<FileSource>("repository")
   const [repository, setRepository] = React.useState(() =>

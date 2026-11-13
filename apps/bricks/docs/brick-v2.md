@@ -30,7 +30,7 @@ The format describes every kind. Kiln reads them in stages.
 | A database Brick with no type    | Defined here; not installable yet     |
 | App Bricks                       | Run from Kiln's own catalog: what they deploy, how they start, their variables, one web port and the ports they publish |
 | Group Bricks                     | Run from Kiln's own catalog: databases, and Apps from an image connected to them |
-| `dockerfile` and `compose`       | Run for Apps from `path` in a source; one written in the Brick isn't yet |
+| `dockerfile` and `compose`       | Run for Apps, written in the Brick or from `path` in a source |
 | `ready` by command               | Run for databases, and for Apps from an image or a Dockerfile; game servers use logs |
 | `ready` by HTTP                  | Defined here; nothing runs it yet     |
 | Ports that aren't `public`       | Defined here; not for game servers    |
@@ -404,9 +404,55 @@ the App's configuration. So far Kiln runs this much of an App Brick:
 
 | `deploy.type` | What Kiln takes from it                                      |
 | ------------- | ------------------------------------------------------------ |
-| `image`       | `image` and `env`, with their templates filled from the answers |
-| `dockerfile`  | `path`, the Dockerfile to build in the App's source          |
-| `compose`     | `path`, the Compose file to run from the App's source        |
+| `image`       | `image`, with its templates filled from the answers          |
+| `dockerfile`  | `dockerfile`, written in the Brick, or `path`, the Dockerfile to build in the App's source |
+| `compose`     | `compose`, written in the Brick, or `path`, the Compose file to run from the App's source |
+
+Every type takes `env`, with its templates filled from the answers: the
+variables the Brick sets in the App's environment.
+
+A file written in the Brick becomes the App's own Compose file or
+Dockerfile when the Brick is installed, exactly as it is written: no
+template is filled in it, so it stays a file that can be run and checked as
+it stands, and no answer is ever kept in it. An answer reaches it through
+`env`: a Compose file reads the App's variables as `${NAME}`, and a
+container has them when it runs. A Dockerfile can't use one while it
+builds.
+
+```yaml
+inputs:
+  - { key: secret, label: App secret, type: secret, generate: true }
+deploy:
+  type: compose
+  env:
+    APP_SECRET: "{{ secret }}"
+  compose: |
+    services:
+      web:
+        image: ghcr.io/acme/site:2
+        environment:
+          APP_SECRET: ${APP_SECRET}
+```
+
+An App made from such a Brick needs no source and deploys at once. The
+file is the Brick's while the App follows it, as an image is: a revision
+replaces it, and its owner can't edit it without detaching. Installing one
+takes `app.manage` on the Relay, as writing a Compose file in an App's
+settings does, since a Compose file can bind the node's own files and
+network. A revision that would change what the App deploys (an image where
+it had a Compose file), or that stops or starts carrying the file, is
+refused: install it again to take it.
+
+Following such a Brick trusts its later revisions as much as the one that
+was installed: a revision replaces the whole file, and so can change what
+the App binds of its node, its network and where it keeps its data. A
+Compose volume is known by its name in the file, so a revision that
+renames one starts on an empty volume and leaves the old one where it was;
+a Brick's author keeps the names.
+
+The Brick carries that one file and nothing beside it. A Dockerfile that
+copies files in, or a Compose file that builds an image or reads files
+beside it, needs a source: give its `path` instead.
 
 The source of a `path` is chosen when the Brick is installed: a repository
 from a connected source, or a file written in Hearth. A `secret` input with
@@ -466,8 +512,8 @@ An App Brick from an image or a Dockerfile may say `ready` by a command
 the Brick's: a revision changes it or takes it away, and its owner can't.
 
 An App Brick that sets anything else (a second web port, a private port,
-`ready` another way or for a Compose project, an entrypoint, a file written
-in the Brick) is refused until Kiln runs that part, as is one from another
+`ready` another way or for a Compose project, an entrypoint) is refused
+until Kiln runs that part, as is one from another
 catalog.
 
 Kiln's catalog has a generic Brick for each thing an App deploys:
@@ -567,10 +613,17 @@ Entries are paths relative to the catalog, or `https://` links.
 ## Security boundary
 
 A Brick is executable infrastructure: its image, command and environment
-decide what runs. Only install Bricks you trust. The Relay still enforces its
-own storage root, read-only root filesystem, dropped capabilities,
-`no-new-privileges`, a process limit and an isolated network; a Brick can't
-ask for host paths, capabilities, privileged mode or the Docker socket.
+decide what runs. Only install Bricks you trust. For a game server or a
+database the Relay still enforces its own storage root, read-only root
+filesystem, dropped capabilities, `no-new-privileges`, a process limit and
+an isolated network; such a Brick can't ask for host paths, capabilities,
+privileged mode or the Docker socket.
+
+An App Brick that carries a Compose file is held to none of that: a Compose
+file can bind the node's files, join its network and mount the Docker
+socket, which is the node itself however it is mounted. So installing one
+takes `app.manage` on the Relay, and Kiln installs App Bricks from its own
+catalog only.
 
 Custom Brick sources must use HTTPS. A Relay operator may configure a local
 `file:` catalog for development or air-gapped installations.

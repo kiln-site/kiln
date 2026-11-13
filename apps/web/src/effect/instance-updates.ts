@@ -318,7 +318,8 @@ function nextUpdate(
         runningDigest: null,
         state: result.status,
       }
-    // A digest never moves, so there is never an update to offer.
+    // A digest never moves, and an App that names no image has none to
+    // move, so there is never an image update to offer.
     case "pinned":
       return { ...checked, ...cleared, runningDigest: null, state: "current" }
     case "checked": {

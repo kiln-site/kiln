@@ -14,7 +14,10 @@ import {
 } from "@/effect/managed-apps"
 import { createManagedDatabaseRecordEffect } from "@/effect/managed-databases"
 import { notifyUsersEffect, openSourceKeysEffect } from "@/effect/notifications"
-import { recordCheckedImageEffect } from "@/lib/instance-updates.server"
+import {
+  askInstanceImageEffect,
+  recordCheckedImageEffect,
+} from "@/lib/instance-updates.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRelay, insertUser } from "@/test/seed"
@@ -22,6 +25,28 @@ import { insertRelay, insertUser } from "@/test/seed"
 // Catalogs are fetched over the network; none has these Bricks.
 vi.mock("@/lib/brick-revisions.server", () => ({
   newestBrickRevision: async () => null,
+}))
+
+// The Relay is asked about what a check names, and answers as it does for
+// an App that names no image: the Brick its containers were deployed from.
+const relay = vi.hoisted(() => ({
+  asked: [] as Array<{ id: string; image?: string }>,
+}))
+vi.mock("@/lib/relay-connection", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
+  relayRpc: async (
+    _relay: unknown,
+    operation: string,
+    payload: { instances?: Array<{ id: string; image?: string }> }
+  ) => {
+    if (operation !== "instance.image.check") return {}
+    relay.asked.push(...(payload.instances ?? []))
+    return (payload.instances ?? []).map(({ id }) => ({
+      brick: { revision: 1, source: "https://bricks.test/monitor.yml" },
+      id,
+      status: "pinned",
+    }))
+  },
 }))
 
 vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"x".repeat(32)}`)
@@ -279,6 +304,53 @@ describeMysql("App image checks", () => {
           )
         })
     )
+    // An App that runs the Compose file its Brick carries names no image,
+    // and is still checked: it is how it hears of its Brick's revisions.
+    it.effect(
+      "ask about an App that runs the file its Brick carries, for its Brick",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.asked.length = 0
+          yield* insertRelay(relayId)
+          yield* insertUser("user")
+          const source = "https://bricks.test/monitor.yml"
+          yield* createAppRecordEffect({
+            appId,
+            brick: {
+              answers: {},
+              environment: [],
+              name: "Monitor",
+              revision: 1,
+              source,
+              volumes: [],
+              written: true,
+            },
+            createdBy: "user",
+            deploys: {
+              compose: "services:\n  hub:\n    image: monitor:1\n",
+              sourceType: "compose",
+            },
+            name: "Monitor",
+            relayId,
+          })
+          const node = { enabled: true, id: relayId } as PersistedRelay
+
+          const asked = yield* askInstanceImageEffect("app", node, appId)
+          assert.deepStrictEqual(relay.asked, [{ id: appId }])
+          assert.isFalse(asked.unchecked)
+
+          const recorded = yield* recordCheckedImageEffect(
+            "app",
+            node,
+            appId,
+            asked,
+            null
+          )
+          assert.deepInclude(recorded?.brick, { revision: 1, source })
+        })
+    )
+
     // Its container says which Brick deployed it until it next deploys,
     // whatever became of the App since.
     it.effect(

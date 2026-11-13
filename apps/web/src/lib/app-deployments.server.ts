@@ -1075,9 +1075,12 @@ const askedDeployment = (input: DeployInput) =>
           }
     // Kiln's own asks of an app that deploys from elsewhere now.
     if (userId === null && automatic && sourceType !== "github") return null
+    // An image update, of one that no longer deploys an image. A revision
+    // of its Brick deploys whatever the revision made.
     if (
       userId === null &&
       input.trigger === "update" &&
+      !input.brick &&
       sourceType !== "image"
     ) {
       return null

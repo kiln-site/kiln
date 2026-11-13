@@ -56,7 +56,8 @@ export interface UpdateSubject {
   id: string
   /**
    * The image Hearth knows it names, which a check asks about. Null for a
-   * kind that runs what its container was made from, which the Relay reads.
+   * kind that runs what its container was made from, which the Relay
+   * reads, and for an App that names none and is checked for its Brick.
    */
   image: string | null
   name: string
@@ -149,16 +150,23 @@ const movingAppImage = (config: { image: string; sourceType: string }) =>
   config.image !== "" &&
   !config.image.includes("@")
 
-// It checks too while it follows a Brick, whose revisions it is offered
-// whatever its image names.
-const checkedApp = (app: {
+type CheckedApp = {
   brick: unknown
   config: { image: string; sourceType: string }
-}) =>
+}
+
+// It checks too while it follows a Brick, whose revisions it is offered
+// whatever it deploys: an image by digest, or a Compose file or Dockerfile
+// its Brick carries, which names no image at all.
+const checkedApp = (app: CheckedApp) =>
   movingAppImage(app.config) ||
   (app.brick !== null &&
-    app.config.sourceType === "image" &&
-    app.config.image !== "")
+    (app.config.sourceType !== "image" || app.config.image !== ""))
+
+// The image a check asks about, or null for one checked for its Brick
+// alone.
+const checkedAppImage = (app: CheckedApp) =>
+  app.config.sourceType === "image" ? app.config.image : null
 
 // An App takes a revision of its Brick as a database or a game server
 // does, with what installing one is for an App: its configuration made
@@ -194,7 +202,7 @@ const apps: UpdatedKind = {
       Effect.map((records) =>
         records.flatMap((app) =>
           checkedApp(app)
-            ? [{ id: app.appId, image: app.config.image, name: app.name }]
+            ? [{ id: app.appId, image: checkedAppImage(app), name: app.name }]
             : []
         )
       )
@@ -202,7 +210,7 @@ const apps: UpdatedKind = {
   namedImage: (relayId, appId) =>
     loadAppConfigEffect(relayId, appId).pipe(
       Effect.map((app) =>
-        app && checkedApp(app) ? app.config.image : undefined
+        app && checkedApp(app) ? checkedAppImage(app) : undefined
       )
     ),
   followsBrick: (relayId, appId) =>

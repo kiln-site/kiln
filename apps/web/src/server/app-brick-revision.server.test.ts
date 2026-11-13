@@ -341,6 +341,73 @@ describeMysql("An App taking a newer revision of its Brick", () => {
         })
     )
 
+    // A file a Brick carries is the Brick's, as an image is: a revision
+    // replaces it whole. The App's own source is never touched, and what
+    // it deploys never changes kind under it.
+    it.effect(
+      "takes the file its revision carries, and no file that isn't the Brick's",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const compose = (tag: number) =>
+            `services:\n  web:\n    image: ghcr.io/acme/site:${tag}\n`
+          const stack = (deploy: object, revision = 2) =>
+            brickRecipeSchema.parse({
+              format: "kiln.brick/v2",
+              kind: "app",
+              metadata: { ...metadata, id: "stack", name: "Stack", revision },
+              deploy,
+            })
+          yield* createAppRecordEffect({
+            appId,
+            brick: {
+              answers: {},
+              environment: [],
+              name: "Stack",
+              revision: 1,
+              source: "https://bricks.test/stack.yml",
+              volumes: [],
+              written: true,
+            },
+            createdBy: "owner",
+            deploys: { compose: compose(1), sourceType: "compose" },
+            name: "Stack",
+            relayId,
+          })
+
+          // Its owner can't edit it while the App follows the Brick.
+          const held = yield* updateAppConfigEffect(relayId, appId, (config) => ({
+            ...config,
+            compose: "services: {}\n",
+          })).pipe(Effect.flip)
+          assert.include(String(held), "Its Compose file is set by its Brick")
+
+          assert.isNull(
+            yield* install(stack({ type: "compose", compose: compose(2) }))
+          )
+          assert.strictEqual((yield* saved).config.compose, compose(2))
+
+          // One that would leave the file behind, or deploy another way,
+          // is refused, and the file stays.
+          assert.include(
+            yield* install(stack({ type: "compose", path: "compose.yaml" }), 3),
+            "no longer carries the file this App runs"
+          )
+          assert.include(
+            yield* install(stack({ type: "image", image: "site:3" }), 3),
+            "no longer carries the file this App runs"
+          )
+          assert.include(
+            yield* install(
+              stack({ type: "dockerfile", dockerfile: "FROM nginx:1\n" }, 3),
+              3
+            ),
+            "deploys another way than this App was installed with"
+          )
+          assert.strictEqual((yield* saved).config.compose, compose(2))
+        })
+    )
+
     it.effect(
       "in a group, is connected again to the database the group has, and never to other members",
       () =>

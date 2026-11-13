@@ -407,13 +407,19 @@ export async function getAppDeploymentSummaryHandler(data: {
       "apps.deployments.latest",
       latestAppDeploymentsEffect(data.appId)
     ),
-    app.config.sourceType === "image"
+    app.config.sourceType === "image" || app.brick
       ? runAppEffect(
           "apps.imageUpdates.load",
           loadInstanceUpdateEffect(data.appId)
         )
       : null,
   ])
+  // The image it checks, or none for one that follows a Brick and deploys
+  // a Compose file or Dockerfile, which is checked for its Brick alone.
+  const checkedImage =
+    app.config.sourceType === "image" && app.config.image !== ""
+      ? app.config.image
+      : null
   const view = source ? await sourceView(user, source) : null
   return {
     current: latest.succeeded && {
@@ -430,15 +436,17 @@ export async function getAppDeploymentSummaryHandler(data: {
     source: app.config.sourceType === "github" ? view : null,
     // What the app deploys from now, which its last deployment may not show.
     sourceType: app.config.sourceType,
-    // Nothing to check until it names an image.
+    // Nothing to check until it names an image, or follows a Brick with
+    // something else to deploy.
     imageUpdates:
-      app.config.sourceType === "image" && app.config.image !== ""
+      checkedImage !== null ||
+      (app.brick && app.config.sourceType !== "image")
         ? updatesView(
-            app.config.image,
+            checkedImage,
             imageUpdate,
             currentImageUpdate(
               imageUpdate,
-              app.config.image,
+              checkedImage,
               latest.latest?.startedAt ?? null
             ),
             // The Brick it follows, as a check since its last deployment
@@ -449,7 +457,8 @@ export async function getAppDeploymentSummaryHandler(data: {
                   imageUpdate,
                   latest.latest?.startedAt ?? null
                 )
-              : null
+              : null,
+            checkedImage === null
           )
         : null,
   }

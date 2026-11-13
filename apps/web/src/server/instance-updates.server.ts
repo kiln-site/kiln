@@ -51,7 +51,9 @@ export function updatesView(
   saved: InstanceUpdate | null,
   current: InstanceUpdate | null,
   /** Its Brick as a check since its last deployment found it, if one has. */
-  brick: InstanceBrickUpdate | null = null
+  brick: InstanceBrickUpdate | null = null,
+  /** An App that names no image, and is checked for its Brick alone. */
+  brickOnly = false
 ) {
   const policy = {
     delayHours: saved?.delayHours ?? defaultInstanceUpdatePolicy.delayHours,
@@ -73,6 +75,7 @@ export function updatesView(
           }
         : null,
     autoUpdateAt: current && autoUpdateAt(current),
+    brickOnly,
     checkError: current?.checkError ?? null,
     checkedAt: current?.checkedAt ?? null,
     image: named,
@@ -118,7 +121,9 @@ export async function instanceUpdatesHandler(
     named,
     saved,
     currentImageUpdate(saved, named, startedAt),
-    currentBrickUpdate(saved, startedAt)
+    currentBrickUpdate(saved, startedAt),
+    // Only an App is checked with no image at all.
+    data.kind === "app" && named === null
   )
 }
 
@@ -132,7 +137,7 @@ async function updatedInstance(data: UpdatedInstanceInput) {
   if (named === undefined) {
     throw new Error(
       data.kind === "app"
-        ? "Only Apps deployed from an image tag check for updates"
+        ? "Only Apps deployed from an image tag, or that follow a Brick, check for updates"
         : "This doesn't check for updates"
     )
   }
