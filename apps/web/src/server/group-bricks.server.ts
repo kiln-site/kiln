@@ -10,19 +10,21 @@ import {
   type GroupConnection,
 } from "@workspace/contracts"
 
+import type { AuthenticatedUser } from "@/lib/auth-session"
 import { makeBrickSecret } from "@/server/app-bricks.server"
 import { databaseBricks } from "@/server/database-bricks.server"
 import { requiredCredential } from "@/server/managed-database-access"
-import { visibleBricks } from "@/server/visible-bricks.server"
+import { installableBricks } from "@/server/visible-bricks.server"
 
 // The group Bricks Kiln installs: those, of every catalog whoever installs
-// one sees, that do only what Kiln does for a group so far. Each of its
+// one sees and of the links they saved themselves, that do only what Kiln
+// does for a group so far. Each of its
 // databases is made from one of Kiln's own database Bricks, whichever
 // catalog the group is in: another catalog's database Bricks aren't run.
 
 /** Every group Brick this person may install a group from. */
-export async function groupBricks(userId: string): Promise<Array<Brick>> {
-  return (await visibleBricks(userId)).flatMap(({ brick }) =>
+async function groupBricks(user: AuthenticatedUser): Promise<Array<Brick>> {
+  return (await installableBricks(user)).flatMap(({ brick }) =>
     groupBrickProblem(brick) === null ? [brick] : []
   )
 }
@@ -47,9 +49,9 @@ export interface InstalledGroupBrick {
 export async function installedGroupBrick(
   source: string,
   answers: Readonly<Record<string, BrickVariableValue>>,
-  userId: string
+  user: AuthenticatedUser
 ): Promise<InstalledGroupBrick> {
-  const brick = (await groupBricks(userId)).find(
+  const brick = (await groupBricks(user)).find(
     (candidate) => candidate.source === source
   )
   if (!brick) throw new Error("This isn't a group Brick in your catalogs")

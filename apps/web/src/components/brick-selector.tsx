@@ -374,14 +374,18 @@ const BrickTabSidebar = React.memo(function BrickTabSidebar({
   )
 })
 
+// Saves the Brick at a link. A game server's is read by the Relay named;
+// with none, Hearth reads it, as it does an App's.
 function useSaveCustomBrick(
-  relayId: string,
+  relayId: string | null,
   onSelectionChange: (selection: BrickSelection | null) => void
 ) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (source: string) =>
-      saveCustomBrick({ data: { relayId, source } }),
+      saveCustomBrick({
+        data: relayId === null ? { source } : { relayId, source },
+      }),
     onSuccess: async ({ brick, brickIdExceedsRecommendation }) => {
       onSelectionChange({ kind: "catalog", brick })
       showToast({
@@ -395,6 +399,9 @@ function useSaveCustomBrick(
       })
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.bricks }),
+        queryClient.invalidateQueries({
+          queryKey: appBricksQueryOptions().queryKey,
+        }),
         queryClient.invalidateQueries({ queryKey: queryKeys.brickIcons }),
       ])
     },
@@ -491,7 +498,12 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
     tab,
   ])
 
-  const saveMutation = useSaveCustomBrick(relayId, onSelectionChange)
+  // A game server's Brick is read by a Relay; Hearth reads the others.
+  const readOnRelay = kind === "game-server"
+  const saveMutation = useSaveCustomBrick(
+    readOnRelay ? relayId : null,
+    onSelectionChange
+  )
 
   const selectedCatalog = selection?.kind === "catalog" ? selection.brick : null
   const customOpen = tab === CUSTOM_TAB
@@ -758,7 +770,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
             customBrickSources={customBrickSources}
             onSelectionChange={onSelectionChange}
             onSaveCustomBrick={(source) => saveMutation.mutate(source)}
-            saveCustomBrickDisabled={!relayId}
+            saveCustomBrickDisabled={readOnRelay && !relayId}
             savingCustomBrick={saveMutation.isPending}
             configuration={configuration}
           />
@@ -1347,8 +1359,9 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
             Bring your own Brick
           </h3>
           <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-            Point Kiln at any HTTPS recipe. We’ll validate it on a Relay and
-            keep it in your custom catalog.
+            Point Kiln at any HTTPS recipe. It’s checked, then kept in your
+            custom catalog. What you install from it isn’t updated when the
+            recipe changes.
           </p>
           <label className="mt-4 block space-y-1.5 text-xs font-medium text-muted-foreground">
             <span>Recipe URL</span>

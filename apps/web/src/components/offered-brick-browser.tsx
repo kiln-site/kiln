@@ -14,7 +14,9 @@ import {
 
 export function OfferedBrickBrowser({
   bricks,
+  canAddCustomBrick = false,
   children,
+  customBricks,
   disabled = false,
   emptyMessage,
   error,
@@ -26,8 +28,12 @@ export function OfferedBrickBrowser({
 }: {
   /** The Bricks offered, once they have loaded. */
   bricks: Array<Brick> | undefined
+  /** Whether this person may save a Brick from a link of their own. */
+  canAddCustomBrick?: boolean
   /** What's asked of the Brick chosen, under its details. */
   children: (brick: Brick | null) => React.ReactNode
+  /** The ones they saved that way, for a kind that takes them. */
+  customBricks?: Array<Brick> | undefined
   disabled?: boolean
   /** Shown when the catalogs offer none. */
   emptyMessage: string
@@ -53,6 +59,8 @@ export function OfferedBrickBrowser({
   return (
     <LoadedBrickBrowser
       bricks={bricks}
+      canAddCustomBrick={canAddCustomBrick}
+      customBricks={customBricks}
       disabled={disabled}
       emptyMessage={emptyMessage}
       initial={initial}
@@ -67,7 +75,9 @@ export function OfferedBrickBrowser({
 
 function LoadedBrickBrowser({
   bricks,
+  canAddCustomBrick,
   children,
+  customBricks,
   disabled,
   emptyMessage,
   initial,
@@ -76,7 +86,9 @@ function LoadedBrickBrowser({
   onKindChange,
 }: {
   bricks: Array<Brick>
+  canAddCustomBrick: boolean
   children: (brick: Brick | null) => React.ReactNode
+  customBricks: Array<Brick> | undefined
   disabled: boolean
   emptyMessage: string
   initial: ((bricks: ReadonlyArray<Brick>) => Brick | undefined) | undefined
@@ -97,7 +109,8 @@ function LoadedBrickBrowser({
       onKindChange={onKindChange}
       relayId=""
       bricks={bricks}
-      canAddCustomBrick={false}
+      canAddCustomBrick={canAddCustomBrick}
+      customBricks={customBricks}
       selection={selection}
       onSelectionChange={setSelection}
       disabled={disabled}
@@ -105,9 +118,12 @@ function LoadedBrickBrowser({
       emptyMessage={
         bricks.length === 0 ? emptyMessage : "No bricks match these filters."
       }
-      configuration={children(
-        selection?.kind === "catalog" ? selection.brick : null
-      )}
+      configuration={
+        // Nothing is asked of a Brick that is still only a link.
+        selection?.kind === "custom"
+          ? undefined
+          : children(selection?.kind === "catalog" ? selection.brick : null)
+      }
     />
   )
 }

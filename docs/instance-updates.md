@@ -191,7 +191,10 @@ image under the same recipe, and a newer recipe. Each is a deployment with
 the trigger `update`.
 
 Kiln's own catalog is read from its source every few minutes. A catalog
-someone added is as current as its last sync.
+someone added is as current as its last sync. A custom Brick, saved from a
+link of its own, is in no catalog: what was installed from it is offered a
+revision only if a catalog holds that Brick too, and saving the link again
+changes nothing already installed.
 
 Several catalogs may hold the same Brick, read at different times. Its
 newest revision is the one in the copy with the most say: Kiln's own

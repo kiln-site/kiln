@@ -4,12 +4,13 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
-import { relayCatalogSchema } from "@workspace/contracts"
+import { brickSchema, relayCatalogSchema } from "@workspace/contracts"
 
 import {
   saveBrickCatalogEffect,
   setBrickCatalogVisibilityEffect,
 } from "@/effect/brick-catalogs"
+import { saveCustomBrickEffect } from "@/effect/custom-bricks"
 import { loadAppConfigEffect } from "@/effect/managed-apps"
 import { createManagedDatabaseRecordEffect } from "@/effect/managed-databases"
 import { disposeAppRuntime } from "@/effect/runtime"
@@ -285,7 +286,8 @@ const seed = (permissions: ReadonlyArray<AccessPermission>) =>
 const createApp = (
   input: Partial<Pick<CreateAppInput, "brick" | "database" | "variables">> & {
     name?: string
-  }
+  },
+  user = person("alice")
 ) =>
   withNewAppIdsEffect(
     {
@@ -295,11 +297,9 @@ const createApp = (
       relayId,
       ...input,
     },
-    "alice"
+    user
   ).pipe(
-    Effect.flatMap((ids) =>
-      runOperation(createAppOperation, ids, { user: person("alice") })
-    )
+    Effect.flatMap((ids) => runOperation(createAppOperation, ids, { user }))
   )
 
 const apps = selectRows<{ app_id: string }>("app")
@@ -680,6 +680,68 @@ describeMysql("Installing an App from another catalog", () => {
         yield* createApp({ brick: billys })
         assert.lengthOf(yield* apps, 1)
       })
+    )
+
+    // A Brick saved from a link of one's own is in no catalog: only whoever
+    // saved it installs from it, and only while they may use such Bricks.
+    it.effect(
+      "takes a Brick its installer saved from a link, and follows it",
+      () =>
+        Effect.gen(function* () {
+          const mine = "https://bricks.test/alice/site.yml"
+          const saved = brickSchema.parse({
+            format: "kiln.brick/v2",
+            kind: "app",
+            metadata: {
+              id: "site",
+              name: "Site",
+              summary: "An example.",
+              author: "Alice",
+            },
+            deploy: {
+              type: "compose",
+              compose: "services:\n  web:\n    image: ghcr.io/alice/site:1\n",
+            },
+            source: mine,
+          })
+          const may = (id: string): AuthenticatedUser => ({
+            ...person(id),
+            role: "relay_creator",
+          })
+          yield* seed(["app.create", "app.manage"])
+          yield* allow("bob", ["app.create", "app.manage"])
+          yield* saveCustomBrickEffect("alice", saved)
+
+          // Bob may use Bricks of his own, and this isn't one.
+          const others = yield* createApp({ brick: mine }, may("bob")).pipe(
+            Effect.flip
+          )
+          assert.include(String(others), "in your catalogs")
+          // Nor is it hers to use once she may not use any.
+          const revoked = yield* createApp({ brick: mine }).pipe(Effect.flip)
+          assert.include(String(revoked), "in your catalogs")
+          assert.deepStrictEqual(yield* apps, [])
+
+          // One saved from a link Kiln wouldn't take now, at a commit on
+          // GitHub that a fork's could be, is nobody's to install.
+          const atCommit = `https://raw.githubusercontent.com/kiln-site/kiln/${"f".repeat(40)}/site.yml`
+          yield* saveCustomBrickEffect("alice", { ...saved, source: atCommit })
+          const untrusted = yield* createApp(
+            { brick: atCommit },
+            may("alice")
+          ).pipe(Effect.flip)
+          assert.include(String(untrusted), "in your catalogs")
+          assert.deepStrictEqual(yield* apps, [])
+
+          const created = yield* createApp({ brick: mine }, may("alice"))
+          const app = yield* loadAppConfigEffect(relayId, created.id)
+          assert.include(app?.config.compose, "ghcr.io/alice/site:1")
+          assert.deepInclude(app?.brick, {
+            name: "Site",
+            source: mine,
+            written: true,
+          })
+        })
     )
   })
 })

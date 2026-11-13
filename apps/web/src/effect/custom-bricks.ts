@@ -5,6 +5,7 @@ import { Clock, Effect, Result } from "effect"
 import type { RowDataPacket } from "mysql2/promise"
 
 import { Database } from "@/effect/database"
+import { brickLinkProblem } from "@/lib/brick-catalog-source.server"
 import { databaseTable } from "@/lib/database-config"
 
 interface CustomBrickRow extends RowDataPacket {
@@ -26,9 +27,13 @@ export const listCustomBricksEffect = Effect.fn("customBricks.list")(function* (
 
   return rows.flatMap((row) => {
     const value = decodeJson(row.recipe)
-    // One saved while recipes were kiln.brick/v1 is converted.
+    // One saved while recipes were kiln.brick/v1 is converted. One whose
+    // link Kiln wouldn't take now is left out until it is saved again: on
+    // GitHub it may have been read at a commit only a fork has.
     const parsed = readBrick(value)
-    return parsed.success ? [parsed.data] : []
+    return parsed.success && brickLinkProblem(parsed.data.source) === null
+      ? [parsed.data]
+      : []
   })
 })
 

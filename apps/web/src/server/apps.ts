@@ -140,7 +140,7 @@ export const getAppBricks = createServerFn({ method: "GET" }).handler(
   async () => {
     const user = await requireEligibleResourceUser()
     const { offeredAppBricks } = await import("@/server/app-bricks.server")
-    return offeredAppBricks(user.id)
+    return offeredAppBricks(user)
   }
 )
 

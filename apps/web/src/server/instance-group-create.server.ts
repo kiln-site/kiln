@@ -95,12 +95,12 @@ const memberName = (
 // its lanes and who may run it.
 const planGroupEffect = Effect.fn("instanceGroups.create.plan")(function* (
   input: CreateInstanceGroupInput,
-  userId: string
+  user: AuthenticatedUser
 ) {
   const installed = yield* promiseEffect(() =>
-    installedGroupBrick(input.brick, input.variables ?? {}, userId)
+    installedGroupBrick(input.brick, input.variables ?? {}, user)
   )
-  const requestKey = `instance-group.create:${userId}:${input.idempotencyKey}`
+  const requestKey = `instance-group.create:${user.id}:${input.idempotencyKey}`
   const id = yield* reserveInstanceIdEffect("group", requestKey)
   const databases = yield* Effect.forEach(installed.databases, (database) =>
     Effect.map(
@@ -409,7 +409,7 @@ export async function createInstanceGroupFor(
 ) {
   const plan = await runAppEffect(
     "instanceGroups.create.plan",
-    planGroupEffect(data, user.id)
+    planGroupEffect(data, user)
   )
   const created = await runOperationPromise(
     createInstanceGroup,

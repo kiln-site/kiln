@@ -179,7 +179,9 @@ export const AddAppPane = React.memo(function AddAppPane({
 
   return (
     <OfferedBrickBrowser
-      bricks={bricksQuery.data}
+      bricks={bricksQuery.data?.bricks}
+      canAddCustomBrick={bricksQuery.data?.canAddCustomBrick}
+      customBricks={bricksQuery.data?.customBricks}
       disabled={pending}
       emptyMessage="No App Bricks are in your catalogs."
       error={bricksQuery.error?.message}
@@ -342,8 +344,7 @@ function PublishedPorts({
       Publishes on the Relay, outside its proxy:{" "}
       {ports
         .map(
-          (port) =>
-            `${port.hostPort} → ${port.containerPort}/${port.protocol}`
+          (port) => `${port.hostPort} → ${port.containerPort}/${port.protocol}`
         )
         .join(", ")}
     </p>
