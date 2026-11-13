@@ -26,7 +26,7 @@ import { runAppEffect } from "@/effect/runtime"
 import {
   listWebHostnamesEffect,
   loadInstanceDomainAssignmentsEffect,
-  retryInstanceDomainsNowEffect,
+  retryAddressesNowEffect,
   webHostnameProxied,
 } from "@/effect/addresses"
 import { isPlatformAdmin } from "@/lib/access-control"
@@ -55,10 +55,9 @@ import {
 import { requireFastReservedPatterns } from "@/server/reserved-names"
 import {
   invalidateManagedDomainAddressesEffect,
-  provisionInstanceDomainEffect,
-} from "@/server/domains.server"
+  resyncAddressesEffect,
+} from "@/server/addresses.server"
 import { pendingWebCertificate } from "@/server/web-certificates.server"
-import { resyncWebHostnamesEffect } from "@/server/web-hostnames.server"
 import type {
   DeleteDomainConnectionInput,
   DiscoverDomainsInput,
@@ -635,25 +634,17 @@ async function resyncDomainsFor(user: AuthenticatedUser) {
       .filter((instance) => access.instance(relay.id, instance.id, true))
       .map((instance) => ({ ...instance, relayId: relay.id }))
   )
-  const [[, failures], hostnames] = await Promise.all([
-    runAppEffect(
-      "domains.instances.resync",
-      Effect.partition(instances, provisionInstanceDomainEffect, {
-        concurrency: 1,
-      })
-    ),
-    runAppEffect(
-      "webHostnames.resync",
-      resyncWebHostnamesEffect((row) =>
-        row.resourceType === "app"
-          ? access.app(row.relayId, row.resourceId, true)
-          : access.instance(row.relayId, row.resourceId, true)
-      )
-    ),
-  ])
-  // Domains still waiting on work, as deletes left by a removed Relay, are
+  const { serverFailures: failures, ...hostnames } = await runAppEffect(
+    "domains.resync",
+    resyncAddressesEffect(instances, (row) =>
+      row.resourceType === "app"
+        ? access.app(row.relayId, row.resourceId, true)
+        : access.instance(row.relayId, row.resourceId, true)
+    )
+  )
+  // Ones still waiting on work, as deletes left by a removed Relay, are
   // retried now rather than after their wait.
-  await runAppEffect("domains.retryNow", retryInstanceDomainsNowEffect())
+  await runAppEffect("domains.retryNow", retryAddressesNowEffect())
   wakePollingWorker("Domains.dns")
   publishDomainChange()
   if (failures.length > 0) {

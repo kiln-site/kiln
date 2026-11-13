@@ -7,7 +7,7 @@ import { runAppEffect } from "@/effect/runtime"
 import {
   listResourceWebHostnamesEffect,
   loadWebHostnameEffect,
-  markResourceWebHostnamesRemovingEffect,
+  markResourceAddressesRemovingEffect,
   webHostnameProxied,
   type WebHostnameResource,
 } from "@/effect/addresses"
@@ -40,14 +40,14 @@ import {
 import {
   adoptableWebHostnamesEffect,
   adoptExistingWebRecordEffect,
-  deleteResourceWebHostnamesEffect,
+  deleteResourceAddressesEffect,
   generateAppHostnameEffect,
   publishWebHostnameChange,
-  reconcileResourceWebHostnamesEffect,
+  reconcileResourceAddressesEffect,
   releaseWebHostnameEffect,
   saveWebRouteHostnamesEffect,
   type WebHostnameProxyChange,
-} from "@/server/web-hostnames.server"
+} from "@/server/addresses.server"
 
 // Changing web routes and their hostnames takes one permission, whatever
 // kind of instance they belong to. Reading a game server's goes with its
@@ -303,7 +303,7 @@ export async function syncWebRouteHostnames(
 ): Promise<void> {
   const changed = await runAppEffect(
     "webHostnames.sync",
-    reconcileResourceWebHostnamesEffect(resource).pipe(
+    reconcileResourceAddressesEffect(resource).pipe(
       Effect.catch((cause) =>
         Effect.sync(() => {
           console.warn(
@@ -339,19 +339,20 @@ export async function generateAppHostnameBestEffort(
   if (hostname) publishWebHostnameChange([resource.relayId])
 }
 
-/** Deletes the records a deleted app or game server had. */
-export async function deleteResourceWebHostnamesBestEffort(
+/** Deletes the records a deleted App or game server had. */
+export async function deleteResourceAddressesBestEffort(
   resource: WebHostnameResource
 ): Promise<void> {
-  // Marked for certain first: a delete that fails after is the DNS
-  // worker's to finish, not lost with the resource.
+  // Marked for certain first: a delete that fails after, or is turned away
+  // before it starts, is the DNS worker's to finish, not lost with the
+  // resource.
   await runAppEffect(
-    "webHostnames.markResourceRemoving",
-    markResourceWebHostnamesRemovingEffect(resource)
+    "addresses.markResourceRemoving",
+    markResourceAddressesRemovingEffect(resource)
   )
   const removed = await runAppEffect(
-    "webHostnames.deleteResource",
-    deleteResourceWebHostnamesEffect(resource).pipe(
+    "addresses.deleteResource",
+    deleteResourceAddressesEffect(resource).pipe(
       Effect.catch((cause) =>
         Effect.sync(() => {
           console.warn(

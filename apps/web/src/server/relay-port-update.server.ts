@@ -3,7 +3,7 @@ import type {
   RelayInstancePortInput,
 } from "@workspace/contracts"
 
-import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
+import { provisionInstanceDomainBestEffort } from "@/server/addresses.server"
 
 export async function syncInstanceDomainAfterPortUpdateBestEffort(
   instance: RelayInstance,

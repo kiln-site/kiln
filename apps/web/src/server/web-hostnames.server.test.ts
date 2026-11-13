@@ -1,7 +1,8 @@
 import { assert, layer } from "@effect/vitest"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import { afterAll, afterEach, vi } from "vite-plus/test"
 
+import { AppCache } from "@/effect/cache"
 import { disposeAppRuntime } from "@/effect/runtime"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { betterAuthSecrets } from "@/lib/environment"
@@ -27,9 +28,9 @@ import {
 import {
   adoptableWebHostnamesEffect,
   adoptExistingWebRecordEffect,
-  reconcileResourceWebHostnamesEffect,
+  reconcileResourceAddressesEffect,
   saveWebRouteHostnamesEffect,
-} from "./web-hostnames.server"
+} from "./addresses.server"
 import { getResourceWebHostnamesHandler } from "./web-hostname-access.server"
 import { serveNewApp } from "./web-routes.server"
 
@@ -297,7 +298,7 @@ const save = (
   resource: WebHostnameResource = app
 ) =>
   claim(actor, hostnames, resource).pipe(
-    Effect.andThen(reconcileResourceWebHostnamesEffect(resource))
+    Effect.andThen(reconcileResourceAddressesEffect(resource))
   )
 
 const refusal = (
@@ -345,8 +346,18 @@ afterEach(() => {
 
 afterAll(() => disposeAppRuntime())
 
+// Reconciling an instance's hostnames refreshes the connect addresses Hearth
+// caches for game servers.
+const disabledCache = Layer.succeed(AppCache)({
+  backend: "disabled",
+  enabled: false,
+  get: () => Effect.succeed(undefined),
+  remove: () => Effect.void,
+  set: () => Effect.void,
+})
+
 describeMysql("web route hostnames", () => {
-  layer(TestDatabase)((it) => {
+  layer(Layer.merge(TestDatabase, disabledCache))((it) => {
     it.effect("leaves a record Kiln didn't create alone", () =>
       Effect.gen(function* () {
         yield* seed

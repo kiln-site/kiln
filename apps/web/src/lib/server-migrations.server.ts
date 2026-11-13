@@ -88,14 +88,14 @@ import { brickRecipeDefinition } from "@/server/bricks"
 import { loadInstanceRecipe } from "@/server/bricks.server"
 import {
   moveInstanceDomainsEffect,
+  moveResourceWebHostnamesEffect,
   provisionInstanceDomainBestEffort,
-} from "@/server/domains.server"
+} from "@/server/addresses.server"
 import {
   advanceRelayTransferEffect,
   beginRelayTransferEffect,
   type RelayTransferRequest,
 } from "@/server/relay-transfers.server"
-import { moveResourceWebHostnamesEffect } from "@/server/web-hostnames.server"
 
 // Waits look again this often, in memory, and store one step a window, so a
 // long one keeps few; a window cut off, as when Hearth stops, starts again.

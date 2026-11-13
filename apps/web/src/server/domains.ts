@@ -21,7 +21,7 @@ import {
   getInstanceDomainHandler,
   removeInstanceDomainHandler,
   updateInstanceDomainHandler,
-} from "@/server/domains.server"
+} from "@/server/addresses.server"
 import {
   deleteDomainConnectionHandler,
   discoverCloudflareDomainsHandler,

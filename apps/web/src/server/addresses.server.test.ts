@@ -20,27 +20,24 @@ import {
 import { encryptWithKeyring } from "../../keyring.mjs"
 
 import {
-  getDomainSettingsHandler,
-  resyncDomainAssignmentsHandler,
-} from "./domain-settings.server"
-import {
   createInstanceDomainHandler,
   getInstanceDomainHandler,
   moveInstanceDomainsEffect,
+  moveResourceWebHostnamesEffect,
   provisionInstanceDomain,
   removeInstanceDomainHandler,
-  removeRelayManagedDomainsEffect,
+  removeRelayAddressesEffect,
   updateInstanceDomainHandler,
-} from "./domains.server"
+} from "./addresses.server"
+import {
+  getDomainSettingsHandler,
+  resyncDomainAssignmentsHandler,
+} from "./domain-settings.server"
 import {
   generateAppHostnameBestEffort,
   getResourceWebHostnamesHandler,
   releaseWebHostnameHandler,
 } from "./web-hostname-access.server"
-import {
-  moveResourceWebHostnamesEffect,
-  removeRelayWebHostnamesEffect,
-} from "./web-hostnames.server"
 import { saveWebRoutes } from "./web-routes.server"
 
 // How a game server's addresses, an App's address and the hostnames their
@@ -71,35 +68,41 @@ vi.mock("@/lib/access-control", async (importOriginal) => ({
 }))
 
 // The Relays are a boundary: each lists the game servers it runs, as its
-// snapshot does, and keeps the routes it is sent. None is connected, so
-// where a Relay is reached for the web is the address Hearth has for it.
-const relays = vi.hoisted(() => ({
-  instances: {} as Record<string, Array<unknown>>,
-}))
+// snapshot does, and keeps the routes it is sent. None is connected unless
+// a test says so, so where a Relay is reached for the web is the address
+// Hearth has for it. A connected one has pushed what it lists.
+const relays = vi.hoisted(() => {
+  const state = {
+    connected: new Set<string>(),
+    instances: {} as Record<string, Array<unknown>>,
+    snapshot: (relayId: string) => ({
+      instances: state.instances[relayId] ?? [],
+      node: {
+        arch: "arm64",
+        connectedAt: "2026-01-01T00:00:00.000Z",
+        cpu: { cores: 4, loadPercent: 0 },
+        docker: { available: true, version: "test" },
+        id: relayId,
+        memory: { totalBytes: 1, usedBytes: 0 },
+        name: "Relay",
+        platform: "linux",
+        storage: { totalBytes: 1, usedBytes: 0 },
+        version: "test",
+      },
+    }),
+  }
+  return state
+})
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
+  relayConnectionSnapshot: (relayId: string) =>
+    relays.connected.has(relayId) ? relays.snapshot(relayId) : null,
   relayRpc: async (
     relay: { id: string },
     operation: string,
     payload: { routes?: Array<object> }
   ) => {
-    if (operation === "relay.snapshot") {
-      return {
-        instances: relays.instances[relay.id] ?? [],
-        node: {
-          arch: "arm64",
-          connectedAt: "2026-01-01T00:00:00.000Z",
-          cpu: { cores: 4, loadPercent: 0 },
-          docker: { available: true, version: "test" },
-          id: relay.id,
-          memory: { totalBytes: 1, usedBytes: 0 },
-          name: "Relay",
-          platform: "linux",
-          storage: { totalBytes: 1, usedBytes: 0 },
-          version: "test",
-        },
-      }
-    }
+    if (operation === "relay.snapshot") return relays.snapshot(relay.id)
     if (operation === "instance.network.routes.write") {
       return {
         edgeConnected: true,
@@ -143,10 +146,12 @@ interface FakeRecord {
 }
 
 // Cloudflare is the other boundary: one zone, a set of DNS records by ID,
-// which can refuse to delete the records under some names for a while.
+// which can refuse to delete the records under some names for a while, or
+// to move a record to some.
 function fakeCloudflare() {
   const records = new Map<string, FakeRecord>()
   const refusesDeleting = new Set<string>()
+  const refusesNaming = new Set<string>()
   let nextId = 0
   const success = (result: unknown) =>
     Response.json({ errors: [], result, success: true })
@@ -208,6 +213,7 @@ function fakeCloudflare() {
         return success({ id: recordId })
       }
       const body = JSON.parse(String(init?.body)) as FakeRecord
+      if (refusesNaming.has(body.name)) return failure(503)
       records.set(recordId, body)
       return success({ id: recordId, name: body.name, type: body.type })
     })
@@ -229,6 +235,7 @@ function fakeCloudflare() {
         )
         .sort(),
     refusesDeleting,
+    refusesNaming,
   }
 }
 
@@ -270,6 +277,7 @@ const app = {
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   relays.instances = {}
+  relays.connected.clear()
   yield* insertRelay(relayOne)
   yield* insertRelay(relayTwo)
   yield* insertRows("domain_integration", {
@@ -570,6 +578,77 @@ describeMysql("a game server's address and its web routes", () => {
           })
         })
     )
+
+    // A rename holds both names until Cloudflare has the new one. A website
+    // put on the new name meanwhile is on the address's name, as one saved
+    // after the rename would be: the two must not end up as two holders of
+    // one name, each with a record.
+    it.effect(
+      "takes in a route saved on the name a rename is moving it to",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare()
+          yield* runs(relayOne, gameServer(serverId))
+          yield* addAddress(relayOne, serverId, "arena")
+          const id = yield* addressId("arena")
+          cloudflare.refusesNaming.add("colosseum.kiln.test")
+          assert.include(
+            yield* refused(() =>
+              updateInstanceDomainHandler({
+                domain: zone.name,
+                id,
+                primary: true,
+                vanityLabel: "colosseum",
+              })
+            ),
+            "Kiln will keep trying"
+          )
+
+          assert.isNull(yield* saveRoutes(server, ["colosseum.kiln.test"]))
+
+          // Players still join at the old name, and the new one waits for
+          // the rename without a record of its own.
+          assert.deepEqual(cloudflare.records(), [
+            "A arena.kiln.test 203.0.113.10",
+            "SRV _minecraft._tcp.arena.kiln.test 25565 arena.kiln.test",
+          ])
+          assert.deepEqual(yield* routeStatuses(server), {
+            "colosseum.kiln.test": "pending",
+          })
+
+          cloudflare.refusesNaming.clear()
+          yield* dnsWorkerPass
+
+          assert.deepEqual(cloudflare.records(), [
+            "A colosseum.kiln.test 203.0.113.10",
+            "SRV _minecraft._tcp.colosseum.kiln.test 25565 colosseum.kiln.test",
+          ])
+          assert.strictEqual(
+            (yield* addressOf(relayOne, serverId))?.address,
+            "colosseum.kiln.test"
+          )
+          assert.deepEqual(yield* routeStatuses(server), {
+            "colosseum.kiln.test": "active",
+          })
+          assert.deepEqual(yield* claims, {
+            "colosseum.kiln.test": `instance ${serverId} on ${relayOne}`,
+          })
+          // One hostname, held once.
+          assert.deepEqual(
+            (yield* selectRows<{ hostname: string }>("instance_address")).map(
+              (row) => row.hostname
+            ),
+            ["colosseum.kiln.test"]
+          )
+          // And nothing left for the worker to make a second record from.
+          yield* dnsWorkerPass
+          assert.deepEqual(cloudflare.records(), [
+            "A colosseum.kiln.test 203.0.113.10",
+            "SRV _minecraft._tcp.colosseum.kiln.test 25565 colosseum.kiln.test",
+          ])
+        })
+    )
   })
 })
 
@@ -631,6 +710,56 @@ describeMysql("the records a game server's address has", () => {
             "A craft.kiln.test 203.0.113.20",
             "A viking.kiln.test 203.0.113.10",
             "SRV _minecraft._tcp.craft.kiln.test 25570 craft.kiln.test",
+          ])
+        })
+    )
+
+    // The address record and the SRV record are two requests. When the
+    // first lands and the second doesn't, the address isn't in step: an
+    // SRV record left naming the old host sends players who join by name
+    // there, for as long as nothing tries it again.
+    it.effect(
+      "tries again an SRV record Cloudflare refused to point at its Relay's new host",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const cloudflare = fakeCloudflare()
+          const craft = gameServer(serverId, {
+            connectAddress: "old.relay.test:25565",
+            publicHost: "old.relay.test",
+          })
+          yield* runs(relayOne, craft)
+          yield* addAddress(relayOne, serverId, "craft")
+          assert.deepEqual(cloudflare.records(), [
+            "CNAME craft.kiln.test old.relay.test",
+            "SRV _minecraft._tcp.craft.kiln.test 25565 old.relay.test",
+          ])
+
+          // Its Relay reports a new host, on the same port.
+          const moved = {
+            ...craft,
+            connectAddress: "new.relay.test:25565",
+            publicHost: "new.relay.test",
+          }
+          relays.instances[relayOne] = [moved]
+          cloudflare.refusesNaming.add("_minecraft._tcp.craft.kiln.test")
+          assert.isNotNull(
+            yield* refused(() => provisionInstanceDomain(moved, relayOne))
+          )
+          assert.deepEqual(cloudflare.records(), [
+            "CNAME craft.kiln.test new.relay.test",
+            "SRV _minecraft._tcp.craft.kiln.test 25565 old.relay.test",
+          ])
+
+          // The DNS worker, which knows where a connected Relay's game
+          // servers are reached, finishes it.
+          cloudflare.refusesNaming.clear()
+          relays.connected.add(relayOne)
+          yield* dnsWorkerPass
+
+          assert.deepEqual(cloudflare.records(), [
+            "CNAME craft.kiln.test new.relay.test",
+            "SRV _minecraft._tcp.craft.kiln.test 25565 new.relay.test",
           ])
         })
     )
@@ -731,17 +860,11 @@ describeMysql("a game server's names when it or its Relay goes", () => {
           cloudflare.refusesDeleting.add("_minecraft._tcp.arena.kiln.test")
           cloudflare.refusesDeleting.add("map.kiln.test")
 
-          // As removing a Relay does: addresses, then the rest.
+          // As removing a Relay does.
           yield* Effect.promise(() =>
             runAppEffect(
-              "domains.relay.removeAssignments",
-              removeRelayManagedDomainsEffect(relayOne, true)
-            )
-          )
-          yield* Effect.promise(() =>
-            runAppEffect(
-              "webHostnames.removeRelay",
-              removeRelayWebHostnamesEffect(relayOne, true)
+              "addresses.removeRelay",
+              removeRelayAddressesEffect(relayOne, true)
             )
           )
 
@@ -775,19 +898,23 @@ describeMysql("a game server's names when it or its Relay goes", () => {
 
           yield* Effect.promise(() => resyncDomainAssignmentsHandler())
 
-          const records = cloudflare.records()
-          assert.include(records, `CNAME map.kiln.test ${webHost(relayOne)}`)
+          assert.deepEqual(cloudflare.records(), [
+            "A arena.kiln.test 203.0.113.10",
+            `CNAME map.kiln.test ${webHost(relayOne)}`,
+            "SRV _minecraft._tcp.arena.kiln.test 25565 arena.kiln.test",
+          ])
           assert.deepEqual(yield* routeStatuses(server), {
             "arena.kiln.test": "active",
             "map.kiln.test": "active",
           })
 
-          // TODAY, AND MEANT TO CHANGE: Sync takes a game server's address
-          // at its word and never asks Cloudflare, so the address record
-          // deleted there stays gone and players can't join by name. Once
-          // addresses are one thing Sync makes it again, as it does a
-          // route's.
-          assert.deepEqual(records, [
+          // The record players are sent to by name, too.
+          cloudflare.deleteByHand("_minecraft._tcp.arena.kiln.test")
+
+          yield* Effect.promise(() => resyncDomainAssignmentsHandler())
+
+          assert.deepEqual(cloudflare.records(), [
+            "A arena.kiln.test 203.0.113.10",
             `CNAME map.kiln.test ${webHost(relayOne)}`,
             "SRV _minecraft._tcp.arena.kiln.test 25565 arena.kiln.test",
           ])
