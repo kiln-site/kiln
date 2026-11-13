@@ -3,7 +3,9 @@ import { Effect } from "effect"
 import {
   type Brick,
   type BrickRecipe,
+  appBrickProblem,
   brickIdExceedsRecommendedLength,
+  groupBrickProblem,
   brickSchema,
   redactedBrickInputs,
   brickSourceSchema,
@@ -30,7 +32,11 @@ import {
 import { grantHasPermission } from "@/lib/permissions"
 import type { AccessGrant } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
-import { hydrateBrickIcon } from "@/lib/brick-catalog-source.server"
+import {
+  hydrateBrickIcon,
+  loadBrickSource,
+  resolveBrickLink,
+} from "@/lib/brick-catalog-source.server"
 import {
   listCustomBricksEffect,
   saveCustomBrickEffect,
@@ -125,10 +131,15 @@ export const getBrickCatalog = createServerFn({ method: "GET" }).handler(
       user,
       "platform.bricks.add-custom"
     )
+    // A game server's: one saved for an App is offered where Apps are.
     const customBricksPromise = canAddCustomBrick
       ? runAppEffect("customBricks.list", listCustomBricksEffect(user.id)).then(
           (bricks) =>
-            Promise.all(bricks.map((brick) => hydrateBrickIcon(brick)))
+            Promise.all(
+              bricks
+                .filter((brick) => brick.kind === "game-server")
+                .map((brick) => hydrateBrickIcon(brick))
+            )
         )
       : Promise.resolve([])
     const catalogsPromise = visibleBrickCatalogs(user)
@@ -510,9 +521,17 @@ export const loadBrickRecipe = createServerFn({ method: "POST" })
     return hydrateBrickIcon(brick)
   })
 
+// A custom Brick is read by whoever would run it: a Relay, for a game
+// server's, and Hearth itself with no Relay named, for an App's or a
+// group's, which it turns into what runs.
+const customBrickInputSchema = z.object({
+  relayId: relayIdSchema.optional(),
+  source: brickSourceSchema,
+})
+
 // A person's own custom Bricks take their Brick library, as their catalog
 // adds do; the database keeps one per source.
-const saveCustom = operation<z.infer<typeof recipeInputSchema>>()({
+const saveCustom = operation<z.infer<typeof customBrickInputSchema>>()({
   name: "customBrick.save",
   doing: "Saving a custom Brick",
   authorize: ({ input, user }) =>
@@ -520,10 +539,12 @@ const saveCustom = operation<z.infer<typeof recipeInputSchema>>()({
       Effect.tap((person) =>
         promiseEffect(async () => {
           requireBrickSourcePermission(person, "platform.bricks.add-custom")
-          await requireRelayProvisionAccess(
-            person,
-            await requiredRelay(input.relayId)
-          )
+          if (input.relayId !== undefined) {
+            await requireRelayProvisionAccess(
+              person,
+              await requiredRelay(input.relayId)
+            )
+          }
         })
       )
     ),
@@ -534,30 +555,62 @@ const saveCustom = operation<z.infer<typeof recipeInputSchema>>()({
 })
 
 export const saveCustomBrick = createServerFn({ method: "POST" })
-  .validator(recipeInputSchema)
+  .validator(customBrickInputSchema)
   .handler(async ({ data }) =>
     runOperationPromise(saveCustom, data, {
       user: await requireEligibleResourceUser(),
     })
   )
 
+// The Brick at a link, as Hearth reads it: one it can install as an App or
+// as a group. A game server's is a Relay's to read and to run.
+async function hearthReadBrick(source: string): Promise<Brick> {
+  const brick = await loadBrickSource(source)
+  if (brick.kind !== "app" && brick.kind !== "group") {
+    throw new Error(
+      "This isn't an App's Brick. Add a game server's from Game Server."
+    )
+  }
+  const problem =
+    brick.kind === "group" ? groupBrickProblem(brick) : appBrickProblem(brick)
+  if (problem !== null) throw new Error(problem)
+  return brick
+}
+
+// The Brick at a link, as a Relay reads it: where Hearth says the link is
+// read, which for one on GitHub is the commit its branch or tag is at.
+async function relayReadBrick(
+  relay: PersistedRelay,
+  link: string
+): Promise<Brick> {
+  const { read, source } = await resolveBrickLink(link)
+  const { brick } = parseImportedBrickFromRelay(
+    await requestRelay(
+      relay,
+      `/v1/bricks/recipe?source=${encodeURIComponent(read.href)}`
+    )
+  )
+  return hydrateBrickIcon({ ...brick, source })
+}
+
 async function saveCustomBrickHandler(
   user: AuthenticatedUser,
-  data: z.infer<typeof recipeInputSchema>
+  data: z.infer<typeof customBrickInputSchema>
 ) {
-  const relay = await requiredRelay(data.relayId)
-  const imported = await requestRelay(
-    relay,
-    `/v1/bricks/recipe?source=${encodeURIComponent(data.source)}`
-  )
-  const { brick: parsedBrick, brickIdExceedsRecommendation } =
-    parseImportedBrickFromRelay(imported)
-  const brick = await hydrateBrickIcon(parsedBrick)
+  const brick =
+    data.relayId === undefined
+      ? await hearthReadBrick(data.source)
+      : await relayReadBrick(await requiredRelay(data.relayId), data.source)
   const saved = await runAppEffect(
     "customBricks.save",
     saveCustomBrickEffect(user.id, brick)
   )
-  return { brick: saved, brickIdExceedsRecommendation }
+  return {
+    brick: saved,
+    brickIdExceedsRecommendation: brickIdExceedsRecommendedLength(
+      brick.metadata.id
+    ),
+  }
 }
 
 export function parseImportedBrickFromRelay(value: unknown): {

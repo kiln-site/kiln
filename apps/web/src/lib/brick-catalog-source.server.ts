@@ -31,6 +31,9 @@ import {
 } from "@/lib/public-remote-address.server"
 
 const GITHUB_RAW_HOST = "raw.githubusercontent.com"
+// The host an address names, however it is written: a name ending in a dot
+// is the same host, and mustn't pass for another.
+const hostOf = (url: URL) => url.hostname.toLowerCase().replace(/\.$/u, "")
 const MAX_DOCUMENT_BYTES = 1024 * 1024
 const MAX_SNAPSHOT_BYTES = 8 * 1024 * 1024
 const MAX_REDIRECTS = 5
@@ -110,30 +113,7 @@ export async function loadBrickCatalogSource(
           `${source.href}: a recipe on GitHub is listed by a catalog of its own repository`
         )
       }
-      // A kiln.brick/v1 recipe is read as the v2 Brick that runs the same.
-      const read = readBrickRecipe(
-        parseYaml(
-          await readDocument(
-            source,
-            resolvedSource.catalogUrl,
-            options.allowFile === true,
-            deadline
-          ),
-          source
-        )
-      )
-      if (!read.success) {
-        throw new Error(
-          `${source.href}: ${read.error.issues
-            .slice(0, 4)
-            .map(
-              (issue) => `${issue.path.join(".") || "recipe"}: ${issue.message}`
-            )
-            .join("; ")}`
-        )
-      }
-      const written = await withCarriedFiles(
-        read.data,
+      const written = await readRecipe(
         source,
         resolvedSource.catalogUrl,
         options.allowFile === true,
@@ -200,6 +180,110 @@ export async function loadBrickCatalogSource(
   }
 }
 
+// A recipe as Hearth keeps it: read from its address, with any file it
+// carries beside it made its own. A kiln.brick/v1 recipe is read as the v2
+// Brick that runs the same.
+async function readRecipe(
+  source: URL,
+  catalog: URL,
+  allowFile: boolean,
+  signal: AbortSignal
+): Promise<BrickRecipe> {
+  const read = readBrickRecipe(
+    parseYaml(await readDocument(source, catalog, allowFile, signal), source)
+  )
+  if (!read.success) {
+    throw new Error(
+      `${source.href}: ${read.error.issues
+        .slice(0, 4)
+        .map((issue) => `${issue.path.join(".") || "recipe"}: ${issue.message}`)
+        .join("; ")}`
+    )
+  }
+  return withCarriedFiles(read.data, source, catalog, allowFile, signal)
+}
+
+/**
+ * Why an address can't be a custom Brick's link, or null when it can. A
+ * link on GitHub names a branch or a tag, as a catalog's does: whatever is
+ * installed from it is known by its repository and path, and is offered
+ * that Brick's revisions from a catalog, so it mustn't be read at a commit
+ * only a fork has.
+ */
+export function brickLinkProblem(input: string): string | null {
+  const source = URL.canParse(input.trim()) ? new URL(input.trim()) : null
+  if (source?.protocol !== "https:") {
+    return "Custom Brick recipes must use HTTPS"
+  }
+  const github = githubCatalogUrl(source)
+  return (
+    github
+      ? namesBranchOrTag(github.reference)
+      : hostOf(source) !== GITHUB_RAW_HOST
+  )
+    ? null
+    : "Link to the recipe on a branch or a tag of its repository, not at a commit"
+}
+
+/**
+ * Where a custom Brick's link is read, and the address the Brick goes by.
+ * One on GitHub, however it was written, goes by its raw address at its
+ * branch or tag, which is what says whose it is and which Brick, and is
+ * read at the commit that branch or tag is at: a Relay or Hearth fetching
+ * the link as given would take whatever GitHub serves for it.
+ */
+export async function resolveBrickLink(
+  input: string,
+  signal = AbortSignal.timeout(CATALOG_LOAD_TIMEOUT_MS)
+): Promise<{ read: URL; source: string }> {
+  const problem = brickLinkProblem(input)
+  if (problem !== null) throw new Error(problem)
+  const given = new URL(input.trim())
+  const github = githubCatalogUrl(given)
+  if (!github) return { read: given, source: given.href }
+  const pin = (only?: "heads" | "tags") =>
+    pinGithubCatalog(
+      github.repository,
+      github.reference,
+      github.path,
+      signal,
+      only
+    )
+  const pinned = await pin(github.only)
+  // The address it is kept by names the branch or tag alone. Where a
+  // branch and a tag share a name, that reads the branch: a link that
+  // says the tag would be kept as an address that reads something else.
+  if (github.only && (await pin()).revisionSha !== pinned.revisionSha) {
+    throw new Error(
+      `${github.reference} is both a branch and a tag of its repository, at different commits. Link to the branch.`
+    )
+  }
+  return {
+    read: pinned.catalogUrl,
+    source: `https://${GITHUB_RAW_HOST}${new URL(github.repository).pathname}/${github.reference}/${github.path}`,
+  }
+}
+
+/**
+ * A Brick read from a link of its own, in no catalog, with any file it
+ * carries beside it. Hearth reads it for the kinds it turns into what runs,
+ * an App and a group; a game server's is read by the Relay that would run
+ * it.
+ */
+export async function loadBrickSource(input: string): Promise<Brick> {
+  const signal = AbortSignal.timeout(CATALOG_LOAD_TIMEOUT_MS)
+  const { read, source } = await resolveBrickLink(input, signal)
+  const recipe = resolveRecipeIconSource(
+    await readRecipe(read, read, false, signal),
+    read,
+    false
+  )
+  return hydrateBrickIcon(
+    { ...recipe, source },
+    { signal: AbortSignal.timeout(ICON_HYDRATION_TIMEOUT_MS) }
+  )
+}
+
 /**
  * Whether a catalog may list a recipe at this address. One on GitHub is in
  * the catalog's own repository, at the commit the catalog was read at
@@ -209,7 +293,7 @@ export async function loadBrickCatalogSource(
  */
 function listedByItsRepository(recipe: URL, tree: string | null): boolean {
   return (
-    recipe.hostname.toLowerCase() !== GITHUB_RAW_HOST ||
+    hostOf(recipe) !== GITHUB_RAW_HOST ||
     (tree !== null && recipe.href.startsWith(tree))
   )
 }
@@ -524,7 +608,8 @@ async function resolveCatalogSource(
         github.repository,
         github.reference,
         github.path,
-        signal
+        signal,
+        github.only
       )),
       source: url.href,
     }
@@ -555,36 +640,48 @@ function githubRepositoryInput(value: string): { repository: string } | null {
   return { repository: repository.success }
 }
 
-function githubCatalogUrl(
-  url: URL
-): { path: string; reference: string; repository: string } | null {
-  const segments = url.pathname.split("/").filter(Boolean)
-  const hostname = url.hostname.toLowerCase()
-  if (hostname === "raw.githubusercontent.com" && segments.length >= 4) {
-    const [owner, repository, reference, ...path] = segments
-    return owner && repository && reference && path.length > 0
-      ? {
-          path: path.join("/"),
-          reference,
-          repository: `https://github.com/${owner}/${repository}`,
-        }
-      : null
-  }
-  if (
-    hostname === "github.com" &&
-    segments[2] === "blob" &&
-    segments.length >= 5
-  ) {
-    const [owner, repository, _blob, reference, ...path] = segments
-    return owner && repository && reference && path.length > 0
-      ? {
-          path: path.join("/"),
-          reference,
-          repository: `https://github.com/${owner}/${repository.replace(/\.git$/u, "")}`,
-        }
-      : null
-  }
-  return null
+interface GithubLink {
+  /** Whether it says which of a branch and a tag it means. */
+  only?: "heads" | "tags"
+  path: string
+  reference: string
+  repository: string
+}
+
+// What follows a repository in a link: the branch or tag it names, then a
+// path in it. `refs/heads/<name>` and `refs/tags/<name>` say which outright.
+// Any other ref, a pull request's among them, holds commits that may be a
+// fork's: it is left as a reference no branch or tag is named by, which is
+// refused. A name with a slash in it can't be told from a folder, so the
+// first part of one is taken for the name.
+function referenceAndPath(
+  tail: ReadonlyArray<string>
+): Omit<GithubLink, "repository"> | null {
+  const [first, ...rest] = tail
+  if (!first || rest.length === 0) return null
+  if (first !== "refs") return { path: rest.join("/"), reference: first }
+  const [kind, name, ...path] = rest
+  return (kind === "heads" || kind === "tags") && name && path.length > 0
+    ? { only: kind, path: path.join("/"), reference: name }
+    : { path: rest.join("/"), reference: `refs/${kind ?? ""}` }
+}
+
+function githubCatalogUrl(url: URL): GithubLink | null {
+  const [owner, repository, ...tail] = url.pathname.split("/").filter(Boolean)
+  const hostname = hostOf(url)
+  if (!owner || !repository) return null
+  const named =
+    hostname === GITHUB_RAW_HOST
+      ? referenceAndPath(tail)
+      : hostname === "github.com" && tail[0] === "blob"
+        ? referenceAndPath(tail.slice(1))
+        : null
+  return (
+    named && {
+      ...named,
+      repository: `https://github.com/${owner}/${repository.replace(/\.git$/u, "")}`,
+    }
+  )
 }
 
 const githubApiHeaders = {
@@ -613,9 +710,12 @@ const commitSha = (commit: unknown): string | null =>
 // ID, whole or shortened, and nothing Git reads as a way to reach one
 // (`main~1`, `<commit>^0`, `a..b`, `HEAD@{1}`). GitHub serves any commit of
 // a repository's forks at the repository's own address, so a commit can't
-// be told from the repository's own by how it is named.
+// be told from the repository's own by how it is named. Nor a branch or a
+// tag called `refs`: an address at one reads as a ref spelled out, so it
+// would be kept as something else than was read.
 const namesBranchOrTag = (reference: string) =>
   /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(reference) &&
+  reference !== "refs" &&
   !reference.includes("..") &&
   !/^[a-f0-9]{4,40}$/iu.test(reference)
 
@@ -630,7 +730,8 @@ const namesBranchOrTag = (reference: string) =>
 async function githubCatalogCommit(
   slug: string,
   reference: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  only?: "heads" | "tags"
 ): Promise<string> {
   if (!namesBranchOrTag(reference)) {
     throw new Error(
@@ -638,17 +739,16 @@ async function githubCatalogCommit(
     )
   }
   const named = encodeURIComponent(reference)
-  const commit =
-    reference === "HEAD"
+  const lookup = (kind: "heads" | "tags") =>
+    recoverPromise(
+      () => githubApi(slug, `commits/${kind}/${named}`, signal),
+      () => null
+    )
+  const commit = only
+    ? await lookup(only)
+    : reference === "HEAD"
       ? await githubApi(slug, "commits/HEAD", signal)
-      : await recoverPromise(
-          () => githubApi(slug, `commits/heads/${named}`, signal),
-          () =>
-            recoverPromise(
-              () => githubApi(slug, `commits/tags/${named}`, signal),
-              () => null
-            )
-        )
+      : ((await lookup("heads")) ?? (await lookup("tags")))
   const sha = commitSha(commit)
   if (!sha) throw new Error(`${reference} isn't a branch or tag of ${slug}`)
   return sha
@@ -658,11 +758,12 @@ async function pinGithubCatalog(
   repository: string,
   reference: string,
   path: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  only?: "heads" | "tags"
 ): Promise<ResolvedCatalogSource> {
   const parsed = new URL(resolveKilnGitRepository(repository))
   const slug = parsed.pathname.slice(1)
-  const sha = await githubCatalogCommit(slug, reference, signal)
+  const sha = await githubCatalogCommit(slug, reference, signal, only)
   return {
     catalogUrl: new URL(
       `https://raw.githubusercontent.com/${slug}/${sha}/${path.replace(/^\/+/, "")}`

@@ -533,7 +533,10 @@ An App Brick that sets anything else (a second web port, a private port,
 until Kiln runs that part.
 
 An App is installed from an App Brick of any catalog whoever installs it
-sees: Kiln's own, one they added, or one published to everyone.
+sees: Kiln's own, one they added, or one published to everyone. Or from a
+custom Brick: a recipe at an `https://` link of its own, in no catalog,
+which only whoever saved it sees. Hearth reads it, with the file it carries
+beside it, and an App made from it follows it as it would a catalog's.
 
 Kiln's catalog has a generic Brick for each thing an App deploys:
 `docker-image`, `dockerfile` and `compose`. An App made from one is its
@@ -670,7 +673,19 @@ by hand takes, whichever catalog the Brick is in. A catalog's author decides
 what its Bricks run, and what their later revisions run: read a Compose
 Brick's file before installing it, as you would one you were handed.
 
-Custom Brick sources must use HTTPS. A Relay operator may configure a local
+A custom Brick's link must use HTTPS, and one on GitHub names a branch or a
+tag, as a catalog's does: what is installed from it is known by its
+repository and path, and is offered that Brick's revisions if a catalog
+holds it. Kiln takes the link to the raw file or to its page on GitHub,
+keeps it as the raw address at that branch or tag, and reads it at the
+commit the branch or tag is at, whoever reads it: a Relay, for a game
+server's, or Hearth, for an App's or a group's, which reaches only public
+addresses. A commit, a pull request or any other ref is refused. A branch
+or tag with a slash in its name can't be told from a folder, and one called
+`refs` reads as a ref spelled out, so neither can be linked to. Where a
+branch and a tag share a name, the name reads the branch, and a link that
+says the tag is refused. One saved from a link Kiln wouldn't take now is set
+aside until it is saved again. A Relay operator may configure a local
 `file:` catalog for development or air-gapped installations.
 
 ## From v1

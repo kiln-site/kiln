@@ -94,11 +94,11 @@ interface CreateAppIds {
 // The volumes its Brick's folders are kept on are settled with them: they
 // are lanes it holds too.
 export const withNewAppIdsEffect = Effect.fn("apps.create.reserveIds")(
-  function* (input: CreateAppInput, userId: string) {
+  function* (input: CreateAppInput, user: AuthenticatedUser) {
     const folders = yield* promiseEffect(() =>
-      appBrickFolders(input.brick, userId)
+      appBrickFolders(input.brick, user)
     )
-    const requestKey = `app.create:${userId}:${input.idempotencyKey}`
+    const requestKey = `app.create:${user.id}:${input.idempotencyKey}`
     const id = yield* reserveInstanceIdEffect("app", requestKey)
     const databaseId =
       input.database?.kind === "existing"
@@ -115,10 +115,10 @@ export const withNewAppIdsEffect = Effect.fn("apps.create.reserveIds")(
   }
 )
 
-function withNewAppIds(input: CreateAppInput, userId: string) {
+function withNewAppIds(input: CreateAppInput, user: AuthenticatedUser) {
   return runAppEffect(
     "apps.create.reserveIds",
-    withNewAppIdsEffect(input, userId)
+    withNewAppIdsEffect(input, user)
   )
 }
 
@@ -204,7 +204,7 @@ export async function createAppFor(
 ) {
   const { deployable, web, ...created } = await runOperationPromise(
     createAppOperation,
-    await withNewAppIds(data, user.id),
+    await withNewAppIds(data, user),
     { user }
   )
   await addressNewApp(user, { ...created, web })
@@ -237,7 +237,7 @@ async function createAppHandler(
   const { deploys, follows } = await installedAppBrick(
     data.brick,
     data.variables ?? {},
-    user.id
+    user
   )
   // A Brick that publishes ports on the Relay, or carries the file its
   // App runs, takes what doing either in an App's settings does: a

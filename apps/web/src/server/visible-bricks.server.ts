@@ -5,7 +5,10 @@ import {
 } from "@workspace/contracts"
 
 import { listBrickCatalogsEffect } from "@/effect/brick-catalogs"
+import { listCustomBricksEffect } from "@/effect/custom-bricks"
 import { runAppEffect } from "@/effect/runtime"
+import { hasPlatformPermission } from "@/lib/access-control"
+import type { AuthenticatedUser } from "@/lib/auth-session"
 import { hydrateBrickCatalogIcons } from "@/lib/brick-catalog-source.server"
 import { defaultBrickCatalog } from "@/server/brick-catalogs.server"
 
@@ -75,4 +78,37 @@ export async function visibleBricks(
     brick,
     own: kilns,
   }))
+}
+
+/**
+ * The Bricks someone saved from links of their own, in no catalog, while
+ * they may still use them. Only they see them.
+ */
+export async function customBricksOf(
+  user: AuthenticatedUser
+): Promise<Array<Brick>> {
+  return hasPlatformPermission(user, "platform.bricks.add-custom")
+    ? runAppEffect("customBricks.list", listCustomBricksEffect(user.id))
+    : []
+}
+
+/**
+ * Every Brick someone may install from: those of the catalogs they see,
+ * then the ones they saved from links of their own. A link to a Brick a
+ * catalog already holds is that catalog's Brick.
+ */
+export async function installableBricks(
+  user: AuthenticatedUser
+): Promise<Array<VisibleBrick>> {
+  const [listed, custom] = await Promise.all([
+    visibleBricks(user.id),
+    customBricksOf(user),
+  ])
+  const sources = new Set(listed.map(({ brick }) => brick.source))
+  return [
+    ...listed,
+    ...custom
+      .filter((brick) => !sources.has(brick.source))
+      .map((brick) => ({ brick, own: false })),
+  ]
 }

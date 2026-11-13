@@ -229,7 +229,10 @@ container's health check, which a deployment waits on. Its `command` is the
 App's start command, and its public ports are published on its Relay.
 A Brick goes by its ID after whose it is (`billy:paper`), from where its
 recipe is kept; Kiln's own go by their ID alone
-(`brickReference` in the contracts).
+(`brickReference` in the contracts). An App or a group is also installed
+from a custom Brick, a recipe at a link of its own that its owner saved, as
+a game server is: whoever would run a recipe reads it, a Relay for a game
+server's and Hearth for the rest (`loadBrickSource`).
 
 Adding any of them opens the same dialog (`AddInstanceDialogHost`): pick
 the kind, pick its Brick, then answer what that kind asks. Each page's Add

@@ -5,7 +5,11 @@ import { pathToFileURL } from "node:url"
 
 import { afterEach, describe, expect, it, vi } from "vite-plus/test"
 
-import { loadBrickCatalogSource } from "./brick-catalog-source.server"
+import {
+  loadBrickCatalogSource,
+  loadBrickSource,
+  resolveBrickLink,
+} from "./brick-catalog-source.server"
 
 // The network is the only fake: what each HTTPS address answers, a document
 // or a redirect, and which were asked for.
@@ -289,5 +293,185 @@ describe("a catalog on GitHub", () => {
       sources("https://bricks.test/billy/catalog.yml")
     ).rejects.toThrow("listed by a catalog of its own repository")
     expect(remote.asked).not.toContain(theirs)
+  })
+})
+
+// A Brick from a link of its own is in no catalog. Hearth reads an App's
+// itself, with the file it carries, which is held to its recipe's folder
+// as a catalog's is.
+describe("a Brick read from a link of its own", () => {
+  const link = "https://bricks.test/alice/site/site.yml"
+  const recipe = (file: string) =>
+    [
+      "format: kiln.brick/v2",
+      "kind: app",
+      "metadata: { id: site, name: Site, summary: An example., author: Alice }",
+      "deploy:",
+      "  type: compose",
+      `  file: ${file}`,
+      "",
+    ].join("\n")
+  const serve = (file: string) => {
+    remote.asked.length = 0
+    remote.answers.clear()
+    remote.answers.set(link, recipe(file))
+    remote.answers.set(
+      "https://bricks.test/alice/site/site.kiln.compose.yaml",
+      "services:\n  web:\n    image: ghcr.io/alice/site:1\n"
+    )
+    remote.answers.set(
+      "https://bricks.test/alice/secrets.yaml",
+      "services:\n  web:\n    image: ghcr.io/alice/other:1\n"
+    )
+  }
+
+  it("is read with the file it carries beside it", async () => {
+    serve("./site.kiln.compose.yaml")
+    const brick = await loadBrickSource(link)
+    expect(brick.source).toBe(link)
+    expect(brick.deploy).toEqual({
+      compose: "services:\n  web:\n    image: ghcr.io/alice/site:1\n",
+      type: "compose",
+    })
+  })
+
+  it("carries nothing from outside its recipe's folder, and is read over HTTPS only", async () => {
+    serve("../secrets.yaml")
+    await expect(loadBrickSource(link)).rejects.toThrow(
+      "isn't beside its recipe"
+    )
+    expect(remote.asked).not.toContain("https://bricks.test/alice/secrets.yaml")
+    for (const elsewhere of [
+      "file:///etc/kiln/brick.yml",
+      "http://bricks.test/alice/site/site.yml",
+      "bricks/site.yml",
+    ]) {
+      await expect(loadBrickSource(elsewhere)).rejects.toThrow("HTTPS")
+    }
+  })
+})
+
+// What is installed from a link on GitHub is known by its repository and
+// path, and is offered that Brick's revisions from a catalog. So the link
+// names a branch or a tag, and is read at the commit that is at.
+describe("a Brick read from a link of its own on GitHub", () => {
+  const published = "a".repeat(40)
+  const forked = "f".repeat(40)
+  const raw = "https://raw.githubusercontent.com/billy/bricks"
+  const recipe = [
+    "format: kiln.brick/v2",
+    "kind: app",
+    "metadata: { id: site, name: Site, summary: An example., author: Billy }",
+    "deploy:",
+    "  type: compose",
+    "  file: ./site.kiln.compose.yaml",
+    "",
+  ].join("\n")
+  const serve = () => {
+    remote.asked.length = 0
+    remote.answers.clear()
+    remote.answers.set(
+      "https://api.github.com/repos/billy/bricks/commits/heads/main",
+      `{"sha":"${published}"}`
+    )
+    // The branch has moved on since: the file beside the recipe must come
+    // from the commit the recipe did.
+    remote.answers.set(`${raw}/${published}/site.yml`, recipe)
+    remote.answers.set(
+      `${raw}/${published}/site.kiln.compose.yaml`,
+      "services:\n  web:\n    image: ghcr.io/billy/site:1\n"
+    )
+    remote.answers.set(`${raw}/${forked}/site.yml`, recipe)
+  }
+
+  it("is read at the commit its branch or tag is at, and goes by its raw address", async () => {
+    // However the link is written, it is one Brick: whose it is and which
+    // come from that address.
+    for (const link of [
+      `${raw}/main/site.yml`,
+      `${raw}/refs/heads/main/site.yml`,
+      "https://github.com/billy/bricks/blob/main/site.yml",
+    ]) {
+      serve()
+      const brick = await loadBrickSource(link)
+      expect(brick.source).toBe(`${raw}/main/site.yml`)
+      expect(brick.deploy).toEqual({
+        compose: "services:\n  web:\n    image: ghcr.io/billy/site:1\n",
+        type: "compose",
+      })
+      expect(remote.asked.filter((asked) => asked.startsWith(raw))).toEqual([
+        `${raw}/${published}/site.yml`,
+        `${raw}/${published}/site.kiln.compose.yaml`,
+      ])
+      // The address it is kept by is one Kiln takes, and reads the same.
+      expect((await resolveBrickLink(brick.source)).read.href).toBe(
+        `${raw}/${published}/site.yml`
+      )
+    }
+  })
+
+  // A link may say which it means, a branch or a tag. It is kept by the
+  // name alone, which reads the branch where both have it.
+  it("says which of a branch and a tag it means only where that is what its name reads", async () => {
+    const api = "https://api.github.com/repos/billy/bricks/commits"
+    const tagged = "c".repeat(40)
+    const both = () => {
+      serve()
+      remote.answers.set(`${api}/tags/v1`, `{"sha":"${published}"}`)
+      remote.answers.set(`${api}/heads/release`, `{"sha":"${published}"}`)
+      remote.answers.set(`${api}/tags/release`, `{"sha":"${tagged}"}`)
+      remote.answers.set(`${raw}/${tagged}/site.yml`, recipe)
+    }
+    for (const [link, name] of [
+      [`${raw}/refs/tags/v1/site.yml`, "v1"],
+      [`${raw}/refs/heads/release/site.yml`, "release"],
+    ] as const) {
+      both()
+      const resolved = await resolveBrickLink(link)
+      expect(resolved).toEqual({
+        read: new URL(`${raw}/${published}/site.yml`),
+        source: `${raw}/${name}/site.yml`,
+      })
+      expect(await resolveBrickLink(resolved.source)).toEqual(resolved)
+    }
+    both()
+    await expect(
+      resolveBrickLink(`${raw}/refs/tags/release/site.yml`)
+    ).rejects.toThrow("both a branch and a tag")
+  })
+
+  // A Relay reads a game server's, and fetches what it is given: it is
+  // given the commit, never the link.
+  it("is read by a Relay at that commit too", async () => {
+    serve()
+    expect(await resolveBrickLink(`${raw}/main/site.yml`)).toEqual({
+      read: new URL(`${raw}/${published}/site.yml`),
+      source: `${raw}/main/site.yml`,
+    })
+  })
+
+  it("is never read at a commit or a pull request, which a fork's can be", async () => {
+    // GitHub serves a pull request's commits at the repository's address.
+    remote.answers.set(`${raw}/refs/pull/7/head/site.yml`, recipe)
+    for (const link of [
+      `${raw}/${forked}/site.yml`,
+      `${raw}/${forked.slice(0, 8)}/site.yml`,
+      `${raw}/${forked}~0/site.yml`,
+      `${raw}/refs/pull/7/head/site.yml`,
+      `${raw}/refs/remotes/origin/main/site.yml`,
+      // A branch called `refs` would be kept at an address that reads as
+      // a ref spelled out: another recipe's, or none.
+      `${raw}/refs/heads/refs/site.yml`,
+      `${raw}/refs/heads/refs/heads/main/site.yml`,
+      `https://github.com/billy/bricks/blob/${forked}/site.yml`,
+      // The same host, written with the dot a name may end in.
+      `https://raw.githubusercontent.com./billy/bricks/${forked}/site.yml`,
+      "https://github.com/billy/bricks/blob/refs/pull/7/head/site.yml",
+    ]) {
+      serve()
+      await expect(resolveBrickLink(link)).rejects.toThrow("not at a commit")
+      await expect(loadBrickSource(link)).rejects.toThrow("not at a commit")
+      expect(remote.asked).toEqual([])
+    }
   })
 })
