@@ -4,13 +4,15 @@ import { afterAll, afterEach, vi } from "vite-plus/test"
 import { relayInstanceSchema } from "@workspace/contracts"
 
 import { AppCache } from "@/effect/cache"
-import type { InstanceDomainAssignment } from "@/effect/domains"
+import type { InstanceDomainAssignment } from "@/effect/addresses"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import { insertRows, selectRows } from "@/test/seed"
 import { betterAuthSecrets } from "@/lib/environment"
-import { beginInstanceDomainRenameEffect } from "@/effect/domains"
-import { insertWebHostnameEffect } from "@/effect/web-hostnames"
+import {
+  beginInstanceDomainRenameEffect,
+  insertWebHostnameEffect,
+} from "@/effect/addresses"
 
 import { encryptWithKeyring } from "../../keyring.mjs"
 
@@ -46,21 +48,24 @@ const insertAssignment = (assignment: InstanceDomainAssignment) =>
   ])
 
 const insertDomainRow = (assignment: InstanceDomainAssignment) =>
-  insertRows("instance_domain", {
+  insertRows("instance_address", {
     id: assignment.id,
+    game: true,
     is_primary: assignment.primary,
     relay_id: assignment.relayId,
-    instance_id: assignment.instanceId,
+    resource_type: "instance",
+    resource_id: assignment.instanceId,
     integration_id: assignment.integrationId,
-    vanity_label: assignment.vanityLabel,
-    domain: assignment.domain,
-    public_host: assignment.publicHost,
+    zone_id: assignment.zoneId,
+    hostname: `${assignment.vanityLabel}.${assignment.domain}`,
+    vanity_domain: assignment.domain,
+    target: assignment.publicHost,
     public_port: assignment.publicPort,
     supports_srv: assignment.supportsSrv,
     srv_service: assignment.srvService,
     srv_protocol: assignment.srvProtocol,
-    address_record_id: assignment.addressRecordId,
-    address_record_type: assignment.addressRecordType,
+    record_id: assignment.addressRecordId,
+    record_type: assignment.addressRecordType,
     srv_record_id: assignment.srvRecordId,
     status: assignment.status,
     created_at: 0,
@@ -113,21 +118,37 @@ const insertCredential = (
     )
   })
 
-const assignmentRows = selectRows<{
-  domain: string
-  id: string
-  is_primary: number
-  vanity_label: string
-}>("instance_domain")
+// A game server's addresses, as rows of the one address table.
+const addressRows = Effect.map(
+  selectRows<{
+    game: number
+    hostname: string
+    id: string
+    is_primary: number
+    relay_id: string
+    resource_id: string
+    status: string
+    vanity_domain: string
+  }>("instance_address"),
+  (rows) => rows.filter((row) => row.game)
+)
+
+const assignmentRows = Effect.map(addressRows, (rows) =>
+  rows.map((row) => ({
+    domain: row.vanity_domain,
+    id: row.id,
+    is_primary: row.is_primary,
+    vanity_label: row.hostname.slice(0, -(row.vanity_domain.length + 1)),
+  }))
+)
 
 const claimedNames = Effect.map(
   selectRows<{ hostname: string }>("hostname_claim"),
   (rows) => rows.map((row) => row.hostname).sort()
 )
 
-const assignmentStatuses = Effect.map(
-  selectRows<{ status: string }>("instance_domain"),
-  (rows) => rows.map((row) => row.status)
+const assignmentStatuses = Effect.map(addressRows, (rows) =>
+  rows.map((row) => row.status)
 )
 
 const optOutKeys = Effect.map(
@@ -137,9 +158,8 @@ const optOutKeys = Effect.map(
   (rows) => rows.map((row) => `${row.relay_id}:${row.instance_id}`)
 )
 
-const assignmentKeys = Effect.map(
-  selectRows<{ relay_id: string; instance_id: string }>("instance_domain"),
-  (rows) => rows.map((row) => `${row.relay_id}:${row.instance_id}`)
+const assignmentKeys = Effect.map(addressRows, (rows) =>
+  rows.map((row) => `${row.relay_id}:${row.resource_id}`)
 )
 
 // Cloudflare is the external system: a DNS zone holding the given records

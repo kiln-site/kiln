@@ -20,7 +20,6 @@ import {
 import { promiseEffect } from "@/effect/promise"
 import {
   activateInstanceDomainAssignmentEffect,
-  anyDomainConnectionEffect,
   assignmentHostnames,
   beginInstanceDomainRenameEffect,
   clearInstanceDomainErrorEffect,
@@ -32,12 +31,9 @@ import {
   deleteRelayInstanceDomainAssignmentsEffect,
   insertInstanceDomainAssignmentEffect,
   loadActiveInstanceDomainAssignmentsEffect,
-  loadDomainConnectionCredentialEffect,
   loadInstanceDomainAssignmentEffect,
   loadInstanceDomainAssignmentsForInstanceEffect,
   loadInstanceDomainOptOutEffect,
-  loadManagedDomainEffect,
-  listUsableVanityDomainsEffect,
   loadRelayInstanceDomainAssignmentsEffect,
   markInstanceDomainRemovingEffect,
   markRelayInstanceDomainsRemovingEffect,
@@ -50,6 +46,12 @@ import {
   updateInstanceDomainAddressRecordEffect,
   updateInstanceDomainEndpointEffect,
   type InstanceDomainAssignment,
+} from "@/effect/addresses"
+import {
+  anyDomainConnectionEffect,
+  loadDomainConnectionCredentialEffect,
+  loadManagedDomainEffect,
+  listUsableVanityDomainsEffect,
   type ManagedDomain,
 } from "@/effect/domains"
 import { Database } from "@/effect/database"

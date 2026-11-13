@@ -14,12 +14,10 @@ import {
   listUsableVanityDomainsEffect,
   loadDomainConnectionCredentialEffect,
   loadDomainConnectionEffect,
-  loadInstanceDomainAssignmentsEffect,
   requireConnectionUnusedEffect,
   saveDomainConnectionEffect,
   type DomainConnection,
   type ManagedDomain,
-  retryInstanceDomainsNowEffect,
 } from "@/effect/domains"
 import { wakePollingWorker } from "@/lib/polling-worker"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
@@ -27,8 +25,10 @@ import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
   listWebHostnamesEffect,
+  loadInstanceDomainAssignmentsEffect,
+  retryInstanceDomainsNowEffect,
   webHostnameProxied,
-} from "@/effect/web-hostnames"
+} from "@/effect/addresses"
 import { isPlatformAdmin } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { promiseEffect } from "@/effect/promise"

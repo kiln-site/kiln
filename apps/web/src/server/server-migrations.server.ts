@@ -13,9 +13,9 @@ import type { z } from "zod"
 
 import { countLinkableInstanceBackupsEffect } from "@/effect/backups"
 import {
-  anyDomainConnectionEffect,
   loadInstanceDomainAssignmentsForInstanceEffect,
-} from "@/effect/domains"
+} from "@/effect/addresses"
+import { anyDomainConnectionEffect } from "@/effect/domains"
 import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import type {

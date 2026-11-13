@@ -221,8 +221,11 @@ hostname.
 - `domain_zone`: vanity domains, unique across connections.
 - `hostname_claim`: the game server or app each hostname belongs to,
   lowercase, one row per name.
-- `instance_domain`: game servers' vanity addresses, with the name a rename
-  is moving one to.
-- `web_hostname`: web route hostnames and generated app addresses, with the
-  record Kiln made for each, whether it's proxied, and, while one is
-  `external`, the address record Cloudflare already had.
+- `instance_address`: one row per hostname a game server or app holds,
+  whatever uses it, with the record Kiln made for it. `game` marks a game
+  server's vanity address, which points at its game port and keeps its SRV
+  record and the name a rename is moving it to. `routed` says web routes
+  answer on it, and `is_generated` that Kiln made it as an app's address;
+  for those it also keeps whether the record is proxied and, while one is
+  `external`, the address record Cloudflare already had. A game server's web
+  route on its own address is that address's row, with both.

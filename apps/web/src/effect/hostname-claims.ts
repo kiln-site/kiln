@@ -62,8 +62,8 @@ export const claimHostnamesEffect = Effect.fn("hostnameClaims.claim")(
 )
 
 /**
- * Lets go of claims nothing uses any more: no web hostname, and no game
- * server domain by its name or the name it's being renamed to. Run it in
+ * Lets go of claims nothing uses any more: no address or web hostname by
+ * its name, and no address by the name it's being renamed to. Run it in
  * the transaction that stopped using them. Narrowed to one owner, and to
  * `hostnames` when given; a Relay's when only its ID is.
  */
@@ -91,16 +91,14 @@ export const releaseUnusedHostnamesEffect = Effect.fn("hostnameClaims.release")(
       `DELETE claim FROM ${claimTable} claim
       WHERE ${conditions.join(" AND ")}
         AND NOT EXISTS (
-          SELECT 1 FROM ${databaseTable("web_hostname")} used
+          SELECT 1 FROM ${databaseTable("instance_address")} used
            WHERE used.hostname = claim.hostname)
         AND NOT EXISTS (
-          SELECT 1 FROM ${databaseTable("instance_domain")} used
-           WHERE claim.resource_type = 'instance'
+          SELECT 1 FROM ${databaseTable("instance_address")} used
+           WHERE used.next_hostname = claim.hostname
              AND used.relay_id = claim.relay_id
-             AND used.instance_id = claim.resource_id
-             AND (CONCAT(used.vanity_label, '.', used.domain) = claim.hostname
-               OR CONCAT(used.next_vanity_label, '.', used.next_domain)
-                  = claim.hostname))`,
+             AND used.resource_type = claim.resource_type
+             AND used.resource_id = claim.resource_id)`,
       values
     )
   }

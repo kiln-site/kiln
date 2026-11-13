@@ -31,7 +31,7 @@ import {
 } from "@/effect/backups"
 import { Database } from "@/effect/database"
 import { DatabaseError } from "@/effect/errors"
-import { setInstanceDomainOptOutEffect } from "@/effect/domains"
+import { setInstanceDomainOptOutEffect } from "@/effect/addresses"
 import {
   notifyUsersEffect,
   publishNotificationChange,

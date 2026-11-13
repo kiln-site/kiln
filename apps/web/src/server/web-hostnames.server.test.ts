@@ -16,13 +16,13 @@ import {
 
 import { encryptWithKeyring } from "../../keyring.mjs"
 
-import type { WebHostnameResource } from "@/effect/web-hostnames"
+import type { WebHostnameResource } from "@/effect/addresses"
 
 import type { DomainActor } from "./domain-access.server"
 import {
   loadWebHostnameByNameEffect,
   type ExistingWebRecord,
-} from "@/effect/web-hostnames"
+} from "@/effect/addresses"
 
 import {
   adoptableWebHostnamesEffect,
@@ -316,13 +316,21 @@ const refusal = (
     }))
   )
 
+// Web hostnames, as rows of the one address table: every row that isn't
+// only a game server's address.
 const hostnameRows = Effect.map(
-  selectRows<{ hostname: string; relay_id: string; status: string }>(
-    "web_hostname"
-  ),
+  selectRows<{
+    game: number
+    hostname: string
+    relay_id: string
+    routed: number
+    status: string
+  }>("instance_address"),
   (rows) =>
     Object.fromEntries(
-      rows.map((row) => [row.hostname, `${row.status}@${row.relay_id.trim()}`])
+      rows
+        .filter((row) => !row.game || row.routed)
+        .map((row) => [row.hostname, `${row.status}@${row.relay_id.trim()}`])
     )
 )
 

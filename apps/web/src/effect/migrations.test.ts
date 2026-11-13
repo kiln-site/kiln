@@ -1510,5 +1510,214 @@ describeMysql("database migrations", () => {
         }),
       schemaBuildTimeout
     )
+
+    // Kiln knows the Cloudflare records it made by their row's ID, so a
+    // row that changes ID, or is lost, leaves records nothing deletes.
+    it.effect(
+      "keeps every address and web hostname, with its ID and record, as one table",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while a game server's addresses and web
+          // hostnames were two tables.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 74)
+          )
+          const relayId = "1".repeat(12)
+          const serverId = "5".repeat(12)
+          const appId = "a".repeat(12)
+          yield* insertRows("domain_integration", {
+            api_token_ciphertext: "token",
+            blacklist_patterns: "[]",
+            created_at: 1,
+            id: "cloudflare",
+            name: "Cloudflare",
+            owner_id: null,
+            provider: "cloudflare",
+            updated_at: 1,
+            zones: "[]",
+          })
+          yield* insertRows("domain_zone", {
+            created_at: 1,
+            domain: "kiln.test",
+            enabled: 1,
+            integration_id: "cloudflare",
+            is_default: 1,
+            updated_at: 1,
+            zone_id: "z".repeat(32),
+            zone_name: "kiln.test",
+          })
+          const address = (
+            id: string,
+            label: string,
+            row: Record<string, unknown> = {}
+          ) => ({
+            address_record_id: `${id}-a`.padEnd(32, "0"),
+            address_record_type: "A",
+            created_at: 1,
+            domain: "kiln.test",
+            id: id.padEnd(36, "0"),
+            instance_id: serverId,
+            integration_id: "cloudflare",
+            is_primary: 0,
+            next_domain: null,
+            next_vanity_label: null,
+            srv_protocol: null,
+            srv_record_id: null,
+            srv_service: null,
+            supports_srv: 0,
+            public_host: "203.0.113.10",
+            public_port: 25565,
+            relay_id: relayId,
+            status: "active",
+            updated_at: 1,
+            vanity_label: label,
+            ...row,
+          })
+          yield* insertRows("instance_domain", [
+            // Players join by name, and a rename is under way.
+            address("primary", "deep-moon", {
+              is_primary: 1,
+              next_domain: "kiln.test",
+              next_vanity_label: "new-moon",
+              srv_protocol: "tcp",
+              srv_record_id: "s".repeat(32),
+              srv_service: "minecraft",
+              supports_srv: 1,
+            }),
+            // Its web routes answer on these two as well.
+            address("shared", "shared"),
+            address("leaving", "leaving", { status: "removing" }),
+          ])
+          const hostname = (
+            id: string,
+            name: string,
+            row: Record<string, unknown> = {}
+          ) => ({
+            created_at: 1,
+            hostname: name,
+            id: id.padEnd(36, "0"),
+            integration_id: "cloudflare",
+            is_generated: 0,
+            proxied: 0,
+            record_id: null,
+            record_type: null,
+            relay_id: relayId,
+            resource_id: serverId,
+            resource_type: "instance",
+            routed: 1,
+            target: null,
+            status: "active",
+            updated_at: 1,
+            vanity_domain: "kiln.test",
+            zone_id: "z".repeat(32),
+            ...row,
+          })
+          yield* insertRows("web_hostname", [
+            hostname("route-shared", "shared.kiln.test"),
+            hostname("route-leaving", "leaving.kiln.test", {
+              record_id: "w".repeat(32),
+              record_type: "CNAME",
+              status: "pending",
+            }),
+            hostname("route-own", "wiki.example.test", {
+              proxied: 1,
+              record_id: "o".repeat(32),
+              record_type: "CNAME",
+              target: "relay.example.test",
+              vanity_domain: null,
+            }),
+            hostname("app", "quiet-lake.kiln.test", {
+              is_generated: 1,
+              record_id: "g".repeat(32),
+              record_type: "CNAME",
+              resource_id: appId,
+              resource_type: "app",
+              routed: 0,
+            }),
+          ])
+
+          yield* applyMigrations(migrations)
+
+          const rows = yield* sql<Record<string, unknown>>`
+            SELECT id, hostname, resource_type, resource_id, zone_id,
+                   vanity_domain, game, routed, is_generated, is_primary,
+                   next_hostname, next_vanity_domain, public_port,
+                   supports_srv, srv_record_id, record_id, record_type,
+                   target, proxied, status
+              FROM ${sql(databaseTableName("instance_address"))}
+             ORDER BY hostname
+          `
+          const kept = Object.fromEntries(
+            rows.map((row) => [String(row.hostname), row])
+          )
+          expect(Object.keys(kept)).toEqual([
+            "deep-moon.kiln.test",
+            "leaving.kiln.test",
+            "quiet-lake.kiln.test",
+            "shared.kiln.test",
+            "wiki.example.test",
+          ])
+          // A game server's address, its label still read from its name.
+          expect(kept["deep-moon.kiln.test"]).toMatchObject({
+            game: 1,
+            id: "primary".padEnd(36, "0"),
+            is_primary: 1,
+            next_hostname: "new-moon.kiln.test",
+            next_vanity_domain: "kiln.test",
+            public_port: 25565,
+            record_id: "primary-a".padEnd(32, "0"),
+            record_type: "A",
+            resource_id: serverId,
+            resource_type: "instance",
+            routed: 0,
+            srv_record_id: "s".repeat(32),
+            supports_srv: 1,
+            target: "203.0.113.10",
+            vanity_domain: "kiln.test",
+            zone_id: "z".repeat(32),
+          })
+          // Its route on its own address: one row, the address's.
+          expect(kept["shared.kiln.test"]).toMatchObject({
+            game: 1,
+            id: "shared".padEnd(36, "0"),
+            record_id: "shared-a".padEnd(32, "0"),
+            routed: 1,
+          })
+          // An address on its way out leaves the name to its route.
+          expect(kept["leaving.kiln.test"]).toMatchObject({
+            game: 0,
+            id: "route-leaving".padEnd(36, "0"),
+            record_id: "w".repeat(32),
+            routed: 1,
+            status: "pending",
+          })
+          expect(kept["wiki.example.test"]).toMatchObject({
+            game: 0,
+            id: "route-own".padEnd(36, "0"),
+            proxied: 1,
+            record_id: "o".repeat(32),
+            target: "relay.example.test",
+            vanity_domain: null,
+          })
+          expect(kept["quiet-lake.kiln.test"]).toMatchObject({
+            game: 0,
+            id: "app".padEnd(36, "0"),
+            is_generated: 1,
+            record_id: "g".repeat(32),
+            resource_id: appId,
+            resource_type: "app",
+          })
+          const old = yield* sql<{ name: string }>`
+            SELECT table_name AS name FROM information_schema.tables
+             WHERE table_schema = DATABASE()
+               AND table_name IN (${databaseTableName("instance_domain")},
+                                  ${databaseTableName("web_hostname")})
+          `
+          expect(old).toEqual([])
+        }),
+      schemaBuildTimeout
+    )
   })
 })
