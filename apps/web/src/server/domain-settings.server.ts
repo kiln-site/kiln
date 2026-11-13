@@ -209,6 +209,7 @@ export async function getDomainSettingsHandler() {
         status: row.status,
         target: row.target,
         vanity: row.vanityDomain !== null,
+        vanityDomain: row.vanityDomain,
         zoneName:
           zoneNameFor(row.hostname, connections, row.connectionId) ??
           (row.vanityDomain ? (zoneNames.get(row.vanityDomain) ?? null) : null),
@@ -319,6 +320,7 @@ export async function getManualWebHostnamesHandler(): Promise<
         status: "manual",
         target: null,
         vanity: false,
+        vanityDomain: null,
         zoneName: null,
       },
     ]

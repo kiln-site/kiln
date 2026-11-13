@@ -63,9 +63,12 @@ import {
   cloudflareDnsRecordsUrl,
   domainHostname,
   domainStatusPresentation,
+  ownAddressTarget,
+  serverDomainTarget,
   showErrorToast,
   vanityDomainChoices,
   type DomainConnectionOverview,
+  type DomainDialogTarget,
   type DomainSettings,
 } from "@/components/domains-shared"
 import {
@@ -99,19 +102,25 @@ import {
 
 type DomainDialog =
   | { connection: DomainConnectionOverview | null; kind: "connection" }
-  | { kind: "delete"; domain: ManagedDomainOverview }
-  | { kind: "edit"; domain: ManagedDomainOverview }
-  | { hostname: WebHostnameOverview; kind: "release" }
+  | { kind: "delete"; domain: DomainDialogTarget }
+  | { kind: "edit"; domain: DomainDialogTarget }
   | { hostname: WebHostnameOverview; kind: "adopt" }
   | null
 
 /**
- * A row of the table: a game server's vanity address, or a web route
- * hostname, whether Kiln keeps its DNS record or not.
+ * A row of the table: a game server's vanity address, or a name web routes
+ * answer on, an App's own addresses among them, whether Kiln keeps its DNS
+ * record or not.
  */
 type DomainRow =
   | { domain: ManagedDomainOverview; id: string; kind: "server" }
-  | { hostname: WebHostnameOverview; id: string; kind: "web" }
+  | {
+      /** How many addresses of its own its instance has. */
+      addresses: number
+      hostname: WebHostnameOverview
+      id: string
+      kind: "web"
+    }
 
 /** Which rows the table shows. */
 interface DomainFilter {
@@ -184,9 +193,6 @@ const DeleteDomainDialog = React.lazy(async () => ({
 }))
 const DomainConnectionDialog = React.lazy(async () => ({
   default: (await loadDomainDialogs()).DomainConnectionDialog,
-}))
-const ReleaseHostnameDialog = React.lazy(async () => ({
-  default: (await loadDomainDialogs()).ReleaseHostnameDialog,
 }))
 const EditDomainDialog = React.lazy(async () => ({
   default: (await loadDomainDialogs()).EditDomainDialog,
@@ -278,11 +284,23 @@ export const DomainsPage = React.memo(function DomainsPage({
         result.push({ domain, id: `server:${domain.id}`, kind: "server" })
       }
     }
+    const own = new Map<string, number>()
+    for (const { generated, relayId, resource } of data.webHostnames) {
+      if (!generated) continue
+      const key = `${relayId}/${resource.id}`
+      own.set(key, (own.get(key) ?? 0) + 1)
+    }
     for (const hostname of [...data.webHostnames, ...manualHostnames]) {
       if (
         inScope(hostname.resource.kind, hostname.resource.id, hostname.relayId)
       ) {
-        result.push({ hostname, id: `web:${hostname.id}`, kind: "web" })
+        result.push({
+          addresses:
+            own.get(`${hostname.relayId}/${hostname.resource.id}`) ?? 1,
+          hostname,
+          id: `web:${hostname.id}`,
+          kind: "web",
+        })
       }
     }
     return result.filter((row) => rowMatches(row, filter))
@@ -354,13 +372,6 @@ export const DomainsPage = React.memo(function DomainsPage({
           <DeleteDomainDialog
             key={dialog.domain.id}
             domain={dialog.domain}
-            onOpenChange={closeDialog}
-          />
-        ) : null}
-        {dialog?.kind === "release" ? (
-          <ReleaseHostnameDialog
-            key={dialog.hostname.id}
-            hostname={dialog.hostname}
             onOpenChange={closeDialog}
           />
         ) : null}
@@ -1192,7 +1203,31 @@ const DomainRowActions = React.memo(function DomainRowActions({
           }
           label={`Edit ${hostname}`}
           tooltip="Edit"
-          onClick={() => onDialog({ domain: row.domain, kind: "edit" })}
+          onClick={() =>
+            onDialog({ domain: serverDomainTarget(row.domain), kind: "edit" })
+          }
+        >
+          <Pencil />
+        </RowActionButton>
+      ) : row.hostname.generated ? (
+        // An address of the instance's own is renamed here, like a game
+        // server's; a web route on it moves with it.
+        <RowActionButton
+          disabledReason={
+            !row.hostname.canManage
+              ? "Needs access to manage this app"
+              : row.hostname.status === "removing"
+                ? "Being deleted"
+                : null
+          }
+          label={`Edit ${hostname}`}
+          tooltip="Edit"
+          onClick={() =>
+            onDialog({
+              domain: ownAddressTarget(row.hostname, row.addresses),
+              kind: "edit",
+            })
+          }
         >
           <Pencil />
         </RowActionButton>
@@ -1223,11 +1258,13 @@ const DomainRowActions = React.memo(function DomainRowActions({
           label={`Delete ${hostname}`}
           tooltip="Delete"
           onClick={() =>
-            onDialog(
-              row.kind === "server"
-                ? { domain: row.domain, kind: "delete" }
-                : { hostname: row.hostname, kind: "release" }
-            )
+            onDialog({
+              domain:
+                row.kind === "server"
+                  ? serverDomainTarget(row.domain)
+                  : ownAddressTarget(row.hostname, row.addresses),
+              kind: "delete",
+            })
           }
         >
           <Trash2 />

@@ -40,6 +40,7 @@ import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
+import { InstanceDomainsSection } from "@/components/instance-domains-section"
 import { useGeneratedHostname } from "@/components/web-hostname-dns"
 import {
   WebRoutesSection,
@@ -54,11 +55,7 @@ import {
   queryKeys,
   webRoutesQueryOptions,
 } from "@/lib/query-options"
-import {
-  deployApp,
-  updateAppConfig,
-  updateAppNetwork,
-} from "@/server/apps"
+import { deployApp, updateAppConfig, updateAppNetwork } from "@/server/apps"
 import { updateWebRoutes } from "@/server/domains"
 import { useAppDeployState } from "@/components/app/use-app-deploy-state"
 
@@ -72,6 +69,11 @@ export function AppNetworkPage() {
   )
   const canManage =
     appRelayAvailable(app) && app.permissions.includes("app.manage")
+  // Its addresses, as every instance holds them.
+  const instance = React.useMemo(
+    () => ({ id: app.id, name: app.name, relayId: app.relayId }),
+    [app.id, app.name, app.relayId]
+  )
 
   return (
     <section className="min-h-0 flex-1 overflow-y-auto bg-card">
@@ -105,6 +107,14 @@ export function AppNetworkPage() {
 
         {config.data ? (
           <>
+            <InstanceDomainsSection
+              canWrite={
+                appRelayAvailable(app) &&
+                app.permissions.includes("instance.network.write")
+              }
+              instance={instance}
+              resourceType="app"
+            />
             <AppWebRoutes app={app} canManage={canManage} compose={compose} />
             <PublishedPorts
               // A fresh form when the saved ports change, and only then:

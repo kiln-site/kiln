@@ -191,6 +191,7 @@ export const queryKeys = {
       resourceType: "app" | "instance",
       resourceId: string
     ) => ["domains", "hostnames", relayId, resourceType, resourceId] as const,
+    all: ["domains"] as const,
     instance: (relayId: string, instanceId: string) =>
       ["domains", "instances", relayId, instanceId] as const,
     settings: ["domains", "settings"] as const,
@@ -1409,11 +1410,13 @@ export function resourceWebHostnamesQueryOptions(
 
 export function instanceDomainQueryOptions(
   relayId: string,
-  instanceId: string
+  instanceId: string,
+  resourceType: "app" | "instance" = "instance"
 ) {
   return queryOptions({
     queryKey: queryKeys.domains.instance(relayId, instanceId),
-    queryFn: () => getInstanceDomain({ data: { instanceId, relayId } }),
+    queryFn: () =>
+      getInstanceDomain({ data: { instanceId, relayId, resourceType } }),
     retry: false,
     staleTime: 10_000,
   })

@@ -34,7 +34,6 @@ import {
   adoptWebHostnameRecordHandler,
   checkWebCertificateHandler,
   getResourceWebHostnamesHandler,
-  releaseWebHostnameHandler,
 } from "@/server/web-hostname-access.server"
 import { getWebRoutesHandler, saveWebRoutes } from "@/server/web-routes.server"
 
@@ -124,8 +123,6 @@ const saveWebRoutesInputSchema = z.discriminatedUnion("resourceType", [
   }),
 ])
 
-const releaseWebHostnameInputSchema = z.object({ id: domainIdSchema })
-
 const adoptWebHostnameRecordInputSchema = z.object({
   id: domainIdSchema,
   /** The record as the person saw it and agreed to hand it over. */
@@ -161,9 +158,6 @@ export type RemoveInstanceDomainInput = z.infer<
 export type ResourceWebHostnamesInput = z.infer<
   typeof resourceWebHostnamesInputSchema
 >
-export type ReleaseWebHostnameInput = z.infer<
-  typeof releaseWebHostnameInputSchema
->
 export type AdoptWebHostnameRecordInput = z.infer<
   typeof adoptWebHostnameRecordInputSchema
 >
@@ -193,6 +187,8 @@ export interface InstanceAddressOverview extends InstanceDomainOverview {
   game: boolean
   hostname: string
   id: string
+  /** A game server's port; none for any other. */
+  port: number | null
   /** Its instance's main address; one per instance. */
   primary: boolean
   /** Whether a web route answers on it. */
@@ -289,6 +285,8 @@ export interface WebHostnameOverview {
   target: string | null
   /** Named under a vanity domain. */
   vanity: boolean
+  /** That vanity domain, which its name is a label under. */
+  vanityDomain: string | null
   /** The Cloudflare zone, for its dashboard link. */
   zoneName: string | null
 }
@@ -413,10 +411,6 @@ export const getResourceWebHostnames = createServerFn({ method: "GET" })
 export const checkWebCertificate = createServerFn({ method: "POST" })
   .validator(checkWebCertificateInputSchema)
   .handler(({ data }) => checkWebCertificateHandler(data))
-
-export const releaseWebHostname = createServerFn({ method: "POST" })
-  .validator(releaseWebHostnameInputSchema)
-  .handler(({ data }) => releaseWebHostnameHandler(data))
 
 /** Has Kiln take over the record Cloudflare already had for a hostname. */
 export const adoptWebHostnameRecord = createServerFn({ method: "POST" })

@@ -1,4 +1,4 @@
-// The Domains page's dialogs, also opened from a game server's network page. They load after the page: when the browser
+// The Domains page's dialogs, also opened from an instance's network page. They load after the page: when the browser
 // is idle, or when one first opens.
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -47,9 +47,9 @@ import {
 
 import type { WebHostnameResourceRef } from "@/components/web-hostname-dns"
 import {
-  domainHostname,
   errorMessage,
   type DomainConnectionOverview,
+  type DomainDialogTarget,
   type VanityDomainChoice,
 } from "@/components/domains-shared"
 import {
@@ -66,12 +66,10 @@ import {
   createInstanceDomain,
   deleteDomainConnection,
   discoverCloudflareDomains,
-  releaseWebHostname,
   removeInstanceDomain,
   saveDomainConnection,
   updateInstanceDomain,
   type DiscoveredCloudflareZone,
-  type ManagedDomainOverview,
   type ResourceWebHostnames,
   type WebHostnameOverview,
 } from "@/server/domains"
@@ -79,14 +77,16 @@ import {
 export function CreateDomainDialog({
   domainCount,
   domains,
+  instance,
   onOpenChange,
-  server,
+  resourceType,
 }: {
-  /** How many domains already point at the game server. */
+  /** How many addresses the instance already has. */
   domainCount: number
   domains: ReadonlyArray<VanityDomainChoice>
+  instance: { id: string; name: string; relayId: string }
   onOpenChange: (open: boolean) => void
-  server: { id: string; name: string; relayId: string }
+  resourceType: "app" | "instance"
 }) {
   const queryClient = useQueryClient()
   const [domain, setDomain] = React.useState(domains[0]?.domain ?? "")
@@ -99,15 +99,16 @@ export function CreateDomainDialog({
       createInstanceDomain({
         data: {
           domain,
-          instanceId: server.id,
+          instanceId: instance.id,
           primary,
-          relayId: server.relayId,
+          relayId: instance.relayId,
+          resourceType,
           vanityLabel: parsed?.success ? parsed.data : undefined,
         },
       }),
     // A failed create can leave a failed row to retry or delete.
     onSettled: () =>
-      queryClient.invalidateQueries({ queryKey: queryKeys.domains.settings }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.domains.all }),
     onSuccess: (result) => {
       showToast({ message: `Created ${result.address}`, type: "success" })
       onOpenChange(false)
@@ -120,7 +121,9 @@ export function CreateDomainDialog({
         <DialogHeader>
           <DialogTitle>Add domain</DialogTitle>
           <DialogDescription>
-            An address players can join {server.name} with.
+            {resourceType === "instance"
+              ? `An address players can join ${instance.name} with.`
+              : `An address for ${instance.name}. Add a web route to serve it.`}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -148,7 +151,7 @@ export function CreateDomainDialog({
           {domainCount > 0 ? (
             <PrimaryDomainSwitch
               checked={primary}
-              serverName={server.name}
+              serverName={instance.name}
               onCheckedChange={setPrimary}
             />
           ) : null}
@@ -294,7 +297,7 @@ export function EditDomainDialog({
   domains,
   onOpenChange,
 }: {
-  domain: ManagedDomainOverview
+  domain: DomainDialogTarget
   domains: ReadonlyArray<VanityDomainChoice>
   onOpenChange: (open: boolean) => void
 }) {
@@ -323,10 +326,17 @@ export function EditDomainDialog({
         data: { domain: suffix, id: domain.id, primary, vanityLabel: label },
       }),
     // A failed rename can still clear a failed domain's leftover records.
+    // A web route on the old name moves with it.
     onSettled: () =>
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.domains.settings,
-      }),
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.domains.all }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.relay.webRoutes(
+            domain.relayId,
+            domain.instanceId
+          ),
+        }),
+      ]),
     onSuccess: (result) => {
       showToast({ message: `Saved ${result.address}`, type: "success" })
       onOpenChange(false)
@@ -338,7 +348,7 @@ export function EditDomainDialog({
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Edit domain</DialogTitle>
-          <DialogDescription>{domain.server.name}</DialogDescription>
+          <DialogDescription>{domain.name}</DialogDescription>
         </DialogHeader>
         <form
           className="space-y-4"
@@ -365,13 +375,13 @@ export function EditDomainDialog({
           {domain.primary ? (
             domain.domainCount > 1 ? (
               <p className="type-meta text-muted-foreground">
-                This is {domain.server.name}&apos;s main address.
+                This is {domain.name}&apos;s main address.
               </p>
             ) : null
           ) : (
             <PrimaryDomainSwitch
               checked={primary}
-              serverName={domain.server.name}
+              serverName={domain.name}
               onCheckedChange={setPrimary}
             />
           )}
@@ -409,19 +419,17 @@ export function DeleteDomainDialog({
   domain,
   onOpenChange,
 }: {
-  domain: ManagedDomainOverview
+  domain: DomainDialogTarget
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
-  const hostname = domainHostname(domain)
+  const { hostname } = domain
   const remove = useMutation({
     mutationFn: () => removeInstanceDomain({ data: { id: domain.id } }),
     // A failed delete marks the domain as failed, so refresh either way.
     onSettled: () =>
       Promise.all([
-        queryClient.invalidateQueries({
-          queryKey: queryKeys.domains.settings,
-        }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.domains.all }),
         queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot }),
       ]),
     onSuccess: () => {
@@ -438,9 +446,9 @@ export function DeleteDomainDialog({
           <DialogDescription>
             Deletes <span className="font-mono">{hostname}</span> from
             Cloudflare.
-            {domain.domainCount > 1
-              ? ""
-              : ` Players join ${domain.server.name} by its Relay address instead.`}
+            {domain.game && domain.domainCount <= 1
+              ? ` Players join ${domain.name} by its Relay address instead.`
+              : ""}
           </DialogDescription>
         </DialogHeader>
 
@@ -1119,62 +1127,6 @@ function mergeDiscoveredZones(
       .filter((choice) => choice.selected && !reachable.has(choice.zoneId))
       .map((choice) => ({ ...choice, missing: true })),
   ]
-}
-
-/** Releases an app's generated address, deleting its record. */
-export function ReleaseHostnameDialog({
-  hostname,
-  onOpenChange,
-}: {
-  hostname: WebHostnameOverview
-  onOpenChange: (open: boolean) => void
-}) {
-  const queryClient = useQueryClient()
-  const release = useMutation({
-    mutationFn: () => releaseWebHostname({ data: { id: hostname.id } }),
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ["domains"] }),
-    onSuccess: () => {
-      showToast({ message: `Deleted ${hostname.hostname}`, type: "success" })
-      onOpenChange(false)
-    },
-  })
-  return (
-    <Dialog open onOpenChange={release.isPending ? undefined : onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Delete address</DialogTitle>
-          <DialogDescription>
-            Deletes <span className="font-mono">{hostname.hostname}</span> from
-            Cloudflare.
-          </DialogDescription>
-        </DialogHeader>
-        {release.error ? <ConfigurationError error={release.error} /> : null}
-        <DialogFooter>
-          <Button
-            disabled={release.isPending}
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            disabled={release.isPending}
-            type="button"
-            variant="destructive"
-            onClick={() => release.mutate()}
-          >
-            {release.isPending ? (
-              <LoaderCircle className="animate-spin" />
-            ) : (
-              <Trash2 />
-            )}
-            Delete
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
 }
 
 /**

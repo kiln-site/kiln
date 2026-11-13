@@ -2395,26 +2395,6 @@ export const adoptExistingWebRecordEffect = Effect.fn(
 })
 
 /**
- * Releases one of an instance's own addresses that isn't a game server's,
- * such as the one made for an App, as it is once work already on it
- * finishes: the removal its Network page asks for, by the hostname's ID.
- */
-export const releaseWebHostnameEffect = Effect.fn("addresses.release")(
-  function* (row: WebHostnameResource & { id: string }) {
-    yield* withCurrentRow("dns.webRoutes.release", row, (current) =>
-      // A route's hostname follows its route; deleting it alone would let
-      // another instance take a name the route still serves. A game
-      // server's address is removed as one.
-      current.game || !current.standalone
-        ? DomainConfigurationError.make({
-            message: `Remove the web route to delete ${current.hostname}`,
-          })
-        : removeOwnAddressEffect(current, current.id)
-    )
-  }
-)
-
-/**
  * Deletes every record a deleted instance had and lets go of its names.
  * All are marked for removal first, so a delete that fails is finished by
  * the DNS worker. Reports how many it had; fails with the first that
@@ -2681,6 +2661,7 @@ function addressOverview(row: Address): InstanceAddressOverview {
     hostname: row.hostname,
     id: row.id,
     lastError: row.lastError,
+    port: row.game ? assignment.publicPort : null,
     primary: row.primary,
     routed: row.routed,
     srvActive: row.game && domainHasActiveSrvRecord(assignment),

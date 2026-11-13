@@ -30,7 +30,6 @@ import {
 import type {
   AdoptWebHostnameRecordInput,
   CheckWebCertificateInput,
-  ReleaseWebHostnameInput,
   ResourceWebHostnames,
   ResourceWebHostnamesInput,
   WebCertificateCheck,
@@ -46,7 +45,6 @@ import {
   generateAppHostnameEffect,
   publishWebHostnameChange,
   reconcileResourceAddressesEffect,
-  releaseWebHostnameEffect,
   saveWebRouteHostnamesEffect,
   type WebHostnameProxyChange,
 } from "@/server/addresses.server"
@@ -133,49 +131,6 @@ export async function checkWebCertificateHandler(
   data: CheckWebCertificateInput
 ): Promise<WebCertificateCheck> {
   return runOperationPromise(checkCertificate, data, {
-    user: await requireEligibleResourceUser(),
-  })
-}
-
-// Releasing a hostname changes its game server's or App's DNS, so it holds
-// that `#dns`; one already gone changes nothing.
-const releaseHostname = operation<ReleaseWebHostnameInput>()({
-  name: "webHostname.release",
-  doing: "Changing its DNS records",
-  authorize: ({ input, user }) =>
-    signedIn(user).pipe(
-      Effect.flatMap((person) =>
-        promiseEffect(async () => {
-          const row = await runAppEffect(
-            "webHostnames.load",
-            loadWebHostnameEffect(input.id)
-          )
-          if (row) await requireResourcePermission(person, row, true)
-          return row
-        })
-      )
-    ),
-  locks: ({ context: row }) => (row ? [exclusive(dnsKey(row))] : []),
-  run: ({ context: row }) =>
-    promiseEffect(async () => {
-      if (!row) return
-      await runAppEffect("webHostnames.release", releaseWebHostnameEffect(row))
-      publishWebHostnameChange([row.relayId])
-    }),
-  audit: ({ context: row }) =>
-    row
-      ? {
-          id: row.resourceId,
-          kind: row.resourceType,
-          relayId: row.relayId,
-        }
-      : null,
-})
-
-/** Deletes a hostname's record, such as an app's generated address. */
-export async function releaseWebHostnameHandler(data: ReleaseWebHostnameInput) {
-  // Signed in before the lookup, so an ID's existence isn't revealed.
-  return runOperationPromise(releaseHostname, data, {
     user: await requireEligibleResourceUser(),
   })
 }

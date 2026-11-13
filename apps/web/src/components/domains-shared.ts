@@ -1,7 +1,11 @@
 import { showToast } from "@workspace/ui/components/sonner"
 
 import type { IdentityStatusPresentation } from "@/components/identity-name"
-import type { getDomainSettings, ManagedDomainOverview } from "@/server/domains"
+import type {
+  getDomainSettings,
+  ManagedDomainOverview,
+  WebHostnameOverview,
+} from "@/server/domains"
 import type { getInfraServerDirectory } from "@/server/infra-directory"
 
 // Shared by the Domains page and its dialogs, which load separately.
@@ -54,6 +58,70 @@ export function domainHostname(domain: ManagedDomainOverview): string {
   return `${domain.vanityLabel}.${domain.domain}`
 }
 
+/**
+ * An address of an instance, as the dialogs that rename or delete one take
+ * it: a game server's, or any other instance's.
+ */
+export interface DomainDialogTarget {
+  /** The vanity domain it is a label under. */
+  domain: string
+  /** How many addresses its instance has. */
+  domainCount: number
+  /** A game server's address, which players join it by. */
+  game: boolean
+  hostname: string
+  id: string
+  instanceId: string
+  /** Its instance's name. */
+  name: string
+  primary: boolean
+  relayId: string
+  vanityLabel: string
+}
+
+/**
+ * The same for any other instance's own address, which the Domains page
+ * lists among the names web routes answer on. `domainCount` is how many of
+ * its own its instance has.
+ */
+export function ownAddressTarget(
+  hostname: WebHostnameOverview,
+  domainCount: number
+): DomainDialogTarget {
+  const domain = hostname.vanityDomain ?? ""
+  return {
+    domain,
+    domainCount,
+    game: false,
+    hostname: hostname.hostname,
+    id: hostname.id,
+    instanceId: hostname.resource.id,
+    name: hostname.resource.name,
+    primary: hostname.primary,
+    relayId: hostname.relayId,
+    vanityLabel: domain
+      ? hostname.hostname.slice(0, -(domain.length + 1))
+      : hostname.hostname,
+  }
+}
+
+export function serverDomainTarget(
+  domain: ManagedDomainOverview
+): DomainDialogTarget {
+  return {
+    domain: domain.domain,
+    domainCount: domain.domainCount,
+    game: true,
+    hostname: domain.hostname,
+    id: domain.id,
+    instanceId: domain.instanceId,
+    name: domain.server.name,
+    primary: domain.primary,
+    relayId: domain.relayId,
+    vanityLabel: domain.vanityLabel,
+  }
+}
+
 // Cloudflare resolves `:account` to the signed-in account that owns the zone.
 export function cloudflareDnsRecordsUrl(zoneName: string): string {
   return `https://dash.cloudflare.com/?to=/:account/${encodeURIComponent(zoneName)}/dns/records`
@@ -68,7 +136,7 @@ export function showErrorToast(cause: Error) {
 }
 
 export function domainStatusPresentation(
-  domain: ManagedDomainOverview
+  domain: Pick<ManagedDomainOverview, "lastError" | "status">
 ): IdentityStatusPresentation {
   if (domain.status === "active") return { label: "Active", tone: "success" }
   if (domain.status === "pending") {

@@ -67,7 +67,7 @@ import {
   useInstancePermissions,
   useInstanceRelayConnected,
 } from "@/components/instance-workspace-context"
-import { ServerDomainsSection } from "@/components/server-domains-section"
+import { InstanceDomainsSection } from "@/components/instance-domains-section"
 import {
   TailscaleMembershipSection,
   type TailscaleMember,
@@ -169,8 +169,7 @@ function WebRoutesNetworkPage({
     }: {
       proxy?: WebRouteProxyChange
       routes: Array<RelayInstanceWebRouteInput>
-    }) =>
-      updateWebRoutes({ data: { ...dnsResource, proxy, routes: next } }),
+    }) => updateWebRoutes({ data: { ...dnsResource, proxy, routes: next } }),
     onSuccess: (next) => queryClient.setQueryData(queryKey, next),
   })
   const restart = useMutation({
@@ -222,7 +221,11 @@ function WebRoutesNetworkPage({
       <div className="mx-auto max-w-4xl space-y-4">
         <DatabaseConnectionWarnings />
         <SavedDatabaseConnections />
-        <ServerDomainsSection />
+        <InstanceDomainsSection
+          canWrite={permissions.networkWrite}
+          instance={instance}
+          resourceType="instance"
+        />
         <ConfiguredRoutesSection
           key={editGamePort ? "edit-game-port" : "network"}
           canPublicPortWrite={permissions.networkPublicPortWrite}

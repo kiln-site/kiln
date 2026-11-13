@@ -36,7 +36,6 @@ import {
 import {
   generateAppHostnameBestEffort,
   getResourceWebHostnamesHandler,
-  releaseWebHostnameHandler,
 } from "./web-hostname-access.server"
 import { saveWebRoutes } from "./web-routes.server"
 
@@ -964,7 +963,9 @@ describeMysql("an App's address", () => {
           assert.isNull(yield* saveRoutes(app, [address.hostname]))
           assert.isFalse((yield* routeHostnames(app))[0]?.canRelease)
           assert.include(
-            yield* refused(() => releaseWebHostnameHandler({ id: address.id })),
+            yield* refused(() =>
+              removeInstanceDomainHandler({ id: address.id })
+            ),
             "A web route uses"
           )
           assert.deepEqual(cloudflare.records(), pointed)
@@ -975,7 +976,7 @@ describeMysql("an App's address", () => {
           assert.isTrue((yield* routeHostnames(app))[0]?.canRelease)
 
           yield* Effect.promise(() =>
-            releaseWebHostnameHandler({ id: address.id })
+            removeInstanceDomainHandler({ id: address.id })
           )
           assert.deepEqual(cloudflare.records(), [])
           assert.deepEqual(yield* routeHostnames(app), [])

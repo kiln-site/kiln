@@ -207,7 +207,7 @@ function dnsPresentation(row: ResourceWebHostname) {
   }
 }
 
-/** The address Kiln generated for an app, if it has one. */
+/** An App's main address of its own, if it has one. */
 export function useGeneratedHostname(resource: WebHostnameResourceRef) {
   const { data } = useQuery({
     ...resourceWebHostnamesQueryOptions(
