@@ -176,6 +176,30 @@ const SETTLE_MS = 3_000
 // How long a container's health check may take to pass, past its settle.
 const HEALTH_TIMEOUT_MS = 10 * 60_000
 const HEALTH_POLL_MS = 1_000
+
+// The health check an App's configuration gives its container, as its
+// Brick's `ready` command. While it starts it is checked every two
+// seconds, so it is ready as soon as it answers, and no failure counts
+// against it for as long as a deployment waits (`HEALTH_TIMEOUT_MS`): a
+// slow first start gets all of that, not a shorter time of Docker's.
+// Once it has passed it is checked twice a minute, and three failures in
+// a row make it unhealthy. It takes the place of a check the image has.
+function appHealthcheck(
+  config: Pick<AppConfig, "healthcheck">
+): Pick<ContainerSpec, "healthcheck"> {
+  return config.healthcheck
+    ? {
+        healthcheck: {
+          command: config.healthcheck.command,
+          intervalMs: 30_000,
+          retries: 3,
+          startIntervalMs: 2_000,
+          startPeriodMs: HEALTH_TIMEOUT_MS,
+          timeoutMs: 10_000,
+        },
+      }
+    : {}
+}
 // Variables Docker and Compose read themselves; an app's environment can't
 // steer the Relay's own Docker client with them.
 const RESERVED_ENVIRONMENT =
@@ -1753,6 +1777,7 @@ export class AppDriver {
       createContainer(this.#engine, {
         command: shellWords(config.command),
         env: environment,
+        ...appHealthcheck(config),
         hostname,
         image: image.reference,
         ...containerLimitSpec({

@@ -31,8 +31,8 @@ The format describes every kind. Kiln reads them in stages.
 | App Bricks                       | Run from Kiln's own catalog: what they deploy, their variables and one web port |
 | Group Bricks                     | Run from Kiln's own catalog: databases, and Apps from an image connected to them |
 | `dockerfile` and `compose`       | Run for Apps from `path` in a source; one written in the Brick isn't yet |
-| `ready` by command               | Run for databases; game servers use logs |
-| `ready` by HTTP                  | Defined here; Apps use it later       |
+| `ready` by command               | Run for databases, and for Apps from an image or a Dockerfile; game servers use logs |
+| `ready` by HTTP                  | Defined here; nothing runs it yet     |
 | Ports that aren't `public`       | Defined here; not for game servers    |
 | A raster icon                    | Defined here; SVG marks are shown     |
 | `settings`                       | Reserved; refused until it is defined |
@@ -293,8 +293,20 @@ a fixed port already in use is reported by Docker.
 A `log` line decides by itself: nothing else is checked once one is given.
 Without `ready`, it is ready once its first port answers a TCP connection,
 or for the `minecraft` type a status ping. A port that is UDP only can't be
-asked, so a Brick with one needs a `log` line. A Docker health check in the
-image takes precedence.
+asked, so a Brick with one needs a `log` line. A Docker health check in a
+game server's image takes precedence.
+
+An App is ready by a `command` only, which is its container's Docker health
+check: Docker runs it in the container with the image's shell, so it can
+only use what the image holds. It takes the place of a health check the
+image has, since the Brick says it on purpose. It is checked every two
+seconds while the App starts, so a deployment goes on as soon as it
+passes, and a deployment waits ten minutes for that, as for any health
+check. Once it has passed it is checked twice a minute, and three failures
+in a row make the App unhealthy: it is shown as failed until the check
+passes again, and nothing restarts it.
+Without `ready`, an App is checked by its image's own health check, if it
+has one. A Compose project says each service's in its own file.
 
 ## Kinds and types
 
@@ -426,9 +438,14 @@ container a deployment replaces. Each is a path a volume can be mounted at
 - A volume made for an App that then couldn't be made stays, empty, on its
   Relay's volumes; the same install tried again uses it.
 
+An App Brick from an image or a Dockerfile may say `ready` by a command
+(see [Ready](#ready)). While the App follows the Brick, that health check is
+the Brick's: a revision changes it or takes it away, and its owner can't.
+
 An App Brick that sets anything else (a second port, one published on the
-host, `ready`, a file written in the Brick) is refused until Kiln runs
-that part, as is one from another catalog.
+host, `ready` another way or for a Compose project, a file written in the
+Brick) is refused until Kiln runs that part, as is one from another
+catalog.
 
 Kiln's catalog has a generic Brick for each thing an App deploys:
 `docker-image`, `dockerfile` and `compose`. An App made from one is its

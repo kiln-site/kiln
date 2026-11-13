@@ -353,10 +353,15 @@ export async function provisionApp(
       appId: id,
       ...(app.brick ? { brick: app.brick } : {}),
       createdBy: user.id,
-      deploys:
-        app.deploys.type === "image"
-          ? { image: app.deploys.image, sourceType: "image" }
-          : { sourceType: app.deploys.type },
+      deploys: {
+        ...(app.deploys.type === "image"
+          ? { image: app.deploys.image, sourceType: "image" as const }
+          : { sourceType: app.deploys.type }),
+        // Its Brick's `ready` command is its container's health check.
+        ...(app.deploys.ready === undefined
+          ? {}
+          : { healthcheck: { command: app.deploys.ready } }),
+      },
       environment: app.environment,
       mounts: brickVolumeMounts(volumes),
       name: app.name,

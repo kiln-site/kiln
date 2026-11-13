@@ -81,8 +81,8 @@ rolled back from again.
 
 When an app is running, a deployment starts its new containers beside the
 old ones. Each new container must stay up past a short settle and pass its
-Docker health check (`HEALTHCHECK` or Compose's `healthcheck`), within ten
-minutes. Only then does it take the app's name on its network, where
+Docker health check (the one its Brick's `ready` command gives it, its
+image's `HEALTHCHECK`, or Compose's `healthcheck`), within ten minutes. Only then does it take the app's name on its network, where
 bundled Traefik reaches it, and the old containers stop. If the new ones
 fail, they're removed and the old ones keep serving. An external Traefik
 reads the containers' labels and leaves out those that aren't healthy yet.

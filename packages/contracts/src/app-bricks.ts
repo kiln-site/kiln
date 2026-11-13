@@ -43,6 +43,12 @@ export type AppBrickDeploy = (
    * volume made when it is installed. A Compose project keeps its own.
    */
   volumes: ReadonlyArray<string>
+  /**
+   * The command that succeeds in its container once it is ready, when the
+   * Brick gives one: its container's health check. A Compose project says
+   * each service's in its own file.
+   */
+  ready?: string
   /** Where its website answers, when the Brick and its answers say. */
   web?: AppBrickWeb
 }
@@ -70,8 +76,8 @@ export const APP_IMAGE_MAX_LENGTH = 512
 // The parts of `deploy` Kiln runs for an App, by type.
 const deployed: Record<AppBrickDeployType, ReadonlyArray<string>> = {
   compose: ["type", "path", "ports"],
-  dockerfile: ["type", "path", "ports", "volumes"],
-  image: ["type", "image", "env", "ports", "volumes"],
+  dockerfile: ["type", "path", "ports", "ready", "volumes"],
+  image: ["type", "image", "env", "ports", "ready", "volumes"],
 }
 
 // A folder an App Brick keeps: a path a volume can be mounted at, as an
@@ -135,10 +141,27 @@ export function appBrickProblem(recipe: BrickRecipe): string | null {
   if (unrun !== undefined) {
     return `Kiln doesn't run an App Brick's ${unrun} yet`
   }
+  // An App is ready by a command, which becomes its container's health
+  // check. Docker runs a check inside the container, so one by HTTP is a
+  // command the Brick writes for what its image holds, and a log line is
+  // no health check at all.
+  if (deploy.ready !== undefined && !("command" in deploy.ready)) {
+    return "Kiln checks an App Brick is ready by a command for now"
+  }
   return (
     webPortProblem(deploy.type, deploy.ports ?? []) ??
     volumesProblem(appBrickVolumes(recipe))
   )
+}
+
+// The command an App Brick is ready by, if it gives one.
+function appBrickReady(
+  recipe: Pick<BrickRecipe, "deploy">
+): { ready: string } | Record<string, never> {
+  const ready = recipe.deploy?.ready
+  return ready !== undefined && "command" in ready
+    ? { ready: ready.command }
+    : {}
 }
 
 /**
@@ -240,7 +263,13 @@ export function appBrickDeploy(
   if (deploy.type !== "image") {
     // Its file is in its source; `appBrickProblem` refused one written here.
     return {
-      deploy: { path: deploy.path ?? "", type: deploy.type, volumes, ...web },
+      deploy: {
+        path: deploy.path ?? "",
+        type: deploy.type,
+        volumes,
+        ...appBrickReady(recipe),
+        ...web,
+      },
     }
   }
   const filled = (template: string) =>
@@ -273,5 +302,14 @@ export function appBrickDeploy(
     }
     environment[name] = value
   }
-  return { deploy: { environment, image, type: "image", volumes, ...web } }
+  return {
+    deploy: {
+      environment,
+      image,
+      type: "image",
+      volumes,
+      ...appBrickReady(recipe),
+      ...web,
+    },
+  }
 }
