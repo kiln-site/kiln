@@ -29,7 +29,7 @@ The format describes every kind. Kiln reads them in stages.
 | A database's `connection`        | Defined here; Kiln builds a type's URL itself |
 | A database Brick with no type    | Defined here; not installable yet     |
 | App Bricks                       | Run from Kiln's own catalog: what they deploy, how they start, their variables, one web port and the ports they publish |
-| Group Bricks                     | Run from Kiln's own catalog: databases, and Apps from an image connected to them |
+| Group Bricks                     | Run from Kiln's own catalog: databases, and Apps connected to them that run an image or a file the recipe carries |
 | `dockerfile` and `compose`       | Run for Apps: written in the Brick, kept beside its recipe (`file`), or from `path` in a source |
 | `ready` by command               | Run for databases, and for Apps from an image or a Dockerfile; game servers use logs |
 | `ready` by HTTP                  | Defined here; nothing runs it yet     |
@@ -586,10 +586,13 @@ does more, as it refuses one from another catalog:
 
 - A member that names a Brick is a database, made from that database Brick
   of the same catalog, by its ID. Its `inputs` are its answers.
-- A member written in place is an App that runs an image, with what an App
-  Brick may say so far and no more: its web port gets the App its address
-  and first route, and each folder it keeps gets a volume, as an App
-  Brick's do. A secret the group asks Kiln to
+- A member written in place is an App of any kind an App Brick can be: one
+  that runs an image, or a Dockerfile or Compose file its recipe carries,
+  written in it or kept beside it. One whose file is in a source (`path`)
+  is refused, since nothing asks for a source for each member when a group
+  is installed. It has what an App Brick may say so far and no more: its
+  web port gets the App its address and first route, and each folder it
+  keeps gets a volume, as an App Brick's do. A secret the group asks Kiln to
   make is made once and kept with the group's answers.
 - `connect` gives an App its variables for a database of the group. In its
   templates `{{ connection }}` is the URL Kiln builds for the database's

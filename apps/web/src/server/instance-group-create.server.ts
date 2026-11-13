@@ -159,9 +159,14 @@ const createInstanceGroup = operation<
               user: person,
             })
           }
-          // Publishing a port on the Relay takes what publishing one in an
-          // App's settings does.
-          if (plan.apps.some((app) => (app.ports?.length ?? 0) > 0)) {
+          // Publishing a port on the Relay, or running a file the Brick
+          // carries, takes what doing either in an App's settings does.
+          if (
+            plan.apps.some(
+              (app) =>
+                (app.ports?.length ?? 0) > 0 || app.runs.type !== "image"
+            )
+          ) {
             await requireRelayPermission({
               permission: "app.manage",
               relayId,
@@ -325,6 +330,7 @@ async function makeMembers(
             revision: plan.brick.revision,
             source: plan.brick.source,
             volumes: [...app.volumes],
+            ...(app.runs.type === "image" ? {} : { written: true }),
           },
           databaseIds: Object.keys(app.connect).flatMap(
             (key) => ids[key] ?? []
@@ -332,10 +338,11 @@ async function makeMembers(
           deploys: {
             ...(app.command === undefined ? {} : { command: app.command }),
             environment: variables,
-            image: app.image,
             ...(app.ports === undefined ? {} : { ports: app.ports }),
             ...(app.ready === undefined ? {} : { ready: app.ready }),
-            type: "image",
+            ...(app.runs.type === "image"
+              ? { image: app.runs.image, type: "image" as const }
+              : { content: app.runs.content, path: "", type: app.runs.type }),
             volumes: app.volumes,
           },
           environment: appEnvironmentWith("", [], variables),

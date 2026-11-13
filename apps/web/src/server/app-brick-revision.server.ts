@@ -266,7 +266,7 @@ async function revisedInGroup(
               command: app.command,
               environment,
               ready: app.ready,
-              runs: { image: app.image, type: "image" },
+              runs: app.runs,
               record: {
                 answers: {},
                 connect: follows.connect ?? [],
@@ -277,6 +277,7 @@ async function revisedInGroup(
                 revision: newest.revision,
                 source: newest.source,
                 volumes: sameFolders(newest, follows.volumes, app.volumes),
+                ...(app.runs.type === "image" ? {} : { written: true }),
               },
             } satisfies Revised,
           }
