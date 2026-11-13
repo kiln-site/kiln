@@ -193,6 +193,13 @@ the trigger `update`.
 Kiln's own catalog is read from its source every few minutes. A catalog
 someone added is as current as its last sync.
 
+Several catalogs may hold the same Brick, read at different times. Its
+newest revision is the one in the copy with the most say: Kiln's own
+catalog, then a catalog published to everyone, then one somebody added for
+themselves, and the newest among equals (`brick-revisions.server.ts`). So
+adding a newer copy of a catalog for oneself doesn't change what instances
+that follow a published copy are offered; publishing it again does.
+
 ### Which Apps follow a Brick
 
 An App made from a catalog Brick, alone or as one of a group's, keeps the

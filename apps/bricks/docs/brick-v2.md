@@ -630,6 +630,15 @@ recipes:
 
 Entries are paths relative to the catalog, or `https://` links.
 
+A catalog on GitHub is read at a commit its repository published: its
+default branch, or a branch or tag of its own, by name. It lists recipes of
+that repository at that commit and no others on GitHub. GitHub serves any
+commit of a repository's forks at the repository's own address, so a commit
+ID, or a link into another repository, could pass a stranger's recipe off as
+the repository's: Kiln refuses both. It keeps the commit it read, so a
+catalog stays as it was when it was added. One stored before Kiln checked
+this is set aside until it is added again.
+
 ## Security boundary
 
 A Brick is executable infrastructure: its image, command and environment
