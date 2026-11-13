@@ -639,6 +639,15 @@ the repository's: Kiln refuses both. It keeps the commit it read, so a
 catalog stays as it was when it was added. One stored before Kiln checked
 this is set aside until it is added again.
 
+A Brick goes by its ID after whose it is: `billy:paper`. Whose is where its
+recipe is kept, which no catalog chooses for itself: the account, for one on
+GitHub, and anywhere else the host with the first folder under it
+(`gitlab.com/billy:paper`). Kiln's own go by their ID alone. An ID is unique
+in its catalog, and one owner's catalogs can't have two Bricks by one ID:
+Kiln refuses to add the catalog that brings the second. A name is for
+reading and searching; an instance follows its Brick by where the recipe is
+kept ([Instance updates](../../../docs/instance-updates.md#brick-revisions)).
+
 ## Security boundary
 
 A Brick is executable infrastructure: its image, command and environment

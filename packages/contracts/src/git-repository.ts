@@ -40,6 +40,14 @@ export function kilnGitRepositorySlug(value?: string): string {
   return new URL(resolveKilnGitRepository(value)).pathname.slice(1)
 }
 
+/**
+ * The namespace of Kiln's own Bricks: the GitHub account its repository is
+ * under, as `kiln-site`.
+ */
+export function kilnBrickNamespace(value?: string): string {
+  return kilnGitRepositorySlug(value).split("/")[0]!.toLowerCase()
+}
+
 export function kilnGitRepositoryApiUrl(
   value: string | undefined,
   path: string

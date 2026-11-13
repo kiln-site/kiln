@@ -1,4 +1,12 @@
 import {
+  brickReference,
+  brickShownReference,
+  brickSourceLineage,
+  kilnBrickNamespace,
+  type RelayCatalog,
+} from "@workspace/contracts"
+
+import {
   deleteBrickCatalogEffect,
   getBrickCatalogEffect,
   listBrickCatalogsEffect,
@@ -11,6 +19,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   hydrateBrickCatalogIcons,
   loadBrickCatalogSource,
+  type LoadedBrickCatalog,
 } from "@/lib/brick-catalog-source.server"
 import { kilnBrickCatalogUrl, kilnGitRepository } from "@/lib/environment"
 import { runAppEffect } from "@/effect/runtime"
@@ -124,21 +133,82 @@ const deletableCatalog = (person: AuthenticatedUser, catalogId: string) =>
     return catalog
   })
 
-const addCatalog = operation<{ readonly source: string }>()({
+// A Brick goes by its ID after whose it is (`brickReference`), so no two
+// Bricks a person sees share both: one account's catalogs may each have a
+// Brick, but not two by one ID. The same Brick in another copy of its
+// catalog, read at another time, is one Brick. `beside` is every catalog
+// that whoever sees this one sees too, but the copy it replaces.
+function requireNamesFree(
+  catalog: RelayCatalog,
+  beside: ReadonlyArray<{ snapshot: RelayCatalog | null }>
+): void {
+  const own = kilnBrickNamespace(kilnGitRepository())
+  const named = new Map<string, Map<string, string>>()
+  for (const other of beside) {
+    for (const brick of other.snapshot?.bricks ?? []) {
+      const name = brickReference(brick, own)
+      const lineages = named.get(name) ?? new Map<string, string>()
+      lineages.set(
+        brickSourceLineage(brick.source),
+        other.snapshot?.name ?? "another catalog"
+      )
+      named.set(name, lineages)
+    }
+  }
+  for (const brick of catalog.bricks) {
+    const lineage = brickSourceLineage(brick.source)
+    const [held] = [...(named.get(brickReference(brick, own)) ?? [])].filter(
+      ([other]) => other !== lineage
+    )
+    if (held) {
+      throw new Error(
+        `${brickShownReference(brick, own)} is already in ${held[1]}. One owner's catalogs can't share a Brick ID.`
+      )
+    }
+  }
+}
+
+// Kiln's own catalog, which everyone sees, when it can be read.
+const kilnsCatalog = () =>
+  recoverPromise(
+    () => loadDefaultCatalog().then((catalog) => [catalog]),
+    () => []
+  )
+
+// One at a time across every library: two catalogs added or published at
+// once would each find the other's names free.
+const brickNamesKey = partKey("brick-catalogs", "names")
+
+const mayAddCatalog = (person: AuthenticatedUser) =>
+  hasPlatformPermission(person, "platform.bricks.add-catalog")
+const addingRefused = "Adding catalogs requires Bring your own Relay access"
+
+const addCatalog = operation<{ readonly loaded: LoadedBrickCatalog }>()({
   name: "brickCatalog.add",
   doing: "Adding a Brick catalog",
   authorize: ({ user }) =>
     signedIn(user).pipe(
-      Effect.filterOrFail(
-        (person) =>
-          hasPlatformPermission(person, "platform.bricks.add-catalog"),
-        () => new Error("Adding catalogs requires Bring your own Relay access")
-      )
+      Effect.filterOrFail(mayAddCatalog, () => new Error(addingRefused))
     ),
-  locks: ({ context: person }) => [exclusive(brickLibraryKey(person.id))],
-  run: ({ context: person, input }) =>
+  locks: ({ context: person }) => [
+    exclusive(brickLibraryKey(person.id)),
+    exclusive(brickNamesKey),
+  ],
+  run: ({ context: person, input: { loaded } }) =>
     promiseEffect(async () => {
-      const loaded = await loadBrickCatalogSource(input.source)
+      // Beside what this person sees, but their own copy it replaces.
+      requireNamesFree(loaded.snapshot, [
+        ...(await kilnsCatalog()),
+        ...(
+          await runAppEffect(
+            "brickCatalogs.visible",
+            listBrickCatalogsEffect(person.id, false)
+          )
+        ).filter(
+          (other) =>
+            other.ownerUserId !== person.id || other.source !== loaded.source
+        ),
+      ])
       const catalogId = await runAppEffect(
         "brickCatalogs.save",
         saveBrickCatalogEffect({
@@ -162,9 +232,16 @@ const addCatalog = operation<{ readonly source: string }>()({
 })
 
 export async function addBrickCatalogHandler(data: { source: string }) {
-  return runOperationPromise(addCatalog, data, {
-    user: await requireEligibleResourceUser(),
-  })
+  const user = await requireEligibleResourceUser()
+  // Read before it takes its turn: it holds the names every catalog goes
+  // by, and a slow catalog would keep everyone else's waiting. Only for
+  // someone who may add one, since reading it reaches out to its address.
+  if (!mayAddCatalog(user)) throw new Error(addingRefused)
+  return runOperationPromise(
+    addCatalog,
+    { loaded: await loadBrickCatalogSource(data.source) },
+    { user }
+  )
 }
 
 const deleteCatalog = operation<{ readonly catalogId: string }>()({
@@ -216,12 +293,26 @@ const publishCatalog = operation<{
   locks: ({ context: { catalog }, input }) => [
     exclusive(partKey(brickCatalogKey(input.catalogId), "visibility")),
     ...libraryOf(catalog),
+    ...(input.community ? [exclusive(brickNamesKey)] : []),
   ],
   run: ({ context: { person }, input }) =>
     promiseEffect(async () => {
       const catalog = await requiredCatalog(input.catalogId)
       if (input.community && !catalog.snapshot) {
         throw new Error("Invalid catalog snapshots cannot be published")
+      }
+      // Published, everyone sees it beside what they already have: Kiln's
+      // own catalog, the published ones, and each person's own.
+      if (input.community && catalog.snapshot) {
+        requireNamesFree(catalog.snapshot, [
+          ...(await kilnsCatalog()),
+          ...(
+            await runAppEffect(
+              "brickCatalogs.all",
+              listBrickCatalogsEffect(person.id, true)
+            )
+          ).filter((other) => other.id !== catalog.id),
+        ])
       }
       const updated = await runAppEffect(
         "brickCatalogs.setVisibility",

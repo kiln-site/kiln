@@ -2,6 +2,9 @@ import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   RECOMMENDED_MAXIMUM_BRICK_ID_LENGTH,
+  brickNamespace,
+  brickReference,
+  brickShownReference,
   type Brick,
 } from "@workspace/contracts"
 import { Result } from "effect"
@@ -53,7 +56,10 @@ import {
 import { instanceKindIcons } from "@/components/instance-kind-icon"
 import { isVerifiedBrick } from "@/components/brick-trust"
 import { normalizeArchitecture } from "@/lib/architecture"
-import { useKilnGitRepositorySlug } from "@/lib/git-repository"
+import {
+  useKilnBrickNamespace,
+  useKilnGitRepositorySlug,
+} from "@/lib/git-repository"
 import {
   brickCatalogDetailsQueryOptions,
   brickCatalogsQueryOptions,
@@ -99,12 +105,13 @@ const EMPTY_BRICKS: Array<Brick> = []
 
 function brickSearchText(
   brick: Brick,
-  presentation: BrickKindPresentation
+  presentation: BrickKindPresentation,
+  own: string
 ): string {
   return [
     brick.metadata.name,
     presentation.label(brick),
-    brick.metadata.id,
+    brickReference(brick, own),
     brick.metadata.author,
     brick.metadata.summary,
     ...(brick.metadata.tags ?? []),
@@ -141,8 +148,16 @@ const ArchitectureTag = React.memo(function ArchitectureTag({
   )
 })
 
-function sourceLabel(brick: Brick, gitRepositorySlug: string): string {
-  return isVerifiedBrick(brick, gitRepositorySlug) ? "Verified" : "Community"
+// Where a row says its Brick is from: whose it is, for one that isn't
+// Kiln's own.
+function sourceLabel(
+  brick: Brick,
+  gitRepositorySlug: string,
+  own: string
+): string {
+  if (isVerifiedBrick(brick, gitRepositorySlug)) return "Verified"
+  const namespace = brickNamespace(brick.source, own)
+  return namespace === own ? "Community" : namespace
 }
 
 function filterAndSortBricks(
@@ -150,6 +165,7 @@ function filterAndSortBricks(
   {
     category,
     gitRepositorySlug,
+    own,
     presentation,
     query,
     sort,
@@ -157,6 +173,7 @@ function filterAndSortBricks(
   }: {
     category: string
     gitRepositorySlug: string
+    own: string
     presentation: BrickKindPresentation
     query: string
     sort: BrickSort
@@ -166,7 +183,10 @@ function filterAndSortBricks(
   const normalized = query.trim().toLowerCase()
   const searchTextBySource = new Map<string, string>()
   for (const brick of bricks) {
-    searchTextBySource.set(brick.source, brickSearchText(brick, presentation))
+    searchTextBySource.set(
+      brick.source,
+      brickSearchText(brick, presentation, own)
+    )
   }
 
   const filtered = bricks.filter((brick) => {
@@ -207,12 +227,13 @@ function filterAndSortBricks(
 function filterAndSortCustomBricks(
   bricks: Array<Brick>,
   query: string,
-  presentation: BrickKindPresentation
+  presentation: BrickKindPresentation,
+  own: string
 ): Array<Brick> {
   const normalized = query.trim().toLowerCase()
   return normalized
     ? bricks.reduce<Array<Brick>>((matches, brick) => {
-        if (brickSearchText(brick, presentation).includes(normalized)) {
+        if (brickSearchText(brick, presentation, own).includes(normalized)) {
           matches.push(brick)
         }
         return matches
@@ -424,6 +445,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
   emptyMessage?: string
 }) {
   const gitRepositorySlug = useKilnGitRepositorySlug()
+  const own = useKilnBrickNamespace()
   const presentation = brickKindPresentations[kind]
   const customBrickSources = React.useMemo(
     () => new Set(customBricks.map((brick) => brick.source)),
@@ -445,11 +467,12 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
   const visibleBricks = React.useMemo(() => {
     if (tab === CATALOGS_TAB) return EMPTY_BRICKS
     if (tab === CUSTOM_TAB) {
-      return filterAndSortCustomBricks(customBricks, query, presentation)
+      return filterAndSortCustomBricks(customBricks, query, presentation, own)
     }
     return filterAndSortBricks(catalogBricks, {
       category: tab,
       gitRepositorySlug,
+      own,
       presentation,
       query,
       sort,
@@ -459,6 +482,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
     catalogBricks,
     customBricks,
     gitRepositorySlug,
+    own,
     presentation,
     query,
     sort,
@@ -496,6 +520,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
         filterAndSortBricks(catalogBricks, {
           category: nextTab,
           gitRepositorySlug,
+          own,
           presentation,
           query,
           sort,
@@ -508,6 +533,7 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
       customBricks,
       gitRepositorySlug,
       onSelectionChange,
+      own,
       presentation,
       query,
       selection,
@@ -691,7 +717,11 @@ export const BrickCatalogBrowser = React.memo(function BrickCatalogBrowser({
                             <span className="type-support mt-0.5 block truncate text-muted-foreground">
                               {custom
                                 ? "Custom"
-                                : sourceLabel(brick, gitRepositorySlug)}{" "}
+                                : sourceLabel(
+                                    brick,
+                                    gitRepositorySlug,
+                                    own
+                                  )}{" "}
                               · {presentation.label(brick)}
                             </span>
                           </span>
@@ -742,6 +772,7 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
 }: {
   disabled: boolean
 }) {
+  const own = useKilnBrickNamespace()
   const queryClient = useQueryClient()
   const catalogsQuery = useQuery(brickCatalogsQueryOptions())
   const [selectedId, setSelectedId] = React.useState("default")
@@ -1085,9 +1116,9 @@ const BrickCatalogManager = React.memo(function BrickCatalogManager({
                       </span>
                       <span
                         className="type-meta max-w-[40%] shrink-0 truncate font-mono text-muted-foreground"
-                        title={brick.metadata.id}
+                        title={brickShownReference(brick, own)}
                       >
-                        {brick.metadata.id}
+                        {brickShownReference(brick, own)}
                       </span>
                     </li>
                   ))}
@@ -1284,6 +1315,7 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
   savingCustomBrick: boolean
   configuration?: React.ReactNode
 }) {
+  const own = useKilnBrickNamespace()
   if (selection?.kind === "custom") {
     return (
       <aside className="flex min-h-96 flex-col md:min-h-0">
@@ -1369,6 +1401,7 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
   const brick = selection.brick
   const custom = customBrickSources.has(brick.source)
   const verified = isVerifiedBrick(brick, gitRepositorySlug)
+  const reference = brickShownReference(brick, own)
   const supportedArchitectures = new Set(
     (brick.metadata.platforms ?? PLATFORM_ARCHITECTURES).map(
       normalizeArchitecture
@@ -1414,6 +1447,12 @@ const BrickDetailsPanel = React.memo(function BrickDetailsPanel({
                 </Badge>
               )}
             </div>
+            <p
+              className="type-meta mt-0.5 truncate font-mono text-muted-foreground"
+              title={reference}
+            >
+              {reference}
+            </p>
             <div className="mt-1.5 flex flex-wrap gap-1">
               {PLATFORM_ARCHITECTURES.map((architecture) => (
                 <ArchitectureTag
@@ -1497,7 +1536,9 @@ export function BrickBrowserDialog({
       >
         <DialogTitle className="sr-only">{title}</DialogTitle>
         {description === undefined ? null : (
-          <DialogDescription className="sr-only">{description}</DialogDescription>
+          <DialogDescription className="sr-only">
+            {description}
+          </DialogDescription>
         )}
         {children}
       </DialogContent>
@@ -1623,20 +1664,20 @@ export const BrickSelectDialog = React.memo(function BrickSelectDialog({
       title={title}
       onOpenChange={onOpenChange}
     >
-        <BrickCatalogBrowser
-          kind={kind}
-          relayId={relayId}
-          bricks={bricks}
-          canAddCustomBrick={canAddCustomBrick}
-          customBricks={customBricks}
-          selection={selection}
-          onSelectionChange={setSelection}
-          className="h-full rounded-none border-0 bg-transparent"
-          emptyMessage={
-            bricks.length === 0 ? description : "No bricks match these filters."
-          }
-          configuration={actions}
-        />
+      <BrickCatalogBrowser
+        kind={kind}
+        relayId={relayId}
+        bricks={bricks}
+        canAddCustomBrick={canAddCustomBrick}
+        customBricks={customBricks}
+        selection={selection}
+        onSelectionChange={setSelection}
+        className="h-full rounded-none border-0 bg-transparent"
+        emptyMessage={
+          bricks.length === 0 ? description : "No bricks match these filters."
+        }
+        configuration={actions}
+      />
     </BrickBrowserDialog>
   )
 })
