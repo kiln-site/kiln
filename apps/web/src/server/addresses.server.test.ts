@@ -62,9 +62,14 @@ vi.mock("@/server/auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/auth")>()),
   requireEligibleResourceUser: async () => user,
 }))
+// Everyone may do everything here, but for the permissions a test takes
+// away to see what they guard.
+const access = vi.hoisted(() => ({ lacks: new Set<string>() }))
 vi.mock("@/lib/access-control", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/access-control")>()),
-  requireRelayPermission: async () => undefined,
+  requireRelayPermission: async ({ permission }: { permission: string }) => {
+    if (access.lacks.has(permission)) throw new Error("Forbidden")
+  },
 }))
 
 // The Relays are a boundary: each lists the game servers it runs, as its
@@ -72,14 +77,26 @@ vi.mock("@/lib/access-control", async (importOriginal) => ({
 // where a Relay is reached for the web is the address Hearth has for it.
 const relays = vi.hoisted(() => ({
   instances: {} as Record<string, Array<unknown>>,
+  /** Refuses to save routes, as a Relay that is away would. */
+  refusesRoutes: false,
+  /** The routes each instance has, by its ID, as last saved. */
+  routes: {} as Record<string, Array<{ hostname: string }>>,
 }))
 vi.mock("@/lib/relay-connection", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/relay-connection")>()),
   relayRpc: async (
     relay: { id: string },
     operation: string,
-    payload: { routes?: Array<object> }
+    payload: { id?: string; routes?: Array<{ hostname: string }> }
   ) => {
+    const routeState = (routes: Array<{ hostname: string }>) => ({
+      edgeConnected: true,
+      message: "Ready",
+      proxyConnected: true,
+      requiresRestart: false,
+      routes,
+      status: "ready",
+    })
     if (operation === "relay.snapshot") {
       return {
         instances: relays.instances[relay.id] ?? [],
@@ -97,18 +114,17 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
         },
       }
     }
+    if (operation === "instance.network.routes.read") {
+      return routeState(relays.routes[payload.id ?? ""] ?? [])
+    }
     if (operation === "instance.network.routes.write") {
-      return {
-        edgeConnected: true,
-        message: "Ready",
-        proxyConnected: true,
-        requiresRestart: false,
-        routes: (payload.routes ?? []).map((route, index) => ({
-          ...route,
-          id: `0000000${index}`,
-        })),
-        status: "ready",
-      }
+      if (relays.refusesRoutes) throw new Error("The Relay is away")
+      const saved = (payload.routes ?? []).map((route, index) => ({
+        ...route,
+        id: `0000000${index}`,
+      }))
+      relays.routes[payload.id ?? ""] = saved
+      return routeState(saved)
     }
     throw new Error(`Unexpected Relay request ${operation}`)
   },
@@ -271,6 +287,9 @@ const app = {
 const seed = Effect.gen(function* () {
   yield* resetDatabase
   relays.instances = {}
+  relays.refusesRoutes = false
+  relays.routes = {}
+  access.lacks.clear()
   yield* insertRelay(relayOne)
   yield* insertRelay(relayTwo)
   yield* insertRows("domain_integration", {
@@ -431,6 +450,10 @@ const claims = Effect.map(
     )
 )
 
+// The hostnames an instance's Relay serves its routes on, as last saved.
+const routedOn = (instanceId: string) =>
+  (relays.routes[instanceId] ?? []).map((saved) => saved.hostname)
+
 // One pass of the DNS worker, which finishes what requests leave undone.
 const dnsWorkerPass = Effect.promise(() =>
   runAppEffect("Domains.dns.pass", reconcileDueDnsEffect)
@@ -521,8 +544,11 @@ describeMysql("a game server's address and its web routes", () => {
         })
     )
 
+    // The website is on the address: renamed, both are at the new name, and
+    // the old one is let go for anyone to take. Players' records move by
+    // their IDs, so the name they join at is never without them.
     it.effect(
-      "moves its records to the new name when the address is renamed",
+      "moves its records, and the route on it, to the new name when the address is renamed",
       () =>
         Effect.gen(function* () {
           const cloudflare = yield* routedAddress
@@ -553,18 +579,54 @@ describeMysql("a game server's address and its web routes", () => {
             "_minecraft._tcp.arena.kiln.test"
           )
 
-          // TODAY, AND MEANT TO CHANGE: the route stays on the old name,
-          // which the game server keeps, with a record of its own pointing
-          // at the Relay. Once addresses are one thing a route follows the
-          // rename, and the old name is let go.
+          // The route followed it: its Relay serves the new name, which has
+          // the one record, and the old name is nobody's.
+          assert.deepEqual(routedOn(serverId), ["colosseum.kiln.test"])
           assert.deepEqual(records, [
+            "A colosseum.kiln.test 203.0.113.10",
+            "SRV _minecraft._tcp.colosseum.kiln.test 25565 colosseum.kiln.test",
+          ])
+          assert.deepEqual(yield* routeStatuses(server), {
+            "colosseum.kiln.test": "active",
+          })
+          assert.deepEqual(yield* claims, {
+            "colosseum.kiln.test": `instance ${serverId} on ${relayOne}`,
+          })
+        })
+    )
+
+    // Players' address can't wait for a Relay that is away: the rename
+    // stands. The website stays where its Relay still serves it, on a name
+    // that keeps a record and isn't let go, and the person is told.
+    it.effect(
+      "leaves the route on the old name, still served, when its Relay can't take the change",
+      () =>
+        Effect.gen(function* () {
+          const cloudflare = yield* routedAddress
+
+          const id = yield* addressId("arena")
+          relays.refusesRoutes = true
+          const told = yield* refused(() =>
+            updateInstanceDomainHandler({
+              domain: zone.name,
+              id,
+              primary: true,
+              vanityLabel: "colosseum",
+            })
+          )
+          yield* dnsWorkerPass
+
+          assert.include(told, "still answers on arena.kiln.test")
+          assert.strictEqual(
+            (yield* addressOf(relayOne, serverId))?.address,
+            "colosseum.kiln.test"
+          )
+          assert.deepEqual(routedOn(serverId), ["arena.kiln.test"])
+          assert.deepEqual(cloudflare.records(), [
             "A colosseum.kiln.test 203.0.113.10",
             `CNAME arena.kiln.test ${webHost(relayOne)}`,
             "SRV _minecraft._tcp.colosseum.kiln.test 25565 colosseum.kiln.test",
           ])
-          assert.deepEqual(yield* routeStatuses(server), {
-            "arena.kiln.test": "active",
-          })
           assert.deepEqual(yield* claims, {
             "arena.kiln.test": `instance ${serverId} on ${relayOne}`,
             "colosseum.kiln.test": `instance ${serverId} on ${relayOne}`,
@@ -919,6 +981,222 @@ describeMysql("an App's address", () => {
           assert.deepEqual(yield* routeHostnames(app), [])
           assert.deepEqual(yield* claims, {})
         })
+    )
+
+    // Its addresses, as its Network page lists them, main one first.
+    const addressesOf = Effect.promise(() =>
+      getInstanceDomainHandler({
+        instanceId: appId,
+        relayId: relayOne,
+        resourceType: "app",
+      })
+    ).pipe(
+      Effect.map(({ addresses }) =>
+        addresses.map(
+          ({ hostname, primary, routed }) =>
+            `${hostname}${primary ? " (main)" : ""}${routed ? " (routed)" : ""}`
+        )
+      )
+    )
+    const addressNamed = (name: string) =>
+      Effect.promise(() =>
+        getInstanceDomainHandler({
+          instanceId: appId,
+          relayId: relayOne,
+          resourceType: "app",
+        })
+      ).pipe(
+        Effect.map(
+          ({ addresses }) =>
+            addresses.find((address) => address.vanityLabel === name)?.id ?? ""
+        )
+      )
+    const addToApp = (name: string, primary = false) =>
+      refused(() =>
+        createInstanceDomainHandler({
+          domain: zone.name,
+          instanceId: appId,
+          primary,
+          relayId: relayOne,
+          resourceType: "app",
+          vanityLabel: name,
+        })
+      )
+    const rename = (id: string, name: string) =>
+      refused(() =>
+        updateInstanceDomainHandler({
+          domain: zone.name,
+          id,
+          primary: false,
+          vanityLabel: name,
+        })
+      )
+    const remove = (id: string) =>
+      refused(() => removeInstanceDomainHandler({ id }))
+    // An App with two addresses of its own: `shop`, its main one, and
+    // `store`.
+    const shop = Effect.gen(function* () {
+      yield* seed
+      const cloudflare = fakeCloudflare()
+      yield* hasApp
+      assert.isNull(yield* addToApp("shop"))
+      assert.isNull(yield* addToApp("store"))
+      return cloudflare
+    })
+
+    // An App holds addresses as a game server does: more than one, each
+    // with a record from the moment it is added, whether or not anything
+    // is served there yet.
+    it.effect(
+      "is one of as many as it is given, each pointed at its Relay",
+      () =>
+        Effect.gen(function* () {
+          const cloudflare = yield* shop
+
+          assert.deepEqual(cloudflare.records(), [
+            `CNAME shop.kiln.test ${webHost(relayOne)}`,
+            `CNAME store.kiln.test ${webHost(relayOne)}`,
+          ])
+          assert.deepEqual(yield* addressesOf, [
+            "shop.kiln.test (main)",
+            "store.kiln.test",
+          ])
+          assert.deepEqual(routedOn(appId), [])
+          assert.deepEqual(yield* claims, {
+            "shop.kiln.test": `app ${appId} on ${relayOne}`,
+            "store.kiln.test": `app ${appId} on ${relayOne}`,
+          })
+          // Not held by anyone else, a game server included, under any name.
+          yield* runs(relayOne, gameServer(serverId))
+          assert.include(
+            yield* refused(() =>
+              createInstanceDomainHandler({
+                domain: zone.name,
+                instanceId: serverId,
+                primary: true,
+                relayId: relayOne,
+                vanityLabel: "shop",
+              })
+            ),
+            "already in use"
+          )
+          yield* addAddress(relayOne, serverId, "arena")
+          assert.include(yield* addToApp("arena"), "already in use")
+          assert.include(
+            yield* rename(yield* addressNamed("store"), "arena"),
+            "already in use"
+          )
+        })
+    )
+
+    // The website answers on the address, so renaming the address has to
+    // take the website with it, or the name people are told stops working.
+    // Its Relay decides: if the route can't be saved there, nothing moves.
+    it.effect(
+      "takes its route with it when it is renamed, or isn't renamed at all",
+      () =>
+        Effect.gen(function* () {
+          const cloudflare = yield* shop
+          assert.isNull(
+            yield* saveRoutes(app, ["shop.kiln.test"], ["shop.kiln.test"])
+          )
+          const before = [
+            `CNAME shop.kiln.test ${webHost(relayOne)} (proxied)`,
+            `CNAME store.kiln.test ${webHost(relayOne)}`,
+          ]
+          assert.deepEqual(cloudflare.records(), before)
+
+          relays.refusesRoutes = true
+          assert.include(
+            yield* rename(yield* addressNamed("shop"), "market"),
+            "nothing was renamed"
+          )
+          yield* dnsWorkerPass
+          assert.deepEqual(cloudflare.records(), before)
+          assert.deepEqual(routedOn(appId), ["shop.kiln.test"])
+          assert.deepEqual(yield* addressesOf, [
+            "shop.kiln.test (main) (routed)",
+            "store.kiln.test",
+          ])
+          // Its Relay may have taken the route even so: the new name stays
+          // the App's, with no record, as a name a failed save of its
+          // routes claimed does, so nobody else can take it meanwhile.
+          assert.deepEqual(yield* claims, {
+            "market.kiln.test": `app ${appId} on ${relayOne}`,
+            "shop.kiln.test": `app ${appId} on ${relayOne}`,
+            "store.kiln.test": `app ${appId} on ${relayOne}`,
+          })
+
+          // Trying again takes that name up.
+          relays.refusesRoutes = false
+          assert.isNull(yield* rename(yield* addressNamed("shop"), "market"))
+          yield* dnsWorkerPass
+
+          // Behind Cloudflare's proxy as it was, and still its main one.
+          assert.deepEqual(cloudflare.records(), [
+            `CNAME market.kiln.test ${webHost(relayOne)} (proxied)`,
+            `CNAME store.kiln.test ${webHost(relayOne)}`,
+          ])
+          assert.deepEqual(routedOn(appId), ["market.kiln.test"])
+          assert.deepEqual(yield* addressesOf, [
+            "market.kiln.test (main) (routed)",
+            "store.kiln.test",
+          ])
+          assert.deepEqual(yield* claims, {
+            "market.kiln.test": `app ${appId} on ${relayOne}`,
+            "store.kiln.test": `app ${appId} on ${relayOne}`,
+          })
+        })
+    )
+
+    // Let go under a route, a name could go to someone else while the App's
+    // website still answered on it. One nothing answers on is its to give
+    // up, and another takes its place as the main one.
+    it.effect(
+      "is removed only while no route answers on it, and another becomes its main one",
+      () =>
+        Effect.gen(function* () {
+          const cloudflare = yield* shop
+          assert.isNull(yield* saveRoutes(app, ["store.kiln.test"]))
+
+          assert.include(
+            yield* remove(yield* addressNamed("store")),
+            "A web route uses store.kiln.test"
+          )
+          assert.isNull(yield* remove(yield* addressNamed("shop")))
+          yield* dnsWorkerPass
+
+          assert.deepEqual(cloudflare.records(), [
+            `CNAME store.kiln.test ${webHost(relayOne)}`,
+          ])
+          assert.deepEqual(yield* addressesOf, [
+            "store.kiln.test (main) (routed)",
+          ])
+          assert.deepEqual(yield* claims, {
+            "store.kiln.test": `app ${appId} on ${relayOne}`,
+          })
+        })
+    )
+
+    // An address is a public name pointed at the Relay: giving an App one,
+    // moving it or taking it away is changing its network.
+    it.effect("is changed only by someone who may change its network", () =>
+      Effect.gen(function* () {
+        const cloudflare = yield* shop
+        const before = cloudflare.records()
+        const store = yield* addressNamed("store")
+
+        access.lacks.add("instance.network.write")
+        assert.include(yield* addToApp("market"), "Forbidden")
+        assert.include(yield* rename(store, "market"), "Forbidden")
+        assert.include(yield* remove(store), "Forbidden")
+
+        assert.deepEqual(cloudflare.records(), before)
+        assert.deepEqual(yield* claims, {
+          "shop.kiln.test": `app ${appId} on ${relayOne}`,
+          "store.kiln.test": `app ${appId} on ${relayOne}`,
+        })
+      })
     )
   })
 })

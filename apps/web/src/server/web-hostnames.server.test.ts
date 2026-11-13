@@ -659,10 +659,10 @@ describeMysql("web route hostnames", () => {
           })
           const row = yield* loadWebHostnameByNameEffect(String(hostname))
           assert.deepInclude(row, {
-            generated: true,
             resourceId: appId,
             resourceType: "app",
             routed: true,
+            standalone: true,
             status: "active",
           })
         })

@@ -167,11 +167,28 @@ however it's disguised (`sh1t`, `f-u-c-k`). Reserved names bind everyone but
 the domain's owner (Kiln's administrators, for Kiln's), and Kiln never
 generates one. New connections start with both.
 
-People with a game server's network permission can add, rename, and remove
-its vanity addresses on its Network page, under domains its owner or they
-themselves provide, or Kiln provides. A name they choose is refused the same
-way as a web route's. An app's generated address stays until it is deleted
-or the app is; while a web route uses it, it goes with the route instead.
+A game server and an App hold addresses the same way: as many as they are
+given, each added, renamed and removed by people with the instance's network
+permission, under domains its owner or they themselves provide, or Kiln
+provides, and one of them its main address. A name they choose is refused
+the same way as a web route's. What differs is what an address is for: a
+game server's points at its game port, with its SRV record, and an App's at
+its Relay, for a web route to answer on.
+
+Renaming an address a web route answers on takes the route with it: the
+route is saved on the new name and the old one is let go. For an App the
+new name gets its record, then the route is saved onto it, and only then is
+the old name removed; if its Relay can't take the change nothing is renamed,
+and the new name stays held without a record, as a name a failed save of its
+routes claimed does, until the rename is tried again or a save lets it go.
+A game server's address is renamed first, its records moved in
+place so players are never without them; if its Relay then can't take the
+route, the route keeps the old name, with a record of its own, and the
+person is told.
+
+An address a web route answers on can't be removed from an App: remove the
+route, or point it elsewhere, first. Removing one from a game server only
+stops it being where players join, and leaves the name to the route.
 
 ## Who holds a hostname
 
@@ -180,9 +197,9 @@ Every hostname Kiln keeps belongs to exactly one game server or app, in
 claimed in the same transaction as the row that uses it, and let go in the
 one that stops using it, so a game server's address and another resource's
 web route can never share one, whichever comes first. A game server's own
-web route on its domain's name holds the name too, with no record of its
-own while the domain keeps one, and makes one when the domain is renamed or
-removed. Moving a game server moves its claims with it; a name both its
+web route on its address's name is the same hostname, with the address's
+one record; it gets a record of its own, pointing at the Relay, only once
+the address is removed. Moving a game server moves its claims with it; a name both its
 domains and its web routes use moves with the domains. A connection can't be
 removed while game server domains, web routes, or app addresses use it, so
 none lets go of a name it still serves; removing a Relay marks everything
@@ -227,7 +244,10 @@ hostname.
   whatever uses it, with the record Kiln made for it. `game` marks a game
   server's vanity address, which points at its game port and keeps its SRV
   record and the name a rename is moving it to. `routed` says web routes
-  answer on it, and `is_generated` that Kiln made it as an app's address;
-  for those it also keeps whether the record is proxied and, while one is
+  answer on it, and `standalone` that it is an address its instance holds
+  in its own right, made for it or added, which keeps its record without a
+  route; a name without it is held only for a route, and goes with it. For
+  what isn't a game server's address it also keeps whether the record is
+  proxied and, while one is
   `external`, the address record Cloudflare already had. A game server's web
   route on its own address is that address's row, with both.

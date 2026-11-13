@@ -11,7 +11,6 @@ import {
   webHostnameProxied,
   type WebHostnameResource,
 } from "@/effect/addresses"
-import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { dnsKey } from "@/lib/dns-operations"
 import { relayRpc } from "@/lib/relay-connection"
@@ -24,7 +23,10 @@ import {
 } from "@/operations/operation"
 import { requireEligibleResourceUser } from "@/server/auth"
 import { domainActor } from "@/server/domain-access.server"
-import { explainHostnameInUseEffect } from "@/server/domain-resource-access.server"
+import {
+  explainHostnameInUseEffect,
+  requireResourcePermission,
+} from "@/server/domain-resource-access.server"
 import type {
   AdoptWebHostnameRecordInput,
   CheckWebCertificateInput,
@@ -48,38 +50,6 @@ import {
   saveWebRouteHostnamesEffect,
   type WebHostnameProxyChange,
 } from "@/server/addresses.server"
-
-// Changing web routes and their hostnames takes one permission, whatever
-// kind of instance they belong to. Reading a game server's goes with its
-// network; where an App is served is read with the App itself.
-function permissionFor(
-  resource: Pick<WebHostnameResource, "resourceType">,
-  change: boolean
-) {
-  if (change) return "instance.network.write" as const
-  return resource.resourceType === "app"
-    ? ("app.read" as const)
-    : ("instance.network.read" as const)
-}
-
-/**
- * Refuses someone who may not read, or change, an instance's web routes
- * and their hostnames.
- */
-export function requireResourcePermission(
-  user: AuthenticatedUser,
-  resource: WebHostnameResource,
-  change: boolean
-) {
-  return requireRelayPermission({
-    ...(resource.resourceType === "app"
-      ? { appId: resource.resourceId }
-      : { instanceId: resource.resourceId }),
-    permission: permissionFor(resource, change),
-    relayId: resource.relayId,
-    user,
-  })
-}
 
 /** A game server's or app's web hostnames, for its network page. */
 export async function getResourceWebHostnamesHandler(
@@ -106,16 +76,17 @@ export async function getResourceWebHostnamesHandler(
     certificates: pendingWebCertificates(data),
     hostnames: rows.map((row) => ({
       canAdopt: adoptable.has(row.id),
-      // Only an app's generated address no route uses.
-      canRelease: canChange && row.generated && !row.routed,
+      // Only an address of its own that no route uses.
+      canRelease: canChange && row.standalone && !row.routed,
       // Only to someone who can take it over: what's at the name otherwise
       // isn't this page's to show.
       existingRecord: adoptable.has(row.id) ? row.existingRecord : null,
-      generated: row.generated,
+      generated: row.standalone,
       hostname: row.hostname,
       id: row.id,
       lastError: row.lastError,
       pointsAtRelay: adoptable.get(row.id) ?? false,
+      primary: row.standalone && row.primary,
       proxied: webHostnameProxied(row),
       status: row.status,
     })),

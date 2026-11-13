@@ -24,8 +24,8 @@ import {
   runOperationPromise,
   signedIn,
 } from "@/operations/operation"
+import { requireResourcePermission } from "@/server/domain-resource-access.server"
 import {
-  requireResourcePermission,
   saveClaimingWebRouteHostnames,
   syncWebRouteHostnames,
 } from "@/server/web-hostname-access.server"
@@ -136,6 +136,63 @@ async function saveWebRoutesHandler(
   // Kiln keeps the DNS records of hostnames in zones it manages.
   await syncWebRouteHostnames(resource)
   return state
+}
+
+/**
+ * Has an instance's web routes answer on one hostname in place of another,
+ * as renaming the address they answer on does. It saves them the way its
+ * Network page would with that one name changed, so its Relay, the names
+ * it holds and their records all follow; `proxied` keeps the new name
+ * behind Cloudflare's proxy, as the old one was. For whoever may change
+ * its addresses, which whoever calls this has checked, and under the DNS
+ * lock they hold. Nothing is saved when no route answers on the old name.
+ */
+export async function moveWebRouteHostname(
+  user: AuthenticatedUser,
+  resource: WebHostnameResource,
+  change: { from: string; proxied: boolean; to: string }
+): Promise<void> {
+  const relay = await activeRelay(resource.relayId)
+  const { routes } = stateOf(
+    resource,
+    await relayRpc(
+      relay,
+      "instance.network.routes.read",
+      relayInstance(resource),
+      30_000,
+      user.id
+    )
+  )
+  const from = change.from.toLowerCase()
+  const answers = routes.filter((route) =>
+    webRouteHostnames(route).includes(from)
+  )
+  if (answers.length === 0) return
+  // Only as the www counterpart of another name: that route's own name
+  // decides it, so it is the route to change.
+  const aliased = answers.find((route) => route.hostname !== from)
+  if (aliased) {
+    throw new Error(
+      `A web route answers on ${from} as the www name of ${aliased.hostname}. Change that route first.`
+    )
+  }
+  const moved = routes.map((route) =>
+    route.hostname === from ? { ...route, hostname: change.to } : route
+  )
+  await saveWebRoutesHandler(user, {
+    ...resource,
+    ...(change.proxied
+      ? {
+          proxy: {
+            hostnames: moved
+              .filter((route) => route.hostname === change.to)
+              .flatMap(webRouteHostnames),
+            proxied: true,
+          },
+        }
+      : {}),
+    routes: moved,
+  } as SaveWebRoutesInput)
 }
 
 /** A new App, and where its Brick says its website answers. */

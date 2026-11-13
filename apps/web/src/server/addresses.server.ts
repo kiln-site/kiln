@@ -53,6 +53,7 @@ import {
   reviveWebHostnamesEffect,
   saveAddressRecordEffect,
   setAddressPendingEffect,
+  setAddressStandaloneEffect,
   setInstanceDomainOptOutEffect,
   setInstanceDomainPrimaryEffect,
   setWebHostnamesProxiedEffect,
@@ -61,7 +62,6 @@ import {
   type Address,
   type ExistingWebRecord,
   type GameEndpoint,
-  type InstanceDomainAssignment,
   type WebHostname,
   type WebHostnameResource,
 } from "@/effect/addresses"
@@ -90,7 +90,6 @@ import {
 } from "@/effect/hostname-claims"
 import { promiseEffect } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
-import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import {
   invalidateCached,
@@ -127,11 +126,14 @@ import {
   vanityDomainUsable,
   type DomainActor,
 } from "@/server/domain-access.server"
-import { explainHostnameInUseEffect } from "@/server/domain-resource-access.server"
+import {
+  explainHostnameInUseEffect,
+  requireResourcePermission,
+} from "@/server/domain-resource-access.server"
 import type {
   CreateInstanceDomainInput,
+  InstanceAddressOverview,
   InstanceDomainInput,
-  InstanceDomainOverview,
   RemoveInstanceDomainInput,
   UpdateInstanceDomainInput,
 } from "@/server/domains"
@@ -152,13 +154,16 @@ import {
 
 type DomainInstance = RelayInstance & { relayId: string }
 
-const instanceOwner = (server: {
+// The instance an address belongs to: a game server, unless it is named
+// as an App.
+const ownerOf = (scope: {
   readonly instanceId: string
   readonly relayId: string
+  readonly resourceType?: WebHostnameResource["resourceType"] | undefined
 }): WebHostnameResource => ({
-  relayId: server.relayId,
-  resourceId: server.instanceId,
-  resourceType: "instance",
+  relayId: scope.relayId,
+  resourceId: scope.instanceId,
+  resourceType: scope.resourceType ?? "instance",
 })
 
 const managedDomainAddressCachePolicy: CachePolicy = {
@@ -178,27 +183,22 @@ export const invalidateManagedDomainAddressesEffect = invalidateCached(
   managedDomainAddressCachePolicy
 )
 
+/**
+ * An instance's own addresses, its main one first, and the vanity domains
+ * the person may give it another under. A name only its web routes answer
+ * on isn't one: it is read with the routes.
+ */
 export async function getInstanceDomainHandler(data: InstanceDomainInput) {
   const user = await requireEligibleResourceUser()
-  await requireRelayPermission({
-    instanceId: data.instanceId,
-    permission: "instance.network.read",
-    relayId: data.relayId,
-    user,
-  })
+  const resource = ownerOf(data)
+  await requireResourcePermission(user, resource, false)
   const actor = domainActor(user)
-  const [assignments, { choice, vanityDomains }] = await Promise.all([
-    runAppEffect(
-      "domains.assignments.instance",
-      loadInstanceDomainAssignmentsForInstanceEffect(
-        data.relayId,
-        data.instanceId
-      )
-    ),
+  const [rows, { choice, vanityDomains }] = await Promise.all([
+    runAppEffect("addresses.resource", listResourceAddressesEffect(resource)),
     runAppEffect(
       "domains.instance.vanityDomains",
       Effect.gen(function* () {
-        const ownerId = yield* loadResourceOwnerIdEffect(instanceOwner(data))
+        const ownerId = yield* loadResourceOwnerIdEffect(resource)
         // Its owner's, the person's own, and Kiln's: the ones it may use.
         const [owners, own] = yield* Effect.all(
           [
@@ -227,9 +227,11 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
       })
     ),
   ])
-  const primary = assignments[0]
+  const addresses = rows.filter((row) => row.standalone).map(addressOverview)
   return {
-    assignment: primary ? assignmentOverview(primary) : null,
+    addresses,
+    /** Its main address. */
+    assignment: addresses[0] ?? null,
     managedDomain: choice?.domain ?? null,
     /** The vanity domains the person may give it an address under. */
     vanityDomains,
@@ -238,15 +240,28 @@ export async function getInstanceDomainHandler(data: InstanceDomainInput) {
 
 // Changing an instance's addresses holds its DNS, so two changes to them
 // never interleave, and deleting it turns them away.
-const instanceDns = (scope: { instanceId: string; relayId: string }) =>
-  exclusive(dnsKey(instanceOwner(scope)))
-const changingDomains = "Changing this game server's domains"
+const addressDns = (resource: WebHostnameResource) =>
+  exclusive(dnsKey(resource))
+const changingDomains = "Changing its addresses"
+
+const audited = (resource: WebHostnameResource) => ({
+  id: resource.resourceId,
+  kind: resource.resourceType,
+  relayId: resource.relayId,
+})
+
+const publishAddressChange = (resource: WebHostnameResource) =>
+  publishDomainChange({
+    instanceId: resource.resourceId,
+    relayId: resource.relayId,
+  })
 
 /**
- * Points a new address at a game server. Its first becomes its connect
- * address; later ones do when `primary` is set. Needs the game server's
- * network, and a vanity domain it may use: its owner's, the platform's, or
- * the person's own.
+ * Gives an instance a new address of its own, whatever kind it is. A game
+ * server's points at its game port; any other's at its Relay, for a web
+ * route to answer on. Its first becomes its main address; later ones do
+ * when `primary` is set. Needs the instance's network, and a vanity domain
+ * it may use: its owner's, the platform's, or the person's own.
  */
 export const addInstanceDomain = operation<CreateInstanceDomainInput>()({
   name: "domain.add",
@@ -254,17 +269,17 @@ export const addInstanceDomain = operation<CreateInstanceDomainInput>()({
   authorize: ({ input, user }) =>
     signedIn(user).pipe(
       Effect.flatMap((person) =>
-        promiseEffect(() =>
-          loadWritableInstanceFor(person, input.relayId, input.instanceId)
-        )
+        promiseEffect(() => loadWritableFor(person, ownerOf(input)))
       )
     ),
-  locks: ({ input }) => [instanceDns(input)],
+  locks: ({ input }) => [addressDns(ownerOf(input))],
   run: ({ context: instance, input, user }) =>
     Effect.gen(function* () {
       const person = yield* signedIn(user)
-      const created = yield* createGameAddressEffect(
-        { ...instance, relayId: input.relayId },
+      const resource = ownerOf(input)
+      const created = yield* createAddressEffect(
+        resource,
+        instance,
         input,
         domainActor(person)
       ).pipe(
@@ -272,25 +287,19 @@ export const addInstanceDomain = operation<CreateInstanceDomainInput>()({
           explainHostnameInUseEffect(person, error)
         )
       )
-      // Adding an address undoes a removal.
-      yield* setInstanceDomainOptOutEffect(
-        input.relayId,
-        input.instanceId,
-        false
-      )
+      // Adding an address undoes a game server's removal of its last.
+      if (resource.resourceType === "instance") {
+        yield* setInstanceDomainOptOutEffect(
+          input.relayId,
+          input.instanceId,
+          false
+        )
+      }
       return created
     }),
-  audit: ({ input }) => ({
-    id: input.instanceId,
-    kind: "instance",
-    relayId: input.relayId,
-  }),
+  audit: ({ input }) => audited(ownerOf(input)),
   // A failed create still leaves a failed row behind.
-  publish: ({ input }) =>
-    publishDomainChange({
-      instanceId: input.instanceId,
-      relayId: input.relayId,
-    }),
+  publish: ({ input }) => publishAddressChange(ownerOf(input)),
 })
 
 export async function createInstanceDomainHandler(
@@ -300,23 +309,28 @@ export async function createInstanceDomainHandler(
   return runOperationPromise(addInstanceDomain, data, { user })
 }
 
-// The game server an address points at, once the person may change it.
+// The instance an address is its own of, once the person may change it. A
+// name only its web routes answer on isn't one: it follows its routes.
 const loadDomainScope = (user: AuthenticatedUser | null, id: string) =>
   Effect.gen(function* () {
     const person = yield* signedIn(user)
     const row = yield* loadAddressEffect(id)
-    if (!row?.game) return null
+    if (!row?.standalone) return null
+    const resource: WebHostnameResource = {
+      relayId: row.relayId,
+      resourceId: row.resourceId,
+      resourceType: row.resourceType,
+    }
     yield* promiseEffect(() =>
-      requireRelayPermission({
-        instanceId: row.resourceId,
-        permission: "instance.network.write",
-        relayId: row.relayId,
-        user: person,
-      })
+      requireResourcePermission(person, resource, true)
     )
-    return { instanceId: row.resourceId, person, relayId: row.relayId }
+    return { person, resource }
   })
 
+/**
+ * Gives an address another name, or makes it its instance's main one. A
+ * web route that answers on it follows it to the new name.
+ */
 export const renameInstanceDomain = operation<UpdateInstanceDomainInput>()({
   name: "domain.rename",
   doing: changingDomains,
@@ -325,28 +339,25 @@ export const renameInstanceDomain = operation<UpdateInstanceDomainInput>()({
       const scope = yield* loadDomainScope(user, input.id)
       if (!scope) return yield* Effect.fail(new Error("Domain not found"))
       const instance = yield* promiseEffect(() =>
-        loadWritableInstanceFor(scope.person, scope.relayId, scope.instanceId)
+        loadWritableFor(scope.person, scope.resource)
       )
       return { ...scope, instance }
     }),
-  locks: ({ context }) => [instanceDns(context)],
+  locks: ({ context }) => [addressDns(context.resource)],
   run: ({ context, input }) =>
-    updateGameAddressEffect(
-      { ...context.instance, relayId: context.relayId },
+    updateAddressEffect(
+      context.resource,
+      context.instance,
       input,
-      domainActor(context.person)
+      context.person
     ).pipe(
       Effect.catchTag("HostnameInUseError", (error) =>
         explainHostnameInUseEffect(context.person, error)
       )
     ),
-  audit: ({ context }) => ({
-    id: context.instanceId,
-    kind: "instance",
-    relayId: context.relayId,
-  }),
+  audit: ({ context }) => audited(context.resource),
   // A failed rename can still clear leftover records.
-  publish: ({ context }) => publishDomainChange(context),
+  publish: ({ context }) => publishAddressChange(context.resource),
 })
 
 export async function updateInstanceDomainHandler(
@@ -365,22 +376,15 @@ export const removeInstanceDomain = operation<RemoveInstanceDomainInput>()({
   name: "domain.remove",
   doing: changingDomains,
   authorize: ({ input, user }) => loadDomainScope(user, input.id),
-  locks: ({ context }) => (context ? [instanceDns(context)] : []),
+  locks: ({ context }) => (context ? [addressDns(context.resource)] : []),
   run: ({ context, input }) =>
     context
-      ? removeInstanceDomainEffect(
-          context.relayId,
-          context.instanceId,
-          input.id
-        )
+      ? removeInstanceDomainEffect(context.resource, input.id)
       : Effect.void,
-  audit: ({ context }) =>
-    context
-      ? { id: context.instanceId, kind: "instance", relayId: context.relayId }
-      : null,
+  audit: ({ context }) => (context ? audited(context.resource) : null),
   // A failed removal still changes the row.
   publish: ({ context }) => {
-    if (context) publishDomainChange(context)
+    if (context) publishAddressChange(context.resource)
   },
 })
 
@@ -635,7 +639,7 @@ const reconcileAddressEffect = Effect.fn("addresses.reconcile")(function* (
   if (!row.game) {
     // Claimed by a save that failed: held, without a record, until a save
     // says the routes use it.
-    if (!row.routed && !row.generated && !row.recordId && !row.srvRecordId) {
+    if (!row.routed && !row.standalone && !row.recordId && !row.srvRecordId) {
       return worked
     }
     // The name a rename is moving an address of its instance to: that
@@ -1117,7 +1121,7 @@ const provisionInstanceDomainEffect = Effect.fn("domains.instance.provision")(
   function* (instance: DomainInstance, verify = false) {
     return yield* withDnsChange(
       "dns.domain.provision",
-      instanceOwner({ instanceId: instance.id, relayId: instance.relayId }),
+      ownerOf({ instanceId: instance.id, relayId: instance.relayId }),
       provisionEffect(instance, verify)
     )
   }
@@ -1131,7 +1135,7 @@ const provisionEffect = Effect.fnUntraced(function* (
   if (!endpoint) return false
   // Most installs never connect Cloudflare; they stop here.
   if (!(yield* anyDomainConnectionEffect())) return false
-  const resource = instanceOwner({
+  const resource = ownerOf({
     instanceId: instance.id,
     relayId: instance.relayId,
   })
@@ -1156,7 +1160,7 @@ const provisionEffect = Effect.fnUntraced(function* (
       domain,
       generateVanityCandidates(blacklistPatterns)
     )
-    yield* addGameAddressEffect(resource, endpoint, domain, {
+    yield* addAddressEffect(resource, endpoint, domain, {
       primary: true,
       vanityLabel,
     })
@@ -1182,28 +1186,44 @@ const provisionEffect = Effect.fnUntraced(function* (
   return changed
 })
 
-// A new address for a game server, with its records.
-const addGameAddressEffect = Effect.fnUntraced(function* (
+// A new address of an instance's own, with its records: a game server's
+// where it is reached, any other's at its Relay.
+const addAddressEffect = Effect.fnUntraced(function* (
   resource: WebHostnameResource,
-  endpoint: GameEndpoint,
+  endpoint: GameEndpoint | null,
   domain: ManagedDomain,
   named: { primary: boolean; vanityLabel: string }
 ) {
   const id = randomUUID()
-  yield* insertInstanceDomainAssignmentEffect({
-    connectionId: domain.connectionId,
-    domain: domain.domain,
-    endpoint,
-    hostname: `${named.vanityLabel}.${domain.domain}`,
+  const hostname = `${named.vanityLabel}.${domain.domain}`
+  if (endpoint) {
+    yield* insertInstanceDomainAssignmentEffect({
+      connectionId: domain.connectionId,
+      domain: domain.domain,
+      endpoint,
+      hostname,
+      id,
+      instanceId: resource.resourceId,
+      primary: named.primary,
+      relayId: resource.relayId,
+      zoneId: domain.zoneId,
+    })
+  } else {
+    yield* insertWebHostnameEffect({
+      ...resource,
+      connectionId: domain.connectionId,
+      hostname,
+      id,
+      primary: named.primary,
+      standalone: true,
+      vanityDomain: domain.domain,
+      zoneId: domain.zoneId,
+    })
+  }
+  return yield* reconciledEffect(
     id,
-    instanceId: resource.resourceId,
-    primary: named.primary,
-    relayId: resource.relayId,
-    zoneId: domain.zoneId,
-  })
-  return yield* reconciledEffect(id, contextFor(resource, { endpoint })).pipe(
-    Effect.ensuring(invalidateManagedDomainAddressesEffect)
-  )
+    contextFor(resource, endpoint ? { endpoint } : {})
+  ).pipe(Effect.ensuring(invalidateManagedDomainAddressesEffect))
 })
 
 // A hostname once its records are in step, or why they aren't.
@@ -1219,54 +1239,72 @@ const reconciledEffect = Effect.fnUntraced(function* (
   return after
 })
 
-const createGameAddressEffect = Effect.fn("domains.instance.create")(function* (
-  instance: DomainInstance,
-  input: Pick<CreateInstanceDomainInput, "domain" | "primary" | "vanityLabel">,
-  actor: DomainActor
+/**
+ * The name a new address takes under a vanity domain: the one someone asked
+ * for, once it may be had (not reserved, unless they own the domain, and
+ * free), or without one, a name Kiln makes.
+ */
+const chosenLabelEffect = Effect.fnUntraced(function* (
+  domain: ManagedDomain,
+  actor: DomainActor,
+  vanityLabel: string | undefined
 ) {
-  const endpoint = endpointOf(instance)
-  if (!endpoint) {
-    return yield* domainFailure(
-      "Update this Relay before assigning a vanity address"
-    )
-  }
-  const resource = instanceOwner({
-    instanceId: instance.id,
-    relayId: instance.relayId,
-  })
-  const domain = yield* configuredDomainEffect(input.domain)
-  yield* requireUsableDomainEffect(resource, domain, actor)
   const { apiToken, blacklistPatterns } =
     yield* loadDomainConnectionCredentialEffect(domain.connectionId)
+  if (vanityLabel === undefined) {
+    return yield* availableVanityLabelEffect(
+      { apiToken, blacklistPatterns },
+      domain,
+      generateVanityCandidates(blacklistPatterns)
+    )
+  }
   // The domain's owner may choose a reserved name; Kiln never generates one.
   const chosenPatterns = ownsVanityDomain(domain, actor)
     ? []
     : blacklistPatterns
-  if (
-    input.vanityLabel !== undefined &&
-    !vanityLabelAllowed(input.vanityLabel, chosenPatterns)
-  ) {
+  if (!vanityLabelAllowed(vanityLabel, chosenPatterns)) {
     return yield* DomainConfigurationError.make({
-      message: `${input.vanityLabel}.${domain.domain} is reserved`,
+      message: `${vanityLabel}.${domain.domain} is reserved`,
     })
   }
-  const existing = (yield* listResourceAddressesEffect(resource)).filter(
-    (row) => row.game
+  return yield* availableVanityLabelEffect(
+    { apiToken, blacklistPatterns: chosenPatterns },
+    domain,
+    [vanityLabel]
   )
-  const vanityLabel = yield* input.vanityLabel === undefined
-    ? availableVanityLabelEffect(
-        { apiToken, blacklistPatterns },
-        domain,
-        generateVanityCandidates(blacklistPatterns)
-      )
-    : availableVanityLabelEffect(
-        { apiToken, blacklistPatterns: chosenPatterns },
-        domain,
-        [input.vanityLabel]
-      )
+})
+
+/** Where players reach a game server; null for any other kind. */
+const gameEndpointEffect = Effect.fnUntraced(function* (
+  resource: WebHostnameResource,
+  instance: RelayInstance | null
+) {
+  if (resource.resourceType !== "instance") return null
+  const endpoint = endpointOf(instance)
+  return (
+    endpoint ??
+    (yield* domainFailure(
+      "Update this Relay before assigning a vanity address"
+    ))
+  )
+})
+
+const createAddressEffect = Effect.fn("domains.instance.create")(function* (
+  resource: WebHostnameResource,
+  instance: RelayInstance | null,
+  input: Pick<CreateInstanceDomainInput, "domain" | "primary" | "vanityLabel">,
+  actor: DomainActor
+) {
+  const endpoint = yield* gameEndpointEffect(resource, instance)
+  const domain = yield* configuredDomainEffect(input.domain)
+  yield* requireUsableDomainEffect(resource, domain, actor)
+  const existing = (yield* listResourceAddressesEffect(resource)).filter(
+    (row) => row.standalone
+  )
+  const vanityLabel = yield* chosenLabelEffect(domain, actor, input.vanityLabel)
   // Promoted only once its records exist, so a failed create leaves the
-  // current connect address alone.
-  const created = yield* addGameAddressEffect(resource, endpoint, domain, {
+  // instance's main address alone.
+  const created = yield* addAddressEffect(resource, endpoint, domain, {
     primary: existing.length === 0,
     vanityLabel,
   })
@@ -1275,29 +1313,23 @@ const createGameAddressEffect = Effect.fn("domains.instance.create")(function* (
       Effect.ensuring(invalidateManagedDomainAddressesEffect)
     )
   }
-  return assignmentOverview(assignmentOf(created))
+  return addressOverview({
+    ...created,
+    primary: created.primary || input.primary,
+  })
 })
 
-const updateGameAddressEffect = Effect.fn("domains.instance.update")(function* (
-  instance: DomainInstance,
+const updateAddressEffect = Effect.fn("domains.instance.update")(function* (
+  resource: WebHostnameResource,
+  instance: RelayInstance | null,
   input: Pick<
     UpdateInstanceDomainInput,
     "domain" | "id" | "primary" | "vanityLabel"
   >,
-  actor: DomainActor
+  person: AuthenticatedUser
 ) {
-  const endpoint = endpointOf(instance)
-  if (!endpoint) {
-    return yield* domainFailure(
-      "Update this Relay before assigning a vanity address"
-    )
-  }
-  const resource = instanceOwner({
-    instanceId: instance.id,
-    relayId: instance.relayId,
-  })
   const row = yield* loadAddressEffect(input.id)
-  if (!row?.game || !sameOwner(row, resource)) {
+  if (!row?.standalone || !sameOwner(row, resource)) {
     return yield* domainFailure("Domain not found")
   }
   if (row.status === "removing") {
@@ -1308,6 +1340,7 @@ const updateGameAddressEffect = Effect.fn("domains.instance.update")(function* (
     input.domain,
     input.domain === row.vanityDomain
   )
+  const actor = domainActor(person)
   if (input.domain !== row.vanityDomain) {
     yield* requireUsableDomainEffect(resource, domain, actor)
   }
@@ -1323,8 +1356,76 @@ const updateGameAddressEffect = Effect.fn("domains.instance.update")(function* (
       message: `${input.vanityLabel}.${domain.domain} is reserved`,
     })
   }
-  const hostname = `${input.vanityLabel}.${domain.domain}`.toLowerCase()
+  const renamed = {
+    credential,
+    domain,
+    person,
+    vanityLabel: input.vanityLabel,
+  }
+  const updated = row.game
+    ? yield* renameGameAddressEffect(
+        resource,
+        yield* gameEndpointEffect(resource, instance),
+        row,
+        renamed
+      )
+    : yield* renameWebAddressEffect(resource, row, renamed)
+  if (input.primary && !updated.primary) {
+    yield* setInstanceDomainPrimaryEffect({ ...resource, id: updated.id }).pipe(
+      Effect.ensuring(invalidateManagedDomainAddressesEffect)
+    )
+  }
+  if (updated.stranded) {
+    return yield* DomainConfigurationError.make({ message: updated.stranded })
+  }
+  return addressOverview({
+    ...updated,
+    primary: updated.primary || input.primary,
+  })
+})
+
+interface Renamed {
+  /** The domain's token, and the names reserved against this person. */
+  credential: { apiToken: string; blacklistPatterns: Array<string> }
+  domain: ManagedDomain
+  person: AuthenticatedUser
+  vanityLabel: string
+}
+
+/**
+ * Has an instance's web routes answer on the name its address took, in
+ * place of the one it left, by saving them as its Network page does: its
+ * Relay, the names it holds and their records all follow.
+ */
+const followRoutesEffect = (
+  person: AuthenticatedUser,
+  resource: WebHostnameResource,
+  change: { from: string; proxied: boolean; to: string }
+) =>
+  promiseEffect(async () => {
+    // Saving routes needs this module, so it is asked for when it's used.
+    const { moveWebRouteHostname } = await import("@/server/web-routes.server")
+    await moveWebRouteHostname(person, resource, change)
+  })
+
+/**
+ * Renames a game server's address in place: its record and SRV record move
+ * to the new name by their IDs, so the name players join at is never
+ * without them. The old name stays held until Cloudflare has the new one.
+ * A web route that answered on the old name is then saved onto the new one,
+ * and the old name let go. When that save fails the rename stands: the
+ * route keeps the old name, with a record of its own, and `stranded` says
+ * so.
+ */
+const renameGameAddressEffect = Effect.fnUntraced(function* (
+  resource: WebHostnameResource,
+  endpoint: GameEndpoint | null,
+  row: Address,
+  { credential, domain, person, vanityLabel }: Renamed
+) {
+  const hostname = `${vanityLabel}.${domain.domain}`.toLowerCase()
   const context = contextFor(resource, { endpoint })
+  let left: Address | null = null
   const update = Effect.gen(function* () {
     // A rename still under way finishes before another starts, so no name
     // its records may be under is let go early.
@@ -1333,20 +1434,32 @@ const updateGameAddressEffect = Effect.fn("domains.instance.update")(function* (
       yield* availableVanityLabelEffect(
         credential,
         domain,
-        [input.vanityLabel],
+        [vanityLabel],
         current
       )
       yield* beginInstanceDomainRenameEffect({
         domain: domain.domain,
         id: current.id,
-        vanityLabel: input.vanityLabel,
+        vanityLabel,
       })
+      left = current
     }
     return yield* reconciledEffect(row.id, context)
   })
   const updated = yield* update.pipe(
     Effect.ensuring(invalidateManagedDomainAddressesEffect)
   )
+  const previous = left as Address | null
+  const followed =
+    previous?.routed && updated.hostname === hostname
+      ? yield* Effect.result(
+          followRoutesEffect(person, resource, {
+            from: previous.hostname,
+            proxied: false,
+            to: hostname,
+          })
+        )
+      : null
   // A name it left stays its routes' while they answer on it, and gets its
   // own record, pointed at the Relay. A failure shows on its row, and the
   // DNS worker retries it.
@@ -1356,66 +1469,180 @@ const updateGameAddressEffect = Effect.fn("domains.instance.update")(function* (
     ),
     context
   )
-  if (input.primary && !row.primary) {
-    yield* setInstanceDomainPrimaryEffect({ ...resource, id: row.id }).pipe(
-      Effect.ensuring(invalidateManagedDomainAddressesEffect)
-    )
+  return {
+    ...((yield* loadAddressEffect(row.id)) ?? updated),
+    stranded:
+      previous && followed && Result.isFailure(followed)
+        ? `${hostname} is its address now, but its web route still answers on ${previous.hostname}: ${failureMessage(followed.failure)}`
+        : null,
   }
-  return assignmentOverview(assignmentOf(updated))
 })
 
 /**
- * Stops a name being its game server's address. Its records are deleted and
- * the name let go, unless its web routes still answer on it: then the name
- * stays theirs, pointed at the Relay, without its SRV record.
+ * Renames an address that isn't a game server's by making the new one and
+ * letting the old one go, so its record never points nowhere on the way:
+ * the new name gets its record, a web route that answered on the old name
+ * is saved onto the new one, and only then is the old name removed. A name
+ * its own routes already hold becomes the address as it is.
+ *
+ * When the routes can't be saved nothing is renamed: the old name is as it
+ * was, and the new one is no address. It stays held, without a record, the
+ * way a name a failed save of the routes claimed does, since the Relay may
+ * have taken the routes even so; trying again takes it up.
+ */
+const renameWebAddressEffect = Effect.fnUntraced(function* (
+  resource: WebHostnameResource,
+  row: Address,
+  { credential, domain, person, vanityLabel }: Renamed
+) {
+  const hostname = `${vanityLabel}.${domain.domain}`.toLowerCase()
+  if (hostname === row.hostname) return { ...row, stranded: null }
+  const held = (yield* listResourceAddressesEffect(resource)).find(
+    (other) => other.hostname === hostname && other.status !== "removing"
+  )
+  if (held && (held.game || held.standalone)) {
+    return yield* DomainConfigurationError.make({
+      message: `${hostname} is already one of its addresses`,
+    })
+  }
+  const id = held?.id ?? randomUUID()
+  if (held) {
+    yield* setAddressStandaloneEffect(id, true)
+  } else {
+    yield* availableVanityLabelEffect(credential, domain, [vanityLabel])
+    yield* insertWebHostnameEffect({
+      ...resource,
+      connectionId: domain.connectionId,
+      hostname,
+      id,
+      standalone: true,
+      vanityDomain: domain.domain,
+      zoneId: domain.zoneId,
+    })
+  }
+  // The new name stops being an address, and keeps no record nothing
+  // answers on. What Cloudflare refuses now, the DNS worker deletes once a
+  // save of the routes lets the name go.
+  const takeBack = Effect.gen(function* () {
+    const made = yield* loadAddressEffect(id)
+    if (!made || made.game) return
+    if (!made.routed && recordIdsOf(made).length > 0) {
+      yield* loadDomainConnectionCredentialEffect(made.connectionId).pipe(
+        Effect.flatMap(({ apiToken }) => releaseRecordsEffect(made, apiToken)),
+        Effect.ignore
+      )
+    }
+    yield* setAddressStandaloneEffect(id, false)
+  })
+  yield* reconciledEffect(id, contextFor(resource)).pipe(
+    Effect.tapError(() =>
+      // Nothing was asked of the Relay: a name made for this goes whole.
+      held
+        ? takeBack
+        : loadAddressEffect(id).pipe(
+            Effect.flatMap((made) =>
+              made ? removeAddressEffect(made) : Effect.void
+            ),
+            Effect.ignore
+          )
+    )
+  )
+  if (row.routed) {
+    yield* followRoutesEffect(person, resource, {
+      from: row.hostname,
+      proxied: row.proxied,
+      to: hostname,
+    }).pipe(
+      Effect.tapError(() => takeBack),
+      Effect.mapError((cause) =>
+        DomainConfigurationError.make({
+          message: `Its web route couldn't be moved to ${hostname}, so nothing was renamed: ${failureMessage(cause)}`,
+        })
+      )
+    )
+  }
+  if (row.primary) {
+    yield* setInstanceDomainPrimaryEffect({ ...resource, id })
+  }
+  // One Cloudflare refuses to delete shows on its row as it goes, and the
+  // DNS worker finishes it.
+  yield* markAddressesRemovingEffect([row.id])
+  yield* removeAddressEffect({ ...row, status: "removing" }).pipe(Effect.ignore)
+  const renamed = yield* loadAddressEffect(id)
+  if (!renamed) return yield* domainFailure("The vanity address disappeared")
+  return { ...renamed, stranded: null }
+})
+
+const failureMessage = (cause: unknown) =>
+  cause instanceof Error ? cause.message : String(cause)
+
+// Removes one of an instance's own addresses, under its lock.
+const removeOwnAddressEffect = Effect.fnUntraced(function* (
+  resource: WebHostnameResource,
+  id: string
+) {
+  const rows = (yield* listResourceAddressesEffect(resource)).filter(
+    (row) => row.standalone
+  )
+  const row = rows.find((item) => item.id === id)
+  if (!row) return
+  // Only a game server's address can leave its name to a route: the name
+  // then stops being where players join. Any other is the route's address,
+  // and let go under it, the name could go to someone else while the route
+  // still answered on it.
+  if (!row.game && row.routed && row.status !== "removing") {
+    return yield* DomainConfigurationError.make({
+      message: `A web route uses ${row.hostname}. Remove it from the routes first.`,
+    })
+  }
+  const remaining = rows.filter(
+    (item) => item.id !== id && item.status !== "removing"
+  )
+  if (remaining.length === 0 && resource.resourceType === "instance") {
+    yield* setInstanceDomainOptOutEffect(
+      resource.relayId,
+      resource.resourceId,
+      true
+    )
+  }
+  // Another address takes over as the main one before Cloudflare is
+  // touched, so it moves even if the delete fails.
+  const successor =
+    remaining.find((item) => item.status === "active") ?? remaining[0]
+  if (row.primary && successor) {
+    yield* setInstanceDomainPrimaryEffect({ ...resource, id: successor.id })
+  }
+  if (row.game && row.routed && row.status !== "removing") {
+    yield* stopGameAddressEffect(row)
+    yield* invalidateManagedDomainAddressesEffect
+    // Its record is its routes' from here: a failure shows on its row,
+    // and the DNS worker retries it.
+    const kept = yield* loadAddressEffect(id)
+    if (kept) {
+      yield* reconcileAddressEffect(kept, contextFor(resource)).pipe(
+        Effect.ignore
+      )
+    }
+    return
+  }
+  // Keep the removal. Cloudflare deletes are idempotent, so deleting
+  // again finishes it; until then the address shows as failing to delete,
+  // Hearth stops advertising it, and nothing re-creates it.
+  yield* markAddressesRemovingEffect([id])
+  yield* invalidateManagedDomainAddressesEffect
+  yield* removeAddressEffect({ ...row, status: "removing" })
+})
+
+/**
+ * Stops a name being one of its instance's own addresses. Its records are
+ * deleted and the name let go. A game server's whose web routes still
+ * answer on it leaves the name to them, pointed at the Relay, without its
+ * SRV record; any other that a web route answers on is refused, until the
+ * route is removed or answers elsewhere.
  */
 export const removeInstanceDomainEffect = Effect.fn("domains.instance.remove")(
-  function* (relayId: string, instanceId: string, id: string) {
-    const resource = instanceOwner({ instanceId, relayId })
-    const rows = (yield* listResourceAddressesEffect(resource)).filter(
-      (row) => row.game
-    )
-    const row = rows.find((item) => item.id === id)
-    if (!row) return
-    const remaining = rows.filter(
-      (item) => item.id !== id && item.status !== "removing"
-    )
-    if (remaining.length === 0) {
-      yield* setInstanceDomainOptOutEffect(relayId, instanceId, true)
-    }
-    // Another address takes over as the connect address before Cloudflare
-    // is touched, so it moves even if the delete fails.
-    const successor =
-      remaining.find((item) => item.status === "active") ?? remaining[0]
-    if (row.primary && successor) {
-      yield* setInstanceDomainPrimaryEffect({ ...resource, id: successor.id })
-    }
-    if (row.routed && row.status !== "removing") {
-      yield* stopGameAddressEffect(row)
-      yield* invalidateManagedDomainAddressesEffect
-      // Its record is its routes' from here: a failure shows on its row,
-      // and the DNS worker retries it.
-      const kept = yield* loadAddressEffect(id)
-      if (kept) {
-        yield* reconcileAddressEffect(kept, contextFor(resource)).pipe(
-          Effect.ignore
-        )
-      }
-      return
-    }
-    // Keep the removal. Cloudflare deletes are idempotent, so deleting
-    // again finishes it; until then the address shows as failing to delete,
-    // Hearth stops advertising it, and nothing re-creates it.
-    yield* markAddressesRemovingEffect([id])
-    yield* invalidateManagedDomainAddressesEffect
-    yield* removeAddressEffect({ ...row, status: "removing" })
-  },
-  (effect, relayId, instanceId) =>
-    withDnsChange(
-      "dns.domain.remove",
-      instanceOwner({ instanceId, relayId }),
-      effect
-    )
+  removeOwnAddressEffect,
+  (effect, resource) => withDnsChange("dns.domain.remove", resource, effect)
 )
 
 /**
@@ -1766,9 +1993,8 @@ export function saveWebRouteHostnamesEffect<A, E, R>(
         rows
           .filter(
             (row) =>
-              !row.game &&
-              // So an App's generated address outlives its routes.
-              !row.generated &&
+              // An address of its own outlives its routes.
+              !row.standalone &&
               row.status !== "removing" &&
               !wanted.has(row.hostname)
           )
@@ -1924,9 +2150,9 @@ const claimHostnameEffect = Effect.fnUntraced(function* (
   yield* insertWebHostnameEffect({
     ...resource,
     connectionId: zone.connectionId,
-    generated: false,
     hostname,
     id,
+    standalone: false,
     vanityDomain: zone.vanityDomain,
     zoneId: zone.zoneId,
   })
@@ -1952,6 +2178,10 @@ export const generateAppHostnameEffect = Effect.fn("addresses.generate")(
     )
     const context = contextFor(resource)
     yield* context.relayHost
+    // Its first address is its main one.
+    const first = !(yield* listResourceAddressesEffect(resource)).some(
+      (row) => row.standalone
+    )
     for (const label of generateVanityCandidates(blacklistPatterns)) {
       if (used.has(label)) continue
       const hostname = `${label}.${domain.domain}`
@@ -1965,9 +2195,10 @@ export const generateAppHostnameEffect = Effect.fn("addresses.generate")(
       const reserved = yield* insertWebHostnameEffect({
         ...resource,
         connectionId: domain.connectionId,
-        generated: true,
         hostname,
         id,
+        primary: first,
+        standalone: true,
         vanityDomain: domain.domain,
         zoneId: domain.zoneId,
       }).pipe(
@@ -2164,27 +2395,21 @@ export const adoptExistingWebRecordEffect = Effect.fn(
 })
 
 /**
- * Releases one hostname, such as an App's generated address, as it is once
- * work already on it finishes, and only while it's still the instance's.
+ * Releases one of an instance's own addresses that isn't a game server's,
+ * such as the one made for an App, as it is once work already on it
+ * finishes: the removal its Network page asks for, by the hostname's ID.
  */
 export const releaseWebHostnameEffect = Effect.fn("addresses.release")(
   function* (row: WebHostnameResource & { id: string }) {
     yield* withCurrentRow("dns.webRoutes.release", row, (current) =>
-      Effect.gen(function* () {
-        // A route's hostname follows its route; deleting it alone would let
-        // another instance take a name the route still serves.
-        if (!current.generated) {
-          return yield* DomainConfigurationError.make({
+      // A route's hostname follows its route; deleting it alone would let
+      // another instance take a name the route still serves. A game
+      // server's address is removed as one.
+      current.game || !current.standalone
+        ? DomainConfigurationError.make({
             message: `Remove the web route to delete ${current.hostname}`,
           })
-        }
-        if (current.routed) {
-          return yield* DomainConfigurationError.make({
-            message: `A web route uses ${current.hostname}. Remove it from the routes first.`,
-          })
-        }
-        yield* removeAddressEffect(current)
-      })
+        : removeOwnAddressEffect(current, current.id)
     )
   }
 )
@@ -2278,8 +2503,8 @@ export const moveInstanceDomainsEffect = Effect.fn("domains.instance.move")(
     from: { readonly instanceId: string; readonly relayId: string },
     to: DomainInstance
   ) {
-    const source = instanceOwner(from)
-    const target = instanceOwner({ instanceId: to.id, relayId: to.relayId })
+    const source = ownerOf(from)
+    const target = ownerOf({ instanceId: to.id, relayId: to.relayId })
     const moved = yield* withDnsChange(
       "dns.domain.move",
       [source, target],
@@ -2442,20 +2667,25 @@ function srvRecordInput(
   }
 }
 
-function assignmentOverview(
-  assignment: InstanceDomainAssignment
-): InstanceDomainOverview {
+/** One of an instance's own addresses, as its Network page lists it. */
+function addressOverview(row: Address): InstanceAddressOverview {
+  const assignment = assignmentOf(row)
   return {
-    address: managedDomainConnectAddress(assignment),
-    directAddress: hostPortAddress(
-      assignment.publicHost,
-      assignment.publicPort
-    ),
+    // What players type, for a game server's; its name, for any other.
+    address: row.game ? managedDomainConnectAddress(assignment) : row.hostname,
+    directAddress: row.game
+      ? hostPortAddress(assignment.publicHost, assignment.publicPort)
+      : (row.target ?? ""),
     domain: assignment.domain,
-    lastError: assignment.lastError,
-    srvActive: domainHasActiveSrvRecord(assignment),
+    game: row.game,
+    hostname: row.hostname,
+    id: row.id,
+    lastError: row.lastError,
+    primary: row.primary,
+    routed: row.routed,
+    srvActive: row.game && domainHasActiveSrvRecord(assignment),
     status: assignment.status,
-    supportsSrv: assignment.supportsSrv,
+    supportsSrv: row.game && assignment.supportsSrv,
     vanityLabel: assignment.vanityLabel,
   }
 }
@@ -2477,25 +2707,27 @@ export function managedAddressForInstance(
     : instance.connectAddress
 }
 
-async function loadWritableInstanceFor(
+/**
+ * Lets someone who may change an instance's addresses through. A game
+ * server comes back as its Relay reports it, for where players reach it;
+ * any other kind needs only its Relay, and comes back null.
+ */
+async function loadWritableFor(
   user: AuthenticatedUser,
-  relayId: string,
-  instanceId: string
-) {
-  const relay = await requiredRelay(relayId)
-  await requireRelayPermission({
-    instanceId,
-    permission: "instance.network.write",
-    relayId,
-    user,
-  })
+  resource: WebHostnameResource
+): Promise<RelayInstance | null> {
+  const relay = await requiredRelay(resource.relayId)
+  await requireResourcePermission(user, resource, true)
+  if (resource.resourceType !== "instance") return null
   const snapshot = relaySnapshotSchema.parse(
     await runAppEffect(
       "relay.snapshot.domain",
       relayJsonEffect(relay, "/v1/snapshot", (input) => input)
     )
   )
-  const instance = snapshot.instances.find((item) => item.id === instanceId)
+  const instance = snapshot.instances.find(
+    (item) => item.id === resource.resourceId
+  )
   if (!instance) throw new Error("Instance not found")
   return relayInstanceSchema.parse(instance)
 }

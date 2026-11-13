@@ -5,11 +5,49 @@ import {
   type HostnameInUseError,
 } from "@/effect/errors"
 import { listAppRecordsEffect } from "@/effect/managed-apps"
-import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
+import type { HostnameOwner } from "@/effect/hostname-claims"
+import {
+  isPlatformAdmin,
+  listUserGrants,
+  requireRelayPermission,
+} from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import { hasAppPermission } from "@/server/app-access"
+
+// Changing an instance's addresses, web routes and their hostnames takes
+// one permission, whatever kind of instance they belong to. Reading a game
+// server's goes with its network; where an App is served is read with the
+// App itself.
+function permissionFor(
+  resource: Pick<HostnameOwner, "resourceType">,
+  change: boolean
+) {
+  if (change) return "instance.network.write" as const
+  return resource.resourceType === "app"
+    ? ("app.read" as const)
+    : ("instance.network.read" as const)
+}
+
+/**
+ * Refuses someone who may not read, or change, an instance's addresses, web
+ * routes and their hostnames.
+ */
+export function requireResourcePermission(
+  user: AuthenticatedUser,
+  resource: HostnameOwner,
+  change: boolean
+) {
+  return requireRelayPermission({
+    ...(resource.resourceType === "app"
+      ? { appId: resource.resourceId }
+      : { instanceId: resource.resourceId }),
+    permission: permissionFor(resource, change),
+    relayId: resource.relayId,
+    user,
+  })
+}
 
 /** What a person can do on the game servers and apps they reach. */
 export async function resourceAccess(user: AuthenticatedUser) {

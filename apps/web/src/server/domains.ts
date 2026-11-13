@@ -68,9 +68,12 @@ const discoverDomainsInputSchema = z.object({
   connectionId: connectionIdSchema.optional(),
 })
 
+// The instance whose addresses these are: a game server, unless it says
+// it is an App. Both have the same kind of ID.
 const instanceDomainInputSchema = z.object({
   instanceId: instanceIdSchema,
   relayId: relayIdSchema,
+  resourceType: z.enum(["app", "instance"]).optional(),
 })
 
 const createInstanceDomainInputSchema = instanceDomainInputSchema.extend({
@@ -179,6 +182,23 @@ export interface InstanceDomainOverview {
   vanityLabel: string
 }
 
+/**
+ * One of an instance's addresses, as its Network page lists them. For a
+ * game server's, `address` is what players type and `directAddress` its
+ * host and port. For any other, `address` is its name and `directAddress`
+ * where its record points.
+ */
+export interface InstanceAddressOverview extends InstanceDomainOverview {
+  /** A game server's address, pointing at its game port. */
+  game: boolean
+  hostname: string
+  id: string
+  /** Its instance's main address; one per instance. */
+  primary: boolean
+  /** Whether a web route answers on it. */
+  routed: boolean
+}
+
 export interface ManagedDomainOverview {
   address: string
   /** Whether the person may rename or delete it. */
@@ -186,6 +206,7 @@ export interface ManagedDomainOverview {
   domain: string
   /** How many domains point at this row's game server. */
   domainCount: number
+  hostname: string
   id: string
   instanceId: string
   lastError: string | null
@@ -194,6 +215,8 @@ export interface ManagedDomainOverview {
   primary: boolean
   relayId: string
   relayName: string
+  /** Whether a web route answers on it. */
+  routed: boolean
   server: {
     brickId: string | undefined
     game: string | undefined
@@ -229,11 +252,16 @@ export interface WebHostnameOverview {
     proxied: boolean
     type: "A" | "AAAA" | "CNAME"
   } | null
-  /** Kiln's generated address for an app. */
+  /**
+   * An App's own address, made for it or added, which it keeps without a
+   * route. The rest follow the routes that answer on them.
+   */
   generated: boolean
   hostname: string
   id: string
   lastError: string | null
+  /** Its instance's main address, for one of its own (`generated`). */
+  primary: boolean
   /** Through Cloudflare's proxy; null when Kiln doesn't know. */
   proxied: boolean | null
   /** Used by a web route, so it goes with the route. */
@@ -302,12 +330,15 @@ export interface ResourceWebHostname {
   canRelease: boolean
   /** The record `canAdopt` would hand over. */
   existingRecord: WebHostnameOverview["existingRecord"]
+  /** An address of the instance's own, made for it or added. */
   generated: boolean
   hostname: string
   id: string
   lastError: string | null
   /** The record `canAdopt` would hand over already points at the Relay. */
   pointsAtRelay: boolean
+  /** Its instance's main address, for one of its own (`generated`). */
+  primary: boolean
   /** Through Cloudflare's proxy; null when Kiln doesn't know. */
   proxied: boolean | null
   status: Exclude<WebHostnameOverview["status"], "manual">

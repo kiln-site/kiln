@@ -24,8 +24,9 @@ import { listAppRecordsEffect } from "@/effect/managed-apps"
 import { recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
 import {
+  assignmentOf,
+  listStandaloneAddressesEffect,
   listWebHostnamesEffect,
-  loadInstanceDomainAssignmentsEffect,
   retryAddressesNowEffect,
   webHostnameProxied,
 } from "@/effect/addresses"
@@ -103,9 +104,10 @@ export async function getDomainSettingsHandler() {
       "domains.domains.usable",
       listUsableVanityDomainsEffect(user.id)
     ),
-    runAppEffect(
-      "domains.assignments.all",
-      loadInstanceDomainAssignmentsEffect()
+    // A game server's own addresses. Any other instance's are listed
+    // with the hostnames its web routes answer on, below.
+    runAppEffect("addresses.standalone", listStandaloneAddressesEffect()).then(
+      (rows) => rows.filter((row) => row.game)
     ),
     runAppEffect("webHostnames.list", listWebHostnamesEffect()),
     listPersistedRelays(),
@@ -123,16 +125,17 @@ export async function getDomainSettingsHandler() {
       zoneNames.set(domain.domain, domain.zoneName)
     }
   }
-  const visibleAssignments = assignments.filter((assignment) =>
-    access.instance(assignment.relayId, assignment.instanceId, false)
+  const visibleAssignments = assignments.filter((row) =>
+    access.instance(row.relayId, row.resourceId, false)
   )
   const domainCounts = new Map<string, number>()
-  for (const assignment of visibleAssignments) {
-    const key = serverKey(assignment.relayId, assignment.instanceId)
+  for (const row of visibleAssignments) {
+    const key = serverKey(row.relayId, row.resourceId)
     domainCounts.set(key, (domainCounts.get(key) ?? 0) + 1)
   }
   const managedDomains = visibleAssignments.map(
-    (assignment): ManagedDomainOverview => {
+    (row): ManagedDomainOverview => {
+      const assignment = assignmentOf(row)
       const key = serverKey(assignment.relayId, assignment.instanceId)
       const server = resources.server(assignment.relayId, assignment.instanceId)
       return {
@@ -144,6 +147,7 @@ export async function getDomainSettingsHandler() {
         ),
         domain: assignment.domain,
         domainCount: domainCounts.get(key) ?? 1,
+        hostname: row.hostname,
         id: assignment.id,
         instanceId: assignment.instanceId,
         lastError: assignment.lastError,
@@ -151,6 +155,7 @@ export async function getDomainSettingsHandler() {
         primary: assignment.primary,
         relayId: assignment.relayId,
         relayName: resources.relayName(assignment.relayId),
+        routed: row.routed,
         server: {
           brickId: server?.brickId,
           game: server?.game,
@@ -187,10 +192,11 @@ export async function getDomainSettingsHandler() {
         certificate: pendingWebCertificate(row, row.hostname),
         connectionName: connectionNames.get(row.connectionId) ?? null,
         existingRecord: row.status === "external" ? row.existingRecord : null,
-        generated: row.generated,
+        generated: row.standalone,
         hostname: row.hostname,
         id: row.id,
         lastError: row.lastError,
+        primary: row.standalone && row.primary,
         proxied: webHostnameProxied(row),
         relayId: row.relayId,
         routed: row.routed,
@@ -300,6 +306,7 @@ export async function getManualWebHostnamesHandler(): Promise<
         hostname,
         id: key,
         lastError: null,
+        primary: false,
         proxied: null,
         relayId: route.relayId,
         routed: true,

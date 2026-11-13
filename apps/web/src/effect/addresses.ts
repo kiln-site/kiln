@@ -49,8 +49,6 @@ export interface Address {
   existingRecord: ExistingWebRecord | null
   /** A game server's address: its record points at its game port. */
   game: boolean
-  /** Made by Kiln as an App's address, kept without a route. */
-  generated: boolean
   hostname: string
   id: string
   lastError: string | null
@@ -75,6 +73,13 @@ export interface Address {
   srvProtocol: "tcp" | "udp" | null
   srvRecordId: string | null
   srvService: string | null
+  /**
+   * An address its instance holds in its own right: a game server's, or an
+   * App's, made for it or added. It keeps its record with or without a web
+   * route, and is its instance's to rename or remove. A name that isn't is
+   * held only because a web route answers on it, and goes with the route.
+   */
+  standalone: boolean
   /**
    * `external` when Cloudflare already had a record Kiln didn't make; Kiln
    * leaves it alone and checks again on the next sync.
@@ -151,7 +156,6 @@ interface AddressRow extends RowDataPacket {
   hostname: string
   id: string
   integration_id: string
-  is_generated: boolean | number
   is_primary: boolean | number
   last_error: string | null
   next_hostname: string | null
@@ -167,6 +171,7 @@ interface AddressRow extends RowDataPacket {
   srv_protocol: "tcp" | "udp" | null
   srv_record_id: string | null
   srv_service: string | null
+  standalone: boolean | number
   status: Address["status"]
   supports_srv: boolean | number
   target: string | null
@@ -176,7 +181,7 @@ interface AddressRow extends RowDataPacket {
 
 const addressSelect = `SELECT id, hostname, relay_id, resource_type,
        resource_id, integration_id, zone_id, vanity_domain, game, routed,
-       is_generated, is_primary, next_hostname, next_vanity_domain,
+       standalone, is_primary, next_hostname, next_vanity_domain,
        public_port, supports_srv, srv_service, srv_protocol, srv_record_id,
        record_id, record_type, target, proxied, existing_record_id,
        existing_record_type, existing_record_content,
@@ -210,7 +215,7 @@ export const listResourceAddressesEffect = Effect.fn("addresses.resource")(
       "addresses.resource",
       `${addressSelect}
         WHERE ${ofResource}
-        ORDER BY is_primary DESC, is_generated DESC, created_at, hostname`,
+        ORDER BY is_primary DESC, standalone DESC, created_at, hostname`,
       resourceValues(resource)
     )
     return rows.map(address)
@@ -253,11 +258,12 @@ function webHostname(row: Address): WebHostname {
     ? {
         ...row,
         existingRecord: null,
-        generated: false,
         lastError: null,
         proxied: false,
         recordId: null,
         recordType: null,
+        // An address of its own on the game server's page, not its routes'.
+        standalone: false,
         status: "active",
         target: null,
       }
@@ -284,7 +290,10 @@ export const loadWebHostnameByNameEffect = Effect.fn("webHostnames.byName")(
   }
 )
 
-/** The hostnames an instance's web routes may answer on, generated first. */
+/**
+ * The hostnames an instance's web routes may answer on: its own addresses
+ * first, its main one before the rest.
+ */
 export const listResourceWebHostnamesEffect = Effect.fn(
   "webHostnames.resource"
 )(function* (resource: HostnameOwner) {
@@ -294,7 +303,9 @@ export const listResourceWebHostnamesEffect = Effect.fn(
     .map(webHostname)
     .sort(
       (left, right) =>
-        Number(right.generated) - Number(left.generated) ||
+        Number(right.standalone) - Number(left.standalone) ||
+        Number(right.standalone && right.primary) -
+          Number(left.standalone && left.primary) ||
         left.hostname.localeCompare(right.hostname)
     )
 })
@@ -333,30 +344,35 @@ export const loadActiveInstanceDomainAssignmentsEffect = Effect.fn(
   return rows.map((row) => assignmentOf(address(row)))
 })
 
-export const loadInstanceDomainAssignmentsEffect = Effect.fn(
-  "domains.assignments.all"
-)(function* () {
-  const database = yield* Database
-  const rows = yield* database.queryRows<AddressRow>(
-    "domains.assignments.all",
-    `${addressSelect}
-      WHERE game = 1
+/** Every address an instance holds in its own right, by domain and name. */
+export const listStandaloneAddressesEffect = Effect.fn("addresses.standalone")(
+  function* () {
+    const database = yield* Database
+    const rows = yield* database.queryRows<AddressRow>(
+      "addresses.standalone",
+      `${addressSelect}
+      WHERE standalone = 1
       ORDER BY vanity_domain, hostname`
-  )
-  return rows.map((row) => assignmentOf(address(row)))
-})
+    )
+    return rows.map(address)
+  }
+)
 
 /**
  * Holds a hostname for an instance before its record exists, claiming it in
  * the same transaction. A hostname another instance holds fails rather than
- * being taken over.
+ * being taken over. `standalone` for an address of the instance's own,
+ * which it keeps without a web route; otherwise it is a name a route is
+ * about to answer on.
  */
 export const insertWebHostnameEffect = Effect.fn("addresses.insert")(function* (
   input: HostnameOwner & {
     connectionId: string
-    generated: boolean
     hostname: string
     id: string
+    /** Its instance's main address. Only for one of its own. */
+    primary?: boolean
+    standalone: boolean
     vanityDomain: string | null
     zoneId: string
   }
@@ -384,9 +400,9 @@ export const insertWebHostnameEffect = Effect.fn("addresses.insert")(function* (
         "addresses.insert",
         `INSERT INTO ${addressTable}
              (id, hostname, relay_id, resource_type, resource_id,
-              integration_id, zone_id, vanity_domain, is_generated, status,
-              created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+              integration_id, zone_id, vanity_domain, standalone, is_primary,
+              status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
         [
           input.id,
           input.hostname.toLowerCase(),
@@ -394,7 +410,8 @@ export const insertWebHostnameEffect = Effect.fn("addresses.insert")(function* (
           input.connectionId,
           input.zoneId,
           input.vanityDomain,
-          input.generated,
+          input.standalone,
+          input.standalone && (input.primary ?? false),
           now,
           now,
         ]
@@ -448,10 +465,10 @@ export const insertInstanceDomainAssignmentEffect = Effect.fn(
         "addresses.insertGame",
         `INSERT INTO ${addressTable}
            (id, hostname, relay_id, resource_type, resource_id,
-            integration_id, zone_id, vanity_domain, game, is_primary, target,
-            public_port, supports_srv, srv_service, srv_protocol, status,
-            last_error, created_at, updated_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?,
+            integration_id, zone_id, vanity_domain, game, standalone,
+            is_primary, target, public_port, supports_srv, srv_service,
+            srv_protocol, status, last_error, created_at, updated_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?, ?,
                 'pending', NULL, ?, ?
            FROM ${databaseTable("domain_zone")}
           WHERE domain = ? AND zone_id = ? AND integration_id = ?
@@ -1091,6 +1108,30 @@ export const clearAddressRecordsEffect = Effect.fn("addresses.clearRecords")(
   }
 )
 
+/**
+ * Says whether a hostname that isn't a game server's address is one its
+ * instance holds in its own right. Made one, it gets its record whether or
+ * not a web route answers on it. Made no longer one, it is held only for
+ * its routes, as a name a save of theirs claimed is, and is never its
+ * instance's main address.
+ */
+export const setAddressStandaloneEffect = Effect.fn("addresses.setStandalone")(
+  function* (id: string, standalone: boolean) {
+    const database = yield* Database
+    const now = yield* Clock.currentTimeMillis
+    yield* database.execute(
+      "addresses.setStandalone",
+      `UPDATE ${addressTable}
+        SET standalone = ?, is_primary = IF(?, is_primary, 0),
+            status = IF(status = 'removing', status, 'pending'),
+            last_error = NULL, attempts = 0, next_attempt_at = NULL,
+            updated_at = ?
+      WHERE id = ? AND game = 0`,
+      [standalone, standalone, now, id]
+    )
+  }
+)
+
 /** Forgets a hostname, letting go of its names. */
 export const deleteAddressEffect = Effect.fn("addresses.delete")(function* (
   row: Address
@@ -1124,7 +1165,7 @@ export const stopGameAddressEffect = Effect.fn("addresses.stopGame")(function* (
       yield* database.execute(
         "addresses.stopGame",
         `UPDATE ${addressTable}
-              SET game = 0, is_primary = 0, public_port = NULL,
+              SET game = 0, standalone = 0, is_primary = 0, public_port = NULL,
                   next_hostname = NULL, next_vanity_domain = NULL,
                   status = 'pending', last_error = NULL, attempts = 0,
                   next_attempt_at = NULL, updated_at = ?
@@ -1282,7 +1323,7 @@ export const setInstanceDomainOptOutEffect = Effect.fn("domains.optOut.set")(
 const addressNeedsWork = `(status = 'removing'
   OR next_hostname IS NOT NULL
   OR (status IN ('pending', 'error')
-    AND (game = 1 OR routed = 1 OR is_generated = 1
+    AND (game = 1 OR routed = 1 OR standalone = 1
       OR record_id IS NOT NULL OR srv_record_id IS NOT NULL))
   OR (game = 1 AND status = 'active' AND last_error IS NOT NULL))`
 
@@ -1386,7 +1427,6 @@ function address(row: AddressRow): Address {
           }
         : null,
     game: Boolean(row.game),
-    generated: Boolean(row.is_generated),
     hostname: row.hostname,
     id: row.id,
     lastError: row.last_error,
@@ -1406,6 +1446,7 @@ function address(row: AddressRow): Address {
     srvProtocol: row.srv_protocol,
     srvRecordId: row.srv_record_id,
     srvService: row.srv_service,
+    standalone: Boolean(row.standalone),
     status: row.status,
     supportsSrv: Boolean(row.supports_srv),
     target: row.target,

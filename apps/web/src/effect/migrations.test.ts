@@ -1638,7 +1638,9 @@ describeMysql("database migrations", () => {
             }),
           ])
 
-          yield* applyMigrations(migrations)
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 75)
+          )
 
           const rows = yield* sql<Record<string, unknown>>`
             SELECT id, hostname, resource_type, resource_id, zone_id,
@@ -1716,6 +1718,126 @@ describeMysql("database migrations", () => {
                                   ${databaseTableName("web_hostname")})
           `
           expect(old).toEqual([])
+        }),
+      schemaBuildTimeout
+    )
+
+    // An address an instance holds in its own right keeps its record with
+    // no route on it; a name only a route answers on gets none, and goes
+    // with the route. Marked wrongly, a game server's address would be
+    // dropped as a leftover, or a route's name kept for good.
+    it.effect(
+      "marks the addresses an instance holds in its own right",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 75)
+          )
+          const held = (hostname: string, row: Record<string, unknown>) => ({
+            created_at: 1,
+            game: 0,
+            hostname,
+            id: hostname.padEnd(36, "0"),
+            integration_id: "cloudflare",
+            is_generated: 0,
+            relay_id: "1".repeat(12),
+            resource_id: "5".repeat(12),
+            resource_type: "instance",
+            routed: 0,
+            updated_at: 1,
+            ...row,
+          })
+          yield* insertRows("instance_address", [
+            held("arena.kiln.test", { game: 1 }),
+            held("quiet-lake.kiln.test", {
+              is_generated: 1,
+              resource_type: "app",
+            }),
+            held("wiki.example.test", { routed: 1 }),
+          ])
+
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 76)
+          )
+
+          const rows = yield* sql<{ hostname: string; standalone: number }>`
+            SELECT hostname, standalone
+              FROM ${sql(databaseTableName("instance_address"))}
+             ORDER BY hostname
+          `
+          expect(
+            rows.map((row) => [row.hostname, Number(row.standalone)])
+          ).toEqual([
+            ["arena.kiln.test", 1],
+            ["quiet-lake.kiln.test", 1],
+            ["wiki.example.test", 0],
+          ])
+        }),
+      schemaBuildTimeout
+    )
+
+    // An App's addresses had no main one before every kind held addresses
+    // the same way. Without one, nothing says which it is shown by, and
+    // removing one promotes nothing.
+    it.effect(
+      "gives every instance with addresses of its own a main one",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 76)
+          )
+          const app = "5".repeat(12)
+          const server = "6".repeat(12)
+          const held = (hostname: string, row: Record<string, unknown>) => ({
+            created_at: 1,
+            game: 0,
+            hostname,
+            id: hostname.padEnd(36, "0"),
+            integration_id: "cloudflare",
+            is_primary: 0,
+            relay_id: "1".repeat(12),
+            resource_id: app,
+            resource_type: "app",
+            standalone: 1,
+            updated_at: 1,
+            ...row,
+          })
+          yield* insertRows("instance_address", [
+            held("quiet-lake.kiln.test", { created_at: 2 }),
+            held("deep-moon.kiln.test", { created_at: 1 }),
+            // A name only its route answers on is never the main one.
+            held("wiki.example.test", { created_at: 0, standalone: 0 }),
+            // A game server that already has one keeps it.
+            held("arena.kiln.test", {
+              created_at: 1,
+              game: 1,
+              resource_id: server,
+              resource_type: "instance",
+            }),
+            held("lobby.kiln.test", {
+              created_at: 2,
+              game: 1,
+              is_primary: 1,
+              resource_id: server,
+              resource_type: "instance",
+            }),
+          ])
+
+          yield* applyMigrations(migrations)
+
+          const rows = yield* sql<{ hostname: string }>`
+            SELECT hostname FROM ${sql(databaseTableName("instance_address"))}
+             WHERE is_primary = 1
+             ORDER BY hostname
+          `
+          expect(rows.map((row) => row.hostname)).toEqual([
+            "deep-moon.kiln.test",
+            "lobby.kiln.test",
+          ])
         }),
       schemaBuildTimeout
     )

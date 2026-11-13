@@ -25,6 +25,11 @@ import {
 
 const relayId = "relay-one"
 const instanceId = "b".repeat(12)
+const server = {
+  relayId,
+  resourceId: instanceId,
+  resourceType: "instance",
+} as const
 
 const disabledCache = Layer.succeed(AppCache)({
   backend: "disabled",
@@ -51,6 +56,7 @@ const insertDomainRow = (assignment: InstanceDomainAssignment) =>
   insertRows("instance_address", {
     id: assignment.id,
     game: true,
+    standalone: true,
     is_primary: assignment.primary,
     relay_id: assignment.relayId,
     resource_type: "instance",
@@ -285,12 +291,12 @@ describeMysql("renaming a game server's domain", () => {
           yield* insertAssignment(testAssignment())
           const takeOldName = insertWebHostnameEffect({
             connectionId: "cloudflare",
-            generated: false,
             hostname: "play.kiln.site",
             id: "00000000-0000-4000-8000-0000000000ac",
             relayId,
             resourceId: "a".repeat(12),
             resourceType: "app",
+            standalone: false,
             vanityDomain: "kiln.site",
             zoneId: "zone-id",
           })
@@ -368,7 +374,7 @@ describeMysql("removing a game server's domain", () => {
           yield* insertAssignment(failed)
           lose(failed.id, "play")
 
-          yield* removeInstanceDomainEffect(relayId, instanceId, failed.id)
+          yield* removeInstanceDomainEffect(server, failed.id)
           assert.deepEqual(dns.names(), [])
           assert.deepEqual(yield* claimedNames, [])
 
@@ -392,8 +398,7 @@ describeMysql("removing a game server's domain", () => {
         yield* insertAssignment(testAssignment())
 
         const failure = yield* removeInstanceDomainEffect(
-          relayId,
-          instanceId,
+          server,
           testAssignment().id
         ).pipe(Effect.flip)
 
