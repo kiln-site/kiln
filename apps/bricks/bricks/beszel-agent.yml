@@ -1,0 +1,39 @@
+format: kiln.brick/v2
+kind: app
+metadata:
+  id: beszel-agent
+  name: Beszel Agent
+  revision: 1
+  summary: Reports a node's usage and its containers to a Beszel hub.
+  author: Kiln
+  icon: ../icons/beszel.svg
+  color: "#24eb5c"
+  tags: [monitoring]
+  links:
+    homepage: "https://beszel.dev"
+    source: "https://github.com/henrygd/beszel"
+    docs: "https://beszel.dev/guide/agent-installation"
+# One on each node to watch. It connects out to the hub, so the hub needs
+# no way in to the node.
+inputs:
+  - key: hub_url
+    label: Hub address
+    help: Where your Beszel hub is opened, like https://beszel.example.com.
+    type: text
+    pattern: '^https?://\S+$'
+  - key: key
+    label: Public key
+    help: The hub shows it under Add System.
+    type: text
+    pattern: '^ssh-ed25519 \S+$'
+  - key: token
+    label: Token
+    help: The hub shows it under Add System, beside the key.
+    type: secret
+deploy:
+  type: compose
+  file: ./beszel-agent.kiln.compose.yaml
+  env:
+    HUB_URL: "{{ hub_url }}"
+    KEY: "{{ key }}"
+    TOKEN: "{{ token }}"

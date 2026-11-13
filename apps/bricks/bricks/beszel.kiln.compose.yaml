@@ -1,0 +1,16 @@
+# The Beszel hub. It keeps its accounts, systems and history in
+# /beszel_data.
+services:
+  beszel:
+    image: henrygd/beszel:0.18.7
+    restart: unless-stopped
+    volumes:
+      - beszel_data:/beszel_data
+    healthcheck:
+      test: ["CMD", "/beszel", "health", "--url", "http://localhost:8090"]
+      start_period: 30s
+      start_interval: 2s
+      interval: 60s
+
+volumes:
+  beszel_data:

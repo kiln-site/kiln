@@ -324,7 +324,8 @@ from a tag or an image name today.
    route, each folder it keeps is on a volume from the start, and its
    `ready` command is its container's health check. Its `command` starts
    it, and its public ports are published on its Relay. A Brick can carry
-   the Compose file or Dockerfile its App runs. Still to come:
+   the Compose file or Dockerfile its App runs, as Beszel's hub and agent
+   do. Still to come:
    App and group Bricks from other catalogs.
 9. Domains for every kind.
 10. One instance page, with each kind's own tabs.

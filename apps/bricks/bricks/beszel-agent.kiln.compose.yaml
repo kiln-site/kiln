@@ -1,0 +1,27 @@
+# The Beszel agent. HUB_URL, KEY and TOKEN are the App's variables, set
+# from the Brick's answers.
+services:
+  beszel-agent:
+    image: henrygd/beszel-agent:0.18.7
+    restart: unless-stopped
+    # The node's own network, so it reads the node's traffic and not a
+    # container's.
+    network_mode: host
+    volumes:
+      - beszel_agent_data:/var/lib/beszel-agent
+      # Read-only, for the containers' usage.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # It connects out to the hub, so nothing listens on the node.
+      DISABLE_SSH: "true"
+      HUB_URL: ${HUB_URL}
+      KEY: ${KEY}
+      TOKEN: ${TOKEN}
+    healthcheck:
+      test: ["CMD", "/agent", "health"]
+      start_period: 30s
+      start_interval: 2s
+      interval: 60s
+
+volumes:
+  beszel_agent_data:
