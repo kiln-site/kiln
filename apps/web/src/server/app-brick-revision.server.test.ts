@@ -265,6 +265,82 @@ describeMysql("An App taking a newer revision of its Brick", () => {
         })
     )
 
+    // How it starts is the Brick's. A port published on its Relay is
+    // its owner's once installed, as a route is: a revision that moved one
+    // would open another port on the Relay unasked.
+    it.effect(
+      "takes the start command its revision gives, and keeps the ports it publishes",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          const published = [
+            { containerPort: 25, hostPort: 2525, protocol: "tcp" as const },
+          ]
+          yield* createAppRecordEffect({
+            appId,
+            brick: {
+              answers: { key: "made-once", token: "made-too" },
+              environment: ["API_TOKEN", "SECRET_KEY"],
+              name: "Blog",
+              ports: ["25/tcp"],
+              revision: 1,
+              source: "https://bricks.test/blog.yml",
+              volumes: [],
+            },
+            createdBy: "owner",
+            deploys: {
+              command: "serve --v1",
+              image: "ghcr.io/acme/blog:1",
+              ports: published,
+              sourceType: "image",
+            },
+            environment: "API_TOKEN=made-too\nSECRET_KEY=made-once\n",
+            name: "Journal",
+            relayId,
+          })
+          const revision = (deploy: object) =>
+            brickRecipeSchema.parse({
+              ...blog,
+              deploy: { ...blog.deploy, ...deploy },
+            })
+          const smtp = { name: "smtp", port: 25, expose: "public" }
+
+          // The same port of its container, on another port of the Relay:
+          // where it is published stays as its owner has it.
+          assert.isNull(
+            yield* install(
+              revision({
+                command: ["serve", "--title", "My Blog"],
+                ports: [{ ...smtp, host: 2626 }],
+              })
+            )
+          )
+          const revised = (yield* saved).config
+          assert.strictEqual(revised.command, "serve --title 'My Blog'")
+          assert.deepStrictEqual(revised.ports, published)
+
+          // One that listens on another port would leave the old one
+          // published to nothing, and one that publishes none would leave
+          // it open: both are refused, and nothing changes.
+          for (const ports of [[{ ...smtp, host: 2525, port: 587 }], undefined]) {
+            assert.include(
+              yield* install(revision(ports ? { ports } : {}), 3),
+              "publishes other ports than this App was installed with"
+            )
+          }
+          assert.strictEqual(
+            (yield* saved).config.command,
+            "serve --title 'My Blog'"
+          )
+
+          // A revision that gives no command goes back to the image's own.
+          assert.isNull(
+            yield* install(revision({ ports: [{ ...smtp, host: 2525 }] }), 3)
+          )
+          assert.strictEqual((yield* saved).config.command, "")
+        })
+    )
+
     it.effect(
       "in a group, is connected again to the database the group has, and never to other members",
       () =>

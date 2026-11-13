@@ -1,6 +1,7 @@
 import {
   appBrickDeploy,
   appBrickProblem,
+  appBrickPublishes,
   appEnvironmentVariables,
   appEnvironmentWith,
   brickInstallAnswers,
@@ -8,6 +9,7 @@ import {
   groupBrickInstall,
   groupBrickProblem,
   groupConnectionEnvironment,
+  type AppBrickDeploy,
   type BrickInputValue,
   type BrickRecipe,
   type GroupConnection,
@@ -41,9 +43,14 @@ export interface NewestBrick {
   source: string
 }
 
-// What a revision sets: the App's image, its variables, how it is checked,
-// and what the App keeps of the Brick from then on.
+// What a revision sets: the App's image, how it starts, its variables, how
+// it is checked, and what the App keeps of the Brick from then on. Never
+// the ports it publishes, which are its owner's once it is installed, as
+// its routes are: a revision that publishes other ports of its container
+// is refused (`samePorts`).
 interface Revised {
+  /** Its start command, or none: its image's own. */
+  command: string | undefined
   environment: Record<string, string>
   image: string
   /** The command it is ready by, or none: its health check either way. */
@@ -67,6 +74,24 @@ function sameFolders(
     )
   }
   return [...kept]
+}
+
+// Nor which ports of its container it publishes on its Relay. Where each
+// is published is its owner's, and a revision never changes that, so one
+// that listened on another port would leave the old one published to
+// nothing; and one that newly published a port would open it unasked.
+function samePorts(
+  newest: NewestBrick,
+  published: ReadonlyArray<string> | undefined,
+  publishes: AppBrickDeploy["ports"]
+) {
+  if (!sameKeys(published ?? [], appBrickPublishes(publishes))) {
+    throw refused(
+      newest,
+      "it publishes other ports than this App was installed with. Install it again to take it."
+    )
+  }
+  return published === undefined ? {} : { ports: [...published] }
 }
 
 // A revision's answers: those the App already has that it still asks for,
@@ -104,6 +129,7 @@ function revisedAlone(brick: AppBrickRecord, newest: NewestBrick): Revised {
     throw refused(newest, "it no longer runs an image")
   }
   return {
+    command: installed.deploy.command,
     environment: installed.deploy.environment,
     image: installed.deploy.image,
     ready: installed.deploy.ready,
@@ -111,6 +137,7 @@ function revisedAlone(brick: AppBrickRecord, newest: NewestBrick): Revised {
       answers,
       environment: Object.keys(installed.deploy.environment),
       name: newest.name,
+      ...samePorts(newest, brick.ports, installed.deploy.ports),
       revision: newest.revision,
       source: newest.source,
       volumes: sameFolders(newest, brick.volumes, installed.deploy.volumes),
@@ -215,6 +242,7 @@ async function revisedInGroup(
             // resolved, a secret it made.
             keep: { answers, databases: kept.databases },
             made: {
+              command: app.command,
               environment,
               image: app.image,
               ready: app.ready,
@@ -224,6 +252,7 @@ async function revisedInGroup(
                 environment: Object.keys(environment),
                 member: follows.member,
                 name: newest.name,
+                ...samePorts(newest, follows.ports, app.ports),
                 revision: newest.revision,
                 source: newest.source,
                 volumes: sameFolders(newest, follows.volumes, app.volumes),
@@ -243,8 +272,8 @@ async function revisedInGroup(
 /**
  * Makes an App again from a newer revision of the Brick it follows, and
  * asks for the deployment that puts it to work. What the Brick set is the
- * revision's: its image, its health check, and its variables in place of
- * those the Brick set before. Every other line of its environment, and everything else about
+ * revision's: its image, its start command, its health check, and its
+ * variables in place of those the Brick set before. Every other line of its environment, and everything else about
  * it, stays. Whoever calls it holds the App's configuration.
  */
 export async function installAppBrickRevision(
@@ -291,6 +320,7 @@ export async function installAppBrickRevision(
         brick: revised.record,
         config: {
           ...rest,
+          command: revised.command ?? "",
           environment: appEnvironmentWith(
             config.environment,
             brick.environment,

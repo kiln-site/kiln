@@ -76,6 +76,12 @@ export const appBrickRecordSchema = z.strictObject({
   member: z.string().min(1).max(64).optional(),
   /** The Brick's name, as it was when installed. */
   name: z.string().min(1).max(80),
+  /**
+   * The ports of its container the Brick published when it was installed,
+   * each as `25/tcp`; none without it. Where on its Relay each is
+   * published is its owner's.
+   */
+  ports: z.array(z.string()).optional(),
   revision: z.number().int().min(1),
   source: brickSourceSchema,
   /**
@@ -128,8 +134,10 @@ export const createAppRecordEffect = Effect.fn("apps.create")(
     createdBy: string
     /** What its Brick deploys. Without one, nothing yet. */
     deploys?: Pick<AppConfig, "sourceType"> & {
+      command?: string
       healthcheck?: NonNullable<AppConfig["healthcheck"]>
       image?: string
+      ports?: AppConfig["ports"]
     }
     environment?: string
     /** What it mounts from the start: the volumes its Brick keeps. */

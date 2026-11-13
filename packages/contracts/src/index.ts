@@ -6,7 +6,10 @@ import {
   MAXIMUM_INSTANCE_NAME_LENGTH,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
-import { APP_IMAGE_MAX_LENGTH } from "./app-bricks.js"
+import {
+  APP_COMMAND_MAX_LENGTH,
+  APP_IMAGE_MAX_LENGTH,
+} from "./app-bricks.js"
 import { readBrick } from "./brick-conversion.js"
 import {
   brickIdSchema,
@@ -1085,7 +1088,7 @@ export const appMountsSchema = z
 export const appConfigSchema = z
   .object({
     // Replaces the image's command, for images and Dockerfiles.
-    command: z.string().max(4_000),
+    command: z.string().max(APP_COMMAND_MAX_LENGTH),
     compose: z.string().max(400_000),
     dockerfile: z.string().max(200_000),
     // KEY=VALUE lines, as in an env file.

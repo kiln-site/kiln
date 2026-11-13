@@ -28,7 +28,7 @@ The format describes every kind. Kiln reads them in stages.
 | Database Bricks of a known type  | Run from Kiln's own catalog, on that type's image |
 | A database's `connection`        | Defined here; Kiln builds a type's URL itself |
 | A database Brick with no type    | Defined here; not installable yet     |
-| App Bricks                       | Run from Kiln's own catalog: what they deploy, their variables and one web port |
+| App Bricks                       | Run from Kiln's own catalog: what they deploy, how they start, their variables, one web port and the ports they publish |
 | Group Bricks                     | Run from Kiln's own catalog: databases, and Apps from an image connected to them |
 | `dockerfile` and `compose`       | Run for Apps from `path` in a source; one written in the Brick isn't yet |
 | `ready` by command               | Run for databases, and for Apps from an image or a Dockerfile; game servers use logs |
@@ -413,13 +413,36 @@ from a connected source, or a file written in Hearth. A `secret` input with
 `generate: true` is made by Kiln once, when the Brick is installed, and kept
 with the App's answers, so it is the same after every update.
 
-Of `ports`, Kiln runs one: the port the App's website answers on, which is
-an App Brick's port unless it says another `expose`. A new App gets an
-address under a vanity domain, when one applies, and its first web route
-sends that address to the port, before its first deployment. An input can
-answer the port (`port: "{{ port }}"`); an optional one left blank means
-the App has no website, and gets no route. A `compose` Brick's port names
-its `service`. Later revisions leave an App's routes alone.
+Of `ports`, Kiln runs two kinds. One port may be where the App's website
+answers, which is an App Brick's port unless it says another `expose`. A
+new App gets an address under a vanity domain, when one applies, and its
+first web route sends that address to the port, before its first
+deployment. A `compose` Brick's web port names its `service`.
+
+Any number may be `expose: public`: ports of its container published on
+its Relay, for an App that is reached some other way than as a website. A
+public port names its port on the Relay (`host`), since Kiln picks none for
+an App yet, and `protocol: both` publishes it for TCP and UDP. Two that
+would take the same port on the Relay are refused. They become the App's
+published ports, which are its owner's to change from then on; a fixed
+port already in use is reported by Docker when the App deploys. A Compose
+project publishes its ports in its own file. The install form lists what
+a Brick publishes before it is installed, and installing one takes
+`app.manage` on the Relay, as publishing a port in an App's settings does,
+since a published port is reached without the proxy.
+
+An input can answer a port (`port: "{{ port }}"`); an optional one left
+blank means the App has no website there, or publishes nothing. Later
+revisions leave an App's routes and its published ports alone, so a
+revision that publishes other ports of its container than the App was
+installed with is refused: install it again to take it.
+
+`command` replaces the image's command for an `image` or a `dockerfile`,
+one argument per entry, as written: no template is filled in it. An App
+keeps it as one line of at most 4,000 characters once its arguments are
+quoted, and a longer one, or an argument with a line break, is refused. It is the
+App's start command, and the Brick's while the App follows it: a revision
+changes it or goes back to the image's own, and its owner can't.
 
 `volumes` are the folders of its container an App keeps, for an `image` or
 a `dockerfile`; a Compose file declares its own. Installing the App makes a
@@ -442,9 +465,9 @@ An App Brick from an image or a Dockerfile may say `ready` by a command
 (see [Ready](#ready)). While the App follows the Brick, that health check is
 the Brick's: a revision changes it or takes it away, and its owner can't.
 
-An App Brick that sets anything else (a second port, one published on the
-host, `ready` another way or for a Compose project, a file written in the
-Brick) is refused until Kiln runs that part, as is one from another
+An App Brick that sets anything else (a second web port, a private port,
+`ready` another way or for a Compose project, an entrypoint, a file written
+in the Brick) is refused until Kiln runs that part, as is one from another
 catalog.
 
 Kiln's catalog has a generic Brick for each thing an App deploys:

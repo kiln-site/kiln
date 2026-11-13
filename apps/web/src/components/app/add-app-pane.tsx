@@ -7,6 +7,7 @@ import {
   brickInputs,
   groupBrickInstall,
   type AppBrickDeployType,
+  type AppBrickPublishedPort,
   type Brick,
   type BrickVariableValue,
 } from "@workspace/contracts"
@@ -256,11 +257,17 @@ function NewGroupForm({
     defaultBrickVariables(brick)
   )
   const { compatible, connected } = useBrickRelayReady(relays, relayId, brick)
-  const refused = React.useMemo(
-    () =>
-      "problem" in
-      groupBrickInstall(brick, withSecretsToCome(brick, variables)),
+  const installed = React.useMemo(
+    () => groupBrickInstall(brick, withSecretsToCome(brick, variables)),
     [brick, variables]
+  )
+  const refused = "problem" in installed
+  const published = React.useMemo(
+    () =>
+      "install" in installed
+        ? installed.install.apps.flatMap((app) => app.ports ?? [])
+        : noPorts,
+    [installed]
   )
   const blocked =
     pending || !name.trim() || !relayId || !compatible || !connected || refused
@@ -305,6 +312,7 @@ function NewGroupForm({
         value={relayId}
         onChange={setRelayId}
       />
+      <PublishedPorts ports={published} />
       <FormError error={error} />
       <div className="grid grid-cols-2 gap-2 pt-1">
         <Button type="button" variant="outline" onClick={onClose}>
@@ -316,6 +324,29 @@ function NewGroupForm({
         </Button>
       </div>
     </form>
+  )
+}
+
+const noPorts: ReadonlyArray<AppBrickPublishedPort> = []
+
+// What a Brick opens on the Relay itself, said before it is installed: a
+// published port is reached directly, by anyone who can reach the Relay.
+function PublishedPorts({
+  ports,
+}: {
+  ports: ReadonlyArray<AppBrickPublishedPort>
+}) {
+  if (ports.length === 0) return null
+  return (
+    <p className="text-xs text-muted-foreground">
+      Publishes on the Relay, outside its proxy:{" "}
+      {ports
+        .map(
+          (port) =>
+            `${port.hostPort} → ${port.containerPort}/${port.protocol}`
+        )
+        .join(", ")}
+    </p>
   )
 }
 
@@ -510,6 +541,13 @@ function NewAppForm({
           onChange={setDatabase}
         />
       ) : null}
+      <PublishedPorts
+        ports={
+          installed && "deploy" in installed
+            ? (installed.deploy.ports ?? noPorts)
+            : noPorts
+        }
+      />
       <FormError error={error} />
       <div className="grid grid-cols-2 gap-2 pt-1">
         <Button type="button" variant="outline" onClick={onClose}>
