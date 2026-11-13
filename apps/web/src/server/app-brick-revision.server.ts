@@ -52,7 +52,14 @@ interface Revised {
   /** Its start command, or none: its image's own. */
   command: string | undefined
   environment: Record<string, string>
-  image: string
+  /**
+   * What it runs: an image, or a Dockerfile or Compose file, with the file
+   * itself when the Brick carries it. A file in the App's own source is
+   * left where it is.
+   */
+  runs:
+    | { image: string; type: "image" }
+    | { content: string | undefined; type: "compose" | "dockerfile" }
   /** The command it is ready by, or none: its health check either way. */
   ready: string | undefined
   record: AppBrickRecord
@@ -125,22 +132,36 @@ function revisedAlone(brick: AppBrickRecord, newest: NewestBrick): Revised {
   const answers = answersFor(newest.definition, brick.answers)
   const installed = appBrickDeploy(newest.definition, answers)
   if ("problem" in installed) throw refused(newest, installed.problem)
-  if (installed.deploy.type !== "image") {
-    throw refused(newest, "it no longer runs an image")
+  const { deploy } = installed
+  // A file it carried stays one it carries, and one in the App's own
+  // source stays there: the other way round, the App would be left with a
+  // file nothing updates, or with two.
+  const written = deploy.type !== "image" && deploy.content !== undefined
+  if (written !== (brick.written === true)) {
+    throw refused(
+      newest,
+      written
+        ? "it carries its file now, and this App has its own. Install it again to take it."
+        : "it no longer carries the file this App runs. Install it again to take it."
+    )
   }
   return {
-    command: installed.deploy.command,
-    environment: installed.deploy.environment,
-    image: installed.deploy.image,
-    ready: installed.deploy.ready,
+    command: deploy.command,
+    environment: deploy.environment,
+    ready: deploy.ready,
+    runs:
+      deploy.type === "image"
+        ? { image: deploy.image, type: "image" }
+        : { content: deploy.content, type: deploy.type },
     record: {
       answers,
-      environment: Object.keys(installed.deploy.environment),
+      environment: Object.keys(deploy.environment),
       name: newest.name,
-      ...samePorts(newest, brick.ports, installed.deploy.ports),
+      ...samePorts(newest, brick.ports, deploy.ports),
       revision: newest.revision,
       source: newest.source,
-      volumes: sameFolders(newest, brick.volumes, installed.deploy.volumes),
+      volumes: sameFolders(newest, brick.volumes, deploy.volumes),
+      ...(written ? { written: true } : {}),
     },
   }
 }
@@ -244,8 +265,8 @@ async function revisedInGroup(
             made: {
               command: app.command,
               environment,
-              image: app.image,
               ready: app.ready,
+              runs: { image: app.image, type: "image" },
               record: {
                 answers: {},
                 connect: follows.connect ?? [],
@@ -272,8 +293,9 @@ async function revisedInGroup(
 /**
  * Makes an App again from a newer revision of the Brick it follows, and
  * asks for the deployment that puts it to work. What the Brick set is the
- * revision's: its image, its start command, its health check, and its
- * variables in place of those the Brick set before. Every other line of its environment, and everything else about
+ * revision's: its image or the file its Brick carries, its start command,
+ * its health check, and its variables in place of those the Brick set
+ * before. Every other line of its environment, and everything else about
  * it, stays. Whoever calls it holds the App's configuration.
  */
 export async function installAppBrickRevision(
@@ -314,6 +336,16 @@ export async function installAppBrickRevision(
           )
         )
       }
+      // What it deploys stays what it was installed as: an image doesn't
+      // become a Compose project under an App set up for one.
+      if (revised.runs.type !== config.sourceType) {
+        return Effect.fail(
+          refused(
+            newest,
+            "it deploys another way than this App was installed with. Install it again to take it."
+          )
+        )
+      }
       // Its health check is the revision's, one it gives or none.
       const { healthcheck: _checked, ...rest } = config
       return Effect.succeed({
@@ -329,7 +361,12 @@ export async function installAppBrickRevision(
           ...(revised.ready === undefined
             ? {}
             : { healthcheck: { command: revised.ready } }),
-          image: revised.image,
+          // Its image, or the file its Brick carries.
+          ...(revised.runs.type === "image"
+            ? { image: revised.runs.image }
+            : revised.runs.content === undefined
+              ? {}
+              : { [revised.runs.type]: revised.runs.content }),
         },
       })
     })

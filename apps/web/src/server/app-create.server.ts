@@ -236,9 +236,14 @@ async function createAppHandler(
     data.brick,
     data.variables ?? {}
   )
-  // A Brick that publishes ports on the Relay takes what publishing one
-  // in an App's settings does: creating an App alone doesn't open them.
-  if ((deploys.ports?.length ?? 0) > 0) {
+  // A Brick that publishes ports on the Relay, or carries the file its
+  // App runs, takes what doing either in an App's settings does: a
+  // Compose file can bind the node's own files, and creating an App alone
+  // opens and writes neither.
+  if (
+    (deploys.ports?.length ?? 0) > 0 ||
+    (deploys.type !== "image" && deploys.content !== undefined)
+  ) {
     await requireRelayPermission({
       permission: "app.manage",
       relayId: relay.id,
@@ -283,10 +288,7 @@ async function createAppHandler(
       ? ""
       : appDatabaseEnvironment(await requiredCredential(relay.id, databaseId))
   // What its Brick sets goes in beside what reaches its database.
-  const environment =
-    deploys.type === "image"
-      ? appEnvironmentWith(connected, [], deploys.environment)
-      : connected
+  const environment = appEnvironmentWith(connected, [], deploys.environment)
   const made = await provisionApp(user, relay, {
     brick: follows,
     databaseIds: databaseId === null ? [] : [databaseId],
@@ -297,8 +299,9 @@ async function createAppHandler(
     volumes: data.volumes,
   })
   return {
-    // An image is all it needs to deploy; a file's source is still to come.
-    deployable: deploys.type === "image",
+    // An image, or a file its Brick carries, is all it needs to deploy; a
+    // file's source is still to come.
+    deployable: deploys.type === "image" || deploys.content !== undefined,
     id: made.id,
     relayId: relay.id,
     /** Where its Brick says its website answers. */
@@ -365,7 +368,13 @@ export async function provisionApp(
       deploys: {
         ...(app.deploys.type === "image"
           ? { image: app.deploys.image, sourceType: "image" as const }
-          : { sourceType: app.deploys.type }),
+          : {
+              sourceType: app.deploys.type,
+              // The file its Brick carries is the App's own from the start.
+              ...(app.deploys.content === undefined
+                ? {}
+                : { [app.deploys.type]: app.deploys.content }),
+            }),
         // Its Brick's `ready` command is its container's health check.
         ...(app.deploys.ready === undefined
           ? {}

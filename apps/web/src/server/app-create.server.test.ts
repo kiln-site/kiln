@@ -170,8 +170,28 @@ vi.mock("@/server/brick-catalogs.server", async () => {
     },
     source: "https://bricks.test/mail.yml",
   })
+  // An App Brick that carries the Compose file it runs.
+  const stack = brickSchema.parse({
+    format: "kiln.brick/v2",
+    kind: "app",
+    metadata: {
+      id: "stack",
+      name: "Stack",
+      summary: "An example.",
+      author: "Kiln",
+    },
+    inputs: [{ key: "key", label: "Key", type: "secret", generate: true }],
+    deploy: {
+      type: "compose",
+      compose: "services:\n  web:\n    image: ghcr.io/acme/site:1\n",
+      env: { SECRET_KEY: "{{ key }}" },
+    },
+    source: "https://bricks.test/stack.yml",
+  })
   return {
-    defaultBrickCatalog: async () => ({ bricks: [...bricks, blog, mail] }),
+    defaultBrickCatalog: async () => ({
+      bricks: [...bricks, blog, mail, stack],
+    }),
   }
 })
 vi.mock("@/server/web-hostname-access.server", () => ({
@@ -491,6 +511,35 @@ describeMysql("Creating an App with a database", () => {
           yield* seed(["app.create", "app.manage"])
           yield* createApp(mail)
           assert.lengthOf(yield* apps, 1)
+        })
+    )
+
+    // A Compose file can bind the node's own files and network. Writing
+    // one in an App's settings takes `app.manage`, so installing a Brick
+    // that carries one takes it too, and the file is the App's from then.
+    it.effect(
+      "installs the file a Brick carries as the App's own, for someone who may manage Apps",
+      () =>
+        Effect.gen(function* () {
+          yield* seed(["app.create"])
+          const stack = { brick: "https://bricks.test/stack.yml", name: "Stack" }
+
+          const refused = yield* createApp(stack).pipe(Effect.flip)
+          assert.include(String(refused), "permission")
+          assert.lengthOf(yield* apps, 0)
+
+          yield* seed(["app.create", "app.manage"])
+          const created = yield* createApp(stack)
+          const app = yield* loadAppConfigEffect(relayId, created.id)
+          assert.deepInclude(app?.config, {
+            compose: "services:\n  web:\n    image: ghcr.io/acme/site:1\n",
+            sourceType: "compose",
+          })
+          // Its answer reaches the file as a variable, never written in it.
+          assert.match(app?.config.environment ?? "", /^SECRET_KEY=\S+\n$/u)
+          assert.isTrue(app?.brick?.written)
+          // It has all it needs to deploy: no source is still to be chosen.
+          assert.isTrue(created.deployable)
         })
     )
 

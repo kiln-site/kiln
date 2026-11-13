@@ -313,6 +313,31 @@ describe("an App that follows a Brick", () => {
     // Detached: deployed since as its own, it says nothing of a Brick.
     expect(await revision(null)).toBeUndefined()
   })
+
+  // One that runs the Compose file its Brick carries names no image to
+  // look up, and whichever of its services answers says the Brick.
+  it("says its Brick's revision when it runs a Compose file and names no image", async () => {
+    const removeCompose = await composeConfigCommand()
+    const harness = await createdApp()
+    const brick = { revision: 3, source: "https://bricks.test/monitor.yml" }
+    useDeploymentClock()
+    await harness.apps.deploy({
+      ...deployment({
+        compose: "services:\n  hub:\n    image: nginx:alpine\n",
+        sourceType: "compose",
+      }),
+      brick,
+    })
+    await settledDeployment(harness)
+
+    expect(
+      await harness.apps.checkImages(
+        [{ appId, image: null }],
+        new AbortController().signal
+      )
+    ).toEqual([{ brick, id: appId, status: "pinned" }])
+    await removeCompose()
+  })
 })
 
 // What an App's containers listen on is said whether or not they publish

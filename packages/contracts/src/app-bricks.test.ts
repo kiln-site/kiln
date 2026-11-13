@@ -110,6 +110,7 @@ describe("an App Brick", () => {
       appBrickDeploy(stack({ name: "web", port: 80, service: "site" }), {})
     ).toEqual({
       deploy: {
+        environment: {},
         path: "compose.yaml",
         type: "compose",
         volumes: [],
@@ -232,8 +233,44 @@ describe("an App Brick", () => {
         {}
       )
     ).toEqual({
-      deploy: { path: "deploy/compose.yaml", type: "compose", volumes: [] },
+      deploy: {
+        environment: {},
+        path: "deploy/compose.yaml",
+        type: "compose",
+        volumes: [],
+      },
     })
+  })
+
+  // What a Brick carries is run as it is written. Filled in, an answer
+  // with a `$` or a quote in it could change what the file says, and a
+  // secret would be kept in the file.
+  it("deploys the file it carries as written, its answers reaching it as variables", () => {
+    const compose =
+      'services:\n  web:\n    image: site:2\n    environment:\n      KEY: "${KEY}"\n      NOTE: "{{ key }}"\n'
+    expect(
+      appBrickDeploy(
+        recipe({
+          inputs: [{ key: "key", label: "Key", type: "secret", generate: true }],
+          deploy: { type: "compose", compose, env: { KEY: "{{ key }}" } },
+        }),
+        { key: "made$once" }
+      )
+    ).toEqual({
+      deploy: {
+        content: compose,
+        environment: { KEY: "made$once" },
+        path: "",
+        type: "compose",
+        volumes: [],
+      },
+    })
+    expect(
+      appBrickDeploy(
+        recipe({ deploy: { type: "dockerfile", dockerfile: "FROM nginx:1\n" } }),
+        {}
+      )
+    ).toMatchObject({ deploy: { content: "FROM nginx:1\n", type: "dockerfile" } })
   })
 
   it("keeps the folders it names, each a path a volume can be mounted at", () => {
@@ -286,9 +323,11 @@ describe("an App Brick", () => {
     ).toBe("Kiln doesn't run an App Brick's memory yet")
     expect(
       appBrickProblem(
-        recipe({ deploy: { type: "dockerfile", dockerfile: "FROM nginx:1" } })
+        recipe({
+          deploy: { type: "image", image: "nginx:1", entrypoint: ["/init"] },
+        })
       )
-    ).toBe("Kiln doesn't run an App Brick's dockerfile yet")
+    ).toBe("Kiln doesn't run an App Brick's entrypoint yet")
     // Another kind's Brick is no App's, whatever it deploys.
     expect(
       appBrickProblem(

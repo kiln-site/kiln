@@ -94,15 +94,16 @@ export async function installedAppBrick(
       ? undefined
       : {
           answers: answered,
-          environment:
-            installed.deploy.type === "image"
-              ? Object.keys(installed.deploy.environment)
-              : [],
+          environment: Object.keys(installed.deploy.environment),
           name: recipe.metadata.name,
           ...publishedBy(installed.deploy.ports),
           revision: brickRevision(recipe),
           source,
           volumes: [...installed.deploy.volumes],
+          ...(installed.deploy.type !== "image" &&
+          installed.deploy.content !== undefined
+            ? { written: true }
+            : {}),
         },
   }
 }

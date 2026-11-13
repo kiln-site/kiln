@@ -3178,11 +3178,13 @@ async function executeControlRequest(
       const ids = input.instances.map(({ id }) => id)
       switch (input.kind) {
         case "app":
-          // An App is asked about the image its config names.
+          // An App is asked about the image its config names, or with
+          // none about the Brick it runs.
           return apps.checkImages(
-            input.instances.flatMap(({ id, image }) =>
-              image === undefined ? [] : [{ appId: id, image }]
-            ),
+            input.instances.map(({ id, image }) => ({
+              appId: id,
+              image: image ?? null,
+            })),
             signal
           )
         case "database":

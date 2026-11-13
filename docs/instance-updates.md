@@ -19,7 +19,10 @@ What "the image it runs" is depends on the kind:
   (`kiln.app.image.digest`). Hearth asks about the image its config names; a
   container running another image, or a config naming a digest, has nothing
   to compare. An App is checked while its image is a tag that can move, or
-  while it follows a Brick. For a container deployed before Kiln labelled its digest, the
+  while it follows a Brick. One that follows a Brick and runs the Compose
+  file or Dockerfile it carries names no image: Hearth asks about it with
+  none, and the Relay says only the Brick its containers were deployed
+  from. For a container deployed before Kiln labelled its digest, the
   Relay uses the digests Docker recorded when it pulled the image.
 - **A database and a game server** run the tag their container was made
   from, which deploying again pulls. The Relay reads that tag from the
@@ -128,7 +131,8 @@ source, with the answers the instance already has:
   replaces the container, running again if it was.
 - **An App** that follows a Brick is made again from it: Hearth works out
   what the new recipe sets with the App's saved answers, replaces the image
-  and the variables the Brick set before with the revision's, and asks the
+  or the file the Brick carries, and the variables the Brick set before,
+  with the revision's, and asks the
   App's deployment queue to deploy the result. Everything its owner added
   stays: other lines of its environment, domains, volumes, limits. A secret
   Kiln made is the same after, and one the revision newly asks for is made
@@ -209,8 +213,8 @@ and it can't be attached again.
 ## Not built yet
 
 - Apps built from a Dockerfile, a Compose file or a repository aren't
-  checked for images: they have no single tag to watch. No Brick makes one
-  that follows it yet either.
+  checked for images: they have no single tag to watch. One that follows a
+  Brick is still offered its Brick's revisions.
 - A changelog or a view of what a revision changes in the recipe.
 - Keeping some of a Brick's own lines changed by hand across a revision:
   an App follows its Brick or is detached from it.

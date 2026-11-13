@@ -96,6 +96,7 @@ const fourth = "d".repeat(12)
 const fifth = "e".repeat(12)
 const seventh = "7".repeat(12)
 const eighth = "8".repeat(12)
+const ninth = "9".repeat(12)
 
 function relayApp(id: string) {
   const deployment = relay.deployments.get(id)
@@ -280,6 +281,50 @@ describeMysql("App deployments", () => {
             state: "succeeded",
           })
           yield* until(() => sentTo(eighth) === 2)
+        }).pipe(TestClock.withLive),
+      60_000
+    )
+
+    // A revision Kiln installs on its own deploys whatever the Brick
+    // made, not only an image.
+    it.effect(
+      "deploy a Brick's revision Kiln took on its own, for an App that runs the file its Brick carries",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          relay.count = 0
+          relay.deployments.clear()
+          relay.journal.clear()
+          relay.sent.length = 0
+          yield* insertRelay(relayId)
+          yield* insertUser("owner")
+          yield* insertRows("relay_database_connection_import", {
+            acknowledged_at: 0,
+            configs_cleared_at: 0,
+            relay_id: relayId,
+          })
+          yield* createAppRecordEffect({
+            appId: ninth,
+            brick: {
+              answers: {},
+              environment: [],
+              name: "Monitor",
+              revision: 2,
+              source: "https://bricks.test/monitor.yml",
+              volumes: [],
+              written: true,
+            },
+            createdBy: "owner",
+            deploys: {
+              compose: "services:\n  hub:\n    image: monitor:2\n",
+              sourceType: "compose",
+            },
+            name: "Monitor",
+            relayId,
+          })
+
+          yield* ask(ninth, "update", null, true)
+          yield* until(() => sentTo(ninth) === 1)
         }).pipe(TestClock.withLive),
       60_000
     )

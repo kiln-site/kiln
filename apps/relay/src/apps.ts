@@ -1400,10 +1400,12 @@ export class AppDriver {
    * What each image app's tag names in its registry now, against the
    * digest its container runs. Apps naming the same image share one lookup,
    * and an app mid-deployment, or whose container runs another image than
-   * the one named, needs none.
+   * the one named, needs none. One that names no image, built from a
+   * Dockerfile or run as a Compose project, has nothing to look up: it is
+   * asked about for the Brick its containers say they were deployed from.
    */
   async checkImages(
-    apps: ReadonlyArray<{ appId: string; image: string }>,
+    apps: ReadonlyArray<{ appId: string; image: string | null }>,
     signal: AbortSignal
   ): Promise<Array<RelayInstanceImageCheckResult>> {
     const containers = await this.#containers(
@@ -1412,13 +1414,16 @@ export class AppDriver {
       signal
     )
     const checks = apps.map(({ appId, image }) => {
-      const reference = Result.try(() => parseImageReference(image))
+      const reference =
+        image === null ? null : Result.try(() => parseImageReference(image))
       // The container serving the app: a deployment's replacement only
-      // takes over once it's healthy, and no check runs during one.
+      // takes over once it's healthy, and no check runs during one. Any
+      // service of a Compose project says the same Brick.
       const container = containers
         .filter(
           (candidate) =>
-            candidate.appId === appId && candidate.service === APP_SERVICE
+            candidate.appId === appId &&
+            (image === null || candidate.service === APP_SERVICE)
         )
         .sort(
           (left, right) =>
@@ -1432,6 +1437,7 @@ export class AppDriver {
       const lookup =
         !deploying &&
         container &&
+        reference !== null &&
         Result.isSuccess(reference) &&
         reference.success.digest === undefined &&
         sameImage(container.image, reference.success)
@@ -1468,7 +1474,7 @@ export class AppDriver {
           lookup,
           reference,
         }): Promise<RelayInstanceImageCheckResult> => {
-          if (Result.isFailure(reference)) {
+          if (reference !== null && Result.isFailure(reference)) {
             return {
               error: "The image isn't a valid reference",
               id,
@@ -1488,8 +1494,12 @@ export class AppDriver {
                 },
               }
             : {}
-          // A digest never moves.
-          if (reference.success.digest !== undefined) {
+          // A digest never moves, and no image has nothing that could.
+          if (
+            image === null ||
+            reference === null ||
+            reference.success.digest !== undefined
+          ) {
             return { ...brick, id, status: "pinned" }
           }
           // Its own lookup only: another app naming the same image says
@@ -2171,6 +2181,7 @@ export class AppDriver {
         const options = {
           appId: input.appId,
           binds,
+          brick: input.brick,
           commit: deployment.commit,
           databases,
           deploymentId: deployment.id,
@@ -2595,6 +2606,8 @@ export class AppDriver {
     options: {
       appId: string
       binds: ReadonlyArray<{ host: string; relay: string }>
+      /** The Brick its configuration was made from, if it follows one. */
+      brick: RelayDeployApp["brick"]
       commit: string | null
       databases: ReadonlyArray<string>
       deferAliases: boolean
@@ -2705,7 +2718,8 @@ export class AppDriver {
             options.appId,
             name,
             options.deploymentId,
-            options.commit
+            options.commit,
+            options.brick
           ),
           ...placementLabels,
         },
@@ -3285,8 +3299,8 @@ export class AppDriver {
     service: string,
     deploymentId: string,
     commit: string | null,
-    // The Brick its configuration was made from, which only an App that
-    // runs one container follows so far.
+    // The Brick its configuration was made from, on every container of
+    // the deployment.
     brick?: RelayDeployApp["brick"]
   ): Record<string, string> {
     return {
