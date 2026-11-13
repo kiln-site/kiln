@@ -138,9 +138,9 @@ export const getAppOwner = createServerFn({ method: "GET" })
 // The Bricks an App can be installed from, for whoever is asked which.
 export const getAppBricks = createServerFn({ method: "GET" }).handler(
   async () => {
-    await requireEligibleResourceUser()
+    const user = await requireEligibleResourceUser()
     const { offeredAppBricks } = await import("@/server/app-bricks.server")
-    return offeredAppBricks()
+    return offeredAppBricks(user.id)
   }
 )
 

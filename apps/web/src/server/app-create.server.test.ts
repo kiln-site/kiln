@@ -4,6 +4,12 @@ import { assert, layer } from "@effect/vitest"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
+import { relayCatalogSchema } from "@workspace/contracts"
+
+import {
+  saveBrickCatalogEffect,
+  setBrickCatalogVisibilityEffect,
+} from "@/effect/brick-catalogs"
 import { loadAppConfigEffect } from "@/effect/managed-apps"
 import { createManagedDatabaseRecordEffect } from "@/effect/managed-databases"
 import { disposeAppRuntime } from "@/effect/runtime"
@@ -522,7 +528,10 @@ describeMysql("Creating an App with a database", () => {
       () =>
         Effect.gen(function* () {
           yield* seed(["app.create"])
-          const stack = { brick: "https://bricks.test/stack.yml", name: "Stack" }
+          const stack = {
+            brick: "https://bricks.test/stack.yml",
+            name: "Stack",
+          }
 
           const refused = yield* createApp(stack).pipe(Effect.flip)
           assert.include(String(refused), "permission")
@@ -583,6 +592,93 @@ describeMysql("Creating an App with a database", () => {
         assert.include(String(refused), "already exists")
         assert.deepStrictEqual(yield* apps, [])
         assert.deepStrictEqual(relay.jobs, [])
+      })
+    )
+  })
+})
+
+// Someone else's catalog, as Hearth keeps one that was added: an App Brick
+// that carries its Compose file, by the ID Kiln's own Compose Brick has.
+const read = "b".repeat(40)
+const billys = `https://raw.githubusercontent.com/billy/bricks/${read}/compose.yml`
+const addCatalog = (owner: string, community: boolean) =>
+  Effect.gen(function* () {
+    const id = yield* saveBrickCatalogEffect({
+      ownerUserId: owner,
+      revisionSha: read,
+      revisionUrl: `https://github.com/billy/bricks/blob/${read}/catalog.yml`,
+      snapshot: relayCatalogSchema.parse({
+        format: "kiln.catalog/v1",
+        name: "Billy's",
+        bricks: [
+          {
+            format: "kiln.brick/v2",
+            kind: "app",
+            metadata: {
+              id: "compose",
+              name: "Billy's stack",
+              summary: "An example.",
+              author: "Billy",
+            },
+            deploy: {
+              type: "compose",
+              compose: "services:\n  web:\n    image: ghcr.io/billy/site:1\n",
+            },
+            source: billys,
+          },
+        ],
+      }),
+      snapshotSha256: "0".repeat(64),
+      source: "https://github.com/billy/bricks",
+    })
+    if (community) {
+      yield* setBrickCatalogVisibilityEffect({
+        catalogId: id,
+        community: true,
+        publishedBy: owner,
+      })
+    }
+  })
+
+describeMysql("Installing an App from another catalog", () => {
+  layer(TestDatabase)((it) => {
+    // Kiln's own Compose Brick makes an App that follows nothing. Another
+    // catalog's Brick by that ID is someone's Brick, whose file is theirs.
+    it.effect(
+      "follows the Brick, though it has the ID of one of Kiln's own",
+      () =>
+        Effect.gen(function* () {
+          yield* seed(["app.create", "app.manage"])
+          yield* addCatalog("alice", false)
+
+          const created = yield* createApp({ brick: billys })
+          const app = yield* loadAppConfigEffect(relayId, created.id)
+
+          assert.include(app?.config.compose, "ghcr.io/billy/site:1")
+          assert.deepInclude(app?.brick, {
+            name: "Billy's stack",
+            revision: 1,
+            source: billys,
+            written: true,
+          })
+        })
+    )
+
+    it.effect("takes a catalog the person sees: theirs, or one published", () =>
+      Effect.gen(function* () {
+        yield* seed(["app.create", "app.manage"])
+        yield* addCatalog("bob", false)
+
+        const refused = yield* createApp({ brick: billys }).pipe(Effect.flip)
+        assert.include(String(refused), "in your catalogs")
+        assert.deepStrictEqual(yield* apps, [])
+        assert.deepStrictEqual(relay.jobs, [])
+
+        yield* resetDatabase
+        yield* seed(["app.create", "app.manage"])
+        yield* addCatalog("bob", true)
+        yield* createApp({ brick: billys })
+        assert.lengthOf(yield* apps, 1)
       })
     )
   })
