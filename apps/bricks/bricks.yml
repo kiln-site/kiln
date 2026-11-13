@@ -20,3 +20,5 @@ recipes:
   - bricks/compose.yml
   - bricks/umami.yml
   - bricks/wordpress.yml
+  - bricks/beszel.yml
+  - bricks/beszel-agent.yml

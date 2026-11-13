@@ -1,0 +1,25 @@
+format: kiln.brick/v2
+kind: app
+metadata:
+  id: beszel
+  name: Beszel
+  revision: 1
+  summary: Lightweight monitoring for your nodes and their containers. This is the hub, where you read it.
+  author: Kiln
+  icon: ../icons/beszel.svg
+  color: "#747bff"
+  tags: [monitoring]
+  links:
+    homepage: "https://beszel.dev"
+    source: "https://github.com/henrygd/beszel"
+    docs: "https://beszel.dev/guide/what-is-beszel"
+# Beszel asks for its first account when its address is first opened. Each
+# node it watches runs the Beszel Agent Brick, with the key and token the
+# hub shows under Add System.
+deploy:
+  type: compose
+  file: ./beszel.kiln.compose.yaml
+  ports:
+    - name: web
+      port: 8090
+      service: beszel
