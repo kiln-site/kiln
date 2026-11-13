@@ -98,7 +98,7 @@ const planGroupEffect = Effect.fn("instanceGroups.create.plan")(function* (
   userId: string
 ) {
   const installed = yield* promiseEffect(() =>
-    installedGroupBrick(input.brick, input.variables ?? {})
+    installedGroupBrick(input.brick, input.variables ?? {}, userId)
   )
   const requestKey = `instance-group.create:${userId}:${input.idempotencyKey}`
   const id = yield* reserveInstanceIdEffect("group", requestKey)
@@ -163,8 +163,7 @@ const createInstanceGroup = operation<
           // carries, takes what doing either in an App's settings does.
           if (
             plan.apps.some(
-              (app) =>
-                (app.ports?.length ?? 0) > 0 || app.runs.type !== "image"
+              (app) => (app.ports?.length ?? 0) > 0 || app.runs.type !== "image"
             )
           ) {
             await requireRelayPermission({

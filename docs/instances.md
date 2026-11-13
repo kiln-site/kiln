@@ -329,8 +329,8 @@ from a tag or an image name today.
    `ready` command is its container's health check. Its `command` starts
    it, and its public ports are published on its Relay. A Brick can carry
    the Compose file or Dockerfile its App runs, as Beszel's hub and agent
-   do. An App Brick is installed from any catalog its installer sees.
-   Still to come: group Bricks from other catalogs.
+   do. An App or group Brick is installed from any catalog its installer
+   sees, and a Brick goes by its ID after whose it is. Done.
 9. Domains for every kind.
 10. One instance page, with each kind's own tabs.
 11. Tailscale as its own kind, with the instance group.
