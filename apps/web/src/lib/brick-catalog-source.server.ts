@@ -9,12 +9,18 @@ import {
   brickIdExceedsRecommendedLength,
   kilnDefaultEmberImage,
   brickCatalogDocumentSchema,
+  brickRecipeSchema,
   readBrickRecipe,
   relayCatalogSchema,
   resolveKilnGitRepository,
   validateBrickIconSvg,
 } from "@workspace/contracts"
-import type { Brick, BrickRecipe, RelayCatalog } from "@workspace/contracts"
+import type {
+  Brick,
+  BrickDeploy,
+  BrickRecipe,
+  RelayCatalog,
+} from "@workspace/contracts"
 import { Effect, Result } from "effect"
 import { parseDocument } from "yaml"
 
@@ -118,19 +124,26 @@ export async function loadBrickCatalogSource(
             .join("; ")}`
         )
       }
+      const written = await withCarriedFiles(
+        read.data,
+        source,
+        resolvedSource.catalogUrl,
+        options.allowFile === true,
+        deadline
+      )
       const parsedRecipe: BrickRecipe =
-        options.distributionRepository && read.data.deploy?.type === "image"
+        options.distributionRepository && written.deploy?.type === "image"
           ? {
-              ...read.data,
+              ...written,
               deploy: {
-                ...read.data.deploy,
+                ...written.deploy,
                 image: kilnDefaultEmberImage(
-                  read.data.deploy.image,
+                  written.deploy.image,
                   options.distributionRepository
                 ),
               },
             }
-          : read.data
+          : written
       const recipe = resolveRecipeIconSource(
         parsedRecipe,
         source,
@@ -177,6 +190,97 @@ export async function loadBrickCatalogSource(
         : []
     ),
   }
+}
+
+/**
+ * Reads the file a Brick carries beside its recipe (`file`), for the Brick
+ * itself and each member of a group, and makes it the Brick's own
+ * `compose` or `dockerfile`: what Hearth keeps of a catalog is whole, and
+ * everything after reads a file written in the Brick. The file is beside
+ * the recipe, in its catalog: one elsewhere is refused.
+ */
+async function withCarriedFiles(
+  recipe: BrickRecipe,
+  recipeSource: URL,
+  catalog: URL,
+  allowFile: boolean,
+  signal: AbortSignal
+): Promise<BrickRecipe> {
+  const carry = async <Deploy extends BrickDeploy | undefined>(
+    deploy: Deploy
+  ): Promise<Deploy> => {
+    if (!deploy || deploy.type === "image" || deploy.file === undefined) {
+      return deploy
+    }
+    const { file, ...rest } = deploy
+    const reference = Result.getOrNull(
+      Result.try(() => new URL(file, recipeSource))
+    )
+    // In its recipe's folder or below it, so a catalog read at a commit
+    // reads its files at that commit too, and nothing of another
+    // repository on the same host. An encoded separator could mean
+    // another folder to whatever serves it.
+    if (
+      reference === null ||
+      /%2f|%5c|\\/iu.test(file) ||
+      !besideRecipe(reference, recipeSource)
+    ) {
+      throw new Error(`${file} isn't beside its recipe`)
+    }
+    const content = await readDocument(
+      reference,
+      catalog,
+      allowFile,
+      signal,
+      { Accept: "text/plain, application/yaml, */*" },
+      // A redirect is followed only to somewhere beside the recipe too.
+      (target) => besideRecipe(target, recipeSource)
+    )
+    return { ...rest, [deploy.type]: content } as unknown as Deploy
+  }
+  const members = recipe.group?.members
+  const carried = {
+    ...recipe,
+    ...(recipe.deploy ? { deploy: await carry(recipe.deploy) } : {}),
+    ...(recipe.group && members
+      ? {
+          group: {
+            ...recipe.group,
+            members: Object.fromEntries(
+              await Promise.all(
+                Object.entries(members).map(async ([key, member]) => [
+                  key,
+                  "deploy" in member
+                    ? { ...member, deploy: await carry(member.deploy) }
+                    : member,
+                ])
+              )
+            ),
+          },
+        }
+      : {}),
+  }
+  if (carried.deploy === recipe.deploy && !members) return recipe
+  // What it read must still make a Brick: a file too long, or empty, doesn't.
+  const checked = brickRecipeSchema.safeParse(carried)
+  if (!checked.success) {
+    throw new Error(
+      `${recipeSource.href}: ${checked.error.issues
+        .slice(0, 4)
+        .map((issue) => `${issue.path.join(".") || "recipe"}: ${issue.message}`)
+        .join("; ")}`
+    )
+  }
+  return checked.data
+}
+
+// Whether a URL is in a recipe's folder or below it, on the same host.
+function besideRecipe(target: URL, recipeSource: URL): boolean {
+  return (
+    target.protocol === recipeSource.protocol &&
+    target.host === recipeSource.host &&
+    target.pathname.startsWith(new URL(".", recipeSource).pathname)
+  )
 }
 
 export async function hydrateBrickCatalogIcons(
@@ -479,7 +583,9 @@ async function readDocument(
   catalog: URL,
   allowFile: boolean,
   signal: AbortSignal,
-  headers?: Readonly<Record<string, string>>
+  headers?: Readonly<Record<string, string>>,
+  /** Where a redirect may lead. Without it, anywhere public over HTTPS. */
+  follows?: (target: URL) => boolean
 ): Promise<string> {
   if (source.protocol === "file:") {
     if (!allowFile || catalog.protocol !== "file:") {
@@ -499,7 +605,7 @@ async function readDocument(
   if (source.protocol !== "https:") {
     throw new Error("Brick documents must use HTTPS")
   }
-  return readHttpsDocument(source, source, 0, signal, headers)
+  return readHttpsDocument(source, source, 0, signal, headers, follows)
 }
 
 function readHttpsDocument(
@@ -509,7 +615,8 @@ function readHttpsDocument(
   signal: AbortSignal,
   headers: Readonly<Record<string, string>> | undefined = {
     Accept: "application/yaml, text/yaml, application/json",
-  }
+  },
+  follows?: (target: URL) => boolean
 ): Promise<string> {
   if (source.protocol !== "https:") {
     return Promise.reject(new Error("Brick source redirected away from HTTPS"))
@@ -544,6 +651,12 @@ function readHttpsDocument(
             )
             return
           }
+          if (follows && !follows(redirected.success)) {
+            rejectDocument(
+              new Error(`${originalSource.href} redirected somewhere else`)
+            )
+            return
+          }
           Effect.runFork(
             promiseEffect(() =>
               readHttpsDocument(
@@ -551,7 +664,8 @@ function readHttpsDocument(
                 originalSource,
                 redirects + 1,
                 signal,
-                headers
+                headers,
+                follows
               )
             ).pipe(
               Effect.match({

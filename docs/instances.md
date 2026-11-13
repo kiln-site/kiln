@@ -208,8 +208,8 @@ that knows v1. Game servers, databases and Apps are installed from a Brick.
 
 An App is installed from an App Brick, which says what it deploys: an
 image, or a Dockerfile or a Compose file. The Brick carries that file,
-written in its recipe, or names one in a source chosen at install, which
-is a repository or a file written in Hearth. Kiln's catalog
+written in its recipe or kept beside it, or names one in a source chosen
+at install, which is a repository or a file written in Hearth. Kiln's catalog
 has one for each (`docker-image`, `dockerfile`, `compose`), and for now only
 those are offered and accepted. Hearth keeps an App's configuration, so
 Hearth turns the Brick and its answers into it
