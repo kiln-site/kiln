@@ -30,7 +30,7 @@ The format describes every kind. Kiln reads them in stages.
 | A database Brick with no type    | Defined here; not installable yet     |
 | App Bricks                       | Run from Kiln's own catalog: what they deploy, how they start, their variables, one web port and the ports they publish |
 | Group Bricks                     | Run from Kiln's own catalog: databases, and Apps from an image connected to them |
-| `dockerfile` and `compose`       | Run for Apps, written in the Brick or from `path` in a source |
+| `dockerfile` and `compose`       | Run for Apps: written in the Brick, kept beside its recipe (`file`), or from `path` in a source |
 | `ready` by command               | Run for databases, and for Apps from an image or a Dockerfile; game servers use logs |
 | `ready` by HTTP                  | Defined here; nothing runs it yet     |
 | Ports that aren't `public`       | Defined here; not for game servers    |
@@ -234,8 +234,8 @@ are passed on as they are.
 | Type         | Runs                                                                      | Needs a source   |
 | ------------ | ------------------------------------------------------------------------- | ---------------- |
 | `image`      | `image`, a Docker image                                                   | No               |
-| `dockerfile` | A build of `dockerfile` (written in the Brick) or of `path` in the source | Only with `path` |
-| `compose`    | `compose` (written in the Brick) or the file at `path` in the source      | Only with `path` |
+| `dockerfile` | A build of `dockerfile` (written in the Brick), of `file` beside the recipe, or of `path` in the source | Only with `path` |
+| `compose`    | `compose` (written in the Brick), `file` beside the recipe, or the file at `path` in the source         | Only with `path` |
 
 Every type takes:
 
@@ -433,6 +433,23 @@ deploy:
         environment:
           APP_SECRET: ${APP_SECRET}
 ```
+
+A Brick can keep that file beside its recipe instead, and name it with
+`file`, relative to the recipe as its icon is:
+
+```yaml
+deploy:
+  type: compose
+  file: ./site.kiln.compose.yaml
+```
+
+A catalog reads the file when it loads the recipe, and the Brick is from
+then on the one that has it written in it: everything above holds for it
+the same. The file is whatever the recipe names; Kiln's own are called
+`<brick>.kiln.compose.yaml`. It must be in its recipe's folder or below
+it, so a catalog read at a commit reads the file at that commit too: one
+somewhere else is refused, as is a redirect that leads elsewhere, and so
+is one too long to be a Brick's.
 
 An App made from such a Brick needs no source and deploys at once. The
 file is the Brick's while the App follows it, as an image is: a revision

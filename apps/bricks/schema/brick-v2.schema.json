@@ -460,6 +460,11 @@
               "minLength": 1,
               "maxLength": 65536
             },
+            "file": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
             "path": {
               "type": "string",
               "minLength": 1,
@@ -660,6 +665,11 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 262144
+            },
+            "file": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
             },
             "path": {
               "type": "string",
@@ -1172,6 +1182,11 @@
                             "minLength": 1,
                             "maxLength": 65536
                           },
+                          "file": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1024
+                          },
                           "path": {
                             "type": "string",
                             "minLength": 1,
@@ -1372,6 +1387,11 @@
                             "type": "string",
                             "minLength": 1,
                             "maxLength": 262144
+                          },
+                          "file": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1024
                           },
                           "path": {
                             "type": "string",

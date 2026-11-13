@@ -168,6 +168,16 @@ const containerShared = {
 const optional = <Shape extends z.ZodRawShape>(shape: Shape) =>
   z.object(shape).partial().shape
 
+/**
+ * Where the file a Brick carries is, relative to its recipe, as its icon
+ * is: a catalog reads it when it loads the recipe, and it is the Brick's
+ * `dockerfile` or `compose` from then on. Whatever it is called.
+ */
+const carriedFileSchema = z.string().trim().min(1).max(1_024)
+
+const given = (...values: ReadonlyArray<unknown>) =>
+  values.filter((value) => value !== undefined).length
+
 export const brickDeploySchema = z.discriminatedUnion("type", [
   z.strictObject({
     type: z.literal("image"),
@@ -178,31 +188,37 @@ export const brickDeploySchema = z.discriminatedUnion("type", [
   z
     .strictObject({
       type: z.literal("dockerfile"),
-      /** The Dockerfile itself, or `path` to one in the source. */
+      /**
+       * The Dockerfile itself; or `file`, where it is beside the recipe; or
+       * `path` to one in the source.
+       */
       dockerfile: z.string().min(1).max(65_536).optional(),
+      file: carriedFileSchema.optional(),
       path: z.string().min(1).max(1_024).optional(),
       ...optional(containerShared),
       ...optional(deployShared),
     })
     .refine(
-      (deploy) =>
-        (deploy.dockerfile === undefined) !== (deploy.path === undefined),
-      { message: "Give either dockerfile or path" }
+      (deploy) => given(deploy.dockerfile, deploy.file, deploy.path) === 1,
+      { message: "Give one of dockerfile, file or path" }
     ),
   z
     .strictObject({
       type: z.literal("compose"),
-      /** The Compose file itself, or `path` to one in the source. */
+      /**
+       * The Compose file itself; or `file`, where it is beside the recipe;
+       * or `path` to one in the source.
+       */
       compose: z.string().min(1).max(262_144).optional(),
+      file: carriedFileSchema.optional(),
       path: z.string().min(1).max(1_024).optional(),
       /** The service whose console and logs open first. */
       service: nameSchema.optional(),
       ...optional(deployShared),
     })
     .refine(
-      (deploy) =>
-        (deploy.compose === undefined) !== (deploy.path === undefined),
-      { message: "Give either compose or path" }
+      (deploy) => given(deploy.compose, deploy.file, deploy.path) === 1,
+      { message: "Give one of compose, file or path" }
     ),
 ])
 export type BrickDeploy = z.infer<typeof brickDeploySchema>
