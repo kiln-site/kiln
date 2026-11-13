@@ -52,7 +52,10 @@ async function requiredAppBrick(
  */
 export async function offeredAppBricks(userId: string): Promise<Array<Brick>> {
   const { groupBricks } = await import("@/server/group-bricks.server")
-  const [apps, groups] = await Promise.all([offeredApps(userId), groupBricks()])
+  const [apps, groups] = await Promise.all([
+    offeredApps(userId),
+    groupBricks(userId),
+  ])
   return [
     ...apps.map(({ brick }) => brick),
     ...groups.filter((group) =>

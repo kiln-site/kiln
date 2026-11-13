@@ -11,20 +11,19 @@ import {
 } from "@workspace/contracts"
 
 import { makeBrickSecret } from "@/server/app-bricks.server"
-import { defaultBrickCatalog } from "@/server/brick-catalogs.server"
 import { databaseBricks } from "@/server/database-bricks.server"
 import { requiredCredential } from "@/server/managed-database-access"
+import { visibleBricks } from "@/server/visible-bricks.server"
 
-// The group Bricks Kiln installs: those of its own catalog that do only
-// what Kiln does for a group so far, each of whose databases is made from
-// one of that catalog's database Bricks. Another catalog's aren't offered
-// or accepted yet, as its App and database Bricks aren't.
+// The group Bricks Kiln installs: those, of every catalog whoever installs
+// one sees, that do only what Kiln does for a group so far. Each of its
+// databases is made from one of Kiln's own database Bricks, whichever
+// catalog the group is in: another catalog's database Bricks aren't run.
 
-/** Every group Brick a group may be installed from. */
-export async function groupBricks(): Promise<Array<Brick>> {
-  const catalog = await defaultBrickCatalog()
-  return (catalog?.bricks ?? []).filter(
-    (brick) => groupBrickProblem(brick) === null
+/** Every group Brick this person may install a group from. */
+export async function groupBricks(userId: string): Promise<Array<Brick>> {
+  return (await visibleBricks(userId)).flatMap(({ brick }) =>
+    groupBrickProblem(brick) === null ? [brick] : []
   )
 }
 
@@ -37,7 +36,7 @@ export interface InstalledGroupBrick {
   databases: Array<{
     /** Its database Brick, by its source. */
     brick: string
-    /** And by its ID in the group Brick's catalog, as the group keeps it. */
+    /** And by its ID in Kiln's own catalog, as the group keeps it. */
     brickId: string
     key: string
     variables: Record<string, BrickVariableValue>
@@ -47,12 +46,13 @@ export interface InstalledGroupBrick {
 /** What the group Brick at a source makes with these answers. */
 export async function installedGroupBrick(
   source: string,
-  answers: Readonly<Record<string, BrickVariableValue>>
+  answers: Readonly<Record<string, BrickVariableValue>>,
+  userId: string
 ): Promise<InstalledGroupBrick> {
-  const brick = (await groupBricks()).find(
+  const brick = (await groupBricks(userId)).find(
     (candidate) => candidate.source === source
   )
-  if (!brick) throw new Error("This isn't one of Kiln's group Bricks")
+  if (!brick) throw new Error("This isn't a group Brick in your catalogs")
   const { iconSvg: _iconSvg, source: _source, ...recipe } = brick
   const installed = groupBrickInstall(
     recipe,

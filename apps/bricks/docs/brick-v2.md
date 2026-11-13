@@ -29,7 +29,7 @@ The format describes every kind. Kiln reads them in stages.
 | A database's `connection`        | Defined here; Kiln builds a type's URL itself |
 | A database Brick with no type    | Defined here; not installable yet     |
 | App Bricks                       | Run from any catalog: what they deploy, how they start, their variables, one web port and the ports they publish |
-| Group Bricks                     | Run from Kiln's own catalog: databases, and Apps connected to them that run an image or a file the recipe carries |
+| Group Bricks                     | Run from any catalog: Kiln's own databases, and Apps connected to them that run an image or a file the recipe carries |
 | `dockerfile` and `compose`       | Run for Apps: written in the Brick, kept beside its recipe (`file`), or from `path` in a source |
 | `ready` by command               | Run for databases, and for Apps from an image or a Dockerfile; game servers use logs |
 | `ready` by HTTP                  | Defined here; nothing runs it yet     |
@@ -585,11 +585,12 @@ A database inside a Compose project is only a container. As a group member it
 is a database of its own, with the viewer, dumps, backups and permissions a
 database has.
 
-So far Kiln installs this much of a group, and refuses a group Brick that
-does more, as it refuses one from another catalog:
+So far Kiln installs this much of a group, from any catalog whoever installs
+it sees, and refuses a group Brick that does more:
 
-- A member that names a Brick is a database, made from that database Brick
-  of the same catalog, by its ID. Its `inputs` are its answers.
+- A member that names a Brick is a database, made from Kiln's own database
+  Brick by that ID (`postgres`, `mysql`, `mariadb`, `redis`, `valkey`),
+  whichever catalog the group is in. Its `inputs` are its answers.
 - A member written in place is an App of any kind an App Brick can be: one
   that runs an image, or a Dockerfile or Compose file its recipe carries,
   written in it or kept beside it. One whose file is in a source (`path`)

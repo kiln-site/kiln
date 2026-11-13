@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
 import type { AppMount } from "@workspace/contracts"
+import { relayCatalogSchema } from "@workspace/contracts"
 import { Effect } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
+import { saveBrickCatalogEffect } from "@/effect/brick-catalogs"
 import {
   instanceGroupOfEffect,
   changeInstanceGroupBrickEffect,
@@ -461,6 +463,92 @@ describeMysql("Installing a group Brick", () => {
           assert.deepStrictEqual(relay.jobs, [])
           assert.strictEqual(yield* count("instance_group"), 1)
           assert.strictEqual(yield* count("database"), 1)
+        })
+    )
+
+    // A group in someone else's catalog brings its Apps; a database it
+    // names is still one of Kiln's own, by its ID.
+    it.effect(
+      "installs one from a catalog its installer sees, with Kiln's own database Brick",
+      () =>
+        Effect.gen(function* () {
+          const read = "b".repeat(40)
+          const billys = `https://raw.githubusercontent.com/billy/bricks/${read}/wiki.yml`
+          const addCatalog = (owner: string) =>
+            saveBrickCatalogEffect({
+              ownerUserId: owner,
+              revisionSha: read,
+              revisionUrl: `https://github.com/billy/bricks/blob/${read}/catalog.yml`,
+              snapshot: relayCatalogSchema.parse({
+                format: "kiln.catalog/v1",
+                name: "Billy's",
+                bricks: [
+                  {
+                    format: "kiln.brick/v2",
+                    kind: "group",
+                    metadata: {
+                      id: "wiki",
+                      name: "Wiki",
+                      summary: "An example.",
+                      author: "Billy",
+                    },
+                    group: {
+                      members: {
+                        database: { brick: "postgres" },
+                        web: {
+                          kind: "app",
+                          deploy: {
+                            type: "image",
+                            image: "ghcr.io/billy/wiki:1",
+                          },
+                          connect: {
+                            database: { DATABASE_URL: "{{ connection }}" },
+                          },
+                        },
+                      },
+                    },
+                    source: billys,
+                  },
+                ],
+              }),
+              snapshotSha256: "0".repeat(64),
+              source: "https://github.com/billy/bricks",
+            })
+          const installBillys = Effect.promise(() =>
+            createInstanceGroupFor(person("alice"), {
+              brick: billys,
+              idempotencyKey: crypto.randomUUID(),
+              name: "Wiki",
+              relayId,
+            }).then(
+              (created) => ({ created, refused: null }),
+              (refused: unknown) => ({
+                created: null,
+                refused: String(refused),
+              })
+            )
+          )
+
+          // In a catalog only someone else sees, it isn't hers to install.
+          yield* seed(["app.create", "database.create"])
+          yield* insertUser("bob")
+          yield* addCatalog("bob")
+          assert.include((yield* installBillys).refused, "in your catalogs")
+          assert.deepStrictEqual(relay.jobs, [])
+
+          yield* seed(["app.create", "database.create"])
+          yield* addCatalog("alice")
+          const { created } = yield* installBillys
+          const [app] = created?.apps ?? []
+          const config = yield* loadAppConfigEffect(relayId, app?.id ?? "")
+          assert.strictEqual(config?.config.image, "ghcr.io/billy/wiki:1")
+          assert.strictEqual(config?.brick?.source, billys)
+          // Its database is Kiln's PostgreSQL Brick's.
+          assert.strictEqual(yield* count("database"), 1)
+          assert.match(
+            config?.config.environment ?? "",
+            /^DATABASE_URL=postgresql:\/\//u
+          )
         })
     )
   })
