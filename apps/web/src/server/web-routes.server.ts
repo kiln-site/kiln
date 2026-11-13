@@ -33,7 +33,7 @@ import {
   generateAppHostnameEffect,
   publishWebHostnameChange,
   type WebHostnameProxyChange,
-} from "@/server/web-hostnames.server"
+} from "@/server/addresses.server"
 
 // An instance's web routes: read and saved one way, whatever kind it is.
 // Its Relay keeps them and says whether its proxy serves them yet; Hearth

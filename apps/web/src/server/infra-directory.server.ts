@@ -10,7 +10,7 @@ import { listInstanceDirectoryEffect } from "@/lib/instance-directory"
 import {
   loadManagedDomainAddressesEffect,
   managedAddressForInstance,
-} from "@/server/domains.server"
+} from "@/server/addresses.server"
 
 export const readInfraServerDirectory = Effect.fn("Infra.directory.servers")(
   function* (user: AuthenticatedUser) {

@@ -15,7 +15,7 @@ import { relayRpc } from "@/lib/relay-connection"
 import { startPollingWorker, type WorkerPass } from "@/lib/polling-worker"
 import { listPersistedRelays } from "@/lib/relay-registry"
 import { finishServerInstall } from "@/lib/server-deployments.server"
-import { provisionInstanceDomain } from "@/server/domains.server"
+import { provisionInstanceDomain } from "@/server/addresses.server"
 
 interface PostProvisionRow extends RowDataPacket {
   attempts: number

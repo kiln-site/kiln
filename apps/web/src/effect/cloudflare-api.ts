@@ -184,23 +184,6 @@ export const listCloudflareRecordsEffect = Effect.fn("cloudflare.dns.list")(
   }
 )
 
-export const createCloudflareAddressRecordEffect = Effect.fn(
-  "cloudflare.dns.createAddress"
-)(function* (
-  apiToken: string,
-  zoneId: string,
-  record: CloudflareAddressRecord,
-  comment: string
-) {
-  return yield* mutateCloudflareRecord(
-    apiToken,
-    zoneId,
-    undefined,
-    webAddressRecordBody(record, comment),
-    "POST"
-  )
-})
-
 export const createCloudflareSrvRecordEffect = Effect.fn(
   "cloudflare.dns.createSrv"
 )(function* (
@@ -213,71 +196,15 @@ export const createCloudflareSrvRecordEffect = Effect.fn(
     apiToken,
     zoneId,
     undefined,
-    {
-      comment,
-      data: {
-        port: record.port,
-        priority: record.priority,
-        target: record.target,
-        weight: record.weight,
-      },
-      name: record.name,
-      ttl: 1,
-      type: "SRV",
-    },
+    srvRecordBody(record, comment),
     "POST"
   )
 })
 
-export const updateCloudflareAddressRecordEffect = Effect.fn(
-  "cloudflare.dns.updateAddress"
-)(function* (
-  apiToken: string,
-  zoneId: string,
-  recordId: string,
-  record: CloudflareAddressRecord,
-  comment: string
-) {
-  return yield* mutateCloudflareRecord(
-    apiToken,
-    zoneId,
-    recordId,
-    webAddressRecordBody(record, comment),
-    "PATCH"
-  )
-})
-
-export const replaceCloudflareAddressRecordEffect = Effect.fn(
-  "cloudflare.dns.replaceAddress"
-)(function* (
-  apiToken: string,
-  zoneId: string,
-  recordId: string,
-  record: CloudflareAddressRecord,
-  comment: string
-) {
-  const result = yield* requestCloudflareResult(
-    apiToken,
-    `/zones/${encodeURIComponent(zoneId)}/dns_records/batch`,
-    CloudflareDnsRecordBatchSchema,
-    {
-      body: JSON.stringify({
-        deletes: [{ id: recordId }],
-        posts: [webAddressRecordBody(record, comment)],
-      }),
-      headers: { "Content-Type": "application/json" },
-      method: "POST",
-    }
-  )
-  const replacement = result.posts[0]
-  if (!replacement) {
-    return yield* cloudflareFailure(
-      "Cloudflare did not return the replacement DNS record"
-    )
-  }
-  return replacement
-})
-
+/**
+ * Points an SRV record at another name, port or target. Null when the
+ * record no longer exists; any other failure fails.
+ */
 export const updateCloudflareSrvRecordEffect = Effect.fn(
   "cloudflare.dns.updateSrv"
 )(function* (
@@ -287,23 +214,16 @@ export const updateCloudflareSrvRecordEffect = Effect.fn(
   record: CloudflareSrvRecord,
   comment: string
 ) {
-  return yield* mutateCloudflareRecord(
+  return yield* requestCloudflareResult(
     apiToken,
-    zoneId,
-    recordId,
+    `/zones/${encodeURIComponent(zoneId)}/dns_records/${encodeURIComponent(recordId)}`,
+    Schema.NullOr(CloudflareDnsRecordSchema),
     {
-      comment,
-      data: {
-        port: record.port,
-        priority: record.priority,
-        target: record.target,
-        weight: record.weight,
-      },
-      name: record.name,
-      ttl: 1,
-      type: "SRV",
+      body: JSON.stringify(srvRecordBody(record, comment)),
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
     },
-    "PATCH"
+    { notFoundResult: null }
   )
 })
 
@@ -435,6 +355,21 @@ function mutateCloudflareRecord(
       method,
     }
   )
+}
+
+function srvRecordBody(record: CloudflareSrvRecord, comment: string) {
+  return {
+    comment,
+    data: {
+      port: record.port,
+      priority: record.priority,
+      target: record.target,
+      weight: record.weight,
+    },
+    name: record.name,
+    ttl: 1,
+    type: "SRV",
+  }
 }
 
 function webAddressRecordBody(
