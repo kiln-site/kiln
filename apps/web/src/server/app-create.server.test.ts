@@ -153,7 +153,26 @@ vi.mock("@/server/brick-catalogs.server", async () => {
     },
     source: "https://bricks.test/blog.yml",
   })
-  return { defaultBrickCatalog: async () => ({ bricks: [...bricks, blog] }) }
+  // An App Brick that publishes a port on its Relay.
+  const mail = brickSchema.parse({
+    format: "kiln.brick/v2",
+    kind: "app",
+    metadata: {
+      id: "mail",
+      name: "Mail",
+      summary: "An example.",
+      author: "Kiln",
+    },
+    deploy: {
+      type: "image",
+      image: "ghcr.io/acme/mail:1",
+      ports: [{ name: "smtp", port: 25, expose: "public", host: 2525 }],
+    },
+    source: "https://bricks.test/mail.yml",
+  })
+  return {
+    defaultBrickCatalog: async () => ({ bricks: [...bricks, blog, mail] }),
+  }
 })
 vi.mock("@/server/web-hostname-access.server", () => ({
   generateAppHostnameBestEffort: () => Promise.resolve(),
@@ -452,6 +471,26 @@ describeMysql("Creating an App with a database", () => {
             [created.id, blog.id].sort()
           )
           assert.deepStrictEqual(relay.jobs, [created.id, blog.id])
+        })
+    )
+
+    // A port published on the Relay is reachable by anyone who can reach
+    // the Relay. Publishing one in an App's settings takes `app.manage`,
+    // so installing a Brick that publishes one takes it too.
+    it.effect(
+      "won't install a Brick that publishes a port for someone who may only create Apps",
+      () =>
+        Effect.gen(function* () {
+          yield* seed(["app.create"])
+          const mail = { brick: "https://bricks.test/mail.yml", name: "Mail" }
+
+          const refused = yield* createApp(mail).pipe(Effect.flip)
+          assert.include(String(refused), "permission")
+          assert.lengthOf(yield* apps, 0)
+
+          yield* seed(["app.create", "app.manage"])
+          yield* createApp(mail)
+          assert.lengthOf(yield* apps, 1)
         })
     )
 

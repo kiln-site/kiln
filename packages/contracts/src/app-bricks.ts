@@ -9,8 +9,9 @@ import {
   type BrickRecipe,
 } from "./brick-recipe.js"
 
-// What Kiln runs of an App Brick so far: what it deploys, the variables it
-// sets, the port its website answers on, and the folders it keeps. Hearth
+// What Kiln runs of an App Brick so far: what it deploys and how it starts,
+// the variables it sets, the port its website answers on, the ports it
+// publishes on its Relay, and the folders it keeps. Hearth
 // keeps an App's configuration, so Hearth turns the Brick and its answers
 // into it, and the Relay deploys that configuration as it always has.
 
@@ -21,6 +22,13 @@ import {
 export interface AppBrickWeb {
   port: number
   service?: string
+}
+
+/** A port of its container an App publishes on its Relay, as an App's are. */
+export interface AppBrickPublishedPort {
+  containerPort: number
+  hostPort: number
+  protocol: "tcp" | "udp"
 }
 
 /**
@@ -43,6 +51,14 @@ export type AppBrickDeploy = (
    * volume made when it is installed. A Compose project keeps its own.
    */
   volumes: ReadonlyArray<string>
+  /**
+   * What its container runs in place of its image's command, when the
+   * Brick says: one line, as an App's start command is written, which reads
+   * back as the Brick's arguments (`appCommandLine`).
+   */
+  command?: string
+  /** The ports it publishes on its Relay, when the Brick has public ones. */
+  ports?: ReadonlyArray<AppBrickPublishedPort>
   /**
    * The command that succeeds in its container once it is ready, when the
    * Brick gives one: its container's health check. A Compose project says
@@ -73,11 +89,14 @@ export const genericAppBrickIds: ReadonlySet<string> = new Set([
 /** As long as the image an App's configuration names may be. */
 export const APP_IMAGE_MAX_LENGTH = 512
 
+/** As long as an App's start command may be, written as one line. */
+export const APP_COMMAND_MAX_LENGTH = 4_000
+
 // The parts of `deploy` Kiln runs for an App, by type.
 const deployed: Record<AppBrickDeployType, ReadonlyArray<string>> = {
   compose: ["type", "path", "ports"],
-  dockerfile: ["type", "path", "ports", "ready", "volumes"],
-  image: ["type", "image", "env", "ports", "ready", "volumes"],
+  dockerfile: ["type", "path", "command", "ports", "ready", "volumes"],
+  image: ["type", "image", "command", "env", "ports", "ready", "volumes"],
 }
 
 // A folder an App Brick keeps: a path a volume can be mounted at, as an
@@ -103,27 +122,82 @@ function volumesProblem(volumes: ReadonlyArray<string>): string | null {
     : `An App Brick keeps each folder once (${twice})`
 }
 
-// The one port of an App Brick Kiln runs: where its website answers.
-// Anything a port says beyond that is refused until Kiln runs it.
-function webPortProblem(
+// How an App Brick's port is reached: through the proxy unless it says.
+const exposed = (port: BrickPort) => port.expose ?? "http"
+
+// The ports of an App Brick Kiln runs: one where its website answers, and
+// any it publishes on its Relay. Anything a port says beyond that is
+// refused until Kiln runs it.
+function portsProblem(
   type: AppBrickDeployType,
   ports: ReadonlyArray<BrickPort>
 ): string | null {
-  const [port, another] = ports
-  if (port === undefined) return null
-  if (another !== undefined) {
-    return "Kiln gives an App Brick one web port for now"
-  }
-  if ((port.expose ?? "http") !== "http") {
-    return "Kiln only routes an App Brick's web port for now"
-  }
-  if (port.protocol !== undefined && port.protocol !== "tcp") {
-    return "A web port is TCP"
-  }
-  if (type === "compose" && port.service === undefined) {
-    return "A Compose project's web port names its service"
+  const published = new Set<string>()
+  let web = false
+  for (const port of ports) {
+    if (exposed(port) === "private") {
+      return "Kiln doesn't run an App Brick's private ports yet"
+    }
+    if (exposed(port) === "http") {
+      if (web) return "Kiln gives an App Brick one web port for now"
+      web = true
+      if (port.protocol !== undefined && port.protocol !== "tcp") {
+        return "A web port is TCP"
+      }
+      if (type === "compose" && port.service === undefined) {
+        return "A Compose project's web port names its service"
+      }
+      continue
+    }
+    if (type === "compose") {
+      return "A Compose project publishes its ports in its own file"
+    }
+    // Kiln picks no port on the Relay for an App yet, so the Brick says.
+    if (port.host === undefined) {
+      return `An App Brick's public port names its port on the Relay, as host (${port.name})`
+    }
+    for (const protocol of portProtocols(port)) {
+      const key = `${port.host}/${protocol}`
+      if (published.has(key)) {
+        return `An App Brick publishes each port on the Relay once (${key})`
+      }
+      published.add(key)
+    }
   }
   return null
+}
+
+const portProtocols = (port: BrickPort): ReadonlyArray<"tcp" | "udp"> =>
+  port.protocol === "both" ? ["tcp", "udp"] : [port.protocol ?? "tcp"]
+
+/**
+ * Which ports of its container a Brick publishes, as an App keeps of the
+ * Brick it follows: each as `25/tcp`, in order, whatever port of the Relay
+ * each is published on, which is its owner's to change.
+ */
+export function appBrickPublishes(
+  ports: ReadonlyArray<AppBrickPublishedPort> | undefined
+): Array<string> {
+  return [
+    ...new Set(
+      (ports ?? []).map((port) => `${port.containerPort}/${port.protocol}`)
+    ),
+  ].sort()
+}
+
+/**
+ * A Brick's start command as an App's configuration writes one: a line the
+ * Relay splits back into the same arguments, whatever they hold. An
+ * argument with a space, a quote or nothing in it is quoted.
+ */
+export function appCommandLine(command: ReadonlyArray<string>): string {
+  return command
+    .map((word) =>
+      /^[A-Za-z0-9_@%+=:,./-]+$/u.test(word)
+        ? word
+        : `'${word.replaceAll("'", "'\\''")}'`
+    )
+    .join(" ")
 }
 
 /**
@@ -148,8 +222,18 @@ export function appBrickProblem(recipe: BrickRecipe): string | null {
   if (deploy.ready !== undefined && !("command" in deploy.ready)) {
     return "Kiln checks an App Brick is ready by a command for now"
   }
+  // Kept on one line, as an App's start command is, and no longer than
+  // one may be once its arguments are quoted: a longer one can't be cut.
+  if (deploy.type !== "compose" && deploy.command !== undefined) {
+    if (deploy.command.some((word) => /[\r\n\0]/u.test(word))) {
+      return "An App Brick's start command can't hold a line break"
+    }
+    if (appCommandLine(deploy.command).length > APP_COMMAND_MAX_LENGTH) {
+      return "This Brick's start command is longer than an App's can be"
+    }
+  }
   return (
-    webPortProblem(deploy.type, deploy.ports ?? []) ??
+    portsProblem(deploy.type, deploy.ports ?? []) ??
     volumesProblem(appBrickVolumes(recipe))
   )
 }
@@ -230,34 +314,58 @@ export function appBrickDeploy(
   const answers = brickAnswers(inputs, given)
   const refused = brickAnswersProblem(inputs, answers)
   if (refused !== null) return { problem: refused.message }
-  // Its web port, as written or as an input answers it. An optional input
-  // left blank says it has none.
-  const [port] = deploy.ports ?? []
-  const answered =
-    port === undefined
-      ? undefined
-      : typeof port.port === "number"
+  // Each port, as written or as an input answers it. An optional input left
+  // blank says the App has none there: no website, or nothing published.
+  let web: { web: AppBrickWeb } | Record<string, never> = {}
+  const published: Array<AppBrickPublishedPort> = []
+  for (const port of deploy.ports ?? []) {
+    const answered =
+      typeof port.port === "number"
         ? port.port
         : answers[brickTemplateInput(port.port) ?? ""]
-  if (
-    answered !== undefined &&
-    !(
-      typeof answered === "number" &&
-      Number.isInteger(answered) &&
-      answered >= 1 &&
-      answered <= 65_535
-    )
-  ) {
-    return { problem: "This Brick's web port isn't a port" }
+    if (answered === undefined) continue
+    if (
+      !(
+        typeof answered === "number" &&
+        Number.isInteger(answered) &&
+        answered >= 1 &&
+        answered <= 65_535
+      )
+    ) {
+      return {
+        problem:
+          exposed(port) === "http"
+            ? "This Brick's web port isn't a port"
+            : `This Brick's ${port.name} port isn't a port`,
+      }
+    }
+    if (exposed(port) === "http") {
+      web = {
+        web: {
+          port: answered,
+          ...(port.service === undefined ? {} : { service: port.service }),
+        },
+      }
+      continue
+    }
+    for (const protocol of portProtocols(port)) {
+      // `appBrickProblem` refused a public port with no host.
+      published.push({
+        containerPort: answered,
+        hostPort: port.host ?? answered,
+        protocol,
+      })
+    }
   }
-  const web =
-    answered === undefined
+  // What it starts with and publishes, for an image or a Dockerfile.
+  const runs =
+    deploy.type === "compose"
       ? {}
       : {
-          web: {
-            port: answered,
-            ...(port?.service === undefined ? {} : { service: port.service }),
-          },
+          ...(deploy.command === undefined || deploy.command.length === 0
+            ? {}
+            : { command: appCommandLine(deploy.command) }),
+          ...(published.length === 0 ? {} : { ports: published }),
         }
   const volumes = appBrickVolumes(recipe)
   if (deploy.type !== "image") {
@@ -268,6 +376,7 @@ export function appBrickDeploy(
         type: deploy.type,
         volumes,
         ...appBrickReady(recipe),
+        ...runs,
         ...web,
       },
     }
@@ -309,6 +418,7 @@ export function appBrickDeploy(
       type: "image",
       volumes,
       ...appBrickReady(recipe),
+      ...runs,
       ...web,
     },
   }

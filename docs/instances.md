@@ -222,8 +222,9 @@ it ([Instance updates](instance-updates.md#which-apps-follow-a-brick)). A
 Brick sets an App's image and its variables, and Kiln makes the secrets it
 asks for. The folders it keeps are each on a Kiln volume, made with the
 App and mounted before its first deployment. Its `ready` command is its
-container's health check, which a deployment waits on. Still to come: its
-other ports, and App Bricks from other catalogs.
+container's health check, which a deployment waits on. Its `command` is the
+App's start command, and its public ports are published on its Relay.
+Still to come: App Bricks from other catalogs.
 
 Adding any of them opens the same dialog (`AddInstanceDialogHost`): pick
 the kind, pick its Brick, then answer what that kind asks. Each page's Add
@@ -320,9 +321,9 @@ from a tag or an image name today.
    catalog Brick follows it: it is offered the Brick's newer revisions, and
    can be detached. Its web port gets a new App its address and first web
    route, each folder it keeps is on a volume from the start, and its
-   `ready` command is its container's health check. Still to come of what
-   a Brick says: its other ports, and App and group Bricks from other
-   catalogs.
+   `ready` command is its container's health check. Its `command` starts
+   it, and its public ports are published on its Relay. Still to come:
+   App and group Bricks from other catalogs.
 9. Domains for every kind.
 10. One instance page, with each kind's own tabs.
 11. Tailscale as its own kind, with the instance group.

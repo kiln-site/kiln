@@ -40,6 +40,7 @@ import {
   brickVolumes,
   type BrickVolume,
 } from "@/server/app-brick-volumes.server"
+import { publishedBy } from "@/server/app-bricks.server"
 import { addressNewApp, provisionApp } from "@/server/app-create.server"
 import { askAppDeploy } from "@/server/app-deploy-ask.server"
 import { createDatabase } from "@/server/database-create.server"
@@ -154,6 +155,15 @@ const createInstanceGroup = operation<
           if (plan.apps.length > 0) {
             await requireRelayPermission({
               permission: "app.create",
+              relayId,
+              user: person,
+            })
+          }
+          // Publishing a port on the Relay takes what publishing one in an
+          // App's settings does.
+          if (plan.apps.some((app) => (app.ports?.length ?? 0) > 0)) {
+            await requireRelayPermission({
+              permission: "app.manage",
               relayId,
               user: person,
             })
@@ -311,6 +321,7 @@ async function makeMembers(
             environment: Object.keys(variables),
             member: app.key,
             name: plan.brick.name,
+            ...publishedBy(app.ports),
             revision: plan.brick.revision,
             source: plan.brick.source,
             volumes: [...app.volumes],
@@ -319,8 +330,10 @@ async function makeMembers(
             (key) => ids[key] ?? []
           ),
           deploys: {
+            ...(app.command === undefined ? {} : { command: app.command }),
             environment: variables,
             image: app.image,
+            ...(app.ports === undefined ? {} : { ports: app.ports }),
             ...(app.ready === undefined ? {} : { ready: app.ready }),
             type: "image",
             volumes: app.volumes,

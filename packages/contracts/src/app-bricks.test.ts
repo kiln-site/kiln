@@ -119,10 +119,7 @@ describe("an App Brick", () => {
     expect(appBrickProblem(stack({ name: "web", port: 80 }))).toBe(
       "A Compose project's web port names its service"
     )
-    // A port published on the host, or a second one, isn't run yet.
-    expect(
-      appBrickProblem(served([{ name: "game", port: 25565, expose: "public" }]))
-    ).toBe("Kiln only routes an App Brick's web port for now")
+    // A second website isn't run yet.
     expect(
       appBrickProblem(
         served([
@@ -131,6 +128,101 @@ describe("an App Brick", () => {
         ])
       )
     ).toBe("Kiln gives an App Brick one web port for now")
+  })
+
+  // A public port is one anyone can reach on the Relay: it must be exactly
+  // the port the Brick says, and no other.
+  it("publishes its public ports on the Relay, each once, beside its website", () => {
+    const served = (ports: Array<unknown>, inputs: Array<unknown> = []) =>
+      recipe({ inputs, deploy: { type: "image", image: "mail:1", ports } })
+    const smtp = { name: "smtp", port: 25, expose: "public", host: 2525 }
+    expect(
+      appBrickDeploy(
+        served([
+          { name: "web", port: 8080 },
+          smtp,
+          { name: "dns", port: 53, expose: "public", host: 53, protocol: "both" },
+        ]),
+        {}
+      )
+    ).toMatchObject({
+      deploy: {
+        ports: [
+          { containerPort: 25, hostPort: 2525, protocol: "tcp" },
+          { containerPort: 53, hostPort: 53, protocol: "tcp" },
+          { containerPort: 53, hostPort: 53, protocol: "udp" },
+        ],
+        web: { port: 8080 },
+      },
+    })
+    // An App with no website is one too.
+    expect(appBrickDeploy(served([smtp]), {})).not.toHaveProperty("deploy.web")
+    // An optional input left blank publishes nothing there.
+    const asked = served(
+      [{ name: "smtp", port: "{{ port }}", expose: "public", host: 2525 }],
+      [{ key: "port", label: "Port", type: "number", optional: true }]
+    )
+    expect(appBrickDeploy(asked, {})).not.toHaveProperty("deploy.ports")
+    expect(appBrickDeploy(asked, { port: 0 })).toEqual({
+      problem: "This Brick's smtp port isn't a port",
+    })
+
+    // Kiln picks no port on the Relay for an App, so the Brick must say.
+    expect(
+      appBrickProblem(served([{ name: "smtp", port: 25, expose: "public" }]))
+    ).toBe(
+      "An App Brick's public port names its port on the Relay, as host (smtp)"
+    )
+    expect(
+      appBrickProblem(served([smtp, { ...smtp, name: "again", port: 26 }]))
+    ).toBe("An App Brick publishes each port on the Relay once (2525/tcp)")
+    expect(
+      appBrickProblem(served([{ name: "metrics", port: 9090, expose: "private" }]))
+    ).toBe("Kiln doesn't run an App Brick's private ports yet")
+    // A Compose project publishes its own.
+    expect(
+      appBrickProblem(
+        recipe({
+          deploy: { type: "compose", path: "compose.yaml", ports: [smtp] },
+        })
+      )
+    ).toBe("A Compose project publishes its ports in its own file")
+  })
+
+  // The Relay splits an App's start command into arguments again, so what
+  // a Brick's arguments are written as must read back as exactly those.
+  it("writes its start command as a line that keeps each argument whole", () => {
+    const started = (command: Array<string>) =>
+      appBrickDeploy(
+        recipe({ deploy: { type: "image", image: "nginx:1", command } }),
+        {}
+      )
+    expect(started(["serve", "--port", "8080"])).toMatchObject({
+      deploy: { command: "serve --port 8080" },
+    })
+    expect(started(["sh", "-c", "echo it's \"up\"", ""])).toMatchObject({
+      deploy: { command: `sh -c 'echo it'\\''s "up"' ''` },
+    })
+    expect(started([])).not.toHaveProperty("deploy.command")
+    expect(
+      appBrickProblem(
+        recipe({
+          deploy: { type: "image", image: "nginx:1", command: ["a\nb"] },
+        })
+      )
+    ).toBe("An App Brick's start command can't hold a line break")
+    // One an App's configuration couldn't keep whole is refused, not cut.
+    expect(
+      appBrickProblem(
+        recipe({
+          deploy: {
+            type: "image",
+            image: "nginx:1",
+            command: ["a".repeat(2_048), "b".repeat(2_048)],
+          },
+        })
+      )
+    ).toBe("This Brick's start command is longer than an App's can be")
   })
 
   it("deploys the file at its path in whatever source it is given", () => {

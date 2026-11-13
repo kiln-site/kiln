@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
+  appCommandLine,
   defaultAppConfig,
   relayDeployAppSchema,
   type AppConfig,
@@ -270,6 +271,20 @@ describe("an App whose configuration gives a health check", () => {
       running!.id,
     ])
     expect(running!.state.running).toBe(true)
+  })
+})
+
+// A Brick writes its start command as arguments, and an App's
+// configuration keeps a line. The container must be started with exactly
+// the Brick's arguments, a space, a quote or an empty one among them.
+describe("an App started with its Brick's command", () => {
+  it("runs the arguments the Brick wrote, each whole", async () => {
+    const harness = await createdApp()
+    const command = ["sh", "-c", `echo it's "up" && serve`, "", "--name=My Site"]
+
+    await deploy(harness, { command: appCommandLine(command) })
+
+    expect(appContainers().map((container) => container.cmd)).toEqual([command])
   })
 })
 

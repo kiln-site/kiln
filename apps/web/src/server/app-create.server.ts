@@ -236,6 +236,15 @@ async function createAppHandler(
     data.brick,
     data.variables ?? {}
   )
+  // A Brick that publishes ports on the Relay takes what publishing one
+  // in an App's settings does: creating an App alone doesn't open them.
+  if ((deploys.ports?.length ?? 0) > 0) {
+    await requireRelayPermission({
+      permission: "app.manage",
+      relayId: relay.id,
+      user,
+    })
+  }
   // What it holds was settled from the folders the Brick kept then.
   if (
     JSON.stringify(deploys.volumes) !==
@@ -361,6 +370,13 @@ export async function provisionApp(
         ...(app.deploys.ready === undefined
           ? {}
           : { healthcheck: { command: app.deploys.ready } }),
+        // What its Brick starts it with, and publishes on its Relay.
+        ...(app.deploys.command === undefined
+          ? {}
+          : { command: app.deploys.command }),
+        ...(app.deploys.ports === undefined
+          ? {}
+          : { ports: [...app.deploys.ports] }),
       },
       environment: app.environment,
       mounts: brickVolumeMounts(volumes),

@@ -1,6 +1,7 @@
 import {
   appBrickDeploy,
   appBrickProblem,
+  type AppBrickPublishedPort,
   type AppBrickWeb,
 } from "./app-bricks.js"
 import {
@@ -44,8 +45,12 @@ export interface GroupBrickApp {
   environment: Record<string, string>
   image: string
   key: string
+  /** Its start command, when its recipe gives one. */
+  command?: string
   /** What it is called. Without one, it takes the group's name. */
   name?: string
+  /** The ports it publishes on its Relay, when its recipe has public ones. */
+  ports?: ReadonlyArray<AppBrickPublishedPort>
   /** The command it is ready by, when its recipe gives one. */
   ready?: string
   /** The folders it keeps across deployments, each on a volume. */
@@ -167,11 +172,17 @@ export function groupBrickInstall(
       return { problem: `Kiln installs ${key} from an image only` }
     }
     install.apps.push({
+      ...(installed.deploy.command === undefined
+        ? {}
+        : { command: installed.deploy.command }),
       connect: member.connect ?? {},
       environment: installed.deploy.environment,
       image: installed.deploy.image,
       key,
       ...(member.name === undefined ? {} : { name: member.name }),
+      ...(installed.deploy.ports === undefined
+        ? {}
+        : { ports: installed.deploy.ports }),
       ...(installed.deploy.ready === undefined
         ? {}
         : { ready: installed.deploy.ready }),

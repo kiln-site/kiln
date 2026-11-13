@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto"
 import {
   appBrickDeploy,
   appBrickProblem,
+  appBrickPublishes,
   appBrickVolumes,
   brickInstallAnswers,
   brickRevision,
@@ -65,6 +66,12 @@ export async function appBrickFolders(
   return appBrickVolumes(brick)
 }
 
+/** What an App keeps of the ports its Brick published, when it has any. */
+export function publishedBy(ports: AppBrickDeploy["ports"]) {
+  const publishes = appBrickPublishes(ports)
+  return publishes.length > 0 ? { ports: publishes } : {}
+}
+
 /**
  * What the App Brick at a source deploys with these answers, and what an
  * App made from it keeps of it: nothing for one of Kiln's generic Bricks.
@@ -92,6 +99,7 @@ export async function installedAppBrick(
               ? Object.keys(installed.deploy.environment)
               : [],
           name: recipe.metadata.name,
+          ...publishedBy(installed.deploy.ports),
           revision: brickRevision(recipe),
           source,
           volumes: [...installed.deploy.volumes],
