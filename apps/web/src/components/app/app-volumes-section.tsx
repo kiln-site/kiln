@@ -114,6 +114,8 @@ interface MountRow {
   composeFile: string | null
   // Whether that file is edited here, rather than in its repository.
   composeEditable: boolean
+  // The Brick that file is, by name, when its Brick carries it.
+  composeBrick: string | null
   entry: MountEntry
   filesLink: VolumeLink | null
   filesUnavailable: string | null
@@ -429,7 +431,12 @@ export function AppVolumesSection({
           {composeRows.length > 0 ? (
             <>
               <ComposeGroupHeader
-                editable={canManage && Boolean(composeFile?.editable)}
+                brick={composeFile?.brick ?? null}
+                editable={
+                  canManage &&
+                  Boolean(composeFile?.editable) &&
+                  !composeFile?.brick
+                }
                 file={composeFile?.path ?? "compose.yaml"}
                 topBorder={configRows.length > 0}
                 onOpen={() => setDialog({ kind: "compose", mount: null })}
@@ -504,7 +511,7 @@ export function AppVolumesSection({
         ) : (
           <AppDocumentDialog
             app={app}
-            canManage={canManage}
+            canManage={canManage && !composeFile?.brick}
             deploying={deploying}
             cursorAt={dialog.mount?.range?.to}
             kind="compose"
@@ -684,11 +691,13 @@ const MountsTable = React.memo(function MountsTable({
 // Above the mounts a Compose file defines: they're the file's, not settings
 // here, so this says so once and is the way in.
 function ComposeGroupHeader({
+  brick,
   editable,
   file,
   onOpen,
   topBorder,
 }: {
+  brick: string | null
   editable: boolean
   file: string
   onOpen: () => void
@@ -709,7 +718,7 @@ function ComposeGroupHeader({
         {file}
       </span>
       <span className="hidden min-w-0 truncate text-xs text-muted-foreground sm:block">
-        Defined in the Compose file
+        {brick ? `Defined by ${brick}` : "Defined in the Compose file"}
       </span>
       <Button
         className="ml-auto shrink-0"
@@ -794,7 +803,8 @@ function MountActions({
     canManage && entry.kind === "config" && entry.mount.source.type === "file"
       ? entry.mount
       : null
-  const composeEdit = canManage && row.composeEditable
+  const composeEdit =
+    canManage && row.composeEditable && row.composeBrick === null
   return (
     <DataTableActionGroup>
       {entry.kind === "compose" ? (
@@ -864,9 +874,11 @@ function MountActions({
           blocked={
             entry.kind === "config"
               ? null
-              : row.composeEditable
-                ? `Defined in ${row.composeFile}, so remove it there`
-                : `Defined in ${row.composeFile} in the repository, so remove it there`
+              : row.composeBrick !== null
+                ? `Defined by ${row.composeBrick}`
+                : row.composeEditable
+                  ? `Defined in ${row.composeFile}, so remove it there`
+                  : `Defined in ${row.composeFile} in the repository, so remove it there`
           }
           label={`Remove ${row.name}`}
           tooltip="Remove"
@@ -946,6 +958,7 @@ function configRow(context: RowContext, mount: AppMount): MountRow {
     target: mount.target,
   })
   const base = {
+    composeBrick: null,
     composeEditable: false,
     composeFile: null,
     entry: { kind: "config", mount } as const,
@@ -1046,6 +1059,7 @@ function composeRow(context: RowContext, mount: ComposeMount): MountRow {
     ...files,
     // Only a volume has backups.
     backups: mount.kind === "volume" ? volumeBackups(context, volumeId) : null,
+    composeBrick: context.composeFile?.brick ?? null,
     composeEditable: context.composeFile?.editable ?? false,
     composeFile: file,
     entry: { kind: "compose", mount },

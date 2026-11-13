@@ -34,6 +34,7 @@ import {
   appContainers,
   appRelayAvailable,
   appServices,
+  carriedBy,
   type App,
 } from "@/components/app/app-presentation"
 import { useAppRunsCompose } from "@/components/app/app-settings"
@@ -392,7 +393,7 @@ function useAppBrick(app: App, canManage: boolean): Brick {
     select: (summary) => summary.source,
   })
   if (config.isError) return { error: config.error.message, state: "error" }
-  if (!saved) return { state: "loading" }
+  if (!config.data || !saved) return { state: "loading" }
   return {
     deploys:
       saved.sourceType !== "github"
@@ -404,8 +405,8 @@ function useAppBrick(app: App, canManage: boolean): Brick {
     facts:
       saved.sourceType === "github"
         ? githubFacts(app, source)
-        : dockerFacts(app, canManage, saved),
-    follows: config.data?.brick?.name,
+        : dockerFacts(app, canManage, saved, carriedBy(config.data)),
+    follows: config.data.brick?.name,
     state: "ready",
   }
 }
@@ -413,7 +414,9 @@ function useAppBrick(app: App, canManage: boolean): Brick {
 function dockerFacts(
   app: App,
   canManage: boolean,
-  config: EditableAppConfig
+  config: EditableAppConfig,
+  // The Brick that carries the file it runs, which is only read then.
+  carried: string | null
 ): ReadonlyArray<BrickFact> {
   const command: BrickFact = {
     key: "command",
@@ -451,7 +454,7 @@ function dockerFacts(
       // into the source that replaced it.
       key={kind}
       app={app}
-      canManage={canManage}
+      canManage={canManage && carried === null}
       kind={kind}
       saved={config[kind]}
     >
@@ -462,10 +465,12 @@ function dockerFacts(
       </span>
     </AppDocumentButton>
   )
+  // Its Brick's file wasn't written here, and its Brick is named above.
+  const source = carried === null ? [writtenInHearth] : []
   if (kind === "dockerfile") {
     const bases = baseImages(config.dockerfile)
     return [
-      writtenInHearth,
+      ...source,
       {
         key: "base",
         label: "Base image",
@@ -499,7 +504,7 @@ function dockerFacts(
   ).length
   const images = [...new Set(app.containers.map(({ image }) => image))]
   return [
-    writtenInHearth,
+    ...source,
     { key: "file", label: "Compose file", value: file },
     {
       key: "services",

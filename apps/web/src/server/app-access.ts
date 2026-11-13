@@ -79,7 +79,12 @@ export async function getAppConfigHandler(
   data: { appId: string; relayId: string }
 ): Promise<{
   /** The Brick it follows, for an App that follows one. */
-  brick: Pick<AppBrickRecord, "member" | "name" | "revision"> | null
+  brick:
+    | (Pick<AppBrickRecord, "member" | "name" | "revision"> & {
+        /** Whether it carries the file the App runs, which is the Brick's. */
+        written: boolean
+      })
+    | null
   config: AppConfig
   environmentHidden: boolean
 }> {
@@ -106,6 +111,7 @@ export async function getAppConfigHandler(
           member: app.brick.member,
           name: app.brick.name,
           revision: app.brick.revision,
+          written: app.brick.written ?? false,
         }
       : null,
     config: canManage

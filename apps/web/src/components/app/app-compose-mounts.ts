@@ -2,10 +2,11 @@ import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { AppConfig } from "@workspace/contracts"
 
-import type { App } from "@/components/app/app-presentation"
+import { carriedBy, type App } from "@/components/app/app-presentation"
 import type { ComposeMount } from "@/lib/compose-mounts"
 import type { AppGitHubSourceView } from "@/server/app-deployments.server"
 import {
+  appConfigQueryOptions,
   appDeploymentSummaryQueryOptions,
   appGitHubSourceFileQueryOptions,
 } from "@/lib/query-options"
@@ -18,6 +19,9 @@ export interface AppComposeMounts {
   // is changed in the repository.
   path: string
   editable: boolean
+  // The Brick that carries it, by name. The file is the Brick's then, and
+  // is only read here.
+  brick: string | null
   // The repository file it reads, for opening it there.
   github: AppGitHubSourceView | null
 }
@@ -44,6 +48,11 @@ export function useAppComposeMounts(
     select: (file) => file.content,
   })
   const pasted = config.sourceType === "compose"
+  const { data: brick = null } = useQuery({
+    ...appConfigQueryOptions(app.relayId, app.id),
+    enabled: pasted,
+    select: carriedBy,
+  })
   const text = pasted ? config.compose : (githubFile ?? null)
   const { data: module } = useQuery({
     queryKey: ["compose-mounts-module"],
@@ -62,6 +71,7 @@ export function useAppComposeMounts(
   }, [app.containers, module, project, text])
   if (!pasted && github === null) return null
   return {
+    brick,
     editable: pasted,
     github,
     mounts,

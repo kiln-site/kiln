@@ -114,6 +114,16 @@ export function appContainers(
   )
 }
 
+/**
+ * The Brick that carries the file an App runs, by name, or null: for an App
+ * that follows none, or whose Brick only names an image.
+ */
+export function carriedBy(app: {
+  brick: { name: string; written: boolean } | null
+}): string | null {
+  return app.brick?.written ? app.brick.name : null
+}
+
 export function showAppOperationError(message: string, error: Error) {
   showToast({ message: `${message}: ${error.message}`, type: "error" })
 }
