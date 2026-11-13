@@ -43,8 +43,14 @@ export interface GroupBrickApp {
   connect: Readonly<Record<string, Readonly<Record<string, string>>>>
   /** The variables its recipe sets itself, each with its template filled. */
   environment: Record<string, string>
-  image: string
   key: string
+  /**
+   * What it runs: an image, or the Dockerfile or Compose file its recipe
+   * carries, as written.
+   */
+  runs:
+    | { image: string; type: "image" }
+    | { content: string; type: "compose" | "dockerfile" }
   /** Its start command, when its recipe gives one. */
   command?: string
   /** What it is called. Without one, it takes the group's name. */
@@ -108,8 +114,13 @@ export function groupBrickProblem(recipe: BrickRecipe): string | null {
     if (member.kind !== "app") {
       return `Kiln doesn't install a ${member.kind} written in a group yet (${key})`
     }
-    if (member.deploy?.type !== "image") {
-      return `Kiln installs an App written in a group from an image only (${key})`
+    // A file in a source would need one chosen for each member when the
+    // group is installed, which nothing asks for yet.
+    if (
+      member.deploy === undefined ||
+      (member.deploy.type !== "image" && member.deploy.path !== undefined)
+    ) {
+      return `Kiln installs an App written in a group from an image, or a file its recipe carries (${key})`
     }
     const unrun = appBrickProblem(memberRecipe(recipe, member))
     if (unrun !== null) return `${unrun} (${key})`
@@ -168,8 +179,10 @@ export function groupBrickInstall(
     }
     const installed = appBrickDeploy(memberRecipe(recipe, member), answers)
     if ("problem" in installed) return { problem: installed.problem }
-    if (installed.deploy.type !== "image") {
-      return { problem: `Kiln installs ${key} from an image only` }
+    const { deploy } = installed
+    // `groupBrickProblem` refused a member whose file is in a source.
+    if (deploy.type !== "image" && deploy.content === undefined) {
+      return { problem: `Kiln installs ${key} from an image, or a file its recipe carries` }
     }
     install.apps.push({
       ...(installed.deploy.command === undefined
@@ -177,8 +190,11 @@ export function groupBrickInstall(
         : { command: installed.deploy.command }),
       connect: member.connect ?? {},
       environment: installed.deploy.environment,
-      image: installed.deploy.image,
       key,
+      runs:
+        deploy.type === "image"
+          ? { image: deploy.image, type: "image" }
+          : { content: deploy.content ?? "", type: deploy.type },
       ...(member.name === undefined ? {} : { name: member.name }),
       ...(installed.deploy.ports === undefined
         ? {}

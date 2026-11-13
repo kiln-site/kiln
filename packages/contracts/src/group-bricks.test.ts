@@ -50,13 +50,40 @@ describe("a group Brick", () => {
           {
             connect: web.connect,
             environment: {},
-            image: "ghcr.io/acme/analytics:2",
             key: "web",
+            runs: { image: "ghcr.io/acme/analytics:2", type: "image" },
             volumes: [],
           },
         ],
         databases: [
           { brick: "postgres", key: "database", variables: { version: "16" } },
+        ],
+      },
+    })
+  })
+
+  // A member is whatever an App can be, so long as its recipe carries
+  // what it runs: a file in a source would need one chosen for it.
+  it("makes a member from the Compose file or Dockerfile its recipe carries", () => {
+    const compose = "services:\n  hub:\n    image: acme/hub:1\n"
+    const made = groupBrickInstall(
+      group({
+        hub: { kind: "app", deploy: { type: "compose", compose } },
+        worker: {
+          kind: "app",
+          deploy: { type: "dockerfile", dockerfile: "FROM acme/worker:1\n" },
+        },
+      }),
+      {}
+    )
+    expect(made).toMatchObject({
+      install: {
+        apps: [
+          { key: "hub", runs: { content: compose, type: "compose" } },
+          {
+            key: "worker",
+            runs: { content: "FROM acme/worker:1\n", type: "dockerfile" },
+          },
         ],
       },
     })
@@ -126,7 +153,9 @@ describe("a group Brick", () => {
         database: { brick: "postgres" },
         web: { ...web, deploy: { type: "compose", path: "compose.yaml" } },
       })
-    ).toBe("Kiln installs an App written in a group from an image only (web)")
+    ).toBe(
+      "Kiln installs an App written in a group from an image, or a file its recipe carries (web)"
+    )
     expect(
       refused({
         database: { brick: "postgres" },
