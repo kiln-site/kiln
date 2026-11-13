@@ -207,6 +207,7 @@ request is answered once.
 | `instance-group:<id>`               | A group of instances: who is in it, and its name       |
 | `brick-catalog:<id>`                | A Brick catalog: deleting it; `#visibility` publishing |
 | `brick-library:<user>#contents`     | A person's catalogs and custom Bricks: adding them     |
+| `brick-catalogs#names`              | The names Bricks go by: adding or publishing a catalog |
 | `file-activity:<relay>/<root>#pins` | A file root's pinned files, under their limit          |
 | `user-settings:<id>#notifications`  | A person's notification settings                       |
 | `platform-appearance#default`       | The appearance new people start with                   |

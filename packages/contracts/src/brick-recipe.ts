@@ -282,6 +282,58 @@ export function brickSourceLineage(source: string): string {
     : source
 }
 
+/**
+ * Whose a Brick is, from where its recipe is kept, which its author can't
+ * choose: the account that holds it on GitHub (`kiln-site`), and anywhere
+ * else the host with the first folder under it (`gitlab.com/kiln-site`).
+ * A recipe read from this installation's own files is Kiln's own (`own`).
+ */
+export function brickNamespace(source: string, own: string): string {
+  if (!URL.canParse(source)) return own
+  const url = new URL(source)
+  if (url.protocol !== "https:") return own
+  const [first, ...rest] = url.pathname.split("/").filter(Boolean)
+  if (
+    url.host.toLowerCase() === "raw.githubusercontent.com" &&
+    !url.username &&
+    !url.password &&
+    first
+  ) {
+    return first.toLowerCase()
+  }
+  const namespace = rest.length > 0 ? `${url.host}/${first}` : url.host
+  // A GitHub account has neither a dot nor a slash in its name, so a host
+  // with neither is kept apart from one.
+  return /[./]/u.test(namespace) ? namespace : `${namespace}/`
+}
+
+/**
+ * A Brick by name: its ID after whose it is, as `billy:paper`. Two Bricks
+ * may share an ID; no two of one namespace do.
+ */
+export function brickReference(
+  brick: {
+    readonly metadata: Pick<BrickMetadata, "id">
+    readonly source: string
+  },
+  own: string
+): string {
+  return `${brickNamespace(brick.source, own)}:${brick.metadata.id}`
+}
+
+/** That name as it is shown: one of Kiln's own goes by its ID alone. */
+export function brickShownReference(
+  brick: {
+    readonly metadata: Pick<BrickMetadata, "id">
+    readonly source: string
+  },
+  own: string
+): string {
+  return brickNamespace(brick.source, own) === own
+    ? brick.metadata.id
+    : brickReference(brick, own)
+}
+
 /** A recipe's revision, which is 1 until its author says otherwise. */
 export function brickRevision(recipe: {
   readonly metadata: Pick<BrickMetadata, "revision">

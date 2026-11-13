@@ -5,6 +5,9 @@ import {
   brickAnswers,
   brickAnswersProblem,
   brickFollowers,
+  brickNamespace,
+  brickReference,
+  brickShownReference,
   brickSourceLineage,
   brickRecipeSchema,
   brickSuggestedValue,
@@ -454,7 +457,11 @@ describe("where a Brick comes from", () => {
   // sources name: an instance installed at one commit has to find its
   // Brick's newer revision at another.
   it("knows a Brick read at another commit of its repository as the same one", () => {
-    const at = (commit: string, file = "bricks/paper.yml", repository = "kiln-site/kiln") =>
+    const at = (
+      commit: string,
+      file = "bricks/paper.yml",
+      repository = "kiln-site/kiln"
+    ) =>
       `https://raw.githubusercontent.com/${repository}/${commit}/apps/bricks/${file}`
     const installed = brickSourceLineage(at("a".repeat(40)))
     expect(brickSourceLineage(at("b".repeat(40)))).toBe(installed)
@@ -469,5 +476,41 @@ describe("where a Brick comes from", () => {
     expect(brickSourceLineage("https://example.com/v1/paper.yml")).not.toBe(
       brickSourceLineage("https://example.com/v2/paper.yml")
     )
+  })
+
+  // Whose a Brick is decides whether it reads as one of Kiln's own, so it
+  // comes from the address alone, which only that account can serve.
+  it("names a Brick after the account or host its recipe is kept on", () => {
+    const own = "kiln-site"
+    const named = (source: string) =>
+      brickReference({ metadata: { id: "paper" }, source }, own)
+    const github = (owner: string, commit = "main") =>
+      `https://raw.githubusercontent.com/${owner}/bricks/${commit}/paper.yml`
+    expect(named(github("Billy"))).toBe("billy:paper")
+    expect(named(github("billy", "a".repeat(40)))).toBe("billy:paper")
+    expect(named("https://gitlab.com/billy/bricks/-/raw/main/paper.yml")).toBe(
+      "gitlab.com/billy:paper"
+    )
+    expect(named("https://example.com/paper.yml")).toBe("example.com:paper")
+    // Read from this installation's own files.
+    expect(named("file:///workspace/apps/bricks/bricks/paper.yml")).toBe(
+      "kiln-site:paper"
+    )
+    // No address that isn't that account's on GitHub is taken for it.
+    for (const source of [
+      "https://raw.githubusercontent.com.example.com/kiln-site/kiln/main/paper.yml",
+      "https://raw.githubusercontent.com@example.com/kiln-site/kiln/main/paper.yml",
+      "https://someone@raw.githubusercontent.com/kiln-site/kiln/main/paper.yml",
+      "https://example.com/kiln-site/kiln/main/paper.yml",
+      "https://kiln-site/paper.yml",
+      "https://raw.githubusercontent.com/kiln-site/kiln/../../billy/bricks/main/paper.yml",
+    ]) {
+      expect(brickNamespace(source, own)).not.toBe(own)
+    }
+    // One of Kiln's own goes by its ID alone where it is shown.
+    const shown = (source: string) =>
+      brickShownReference({ metadata: { id: "paper" }, source }, own)
+    expect(shown(github("kiln-site"))).toBe("paper")
+    expect(shown(github("billy"))).toBe("billy:paper")
   })
 })
