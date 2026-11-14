@@ -265,21 +265,23 @@ function readLog<S extends z.ZodType>(
 }
 
 // Logs saved before every kind shared one format: an App's held its
-// deployment's fields beside its lines, and a game server's or a
-// database's had no dropped lines or rolling over to record.
+// deployment's fields beside its lines, and may predate recording whether
+// it rolled over; a game server's or a database's had no dropped lines or
+// rolling over to record.
 function savedLog(saved: unknown): unknown {
   if (!isRecord(saved)) return saved
-  if (!("deployment" in saved)) {
-    const { dropped, lines, ...deployment } = saved
-    return { deployment, dropped, lines }
-  }
-  return isRecord(saved.deployment)
+  const nested = "deployment" in saved ? saved : flatLog(saved)
+  return isRecord(nested.deployment)
     ? {
-        dropped: 0,
-        ...saved,
-        deployment: { rolling: null, ...saved.deployment },
+        ...nested,
+        deployment: { rolling: null, ...nested.deployment },
+        dropped: nested.dropped ?? 0,
       }
-    : saved
+    : nested
+}
+
+function flatLog({ dropped, lines, ...deployment }: Record<string, unknown>) {
+  return { deployment, dropped, lines }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

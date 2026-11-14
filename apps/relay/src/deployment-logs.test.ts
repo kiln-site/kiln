@@ -4,6 +4,8 @@ import { join } from "node:path"
 
 import { expect, it, onTestFinished } from "vite-plus/test"
 
+import { relayDeploymentLogSchema } from "@workspace/contracts"
+
 import { DeploymentLogs } from "./deployment-logs.js"
 
 async function dataDirectory() {
@@ -124,6 +126,39 @@ it("reads the logs saved before every kind shared one format", async () => {
     dropped: 0,
     lines: [{ ...line, origin: "kiln" }],
   })
+})
+
+// An App's log saved before deployments recorded whether they rolled over
+// has neither that nor its commit, and still reads, as the latest when it
+// is.
+it("reads an App's log from before deployments recorded rolling over", async () => {
+  const directory = await dataDirectory()
+  await mkdir(join(directory, "app-deployments", appId), { recursive: true })
+  for (const day of [1, 2]) {
+    const id = `2026100${day}000000`
+    await writeFile(
+      join(directory, "app-deployments", appId, `${id}.json`),
+      JSON.stringify({
+        dropped: 0,
+        error: null,
+        finishedAt: `2026-10-0${day}T00:00:09.000Z`,
+        id,
+        lines: [],
+        sourceType: "image",
+        startedAt: `2026-10-0${day}T00:00:00.000Z`,
+        state: "succeeded",
+      })
+    )
+  }
+  const logs = new DeploymentLogs(directory)
+  const target = { id: appId, kind: "app" } as const
+
+  expect((await logs.read(target, "20261001000000"))?.deployment).toMatchObject(
+    { id: "20261001000000", rolling: null }
+  )
+  expect(
+    (await logs.latest(target, relayDeploymentLogSchema))?.deployment.id
+  ).toBe("20261002000000")
 })
 
 it("keeps each instance's 20 latest logs", async () => {
