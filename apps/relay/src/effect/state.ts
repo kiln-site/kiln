@@ -38,6 +38,7 @@ import {
   migratedLimitActions,
   migratedRouteActions,
   migratedPowerActions,
+  migratedTerminalActions,
   omitBackupSecrets,
   relayBackupTaskSchema,
   relayAppSchema,
@@ -1905,6 +1906,10 @@ const migrations = SqliteMigrator.fromRecord({
   // kind it is. An App's went with `app.manage`, which stays for what else
   // it covers.
   "44_instance_route_action": moveCustomActions(migratedRouteActions),
+  // A shell in any kind of instance takes one action. An App's had its own;
+  // a database's took importing a dump, which stays for that alone and
+  // isn't widened to every shell on the Relay.
+  "45_instance_terminal_action": moveCustomActions(migratedTerminalActions),
 })
 
 // Rewrites the actions of every client and invitation given actions of its

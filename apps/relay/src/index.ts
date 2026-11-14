@@ -287,6 +287,8 @@ import { operation, runOperation } from "./operations/operation.js"
 import {
   controlRequestLocks,
   databaseReadLocks,
+  appReadLocks,
+  instanceReadLocks,
   instanceLifecycleLocks,
   transferInstallLocks,
   transferPackLocks,
@@ -808,8 +810,13 @@ if (!hostShell.enabled && cliArguments.length === 0) {
 }
 if (cliArguments.length === 0)
   forkPromise(async () => {
-    const [managedDatabases, managedApps, hostContainer, platformContainers] =
-      await Promise.all([
+    const [
+      managedDatabases,
+      managedApps,
+      hostContainer,
+      platformContainers,
+      gameServerContainers,
+    ] = await Promise.all([
         databases.list(),
         apps.list(),
         hostShell.enabled ? hostShell.runningContainer() : null,
@@ -821,9 +828,11 @@ if (cliArguments.length === 0)
             )
           )
         ),
+        docker.runningContainerIds(),
       ])
     await terminals.sweep([
       ...(hostContainer ? [hostContainer] : []),
+      ...gameServerContainers,
       ...platformContainers.flatMap((container) =>
         container?.State.Running ? [container.Id] : []
       ),
@@ -2287,10 +2296,24 @@ async function attachTerminal(
         push
       )
     }
+    // An instance's shell opens in its lane, so freezing it for its deletion
+    // waits for an attach under way and refuses later ones.
+    case "instance":
+      return inLane(
+        { label: "terminal.attach", locks: instanceReadLocks(target.id) },
+        async () =>
+          terminals.attach(
+            owner,
+            containerShell(
+              target,
+              await docker.terminalContainer(target.id),
+              "Start the server to open its terminal"
+            ),
+            input,
+            push
+          )
+      )
     case "database":
-      // In the database's lane until the session is open, so freezing it
-      // for its deletion waits for an attach under way and refuses later
-      // ones.
       return inLane(
         { label: "terminal.attach", locks: databaseReadLocks(target.id) },
         async () => {
@@ -2312,25 +2335,27 @@ async function attachTerminal(
           )
         }
       )
-    case "app": {
-      const container = await apps.serviceContainer(target.id, target.service)
-      return terminals.attach(
-        owner,
-        containerShell(
-          target,
-          container,
-          `Start ${target.service} to open its terminal`
-        ),
-        input,
-        push
+    case "app":
+      return inLane(
+        { label: "terminal.attach", locks: appReadLocks(target.id) },
+        async () =>
+          terminals.attach(
+            owner,
+            containerShell(
+              target,
+              await apps.serviceContainer(target.id, target.service),
+              `Start ${target.service} to open its terminal`
+            ),
+            input,
+            push
+          )
       )
-    }
   }
 }
 
 // What a terminal takes besides its session: the host's shell is turned on,
-// Kiln's own containers are only for the Hearth that installed them, and a
-// database being deleted takes no more input.
+// Kiln's own containers are only for the Hearth that installed them, and an
+// instance being deleted takes no more input.
 async function admitTerminal(
   client: RelayClientGrant,
   target: TerminalTarget,
@@ -2343,10 +2368,10 @@ async function admitTerminal(
     case "platform":
       if (!options.typing) await requirePlatformOwner(client.id)
       return
+    case "instance":
     case "database":
-      refuseIfFrozenDatabase(target.id)
-      return
     case "app":
+      refuseIfFrozen(target.kind, target.id)
       return
   }
 }
@@ -4607,6 +4632,8 @@ async function quietFrozenResource(
       // Startup has no in-memory power intents or schedules yet, and the
       // power coordinator isn't constructed until recovery has finished.
       if (!recovering) power.changed("instance", instance.id)
+      const container = await docker.terminalContainer(instance.id)
+      await terminals.endInstance(instance.id, container ? [container.id] : [])
       const routes = await runRelayEffect(
         "relay.network.routes.forFreeze",
         startupCore.state.listInstanceRoutes(instance.id)
@@ -4614,10 +4641,21 @@ async function quietFrozenResource(
       await lifecycle.runInstanceAction(instance, "stop", routes)
       return
     }
-    case "app":
+    case "app": {
+      const app = await recoverPromise(
+        () => apps.get(freeze.id),
+        () => null
+      )
+      await terminals.endInstance(
+        freeze.id,
+        app?.containers.flatMap((container) =>
+          container.running ? [container.id] : []
+        ) ?? []
+      )
       return apps.quietForDeletion(freeze.id, (restartPolicies) =>
         record({ restartPolicies })
       )
+    }
     case "database": {
       const database = await recoverPromise(
         () => databases.target(freeze.id),
@@ -4647,12 +4685,15 @@ async function restoreFrozenResource(
   }
 }
 
-// A database being deleted takes no terminal input: its client could write
-// to it after its final dump.
-function refuseIfFrozenDatabase(databaseId: string): void {
-  if (!resourceFreezes.has("database", databaseId)) return
+// An instance being deleted takes no terminal input: its shell could change
+// a database after its final dump, or anything after its last backup.
+function refuseIfFrozen(
+  kind: "app" | "database" | "instance",
+  id: string
+): void {
+  if (!resourceFreezes.has(kind, id)) return
   throw new LaneRejectedError({
-    message: "This database is being deleted",
+    message: `This ${kind === "instance" ? "server" : kind === "app" ? "App" : "database"} is being deleted`,
     reason: "refused",
   })
 }

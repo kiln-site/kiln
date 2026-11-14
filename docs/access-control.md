@@ -153,6 +153,11 @@ reveals those kinds there.
   disk limits of a game server, a database or an App. It doesn't read a
   game server's configuration, and configuring an App (`app.manage`)
   doesn't include it.
+- **Terminal**: `instance.terminal` opens a shell in a game server's, a
+  database's, or an App's container. A database's shell reaches its data
+  files and its engine's login. An App's can reach the Relay's host, so on
+  a Relay it is that much authority. A Relay's own host shell keeps
+  `relay.terminal`.
 - **Changing the network**: `instance.network.write` changes a game
   server's ports and web routes, and an App's web routes, with the DNS
   records and certificates that go with them. Configuring an App
@@ -201,12 +206,15 @@ Each resource has exactly one owner. A Relay's owner is the person who paired
 it (`relay.created_by`). A game server's, database's, or App's owner is its
 creator (`owner_id`). A game server whose creator is unknown is owned
 provisionally by its Relay's owner, until the Relay's audit log names who
-created it. Owners of a Relay, game server, or database hold `all` there;
-on a Relay, that covers everything on it. An App's owner holds only
-`app.read`, `app.logs.read`, and `app.delete`.
+created it. Owners of a Relay or a database hold `all` there; on a Relay,
+that covers everything on it. A game server's owner holds `all` but its
+terminal (`instance.terminal`): whoever may create game servers gets no
+shell in the ones they create unless it's granted, on the Relay, since an
+owner's own access can't be edited. An App's owner holds only `app.read`,
+`app.logs.read`, and `app.delete`.
 Configuring an App, opening its shell, and using its files can reach the
-Relay's host, so those still take permissions on the Relay: App permissions
-for the first two, and file permissions for its files. Its power takes
+Relay's host, so those still take permissions on the Relay: `app.manage`,
+`instance.terminal`, and file permissions. Its power takes
 `instance.power.*` and deploying it `instance.deploy`, on the Relay too.
 
 Only the owner or a platform administrator can transfer ownership, to an

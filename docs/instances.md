@@ -35,13 +35,14 @@ Every kind gets these from the platform.
 | Deployments | One redeploy for every kind                     | Done for game servers, databases and Apps: one Relay request and one permission                                          |
 | Limits      | One request and one permission for every kind   | Done for game servers, databases and Apps: one Relay request and one permission                                          |
 | Domains     | Every kind, automatic for an App's web services | One table of addresses, one reconcile and one Domains table for game servers and Apps; a database has no address yet     |
+| Terminal    | A shell in every kind, on one path              | Done for game servers, databases and Apps: one set of Relay requests, one stream and one permission                      |
 | Ports       | One list of taken ports and one Ports section   | Done for game servers and Apps: one list on the Relay and one Ports section. Each kind still saves its ports its own way |
 | Networking  | One page for every kind                         | A page per kind, on a few shared sections                                                                                |
 | Files       | One file browser and one permission             | Done for game servers and Apps                                                                                           |
 | Info page   | One page shell                                  | One profile and container section for every kind; a Relay's page is its own                                              |
 
 A Relay implements each in its own way: it can only be restarted, its
-deployments are its updates, and its files are the host's.
+deployments are its updates, and its files and its shell are the host's.
 
 Sharing a console, logs or a file is planned as a foundation feature of
 Kiln's own, replacing the mclo.gs upload game servers have now.
@@ -77,7 +78,10 @@ of everything on a Relay; a database's no longer has a permission of its
 own, and an App's is no longer part of `app.manage`.
 `instance.network.write` saves the web routes of a game server it is
 granted on, and of every game server and App on a Relay; an App's is no
-longer part of `app.manage`. See [Access control](access-control.md).
+longer part of `app.manage`. `instance.terminal` opens a shell in what it
+is granted on, and in everything on a Relay; `app.terminal` and
+`database.terminal` are gone, and a game server's owner holds it only when
+it's granted. See [Access control](access-control.md).
 
 In the catalog (`packages/contracts/src/access-permissions.ts`) these are
 the `every` family, and `everyInstanceBlocks` says where each can be granted
@@ -339,11 +343,27 @@ from a tag or an image name today.
    address is still to come.
 10. One instance page, with each kind's own tabs.
 11. Tailscale as its own kind, with the instance group.
-12. One terminal path.
+12. One terminal path. Done: every shell, an instance's, the Relay's host's
+    or one of Kiln's own containers', is one session the Relay keeps, opened
+    with the six `terminal.*` requests that name their target, and shown by
+    one stream and one page section. A shell in a game server, a database or
+    an App takes `instance.terminal`. A database's Terminal opens a shell,
+    not its signed-in client; signing in from it in one click is #936.
 13. One log path. The Logs page is one already: every kind fills the same
     page (`InstanceLogsPage`) with its containers and its deployments. The
     Relay still keeps an App's deployment logs apart from a game server's
     and a database's, behind two read requests.
+14. One permission model. Permissions still work three ways by kind: an App
+    can't be shared on its own, only through its Relay, and a game server's
+    or a database's owner holds `all` in code, which no preset can narrow.
+    The target: every instance can be granted on; ownership is a role (it
+    transfers and can't be removed) and an owner's authority is an ordinary
+    grant made with the instance from a preset its Relay names; and whether
+    an instance is confined to itself (no host folders, privileged mode,
+    Docker socket or host network) is the instance's own, so a confined App
+    is granted on like a game server and only one that reaches the node
+    takes the Relay's permissions. Owning a game server without its
+    terminal is an exception in code until then.
 
 The CLI is reworked after this, and isn't changed along the way beyond what
 keeps it working.

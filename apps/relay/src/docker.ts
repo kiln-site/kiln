@@ -821,6 +821,26 @@ export class DockerDriver {
     return found?.config ?? null
   }
 
+  // A game server's container, for a shell in it.
+  async terminalContainer(
+    id: string
+  ): Promise<{ id: string; running: boolean } | null> {
+    const found = (await this.#discover()).find((item) =>
+      matchesInstanceId(item.config, id)
+    )
+    return found
+      ? { id: found.container.Id, running: found.container.State.Running }
+      : null
+  }
+
+  // Every running game server's container, for sweeping shells a stopped
+  // Relay left in them.
+  async runningContainerIds(): Promise<Array<string>> {
+    return (await this.#discover()).flatMap(({ container }) =>
+      container.State.Running ? [container.Id] : []
+    )
+  }
+
   resourceHistory(instanceId: string): Array<RelayInstanceResources> {
     return this.#resourceSamples.history(instanceId)
   }

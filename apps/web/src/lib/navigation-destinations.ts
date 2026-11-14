@@ -20,6 +20,7 @@ import {
   ScrollText,
   ShieldAlert,
   SlidersHorizontal,
+  SquareChevronRight,
   Table2,
   TerminalSquare,
   Waypoints,
@@ -235,6 +236,7 @@ export type ServerDestinationId =
   | "logs"
   | "network"
   | "startup"
+  | "terminal"
 
 type ServerWorkspaceKind = "network-stack" | "server"
 
@@ -252,6 +254,16 @@ export const serverDestinations = [
     label: "Console",
     permission: "instance.console.read",
     to: "/server/$serverId/console",
+    workspaces: ["network-stack", "server"],
+  },
+  {
+    // A shell in its container; the console is its own process.
+    icon: SquareChevronRight,
+    id: "terminal",
+    keywords: ["shell", "bash", "exec"],
+    label: "Terminal",
+    permission: "instance.terminal",
+    to: "/server/$serverId/terminal",
     workspaces: ["network-stack", "server"],
   },
   {
@@ -389,7 +401,7 @@ export const databaseDestinations = [
     id: "terminal",
     keywords: ["console", "shell", "cli", "psql", "mysql"],
     label: "Terminal",
-    permission: "database.terminal",
+    permission: "instance.terminal",
     to: "/db/$databaseId/terminal",
   },
   {
@@ -501,7 +513,7 @@ export const appDestinations = [
     id: "terminal",
     keywords: ["console", "shell", "exec", "bash"],
     label: "Terminal",
-    permission: "app.terminal",
+    permission: "instance.terminal",
     to: "/app/$appId/terminal",
   },
   {

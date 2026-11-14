@@ -170,6 +170,56 @@ describe("Relay control socket", () => {
     })
   })
 
+  // A shell in any kind of instance takes one action, and a database's no
+  // longer follows from importing a dump into it.
+  it("opens an instance's shell only for a client given the terminal action", async () => {
+    const relay = await startRelay()
+    const id = "0123456789ab"
+    const targets = [
+      { kind: "instance", id },
+      { kind: "database", id },
+      { kind: "app", id, service: "web" },
+    ]
+    const others = await relay.connect(
+      await relay.pair({
+        role: "custom",
+        actions: [
+          "relay.terminal",
+          "database.dump.import",
+          "app.manage",
+          "instance.console.write",
+        ],
+      })
+    )
+    for (const target of targets) {
+      const refused = sendRequest(others.socket, "terminal.attach", { target })
+      expect(await others.inbox.next()).toMatchObject({
+        code: "forbidden",
+        replyTo: refused,
+        type: "error",
+      })
+    }
+    const shells = await relay.connect(
+      await relay.pair({ role: "custom", actions: ["instance.terminal"] })
+    )
+    for (const target of targets) {
+      const opened = sendRequest(shells.socket, "terminal.attach", { target })
+      expect(await shells.inbox.next()).toMatchObject({
+        replyTo: opened,
+        type: "response",
+      })
+    }
+    // Nor does it reach the host's shell.
+    const host = sendRequest(shells.socket, "terminal.attach", {
+      target: { kind: "relay" },
+    })
+    expect(await shells.inbox.next()).toMatchObject({
+      code: "forbidden",
+      replyTo: host,
+      type: "error",
+    })
+  })
+
   it("keeps host files behind their own grants", async () => {
     const relay = await startRelay()
     const hostId = "relay:0123456789ab"

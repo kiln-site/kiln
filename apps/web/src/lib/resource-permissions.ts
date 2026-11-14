@@ -172,18 +172,32 @@ export const loadResourceGrantsEffect = Effect.fn("access.resolveGrants")(
         relayId: row.relay_id,
         resourceId: row.resource_id,
         resourceType: row.resource_type,
-        permissions: expandResourceGrantPermissions(
-          row,
-          row.resource_type === "app"
-            ? appOwnerSelections
-            : [{ kind: "collection", key: "all" }]
-        ),
+        permissions: ownerPermissions(row),
         source: "owner",
       })
     }
     return grants
   }
 )
+
+// What an owner holds on what they own: everything on a Relay or a database,
+// the list above on an App, and everything but its terminal on a game
+// server. Whoever may create game servers gets no shell in the ones they
+// create unless it's granted on its own, until ownership comes from a grant
+// made with the game server.
+function ownerPermissions(
+  row: Pick<GrantRow, "resource_type" | "engine">
+): Array<AccessPermission> {
+  if (row.resource_type === "app") {
+    return expandResourceGrantPermissions(row, appOwnerSelections)
+  }
+  const all = expandResourceGrantPermissions(row, [
+    { kind: "collection", key: "all" },
+  ])
+  return row.resource_type === "instance"
+    ? all.filter((permission) => permission !== "instance.terminal")
+    : all
+}
 
 function expandResourceGrantPermissions(
   row: Pick<GrantRow, "resource_type" | "engine">,

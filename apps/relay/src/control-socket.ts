@@ -1661,12 +1661,11 @@ function deployAction(kind: string | null): RelayAction | null {
 // runs in. Null refuses a target it doesn't know.
 function terminalAction(target: object | null): RelayAction | null {
   switch (objectString(target, "kind")) {
-    // A shell in a database's container reaches its data files and its
-    // engine's own login, everything a dump carries.
+    // A shell in any kind of instance takes the same action.
+    case "instance":
     case "database":
-      return "database.dump.import"
     case "app":
-      return "app.terminal"
+      return "instance.terminal"
     // Kiln's own containers are as much as the host's shell.
     case "relay":
     case "platform":

@@ -526,7 +526,11 @@ its Relay with `resource.freeze`, naming the deletion and the resource's full
 ID. The
 freeze takes the resource whole, as replacing it does, so it waits for
 everything running on it. It records the freeze in SQLite, then quiets the
-resource so nothing Kiln starts writes to it but its final backup:
+resource so nothing Kiln starts writes to it but its final backup.
+Everyone's terminal sessions on a game server, App, or database end, the
+shells left in its containers are hung up, and new sessions and input are
+refused; opening one takes the resource's lane, so one under way finishes
+before the freeze. Then:
 
 - A game server is stopped.
 - An App is stopped, and its containers' restart policies are set to `no`
@@ -535,12 +539,9 @@ resource so nothing Kiln starts writes to it but its final backup:
   mounts it and no App's configuration names it, the checks its deletion
   makes, and from then on an App that would start with it is refused.
 - A database keeps running, since its final backup is a live dump of it.
-  Everyone's terminal sessions on it end, its terminal clients are hung up,
-  and new sessions and input are refused; attaching takes the database's
-  lane, so one under way finishes before the freeze. Work a client already
-  sent may still finish, and game servers and Apps connected to it can
-  still write to it until it's deleted, so what's written during or after
-  its dump may not be in its final backup.
+  Work a shell already sent may still finish, and game servers and Apps
+  connected to it can still write to it until it's deleted, so what's
+  written during or after its dump may not be in its final backup.
 
 What quieting changes is recorded with the freeze before it's made. From then on the lanes
 refuse any operation that touches the resource when its turn comes,

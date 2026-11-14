@@ -125,6 +125,7 @@ import { Route as AppServerServerIdInfoRouteImport } from './routes/_app/server/
 import { Route as AppServerServerIdLogsRouteImport } from './routes/_app/server/$serverId.logs'
 import { Route as AppServerServerIdNetworkRouteImport } from './routes/_app/server/$serverId.network'
 import { Route as AppServerServerIdStartupRouteImport } from './routes/_app/server/$serverId.startup'
+import { Route as AppServerServerIdTerminalRouteImport } from './routes/_app/server/$serverId.terminal'
 import { Route as ApiCliAuthDeviceRouteImport } from './routes/api.cli.auth.device'
 import { Route as ApiCliAuthTokenRouteImport } from './routes/api.cli.auth.token'
 import { Route as ApiCliV1SplatRouteImport } from './routes/api.cli.v1.$'
@@ -720,6 +721,12 @@ const AppServerServerIdStartupRoute =
     path: '/startup',
     getParentRoute: () => AppServerServerIdRoute,
   } as any)
+const AppServerServerIdTerminalRoute =
+  AppServerServerIdTerminalRouteImport.update({
+    id: '/terminal',
+    path: '/terminal',
+    getParentRoute: () => AppServerServerIdRoute,
+  } as any)
 const ApiCliAuthDeviceRoute = ApiCliAuthDeviceRouteImport.update({
   id: '/api/cli/auth/device',
   path: '/api/cli/auth/device',
@@ -881,6 +888,7 @@ export interface FileRoutesByFullPath {
   '/server/$serverId/logs': typeof AppServerServerIdLogsRoute
   '/server/$serverId/network': typeof AppServerServerIdNetworkRoute
   '/server/$serverId/startup': typeof AppServerServerIdStartupRoute
+  '/server/$serverId/terminal': typeof AppServerServerIdTerminalRoute
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
@@ -998,6 +1006,7 @@ export interface FileRoutesByTo {
   '/server/$serverId/logs': typeof AppServerServerIdLogsRoute
   '/server/$serverId/network': typeof AppServerServerIdNetworkRoute
   '/server/$serverId/startup': typeof AppServerServerIdStartupRoute
+  '/server/$serverId/terminal': typeof AppServerServerIdTerminalRoute
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
@@ -1126,6 +1135,7 @@ export interface FileRoutesById {
   '/_app/server/$serverId/logs': typeof AppServerServerIdLogsRoute
   '/_app/server/$serverId/network': typeof AppServerServerIdNetworkRoute
   '/_app/server/$serverId/startup': typeof AppServerServerIdStartupRoute
+  '/_app/server/$serverId/terminal': typeof AppServerServerIdTerminalRoute
   '/api/cli/auth/device': typeof ApiCliAuthDeviceRoute
   '/api/cli/auth/token': typeof ApiCliAuthTokenRoute
   '/api/cli/v1/$': typeof ApiCliV1SplatRoute
@@ -1254,6 +1264,7 @@ export interface FileRouteTypes {
     | '/server/$serverId/logs'
     | '/server/$serverId/network'
     | '/server/$serverId/startup'
+    | '/server/$serverId/terminal'
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
@@ -1371,6 +1382,7 @@ export interface FileRouteTypes {
     | '/server/$serverId/logs'
     | '/server/$serverId/network'
     | '/server/$serverId/startup'
+    | '/server/$serverId/terminal'
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
@@ -1498,6 +1510,7 @@ export interface FileRouteTypes {
     | '/_app/server/$serverId/logs'
     | '/_app/server/$serverId/network'
     | '/_app/server/$serverId/startup'
+    | '/_app/server/$serverId/terminal'
     | '/api/cli/auth/device'
     | '/api/cli/auth/token'
     | '/api/cli/v1/$'
@@ -2368,6 +2381,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppServerServerIdStartupRouteImport
       parentRoute: typeof AppServerServerIdRoute
     }
+    '/_app/server/$serverId/terminal': {
+      id: '/_app/server/$serverId/terminal'
+      path: '/terminal'
+      fullPath: '/server/$serverId/terminal'
+      preLoaderRoute: typeof AppServerServerIdTerminalRouteImport
+      parentRoute: typeof AppServerServerIdRoute
+    }
     '/api/cli/auth/device': {
       id: '/api/cli/auth/device'
       path: '/api/cli/auth/device'
@@ -2679,6 +2699,7 @@ interface AppServerServerIdRouteChildren {
   AppServerServerIdLogsRoute: typeof AppServerServerIdLogsRoute
   AppServerServerIdNetworkRoute: typeof AppServerServerIdNetworkRoute
   AppServerServerIdStartupRoute: typeof AppServerServerIdStartupRoute
+  AppServerServerIdTerminalRoute: typeof AppServerServerIdTerminalRoute
   AppServerServerIdIndexRoute: typeof AppServerServerIdIndexRoute
 }
 
@@ -2690,6 +2711,7 @@ const AppServerServerIdRouteChildren: AppServerServerIdRouteChildren = {
   AppServerServerIdLogsRoute: AppServerServerIdLogsRoute,
   AppServerServerIdNetworkRoute: AppServerServerIdNetworkRoute,
   AppServerServerIdStartupRoute: AppServerServerIdStartupRoute,
+  AppServerServerIdTerminalRoute: AppServerServerIdTerminalRoute,
   AppServerServerIdIndexRoute: AppServerServerIdIndexRoute,
 }
 

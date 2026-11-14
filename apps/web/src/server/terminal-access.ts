@@ -16,18 +16,28 @@ export async function authorizeTerminal(
   target: TerminalTarget
 ): Promise<PersistedRelay> {
   switch (target.kind) {
+    // A shell in any kind of instance takes one permission. An App's is
+    // only ever granted on its Relay.
+    case "instance":
+      await requireRelayPermission({
+        instanceId: target.id,
+        permission: "instance.terminal",
+        relayId,
+        user,
+      })
+      return requiredRelay(relayId)
     case "app": {
       const { relay } = await authorizedAppFor(
         user,
         { appId: target.id, relayId },
-        "app.terminal"
+        "instance.terminal"
       )
       return relay
     }
     case "database":
       await requireRelayPermission({
         databaseId: target.id,
-        permission: "database.terminal",
+        permission: "instance.terminal",
         relayId,
         user,
       })

@@ -470,6 +470,8 @@ function InstanceRouteTitle() {
       if (pathname.endsWith("/startup")) return "Startup"
       if (pathname.endsWith("/network")) return "Network"
       if (pathname.endsWith("/info")) return "Info"
+      if (pathname.endsWith("/logs")) return "Logs"
+      if (pathname.endsWith("/terminal")) return "Terminal"
       return "Console"
     },
   })

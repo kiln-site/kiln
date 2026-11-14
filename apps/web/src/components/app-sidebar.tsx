@@ -946,6 +946,13 @@ const InstanceNavigation = React.memo(function InstanceNavigation({
           replace,
         })
       }
+      if (tab === "terminal") {
+        return navigate({
+          to: "/server/$serverId/terminal",
+          params: { serverId: nextServerId },
+          replace,
+        })
+      }
       return navigate({
         to: "/server/$serverId/console",
         params: { serverId: nextServerId },
@@ -1581,6 +1588,16 @@ const InstanceTabNavigationItem = React.memo(
             >
               {content}
             </Link>
+          ) : item.id === "terminal" ? (
+            <Link
+              to="/server/$serverId/terminal"
+              params={{ serverId }}
+              activeOptions={{ exact: true }}
+              activeProps={{ "data-active": true }}
+              preload="intent"
+            >
+              {content}
+            </Link>
           ) : item.id === "logs" ? (
             <Link
               to="/server/$serverId/logs"
@@ -1927,6 +1944,7 @@ function instanceTabFromPathname(pathname: string): InstanceTab | null {
   if (/^\/server\/[^/]+\/logs\/?$/.test(pathname)) return "logs"
   if (/^\/server\/[^/]+\/info\/?$/.test(pathname)) return "info"
   if (/^\/server\/[^/]+\/console\/?$/.test(pathname)) return "console"
+  if (/^\/server\/[^/]+\/terminal\/?$/.test(pathname)) return "terminal"
   return null
 }
 

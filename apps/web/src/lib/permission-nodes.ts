@@ -207,10 +207,20 @@ const hostLevelPermissions: ReadonlySet<string> = new Set([
   "relay.files.mount",
   "relay.database.read",
   "app.manage",
-  "app.terminal",
 ])
-export function isHostLevel(permission: string) {
-  return hostLevelPermissions.has(permission)
+// Ones that reach it only from a Relay, where they cover its Apps: an App's
+// shell can.
+const relayHostLevelPermissions: ReadonlySet<string> = new Set([
+  "instance.terminal",
+])
+export function isHostLevel(
+  permission: string,
+  scopeType: PermissionScopeType
+) {
+  return (
+    hostLevelPermissions.has(permission) ||
+    (scopeType === "relay" && relayHostLevelPermissions.has(permission))
+  )
 }
 export function isDestructive(permission: string) {
   return (

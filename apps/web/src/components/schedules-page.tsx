@@ -3571,20 +3571,12 @@ function NamedRestrictedTargetsNote({
   const shell = (target: ScheduleOption) =>
     action.type === "console_command" &&
     (target.kind === "database" || target.kind === "app")
-  const databases = targets.filter(
-    (target) => shell(target) && target.kind === "database"
-  )
-  const apps = targets.filter(
-    (target) => shell(target) && target.kind === "app"
-  )
+  const shells = targets.filter(shell)
   const others = targets.filter((target) => !shell(target))
   return (
     <p className="type-meta rounded-md border border-amber-400/30 bg-amber-400/5 px-2.5 py-2 text-pretty text-amber-300 light:text-amber-700">
-      {databases.length > 0
-        ? `Saving runs this command in ${targetList(databases)}'s shell, which needs Relay terminal permission. `
-        : null}
-      {apps.length > 0
-        ? `Saving runs this command in ${targetList(apps)}'s shell, which needs App terminal permission. `
+      {shells.length > 0
+        ? `Saving runs this command in ${targetList(shells)}'s shell, which needs the terminal permission (instance.terminal) there or on its Relay. `
         : null}
       {others.length > 0
         ? `You don't have permission to run this action on ${targetList(others)}. `
