@@ -470,7 +470,7 @@ const ContextGroup = memo(function ContextGroup({
       ) : null}
       <span className="type-meta ml-auto shrink-0 text-muted-foreground tabular-nums">
         {target.locked
-          ? "All permissions"
+          ? "Owned"
           : `${rows.length} ${rows.length === 1 ? "entry" : "entries"}`}
       </span>
     </>
