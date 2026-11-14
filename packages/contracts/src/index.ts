@@ -2680,11 +2680,13 @@ export type RelayPlatformProxy = z.infer<typeof relayPlatformProxySchema>
 export type RelayPlatformTarget = z.infer<typeof relayPlatformTargetSchema>
 
 // Where a terminal's shell runs. Each person has one session per target.
+// - `instance`: a login shell in a game server's container.
 // - `app`: a login shell in one of an App's services.
 // - `database`: a login shell in a database's container.
 // - `relay`: a root shell on the Relay's host.
 // - `platform`: a login shell in one of Kiln's own containers.
 export const terminalTargetSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("instance"), id: instanceIdSchema }).strict(),
   z
     .object({
       kind: z.literal("app"),

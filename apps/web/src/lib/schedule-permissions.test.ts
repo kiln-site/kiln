@@ -26,7 +26,7 @@ const consoleAction: ScheduleAction = {
 }
 
 describe("schedule authorization", () => {
-  it("runs a database command only for those with a terminal on its Relay", () => {
+  it("runs a database command only for those who may open its terminal", () => {
     const database: ScheduleTarget = {
       id: "database-a",
       kind: "database",
@@ -38,14 +38,11 @@ describe("schedule authorization", () => {
       relayId: "relay-a",
       resourceId: "database-a",
       resourceType: "database",
-      permissions: ["schedule.create", "database.terminal", "instance.power.restart"],
+      permissions: ["schedule.create", "instance.power.restart"],
     }
-    const relayGrant: AccessGrant = {
-      id: "relay-grant",
-      relayId: "relay-a",
-      resourceId: "relay-a",
-      resourceType: "relay",
-      permissions: ["schedule.create", "relay.terminal"],
+    const terminalGrant: AccessGrant = {
+      ...databaseGrant,
+      permissions: ["schedule.create", "instance.terminal"],
     }
     const named: ScheduleAction = {
       ...consoleAction,
@@ -61,9 +58,9 @@ describe("schedule authorization", () => {
 
     expect(
       scheduleAuthorizationFailure({ ...input, grants: [databaseGrant] })
-    ).toContain("relay.terminal")
+    ).toContain("instance.terminal")
     expect(
-      scheduleAuthorizationFailure({ ...input, grants: [relayGrant] })
+      scheduleAuthorizationFailure({ ...input, grants: [terminalGrant] })
     ).toBeNull()
   })
 
@@ -107,16 +104,16 @@ describe("schedule authorization", () => {
       })
 
     expect(failure([command], [relayGrant(["app.manage"])])).toContain(
-      "app.terminal"
+      "instance.terminal"
     )
     // Configuring an App no longer stops it.
     expect(
-      failure([stop], [relayGrant(["app.terminal", "app.manage"])])
+      failure([stop], [relayGrant(["instance.terminal", "app.manage"])])
     ).toContain("instance.power.stop")
     expect(
       failure(
         [command, stop],
-        [relayGrant(["app.terminal", "instance.power.stop"])]
+        [relayGrant(["instance.terminal", "instance.power.stop"])]
       )
     ).toBeNull()
     // Without Hearth's mark, a command step never reaches the App, so it

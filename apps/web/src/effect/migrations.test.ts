@@ -696,8 +696,8 @@ describeMysql("database migrations", () => {
             "instance.files.delete",
             "instance.files.write",
           ])
-          // Selecting every App permission also covered an App's power and
-          // deploying it.
+          // Selecting every App permission also covered an App's power,
+          // deploying it, and its shell.
           expect(yield* granted("apps")).toEqual([
             "app.all",
             "instance.deploy",
@@ -706,6 +706,7 @@ describeMysql("database migrations", () => {
             "instance.limits.write",
             "instance.network.write",
             "instance.power.kill",
+            "instance.terminal",
           ])
           expect(yield* granted("server")).toEqual(["instance.console.read"])
           expect(
@@ -1010,6 +1011,7 @@ describeMysql("database migrations", () => {
             "instance.deploy",
             "instance.limits.write",
             "instance.network.write",
+            "instance.terminal",
           ])
           expect(yield* granted("server")).toEqual([
             "instance.configuration.write",
@@ -1481,6 +1483,7 @@ describeMysql("database migrations", () => {
           expect(yield* granted("everything")).toEqual([
             "app.all",
             "instance.network.write",
+            "instance.terminal",
           ])
           expect(yield* granted("viewer")).toEqual(["app.read"])
           expect(yield* granted("server")).toEqual(["instance.network.read"])
@@ -1507,6 +1510,117 @@ describeMysql("database migrations", () => {
               ? JSON.parse(relay.actions)
               : relay?.actions
           ).toEqual(["app.read", "app.manage", "instance.network.write"])
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
+      "keeps who could open an App's or a database's shell, as the terminal permission every instance takes",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while each kind's shell had a permission of
+          // its own.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 75)
+          )
+          const relayId = "1".repeat(12)
+          const databaseId = "6".repeat(12)
+          yield* insertRelay(relayId, {
+            client_actions: JSON.stringify([
+              "app.read",
+              "app.terminal",
+              "database.dump.import",
+            ]),
+            client_role: "custom",
+          })
+          const grant = Effect.fnUntraced(function* (
+            id: string,
+            resourceType: "database" | "relay",
+            resourceId: string,
+            keys: ReadonlyArray<string>
+          ) {
+            yield* insertUser(id)
+            yield* insertGrant({
+              id,
+              relayId,
+              resourceId,
+              resourceType,
+              userId: id,
+            })
+            yield* insertRows(
+              "access_selection",
+              keys.map((key) => ({
+                access_id: id,
+                selection_kind: key.endsWith(".all")
+                  ? "collection"
+                  : "permission",
+                selection_key: key,
+              }))
+            )
+          })
+          yield* grant("app-shell", "relay", relayId, ["app.terminal"])
+          yield* grant("every-app", "relay", relayId, ["app.all"])
+          yield* grant("database-shell", "database", databaseId, [
+            "database.read",
+            "database.terminal",
+          ])
+          yield* grant("database-shells", "relay", relayId, [
+            "database.terminal.all",
+          ])
+          yield* grant("viewer", "relay", relayId, ["app.read"])
+
+          yield* applyMigrations(migrations)
+
+          const granted = (id: string) =>
+            sql<{ key: string }>`
+              SELECT selection_key AS \`key\`
+                FROM ${sql(databaseTableName("access_selection"))}
+               WHERE access_id = ${id} ORDER BY selection_key
+            `.pipe(Effect.map((rows) => rows.map((row) => row.key)))
+          expect(yield* granted("app-shell")).toEqual(["instance.terminal"])
+          expect(yield* granted("every-app")).toEqual([
+            "app.all",
+            "instance.terminal",
+          ])
+          expect(yield* granted("database-shell")).toEqual([
+            "database.read",
+            "instance.terminal",
+          ])
+          expect(yield* granted("database-shells")).toEqual([
+            "instance.terminal",
+          ])
+          expect(yield* granted("viewer")).toEqual(["app.read"])
+
+          // What was stored now loads, and opens the shell it could.
+          expect(
+            expandStoredSelections(
+              [{ key: "app.all", kind: "collection" }],
+              "relay"
+            )
+          ).not.toContain("instance.terminal")
+          expect(
+            expandStoredSelections(
+              (yield* granted("database-shell")).map((key) => ({
+                key,
+                kind: "permission" as const,
+              })),
+              "database"
+            )
+          ).toContain("instance.terminal")
+
+          // A database's shell took importing a dump on the Relay, which
+          // stays for that and isn't widened to every shell there.
+          const [relay] = yield* sql<{ actions: unknown }>`
+            SELECT client_actions AS actions
+              FROM ${sql(databaseTableName("relay"))} WHERE id = ${relayId}
+          `
+          expect(
+            typeof relay?.actions === "string"
+              ? JSON.parse(relay.actions)
+              : relay?.actions
+          ).toEqual(["app.read", "instance.terminal", "database.dump.import"])
         }),
       schemaBuildTimeout
     )

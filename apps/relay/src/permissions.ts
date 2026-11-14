@@ -41,7 +41,6 @@ export const relayActions = [
   "app.manage",
   "app.delete",
   "app.logs.read",
-  "app.terminal",
   "backup.read",
   "backup.create",
   "backup.download",
@@ -76,6 +75,7 @@ export const relayActions = [
   "instance.network.write",
   "instance.logs.read",
   "instance.logs.share",
+  "instance.terminal",
 ] as const
 
 export type RelayAction = (typeof relayActions)[number]

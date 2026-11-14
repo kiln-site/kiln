@@ -269,6 +269,7 @@ export const PermissionEditor = memo(function PermissionEditor({
           rows={rowsByTarget[0][1]}
           focusedId={focusedId}
           editable={editable}
+          scopeType={rowsByTarget[0][0].context.scope.resourceType}
           onSelect={select}
           onRemove={remove}
         />
@@ -469,7 +470,7 @@ const ContextGroup = memo(function ContextGroup({
       ) : null}
       <span className="type-meta ml-auto shrink-0 text-muted-foreground tabular-nums">
         {target.locked
-          ? "All permissions"
+          ? "Owned"
           : `${rows.length} ${rows.length === 1 ? "entry" : "entries"}`}
       </span>
     </>
@@ -517,6 +518,7 @@ const ContextGroup = memo(function ContextGroup({
           rows={rows}
           focusedId={focusedId}
           editable={editable}
+          scopeType={target.context.scope.resourceType}
           onSelect={onSelect}
           onRemove={onRemove}
         />
@@ -538,12 +540,14 @@ const RowList = memo(function RowList({
   rows,
   focusedId,
   editable,
+  scopeType,
   onSelect,
   onRemove,
 }: {
   rows: ReadonlyArray<Row>
   focusedId: string | null
   editable: boolean
+  scopeType: PermissionScopeType
   onSelect: (row: Row) => void
   onRemove: (row: Row) => void
 }) {
@@ -555,6 +559,7 @@ const RowList = memo(function RowList({
           row={row}
           focused={row.id === focusedId}
           editable={editable}
+          scopeType={scopeType}
           onSelect={onSelect}
           onRemove={onRemove}
         />
@@ -567,12 +572,14 @@ const EntryRow = memo(function EntryRow({
   row,
   focused,
   editable,
+  scopeType,
   onSelect,
   onRemove,
 }: {
   row: Row
   focused: boolean
   editable: boolean
+  scopeType: PermissionScopeType
   onSelect: (row: Row) => void
   onRemove: (row: Row) => void
 }) {
@@ -581,7 +588,7 @@ const EntryRow = memo(function EntryRow({
   const host =
     item.kind === "node" &&
     item.selection.kind === "permission" &&
-    isHostLevel(item.selection.key)
+    isHostLevel(item.selection.key, scopeType)
   return (
     <li
       data-focused={focused}
@@ -983,7 +990,7 @@ function ItemDetails({
     () => (self ? permissionsIncluding(self, scopeType, capabilities) : []),
     [self, scopeType, capabilities]
   )
-  const host = (expanded ?? []).filter(isHostLevel)
+  const host = (expanded ?? []).filter((key) => isHostLevel(key, scopeType))
   const destructive = (expanded ?? []).some(isDestructive)
   const eyebrow =
     item.kind === "preset"
