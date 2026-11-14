@@ -207,19 +207,24 @@ function dnsPresentation(row: ResourceWebHostname) {
   }
 }
 
-/** The address Kiln generated for an app, if it has one. */
-export function useGeneratedHostname(resource: WebHostnameResourceRef) {
-  const { data } = useQuery({
+/**
+ * The names an instance holds whether or not a route serves them, such as
+ * an App's own address; undefined until they load.
+ */
+export function useHeldWebHostnames(
+  resource: WebHostnameResourceRef
+): ReadonlyArray<ResourceWebHostname> | undefined {
+  const { data, isPending } = useQuery({
     ...resourceWebHostnamesQueryOptions(
       resource.relayId,
       resource.resourceType,
       resource.resourceId
     ),
-    select: selectGenerated,
+    select: selectHeld,
   })
-  return data ?? null
+  return isPending ? undefined : (data ?? noHostnames)
 }
 
-function selectGenerated({ hostnames }: ResourceWebHostnames) {
-  return hostnames.find((row) => row.generated) ?? null
+function selectHeld({ hostnames }: ResourceWebHostnames) {
+  return hostnames.filter((row) => row.generated && row.status !== "removing")
 }

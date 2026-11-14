@@ -13,6 +13,20 @@ Kiln makes carries a comment naming the game server or app it belongs to.
 Records are DNS-only unless a web route turns on Cloudflare's proxy (below);
 a game server's address always is, since players connect to it directly.
 
+## On an instance's Network page
+
+Every instance's Network page has one **Domains** table: each name the
+instance holds and where it goes, a port or a redirect to another URL. Each
+row is a web route, served through the Relay's proxy, and one of them is the
+instance's primary domain (★), the one an App's header and lists show. A
+name nothing serves yet, such as a new App's own address, is a row too,
+which says so and offers to point it somewhere.
+
+A game server also has **Join address** above it: the addresses players
+type, which go straight to its game port and not through the proxy. Each
+shows what to type, its port left out when an SRV record carries it, and
+one is its primary (★).
+
 ## Web route hostnames
 
 A game server's and an App's web routes are the same thing, read and saved
@@ -142,10 +156,10 @@ App waits up to eight seconds for that, since Cloudflare is asked along the
 way; a route saved later than the App's containers shows, on a Relay behind
 someone else's proxy, as waiting for a deployment.
 
-An App that doesn't say has the address ready for a route, and is offered
-one on its Network page while it has none: each port its running services
+An App that doesn't say has the address ready for a route. Its row in the
+Domains table offers one while it has none: each port its running services
 say they listen on that could be a website's, of any service, as a button
-that serves the address from it. Ports of other protocols (a database's,
+that points the address at it. Ports of other protocols (a database's,
 SSH, 443) aren't offered. Nothing is routed until someone picks one: a port
 an image exposes says it listens there, not that it is a website or meant
 to be public, and several candidates, or a Compose project's services,
@@ -168,10 +182,11 @@ the domain's owner (Kiln's administrators, for Kiln's), and Kiln never
 generates one. New connections start with both.
 
 People with a game server's network permission can add, rename, and remove
-its vanity addresses on its Network page, under domains its owner or they
-themselves provide, or Kiln provides. A name they choose is refused the same
-way as a web route's. An app's generated address stays until it is deleted
-or the app is; while a web route uses it, it goes with the route instead.
+its join addresses on its Network page, and choose its primary one, under
+domains its owner or they themselves provide, or Kiln provides. A name they
+choose is refused the same way as a web route's. An App's generated address
+stays, as a row of its Domains table, until it is deleted there or the App
+is; removing the route that serves it leaves the address pointing nowhere.
 
 ## Who holds a hostname
 

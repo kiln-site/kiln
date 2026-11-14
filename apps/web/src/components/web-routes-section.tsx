@@ -17,7 +17,6 @@ import {
   LoaderCircle,
   Pencil,
   Plus,
-  Star,
   Trash2,
 } from "lucide-react"
 
@@ -28,7 +27,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { cn } from "@workspace/ui/lib/utils"
 
 import {
   DataTableActionGroup,
@@ -36,6 +34,7 @@ import {
 } from "@/components/data-table"
 import { DataTable } from "@/components/data-table-view"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
+import { PrimaryStar } from "@/components/primary-star"
 import { StatusIndicator } from "@/components/status-indicator"
 import {
   WebRouteDialog,
@@ -45,6 +44,7 @@ import { WebCertificateStatus } from "@/components/web-certificate-status"
 import {
   AdoptRecordButton,
   useAdoptableWebHostnames,
+  useHeldWebHostnames,
   useWebHostnameProxied,
   WebHostnameDnsStatus,
   type WebHostnameResourceRef,
@@ -61,6 +61,9 @@ import type { ResourceWebHostname } from "@/server/domains"
 const AdoptRecordDialog = React.lazy(async () => ({
   default: (await import("@/components/domains-dialogs")).AdoptRecordDialog,
 }))
+const ReleaseHostnameDialog = React.lazy(async () => ({
+  default: (await import("@/components/domains-dialogs")).ReleaseHostnameDialog,
+}))
 
 // A route as this section edits it: an app's names the service it reaches.
 export type WebRouteRow = RelayInstanceWebRouteInput & {
@@ -68,6 +71,11 @@ export type WebRouteRow = RelayInstanceWebRouteInput & {
 }
 
 type DisplayedRoute = WebRouteRow & { readonly rowId: string }
+
+// A row of the table: a route, or a name held that no route serves yet.
+type DomainRow =
+  | { held?: undefined; route: DisplayedRoute; rowId: string }
+  | { held: ResourceWebHostname; route?: undefined; rowId: string }
 
 /** Whether a route's hostnames go through Cloudflare's proxy, as changed. */
 export interface WebRouteProxyChange {
@@ -77,16 +85,17 @@ export interface WebRouteProxyChange {
 
 export type { WebRouteServiceOption }
 
-// Domains Traefik serves for a game server or an app, in one table. Each
-// change saves the whole list, and the table shows it while it saves.
-/** An address nothing serves yet, and where its website might answer. */
-export interface UnservedAddress {
-  hostname: string
-  targets: ReadonlyArray<{ port: number; service: string }>
+/** A port a name nothing serves yet might be pointed at. */
+export interface WebRouteTarget {
+  port: number
+  service: string
 }
 
+// An instance's domains, in one table: each name it holds and where Traefik
+// sends it. A name no route serves yet, such as a new App's own address, is
+// a row too. Each change saves the whole list of routes, and the table shows
+// it while it saves.
 export function WebRoutesSection({
-  address,
   canWrite,
   dnsResource,
   error,
@@ -95,11 +104,9 @@ export function WebRoutesSection({
   services,
   status,
   statusAction,
+  targets = noTargets,
   onSave,
 }: {
-  // An App's own address while it has no route, with the ports its running
-  // services listen on that could be its website's: one click serves it.
-  address?: UnservedAddress | undefined
   canWrite: boolean
   // Whose DNS records the domains' badges read.
   dnsResource: WebHostnameResourceRef
@@ -113,6 +120,9 @@ export function WebRoutesSection({
   status: IdentityStatusPresentation | null
   // Applies saved routes, such as by deploying or restarting.
   statusAction?: React.ReactNode
+  // The ports an App's running services listen on that could be a
+  // website's: one click points a name nothing serves at one.
+  targets?: ReadonlyArray<WebRouteTarget>
   // `proxy` when a route's dialog changed whether its hostnames go through
   // Cloudflare's proxy.
   onSave: (
@@ -121,11 +131,17 @@ export function WebRoutesSection({
   ) => Promise<unknown>
 }) {
   const [editing, setEditing] = React.useState<
-    { mode: "add" } | { mode: "edit"; route: DisplayedRoute } | null
+    | { hostname?: string; mode: "add" }
+    | { mode: "edit"; route: DisplayedRoute }
+    | null
   >(null)
   const [adopting, setAdopting] = React.useState<ResourceWebHostname | null>(
     null
   )
+  const [releasing, setReleasing] = React.useState<ResourceWebHostname | null>(
+    null
+  )
+  const held = useHeldWebHostnames(dnsResource)
   const proxiedFor = useWebHostnameProxied(dnsResource)
   const adoptable = useAdoptableWebHostnames(dnsResource)
   const save = useMutation({
@@ -163,6 +179,17 @@ export function WebRoutesSection({
     [save.isPending, save.variables, saved]
   )
   const primary = displayed ? primaryWebRoute(displayed) : undefined
+  // The routes, then each name held that none of them serves.
+  const rows = React.useMemo((): Array<DomainRow> | undefined => {
+    if (!displayed || !held) return undefined
+    const served = new Set(displayed.flatMap(webRouteHostnames))
+    return [
+      ...displayed.map((route) => ({ route, rowId: route.rowId })),
+      ...held
+        .filter((name) => !served.has(name.hostname))
+        .map((name) => ({ held: name, rowId: `held-${name.id}` })),
+    ]
+  }, [displayed, held])
   // A game server is reached at its own address; only an app's header and
   // list show a domain.
   const showPrimary = kind === "app"
@@ -200,10 +227,10 @@ export function WebRoutesSection({
   // Undo acts on the routes as they are when it's clicked, not as they were
   // when the toast appeared. Leaving the page takes its Undo away, since
   // the routes can change elsewhere after that.
-  const latest = React.useRef({ pending: save.isPending, saved })
+  const latest = React.useRef({ held, pending: save.isPending, saved })
   React.useEffect(() => {
-    latest.current = { pending: save.isPending, saved }
-  }, [save.isPending, saved])
+    latest.current = { held, pending: save.isPending, saved }
+  }, [held, save.isPending, saved])
   const undoToasts = React.useRef(new Set<number | string>())
   const mounted = React.useRef(true)
   React.useEffect(() => {
@@ -243,10 +270,19 @@ export function WebRoutesSection({
           primary ? { ...candidate, primary: false } : candidate
         )
         next.splice(Math.min(index, next.length), 0, { ...removed, primary })
-        commit(next, "Could not restore the route")
+        commit(next, "Could not restore the domain")
       }
-      commit(remaining, "Could not remove the route", () => {
-        const message = `Removed ${route.hostname}${route.path ?? ""}`
+      // A name the instance holds anyway stays in the table, served by
+      // nothing.
+      const stays =
+        latest.current.held?.some((name) => name.hostname === route.hostname) &&
+        !remaining.some((other) =>
+          webRouteHostnames(other).includes(route.hostname)
+        )
+      commit(remaining, "Could not remove the domain", () => {
+        const message = stays
+          ? `Stopped serving ${route.hostname}`
+          : `Removed ${route.hostname}${route.path ?? ""}`
         if (!mounted.current) {
           showToast({ message, type: "success" })
           return
@@ -275,16 +311,17 @@ export function WebRoutesSection({
     setEditing({ mode: "edit", route })
   }, [])
   const serve = React.useCallback(
-    (hostname: string, target: UnservedAddress["targets"][number]) => {
+    (hostname: string, target: WebRouteTarget) => {
       if (!saved || save.isPending) return
       commit(
         [
+          ...saved,
           {
             hostname,
             httpsRedirect: true,
             name: "",
             path: null,
-            primary: true,
+            primary: !primaryWebRoute(saved),
             redirect: null,
             service: target.service,
             stripPrefix: true,
@@ -292,11 +329,14 @@ export function WebRoutesSection({
             www: "none",
           },
         ],
-        "Could not route the address"
+        "Could not point the domain"
       )
     },
     [commit, save.isPending, saved]
   )
+  const point = React.useCallback((hostname: string) => {
+    setEditing({ hostname, mode: "add" })
+  }, [])
 
   const busy = !canWrite || !saved || save.isPending
 
@@ -305,7 +345,7 @@ export function WebRoutesSection({
       <div className="flex min-h-12 items-center justify-between gap-3 border-b border-border/70 px-4 py-2">
         <div className="flex min-w-0 items-center gap-2.5">
           <Globe2 className="size-4 shrink-0 text-primary-ink" />
-          <h2 className="truncate text-sm font-semibold">Web routes</h2>
+          <h2 className="truncate text-sm font-semibold">Domains</h2>
           {status && displayed?.length ? (
             <StatusIndicator status={status} />
           ) : null}
@@ -320,34 +360,11 @@ export function WebRoutesSection({
               onClick={() => setEditing({ mode: "add" })}
             >
               <Plus />
-              Add route
+              Add domain
             </Button>
           ) : null}
         </div>
       </div>
-      {address && canWrite && saved?.length === 0 && !save.isPending ? (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border/70 bg-muted/25 px-4 py-2.5 text-xs text-muted-foreground">
-          <span>
-            Nothing answers at{" "}
-            <span className="font-medium text-foreground">
-              {address.hostname}
-            </span>{" "}
-            yet. Serve it from
-          </span>
-          {address.targets.map((target) => (
-            <Button
-              key={`${target.service}:${target.port}`}
-              className="h-6 px-2 font-mono text-xs"
-              size="sm"
-              type="button"
-              variant="outline"
-              onClick={() => serve(address.hostname, target)}
-            >
-              {target.service}:{target.port}
-            </Button>
-          ))}
-        </div>
-      ) : null}
       <WebRoutesTable
         adoptable={adoptable}
         canWrite={canWrite}
@@ -356,17 +373,22 @@ export function WebRoutesSection({
         error={error}
         pending={save.isPending}
         primaryRowId={primary?.rowId}
-        routes={displayed}
+        rows={rows}
         services={services}
         showPrimary={showPrimary}
+        targets={targets}
         onAdd={canWrite ? () => setEditing({ mode: "add" }) : undefined}
         onAdopt={setAdopting}
         onEdit={edit}
         onMakePrimary={makePrimary}
+        onPoint={point}
+        onRelease={setReleasing}
         onRemove={remove}
+        onServe={serve}
       />
       {editing && saved ? (
         <WebRouteDialog
+          hostname={editing.mode === "add" ? editing.hostname : undefined}
           proxiedFor={proxiedFor}
           route={editing.mode === "edit" ? editing.route : undefined}
           services={services}
@@ -387,7 +409,7 @@ export function WebRoutesSection({
                   )
                 : [
                     ...saved,
-                    // The first route a server or app gets is its primary.
+                    // The first domain a server or app gets is its primary.
                     { ...route, primary: !primaryWebRoute(saved) },
                   ]
             await save.mutateAsync({
@@ -413,6 +435,17 @@ export function WebRoutesSection({
           />
         </React.Suspense>
       ) : null}
+      {releasing ? (
+        <React.Suspense fallback={null}>
+          <ReleaseHostnameDialog
+            key={releasing.id}
+            hostname={releasing}
+            onOpenChange={(open) => {
+              if (!open) setReleasing(null)
+            }}
+          />
+        </React.Suspense>
+      ) : null}
     </section>
   )
 }
@@ -423,7 +456,9 @@ function withPrimary(routes: Array<WebRouteRow>): Array<WebRouteRow> {
   return routes.map((route) => ({ ...route, primary: route === primary }))
 }
 
-const columnHelper = createDataTableColumnHelper<DisplayedRoute>()
+const noTargets: ReadonlyArray<WebRouteTarget> = []
+
+const columnHelper = createDataTableColumnHelper<DomainRow>()
 
 const WebRoutesTable = React.memo(function WebRoutesTable({
   adoptable,
@@ -433,14 +468,18 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
   error,
   pending,
   primaryRowId,
-  routes,
+  rows,
   services,
   showPrimary,
+  targets,
   onAdd,
   onAdopt,
   onEdit,
   onMakePrimary,
+  onPoint,
+  onRelease,
   onRemove,
+  onServe,
 }: {
   adoptable: ReadonlyArray<ResourceWebHostname>
   canWrite: boolean
@@ -449,45 +488,52 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
   error: Error | null
   pending: boolean
   primaryRowId: string | undefined
-  routes: ReadonlyArray<DisplayedRoute> | undefined
+  rows: ReadonlyArray<DomainRow> | undefined
   services: ReadonlyArray<WebRouteServiceOption> | undefined
   showPrimary: boolean
+  targets: ReadonlyArray<WebRouteTarget>
   onAdd?: () => void
   onAdopt: (hostname: ResourceWebHostname) => void
   onEdit: (route: DisplayedRoute) => void
   onMakePrimary: (route: DisplayedRoute) => void
+  onPoint: (hostname: string) => void
+  onRelease: (hostname: ResourceWebHostname) => void
   onRemove: (route: DisplayedRoute) => void
+  onServe: (hostname: string, target: WebRouteTarget) => void
 }) {
   const source = React.useMemo(
-    (): DataTableSource<DisplayedRoute> => ({
-      body: routes
+    (): DataTableSource<DomainRow> => ({
+      body: rows
         ? { kind: "ready" }
         : error
           ? { kind: "error", error }
           : { kind: "loading", rowCount: 2 },
       refreshing: false,
-      rows: routes ? [...routes] : [],
+      rows: rows ? [...rows] : [],
     }),
-    [error, routes]
+    [error, rows]
   )
   const definition = React.useMemo(
     () =>
       defineDataTable({
-        ariaLabel: "Web routes",
+        ariaLabel: "Domains",
         columns: columnHelper.columns([
           columnHelper.display({
             id: "kind",
             header: () => <span className="sr-only">Primary</span>,
             enableSorting: false,
-            cell: ({ row }) => (
-              <RouteKindCell
-                disabled={disabled || !canWrite}
-                primary={row.original.rowId === primaryRowId}
-                route={row.original}
-                showPrimary={showPrimary}
-                onMakePrimary={onMakePrimary}
-              />
-            ),
+            cell: ({ row }) =>
+              row.original.route ? (
+                <RouteKindCell
+                  disabled={disabled || !canWrite}
+                  primary={row.original.rowId === primaryRowId}
+                  route={row.original.route}
+                  showPrimary={showPrimary}
+                  onMakePrimary={onMakePrimary}
+                />
+              ) : (
+                <PlainKindIcon />
+              ),
             meta: dataTableColumnMeta(
               { width: "3rem" },
               {
@@ -500,13 +546,19 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
             id: "domain",
             header: "Domain",
             enableSorting: false,
-            cell: ({ row }) => (
-              <RouteDomainCell
-                dnsResource={dnsResource}
-                route={row.original}
-                services={services}
-              />
-            ),
+            cell: ({ row }) =>
+              row.original.route ? (
+                <RouteDomainCell
+                  dnsResource={dnsResource}
+                  route={row.original.route}
+                  services={services}
+                />
+              ) : (
+                <HeldDomainCell
+                  dnsResource={dnsResource}
+                  hostname={row.original.held.hostname}
+                />
+              ),
             meta: dataTableColumnMeta(
               { width: { base: "minmax(0,1fr)", sm: "minmax(0,1.3fr)" } },
               { cellClassName: "pl-1", headerClassName: "pl-1" }
@@ -516,9 +568,20 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
             id: "destination",
             header: "Destination",
             enableSorting: false,
-            cell: ({ row }) => (
-              <RouteDestinationCell route={row.original} services={services} />
-            ),
+            cell: ({ row }) =>
+              row.original.route ? (
+                <RouteDestinationCell
+                  route={row.original.route}
+                  services={services}
+                />
+              ) : (
+                <HeldDestinationCell
+                  disabled={disabled}
+                  hostname={row.original.held.hostname}
+                  targets={canWrite ? targets : noTargets}
+                  onServe={onServe}
+                />
+              ),
             meta: dataTableColumnMeta({
               hideBelow: "sm",
               width: "minmax(0,1fr)",
@@ -528,20 +591,30 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
             id: "actions",
             header: () => <span className="sr-only">Actions</span>,
             enableSorting: false,
-            cell: ({ row }) => (
-              <RouteActions
-                adoptable={adoptable.find(
-                  (hostname) => hostname.hostname === row.original.hostname
-                )}
-                canWrite={canWrite}
-                disabled={disabled}
-                pending={pending && row.original.id === undefined}
-                route={row.original}
-                onAdopt={onAdopt}
-                onEdit={onEdit}
-                onRemove={onRemove}
-              />
-            ),
+            cell: ({ row }) =>
+              row.original.route ? (
+                <RouteActions
+                  adoptable={adoptable.find(
+                    (hostname) =>
+                      hostname.hostname === row.original.route?.hostname
+                  )}
+                  canWrite={canWrite}
+                  disabled={disabled}
+                  pending={pending && row.original.route.id === undefined}
+                  route={row.original.route}
+                  onAdopt={onAdopt}
+                  onEdit={onEdit}
+                  onRemove={onRemove}
+                />
+              ) : (
+                <HeldActions
+                  canWrite={canWrite}
+                  disabled={disabled}
+                  held={row.original.held}
+                  onPoint={onPoint}
+                  onRelease={onRelease}
+                />
+              ),
             meta: dataTableColumnMeta(
               {
                 width:
@@ -553,7 +626,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
             ),
           }),
         ]),
-        getRowId: (route) => route.rowId,
+        getRowId: (row) => row.rowId,
       }),
     [
       adoptable,
@@ -563,11 +636,15 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
       onAdopt,
       onEdit,
       onMakePrimary,
+      onPoint,
+      onRelease,
       onRemove,
+      onServe,
       pending,
       primaryRowId,
       services,
       showPrimary,
+      targets,
     ]
   )
 
@@ -580,7 +657,7 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
             onAdd ? (
               <Button size="sm" type="button" onClick={onAdd}>
                 <Plus />
-                Add route
+                Add domain
               </Button>
             ) : undefined
           }
@@ -592,13 +669,21 @@ const WebRoutesTable = React.memo(function WebRoutesTable({
           icon={
             <Globe2 className="size-6 text-muted-foreground/45 light:text-muted-foreground/72" />
           }
-          title="No web routes"
+          title="No domains"
         />
       }
       source={source}
     />
   )
 })
+
+function PlainKindIcon() {
+  return (
+    <span className="grid size-7 place-items-center text-muted-foreground">
+      <Globe2 className="size-4" aria-hidden="true" />
+    </span>
+  )
+}
 
 const RouteKindCell = React.memo(function RouteKindCell({
   disabled,
@@ -625,43 +710,125 @@ const RouteKindCell = React.memo(function RouteKindCell({
       </Tooltip>
     )
   }
-  if (!showPrimary) {
+  if (!showPrimary) return <PlainKindIcon />
+  return (
+    <PrimaryStar
+      disabled={disabled}
+      name={route.hostname}
+      noun="domain"
+      primary={primary}
+      onMakePrimary={() => onMakePrimary(route)}
+    />
+  )
+})
+
+// A name the instance holds that no route serves.
+const HeldDomainCell = React.memo(function HeldDomainCell({
+  dnsResource,
+  hostname,
+}: {
+  dnsResource: WebHostnameResourceRef
+  hostname: string
+}) {
+  return (
+    <div className="min-w-0">
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="truncate text-sm font-medium">{hostname}</span>
+        <WebHostnameDnsStatus hostname={hostname} resource={dnsResource} />
+      </span>
+      <span className="type-meta block truncate text-muted-foreground sm:hidden">
+        Not pointed anywhere
+      </span>
+    </div>
+  )
+})
+
+const HeldDestinationCell = React.memo(function HeldDestinationCell({
+  disabled,
+  hostname,
+  targets,
+  onServe,
+}: {
+  disabled: boolean
+  hostname: string
+  targets: ReadonlyArray<WebRouteTarget>
+  onServe: (hostname: string, target: WebRouteTarget) => void
+}) {
+  if (targets.length === 0) {
     return (
-      <span className="grid size-7 place-items-center text-muted-foreground">
-        <Globe2 className="size-4" aria-hidden="true" />
+      <span className="type-meta truncate text-muted-foreground">
+        Not pointed anywhere
       </span>
     )
   }
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
+    <span className="type-meta flex min-w-0 items-center gap-1.5 overflow-hidden text-muted-foreground">
+      <span className="shrink-0">Point at</span>
+      {targets.map((target) => (
         <Button
-          aria-label={
-            primary
-              ? `${route.hostname} is the primary domain`
-              : `Make ${route.hostname} the primary domain`
-          }
-          aria-pressed={primary}
-          className={cn(
-            primary
-              ? "text-primary-ink hover:text-primary-ink"
-              : "text-muted-foreground/70 hover:text-primary-ink"
-          )}
-          disabled={disabled && !primary}
-          size="icon-sm"
+          key={`${target.service}:${target.port}`}
+          className="h-6 shrink-0 px-2 font-mono text-xs"
+          disabled={disabled}
+          size="sm"
           type="button"
-          variant="ghost"
-          onClick={() => {
-            if (!primary) onMakePrimary(route)
-          }}
+          variant="outline"
+          onClick={() => onServe(hostname, target)}
         >
-          <Star className={cn(primary && "fill-current")} />
+          {target.service}:{target.port}
         </Button>
-      </TooltipTrigger>
-      <TooltipContent>
-        {primary ? "Primary domain" : "Make primary"}
-      </TooltipContent>
-    </Tooltip>
+      ))}
+    </span>
+  )
+})
+
+const HeldActions = React.memo(function HeldActions({
+  canWrite,
+  disabled,
+  held,
+  onPoint,
+  onRelease,
+}: {
+  canWrite: boolean
+  disabled: boolean
+  held: ResourceWebHostname
+  onPoint: (hostname: string) => void
+  onRelease: (hostname: ResourceWebHostname) => void
+}) {
+  if (!canWrite) return null
+  return (
+    <DataTableActionGroup>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            aria-label={`Choose where ${held.hostname} goes`}
+            disabled={disabled}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+            onClick={() => onPoint(held.hostname)}
+          >
+            <Pencil />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Choose where it goes</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            aria-label={`Delete ${held.hostname}`}
+            className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
+            disabled={disabled || !held.canRelease}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+            onClick={() => onRelease(held)}
+          >
+            <Trash2 />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Delete</TooltipContent>
+      </Tooltip>
+    </DataTableActionGroup>
   )
 })
 

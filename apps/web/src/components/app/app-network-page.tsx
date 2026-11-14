@@ -40,7 +40,6 @@ import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
 import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
-import { useGeneratedHostname } from "@/components/web-hostname-dns"
 import {
   WebRoutesSection,
   type WebRouteProxyChange,
@@ -54,11 +53,7 @@ import {
   queryKeys,
   webRoutesQueryOptions,
 } from "@/lib/query-options"
-import {
-  deployApp,
-  updateAppConfig,
-  updateAppNetwork,
-} from "@/server/apps"
+import { deployApp, updateAppConfig, updateAppNetwork } from "@/server/apps"
 import { updateWebRoutes } from "@/server/domains"
 import { useAppDeployState } from "@/components/app/use-app-deploy-state"
 
@@ -132,8 +127,7 @@ export function AppNetworkPage() {
   )
 }
 
-// Domains Traefik serves from one of the app's services, like a server's
-// web routes.
+// Domains Traefik serves from one of the app's services, like a server's.
 function AppWebRoutes({
   app,
   canManage,
@@ -153,7 +147,6 @@ function AppWebRoutes({
     [app.id, app.relayId]
   )
   const state = useQuery(webRoutesQueryOptions(dnsResource))
-  const generated = useGeneratedHostname(dnsResource)
   const services = React.useMemo(
     () => appServiceOptions(app, compose),
     [app, compose]
@@ -180,29 +173,26 @@ function AppWebRoutes({
     [app.id, app.relayId, dnsResource, queryClient, services]
   )
 
-  // Its own address, while nothing serves it: offered to the ports its
-  // running services listen on that could be its website's.
-  const address = React.useMemo(() => {
-    if (!generated || generated.status === "removing") return undefined
-    const targets = services
-      .filter((service) => service.running)
-      .flatMap((service) =>
-        webPortCandidates(service.ports).map((port) => ({
-          port,
-          service: service.name,
-        }))
-      )
-      .slice(0, 6)
-    return targets.length > 0
-      ? { hostname: generated.hostname, targets }
-      : undefined
-  }, [generated, services])
+  // The ports its running services listen on that could be its website's:
+  // a name nothing serves yet is offered to them.
+  const targets = React.useMemo(
+    () =>
+      services
+        .filter((service) => service.running)
+        .flatMap((service) =>
+          webPortCandidates(service.ports).map((port) => ({
+            port,
+            service: service.name,
+          }))
+        )
+        .slice(0, 3),
+    [services]
+  )
 
   return (
     <WebRoutesSection
       // Another app's routes start fresh, Undo included.
       key={`${app.relayId}:${app.id}`}
-      address={address}
       canWrite={
         appRelayAvailable(app) &&
         app.permissions.includes("instance.network.write")
@@ -218,6 +208,7 @@ function AppWebRoutes({
           <AppDeployButton app={app} />
         ) : null
       }
+      targets={targets}
       onSave={save}
     />
   )
