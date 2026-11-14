@@ -60,7 +60,10 @@ import {
   vanityLabelSchema,
 } from "@/lib/domain-schemas"
 import { notALoginField } from "@/lib/not-a-login-field"
-import { queryKeys, resourceWebHostnamesQueryOptions } from "@/lib/query-options"
+import {
+  queryKeys,
+  resourceWebHostnamesQueryOptions,
+} from "@/lib/query-options"
 import {
   adoptWebHostnameRecord,
   createInstanceDomain,
@@ -118,7 +121,7 @@ export function CreateDomainDialog({
     <Dialog open onOpenChange={create.isPending ? undefined : onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Add domain</DialogTitle>
+          <DialogTitle>Add address</DialogTitle>
           <DialogDescription>
             An address players can join {server.name} with.
           </DialogDescription>
@@ -173,7 +176,7 @@ export function CreateDomainDialog({
               ) : (
                 <Plus />
               )}
-              Add domain
+              Add address
             </Button>
           </DialogFooter>
         </form>
@@ -275,13 +278,13 @@ function PrimaryDomainSwitch({
   return (
     <div className="flex items-center justify-between gap-4 border border-border/75 bg-background/35 p-3">
       <div>
-        <p className="text-xs font-medium">Main address</p>
+        <p className="text-xs font-medium">Primary address</p>
         <p className="type-meta mt-0.5 text-muted-foreground">
           Shown on {serverName}&apos;s pages.
         </p>
       </div>
       <Switch
-        aria-label="Main address"
+        aria-label="Primary address"
         checked={checked}
         onCheckedChange={onCheckedChange}
       />
@@ -337,7 +340,7 @@ export function EditDomainDialog({
     <Dialog open onOpenChange={save.isPending ? undefined : onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Edit domain</DialogTitle>
+          <DialogTitle>Edit address</DialogTitle>
           <DialogDescription>{domain.server.name}</DialogDescription>
         </DialogHeader>
         <form
@@ -365,7 +368,7 @@ export function EditDomainDialog({
           {domain.primary ? (
             domain.domainCount > 1 ? (
               <p className="type-meta text-muted-foreground">
-                This is {domain.server.name}&apos;s main address.
+                This is {domain.server.name}&apos;s primary address.
               </p>
             ) : null
           ) : (
@@ -434,7 +437,7 @@ export function DeleteDomainDialog({
     <Dialog open onOpenChange={remove.isPending ? undefined : onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Delete domain</DialogTitle>
+          <DialogTitle>Delete address</DialogTitle>
           <DialogDescription>
             Deletes <span className="font-mono">{hostname}</span> from
             Cloudflare.
@@ -1126,7 +1129,7 @@ export function ReleaseHostnameDialog({
   hostname,
   onOpenChange,
 }: {
-  hostname: WebHostnameOverview
+  hostname: { hostname: string; id: string }
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
@@ -1142,7 +1145,7 @@ export function ReleaseHostnameDialog({
     <Dialog open onOpenChange={release.isPending ? undefined : onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Delete address</DialogTitle>
+          <DialogTitle>Delete domain</DialogTitle>
           <DialogDescription>
             Deletes <span className="font-mono">{hostname.hostname}</span> from
             Cloudflare.

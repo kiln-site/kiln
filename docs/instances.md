@@ -29,15 +29,15 @@ Relay's node shares.
 
 Every kind gets these from the platform.
 
-| Capability  | Target                                          | Today                                                                                   |
-| ----------- | ----------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases and Apps: one Relay request and one permission         |
-| Deployments | One redeploy for every kind                     | Done for game servers, databases and Apps: one Relay request and one permission         |
-| Limits      | One request and one permission for every kind   | Done for game servers, databases and Apps: one Relay request and one permission         |
-| Domains     | Every kind, automatic for an App's web services | Web routes are one request, one operation and one permission for game servers and Apps; their addresses are still made per kind |
-| Networking  | One page for every kind                         | A page per kind, on a few shared sections                                               |
-| Files       | One file browser and one permission             | Done for game servers and Apps                                                          |
-| Info page   | One page shell                                  | One profile and container section for every kind; a Relay's page is its own             |
+| Capability  | Target                                          | Today                                                                                                                |
+| ----------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Power       | Start, stop, restart and kill, for every kind   | Done for game servers, databases and Apps: one Relay request and one permission                                      |
+| Deployments | One redeploy for every kind                     | Done for game servers, databases and Apps: one Relay request and one permission                                      |
+| Limits      | One request and one permission for every kind   | Done for game servers, databases and Apps: one Relay request and one permission                                      |
+| Domains     | Every kind, automatic for an App's web services | One table of addresses, one reconcile and one Domains table for game servers and Apps; a database has no address yet |
+| Networking  | One page for every kind                         | A page per kind, on a few shared sections                                                                            |
+| Files       | One file browser and one permission             | Done for game servers and Apps                                                                                       |
+| Info page   | One page shell                                  | One profile and container section for every kind; a Relay's page is its own                                          |
 
 A Relay implements each in its own way: it can only be restarted, its
 deployments are its updates, and its files are the host's.
@@ -334,7 +334,8 @@ from a tag or an image name today.
    the Compose file or Dockerfile its App runs, as Beszel's hub and agent
    do. An App or group Brick is installed from any catalog its installer
    sees, and a Brick goes by its ID after whose it is. Done.
-9. Domains for every kind.
+9. Domains for every kind. Done for game servers and Apps; a database's
+   address is still to come.
 10. One instance page, with each kind's own tabs.
 11. Tailscale as its own kind, with the instance group.
 12. One terminal path.

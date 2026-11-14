@@ -43,15 +43,18 @@ export interface WebRouteServiceOption {
 
 type Route = RelayInstanceWebRouteInput & { readonly service?: string }
 
-// Adds or edits a route. Every field stays in place as the choices change,
-// so the dialog never changes size under the pointer.
+// Adds or edits a domain: a route. Every field stays in place as the
+// choices change, so the dialog never changes size under the pointer.
 export function WebRouteDialog({
+  hostname: held,
   proxiedFor,
   route,
   services,
   onOpenChange,
   onSubmit,
 }: {
+  // A name already held that the new route is for.
+  hostname?: string
   // Whether Kiln keeps a hostname's record behind Cloudflare's proxy; null
   // when it keeps no record for it.
   proxiedFor: (hostname: string) => boolean | null
@@ -66,7 +69,7 @@ export function WebRouteDialog({
   const [mode, setMode] = React.useState<"redirect" | "serve">(
     route?.redirect ? "redirect" : "serve"
   )
-  const [hostname, setHostname] = React.useState(route?.hostname ?? "")
+  const [hostname, setHostname] = React.useState(route?.hostname ?? held ?? "")
   const [www, setWww] = React.useState<WebRouteWww>(route?.www ?? "none")
   // A new route starts at the first service that publishes a port.
   const [service, setService] = React.useState(
@@ -145,11 +148,11 @@ export function WebRouteDialog({
       return
     }
     if (mode === "serve" && parsed.data.targetPort === null) {
-      setError("Enter the port the route serves")
+      setError("Enter the port the domain serves")
       return
     }
     if (services && mode === "serve" && !service.trim()) {
-      setError("Choose the service this route reaches")
+      setError("Choose the service this domain reaches")
       return
     }
     setError(null)
@@ -181,10 +184,7 @@ export function WebRouteDialog({
     >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <p className="type-technical-label text-primary-ink">Web route</p>
-          <DialogTitle>
-            {route ? "Edit web route" : "Add web route"}
-          </DialogTitle>
+          <DialogTitle>{route ? "Edit domain" : "Add domain"}</DialogTitle>
           <DialogDescription className="sr-only">
             Serve a domain over HTTPS, or redirect it to another URL.
           </DialogDescription>
@@ -342,7 +342,7 @@ export function WebRouteDialog({
                   description={
                     path.trim()
                       ? `The service sees / instead of ${path.trim()}`
-                      : "Only applies to a route with a path"
+                      : "Only applies with a path"
                   }
                   disabled={!path.trim()}
                   label="Strip the path before forwarding"
@@ -455,7 +455,7 @@ export function WebRouteDialog({
             </Button>
             <Button className="min-w-28" disabled={pending} type="submit">
               {pending ? <LoaderCircle className="animate-spin" /> : null}
-              {route ? "Save route" : "Add route"}
+              {route ? "Save" : "Add domain"}
             </Button>
           </DialogFooter>
         </form>
@@ -636,7 +636,7 @@ function normalizeUrl(value: string): string {
 function issueMessage(
   issue: { message: string; path: ReadonlyArray<PropertyKey> } | undefined
 ): string {
-  if (!issue) return "The route is invalid"
+  if (!issue) return "The domain is invalid"
   const field = issue.path[0]
   if (field === "hostname") return "Enter a domain such as donutsmp.com"
   if (field === "targetPort") return "Enter a port from 1 to 65535"
