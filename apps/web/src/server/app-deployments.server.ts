@@ -1,11 +1,11 @@
 import {
   appConfigSchema,
-  relayAppDeploymentLogSchema,
   relayAppGitHubV1Feature,
-  relayServerDeploymentLogSchema,
+  relayDeploymentLogSchema,
+  type AccessPermission,
   type AppGitHubBuild,
-  type RelayAppDeploymentLog,
-  type RelayServerDeploymentLog,
+  type RelayDeploymentLog,
+  type RelayDeploymentRead,
 } from "@workspace/contracts"
 
 import {
@@ -439,8 +439,7 @@ export async function getAppDeploymentSummaryHandler(data: {
     // Nothing to check until it names an image, or follows a Brick with
     // something else to deploy.
     imageUpdates:
-      checkedImage !== null ||
-      (app.brick && app.config.sourceType !== "image")
+      checkedImage !== null || (app.brick && app.config.sourceType !== "image")
         ? updatesView(
             checkedImage,
             imageUpdate,
@@ -656,76 +655,82 @@ export async function redeployAppDeploymentHandler(
   )
 }
 
-/** A deployment's log, from its Relay while it keeps it. */
-export async function getAppDeploymentLogHandler(
-  user: AuthenticatedUser,
-  data: { appId: string; deploymentId: string }
-): Promise<{ log: RelayAppDeploymentLog; reason: string | null }> {
-  const record = await recordFor(data.deploymentId)
-  const { relay } = await authorizedAppFor(user, record, "app.logs.read")
-  // Its page names the app, so another's log can't pass as this one's. Only
-  // after authorizing, so this says nothing of an app the person can't read.
-  if (record.appId !== data.appId) throw new Error("Deployment not found")
-  if (!record.relayDeploymentId) {
-    return { log: null, reason: "The Relay refused this deployment" }
+// What each kind's deployments are logged under on its Relay, the
+// permission reading them takes, and what one is called.
+const deploymentLogKinds = {
+  app: {
+    noun: "app",
+    permission: "app.logs.read",
+    relayKind: "app",
+    scope: "appId",
+  },
+  database: {
+    noun: "database",
+    permission: "database.logs.read",
+    relayKind: "database",
+    scope: "databaseId",
+  },
+  server: {
+    noun: "game server",
+    permission: "instance.logs.read",
+    relayKind: "instance",
+    scope: "instanceId",
+  },
+} as const satisfies Record<
+  DeploymentKind,
+  {
+    noun: string
+    permission: AccessPermission
+    relayKind: RelayDeploymentRead["kind"]
+    scope: "appId" | "databaseId" | "instanceId"
   }
-  if (relayConnectionFeatures(relay.id).size === 0) {
-    return { log: null, reason: "The Relay is offline" }
-  }
-  const log = relayAppDeploymentLogSchema.parse(
-    await databaseRpc(
-      relay,
-      "app.deployment.read",
-      { appId: record.appId, deploymentId: record.relayDeploymentId },
-      15_000,
-      user.id
-    )
-  )
-  return {
-    log,
-    reason: log ? null : "The Relay keeps only each app's 20 latest logs",
-  }
-}
+>
 
 /**
- * A game server deployment's log, from its Relay while it keeps it, for
- * whoever can read the server's logs.
+ * Any kind of instance's deployment log, from its Relay while it keeps it,
+ * for whoever can read that instance's logs.
  */
-export async function getServerDeploymentLogHandler(
+export async function getDeploymentLogHandler(
   user: AuthenticatedUser,
-  data: { deploymentId: string; instanceId: string }
-): Promise<{ log: RelayServerDeploymentLog; reason: string | null }> {
+  data: {
+    deploymentId: string
+    instance: { id: string; kind: DeploymentKind }
+  }
+): Promise<{ log: RelayDeploymentLog; reason: string | null }> {
   const record = await runAppEffect(
     "deployments.load",
     loadDeploymentEffect(data.deploymentId)
   )
-  // Not found alike whether it's missing, an App's, or another instance's,
-  // so this says nothing of one the person can't read.
-  const target =
-    record?.kind === "server"
-      ? { id: record.instanceId, kind: "instance" as const }
-      : record?.kind === "database"
-        ? { id: record.databaseId, kind: "database" as const }
-        : null
-  if (!record || !target || target.id !== data.instanceId) {
-    throw new Error("Deployment not found")
-  }
+  if (!record) throw new Error("Deployment not found")
+  const kind = deploymentLogKinds[record.kind]
+  const instanceId = deploymentInstanceId(record)
   await requireRelayPermission({
-    ...(target.kind === "instance"
-      ? { instanceId: target.id, permission: "instance.logs.read" }
-      : { databaseId: target.id, permission: "database.logs.read" }),
+    [kind.scope]: instanceId,
+    permission: kind.permission,
     relayId: record.relayId,
     user,
   })
+  // Its page names the instance, so another's log can't pass as this one's.
+  // Only after authorizing, so this says nothing of an instance the person
+  // can't read.
+  if (record.kind !== data.instance.kind || instanceId !== data.instance.id) {
+    throw new Error("Deployment not found")
+  }
+  // An App's is named by its Relay, which may have refused it unnamed.
+  const deploymentId =
+    record.kind === "app" ? record.relayDeploymentId : record.id
+  if (!deploymentId) {
+    return { log: null, reason: "The Relay refused this deployment" }
+  }
   const relay = await requiredRelay(record.relayId)
   if (relayConnectionFeatures(relay.id).size === 0) {
     return { log: null, reason: "The Relay is offline" }
   }
-  const log = relayServerDeploymentLogSchema.parse(
+  const log = relayDeploymentLogSchema.parse(
     await databaseRpc(
       relay,
       "instance.deployment.read",
-      { deploymentId: record.id, ...target },
+      { deploymentId, id: instanceId, kind: kind.relayKind },
       15_000,
       user.id
     )
@@ -734,9 +739,18 @@ export async function getServerDeploymentLogHandler(
     log,
     reason: log
       ? null
-      : `The Relay keeps only each ${
-          target.kind === "instance" ? "game server" : "database"
-        }'s 20 latest deployment logs`,
+      : `The Relay keeps only each ${kind.noun}'s 20 latest deployment logs`,
+  }
+}
+
+function deploymentInstanceId(record: DeploymentRecord): string {
+  switch (record.kind) {
+    case "app":
+      return record.appId
+    case "database":
+      return record.databaseId
+    case "server":
+      return record.instanceId
   }
 }
 

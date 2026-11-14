@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query"
+import { useInfiniteQuery } from "@tanstack/react-query"
 import { linkOptions, useRouter, useSearch } from "@tanstack/react-router"
 
 import {
@@ -16,10 +16,10 @@ import {
   type App,
 } from "@/components/app/app-presentation"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
-import type { ConsoleStreamSnapshot } from "@/components/console/console-stores"
 import {
   InstanceLogsPage,
   LISTED_DEPLOYMENTS,
+  SavedDeploymentLog,
   type InstanceLogsLinks,
   type LogSource,
   type LoggedDeployment,
@@ -33,10 +33,7 @@ import {
 import { ResourceLogsSession } from "@/components/console/resource-logs"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { RelativeTime } from "@/components/relative-time"
-import {
-  appDeploymentLogQueryOptions,
-  appDeploymentsQueryOptions,
-} from "@/lib/query-options"
+import { appDeploymentsQueryOptions } from "@/lib/query-options"
 import type { AppDeploymentView } from "@/server/app-deployments.server"
 
 const SERVICE_PREFIX = "service:"
@@ -120,28 +117,24 @@ export function AppLogsPage() {
   )
   const sources = React.useMemo(
     () =>
-      services.map(
-        (service): LogSource => ({
-          id: service.name,
-          meta: <ServiceMeta service={service} />,
-          status: service.status,
-          title: service.name,
-        })
-      ),
+      services.map((service): LogSource => ({
+        id: service.name,
+        meta: <ServiceMeta service={service} />,
+        status: service.status,
+        title: service.name,
+      })),
     [services]
   )
   const deployments = React.useMemo(() => {
     const live = liveDeployments(app)
-    return records.map(
-      (deployment): LoggedDeployment => ({
-        headingMeta: <DeploymentMeta deployment={deployment} full />,
-        id: deployment.id,
-        live: isLive(deployment, live),
-        meta: <DeploymentMeta deployment={deployment} />,
-        status: deploymentStatusPresentation(deployment),
-        title: deploymentTitle(deployment),
-      })
-    )
+    return records.map((deployment): LoggedDeployment => ({
+      headingMeta: <DeploymentMeta deployment={deployment} full />,
+      id: deployment.id,
+      live: isLive(deployment, live),
+      meta: <DeploymentMeta deployment={deployment} />,
+      status: deploymentStatusPresentation(deployment),
+      title: deploymentTitle(deployment),
+    }))
   }, [app, records])
   const links = React.useMemo((): InstanceLogsLinks => {
     const here = {
@@ -288,76 +281,9 @@ function DeploymentLogs({
       key={id}
       deploymentId={id!}
       header={header}
+      instance={{ id: app.id, kind: "app" }}
       logName={logName}
       shareHref={shareHref}
-    />
-  )
-}
-
-function SavedDeploymentLog({
-  deploymentId,
-  header,
-  logName,
-  shareHref,
-}: {
-  deploymentId: string
-  header: React.ReactNode
-  logName: string
-  shareHref: string | undefined
-}) {
-  const { app } = useAppWorkspace()
-  const { data, error, isPending } = useQuery(
-    appDeploymentLogQueryOptions(app.id, deploymentId)
-  )
-  const log = data?.log ?? null
-  const saved = React.useMemo<ConsoleStreamSnapshot | null>(
-    () =>
-      log && {
-        connection: "live",
-        consoleData: {
-          instanceId: app.id,
-          lifecycle: [],
-          lines: log.lines,
-          truncated: log.dropped > 0,
-        },
-        error: null,
-        loading: false,
-        transport: null,
-        transportMessage: null,
-      },
-    [app.id, log]
-  )
-  if (isPending) return <LogMessage header={header} loading />
-  if (!log || !saved) {
-    return (
-      <LogMessage
-        header={header}
-        message={error?.message ?? data?.reason ?? "This log is no longer kept"}
-      />
-    )
-  }
-  return (
-    <ResourceLogsSession
-      elapsedFrom={log.deployment.startedAt}
-      header={
-        <>
-          {header}
-          {log.dropped > 0 ? (
-            <p className="type-meta shrink-0 border-b px-3 py-1.5 text-muted-foreground sm:px-4">
-              {log.dropped.toLocaleString()} earlier lines were dropped once
-              this log reached its limit.
-            </p>
-          ) : null}
-        </>
-      }
-      id={app.id}
-      kind="app"
-      logName={logName}
-      relayAvailable={appRelayAvailable(app)}
-      relayId={app.relayId}
-      saved={saved}
-      shareHref={shareHref}
-      timeMode="elapsed"
     />
   )
 }

@@ -19,7 +19,7 @@ import {
   type ProvisioningAdapter,
   ProvisioningManager,
 } from "./provisioning.js"
-import { ServerDeploymentLogs } from "./server-deployment-logs.js"
+import { DeploymentLogs } from "./deployment-logs.js"
 import { serverProvisioning } from "./server-provisioning.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, type RelayHarness } from "./test/relay.js"
@@ -96,9 +96,7 @@ async function serverWorker(harness: RelayHarness) {
         app: unused("app"),
         database: unused("database"),
         server: serverProvisioning({
-          deploymentLogs: new ServerDeploymentLogs(
-            harness.config.dataDirectory
-          ),
+          deploymentLogs: new DeploymentLogs(harness.config.dataDirectory),
           lifecycle: harness.lifecycle,
           refreshSnapshot: async () => {
             const job = await Effect.runPromise(

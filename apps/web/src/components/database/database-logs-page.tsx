@@ -101,7 +101,7 @@ export function DatabaseLogsPage() {
       renderDeployment={(id, header) => (
         <RequestDeploymentLog
           header={header}
-          instance={database}
+          instance={{ id: database.id, kind: "database", name: database.name }}
           pending={isPending}
           record={
             id === null

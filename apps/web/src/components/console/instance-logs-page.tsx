@@ -41,7 +41,10 @@ import { SavedLogSession } from "@/components/console/resource-logs"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { RelativeTime } from "@/components/relative-time"
 import type { AppDeploymentStatus } from "@/effect/app-deployments"
-import { serverDeploymentLogQueryOptions } from "@/lib/query-options"
+import {
+  deploymentLogQueryOptions,
+  type DeploymentInstance,
+} from "@/lib/query-options"
 
 // The Logs page every kind of instance has: what it has output from, its
 // containers and each deployment the Relay kept a log of, in a rail beside
@@ -422,13 +425,14 @@ export function RequestDeploymentLog({
   shareLink,
 }: {
   header: React.ReactNode
-  instance: { id: string; name: string }
+  instance: DeploymentInstance & { name: string }
   /** Its deployments are still loading. */
   pending: boolean
   /** The deployment shown: its record when listed, or only its ID. */
   record: Pick<RequestDeploymentRecord, "error" | "id" | "status"> | undefined
   shareLink: (id: string) => LinkProps
 }) {
+  const router = useRouter()
   const id = record?.id
   if (id === undefined) {
     return (
@@ -440,37 +444,44 @@ export function RequestDeploymentLog({
     )
   }
   return (
-    <SavedRequestDeploymentLog
+    <SavedDeploymentLog
       key={id}
+      deploymentId={id}
       failure={record?.error ?? null}
       header={header}
-      id={id}
       instance={instance}
+      logName={`${instance.name}-deployment`}
       running={record?.status === "running"}
-      shareLink={shareLink(id)}
+      shareHref={router.buildLocation(shareLink(id)).href}
     />
   )
 }
 
-function SavedRequestDeploymentLog({
-  failure,
+/**
+ * A deployment's log as its Relay saved it, whatever kind of instance it is
+ * of, read again each second while it runs.
+ */
+export function SavedDeploymentLog({
+  deploymentId,
+  failure = null,
   header,
-  id,
   instance,
-  running,
-  shareLink,
+  logName,
+  running = false,
+  shareHref,
 }: {
+  deploymentId: string
   /** Why it failed, which is all there is of one the Relay never began. */
-  failure: string | null
+  failure?: string | null
   header: React.ReactNode
-  id: string
-  instance: { id: string; name: string }
-  running: boolean
-  shareLink: LinkProps
+  instance: DeploymentInstance
+  /** Names a downloaded copy. */
+  logName: string
+  running?: boolean
+  shareHref: string | undefined
 }) {
-  const router = useRouter()
   const { data, error, isPending } = useQuery({
-    ...serverDeploymentLogQueryOptions(instance.id, id),
+    ...deploymentLogQueryOptions(instance, deploymentId),
     refetchInterval: running ? 1_000 : false,
   })
   const log = data?.log ?? null
@@ -482,7 +493,7 @@ function SavedRequestDeploymentLog({
           instanceId: instance.id,
           lifecycle: [],
           lines: log.lines,
-          truncated: false,
+          truncated: log.dropped > 0,
         },
         error: null,
         loading: false,
@@ -508,10 +519,20 @@ function SavedRequestDeploymentLog({
   return (
     <SavedLogSession
       elapsedFrom={log.deployment.startedAt}
-      header={header}
-      logName={`${instance.name}-deployment`}
+      header={
+        <>
+          {header}
+          {log.dropped > 0 ? (
+            <p className="type-meta shrink-0 border-b px-3 py-1.5 text-muted-foreground sm:px-4">
+              {log.dropped.toLocaleString()} earlier lines were dropped once
+              this log reached its limit.
+            </p>
+          ) : null}
+        </>
+      }
+      logName={logName}
       saved={saved}
-      shareHref={router.buildLocation(shareLink).href}
+      shareHref={shareHref}
       timeMode="elapsed"
     />
   )

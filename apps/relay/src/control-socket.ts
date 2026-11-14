@@ -34,7 +34,6 @@ import {
   relayControlProtocol,
   relayConsoleResourcesV1Feature,
   relayAppsV1Feature,
-  relayLogsV1Feature,
   relayProxyConfigurationV1Feature,
   relayWorkloadUsageV1Feature,
   relayHostFilesV1Feature,
@@ -1336,7 +1335,6 @@ function authenticateSocket(
           relayFileRequestReplayV1Feature,
           relayConsoleResourcesV1Feature,
           relayAppsV1Feature,
-          relayLogsV1Feature,
           relayProxyConfigurationV1Feature,
           relayWorkloadUsageV1Feature,
           relayHostFilesV1Feature,
@@ -1958,8 +1956,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     case "app.list":
     case "app.resources.read":
       return "app.read"
-    case "app.deployment.read":
-      return "app.logs.read"
     case "app.provision.prepare":
     case "app.provision.claim":
       return "app.create"
@@ -2107,6 +2103,8 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
           return "instance.logs.read"
         case "database":
           return "database.logs.read"
+        case "app":
+          return "app.logs.read"
         default:
           return null
       }

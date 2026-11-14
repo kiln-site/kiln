@@ -14,8 +14,7 @@ import type {
   AppConfig,
   AppPort,
   RelayApp,
-  RelayAppDeploymentLog,
-  RelayAppDeploymentRead,
+  RelayDeploymentLog,
   RelayInstanceImageCheckResult,
   RelayAppContainer,
   RelayAppDeployment,
@@ -37,9 +36,12 @@ import {
   appServiceNameSchema,
   CPU_LIMIT_MILLIS_PER_CORE,
   NO_RESOURCE_LIMITS,
+  relayAppDeploymentSchema,
   relayAppSchema,
+  relayConsoleLineSchema,
 } from "@workspace/contracts"
 import { Effect, Predicate, Result } from "effect"
+import { z } from "zod"
 
 import { commandLines } from "./command.js"
 import {
@@ -57,6 +59,7 @@ import type { RelayConfig } from "./config.js"
 import { consoleLineCharacters } from "./console-frames.js"
 import { parseConsoleLine } from "./console-parsing.js"
 import type { DatabaseConnections } from "./database-connections.js"
+import type { DeploymentLogs } from "./deployment-logs.js"
 import type { HostPort, HostPorts } from "./host-ports.js"
 import { databaseNetworkName } from "./databases.js"
 import {
@@ -166,8 +169,6 @@ export const APP_DEPLOYMENT_STREAM = "deployment"
 const DEPLOYMENT_STREAM_PREFIX = `${APP_DEPLOYMENT_STREAM}:`
 const SERVICE_STREAM_PREFIX = "service:"
 const MAX_DEPLOYMENT_LINES = 5_000
-// Finished deployments' logs kept per app, newest first.
-const KEPT_DEPLOYMENTS = 20
 const PULL_TIMEOUT_MS = 15 * 60_000
 const BUILD_TIMEOUT_MS = 30 * 60_000
 // Where the Relay image installs buildx, as a plugin Compose finds too.
@@ -327,6 +328,7 @@ export class AppDriver {
     dockerNames: ReadonlyArray<string>
   ) => Promise<ReadonlyArray<string>>
   readonly #composeVolumes: AppComposeVolumes
+  readonly #deploymentLogs: DeploymentLogs
 
   /**
    * Callers hold the App's lane locks for each change; a deployment's build
@@ -344,9 +346,12 @@ export class AppDriver {
       dockerNames: ReadonlyArray<string>
     ) => Promise<ReadonlyArray<string>>,
     composeVolumes: AppComposeVolumes,
-    cleanup: DockerCleanup
+    cleanup: DockerCleanup,
+    /** Where each deployment's log is saved once it ends. */
+    deploymentLogs: DeploymentLogs
   ) {
     this.#cleanup = cleanup
+    this.#deploymentLogs = deploymentLogs
     this.#volumeIds = volumeIds
     this.#composeVolumes = composeVolumes
     this.#config = config
@@ -1002,10 +1007,7 @@ export class AppDriver {
         throw new Error("The App's folder is still there; delete it again")
       }
     }
-    await rm(this.#deploymentDirectory(input.appId), {
-      force: true,
-      recursive: true,
-    })
+    await this.#deploymentLogs.remove({ id: input.appId, kind: "app" })
     await rm(
       join(this.#config.dataDirectory, "app-sources", physicalKey(input.appId)),
       { force: true, recursive: true }
@@ -1307,23 +1309,18 @@ export class AppDriver {
     this.#wake(appId)
   }
 
-  // Writes a finished deployment's log, keeping the newest few per app. A
-  // log that can't be written only costs its history.
+  // Saves a finished deployment's log among the app's latest.
   async #saveDeployment(appId: string, deployment: Deployment) {
-    const directory = this.#deploymentDirectory(appId)
-    await Effect.runPromise(
-      promiseEffect(async () => {
-        await mkdir(directory, { recursive: true, mode: 0o700 })
-        const { abort: _abort, characters: _characters, ...saved } = deployment
-        await writeFile(
-          join(directory, `${deployment.id}.json`),
-          JSON.stringify(saved),
-          { mode: 0o600 }
-        )
-        const older = (await deploymentFiles(directory)).slice(KEPT_DEPLOYMENTS)
-        for (const file of older)
-          await rm(join(directory, file), { force: true })
-      }).pipe(Effect.ignore)
+    const {
+      abort: _abort,
+      characters: _characters,
+      dropped,
+      lines,
+      ...saved
+    } = deployment
+    await this.#deploymentLogs.save(
+      { id: appId, kind: "app" },
+      { deployment: saved, dropped, lines }
     )
   }
 
@@ -1347,48 +1344,13 @@ export class AppDriver {
   }
 
   async #readDeployment(appId: string) {
-    const [latest] = await Effect.runPromise(
-      promiseEffect(() =>
-        deploymentFiles(this.#deploymentDirectory(appId))
-      ).pipe(Effect.orElseSucceed((): Array<string> => []))
+    const restored = await this.#deploymentLogs.latest(
+      { id: appId, kind: "app" },
+      savedDeploymentSchema
     )
-    const restored = latest
-      ? await this.#savedDeployment(appId, latest.slice(0, -".json".length))
-      : null
     if (restored && !this.#deployments.has(appId)) {
-      this.#deployments.set(appId, restored)
+      this.#deployments.set(appId, restoredDeployment(restored))
     }
-  }
-
-  // A finished deployment's saved log, or null if it isn't kept.
-  async #savedDeployment(
-    appId: string,
-    deploymentId: string
-  ): Promise<Deployment | null> {
-    if (!/^\d{14}$/u.test(deploymentId)) return null
-    const file = join(this.#deploymentDirectory(appId), `${deploymentId}.json`)
-    return Effect.runPromise(
-      promiseEffect(async () => {
-        const saved = JSON.parse(await readFile(file, "utf8")) as Omit<
-          Deployment,
-          "abort" | "characters" | "commit" | "rolling"
-        > &
-          Partial<Pick<Deployment, "commit" | "rolling">>
-        const deployment: Deployment = {
-          ...saved,
-          abort: new AbortController(),
-          characters: saved.lines.reduce(
-            (total, line) => total + consoleLineCharacters(line),
-            0
-          ),
-          // Logs saved before deployments recorded these.
-          commit: saved.commit ?? null,
-          rolling: saved.rolling ?? null,
-        }
-        trimDeploymentLog(deployment)
-        return deployment
-      }).pipe(Effect.orElseSucceed(() => null))
-    )
   }
 
   /**
@@ -1396,19 +1358,25 @@ export class AppDriver {
    * whose log the Relay kept. Null once it no longer keeps it.
    */
   async readDeployment(
-    input: RelayAppDeploymentRead
-  ): Promise<RelayAppDeploymentLog> {
-    await this.#restoreDeployment(input.appId)
-    const latest = this.#deployments.get(input.appId)
-    const deployment =
-      latest?.id === input.deploymentId
-        ? latest
-        : await this.#savedDeployment(input.appId, input.deploymentId)
-    if (!deployment) return null
+    appId: string,
+    deploymentId: string
+  ): Promise<RelayDeploymentLog> {
+    await this.#restoreDeployment(appId)
+    const latest = this.#deployments.get(appId)
+    if (latest?.id !== deploymentId) {
+      return this.#deploymentLogs.read({ id: appId, kind: "app" }, deploymentId)
+    }
     return {
-      deployment: deploymentSummary(deployment),
-      dropped: deployment.dropped,
-      lines: deployment.lines,
+      deployment: {
+        error: latest.error,
+        finishedAt: latest.finishedAt,
+        id: latest.id,
+        rolling: latest.rolling,
+        startedAt: latest.startedAt,
+        state: latest.state,
+      },
+      dropped: latest.dropped,
+      lines: latest.lines,
     }
   }
 
@@ -1549,14 +1517,6 @@ export class AppDriver {
           }
         }
       )
-    )
-  }
-
-  #deploymentDirectory(appId: string): string {
-    return join(
-      this.#config.dataDirectory,
-      "app-deployments",
-      physicalKey(appId)
     )
   }
 
@@ -3810,11 +3770,29 @@ function deploymentStamp(earlier: ReadonlyArray<string | undefined>): string {
 
 // A directory's deployment logs, newest first: their names are their UTC
 // start times.
-async function deploymentFiles(directory: string): Promise<Array<string>> {
-  return (await readdir(directory))
-    .filter((file) => /^\d{14}\.json$/u.test(file))
-    .sort()
-    .reverse()
+// An App's deployment as its saved log has it, with what restoring it as
+// the latest needs beside what every kind's log records.
+const savedDeploymentSchema = z.object({
+  deployment: relayAppDeploymentSchema,
+  dropped: z.number().int().nonnegative(),
+  lines: z.array(relayConsoleLineSchema),
+})
+
+function restoredDeployment(
+  saved: z.infer<typeof savedDeploymentSchema>
+): Deployment {
+  const deployment: Deployment = {
+    ...saved.deployment,
+    abort: new AbortController(),
+    characters: saved.lines.reduce(
+      (total, line) => total + consoleLineCharacters(line),
+      0
+    ),
+    dropped: saved.dropped,
+    lines: saved.lines,
+  }
+  trimDeploymentLog(deployment)
+  return deployment
 }
 
 // Drops a deployment log's oldest lines past its line or character budget.

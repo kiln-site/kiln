@@ -31,6 +31,7 @@ import { loadConfig, type RelayConfig } from "../config.js"
 import { ContainerCommands } from "../container-commands.js"
 import { DatabaseConnections } from "../database-connections.js"
 import { DatabaseDriver } from "../databases.js"
+import { DeploymentLogs } from "../deployment-logs.js"
 import { DockerCleanup } from "../docker-cleanup.js"
 import { DockerDriver } from "../docker.js"
 import { DockerEngine } from "../docker-engine.js"
@@ -193,8 +194,7 @@ export async function relayHarness(
       databaseConnections,
       (dockerNames) => Effect.runPromise(volumes.idsByDockerName(dockerNames)),
       {
-        absent: (ids) =>
-          Effect.runPromise(volumes.idsMissing(ids)),
+        absent: (ids) => Effect.runPromise(volumes.idsMissing(ids)),
         ensure: (appId, appName, keys, named) =>
           Effect.runPromise(
             volumes.composeVolumes(appId, appName, keys, named)
@@ -203,7 +203,8 @@ export async function relayHarness(
         settle: (appId, keys) =>
           Effect.runPromise(volumes.settleComposeVolumes(appId, keys)),
       },
-      cleanup
+      cleanup,
+      new DeploymentLogs(config.dataDirectory)
     )
     lifecycle.useAppServiceContainers(async (appId, service) => {
       await apps.get(appId)
