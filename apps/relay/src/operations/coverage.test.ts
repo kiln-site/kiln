@@ -69,11 +69,11 @@ const directAdmissions: Record<string, string> = {
 // persistence order, or admission pressure. One that orders changes to a
 // resource belongs in the lanes instead.
 const semaphores: Record<string, string> = {
+  "host-ports.ts:#semaphore":
+    "Port leases outlive requests (docs/relay-operations.md)",
   "image-checks.ts:registryLookups": "Bounds registry lookups",
   "docker.ts:#diskUsageSemaphore": "Bounds disk scans",
   "installation.ts:adoption": "Orders adopting an installation's metadata",
-  "lifecycle.ts:#gamePortSemaphore":
-    "Port leases outlive requests (docs/relay-operations.md)",
   "lifecycle.ts:#tailscaleDnsSemaphore":
     "Orders writing Tailscale's CoreDNS file, which starts refresh holding the routes only shared",
   "platform.ts:identifying": "Orders identifying Kiln's services",

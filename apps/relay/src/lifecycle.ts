@@ -87,6 +87,7 @@ import {
   installationMarkerName,
   supportsInstallationMarkerProtocol,
 } from "./installation-marker.js"
+import { HostPorts } from "./host-ports.js"
 import {
   dockerPortBindingsForAllocations,
   portAllocationContainerLabels,
@@ -444,11 +445,9 @@ export class LifecycleDriver {
   } | null = null
   // The last reason Traefik couldn't serve Hearth, logged once.
   #platformEdgeError: string | null = null
-  readonly #gamePortSemaphore = Semaphore.makeUnsafe(1)
   // The Tailscale CoreDNS container is shared by every server; starts on
   // different servers can refresh it at once.
   readonly #tailscaleDnsSemaphore = Semaphore.makeUnsafe(1)
-  readonly #pendingGamePorts = new Set<string>()
   readonly #portLeases = new Map<string, PortLeaseRecord>()
   readonly #portLeaseTimers = new Map<string, NodeJS.Timeout>()
   readonly #tailscaleConfigs = new Map<string, RelayTailscaleStackConfig>()
@@ -457,6 +456,8 @@ export class LifecycleDriver {
   #webRoutes: ReadonlyArray<RelayStoredWebRoute> = []
   /** Certificates for the routes the bundled Traefik serves. */
   readonly certificates: WebCertificates
+  /** The ports published on the host, for every kind that publishes one. */
+  readonly hostPorts: HostPorts
 
   constructor(
     config: RelayConfig,
@@ -471,6 +472,7 @@ export class LifecycleDriver {
     this.#config = config
     this.#docker = docker
     this.#engine = new DockerEngine(config.dockerSocket)
+    this.hostPorts = new HostPorts(this.#engine)
     this.#resources = relayResourceNames(config)
     this.certificates = certificates
   }
@@ -2113,13 +2115,10 @@ export class LifecycleDriver {
           Effect.ensuring(
             Effect.sync(() => {
               if (pendingPrimaryPort && pendingExternalPort) {
-                for (const protocol of portProtocols(
-                  pendingPrimaryPort.protocol
-                )) {
-                  this.#pendingGamePorts.delete(
-                    `${protocol}:${pendingExternalPort}`
-                  )
-                }
+                this.hostPorts.release(
+                  pendingExternalPort,
+                  portProtocols(pendingPrimaryPort.protocol)
+                )
               }
             })
           )
@@ -2337,9 +2336,10 @@ export class LifecycleDriver {
         Effect.ensuring(
           Effect.sync(() => {
             for (const allocation of pending) {
-              for (const protocol of portProtocols(allocation.protocol)) {
-                this.#pendingGamePorts.delete(`${protocol}:${allocation.port}`)
-              }
+              this.hostPorts.release(
+                allocation.port,
+                portProtocols(allocation.protocol)
+              )
             }
           })
         )
@@ -2439,14 +2439,14 @@ export class LifecycleDriver {
       // observing interruption so the pending-port set cannot be stranded.
       Effect.uninterruptible
     )
-    return this.#gamePortSemaphore
-      .withPermit(criticalSection)
+    return this.hostPorts
+      .locked(criticalSection)
       .pipe(Effect.withSpan("relay.ports.reserve"))
   }
 
   releaseInstancePortEffect(instanceId: string, leaseId: string) {
-    return this.#gamePortSemaphore
-      .withPermit(
+    return this.hostPorts
+      .locked(
         Effect.sync(() => {
           this.#pruneExpiredPortLeases(Date.now())
           return this.#portLeases.get(leaseId)
@@ -3143,11 +3143,10 @@ export class LifecycleDriver {
               Effect.ensuring(
                 Effect.sync(() => {
                   for (const allocation of reservedPorts) {
-                    for (const protocol of portProtocols(allocation.protocol)) {
-                      this.#pendingGamePorts.delete(
-                        `${protocol}:${allocation.port}`
-                      )
-                    }
+                    this.hostPorts.release(
+                      allocation.port,
+                      portProtocols(allocation.protocol)
+                    )
                   }
                 })
               )
@@ -3260,26 +3259,14 @@ export class LifecycleDriver {
     // The other game servers, whose ports stay theirs while they're stopped.
     others: ReadonlyArray<RelayInstance>
   ): Promise<void> {
-    await this.#withGamePortLock(async () => {
-      for (const protocol of protocols) {
-        const key = `${protocol}:${port}`
-        if (
-          this.#pendingGamePorts.has(key) ||
-          others.some((other) => allocatesPort(other, port, protocol)) ||
-          (
-            await this.#docker.publishedHostPorts(protocol, {
-              end: port,
-              start: port,
-            })
-          ).has(port)
-        ) {
-          throw new Error(`Public port ${port}/${protocol} is already in use`)
-        }
+    for (const protocol of protocols) {
+      if (others.some((other) => allocatesPort(other, port, protocol))) {
+        throw new Error(`Public port ${port}/${protocol} is already in use`)
       }
-      for (const protocol of protocols) {
-        this.#pendingGamePorts.add(`${protocol}:${port}`)
-      }
-    })
+    }
+    await this.hostPorts.claim(
+      protocols.map((protocol) => ({ port, protocol }))
+    )
   }
 
   async #claimPortLease(
@@ -3325,27 +3312,11 @@ export class LifecycleDriver {
     overridePortRange = false
   ): Promise<number> {
     const protocols = portProtocols(protocol)
-    const unavailable = new Set<number>()
     const { end, start } = this.#config.gamePortRange
-    const checkedRange =
-      requestedPort !== undefined
-        ? { end: requestedPort, start: requestedPort }
-        : { end, start }
-    for (const candidate of protocols) {
-      for (const port of await this.#docker.publishedHostPorts(
-        candidate,
-        checkedRange
-      )) {
-        unavailable.add(port)
-      }
-      const pendingPrefix = `${candidate}:`
-      for (const key of this.#pendingGamePorts) {
-        if (!key.startsWith(pendingPrefix)) continue
-        unavailable.add(Number(key.slice(pendingPrefix.length)))
-      }
-    }
-    // Every port a game server is allocated stays its own while it's
-    // stopped, when Docker publishes none of them.
+    // Whatever holds them: another game server, an App, a lease.
+    const unavailable = await this.hostPorts.taken(protocols)
+    // A game server's ports as its labels name them, should its container
+    // not bind one.
     for (const instance of existing) {
       for (const candidate of protocols) {
         for (const port of allocatedPorts(instance, candidate)) {
@@ -3373,26 +3344,26 @@ export class LifecycleDriver {
         start,
         unavailable,
       })
-    for (const candidate of protocols) {
-      this.#pendingGamePorts.add(`${candidate}:${port}`)
-    }
+    this.hostPorts.promise(port, protocols)
     return port
   }
 
   #addPendingPort(
     allocation: Pick<PortLeaseRecord, "externalPort" | "protocol">
   ): void {
-    for (const protocol of portProtocols(allocation.protocol)) {
-      this.#pendingGamePorts.add(`${protocol}:${allocation.externalPort}`)
-    }
+    this.hostPorts.promise(
+      allocation.externalPort,
+      portProtocols(allocation.protocol)
+    )
   }
 
   #removePendingPort(
     allocation: Pick<PortLeaseRecord, "externalPort" | "protocol">
   ): void {
-    for (const protocol of portProtocols(allocation.protocol)) {
-      this.#pendingGamePorts.delete(`${protocol}:${allocation.externalPort}`)
-    }
+    this.hostPorts.release(
+      allocation.externalPort,
+      portProtocols(allocation.protocol)
+    )
   }
 
   #consumePortLease(lease: PortLeaseRecord): void {
@@ -3434,7 +3405,7 @@ export class LifecycleDriver {
 
   #withGamePortLock<Result>(action: () => Promise<Result>): Promise<Result> {
     return Effect.runPromise(
-      this.#gamePortSemaphore.withPermit(
+      this.hostPorts.locked(
         Effect.tryPromise({
           try: action,
           catch: (cause) => cause,

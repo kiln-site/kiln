@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url"
 
 import {
   appCommandLine,
+  brickRecipeSchema,
   defaultAppConfig,
+  MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
+  relayCreateInstanceSchema,
   relayDeployAppSchema,
   type AppConfig,
   type RelayApp,
@@ -280,7 +283,13 @@ describe("an App whose configuration gives a health check", () => {
 describe("an App started with its Brick's command", () => {
   it("runs the arguments the Brick wrote, each whole", async () => {
     const harness = await createdApp()
-    const command = ["sh", "-c", `echo it's "up" && serve`, "", "--name=My Site"]
+    const command = [
+      "sh",
+      "-c",
+      `echo it's "up" && serve`,
+      "",
+      "--name=My Site",
+    ]
 
     await deploy(harness, { command: appCommandLine(command) })
 
@@ -352,6 +361,147 @@ describe("an App's containers", () => {
     expect(
       app.containers.find((container) => container.running)?.exposedPorts
     ).toEqual([8080, 9090])
+  })
+})
+
+describe("an App's published ports", () => {
+  const serverId = "d".repeat(12)
+  const web = (hostPort: number) => ({
+    ports: [{ containerPort: 80, hostPort, protocol: "tcp" as const }],
+  })
+
+  async function harnessWithGamePorts(range: string) {
+    const harness = await relayHarness({ KILN_RELAY_GAME_PORT_RANGE: range })
+    await harness.apps.create({ id: appId, name: "Website" })
+    fakeDocker.images.set("nginx:alpine", {})
+    return harness
+  }
+
+  // A game server with one TCP port, which the Relay picks from its range.
+  function createGameServer(harness: RelayHarness, start: boolean) {
+    return harness.lifecycle.createInstanceWithId(
+      serverId,
+      relayCreateInstanceSchema.parse({
+        diskLimitBytes: MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
+        name: "Game",
+        recipe: "https://bricks.test/game.yml",
+        recipeDefinition: brickRecipeSchema.parse({
+          format: "kiln.brick/v2",
+          kind: "game-server",
+          metadata: {
+            author: "Kiln",
+            id: "game",
+            name: "Game",
+            summary: "Test recipe",
+          },
+          deploy: {
+            type: "image",
+            image: "example.test/game:latest",
+            runtime: "Game",
+            memory: "512M",
+            pids: 128,
+            volumes: ["/server"],
+            ports: [{ name: "game", port: 7777, protocol: "tcp" }],
+          },
+          "game-server": { game: "Test" },
+        }),
+        start,
+        variables: {},
+      })
+    )
+  }
+
+  it("stay the App's while it's stopped, so no game server is given one", async () => {
+    const harness = await harnessWithGamePorts("30000-30000")
+    await deploy(harness, web(30_000))
+    await harness.apps.action({ action: "stop", appId })
+
+    await expect(createGameServer(harness, false)).rejects.toThrow(
+      /No game ports are available/u
+    )
+  })
+
+  it("can be one that a stopped container Kiln didn't make once published", async () => {
+    const harness = await harnessWithGamePorts("30000-30001")
+    fakeDocker.addContainer({ name: "left-behind" }).portBindings = {
+      "80/tcp": [{ HostIp: "", HostPort: "8080" }],
+    }
+
+    const deployed = await deploy(harness, web(8080))
+    expect(deployed.deployment?.state).toBe("succeeded")
+  })
+
+  it("aren't one a paused container binds, whoever made it", async () => {
+    const harness = await harnessWithGamePorts("30000-30001")
+    const paused = fakeDocker.addContainer({ name: "frozen", running: true })
+    paused.state.paused = true
+    paused.portBindings = { "80/tcp": [{ HostIp: "", HostPort: "8080" }] }
+
+    const refused = await deploy(harness, web(8080))
+    expect(refused.deployment?.error).toContain(
+      "Public port 8080/tcp is already in use"
+    )
+  })
+
+  it("aren't taken from a stopped game server, or from a port someone is choosing", async () => {
+    const harness = await harnessWithGamePorts("30000-30001")
+    const server = await createGameServer(harness, false)
+    const held = server.ports[0]!.externalPort
+    const leased = await Effect.runPromise(
+      harness.lifecycle.reserveInstancePortEffect(serverId, {
+        protocol: "tcp",
+      })
+    )
+    expect(new Set([held, leased.externalPort])).toEqual(
+      new Set([30_000, 30_001])
+    )
+
+    for (const port of [held, leased.externalPort]) {
+      const refused = await deploy(harness, web(port))
+      expect(refused.deployment?.state).toBe("failed")
+      expect(refused.deployment?.error).toContain(
+        `Public port ${port}/tcp is already in use`
+      )
+    }
+    expect(appContainers()).toEqual([])
+  })
+
+  it("are its own to publish again when it redeploys", async () => {
+    const harness = await harnessWithGamePorts("30000-30001")
+    await deploy(harness, web(8080))
+    const again = await deploy(harness, web(8080))
+
+    expect(again.deployment?.state).toBe("succeeded")
+    expect(again.containers[0]?.ports).toEqual([
+      { containerPort: 80, hostPort: 8080, protocol: "tcp" },
+    ])
+  })
+
+  it("are refused to a Compose App too, when its file publishes one that's taken", async () => {
+    const cleanup = await composeConfigCommand()
+    try {
+      const harness = await harnessWithGamePorts("30000-30000")
+      const server = await createGameServer(harness, false)
+      const held = server.ports[0]!.externalPort
+
+      const refused = await deploy(harness, {
+        compose: [
+          "services:",
+          "  web:",
+          "    image: nginx:alpine",
+          "    ports:",
+          `      - published: "${held}"`,
+          "        target: 80",
+        ].join("\n"),
+        sourceType: "compose",
+      })
+      expect(refused.deployment?.state).toBe("failed")
+      expect(refused.deployment?.error).toContain(
+        `Public port ${held}/tcp is already in use`
+      )
+    } finally {
+      await cleanup()
+    }
   })
 })
 
@@ -470,9 +620,7 @@ describe("App volumes", () => {
       compose: "services:\n  db:\n    image: nginx:alpine\n",
       sourceType: "compose",
     })
-    expect(await listed()).toEqual([
-      expect.objectContaining({ id, users: [] }),
-    ])
+    expect(await listed()).toEqual([expect.objectContaining({ id, users: [] })])
     await removeCompose()
   })
 
@@ -570,8 +718,7 @@ describe("App volumes", () => {
     expect(fakeDocker.volumes.has(old)).toBe(true)
     // The volume made to move it to is no App's yet: a backup of the App
     // would take it, empty, for the data still in the old one.
-    const made = (await Effect.runPromise(relayVolumes(harness).list()))
-      .volumes
+    const made = (await Effect.runPromise(relayVolumes(harness).list())).volumes
     expect(made).toEqual([
       expect.objectContaining({
         id: composeVolumeId(appId, "data"),

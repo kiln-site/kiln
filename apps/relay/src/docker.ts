@@ -821,26 +821,6 @@ export class DockerDriver {
     return found?.config ?? null
   }
 
-  async publishedHostPorts(
-    protocol: "tcp" | "udp",
-    range: { end: number; start: number }
-  ): Promise<Set<number>> {
-    const publishedPort =
-      range.start === range.end
-        ? `${range.start}/${protocol}`
-        : `${range.start}-${range.end}/${protocol}`
-    const containers = await runEffect(
-      this.#engine.listContainers({ filters: { publish: [publishedPort] } })
-    )
-    return new Set(
-      containers.flatMap((container) =>
-        (container.Ports ?? []).flatMap((port) =>
-          port.Type === protocol && port.PublicPort ? [port.PublicPort] : []
-        )
-      )
-    )
-  }
-
   resourceHistory(instanceId: string): Array<RelayInstanceResources> {
     return this.#resourceSamples.history(instanceId)
   }

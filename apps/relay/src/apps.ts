@@ -57,6 +57,7 @@ import type { RelayConfig } from "./config.js"
 import { consoleLineCharacters } from "./console-frames.js"
 import { parseConsoleLine } from "./console-parsing.js"
 import type { DatabaseConnections } from "./database-connections.js"
+import type { HostPort, HostPorts } from "./host-ports.js"
 import { databaseNetworkName } from "./databases.js"
 import {
   MAX_CONSOLE_HISTORY_CHARACTERS,
@@ -284,6 +285,8 @@ export interface AppLimitStores {
 }
 
 export interface AppNetworking {
+  /** The ports published on the host, to claim an App's among them. */
+  readonly hostPorts: HostPorts
   /**
    * Puts an app's services back at their addresses on their Tailscale
    * networks, logging any it can't.
@@ -1197,38 +1200,51 @@ export class AppDriver {
               mounts
             )
           } else {
-            const image =
-              config.sourceType === "image"
-                ? await traceRelayPromise("relay.apps.deployment.pull", () =>
-                    this.#pullImage(input, deployment)
-                  )
-                : await traceRelayPromise("relay.apps.deployment.build", () =>
-                    this.#buildImage(input, deployment, checkout)
-                  ).then((reference) => ({ labels: {}, reference }))
-            // Its one service's limits count once the image is ready.
-            await this.#reserving(
+            // Before the image, so a port that's taken costs no build.
+            await this.#publishing(
               input.appId,
-              [
-                config.serviceLimits[APP_SERVICE] ?? {
-                  cpuMillis: null,
-                  memoryBytes: null,
-                },
-              ],
-              (surge) =>
-                traceRelayPromise("relay.apps.deployment.replace", () =>
-                  this.#replaceContainer(
-                    input,
-                    deployment,
-                    image,
-                    host,
-                    mounts.filter(
-                      (mount) =>
-                        mount.service === null || mount.service === APP_SERVICE
+              config.ports.map(({ hostPort, protocol }) => ({
+                port: hostPort,
+                protocol,
+              })),
+              async () => {
+                const image =
+                  config.sourceType === "image"
+                    ? await traceRelayPromise(
+                        "relay.apps.deployment.pull",
+                        () => this.#pullImage(input, deployment)
+                      )
+                    : await traceRelayPromise(
+                        "relay.apps.deployment.build",
+                        () => this.#buildImage(input, deployment, checkout)
+                      ).then((reference) => ({ labels: {}, reference }))
+                // Its one service's limits count once the image is ready.
+                await this.#reserving(
+                  input.appId,
+                  [
+                    config.serviceLimits[APP_SERVICE] ?? {
+                      cpuMillis: null,
+                      memoryBytes: null,
+                    },
+                  ],
+                  (surge) =>
+                    traceRelayPromise("relay.apps.deployment.replace", () =>
+                      this.#replaceContainer(
+                        input,
+                        deployment,
+                        image,
+                        host,
+                        mounts.filter(
+                          (mount) =>
+                            mount.service === null ||
+                            mount.service === APP_SERVICE
+                        ),
+                        surge
+                      )
                     ),
-                    surge
-                  )
-                ),
-              { surge: true }
+                  { surge: true }
+                )
+              }
             )
           }
         })
@@ -1745,6 +1761,22 @@ export class AppDriver {
     return tag
   }
 
+  // Holds the host ports a deployment publishes while it makes the
+  // containers that bind them, and refuses one something else holds: another
+  // App or a game server, running or stopped. The App's own containers don't
+  // count, since the deployment replaces them.
+  async #publishing<A>(
+    appId: string,
+    ports: ReadonlyArray<HostPort>,
+    run: () => Promise<A>
+  ): Promise<A> {
+    const release = await this.#networking.hostPorts.claim(
+      ports,
+      (container) => container.Labels?.[ID_LABEL] === physicalKey(appId)
+    )
+    return ensuringPromise(run, release)
+  }
+
   async #replaceContainer(
     input: RelayDeployApp,
     deployment: Deployment,
@@ -2166,119 +2198,121 @@ export class AppDriver {
     log("Reading Compose file")
     const normalized = await readConfig(base)
     const kept = await this.#keepComposeVolumes(input, base, normalized)
-    await this.#holdingComposeVolumes(
-      input.appId,
-      base,
-      normalized,
-      kept,
-      async () => {
-        const databases = await this.#connectableDatabases(
-          input.appId,
-          deployment
-        )
-        const routes = await this.#networking.routes(input.appId)
-        const tailscale = await this.#networking.tailscale(input.appId)
-        const options = {
-          appId: input.appId,
-          binds,
-          brick: input.brick,
-          commit: deployment.commit,
-          databases,
-          deploymentId: deployment.id,
-          kept,
-          mounts,
-          noCache: input.noCache === true,
-          routes,
-          serviceLimits: input.config.serviceLimits,
-          tailscale,
-        }
-        const previous = await this.#appContainers(input.appId)
-        const running = previous.some((container) => container.running)
-        const blocker =
-          mountsRollingBlocker(mounts) ??
-          composeRollingBlocker(normalized, tailscale)
-        if (running && blocker) {
-          log(`Stopping the running containers first, since ${blocker}`)
-        }
-        // Every service counts, with the limits the Compose file sets for those
-        // Kiln leaves alone.
-        const reserve = (
-          prepared: ComposeProject,
-          apply: (surge: boolean) => Promise<void>,
-          surge = false
-        ) =>
-          this.#reserving(
+    await this.#publishing(input.appId, composeHostPorts(normalized), () =>
+      this.#holdingComposeVolumes(
+        input.appId,
+        base,
+        normalized,
+        kept,
+        async () => {
+          const databases = await this.#connectableDatabases(
             input.appId,
-            Object.values(prepared.services).map(composeServiceLimits),
-            (fits) =>
-              traceRelayPromise("relay.apps.deployment.composeUp", () =>
-                apply(fits)
-              ),
-            { surge }
+            deployment
           )
-        if (input.noCache) log("Building without the cache")
-        if (running && blocker === null) {
-          // Its own project, so its networks and containers stand apart from
-          // the running ones until it takes over.
-          const project = `${base}-${deployment.id}`
-          const prepared = this.#prepareCompose(await readConfig(project), {
-            ...options,
-            deferAliases: true,
-          })
-          log(`Services: ${Object.keys(prepared.services).join(", ")}`)
-          let rolled = false
-          await reserve(
-            prepared,
-            async (surge) => {
-              if (!surge) {
-                log(
-                  "Stopping the running containers first, since the node can't hold both copies at once"
+          const routes = await this.#networking.routes(input.appId)
+          const tailscale = await this.#networking.tailscale(input.appId)
+          const options = {
+            appId: input.appId,
+            binds,
+            brick: input.brick,
+            commit: deployment.commit,
+            databases,
+            deploymentId: deployment.id,
+            kept,
+            mounts,
+            noCache: input.noCache === true,
+            routes,
+            serviceLimits: input.config.serviceLimits,
+            tailscale,
+          }
+          const previous = await this.#appContainers(input.appId)
+          const running = previous.some((container) => container.running)
+          const blocker =
+            mountsRollingBlocker(mounts) ??
+            composeRollingBlocker(normalized, tailscale)
+          if (running && blocker) {
+            log(`Stopping the running containers first, since ${blocker}`)
+          }
+          // Every service counts, with the limits the Compose file sets for those
+          // Kiln leaves alone.
+          const reserve = (
+            prepared: ComposeProject,
+            apply: (surge: boolean) => Promise<void>,
+            surge = false
+          ) =>
+            this.#reserving(
+              input.appId,
+              Object.values(prepared.services).map(composeServiceLimits),
+              (fits) =>
+                traceRelayPromise("relay.apps.deployment.composeUp", () =>
+                  apply(fits)
+                ),
+              { surge }
+            )
+          if (input.noCache) log("Building without the cache")
+          if (running && blocker === null) {
+            // Its own project, so its networks and containers stand apart from
+            // the running ones until it takes over.
+            const project = `${base}-${deployment.id}`
+            const prepared = this.#prepareCompose(await readConfig(project), {
+              ...options,
+              deferAliases: true,
+            })
+            log(`Services: ${Object.keys(prepared.services).join(", ")}`)
+            let rolled = false
+            await reserve(
+              prepared,
+              async (surge) => {
+                if (!surge) {
+                  log(
+                    "Stopping the running containers first, since the node can't hold both copies at once"
+                  )
+                  return
+                }
+                rolled = await this.#rollCompose(
+                  input,
+                  deployment,
+                  composeArguments(project),
+                  environment,
+                  prepared,
+                  previous
                 )
-                return
-              }
-              rolled = await this.#rollCompose(
+              },
+              true
+            )
+            if (rolled) {
+              deployment.rolling = true
+              await this.#removeComposeNetworks(input.appId, project)
+              return
+            }
+          }
+          deployment.rolling = false
+          const prepared = this.#prepareCompose(normalized, {
+            ...options,
+            deferAliases: false,
+          })
+          if (!running || blocker) {
+            log(`Services: ${Object.keys(prepared.services).join(", ")}`)
+          }
+          // Containers from an image or Dockerfile deployment, or a rolled one,
+          // aren't the project's, so Compose's --remove-orphans can't see them.
+          const outside = previous.filter(
+            (container) => container.labels[COMPOSE_PROJECT_LABEL] !== base
+          )
+          await reserve(prepared, () =>
+            this.#replacing(input.appId, deployment, outside, [], () =>
+              this.#composeUp(
                 input,
                 deployment,
-                composeArguments(project),
+                composeArguments(base),
                 environment,
-                prepared,
-                previous
+                prepared
               )
-            },
-            true
-          )
-          if (rolled) {
-            deployment.rolling = true
-            await this.#removeComposeNetworks(input.appId, project)
-            return
-          }
-        }
-        deployment.rolling = false
-        const prepared = this.#prepareCompose(normalized, {
-          ...options,
-          deferAliases: false,
-        })
-        if (!running || blocker) {
-          log(`Services: ${Object.keys(prepared.services).join(", ")}`)
-        }
-        // Containers from an image or Dockerfile deployment, or a rolled one,
-        // aren't the project's, so Compose's --remove-orphans can't see them.
-        const outside = previous.filter(
-          (container) => container.labels[COMPOSE_PROJECT_LABEL] !== base
-        )
-        await reserve(prepared, () =>
-          this.#replacing(input.appId, deployment, outside, [], () =>
-            this.#composeUp(
-              input,
-              deployment,
-              composeArguments(base),
-              environment,
-              prepared
             )
           )
-        )
-        await this.#removeComposeNetworks(input.appId, base)
-      }
+          await this.#removeComposeNetworks(input.appId, base)
+        }
+      )
     )
     return [...kept.keys()]
   }
@@ -3345,7 +3379,11 @@ interface ComposeService {
   labels?: Record<string, string>
   network_mode?: string
   networks?: Record<string, unknown>
-  ports?: Array<{ published?: unknown; [key: string]: unknown }>
+  ports?: Array<{
+    protocol?: unknown
+    published?: unknown
+    [key: string]: unknown
+  }>
   secrets?: Array<ComposeFileReference>
   restart?: string
   volumes?: Array<{ source?: unknown; type?: string; [key: string]: unknown }>
@@ -3497,6 +3535,22 @@ function fileMounts(
     ...(service.secrets && { secrets }),
     ...(volumes.length > 0 && { volumes }),
   }
+}
+
+// The host ports a Compose file publishes. One it leaves Docker to choose,
+// or to pick from a range, is whichever is free when it starts.
+function composeHostPorts(project: ComposeProject): Array<HostPort> {
+  return Object.values(project.services ?? {}).flatMap((service) =>
+    (service.ports ?? []).flatMap((port): Array<HostPort> => {
+      const published = Number(port.published)
+      const protocol = port.protocol ?? "tcp"
+      return Number.isInteger(published) &&
+        published > 0 &&
+        (protocol === "tcp" || protocol === "udp")
+        ? [{ port: published, protocol }]
+        : []
+    })
+  )
 }
 
 // Why two copies of a Compose project can't run side by side, if they
