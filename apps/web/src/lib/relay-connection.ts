@@ -52,7 +52,7 @@ import type {
   RelaySnapshotDelta,
   RelaySystemUpdate,
 } from "@workspace/contracts"
-import { hearthDatabaseTerminalOutputSchema } from "@workspace/contracts"
+import { hearthTerminalOutputSchema } from "@workspace/contracts"
 
 import {
   hearthDialUrl,
@@ -2064,19 +2064,19 @@ class RelayConnection {
     request: RelayControlRequest,
     socket: WebSocket
   ): Effect.Effect<void, Error> {
-    if (request.operation === "hearth.database.terminal.output") {
+    if (request.operation === "hearth.terminal.output") {
       return Effect.gen({ self: this }, function* () {
         const output = yield* Effect.try({
-          try: () => hearthDatabaseTerminalOutputSchema.parse(request.payload),
+          try: () => hearthTerminalOutputSchema.parse(request.payload),
           catch: asError,
         })
-        const { deliverDatabaseTerminalOutput } = yield* Effect.tryPromise({
-          try: () => import("@/server/database-terminal-hub"),
+        const { deliverTerminalOutput } = yield* Effect.tryPromise({
+          try: () => import("@/server/terminal-hub"),
           catch: asError,
         })
         yield* sendSocketEffect(socket, {
           id: randomUUID(),
-          payload: deliverDatabaseTerminalOutput(this.#relay.id, output),
+          payload: deliverTerminalOutput(this.#relay.id, output),
           replyTo: request.id,
           type: "response",
           v: 1,

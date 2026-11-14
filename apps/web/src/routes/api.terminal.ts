@@ -1,11 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router"
 
-export const Route = createFileRoute("/api/app-terminal/$appId")({
+// Every terminal's stream, whatever its shell runs in.
+export const Route = createFileRoute("/api/terminal")({
   server: {
     handlers: {
-      GET: async ({ params, request }) => {
+      GET: async ({ request }) => {
         const { terminalResponse } = await import("@/server/terminal-response")
-        return terminalResponse(request, { kind: "app", id: params.appId })
+        return terminalResponse(request)
       },
     },
   },

@@ -13,7 +13,7 @@ import {
 } from "./docker-engine.js"
 import { ensuringPromise } from "./effect/promise.js"
 import { RELAY_OWNER_LABEL, relayOwnsLabels } from "./relay-resources.js"
-import type { TerminalTarget } from "./container-terminal.js"
+import { terminalTargetKey, type TerminalSpec } from "./container-terminal.js"
 
 // BusyBox's nsenter is all the helper needs. Pinned, as it runs as root on
 // the host.
@@ -223,7 +223,7 @@ export class HostShell {
 // A login shell on the Relay's host, bash where the host has it. nsenter
 // joins the host's mount, UTS, IPC, and network namespaces; the helper already
 // shares its processes, so the shell stays the process the session started.
-export function hostTerminalTarget(containerId: string): TerminalTarget {
+export function hostTerminalTarget(containerId: string): TerminalSpec {
   return {
     command: [
       ...hostNamespaces,
@@ -235,13 +235,11 @@ export function hostTerminalTarget(containerId: string): TerminalTarget {
     ],
     containerId,
     environment: ["HOME=/root"],
-    key: HOST_TERMINAL_KEY,
+    key: terminalTargetKey({ kind: "relay" }),
     running: true,
     stoppedMessage: "The host shell could not start",
   }
 }
-
-export const HOST_TERMINAL_KEY = "relay:host"
 
 const hostNamespaces = [
   "nsenter",

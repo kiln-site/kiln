@@ -160,7 +160,9 @@ describe("Relay control socket", () => {
     const relay = await startRelay()
     const hearth = await relay.pair({ role: "read_only" })
     const { inbox, socket } = await relay.connect(hearth)
-    const id = sendRequest(socket, "relay.terminal.attach", {})
+    const id = sendRequest(socket, "terminal.attach", {
+      target: { kind: "relay" },
+    })
     expect(await inbox.next()).toMatchObject({
       code: "forbidden",
       replyTo: id,

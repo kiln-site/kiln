@@ -565,7 +565,8 @@ const permissionCopy: Record<
   },
   "database.terminal": {
     label: "Use database terminal",
-    description: "Open the database's command-line client, signed in.",
+    description:
+      "Open a shell in the database's container, which reaches its data files and its engine's login.",
   },
   "app.read": {
     label: "View apps",

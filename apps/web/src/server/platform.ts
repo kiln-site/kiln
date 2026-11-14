@@ -3,9 +3,6 @@ import {
   relayIdSchema,
   relayPlatformActionInputSchema,
   relayPlatformStatusSchema,
-  relayPlatformTargetSchema,
-  relayPlatformTerminalClaimSchema,
-  relayPlatformTerminalWriteSchema,
   type RelayPlatformStatus,
 } from "@workspace/contracts"
 import { z } from "zod"
@@ -50,67 +47,4 @@ export const runKilnPlatformAction = createServerFn({ method: "POST" })
     const { runKilnServiceAction } =
       await import("@/server/kiln-platform-operations.server")
     return relayPlatformStatusSchema.parse(await runKilnServiceAction(data))
-  })
-
-const terminalSchema = z.object({
-  relayId: relayIdSchema,
-  role: relayPlatformTargetSchema,
-})
-
-export const writeKilnTerminal = createServerFn({ method: "POST" })
-  .validator(
-    relayPlatformTerminalWriteSchema.extend({ relayId: relayIdSchema })
-  )
-  .handler(async ({ data: { relayId, ...input } }) => {
-    const { databaseRpc, platformV2Relay, requirePlatformAdministrator } =
-      await import("@/server/platform-access.server")
-    const user = await requirePlatformAdministrator()
-    const relay = await platformV2Relay(relayId)
-    await databaseRpc(
-      relay,
-      "relay.platform.terminal.write",
-      input,
-      15_000,
-      user.id
-    )
-    return { accepted: true }
-  })
-
-export const claimKilnTerminal = createServerFn({ method: "POST" })
-  .validator(
-    relayPlatformTerminalClaimSchema.extend({ relayId: relayIdSchema })
-  )
-  .handler(async ({ data: { relayId, ...input } }) => {
-    const { databaseRpc, platformV2Relay, requirePlatformAdministrator } =
-      await import("@/server/platform-access.server")
-    const user = await requirePlatformAdministrator()
-    const relay = await platformV2Relay(relayId)
-    return z
-      .object({ seq: z.number().int().nonnegative() })
-      .parse(
-        await databaseRpc(
-          relay,
-          "relay.platform.terminal.claim",
-          input,
-          15_000,
-          user.id
-        )
-      )
-  })
-
-export const restartKilnTerminal = createServerFn({ method: "POST" })
-  .validator(terminalSchema)
-  .handler(async ({ data: { relayId, role } }) => {
-    const { databaseRpc, platformV2Relay, requirePlatformAdministrator } =
-      await import("@/server/platform-access.server")
-    const user = await requirePlatformAdministrator()
-    const relay = await platformV2Relay(relayId)
-    await databaseRpc(
-      relay,
-      "relay.platform.terminal.restart",
-      { role },
-      30_000,
-      user.id
-    )
-    return { restarted: true }
   })

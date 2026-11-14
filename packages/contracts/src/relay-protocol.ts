@@ -62,7 +62,7 @@ export const relayVolumesV1Feature = "relay-volumes-v1"
 export const relayPlatformV1Feature = "relay-platform-v1"
 // The Relay also reports the Traefik in front of Hearth, follows each of
 // Kiln's containers' output as browser resource `platform`, opens shells in
-// them through `relay.platform.terminal.*`, and restarts its own Traefik.
+// them through `terminal.*`, and restarts its own Traefik.
 export const relayPlatformV2Feature = "relay-platform-v2"
 // The Relay browses and edits Hearth's own database through
 // `relay.platform.database.*`, with the credentials Hearth sends.
@@ -132,22 +132,16 @@ export const relayControlOperations = [
   "relay.host.files.mount",
   "relay.host.restart",
   "relay.database.read",
-  "relay.terminal.attach",
-  "relay.terminal.heartbeat",
-  "relay.terminal.detach",
-  "relay.terminal.write",
-  "relay.terminal.claim",
-  "relay.terminal.restart",
+  "terminal.attach",
+  "terminal.heartbeat",
+  "terminal.detach",
+  "terminal.write",
+  "terminal.claim",
+  "terminal.restart",
   "relay.desktop.read",
   "relay.desktop.attach",
   "relay.desktop.heartbeat",
   "relay.desktop.detach",
-  "relay.platform.terminal.attach",
-  "relay.platform.terminal.heartbeat",
-  "relay.platform.terminal.detach",
-  "relay.platform.terminal.write",
-  "relay.platform.terminal.claim",
-  "relay.platform.terminal.restart",
   "relay.proxy.read",
   "relay.proxy.config.read",
   "relay.proxy.write",
@@ -196,12 +190,6 @@ export const relayControlOperations = [
   "database.dump.import",
   "database.data.read",
   "database.data.write",
-  "database.terminal.attach",
-  "database.terminal.heartbeat",
-  "database.terminal.detach",
-  "database.terminal.write",
-  "database.terminal.claim",
-  "database.terminal.restart",
   "app.list",
   "app.resources.read",
   "app.provision.prepare",
@@ -212,12 +200,6 @@ export const relayControlOperations = [
   "app.deployment.read",
   "app.deployment.abort",
   "instance.image.check",
-  "app.terminal.attach",
-  "app.terminal.heartbeat",
-  "app.terminal.detach",
-  "app.terminal.write",
-  "app.terminal.claim",
-  "app.terminal.restart",
   "backup.task.enqueue",
   "backup.task.cancel",
   "backup.restore.resolve",
@@ -271,7 +253,7 @@ export const relayControlOperations = [
   "instance.network.routes.read",
   "instance.network.routes.write",
   "instance.network.databases.remove",
-  "hearth.database.terminal.output",
+  "hearth.terminal.output",
   "sftp.authorization.resolve",
   "operation.get",
   "relay.pause.write",
@@ -307,10 +289,8 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.proxy.write",
   "relay.proxy.trial",
   "relay.platform.action",
-  "relay.terminal.attach",
-  "relay.terminal.restart",
-  "relay.platform.terminal.attach",
-  "relay.platform.terminal.restart",
+  "terminal.attach",
+  "terminal.restart",
   "relay.platform.database.write",
   "relay.installation.replace",
   "instance.create",
@@ -343,15 +323,11 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "database.dump.export",
   "database.dump.import",
   "database.data.write",
-  "database.terminal.attach",
-  "database.terminal.restart",
   "app.provision.prepare",
   "app.provision.claim",
   "app.provision.cancel",
   "app.delete",
   "app.volumes.write",
-  "app.terminal.attach",
-  "app.terminal.restart",
   "backup.task.enqueue",
   "backup.task.cancel",
   "backup.restore.resolve",
@@ -437,35 +413,17 @@ export function relayControlOperationChanges(
     case "instance.console.history":
     case "instance.deployment.read":
     case "instance.network.routes.read":
-    case "relay.terminal.attach":
-    case "relay.terminal.heartbeat":
-    case "relay.terminal.detach":
-    case "relay.terminal.write":
-    case "relay.terminal.claim":
-    case "relay.terminal.restart":
+    case "terminal.attach":
+    case "terminal.heartbeat":
+    case "terminal.detach":
+    case "terminal.write":
+    case "terminal.claim":
+    case "terminal.restart":
     case "relay.desktop.read":
     case "relay.desktop.attach":
     case "relay.desktop.heartbeat":
     case "relay.desktop.detach":
-    case "relay.platform.terminal.attach":
-    case "relay.platform.terminal.heartbeat":
-    case "relay.platform.terminal.detach":
-    case "relay.platform.terminal.write":
-    case "relay.platform.terminal.claim":
-    case "relay.platform.terminal.restart":
-    case "database.terminal.attach":
-    case "database.terminal.heartbeat":
-    case "database.terminal.detach":
-    case "database.terminal.write":
-    case "database.terminal.claim":
-    case "database.terminal.restart":
-    case "app.terminal.attach":
-    case "app.terminal.heartbeat":
-    case "app.terminal.detach":
-    case "app.terminal.write":
-    case "app.terminal.claim":
-    case "app.terminal.restart":
-    case "hearth.database.terminal.output":
+    case "hearth.terminal.output":
     case "sftp.authorization.resolve":
     case "operation.get":
       return false
@@ -561,18 +519,11 @@ export const relayOperationRetentionMs = 7 * 24 * 60 * 60_000
 // Terminal traffic isn't journaled, but opening a shell or sending it input
 // can change anything. Heartbeats and detaching only keep or end a session.
 const terminalInputOperations = new Set<RelayControlOperation>([
-  "app.terminal.attach",
-  "app.terminal.claim",
-  "app.terminal.restart",
-  "app.terminal.write",
-  "database.terminal.attach",
-  "database.terminal.claim",
-  "database.terminal.restart",
-  "database.terminal.write",
-  "relay.terminal.attach",
-  "relay.terminal.claim",
-  "relay.terminal.restart",
-  "relay.terminal.write", // A desktop stream takes the keyboard and mouse.
+  "terminal.attach",
+  "terminal.claim",
+  "terminal.restart",
+  "terminal.write",
+  // A desktop stream takes the keyboard and mouse.
   "relay.desktop.attach",
 ])
 
@@ -605,7 +556,9 @@ export function relayControlOperationRefusedWhilePaused(
 export function relayControlDeadlineMs(
   operation: RelayControlOperation
 ): number {
-  if (operation === "relay.terminal.attach") return 360_000
+  // The host's shell helper may have to be pulled first. Hearth asks for
+  // less where nothing is pulled.
+  if (operation === "terminal.attach") return 360_000
   // The streamer's image may have to be pulled first.
   if (operation === "relay.desktop.attach") return 240_000
   if (operation === "relay.update.apply") return 15 * 60_000
