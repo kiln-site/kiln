@@ -81,11 +81,17 @@ export function useAppConfigSave(
       }
       return { config: result.config, next }
     },
-    onSuccess: async ({ config, next }, { config: changed }) => {
+    onSuccess: async ({ config, next }, { config: changed, github }) => {
       // First, so a volume just added is known before a row shows it.
       if (changed.mounts) {
         await queryClient.invalidateQueries({
           queryKey: queryKeys.appVolumes(app.relayId, app.id),
+        })
+      }
+      // Another repository's file, though its branch and path are the same.
+      if (github) {
+        void queryClient.invalidateQueries({
+          queryKey: ["app-github-source-file", app.relayId, app.id],
         })
       }
       queryClient.setQueryData(
