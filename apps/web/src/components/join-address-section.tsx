@@ -59,6 +59,28 @@ type DomainDialog =
  * it may use, one of them its primary. Kiln keeps their DNS records. They
  * point straight at its game port, not through the proxy its domains use.
  */
+/**
+ * The name players join by, once its record is live. Its record points at
+ * the Relay, so every port of the game server answers there too.
+ */
+export function usePrimaryJoinHostname(): string | null {
+  const instance = useInstanceIdentity()
+  const select = React.useCallback(
+    (data: DomainSettings) => {
+      const primary = data.managedDomains.find(
+        (domain) =>
+          domain.instanceId === instance.id &&
+          domain.relayId === instance.relayId &&
+          domain.primary &&
+          domain.status === "active"
+      )
+      return primary ? `${primary.vanityLabel}.${primary.domain}` : null
+    },
+    [instance.id, instance.relayId]
+  )
+  return useQuery({ ...domainSettingsQueryOptions(), select }).data ?? null
+}
+
 export const JoinAddressSection = React.memo(function JoinAddressSection() {
   const instance = useInstanceIdentity()
   const permissions = useInstancePermissions()

@@ -7,20 +7,7 @@ import {
 } from "@tanstack/react-query"
 import { useNavigate } from "@tanstack/react-router"
 import { Effect } from "effect"
-import {
-  AlertTriangle,
-  BrickWall,
-  Cable,
-  Check,
-  CircleAlert,
-  Copy,
-  Globe2,
-  LoaderCircle,
-  Pencil,
-  Plus,
-  RotateCw,
-  Trash2,
-} from "lucide-react"
+import { CircleAlert, LoaderCircle, Plus, RotateCw } from "lucide-react"
 import {
   instanceTailscaleMemberId,
   relayInstancePortInputSchema,
@@ -47,14 +34,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@workspace/ui/components/dialog"
-import { Input } from "@workspace/ui/components/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 import { showToast } from "@workspace/ui/components/sonner"
 import {
   Tooltip,
@@ -67,7 +46,23 @@ import {
   useInstancePermissions,
   useInstanceRelayConnected,
 } from "@/components/instance-workspace-context"
-import { JoinAddressSection } from "@/components/join-address-section"
+import {
+  JoinAddressSection,
+  usePrimaryJoinHostname,
+} from "@/components/join-address-section"
+import {
+  formatHostPort,
+  formatPortProtocol,
+  PortFields,
+  PortRow,
+  PortRowActions,
+  PortsDivider,
+  PortsNote,
+  PortsSection,
+  PortsTable,
+  RemovePortDialog,
+  type PortNotice,
+} from "@/components/ports-section"
 import {
   TailscaleMembershipSection,
   type TailscaleMember,
@@ -78,11 +73,6 @@ import {
   type WebRouteProxyChange,
   type WebRouteRow,
 } from "@/components/web-routes-section"
-import {
-  WorkspaceTableCell,
-  WorkspaceTableHead,
-  WorkspaceTableHeading,
-} from "@/components/workspace-table"
 import {
   accessCapabilitiesQueryOptions,
   webRoutesQueryOptions,
@@ -447,6 +437,8 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
 }) {
   const navigate = useNavigate({ from: "/server/$serverId/network" })
   const queryClient = useQueryClient()
+  // Its ports are shown at the name players join by, or at the Relay's.
+  const publicHost = usePrimaryJoinHostname() ?? instance.publicHost
   const primaryPort = instance.ports.find(
     (allocation) => allocation.kind === "primary"
   )
@@ -502,7 +494,7 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
           : undefined,
         message: updated.pendingPrimaryPort
           ? "Default Server saved"
-          : "Port allocations updated",
+          : "Ports saved",
         type: "success",
       })
     },
@@ -665,62 +657,53 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
   }, [portInputs, removal, update])
 
   return (
-    <section className="border border-border/80 bg-card/55">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
-        <div>
-          <h1 className="font-heading text-base font-semibold tracking-tight">
-            Ports
-          </h1>
-        </div>
-        <div className="flex items-center gap-2">
-          {canWrite ? (
-            <Button
-              disabled={
-                disabled ||
-                primaryPort === undefined ||
-                instance.ports.length >= 16 ||
-                addedRoutes.some(({ status }) => status === "pending")
-              }
-              onClick={() => {
-                update.reset()
-                setDialog({ mode: "add" })
-              }}
-              size="sm"
-              type="button"
-            >
-              <Plus />
-              Add port
-            </Button>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="overflow-x-auto">
-        <ConfiguredRoutesTable
-          addedRoutes={addedRoutes}
-          canWrite={canWrite}
-          disabled={disabled}
-          instance={instance}
-          canRestart={canRestart}
-          restarting={restarting}
-          removal={removal?.phase === "removing" ? removal : null}
-          removedRouteKeys={removedRouteKeys}
-          onEditPort={editPort}
-          onRecoverPrimaryPort={recoverPrimaryPort}
-          onRemovePort={removePort}
-          onRestart={onRestart}
-        />
-      </div>
-
-      {!relayConnected ? (
-        <p className="type-support border-t border-amber-400/20 bg-amber-400/5 px-4 py-2 text-amber-100 light:bg-amber-400/10 light:text-amber-800">
-          Port changes are unavailable while this Relay is disconnected.
-        </p>
-      ) : update.error && dialog === null ? (
-        <p className="border-t border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive light:bg-destructive/10">
-          {errorMessage(update.error)}
-        </p>
-      ) : null}
+    <PortsSection
+      action={
+        canWrite ? (
+          <Button
+            disabled={
+              disabled ||
+              primaryPort === undefined ||
+              instance.ports.length >= 16 ||
+              addedRoutes.some(({ status }) => status === "pending")
+            }
+            onClick={() => {
+              update.reset()
+              setDialog({ mode: "add" })
+            }}
+            size="sm"
+            type="button"
+          >
+            <Plus />
+            Add port
+          </Button>
+        ) : null
+      }
+      footer={
+        !relayConnected ? (
+          <PortsNote tone="warning">
+            Port changes are unavailable while this Relay is disconnected.
+          </PortsNote>
+        ) : update.error && dialog === null ? (
+          <PortsNote tone="error">{errorMessage(update.error)}</PortsNote>
+        ) : null
+      }
+    >
+      <ConfiguredRoutesTable
+        addedRoutes={addedRoutes}
+        canWrite={canWrite}
+        disabled={disabled}
+        instance={instance}
+        publicHost={publicHost}
+        canRestart={canRestart}
+        restarting={restarting}
+        removal={removal?.phase === "removing" ? removal : null}
+        removedRouteKeys={removedRouteKeys}
+        onEditPort={editPort}
+        onRecoverPrimaryPort={recoverPrimaryPort}
+        onRemovePort={removePort}
+        onRestart={onRestart}
+      />
 
       {dialog?.mode === "add" ? (
         <AddPortDialog
@@ -779,16 +762,22 @@ const ConfiguredRoutesSection = React.memo(function ConfiguredRoutesSection({
         }}
         onSubmit={applyPort}
       />
-      <RemoveNetworkRouteDialog
-        open={removal?.phase === "confirming"}
-        publicHost={instance.publicHost}
-        removal={removal}
-        onConfirm={() => void confirmRemoval()}
-        onOpenChange={(open) => {
-          if (!open && removal?.phase === "confirming") setRemoval(null)
-        }}
-      />
-    </section>
+      {removal ? (
+        <RemovePortDialog
+          address={
+            publicHost
+              ? formatHostPort(publicHost, removal.allocation.externalPort)
+              : String(removal.allocation.externalPort)
+          }
+          name={removal.allocation.name}
+          open={removal.phase === "confirming"}
+          onConfirm={() => void confirmRemoval()}
+          onOpenChange={(open) => {
+            if (!open && removal.phase === "confirming") setRemoval(null)
+          }}
+        />
+      ) : null}
+    </PortsSection>
   )
 })
 
@@ -798,6 +787,7 @@ const ConfiguredRoutesTable = React.memo(function ConfiguredRoutesTable({
   canWrite,
   disabled,
   instance,
+  publicHost,
   restarting,
   removal,
   removedRouteKeys,
@@ -811,6 +801,7 @@ const ConfiguredRoutesTable = React.memo(function ConfiguredRoutesTable({
   canWrite: boolean
   disabled: boolean
   instance: InstanceWorkspaceInstance
+  publicHost: string | undefined
   restarting: boolean
   removal: RouteRemovalState | null
   removedRouteKeys: ReadonlySet<string>
@@ -858,213 +849,125 @@ const ConfiguredRoutesTable = React.memo(function ConfiguredRoutesTable({
     displayedPorts.some((allocation) => allocation.kind !== "primary") ||
     displayedAddedRoutes.length > 0
 
+  const primaryNotice = React.useMemo<PortNotice | undefined>(() => {
+    if (!displayedPrimaryPort) {
+      return {
+        label: "View Default Server error",
+        tone: "error",
+        tooltip: "Default Server needs configuration",
+        onClick: () =>
+          showToast({
+            description:
+              "Edit the Default Server to assign its internal port and protocol.",
+            message: "Default Server is not configured",
+            type: "error",
+          }),
+      }
+    }
+    if (!pendingPrimaryPort) return undefined
+    return {
+      label: "View Default Server restart warning",
+      tone: "warning",
+      tooltip: "Restart required",
+      onClick: () =>
+        showPendingRestartToast({
+          canRestart,
+          message:
+            "Restart this server when you are ready to apply its Default Server route.",
+          restarting,
+          onRestart,
+        }),
+    }
+  }, [
+    canRestart,
+    displayedPrimaryPort,
+    onRestart,
+    pendingPrimaryPort,
+    restarting,
+  ])
+
   return (
-    <table className="w-full min-w-[40rem] table-fixed border-collapse text-left">
-      <WorkspaceTableHead>
-        <WorkspaceTableHeading className="w-[27%]">Name</WorkspaceTableHeading>
-        <WorkspaceTableHeading className="w-[15%]">
-          Internal Port
-        </WorkspaceTableHeading>
-        <WorkspaceTableHeading>Public Address</WorkspaceTableHeading>
-        <WorkspaceTableHeading className="w-[6.5rem] text-right">
-          Actions
-        </WorkspaceTableHeading>
-      </WorkspaceTableHead>
-      <tbody className="divide-y divide-border/70">
-        <tr className="hover:bg-muted/10">
-          <WorkspaceTableCell>
-            <div className="flex min-w-0 items-center gap-2.5">
-              <RouteRowIcon
-                canRestart={canRestart}
-                errorMessage={
-                  displayedPrimaryPort
-                    ? undefined
-                    : "Edit the Default Server to assign its internal port and protocol."
-                }
-                kind="primary"
-                pendingMessage={
-                  pendingPrimaryPort
-                    ? "Restart this server when you are ready to apply its Default Server route."
-                    : undefined
-                }
-                restarting={restarting}
-                onRestart={onRestart}
-              />
-              <div className="min-w-0">
-                <span className="block truncate text-xs font-medium">
-                  Default Server
-                </span>
-                <span className="type-technical-label mt-0.5 block text-muted-foreground">
-                  {displayedPrimaryPort
-                    ? formatPortProtocol(displayedPrimaryPort.protocol)
-                    : "Not configured"}
-                </span>
-              </div>
-              <span className="type-technical-label shrink-0 self-center border border-primary/30 bg-primary/8 px-2 py-1 text-primary-ink">
-                Primary
-              </span>
-            </div>
-          </WorkspaceTableCell>
-          <WorkspaceTableCell>
-            <span className="font-mono text-xs text-foreground">
-              {displayedPrimaryPort?.internalPort ?? "—"}
-            </span>
-          </WorkspaceTableCell>
-          <WorkspaceTableCell>
-            <PublicAddressCopy
-              address={
-                instance.publicHost && primaryPort
-                  ? formatHostPort(
-                      instance.publicHost,
-                      primaryPort.externalPort
-                    )
-                  : null
-              }
-              label="game server public address"
-              prominent
-            />
-          </WorkspaceTableCell>
-          <WorkspaceTableCell className="px-2">
-            <div className="flex justify-end">
-              {canWrite ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      aria-label="Edit Default Server"
-                      disabled={disabled}
-                      onClick={() => {
-                        if (primaryPort) onEditPort(primaryPort)
-                        else onRecoverPrimaryPort()
-                      }}
-                      size="icon-sm"
-                      type="button"
-                      variant="ghost"
-                    >
-                      <Pencil />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {primaryPort
-                      ? "Edit allocation"
-                      : pendingPrimaryPort
-                        ? "Edit pending Default Server"
-                        : "Assign Default Server"}
-                  </TooltipContent>
-                </Tooltip>
-              ) : null}
-            </div>
-          </WorkspaceTableCell>
-        </tr>
-        {hasAdditionalRoutes ? (
-          <tr aria-hidden="true">
-            <td
-              className="h-3 border-y border-border/70 bg-muted/25 p-0"
-              colSpan={4}
-            />
-          </tr>
-        ) : null}
-        {displayedPorts.map((allocation) => {
-          if (
-            allocation.kind === "primary" ||
-            addedRoutes.some(
-              (addedRoute) =>
-                addedRoute.kind === "port" &&
-                (addedRoute.status === "ready"
-                  ? addedRoute.allocation.id === allocation.id
-                  : addedRoute.route.publicPort === allocation.externalPort)
-            )
-          ) {
-            return null
-          }
-          return (
-            <PortRouteRow
-              key={allocation.id}
-              allocation={allocation}
-              canWrite={canWrite}
-              deleting={
-                removal?.kind === "port" &&
-                removal.allocation.id === allocation.id
-              }
+    <PortsTable>
+      <PortRow
+        actions={
+          canWrite ? (
+            <PortRowActions
               disabled={disabled}
-              publicHost={instance.publicHost}
-              onEdit={onEditPort}
-              onRemove={onRemovePort}
+              name="Default Server"
+              onEdit={() => {
+                if (primaryPort) onEditPort(primaryPort)
+                else onRecoverPrimaryPort()
+              }}
             />
+          ) : null
+        }
+        address={
+          publicHost && primaryPort
+            ? {
+                copy: formatHostPort(publicHost, primaryPort.externalPort),
+                label: "game server public address",
+              }
+            : null
+        }
+        detail={
+          displayedPrimaryPort
+            ? formatPortProtocol(displayedPrimaryPort.protocol)
+            : "Not configured"
+        }
+        internalPort={displayedPrimaryPort?.internalPort ?? null}
+        name="Default Server"
+        notice={primaryNotice}
+        primary
+      />
+      {hasAdditionalRoutes ? <PortsDivider /> : null}
+      {displayedPorts.map((allocation) => {
+        if (
+          allocation.kind === "primary" ||
+          addedRoutes.some(
+            (addedRoute) =>
+              addedRoute.kind === "port" &&
+              (addedRoute.status === "ready"
+                ? addedRoute.allocation.id === allocation.id
+                : addedRoute.route.publicPort === allocation.externalPort)
           )
-        })}
-        {displayedAddedRoutes.map((addedRoute) => (
-          <AddedRouteRow
-            key={addedRoute.clientId}
-            addedRoute={addedRoute}
+        ) {
+          return null
+        }
+        return (
+          <PortRouteRow
+            key={allocation.id}
+            allocation={allocation}
             canWrite={canWrite}
             deleting={
-              addedRoute.status === "ready" &&
-              removal?.allocation.id === addedRoute.allocation.id
+              removal?.kind === "port" &&
+              removal.allocation.id === allocation.id
             }
             disabled={disabled}
-            instance={instance}
-            onEditPort={onEditPort}
-            onRemovePort={onRemovePort}
+            publicHost={publicHost}
+            onEdit={onEditPort}
+            onRemove={onRemovePort}
           />
-        ))}
-      </tbody>
-    </table>
+        )
+      })}
+      {displayedAddedRoutes.map((addedRoute) => (
+        <AddedRouteRow
+          key={addedRoute.clientId}
+          addedRoute={addedRoute}
+          canWrite={canWrite}
+          deleting={
+            addedRoute.status === "ready" &&
+            removal?.allocation.id === addedRoute.allocation.id
+          }
+          disabled={disabled}
+          instance={instance}
+          publicHost={publicHost}
+          onEditPort={onEditPort}
+          onRemovePort={onRemovePort}
+        />
+      ))}
+    </PortsTable>
   )
 })
-
-function RemoveNetworkRouteDialog({
-  open,
-  publicHost,
-  removal,
-  onConfirm,
-  onOpenChange,
-}: {
-  open: boolean
-  publicHost?: string
-  removal: RouteRemovalState | null
-  onConfirm: () => void
-  onOpenChange: (open: boolean) => void
-}) {
-  if (!removal) return null
-  const name = removal.allocation.name
-  const publicAddress = publicHost
-    ? formatHostPort(publicHost, removal.allocation.externalPort)
-    : String(removal.allocation.externalPort)
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Trash2 aria-hidden="true" className="size-5 text-destructive" />
-            Remove Route
-          </DialogTitle>
-        </DialogHeader>
-        <div className="border border-border bg-muted/20 px-3 py-2.5">
-          <span className="block truncate text-sm font-medium text-foreground">
-            {name}
-          </span>
-          <span className="mt-0.5 block truncate font-mono text-xs text-muted-foreground">
-            {publicAddress}
-          </span>
-        </div>
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button type="button" variant="destructive" onClick={onConfirm}>
-            <Trash2 />
-            Remove route
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 const PortRouteRow = React.memo(function PortRouteRow({
   allocation,
@@ -1083,90 +986,47 @@ const PortRouteRow = React.memo(function PortRouteRow({
   onEdit: (allocation: RelayInstancePortAllocation) => void
   onRemove: (allocation: RelayInstancePortAllocation) => void
 }) {
-  const address = publicHost
-    ? formatHostPort(publicHost, allocation.externalPort)
-    : null
-
   return (
-    <tr
-      aria-label={deleting ? `Removing ${allocation.name}` : undefined}
-      className="hover:bg-muted/10"
-    >
-      <WorkspaceTableCell>
-        <div className="flex min-w-0 items-center gap-2.5">
-          <RouteRowIcon
-            busyLabel="Removing route"
-            kind="port"
-            settingUp={deleting}
-          />
-          <RouteName
+    <PortRow
+      actions={
+        canWrite ? (
+          <PortRowActions
+            disabled={disabled || deleting}
             name={allocation.name}
-            secondary={formatPortProtocol(allocation.protocol)}
+            onEdit={() => onEdit(allocation)}
+            onRemove={
+              allocation.kind === "custom"
+                ? () => onRemove(allocation)
+                : undefined
+            }
           />
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <span className="font-mono text-xs text-foreground">
-          {allocation.internalPort}
-        </span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <PublicAddressCopy
-          address={address}
-          label={`${allocation.name} public address`}
-          prominent
-        />
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="px-2">
-        <div className="flex justify-end gap-0.5">
-          {canWrite ? (
-            <>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label={`Edit ${allocation.name}`}
-                    disabled={disabled || deleting}
-                    onClick={() => onEdit(allocation)}
-                    size="icon-sm"
-                    type="button"
-                    variant="ghost"
-                  >
-                    <Pencil />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Edit allocation</TooltipContent>
-              </Tooltip>
-              {allocation.kind === "custom" ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      aria-label={`Remove ${allocation.name}`}
-                      disabled={disabled || deleting}
-                      onClick={() => onRemove(allocation)}
-                      size="icon-sm"
-                      type="button"
-                      variant="ghost"
-                    >
-                      <Trash2 />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Remove allocation</TooltipContent>
-                </Tooltip>
-              ) : null}
-            </>
-          ) : null}
-        </div>
-      </WorkspaceTableCell>
-    </tr>
+        ) : null
+      }
+      address={
+        publicHost
+          ? {
+              copy: formatHostPort(publicHost, allocation.externalPort),
+              label: `${allocation.name} public address`,
+            }
+          : null
+      }
+      busy={deleting ? "Removing" : undefined}
+      detail={formatPortProtocol(allocation.protocol)}
+      internalPort={allocation.internalPort}
+      name={allocation.name}
+    />
   )
 })
 
+// A port added since the page opened: shown while the Relay adds it, then as
+// the Relay reports it.
 function AddedRouteRow({
   addedRoute,
   canWrite,
   deleting,
   disabled,
   instance,
+  publicHost,
   onEditPort,
   onRemovePort,
 }: {
@@ -1175,354 +1035,59 @@ function AddedRouteRow({
   deleting: boolean
   disabled: boolean
   instance: InstanceWorkspaceInstance
+  publicHost: string | undefined
   onEditPort: (allocation: RelayInstancePortAllocation) => void
   onRemovePort: (allocation: RelayInstancePortAllocation) => void
 }) {
-  if (addedRoute.kind === "port") {
-    const details =
-      addedRoute.status === "ready"
-        ? (() => {
-            const allocation =
-              instance.ports.find(
-                ({ id }) => id === addedRoute.allocation.id
-              ) ?? addedRoute.allocation
-            return {
-              allocation,
-              externalPort: allocation.externalPort,
-              internalPort: allocation.internalPort,
-              name: allocation.name,
-              protocol: allocation.protocol,
-            }
-          })()
-        : {
-            allocation: null,
-            externalPort: addedRoute.route.publicPort,
-            internalPort: addedRoute.route.internalPort,
-            name: addedRoute.route.name,
-            protocol: addedRoute.route.protocol,
-          }
-    const address =
-      instance.publicHost && details.externalPort
-        ? formatHostPort(instance.publicHost, details.externalPort)
-        : "Allocating…"
-
-    return (
-      <ProvisioningRouteRow
-        actions={
-          details.allocation && canWrite ? (
-            <>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label={`Edit ${details.allocation.name}`}
-                    disabled={disabled || deleting}
-                    onClick={() => onEditPort(details.allocation)}
-                    size="icon-sm"
-                    type="button"
-                    variant="ghost"
-                  >
-                    <Pencil />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Edit allocation</TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label={`Remove ${details.allocation.name}`}
-                    disabled={disabled || deleting}
-                    onClick={() => onRemovePort(details.allocation)}
-                    size="icon-sm"
-                    type="button"
-                    variant="ghost"
-                  >
-                    <Trash2 />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Remove allocation</TooltipContent>
-              </Tooltip>
-            </>
-          ) : null
+  const allocation =
+    addedRoute.status === "ready"
+      ? (instance.ports.find(({ id }) => id === addedRoute.allocation.id) ??
+        addedRoute.allocation)
+      : null
+  const details = allocation
+    ? {
+        externalPort: allocation.externalPort,
+        internalPort: allocation.internalPort,
+        name: allocation.name,
+        protocol: allocation.protocol,
+      }
+    : addedRoute.status === "pending"
+      ? {
+          externalPort: addedRoute.route.publicPort,
+          internalPort: addedRoute.route.internalPort,
+          name: addedRoute.route.name,
+          protocol: addedRoute.route.protocol,
         }
-        address={address}
-        copyLabel={`${details.name} public address`}
-        internalPort={details.internalPort}
-        kind="port"
-        name={details.name}
-        secondary={formatPortProtocol(details.protocol)}
-        settingUp={!details.allocation || deleting}
-        showCopy={Boolean(details.allocation)}
-        statusLabel={deleting ? "Removing" : "Adding"}
-      />
-    )
-  }
-}
+      : null
+  if (!details) return null
+  const address =
+    publicHost && details.externalPort
+      ? formatHostPort(publicHost, details.externalPort)
+      : "Allocating…"
 
-function ProvisioningRouteRow({
-  actions,
-  address,
-  canRestart,
-  copyLabel,
-  internalPort,
-  kind,
-  name,
-  restarting,
-  secondary,
-  settingUp,
-  showCopy,
-  state,
-  statusLabel,
-  onRestart,
-}: {
-  actions: React.ReactNode
-  address: string
-  canRestart?: boolean
-  copyLabel: string
-  internalPort: number
-  kind: "port" | "web"
-  name: string
-  restarting?: boolean
-  secondary: string
-  settingUp: boolean
-  showCopy: boolean
-  state?: RelayInstanceWebRouteState
-  statusLabel: "Adding" | "Removing"
-  onRestart?: () => void
-}) {
   return (
-    <tr
-      aria-label={settingUp ? `${statusLabel} ${name}` : undefined}
-      className="hover:bg-muted/10"
-    >
-      <WorkspaceTableCell>
-        <div className="flex min-w-0 items-center gap-2.5">
-          <RouteRowIcon
-            busyLabel={`${statusLabel} route`}
-            canRestart={canRestart}
-            kind={kind}
-            restarting={restarting}
-            settingUp={settingUp}
-            state={state}
-            onRestart={onRestart}
+    <PortRow
+      actions={
+        allocation && canWrite ? (
+          <PortRowActions
+            disabled={disabled || deleting}
+            name={allocation.name}
+            onEdit={() => onEditPort(allocation)}
+            onRemove={() => onRemovePort(allocation)}
           />
-          <RouteName name={name} secondary={secondary} />
-        </div>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        <span className="font-mono text-xs text-foreground">
-          {internalPort}
-        </span>
-      </WorkspaceTableCell>
-      <WorkspaceTableCell>
-        {showCopy ? (
-          <PublicAddressCopy address={address} label={copyLabel} prominent />
-        ) : (
-          <span className="block truncate font-mono text-sm font-medium text-muted-foreground">
-            {address}
-          </span>
-        )}
-      </WorkspaceTableCell>
-      <WorkspaceTableCell className="px-2">
-        <div className="flex justify-end gap-0.5">{actions}</div>
-      </WorkspaceTableCell>
-    </tr>
+        ) : null
+      }
+      address={
+        allocation
+          ? { copy: address, label: `${details.name} public address` }
+          : address
+      }
+      busy={!allocation ? "Adding" : deleting ? "Removing" : undefined}
+      detail={formatPortProtocol(details.protocol)}
+      internalPort={details.internalPort}
+      name={details.name}
+    />
   )
-}
-
-function RouteName({ name, secondary }: { name: string; secondary: string }) {
-  return (
-    <div className="min-w-0">
-      <span className="block truncate text-xs font-medium">{name}</span>
-      <span className="type-technical-label mt-0.5 block truncate text-muted-foreground">
-        {secondary}
-      </span>
-    </div>
-  )
-}
-
-const RouteRowIcon = React.memo(function RouteRowIcon({
-  busyLabel = "Setting up route",
-  canRestart = false,
-  errorMessage,
-  kind,
-  pendingMessage,
-  restarting = false,
-  settingUp = false,
-  state,
-  onRestart,
-}: {
-  busyLabel?: string
-  canRestart?: boolean
-  errorMessage?: string
-  kind: "port" | "primary" | "web"
-  pendingMessage?: string
-  restarting?: boolean
-  settingUp?: boolean
-  state?: RelayInstanceWebRouteState
-  onRestart?: () => void
-}) {
-  const pending =
-    pendingMessage !== undefined || state?.status === "pending_restart"
-  const blocked = state?.status === "blocked" || errorMessage !== undefined
-  const Icon = kind === "primary" ? BrickWall : kind === "web" ? Globe2 : Cable
-
-  if (settingUp) {
-    return (
-      <div
-        aria-label={busyLabel}
-        className="grid size-7 shrink-0 place-items-center border border-primary/30 bg-primary/5 text-primary-ink"
-        role="status"
-      >
-        <LoaderCircle className="size-3.5 animate-spin" />
-      </div>
-    )
-  }
-
-  if (!pending && !blocked) {
-    return (
-      <div
-        className={`grid size-7 shrink-0 place-items-center border ${
-          kind === "primary"
-            ? "border-primary/30 bg-primary/5 text-primary-ink"
-            : "border-emerald-400/25 bg-emerald-400/5 text-emerald-300 light:bg-emerald-400/10 light:text-emerald-700"
-        }`}
-      >
-        <Icon className="size-3.5" />
-      </div>
-    )
-  }
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          aria-label={
-            pending
-              ? "View Default Server restart warning"
-              : errorMessage
-                ? "View Default Server error"
-                : "View route error"
-          }
-          className={`grid size-7 shrink-0 place-items-center border transition-colors ${
-            pending
-              ? "border-amber-400/30 bg-amber-400/5 text-amber-300 hover:bg-amber-400/10 light:bg-amber-400/10 light:text-amber-700 light:hover:bg-amber-400/20"
-              : "border-destructive/35 bg-destructive/5 text-destructive hover:bg-destructive/10 light:bg-destructive/10 light:hover:bg-destructive/20"
-          }`}
-          onClick={() => {
-            if (errorMessage) {
-              showToast({
-                description: errorMessage,
-                message: "Default Server is not configured",
-                type: "error",
-              })
-              return
-            }
-            if (pendingMessage) {
-              showPendingRestartToast({
-                canRestart,
-                message: pendingMessage,
-                restarting,
-                onRestart,
-              })
-              return
-            }
-            if (!state) return
-            showRouteStatusToast({
-              canRestart,
-              restarting,
-              state,
-              onRestart,
-            })
-          }}
-          type="button"
-        >
-          {pending ? (
-            <AlertTriangle className="size-3.5" />
-          ) : (
-            <CircleAlert className="size-3.5" />
-          )}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>
-        {pending
-          ? "Restart required"
-          : errorMessage
-            ? "Default Server needs configuration"
-            : "View route error"}
-      </TooltipContent>
-    </Tooltip>
-  )
-})
-
-const PublicAddressCopy = React.memo(function PublicAddressCopy({
-  address,
-  label,
-  prominent = false,
-}: {
-  address: string | null
-  label: string
-  prominent?: boolean
-}) {
-  const { copied, copy } = useCopyFeedback(address ?? "")
-
-  if (!address) {
-    return (
-      <span className="type-code block truncate text-muted-foreground">
-        Unavailable
-      </span>
-    )
-  }
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          aria-label={`Copy ${label}`}
-          className={`flex max-w-full items-center gap-1 font-mono transition-colors ${
-            prominent ? "type-control" : "type-meta"
-          } ${
-            copied
-              ? "text-emerald-400"
-              : "text-primary-ink/75 hover:text-primary-ink"
-          }`}
-          onClick={() => {
-            void copy()
-          }}
-          type="button"
-        >
-          <span className="truncate">{address}</span>
-          {copied ? (
-            <Check className="size-3 shrink-0" />
-          ) : (
-            <Copy className="size-3 shrink-0 opacity-55" />
-          )}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>
-        {copied ? "Address copied" : "Copy address"}
-      </TooltipContent>
-    </Tooltip>
-  )
-})
-
-function useCopyFeedback(value: string) {
-  const [copied, setCopied] = React.useState(false)
-  const resetTimer = React.useRef<number | null>(null)
-  React.useEffect(
-    () => () => {
-      if (resetTimer.current) window.clearTimeout(resetTimer.current)
-    },
-    []
-  )
-
-  async function copy() {
-    await copyToClipboard(value)
-    setCopied(true)
-    if (resetTimer.current) window.clearTimeout(resetTimer.current)
-    resetTimer.current = window.setTimeout(() => setCopied(false), 1_800)
-  }
-
-  return { copied, copy }
 }
 
 function usePortLease({
@@ -1749,7 +1314,7 @@ function usePortLease({
       externalPort < 1 ||
       externalPort > 65_535
     ) {
-      throw new Error("Public Port must be between 1 and 65535")
+      throw new Error("Public port must be between 1 and 65535")
     }
     if (
       (currentLease && externalPort === currentLease.externalPort) ||
@@ -1837,35 +1402,6 @@ function usePortLease({
   }
 }
 
-function ProtocolSelect({
-  value,
-  onChange,
-}: {
-  value: RelayInstancePortProtocol
-  onChange: (protocol: RelayInstancePortProtocol) => void
-}) {
-  return (
-    <Select
-      name="protocol"
-      value={value}
-      onValueChange={(nextValue) => {
-        const parsed =
-          relayInstancePortInputSchema.shape.protocol.safeParse(nextValue)
-        if (parsed.success) onChange(parsed.data)
-      }}
-    >
-      <SelectTrigger aria-label="Protocol" className="h-8 w-full text-xs">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="tcp">TCP</SelectItem>
-        <SelectItem value="udp">UDP</SelectItem>
-        <SelectItem value="both">TCP + UDP</SelectItem>
-      </SelectContent>
-    </Select>
-  )
-}
-
 function AddPortDialog({
   canEditPublicPort,
   error,
@@ -1910,10 +1446,9 @@ function AddPortDialog({
     >
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <p className="type-technical-label text-primary-ink">New port</p>
-          <DialogTitle>Add a port</DialogTitle>
+          <DialogTitle>Add port</DialogTitle>
           <DialogDescription className="sr-only">
-            Publish a raw TCP or UDP port from this server.
+            Publish a TCP or UDP port from this server.
           </DialogDescription>
         </DialogHeader>
 
@@ -1981,54 +1516,27 @@ function AddPortDialog({
           }}
           className="space-y-4"
         >
-          <label className="type-label block space-y-1.5">
-            Name
-            <Input
-              autoComplete="off"
-              maxLength={32}
-              name="name"
-              placeholder="Voice chat"
-              required
-            />
-          </label>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-[7.5rem_7.5rem_minmax(0,1fr)]">
-            <label className="type-label block space-y-1.5">
-              Internal Port
-              <Input
-                max={65_535}
-                min={1}
-                name="internalPort"
-                placeholder="24454"
-                required
-                type="number"
-                value={internalPort ?? portLease.portValue}
-                onChange={(event) => setInternalPort(event.target.value)}
-              />
-            </label>
-            <label className="type-label block space-y-1.5">
-              Public Port
-              <Input
-                aria-label="Public Port"
-                className="font-mono"
-                disabled={!canEditPublicPort || portLease.pending}
-                max={65_535}
-                min={1}
-                readOnly={!canEditPublicPort}
-                type="number"
-                value={portLease.portValue}
-                onBlur={() => {
-                  if (canEditPublicPort && portLease.lease) {
-                    forkPromise(portLease.commit)
-                  }
-                }}
-                onChange={(event) => portLease.setPortValue(event.target.value)}
-              />
-            </label>
-            <label className="type-label col-span-2 block space-y-1.5 sm:col-span-1">
-              Protocol
-              <ProtocolSelect value={protocol} onChange={setProtocol} />
-            </label>
-          </div>
+          <PortFields
+            both
+            internalPort={{
+              value: internalPort ?? portLease.portValue,
+              onChange: setInternalPort,
+            }}
+            name={{}}
+            protocol={protocol}
+            publicPort={{
+              disabled: !canEditPublicPort || portLease.pending,
+              readOnly: !canEditPublicPort,
+              value: portLease.portValue,
+              onBlur: () => {
+                if (canEditPublicPort && portLease.lease) {
+                  forkPromise(portLease.commit)
+                }
+              },
+              onChange: portLease.setPortValue,
+            }}
+            onProtocolChange={setProtocol}
+          />
           {validationError || portLease.error || error ? (
             <p className="text-xs text-destructive">
               {validationError ?? portLease.error ?? error}
@@ -2082,7 +1590,6 @@ function PortAllocationDialog({
   const [validationError, setValidationError] = React.useState<string | null>(
     null
   )
-  const editing = allocation !== null || recoveringPrimary
   const isDefaultServer = recoveringPrimary || allocation?.kind === "primary"
   const [protocol, setProtocol] = React.useState<RelayInstancePortProtocol>(
     allocation?.protocol ?? pendingPrimaryPort?.protocol ?? "tcp"
@@ -2105,26 +1612,16 @@ function PortAllocationDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <p className="type-technical-label text-primary-ink">
-            {isDefaultServer
-              ? "Default Server"
-              : editing
-                ? "Port mapping"
-                : "New allocation"}
-          </p>
           <DialogTitle>
             {recoveringPrimary
               ? "Assign the Default Server"
               : isDefaultServer
                 ? "Edit the Default Server"
-                : editing
-                  ? "Edit port allocation"
-                  : "Allocate a port"}
+                : "Edit port"}
           </DialogTitle>
           <DialogDescription className="sr-only">
-            {recoveringPrimary
-              ? "Choose the internal port and protocol used by this game server. Kiln assigns its public port automatically."
-              : "Choose where traffic should arrive inside the Ember. Kiln assigns the public port automatically."}
+            Choose the port inside this server and its protocol. Kiln picks the
+            public port.
           </DialogDescription>
         </DialogHeader>
 
@@ -2177,81 +1674,37 @@ function PortAllocationDialog({
           }}
           className="space-y-4"
         >
-          {isDefaultServer ? null : (
-            <label className="type-label block space-y-1.5">
-              Name
-              <Input
-                autoComplete="off"
-                defaultValue={allocation?.name ?? ""}
-                maxLength={32}
-                name="name"
-                placeholder="Voice chat"
-                required
-              />
-            </label>
-          )}
-          <div
-            className={
+          <PortFields
+            both
+            internalPort={
               recoveringPrimary
-                ? "grid grid-cols-[7.5rem_minmax(0,1fr)] gap-3"
-                : "grid grid-cols-2 gap-3 sm:grid-cols-[7.5rem_7.5rem_minmax(0,1fr)]"
+                ? { value: internalPort, onChange: setInternalPort }
+                : { defaultValue: allocation?.internalPort }
             }
-          >
-            <label className="type-label block space-y-1.5">
-              Internal Port
-              <Input
-                defaultValue={allocation?.internalPort}
-                max={65_535}
-                min={1}
-                name="internalPort"
-                placeholder="24454"
-                required
-                type="number"
-                value={recoveringPrimary ? internalPort : undefined}
-                onChange={
-                  recoveringPrimary
-                    ? (event) => setInternalPort(event.target.value)
-                    : undefined
-                }
-              />
-            </label>
-            {recoveringPrimary ? null : (
-              <label className="type-label block space-y-1.5">
-                Public Port
-                <Input
-                  aria-label="Public Port"
-                  className="font-mono"
-                  disabled={
-                    !isDefaultServer ||
-                    !canEditPublicPort ||
-                    publicPortLease.pending
+            name={
+              isDefaultServer ? undefined : { defaultValue: allocation?.name }
+            }
+            protocol={protocol}
+            publicPort={
+              recoveringPrimary
+                ? undefined
+                : {
+                    disabled:
+                      !isDefaultServer ||
+                      !canEditPublicPort ||
+                      publicPortLease.pending,
+                    readOnly: !isDefaultServer || !canEditPublicPort,
+                    value:
+                      isDefaultServer && canEditPublicPort
+                        ? publicPortLease.portValue
+                        : allocation
+                          ? String(allocation.externalPort)
+                          : "",
+                    onChange: publicPortLease.setPortValue,
                   }
-                  onChange={(event) =>
-                    publicPortLease.setPortValue(event.target.value)
-                  }
-                  readOnly={!isDefaultServer || !canEditPublicPort}
-                  type="number"
-                  value={
-                    isDefaultServer && canEditPublicPort
-                      ? publicPortLease.portValue
-                      : allocation
-                        ? String(allocation.externalPort)
-                        : ""
-                  }
-                />
-              </label>
-            )}
-            <label
-              className={
-                recoveringPrimary
-                  ? "type-label block space-y-1.5"
-                  : "type-label col-span-2 block space-y-1.5 sm:col-span-1"
-              }
-            >
-              Protocol
-              <ProtocolSelect value={protocol} onChange={setProtocol} />
-            </label>
-          </div>
+            }
+            onProtocolChange={setProtocol}
+          />
 
           {validationError || publicPortLease.error || error ? (
             <p className="text-xs text-destructive">
@@ -2274,12 +1727,10 @@ function PortAllocationDialog({
             <Button disabled={dialogPending} type="submit">
               {dialogPending ? <LoaderCircle className="animate-spin" /> : null}
               {dialogPending
-                ? "Applying"
+                ? "Saving"
                 : recoveringPrimary
                   ? "Assign Default Server"
-                  : editing
-                    ? "Save allocation"
-                    : "Allocate port"}
+                  : "Save"}
             </Button>
           </DialogFooter>
         </form>
@@ -2417,36 +1868,6 @@ function showPendingRestartToast({
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : "The network change failed."
-}
-
-function formatHostPort(host: string, port: number): string {
-  return `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port}`
-}
-
-function formatPortProtocol(protocol: RelayInstancePortProtocol): string {
-  return protocol === "both" ? "TCP + UDP" : protocol.toUpperCase()
-}
-
-async function copyToClipboard(value: string) {
-  await Effect.runPromise(
-    Effect.tryPromise({
-      try: () => navigator.clipboard.writeText(value),
-      catch: (cause) => cause,
-    }).pipe(
-      Effect.catch(() =>
-        Effect.sync(() => {
-          const textarea = document.createElement("textarea")
-          textarea.value = value
-          textarea.style.position = "fixed"
-          textarea.style.opacity = "0"
-          document.body.append(textarea)
-          textarea.select()
-          document.execCommand("copy")
-          textarea.remove()
-        })
-      )
-    )
-  )
 }
 
 // The game server's Tailscale networks, as a member of each.

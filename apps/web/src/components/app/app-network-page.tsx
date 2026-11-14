@@ -3,7 +3,11 @@ import { instanceInventoryScope } from "@/lib/instance-inventory"
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "@tanstack/react-router"
-import { appTailscaleMemberId, webPortCandidates } from "@workspace/contracts"
+import {
+  appPortSchema,
+  appTailscaleMemberId,
+  webPortCandidates,
+} from "@workspace/contracts"
 import type { AppPort } from "@workspace/contracts"
 import {
   Cable,
@@ -12,12 +16,19 @@ import {
   Plus,
   Radio,
   Rocket,
-  Trash2,
   Unplug,
 } from "lucide-react"
 
 import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@workspace/ui/components/dialog"
 import {
   Select,
   SelectContent,
@@ -38,7 +49,20 @@ import {
 import { useAppRunsCompose } from "@/components/app/app-compose"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
 import { CopyMetaRow, InfoCard, InfoCardHeader } from "@/components/info-card"
+import {
+  formatHostPort,
+  formatPortProtocol,
+  PortFields,
+  PortRow,
+  PortRowActions,
+  PortsNote,
+  PortsSection,
+  PortsTable,
+  RemovePortDialog,
+  type PortNotice,
+} from "@/components/ports-section"
 import { TailscaleMembershipSection } from "@/components/tailscale-network-membership"
+import { useHeldWebHostnames } from "@/components/web-hostname-dns"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import {
   WebRoutesSection,
@@ -101,10 +125,7 @@ export function AppNetworkPage() {
         {config.data ? (
           <>
             <AppWebRoutes app={app} canManage={canManage} compose={compose} />
-            <PublishedPorts
-              // A fresh form when the saved ports change, and only then:
-              // refetches of the same ports keep unsaved edits.
-              key={JSON.stringify(config.data.config.ports)}
+            <AppPorts
               app={app}
               canManage={canManage}
               compose={compose}
@@ -345,7 +366,10 @@ function AppTailscale({ app, compose }: { app: App; compose: boolean }) {
 // Image and Dockerfile apps run one service under this name.
 const APP_SERVICE_NAME = "app"
 
-function PublishedPorts({
+// The ports the App publishes on its Relay. An image or Dockerfile App's are
+// its configuration's, published by its next deploy. A Compose App's are
+// whatever its file lists, shown as its containers publish them.
+function AppPorts({
   app,
   canManage,
   compose,
@@ -357,13 +381,18 @@ function PublishedPorts({
   saved: ReadonlyArray<AppPort>
 }) {
   const queryClient = useQueryClient()
-  const [ports, setPorts] = React.useState<Array<AppPort>>(() => [...saved])
-  const dirty = JSON.stringify(ports) !== JSON.stringify(saved)
-  const live = app.containers.flatMap((container) =>
-    container.ports.map((port) => ({ ...port, service: container.service }))
+  // The port being edited by its place in the list, or a new one.
+  const [editing, setEditing] = React.useState<number | "new" | null>(null)
+  const [removing, setRemoving] = React.useState<number | null>(null)
+  const live = React.useMemo(
+    () =>
+      app.containers.flatMap((container) =>
+        container.ports.map((port) => ({ ...port, service: container.service }))
+      ),
+    [app.containers]
   )
   const save = useMutation({
-    mutationFn: () =>
+    mutationFn: (ports: Array<AppPort>) =>
       updateAppConfig({
         data: { appId: app.id, config: { ports }, relayId: app.relayId },
       }),
@@ -371,6 +400,8 @@ function PublishedPorts({
       await queryClient.invalidateQueries({
         queryKey: queryKeys.apps.config(app.relayId, app.id),
       })
+      setEditing(null)
+      setRemoving(null)
       showToast({
         message: "Ports saved. Deploy to publish them.",
         type: "success",
@@ -378,176 +409,254 @@ function PublishedPorts({
     },
     onError: (error) => showAppOperationError("Could not save ports", error),
   })
-  const update = (index: number, patch: Partial<AppPort>) =>
-    setPorts((current) =>
-      current.map((port, position) =>
-        position === index ? { ...port, ...patch } : port
-      )
+  const dnsResource = React.useMemo(
+    () => ({
+      relayId: app.relayId,
+      resourceId: app.id,
+      resourceType: "app" as const,
+    }),
+    [app.id, app.relayId]
+  )
+  // The App's own address reaches its ports too, unless it goes through
+  // Cloudflare's proxy, which carries web traffic only.
+  const host = useHeldWebHostnames(dnsResource)?.find(
+    (held) => held.status === "active" && held.proxied === false
+  )?.hostname
+  const address = (port: number, name: string) =>
+    host
+      ? {
+          copy: formatHostPort(host, port),
+          label: `${name} public address`,
+        }
+      : String(port)
+  const running = app.containers.some((container) => container.running)
+  const published = (port: AppPort) =>
+    live.some(
+      (candidate) =>
+        candidate.hostPort === port.hostPort &&
+        candidate.containerPort === port.containerPort &&
+        candidate.protocol === port.protocol
     )
+  // What it publishes differs from what's saved: its next deploy applies it.
+  const stale =
+    running &&
+    !compose &&
+    (saved.some((port) => !published(port)) || live.length !== saved.length)
+  const removal = removing === null ? undefined : saved[removing]
 
   return (
-    <InfoCard>
-      <InfoCardHeader
-        icon={<Radio />}
-        title="Published ports"
-        action={
-          canManage && !compose ? (
+    <PortsSection
+      action={
+        canManage && !compose ? (
+          <>
+            {stale ? <AppDeployButton app={app} /> : null}
             <Button
-              size="xs"
+              disabled={save.isPending || saved.length >= 32}
+              size="sm"
               type="button"
-              variant="ghost"
-              onClick={() =>
-                setPorts((current) => [
-                  ...current,
-                  { containerPort: 80, hostPort: 8080, protocol: "tcp" },
-                ])
-              }
+              onClick={() => setEditing("new")}
             >
               <Plus />
               Add port
             </Button>
-          ) : null
-        }
-      />
+          </>
+        ) : null
+      }
+      footer={
+        compose ? (
+          <PortsNote>
+            Compose Apps publish the ports their Compose file lists.
+          </PortsNote>
+        ) : null
+      }
+    >
       {compose ? (
-        <p className="border-b px-4 py-3 text-xs text-muted-foreground">
-          Compose Apps publish the ports their Compose file lists.
-        </p>
-      ) : ports.length === 0 ? (
-        <p className="border-b px-4 py-3 text-xs text-muted-foreground">
-          No ports are published; the app is reachable only on its network.
+        live.length === 0 ? (
+          <p className="type-support px-4 py-3 text-muted-foreground">
+            Nothing published right now.
+          </p>
+        ) : (
+          <PortsTable>
+            {live.map((port) => (
+              <PortRow
+                key={`${port.service}:${port.hostPort}/${port.protocol}`}
+                address={address(port.hostPort, port.service)}
+                detail={formatPortProtocol(port.protocol)}
+                internalPort={port.containerPort}
+                name={port.service}
+              />
+            ))}
+          </PortsTable>
+        )
+      ) : saved.length === 0 ? (
+        <p className="type-support px-4 py-3 text-muted-foreground">
+          No ports. This App is reachable only on its network.
         </p>
       ) : (
-        <ul className="border-b">
-          {ports.map((port, index) => (
-            <li
-              key={index}
-              className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5 last:border-b-0"
-            >
-              <PortInput
-                disabled={!canManage}
-                label="Host port"
-                value={port.hostPort}
-                onChange={(hostPort) => update(index, { hostPort })}
-              />
-              <span className="text-muted-foreground">→</span>
-              <PortInput
-                disabled={!canManage}
-                label="Container port"
-                value={port.containerPort}
-                onChange={(containerPort) => update(index, { containerPort })}
-              />
-              <Select
-                disabled={!canManage}
-                value={port.protocol}
-                onValueChange={(protocol) =>
-                  update(index, { protocol: protocol as AppPort["protocol"] })
-                }
-              >
-                <SelectTrigger
-                  aria-label="Protocol"
-                  className="h-8 w-20 px-2.5 font-mono text-xs uppercase"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="tcp">TCP</SelectItem>
-                  <SelectItem value="udp">UDP</SelectItem>
-                </SelectContent>
-              </Select>
-              {canManage ? (
-                <Button
-                  aria-label="Remove port"
-                  className="ml-auto text-muted-foreground hover:text-destructive"
-                  size="icon-sm"
-                  type="button"
-                  variant="ghost"
-                  onClick={() =>
-                    setPorts((current) =>
-                      current.filter((_, position) => position !== index)
-                    )
-                  }
-                >
-                  <Trash2 />
-                </Button>
-              ) : null}
-            </li>
+        <PortsTable>
+          {saved.map((port, index) => (
+            <PortRow
+              key={`${port.hostPort}/${port.protocol}`}
+              actions={
+                canManage ? (
+                  <PortRowActions
+                    disabled={save.isPending}
+                    name={`port ${port.hostPort}`}
+                    onEdit={() => setEditing(index)}
+                    onRemove={() => setRemoving(index)}
+                  />
+                ) : null
+              }
+              address={address(port.hostPort, `port ${port.hostPort}`)}
+              detail={formatPortProtocol(port.protocol)}
+              internalPort={port.containerPort}
+              name={app.name}
+              notice={running && !published(port) ? unpublished : undefined}
+            />
           ))}
-        </ul>
+        </PortsTable>
       )}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3">
-        <span className="type-technical-label text-muted-foreground">Live</span>
-        {live.length === 0 ? (
-          <span className="type-meta text-muted-foreground">
-            Nothing published right now
-          </span>
-        ) : (
-          live.map((port) => (
-            <span
-              key={`${port.service}:${port.hostPort}/${port.protocol}`}
-              className="type-meta font-mono"
-            >
-              {port.hostPort}→{port.service}:{port.containerPort}/
-              {port.protocol}
-            </span>
-          ))
-        )}
-        {dirty ? (
-          <div className="ml-auto flex items-center gap-2">
-            <Button
-              size="sm"
-              type="button"
-              variant="ghost"
-              onClick={() => setPorts([...saved])}
-            >
-              Discard
-            </Button>
-            <Button
-              disabled={save.isPending}
-              size="sm"
-              type="button"
-              onClick={() => save.mutate()}
-            >
-              {save.isPending ? (
-                <LoaderCircle className="animate-spin" />
-              ) : null}
-              Save ports
-            </Button>
-          </div>
-        ) : null}
-      </div>
-    </InfoCard>
+      {editing !== null ? (
+        <AppPortDialog
+          others={saved.filter((_, index) => index !== editing)}
+          pending={save.isPending}
+          port={editing === "new" ? undefined : saved[editing]}
+          onOpenChange={(open) => {
+            if (!open && !save.isPending) setEditing(null)
+          }}
+          onSubmit={(port) =>
+            save.mutate(
+              editing === "new"
+                ? [...saved, port]
+                : saved.map((current, index) =>
+                    index === editing ? port : current
+                  )
+            )
+          }
+        />
+      ) : null}
+      {removal ? (
+        <RemovePortDialog
+          address={`${removal.hostPort} → ${removal.containerPort}`}
+          name={`${app.name} · ${formatPortProtocol(removal.protocol)}`}
+          open
+          onConfirm={() =>
+            save.mutate(saved.filter((_, index) => index !== removing))
+          }
+          onOpenChange={(open) => {
+            if (!open && !save.isPending) setRemoving(null)
+          }}
+        />
+      ) : null}
+    </PortsSection>
   )
 }
 
-function PortInput({
-  disabled,
-  label,
-  onChange,
-  value,
+const unpublished: PortNotice = {
+  label: "View why this port isn't published",
+  tone: "warning",
+  tooltip: "Deploy to publish",
+  onClick: () =>
+    showToast({
+      description: "Deploy this App to publish it.",
+      message: "Port not published yet",
+      type: "warning",
+    }),
+}
+
+function AppPortDialog({
+  others,
+  pending,
+  port,
+  onOpenChange,
+  onSubmit,
 }: {
-  disabled: boolean
-  label: string
-  onChange: (value: number) => void
-  value: number
+  /** The App's other ports, which this one can't repeat. */
+  others: ReadonlyArray<AppPort>
+  pending: boolean
+  port?: AppPort
+  onOpenChange: (open: boolean) => void
+  onSubmit: (port: AppPort) => void
 }) {
+  const [protocol, setProtocol] = React.useState<AppPort["protocol"]>(
+    port?.protocol ?? "tcp"
+  )
+  // Kept here, not in the form: React clears a form's own fields when its
+  // action returns, which would lose them to a refused save.
+  const [internalPort, setInternalPort] = React.useState(
+    port ? String(port.containerPort) : ""
+  )
+  const [publicPort, setPublicPort] = React.useState(
+    port ? String(port.hostPort) : ""
+  )
+  const [error, setError] = React.useState<string | null>(null)
+
   return (
-    <Input
-      aria-label={label}
-      className="h-8 w-24 font-mono text-xs"
-      disabled={disabled}
-      inputMode="numeric"
-      max={65_535}
-      min={1}
-      type="number"
-      value={value}
-      onChange={(event) => {
-        const next = Number(event.currentTarget.value)
-        if (Number.isInteger(next) && next >= 1 && next <= 65_535) {
-          onChange(next)
-        }
-      }}
-    />
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{port ? "Edit port" : "Add port"}</DialogTitle>
+          <DialogDescription className="sr-only">
+            Publish a TCP or UDP port of this App on its Relay.
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          action={() => {
+            const parsed = appPortSchema.safeParse({
+              containerPort: Number(internalPort),
+              hostPort: Number(publicPort),
+              protocol,
+            })
+            if (!parsed.success) {
+              setError("Ports must be between 1 and 65535")
+              return
+            }
+            if (
+              others.some(
+                (other) =>
+                  other.hostPort === parsed.data.hostPort &&
+                  other.protocol === parsed.data.protocol
+              )
+            ) {
+              setError(
+                `This App already publishes ${parsed.data.hostPort}/${parsed.data.protocol}`
+              )
+              return
+            }
+            setError(null)
+            onSubmit(parsed.data)
+          }}
+          className="space-y-4"
+        >
+          <PortFields
+            internalPort={{ value: internalPort, onChange: setInternalPort }}
+            protocol={protocol}
+            publicPort={{ value: publicPort, onChange: setPublicPort }}
+            onProtocolChange={(next) => {
+              if (next !== "both") setProtocol(next)
+            }}
+          />
+          {error ? <p className="text-xs text-destructive">{error}</p> : null}
+          <DialogFooter>
+            <DialogClose
+              render={
+                <Button disabled={pending} type="button" variant="outline" />
+              }
+            >
+              Cancel
+            </DialogClose>
+            <Button disabled={pending} type="submit">
+              {pending ? (
+                <LoaderCircle className="animate-spin" />
+              ) : port ? null : (
+                <Plus />
+              )}
+              {port ? "Save" : "Add port"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
