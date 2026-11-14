@@ -83,6 +83,7 @@ export const accessPermissions = [
   "instance.files.delete",
   "instance.files.chmod",
   "instance.logs.read",
+  "instance.terminal",
   "relay.update",
   "relay.pause",
   "relay.connections.read",
@@ -96,14 +97,12 @@ export const accessPermissions = [
   "relay.files.mount",
   "database.data.read",
   "database.data.write",
-  "database.terminal",
   "database.logs.read",
   "app.read",
   "app.create",
   "app.manage",
   "app.delete",
   "app.logs.read",
-  "app.terminal",
 ] as const
 export type AccessPermission = (typeof accessPermissions)[number]
 Object.freeze(accessPermissions)
@@ -259,6 +258,7 @@ const permissionPlacement: Record<
   "instance.network.read": ["instance.network", "instance"],
   "instance.network.write": ["instance.network", "every"],
   "instance.network.public-port.write": ["instance.network", "instance"],
+  "instance.terminal": ["instance.terminal", "every"],
   "database.read": ["overview", "database"],
   "database.credentials.read": ["database.credentials", "database"],
   "database.credentials.rotate": ["database.credentials", "database"],
@@ -269,14 +269,12 @@ const permissionPlacement: Record<
   "database.dump.import": ["database.dump", "database"],
   "database.data.read": ["database.data", "database"],
   "database.data.write": ["database.data", "database"],
-  "database.terminal": ["database.terminal", "database"],
   "database.logs.read": ["database.logs", "database"],
   "app.read": ["overview", "app"],
   "app.create": ["resource.creation", "relay"],
   "app.manage": ["app.manage", "app"],
   "app.delete": ["resource.deletion", "app"],
   "app.logs.read": ["app.logs", "app"],
-  "app.terminal": ["app.terminal", "app"],
 }
 
 const familyScopes: Record<
@@ -318,8 +316,8 @@ const relayScopeChildVisibility: Record<string, readonly AccessPermission[]> = {
  * there. Files: a game server's and an App's, and an App is reached only
  * through its Relay. Changing its network: a game server's ports and web
  * routes, and an App's web routes; where an App is served is read with the
- * App itself. Power, deploying and resource limits: a game server's, a
- * database's and an App's.
+ * App itself. Power, deploying, resource limits and the terminal: a game
+ * server's, a database's and an App's.
  */
 const everyInstanceBlocks: Record<
   string,
@@ -345,6 +343,10 @@ const everyInstanceBlocks: Record<
     reaches: ["instance.read", "database.read", "app.read"],
   },
   "instance.limits": {
+    scopes: grantScopes,
+    reaches: ["instance.read", "database.read", "app.read"],
+  },
+  "instance.terminal": {
     scopes: grantScopes,
     reaches: ["instance.read", "database.read", "app.read"],
   },
@@ -503,6 +505,11 @@ const permissionCopy: Record<
     label: "Share logs",
     description: "Publish server logs through a shareable link.",
   },
+  "instance.terminal": {
+    label: "Open terminal",
+    description:
+      "Run a shell inside a game server's, database's, or App's container. An App's shell can reach the Relay's host.",
+  },
   "instance.network.read": {
     label: "View server network",
     description: "See the server’s addresses, ports, and routes.",
@@ -563,11 +570,6 @@ const permissionCopy: Record<
     label: "Edit database tables",
     description: "Edit rows and run SQL queries in the viewer.",
   },
-  "database.terminal": {
-    label: "Use database terminal",
-    description:
-      "Open a shell in the database's container, which reaches its data files and its engine's login.",
-  },
   "app.read": {
     label: "View apps",
     description: "See apps, their containers, and how they are configured.",
@@ -588,10 +590,6 @@ const permissionCopy: Record<
   "app.logs.read": {
     label: "View app logs",
     description: "Read deployment logs and container output.",
-  },
-  "app.terminal": {
-    label: "Open app shells",
-    description: "Run a shell inside an app's containers.",
   },
   "database.logs.read": {
     label: "View database logs",
@@ -764,6 +762,7 @@ const blockLabels: Record<string, string> = {
   "instance.power": "Power",
   "instance.deploy": "Deployments",
   "instance.limits": "Resource limits",
+  "instance.terminal": "Terminal",
   "instance.console": "Console",
   "instance.files": "Files",
   "instance.logs": "Logs",
@@ -777,11 +776,9 @@ const blockLabels: Record<string, string> = {
   "database.network": "Database networking",
   "database.dump": "Database data",
   "database.data": "Database tables",
-  "database.terminal": "Database terminal",
   "database.logs": "Database logs",
   "app.manage": "App configuration",
   "app.logs": "App logs",
-  "app.terminal": "App shell",
   "resource.deletion": "Resource deletion",
   "resource.creation": "Resource creation",
   "relay.configuration": "Relay configuration",

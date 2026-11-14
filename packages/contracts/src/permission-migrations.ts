@@ -21,6 +21,10 @@
  * Web routes: saving an App's went with configuring it. A game server's
  * already took changing its network, which every kind's now take. Reading
  * an App's stays with seeing the App.
+ *
+ * Terminal: an App's shell took `app.terminal`, and a database's
+ * `database.terminal` (the Relay's `database.dump.import`). A game server
+ * had none.
  */
 const fileActions: Readonly<Record<string, ReadonlyArray<string>>> = {
   "app.files.read": ["instance.files.list", "instance.files.read"],
@@ -149,3 +153,19 @@ export function migratedRouteActions(
 
 /** The permission that saves the web routes of any kind of instance. */
 export const migratedRoutesPermission = "instance.network.write"
+
+// An App's shell had a Relay action of its own. A database's took importing
+// a dump, which stays for that alone.
+const terminalActions: Readonly<Record<string, ReadonlyArray<string>>> = {
+  "app.terminal": ["instance.terminal"],
+}
+
+/** A Relay client's actions, with an App's shell replaced. */
+export function migratedTerminalActions(
+  actions: ReadonlyArray<string>
+): Array<string> {
+  return replaced(actions, terminalActions)
+}
+
+/** The permission that opens a shell in any kind of instance. */
+export const migratedTerminalPermission = "instance.terminal"

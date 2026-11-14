@@ -33,11 +33,11 @@ export function scheduleActionPermission(
   if (action.type === "wait") return null
   if (action.type === "console_command") {
     if (target.kind === "instance") return "instance.console.write"
-    // A shell in a database's container reaches past what the database
-    // grants, so it takes a terminal on its Relay.
-    if (target.kind === "database") return "relay.terminal"
-    // As the App's own terminal does.
-    if (target.kind === "app") return "app.terminal"
+    // A database's or an App's command runs in a shell in its container,
+    // as its terminal does.
+    if (target.kind === "database" || target.kind === "app") {
+      return "instance.terminal"
+    }
     return null
   }
   if (action.type === "power") {

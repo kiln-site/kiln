@@ -908,6 +908,7 @@ export function terminalTargetKey(target: TerminalTarget): string {
   switch (target.kind) {
     case "app":
       return `${target.id}:${target.service}`
+    case "instance":
     case "database":
       return target.id
     case "relay":

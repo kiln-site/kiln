@@ -39,6 +39,8 @@ const encoder = new TextEncoder()
 // Who the toolbar says the session runs as.
 function sessionUser(target: TerminalTarget): string {
   switch (target.kind) {
+    case "instance":
+      return "shell"
     case "app":
       return target.service
     case "database":

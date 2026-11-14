@@ -9,6 +9,7 @@ import { loadResourceGrantsEffect } from "@/lib/resource-permissions"
 import { TestDatabase, describeMysql, resetDatabase } from "@/test/database"
 import {
   insertGrant,
+  insertInstance,
   insertRelay,
   insertRows,
   insertUser,
@@ -129,7 +130,7 @@ describeMysql("resource ownership", () => {
           // and its files still take permissions on the Relay.
           for (const permission of [
             "app.manage",
-            "app.terminal",
+            "instance.terminal",
             "instance.files.read",
             "instance.files.write",
           ] as const)
@@ -164,6 +165,51 @@ describeMysql("resource ownership", () => {
                 )
             )
           )
+        })
+    )
+
+    // Whoever may create game servers may be someone who shouldn't run
+    // commands in them: owning one gives no shell until one is granted.
+    it.effect(
+      "keeps a game server's terminal from its owner until it's granted",
+      () =>
+        Effect.gen(function* () {
+          yield* resetDatabase
+          yield* insertUser("owner", verified)
+          yield* insertRelay(relayId, { created_by: "someone" })
+          const server = "e".repeat(12)
+          const database = "f".repeat(12)
+          yield* insertInstance(relayId, server, { owner_id: "owner" })
+          yield* insertDatabase(database, { owner_id: "owner" })
+          const at = { relayId, instanceId: server }
+
+          const owned = yield* loadResourceGrantsEffect("owner")
+          assert.isTrue(grantsAllowPermission(owned, "instance.files.write", at))
+          assert.isFalse(grantsAllowPermission(owned, "instance.terminal", at))
+          // A database's owner already holds its data, which its shell
+          // reaches.
+          assert.isTrue(
+            grantsAllowPermission(owned, "instance.terminal", {
+              relayId,
+              databaseId: database,
+            })
+          )
+
+          const grantId = "a0000000-0000-4000-8000-000000000001"
+          yield* insertGrant({
+            id: grantId,
+            relayId,
+            resourceId: relayId,
+            resourceType: "relay",
+            userId: "owner",
+          })
+          yield* insertRows("access_selection", {
+            access_id: grantId,
+            selection_key: "instance.terminal",
+            selection_kind: "permission",
+          })
+          const granted = yield* loadResourceGrantsEffect("owner")
+          assert.isTrue(grantsAllowPermission(granted, "instance.terminal", at))
         })
     )
 

@@ -74,6 +74,11 @@ export function appFileLocks(appId: string): Array<LaneLock> {
   return [shared(laneKeys.app(appId)), exclusive(laneKeys.appFiles(appId))]
 }
 
+/** Reading an App while it keeps running, as opening a shell in it does. */
+export function appReadLocks(appId: string): Array<LaneLock> {
+  return [shared(laneKeys.app(appId))]
+}
+
 export function appReplaceLocks(appId: string): Array<LaneLock> {
   return [exclusive(laneKeys.app(appId))]
 }
@@ -539,7 +544,7 @@ export function controlRequestLocks(
       return null
 
     // Terminals are interactive sessions, coordinated by their own registry.
-    // Opening a database's waits in its lane itself.
+    // Opening one waits in its instance's lane itself.
     case "terminal.attach":
     case "terminal.heartbeat":
     case "terminal.detach":

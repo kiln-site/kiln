@@ -56,8 +56,9 @@ administrators may schedule Kiln's backups.
 - Seeing a schedule takes `schedule.read` on all of its targets.
 - Creating one takes `schedule.create`, and each step's own permission on
   each target it reaches: `instance.console.write` for a game server's
-  command, `relay.terminal` for a database's, and `app.terminal` for an
-  App's; `instance.power.<action>` for power, whatever the kind;
+  command, and `instance.terminal` for a database's or an App's, which run
+  in a shell in its container; `instance.power.<action>` for power,
+  whatever the kind;
   `backup.create` for a backup, or `instance.files.read` for an App's.
 - Editing takes `schedule.update` and every step permission of both the
   stored schedule and the new one, so removing a step nobody let you run
