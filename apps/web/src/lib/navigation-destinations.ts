@@ -324,8 +324,7 @@ type AccessibleServer = NavigableServer & {
 function destinationsForServer(
   instance: NavigableServer
 ): ReadonlyArray<ServerDestination> {
-  const workspace =
-    isTailscaleNode(instance) ? "network-stack" : "server"
+  const workspace = isTailscaleNode(instance) ? "network-stack" : "server"
   const destinations: ReadonlyArray<ServerDestination> = serverDestinations
   return destinations.filter((destination) =>
     destination.workspaces.includes(workspace)
@@ -426,7 +425,7 @@ export const databaseDestinations = [
     id: "logs",
     keywords: ["output", "container", "errors"],
     label: "Logs",
-    permission: "database.logs.read",
+    permission: "instance.logs.read",
     to: "/db/$databaseId/logs",
   },
 ] as const satisfies ReadonlyArray<DatabaseDestination>
@@ -537,7 +536,7 @@ export const appDestinations = [
     id: "logs",
     keywords: ["deployment", "output", "containers", "errors"],
     label: "Logs",
-    permission: "app.logs.read",
+    permission: "instance.logs.read",
     to: "/app/$appId/logs",
   },
 ] as const satisfies ReadonlyArray<AppDestination>

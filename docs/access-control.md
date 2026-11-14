@@ -158,6 +158,11 @@ reveals those kinds there.
   files and its engine's login. An App's can reach the Relay's host, so on
   a Relay it is that much authority. A Relay's own host shell keeps
   `relay.terminal`.
+- **Logs**: `instance.logs.read` reads a game server's, a database's or an
+  App's deployment logs, and a database's or an App's containers' output.
+  A game server's own output is its console (`instance.console.read`), and
+  sharing a game server's log stays its own (`instance.logs.share`). A
+  Relay's and Kiln's own containers keep `relay.logs.read`.
 - **Changing the network**: `instance.network.write` changes a game
   server's ports and web routes, and an App's web routes, with the DNS
   records and certificates that go with them. Configuring an App
@@ -211,7 +216,7 @@ that covers everything on it. A game server's owner holds `all` but its
 terminal (`instance.terminal`): whoever may create game servers gets no
 shell in the ones they create unless it's granted, on the Relay, since an
 owner's own access can't be edited. An App's owner holds only `app.read`,
-`app.logs.read`, and `app.delete`.
+`instance.logs.read`, and `app.delete`.
 Configuring an App, opening its shell, and using its files can reach the
 Relay's host, so those still take permissions on the Relay: `app.manage`,
 `instance.terminal`, and file permissions. Its power takes

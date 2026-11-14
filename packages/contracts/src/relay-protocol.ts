@@ -774,8 +774,8 @@ export interface RelayConsoleResource {
 // The action that reads each kind of resource's console output. Only servers
 // take console input.
 export const relayConsoleReadActions = {
-  app: "app.logs.read",
-  database: "database.logs.read",
+  app: "instance.logs.read",
+  database: "instance.logs.read",
   instance: "instance.console.read",
   // Hearth issues these only to platform administrators.
   platform: "relay.logs.read",

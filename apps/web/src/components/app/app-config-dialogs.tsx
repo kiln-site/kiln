@@ -119,7 +119,7 @@ export function useAppConfigSave(
         showToast({ message: "Saved, deploy queued", type: "success" })
       }
       // Follow the deployment as it happens.
-      if (next === "deploy" && app.permissions.includes("app.logs.read")) {
+      if (next === "deploy" && app.permissions.includes("instance.logs.read")) {
         await navigate({
           params: { appId: app.id },
           search: { stream: "deployment" },

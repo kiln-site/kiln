@@ -74,6 +74,7 @@ import { instanceRoutesPermission } from "./0073_instance_routes_permission"
 import { appBackupSchedules } from "./0074_app_backup_schedules"
 import { instanceAddresses } from "./0075_instance_addresses"
 import { instanceTerminalPermission } from "./0076_instance_terminal_permission"
+import { instanceLogsPermission } from "./0077_instance_logs_permission"
 
 // Append new migrations with the next id. Never edit or reorder applied ones.
 export const migrations: ReadonlyArray<Migration> = [
@@ -151,4 +152,5 @@ export const migrations: ReadonlyArray<Migration> = [
   appBackupSchedules,
   instanceAddresses,
   instanceTerminalPermission,
+  instanceLogsPermission,
 ]

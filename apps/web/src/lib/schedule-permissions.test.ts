@@ -132,7 +132,7 @@ describe("schedule authorization", () => {
             relayId: "relay-a",
             resourceId: app.id,
             resourceType: "app",
-            permissions: ["app.read", "app.logs.read", "app.delete"],
+            permissions: ["instance.logs.read", "app.read", "app.delete"],
           },
         ]
       )

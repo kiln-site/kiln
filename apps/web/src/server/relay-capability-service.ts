@@ -62,16 +62,15 @@ type BrowserPublicKey = {
 }
 
 type BrowserAction =
-  | "app.logs.read"
   | "app.read"
   | "database.dump.export"
   | "database.dump.import"
-  | "database.logs.read"
   | "database.read"
   | "instance.console.read"
   | "instance.console.write"
   | "instance.files.download"
   | "instance.files.upload"
+  | "instance.logs.read"
   | "instance.read"
   | "relay.logs.read"
   | "relay.files.download"

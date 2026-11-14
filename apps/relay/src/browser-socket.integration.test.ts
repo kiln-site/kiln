@@ -178,7 +178,7 @@ async function startRelay(
   const client = {
     actions: clientGrant.actions ?? [
       "instance.console.read",
-      "database.logs.read",
+      "instance.logs.read",
     ],
     createdAt: Date.now(),
     id: "hearth-test",
@@ -367,7 +367,7 @@ function sendAuth(
 }
 
 const databaseCapability = {
-  actions: ["database.logs.read"],
+  actions: ["instance.logs.read"],
   instanceId: sharedId,
   resourceKind: "database",
 } satisfies Partial<RelayBrowserCapabilityV2>

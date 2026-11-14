@@ -280,7 +280,7 @@ const AppDeploymentCard = React.memo(function AppDeploymentCard({
     summary?.current?.commitSha === runningCommit ? summary?.current : null
   const latest = summary?.latest ?? null
   const source = summary?.source ?? null
-  const canReadLogs = app.permissions.includes("app.logs.read")
+  const canReadLogs = app.permissions.includes("instance.logs.read")
   return (
     <InfoRailCard
       icon={<Rocket />}
@@ -409,7 +409,7 @@ function AppUpdatesStatus({
   updates: InstanceUpdates
 }) {
   const navigate = useNavigate()
-  const canReadLogs = app.permissions.includes("app.logs.read")
+  const canReadLogs = app.permissions.includes("instance.logs.read")
   const instance = React.useMemo(
     (): UpdatedInstance => ({
       canDeploy: app.permissions.includes("instance.deploy"),

@@ -2,7 +2,6 @@ import {
   appConfigSchema,
   relayAppGitHubV1Feature,
   relayDeploymentLogSchema,
-  type AccessPermission,
   type AppGitHubBuild,
   type RelayDeploymentLog,
   type RelayDeploymentRead,
@@ -312,7 +311,7 @@ async function listDeployments(
           ...record,
           canReadLogs:
             isPlatformAdmin(user) ||
-            databasePermissions(record).has("database.logs.read"),
+            databasePermissions(record).has("instance.logs.read"),
           databaseName:
             readableDatabases.get(record.databaseId)?.name ?? record.databaseId,
           relayName,
@@ -323,7 +322,12 @@ async function listDeployments(
         ...record,
         appName: appNames.get(record.appId) ?? record.appId,
         canDeploy: hasAppPermission(user, grants, record, "instance.deploy"),
-        canReadLogs: hasAppPermission(user, grants, record, "app.logs.read"),
+        canReadLogs: hasAppPermission(
+          user,
+          grants,
+          record,
+          "instance.logs.read"
+        ),
         commitUrl: commitUrl(record),
         relayName,
         triggeredByName: triggeredByName(record, index),
@@ -655,24 +659,21 @@ export async function redeployAppDeploymentHandler(
   )
 }
 
-// What each kind's deployments are logged under on its Relay, the
-// permission reading them takes, and what one is called.
+// What each kind's deployments are logged under on its Relay, how a grant
+// names it, and what one is called.
 const deploymentLogKinds = {
   app: {
     noun: "app",
-    permission: "app.logs.read",
     relayKind: "app",
     scope: "appId",
   },
   database: {
     noun: "database",
-    permission: "database.logs.read",
     relayKind: "database",
     scope: "databaseId",
   },
   server: {
     noun: "game server",
-    permission: "instance.logs.read",
     relayKind: "instance",
     scope: "instanceId",
   },
@@ -680,7 +681,6 @@ const deploymentLogKinds = {
   DeploymentKind,
   {
     noun: string
-    permission: AccessPermission
     relayKind: RelayDeploymentRead["kind"]
     scope: "appId" | "databaseId" | "instanceId"
   }
@@ -688,7 +688,7 @@ const deploymentLogKinds = {
 
 /**
  * Any kind of instance's deployment log, from its Relay while it keeps it,
- * for whoever can read that instance's logs.
+ * for whoever can read that instance's logs (`instance.logs.read`).
  */
 export async function getDeploymentLogHandler(
   user: AuthenticatedUser,
@@ -706,7 +706,7 @@ export async function getDeploymentLogHandler(
   const instanceId = deploymentInstanceId(record)
   await requireRelayPermission({
     [kind.scope]: instanceId,
-    permission: kind.permission,
+    permission: "instance.logs.read",
     relayId: record.relayId,
     user,
   })

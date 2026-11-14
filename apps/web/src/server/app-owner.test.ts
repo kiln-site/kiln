@@ -114,9 +114,9 @@ describeMysql("app owner", () => {
             "app.read",
           ])
           assert.deepStrictEqual(yield* permissions(sessionUser("owner")), [
+            "instance.logs.read",
             "app.read",
             "app.delete",
-            "app.logs.read",
           ])
           assert.includeMembers(
             (yield* permissions({ ...sessionUser("admin"), role: "admin" })) ??

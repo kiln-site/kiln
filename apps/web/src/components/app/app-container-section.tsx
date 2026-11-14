@@ -119,7 +119,7 @@ export function AppContainerSection({
           <Tags />
         </SectionIconButton>
       ) : null}
-      {container && app.permissions.includes("app.logs.read") ? (
+      {container && app.permissions.includes("instance.logs.read") ? (
         <Tooltip>
           <TooltipTrigger asChild>
             <Link
