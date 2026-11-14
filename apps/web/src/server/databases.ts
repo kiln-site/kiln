@@ -22,9 +22,6 @@ import {
   relayPowerActionSchema,
   relayDatabaseNameSchema,
   relayIdSchema,
-  relayDatabaseTerminalClaimSchema,
-  relayDatabaseTerminalRestartSchema,
-  relayDatabaseTerminalWriteSchema,
   relayDatabaseContainerSchema,
   relayDatabaseImportFileSchema,
   relayManagedDatabaseSchema,
@@ -685,72 +682,6 @@ async function managedDatabaseDataRequest(
     user.id
   )
 }
-
-// Typing and window size go to the person's own session; the Relay rejects
-// a session id that isn't theirs or has ended. Output arrives through
-// the terminal stream (routes/api.database-terminal.$databaseId.ts).
-export const writeDatabaseTerminal = createServerFn({ method: "POST" })
-  .validator(
-    relayDatabaseTerminalWriteSchema.extend({ relayId: relayIdSchema })
-  )
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedDatabase(data, "database.terminal")
-    await databaseRpc(
-      relay,
-      "database.terminal.write",
-      {
-        data: data.data,
-        databaseId: data.databaseId,
-        sessionId: data.sessionId,
-      },
-      15_000,
-      user.id
-    )
-    return { accepted: true }
-  })
-
-// Puts this page in control of the person's terminal session, sized to its
-// window.
-export const claimDatabaseTerminal = createServerFn({ method: "POST" })
-  .validator(
-    relayDatabaseTerminalClaimSchema.extend({ relayId: relayIdSchema })
-  )
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedDatabase(data, "database.terminal")
-    const claimed = await databaseRpc(
-      relay,
-      "database.terminal.claim",
-      {
-        attachmentId: data.attachmentId,
-        cols: data.cols,
-        databaseId: data.databaseId,
-        rows: data.rows,
-        sessionId: data.sessionId,
-      },
-      15_000,
-      user.id
-    )
-    // The state change that put this page in control.
-    return z.object({ seq: z.number().int().nonnegative() }).parse(claimed)
-  })
-
-// Ends the person's terminal session on a database. A POST server function,
-// so it carries the request forgery protection a navigation would not.
-export const restartDatabaseTerminal = createServerFn({ method: "POST" })
-  .validator(
-    relayDatabaseTerminalRestartSchema.extend({ relayId: relayIdSchema })
-  )
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedDatabase(data, "database.terminal")
-    await databaseRpc(
-      relay,
-      "database.terminal.restart",
-      { databaseId: data.databaseId },
-      30_000,
-      user.id
-    )
-    return { restarted: true }
-  })
 
 export const deleteManagedDatabase = createServerFn({ method: "POST" })
   .validator(

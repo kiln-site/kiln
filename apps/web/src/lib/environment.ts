@@ -136,8 +136,9 @@ export function publicSignupEnabled(): boolean {
   return environmentFlag("KILN_ENABLE_SIGNUPS", false)
 }
 
-// How long a database terminal keeps running with no page open to it.
-export function databaseTerminalIdleTimeoutMs(): number {
+// How long a terminal session keeps running with no page open to it. The
+// variable is named for the database terminal it began with.
+export function terminalIdleTimeoutMs(): number {
   const configured =
     process.env.KILN_DATABASE_TERMINAL_IDLE_TIMEOUT_MINUTES?.trim()
   if (!configured) return 15 * 60_000
