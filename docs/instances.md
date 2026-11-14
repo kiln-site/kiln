@@ -35,6 +35,7 @@ Every kind gets these from the platform.
 | Deployments | One redeploy for every kind                     | Done for game servers, databases and Apps: one Relay request and one permission                                      |
 | Limits      | One request and one permission for every kind   | Done for game servers, databases and Apps: one Relay request and one permission                                      |
 | Domains     | Every kind, automatic for an App's web services | One table of addresses, one reconcile and one Domains table for game servers and Apps; a database has no address yet |
+| Ports       | One list of taken ports and one Ports section   | One list on the Relay for game servers and Apps; a Ports section per kind                                            |
 | Networking  | One page for every kind                         | A page per kind, on a few shared sections                                                                            |
 | Files       | One file browser and one permission             | Done for game servers and Apps                                                                                       |
 | Info page   | One page shell                                  | One profile and container section for every kind; a Relay's page is its own                                          |

@@ -9,6 +9,15 @@ gets ordering and exclusion by naming the resources it touches instead of
 adding a lock of its own. Port reservations are the one exception: they take
 a reservation lock of their own rather than a lane.
 
+That lock guards one list of the ports taken on the Relay's host
+(`apps/relay/src/host-ports.ts`), which game servers and Apps both reserve
+from. A port is taken while a running container binds it, while a stopped
+container Kiln made binds it (so a stopped game server or App keeps its
+ports; any other stopped container has let its ports go), and while it is
+promised to a container still being made or held by a lease. A game server is given a free
+port from the Relay's range; an App's deployment is refused if a port it
+publishes is taken by anything but the containers it replaces.
+
 ## Lanes
 
 An operation names lock keys, each **shared** or **exclusive**. It runs once

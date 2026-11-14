@@ -719,6 +719,7 @@ const apps = new AppDriver(
   config,
   () => lifecycle.hostDataDirectory(),
   {
+    hostPorts: lifecycle.hostPorts,
     routes: async (appId) =>
       lifecycle.appRoutePlan(
         await runRelayEffect(

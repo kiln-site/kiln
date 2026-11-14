@@ -93,6 +93,8 @@ export interface FakeContainer {
   healthCheck: boolean
   state: {
     running: boolean
+    /** Frozen by `docker pause`: still running, its ports still bound. */
+    paused?: boolean
     restarting: boolean
     exitCode: number
     oomKilled: boolean
@@ -2909,7 +2911,9 @@ function containerSummary(container: FakeContainer): Record<string, unknown> {
       )
     }),
     State: container.state.running
-      ? "running"
+      ? container.state.paused
+        ? "paused"
+        : "running"
       : container.state.startedAt === NEVER
         ? "created"
         : "exited",

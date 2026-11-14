@@ -167,6 +167,7 @@ export async function relayHarness(
       config,
       () => lifecycle.hostDataDirectory(),
       {
+        hostPorts: lifecycle.hostPorts,
         reattachTailscale: (appId) =>
           lifecycle.reattachTailscaleMembers(
             (memberId) => appTailscaleMember(memberId)?.appId === appId
