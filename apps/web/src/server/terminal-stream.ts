@@ -1,35 +1,30 @@
 import { randomBytes } from "node:crypto"
 
 import {
-  relayDatabaseTerminalAttachedSchema,
-  relayDatabaseTerminalHeartbeatSchema,
-  type HearthDatabaseTerminalOutput,
-  type RelayControlOperation,
-  type RelayDatabaseTerminalAttached,
-  type RelayPlatformTarget,
+  relayTerminalAttachedSchema,
+  type HearthTerminalOutput,
+  type RelayTerminalAttached,
+  type TerminalTarget,
 } from "@workspace/contracts"
 import { z } from "zod"
 
 import { RelayUnavailableError } from "@/effect/errors"
 import { ensuringPromise, forkPromise } from "@/effect/promise"
-import { requireRelayPermission } from "@/lib/access-control"
 import { isEligibleAccount } from "@/lib/account-policy"
 import {
   getAuthenticatedRealtimeIdentityFromHeaders,
   type AuthenticatedUser,
 } from "@/lib/auth-session"
 import type {
-  DatabaseTerminalStreamError,
-  DatabaseTerminalStreamRecord,
-} from "@/lib/database-terminal-stream"
-import { databaseTerminalIdleTimeoutMs } from "@/lib/environment"
+  TerminalStreamError,
+  TerminalStreamRecord,
+} from "@/lib/terminal-connection"
+import { terminalIdleTimeoutMs } from "@/lib/environment"
 import { subscribeRealtimeChanges } from "@/lib/realtime-source.server"
 import type { PersistedRelay } from "@/lib/relay-registry"
-import { registerDatabaseTerminalAttachment } from "@/server/database-terminal-hub"
-import {
-  databaseRpc,
-  requiredCredential,
-} from "@/server/managed-database-access"
+import { databaseRpc } from "@/server/managed-database-access"
+import { authorizeTerminal } from "@/server/terminal-access"
+import { registerTerminalAttachment } from "@/server/terminal-hub"
 
 // Renewals keep this page's viewer on the Relay, which drops viewers it
 // hasn't heard from in a minute.
@@ -41,174 +36,40 @@ const MAX_QUEUED_CHARACTERS = 2_000_000
 
 const encoder = new TextEncoder()
 
-// What a terminal stream attaches to: a database's client or a shell in one
-// of an app's services. Both are sessions the Relay keeps the same way.
-export interface TerminalStreamTarget {
-  readonly attach: (
-    attachmentId: string,
-    rows: number,
-    cols: number
-  ) => Promise<{ session: RelayDatabaseTerminalAttached; user: string }>
-  // Throws once the person may no longer use this terminal.
-  readonly authorize: (user: AuthenticatedUser) => Promise<void>
-  readonly operations: {
-    readonly detach: RelayControlOperation
-    readonly heartbeat: RelayControlOperation
+// Who the toolbar says the session runs as.
+function sessionUser(target: TerminalTarget): string {
+  switch (target.kind) {
+    case "app":
+      return target.service
+    case "database":
+      return "shell"
+    case "relay":
+      return "root"
+    case "platform":
+      return target.role
   }
 }
 
-export function databaseTerminalTarget(
+async function attachTerminal(
   relay: PersistedRelay,
-  databaseId: string,
-  user: AuthenticatedUser
-): TerminalStreamTarget {
-  return {
-    attach: async (attachmentId, rows, cols) => {
-      const credential = await requiredCredential(relay.id, databaseId)
-      const session = relayDatabaseTerminalAttachedSchema.parse(
-        await databaseRpc(
-          relay,
-          "database.terminal.attach",
-          {
-            attachmentId,
-            cols,
-            databaseId,
-            idleTimeoutMs: databaseTerminalIdleTimeoutMs(),
-            password: credential.password,
-            rows,
-            username: credential.username,
-          },
-          30_000,
-          user.id
-        )
-      )
-      return { session, user: credential.username }
-    },
-    authorize: (current) =>
-      requireRelayPermission({
-        databaseId,
-        permission: "database.terminal",
-        relayId: relay.id,
-        user: current,
-      }),
-    operations: {
-      detach: "database.terminal.detach",
-      heartbeat: "database.terminal.heartbeat",
-    },
-  }
-}
-
-export function appTerminalTarget(
-  relay: PersistedRelay,
-  appId: string,
-  service: string,
-  user: AuthenticatedUser
-): TerminalStreamTarget {
-  return {
-    attach: async (attachmentId, rows, cols) => {
-      const session = relayDatabaseTerminalAttachedSchema.parse(
-        await databaseRpc(
-          relay,
-          "app.terminal.attach",
-          {
-            appId,
-            attachmentId,
-            cols,
-            idleTimeoutMs: databaseTerminalIdleTimeoutMs(),
-            rows,
-            service,
-          },
-          30_000,
-          user.id
-        )
-      )
-      return { session, user: service }
-    },
-    authorize: (current) =>
-      requireRelayPermission({
-        appId,
-        permission: "app.terminal",
-        relayId: relay.id,
-        user: current,
-      }),
-    operations: {
-      detach: "app.terminal.detach",
-      heartbeat: "app.terminal.heartbeat",
-    },
-  }
-}
-
-export function relayTerminalTarget(
-  relay: PersistedRelay,
-  user: AuthenticatedUser
-): TerminalStreamTarget {
-  return {
-    attach: async (attachmentId, rows, cols) => ({
-      session: relayDatabaseTerminalAttachedSchema.parse(
-        await databaseRpc(
-          relay,
-          "relay.terminal.attach",
-          {
-            attachmentId,
-            cols,
-            rows,
-            idleTimeoutMs: databaseTerminalIdleTimeoutMs(),
-          },
-          360_000,
-          user.id
-        )
-      ),
-      user: "root",
-    }),
-    authorize: (current) =>
-      requireRelayPermission({
-        permission: "relay.terminal",
-        relayId: relay.id,
-        user: current,
-      }),
-    operations: {
-      detach: "relay.terminal.detach",
-      heartbeat: "relay.terminal.heartbeat",
-    },
-  }
-}
-
-// A shell in one of Kiln's own containers, for platform administrators.
-export function platformTerminalTarget(
-  relay: PersistedRelay,
-  role: RelayPlatformTarget,
-  user: AuthenticatedUser
-): TerminalStreamTarget {
-  return {
-    attach: async (attachmentId, rows, cols) => ({
-      session: relayDatabaseTerminalAttachedSchema.parse(
-        await databaseRpc(
-          relay,
-          "relay.platform.terminal.attach",
-          {
-            attachmentId,
-            cols,
-            idleTimeoutMs: databaseTerminalIdleTimeoutMs(),
-            role,
-            rows,
-          },
-          30_000,
-          user.id
-        )
-      ),
-      user: role,
-    }),
-    authorize: async (current) => {
-      const { isPlatformAdmin } = await import("@/lib/access-control")
-      if (!isPlatformAdmin(current)) {
-        throw new Error("Only platform administrators can open Kiln's terminals")
-      }
-    },
-    operations: {
-      detach: "relay.platform.terminal.detach",
-      heartbeat: "relay.platform.terminal.heartbeat",
-    },
-  }
+  target: TerminalTarget,
+  user: AuthenticatedUser,
+  input: { attachmentId: string; cols: number; rows: number }
+): Promise<RelayTerminalAttached> {
+  return relayTerminalAttachedSchema.parse(
+    await databaseRpc(
+      relay,
+      "terminal.attach",
+      {
+        ...input,
+        idleTimeoutMs: terminalIdleTimeoutMs(),
+        target,
+      },
+      // The host's shell helper may have to be pulled first.
+      target.kind === "relay" ? 360_000 : 30_000,
+      user.id
+    )
+  )
 }
 
 // Attaches one page to the person's terminal session and streams it as NDJSON
@@ -222,21 +83,21 @@ export function openTerminalStream(input: {
   relay: PersistedRelay
   rows: number
   signal: AbortSignal
-  target: TerminalStreamTarget
+  target: TerminalTarget
   user: AuthenticatedUser
 }): ReadableStream<Uint8Array> {
   const { relay, target, user } = input
   const attachmentId = randomBytes(24).toString("base64url")
-  const queued: Array<DatabaseTerminalStreamRecord> = []
+  const queued: Array<TerminalStreamRecord> = []
   let queuedCharacters = 0
   // Pushes can reach Hearth before the attach reply; they wait behind it.
-  const early: Array<HearthDatabaseTerminalOutput> = []
+  const early: Array<HearthTerminalOutput> = []
   let attached = false
   let closed = false
   let wake: (() => void) | null = null
   const timers: Array<ReturnType<typeof setInterval>> = []
 
-  const send = (record: DatabaseTerminalStreamRecord) => {
+  const send = (record: TerminalStreamRecord) => {
     if (closed) return
     if (record.type === "output") {
       queuedCharacters += record.data.length
@@ -254,7 +115,7 @@ export function openTerminalStream(input: {
     queued.push(record)
     wake?.()
   }
-  const finish = (record?: DatabaseTerminalStreamRecord) => {
+  const finish = (record?: TerminalStreamRecord) => {
     if (record) send(record)
     if (closed) return
     closed = true
@@ -273,7 +134,7 @@ export function openTerminalStream(input: {
           : "The terminal connection failed",
       type: "error",
     })
-  const deliver = (output: HearthDatabaseTerminalOutput) => {
+  const deliver = (output: HearthTerminalOutput) => {
     if (!attached) {
       early.push(output)
       return
@@ -290,22 +151,22 @@ export function openTerminalStream(input: {
     })
     if (output.ended) finish({ ended: output.ended, type: "ended" })
   }
-  const unregister = registerDatabaseTerminalAttachment(
+  const unregister = registerTerminalAttachment(
     attachmentId,
     relay.id,
     deliver
   )
   // A page that leaves stops being a viewer now rather than at expiry, so
   // the idle timeout starts from when it actually closed.
-  const leave = (record?: DatabaseTerminalStreamRecord) => {
+  const leave = (record?: TerminalStreamRecord) => {
     const wasOpen = !closed
     finish(record)
     if (wasOpen) {
       forkPromise(() =>
         databaseRpc(
           relay,
-          target.operations.detach,
-          { attachmentId },
+          "terminal.detach",
+          { attachmentId, target },
           10_000,
           user.id
         )
@@ -352,17 +213,17 @@ export function openTerminalStream(input: {
   })
 
   forkPromise(async () => {
-    const attachedSession = await target.attach(
+    const session = await attachTerminal(relay, target, user, {
       attachmentId,
-      input.rows,
-      input.cols
-    )
+      cols: input.cols,
+      rows: input.rows,
+    })
     if (closed) return
     send({
-      ...attachedSession.session,
+      ...session,
       attachmentId,
       type: "attached",
-      user: attachedSession.user,
+      user: sessionUser(target),
     })
     attached = true
     timers.push(
@@ -373,10 +234,8 @@ export function openTerminalStream(input: {
           const renewed = z.object({ unknown: z.array(z.string()) }).parse(
             await databaseRpc(
               relay,
-              target.operations.heartbeat,
-              relayDatabaseTerminalHeartbeatSchema.parse({
-                attachmentIds: [attachmentId],
-              }),
+              "terminal.heartbeat",
+              { attachmentIds: [attachmentId], target },
               10_000,
               user.id
             )
@@ -420,7 +279,8 @@ export function openTerminalStream(input: {
 async function stillAuthorized(input: {
   authSessionId: string
   headers: Headers
-  target: TerminalStreamTarget
+  relay: PersistedRelay
+  target: TerminalTarget
 }) {
   const identity = await getAuthenticatedRealtimeIdentityFromHeaders(
     input.headers
@@ -432,11 +292,11 @@ async function stillAuthorized(input: {
   ) {
     return false
   }
-  await input.target.authorize(identity.user)
+  await authorizeTerminal(identity.user, input.relay.id, input.target)
   return true
 }
 
-function streamErrorCode(cause: unknown): DatabaseTerminalStreamError {
+function streamErrorCode(cause: unknown): TerminalStreamError {
   if (cause instanceof RelayUnavailableError) {
     // Operation errors carry the Relay's code; connection failures don't.
     if (cause.code === undefined) return "relay-unavailable"

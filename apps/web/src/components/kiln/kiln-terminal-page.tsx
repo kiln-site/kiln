@@ -18,14 +18,7 @@ import {
   kilnShellAvailable,
   useKilnHost,
 } from "@/components/kiln/kiln-presentation"
-import type { TerminalBackend } from "@/components/terminal-session"
-import { platformTerminalStreamUrl } from "@/lib/database-terminal-stream"
 import type { KilnPlatformHost } from "@/server/platform"
-import {
-  claimKilnTerminal,
-  restartKilnTerminal,
-  writeKilnTerminal,
-} from "@/server/platform"
 
 const TerminalSession = React.lazy(async () => {
   const module = await import("@/components/terminal-session")
@@ -143,20 +136,12 @@ function KilnTerminalSession({
   target: RelayPlatformTarget
   toolbarActions: React.ReactNode
 }) {
-  const backend = React.useMemo<TerminalBackend>(() => {
-    const input = { relayId, role: target }
-    return {
-      claim: (claim) => claimKilnTerminal({ data: { ...input, ...claim } }),
-      noun: kilnCopy[target].noun,
-      startFailure: {
-        title: "Couldn't start a shell",
-        detail: "This container's image may have no shell (sh).",
-      },
-      restart: () => restartKilnTerminal({ data: input }),
-      streamUrl: (size) => platformTerminalStreamUrl({ ...input, ...size }),
-      write: (sessionId, data) =>
-        writeKilnTerminal({ data: { ...input, data, sessionId } }),
-    }
-  }, [relayId, target])
-  return <TerminalSession backend={backend} toolbarActions={toolbarActions} />
+  return (
+    <TerminalSession
+      noun={kilnCopy[target].noun}
+      relayId={relayId}
+      target={{ kind: "platform", role: target }}
+      toolbarActions={toolbarActions}
+    />
+  )
 }

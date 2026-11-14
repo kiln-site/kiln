@@ -17,13 +17,6 @@ import {
   type App,
 } from "@/components/app/app-presentation"
 import { useAppWorkspace } from "@/components/app/app-workspace-context"
-import type { TerminalBackend } from "@/components/terminal-session"
-import { appTerminalStreamUrl } from "@/lib/database-terminal-stream"
-import {
-  claimAppTerminal,
-  restartAppTerminal,
-  writeAppTerminal,
-} from "@/server/apps"
 
 const TerminalSession = React.lazy(async () => {
   const module = await import("@/components/terminal-session")
@@ -98,11 +91,11 @@ export function AppTerminalPage() {
 
   return (
     <React.Suspense fallback={<div className="min-h-0 flex-1 bg-card" />}>
-      <AppTerminalSession
+      <TerminalSession
         key={`${app.relayId}:${app.id}:${service}`}
-        appId={app.id}
+        noun="app"
         relayId={app.relayId}
-        service={service}
+        target={{ kind: "app", id: app.id, service }}
         toolbarActions={serviceSelect}
       />
     </React.Suspense>
@@ -124,34 +117,4 @@ function terminalUnavailableMessage(app: App, service: string | undefined) {
     title: `${app.name} is not deployed`,
     description: "Deploy the app to open a shell in its containers.",
   }
-}
-
-function AppTerminalSession({
-  appId,
-  relayId,
-  service,
-  toolbarActions,
-}: {
-  appId: string
-  relayId: string
-  service: string
-  toolbarActions: React.ReactNode
-}) {
-  const backend = React.useMemo<TerminalBackend>(() => {
-    const target = { appId, relayId, service }
-    return {
-      claim: (input) => claimAppTerminal({ data: { ...target, ...input } }),
-      noun: "app",
-      startFailure: {
-        title: "Couldn't start a shell",
-        detail:
-          "This container most likely has no shell (sh). Minimal images, like distroless or scratch, leave it out.",
-      },
-      restart: () => restartAppTerminal({ data: target }),
-      streamUrl: (size) => appTerminalStreamUrl({ ...target, ...size }),
-      write: (sessionId, data) =>
-        writeAppTerminal({ data: { ...target, data, sessionId } }),
-    }
-  }, [appId, relayId, service])
-  return <TerminalSession backend={backend} toolbarActions={toolbarActions} />
 }

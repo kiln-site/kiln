@@ -1,21 +1,21 @@
-import type { HearthDatabaseTerminalOutput } from "@workspace/contracts"
+import type { HearthTerminalOutput } from "@workspace/contracts"
 
-// Database terminal output arrives from Relays as pushes for an attachment;
-// each attachment is one open browser stream in this Hearth process.
+// Terminal output arrives from Relays as pushes for an attachment; each
+// attachment is one open browser stream in this Hearth process.
 
 interface Attachment {
-  deliver: (output: HearthDatabaseTerminalOutput) => void
+  deliver: (output: HearthTerminalOutput) => void
   relayId: string
 }
 
 const globalHub = globalThis as typeof globalThis & {
-  kilnDatabaseTerminalAttachments?: Map<string, Attachment>
+  kilnTerminalAttachments?: Map<string, Attachment>
 }
 
 // Kept on globalThis so development reloads don't orphan open streams.
-const attachments = (globalHub.kilnDatabaseTerminalAttachments ??= new Map())
+const attachments = (globalHub.kilnTerminalAttachments ??= new Map())
 
-export function registerDatabaseTerminalAttachment(
+export function registerTerminalAttachment(
   attachmentId: string,
   relayId: string,
   deliver: Attachment["deliver"]
@@ -30,9 +30,9 @@ export function registerDatabaseTerminalAttachment(
 }
 
 // Answers the Relay: an unaccepted push tells it the viewer is gone.
-export function deliverDatabaseTerminalOutput(
+export function deliverTerminalOutput(
   relayId: string,
-  output: HearthDatabaseTerminalOutput
+  output: HearthTerminalOutput
 ): { accepted: boolean } {
   const attachment = attachments.get(output.attachmentId)
   // Another Relay can't write into a stream it didn't attach.

@@ -1,8 +1,7 @@
 import {
   relayCreateDatabaseSchema,
-  type DatabaseEngine,
-  type DatabaseTerminalEnd,
-  type HearthDatabaseTerminalOutput,
+  type HearthTerminalOutput,
+  type TerminalEnd,
 } from "@workspace/contracts"
 import { describe, expect, it, vi } from "vite-plus/test"
 
@@ -10,30 +9,29 @@ vi.mock("./command.js", () => import("./test/docker.js"))
 
 import {
   ContainerTerminals,
-  databaseTerminalTarget,
+  containerShell,
+  terminalTargetKey,
 } from "./container-terminal.js"
 import { fakeDocker } from "./test/docker.js"
 import { databaseBrick } from "./test/database-bricks.js"
 import { relayHarness, type RelayHarness } from "./test/relay.js"
 
 const databaseId = "e".repeat(12)
-const password = "correct-horse-battery-staple-1"
-const credentials = { password, username: "kiln_user" }
+const target = { kind: "database", id: databaseId } as const
+const targetKey = terminalTargetKey(target)
 const alice = "hearth:alice"
 const mallory = "hearth:mallory"
 const idleTimeoutMs = 15 * 60_000
 
-async function runningDatabase(
-  harness: RelayHarness,
-  engine: DatabaseEngine = "postgres"
-) {
+async function runningDatabase(harness: RelayHarness) {
   await harness.databases.create(
     relayCreateDatabaseSchema.parse({
       databaseName: "kiln_app",
-      ...databaseBrick(engine),
+      ...databaseBrick("postgres"),
       id: databaseId,
       name: "Main database",
-      ...credentials,
+      password: "correct-horse-battery-staple-1",
+      username: "kiln_user",
     })
   )
   return harness.databases.target(databaseId)
@@ -41,12 +39,12 @@ async function runningDatabase(
 
 // A Hearth viewer: collects the output and ending pushed to it.
 function viewer() {
-  const pushes: Array<HearthDatabaseTerminalOutput> = []
+  const pushes: Array<HearthTerminalOutput> = []
   return {
-    get ended(): DatabaseTerminalEnd | null {
+    get ended(): TerminalEnd | null {
       return pushes.find((push) => push.ended)?.ended ?? null
     },
-    push: async (output: HearthDatabaseTerminalOutput) => {
+    push: async (output: HearthTerminalOutput) => {
       pushes.push(output)
       return { accepted: true }
     },
@@ -67,10 +65,10 @@ function attach(
   attachments += 1
   return terminals.attach(
     owner,
-    databaseTerminalTarget(
-      database,
-      credentials.username,
-      credentials.password
+    containerShell(
+      target,
+      { id: database.containerId!, running: true },
+      "Start the database to open its terminal"
     ),
     {
       attachmentId: attachmentId(attachments),
@@ -86,7 +84,7 @@ function clientExecs() {
   return [...fakeDocker.execs.values()].filter((exec) => exec.tty)
 }
 
-describe("database terminal sessions", () => {
+describe("terminal sessions", () => {
   it("keeps each person's session to themselves", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
@@ -97,49 +95,38 @@ describe("database terminal sessions", () => {
 
     expect(mallorySession.sessionId).not.toBe(aliceSession.sessionId)
     expect(() =>
-      terminals.write(mallory, databaseId, aliceSession.sessionId, "\\q\r")
+      terminals.write(mallory, targetKey, aliceSession.sessionId, "exit\r")
     ).toThrow("The terminal session has ended")
-    expect(terminals.heartbeat(mallory, [aliceAttachment]).unknown).toEqual([
-      aliceAttachment,
-    ])
+    expect(
+      terminals.heartbeat(mallory, targetKey, [aliceAttachment]).unknown
+    ).toEqual([aliceAttachment])
   })
 
-  it("passes the password through the client's environment, not its command line", async () => {
+  // A request is authorized for the target it names, so it reaches no
+  // attachment on another, even the same person's.
+  it("keeps an attachment to the target it was opened on", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
-    await attach(
-      new ContainerTerminals(harness.config),
-      alice,
-      database,
-      viewer()
-    )
+    const terminals = new ContainerTerminals(harness.config)
+    const watcher = viewer()
+    await attach(terminals, alice, database, watcher)
+    const attachment = attachmentId(attachments)
+    const elsewhere = terminalTargetKey({
+      kind: "app",
+      id: "a".repeat(12),
+      service: "web",
+    })
 
-    const [client] = clientExecs()
-    expect(client?.cmd.join(" ")).not.toContain(password)
-    expect(client?.env.PGPASSWORD).toBe(password)
+    expect(
+      terminals.heartbeat(alice, elsewhere, [attachment]).unknown
+    ).toEqual([attachment])
+    terminals.detach(alice, elsewhere, attachment)
+    expect(terminals.heartbeat(alice, targetKey, [attachment]).unknown).toEqual(
+      []
+    )
   })
 
-  // valkey-cli reads REDISCLI_AUTH, like redis-cli; any other variable
-  // opened an unauthenticated client.
-  it.each(["redis", "valkey"] as const)(
-    "signs the %s client in with the variable it reads",
-    async (engine) => {
-      const harness = await relayHarness()
-      const database = await runningDatabase(harness, engine)
-      await attach(
-        new ContainerTerminals(harness.config),
-        alice,
-        database,
-        viewer()
-      )
-
-      const [client] = clientExecs()
-      expect(client?.cmd.join(" ")).not.toContain(password)
-      expect(client?.env.REDISCLI_AUTH).toBe(password)
-    }
-  )
-
-  it("ends everyone's sessions on a database being deleted, so its client can't write to it", async () => {
+  it("ends everyone's sessions on an instance being deleted, and hangs up their shells", async () => {
     const harness = await relayHarness()
     const database = await runningDatabase(harness)
     const terminals = new ContainerTerminals(harness.config)
@@ -148,7 +135,7 @@ describe("database terminal sessions", () => {
     await attach(terminals, alice, database, first)
     await attach(terminals, "bob", database, second)
 
-    await terminals.endTarget(databaseId, database.containerId)
+    await terminals.endInstance(databaseId, [database.containerId!])
 
     await vi.waitFor(() => expect(first.ended?.reason).toBe("deleting"))
     await vi.waitFor(() => expect(second.ended?.reason).toBe("deleting"))

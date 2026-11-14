@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test"
 
-import type { DatabaseTerminalStreamRecord } from "@/lib/database-terminal-stream"
+import type { TerminalStreamRecord } from "@/lib/terminal-connection"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { PersistedRelay } from "@/lib/relay-registry"
 
@@ -19,7 +19,7 @@ vi.mock("@/server/managed-database-access", () => ({
     operation: string,
     payload: { attachmentId?: string }
   ) => {
-    if (operation === "database.terminal.attach") {
+    if (operation === "terminal.attach") {
       boundary.attachmentIds.push(payload.attachmentId!)
       return {
         cols: 80,
@@ -33,17 +33,13 @@ vi.mock("@/server/managed-database-access", () => ({
         startedAt: "2026-01-01T00:00:00.000Z",
       }
     }
-    if (operation === "database.terminal.detach") {
+    if (operation === "terminal.detach") {
       boundary.detached.push(payload.attachmentId!)
       return { detached: true }
     }
     return { unknown: [] }
   },
-  requiredCredential: async () => ({
-    databaseName: "kiln_app",
-    password: "correct-horse-battery-staple-1",
-    username: "kiln_user",
-  }),
+  requiredRelay: async () => relay,
 }))
 
 vi.mock("@/lib/auth-session", () => ({
@@ -58,8 +54,8 @@ vi.mock("@/lib/access-control", () => ({
 }))
 
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
-import { deliverDatabaseTerminalOutput } from "./database-terminal-hub"
-import { databaseTerminalTarget, openTerminalStream } from "./terminal-stream"
+import { deliverTerminalOutput } from "./terminal-hub"
+import { openTerminalStream } from "./terminal-stream"
 
 const user = {
   email: "user@example.com",
@@ -86,18 +82,18 @@ async function openStream() {
     relay,
     rows: 24,
     signal: page.signal,
-    target: databaseTerminalTarget(relay, "e".repeat(12), user),
+    target: { kind: "database", id: "e".repeat(12) },
     user,
   }).getReader()
   const decoder = new TextDecoder()
-  const next = async (): Promise<DatabaseTerminalStreamRecord | null> => {
+  const next = async (): Promise<TerminalStreamRecord | null> => {
     const { done, value } = await reader.read()
     return done ? null : JSON.parse(decoder.decode(value))
   }
-  expect(await next()).toMatchObject({ type: "attached", user: "kiln_user" })
+  expect(await next()).toMatchObject({ type: "attached" })
   const attachmentId = boundary.attachmentIds.at(-1)!
   const output = (data: string) =>
-    deliverDatabaseTerminalOutput(relay.id, {
+    deliverTerminalOutput(relay.id, {
       attachmentId,
       cols: 80,
       control: "none",
@@ -111,7 +107,7 @@ async function openStream() {
   return { attachmentId, next, output, page }
 }
 
-describe("database terminal stream", () => {
+describe("terminal stream", () => {
   it("stops sending output once the person loses access to the terminal", async () => {
     const stream = await openStream()
 
@@ -127,7 +123,7 @@ describe("database terminal stream", () => {
       type: "error",
     })
     expect(await stream.next()).toBeNull()
-    expect(stream.output("select * from secrets;")).toEqual({
+    expect(stream.output("cat /etc/shadow")).toEqual({
       accepted: false,
     })
     expect(boundary.detached).toContain(stream.attachmentId)
@@ -147,7 +143,7 @@ describe("database terminal stream", () => {
       type: "error",
     })
     expect(await stream.next()).toBeNull()
-    expect(stream.output("select * from secrets;")).toEqual({
+    expect(stream.output("cat /etc/shadow")).toEqual({
       accepted: false,
     })
   })

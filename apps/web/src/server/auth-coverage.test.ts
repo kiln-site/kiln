@@ -86,21 +86,10 @@ const readsOverPost: Record<string, string> = {
 // Server functions that change nothing an operation orders: sessions,
 // keystrokes, and signing what the browser takes to a Relay.
 const notOperations: Record<string, string> = {
-  "apps.ts:claimAppTerminal": "Takes over this person's terminal session",
-  "apps.ts:restartAppTerminal": "Restarts this person's terminal session",
-  "apps.ts:writeAppTerminal": "Keystrokes, streamed to the Relay",
   "browser-accounts.ts:rememberActiveBrowserAccountSession":
     "Sets this browser's account cookie",
-  "databases.ts:claimDatabaseTerminal":
-    "Takes over this person's terminal session",
-  "databases.ts:restartDatabaseTerminal":
-    "Restarts this person's terminal session",
-  "databases.ts:writeDatabaseTerminal": "Keystrokes, streamed to the Relay",
   "github-sync.ts:startGitHubConnection":
     "Signs the state for GitHub's redirect; changes nothing",
-  "platform.ts:claimKilnTerminal": "Takes over this person's terminal session",
-  "platform.ts:restartKilnTerminal": "Restarts this person's terminal session",
-  "platform.ts:writeKilnTerminal": "Keystrokes, streamed to the Relay",
   "relay-capability.ts:issueBrowserCapabilities":
     "Signs short-lived capabilities; changes nothing",
   "relay-capability.ts:issueFileCapability":
@@ -110,13 +99,11 @@ const notOperations: Record<string, string> = {
   "relay-desktop.ts:openRelayDesktop":
     "Opens this person's desktop session, coordinated by the Relay's own registry",
   "relay-desktop.ts:closeRelayDesktop": "Ends this person's desktop session",
-  "relay-host.ts:claimRelayTerminal":
-    "Takes over this person's terminal session",
-  "relay-host.ts:restartRelayTerminal":
-    "Restarts this person's terminal session",
-  "relay-host.ts:writeRelayTerminal": "Keystrokes, streamed to the Relay",
   "relay.ts:sendRelayConsoleCommand":
     "Console input, which the Relay orders in the game server's lifecycle lane",
+  "terminals.ts:claimTerminal": "Takes over this person's terminal session",
+  "terminals.ts:restartTerminal": "Restarts this person's terminal session",
+  "terminals.ts:writeTerminal": "Keystrokes, streamed to the Relay",
 }
 
 // The session checks every handler must reach.

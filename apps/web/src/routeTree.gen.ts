@@ -40,6 +40,7 @@ import { Route as AppSettingsRouteImport } from './routes/_app.settings'
 import { Route as ApiAccountStatusRouteImport } from './routes/api.account-status'
 import { Route as ApiHealthRouteImport } from './routes/api.health'
 import { Route as ApiRealtimeRouteImport } from './routes/api.realtime'
+import { Route as ApiTerminalRouteImport } from './routes/api.terminal'
 import { Route as CliAuthorizeRouteImport } from './routes/cli.authorize'
 import { Route as DownloadsIdRouteImport } from './routes/downloads.$id'
 import { Route as AppAppAppIdRouteImport } from './routes/_app/app/$appId'
@@ -81,17 +82,13 @@ import { Route as AppSettingsBillingRouteImport } from './routes/_app.settings.b
 import { Route as AppSettingsFilesRouteImport } from './routes/_app.settings.files'
 import { Route as AppSettingsNotificationsRouteImport } from './routes/_app.settings.notifications'
 import { Route as AppSettingsRelaysRouteImport } from './routes/_app.settings.relays'
-import { Route as ApiAppTerminalAppIdRouteImport } from './routes/api.app-terminal.$appId'
 import { Route as ApiAuthSplatRouteImport } from './routes/api.auth.$'
 import { Route as ApiConsoleInstanceIdRouteImport } from './routes/api.console.$instanceId'
-import { Route as ApiDatabaseTerminalDatabaseIdRouteImport } from './routes/api.database-terminal.$databaseId'
 import { Route as ApiGithubManifestRouteImport } from './routes/api.github.manifest'
 import { Route as ApiGithubSetupRouteImport } from './routes/api.github.setup'
 import { Route as ApiGithubWebhookRouteImport } from './routes/api.github.webhook'
 import { Route as ApiIconsSplatRouteImport } from './routes/api.icons.$'
 import { Route as ApiKilnDatabaseExportRouteImport } from './routes/api.kiln.database-export'
-import { Route as ApiPlatformTerminalRelayIdRouteImport } from './routes/api.platform-terminal.$relayId'
-import { Route as ApiRelayTerminalRelayIdRouteImport } from './routes/api.relay-terminal.$relayId'
 import { Route as ApiRelaysJoinRouteImport } from './routes/api.relays.join'
 import { Route as AppAppAppIdIndexRouteImport } from './routes/_app/app/$appId.index'
 import { Route as AppAppAppIdSplatRouteImport } from './routes/_app/app/$appId.$'
@@ -290,6 +287,11 @@ const ApiHealthRoute = ApiHealthRouteImport.update({
 const ApiRealtimeRoute = ApiRealtimeRouteImport.update({
   id: '/api/realtime',
   path: '/api/realtime',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiTerminalRoute = ApiTerminalRouteImport.update({
+  id: '/api/terminal',
+  path: '/api/terminal',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CliAuthorizeRoute = CliAuthorizeRouteImport.update({
@@ -499,11 +501,6 @@ const AppSettingsRelaysRoute = AppSettingsRelaysRouteImport.update({
   path: '/relays',
   getParentRoute: () => AppSettingsRoute,
 } as any)
-const ApiAppTerminalAppIdRoute = ApiAppTerminalAppIdRouteImport.update({
-  id: '/api/app-terminal/$appId',
-  path: '/api/app-terminal/$appId',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
   path: '/api/auth/$',
@@ -514,12 +511,6 @@ const ApiConsoleInstanceIdRoute = ApiConsoleInstanceIdRouteImport.update({
   path: '/api/console/$instanceId',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiDatabaseTerminalDatabaseIdRoute =
-  ApiDatabaseTerminalDatabaseIdRouteImport.update({
-    id: '/api/database-terminal/$databaseId',
-    path: '/api/database-terminal/$databaseId',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const ApiGithubManifestRoute = ApiGithubManifestRouteImport.update({
   id: '/api/github/manifest',
   path: '/api/github/manifest',
@@ -543,17 +534,6 @@ const ApiIconsSplatRoute = ApiIconsSplatRouteImport.update({
 const ApiKilnDatabaseExportRoute = ApiKilnDatabaseExportRouteImport.update({
   id: '/api/kiln/database-export',
   path: '/api/kiln/database-export',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiPlatformTerminalRelayIdRoute =
-  ApiPlatformTerminalRelayIdRouteImport.update({
-    id: '/api/platform-terminal/$relayId',
-    path: '/api/platform-terminal/$relayId',
-    getParentRoute: () => rootRouteImport,
-  } as any)
-const ApiRelayTerminalRelayIdRoute = ApiRelayTerminalRelayIdRouteImport.update({
-  id: '/api/relay-terminal/$relayId',
-  path: '/api/relay-terminal/$relayId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiRelaysJoinRoute = ApiRelaysJoinRouteImport.update({
@@ -821,6 +801,7 @@ export interface FileRoutesByFullPath {
   '/api/account-status': typeof ApiAccountStatusRoute
   '/api/health': typeof ApiHealthRoute
   '/api/realtime': typeof ApiRealtimeRoute
+  '/api/terminal': typeof ApiTerminalRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
   '/app/$appId': typeof AppAppAppIdRouteWithChildren
@@ -857,17 +838,13 @@ export interface FileRoutesByFullPath {
   '/settings/files': typeof AppSettingsFilesRoute
   '/settings/notifications': typeof AppSettingsNotificationsRoute
   '/settings/relays': typeof AppSettingsRelaysRoute
-  '/api/app-terminal/$appId': typeof ApiAppTerminalAppIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
-  '/api/database-terminal/$databaseId': typeof ApiDatabaseTerminalDatabaseIdRoute
   '/api/github/manifest': typeof ApiGithubManifestRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
   '/api/icons/$': typeof ApiIconsSplatRoute
   '/api/kiln/database-export': typeof ApiKilnDatabaseExportRoute
-  '/api/platform-terminal/$relayId': typeof ApiPlatformTerminalRelayIdRoute
-  '/api/relay-terminal/$relayId': typeof ApiRelayTerminalRelayIdRoute
   '/api/relays/join': typeof ApiRelaysJoinRoute
   '/automations/': typeof AppAutomationsIndexRoute
   '/backups/': typeof AppBackupsIndexRoute
@@ -945,6 +922,7 @@ export interface FileRoutesByTo {
   '/api/account-status': typeof ApiAccountStatusRoute
   '/api/health': typeof ApiHealthRoute
   '/api/realtime': typeof ApiRealtimeRoute
+  '/api/terminal': typeof ApiTerminalRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
   '/automations/calendar': typeof AppAutomationsCalendarRoute
@@ -977,17 +955,13 @@ export interface FileRoutesByTo {
   '/settings/files': typeof AppSettingsFilesRoute
   '/settings/notifications': typeof AppSettingsNotificationsRoute
   '/settings/relays': typeof AppSettingsRelaysRoute
-  '/api/app-terminal/$appId': typeof ApiAppTerminalAppIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
-  '/api/database-terminal/$databaseId': typeof ApiDatabaseTerminalDatabaseIdRoute
   '/api/github/manifest': typeof ApiGithubManifestRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
   '/api/icons/$': typeof ApiIconsSplatRoute
   '/api/kiln/database-export': typeof ApiKilnDatabaseExportRoute
-  '/api/platform-terminal/$relayId': typeof ApiPlatformTerminalRelayIdRoute
-  '/api/relay-terminal/$relayId': typeof ApiRelayTerminalRelayIdRoute
   '/api/relays/join': typeof ApiRelaysJoinRoute
   '/automations': typeof AppAutomationsIndexRoute
   '/backups': typeof AppBackupsIndexRoute
@@ -1072,6 +1046,7 @@ export interface FileRoutesById {
   '/api/account-status': typeof ApiAccountStatusRoute
   '/api/health': typeof ApiHealthRoute
   '/api/realtime': typeof ApiRealtimeRoute
+  '/api/terminal': typeof ApiTerminalRoute
   '/cli/authorize': typeof CliAuthorizeRoute
   '/downloads/$id': typeof DownloadsIdRoute
   '/_app/app/$appId': typeof AppAppAppIdRouteWithChildren
@@ -1108,17 +1083,13 @@ export interface FileRoutesById {
   '/_app/settings/files': typeof AppSettingsFilesRoute
   '/_app/settings/notifications': typeof AppSettingsNotificationsRoute
   '/_app/settings/relays': typeof AppSettingsRelaysRoute
-  '/api/app-terminal/$appId': typeof ApiAppTerminalAppIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/console/$instanceId': typeof ApiConsoleInstanceIdRoute
-  '/api/database-terminal/$databaseId': typeof ApiDatabaseTerminalDatabaseIdRoute
   '/api/github/manifest': typeof ApiGithubManifestRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
   '/api/icons/$': typeof ApiIconsSplatRoute
   '/api/kiln/database-export': typeof ApiKilnDatabaseExportRoute
-  '/api/platform-terminal/$relayId': typeof ApiPlatformTerminalRelayIdRoute
-  '/api/relay-terminal/$relayId': typeof ApiRelayTerminalRelayIdRoute
   '/api/relays/join': typeof ApiRelaysJoinRoute
   '/_app/automations/': typeof AppAutomationsIndexRoute
   '/_app/backups/': typeof AppBackupsIndexRoute
@@ -1203,6 +1174,7 @@ export interface FileRouteTypes {
     | '/api/account-status'
     | '/api/health'
     | '/api/realtime'
+    | '/api/terminal'
     | '/cli/authorize'
     | '/downloads/$id'
     | '/app/$appId'
@@ -1239,17 +1211,13 @@ export interface FileRouteTypes {
     | '/settings/files'
     | '/settings/notifications'
     | '/settings/relays'
-    | '/api/app-terminal/$appId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
-    | '/api/database-terminal/$databaseId'
     | '/api/github/manifest'
     | '/api/github/setup'
     | '/api/github/webhook'
     | '/api/icons/$'
     | '/api/kiln/database-export'
-    | '/api/platform-terminal/$relayId'
-    | '/api/relay-terminal/$relayId'
     | '/api/relays/join'
     | '/automations/'
     | '/backups/'
@@ -1327,6 +1295,7 @@ export interface FileRouteTypes {
     | '/api/account-status'
     | '/api/health'
     | '/api/realtime'
+    | '/api/terminal'
     | '/cli/authorize'
     | '/downloads/$id'
     | '/automations/calendar'
@@ -1359,17 +1328,13 @@ export interface FileRouteTypes {
     | '/settings/files'
     | '/settings/notifications'
     | '/settings/relays'
-    | '/api/app-terminal/$appId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
-    | '/api/database-terminal/$databaseId'
     | '/api/github/manifest'
     | '/api/github/setup'
     | '/api/github/webhook'
     | '/api/icons/$'
     | '/api/kiln/database-export'
-    | '/api/platform-terminal/$relayId'
-    | '/api/relay-terminal/$relayId'
     | '/api/relays/join'
     | '/automations'
     | '/backups'
@@ -1453,6 +1418,7 @@ export interface FileRouteTypes {
     | '/api/account-status'
     | '/api/health'
     | '/api/realtime'
+    | '/api/terminal'
     | '/cli/authorize'
     | '/downloads/$id'
     | '/_app/app/$appId'
@@ -1489,17 +1455,13 @@ export interface FileRouteTypes {
     | '/_app/settings/files'
     | '/_app/settings/notifications'
     | '/_app/settings/relays'
-    | '/api/app-terminal/$appId'
     | '/api/auth/$'
     | '/api/console/$instanceId'
-    | '/api/database-terminal/$databaseId'
     | '/api/github/manifest'
     | '/api/github/setup'
     | '/api/github/webhook'
     | '/api/icons/$'
     | '/api/kiln/database-export'
-    | '/api/platform-terminal/$relayId'
-    | '/api/relay-terminal/$relayId'
     | '/api/relays/join'
     | '/_app/automations/'
     | '/_app/backups/'
@@ -1573,19 +1535,16 @@ export interface RootRouteChildren {
   ApiAccountStatusRoute: typeof ApiAccountStatusRoute
   ApiHealthRoute: typeof ApiHealthRoute
   ApiRealtimeRoute: typeof ApiRealtimeRoute
+  ApiTerminalRoute: typeof ApiTerminalRoute
   CliAuthorizeRoute: typeof CliAuthorizeRoute
   DownloadsIdRoute: typeof DownloadsIdRoute
-  ApiAppTerminalAppIdRoute: typeof ApiAppTerminalAppIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiConsoleInstanceIdRoute: typeof ApiConsoleInstanceIdRoute
-  ApiDatabaseTerminalDatabaseIdRoute: typeof ApiDatabaseTerminalDatabaseIdRoute
   ApiGithubManifestRoute: typeof ApiGithubManifestRoute
   ApiGithubSetupRoute: typeof ApiGithubSetupRoute
   ApiGithubWebhookRoute: typeof ApiGithubWebhookRoute
   ApiIconsSplatRoute: typeof ApiIconsSplatRoute
   ApiKilnDatabaseExportRoute: typeof ApiKilnDatabaseExportRoute
-  ApiPlatformTerminalRelayIdRoute: typeof ApiPlatformTerminalRelayIdRoute
-  ApiRelayTerminalRelayIdRoute: typeof ApiRelayTerminalRelayIdRoute
   ApiRelaysJoinRoute: typeof ApiRelaysJoinRoute
   ApiCliAuthDeviceRoute: typeof ApiCliAuthDeviceRoute
   ApiCliAuthTokenRoute: typeof ApiCliAuthTokenRoute
@@ -1812,6 +1771,13 @@ declare module '@tanstack/react-router' {
       path: '/api/realtime'
       fullPath: '/api/realtime'
       preLoaderRoute: typeof ApiRealtimeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/terminal': {
+      id: '/api/terminal'
+      path: '/api/terminal'
+      fullPath: '/api/terminal'
+      preLoaderRoute: typeof ApiTerminalRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/cli/authorize': {
@@ -2101,13 +2067,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRelaysRouteImport
       parentRoute: typeof AppSettingsRoute
     }
-    '/api/app-terminal/$appId': {
-      id: '/api/app-terminal/$appId'
-      path: '/api/app-terminal/$appId'
-      fullPath: '/api/app-terminal/$appId'
-      preLoaderRoute: typeof ApiAppTerminalAppIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/auth/$': {
       id: '/api/auth/$'
       path: '/api/auth/$'
@@ -2120,13 +2079,6 @@ declare module '@tanstack/react-router' {
       path: '/api/console/$instanceId'
       fullPath: '/api/console/$instanceId'
       preLoaderRoute: typeof ApiConsoleInstanceIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/database-terminal/$databaseId': {
-      id: '/api/database-terminal/$databaseId'
-      path: '/api/database-terminal/$databaseId'
-      fullPath: '/api/database-terminal/$databaseId'
-      preLoaderRoute: typeof ApiDatabaseTerminalDatabaseIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/github/manifest': {
@@ -2162,20 +2114,6 @@ declare module '@tanstack/react-router' {
       path: '/api/kiln/database-export'
       fullPath: '/api/kiln/database-export'
       preLoaderRoute: typeof ApiKilnDatabaseExportRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/platform-terminal/$relayId': {
-      id: '/api/platform-terminal/$relayId'
-      path: '/api/platform-terminal/$relayId'
-      fullPath: '/api/platform-terminal/$relayId'
-      preLoaderRoute: typeof ApiPlatformTerminalRelayIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/relay-terminal/$relayId': {
-      id: '/api/relay-terminal/$relayId'
-      path: '/api/relay-terminal/$relayId'
-      fullPath: '/api/relay-terminal/$relayId'
-      preLoaderRoute: typeof ApiRelayTerminalRelayIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/relays/join': {
@@ -2819,19 +2757,16 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAccountStatusRoute: ApiAccountStatusRoute,
   ApiHealthRoute: ApiHealthRoute,
   ApiRealtimeRoute: ApiRealtimeRoute,
+  ApiTerminalRoute: ApiTerminalRoute,
   CliAuthorizeRoute: CliAuthorizeRoute,
   DownloadsIdRoute: DownloadsIdRoute,
-  ApiAppTerminalAppIdRoute: ApiAppTerminalAppIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiConsoleInstanceIdRoute: ApiConsoleInstanceIdRoute,
-  ApiDatabaseTerminalDatabaseIdRoute: ApiDatabaseTerminalDatabaseIdRoute,
   ApiGithubManifestRoute: ApiGithubManifestRoute,
   ApiGithubSetupRoute: ApiGithubSetupRoute,
   ApiGithubWebhookRoute: ApiGithubWebhookRoute,
   ApiIconsSplatRoute: ApiIconsSplatRoute,
   ApiKilnDatabaseExportRoute: ApiKilnDatabaseExportRoute,
-  ApiPlatformTerminalRelayIdRoute: ApiPlatformTerminalRelayIdRoute,
-  ApiRelayTerminalRelayIdRoute: ApiRelayTerminalRelayIdRoute,
   ApiRelaysJoinRoute: ApiRelaysJoinRoute,
   ApiCliAuthDeviceRoute: ApiCliAuthDeviceRoute,
   ApiCliAuthTokenRoute: ApiCliAuthTokenRoute,

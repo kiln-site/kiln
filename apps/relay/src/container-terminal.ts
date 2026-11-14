@@ -3,12 +3,12 @@ import { createRequire } from "node:module"
 import type { Duplex } from "node:stream"
 
 import type {
-  DatabaseTerminalControl,
-  DatabaseTerminalEnd,
-  DatabaseTerminalEndReason,
-  HearthDatabaseTerminalOutput,
-  RelayDatabaseTerminalAttached,
-  RelayManagedDatabase,
+  HearthTerminalOutput,
+  RelayTerminalAttached,
+  TerminalControl,
+  TerminalEnd,
+  TerminalEndReason,
+  TerminalTarget,
 } from "@workspace/contracts"
 import {
   terminalColorQuery,
@@ -23,8 +23,8 @@ import { DockerEngine } from "./docker-engine.js"
 import { forkPromise, recoverPromise } from "./effect/promise.js"
 import type { TerminalCapacity } from "./relay-capacity.js"
 
-// Each person gets one terminal session per target: a database's client, or a
-// shell in one of an app's services. It belongs to the Relay, so it outlives
+// Each person gets one terminal session per target: a shell in an
+// instance's container, on the Relay's host, or in one of Kiln's own. It belongs to the Relay, so it outlives
 // tabs, devices, and Hearth restarts: Hearth attaches viewers, the Relay
 // pushes their output to Hearth, and a session nobody views ends after its
 // idle timeout. Relay restarts end every session.
@@ -72,9 +72,8 @@ const { SerializeAddon: HeadlessSerializeAddon } =
   }
 
 // What a terminal session runs, and where.
-export interface TerminalTarget {
-  // Names the session alongside its owner: a database's ID, or an app's
-  // service.
+export interface TerminalSpec {
+  // Names the session alongside its owner (`terminalTargetKey`).
   readonly key: string
   readonly containerId: string | null
   readonly running: boolean
@@ -95,7 +94,7 @@ export interface TerminalAttach {
 const BOOT_ID = randomBytes(6).toString("base64url")
 
 export type PushTerminalOutput = (
-  output: HearthDatabaseTerminalOutput,
+  output: HearthTerminalOutput,
   timeoutMs: number
 ) => Promise<unknown>
 
@@ -130,10 +129,10 @@ interface TerminalSession {
   // The last change the screen has applied; snapshots are in this state.
   appliedSeq: number
   containerId: string
-  ending: DatabaseTerminalEndReason | null
+  ending: TerminalEndReason | null
   // Settles once ending has finished; set as soon as it starts.
   finished: Promise<void> | null
-  ended: DatabaseTerminalEnd | null
+  ended: TerminalEnd | null
   execId: string
   // Raw output from `historyStart`, for viewers catching up between pushes.
   history: Buffer
@@ -149,7 +148,7 @@ interface TerminalSession {
   // sequence the screen has only partly received reaches a new page whole.
   resumeOffset: number
   pidFile: string
-  previous: DatabaseTerminalEnd | null
+  previous: TerminalEnd | null
   screen: Terminal
   serializer: SerializeAddon
   socket: Duplex
@@ -160,7 +159,7 @@ interface TerminalSession {
 export class ContainerTerminals {
   readonly #sessions = new Map<string, TerminalSession>()
   readonly #attachments = new Map<string, TerminalSession>()
-  readonly #endings = new Map<string, DatabaseTerminalEnd>()
+  readonly #endings = new Map<string, TerminalEnd>()
   // The attach in progress per person and target, which the next one waits
   // for.
   readonly #attaching = new Map<string, Promise<unknown>>()
@@ -185,10 +184,10 @@ export class ContainerTerminals {
   // opening together share one session and a restart can't race them.
   attach(
     owner: string,
-    target: TerminalTarget,
+    target: TerminalSpec,
     input: TerminalAttach,
     push: PushTerminalOutput
-  ): Promise<RelayDatabaseTerminalAttached> {
+  ): Promise<RelayTerminalAttached> {
     const key = sessionKey(owner, target.key)
     return this.#exclusive(key, () =>
       this.#attachNow(key, owner, target, input, push)
@@ -207,22 +206,27 @@ export class ContainerTerminals {
   }
 
   /**
-   * Ends everyone's sessions on a target and hangs up every terminal client
-   * left in its container, as freezing a database for its deletion does.
+   * Ends everyone's sessions on an instance and hangs up every terminal
+   * client left in its containers, as freezing it for its deletion does.
    * Best effort: work a client already sent may still finish.
    */
-  async endTarget(
-    targetKey: string,
-    containerId: string | null
+  async endInstance(
+    instanceId: string,
+    containerIds: ReadonlyArray<string>
   ): Promise<void> {
     await Promise.all(
       [...this.#sessions.entries()]
-        .filter(([key]) => key.endsWith(`\u0000${targetKey}`))
+        .filter(([key]) => {
+          const targetKey = key.slice(key.indexOf("\u0000") + 1)
+          return (
+            targetKey === instanceId || targetKey.startsWith(`${instanceId}:`)
+          )
+        })
         .map(([key, session]) =>
           this.#exclusive(key, () => this.#end(session, "deleting"))
         )
     )
-    if (containerId !== null) await this.sweep([containerId])
+    if (containerIds.length > 0) await this.sweep(containerIds)
   }
 
   #exclusive<T>(key: string, task: () => Promise<T>): Promise<T> {
@@ -246,10 +250,10 @@ export class ContainerTerminals {
   async #attachNow(
     key: string,
     owner: string,
-    target: TerminalTarget,
+    target: TerminalSpec,
     input: TerminalAttach,
     push: PushTerminalOutput
-  ): Promise<RelayDatabaseTerminalAttached> {
+  ): Promise<RelayTerminalAttached> {
     let session = this.#sessions.get(key)
     // A session already ending is let finish, so its replacement starts
     // after it is gone.
@@ -288,30 +292,42 @@ export class ContainerTerminals {
       sessionId: session.id,
       snapshot: snapshot.content,
       startedAt: session.startedAt,
-      answersQueries: true,
     }
   }
 
   // Returns the attachments the Relay no longer has, so Hearth can reattach.
-  heartbeat(owner: string, attachmentIds: ReadonlyArray<string>) {
+  // Only the person's own attachments to this target count: the target is
+  // what the request was authorized for.
+  heartbeat(
+    owner: string,
+    targetKey: string,
+    attachmentIds: ReadonlyArray<string>
+  ) {
     const now = Date.now()
     const unknown: Array<string> = []
     for (const attachmentId of attachmentIds) {
-      const viewer = this.#attachments
-        .get(attachmentId)
-        ?.viewers.get(attachmentId)
-      if (viewer && viewer.owner === owner) viewer.renewedAt = now
+      const viewer = this.#viewer(owner, targetKey, attachmentId)
+      if (viewer) viewer.renewedAt = now
       else unknown.push(attachmentId)
     }
     return { unknown }
   }
 
-  detach(owner: string, attachmentId: string) {
+  detach(owner: string, targetKey: string, attachmentId: string) {
     const session = this.#attachments.get(attachmentId)
-    if (session?.viewers.get(attachmentId)?.owner === owner) {
+    if (session && this.#viewer(owner, targetKey, attachmentId)) {
       this.#dropViewer(session, attachmentId)
     }
     return { detached: true }
+  }
+
+  #viewer(owner: string, targetKey: string, attachmentId: string) {
+    const session = this.#attachments.get(attachmentId)
+    const viewer = session?.viewers.get(attachmentId)
+    return session?.key === sessionKey(owner, targetKey) &&
+      viewer?.owner === owner
+      ? viewer
+      : null
   }
 
   write(owner: string, targetKey: string, sessionId: string, data: string) {
@@ -390,7 +406,7 @@ export class ContainerTerminals {
     return session
   }
 
-  async #start(key: string, target: TerminalTarget, input: TerminalAttach) {
+  async #start(key: string, target: TerminalSpec, input: TerminalAttach) {
     const containerId = target.containerId
     if (!containerId || !target.running) {
       throw new Error(target.stoppedMessage)
@@ -507,14 +523,14 @@ export class ContainerTerminals {
   // Ends a session for `reason`, or works out why it ended on its own. Every
   // caller (the socket's end, close, and error, a restart, a timeout) shares
   // the first one's ending.
-  #end(session: TerminalSession, reason: DatabaseTerminalEndReason | null) {
+  #end(session: TerminalSession, reason: TerminalEndReason | null) {
     session.finished ??= this.#finish(session, reason)
     return session.finished
   }
 
   async #finish(
     session: TerminalSession,
-    reason: DatabaseTerminalEndReason | null
+    reason: TerminalEndReason | null
   ) {
     // Claimed before anything is awaited, so the session takes no more input.
     session.ending = reason ?? "exited"
@@ -522,7 +538,7 @@ export class ContainerTerminals {
     // PID may already belong to another process.
     const hangUp = reason !== null
     if (reason === null && !(await this.#containerRunning(session))) {
-      session.ending = "database-stopped"
+      session.ending = "stopped"
     } else if (reason === null && (await this.#programMissing(session))) {
       // The container can't run the client, as when it has no shell.
       session.ending = "failed"
@@ -802,7 +818,7 @@ function answerQueries(screen: Terminal, reply: (data: string) => void) {
 function controlFor(
   state: StateChange,
   attachmentId: string
-): DatabaseTerminalControl {
+): TerminalControl {
   if (state.active === null) return "none"
   return state.active === attachmentId ? "self" : "other"
 }
@@ -886,29 +902,27 @@ function isAccepted(reply: unknown) {
   )
 }
 
-// A database's terminal: the engine's own client, signed in as the
-// database's user. Passwords go through the environment the clients read,
-// never the command line.
-export function databaseTerminalTarget(
-  database: RelayManagedDatabase,
-  username: string,
-  password: string
-): TerminalTarget {
-  return {
-    ...databaseClient(database, username, password),
-    containerId: database.containerId,
-    key: database.id,
-    running: database.observedState === "running",
-    stoppedMessage: "Start the database to open its terminal",
+// The key a person's session on a target is kept under. An instance's
+// sessions start with its ID, so `endInstance` finds every one of them.
+export function terminalTargetKey(target: TerminalTarget): string {
+  switch (target.kind) {
+    case "app":
+      return `${target.id}:${target.service}`
+    case "database":
+      return target.id
+    case "relay":
+      return "relay"
+    case "platform":
+      return `platform:${target.role}`
   }
 }
 
-// A login shell in one of an app's containers, bash where the image has it.
-export function appTerminalTarget(
-  appId: string,
-  service: string,
-  container: { id: string; running: boolean } | null
-): TerminalTarget {
+// A login shell in a container, bash where the image has it.
+export function containerShell(
+  target: TerminalTarget,
+  container: { id: string; running: boolean } | null,
+  stoppedMessage: string
+): TerminalSpec {
   return {
     command: [
       "sh",
@@ -917,75 +931,8 @@ export function appTerminalTarget(
     ],
     containerId: container?.id ?? null,
     environment: [],
-    key: `app:${appId}:${service}`,
+    key: terminalTargetKey(target),
     running: container?.running ?? false,
-    stoppedMessage: `Start ${service} to open its terminal`,
-  }
-}
-
-// A login shell in one of Kiln's own containers: Hearth's database, cache,
-// or the Traefik in front of it.
-export function platformTerminalTarget(
-  target: string,
-  container: { id: string; running: boolean } | null
-): TerminalTarget {
-  return {
-    command: [
-      "sh",
-      "-c",
-      "if command -v bash >/dev/null 2>&1; then exec bash -l; else exec sh -l; fi",
-    ],
-    containerId: container?.id ?? null,
-    environment: [],
-    key: `platform:${target}`,
-    running: container?.running ?? false,
-    stoppedMessage: "Start it to open its terminal",
-  }
-}
-
-function databaseClient(
-  database: RelayManagedDatabase,
-  username: string,
-  password: string
-): { command: Array<string>; environment: Array<string> } {
-  switch (database.engine) {
-    case "mysql":
-    case "mariadb":
-      return {
-        command: [
-          database.engine === "mysql" ? "mysql" : "mariadb",
-          "--user",
-          username,
-          database.databaseName,
-        ],
-        environment: [`MYSQL_PWD=${password}`],
-      }
-    case "postgres":
-      return {
-        // No pager: when the session hangs up, an orphaned pager is adopted
-        // by the postmaster (PID 1), which restarts the server if it dies by
-        // signal. The terminal keeps its own scrollback instead.
-        command: [
-          "psql",
-          "--pset=pager=off",
-          "--username",
-          username,
-          "--dbname",
-          database.databaseName,
-        ],
-        environment: [`PGPASSWORD=${password}`],
-      }
-    case "redis":
-    case "valkey":
-      return {
-        command: [
-          database.engine === "redis" ? "redis-cli" : "valkey-cli",
-          "--user",
-          username,
-          "--no-auth-warning",
-        ],
-        // valkey-cli reads REDISCLI_AUTH too.
-        environment: [`REDISCLI_AUTH=${password}`],
-      }
+    stoppedMessage,
   }
 }

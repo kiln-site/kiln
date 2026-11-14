@@ -1569,6 +1569,17 @@ function auditDetailsForRequest(
     if (target && typeof payload.id === "string") details[target] = payload.id
   }
   if (
+    request.operation === "terminal.attach" ||
+    request.operation === "terminal.restart"
+  ) {
+    // Its target under the name each kind's records go by.
+    const target = objectRecord(payload, "target")
+    const kind = objectString(target, "kind")
+    const id = objectString(target, "id")
+    const record = kindAuditTarget(kind)
+    if (record && id) details[record] = id
+  }
+  if (
     (request.operation === "instance.create" ||
       request.operation === "instance.provision.prepare") &&
     result &&
@@ -1644,6 +1655,25 @@ function powerAction(
 // every kind that deploys, and none for anything else.
 function deployAction(kind: string | null): RelayAction | null {
   return isInstanceKind(kind) ? "instance.deploy" : null
+}
+
+// The one place that says which action a terminal takes, by what its shell
+// runs in. Null refuses a target it doesn't know.
+function terminalAction(target: object | null): RelayAction | null {
+  switch (objectString(target, "kind")) {
+    // A shell in a database's container reaches its data files and its
+    // engine's own login, everything a dump carries.
+    case "database":
+      return "database.dump.import"
+    case "app":
+      return "app.terminal"
+    // Kiln's own containers are as much as the host's shell.
+    case "relay":
+    case "platform":
+      return "relay.terminal"
+    default:
+      return null
+  }
 }
 
 // The one place that says which action reading an instance takes: each
@@ -1808,26 +1838,19 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "instance.network.write"
     case "relay.tailscale.stack.remove":
       return "instance.delete"
-    case "relay.terminal.attach":
-    case "relay.terminal.heartbeat":
-    case "relay.terminal.detach":
-    case "relay.terminal.write":
-    case "relay.terminal.claim":
-    case "relay.terminal.restart":
-      return "relay.terminal"
+    // Every terminal request takes what its target's shell is as much as.
+    case "terminal.attach":
+    case "terminal.heartbeat":
+    case "terminal.detach":
+    case "terminal.write":
+    case "terminal.claim":
+    case "terminal.restart":
+      return terminalAction(objectRecord(request.payload, "target"))
     // Watching and driving the node's desktop is as much as a host shell.
     case "relay.desktop.read":
     case "relay.desktop.attach":
     case "relay.desktop.heartbeat":
     case "relay.desktop.detach":
-      return "relay.terminal"
-    // A shell in Kiln's own containers is as much as a host shell.
-    case "relay.platform.terminal.attach":
-    case "relay.platform.terminal.heartbeat":
-    case "relay.platform.terminal.detach":
-    case "relay.platform.terminal.write":
-    case "relay.platform.terminal.claim":
-    case "relay.platform.terminal.restart":
       return "relay.terminal"
     // A root shell on the host could reboot it anyway, or update it.
     case "relay.host.restart":
@@ -1933,14 +1956,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "database.dump.export"
     case "database.data.write":
       return "database.dump.import"
-    // A signed-in client can read and change everything a dump carries.
-    case "database.terminal.attach":
-    case "database.terminal.heartbeat":
-    case "database.terminal.detach":
-    case "database.terminal.write":
-    case "database.terminal.claim":
-    case "database.terminal.restart":
-      return "database.dump.import"
     case "app.list":
     case "app.resources.read":
       return "app.read"
@@ -1971,13 +1986,6 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
     }
     case "app.volumes.write":
       return null
-    case "app.terminal.attach":
-    case "app.terminal.heartbeat":
-    case "app.terminal.detach":
-    case "app.terminal.write":
-    case "app.terminal.claim":
-    case "app.terminal.restart":
-      return "app.terminal"
     case "backup.task.enqueue": {
       const kind = objectString(request.payload, "kind")
       if (kind === "create") return "backup.create"

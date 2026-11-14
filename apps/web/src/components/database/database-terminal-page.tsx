@@ -3,13 +3,6 @@ import { Play } from "lucide-react"
 
 import { DatabaseCredentialsPopover } from "@/components/database/database-credentials-popover"
 import { useDatabaseWorkspace } from "@/components/database/database-workspace-context"
-import type { TerminalBackend } from "@/components/terminal-session"
-import { databaseTerminalStreamUrl } from "@/lib/database-terminal-stream"
-import {
-  claimDatabaseTerminal,
-  restartDatabaseTerminal,
-  writeDatabaseTerminal,
-} from "@/server/databases"
 
 const TerminalSession = React.lazy(async () => {
   const module = await import("@/components/terminal-session")
@@ -44,10 +37,11 @@ export function DatabaseTerminalPage() {
 
   return (
     <React.Suspense fallback={<div className="min-h-0 flex-1 bg-card" />}>
-      <DatabaseTerminalSession
+      <TerminalSession
         key={`${database.relayId}:${database.id}`}
-        databaseId={database.id}
+        noun="database"
         relayId={database.relayId}
+        target={{ kind: "database", id: database.id }}
         toolbarActions={
           database.hasCredentials &&
           database.permissions.includes("database.credentials.read") ? (
@@ -57,32 +51,4 @@ export function DatabaseTerminalPage() {
       />
     </React.Suspense>
   )
-}
-
-function DatabaseTerminalSession({
-  databaseId,
-  relayId,
-  toolbarActions,
-}: {
-  databaseId: string
-  relayId: string
-  toolbarActions: React.ReactNode
-}) {
-  const backend = React.useMemo<TerminalBackend>(() => {
-    const target = { databaseId, relayId }
-    return {
-      claim: (input) =>
-        claimDatabaseTerminal({ data: { ...target, ...input } }),
-      noun: "database",
-      startFailure: {
-        title: "Client couldn't start",
-        detail: "The database's container couldn't run its client.",
-      },
-      restart: () => restartDatabaseTerminal({ data: target }),
-      streamUrl: (size) => databaseTerminalStreamUrl({ ...target, ...size }),
-      write: (sessionId, data) =>
-        writeDatabaseTerminal({ data: { ...target, data, sessionId } }),
-    }
-  }, [databaseId, relayId])
-  return <TerminalSession backend={backend} toolbarActions={toolbarActions} />
 }

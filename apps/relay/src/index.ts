@@ -1,7 +1,6 @@
 import {
   HostShell,
   hostTerminalTarget,
-  HOST_TERMINAL_KEY,
   HostAccessDisabledError,
 } from "./host-shell.js"
 import { ScreenSharingDesktop } from "./desktop-screen-sharing.js"
@@ -25,18 +24,17 @@ import {
   backupTaskInputSchema,
   redactRelayBackupTask,
   relayConsoleCommandSchema,
+  relayTerminalAttachSchema,
+  relayTerminalClaimSchema,
+  relayTerminalDetachSchema,
+  relayTerminalHeartbeatSchema,
+  relayTerminalRestartSchema,
+  relayTerminalWriteSchema,
   relayConsoleCompletionInputSchema,
   relayConsoleShareInputSchema,
   relayPrepareDatabaseSchema,
   relayProvisionDatabaseSchema,
   relayStateDatabaseReadSchema,
-  relayHostTerminalAttachSchema,
-  relayHostTerminalWriteSchema,
-  relayHostTerminalClaimSchema,
-  relayAppTerminalAttachSchema,
-  relayAppTerminalClaimSchema,
-  relayAppTerminalRestartSchema,
-  relayAppTerminalWriteSchema,
   relayPrepareAppSchema,
   relayProvisionAppSchema,
   appIdFromFileRoot,
@@ -67,14 +65,8 @@ import {
   relayDatabaseDataWriteSchema,
   relayPlatformDatabaseReadSchema,
   relayPlatformDatabaseWriteSchema,
-  relayDatabaseTerminalAttachSchema,
-  relayDatabaseTerminalDetachSchema,
-  relayDatabaseTerminalHeartbeatSchema,
   relayDesktopDetachSchema,
   relayDesktopHeartbeatSchema,
-  relayDatabaseTerminalClaimSchema,
-  relayDatabaseTerminalRestartSchema,
-  relayDatabaseTerminalWriteSchema,
   relayDatabaseExportSchema,
   relayDatabaseImportSchema,
   relayDatabaseInspectRequestSchema,
@@ -147,10 +139,6 @@ import {
   relayBrowserAuthorizationReviseMaxItems,
   relayBackupFailureCodesV1Feature,
   relayPlatformActionInputSchema,
-  relayPlatformTerminalAttachSchema,
-  relayPlatformTerminalClaimSchema,
-  relayPlatformTerminalRestartSchema,
-  relayPlatformTerminalWriteSchema,
   RelayTunnelOpenSchema,
 } from "@workspace/contracts"
 import { relayScheduleProjectionSchema } from "@workspace/contracts/schedules"
@@ -160,6 +148,9 @@ import type {
   RelayControlRequest,
   RelayDirectorySizes,
   RelayInstance,
+  RelayTerminalAttach,
+  RelayTerminalAttached,
+  TerminalTarget,
 } from "@workspace/contracts"
 
 import { DatabaseConnections } from "./database-connections.js"
@@ -193,10 +184,10 @@ import {
 } from "./database-sql-browser.js"
 import { consoleSources } from "./console-sources.js"
 import {
-  appTerminalTarget,
-  platformTerminalTarget,
   ContainerTerminals,
-  databaseTerminalTarget,
+  containerShell,
+  terminalTargetKey,
+  type PushTerminalOutput,
 } from "./container-terminal.js"
 import { AppDriver } from "./apps.js"
 import {
@@ -2256,6 +2247,110 @@ function terminalOwner(
   return `${client.id}:${request.subject ?? ""}`
 }
 
+// Opens the person's session on a terminal target, or attaches to the one
+// they have, finding the container its shell runs in.
+async function attachTerminal(
+  client: RelayClientGrant,
+  request: RelayControlRequest,
+  input: RelayTerminalAttach,
+  push: PushTerminalOutput
+): Promise<RelayTerminalAttached> {
+  const owner = terminalOwner(client, request)
+  const { target } = input
+  switch (target.kind) {
+    case "relay":
+      return terminals.attach(
+        owner,
+        hostTerminalTarget(await hostShell.container()),
+        input,
+        push
+      )
+    case "platform": {
+      await requirePlatformOwner(client.id)
+      const container = await runRelayEffect(
+        "relay.platform.terminal.target",
+        platformManagedContainer(platformReadContext(), target.role)
+      )
+      if (!container) {
+        throw new Error(
+          "Kiln doesn't manage that container, so it opens no shell in it"
+        )
+      }
+      return terminals.attach(
+        owner,
+        containerShell(
+          target,
+          { id: container.Id, running: container.State.Running },
+          "Start it to open its terminal"
+        ),
+        input,
+        push
+      )
+    }
+    case "database":
+      // In the database's lane until the session is open, so freezing it
+      // for its deletion waits for an attach under way and refuses later
+      // ones.
+      return inLane(
+        { label: "terminal.attach", locks: databaseReadLocks(target.id) },
+        async () => {
+          const database = await databases.target(target.id)
+          return terminals.attach(
+            owner,
+            containerShell(
+              target,
+              database.containerId
+                ? {
+                    id: database.containerId,
+                    running: database.observedState === "running",
+                  }
+                : null,
+              "Start the database to open its terminal"
+            ),
+            input,
+            push
+          )
+        }
+      )
+    case "app": {
+      const container = await apps.serviceContainer(target.id, target.service)
+      return terminals.attach(
+        owner,
+        containerShell(
+          target,
+          container,
+          `Start ${target.service} to open its terminal`
+        ),
+        input,
+        push
+      )
+    }
+  }
+}
+
+// What a terminal takes besides its session: the host's shell is turned on,
+// Kiln's own containers are only for the Hearth that installed them, and a
+// database being deleted takes no more input.
+async function admitTerminal(
+  client: RelayClientGrant,
+  target: TerminalTarget,
+  options: { typing?: boolean } = {}
+): Promise<void> {
+  switch (target.kind) {
+    case "relay":
+      if (!hostShell.enabled) throw new HostAccessDisabledError()
+      return
+    case "platform":
+      if (!options.typing) await requirePlatformOwner(client.id)
+      return
+    case "database":
+      refuseIfFrozenDatabase(target.id)
+      return
+    case "app":
+      return
+  }
+}
+
 // A person changed an App's power, which a start a stopped backup owed from
 // before doesn't override.
 async function notePowerChange(appId: string): Promise<void> {
@@ -2458,14 +2553,62 @@ async function executeControlRequest(
     case "relay.host.files.mount":
       await hostFiles.mount()
       return { started: true }
-    case "relay.terminal.attach": {
-      const input = relayHostTerminalAttachSchema.parse(request.payload)
-      return terminals.attach(
+    // Every terminal is one person's session on its target, whatever it runs
+    // in. Heartbeats and detaching only reach the person's attachments to
+    // that target.
+    case "terminal.attach": {
+      const input = relayTerminalAttachSchema.parse(request.payload)
+      // Output goes back to the Hearth connection that attached.
+      return attachTerminal(client, request, input, (output, timeoutMs) =>
+        requestHearth("hearth.terminal.output", output, timeoutMs)
+      )
+    }
+    case "terminal.heartbeat": {
+      const input = relayTerminalHeartbeatSchema.parse(request.payload)
+      return terminals.heartbeat(
         terminalOwner(client, request),
-        hostTerminalTarget(await hostShell.container()),
-        input,
-        (output, timeoutMs) =>
-          requestHearth("hearth.database.terminal.output", output, timeoutMs)
+        terminalTargetKey(input.target),
+        input.attachmentIds
+      )
+    }
+    case "terminal.detach": {
+      const input = relayTerminalDetachSchema.parse(request.payload)
+      return terminals.detach(
+        terminalOwner(client, request),
+        terminalTargetKey(input.target),
+        input.attachmentId
+      )
+    }
+    case "terminal.restart": {
+      const input = relayTerminalRestartSchema.parse(request.payload)
+      await admitTerminal(client, input.target)
+      return terminals.restart(
+        terminalOwner(client, request),
+        terminalTargetKey(input.target)
+      )
+    }
+    case "terminal.write": {
+      const input = relayTerminalWriteSchema.parse(request.payload)
+      // Only a session the person opened takes their input, so this skips
+      // the platform check attaching made.
+      await admitTerminal(client, input.target, { typing: true })
+      return terminals.write(
+        terminalOwner(client, request),
+        terminalTargetKey(input.target),
+        input.sessionId,
+        input.data
+      )
+    }
+    case "terminal.claim": {
+      const input = relayTerminalClaimSchema.parse(request.payload)
+      await admitTerminal(client, input.target)
+      return terminals.claim(
+        terminalOwner(client, request),
+        terminalTargetKey(input.target),
+        input.sessionId,
+        input.attachmentId,
+        input.rows,
+        input.cols
       )
     }
     case "relay.desktop.read":
@@ -2479,48 +2622,6 @@ async function executeControlRequest(
     case "relay.desktop.detach":
       desktop.detach(relayDesktopDetachSchema.parse(request.payload).ticket)
       return { detached: true }
-    case "relay.terminal.heartbeat": {
-      const input = relayDatabaseTerminalHeartbeatSchema.parse(request.payload)
-      return terminals.heartbeat(
-        terminalOwner(client, request),
-        input.attachmentIds
-      )
-    }
-    case "relay.terminal.detach": {
-      const input = relayDatabaseTerminalDetachSchema.parse(request.payload)
-      return terminals.detach(
-        terminalOwner(client, request),
-        input.attachmentId
-      )
-    }
-    case "relay.terminal.restart":
-      if (!hostShell.enabled) throw new HostAccessDisabledError()
-      return terminals.restart(
-        terminalOwner(client, request),
-        HOST_TERMINAL_KEY
-      )
-    case "relay.terminal.write": {
-      if (!hostShell.enabled) throw new HostAccessDisabledError()
-      const input = relayHostTerminalWriteSchema.parse(request.payload)
-      return terminals.write(
-        terminalOwner(client, request),
-        HOST_TERMINAL_KEY,
-        input.sessionId,
-        input.data
-      )
-    }
-    case "relay.terminal.claim": {
-      if (!hostShell.enabled) throw new HostAccessDisabledError()
-      const input = relayHostTerminalClaimSchema.parse(request.payload)
-      return terminals.claim(
-        terminalOwner(client, request),
-        HOST_TERMINAL_KEY,
-        input.sessionId,
-        input.attachmentId,
-        input.rows,
-        input.cols
-      )
-    }
     case "relay.proxy.read": {
       const settings = await lifecycle.proxySettings()
       const input = relayProxyReadInputSchema.parse(request.payload)
@@ -3005,76 +3106,6 @@ async function executeControlRequest(
         )
       )
     }
-    case "database.terminal.attach": {
-      const input = relayDatabaseTerminalAttachSchema.parse(request.payload)
-      // In the database's lane until the session is open, so freezing it
-      // for its deletion waits for an attach under way and refuses later
-      // ones.
-      return inLane(
-        {
-          label: "database.terminal.attach",
-          locks: databaseReadLocks(input.databaseId),
-        },
-        async () =>
-          terminals.attach(
-            terminalOwner(client, request),
-            databaseTerminalTarget(
-              await databases.target(input.databaseId),
-              input.username,
-              input.password
-            ),
-            input,
-            // Output goes back to the Hearth connection that attached.
-            (output, timeoutMs) =>
-              requestHearth(
-                "hearth.database.terminal.output",
-                output,
-                timeoutMs
-              )
-          )
-      )
-    }
-    case "database.terminal.heartbeat": {
-      const input = relayDatabaseTerminalHeartbeatSchema.parse(request.payload)
-      return terminals.heartbeat(
-        terminalOwner(client, request),
-        input.attachmentIds
-      )
-    }
-    case "database.terminal.restart": {
-      const input = relayDatabaseTerminalRestartSchema.parse(request.payload)
-      refuseIfFrozenDatabase(input.databaseId)
-      return terminals.restart(terminalOwner(client, request), input.databaseId)
-    }
-    case "database.terminal.detach": {
-      const input = relayDatabaseTerminalDetachSchema.parse(request.payload)
-      return terminals.detach(
-        terminalOwner(client, request),
-        input.attachmentId
-      )
-    }
-    case "database.terminal.write": {
-      const input = relayDatabaseTerminalWriteSchema.parse(request.payload)
-      refuseIfFrozenDatabase(input.databaseId)
-      return terminals.write(
-        terminalOwner(client, request),
-        input.databaseId,
-        input.sessionId,
-        input.data
-      )
-    }
-    case "database.terminal.claim": {
-      const input = relayDatabaseTerminalClaimSchema.parse(request.payload)
-      refuseIfFrozenDatabase(input.databaseId)
-      return terminals.claim(
-        terminalOwner(client, request),
-        input.databaseId,
-        input.sessionId,
-        input.attachmentId,
-        input.rows,
-        input.cols
-      )
-    }
     case "app.resources.read": {
       const input = relayWorkloadUsageReadSchema.parse(request.payload)
       return workloadResources.usage("app", input.appId, input.history)
@@ -3201,61 +3232,6 @@ async function executeControlRequest(
         volumes.writeAppReferences(client.id, input.appId, input.volumeIds)
       )
       return { appId: input.appId, volumeIds: input.volumeIds }
-    }
-    case "app.terminal.attach": {
-      const input = relayAppTerminalAttachSchema.parse(request.payload)
-      return terminals.attach(
-        terminalOwner(client, request),
-        appTerminalTarget(
-          input.appId,
-          input.service,
-          await apps.serviceContainer(input.appId, input.service)
-        ),
-        input,
-        (output, timeoutMs) =>
-          requestHearth("hearth.database.terminal.output", output, timeoutMs)
-      )
-    }
-    case "app.terminal.heartbeat": {
-      const input = relayDatabaseTerminalHeartbeatSchema.parse(request.payload)
-      return terminals.heartbeat(
-        terminalOwner(client, request),
-        input.attachmentIds
-      )
-    }
-    case "app.terminal.detach": {
-      const input = relayDatabaseTerminalDetachSchema.parse(request.payload)
-      return terminals.detach(
-        terminalOwner(client, request),
-        input.attachmentId
-      )
-    }
-    case "app.terminal.restart": {
-      const input = relayAppTerminalRestartSchema.parse(request.payload)
-      return terminals.restart(
-        terminalOwner(client, request),
-        appTerminalTarget(input.appId, input.service, null).key
-      )
-    }
-    case "app.terminal.write": {
-      const input = relayAppTerminalWriteSchema.parse(request.payload)
-      return terminals.write(
-        terminalOwner(client, request),
-        appTerminalTarget(input.appId, input.service, null).key,
-        input.sessionId,
-        input.data
-      )
-    }
-    case "app.terminal.claim": {
-      const input = relayAppTerminalClaimSchema.parse(request.payload)
-      return terminals.claim(
-        terminalOwner(client, request),
-        appTerminalTarget(input.appId, input.service, null).key,
-        input.sessionId,
-        input.attachmentId,
-        input.rows,
-        input.cols
-      )
     }
     case "database.data.write": {
       const input = relayDatabaseDataWriteSchema.parse(request.payload)
@@ -4087,72 +4063,6 @@ async function executeControlRequest(
         )
       )
     }
-    case "relay.platform.terminal.attach": {
-      const input = relayPlatformTerminalAttachSchema.parse(request.payload)
-      await requirePlatformOwner(client.id)
-      const container = await runRelayEffect(
-        "relay.platform.terminal.target",
-        platformManagedContainer(platformReadContext(), input.role)
-      )
-      if (!container) {
-        throw new Error(
-          "Kiln doesn't manage that container, so it opens no shell in it"
-        )
-      }
-      return terminals.attach(
-        terminalOwner(client, request),
-        platformTerminalTarget(input.role, {
-          id: container.Id,
-          running: container.State.Running,
-        }),
-        input,
-        (output, timeoutMs) =>
-          requestHearth("hearth.database.terminal.output", output, timeoutMs)
-      )
-    }
-    case "relay.platform.terminal.heartbeat": {
-      const input = relayDatabaseTerminalHeartbeatSchema.parse(request.payload)
-      return terminals.heartbeat(
-        terminalOwner(client, request),
-        input.attachmentIds
-      )
-    }
-    case "relay.platform.terminal.detach": {
-      const input = relayDatabaseTerminalDetachSchema.parse(request.payload)
-      return terminals.detach(
-        terminalOwner(client, request),
-        input.attachmentId
-      )
-    }
-    case "relay.platform.terminal.restart": {
-      const input = relayPlatformTerminalRestartSchema.parse(request.payload)
-      await requirePlatformOwner(client.id)
-      return terminals.restart(
-        terminalOwner(client, request),
-        platformTerminalTarget(input.role, null).key
-      )
-    }
-    case "relay.platform.terminal.write": {
-      const input = relayPlatformTerminalWriteSchema.parse(request.payload)
-      return terminals.write(
-        terminalOwner(client, request),
-        platformTerminalTarget(input.role, null).key,
-        input.sessionId,
-        input.data
-      )
-    }
-    case "relay.platform.terminal.claim": {
-      const input = relayPlatformTerminalClaimSchema.parse(request.payload)
-      await requirePlatformOwner(client.id)
-      return terminals.claim(
-        terminalOwner(client, request),
-        platformTerminalTarget(input.role, null).key,
-        input.sessionId,
-        input.attachmentId,
-        input.rows,
-        input.cols
-      )
-    }
     case "relay.platform.action": {
       const input = relayPlatformActionInputSchema.parse(request.payload)
       const record = await clientRecord(client.id)
@@ -4713,7 +4623,10 @@ async function quietFrozenResource(
         () => databases.target(freeze.id),
         () => null
       )
-      await terminals.endTarget(freeze.id, database?.containerId ?? null)
+      await terminals.endInstance(
+        freeze.id,
+        database?.containerId ? [database.containerId] : []
+      )
       return
     }
     // Nothing mounts it, or it wouldn't have been frozen, and the lanes

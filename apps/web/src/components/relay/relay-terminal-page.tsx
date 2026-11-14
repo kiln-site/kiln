@@ -2,17 +2,10 @@ import * as React from "react"
 
 import { RelayHostTerminalAccess } from "@/components/relay/relay-host-access"
 import { useRelayWorkspace } from "@/components/relay/relay-workspace-context"
-import type { TerminalBackend } from "@/components/terminal-session"
-import { relayTerminalStreamUrl } from "@/lib/database-terminal-stream"
 import {
   relayTerminalInputKey,
   takeTerminalInput,
 } from "@/lib/terminal-prefill"
-import {
-  claimRelayTerminal,
-  restartRelayTerminal,
-  writeRelayTerminal,
-} from "@/server/relay-host"
 
 const TerminalSession = React.lazy(async () => {
   const module = await import("@/components/terminal-session")
@@ -30,27 +23,24 @@ export function RelayTerminalPage() {
   )
 }
 
+const hostTarget = { kind: "relay" } as const
+const hostStartFailure = {
+  title: "Host shell couldn't start",
+  detail: "The Relay couldn't start a shell on its node.",
+}
+
 function RelayTerminalSession({ relayId }: { relayId: string }) {
-  const backend = React.useMemo<TerminalBackend>(
-    () => ({
-      claim: (input) => claimRelayTerminal({ data: { relayId, ...input } }),
-      noun: "host shell",
-      startFailure: {
-        title: "Host shell couldn't start",
-        detail: "The Relay couldn't start a shell on its node.",
-      },
-      restart: () => restartRelayTerminal({ data: { relayId } }),
-      streamUrl: (size) => relayTerminalStreamUrl({ relayId, ...size }),
-      write: (sessionId, data) =>
-        writeRelayTerminal({ data: { relayId, sessionId, data } }),
-    }),
-    [relayId]
-  )
   const takeInitialInput = React.useCallback(
     () => takeTerminalInput(relayTerminalInputKey(relayId)),
     [relayId]
   )
   return (
-    <TerminalSession backend={backend} takeInitialInput={takeInitialInput} />
+    <TerminalSession
+      noun="host shell"
+      relayId={relayId}
+      startFailure={hostStartFailure}
+      takeInitialInput={takeInitialInput}
+      target={hostTarget}
+    />
   )
 }

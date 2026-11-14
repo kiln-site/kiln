@@ -6,12 +6,13 @@ import { SearchAddon } from "@xterm/addon-search"
 import { WebLinksAddon } from "@xterm/addon-web-links"
 import { Terminal, type IDisposable } from "@xterm/xterm"
 import {
-  DATABASE_TERMINAL_WRITE_MAX_CHARACTERS,
+  TERMINAL_WRITE_MAX_CHARACTERS,
   terminalColorQuery,
   terminalColors,
   terminalCursor,
-  type DatabaseTerminalControl,
-  type DatabaseTerminalEnd,
+  type TerminalControl as SessionControl,
+  type TerminalEnd,
+  type TerminalTarget,
 } from "@workspace/contracts"
 import { Effect } from "effect"
 import {
@@ -42,11 +43,14 @@ import { showToast } from "@workspace/ui/components/sonner"
 import { OverlayNotice } from "@/components/overlay-notice"
 import { WorkspaceToolbarTooltip } from "@/components/workspace-toolbar-tooltip"
 import { ensuringPromise, forkPromise, recoverPromise } from "@/effect/promise"
-import type { DatabaseTerminalStreamRecord } from "@/lib/database-terminal-stream"
+import {
+  terminalStreamUrl,
+  type TerminalStreamRecord,
+} from "@/lib/terminal-connection"
+import { claimTerminal, restartTerminal, writeTerminal } from "@/server/terminals"
 
-// What a terminal page attaches to: a database's client or a shell in one of
-// an app's services. The session works the same way for both.
-export interface TerminalBackend {
+// What the page's connection does with the person's session on its target.
+interface TerminalBackend {
   readonly claim: (input: {
     attachmentId: string
     cols: number
@@ -55,12 +59,21 @@ export interface TerminalBackend {
   }) => Promise<{ seq: number }>
   // Lowercase, as in "the database stopped".
   readonly noun: string
-  // Shown when the container couldn't start the client, as when it has no
-  // shell.
-  readonly startFailure: { readonly title: string; readonly detail: string }
   readonly restart: () => Promise<unknown>
   readonly streamUrl: (size: { cols: number; rows: number }) => string
   readonly write: (sessionId: string, data: string) => Promise<unknown>
+}
+
+// Shown when the shell couldn't start.
+export interface TerminalStartFailure {
+  readonly title: string
+  readonly detail: string
+}
+
+const shellStartFailure: TerminalStartFailure = {
+  title: "Couldn't start a shell",
+  detail:
+    "This container most likely has no shell (sh). Minimal images, like distroless or scratch, leave it out.",
 }
 
 // The person's terminal session lives on the Relay and outlives this page.
@@ -74,26 +87,26 @@ type TerminalStatus =
   | { kind: "live" }
   // The session keeps running; the page is reattaching.
   | { kind: "reconnecting"; cause: "hearth" | "relay" }
-  | { kind: "ended"; ended: DatabaseTerminalEnd }
+  | { kind: "ended"; ended: TerminalEnd }
   | { kind: "not-running" }
   | { kind: "failed"; message: string }
 
 // Shown briefly over the terminal when a new session replaced an earlier one.
 type SessionNotice =
-  | { kind: "previous"; ended: DatabaseTerminalEnd }
+  | { kind: "previous"; ended: TerminalEnd }
   | { kind: "relay-restarted" }
 
 // Whether this page is the one in control of the session: it sets the size
 // and is the one typed in. Only one of the person's pages is at a time.
 // "claiming" is this page taking control, until the Relay confirms it.
-type TerminalControl = DatabaseTerminalControl | "claiming"
+type TerminalControl = SessionControl | "claiming"
 
 interface TerminalSize {
   cols: number
   rows: number
 }
 
-// Who the client is signed in as, and since when, for the toolbar.
+// Who the session runs as, and since when, for the toolbar.
 interface TerminalSessionInfo {
   startedAt: string
   user: string
@@ -108,17 +121,38 @@ const NOTICE_VISIBLE_MS = 10_000
 const ACTIVATED_VISIBLE_MS = 2_500
 
 export function TerminalSession({
-  backend,
+  noun,
+  relayId,
+  startFailure = shellStartFailure,
   takeInitialInput,
+  target,
   toolbarActions,
 }: {
-  // Stable while the target is; a new backend starts a new connection.
-  backend: TerminalBackend
+  // Lowercase, as in "the database stopped".
+  noun: string
+  relayId: string
+  startFailure?: TerminalStartFailure
+  // A new target starts a new connection.
+  target: TerminalTarget
   // Typed at the prompt once the session is live, without Enter.
   takeInitialInput?: () => string | null
   // Extra toolbar buttons from the page, before the terminal's own.
   toolbarActions?: React.ReactNode
 }) {
+  const targetKey = JSON.stringify(target)
+  const backend = React.useMemo<TerminalBackend>(() => {
+    const parsed = JSON.parse(targetKey) as TerminalTarget
+    return {
+      claim: (input) =>
+        claimTerminal({ data: { ...input, relayId, target: parsed } }),
+      noun,
+      restart: () => restartTerminal({ data: { relayId, target: parsed } }),
+      streamUrl: (size) =>
+        terminalStreamUrl({ ...size, relayId, target: parsed }),
+      write: (sessionId, data) =>
+        writeTerminal({ data: { data, relayId, sessionId, target: parsed } }),
+    }
+  }, [noun, relayId, targetKey])
   const [status, setStatus] = React.useState<TerminalStatus>({
     kind: "connecting",
   })
@@ -235,7 +269,7 @@ export function TerminalSession({
         />
         <TerminalOverlay
           noun={backend.noun}
-          startFailure={backend.startFailure}
+          startFailure={startFailure}
           status={status}
           onReconnect={reconnect}
         />
@@ -344,7 +378,7 @@ function RestartSessionButton({
         <div className="border-b px-3 py-2.5">
           <p className="text-xs font-semibold">Restart session?</p>
           <p className="type-support mt-1 text-muted-foreground">
-            This ends the running client, including anything it is doing, and
+            This ends the running shell, including anything it is doing, and
             starts a new one. Other open pages switch to it too.
           </p>
         </div>
@@ -447,7 +481,7 @@ function TerminalOverlay({
 }: {
   noun: string
   onReconnect: () => void
-  startFailure: TerminalBackend["startFailure"]
+  startFailure: TerminalStartFailure
   status: TerminalStatus
 }) {
   if (status.kind === "connecting") {
@@ -508,11 +542,11 @@ function TerminalOverlay({
   )
 }
 
-function endedDescription(ended: DatabaseTerminalEnd, noun: string) {
+function endedDescription(ended: TerminalEnd, noun: string) {
   switch (ended.reason) {
     case "exited":
-      return "The client exited."
-    case "database-stopped":
+      return "The shell exited."
+    case "stopped":
       return `The ${noun} stopped or restarted, which ended the session.`
     case "timed-out":
       return "The session ended after a while without an open page."
@@ -521,16 +555,16 @@ function endedDescription(ended: DatabaseTerminalEnd, noun: string) {
     case "deleting":
       return `The ${noun} is being deleted, which ended the session.`
     case "failed":
-      return "The client couldn't start."
+      return "The shell couldn't start."
   }
 }
 
 // Why the last session ended, short enough for a notice.
-function endedLabel(ended: DatabaseTerminalEnd, noun: string) {
+function endedLabel(ended: TerminalEnd, noun: string) {
   switch (ended.reason) {
     case "exited":
-      return "THE CLIENT EXITED"
-    case "database-stopped":
+      return "THE SHELL EXITED"
+    case "stopped":
       return `THE ${noun.toUpperCase()} STOPPED`
     case "timed-out":
       return "THE LAST ONE TIMED OUT"
@@ -781,7 +815,7 @@ class TerminalConnection {
   // may be stale.
   #resizedDuringClaim = false
   #claimRequests = 0
-  #reported: DatabaseTerminalControl = "none"
+  #reported: SessionControl = "none"
   // The last state change this page has seen.
   #seq = 0
   #shownControl: TerminalControl = "none"
@@ -794,8 +828,6 @@ class TerminalConnection {
   #sessionSize: TerminalSize | null = null
   #stopped = false
   #writing = false
-  // Set while the Relay answers the client's queries, so this page doesn't.
-  #queriesLeftToRelay: IDisposable | null = null
 
   constructor(
     terminal: Terminal,
@@ -804,6 +836,11 @@ class TerminalConnection {
     measure: () => TerminalSize | null
   ) {
     this.#terminal = terminal
+    // A client asking the terminal something (where the cursor is, what
+    // terminal this is) gets its answer from the Relay, once and right away,
+    // rather than from every page showing the session. Disposed with the
+    // terminal.
+    ignoreQueries(terminal)
     this.#backend = backend
     this.#events = events
     this.#measure = measure
@@ -903,7 +940,7 @@ class TerminalConnection {
   }
 
   // Records who the Relay says is in control as of state change `seq`.
-  #report(control: DatabaseTerminalControl, seq: number) {
+  #report(control: SessionControl, seq: number) {
     this.#reported = control
     this.#seq = seq
     this.#settleClaim()
@@ -930,20 +967,6 @@ class TerminalConnection {
     if (control === this.#shownControl) return
     this.#shownControl = control
     this.#events.onControl(control)
-  }
-
-  // A client asking the terminal something (where the cursor is, what
-  // terminal this is) gets its answer from the Relay, once and right away,
-  // rather than from every page showing the session. Older Relays leave the
-  // answers to the pages.
-  #leaveQueriesToRelay(relayAnswers: boolean) {
-    if (relayAnswers === (this.#queriesLeftToRelay !== null)) return
-    if (relayAnswers) {
-      this.#queriesLeftToRelay = ignoreQueries(this.#terminal)
-    } else {
-      this.#queriesLeftToRelay?.dispose()
-      this.#queriesLeftToRelay = null
-    }
   }
 
   // Output already written was at the old size, so the resize waits for it.
@@ -1075,7 +1098,7 @@ class TerminalConnection {
         buffered = buffered.slice(newline + 1)
         newline = buffered.indexOf("\n")
         if (!line) continue
-        const record = JSON.parse(line) as DatabaseTerminalStreamRecord
+        const record = JSON.parse(line) as TerminalStreamRecord
         if (record.type === "attached") attached = true
         const outcome = this.#handle(record)
         if (outcome) {
@@ -1086,7 +1109,7 @@ class TerminalConnection {
     }
   }
 
-  #handle(record: DatabaseTerminalStreamRecord): StreamOutcome | null {
+  #handle(record: TerminalStreamRecord): StreamOutcome | null {
     switch (record.type) {
       case "attached": {
         const previousSession = this.#sessionId
@@ -1099,7 +1122,6 @@ class TerminalConnection {
         // Rebuild the screen from the session's own snapshot, at its size, so
         // every page shows the same thing whatever it missed.
         this.#sessionSize = { cols: record.cols, rows: record.rows }
-        this.#leaveQueriesToRelay(record.answersQueries === true)
         this.#terminal.resize(record.cols, record.rows)
         this.#terminal.reset()
         this.#terminal.write(record.snapshot)
@@ -1273,8 +1295,8 @@ function openLink(event: MouseEvent, uri: string, mac: boolean) {
 
 // The next write's worth of input, never splitting a surrogate pair.
 function inputChunk(input: string) {
-  if (input.length <= DATABASE_TERMINAL_WRITE_MAX_CHARACTERS) return input
-  const end = DATABASE_TERMINAL_WRITE_MAX_CHARACTERS
+  if (input.length <= TERMINAL_WRITE_MAX_CHARACTERS) return input
+  const end = TERMINAL_WRITE_MAX_CHARACTERS
   const last = input.charCodeAt(end - 1)
   return input.slice(0, last >= 0xd800 && last <= 0xdbff ? end - 1 : end)
 }
@@ -1295,7 +1317,7 @@ const FRESH_SESSION_MS = 60_000
 // opening an older session, or the page that restarted it, needs no note.
 function sessionNotice(
   previousSession: string | null,
-  attached: Extract<DatabaseTerminalStreamRecord, { type: "attached" }>,
+  attached: Extract<TerminalStreamRecord, { type: "attached" }>,
   restartedHere: boolean
 ): SessionNotice | null {
   const witnessed =

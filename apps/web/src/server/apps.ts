@@ -2,7 +2,6 @@ import { createServerFn } from "@tanstack/react-start"
 import {
   appIdSchema,
   appNameSchema,
-  appServiceNameSchema,
   brickSourceSchema,
   brickVariableValuesSchema,
   databaseIdSchema,
@@ -13,9 +12,6 @@ import {
   relayVolumeIdSchema,
   relayPowerActionSchema,
   relayAppSchema,
-  relayAppTerminalClaimSchema,
-  relayAppTerminalRestartSchema,
-  relayAppTerminalWriteSchema,
   relayDatabaseNameSchema,
   relayIdSchema,
 } from "@workspace/contracts"
@@ -425,63 +421,6 @@ export const deleteApp = createServerFn({ method: "POST" })
     })
     await awaitResourceDeletion(deletion)
     return { deleted: true }
-  })
-
-// Typing and window size go to the person's own session; the Relay rejects a
-// session that isn't theirs or has ended. Output arrives through the
-// terminal stream (routes/api.app-terminal.$appId.ts).
-export const writeAppTerminal = createServerFn({ method: "POST" })
-  .validator(relayAppTerminalWriteSchema.extend({ relayId: relayIdSchema }))
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedApp(data, "app.terminal")
-    await databaseRpc(
-      relay,
-      "app.terminal.write",
-      {
-        appId: data.appId,
-        data: data.data,
-        service: data.service,
-        sessionId: data.sessionId,
-      },
-      15_000,
-      user.id
-    )
-    return { accepted: true }
-  })
-
-export const claimAppTerminal = createServerFn({ method: "POST" })
-  .validator(relayAppTerminalClaimSchema.extend({ relayId: relayIdSchema }))
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedApp(data, "app.terminal")
-    const claimed = await databaseRpc(
-      relay,
-      "app.terminal.claim",
-      {
-        appId: data.appId,
-        attachmentId: data.attachmentId,
-        cols: data.cols,
-        rows: data.rows,
-        service: data.service,
-        sessionId: data.sessionId,
-      },
-      15_000,
-      user.id
-    )
-    return z.object({ seq: z.number().int().nonnegative() }).parse(claimed)
-  })
-
-export const restartAppTerminal = createServerFn({ method: "POST" })
-  .validator(relayAppTerminalRestartSchema.extend({ relayId: relayIdSchema }))
-  .handler(async ({ data }) => {
-    const { relay, user } = await authorizedApp(data, "app.terminal")
-    await databaseRpc(
-      relay,
-      "app.terminal.restart",
-      { appId: data.appId, service: appServiceNameSchema.parse(data.service) },
-      30_000,
-      user.id
-    )
-    return { restarted: true }
   })
 
 function publishRelayVolumesChange(relayId: string): void {

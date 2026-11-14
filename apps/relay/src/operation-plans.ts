@@ -539,30 +539,13 @@ export function controlRequestLocks(
       return null
 
     // Terminals are interactive sessions, coordinated by their own registry.
-    case "relay.terminal.attach":
-    case "relay.terminal.heartbeat":
-    case "relay.terminal.detach":
-    case "relay.terminal.write":
-    case "relay.terminal.claim":
-    case "relay.terminal.restart":
-    case "relay.platform.terminal.attach":
-    case "relay.platform.terminal.heartbeat":
-    case "relay.platform.terminal.detach":
-    case "relay.platform.terminal.write":
-    case "relay.platform.terminal.claim":
-    case "relay.platform.terminal.restart":
-    case "database.terminal.attach":
-    case "database.terminal.heartbeat":
-    case "database.terminal.detach":
-    case "database.terminal.write":
-    case "database.terminal.claim":
-    case "database.terminal.restart":
-    case "app.terminal.attach":
-    case "app.terminal.heartbeat":
-    case "app.terminal.detach":
-    case "app.terminal.write":
-    case "app.terminal.claim":
-    case "app.terminal.restart":
+    // Opening a database's waits in its lane itself.
+    case "terminal.attach":
+    case "terminal.heartbeat":
+    case "terminal.detach":
+    case "terminal.write":
+    case "terminal.claim":
+    case "terminal.restart":
       return null
 
     // Restarting or repairing Kiln's services, one change at a time, as the
@@ -641,7 +624,7 @@ export function controlRequestLocks(
       return null
 
     // Requests the Relay sends Hearth, never the other way.
-    case "hearth.database.terminal.output":
+    case "hearth.terminal.output":
     case "sftp.authorization.resolve":
       return null
 
