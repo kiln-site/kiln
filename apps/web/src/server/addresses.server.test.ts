@@ -4,7 +4,7 @@ import { Effect } from "effect"
 import { afterAll, afterEach, vi } from "vite-plus/test"
 
 import { disposeAppRuntime, runAppEffect } from "@/effect/runtime"
-import type { WebHostnameResource } from "@/effect/web-hostnames"
+import type { WebHostnameResource } from "@/effect/addresses"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { reconcileDueDnsEffect } from "@/lib/dns-worker.server"
 import { betterAuthSecrets } from "@/lib/environment"

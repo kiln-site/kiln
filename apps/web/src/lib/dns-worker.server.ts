@@ -1,8 +1,10 @@
 import { Clock, Effect } from "effect"
 
-import { nextInstanceDomainAttemptEffect } from "@/effect/domains"
+import {
+  nextInstanceDomainAttemptEffect,
+  nextWebHostnameAttemptEffect,
+} from "@/effect/addresses"
 import { runAppEffect, runAppEffectUntraced } from "@/effect/runtime"
-import { nextWebHostnameAttemptEffect } from "@/effect/web-hostnames"
 import { startPollingWorker, type WorkerPass } from "@/lib/polling-worker"
 import { reconcileDueInstanceDomainsEffect } from "@/server/domains.server"
 import { reconcileDueWebHostnamesEffect } from "@/server/web-hostnames.server"

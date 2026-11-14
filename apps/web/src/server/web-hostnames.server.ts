@@ -36,6 +36,7 @@ import {
   deferWebHostnamesEffect,
   deleteRelayWebHostnamesEffect,
   deleteWebHostnameEffect,
+  gameAddressNamedEffect,
   insertWebHostnameEffect,
   listDueWebHostnameResourcesEffect,
   listResourceWebHostnamesEffect,
@@ -54,7 +55,7 @@ import {
   type ExistingWebRecord,
   type WebHostname,
   type WebHostnameResource,
-} from "@/effect/web-hostnames"
+} from "@/effect/addresses"
 import { promiseEffect } from "@/effect/promise"
 import { domainInZone } from "@/lib/domain-schemas"
 import { vanityLabelAllowed } from "@/server/reserved-names"
@@ -507,7 +508,7 @@ const counterpartZoneEffect = Effect.fnUntraced(function* (
   const baseName = hostname.slice(4)
   const base = held.get(baseName)
   if (base) {
-    return base.vanityDomain
+    return base.vanityDomain && base.zoneId
       ? ({
           connectionId: base.connectionId,
           vanityDomain: null,
@@ -531,8 +532,10 @@ const counterpartZoneEffect = Effect.fnUntraced(function* (
  * Holds a hostname for a resource, in the zone Kiln may make its record in.
  * Null when there's none; fails when another resource holds it. A `www`
  * counterpart of a vanity name the resource holds goes in that name's zone.
- * A game server's own address is held too, in its domain's zone, so a route
- * on it keeps the name once the domain moves off it.
+ * A game server's own address takes no row here: a route on it shares the
+ * address's, and keeps the name once the address moves off it. The name a
+ * rename is moving an address to is held, in that domain's zone, until the
+ * rename finishes.
  */
 const claimHostnameEffect = Effect.fnUntraced(function* (
   resource: WebHostnameResource,
@@ -549,6 +552,7 @@ const claimHostnameEffect = Effect.fnUntraced(function* (
       message: `${hostname} is already in use`,
     })
   }
+  if (holder && (yield* gameAddressNamedEffect(resource, hostname))) return null
   const own = holder ? yield* vanityNameEffect(hostname) : null
   const zone = holder
     ? own && {
@@ -653,10 +657,13 @@ const reconcileWebHostnameEffect = Effect.fn("webHostnames.reconcile")(
     ) {
       return false
     }
+    // The game server's own address: its record is the address's.
+    if (row.game) return false
     // Claimed by a save that failed: held, without a record, until a save
     // says the routes use it.
     if (!row.routed && !row.generated && !row.recordId) return false
-    // The game server's own address: its domain keeps the record.
+    // The name a rename is moving an address of its game server to: that
+    // address keeps the record.
     if (!row.recordId && (yield* webHostnameCoveredEffect(row))) {
       if (row.status === "active") return false
       yield* markWebHostnameCoveredEffect(row.id)
@@ -927,12 +934,12 @@ export const adoptExistingWebRecordEffect = Effect.fn(
  * any record Kiln made for it but never heard back about, as when a create
  * or a replacement lost its answer: those carry the hostname's marker. One
  * Cloudflare refuses stays `removing`, with why, for the DNS worker. A
- * game server's own address keeps its domain's record.
+ * game server's own address keeps its record, and only stops being routed.
  */
 const removeWebHostnameEffect = Effect.fn("webHostnames.remove")(function* (
   row: WebHostname
 ) {
-  if (!row.recordId && (yield* webHostnameCoveredEffect(row))) {
+  if (row.game || (!row.recordId && (yield* webHostnameCoveredEffect(row)))) {
     return yield* deleteWebHostnameEffect(row)
   }
   const recordId = row.recordId

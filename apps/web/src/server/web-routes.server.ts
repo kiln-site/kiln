@@ -11,7 +11,7 @@ import { Effect } from "effect"
 
 import { promiseEffect, recoverPromise } from "@/effect/promise"
 import { runAppEffect } from "@/effect/runtime"
-import type { WebHostnameResource } from "@/effect/web-hostnames"
+import type { WebHostnameResource } from "@/effect/addresses"
 import { requireRelayPermission } from "@/lib/access-control"
 import type { AuthenticatedUser } from "@/lib/auth-session"
 import { dnsKey } from "@/lib/dns-operations"
