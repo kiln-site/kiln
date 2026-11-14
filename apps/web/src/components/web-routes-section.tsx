@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useMutation } from "@tanstack/react-query"
+import { useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   primaryWebRoute,
   relayInstanceWebRouteInputsSchema,
@@ -49,6 +49,7 @@ import {
   WebHostnameDnsStatus,
   type WebHostnameResourceRef,
 } from "@/components/web-hostname-dns"
+import { queryKeys } from "@/lib/query-options"
 import {
   createDataTableColumnHelper,
   dataTableColumnMeta,
@@ -142,6 +143,7 @@ export function WebRoutesSection({
     null
   )
   const held = useHeldWebHostnames(dnsResource)
+  const queryClient = useQueryClient()
   const proxiedFor = useWebHostnameProxied(dnsResource)
   const adoptable = useAdoptableWebHostnames(dnsResource)
   const save = useMutation({
@@ -162,6 +164,16 @@ export function WebRoutesSection({
       }
       await onSave(next, proxy)
     },
+    // Which names its routes serve decides what each can do: one that
+    // nothing serves any more can be deleted.
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.domains.hostnames(
+          dnsResource.relayId,
+          dnsResource.resourceType,
+          dnsResource.resourceId
+        ),
+      }),
   })
   const saved = React.useMemo(
     (): Array<WebRouteRow> | undefined => routes?.slice(),
