@@ -321,6 +321,7 @@ export function ImportDatabaseDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const queryClient = useQueryClient()
   const [file, setFile] = React.useState<File | null>(initialFile)
   // How much of the dump has reached the Relay, until it all has.
   const [uploaded, setUploaded] = React.useState<number | null>(null)
@@ -350,6 +351,10 @@ export function ImportDatabaseDialog({
         type: "success",
       })
       onOpenChange(false)
+      // What it holds now is what its disk usage shows.
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.databases.container(database.relayId, database.id),
+      })
     },
   })
 

@@ -31,6 +31,10 @@ const prefix = (queryKey: QueryKey): HearthRealtimeQueryScope => ({
   queryKey,
 })
 
+const manualWebHostnamesKey = [...queryKeys.domains.settings, "manual"]
+// Every App's backup settings, under `queryKeys.backups.app`.
+const appBackupsKey = ["backups", "app"]
+
 const hearthRealtimeQueryScopes = {
   access: [
     exact(queryKeys.relay.reachability),
@@ -101,7 +105,7 @@ const hearthRealtimeQueryScopes = {
   ],
   // Which group an instance is in, on the pages of its members.
   "instance-groups": [prefix(queryKeys.instanceGroups.all)],
-  "instance-web-routes": [prefix(["web-routes"])],
+  "instance-web-routes": [prefix(["web-routes"]), exact(manualWebHostnamesKey)],
   notifications: [exact(queryKeys.notifications)],
   operations: [prefix(["operations"])],
   preferences: [exact(queryKeys.uiPreferences)],
@@ -114,7 +118,7 @@ const hearthRealtimeQueryScopes = {
     exact(queryKeys.relayProxyModes),
     prefix(["web-routes"]),
   ],
-  "relay-volumes": [prefix(["relays", "volumes"])],
+  "relay-volumes": [prefix(["relays", "volumes"]), prefix(appBackupsKey)],
   relays: [
     prefix(["infra-directory"]),
     prefix(["instance-inventory"]),
@@ -207,10 +211,18 @@ function queryScopes(
     return [
       exact(queryKeys.relay.webRoutes(scope.relayId, scope.instanceId)),
       exact(queryKeys.relayWebRoutes(scope.relayId)),
+      // The Domains page lists the routes' hostnames Kiln keeps no record
+      // for, read from the routes themselves.
+      exact(manualWebHostnamesKey),
     ]
   }
   if (topic === "relay-volumes" && scope) {
-    return [prefix(queryKeys.relayVolumes(scope.relayId))]
+    return [
+      prefix(queryKeys.relayVolumes(scope.relayId)),
+      // Which of an App's volumes are backed up follows the volumes it
+      // mounts, and what they are called.
+      prefix([...appBackupsKey, scope.relayId]),
+    ]
   }
   if (topic === "relay-proxy" && scope) {
     return [
