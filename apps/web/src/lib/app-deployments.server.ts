@@ -1,6 +1,6 @@
 import {
   relayAppGitHubV1Feature,
-  relayAppDeploymentLogSchema,
+  relayDeploymentLogSchema,
   relayAppSchema,
   relayManagedDatabaseSchema,
   type AppConfig,
@@ -645,8 +645,12 @@ const checkAppDeploymentEffect = Effect.fn("Apps.deployment.check")(function* (
   // The Relay moved on to another deployment; its log of this one says
   // how it ended.
   const kept =
-    app && relayConnectionFeatures(relay.id).has(relayAppGitHubV1Feature)
-      ? yield* readRelayDeployment(relay, record)
+    app && record.relayDeploymentId
+      ? yield* readRelayDeployment(
+          relay,
+          record.appId,
+          record.relayDeploymentId
+        )
       : null
   if (kept && kept.state !== "running") {
     const finished = yield* finishAppDeploymentEffect(record.id, {
@@ -679,14 +683,15 @@ const checkAppDeploymentEffect = Effect.fn("Apps.deployment.check")(function* (
 
 const readRelayDeployment = Effect.fnUntraced(function* (
   relay: PersistedRelay,
-  record: AppDeploymentRecord
+  appId: string,
+  deploymentId: string
 ) {
   const response = yield* Effect.tryPromise({
     try: () =>
       relayRpc(
         relay,
-        "app.deployment.read",
-        { appId: record.appId, deploymentId: record.relayDeploymentId },
+        "instance.deployment.read",
+        { deploymentId, id: appId, kind: "app" },
         15_000
       ),
     catch: (cause) =>
@@ -696,7 +701,7 @@ const readRelayDeployment = Effect.fnUntraced(function* (
         service: "Relay",
       }),
   })
-  const parsed = relayAppDeploymentLogSchema.safeParse(response)
+  const parsed = relayDeploymentLogSchema.safeParse(response)
   return parsed.success ? (parsed.data?.deployment ?? null) : null
 })
 

@@ -5,11 +5,10 @@ a GitHub repository. Each deployment is recorded in Hearth (`deployment`)
 and listed under **Infrastructure → Deployments**, across every Relay the
 person can read apps on, beside game servers' deployments (see
 [Game server deployments](#game-server-deployments)). Scoped to one app, from the
-Deployment card on its Info rail, it's that app's history. The Relay keeps
-the logs of each app's 20 latest deployments. They open on the app's Logs
-page, which lists them beside its containers: the one the Relay is on is
-followed live, and any other reads the log the Relay saved. It keeps the
-images of each app's 5 newest successful deployments, and any build for a
+Deployment card on its Info rail, it's that app's history. Its logs open
+on the app's Logs page (see [Deployment logs](#deployment-logs)): the one
+the Relay is on is followed live, and any other reads the log the Relay
+saved. The Relay keeps the images of each app's 5 newest successful deployments, and any build for a
 day; older ones are removed (see
 [Relay runtime](relay-runtime.md#docker-cleanup)). Deploying an older one
 again builds or pulls it again.
@@ -328,15 +327,12 @@ once nothing can still follow it: a redeploy or change of Brick after 15
 minutes, an install after 10 minutes without a post-provisioning job, or a
 day with one.
 
-The Relay logs each phase and how it ended under the deployment's ID, in
-`server-deployments/<server>/<deployment>.json` in its data directory,
-keeping each server's 20 latest and removing them with the server. The
-server's Logs page lists its deployments and shows each one's log, for
-whoever can read the server's logs (`instance.deployment.read`, which takes
-`instance.logs.read`), and a deployment's row on the Deployments page opens
-it there. A redeploy takes whoever asked for it to that page to follow it.
-The server's own output stays on its Console page. Deleting an instance of
-any kind removes its deployment records.
+The Relay logs each phase and how it ended under the deployment's ID (see
+[Deployment logs](#deployment-logs)). A deployment's row on the
+Deployments page opens its log on the server's Logs page, and a redeploy
+takes whoever asked for it there to follow it. The server's own output
+stays on its Console page. Deleting an instance of any kind removes its
+deployment records.
 
 ## Database deployments
 
@@ -356,9 +352,24 @@ which image the database ran and which it pulled, by ID.
 A redeploy is recorded in the same table by the database's ID, before
 Hearth asks the Relay, and ends as the Relay answers; the minute sweep ends
 one a Hearth restart cut off as **Unknown** after 15 minutes. The Relay
-logs it as it does a game server's, in a store of its own
-(`database-deployments`), so a log is only read as the kind it was written
-for. The database's Logs page lists its
-deployments beside its container's output, as an App's does, and whoever
-reads the database's logs (`database.logs.read`) reads each one's log
-there.
+logs it as it does a game server's, and the database's Logs page lists its
+deployments beside its container's output, as an App's does.
+
+## Deployment logs
+
+Every kind of instance's deployments are logged the same way. The Relay
+saves each one's log whole, as one file in its data directory, in its
+kind's folder: `server-deployments`, `database-deployments` or
+`app-deployments`, then `<instance>/<deployment>.json`. It keeps each
+instance's 20 latest and removes them with the instance. A game server's
+or a database's is named by Hearth, and the Relay rewrites it as each
+phase goes by. An App's is named by the Relay, which follows its output
+live in memory, as the App's console stream, and saves it once it ends;
+the latest is read back from disk after a restart.
+
+Hearth reads any of them with `instance.deployment.read`, naming the
+instance's kind beside its ID, and each instance's Logs page shows them
+the same way: one still running is read again each second, and one the
+Relay no longer keeps says so. Reading one takes reading that instance's
+logs: `instance.logs.read` on a game server, `database.logs.read` on a
+database, `app.logs.read` on an App.

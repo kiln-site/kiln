@@ -29,8 +29,6 @@ export const relayAppsV1Feature = "apps-v1"
 export const relayWorkloadUsageV1Feature = "workload-usage-v1"
 // The Relay serves its host's files under its own ID as a file root.
 export const relayHostFilesV1Feature = "relay-host-files-v1"
-// The Relay streams its own container's output as the `relay` console kind.
-export const relayLogsV1Feature = "relay-logs-v1"
 // The Relay answers `relay.proxy.config.read` with its proxy configuration.
 export const relayProxyConfigurationV1Feature = "relay-proxy-configuration-v1"
 // The Relay restarts its own container (`relay.restart`) and its host
@@ -50,8 +48,7 @@ export const relayDatabaseProvisioningV1Feature = "database-provisioning-v1"
 // The Relay provisions apps through `app.provision.*` the same way.
 export const relayAppProvisioningV1Feature = "app-provisioning-v1"
 // The Relay deploys GitHub sources from `app.deploy`'s `github` checkout,
-// rolls deployments over once their containers are healthy, and answers
-// `app.deployment.read`.
+// and rolls deployments over once their containers are healthy.
 export const relayAppGitHubV1Feature = "app-github-v1"
 // The Relay lists, creates, renames, and deletes its Docker named volumes
 // through `relay.volumes.*`.
@@ -197,7 +194,6 @@ export const relayControlOperations = [
   "app.provision.cancel",
   "app.delete",
   "app.volumes.write",
-  "app.deployment.read",
   "app.deployment.abort",
   "instance.image.check",
   "backup.task.enqueue",
@@ -392,7 +388,6 @@ export function relayControlOperationChanges(
     case "database.dump.export":
     case "app.list":
     case "app.resources.read":
-    case "app.deployment.read":
     case "instance.image.check":
     case "backup.task.get":
     case "backup.task.list":

@@ -72,7 +72,7 @@ export function ServerLogsPage() {
       renderDeployment={(id, header) => (
         <RequestDeploymentLog
           header={header}
-          instance={instance}
+          instance={{ id: instance.id, kind: "server", name: instance.name }}
           pending={isPending}
           record={
             id === null

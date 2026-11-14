@@ -514,7 +514,6 @@ export function controlRequestLocks(
     case "database.data.read":
     case "app.list":
     case "app.resources.read":
-    case "app.deployment.read":
     case "instance.image.check":
     case "instance.resources.read":
     case "instance.files.list":

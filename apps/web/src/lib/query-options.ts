@@ -122,13 +122,12 @@ import {
   getServerNavigation,
 } from "@/server/infra-directory"
 import {
-  getAppDeploymentLog,
   getAppDeployments,
   getAppDeployStates,
   getAppDeploymentSummary,
   getAppGitHubSourceFile,
+  getDeploymentLog,
   getDeployments,
-  getServerDeploymentLog,
 } from "@/server/app-deployments"
 import { getInstanceGroup, getInstanceGroups } from "@/server/instance-groups"
 import {
@@ -224,13 +223,18 @@ export const queryKeys = {
   appDeployments: {
     list: (scope: { appId?: string; relayId?: string }) =>
       ["app-deployments", "list", scope] as const,
-    log: (appId: string, deploymentId: string) =>
-      ["app-deployments", "log", appId, deploymentId] as const,
+    // Any kind's deployment log.
+    log: (instance: DeploymentInstance, deploymentId: string) =>
+      [
+        "app-deployments",
+        "log",
+        instance.kind,
+        instance.id,
+        deploymentId,
+      ] as const,
     // App and game server deployments together.
     all: (scope: DeploymentsScope) =>
       ["app-deployments", "all", scope] as const,
-    serverLog: (instanceId: string, deploymentId: string) =>
-      ["app-deployments", "server-log", instanceId, deploymentId] as const,
     summary: (relayId: string, appId: string) =>
       ["app-deployments", "summary", relayId, appId] as const,
     // A game server's or a database's updates; an App's are in its summary.
@@ -1048,7 +1052,8 @@ export function updateEligibilityQueryOptions() {
   return queryOptions({
     ...systemUpdateOverviewRefetchPolicy,
     queryKey: queryKeys.updateEligibility,
-    queryFn: () => traceUpdaterWork("eligibility", () => getUpdateEligibility()),
+    queryFn: () =>
+      traceUpdaterWork("eligibility", () => getUpdateEligibility()),
     // Not after a failed read: the dialog's Retry asks again.
     refetchInterval: (query) =>
       query.state.status !== "error" &&
@@ -1273,13 +1278,26 @@ export function appGitHubSourceFileQueryOptions(
   })
 }
 
-export function appDeploymentLogQueryOptions(
-  appId: string,
+/** An instance whose deployments are listed or read. */
+export interface DeploymentInstance {
+  id: string
+  kind: "app" | "database" | "server"
+}
+
+/** Any kind of instance's deployment log, from its Relay. */
+export function deploymentLogQueryOptions(
+  instance: DeploymentInstance,
   deploymentId: string
 ) {
   return queryOptions({
-    queryKey: queryKeys.appDeployments.log(appId, deploymentId),
-    queryFn: () => getAppDeploymentLog({ data: { appId, deploymentId } }),
+    queryKey: queryKeys.appDeployments.log(instance, deploymentId),
+    queryFn: () =>
+      getDeploymentLog({
+        data: {
+          deploymentId,
+          instance: { id: instance.id, kind: instance.kind },
+        },
+      }),
     retry: false,
     // A finished log never changes; one that couldn't be read may come back.
     staleTime: (query) =>
@@ -1289,7 +1307,7 @@ export function appDeploymentLogQueryOptions(
 
 /** One App's or game server's deployments, one Relay's, or all. */
 export interface DeploymentsScope {
-  instance?: { id: string; kind: "app" | "database" | "server" }
+  instance?: DeploymentInstance
   relayId?: string
 }
 
@@ -1302,21 +1320,6 @@ export function deploymentsQueryOptions(scope: DeploymentsScope) {
       }),
     initialPageParam: null as { id: string; startedAt: string } | null,
     getNextPageParam: (page) => page.nextCursor,
-  })
-}
-
-export function serverDeploymentLogQueryOptions(
-  instanceId: string,
-  deploymentId: string
-) {
-  return queryOptions({
-    queryKey: queryKeys.appDeployments.serverLog(instanceId, deploymentId),
-    queryFn: () =>
-      getServerDeploymentLog({ data: { deploymentId, instanceId } }),
-    retry: false,
-    // A finished log never changes; one that couldn't be read may come back.
-    staleTime: (query) =>
-      query.state.data?.log?.deployment.finishedAt ? Infinity : 0,
   })
 }
 

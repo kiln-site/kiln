@@ -13,12 +13,11 @@ import { runOperationPromise } from "@/operations/operation"
 import {
   cancelQueuedAppDeployHandler,
   getAppDeployStatesHandler,
-  getAppDeploymentLogHandler,
   getAppDeploymentsHandler,
   getAppDeploymentSummaryHandler,
   getAppGitHubSourceFileHandler,
+  getDeploymentLogHandler,
   getDeploymentsHandler,
-  getServerDeploymentLogHandler,
   redeployAppDeploymentHandler,
   saveAppGitHubSourceHandler,
 } from "@/server/app-deployments.server"
@@ -33,8 +32,11 @@ const appInputSchema = z.strictObject({
 const deploymentInputSchema = z.strictObject({ deploymentId: z.uuid() })
 
 const deploymentLogInputSchema = z.strictObject({
-  appId: appIdSchema,
   deploymentId: z.uuid(),
+  instance: z.strictObject({
+    id: instanceIdSchema,
+    kind: z.enum(["app", "database", "server"]),
+  }),
 })
 
 const cancelDeployInputSchema = appInputSchema.extend({
@@ -69,11 +71,6 @@ const allDeploymentsInputSchema = z.strictObject({
     })
     .optional(),
   relayId: relayIdSchema.optional(),
-})
-
-const serverDeploymentLogInputSchema = z.strictObject({
-  deploymentId: z.uuid(),
-  instanceId: instanceIdSchema,
 })
 
 const saveSourceInputSchema = appInputSchema.extend({
@@ -154,14 +151,9 @@ export const redeployAppDeployment = createServerFn({ method: "POST" })
     redeployAppDeploymentHandler(await requireEligibleResourceUser(), data)
   )
 
-export const getAppDeploymentLog = createServerFn({ method: "GET" })
+// Any kind of instance's deployment log.
+export const getDeploymentLog = createServerFn({ method: "GET" })
   .validator(deploymentLogInputSchema)
   .handler(async ({ data }) =>
-    getAppDeploymentLogHandler(await requireEligibleResourceUser(), data)
-  )
-
-export const getServerDeploymentLog = createServerFn({ method: "GET" })
-  .validator(serverDeploymentLogInputSchema)
-  .handler(async ({ data }) =>
-    getServerDeploymentLogHandler(await requireEligibleResourceUser(), data)
+    getDeploymentLogHandler(await requireEligibleResourceUser(), data)
   )

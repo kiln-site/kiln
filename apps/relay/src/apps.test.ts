@@ -511,25 +511,20 @@ describe("deployment logs", () => {
     const first = await deploy(harness, {})
     const second = await deploy(harness, { command: "serve --v2" })
 
-    const latest = await harness.apps.readDeployment({
+    const latest = await harness.apps.readDeployment(
       appId,
-      deploymentId: second.deployment!.id,
-    })
-    const earlier = await harness.apps.readDeployment({
+      second.deployment!.id
+    )
+    const earlier = await harness.apps.readDeployment(
       appId,
-      deploymentId: first.deployment!.id,
-    })
+      first.deployment!.id
+    )
 
     expect(latest?.deployment).toMatchObject({ state: "succeeded" })
     expect(earlier?.lines.map((line) => line.text)).toContain(
       "Pulling nginx:alpine"
     )
-    expect(
-      await harness.apps.readDeployment({
-        appId,
-        deploymentId: "../../relay",
-      })
-    ).toBeNull()
+    expect(await harness.apps.readDeployment(appId, "../../relay")).toBeNull()
   })
 })
 

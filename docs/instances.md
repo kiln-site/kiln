@@ -349,10 +349,11 @@ from a tag or an image name today.
     one stream and one page section. A shell in a game server, a database or
     an App takes `instance.terminal`. A database's Terminal opens a shell,
     not its signed-in client; signing in from it in one click is #936.
-13. One log path. The Logs page is one already: every kind fills the same
-    page (`InstanceLogsPage`) with its containers and its deployments. The
-    Relay still keeps an App's deployment logs apart from a game server's
-    and a database's, behind two read requests.
+13. One log path. Every kind fills the same Logs page
+    (`InstanceLogsPage`) with its containers and its deployments, and every
+    deployment's log is kept by one store on the Relay, in one format, and
+    read with `instance.deployment.read`. Reading a kind's logs still takes
+    a permission of that kind's.
 14. One permission model. Permissions still work three ways by kind: an App
     can't be shared on its own, only through its Relay, and a game server's
     or a database's owner holds `all` in code, which no preset can narrow.

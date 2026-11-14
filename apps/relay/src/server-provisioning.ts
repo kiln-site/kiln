@@ -4,11 +4,11 @@ import type { RelayStateStore } from "./effect/state.js"
 import type { LifecycleDriver } from "./lifecycle.js"
 import { instanceReplaceLocks } from "./operation-plans.js"
 import { type ProvisioningAdapter, provisioningStatus } from "./provisioning.js"
-import type { ServerDeploymentLogs } from "./server-deployment-logs.js"
+import type { DeploymentLogs } from "./deployment-logs.js"
 
 /** How a game server provisions: its container, from its Brick. */
 export function serverProvisioning(options: {
-  deploymentLogs: ServerDeploymentLogs
+  deploymentLogs: DeploymentLogs
   lifecycle: LifecycleDriver
   /** Sends Hearth the Relay's snapshot, where game servers' placeholders are. */
   refreshSnapshot: () => Promise<unknown>

@@ -6,10 +6,7 @@ import {
   MAXIMUM_INSTANCE_NAME_LENGTH,
   MINIMUM_INSTANCE_DISK_LIMIT_BYTES,
 } from "./instance-limits.js"
-import {
-  APP_COMMAND_MAX_LENGTH,
-  APP_IMAGE_MAX_LENGTH,
-} from "./app-bricks.js"
+import { APP_COMMAND_MAX_LENGTH, APP_IMAGE_MAX_LENGTH } from "./app-bricks.js"
 import { readBrick } from "./brick-conversion.js"
 import {
   brickIdSchema,
@@ -749,7 +746,10 @@ export function appBackupVolumes<
     z.infer<typeof relayVolumeSchema>,
     "id" | "kind" | "users"
   >,
->(appId: string, volumes: ReadonlyArray<Volume>): Array<Volume & { id: string }> {
+>(
+  appId: string,
+  volumes: ReadonlyArray<Volume>
+): Array<Volume & { id: string }> {
   return volumes.flatMap((volume) =>
     volume.id !== null &&
     volume.kind === "kiln" &&
@@ -1292,12 +1292,6 @@ export const relayInstanceImageCheckResultsSchema = z.array(
   relayInstanceImageCheckResultSchema
 )
 
-// One of the app's recent deployments, with its log: the running one, or one
-// the Relay kept.
-export const relayAppDeploymentReadSchema = z
-  .object({ appId: appIdSchema, deploymentId: z.string().min(1).max(64) })
-  .strict()
-
 /** Stops an App's running deployment, as before it's deleted. */
 export const relayAppDeploymentAbortSchema = z
   .object({ appId: appIdSchema })
@@ -1466,13 +1460,18 @@ export const relayProvisionInstanceSchema = z.object({
 export const relayClaimInstanceProvisioningSchema =
   relayProvisionInstanceSchema.extend({ deploymentId: z.uuid() })
 
-// A game server's or a database's deployment log, which names the kind
-// beside its ID.
-export const relayServerDeploymentReadSchema = z
+// The ID a deployment's log goes by on its Relay: the one Hearth gave a
+// game server's or a database's, or the one the Relay gave an App's. It
+// names the log's file, so it is only ever letters, digits and dashes.
+export const relayDeploymentIdSchema = z.string().regex(/^[0-9A-Za-z-]{1,64}$/u)
+
+// One of an instance's recent deployments, with its log, for every kind:
+// the running one, or one the Relay kept.
+export const relayDeploymentReadSchema = z
   .object({
-    deploymentId: z.uuid(),
+    deploymentId: relayDeploymentIdSchema,
     id: instanceIdSchema,
-    kind: z.enum(["instance", "database"]),
+    kind: z.enum(["app", "database", "instance"]),
   })
   .strict()
 
@@ -3171,27 +3170,26 @@ export const relayConsoleLineSchema = z.object({
   segments: z.array(relayConsoleSegmentSchema).optional(),
 })
 
-// Null when the Relay no longer keeps that deployment.
-export const relayAppDeploymentLogSchema = z
+// A deployment as its log records it, for every kind. Whether it rolled
+// over (its new containers took over from the old once healthy) is an
+// App's alone, null for every other kind.
+export const relayDeploymentSummarySchema = z.object({
+  error: z.string().max(2_000).nullable(),
+  finishedAt: z.string().datetime().nullable(),
+  id: relayDeploymentIdSchema,
+  rolling: z.boolean().nullable(),
+  startedAt: z.string().datetime(),
+  state: appDeploymentStateSchema,
+})
+
+// One of an instance's deployments as its Relay logged it: a game server's
+// install, reinstall or change of Brick, a database's redeploy, or an App's
+// deployment. Null when the Relay no longer keeps it.
+export const relayDeploymentLogSchema = z
   .object({
-    deployment: relayAppDeploymentSchema,
+    deployment: relayDeploymentSummarySchema,
     // Lines dropped from the front once the log reached its limits.
     dropped: z.number().int().nonnegative(),
-    lines: z.array(relayConsoleLineSchema),
-  })
-  .nullable()
-
-// A game server's install, reinstall, or change of Brick, as its Relay
-// logged it. Null when the Relay doesn't keep that deployment.
-export const relayServerDeploymentLogSchema = z
-  .object({
-    deployment: z.object({
-      error: z.string().max(2_000).nullable(),
-      finishedAt: z.string().datetime().nullable(),
-      id: z.uuid(),
-      startedAt: z.string().datetime(),
-      state: appDeploymentStateSchema,
-    }),
     lines: z.array(relayConsoleLineSchema),
   })
   .nullable()
@@ -3483,10 +3481,6 @@ export type AppGitHubBuild = z.infer<typeof appGitHubBuildSchema>
 export type RelayAppGitHubCheckout = z.infer<
   typeof relayAppGitHubCheckoutSchema
 >
-export type RelayAppDeploymentRead = z.infer<
-  typeof relayAppDeploymentReadSchema
->
-export type RelayAppDeploymentLog = z.infer<typeof relayAppDeploymentLogSchema>
 export type RelayInstanceImageCheck = z.infer<
   typeof relayInstanceImageCheckSchema
 >
@@ -3509,9 +3503,11 @@ export type RelayProvisionInstance = z.infer<
 export type RelayInstanceProvisioning = z.infer<
   typeof relayInstanceProvisioningSchema
 >
-export type RelayServerDeploymentLog = z.infer<
-  typeof relayServerDeploymentLogSchema
+export type RelayDeploymentRead = z.infer<typeof relayDeploymentReadSchema>
+export type RelayDeploymentSummary = z.infer<
+  typeof relayDeploymentSummarySchema
 >
+export type RelayDeploymentLog = z.infer<typeof relayDeploymentLogSchema>
 export type ProvisioningKind = z.infer<typeof provisioningKindSchema>
 export type ProvisioningPhase = z.infer<typeof provisioningPhaseSchema>
 export type ProvisioningWorkPhase = z.infer<typeof provisioningWorkPhaseSchema>

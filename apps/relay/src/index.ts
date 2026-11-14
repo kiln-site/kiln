@@ -54,7 +54,6 @@ import {
   relayInstanceWebRoutesWriteSchema,
   relayDeleteAppSchema,
   relayAppDeploymentAbortSchema,
-  relayAppDeploymentReadSchema,
   relayInstanceImageCheckSchema,
   relayHostPackagesRequestSchema,
   relaySecurityInventoryRequestSchema,
@@ -83,7 +82,7 @@ import {
   relayPrepareInstanceSchema,
   relayProvisionInstanceSchema,
   relayClaimInstanceProvisioningSchema,
-  relayServerDeploymentReadSchema,
+  relayDeploymentReadSchema,
   relayInstanceActionSchema,
   relayInstanceNameSchema,
   relayInstanceSchema,
@@ -307,7 +306,7 @@ import {
   hostProvisioningCapacity,
   ProvisioningManager,
 } from "./provisioning.js"
-import { ServerDeploymentLogs } from "./server-deployment-logs.js"
+import { DeploymentLogs } from "./deployment-logs.js"
 import { appProvisioning } from "./app-provisioning.js"
 import { databaseProvisioning } from "./database-provisioning.js"
 import { serverProvisioning } from "./server-provisioning.js"
@@ -406,13 +405,7 @@ let relayIdentity = startupCore.identity
 config.nodeId = relayIdentity.id
 config.nodeName = relayIdentity.name
 const bricks = new BrickCatalog(config.brickCatalogUrl, config.dataDirectory)
-const serverDeploymentLogs = new ServerDeploymentLogs(config.dataDirectory)
-// A database's, apart from a game server's: what may read one kind's logs
-// can't name the other kind to read them.
-const databaseDeploymentLogs = new ServerDeploymentLogs(
-  config.dataDirectory,
-  "database-deployments"
-)
+const deploymentLogs = new DeploymentLogs(config.dataDirectory)
 // Resources being deleted refuse every change but their final backup and
 // their deletion, from the first operation admitted.
 const resourceFreezes = await runRelayEffect(
@@ -749,9 +742,13 @@ const apps = new AppDriver(
       ),
     id: composeVolumeId,
     settle: (appId, keys) =>
-      runRelayEffect("relay.apps.composeVolumes", volumes.settleComposeVolumes(appId, keys)),
+      runRelayEffect(
+        "relay.apps.composeVolumes",
+        volumes.settleComposeVolumes(appId, keys)
+      ),
   },
-  dockerCleanup
+  dockerCleanup,
+  deploymentLogs
 )
 lifecycle.useAppServiceContainers(async (appId, service) => {
   await apps.get(appId)
@@ -817,19 +814,19 @@ if (cliArguments.length === 0)
       platformContainers,
       gameServerContainers,
     ] = await Promise.all([
-        databases.list(),
-        apps.list(),
-        hostShell.enabled ? hostShell.runningContainer() : null,
-        Promise.all(
-          (["database", "cache", "proxy"] as const).map((target) =>
-            runRelayEffect(
-              "relay.platform.terminal.sweepTarget",
-              platformManagedContainer({ config, engine: relayEngine }, target)
-            )
+      databases.list(),
+      apps.list(),
+      hostShell.enabled ? hostShell.runningContainer() : null,
+      Promise.all(
+        (["database", "cache", "proxy"] as const).map((target) =>
+          runRelayEffect(
+            "relay.platform.terminal.sweepTarget",
+            platformManagedContainer({ config, engine: relayEngine }, target)
           )
-        ),
-        docker.runningContainerIds(),
-      ])
+        )
+      ),
+      docker.runningContainerIds(),
+    ])
     await terminals.sweep([
       ...(hostContainer ? [hostContainer] : []),
       ...gameServerContainers,
@@ -998,7 +995,7 @@ const provisioningManager = await runRelayEffect(
       app: appProvisioning(apps),
       database: databaseProvisioning(databases),
       server: serverProvisioning({
-        deploymentLogs: serverDeploymentLogs,
+        deploymentLogs,
         lifecycle,
         refreshSnapshot: () => snapshotHub.refresh(),
         state: startupCore.state,
@@ -3061,7 +3058,7 @@ async function executeControlRequest(
         // and an App created with it may be connected to it.
         await databases.connections.forgetDatabase(input.databaseId)
         await resourceFreezes.forget("database", input.databaseId)
-        await databaseDeploymentLogs.remove(input.databaseId)
+        await deploymentLogs.remove({ id: input.databaseId, kind: "database" })
         return { databaseId: input.databaseId, deleted: true }
       }
       // Hearth removed its DNS records from every node first. One already
@@ -3083,7 +3080,7 @@ async function executeControlRequest(
       )
       await leaveTailscale()
       await resourceFreezes.forget("database", input.databaseId)
-      await databaseDeploymentLogs.remove(input.databaseId)
+      await deploymentLogs.remove({ id: input.databaseId, kind: "database" })
       return deleted
     }
     case "database.wipe":
@@ -3219,10 +3216,6 @@ async function executeControlRequest(
       await resourceFreezes.forget("app", input.appId)
       return deleted
     }
-    case "app.deployment.read":
-      return apps.readDeployment(
-        relayAppDeploymentReadSchema.parse(request.payload)
-      )
     case "app.deployment.abort": {
       const { appId } = relayAppDeploymentAbortSchema.parse(request.payload)
       apps.abortDeployment(appId)
@@ -3462,7 +3455,7 @@ async function executeControlRequest(
     case "instance.provision.claim": {
       const { deploymentId, instanceId } =
         relayClaimInstanceProvisioningSchema.parse(request.payload)
-      serverDeploymentLogs.expectInstall(instanceId, deploymentId)
+      deploymentLogs.expectInstall(instanceId, deploymentId)
       return runRelayEffect(
         "relay.instance.provision.claim",
         provisioningManager.claim("server", instanceId)
@@ -3485,8 +3478,8 @@ async function executeControlRequest(
         ) ?? relayInstanceSchema.parse(await requiredInstance(payload))
       return retainingInstance(existing, async () => {
         // A change of Brick is a deployment Hearth names.
-        const instance = await serverDeploymentLogs.run(
-          instanceId,
+        const instance = await deploymentLogs.run(
+          { id: instanceId, kind: "instance" },
           input.deploymentId,
           "Changing the game server's Brick",
           (onPhase) => lifecycle.reconfigureInstance(instanceId, input, onPhase)
@@ -3505,8 +3498,8 @@ async function executeControlRequest(
           return apps.deploy({ ...deploy, appId: id })
         }
         case "database":
-          return databaseDeploymentLogs.run(
-            input.id,
+          return deploymentLogs.run(
+            { id: input.id, kind: "database" },
             input.deploymentId,
             input.recipeDefinition
               ? "Updating the database's Brick"
@@ -3535,8 +3528,8 @@ async function executeControlRequest(
             )
           return retainingInstance(existing, async () =>
             relayInstanceWithStoredName(
-              await serverDeploymentLogs.run(
-                input.id,
+              await deploymentLogs.run(
+                { id: input.id, kind: "instance" },
                 input.deploymentId,
                 "Redeploying the game server",
                 (onPhase) => lifecycle.redeployInstance(input.id, onPhase)
@@ -3622,7 +3615,7 @@ async function executeControlRequest(
         )
         await docker.setPendingLimits(instanceId, null)
         await resourceFreezes.forget("instance", instanceId)
-        await serverDeploymentLogs.remove(instanceId)
+        await deploymentLogs.remove({ id: instanceId, kind: "instance" })
         return { deleted: true, instanceId }
       }
       await lifecycle.deleteInstance(instanceId, payload.deleteData === true)
@@ -3649,7 +3642,7 @@ async function executeControlRequest(
         )
       })
       await resourceFreezes.forget("instance", instanceId)
-      await serverDeploymentLogs.remove(instanceId)
+      await deploymentLogs.remove({ id: instanceId, kind: "instance" })
       return { deleted: true, instanceId }
     }
     // Power for a game server, database or App alike.
@@ -3896,14 +3889,14 @@ async function executeControlRequest(
         uploadConsoleLogToMclogs(config.mclogsApiUrl, log, input)
       )
     }
+    // Any kind's deployment log. The kind picked the action that let this
+    // through, so it picks the folder too.
     case "instance.deployment.read": {
       const { deploymentId, id, kind } =
-        relayServerDeploymentReadSchema.parse(payload)
-      // The kind picked the action that let this through, so it picks the
-      // store too.
-      return (
-        kind === "database" ? databaseDeploymentLogs : serverDeploymentLogs
-      ).read(id, deploymentId)
+        relayDeploymentReadSchema.parse(payload)
+      return kind === "app"
+        ? apps.readDeployment(id, deploymentId)
+        : deploymentLogs.read({ id, kind }, deploymentId)
     }
     case "instance.network.ports.reserve": {
       const instance = await requiredInstance(payload)

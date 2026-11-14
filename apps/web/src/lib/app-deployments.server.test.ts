@@ -545,18 +545,18 @@ describeMysql("App deployments", () => {
           triggeredBy: null,
         })
 
-        const { getAppDeploymentLogHandler } = yield* Effect.promise(
+        const { getDeploymentLogHandler } = yield* Effect.promise(
           () => import("@/server/app-deployments.server")
         )
         const refusal = (userId: string, role: string, appId: string) =>
           Effect.promise(() =>
-            getAppDeploymentLogHandler(
+            getDeploymentLogHandler(
               {
                 emailVerifiedAt: new Date().toISOString(),
                 id: userId,
                 role,
               } as AuthenticatedUser,
-              { appId, deploymentId: id }
+              { deploymentId: id, instance: { id: appId, kind: "app" } }
             ).then(
               () => null,
               (error: Error) => error.message
