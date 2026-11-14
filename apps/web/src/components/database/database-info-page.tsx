@@ -65,7 +65,7 @@ export function DatabaseInfoPage() {
       />
       <DatabaseContainerSection
         available={available}
-        canReadLogs={can("database.logs.read")}
+        canReadLogs={can("instance.logs.read")}
         database={database}
         editable={can("instance.limits.write")}
       />

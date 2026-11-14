@@ -2096,18 +2096,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "instance.console.read"
     case "instance.logs.share":
       return "instance.logs.share"
-    // Each kind's deployment log takes what reading its logs does.
+    // Any kind's deployment log takes reading its logs.
     case "instance.deployment.read":
-      switch (objectString(request.payload, "kind")) {
-        case "instance":
-          return "instance.logs.read"
-        case "database":
-          return "database.logs.read"
-        case "app":
-          return "app.logs.read"
-        default:
-          return null
-      }
+      return "instance.logs.read"
     case "instance.network.ports.reserve":
     case "instance.network.ports.release":
     case "instance.network.ports.write":

@@ -379,7 +379,7 @@ function AppPowerControls({
       showToast({ message: `${deployLabel} queued`, type: "success" })
       await invalidate()
       // Follow the deployment as it happens.
-      if (app.permissions.includes("app.logs.read")) {
+      if (app.permissions.includes("instance.logs.read")) {
         await navigate({
           params: { appId: app.id },
           search: { stream: "deployment" },

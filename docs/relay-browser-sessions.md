@@ -147,13 +147,13 @@ when their capabilities expire: within a minute, or 10 for preview links.
 
 ## Surfaces
 
-| Surface                                     | Channel                      | Actions                                                  |
-| ------------------------------------------- | ---------------------------- | -------------------------------------------------------- |
-| Game server console, commands, completion   | Console socket               | `instance.console.read`, `instance.console.write`        |
-| App, database, Relay, and Kiln service logs | Console socket               | `app.logs.read`, `database.logs.read`, `relay.logs.read` |
-| Game server, App, and database usage        | Resource socket              | `instance.read`, `app.read`, `database.read`             |
-| Files, App data, host files, database dumps | HTTP `/v1/browser/files/...` | `*.files.download`, `*.files.upload`, `database.dump.*`  |
-| Audio and video in the Files tab            | HTTP `/v1/browser/previews/...` | `*.files.download`, `database.dump.export`            |
+| Surface                                     | Channel                         | Actions                                                 |
+| ------------------------------------------- | ------------------------------- | ------------------------------------------------------- |
+| Game server console, commands, completion   | Console socket                  | `instance.console.read`, `instance.console.write`       |
+| App, database, Relay, and Kiln service logs | Console socket                  | `instance.logs.read`, `relay.logs.read`                 |
+| Game server, App, and database usage        | Resource socket                 | `instance.read`, `app.read`, `database.read`            |
+| Files, App data, host files, database dumps | HTTP `/v1/browser/files/...`    | `*.files.download`, `*.files.upload`, `database.dump.*` |
+| Audio and video in the Files tab            | HTTP `/v1/browser/previews/...` | `*.files.download`, `database.dump.export`              |
 
 A media player can't sign its requests, so a preview link carries a
 `preview` capability with no proof: it names one file, grants only its

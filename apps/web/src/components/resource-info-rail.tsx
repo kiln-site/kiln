@@ -191,7 +191,7 @@ const InfoRailUpdatesRow = React.memo(function InfoRailUpdatesRow({
         ? canAccessDatabasePermission(
             capabilities,
             { id, relayId },
-            "database.logs.read"
+            "instance.logs.read"
           )
         : canAccessInstancePermission(
             capabilities,

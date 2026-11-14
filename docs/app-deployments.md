@@ -212,14 +212,14 @@ Kiln volume, mounted in Hearth or declared in the Compose file. Only
 volumes are backed up, and a row speaks up where what is written there may
 be lost:
 
-| Row | It says |
-| --- | --- |
-| A relative path in a repository's Compose file | Not kept: each deployment replaces the checkout |
-| A volume with no name in a Compose file | Not kept: Docker makes a new one on every deploy |
-| A relative path in a Compose file written in Hearth | Not backed up: it is kept on the node, beside the file |
-| A path on the node | Not backed up |
-| A volume the Compose file names or configures itself | Not backed up |
-| A typed file the app may write to | Changes not kept: it is written again on each deploy |
+| Row                                                  | It says                                                |
+| ---------------------------------------------------- | ------------------------------------------------------ |
+| A relative path in a repository's Compose file       | Not kept: each deployment replaces the checkout        |
+| A volume with no name in a Compose file              | Not kept: Docker makes a new one on every deploy       |
+| A relative path in a Compose file written in Hearth  | Not backed up: it is kept on the node, beside the file |
+| A path on the node                                   | Not backed up                                          |
+| A volume the Compose file names or configures itself | Not backed up                                          |
+| A typed file the app may write to                    | Changes not kept: it is written again on each deploy   |
 
 Below the rows it lists each path the app's image declares as a volume
 with nothing mounted there, which starts empty on every deploy. It can't
@@ -371,5 +371,4 @@ Hearth reads any of them with `instance.deployment.read`, naming the
 instance's kind beside its ID, and each instance's Logs page shows them
 the same way: one still running is read again each second, and one the
 Relay no longer keeps says so. Reading one takes reading that instance's
-logs: `instance.logs.read` on a game server, `database.logs.read` on a
-database, `app.logs.read` on an App.
+logs (`instance.logs.read`), on the instance or its Relay.

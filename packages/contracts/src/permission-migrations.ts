@@ -25,6 +25,10 @@
  * Terminal: an App's shell took `app.terminal`, and a database's
  * `database.terminal` (the Relay's `database.dump.import`). A game server
  * had none.
+ *
+ * Logs: an App's took `app.logs.read`, and a database's
+ * `database.logs.read`, as Relay actions too. A game server's already had
+ * the name every kind's now take.
  */
 const fileActions: Readonly<Record<string, ReadonlyArray<string>>> = {
   "app.files.read": ["instance.files.list", "instance.files.read"],
@@ -169,3 +173,19 @@ export function migratedTerminalActions(
 
 /** The permission that opens a shell in any kind of instance. */
 export const migratedTerminalPermission = "instance.terminal"
+
+// Reading an App's or a database's logs had a Relay action of its own.
+const logActions: Readonly<Record<string, ReadonlyArray<string>>> = {
+  "app.logs.read": ["instance.logs.read"],
+  "database.logs.read": ["instance.logs.read"],
+}
+
+/** A Relay client's actions, with reading each kind's logs replaced. */
+export function migratedLogActions(
+  actions: ReadonlyArray<string>
+): Array<string> {
+  return replaced(actions, logActions)
+}
+
+/** The permission that reads any kind of instance's logs. */
+export const migratedLogsPermission = "instance.logs.read"

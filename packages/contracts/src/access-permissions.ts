@@ -97,12 +97,10 @@ export const accessPermissions = [
   "relay.files.mount",
   "database.data.read",
   "database.data.write",
-  "database.logs.read",
   "app.read",
   "app.create",
   "app.manage",
   "app.delete",
-  "app.logs.read",
 ] as const
 export type AccessPermission = (typeof accessPermissions)[number]
 Object.freeze(accessPermissions)
@@ -253,7 +251,7 @@ const permissionPlacement: Record<
   "instance.configuration.read": ["instance.configuration", "instance"],
   "instance.configuration.write": ["instance.configuration", "instance"],
   "instance.limits.write": ["instance.limits", "every"],
-  "instance.logs.read": ["instance.logs", "instance"],
+  "instance.logs.read": ["instance.logs", "every"],
   "instance.logs.share": ["instance.logs", "instance"],
   "instance.network.read": ["instance.network", "instance"],
   "instance.network.write": ["instance.network", "every"],
@@ -269,12 +267,10 @@ const permissionPlacement: Record<
   "database.dump.import": ["database.dump", "database"],
   "database.data.read": ["database.data", "database"],
   "database.data.write": ["database.data", "database"],
-  "database.logs.read": ["database.logs", "database"],
   "app.read": ["overview", "app"],
   "app.create": ["resource.creation", "relay"],
   "app.manage": ["app.manage", "app"],
   "app.delete": ["resource.deletion", "app"],
-  "app.logs.read": ["app.logs", "app"],
 }
 
 const familyScopes: Record<
@@ -316,8 +312,9 @@ const relayScopeChildVisibility: Record<string, readonly AccessPermission[]> = {
  * there. Files: a game server's and an App's, and an App is reached only
  * through its Relay. Changing its network: a game server's ports and web
  * routes, and an App's web routes; where an App is served is read with the
- * App itself. Power, deploying, resource limits and the terminal: a game
- * server's, a database's and an App's.
+ * App itself. Power, deploying, resource limits, the terminal and reading
+ * logs: a game server's, a database's and an App's. Sharing a log is a game
+ * server's console's alone.
  */
 const everyInstanceBlocks: Record<
   string,
@@ -348,6 +345,11 @@ const everyInstanceBlocks: Record<
   },
   "instance.terminal": {
     scopes: grantScopes,
+    reaches: ["instance.read", "database.read", "app.read"],
+  },
+  // An App's owner reads its logs on the App itself.
+  "instance.logs": {
+    scopes: [...grantScopes, "app"],
     reaches: ["instance.read", "database.read", "app.read"],
   },
 }
@@ -489,8 +491,7 @@ const permissionCopy: Record<
   },
   "instance.configuration.write": {
     label: "Manage configuration",
-    description:
-      "Change startup settings and switch Bricks.",
+    description: "Change startup settings and switch Bricks.",
   },
   "instance.limits.write": {
     label: "Manage resource limits",
@@ -498,8 +499,9 @@ const permissionCopy: Record<
       "Change its memory, CPU, and disk limits: a game server's, a database's, or an App's.",
   },
   "instance.logs.read": {
-    label: "View saved logs",
-    description: "Read the server’s saved log files.",
+    label: "View logs",
+    description:
+      "Read its deployment logs and its containers' output: a game server's, a database's, or an App's.",
   },
   "instance.logs.share": {
     label: "Share logs",
@@ -586,14 +588,6 @@ const permissionCopy: Record<
   "app.delete": {
     label: "Delete apps",
     description: "Remove apps, their containers, and their data.",
-  },
-  "app.logs.read": {
-    label: "View app logs",
-    description: "Read deployment logs and container output.",
-  },
-  "database.logs.read": {
-    label: "View database logs",
-    description: "Watch the database container's live output.",
   },
   "backup.read": {
     label: "View backups",
@@ -776,9 +770,7 @@ const blockLabels: Record<string, string> = {
   "database.network": "Database networking",
   "database.dump": "Database data",
   "database.data": "Database tables",
-  "database.logs": "Database logs",
   "app.manage": "App configuration",
-  "app.logs": "App logs",
   "resource.deletion": "Resource deletion",
   "resource.creation": "Resource creation",
   "relay.configuration": "Relay configuration",
@@ -989,8 +981,7 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
           "overview.all",
           "instance.console.read",
           "instance.configuration.read",
-          "database.logs.read",
-          "app.logs.read",
+          "instance.logs.read",
           "instance.network.read",
           "database.network.read",
           "backup.read",
@@ -1015,8 +1006,6 @@ export const builtinPermissionPresets: readonly PermissionPreset[] =
           "instance.logs.all",
           "instance.network.write",
           "database.network.write",
-          "database.logs.read",
-          "app.logs.read",
           "backup.all",
           "schedule.all",
         ].map((key) =>
@@ -1065,9 +1054,7 @@ export const relayReadOnlyMachineActions = [
   "schedule.read",
   "instance.read",
   "instance.console.read",
-  "database.logs.read",
   "app.read",
-  "app.logs.read",
   "instance.sftp.connect",
   "instance.files.list",
   "instance.files.read",

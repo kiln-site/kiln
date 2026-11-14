@@ -54,7 +54,7 @@ interface SelectionRow extends RowDataPacket {
 // themselves.
 const appOwnerSelections: ReadonlyArray<PermissionSelection> = [
   { kind: "permission", key: "app.read" },
-  { kind: "permission", key: "app.logs.read" },
+  { kind: "permission", key: "instance.logs.read" },
   { kind: "permission", key: "app.delete" },
 ]
 

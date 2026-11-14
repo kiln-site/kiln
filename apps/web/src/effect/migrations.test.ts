@@ -839,7 +839,7 @@ describeMysql("database migrations", () => {
           const granted = (id: string) =>
             selected("access_selection", "access_id", id)
           expect(yield* granted("databases")).toEqual([
-            "database.logs.read",
+            "instance.logs.read",
             "instance.power.kill",
           ])
           expect(yield* granted("block")).toEqual(["instance.power.kill"])
@@ -850,7 +850,7 @@ describeMysql("database migrations", () => {
             "instance.network.write",
             "instance.power.kill",
           ])
-          expect(yield* granted("observer")).toEqual(["app.logs.read"])
+          expect(yield* granted("observer")).toEqual(["instance.logs.read"])
           expect(yield* granted("database")).toEqual(["instance.power.kill"])
           expect(yield* granted("server")).toEqual(["instance.console.read"])
           expect(
@@ -926,7 +926,10 @@ describeMysql("database migrations", () => {
           const databaseId = "2".repeat(12)
           const serverId = "5".repeat(12)
           yield* insertRelay(relayId, {
-            client_actions: JSON.stringify(["database.read", "instance.create"]),
+            client_actions: JSON.stringify([
+              "database.read",
+              "instance.create",
+            ]),
             client_role: "custom",
           })
           const selections = (
@@ -1023,12 +1026,12 @@ describeMysql("database migrations", () => {
             "instance.limits.write",
           ])
           expect(yield* granted("observer")).toEqual([
-            "app.logs.read",
             "instance.configuration.read",
+            "instance.logs.read",
           ])
           expect(yield* granted("stray")).toEqual([
-            "database.logs.read",
             "instance.configuration.write",
+            "instance.logs.read",
           ])
           expect(
             yield* selected("preset_selection", "preset_id", "preset")
@@ -1057,7 +1060,11 @@ describeMysql("database migrations", () => {
             expect.arrayContaining(["instance.read", "instance.deploy"])
           )
           expect(loaded(yield* granted("apps"), "relay")).toEqual(
-            expect.arrayContaining(["app.manage", "app.read", "instance.deploy"])
+            expect.arrayContaining([
+              "app.manage",
+              "app.read",
+              "instance.deploy",
+            ])
           )
 
           const [relay] = yield* sql<{ actions: unknown }>`
@@ -1129,7 +1136,10 @@ describeMysql("database migrations", () => {
               FROM ${sql(databaseTableName("instance_update"))}
           `
           expect(
-            updates.map((row) => ({ ...row, delay_hours: Number(row.delay_hours) }))
+            updates.map((row) => ({
+              ...row,
+              delay_hours: Number(row.delay_hours),
+            }))
           ).toEqual([
             {
               delay_hours: 24,
@@ -1305,7 +1315,10 @@ describeMysql("database migrations", () => {
           const databaseId = "2".repeat(12)
           const serverId = "5".repeat(12)
           yield* insertRelay(relayId, {
-            client_actions: JSON.stringify(["database.read", "database.create"]),
+            client_actions: JSON.stringify([
+              "database.read",
+              "database.create",
+            ]),
             client_role: "custom",
           })
           const selections = (
@@ -1376,7 +1389,7 @@ describeMysql("database migrations", () => {
             "instance.configuration.all",
             "instance.limits.write",
           ])
-          expect(yield* granted("observer")).toEqual(["database.logs.read"])
+          expect(yield* granted("observer")).toEqual(["instance.logs.read"])
 
           // What was stored now loads, and changes the limits it could.
           const loaded = (
@@ -1621,6 +1634,147 @@ describeMysql("database migrations", () => {
               ? JSON.parse(relay.actions)
               : relay?.actions
           ).toEqual(["app.read", "instance.terminal", "database.dump.import"])
+        }),
+      schemaBuildTimeout
+    )
+
+    it.effect(
+      "keeps who could read an App's or a database's logs, as the logs permission every instance takes",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          // As a Hearth left it while each kind's logs had a permission of
+          // its own.
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 76)
+          )
+          const relayId = "1".repeat(12)
+          const databaseId = "6".repeat(12)
+          yield* insertRelay(relayId, {
+            client_actions: JSON.stringify([
+              "app.read",
+              "app.logs.read",
+              "database.logs.read",
+            ]),
+            client_role: "custom",
+          })
+          const selections = (
+            owner: Record<string, string>,
+            keys: ReadonlyArray<string>
+          ) =>
+            keys.map((key) => ({
+              ...owner,
+              selection_kind: key.endsWith(".all")
+                ? "collection"
+                : "permission",
+              selection_key: key,
+            }))
+          const grant = Effect.fnUntraced(function* (
+            id: string,
+            resourceType: "database" | "relay",
+            resourceId: string,
+            keys: ReadonlyArray<string>
+          ) {
+            yield* insertUser(id)
+            yield* insertGrant({
+              id,
+              relayId,
+              resourceId,
+              resourceType,
+              userId: id,
+            })
+            yield* insertRows(
+              "access_selection",
+              selections({ access_id: id }, keys)
+            )
+          })
+          yield* grant("app-logs", "relay", relayId, ["app.logs.read"])
+          yield* grant("app-log-blocks", "relay", relayId, ["app.logs.all"])
+          yield* grant("database-logs", "database", databaseId, [
+            "database.read",
+            "database.logs.read",
+          ])
+          yield* grant("database-log-blocks", "relay", relayId, [
+            "database.logs.all",
+          ])
+          yield* grant("every-database", "database", databaseId, [
+            "database.all",
+          ])
+          yield* insertRows("permission_preset", {
+            created_at: 1,
+            id: "preset",
+            name: "Log readers",
+            relay_id: relayId,
+            resource_id: relayId,
+            resource_type: "relay",
+            updated_at: 1,
+          })
+          yield* insertRows(
+            "preset_selection",
+            selections({ preset_id: "preset" }, [
+              "app.logs.read",
+              "database.logs.read",
+            ])
+          )
+
+          yield* applyMigrations(migrations)
+
+          const selected = (table: string, owner: string, id: string) =>
+            sql<{ key: string }>`
+              SELECT selection_key AS \`key\` FROM ${sql(databaseTableName(table))}
+               WHERE ${sql(owner)} = ${id} ORDER BY selection_key
+            `.pipe(Effect.map((rows) => rows.map((row) => row.key)))
+          const granted = (id: string) =>
+            selected("access_selection", "access_id", id)
+          expect(yield* granted("app-logs")).toEqual(["instance.logs.read"])
+          expect(yield* granted("app-log-blocks")).toEqual([
+            "instance.logs.read",
+          ])
+          expect(yield* granted("database-logs")).toEqual([
+            "database.read",
+            "instance.logs.read",
+          ])
+          expect(yield* granted("database-log-blocks")).toEqual([
+            "instance.logs.read",
+          ])
+          expect(yield* granted("every-database")).toEqual(["database.all"])
+          expect(
+            yield* selected("preset_selection", "preset_id", "preset")
+          ).toEqual(["instance.logs.read"])
+
+          // What was stored now loads, and reads the logs it could.
+          expect(
+            expandStoredSelections(
+              (yield* granted("database-logs")).map((key) => ({
+                key,
+                kind: "permission" as const,
+              })),
+              "database"
+            )
+          ).toContain("instance.logs.read")
+          expect(
+            expandStoredSelections(
+              [{ key: "database.all", kind: "collection" }],
+              "database"
+            )
+          ).toContain("instance.logs.read")
+          expect(
+            expandStoredSelections(
+              [{ key: "app.all", kind: "collection" }],
+              "relay"
+            )
+          ).toContain("instance.logs.read")
+
+          const [relay] = yield* sql<{ actions: unknown }>`
+            SELECT client_actions AS actions
+              FROM ${sql(databaseTableName("relay"))} WHERE id = ${relayId}
+          `
+          expect(
+            typeof relay?.actions === "string"
+              ? JSON.parse(relay.actions)
+              : relay?.actions
+          ).toEqual(["app.read", "instance.logs.read"])
         }),
       schemaBuildTimeout
     )

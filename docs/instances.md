@@ -36,6 +36,7 @@ Every kind gets these from the platform.
 | Limits      | One request and one permission for every kind   | Done for game servers, databases and Apps: one Relay request and one permission                                          |
 | Domains     | Every kind, automatic for an App's web services | One table of addresses, one reconcile and one Domains table for game servers and Apps; a database has no address yet     |
 | Terminal    | A shell in every kind, on one path              | Done for game servers, databases and Apps: one set of Relay requests, one stream and one permission                      |
+| Logs        | One Logs page, one log store and one permission | Done for game servers, databases and Apps: one page, one store and read request on the Relay, and one permission         |
 | Ports       | One list of taken ports and one Ports section   | Done for game servers and Apps: one list on the Relay and one Ports section. Each kind still saves its ports its own way |
 | Networking  | One page for every kind                         | A page per kind, on a few shared sections                                                                                |
 | Files       | One file browser and one permission             | Done for game servers and Apps                                                                                           |
@@ -81,7 +82,9 @@ granted on, and of every game server and App on a Relay; an App's is no
 longer part of `app.manage`. `instance.terminal` opens a shell in what it
 is granted on, and in everything on a Relay; `app.terminal` and
 `database.terminal` are gone, and a game server's owner holds it only when
-it's granted. See [Access control](access-control.md).
+it's granted. `instance.logs.read` reads the logs of what it is granted
+on, and of everything on a Relay; `app.logs.read` and `database.logs.read`
+are gone. See [Access control](access-control.md).
 
 In the catalog (`packages/contracts/src/access-permissions.ts`) these are
 the `every` family, and `everyInstanceBlocks` says where each can be granted
@@ -352,8 +355,8 @@ from a tag or an image name today.
 13. One log path. Every kind fills the same Logs page
     (`InstanceLogsPage`) with its containers and its deployments, and every
     deployment's log is kept by one store on the Relay, in one format, and
-    read with `instance.deployment.read`. Reading a kind's logs still takes
-    a permission of that kind's.
+    read with `instance.deployment.read`. Reading any kind's logs takes
+    `instance.logs.read`. Done.
 14. One permission model. Permissions still work three ways by kind: an App
     can't be shared on its own, only through its Relay, and a game server's
     or a database's owner holds `all` in code, which no preset can narrow.

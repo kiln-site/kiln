@@ -374,6 +374,8 @@ describe("Relay state", () => {
                 "instance.files.read",
                 "database.power",
                 "app.terminal",
+                "app.logs.read",
+                "database.logs.read",
               ])
               yield* store.createInvitation(used)
               yield* store.pairClient({
@@ -413,6 +415,7 @@ describe("Relay state", () => {
                   "instance.power.restart",
                   "instance.power.kill",
                   "instance.terminal",
+                  "instance.logs.read",
                 ]
               )
               assert.deepStrictEqual(

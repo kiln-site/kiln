@@ -326,7 +326,7 @@ function DatabasePowerControls({
     onMutate: () => {
       setRedeployOpen(false)
       // Follow the deployment as it happens, as an App's is.
-      if (database.permissions.includes("database.logs.read")) {
+      if (database.permissions.includes("instance.logs.read")) {
         void navigate({
           params: { databaseId: database.id },
           search: { stream: "deployment" },
@@ -375,12 +375,12 @@ function DatabasePowerControls({
           onConfirm={() => redeploy.mutate()}
           onOpenChange={setRedeployOpen}
         >
-          Pulls {engineProductLabel(database)} again and replaces the
-          container over the same data. The database is unavailable until
-          the new container is ready, and whatever is connected to it has
-          to reconnect. If the new container doesn't get ready, the old one
-          is started again, but anything a newer release already changed in
-          the data stays changed. Back up first what you can't lose.
+          Pulls {engineProductLabel(database)} again and replaces the container
+          over the same data. The database is unavailable until the new
+          container is ready, and whatever is connected to it has to reconnect.
+          If the new container doesn't get ready, the old one is started again,
+          but anything a newer release already changed in the data stays
+          changed. Back up first what you can't lose.
         </RedeployDialog>
       ) : null}
     </>
