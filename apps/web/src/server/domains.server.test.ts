@@ -18,10 +18,10 @@ import { encryptWithKeyring } from "../../keyring.mjs"
 
 import {
   provisionInstanceDomain,
-  reconcileDueInstanceDomainsEffect,
+  reconcileDueAddressesEffect,
   removeInstanceDomainEffect,
-  removeRelayManagedDomainsEffect,
-} from "./domains.server"
+  removeRelayAddressesEffect,
+} from "./addresses.server"
 
 const relayId = "relay-one"
 const instanceId = "b".repeat(12)
@@ -302,7 +302,7 @@ describeMysql("renaming a game server's domain", () => {
             id: testAssignment().id,
             vanityLabel: "creative",
           })
-          yield* reconcileDueInstanceDomainsEffect(0)
+          yield* reconcileDueAddressesEffect(0)
 
           assert.deepEqual(
             (yield* assignmentRows).map((row) => row.vanity_label),
@@ -319,12 +319,12 @@ describeMysql("renaming a game server's domain", () => {
 
           // Retried once its wait is up, with Cloudflare back.
           dns.refuseUpdate.clear()
-          yield* reconcileDueInstanceDomainsEffect(0)
+          yield* reconcileDueAddressesEffect(0)
           assert.deepEqual(yield* claimedNames, [
             "creative.kiln.site",
             "play.kiln.site",
           ])
-          yield* reconcileDueInstanceDomainsEffect(31_000)
+          yield* reconcileDueAddressesEffect(31_000)
 
           assert.deepEqual(dns.names(), [
             "_minecraft._tcp.creative.kiln.site",
@@ -375,7 +375,7 @@ describeMysql("removing a game server's domain", () => {
           // Removing its Relay with its records too.
           yield* insertAssignment(failed)
           lose(failed.id, "play")
-          yield* removeRelayManagedDomainsEffect(relayId, true)
+          yield* removeRelayAddressesEffect(relayId, true)
           assert.deepEqual(dns.names(), [])
           assert.deepEqual(yield* claimedNames, [])
         }).pipe(Effect.provide(disabledCache))
@@ -412,7 +412,7 @@ describeMysql("removing a game server's domain", () => {
         // Its name stays held until the delete finishes.
         assert.deepEqual(yield* claimedNames, ["play.kiln.site"])
         dns.refuseDelete.clear()
-        yield* reconcileDueInstanceDomainsEffect(0)
+        yield* reconcileDueAddressesEffect(0)
 
         assert.deepEqual(dns.records(), [])
         assert.deepEqual(yield* assignmentKeys, [])

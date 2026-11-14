@@ -85,7 +85,7 @@ import { forkAppEffect, runAppEffect, traceAppPromise } from "@/effect/runtime"
 import {
   applyManagedDomainAddressesEffect,
   provisionInstanceDomainBestEffort,
-} from "@/server/domains.server"
+} from "@/server/addresses.server"
 import { syncInstanceDomainAfterPortUpdateBestEffort } from "@/server/relay-port-update.server"
 import { deleteConfirmationSchema } from "@/lib/delete-confirmation"
 import {

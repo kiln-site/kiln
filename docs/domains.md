@@ -202,7 +202,9 @@ MySQL first. Hearth's DNS worker (`Domains.dns`) finishes whatever they
 left: records Cloudflare refused, renames and deletes cut short by an outage
 or a restart. A row still waiting is retried after 30 seconds, then twice as
 long each time, up to an hour; saving it again or Sync tries it at once,
-including deletes left behind by a removed Relay.
+including deletes left behind by a removed Relay. Sync also asks Cloudflare
+about every record Kiln keeps, a game server's address and its SRV record
+like a web route's, and makes one deleted there again.
 
 Kiln can't make MySQL, the Relays, and Cloudflare change together. MySQL
 decides who holds a name; Cloudflare allows several records under one name,

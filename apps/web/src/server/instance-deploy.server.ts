@@ -27,7 +27,7 @@ import {
   requiredRelay,
   requiredRelayInstance,
 } from "@/server/bricks.server"
-import { provisionInstanceDomainBestEffort } from "@/server/domains.server"
+import { provisionInstanceDomainBestEffort } from "@/server/addresses.server"
 import {
   databaseRpc,
   publishDatabaseChange,

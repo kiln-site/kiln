@@ -41,7 +41,7 @@ vi.mock("@/lib/relay-client", async (original) => ({
   ...(await original<typeof import("@/lib/relay-client")>()),
   invalidateRelayCache: f.invalidate,
 }))
-vi.mock("@/server/domains.server", () => ({
+vi.mock("@/server/addresses.server", () => ({
   provisionInstanceDomainBestEffort: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock("@/backups/destinations/s3", async (original) => ({

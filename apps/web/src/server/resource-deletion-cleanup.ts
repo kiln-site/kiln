@@ -18,7 +18,6 @@ import { reportAppError } from "@/effect/runtime"
 import { deleteResourceAccessEffect } from "@/lib/access-control"
 import { removeDeletedInstanceEffect } from "@/lib/instance-registry"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
-import { deleteInstanceDomainEffect } from "@/server/domains.server"
 
 /** A game server, App, or database the Relay no longer has. */
 export interface DeletedResource {
@@ -42,16 +41,13 @@ export const cleanUpDeletedResourceEffect = Effect.fn(
   "resources.delete.cleanUp"
 )(function* (resource: DeletedResource, subject: string) {
   const { id, kind, relayId } = resource
-  if (kind === "instance") {
-    // Only once the server is gone: its names stay held while it might
-    // survive. Deletes Cloudflare refuses are left to the DNS worker.
-    yield* deleteInstanceDomainEffect(relayId, id)
-  }
   if (kind !== "database") {
+    // Only once it is gone: its names stay held while it might survive.
+    // Deletes Cloudflare refuses are left to the DNS worker.
     yield* promiseEffect(async () => {
-      const { deleteResourceWebHostnamesBestEffort } =
+      const { deleteResourceAddressesBestEffort } =
         await import("@/server/web-hostname-access.server")
-      await deleteResourceWebHostnamesBestEffort({
+      await deleteResourceAddressesBestEffort({
         relayId,
         resourceId: id,
         resourceType: kind,
