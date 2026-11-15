@@ -91,11 +91,12 @@ async function savedState(harness: RelayHarness, id: string) {
   const records = JSON.parse(
     await readFile(join(directory, "dns-records.json"), "utf8")
   ).records as Array<{ address: string; hostname: string }>
-  const corefile = await readFile(join(directory, "Corefile"), "utf8").catch(
+  // What CoreDNS answers from: the hosts file in its folder.
+  const hosts = await readFile(join(directory, "dns", "hosts"), "utf8").catch(
     () => null
   )
   return {
-    corefile,
+    hosts,
     members: config.bindings.map((binding) => binding.memberId),
     records,
   }
@@ -347,8 +348,8 @@ describe("Tailscale network members", () => {
 
     const saved = await savedState(harness, stackId)
     expect(saved.records).toEqual(hearthRecords)
-    expect(saved.corefile).toContain("10.165.61.10 peer.test")
-    expect(saved.corefile).not.toContain("other.test")
+    expect(saved.hosts).toContain("10.165.61.10 peer.test")
+    expect(saved.hosts).not.toContain("other.test")
   })
 })
 
@@ -510,5 +511,41 @@ describe("A tunnel as an instance", () => {
     expect((await savedState(harness, id)).records).toEqual([
       { address: "10.165.55.10", hostname: "paper" },
     ])
+  })
+})
+
+describe("A tunnel's DNS", () => {
+  // CoreDNS reads its records again by itself, so a change never makes the
+  // container again or drops a query.
+  it("serves new records without making its CoreDNS again", async () => {
+    const harness = await relayHarness()
+    const id = "f".repeat(12)
+    await savedStack(harness, stackConfig(id), [
+      { address: "10.165.55.10", hostname: "paper" },
+    ])
+    fakeDocker.addNetwork({
+      labels: { ...owner, "kiln.relay.network": `tailscale:${id}` },
+      name: harness.resources.tunnelNetwork(id),
+    })
+    stackContainer(harness, id, true)
+    await harness.lifecycle.syncTunnelDns({
+      id,
+      records: [{ address: "10.165.55.10", hostname: "paper" }],
+    })
+    const dns = harness.resources.tunnelDnsContainer(id)
+    const before = fakeDocker.container(dns)?.id
+
+    await harness.lifecycle.syncTunnelDns({
+      id,
+      records: [
+        { address: "10.165.55.10", hostname: "paper" },
+        { address: "10.165.55.11", hostname: "survival" },
+      ],
+    })
+
+    expect(fakeDocker.container(dns)?.id).toBe(before)
+    expect((await savedState(harness, id)).hosts).toBe(
+      "10.165.55.10 paper.test\n10.165.55.11 survival.test\n"
+    )
   })
 })

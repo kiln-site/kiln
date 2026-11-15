@@ -154,20 +154,35 @@ export function tunnelWithoutMembers(
   })
 }
 
-export function tunnelCoreDnsConfiguration(
+/**
+ * A tunnel's Corefile: its zone, answered from its hosts file, which CoreDNS
+ * reads again by itself as it changes. CoreDNS also watches the Corefile and
+ * reloads it gracefully, keeping the old one if the new one fails, so a
+ * change to either never restarts it.
+ */
+export function tunnelCorefile(domain: string): string {
+  return `${domain}:53 {\n    errors\n    cache 30\n    hosts ${TUNNEL_DNS_MOUNT}/hosts {\n        ttl 60\n    }\n    reload 4s 1s\n}\n`
+}
+
+/** A tunnel's records, as the hosts file its CoreDNS answers from. */
+export function tunnelHostsFile(
   domain: string,
   records: ReadonlyArray<{ address: string; hostname: string }>
 ): string {
-  const entries = [...records]
+  return [...records]
     .sort((left, right) => left.hostname.localeCompare(right.hostname))
     .map(
       ({ address, hostname }) =>
-        `        ${address} ${hostname.replace(/\.$/u, "")}.${domain}`
+        `${address} ${hostname.replace(/\.$/u, "")}.${domain}\n`
     )
-    .join("\n")
-  return `${domain}:53 {\n    errors\n    cache 30\n    hosts {\n${entries}${entries ? "\n" : ""}        ttl 60\n    }\n}\n`
+    .join("")
 }
 
+/** Where a tunnel's CoreDNS finds its Corefile and hosts file. */
+export const TUNNEL_DNS_MOUNT = "/etc/coredns"
+
+// A tunnel's Corefile from before it answered from a hosts file, with its
+// records inline: read once, for a tunnel that has no records file.
 export function tunnelCoreDnsRecords(
   domain: string,
   configuration: string
