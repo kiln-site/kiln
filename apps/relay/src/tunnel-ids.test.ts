@@ -11,7 +11,11 @@ import { physicalKey, useInstanceLegacyIds } from "./instance-keys.js"
 import { TUNNEL_ID_LABEL } from "./lifecycle.js"
 import { fakeDocker } from "./test/docker.js"
 import { relayHarness, TEST_NAMESPACE } from "./test/relay.js"
-import { migrateTunnelIds, migrateTunnelNames } from "./tunnel-ids.js"
+import {
+  migrateTunnelBricks,
+  migrateTunnelIds,
+  migrateTunnelNames,
+} from "./tunnel-ids.js"
 
 const relayId = "7".repeat(12)
 const networkId = "b".repeat(12)
@@ -195,6 +199,22 @@ describe("tailnet stacks becoming tunnels", () => {
       state: harness.state,
     })
     await migrateTunnelNames(harness.config)
+    // Made before tunnels ran Bricks, it runs Kiln's `tailscale` Brick at
+    // the images it ran then, with no source, and once is enough.
+    expect(await migrateTunnelBricks(harness.config)).toBe(1)
+    expect(await migrateTunnelBricks(harness.config)).toBe(0)
+    const directory = join(harness.config.rootDirectory, networkId)
+    for (const file of ["stack.json", ".removing-stack.json"]) {
+      expect((await read(directory, file)).brick).toEqual({
+        id: "tailscale",
+        images: {
+          dns: "coredns/coredns:1.14.7",
+          tailscale: "tailscale/tailscale:stable",
+        },
+        revision: 1,
+        source: null,
+      })
+    }
     const name = harness.resources.tunnelContainer(tunnelId)
     fakeDocker.tailscale.machines.set(name, {
       ipv4: "100.64.0.9",
@@ -219,6 +239,8 @@ describe("tailnet stacks becoming tunnels", () => {
     expect(tailscale.labels[TUNNEL_ID_LABEL]).toBe(networkId)
     expect(tailscale.labels).not.toHaveProperty("kiln.server.id")
     expect(tailscale.state.running).toBe(false)
+    // Its images are the ones it ran before.
+    expect(tailscale.image).toBe("tailscale/tailscale:stable")
     const dns = fakeDocker.container(
       harness.resources.tunnelDnsContainer(tunnelId)
     )!

@@ -1,0 +1,24 @@
+format: kiln.brick/v2
+kind: tunnel
+type: tailscale
+metadata:
+  id: tailscale
+  name: Tailscale
+  revision: 1
+  summary: Reach what runs on a Relay by name from anywhere on your tailnet.
+  author: Kiln
+  icon: ../icons/tailscale.svg
+  color: "#6b7280"
+  tags: [vpn, dns]
+  links:
+    homepage: "https://tailscale.com"
+    docs: "https://tailscale.com/kb/1019/subnets"
+# Its Tailscale container, a subnet router for what it connects. Kiln makes
+# the rest of both containers: the login, routes, firewall and DNS.
+deploy:
+  type: image
+  image: tailscale/tailscale:stable
+tunnel:
+  # Answers the tailnet's names from inside the Tailscale container's network.
+  dns:
+    image: coredns/coredns:1.14.7

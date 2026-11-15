@@ -23,6 +23,8 @@ import {
   databaseEngineRuntimes,
   databaseEngineRunsImage,
   databaseEngineSchema,
+  tunnelBrickImages,
+  tunnelBrickProblem,
 } from "@workspace/contracts"
 
 import { BrickRecipeError } from "./effect/errors.js"
@@ -37,6 +39,7 @@ import type {
   BrickVariableValue,
   RelayCatalog,
   DatabaseEngine,
+  TunnelBrickRecord,
 } from "@workspace/contracts"
 import {
   BlockedRemoteAddressError,
@@ -456,7 +459,28 @@ export async function resolveBrickForProvisioning(
  */
 function runnableBrick(recipe: BrickRecipe, source: string): void {
   if (recipe.kind === "database") databaseBrick(recipe, source)
+  else if (recipe.kind === "tunnel") tunnelBrick(recipe, source)
   else gameServerBrick(recipe, source)
+}
+
+/**
+ * A recipe as the tunnel the Relay runs, recorded as the tunnel keeps it:
+ * a type Kiln runs, from that type's two images. Kiln makes the rest of
+ * both containers. Which catalogs a tunnel may come from is Hearth's to
+ * say: it offers only Kiln's own.
+ */
+export function tunnelBrick(
+  recipe: BrickRecipe,
+  source: string
+): TunnelBrickRecord {
+  const problem = tunnelBrickProblem(recipe)
+  if (problem) throw recipeError("unsupported_brick", source, problem)
+  return {
+    id: recipe.metadata.id,
+    images: tunnelBrickImages(recipe),
+    revision: recipe.metadata.revision ?? 1,
+    source,
+  }
 }
 
 /** What a database Brick says of the container a database runs in. */

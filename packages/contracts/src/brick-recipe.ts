@@ -13,7 +13,13 @@ export const BRICK_FORMAT = "kiln.brick/v2"
 
 export const brickIdSchema = z.string().regex(/^[a-z0-9][a-z0-9.-]{0,63}$/u)
 
-export const brickKinds = ["game-server", "database", "app", "group"] as const
+export const brickKinds = [
+  "game-server",
+  "database",
+  "app",
+  "tunnel",
+  "group",
+] as const
 export type BrickKind = (typeof brickKinds)[number]
 
 /**
@@ -24,6 +30,7 @@ export const brickTypes = {
   "game-server": ["minecraft"],
   database: ["postgres", "mysql", "mariadb", "redis", "valkey"],
   app: [],
+  tunnel: ["tailscale"],
   group: [],
 } as const satisfies Record<BrickKind, ReadonlyArray<string>>
 export type BrickType = (typeof brickTypes)[BrickKind][number]
@@ -216,10 +223,9 @@ export const brickDeploySchema = z.discriminatedUnion("type", [
       service: nameSchema.optional(),
       ...optional(deployShared),
     })
-    .refine(
-      (deploy) => given(deploy.compose, deploy.file, deploy.path) === 1,
-      { message: "Give one of compose, file or path" }
-    ),
+    .refine((deploy) => given(deploy.compose, deploy.file, deploy.path) === 1, {
+      message: "Give one of compose, file or path",
+    }),
 ])
 export type BrickDeploy = z.infer<typeof brickDeploySchema>
 
@@ -364,6 +370,16 @@ export const brickDatabaseSchema = z.strictObject({
   import: z.string().min(1).max(2_048).optional(),
 })
 
+/**
+ * What only a tunnel has: the container that answers its tailnet's names,
+ * beside the one `deploy` runs. Its image is pinned, as `deploy`'s is.
+ */
+export const brickTunnelSchema = z.strictObject({
+  dns: z.strictObject({
+    image: z.string().min(1).max(512),
+  }),
+})
+
 /** What the `minecraft` type adds, and which of it this Brick uses. */
 export const brickMinecraftSchema = z.strictObject({
   /**
@@ -387,6 +403,7 @@ const instanceShape = {
   deploy: brickDeploySchema.optional(),
   "game-server": brickGameServerSchema.optional(),
   database: brickDatabaseSchema.optional(),
+  tunnel: brickTunnelSchema.optional(),
   minecraft: brickMinecraftSchema.optional(),
 }
 
@@ -669,6 +686,7 @@ function checkInstance(
     deploy?: BrickDeploy | undefined
     "game-server"?: unknown
     database?: unknown
+    tunnel?: unknown
     minecraft?: unknown
   },
   templates: ReadonlyArray<string>,
@@ -703,6 +721,12 @@ function checkInstance(
   }
   if (kind === "database" && recipe.database === undefined) {
     issue([...path, "database"], "A database says how to connect to it")
+  }
+  if (recipe.tunnel !== undefined && kind !== "tunnel") {
+    issue([...path, "tunnel"], "Only a tunnel has this section")
+  }
+  if (kind === "tunnel" && recipe.tunnel === undefined) {
+    issue([...path, "tunnel"], "A tunnel says what answers its names")
   }
   if (recipe.minecraft !== undefined && recipe.type !== "minecraft") {
     issue([...path, "minecraft"], "Only the minecraft type has this section")
@@ -751,6 +775,7 @@ function checkRecipe(
     "deploy",
     "game-server",
     "database",
+    "tunnel",
     "minecraft",
   ] as const) {
     if (recipe[section] !== undefined) {
@@ -826,6 +851,7 @@ export const brickDefaultExpose = {
   "game-server": "public",
   app: "http",
   database: "private",
+  tunnel: "private",
 } as const satisfies Record<
   Exclude<BrickKind, "group">,
   NonNullable<BrickPort["expose"]>

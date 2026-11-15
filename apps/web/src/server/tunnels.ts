@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { createServerFn } from "@tanstack/react-start"
 import {
   appTailscaleMember,
+  brickSourceSchema,
   databaseTailscaleMember,
   instanceTailscaleMember,
   MAXIMUM_TUNNEL_BINDINGS,
@@ -64,6 +65,10 @@ import { isPlatformAdmin, listUserGrants } from "@/lib/access-control"
 import { accessPermissions, type AccessPermission } from "@/lib/permissions"
 import { effectiveScopePermissions } from "@/lib/resource-permissions"
 import { listTunnelRecordsEffect } from "@/server/tunnel-access.server"
+import {
+  requiredTunnelBrick,
+  tunnelBricks,
+} from "@/server/tunnel-bricks.server"
 import { invalidateRelayCache, relayCachePolicy } from "@/lib/relay-client"
 import { relayRpc } from "@/lib/relay-connection"
 import { publishRealtimeChange } from "@/lib/realtime-source.server"
@@ -117,6 +122,8 @@ const saveTailnetSchema = z.strictObject({
   name: relayInstanceNameSchema,
   // The Relays it has a tunnel on. A Relay a member connects on gets one.
   relayIds: z.array(relayIdSchema).max(64),
+  // The Brick each tunnel it adds is made from: one of Kiln's own.
+  brick: brickSourceSchema.optional(),
 })
 
 const createTailnetSchema = z.strictObject({
@@ -309,6 +316,14 @@ const createTailnetOperation = operation<
     promiseEffect(() => createTailnetHandler(user, input)),
   audit: ({ input }) => ({ id: input.id, kind: "tailnet" }),
 })
+
+// The Bricks a tunnel can be made from, for whoever is asked which.
+export const getTunnelBricks = createServerFn({ method: "GET" }).handler(
+  async () => {
+    await requireEligibleResourceUser()
+    return tunnelBricks()
+  }
+)
 
 export const createTailnet = createServerFn({ method: "POST" })
   .validator(createTailnetSchema)
@@ -750,6 +765,14 @@ async function saveTailnetHandler(
       "A manual auth key can add one new Relay at a time. Install the first Relay, connect Kiln to Tailscale, then add the remaining Relays."
     )
   }
+  // A new tunnel runs one of Kiln's own tunnel Bricks.
+  if (newTargets.length > 0 && !data.brick) {
+    throw new Error("Choose the Brick a new tunnel runs")
+  }
+  const brick =
+    newTargets.length > 0 && data.brick
+      ? await requiredTunnelBrick(data.brick)
+      : undefined
   const desiredRelayIds = new Set(grouped.keys())
   const removed = currentForStack.filter(
     ({ relayId }) => !desiredRelayIds.has(relayId)
@@ -762,6 +785,7 @@ async function saveTailnetHandler(
     "tailscale.deployment.save",
     applyTunnelPlanEffect({
       authKey: data.authKey,
+      brick,
       authKeyForTarget: integrationCredential
         ? async (target) =>
             createTailscaleNodeAuthKey(integrationCredential, target.hostname)

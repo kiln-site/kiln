@@ -56,6 +56,7 @@ export const applyTunnelPlanEffect = Effect.fn(
 )(function* <TDeployment extends TunnelPlanState>({
   authKey,
   authKeyForTarget,
+  brick,
   current,
   desired,
   domains,
@@ -69,6 +70,8 @@ export const applyTunnelPlanEffect = Effect.fn(
   authKeyForTarget?: (
     target: DesiredTunnel
   ) => Promise<string | undefined>
+  /** The Brick each tunnel it adds is made from. */
+  brick?: TunnelApply["brick"]
   current: ReadonlyArray<TDeployment>
   desired: ReadonlyArray<DesiredTunnel>
   domains: Array<string>
@@ -88,6 +91,12 @@ export const applyTunnelPlanEffect = Effect.fn(
   const newTargetCount = desired.filter(
     ({ relayId }) => !previousByRelay.has(relayId)
   ).length
+  if (newTargetCount > 0 && !brick) {
+    return yield* orchestrationFailure(
+      "validation",
+      "Choose the Brick a new tunnel runs"
+    )
+  }
   if (newTargetCount > 1 && !authKeyForTarget) {
     return yield* orchestrationFailure(
       "validation",
@@ -111,6 +120,8 @@ export const applyTunnelPlanEffect = Effect.fn(
           const deployment = yield* promiseOperation("apply", () =>
             operations.apply(target, {
               ...(targetAuthKey ? { authKey: targetAuthKey } : {}),
+              // A tunnel keeps the Brick it was made from.
+              ...(previous ? {} : { brick }),
               bindings: target.bindings,
               domains,
               hostname: target.hostname,

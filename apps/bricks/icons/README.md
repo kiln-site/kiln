@@ -11,6 +11,8 @@ one in the Valkey project's
 [brand assets](https://github.com/valkey-io/assets), without its wordmark.
 Each is its project's trademark, used here only to name that project.
 The Dockerfile and Compose marks are Kiln's own.
+The Tailscale mark is from [Simple Icons](https://simpleicons.org) (CC0-1.0),
+Tailscale's trademark, used only to name it.
 The Beszel mark is from the [Beszel](https://github.com/henrygd/beszel)
 project (MIT), in one color.
 

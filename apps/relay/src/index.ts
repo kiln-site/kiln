@@ -332,7 +332,11 @@ import {
 } from "./platform.js"
 import { ScheduleManager } from "./schedules.js"
 import { migrateInstanceIds } from "./instance-id-migration.js"
-import { migrateTunnelIds, migrateTunnelNames } from "./tunnel-ids.js"
+import {
+  migrateTunnelBricks,
+  migrateTunnelIds,
+  migrateTunnelNames,
+} from "./tunnel-ids.js"
 import { assignRelayWebRouteIds, webRouteCollision } from "./web-route-ids.js"
 import { planWebRouteRecovery } from "./web-route-labels.js"
 import type {
@@ -391,6 +395,7 @@ await migrateTunnelIds({
   state: startupCore.state,
 })
 await migrateTunnelNames(config)
+await migrateTunnelBricks(config)
 const cliArguments = process.argv.slice(2)
 // Before pairing, so the bootstrap invitation expects the token the
 // installed Hearth is given.
@@ -2520,10 +2525,7 @@ async function executeControlRequest(
       return lifecycle.tunnelStates()
     case "tunnel.apply": {
       const input = tunnelApplySchema.parse(request.payload)
-      const stack = await lifecycle.applyTunnel(
-        input,
-        tunnelPlans.get(request)
-      )
+      const stack = await lifecycle.applyTunnel(input, tunnelPlans.get(request))
       await snapshotHub.refresh()
       return stack
     }
@@ -2532,8 +2534,9 @@ async function executeControlRequest(
       return lifecycle.syncTunnelDns(input)
     }
     case "tunnel.remove": {
-      const { controlPlaneDeviceRemoved, id, mode } =
-        tunnelRemoveSchema.parse(request.payload)
+      const { controlPlaneDeviceRemoved, id, mode } = tunnelRemoveSchema.parse(
+        request.payload
+      )
       await lifecycle.removeTunnel(
         id,
         mode,
@@ -3551,7 +3554,8 @@ async function executeControlRequest(
             { id: input.id, kind: "tunnel" },
             input.deploymentId,
             "Redeploying the tunnel",
-            (onPhase, note) => lifecycle.redeployTunnel(input.id, onPhase, note),
+            (onPhase, note) =>
+              lifecycle.redeployTunnel(input.id, onPhase, note),
             "tunnel"
           )
       }

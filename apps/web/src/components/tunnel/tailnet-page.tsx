@@ -40,6 +40,7 @@ import {
   useSetTailnets,
   useTailnet,
   useTailnetSave,
+  useTailscaleTunnelBrick,
   type TailnetOverview,
 } from "@/components/tunnel/tailnet-data"
 import {
@@ -273,6 +274,8 @@ function AddTunnelDialog({
   // Without a Tailscale login, one tunnel at a time logs in with a key.
   const needsKey = tailnet.integration === null
   const save = useTailnetSave()
+  // The Brick a tunnel is made from: Kiln's Tailscale one.
+  const brick = useTailscaleTunnelBrick()
   const relayName = available.find(({ id }) => id === relayId)?.name ?? ""
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
@@ -286,6 +289,7 @@ function AddTunnelDialog({
               {
                 change: {
                   ...(needsKey ? { authKey: authKey.trim() } : {}),
+                  brick,
                   relayIds: [
                     ...tailnet.deployments.map(
                       (deployment) => deployment.relayId
@@ -373,7 +377,10 @@ function AddTunnelDialog({
             <Button
               type="submit"
               disabled={
-                !relayId || save.isPending || (needsKey && !authKey.trim())
+                !relayId ||
+                !brick ||
+                save.isPending ||
+                (needsKey && !authKey.trim())
               }
             >
               {save.isPending ? (

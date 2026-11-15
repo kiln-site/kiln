@@ -69,6 +69,7 @@ export * from "./database-login.js"
 export * from "./app-bricks.js"
 export * from "./app-environment.js"
 export * from "./database-bricks.js"
+export * from "./tunnel-bricks.js"
 export * from "./group-bricks.js"
 export * from "./security.js"
 export * from "./instance-overview.js"
@@ -1486,12 +1487,35 @@ export const tunnelBindingInputSchema = z
   })
   .strict()
 
+/**
+ * The Brick a tunnel was made from, as its Relay keeps it: which it is, and
+ * the images it runs, resolved when it was made. One made before tunnels
+ * ran Bricks reads as Kiln's `tailscale` Brick, with no source.
+ */
+export const tunnelBrickRecordSchema = z
+  .object({
+    id: brickIdSchema,
+    images: z
+      .object({
+        dns: z.string().min(1).max(512),
+        tailscale: z.string().min(1).max(512),
+      })
+      .strict(),
+    revision: z.number().int().min(1),
+    source: brickSourceSchema.nullable(),
+  })
+  .strict()
+
 export const tunnelApplySchema = z
   .object({
     authKey: relayTailscaleAuthKeySchema.optional(),
-    bindings: z
-      .array(tunnelBindingInputSchema)
-      .max(MAXIMUM_TUNNEL_BINDINGS),
+    // The Brick it is made from, given when it is made: a tunnel keeps the
+    // one it was made from.
+    brick: z
+      .object({ definition: brickRecipeSchema, source: brickSourceSchema })
+      .strict()
+      .optional(),
+    bindings: z.array(tunnelBindingInputSchema).max(MAXIMUM_TUNNEL_BINDINGS),
     // Its tailnet's TLDs, which its CoreDNS answers for.
     domains: z.array(relayTailscaleDomainSchema).min(1).max(16),
     hostname: relayTailscaleHostnameSchema,
@@ -2193,10 +2217,9 @@ export const relayInstanceSchema = z.object({
   provisioning: relayInstanceProvisioningSchema.optional(),
 })
 
-export const tunnelBindingSchema =
-  tunnelBindingInputSchema.extend({
-    address: z.ipv4(),
-  })
+export const tunnelBindingSchema = tunnelBindingInputSchema.extend({
+  address: z.ipv4(),
+})
 
 /**
  * Rewrites a stack saved before members were typed: its bindings named the
@@ -2240,9 +2263,8 @@ export function migrateLegacyTailscaleBindings(
 
 export const tunnelConfigSchema = z
   .object({
-    bindings: z
-      .array(tunnelBindingSchema)
-      .max(MAXIMUM_TUNNEL_BINDINGS),
+    bindings: z.array(tunnelBindingSchema).max(MAXIMUM_TUNNEL_BINDINGS),
+    brick: tunnelBrickRecordSchema,
     // Its tailnet's TLDs, which its CoreDNS answers for.
     domains: z.array(relayTailscaleDomainSchema).min(1).max(16),
     hostname: relayTailscaleHostnameSchema,
@@ -2256,6 +2278,7 @@ export const tunnelConfigSchema = z
 export const tunnelSchema = z
   .object({
     bindings: z.array(tunnelBindingSchema),
+    brick: tunnelBrickRecordSchema,
     components: z
       .object({
         coreDnsRunning: z.boolean(),
@@ -2293,22 +2316,16 @@ export const tunnelsSchema = z.array(tunnelSchema)
  */
 export const tunnelStateSchema = z
   .object({
-    bindings: z.array(
-      tunnelBindingSchema.extend({ frozen: z.boolean() })
-    ),
+    bindings: z.array(tunnelBindingSchema.extend({ frozen: z.boolean() })),
     id: tunnelIdSchema,
     removalPending: z.boolean(),
     tailnetId: instanceIdSchema,
   })
   .strict()
 
-export const tunnelStatesSchema = z.array(
-  tunnelStateSchema
-)
+export const tunnelStatesSchema = z.array(tunnelStateSchema)
 
-export type TunnelState = z.infer<
-  typeof tunnelStateSchema
->
+export type TunnelState = z.infer<typeof tunnelStateSchema>
 
 export const relayNodeCapabilitySchema = z.enum([
   "schedule-continue-on-failure",
@@ -3433,18 +3450,11 @@ export type RelayUpdateInstanceStartup = z.infer<
   typeof relayUpdateInstanceStartupSchema
 >
 export type Tunnel = z.infer<typeof tunnelSchema>
-export type TunnelApply = z.infer<
-  typeof tunnelApplySchema
->
-export type TunnelBinding = z.infer<
-  typeof tunnelBindingSchema
->
-export type TunnelConfig = z.infer<
-  typeof tunnelConfigSchema
->
-export type TunnelDns = z.infer<
-  typeof tunnelDnsSchema
->
+export type TunnelBrickRecord = z.infer<typeof tunnelBrickRecordSchema>
+export type TunnelApply = z.infer<typeof tunnelApplySchema>
+export type TunnelBinding = z.infer<typeof tunnelBindingSchema>
+export type TunnelConfig = z.infer<typeof tunnelConfigSchema>
+export type TunnelDns = z.infer<typeof tunnelDnsSchema>
 export type RelayProxyMode = z.infer<typeof relayProxyModeSchema>
 export type RelayProxyBrowserMetadata = z.infer<
   typeof relayProxyBrowserMetadataSchema

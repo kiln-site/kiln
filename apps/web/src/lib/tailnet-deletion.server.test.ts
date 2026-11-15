@@ -100,9 +100,7 @@ const domain = "private.test"
 const hostname = "private-network"
 const stack = `${relayId}/${tunnelId}`
 
-const networkRows = selectRows<{ cleanup_last_error: string | null }>(
-  "tailnet"
-)
+const networkRows = selectRows<{ cleanup_last_error: string | null }>("tailnet")
 const deploymentRows = selectRows<{
   cleanup_attempts: number
   cleanup_last_error: string | null
@@ -119,9 +117,7 @@ const seedNetworkBeingDeleted = Effect.gen(function* () {
     fake.tailnetSecret,
     "user-one"
   )
-  yield* requestTailnetCleanupEffect(networkId, "user-one", [
-    deployment(),
-  ])
+  yield* requestTailnetCleanupEffect(networkId, "user-one", [deployment()])
 
   fake.relayStacks.clear()
   fake.relayStacks.add(stack)
@@ -186,6 +182,15 @@ describeMysql("tailnet deletion", () => {
 function deployment(): PersistedTunnel {
   const parsed = tunnelSchema.parse({
     bindings: [],
+    brick: {
+      id: "tailscale",
+      images: {
+        dns: "coredns/coredns:1.14.7",
+        tailscale: "tailscale/tailscale:stable",
+      },
+      revision: 1,
+      source: null,
+    },
     components: { coreDnsRunning: true, tailscaleRunning: true },
     domains: [domain],
     hostname,

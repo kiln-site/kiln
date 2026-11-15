@@ -2213,5 +2213,89 @@ describeMysql("database migrations", () => {
         }),
       schemaBuildTimeout
     )
+
+    // A tunnel runs a Brick. One made before then runs Kiln's `tailscale`
+    // Brick at the images it already ran, with no source, as its Relay
+    // records it; one that names its Brick keeps it.
+    it.effect(
+      "gives each tunnel from before Bricks the Brick it runs",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 82)
+          )
+          const tailnetId = "a".repeat(12)
+          yield* insertRows("instance_group", {
+            created_at: 1,
+            created_by: "owner",
+            id: tailnetId,
+            name: "Home",
+            updated_at: 1,
+          })
+          yield* insertRows("tailnet", {
+            created_at: 1,
+            id: tailnetId,
+            updated_at: 1,
+          })
+          const named = {
+            id: "tailscale",
+            images: {
+              dns: "coredns/coredns:1.15.0",
+              tailscale: "tailscale/tailscale:v1.90.0",
+            },
+            revision: 2,
+            source: "https://bricks.example/bricks/tailscale.yml",
+          }
+          for (const [id, brick] of [
+            ["b".repeat(12), undefined],
+            ["c".repeat(12), named],
+          ] as const) {
+            yield* insertRows("tunnel", {
+              cleanup_next_attempt_at: 0,
+              id,
+              observed_at: 0,
+              relay_id: id === "b".repeat(12) ? "1".repeat(12) : "2".repeat(12),
+              state: JSON.stringify({
+                bindings: [],
+                domains: ["kiln"],
+                id,
+                tailnetId,
+                ...(brick ? { brick } : {}),
+              }),
+              tailnet_id: tailnetId,
+              updated_at: 0,
+            })
+          }
+
+          yield* applyMigrations(migrations)
+
+          const rows = yield* sql<{ id: string; state: unknown }>`
+            SELECT id, state FROM ${sql(databaseTableName("tunnel"))}
+             ORDER BY id
+          `
+          const bricks = rows.map(
+            (row) =>
+              (typeof row.state === "string"
+                ? JSON.parse(row.state)
+                : row.state
+              ).brick
+          )
+          expect(bricks).toEqual([
+            {
+              id: "tailscale",
+              images: {
+                dns: "coredns/coredns:1.14.7",
+                tailscale: "tailscale/tailscale:stable",
+              },
+              revision: 1,
+              source: null,
+            },
+            named,
+          ])
+        }),
+      schemaBuildTimeout
+    )
   })
 })

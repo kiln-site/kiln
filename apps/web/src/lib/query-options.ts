@@ -96,7 +96,10 @@ import {
   getRelayHostFiles,
   getRelays,
 } from "@/server/relays"
-import { getTailnets } from "@/server/tunnels"
+import {
+  getTailnets,
+  getTunnelBricks,
+} from "@/server/tunnels"
 import { getAuthState } from "@/server/auth"
 import type { ReleaseHistoryCursor } from "@/effect/kiln-release-feed"
 import type { UpdateEligibility } from "@/server/updates"
@@ -1102,6 +1105,15 @@ export function releaseHistoryInfiniteQueryOptions() {
 }
 
 /** The Bricks a database can be created from. */
+/** The Bricks a tunnel can be made from: Kiln's own tunnel Bricks. */
+export function tunnelBricksQueryOptions() {
+  return queryOptions({
+    queryKey: ["bricks", "tunnels"] as const,
+    queryFn: () => getTunnelBricks(),
+    staleTime: 5 * 60_000,
+  })
+}
+
 export function databaseBricksQueryOptions() {
   return queryOptions({
     queryKey: ["bricks", "databases"] as const,
