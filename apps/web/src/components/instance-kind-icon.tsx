@@ -1,6 +1,7 @@
 import type { ComponentType } from "react"
 import {
   Boxes,
+  BoxesLinked,
   Database,
   Group,
   HardDrive,
@@ -10,8 +11,6 @@ import {
 import type { LucideProps } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
-
-import { BoxesLinked } from "@/components/boxes-linked-icon"
 
 export type InstanceKind = "app" | "database" | "relay" | "server" | "tunnel"
 
