@@ -349,7 +349,7 @@ const TunnelTable = React.memo(function TunnelTable({
       }),
       columnHelper.accessor((tunnel) => tunnel.tailnet.name, {
         id: "tailnet",
-        header: "Tailnet",
+        header: "Net",
         sortFn: "text",
         cell: ({ row }) => (
           <Link
@@ -374,7 +374,7 @@ const TunnelTable = React.memo(function TunnelTable({
       }),
       columnHelper.accessor((tunnel) => tunnel.ipv4 ?? "", {
         id: "address",
-        header: "Tailscale IP",
+        header: "IP",
         sortFn: "text",
         cell: ({ row }) => (
           <DataTableTextCell
