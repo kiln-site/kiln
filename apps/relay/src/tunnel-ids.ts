@@ -56,6 +56,10 @@ export async function migrateTunnelIds(
     const stack = await readJson(join(directory, "stack.json"))
     if (!stack || typeof stack.id !== "string") continue
     const known = tunnelsByKey.get(entry.name)
+    // A stack that names its tailnet is a tunnel's: one made as a tunnel
+    // has no old key to find it by. A network's never named one, and one
+    // moving names it only once it has moved.
+    if (!known && typeof stack.tailnetId === "string") continue
     if (known && stack.id === known) {
       // Moved; only a pending removal's snapshot may still read as before.
       const tailnetId =

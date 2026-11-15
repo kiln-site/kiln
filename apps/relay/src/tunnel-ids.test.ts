@@ -122,6 +122,36 @@ describe("Tailscale network stacks becoming tunnels", () => {
     useInstanceLegacyIds([])
   })
 
+  // A tunnel made as one is named by its own ID and names its tailnet,
+  // with no old key; it is no network to move.
+  it("leaves a tunnel made as one as it is", async () => {
+    const harness = await relayHarness()
+    const tunnelId = "d".repeat(12)
+    const directory = join(harness.config.rootDirectory, tunnelId)
+    await mkdir(directory, { recursive: true })
+    const stack = {
+      bindings: [],
+      domain: "kiln",
+      hostname: "home",
+      id: tunnelId,
+      name: "Home",
+      subnet: "10.187.228.0/24",
+      tailnetId: networkId,
+    }
+    await writeFile(join(directory, "stack.json"), JSON.stringify(stack))
+
+    expect(
+      await migrateTunnelIds({
+        config: harness.config,
+        relayId,
+        state: harness.state,
+      })
+    ).toBe(0)
+    expect(await read(directory, "stack.json")).toEqual(stack)
+    expect(physicalKey(tunnelId)).toBe(tunnelId)
+    useInstanceLegacyIds([])
+  })
+
   it("makes a stack's containers again as a tunnel's, and leaves a stopped one stopped", async () => {
     const harness = await relayHarness()
     await networkStack(harness.config.rootDirectory)
