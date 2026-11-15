@@ -193,9 +193,18 @@ tailnet. Nothing here is built yet.
 ### The tailnet
 
 - The tunnels of one Tailscale account are a tailnet: an instance group,
-  made with its first tunnel and gone with its last. Beside the group,
-  `kiln_tailnet` keeps what they share: the type, the Tailscale login
-  (OAuth client and secret), and its TLDs.
+  made with its first tunnel. Beside the group, `kiln_tailnet` keeps what
+  they share: the type, the Tailscale login (OAuth client and secret), and
+  its TLDs.
+- Kiln makes the group and keeps it whole. Its members are tunnels and
+  nothing else, a tunnel is never moved into another group, and the
+  generic group actions (deleting a group while keeping its members) don't
+  apply to it: deleting a tailnet deletes its tunnels.
+- Deleting its last tunnel deletes the tailnet once that tunnel is torn
+  down, which needs its login to log the node out; then Hearth clears its
+  split DNS and forgets the login. A network that has no Relays today
+  becomes a tailnet with no tunnels, kept until it is deleted or given
+  one.
 - Hearth registers every TLD in the tailnet's split DNS, pointing at all of
   its tunnels, so names still resolve while one Relay is down. Every tunnel
   serves the whole tailnet's records.
@@ -252,6 +261,15 @@ tailnet. Nothing here is built yet.
 - Connecting an instance takes `instance.network.write` on it and
   `tunnel.manage` on the tunnel. Sharing a tunnel with others who connect
   their own instances comes with the permission model (step 14).
+- This opens tunnels beyond platform administrators on purpose: a grant on
+  a Relay reaches its tunnels as it reaches everything else there. A
+  tunnel forwards only to the addresses of what is connected through it.
+- In Hearth a tunnel's changes hold `tunnel:<id>`, whole to create or
+  delete it and `#settings` to connect, rename or rewrite its DNS. A
+  tailnet's login and TLDs hold `tailnet:<id>#settings`, which a tunnel's
+  changes hold shared, since they read them. On the Relay a tunnel holds
+  its own instance lane, and the lifecycle lanes of the members it connects
+  or disconnects, as networks do now.
 
 ### Pages
 
@@ -268,20 +286,24 @@ tailnet. Nothing here is built yet.
 ### Moving off today's networks
 
 - A network's ID becomes its tailnet's group ID. Each of its Relay
-  deployments becomes a tunnel whose ID Hearth and the Relay each derive
-  from the network's ID and the Relay's, as the old IDs were migrated, and
-  whose physical key stays the network's: its containers, Docker network,
-  Tailscale identity, state and subnet are kept, and its containers are
-  recreated once with a tunnel's labels. The network's owner owns each
-  tunnel.
+  deployments becomes a tunnel whose ID Hearth and the Relay each derive,
+  as the old IDs were migrated (`migratedInstanceId` over the kind and
+  `<network>:<relay>`); Hearth reserves each in its directory and refuses
+  to migrate on a collision. The tunnel's physical key stays the
+  network's, kept where the Relay keeps legacy keys: its containers,
+  Docker network, Tailscale identity, state and subnet are kept, and its
+  containers are recreated once with a tunnel's labels. A migration
+  interrupted between any two steps finishes when the Relay next starts,
+  with the identity, subnet, members and state intact. The network's owner
+  owns each tunnel.
 - `kiln_tailscale_network` becomes `kiln_tailnet`, and its deployments
   `kiln_tunnel`. Each member's hostname becomes its generated name, and the
   network's domain its first TLD. "Network" leaves the copy and the code
   for this: it means a Docker network.
 - `relay.tailscale.stack.*` become `tunnel.*` requests, and the shared
   ones (`instance.action`, `instance.deploy`, `terminal.*`,
-  `instance.deployment.read`, the Logs page's sources) take `kind:
-"tunnel"`.
+  `instance.deployment.read`, the Logs page's sources) take
+  `kind: "tunnel"`.
 
 ### Deleted
 
@@ -292,7 +314,9 @@ tailnet. Nothing here is built yet.
 - The Relay's private networking, which nothing in Hearth or the CLI calls
   and which took its names from those labels: `relay.networking.*`,
   `networking.json`, and the `kiln-coredns` and `kiln-limbo` containers. A
-  Relay migration removes whatever of either still runs.
+  Relay that still has it saved stops serving those names on its DNS
+  port; no container's DNS settings point at it. The Relay removes
+  whatever of either still runs as it starts.
 - `TailscalePage`, the `network-stack` workspace and the console that
   merged every node's.
 
@@ -303,7 +327,8 @@ One stack, each part working on its own:
 1. Delete what came before networks, and private networking.
 2. One primary address per instance, kept by Hearth.
 3. Tunnels as their own kind, tailnets as groups, and DNS reloading in
-   place.
+   place. Today's page and each instance's Tailscale section keep working
+   on the new model until the pages land.
 4. Names: several TLDs, generated names and aliases, any number of tailnets
    per instance, and tunnel names as primary.
 5. The pages.
