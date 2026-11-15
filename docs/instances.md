@@ -171,8 +171,8 @@ carry a tunnel's labels, and nothing treats it as a game server. Built so
 far: that, the migration from networks, and the requests' new names; and
 what every instance has: power, deploying again (recorded and logged as
 every kind's), its terminal and its logs' sources, each authorized as a
-tunnel is; DNS reloading in place; names; and the pages. Tunnel names as
-primary addresses, and the permissions of their own, follow.
+tunnel is; DNS reloading in place; names; the pages; and tunnel names as
+primary addresses. Its permissions of its own follow.
 
 ### What runs
 
@@ -249,12 +249,20 @@ primary addresses, and the permissions of their own, follow.
 ### One primary address
 
 - An instance has one primary address (★), whichever it is: a join address,
-  a domain or a tunnel name. A tunnel name can't be chosen yet; that is
-  step 6 below. It is what Kiln shows for the instance (lists,
+  a domain or a tunnel name. It is what Kiln shows for the instance (lists,
   its header, the infra map, the copy button and the CLI) and, for a game
   server, the address it advertises. It changes nothing about routing: every
-  name works, starred or not. A tunnel name shown as primary carries the
-  Tailscale mark, since only its tailnet reaches it.
+  name works, starred or not.
+- Any of a game server's or an App's names in a tailnet can be its primary,
+  in place of its join address or domain, from the names on its Network
+  tab or its tailnet's page. A game server's is the name at the port it
+  listens on in its container (`paper.kiln:25565`), since its tailnet
+  reaches the container itself. An App's header and the Apps list show it
+  with the Tailscale mark, since only its tailnet reaches it; a game
+  server's address doesn't carry the mark yet. A database has no primary
+  address. While a tunnel name is the primary, no join address or domain
+  steps in for it, even a game server's first; once the name is gone, the
+  first active one does. Built.
 - Hearth keeps it, one row per instance naming the address
   (`kiln_instance_primary_address`), so an instance can't have two. The
   Relay forgets it: the web-route star on its routes and in their labels
@@ -359,7 +367,7 @@ One stack, each part working on its own:
 4. Names: several TLDs, generated names and aliases, and any number of
    tailnets per instance.
 5. The pages.
-6. Tunnel names as primary addresses.
+6. Tunnel names as primary addresses. Built.
 
 ## Bricks
 

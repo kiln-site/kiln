@@ -4,6 +4,7 @@ import type { RowDataPacket } from "mysql2/promise"
 import { Clock, Effect } from "effect"
 
 import { Database } from "@/effect/database"
+import { primaryAddressTable } from "@/effect/primary-addresses"
 import { databaseTable } from "@/lib/database-config"
 
 // The names each member has in a tailnet: one generated as it connected,
@@ -22,6 +23,8 @@ export interface TunnelName {
   /** Its label or labels, under its TLD. */
   label: string
   memberId: string
+  /** Whether it is its instance's primary address. */
+  primary: boolean
   tailnetId: string
 }
 
@@ -31,6 +34,7 @@ interface NameRow extends RowDataPacket {
   id: string
   label: string
   member_id: string
+  primary_ref?: string | null
   tailnet_id: string
 }
 
@@ -47,20 +51,17 @@ export const listTunnelNamesEffect = Effect.fn("tunnelNames.list")(function* (
   const database = yield* Database
   const rows = yield* database.queryRows<NameRow>(
     "tunnelNames.list",
-    `SELECT id, tailnet_id, member_id, label, domain, generated_for
-       FROM ${nameTable}
-      WHERE tailnet_id IN (${tailnetIds.map(() => "?").join(", ")})
-      ORDER BY tailnet_id, member_id, generated_for IS NULL, label, domain`,
+    `SELECT name.id, name.tailnet_id, name.member_id, name.label, name.domain,
+            name.generated_for, chosen.address_ref AS primary_ref
+       FROM ${nameTable} name
+       LEFT JOIN ${primaryAddressTable} chosen
+         ON chosen.address_kind = 'tunnel' AND chosen.address_ref = name.id
+      WHERE name.tailnet_id IN (${tailnetIds.map(() => "?").join(", ")})
+      ORDER BY name.tailnet_id, name.member_id, name.generated_for IS NULL,
+               name.label, name.domain`,
     [...tailnetIds]
   )
-  return rows.map((row): TunnelName => ({
-    domain: row.domain,
-    generated: row.generated_for !== null,
-    id: row.id,
-    label: row.label,
-    memberId: row.member_id,
-    tailnetId: row.tailnet_id,
-  }))
+  return rows.map(tunnelName)
 })
 
 // A label is at most 63 characters, DNS's limit for one.
@@ -230,14 +231,17 @@ export const loadTunnelNameEffect = Effect.fn("tunnelNames.load")(function* (
        FROM ${nameTable} WHERE id = ?`,
     [id]
   )
-  return row
-    ? ({
-        domain: row.domain,
-        generated: row.generated_for !== null,
-        id: row.id,
-        label: row.label,
-        memberId: row.member_id,
-        tailnetId: row.tailnet_id,
-      } satisfies TunnelName)
-    : null
+  return row ? tunnelName(row) : null
 })
+
+function tunnelName(row: NameRow): TunnelName {
+  return {
+    domain: row.domain,
+    generated: row.generated_for !== null,
+    id: row.id,
+    label: row.label,
+    memberId: row.member_id,
+    primary: Boolean(row.primary_ref),
+    tailnetId: row.tailnet_id,
+  }
+}

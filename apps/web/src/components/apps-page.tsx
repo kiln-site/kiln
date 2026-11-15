@@ -99,6 +99,7 @@ import {
 import type { DataTableSource } from "@/lib/data-table-source"
 import type { InstanceFavorite } from "@/lib/instance-favorites"
 import { heldPowerActions } from "@/lib/use-instance-power"
+import { TailscaleLogo } from "@/components/brand-logos"
 import { relayWebRoutesQueryOptions } from "@/lib/query-options"
 import { deployApp, runAppAction } from "@/server/apps"
 import type { getRelayWebRoutes } from "@/server/relays"
@@ -339,7 +340,11 @@ const AppTable = React.memo(function AppTable({
         header: "Link",
         enableSorting: false,
         cell: ({ row }) => (
-          <AppLinkCell appId={row.original.id} relayId={row.original.relayId} />
+          <AppLinkCell
+            appId={row.original.id}
+            relayId={row.original.relayId}
+            tunnelName={row.original.primaryTunnelName}
+          />
         ),
         meta: dataTableColumnMeta(
           { width: { base: dataTablePhoneDetailWidth, md: "minmax(0,1fr)" } },
@@ -619,9 +624,12 @@ const AppActions = React.memo(function AppActions({
 const AppLinkCell = React.memo(function AppLinkCell({
   appId,
   relayId,
+  tunnelName,
 }: {
   appId: string
   relayId: string
+  /** Its name in a tailnet, when that is its primary address. */
+  tunnelName: string | null
 }) {
   const selectLink = React.useCallback(
     (routes: Awaited<ReturnType<typeof getRelayWebRoutes>>) => {
@@ -638,8 +646,18 @@ const AppLinkCell = React.memo(function AppLinkCell({
   )
   const { data: link } = useQuery({
     ...relayWebRoutesQueryOptions(relayId),
+    enabled: tunnelName === null,
     select: selectLink,
   })
+  if (tunnelName) {
+    // Only its tailnet reaches it.
+    return (
+      <span className="type-meta flex min-w-0 items-center gap-1.5 font-mono text-foreground">
+        <TailscaleLogo className="size-3 shrink-0 text-muted-foreground" />
+        <span className="truncate">{tunnelName}</span>
+      </span>
+    )
+  }
   if (!link) {
     return <span className="type-meta text-muted-foreground">—</span>
   }

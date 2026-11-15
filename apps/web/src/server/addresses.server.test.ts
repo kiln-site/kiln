@@ -3,6 +3,8 @@ import { relayInstanceSchema, type RelayInstance } from "@workspace/contracts"
 import { Effect } from "effect"
 import { afterAll, afterEach, vi } from "vite-plus/test"
 
+import { setPrimaryAddressEffect } from "@/effect/primary-addresses"
+import { keepTunnelNamesOfEffect } from "@/effect/tunnel-names"
 import { disposeAppRuntime, runAppEffect } from "@/effect/runtime"
 import type { WebHostnameResource } from "@/effect/addresses"
 import type { AuthenticatedUser } from "@/lib/auth-session"
@@ -20,7 +22,9 @@ import {
 import { encryptWithKeyring } from "../../keyring.mjs"
 
 import {
+  applyManagedDomainAddressesEffect,
   createInstanceDomainHandler,
+  invalidateManagedDomainAddressesEffect,
   getInstanceDomainHandler,
   moveInstanceDomainsEffect,
   moveResourceWebHostnamesEffect,
@@ -974,6 +978,120 @@ describeMysql("an App's address", () => {
           assert.deepEqual(cloudflare.records(), [])
           assert.deepEqual(yield* routeHostnames(app), [])
           assert.deepEqual(yield* claims, {})
+        })
+    )
+  })
+})
+
+describeMysql("a game server whose primary address is a tunnel name", () => {
+  layer(TestDatabase)((it) => {
+    const tailnetId = "e".repeat(12)
+    const nameId = "00000000-0000-4000-8000-000000000001"
+    const craft = gameServer(serverId, { brickPrimaryPort: 25_565 })
+
+    // What Kiln shows and advertises for it.
+    const shown = Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        runAppEffect("test.invalidate", invalidateManagedDomainAddressesEffect)
+      )
+      const [instance] = yield* Effect.promise(() =>
+        runAppEffect(
+          "test.addresses",
+          applyManagedDomainAddressesEffect([
+            {
+              ...craft,
+              relayId: relayOne,
+              relayName: "One",
+              relayStatus: "connected",
+            },
+          ])
+        )
+      )
+      return instance?.connectAddress
+    })
+    const primaryKind = Effect.map(
+      selectRows<{ address_kind: string; instance_id: string }>(
+        "instance_primary_address"
+      ),
+      (rows) => rows.find((row) => row.instance_id === serverId)?.address_kind
+    )
+
+    // Its join addresses step in for a primary that has none of them only
+    // while it has no name of its own there, and once that name goes.
+    it.effect(
+      "shows the name at its game's port, keeps it as its addresses change, and falls back once it goes",
+      () =>
+        Effect.gen(function* () {
+          yield* seed
+          fakeCloudflare()
+          yield* runs(relayOne, craft)
+          yield* addAddress(relayOne, serverId, "arena")
+          yield* insertRows("instance_group", {
+            created_at: 0,
+            created_by: user.id,
+            id: tailnetId,
+            name: "Home",
+            updated_at: 0,
+          })
+          yield* insertRows("tailnet", {
+            created_at: 0,
+            id: tailnetId,
+            owner_id: user.id,
+            updated_at: 0,
+          })
+          yield* insertRows("tunnel_name", {
+            created_at: 0,
+            domain: "kiln",
+            generated_for: `instance:${serverId}`,
+            id: nameId,
+            label: "paper",
+            member_id: `instance:${serverId}`,
+            tailnet_id: tailnetId,
+          })
+          yield* Effect.promise(() =>
+            runAppEffect(
+              "test.primary",
+              setPrimaryAddressEffect(
+                { id: serverId, type: "instance" },
+                { kind: "tunnel", ref: nameId }
+              )
+            )
+          )
+
+          // Its tailnet reaches its container, at the port it listens on.
+          assert.strictEqual(yield* shown, "paper.kiln:25565")
+
+          // Its Relay reports it somewhere else, and its address follows.
+          yield* Effect.promise(() =>
+            provisionInstanceDomain(
+              {
+                ...craft,
+                connectAddress: "203.0.113.20:25570",
+                publicHost: "203.0.113.20",
+                publicPort: 25_570,
+              },
+              relayOne
+            )
+          )
+          assert.strictEqual(yield* primaryKind, "tunnel")
+
+          // A first address again, after its last was removed.
+          const id = yield* addressId("arena")
+          yield* Effect.promise(() => removeInstanceDomainHandler({ id }))
+          yield* dnsWorkerPass
+          yield* addAddress(relayOne, serverId, "colosseum")
+          assert.strictEqual(yield* primaryKind, "tunnel")
+          assert.strictEqual(yield* shown, "paper.kiln:25565")
+
+          // Disconnected from the tailnet, its name is gone, and its
+          // domain stands in.
+          yield* Effect.promise(() =>
+            runAppEffect(
+              "test.disconnect",
+              keepTunnelNamesOfEffect(tailnetId, [], ["kiln"])
+            )
+          )
+          assert.strictEqual(yield* shown, "colosseum.kiln.test")
         })
     )
   })

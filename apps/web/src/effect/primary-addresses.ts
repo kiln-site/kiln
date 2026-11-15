@@ -6,7 +6,8 @@ import { databaseTable } from "@/lib/database-config"
 
 // Each instance's one primary address: what Kiln shows for it (lists, its
 // header, the infra map, the copy button) and, for a game server, the
-// address it advertises. One row per instance names it, so an instance
+// address it advertises. A game server's join address, an App's web route,
+// or either's name in a tailnet. One row per instance names it, so an instance
 // can't have two. It changes nothing about routing: every address works,
 // primary or not. A row naming an address that's gone is ignored, and the
 // instance's first address that serves stands in until another is chosen.
@@ -16,9 +17,9 @@ export type PrimaryAddressInstanceType = "app" | "database" | "instance"
 
 /** Which of an instance's addresses is its primary. */
 export interface PrimaryAddress {
-  /** A game server's join address, or one of an App's web routes. */
-  kind: "join" | "route"
-  /** The join address's ID, or the web route's. */
+  /** A game server's join address, an App's web route, or a tunnel name. */
+  kind: "join" | "route" | "tunnel"
+  /** The join address's ID, the web route's, or the tunnel name's. */
   ref: string
 }
 
@@ -126,6 +127,70 @@ export const forgetPrimaryAddressEffect = Effect.fn("primaryAddresses.forget")(
     )
   }
 )
+
+/**
+ * Whether an instance's primary is one of its tunnel names, still there, so
+ * none of its join addresses or domains steps in for it.
+ */
+export const primaryIsTunnelNameEffect = Effect.fn(
+  "primaryAddresses.isTunnelName"
+)(function* (instance: PrimaryAddressInstance) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<RowDataPacket>(
+    "primaryAddresses.isTunnelName",
+    `SELECT 1 FROM ${primaryAddressTable} chosen
+       JOIN ${databaseTable("tunnel_name")} name
+         ON name.id = chosen.address_ref
+      WHERE chosen.address_kind = 'tunnel'
+        AND chosen.instance_type = ? AND chosen.instance_id = ?`,
+    [instance.type, instance.id]
+  )
+  return rows.length > 0
+})
+
+export interface PrimaryTunnelName {
+  instanceId: string
+  instanceType: PrimaryAddressInstanceType
+  /** The name whole, as its tailnet resolves it. */
+  name: string
+  nameId: string
+}
+
+/**
+ * The tunnel names that are their instances' primaries, of one kind of
+ * instance or every kind. A name since taken away is no one's.
+ */
+export const loadPrimaryTunnelNamesEffect = Effect.fn(
+  "primaryAddresses.tunnelNames"
+)(function* (type?: PrimaryAddressInstanceType) {
+  const database = yield* Database
+  const rows = yield* database.queryRows<
+    RowDataPacket & {
+      domain: string
+      instance_id: string
+      instance_type: PrimaryAddressInstanceType
+      label: string
+      name_id: string
+    }
+  >(
+    "primaryAddresses.tunnelNames",
+    `SELECT chosen.instance_type, chosen.instance_id, name.id AS name_id,
+            name.label, name.domain
+       FROM ${primaryAddressTable} chosen
+       JOIN ${databaseTable("tunnel_name")} name
+         ON name.id = chosen.address_ref
+      WHERE chosen.address_kind = 'tunnel'${
+        type === undefined ? "" : " AND chosen.instance_type = ?"
+      }`,
+    type === undefined ? [] : [type]
+  )
+  return rows.map((row): PrimaryTunnelName => ({
+    instanceId: row.instance_id,
+    instanceType: row.instance_type,
+    name: `${row.label}.${row.domain}`,
+    nameId: row.name_id,
+  }))
+})
 
 function primaryAddress(row: PrimaryAddressRow): PrimaryAddress {
   return { kind: row.address_kind, ref: row.address_ref }

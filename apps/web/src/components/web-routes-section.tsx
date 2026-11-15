@@ -101,6 +101,7 @@ export function WebRoutesSection({
   dnsResource,
   error,
   kind,
+  primaryElsewhere = false,
   primaryRouteId,
   routes,
   services,
@@ -115,6 +116,8 @@ export function WebRoutesSection({
   dnsResource: WebHostnameResourceRef
   error: Error | null
   kind: "app" | "server"
+  // Its primary address is none of these routes (a tunnel name).
+  primaryElsewhere?: boolean
   // The route its instance's primary address names, if one does.
   primaryRouteId?: string | null
   routes:
@@ -197,9 +200,10 @@ export function WebRoutesSection({
   )
   // While a choice of primary saves, the table shows it.
   const [choosing, setChoosing] = React.useState<string | null>(null)
-  const primary = displayed
-    ? primaryWebRoute(displayed, choosing ?? primaryRouteId)
-    : undefined
+  const primary =
+    displayed && (choosing !== null || !primaryElsewhere)
+      ? primaryWebRoute(displayed, choosing ?? primaryRouteId)
+      : undefined
   // The routes, then each name held that none of them serves.
   const rows = React.useMemo((): Array<DomainRow> | undefined => {
     if (!displayed || !held) return undefined

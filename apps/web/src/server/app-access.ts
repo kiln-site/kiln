@@ -14,6 +14,7 @@ import {
   type AppBrickRecord,
 } from "@/effect/managed-apps"
 import { ownerDisplayName } from "@/effect/relay-owners"
+import { loadPrimaryTunnelNamesEffect } from "@/effect/primary-addresses"
 import { runAppEffect } from "@/effect/runtime"
 import {
   isPlatformAdmin,
@@ -208,11 +209,18 @@ const appPermissions = accessPermissions.filter(
 
 /** The Apps a person can see, each with what they may do to it. */
 export async function getAppDirectoryHandler(user: AuthenticatedUser) {
-  const [persistedRelays, grants, records] = await Promise.all([
+  const [persistedRelays, grants, records, tunnelNames] = await Promise.all([
     listPersistedRelays(),
     isPlatformAdmin(user) ? Promise.resolve([]) : listUserGrants(user.id),
     runAppEffect("apps.directory", listAppRecordsEffect()),
+    runAppEffect(
+      "primaryAddresses.tunnelNames",
+      loadPrimaryTunnelNamesEffect("app")
+    ),
   ])
+  const primaryTunnelNames = new Map(
+    tunnelNames.map(({ instanceId, name }) => [instanceId, name])
+  )
   const relayNames = new Map(
     persistedRelays
       .filter((relay) => relay.enabled)
@@ -231,6 +239,8 @@ export async function getAppDirectoryHandler(user: AuthenticatedUser) {
           hasAppPermission(user, grants, record, permission)
         ),
         name: record.name,
+        // Its name in a tailnet, when that is its primary address.
+        primaryTunnelName: primaryTunnelNames.get(record.appId) ?? null,
         relayId: record.relayId,
         relayName,
       },

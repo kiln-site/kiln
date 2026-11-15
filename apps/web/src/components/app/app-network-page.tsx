@@ -232,6 +232,7 @@ function AppWebRoutes({
       dnsResource={dnsResource}
       error={state.error}
       kind="app"
+      primaryElsewhere={Boolean(state.data?.primaryTunnelName)}
       primaryRouteId={state.data?.primaryRouteId}
       routes={state.data?.routes}
       services={services}
