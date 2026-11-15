@@ -553,6 +553,60 @@ export class LifecycleDriver {
     return relabeled
   }
 
+  /**
+   * Deploys a tunnel again: both its images pulled anew, and its containers
+   * made from them. Its Tailscale container keeps its state, so it comes
+   * back as the same node advertising the same routes, and its CoreDNS
+   * serves the records Hearth last sent.
+   */
+  async redeployTunnel(
+    id: string,
+    onPhase: (phase: ProvisioningWorkPhase) => Promise<void>,
+    note: (text: string) => Promise<void>
+  ): Promise<Tunnel> {
+    const config = await this.#readTunnelConfig(id)
+    if (!config) throw new Error(`Tunnel ${id} was not found`)
+    await this.#assertTunnelRemovalNotPending(id, "redeploy")
+    await onPhase("pulling_image")
+    for (const image of [TAILSCALE_IMAGE, COREDNS_IMAGE]) {
+      await note(`Pulling ${image}`)
+      await runLifecycle(this.#engine.pullImage(image, { timeout: 300_000 }))
+    }
+    await onPhase("creating_container")
+    await this.#ensureTunnelNetwork(config)
+    await this.#restartTunnel(config)
+    await onPhase("finalizing")
+    await this.#configureTunnelRouting(config)
+    await this.#renderTunnelDns(config)
+    return this.#tunnel(config)
+  }
+
+  /** A tunnel's container: its Tailscale one, or its CoreDNS. */
+  tunnelContainerName(id: string, component: "coredns" | "tailscale"): string {
+    return component === "coredns"
+      ? this.#resources.tunnelDnsContainer(id)
+      : this.#resources.tunnelContainer(id)
+  }
+
+  /** The container a tunnel's shell opens in, or null when it has none. */
+  async tunnelTerminalContainer(
+    id: string
+  ): Promise<{ id: string; running: boolean } | null> {
+    if (!(await this.#readTunnelConfig(id))) {
+      throw new Error(`Tunnel ${id} was not found`)
+    }
+    const container = await recoverPromise(
+      () =>
+        runLifecycle(
+          this.#engine.inspectContainer(this.#resources.tunnelContainer(id))
+        ),
+      () => null
+    )
+    return container
+      ? { id: container.Id, running: container.State.Running }
+      : null
+  }
+
   async tunnels(): Promise<Array<Tunnel>> {
     const entries = await recoverPromise(
       () =>

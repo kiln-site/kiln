@@ -140,7 +140,7 @@ export function databaseReadLocks(databaseId: string): Array<LaneLock> {
 }
 
 /** The kinds of resource whose power the Relay changes. */
-export type PowerResourceKind = "app" | "database" | "instance"
+export type PowerResourceKind = "app" | "database" | "instance" | "tunnel"
 
 /**
  * A power action on any kind: the resource shared and its lifecycle
@@ -153,6 +153,8 @@ export function resourcePowerLocks(
 ): Array<LaneLock> {
   if (kind === "instance") return instancePowerLocks(id, action)
   if (kind === "app") return appLifecycleLocks(id)
+  // A tunnel changes as a whole, as applying or removing it does.
+  if (kind === "tunnel") return instanceReplaceLocks(id)
   return databaseLifecycleLocks(id)
 }
 
@@ -170,7 +172,7 @@ export function containerCommandLocks(
 
 /** The lane key a resource is replaced under, for its power intent. */
 export function resourceLaneKey(kind: PowerResourceKind, id: string): string {
-  if (kind === "instance") return laneKeys.instance(id)
+  if (kind === "instance" || kind === "tunnel") return laneKeys.instance(id)
   if (kind === "app") return laneKeys.app(id)
   return laneKeys.database(id)
 }
@@ -805,6 +807,10 @@ export function controlRequestLocks(
             (id) => resourcePowerLocks("database", id, action),
             "id"
           )
+        case "tunnel": {
+          const id = stringField(payload, "id")
+          return id ? resourcePowerLocks("tunnel", id, action) : null
+        }
         default:
           return null
       }
@@ -822,6 +828,11 @@ export function controlRequestLocks(
           return database(databaseLocks, "id")
         case "app":
           return app(appLifecycleLocks, "id")
+        // Its containers made again, as applying it does.
+        case "tunnel": {
+          const id = stringField(payload, "id")
+          return id ? instanceReplaceLocks(id) : null
+        }
         default:
           return null
       }

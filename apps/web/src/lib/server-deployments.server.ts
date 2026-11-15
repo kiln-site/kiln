@@ -124,12 +124,37 @@ export async function asDatabaseDeployment<T>(
   )
 }
 
+/** Runs a tunnel's redeploy as a deployment, as a database's is. */
+export async function asTunnelDeployment<T>(
+  input: { relayId: string; tunnelId: string; userId: string | null },
+  run: (deploymentId: string) => Promise<T>
+): Promise<T> {
+  return following(
+    {
+      instanceId: input.tunnelId,
+      kind: "tunnel",
+      relayId: input.relayId,
+      userId: input.userId,
+    },
+    await insertRunning({
+      brickId: null,
+      brickName: null,
+      instanceId: input.tunnelId,
+      kind: "tunnel",
+      relayId: input.relayId,
+      trigger: "redeploy",
+      userId: input.userId,
+    }),
+    run
+  )
+}
+
 // Asks the Relay for a deployment recorded as running, and ends it as the
 // Relay answers.
 function following<T>(
   of: {
     instanceId: string
-    kind: "database" | "server"
+    kind: "database" | "server" | "tunnel"
     relayId: string
     userId: string | null
   },
@@ -137,6 +162,7 @@ function following<T>(
   run: (deploymentId: string) => Promise<T>
 ): Promise<T> {
   const { relayId } = of
+  const checked = of.kind === "tunnel" ? null : of.kind
   return Effect.runPromise(
     promiseEffect(() => run(id)).pipe(
       Effect.tap(() =>
@@ -155,13 +181,16 @@ function following<T>(
       ),
       // Its updates follow what it runs now, however the deployment went.
       // Imported here, since updates deploy through this module.
+      // A tunnel's images aren't checked for updates yet.
       Effect.ensuring(
-        Effect.promise(() => import("@/lib/instance-updates.server")).pipe(
-          Effect.map(({ recheckInstanceImage }) =>
-            recheckInstanceImage(of.kind, relayId, of.instanceId, of.userId)
-          ),
-          Effect.ignore
-        )
+        checked === null
+          ? Effect.void
+          : Effect.promise(() => import("@/lib/instance-updates.server")).pipe(
+              Effect.map(({ recheckInstanceImage }) =>
+                recheckInstanceImage(checked, relayId, of.instanceId, of.userId)
+              ),
+              Effect.ignore
+            )
       )
     )
   )
@@ -213,6 +242,7 @@ async function insertRunning(
     (
       | { kind: "database"; trigger: "redeploy" | "update" }
       | { kind: "server"; trigger: "brick" | "install" | "reinstall" | "update" }
+      | { kind: "tunnel"; trigger: "redeploy" }
     )
 ): Promise<string> {
   const id = crypto.randomUUID()

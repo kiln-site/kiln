@@ -49,7 +49,9 @@ export function consoleSources(
     container: (
       target: ReturnType<typeof relayPlatformTargetSchema.parse>
     ) => Promise<string | null>
-  }
+  },
+  // A tunnel's container: its Tailscale one, or `coredns` for its DNS.
+  tunnelContainer: (id: string, component: "coredns" | "tailscale") => string
 ): ConsoleSources {
   return (kind, id, stream) => {
     switch (kind) {
@@ -103,6 +105,17 @@ export function consoleSources(
             }
             return docker.containerConsoleSession(id, containerId, signal)
           },
+        }
+      // A tunnel's two containers, one per stream: Tailscale, or CoreDNS.
+      case "tunnel":
+        return {
+          readAction: relayConsoleReadActions.tunnel,
+          session: (signal) =>
+            docker.containerConsoleSession(
+              id,
+              tunnelContainer(id, stream === "coredns" ? "coredns" : "tailscale"),
+              signal
+            ),
         }
       // Kiln's services on this Relay's host, one container per stream.
       case "platform":

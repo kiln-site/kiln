@@ -442,3 +442,73 @@ describe("Tailscale forwarding repair", () => {
     )
   })
 })
+
+describe("A tunnel as an instance", () => {
+  async function runningTunnel(harness: RelayHarness, id: string) {
+    await savedStack(harness, stackConfig(id), [
+      { address: "10.165.55.10", hostname: "paper" },
+    ])
+    fakeDocker.addNetwork({
+      labels: { ...owner, "kiln.relay.network": `tailscale:${id}` },
+      name: harness.resources.tunnelNetwork(id),
+    })
+    const tailscale = stackContainer(harness, id, true)
+    const dns = fakeDocker.addContainer({
+      image: "coredns/coredns:1.14.7",
+      labels: owner,
+      name: harness.resources.tunnelDnsContainer(id),
+      running: true,
+    })
+    return { dns, tailscale }
+  }
+
+  // Its CoreDNS lives in its Tailscale container's network, so the two go
+  // down and come up together.
+  it("stops and starts both its containers together", async () => {
+    const harness = await relayHarness()
+    const id = "d".repeat(12)
+    await runningTunnel(harness, id)
+    const running = (name: string) =>
+      fakeDocker.container(name)?.state.running ?? false
+
+    const stopped = await harness.power.requested("tunnel", id, "stop")
+    expect(stopped.observedState).toBe("stopped")
+    expect(running(harness.resources.tunnelContainer(id))).toBe(false)
+    expect(running(harness.resources.tunnelDnsContainer(id))).toBe(false)
+
+    const started = await harness.power.requested("tunnel", id, "start")
+    expect(started.observedState).toBe("running")
+    expect(running(harness.resources.tunnelContainer(id))).toBe(true)
+    expect(running(harness.resources.tunnelDnsContainer(id))).toBe(true)
+  })
+
+  it("deploys again from images pulled anew, keeping its identity and records", async () => {
+    const harness = await relayHarness()
+    const id = "e".repeat(12)
+    const { tailscale } = await runningTunnel(harness, id)
+    const phases: Array<string> = []
+
+    const redeployed = await harness.lifecycle.redeployTunnel(
+      id,
+      async (phase) => {
+        phases.push(phase)
+      },
+      async () => undefined
+    )
+
+    expect(phases).toEqual(["pulling_image", "creating_container", "finalizing"])
+    expect([...fakeDocker.pulls.keys()]).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("tailscale/tailscale"),
+        expect.stringContaining("coredns/coredns"),
+      ])
+    )
+    const replaced = fakeDocker.container(harness.resources.tunnelContainer(id))
+    expect(replaced?.id).not.toBe(tailscale.id)
+    expect(replaced?.state.running).toBe(true)
+    expect(redeployed).toMatchObject({ id, observedState: "running" })
+    expect((await savedState(harness, id)).records).toEqual([
+      { address: "10.165.55.10", hostname: "paper" },
+    ])
+  })
+})

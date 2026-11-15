@@ -92,7 +92,8 @@ import type {
 // the Relays the person can read. Scoped to one App or game server, this
 // is its history.
 
-type Deployment = DeploymentView
+// A tunnel's deployments are on its own page.
+type Deployment = Exclude<DeploymentView, { kind: "tunnel" }>
 type AppDeployment = Extract<Deployment, { kind: "app" }>
 // One the Relay runs as a single request and logs under Hearth's ID.
 type RequestDeployment = Exclude<Deployment, { kind: "app" }>

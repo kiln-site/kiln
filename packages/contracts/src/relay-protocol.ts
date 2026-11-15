@@ -739,6 +739,7 @@ export const relayBrowserResourceKinds = [
   "instance",
   "database",
   "app",
+  "tunnel",
   "relay",
   "platform",
 ] as const
@@ -765,6 +766,7 @@ export const relayConsoleReadActions = {
   app: "instance.logs.read",
   database: "instance.logs.read",
   instance: "instance.console.read",
+  tunnel: "instance.logs.read",
   // Hearth issues these only to platform administrators.
   platform: "relay.logs.read",
   relay: "relay.logs.read",

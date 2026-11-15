@@ -250,7 +250,8 @@ async function startRelay(
         authorize: () =>
           Promise.reject(new Error("Not the Hearth this Relay installed")),
         container: (target) => Promise.resolve(`kiln-${target}`),
-      }
+      },
+      (id, component) => `kiln-ts-${id}${component === "coredns" ? "-dns" : ""}`
     ),
     docker: {} as DockerDriver,
     filesystem: {} as FilesystemDriver,

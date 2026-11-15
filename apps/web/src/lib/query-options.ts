@@ -1270,7 +1270,7 @@ export function appGitHubSourceFileQueryOptions(
 /** An instance whose deployments are listed or read. */
 export interface DeploymentInstance {
   id: string
-  kind: "app" | "database" | "server"
+  kind: "app" | "database" | "server" | "tunnel"
 }
 
 /** Any kind of instance's deployment log, from its Relay. */

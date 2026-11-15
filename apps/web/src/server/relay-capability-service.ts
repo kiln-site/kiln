@@ -53,6 +53,7 @@ import { CredentialError } from "@/effect/errors"
 import { recoverPromise } from "@/effect/promise"
 import { runAppEffect, traceAppPromise } from "@/effect/runtime"
 import type { AccessPermission } from "@/lib/permissions"
+import { requireTunnelPermission } from "@/server/tunnel-access.server"
 
 type BrowserPublicKey = {
   crv: "P-256"
@@ -502,12 +503,25 @@ const authorizeBrowserCapabilityEffect = Effect.fn(
         new Error("Only platform administrators can read Kiln's logs")
       )
     }
-    yield* requireRelayPermissionsEffect({
-      ...resourceScope(input.resource),
-      permissions: input.permissions,
-      relayId: input.relayId,
-      user: snapshot.user,
-    })
+    // A tunnel is its owner's, or anyone's who may on its Relay.
+    if (input.resource.kind === "tunnel") {
+      const tunnelId = input.resource.id
+      for (const permission of input.permissions) {
+        const tunnel = yield* Effect.tryPromise(() =>
+          requireTunnelPermission(snapshot.user, tunnelId, permission)
+        )
+        if (tunnel.relayId !== input.relayId) {
+          return yield* Effect.fail(new Error("Tunnel not found"))
+        }
+      }
+    } else {
+      yield* requireRelayPermissionsEffect({
+        ...resourceScope(input.resource),
+        permissions: input.permissions,
+        relayId: input.relayId,
+        user: snapshot.user,
+      })
+    }
     const after = yield* readAuthorizationRevisionEffect(input.identity.user.id)
     if (snapshot.revision === after) {
       return { revision: after, user: snapshot.user }
@@ -771,6 +785,7 @@ function resourceScope(resource: RelayConsoleResource) {
       return { appId: appIdFromFileRoot(resource.id) ?? resource.id }
     case "relay":
     case "platform":
+    case "tunnel":
       return {}
     default:
       return resource.kind satisfies never

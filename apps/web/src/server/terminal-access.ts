@@ -5,6 +5,7 @@ import type { AuthenticatedUser } from "@/lib/auth-session"
 import type { PersistedRelay } from "@/lib/relay-registry"
 import { authorizedAppFor } from "@/server/app-access"
 import { requiredRelay } from "@/server/managed-database-access"
+import { requireTunnelPermission } from "@/server/tunnel-access.server"
 
 // The one check every terminal request makes: opening its stream, checking
 // again while the stream stays open, and each write, claim, and restart.
@@ -42,6 +43,16 @@ export async function authorizeTerminal(
         user,
       })
       return requiredRelay(relayId)
+    // A tunnel's is its owner's, or anyone's who may on its Relay.
+    case "tunnel": {
+      const tunnel = await requireTunnelPermission(
+        user,
+        target.id,
+        "instance.terminal"
+      )
+      if (tunnel.relayId !== relayId) throw new Error("Tunnel not found")
+      return requiredRelay(relayId)
+    }
     case "relay":
       await requireRelayPermission({
         permission: "relay.terminal",
