@@ -2,40 +2,41 @@ import type { RowDataPacket } from "mysql2/promise"
 import {
   relayIdSchema,
   relayInstanceNameSchema,
-  relayTailscaleStackSchema,
-  type RelayTailscaleStack,
+  tunnelSchema,
+  type Tunnel,
 } from "@workspace/contracts"
 import { Clock, Effect } from "effect"
 
 import { Database, type DatabaseTransaction } from "@/effect/database"
 import { databaseTable } from "@/lib/database-config"
 
-export interface PersistedTailscaleDeployment extends RelayTailscaleStack {
+export interface PersistedTunnel extends Tunnel {
   relayId: string
   relayName: string
 }
 
-export interface PendingTailscaleCleanup {
+export interface PendingTunnelCleanup {
   attempts: number
-  deployment: PersistedTailscaleDeployment
+  deployment: PersistedTunnel
   lastError: string | null
   requestedBy: string
 }
 
-export interface PendingTailscaleCleanupBatch {
-  cleanups: Array<PendingTailscaleCleanup>
+export interface PendingTunnelCleanupBatch {
+  cleanups: Array<PendingTunnelCleanup>
   deferredCorruptRows: number
 }
 
-export function tailscaleCleanupRetryDelaySeconds(attempt: number): number {
+export function tunnelCleanupRetryDelaySeconds(attempt: number): number {
   return Math.min(300, 2 ** Math.min(Math.max(1, attempt), 9))
 }
 
 interface DeploymentRow extends RowDataPacket {
   cleanup_attempts: number
   cleanup_last_error: string | null
-  deployment: unknown
-  network_id: string
+  id: string
+  state: unknown
+  tailnet_id: string
   relay_id: string
   relay_name?: string
   requested_by: string
@@ -45,9 +46,9 @@ interface DeploymentRow extends RowDataPacket {
  * Records the deployments Hearth saw on Relays. Returns how many it hadn't
  * seen before; one belonging to a network being deleted is due for cleanup.
  */
-export const observeTailscaleDeploymentsEffect = Effect.fn(
+export const observeTunnelsEffect = Effect.fn(
   "tailscaleCleanup.observeDeployments"
-)(function* (deployments: ReadonlyArray<PersistedTailscaleDeployment>) {
+)(function* (deployments: ReadonlyArray<PersistedTunnel>) {
   if (deployments.length === 0) return 0
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -62,11 +63,11 @@ export const observeTailscaleDeploymentsEffect = Effect.fn(
   return results.filter((result) => result.affectedRows === 1).length
 })
 
-export const reconcileTailscaleDeploymentsEffect = Effect.fn(
+export const reconcileTunnelsEffect = Effect.fn(
   "tailscaleCleanup.reconcileDeployments"
 )(function* (
   networkId: string,
-  deployments: ReadonlyArray<PersistedTailscaleDeployment>,
+  deployments: ReadonlyArray<PersistedTunnel>,
   removedRelayIds: ReadonlyArray<string>
 ) {
   const database = yield* Database
@@ -74,10 +75,16 @@ export const reconcileTailscaleDeploymentsEffect = Effect.fn(
   yield* database.transaction("tailscaleCleanup.reconcileDeployments", (tx) =>
     Effect.gen(function* () {
       if (removedRelayIds.length > 0) {
+        const relays = removedRelayIds.map(() => "?").join(", ")
         yield* tx.execute(
-          `DELETE FROM ${databaseTable("tailscale_network_deployment")}
-              WHERE network_id = ?
-                AND relay_id IN (${removedRelayIds.map(() => "?").join(", ")})`,
+          `DELETE member FROM ${databaseTable("instance_group_member")} member
+             JOIN ${databaseTable("tunnel")} tunnel ON tunnel.id = member.instance_id
+            WHERE tunnel.tailnet_id = ? AND tunnel.relay_id IN (${relays})`,
+          [networkId, ...removedRelayIds]
+        )
+        yield* tx.execute(
+          `DELETE FROM ${databaseTable("tunnel")}
+              WHERE tailnet_id = ? AND relay_id IN (${relays})`,
           [networkId, ...removedRelayIds]
         )
       }
@@ -90,12 +97,12 @@ export const reconcileTailscaleDeploymentsEffect = Effect.fn(
   )
 })
 
-export const requestTailscaleNetworkCleanupEffect = Effect.fn(
+export const requestTailnetCleanupEffect = Effect.fn(
   "tailscaleCleanup.request"
 )(function* (
   networkId: string,
   requestedBy: string,
-  deployments: ReadonlyArray<PersistedTailscaleDeployment>
+  deployments: ReadonlyArray<PersistedTunnel>
 ) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
@@ -107,7 +114,7 @@ export const requestTailscaleNetworkCleanupEffect = Effect.fn(
         { discard: true }
       )
       yield* tx.execute(
-        `UPDATE ${databaseTable("tailscale_network")}
+        `UPDATE ${databaseTable("tailnet")}
             SET deletion_requested_at = COALESCE(deletion_requested_at, ?),
                 deletion_requested_by = COALESCE(deletion_requested_by, ?),
                 cleanup_attempts = 0,
@@ -129,7 +136,7 @@ interface NextAttemptRow extends RowDataPacket {
  * When a network being deleted next has cleanup due: its earliest Relay
  * removal, or, with no Relays left, its finalization. Null once it's gone.
  */
-export const nextTailscaleCleanupAttemptEffect = Effect.fn(
+export const nextTailnetCleanupAttemptEffect = Effect.fn(
   "tailscaleCleanup.nextAttempt"
 )(function* (networkId: string) {
   const database = yield* Database
@@ -138,13 +145,13 @@ export const nextTailscaleCleanupAttemptEffect = Effect.fn(
   const [row] = yield* database.queryRows<NextAttemptRow>(
     "tailscaleCleanup.nextAttempt",
     `SELECT COALESCE(
-              (SELECT MIN(deployment.cleanup_next_attempt_at)
-                 FROM ${databaseTable("tailscale_network_deployment")} deployment
-                WHERE deployment.network_id = network.id),
+              (SELECT MIN(tunnel.cleanup_next_attempt_at)
+                 FROM ${databaseTable("tunnel")} tunnel
+                WHERE tunnel.tailnet_id = network.id),
               network.cleanup_next_attempt_at,
               0
             ) AS next_attempt_at
-       FROM ${databaseTable("tailscale_network")} network
+       FROM ${databaseTable("tailnet")} network
       WHERE network.id = ? AND network.deletion_requested_at IS NOT NULL`,
     [networkId]
   )
@@ -152,13 +159,13 @@ export const nextTailscaleCleanupAttemptEffect = Effect.fn(
 })
 
 /** Networks being deleted, as after an upgrade from the cleanup worker. */
-export const tailscaleNetworksBeingDeletedEffect = Effect.fn(
+export const tailnetsBeingDeletedEffect = Effect.fn(
   "tailscaleCleanup.networksBeingDeleted"
 )(function* () {
   const database = yield* Database
   const rows = yield* database.queryRows<RowDataPacket & { id: string }>(
     "tailscaleCleanup.networksBeingDeleted",
-    `SELECT id FROM ${databaseTable("tailscale_network")}
+    `SELECT id FROM ${databaseTable("tailnet")}
       WHERE deletion_requested_at IS NOT NULL
       ORDER BY deletion_requested_at`
   )
@@ -166,20 +173,20 @@ export const tailscaleNetworksBeingDeletedEffect = Effect.fn(
 })
 
 /** A network's Relay removals that are due. */
-export const loadPendingTailscaleCleanupsEffect = Effect.fn(
+export const loadPendingTunnelCleanupsEffect = Effect.fn(
   "tailscaleCleanup.loadPending"
 )(function* (networkId: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   const rows = yield* database.queryRows<DeploymentRow>(
     "tailscaleCleanup.loadPending",
-    `SELECT deployment.network_id, deployment.relay_id,
-            deployment.deployment, deployment.cleanup_attempts,
+    `SELECT deployment.id, deployment.tailnet_id, deployment.relay_id,
+            deployment.state, deployment.cleanup_attempts,
             deployment.cleanup_last_error,
             network.deletion_requested_by AS requested_by
-       FROM ${databaseTable("tailscale_network_deployment")} deployment
-       JOIN ${databaseTable("tailscale_network")} network
-         ON network.id = deployment.network_id
+       FROM ${databaseTable("tunnel")} deployment
+       JOIN ${databaseTable("tailnet")} network
+         ON network.id = deployment.tailnet_id
       WHERE network.id = ?
         AND network.deletion_requested_at IS NOT NULL
         AND deployment.cleanup_next_attempt_at <= ?
@@ -190,24 +197,20 @@ export const loadPendingTailscaleCleanupsEffect = Effect.fn(
     Effect.try({
       try: () => ({
         attempts: row.cleanup_attempts,
-        deployment: parseDeployment(
-          row.deployment,
-          row.network_id,
-          row.relay_id
-        ),
+        deployment: parseDeployment(row.state, row.id, row.relay_id),
         lastError: row.cleanup_last_error,
         requestedBy: row.requested_by,
       }),
       catch: (cause) => cause,
     }).pipe(
-      Effect.map((cleanup) => cleanup satisfies PendingTailscaleCleanup),
+      Effect.map((cleanup) => cleanup satisfies PendingTunnelCleanup),
       Effect.catch((cause) => {
         const attempts = row.cleanup_attempts + 1
-        return deferTailscaleCleanupEffect(
-          row.network_id,
+        return deferTunnelCleanupEffect(
+          row.tailnet_id,
           row.relay_id,
           attempts,
-          tailscaleCleanupRetryDelaySeconds(attempts),
+          tunnelCleanupRetryDelaySeconds(attempts),
           `Stored Tailscale cleanup data is invalid: ${errorMessage(cause)}`.slice(
             0,
             512
@@ -218,13 +221,13 @@ export const loadPendingTailscaleCleanupsEffect = Effect.fn(
   )
   return {
     cleanups: cleanups.filter(
-      (cleanup): cleanup is PendingTailscaleCleanup => cleanup !== null
+      (cleanup): cleanup is PendingTunnelCleanup => cleanup !== null
     ),
     deferredCorruptRows: cleanups.filter((cleanup) => cleanup === null).length,
-  } satisfies PendingTailscaleCleanupBatch
+  } satisfies PendingTunnelCleanupBatch
 })
 
-export const completeTailscaleCleanupEffect = Effect.fn(
+export const completeTunnelCleanupEffect = Effect.fn(
   "tailscaleCleanup.complete"
 )(function* (networkId: string, relayId: string) {
   const database = yield* Database
@@ -232,12 +235,18 @@ export const completeTailscaleCleanupEffect = Effect.fn(
   yield* database.transaction("tailscaleCleanup.complete", (tx) =>
     Effect.gen(function* () {
       yield* tx.execute(
-        `DELETE FROM ${databaseTable("tailscale_network_deployment")}
-          WHERE network_id = ? AND relay_id = ?`,
+        `DELETE member FROM ${databaseTable("instance_group_member")} member
+           JOIN ${databaseTable("tunnel")} tunnel ON tunnel.id = member.instance_id
+          WHERE tunnel.tailnet_id = ? AND tunnel.relay_id = ?`,
         [networkId, relayId]
       )
       yield* tx.execute(
-        `UPDATE ${databaseTable("tailscale_network")} network
+        `DELETE FROM ${databaseTable("tunnel")}
+          WHERE tailnet_id = ? AND relay_id = ?`,
+        [networkId, relayId]
+      )
+      yield* tx.execute(
+        `UPDATE ${databaseTable("tailnet")} network
             SET network.cleanup_attempts = 0,
                 network.cleanup_next_attempt_at = ?,
                 network.cleanup_last_error = NULL,
@@ -246,8 +255,8 @@ export const completeTailscaleCleanupEffect = Effect.fn(
             AND network.deletion_requested_at IS NOT NULL
             AND NOT EXISTS (
               SELECT 1
-                FROM ${databaseTable("tailscale_network_deployment")} deployment
-               WHERE deployment.network_id = network.id
+                FROM ${databaseTable("tunnel")} deployment
+               WHERE deployment.tailnet_id = network.id
             )`,
         [now, now, networkId]
       )
@@ -255,7 +264,7 @@ export const completeTailscaleCleanupEffect = Effect.fn(
   )
 })
 
-export const deferTailscaleCleanupEffect = Effect.fn("tailscaleCleanup.defer")(
+export const deferTunnelCleanupEffect = Effect.fn("tailscaleCleanup.defer")(
   function* (
     networkId: string,
     relayId: string,
@@ -269,16 +278,16 @@ export const deferTailscaleCleanupEffect = Effect.fn("tailscaleCleanup.defer")(
     yield* database.transaction("tailscaleCleanup.defer", (tx) =>
       Effect.gen(function* () {
         yield* tx.execute(
-          `UPDATE ${databaseTable("tailscale_network_deployment")}
+          `UPDATE ${databaseTable("tunnel")}
             SET cleanup_attempts = ?,
                 cleanup_next_attempt_at = ?,
                 cleanup_last_error = ?,
                 updated_at = ?
-          WHERE network_id = ? AND relay_id = ?`,
+          WHERE tailnet_id = ? AND relay_id = ?`,
           [attempts, nextAttemptAt, error, now, networkId, relayId]
         )
         yield* tx.execute(
-          `UPDATE ${databaseTable("tailscale_network")}
+          `UPDATE ${databaseTable("tailnet")}
             SET cleanup_attempts = cleanup_attempts + 1,
                 cleanup_next_attempt_at = ?,
                 cleanup_last_error = ?,
@@ -291,14 +300,14 @@ export const deferTailscaleCleanupEffect = Effect.fn("tailscaleCleanup.defer")(
   }
 )
 
-export const recordTailscaleCleanupFinalizationFailureEffect = Effect.fn(
+export const recordTailnetFinalizationFailureEffect = Effect.fn(
   "tailscaleCleanup.finalizationFailure"
 )(function* (networkId: string, delaySeconds: number, error: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   yield* database.execute(
     "tailscaleCleanup.finalizationFailure",
-    `UPDATE ${databaseTable("tailscale_network")}
+    `UPDATE ${databaseTable("tailnet")}
         SET cleanup_attempts = cleanup_attempts + 1,
             cleanup_next_attempt_at = ?,
             cleanup_last_error = ?,
@@ -310,34 +319,50 @@ export const recordTailscaleCleanupFinalizationFailureEffect = Effect.fn(
 
 function upsertDeployment(
   tx: DatabaseTransaction,
-  deployment: PersistedTailscaleDeployment,
+  deployment: PersistedTunnel,
   now: number
 ) {
-  return tx.execute(
-    `INSERT INTO ${databaseTable("tailscale_network_deployment")}
-       (network_id, relay_id, deployment, cleanup_next_attempt_at,
-        observed_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON DUPLICATE KEY UPDATE
-       deployment = VALUES(deployment),
-       observed_at = VALUES(observed_at),
-       updated_at = VALUES(updated_at)`,
-    [
-      deployment.id,
-      deployment.relayId,
-      JSON.stringify(deployment),
-      now,
-      now,
-      now,
-    ]
-  )
+  // A tunnel Hearth sees for the first time is its tailnet owner's, and one
+  // of the tailnet's group. One of a tailnet Hearth doesn't know is left out.
+  return Effect.gen(function* () {
+    const result = yield* tx.execute(
+      `INSERT INTO ${databaseTable("tunnel")}
+         (id, tailnet_id, relay_id, owner_id, state, cleanup_next_attempt_at,
+          observed_at, updated_at)
+       SELECT ?, tailnet.id, ?, tailnet.owner_id, ?, ?, ?, ?
+         FROM ${databaseTable("tailnet")} tailnet
+        WHERE tailnet.id = ?
+       ON DUPLICATE KEY UPDATE
+         state = VALUES(state),
+         observed_at = VALUES(observed_at),
+         updated_at = VALUES(updated_at)`,
+      [
+        deployment.id,
+        deployment.relayId,
+        JSON.stringify(deployment),
+        now,
+        now,
+        now,
+        deployment.tailnetId,
+      ]
+    )
+    yield* tx.execute(
+      `INSERT IGNORE INTO ${databaseTable("instance_group_member")}
+         (instance_id, group_id, instance_kind, relay_id, created_at)
+       SELECT ?, tailnet.id, 'tunnel', ?, ?
+         FROM ${databaseTable("tailnet")} tailnet
+        WHERE tailnet.id = ?`,
+      [deployment.id, deployment.relayId, now, deployment.tailnetId]
+    )
+    return result
+  })
 }
 
 function parseDeployment(
   value: unknown,
-  networkId: string,
+  tunnelId: string,
   relayId: string
-): PersistedTailscaleDeployment {
+): PersistedTunnel {
   const decoded = typeof value === "string" ? JSON.parse(value) : value
   if (typeof decoded !== "object" || decoded === null) {
     throw new Error("Stored Tailscale cleanup is not an object")
@@ -347,9 +372,9 @@ function parseDeployment(
     relayName,
     ...stackValue
   } = decoded as Record<string, unknown>
-  const stack = relayTailscaleStackSchema.parse(stackValue)
-  if (stack.id !== networkId) {
-    throw new Error("Stored Tailscale cleanup belongs to another network")
+  const stack = tunnelSchema.parse(stackValue)
+  if (stack.id !== tunnelId) {
+    throw new Error("Stored tunnel belongs to another tunnel")
   }
   const storedRelayId = relayIdSchema.parse(candidateRelayId ?? relayId)
   if (storedRelayId !== relayId) {

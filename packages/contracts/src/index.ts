@@ -1359,56 +1359,6 @@ export function relayDiskAllocationAvailableBytes(
   return Math.max(remainingBytes, currentLimitBytes)
 }
 
-export const builtinTailscaleBrickId = "tailscale"
-/**
- * Whether an instance is a node of a Tailscale network. A Relay runs one as
- * a game server until Tailscale is a kind of its own (docs/instances.md),
- * and tells it apart by its Brick. This is the one place that says how, so
- * that changing it is one change.
- */
-export function isTailscaleNode(instance: {
-  readonly brickId?: string | null | undefined
-}): boolean {
-  return instance.brickId === builtinTailscaleBrickId
-}
-
-export const builtinTailscaleBrickSource =
-  "https://kiln.site/bricks/builtin/tailscale"
-export const builtinTailscaleBrick = brickSchema.parse({
-  format: "kiln.brick/v2",
-  kind: "game-server",
-  metadata: {
-    id: builtinTailscaleBrickId,
-    name: "Tailscale",
-    summary: "Private tailnet access for servers managed by Kiln.",
-    author: "Kiln",
-    tags: ["networking", "private"],
-  },
-  inputs: [
-    {
-      key: "domain",
-      label: "Private domain",
-      help: "Domain used for private server names.",
-      type: "text",
-      default: "test",
-    },
-  ],
-  deploy: {
-    type: "image",
-    image: "tailscale/tailscale:stable",
-    runtime: "Tailscale",
-    memory: "64m",
-    pids: 128,
-    volumes: ["/config"],
-    ports: [
-      { name: "dns-tcp", port: 53 },
-      { name: "dns-udp", port: 53, protocol: "udp" },
-    ],
-  },
-  "game-server": { game: "Networking" },
-  source: builtinTailscaleBrickSource,
-})
-
 export const brickVariableValuesSchema = z.record(
   z.string().regex(/^[a-z][a-z0-9_]{0,47}$/u),
   brickVariableValueSchema
@@ -1515,11 +1465,11 @@ export const relayTailscaleAuthKeySchema = z
   .max(512)
   .regex(/^tskey-[A-Za-z0-9?=_-]+$/u, "Enter a Tailscale auth key")
 
-export const relayTailscaleStackIdSchema = instanceIdSchema
+export const tunnelIdSchema = instanceIdSchema
 
-export const MAXIMUM_TAILSCALE_STACK_BINDINGS = 245
+export const MAXIMUM_TUNNEL_BINDINGS = 245
 
-export const relayTailscaleStackBindingInputSchema = z
+export const tunnelBindingInputSchema = z
   .object({
     enabled: z.boolean().default(true),
     hostname: relayTailscaleSubdomainSchema,
@@ -1529,37 +1479,39 @@ export const relayTailscaleStackBindingInputSchema = z
   })
   .strict()
 
-export const relayTailscaleStackApplySchema = z
+export const tunnelApplySchema = z
   .object({
     authKey: relayTailscaleAuthKeySchema.optional(),
     bindings: z
-      .array(relayTailscaleStackBindingInputSchema)
-      .max(MAXIMUM_TAILSCALE_STACK_BINDINGS),
+      .array(tunnelBindingInputSchema)
+      .max(MAXIMUM_TUNNEL_BINDINGS),
     domain: relayTailscaleDomainSchema,
     hostname: relayTailscaleHostnameSchema,
-    id: relayTailscaleStackIdSchema,
+    id: tunnelIdSchema,
     name: relayInstanceNameSchema,
+    // The tailnet it is one of: its Tailscale account's tunnels.
+    tailnetId: instanceIdSchema,
   })
   .strict()
 
-export const relayTailscaleStackDnsRecordSchema = z
+export const tunnelDnsRecordSchema = z
   .object({
     address: z.ipv4(),
     hostname: relayTailscaleSubdomainSchema,
   })
   .strict()
 
-export const relayTailscaleStackDnsSchema = z
+export const tunnelDnsSchema = z
   .object({
-    id: relayTailscaleStackIdSchema,
-    records: z.array(relayTailscaleStackDnsRecordSchema).max(4_096),
+    id: tunnelIdSchema,
+    records: z.array(tunnelDnsRecordSchema).max(4_096),
   })
   .strict()
 
-export const relayTailscaleStackRemoveSchema = z
+export const tunnelRemoveSchema = z
   .object({
     controlPlaneDeviceRemoved: z.boolean().default(false),
-    id: relayTailscaleStackIdSchema,
+    id: tunnelIdSchema,
     mode: z.enum(["prepare", "commit", "rollback"]).default("commit"),
   })
   .strict()
@@ -2231,8 +2183,8 @@ export const relayInstanceSchema = z.object({
   provisioning: relayInstanceProvisioningSchema.optional(),
 })
 
-export const relayTailscaleStackBindingSchema =
-  relayTailscaleStackBindingInputSchema.extend({
+export const tunnelBindingSchema =
+  tunnelBindingInputSchema.extend({
     address: z.ipv4(),
   })
 
@@ -2276,22 +2228,23 @@ export function migrateLegacyTailscaleBindings(
   }
 }
 
-export const relayTailscaleStackConfigSchema = z
+export const tunnelConfigSchema = z
   .object({
     bindings: z
-      .array(relayTailscaleStackBindingSchema)
-      .max(MAXIMUM_TAILSCALE_STACK_BINDINGS),
+      .array(tunnelBindingSchema)
+      .max(MAXIMUM_TUNNEL_BINDINGS),
     domain: relayTailscaleDomainSchema,
     hostname: relayTailscaleHostnameSchema,
-    id: relayTailscaleStackIdSchema,
+    id: tunnelIdSchema,
     name: relayInstanceNameSchema,
+    tailnetId: instanceIdSchema,
     subnet: z.string().regex(/^10\.(?:\d{1,3}\.){2}0\/24$/u),
   })
   .strict()
 
-export const relayTailscaleStackSchema = z
+export const tunnelSchema = z
   .object({
-    bindings: z.array(relayTailscaleStackBindingSchema),
+    bindings: z.array(tunnelBindingSchema),
     components: z
       .object({
         coreDnsRunning: z.boolean(),
@@ -2300,9 +2253,11 @@ export const relayTailscaleStackSchema = z
       .strict(),
     domain: relayTailscaleDomainSchema,
     hostname: relayTailscaleHostnameSchema,
-    id: relayTailscaleStackIdSchema,
-    instance: relayInstanceSchema,
+    id: tunnelIdSchema,
     name: relayInstanceNameSchema,
+    // Its Tailscale container's, which its CoreDNS container follows.
+    observedState: relayObservedStateSchema,
+    tailnetId: instanceIdSchema,
     status: z
       .object({
         connected: z.boolean(),
@@ -2315,31 +2270,32 @@ export const relayTailscaleStackSchema = z
   })
   .strict()
 
-export const relayTailscaleStacksSchema = z.array(relayTailscaleStackSchema)
+export const tunnelsSchema = z.array(tunnelSchema)
 
 /**
- * What a Tailscale network's DNS is made from on one node
- * (`relay.tailscale.stack.state`): its members, each marked frozen while its
- * resource is frozen for deletion, and whether the node is being removed
- * from the network. Hearth builds every node's records from these: the
- * enabled members that aren't frozen, of nodes not being removed.
+ * What a tailnet's DNS is made from on one tunnel (`tunnel.state`): its
+ * members, each marked frozen while its resource is frozen for deletion,
+ * and whether the tunnel is being removed. Hearth builds every tunnel's
+ * records from these: the enabled members that aren't frozen, of tunnels
+ * not being removed.
  */
-export const relayTailscaleStackStateSchema = z
+export const tunnelStateSchema = z
   .object({
     bindings: z.array(
-      relayTailscaleStackBindingSchema.extend({ frozen: z.boolean() })
+      tunnelBindingSchema.extend({ frozen: z.boolean() })
     ),
-    id: relayTailscaleStackIdSchema,
+    id: tunnelIdSchema,
     removalPending: z.boolean(),
+    tailnetId: instanceIdSchema,
   })
   .strict()
 
-export const relayTailscaleStackStatesSchema = z.array(
-  relayTailscaleStackStateSchema
+export const tunnelStatesSchema = z.array(
+  tunnelStateSchema
 )
 
-export type RelayTailscaleStackState = z.infer<
-  typeof relayTailscaleStackStateSchema
+export type TunnelState = z.infer<
+  typeof tunnelStateSchema
 >
 
 export const relayNodeCapabilitySchema = z.enum([
@@ -3455,18 +3411,18 @@ export type ProvisioningState = z.infer<typeof provisioningStateSchema>
 export type RelayUpdateInstanceStartup = z.infer<
   typeof relayUpdateInstanceStartupSchema
 >
-export type RelayTailscaleStack = z.infer<typeof relayTailscaleStackSchema>
-export type RelayTailscaleStackApply = z.infer<
-  typeof relayTailscaleStackApplySchema
+export type Tunnel = z.infer<typeof tunnelSchema>
+export type TunnelApply = z.infer<
+  typeof tunnelApplySchema
 >
-export type RelayTailscaleStackBinding = z.infer<
-  typeof relayTailscaleStackBindingSchema
+export type TunnelBinding = z.infer<
+  typeof tunnelBindingSchema
 >
-export type RelayTailscaleStackConfig = z.infer<
-  typeof relayTailscaleStackConfigSchema
+export type TunnelConfig = z.infer<
+  typeof tunnelConfigSchema
 >
-export type RelayTailscaleStackDns = z.infer<
-  typeof relayTailscaleStackDnsSchema
+export type TunnelDns = z.infer<
+  typeof tunnelDnsSchema
 >
 export type RelayProxyMode = z.infer<typeof relayProxyModeSchema>
 export type RelayProxyBrowserMetadata = z.infer<

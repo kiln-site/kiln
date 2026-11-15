@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test"
 
 import {
-  tailscaleStackCoreDnsConfiguration,
-  tailscaleStackCoreDnsRecords,
+  tunnelCoreDnsConfiguration,
+  tunnelCoreDnsRecords,
 } from "./private-network.js"
 
 describe("Tailscale stack DNS records", () => {
@@ -12,9 +12,9 @@ describe("Tailscale stack DNS records", () => {
       { address: "10.165.55.10", hostname: "paper" },
     ]
 
-    const corefile = tailscaleStackCoreDnsConfiguration("test", records)
+    const corefile = tunnelCoreDnsConfiguration("test", records)
 
-    expect(tailscaleStackCoreDnsRecords("test", corefile)).toEqual([
+    expect(tunnelCoreDnsRecords("test", corefile)).toEqual([
       { address: "10.165.55.10", hostname: "paper" },
       { address: "10.140.2.10", hostname: "survival" },
     ])

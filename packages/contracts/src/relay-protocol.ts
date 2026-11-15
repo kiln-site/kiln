@@ -115,11 +115,11 @@ export const relayControlOperations = [
   "relay.resources.read",
   "relay.rename",
   "relay.audit.list",
-  "relay.tailscale.stack.apply",
-  "relay.tailscale.stack.dns",
-  "relay.tailscale.stack.list",
-  "relay.tailscale.stack.state",
-  "relay.tailscale.stack.remove",
+  "tunnel.apply",
+  "tunnel.dns",
+  "tunnel.list",
+  "tunnel.state",
+  "tunnel.remove",
   "relay.host.read",
   "relay.host.files.mount",
   "relay.host.restart",
@@ -273,9 +273,9 @@ const auditedRelayControlOperations = new Set<RelayControlOperation>([
   "relay.volumes.delete",
   "relay.volumes.references.import",
   "relay.volumes.references.hold",
-  "relay.tailscale.stack.apply",
-  "relay.tailscale.stack.dns",
-  "relay.tailscale.stack.remove",
+  "tunnel.apply",
+  "tunnel.dns",
+  "tunnel.remove",
   "relay.proxy.write",
   "relay.proxy.trial",
   "relay.platform.action",
@@ -353,8 +353,8 @@ export function relayControlOperationChanges(
     case "relay.update.status":
     case "relay.resources.read":
     case "relay.audit.list":
-    case "relay.tailscale.stack.list":
-    case "relay.tailscale.stack.state":
+    case "tunnel.list":
+    case "tunnel.state":
     case "relay.host.read":
     case "relay.database.read":
     case "relay.proxy.read":
@@ -419,9 +419,9 @@ export function relayControlOperationChanges(
     case "relay.update.apply":
     case "relay.restart":
     case "relay.rename":
-    case "relay.tailscale.stack.apply":
-    case "relay.tailscale.stack.dns":
-    case "relay.tailscale.stack.remove":
+    case "tunnel.apply":
+    case "tunnel.dns":
+    case "tunnel.remove":
     case "relay.host.files.mount":
     case "relay.host.restart":
     case "relay.host.packages.update":
@@ -550,9 +550,9 @@ export function relayControlDeadlineMs(
   if (operation === "relay.update.apply") return 15 * 60_000
   // The host's shell helper may have to be pulled first.
   if (operation === "relay.host.restart") return 120_000
-  if (operation === "relay.tailscale.stack.apply") return 240_000
-  if (operation === "relay.tailscale.stack.remove") return 120_000
-  if (operation === "relay.tailscale.stack.dns") return 60_000
+  if (operation === "tunnel.apply") return 240_000
+  if (operation === "tunnel.remove") return 120_000
+  if (operation === "tunnel.dns") return 60_000
   // Proxy writes can pull and start edge containers.
   if (operation === "relay.proxy.write") return 240_000
   if (operation === "relay.proxy.trial") return 240_000

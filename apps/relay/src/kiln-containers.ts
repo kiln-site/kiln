@@ -55,6 +55,12 @@ export function kilnContainerOwner(
   if (databaseId) {
     return { component: null, resource: { id: databaseId, type: "database" } }
   }
+  // A tunnel's two containers count with the Relay's own services.
+  if (labels["kiln.tunnel.id"]) {
+    return relay(
+      labels["kiln.tunnel.component"] === "dns" ? "CoreDNS" : "Tailscale"
+    )
+  }
   const serverId = labels[config.serverIdLabel]
   if (serverId && labels["kiln.relay.managed"] === "true") {
     return {

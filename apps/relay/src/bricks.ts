@@ -15,8 +15,6 @@ import {
   brickInputs,
   brickRecipeSchema,
   brickRecipeV1Schema,
-  builtinTailscaleBrick,
-  builtinTailscaleBrickSource,
   fillBrickTemplate,
   latestVelocityVersion,
   readBrickRecipe,
@@ -172,10 +170,6 @@ export class BrickCatalog {
   }
 
   async recipe(source: string, snapshotSha256?: string): Promise<BrickRecipe> {
-    if (source === builtinTailscaleBrickSource) {
-      const { source: _source, ...recipe } = builtinTailscaleBrick
-      return recipe
-    }
     if (snapshotSha256) {
       return readBrickSnapshot(this.#snapshotDirectory, snapshotSha256)
     }

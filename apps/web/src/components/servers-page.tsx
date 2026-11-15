@@ -38,7 +38,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@workspace/ui/components/tooltip"
-import { isTailscaleNode } from "@workspace/contracts"
 
 import {
   AddInstanceDialogHost,
@@ -753,7 +752,6 @@ function canDeleteServer(
   access: ServerDeleteAccess,
   server: ServerDirectory
 ): boolean {
-  if (isTailscaleNode(server)) return false
   return (
     access.all ||
     access.relays.has(server.relayId) ||

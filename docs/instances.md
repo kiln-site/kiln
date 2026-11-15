@@ -163,8 +163,14 @@ tailnet and for its own services.
 
 ## Tunnels
 
-The plan for step 11. Today's Tailscale network becomes tunnels in a
-tailnet. Nothing here is built yet.
+The plan for step 11, and where it stands. A Tailscale network became
+tunnels in a tailnet: each tunnel is an instance of its own, with its own
+ID, kept in `tunnel` and listed by its Relay with its tailnet's ID, and the
+tailnet is a group Kiln keeps whole (`tailnet` beside it). Its containers
+carry a tunnel's labels, and nothing treats it as a game server. Built so
+far: that, the migration from networks, and the requests' new names; what
+every instance has (power, deployments, logs, terminal), DNS reloading in
+place, names and the pages follow in this stack.
 
 ### What runs
 
@@ -434,11 +440,8 @@ Whatever depends on what an instance is reads those. The older
 containers made before the type was; one of those is read as `minecraft`
 when its network mode is `minecraft-backend`.
 
-One thing is still told apart by its Brick's ID: a Tailscale node, which a
-Relay runs as a game server until Tailscale is a kind of its own. Everything
-that asks goes through `isTailscaleNode` in the contracts, so that step
-changes one function. The Brick picker also still guesses its "Steam"
-category from a tag or an image name.
+The Brick picker still guesses its "Steam" category from a tag or an image
+name.
 
 Tied settings have four things to settle before they are built: secrets stay
 in Hearth and the file only names them; a push acts with the authority of

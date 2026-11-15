@@ -47,6 +47,9 @@ export const INSTANCE_KINDS = [
   "server",
   "app",
   "database",
+  // A Tailscale network, before each of its Relays' tunnels had an ID of
+  // its own and the network became a tailnet, an instance group.
   "tailscale",
+  "tunnel",
 ] as const
 export type InstanceIdKind = (typeof INSTANCE_KINDS)[number]

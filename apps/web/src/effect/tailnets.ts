@@ -5,10 +5,10 @@ import { z } from "zod"
 import {
   relayInstanceNameSchema,
   relayTailscaleDomainSchema,
-  relayTailscaleStackIdSchema,
+  tunnelIdSchema,
 } from "@workspace/contracts"
 
-import { Database } from "@/effect/database"
+import { Database, type DatabaseTransaction } from "@/effect/database"
 import { CredentialError, ResourceNotFoundError } from "@/effect/errors"
 import { databaseTable } from "@/lib/database-config"
 import { betterAuthSecrets } from "@/lib/environment"
@@ -36,15 +36,15 @@ export interface TailscaleOAuthCredential {
   tags: Array<string>
 }
 
-export interface TailscaleNetworkDefinition {
-  cleanup: TailscaleNetworkCleanup | null
+export interface TailnetDefinition {
+  cleanup: TailnetCleanup | null
   domain: string
   id: string
   integration: TailscaleIntegration | null
   name: string
 }
 
-export interface TailscaleNetworkCleanup {
+export interface TailnetCleanup {
   attempts: number
   lastError: string | null
   nextAttemptAt: string | null
@@ -52,7 +52,7 @@ export interface TailscaleNetworkCleanup {
   requestedAt: string
 }
 
-interface TailscaleNetworkRow extends RowDataPacket {
+interface TailnetRow extends RowDataPacket {
   cleanup_attempts: number
   cleanup_last_error: string | null
   cleanup_next_attempt_at: number | null
@@ -73,60 +73,62 @@ interface TailscaleNetworkRow extends RowDataPacket {
  * The Relays each network is on, by network: what Hearth recorded when it
  * last saved it.
  */
-export const tailscaleNetworkRelaysEffect = Effect.fn(
-  "tailscaleNetworks.relays"
+export const tailnetRelaysEffect = Effect.fn(
+  "tailnets.relays"
 )(function* (networkIds: ReadonlyArray<string>) {
   const relays = new Map<string, Array<string>>()
   if (networkIds.length === 0) return relays
   const database = yield* Database
   const rows = yield* database.queryRows<
-    RowDataPacket & { network_id: string; relay_id: string }
+    RowDataPacket & { tailnet_id: string; relay_id: string }
   >(
-    "tailscale_network_relays",
-    `SELECT network_id, relay_id
-       FROM ${databaseTable("tailscale_network_deployment")}
-      WHERE network_id IN (${networkIds.map(() => "?").join(", ")})`,
+    "tailnet_relays",
+    `SELECT tailnet_id, relay_id
+       FROM ${databaseTable("tunnel")}
+      WHERE tailnet_id IN (${networkIds.map(() => "?").join(", ")})`,
     [...networkIds]
   )
   for (const row of rows) {
-    relays.set(row.network_id, [
-      ...(relays.get(row.network_id) ?? []),
+    relays.set(row.tailnet_id, [
+      ...(relays.get(row.tailnet_id) ?? []),
       row.relay_id,
     ])
   }
   return relays
 })
 
-export const loadTailscaleNetworkDefinitionsEffect = Effect.fn(
-  "tailscaleNetworks.load"
+export const loadTailnetDefinitionsEffect = Effect.fn(
+  "tailnets.load"
 )(function* () {
   const database = yield* Database
-  const rows = yield* database.queryRows<TailscaleNetworkRow>(
-    "tailscaleNetworks.load",
-    `SELECT network.id, network.name, network.domain, network.oauth_client_id,
-            oauth_client_secret_ciphertext, oauth_scopes, oauth_tags,
-            oauth_last_synced_at, oauth_last_error,
+  const rows = yield* database.queryRows<TailnetRow>(
+    "tailnets.load",
+    `SELECT tailnet.id, tailnet_group.name, tailnet.domain,
+            tailnet.oauth_client_id, oauth_client_secret_ciphertext,
+            oauth_scopes, oauth_tags, oauth_last_synced_at, oauth_last_error,
             deletion_requested_at, cleanup_attempts,
             cleanup_next_attempt_at, cleanup_last_error,
             (SELECT COUNT(*)
-               FROM ${databaseTable("tailscale_network_deployment")} deployment
-              WHERE deployment.network_id = network.id) AS cleanup_pending_relays
-       FROM ${databaseTable("tailscale_network")} network
-      ORDER BY network.name, network.id`
+               FROM ${databaseTable("tunnel")} tunnel
+              WHERE tunnel.tailnet_id = tailnet.id) AS cleanup_pending_relays
+       FROM ${databaseTable("tailnet")} tailnet
+       JOIN ${databaseTable("instance_group")} tailnet_group
+         ON tailnet_group.id = tailnet.id
+      ORDER BY tailnet_group.name, tailnet.id`
   )
   return rows.map((row) => ({
     cleanup: cleanupState(row),
     domain: relayTailscaleDomainSchema.parse(row.domain),
-    id: relayTailscaleStackIdSchema.parse(row.id),
+    id: tunnelIdSchema.parse(row.id),
     integration: publicIntegration(row),
     name: relayInstanceNameSchema.parse(row.name),
   }))
 })
 
-export const createTailscaleNetworkDefinitionEffect = Effect.fn(
-  "tailscaleNetworks.create"
+export const createTailnetDefinitionEffect = Effect.fn(
+  "tailnets.create"
 )(function* (
-  definition: Omit<TailscaleNetworkDefinition, "cleanup" | "integration">,
+  definition: Omit<TailnetDefinition, "cleanup" | "integration">,
   credential: Omit<TailscaleOAuthCredential, "clientSecret">,
   clientSecret: string,
   ownerId: string
@@ -134,38 +136,41 @@ export const createTailscaleNetworkDefinitionEffect = Effect.fn(
   const database = yield* Database
   const ciphertext = yield* encryptTailscaleClientSecretEffect(clientSecret)
   const now = yield* Clock.currentTimeMillis
-  yield* database.execute(
-    "tailscaleNetworks.create",
-    `INSERT INTO ${databaseTable("tailscale_network")}
-       (id, name, domain, owner_id, oauth_client_id,
-        oauth_client_secret_ciphertext, oauth_scopes, oauth_tags, created_at,
-        updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      definition.id,
-      definition.name,
-      definition.domain,
-      ownerId,
-      credential.clientId,
-      ciphertext,
-      JSON.stringify(credential.scopes),
-      JSON.stringify(credential.tags),
-      now,
-      now,
-    ]
+  yield* database.transaction("tailnets.create", (transaction) =>
+    Effect.gen(function* () {
+      yield* insertTailnetGroup(transaction, definition, ownerId, now)
+      yield* transaction.execute(
+        `INSERT INTO ${databaseTable("tailnet")}
+           (id, domain, owner_id, oauth_client_id,
+            oauth_client_secret_ciphertext, oauth_scopes, oauth_tags,
+            created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          definition.id,
+          definition.domain,
+          ownerId,
+          credential.clientId,
+          ciphertext,
+          JSON.stringify(credential.scopes),
+          JSON.stringify(credential.tags),
+          now,
+          now,
+        ]
+      )
+    })
   )
 })
 
-export const saveTailscaleNetworkDefinitionEffect = Effect.fn(
-  "tailscaleNetworks.save"
-)(function* (definition: TailscaleNetworkDefinition, ownerId: string) {
+export const saveTailnetDefinitionEffect = Effect.fn(
+  "tailnets.save"
+)(function* (definition: TailnetDefinition, ownerId: string) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
-  yield* database.transaction("tailscaleNetworks.save", (transaction) =>
+  yield* database.transaction("tailnets.save", (transaction) =>
     Effect.gen(function* () {
       const existing = yield* transaction.queryRows<RowDataPacket>(
         `SELECT id
-         FROM ${databaseTable("tailscale_network")}
+         FROM ${databaseTable("tailnet")}
         WHERE id = ?
         LIMIT 1
           FOR UPDATE`,
@@ -173,25 +178,32 @@ export const saveTailscaleNetworkDefinitionEffect = Effect.fn(
       )
       if (existing.length > 0) {
         yield* transaction.execute(
-          `UPDATE ${databaseTable("tailscale_network")}
-            SET name = ?, domain = ?, updated_at = ?
+          `UPDATE ${databaseTable("tailnet")}
+            SET domain = ?, updated_at = ?
           WHERE id = ?`,
-          [definition.name, definition.domain, now, definition.id]
+          [definition.domain, now, definition.id]
+        )
+        yield* transaction.execute(
+          `UPDATE ${databaseTable("instance_group")}
+            SET name = ?, updated_at = ?
+          WHERE id = ?`,
+          [definition.name, now, definition.id]
         )
         return
       }
+      yield* insertTailnetGroup(transaction, definition, ownerId, now)
       yield* transaction.execute(
-        `INSERT INTO ${databaseTable("tailscale_network")}
-         (id, name, domain, owner_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-        [definition.id, definition.name, definition.domain, ownerId, now, now]
+        `INSERT INTO ${databaseTable("tailnet")}
+         (id, domain, owner_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+        [definition.id, definition.domain, ownerId, now, now]
       )
     })
   )
 })
 
-export const saveTailscaleNetworkIntegrationEffect = Effect.fn(
-  "tailscaleNetworks.integration.save"
+export const saveTailnetIntegrationEffect = Effect.fn(
+  "tailnets.integration.save"
 )(function* (
   id: string,
   credential: Omit<TailscaleOAuthCredential, "clientSecret">,
@@ -201,8 +213,8 @@ export const saveTailscaleNetworkIntegrationEffect = Effect.fn(
   const ciphertext = yield* encryptTailscaleClientSecretEffect(clientSecret)
   const now = yield* Clock.currentTimeMillis
   const result = yield* database.execute(
-    "tailscaleNetworks.integration.save",
-    `UPDATE ${databaseTable("tailscale_network")}
+    "tailnets.integration.save",
+    `UPDATE ${databaseTable("tailnet")}
         SET oauth_client_id = ?,
             oauth_client_secret_ciphertext = ?,
             oauth_scopes = ?,
@@ -222,22 +234,22 @@ export const saveTailscaleNetworkIntegrationEffect = Effect.fn(
   )
   if (result.affectedRows === 0) {
     return yield* ResourceNotFoundError.make({
-      resource: "tailscale_network",
+      resource: "tailnet",
       message: "Tailscale network not found",
     })
   }
 })
 
-export const loadTailscaleNetworkCredentialEffect = Effect.fn(
-  "tailscaleNetworks.integration.load"
+export const loadTailnetCredentialEffect = Effect.fn(
+  "tailnets.integration.load"
 )(function* (id: string) {
   const database = yield* Database
-  const rows = yield* database.queryRows<TailscaleNetworkRow>(
-    "tailscaleNetworks.integration.load",
-    `SELECT id, name, domain, oauth_client_id,
+  const rows = yield* database.queryRows<TailnetRow>(
+    "tailnets.integration.load",
+    `SELECT id, domain, oauth_client_id,
             oauth_client_secret_ciphertext, oauth_scopes, oauth_tags,
             oauth_last_synced_at, oauth_last_error
-       FROM ${databaseTable("tailscale_network")}
+       FROM ${databaseTable("tailnet")}
       WHERE id = ?
       LIMIT 1`,
     [id]
@@ -279,8 +291,8 @@ export const loadTailscaleNetworkCredentialEffect = Effect.fn(
     })
     const now = yield* Clock.currentTimeMillis
     yield* database.execute(
-      "tailscaleNetworks.integration.rotate",
-      `UPDATE ${databaseTable("tailscale_network")}
+      "tailnets.integration.rotate",
+      `UPDATE ${databaseTable("tailnet")}
           SET oauth_client_secret_ciphertext = ?, updated_at = ?
         WHERE id = ? AND oauth_client_secret_ciphertext = ?`,
       [rotated, now, id, ciphertext]
@@ -294,15 +306,15 @@ export const loadTailscaleNetworkCredentialEffect = Effect.fn(
   } satisfies TailscaleOAuthCredential
 })
 
-export const recordTailscaleNetworkSyncEffect = Effect.fn(
-  "tailscaleNetworks.integration.recordSync"
+export const recordTailnetSyncEffect = Effect.fn(
+  "tailnets.integration.recordSync"
 )(function* (id: string, error: string | null) {
   const database = yield* Database
   const now = yield* Clock.currentTimeMillis
   if (error) {
     yield* database.execute(
-      "tailscaleNetworks.integration.recordSyncError",
-      `UPDATE ${databaseTable("tailscale_network")}
+      "tailnets.integration.recordSyncError",
+      `UPDATE ${databaseTable("tailnet")}
           SET oauth_last_error = ?, updated_at = ?
         WHERE id = ?`,
       [error.slice(0, 512), now, id]
@@ -310,8 +322,8 @@ export const recordTailscaleNetworkSyncEffect = Effect.fn(
     return
   }
   yield* database.execute(
-    "tailscaleNetworks.integration.recordSyncSuccess",
-    `UPDATE ${databaseTable("tailscale_network")}
+    "tailnets.integration.recordSyncSuccess",
+    `UPDATE ${databaseTable("tailnet")}
         SET oauth_last_synced_at = ?,
             oauth_last_error = NULL,
             updated_at = ?
@@ -320,19 +332,48 @@ export const recordTailscaleNetworkSyncEffect = Effect.fn(
   )
 })
 
-export const removeTailscaleNetworkDefinitionEffect = Effect.fn(
-  "tailscaleNetworks.remove"
+export const removeTailnetDefinitionEffect = Effect.fn(
+  "tailnets.remove"
 )(function* (id: string) {
   const database = yield* Database
-  yield* database.execute(
-    "tailscaleNetworks.remove",
-    `DELETE FROM ${databaseTable("tailscale_network")} WHERE id = ?`,
-    [id]
+  // Its tunnels' rows go with it; their group membership goes with the
+  // group, which is gone with its last tunnel.
+  yield* database.transaction("tailnets.remove", (transaction) =>
+    Effect.gen(function* () {
+      yield* transaction.execute(
+        `DELETE FROM ${databaseTable("tailnet")} WHERE id = ?`,
+        [id]
+      )
+      yield* transaction.execute(
+        `DELETE FROM ${databaseTable("instance_group_member")} WHERE group_id = ?`,
+        [id]
+      )
+      yield* transaction.execute(
+        `DELETE FROM ${databaseTable("instance_group")} WHERE id = ?`,
+        [id]
+      )
+    })
   )
 })
 
+// A tailnet is an instance group of its tunnels, which Kiln makes for it.
+function insertTailnetGroup(
+  transaction: DatabaseTransaction,
+  definition: Pick<TailnetDefinition, "id" | "name">,
+  createdBy: string,
+  now: number
+) {
+  return transaction.execute(
+    `INSERT INTO ${databaseTable("instance_group")}
+       (id, name, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE name = VALUES(name), updated_at = VALUES(updated_at)`,
+    [definition.id, definition.name, createdBy, now, now]
+  )
+}
+
 function publicIntegration(
-  row: TailscaleNetworkRow
+  row: TailnetRow
 ): TailscaleIntegration | null {
   if (!row.oauth_client_id || !row.oauth_client_secret_ciphertext) return null
   return {
@@ -345,8 +386,8 @@ function publicIntegration(
 }
 
 function cleanupState(
-  row: TailscaleNetworkRow
-): TailscaleNetworkCleanup | null {
+  row: TailnetRow
+): TailnetCleanup | null {
   const requestedAt = timestamp(row.deletion_requested_at)
   if (!requestedAt) return null
   return {

@@ -1818,14 +1818,14 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "relay.configure"
     case "relay.audit.list":
       return "relay.audit.read"
-    case "relay.tailscale.stack.list":
-    case "relay.tailscale.stack.state":
+    case "tunnel.list":
+    case "tunnel.state":
       return "instance.network.read"
-    case "relay.tailscale.stack.apply":
+    case "tunnel.apply":
       return "instance.create"
-    case "relay.tailscale.stack.dns":
+    case "tunnel.dns":
       return "instance.network.write"
-    case "relay.tailscale.stack.remove":
+    case "tunnel.remove":
       return "instance.delete"
     // Every terminal request takes what its target's shell is as much as.
     case "terminal.attach":

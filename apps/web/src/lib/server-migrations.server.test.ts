@@ -2,8 +2,6 @@ import { generateKeyPairSync, randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
 import {
-  builtinTailscaleBrick,
-  builtinTailscaleBrickSource,
   relayPeerTransfersV1Feature,
 } from "@workspace/contracts"
 import { Deferred, Effect, Exit, Fiber, Layer, Ref, Scope } from "effect"
@@ -43,6 +41,7 @@ import {
   insertUser,
   selectRows,
 } from "@/test/seed"
+import { testBrick, testBrickSource } from "@/test/bricks"
 
 // The Relays are the only fake (`relay` below): the game servers each has,
 // what the old one packed and the new one pulled for a copy, and requests
@@ -159,7 +158,7 @@ function instanceOf(relayId: string, id: string) {
   const server = relay.servers.get(serverKey(relayId, id))
   if (!server) return null
   return {
-    brickSource: builtinTailscaleBrickSource,
+    brickSource: testBrickSource,
     connectAddress: "play.example.test:25565",
     containerId: null,
     desiredState: server.state,
@@ -234,8 +233,8 @@ function answer(
     case "app.list":
       return []
     case "brick.recipe":
-      return builtinTailscaleBrick
-    case "relay.tailscale.stack.state":
+      return testBrick
+    case "tunnel.state":
     case "backup.task.list":
       return []
     case "backup.task.enqueue":

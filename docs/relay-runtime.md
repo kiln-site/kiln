@@ -315,7 +315,7 @@ exits are counted from Docker's events as they happen. Every metric is
 labelled with `relay.id`.
 
 Container metrics carry `kiln.container.group`, one of `relay`, `hearth`,
-`mysql`, `valkey`, `relay_services` (Traefik),
+`mysql`, `valkey`, `relay_services` (Traefik, and each tunnel's Tailscale and CoreDNS),
 `game_server`, `app`, `database`, or `other` for every container Kiln doesn't
 run, such as Coolify's. Workloads are summed per kind, never labelled per
 resource, and every group is written each sample, so one that empties reads

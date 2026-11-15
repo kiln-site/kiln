@@ -44,8 +44,8 @@ import { relayRpc } from "@/lib/relay-connection"
 import { activeRelay } from "@/lib/relay-registry"
 import {
   rewriteTailscaleDnsOf,
-  tailscaleNetworksOf,
-} from "@/lib/tailscale-dns.server"
+  tailnetsOf,
+} from "@/lib/tunnel-dns.server"
 import { currentActingUser } from "@/operations/acting-user"
 import {
   durableOperation,
@@ -742,7 +742,7 @@ const leftOnRelay = (input: DeletionInput) =>
       present
         ? Effect.succeed(true)
         : promiseEffect(() =>
-            tailscaleNetworksOf({
+            tailnetsOf({
               id: input.resourceId,
               kind: input.kind,
               relayId: input.relayId,

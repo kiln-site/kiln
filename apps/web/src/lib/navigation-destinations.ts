@@ -28,9 +28,7 @@ import {
 } from "lucide-react"
 import {
   accessPermissionSupported,
-  isTailscaleNode,
   type DatabaseEngine,
-  type RelayInstance,
 } from "@workspace/contracts"
 
 import {
@@ -238,12 +236,9 @@ export type ServerDestinationId =
   | "startup"
   | "terminal"
 
-type ServerWorkspaceKind = "network-stack" | "server"
-
 export interface ServerDestination extends NavigationDestination {
   id: ServerDestinationId
   permission: AccessPermission
-  workspaces: ReadonlyArray<ServerWorkspaceKind>
 }
 
 export const serverDestinations = [
@@ -254,7 +249,6 @@ export const serverDestinations = [
     label: "Console",
     permission: "instance.console.read",
     to: "/server/$serverId/console",
-    workspaces: ["network-stack", "server"],
   },
   {
     // A shell in its container; the console is its own process.
@@ -264,7 +258,6 @@ export const serverDestinations = [
     label: "Terminal",
     permission: "instance.terminal",
     to: "/server/$serverId/terminal",
-    workspaces: ["network-stack", "server"],
   },
   {
     // Its deployments' logs; its own output is the console.
@@ -274,7 +267,6 @@ export const serverDestinations = [
     label: "Logs",
     permission: "instance.logs.read",
     to: "/server/$serverId/logs",
-    workspaces: ["server"],
   },
   {
     icon: Folder,
@@ -283,7 +275,6 @@ export const serverDestinations = [
     label: "Files",
     permission: "instance.files.read",
     to: "/server/$serverId/files/$",
-    workspaces: ["network-stack", "server"],
   },
   {
     icon: Rocket,
@@ -292,7 +283,6 @@ export const serverDestinations = [
     label: "Startup",
     permission: "instance.configuration.read",
     to: "/server/$serverId/startup",
-    workspaces: ["server"],
   },
   {
     icon: Network,
@@ -301,7 +291,6 @@ export const serverDestinations = [
     label: "Network",
     permission: "instance.network.read",
     to: "/server/$serverId/network",
-    workspaces: ["network-stack", "server"],
   },
   {
     icon: SlidersHorizontal,
@@ -310,32 +299,20 @@ export const serverDestinations = [
     label: "Info",
     permission: "instance.read",
     to: "/server/$serverId/info",
-    workspaces: ["server"],
   },
 ] as const satisfies ReadonlyArray<ServerDestination>
 
-type NavigableServer = Pick<RelayInstance, "brickId">
-
-type AccessibleServer = NavigableServer & {
+interface AccessibleServer {
   id: string
   relayId: string
-}
-
-function destinationsForServer(
-  instance: NavigableServer
-): ReadonlyArray<ServerDestination> {
-  const workspace = isTailscaleNode(instance) ? "network-stack" : "server"
-  const destinations: ReadonlyArray<ServerDestination> = serverDestinations
-  return destinations.filter((destination) =>
-    destination.workspaces.includes(workspace)
-  )
 }
 
 export function accessibleDestinationsForServer(
   instance: AccessibleServer,
   capabilities: NavigationAccessCapabilities
 ): ReadonlyArray<ServerDestination> {
-  return destinationsForServer(instance).filter((destination) =>
+  const destinations: ReadonlyArray<ServerDestination> = serverDestinations
+  return destinations.filter((destination) =>
     canAccessServerDestination(capabilities, instance, destination.id)
   )
 }

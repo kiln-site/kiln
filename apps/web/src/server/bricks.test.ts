@@ -1,4 +1,3 @@
-import { builtinTailscaleBrick } from "@workspace/contracts"
 import { describe, expect, it } from "vite-plus/test"
 
 import {
@@ -7,8 +6,9 @@ import {
   startupResourceLimitsChanged,
   startupConfigurationChanged,
 } from "@/server/bricks"
+import { testBrick } from "@/test/bricks"
 
-const { source, ...recipeDefinition } = builtinTailscaleBrick
+const { source, ...recipeDefinition } = testBrick
 
 describe("Hearth Brick mutation inputs", () => {
   it("rejects browser-supplied recipes during startup updates", () => {

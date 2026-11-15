@@ -19,6 +19,16 @@ import type { InstanceLegacyId } from "../instance-keys.js"
 export interface RelayInstanceIdState {
   /** Every migrated instance's old ID. */
   readonly list: () => Effect.Effect<Array<InstanceLegacyId>, RelayStateError>
+  /**
+   * Gives a Tailscale network's stack on this Relay to its tunnel: the
+   * tunnel takes the key the network's folder and containers are named by,
+   * and the network, no longer anything on the Relay, gives up any old ID.
+   */
+  readonly moveToTunnel: (input: {
+    readonly legacyId: string
+    readonly networkId: string
+    readonly tunnelId: string
+  }) => Effect.Effect<void, RelayStateError>
   /** Records old IDs, keeping any already recorded. */
   readonly save: (
     entries: ReadonlyArray<InstanceLegacyId>
@@ -95,6 +105,22 @@ export function makeRelayInstanceIdState(sql: SqlClient): RelayInstanceIdState {
         `.pipe(Effect.map((rows) => rows.map((row) => ({ ...row }))))
       ),
     save: (entries) => run("save", insert(entries)),
+    moveToTunnel: ({ legacyId, networkId, tunnelId }) =>
+      run(
+        "move_to_tunnel",
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              DELETE FROM relay_instance_legacy_ids
+              WHERE id = ${networkId} OR legacy_id = ${legacyId}
+            `
+            yield* sql`
+              INSERT INTO relay_instance_legacy_ids (id, kind, legacy_id)
+              VALUES (${tunnelId}, 'tunnel', ${legacyId})
+            `
+          })
+        )
+      ),
     legacyReferences: (ownFingerprint) =>
       run(
         "legacy_references",

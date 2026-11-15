@@ -124,9 +124,9 @@ import {
   relayRemoteFileUploadResultSchema,
   relayRemoteFileUploadSchema,
   relaySaveFileInputSchema,
-  relayTailscaleStackApplySchema,
-  relayTailscaleStackDnsSchema,
-  relayTailscaleStackRemoveSchema,
+  tunnelApplySchema,
+  tunnelDnsSchema,
+  tunnelRemoveSchema,
   relayRotateDatabaseCredentialsSchema,
   relayUpdateInstanceStartupSchema,
   relayBootstrapDiscoveryTranscript,
@@ -332,6 +332,7 @@ import {
 } from "./platform.js"
 import { ScheduleManager } from "./schedules.js"
 import { migrateInstanceIds } from "./instance-id-migration.js"
+import { migrateTunnelIds } from "./tunnel-ids.js"
 import { assignRelayWebRouteIds, webRouteCollision } from "./web-route-ids.js"
 import { planWebRouteRecovery } from "./web-route-labels.js"
 import type {
@@ -382,6 +383,11 @@ await migrateInstanceIds({
   config,
   engine: new DockerEngine(config.dockerSocket),
   identity: startupCore.identity,
+  state: startupCore.state,
+})
+await migrateTunnelIds({
+  config,
+  relayId: startupCore.identity.id,
   state: startupCore.state,
 })
 const cliArguments = process.argv.slice(2)
@@ -672,7 +678,8 @@ const lifecycle = new LifecycleDriver(
   })
 )
 // Before anything reads a Tailscale stack.
-await lifecycle.migrateTailscaleStackMembers()
+await lifecycle.migrateTunnelMembers()
+await lifecycle.relabelTunnels()
 await lifecycle.removeRetiredInfrastructure()
 lifecycle.useDatabaseContainers((databaseId) =>
   databases.containerOf(databaseId)
@@ -691,7 +698,7 @@ databases.useTailscaleAddresses((databaseId) =>
 await databases.recoverReplacements()
 // What each queued change to a Tailscale stack planned its locks from, so it
 // can tell, once it runs, whether the stack changed meanwhile.
-const tailscaleStackPlans = new WeakMap<object, string>()
+const tunnelPlans = new WeakMap<object, string>()
 // The ID each queued game server create will make, chosen as it arrives so
 // it waits in the new server's lane.
 const newInstanceIds = new WeakMap<object, string>()
@@ -938,7 +945,7 @@ await lifecycle.initializeProxy(
 )
 let tailscaleFirewallError: string | null = null
 const reconcileTailscaleFirewalls = Effect.tryPromise({
-  try: () => lifecycle.reconcileTailscaleStackFirewalls(),
+  try: () => lifecycle.reconcileTunnelFirewalls(),
   catch: (cause) => cause,
 }).pipe(
   Effect.matchEffect({
@@ -1609,8 +1616,8 @@ const controlSocket = attachControlSocket({
       (appId) =>
         runRelayEffect("relay.apps.volumes", volumes.appVolumeIds(appId)),
       async (stackId) => {
-        const plan = await lifecycle.tailscaleStackPlan(stackId)
-        tailscaleStackPlans.set(request, plan.basis)
+        const plan = await lifecycle.tunnelPlan(stackId)
+        tunnelPlans.set(request, plan.basis)
         return plan.bindings
       },
       (kind, id) => lanes.isFrozen(kind, id)
@@ -2488,35 +2495,35 @@ async function executeControlRequest(
       return { restarting: true }
     case "relay.resources.read":
       return { history: docker.relayResourceHistory() }
-    case "relay.tailscale.stack.list":
-      return lifecycle.tailscaleStacks()
-    case "relay.tailscale.stack.state":
-      return lifecycle.tailscaleStackStates()
-    case "relay.tailscale.stack.apply": {
-      const input = relayTailscaleStackApplySchema.parse(request.payload)
-      const stack = await lifecycle.applyTailscaleStack(
+    case "tunnel.list":
+      return lifecycle.tunnels()
+    case "tunnel.state":
+      return lifecycle.tunnelStates()
+    case "tunnel.apply": {
+      const input = tunnelApplySchema.parse(request.payload)
+      const stack = await lifecycle.applyTunnel(
         input,
-        tailscaleStackPlans.get(request)
+        tunnelPlans.get(request)
       )
       await snapshotHub.refresh()
       return stack
     }
-    case "relay.tailscale.stack.dns": {
-      const input = relayTailscaleStackDnsSchema.parse(request.payload)
-      return lifecycle.syncTailscaleStackDns(input)
+    case "tunnel.dns": {
+      const input = tunnelDnsSchema.parse(request.payload)
+      return lifecycle.syncTunnelDns(input)
     }
-    case "relay.tailscale.stack.remove": {
+    case "tunnel.remove": {
       const { controlPlaneDeviceRemoved, id, mode } =
-        relayTailscaleStackRemoveSchema.parse(request.payload)
-      await lifecycle.removeTailscaleStack(
+        tunnelRemoveSchema.parse(request.payload)
+      await lifecycle.removeTunnel(
         id,
         mode,
         controlPlaneDeviceRemoved,
-        tailscaleStackPlans.get(request)
+        tunnelPlans.get(request)
       )
       if (mode === "commit") {
         await runRelayEffect(
-          "relay.tailscale.stack.deleteName",
+          "tunnel.deleteName",
           startup.state.deleteInstanceName(id)
         )
       }

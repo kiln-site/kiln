@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router"
-import { isTailscaleNode } from "@workspace/contracts"
 
 import { ConsoleWorkspace } from "@/components/console/console-workspace"
 import {
@@ -44,9 +43,7 @@ export const Route = createFileRoute("/_app/server/$serverId/console")({
         !capabilities ||
         workspace.relay.status !== "connected" ||
         workspace.relay.consoleTransport === "hearth" ||
-        !workspace.relay.browserOrigin ||
-        // An aggregate console streams each deployment on its own.
-        isTailscaleNode(server)
+        !workspace.relay.browserOrigin
       ) {
         return
       }

@@ -28,8 +28,8 @@ replace MySQL, Relay state, or high-frequency Relay streams.
 | Database containers and observed database state                    | Relay     | Projected through the `databases` query                        |
 | Backup catalog, policies, and storage destinations                 | Hearth    | Separate catalog, policy, and storage invalidations            |
 | Backup execution and progress                                      | Relay     | Scoped backup invalidation from Hearth's reconciliation        |
-| Tailscale network definitions and integration credentials          | Hearth    | `tailscale` query-scope invalidation                           |
-| Tailscale deployments and observed node state                      | Relay     | Projected through the `tailscale` query                        |
+| Tailnet definitions and integration credentials                    | Hearth    | `tailscale` query-scope invalidation                           |
+| Tunnels and their observed state                                   | Relay     | Projected through the `tailscale` query                        |
 | Relay audit history                                                | Relay     | `activity` invalidation after audited control mutations        |
 | Pinned and recently viewed file records                            | Hearth    | Relay-reader `file-activity` invalidation                      |
 | Server definitions, names, startup, ports, routes, and power state | Relay     | Instance deltas plus exact route-query invalidation            |

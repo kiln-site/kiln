@@ -1,6 +1,6 @@
 # Instance IDs
 
-Every instance — a Relay, game server, App, database, or Tailscale network —
+Every instance — a Relay, game server, App, database, or tunnel —
 has one ID: 12 lowercase hexadecimal characters, such as `a7c39f204bd1`.
 
 - It's the whole ID. There are no short IDs, prefix matches, or route IDs

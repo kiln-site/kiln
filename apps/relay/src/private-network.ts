@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto"
 
-import type { RelayTailscaleStackConfig } from "@workspace/contracts"
+import type { TunnelConfig } from "@workspace/contracts"
 import {
-  relayTailscaleStackConfigSchema,
-  relayTailscaleStackDnsSchema,
+  tunnelConfigSchema,
+  tunnelDnsSchema,
 } from "@workspace/contracts"
 
 /**
@@ -11,18 +11,18 @@ import {
  * stack forwarding allowlist, and its DNS records.
  */
 
-export const TAILSCALE_STACK_FORWARD_CHAIN = "KILN-TAILSCALE"
-const TAILSCALE_STACK_SUBNET_COUNT = 64 * 256
+export const TUNNEL_FORWARD_CHAIN = "KILN-TAILSCALE"
+const TUNNEL_SUBNET_COUNT = 64 * 256
 
-export function tailscaleStackFirewallRules(
+export function tunnelFirewallRules(
   bindings: ReadonlyArray<
-    Pick<RelayTailscaleStackConfig["bindings"][number], "address">
+    Pick<TunnelConfig["bindings"][number], "address">
   >
 ): Array<Array<string>> {
   return [
     ...bindings.map(({ address }) => [
       "-A",
-      TAILSCALE_STACK_FORWARD_CHAIN,
+      TUNNEL_FORWARD_CHAIN,
       "-d",
       `${address}/32`,
       "-j",
@@ -30,23 +30,23 @@ export function tailscaleStackFirewallRules(
       // packet for masquerading. ACCEPT here would bypass that return path.
       "RETURN",
     ]),
-    ["-A", TAILSCALE_STACK_FORWARD_CHAIN, "-j", "DROP"],
+    ["-A", TUNNEL_FORWARD_CHAIN, "-j", "DROP"],
   ]
 }
 
-export function tailscaleStackFirewallIsCurrent(
+export function tunnelFirewallIsCurrent(
   hookExists: boolean,
   specification: string,
   bindings: ReadonlyArray<
-    Pick<RelayTailscaleStackConfig["bindings"][number], "address">
+    Pick<TunnelConfig["bindings"][number], "address">
   >
 ): boolean {
   if (!hookExists) return false
   const current = specification
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => line.startsWith(`-A ${TAILSCALE_STACK_FORWARD_CHAIN} `))
-  const expected = tailscaleStackFirewallRules(bindings).map((rule) =>
+    .filter((line) => line.startsWith(`-A ${TUNNEL_FORWARD_CHAIN} `))
+  const expected = tunnelFirewallRules(bindings).map((rule) =>
     rule.join(" ")
   )
   return (
@@ -55,25 +55,25 @@ export function tailscaleStackFirewallIsCurrent(
   )
 }
 
-export function allocateTailscaleStackSubnet(
+export function allocateTunnelSubnet(
   stackId: string,
   nodeId: string,
   reserved: ReadonlySet<string>
 ): string {
   const digest = createHash("sha256").update(`${stackId}:${nodeId}`).digest()
   const start =
-    (((digest[0] ?? 0) << 8) | (digest[1] ?? 0)) % TAILSCALE_STACK_SUBNET_COUNT
+    (((digest[0] ?? 0) << 8) | (digest[1] ?? 0)) % TUNNEL_SUBNET_COUNT
   const stepSeed = ((digest[2] ?? 0) << 8) | (digest[3] ?? 0)
-  const step = (stepSeed % (TAILSCALE_STACK_SUBNET_COUNT / 2)) * 2 + 1
-  for (let offset = 0; offset < TAILSCALE_STACK_SUBNET_COUNT; offset += 1) {
-    const index = (start + offset * step) % TAILSCALE_STACK_SUBNET_COUNT
+  const step = (stepSeed % (TUNNEL_SUBNET_COUNT / 2)) * 2 + 1
+  for (let offset = 0; offset < TUNNEL_SUBNET_COUNT; offset += 1) {
+    const index = (start + offset * step) % TUNNEL_SUBNET_COUNT
     const subnet = `10.${128 + Math.floor(index / 256)}.${index % 256}.0/24`
     if (!reserved.has(subnet)) return subnet
   }
   throw new Error("No private Tailscale subnets remain on this Relay")
 }
 
-export function tailscaleStackServiceAddress(subnet: string): string {
+export function tunnelServiceAddress(subnet: string): string {
   const prefix = subnet.replace(/\.0\/24$/u, "")
   if (prefix === subnet) throw new Error(`Invalid Tailscale subnet ${subnet}`)
   return `${prefix}.2`
@@ -136,7 +136,7 @@ export function assignTailscaleBindingAddresses(
   })
 }
 
-export function activeTailscaleStackBindings<
+export function activeTunnelBindings<
   TBinding extends { enabled: boolean },
 >(bindings: ReadonlyArray<TBinding>): Array<TBinding> {
   return bindings.filter((binding) => binding.enabled)
@@ -144,17 +144,17 @@ export function activeTailscaleStackBindings<
 
 // The stack without the members that match. Their DNS records are Hearth's
 // to drop, with every node's.
-export function tailscaleStackWithoutMembers(
-  config: RelayTailscaleStackConfig,
+export function tunnelWithoutMembers(
+  config: TunnelConfig,
   matches: (memberId: string) => boolean
-): RelayTailscaleStackConfig {
-  return relayTailscaleStackConfigSchema.parse({
+): TunnelConfig {
+  return tunnelConfigSchema.parse({
     ...config,
     bindings: config.bindings.filter((binding) => !matches(binding.memberId)),
   })
 }
 
-export function tailscaleStackCoreDnsConfiguration(
+export function tunnelCoreDnsConfiguration(
   domain: string,
   records: ReadonlyArray<{ address: string; hostname: string }>
 ): string {
@@ -168,7 +168,7 @@ export function tailscaleStackCoreDnsConfiguration(
   return `${domain}:53 {\n    errors\n    cache 30\n    hosts {\n${entries}${entries ? "\n" : ""}        ttl 60\n    }\n}\n`
 }
 
-export function tailscaleStackCoreDnsRecords(
+export function tunnelCoreDnsRecords(
   domain: string,
   configuration: string
 ): Array<{ address: string; hostname: string }> {
@@ -185,7 +185,7 @@ export function tailscaleStackCoreDnsRecords(
         },
       ]
     })
-  return relayTailscaleStackDnsSchema.parse({
+  return tunnelDnsSchema.parse({
     id: "0".repeat(12),
     records,
   }).records

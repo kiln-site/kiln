@@ -8,8 +8,8 @@ import {
   rollBackLegacyServerMigration,
   serverMigration,
 } from "@/lib/server-migrations.server"
-import { deleteTailscaleNetwork } from "@/lib/tailscale-cleanup.server"
-import { rewriteTailscaleDns } from "@/lib/tailscale-dns.server"
+import { deleteTailnet } from "@/lib/tailnet-deletion.server"
+import { rewriteTailscaleDns } from "@/lib/tunnel-dns.server"
 
 /**
  * Every workflow Hearth runs, registered with the engine when it starts. An
@@ -24,6 +24,6 @@ export const HearthWorkflows = Layer.mergeAll(
   keepResource.layer,
   serverMigration.layer,
   rollBackLegacyServerMigration.layer,
-  deleteTailscaleNetwork.layer,
+  deleteTailnet.layer,
   rewriteTailscaleDns.layer
 )

@@ -5,8 +5,8 @@ import {
   appTailscaleMemberId,
   databaseTailscaleMemberId,
   instanceTailscaleMemberId,
-  relayTailscaleStackConfigSchema,
-  type RelayTailscaleStackConfig,
+  tunnelConfigSchema,
+  type TunnelConfig,
 } from "@workspace/contracts"
 import { Effect } from "effect"
 import { describe, expect, it, vi } from "vite-plus/test"
@@ -22,18 +22,20 @@ import {
 } from "./test/relay.js"
 
 const owner = { "kiln.relay.owner": TEST_NAMESPACE }
+const tailnetId = "f".repeat(12)
 
 function stackConfig(
   id: string,
-  overrides: Partial<RelayTailscaleStackConfig> = {}
-): RelayTailscaleStackConfig {
-  return relayTailscaleStackConfigSchema.parse({
+  overrides: Partial<TunnelConfig> = {}
+): TunnelConfig {
+  return tunnelConfigSchema.parse({
     bindings: [],
     domain: "test",
     hostname: "private-network",
     id,
     name: "Private Network",
     subnet: "10.165.55.0/24",
+    tailnetId: tailnetId,
     ...overrides,
   })
 }
@@ -41,7 +43,7 @@ function stackConfig(
 /** Writes a stack that Relay already prepared for removal. */
 async function preparedRemoval(
   harness: RelayHarness,
-  config: RelayTailscaleStackConfig
+  config: TunnelConfig
 ) {
   const directory = join(harness.config.rootDirectory, config.id)
   await mkdir(directory, { recursive: true })
@@ -51,7 +53,7 @@ async function preparedRemoval(
 }
 
 function stackContainer(harness: RelayHarness, id: string, running: boolean) {
-  const name = harness.resources.tailscaleStackContainer(id)
+  const name = harness.resources.tunnelContainer(id)
   fakeDocker.tailscale.machines.set(name, {
     ipv4: "100.64.0.9",
     loggedIn: true,
@@ -67,7 +69,7 @@ function stackContainer(harness: RelayHarness, id: string, running: boolean) {
 /** Writes a stack as Relay saved it, with the DNS records Hearth last sent. */
 async function savedStack(
   harness: RelayHarness,
-  config: RelayTailscaleStackConfig,
+  config: TunnelConfig,
   records: ReadonlyArray<{ address: string; hostname: string }>
 ) {
   const directory = join(harness.config.rootDirectory, config.id)
@@ -83,7 +85,7 @@ async function savedStack(
 /** What the stack saves and what its CoreDNS serves, as read from disk. */
 async function savedState(harness: RelayHarness, id: string) {
   const directory = join(harness.config.rootDirectory, id)
-  const config = relayTailscaleStackConfigSchema.parse(
+  const config = tunnelConfigSchema.parse(
     JSON.parse(await readFile(join(directory, "stack.json"), "utf8"))
   )
   const records = JSON.parse(
@@ -113,11 +115,11 @@ describe("Tailscale stack removal", () => {
     const container = stackContainer(harness, id, true)
     fakeDocker.addNetwork({
       labels: { ...owner, "kiln.relay.network": `tailscale:${id}` },
-      name: harness.resources.tailscaleStackNetwork(id),
+      name: harness.resources.tunnelNetwork(id),
     })
     fakeDocker.tailscale.controlPlaneReachable = false
 
-    await expect(harness.lifecycle.removeTailscaleStack(id)).rejects.toThrow(
+    await expect(harness.lifecycle.removeTunnel(id)).rejects.toThrow(
       "local identity was preserved for retry"
     )
     expect(await exists(join(directory, ".removing"))).toBe(true)
@@ -138,7 +140,7 @@ describe("Tailscale stack removal", () => {
     await writeFile(join(stateDirectory, "tailscaled.state"), "{}\n")
     fakeDocker.tailscale.controlPlaneReachable = true
 
-    await harness.lifecycle.removeTailscaleStack(id)
+    await harness.lifecycle.removeTunnel(id)
 
     expect(fakeDocker.tailscale.machines.get(container.name)?.loggedIn).toBe(
       false
@@ -189,7 +191,7 @@ describe("Tailscale stack forwarding", () => {
     const harness = await relayHarness()
     const container = await runningStack(harness)
 
-    await harness.lifecycle.reconcileTailscaleStackFirewalls()
+    await harness.lifecycle.reconcileTunnelFirewalls()
 
     expect(container.firewall.get("KILN-TAILSCALE")).toEqual(allowlist)
     expect(container.firewall.get("FORWARD")).toEqual([
@@ -208,7 +210,7 @@ describe("Tailscale stack forwarding", () => {
     const holder = Effect.runPromise(
       harness.lanes
         .admit({
-          label: "relay.tailscale.stack.apply",
+          label: "tunnel.apply",
           locks: [exclusive(laneKeys.instance("c".repeat(12)))],
         })
         .run(
@@ -221,12 +223,12 @@ describe("Tailscale stack forwarding", () => {
     await running
     harness.lanes.setPaused(true)
 
-    await harness.lifecycle.reconcileTailscaleStackFirewalls()
+    await harness.lifecycle.reconcileTunnelFirewalls()
     expect(container.firewall.get("KILN-TAILSCALE")).toBeUndefined()
 
     release()
     await holder
-    await harness.lifecycle.reconcileTailscaleStackFirewalls()
+    await harness.lifecycle.reconcileTunnelFirewalls()
     expect(harness.lanes.paused).toBe(true)
     expect(container.firewall.get("KILN-TAILSCALE")).toEqual(allowlist)
   })
@@ -306,7 +308,7 @@ describe("Tailscale network members", () => {
     await savedStack(harness, servers, hearthRecords)
     for (const id of [serverId, otherServerId]) await harness.seedServer({ id })
     // The stack's own container, which Relay lists as a game server.
-    const stack = harness.resources.tailscaleStackContainer(stackId)
+    const stack = harness.resources.tunnelContainer(stackId)
     fakeDocker.tailscale.machines.set(stack, {
       ipv4: "100.64.0.9",
       loggedIn: true,
@@ -320,10 +322,10 @@ describe("Tailscale network members", () => {
     })
     fakeDocker.addNetwork({
       labels: { ...owner, "kiln.relay.network": `tailscale:${stackId}` },
-      name: harness.resources.tailscaleStackNetwork(stackId),
+      name: harness.resources.tunnelNetwork(stackId),
     })
 
-    await harness.lifecycle.applyTailscaleStack({
+    await harness.lifecycle.applyTunnel({
       bindings: [
         {
           enabled: true,
@@ -339,6 +341,7 @@ describe("Tailscale network members", () => {
       domain: servers.domain,
       hostname: servers.hostname,
       id: stackId,
+      tailnetId,
       name: servers.name,
     })
 
@@ -371,7 +374,7 @@ describe("Tailscale forwarding repair", () => {
     const harness = await relayHarness()
     await savedStack(harness, before, [])
     for (const id of [serverId, otherServerId]) await harness.seedServer({ id })
-    const stack = harness.resources.tailscaleStackContainer(stackId)
+    const stack = harness.resources.tunnelContainer(stackId)
     fakeDocker.tailscale.machines.set(stack, {
       ipv4: "100.64.0.9",
       loggedIn: true,
@@ -385,21 +388,21 @@ describe("Tailscale forwarding repair", () => {
     })
     fakeDocker.addNetwork({
       labels: { ...owner, "kiln.relay.network": `tailscale:${stackId}` },
-      name: harness.resources.tailscaleStackNetwork(stackId),
+      name: harness.resources.tunnelNetwork(stackId),
     })
 
     // The repair stops as it first looks at the stack's rules.
     const looking = fakeDocker.hold({ command: "exec", target: stack })
-    const repair = harness.lifecycle.reconcileTailscaleStackFirewalls()
+    const repair = harness.lifecycle.reconcileTunnelFirewalls()
     await looking.reached
     const applying = harness.lanes.admit({
-      label: "relay.tailscale.stack.apply",
+      label: "tunnel.apply",
       locks: [exclusive(laneKeys.instance(stackId))],
     })
     const applied = Effect.runPromise(
       applying.run(
         Effect.promise(() =>
-          harness.lifecycle.applyTailscaleStack({
+          harness.lifecycle.applyTunnel({
             bindings: before.bindings.map(({ hostname, memberId }) => ({
               enabled: true,
               hostname,
@@ -408,6 +411,7 @@ describe("Tailscale forwarding repair", () => {
             domain: before.domain,
             hostname: before.hostname,
             id: stackId,
+            tailnetId,
             name: before.name,
           })
         )
@@ -417,9 +421,9 @@ describe("Tailscale forwarding repair", () => {
     if (applying.grantedAtOnce) await applied
     looking.release()
     await Promise.all([repair, applied])
-    await harness.lifecycle.reconcileTailscaleStackFirewalls()
+    await harness.lifecycle.reconcileTunnelFirewalls()
 
-    const saved = relayTailscaleStackConfigSchema.parse(
+    const saved = tunnelConfigSchema.parse(
       JSON.parse(
         await readFile(
           join(harness.config.rootDirectory, stackId, "stack.json"),

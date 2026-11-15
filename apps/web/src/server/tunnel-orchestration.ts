@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 
-import type { RelayTailscaleStackApply } from "@workspace/contracts"
+import type { TunnelApply } from "@workspace/contracts"
 
 import { TailscaleOrchestrationError } from "@/effect/errors"
 
@@ -11,7 +11,7 @@ interface TailscaleBindingState {
   memberId: string
 }
 
-export interface TailscaleDeploymentState {
+export interface TunnelPlanState {
   bindings: Array<TailscaleBindingState>
   domain: string
   hostname: string
@@ -20,39 +20,42 @@ export interface TailscaleDeploymentState {
   relayId: string
   relayName: string
   subnet: string
+  tailnetId: string
 }
 
-export interface DesiredTailscaleDeployment {
+export interface DesiredTunnel {
   bindings: Array<{
     enabled: boolean
     hostname: string
     memberId: string
   }>
   hostname: string
+  /** The tunnel's ID: the one the tailnet has on the Relay, or a new one. */
+  id: string
   relayId: string
   relayName: string
 }
 
 export type TailscaleRemovalMode = "commit" | "prepare" | "rollback"
 
-export interface TailscaleDeploymentOperations<
-  TDeployment extends TailscaleDeploymentState,
+export interface TunnelOperations<
+  TDeployment extends TunnelPlanState,
 > {
   apply: (
-    target: DesiredTailscaleDeployment,
-    input: RelayTailscaleStackApply
+    target: DesiredTunnel,
+    input: TunnelApply
   ) => Promise<TDeployment>
   remove: (deployment: TDeployment, mode: TailscaleRemovalMode) => Promise<void>
   /**
    * Rewrites the network's DNS on every node of it from what the Relays
-   * hold now (`writeTailscaleNetworkDns`), never from what a step returned.
+   * hold now (`writeTailnetDns`), never from what a step returned.
    */
   rewriteDns: () => Promise<void>
 }
 
-export const applyTailscaleDeploymentPlanEffect = Effect.fn(
+export const applyTunnelPlanEffect = Effect.fn(
   "tailscale.deployment.applyPlan"
-)(function* <TDeployment extends TailscaleDeploymentState>({
+)(function* <TDeployment extends TunnelPlanState>({
   authKey,
   authKeyForTarget,
   current,
@@ -66,14 +69,14 @@ export const applyTailscaleDeploymentPlanEffect = Effect.fn(
 }: {
   authKey?: string
   authKeyForTarget?: (
-    target: DesiredTailscaleDeployment
+    target: DesiredTunnel
   ) => Promise<string | undefined>
   current: ReadonlyArray<TDeployment>
-  desired: ReadonlyArray<DesiredTailscaleDeployment>
+  desired: ReadonlyArray<DesiredTunnel>
   domain: string
   id: string
   name: string
-  operations: TailscaleDeploymentOperations<TDeployment>
+  operations: TunnelOperations<TDeployment>
   beforeFinalize?: (deployments: ReadonlyArray<TDeployment>) => Promise<void>
   reservedSubnets?: ReadonlySet<string>
 }) {
@@ -113,8 +116,9 @@ export const applyTailscaleDeploymentPlanEffect = Effect.fn(
               bindings: target.bindings,
               domain,
               hostname: target.hostname,
-              id,
+              id: target.id,
               name,
+              tailnetId: id,
             })
           )
           const peer = applied.find(
@@ -153,7 +157,7 @@ export const applyTailscaleDeploymentPlanEffect = Effect.fn(
     return applied
   }).pipe(
     Effect.catch((cause) =>
-      rollbackTailscaleDeploymentPlanEffect(
+      rollbackTunnelPlanEffect(
         current,
         applied,
         preparedRemovals,
@@ -197,13 +201,13 @@ export const applyTailscaleDeploymentPlanEffect = Effect.fn(
   return synchronized
 })
 
-const rollbackTailscaleDeploymentPlanEffect = Effect.fn(
+const rollbackTunnelPlanEffect = Effect.fn(
   "tailscale.deployment.rollbackPlan"
-)(function* <TDeployment extends TailscaleDeploymentState>(
+)(function* <TDeployment extends TunnelPlanState>(
   current: ReadonlyArray<TDeployment>,
   applied: ReadonlyArray<TDeployment>,
   preparedRemovals: ReadonlyArray<TDeployment>,
-  operations: TailscaleDeploymentOperations<TDeployment>
+  operations: TunnelOperations<TDeployment>
 ) {
   const previousByRelay = new Map(
     current.map((deployment) => [deployment.relayId, deployment])
@@ -240,6 +244,7 @@ const rollbackTailscaleDeploymentPlanEffect = Effect.fn(
               hostname: previous.hostname,
               id: previous.id,
               name: previous.name,
+              tailnetId: previous.tailnetId,
             })
           )
         : Effect.gen(function* () {
@@ -297,8 +302,8 @@ function orchestrationFailure(
 }
 
 function deploymentTarget(
-  deployment: TailscaleDeploymentState
-): DesiredTailscaleDeployment {
+  deployment: TunnelPlanState
+): DesiredTunnel {
   return {
     bindings: deployment.bindings.map(({ enabled, hostname, memberId }) => ({
       enabled,
@@ -306,6 +311,7 @@ function deploymentTarget(
       memberId,
     })),
     hostname: deployment.hostname,
+    id: deployment.id,
     relayId: deployment.relayId,
     relayName: deployment.relayName,
   }

@@ -60,16 +60,16 @@ import {
   type DataTableSearchStore,
 } from "@/lib/data-table-search"
 import { notALoginField } from "@/lib/not-a-login-field"
-import { queryKeys, tailscaleStacksQueryOptions } from "@/lib/query-options"
+import { queryKeys, tailnetsQueryOptions } from "@/lib/query-options"
 import {
   configureTailscaleIntegration,
-  createTailscaleNetwork,
-  removeTailscaleStack,
-  saveTailscaleStack,
-  type TailscaleStackOverview,
-} from "@/server/tailscale"
+  createTailnet,
+  removeTailnet,
+  saveTailnet,
+  type TailnetOverview,
+} from "@/server/tunnels"
 
-type SaveStackInput = Parameters<typeof saveTailscaleStack>[0]["data"]
+type SaveStackInput = Parameters<typeof saveTailnet>[0]["data"]
 
 const tailscaleCredentialPermissions = [
   { group: "General", permission: "DNS" },
@@ -94,7 +94,7 @@ export const TailscalePage = React.memo(function TailscalePage({
   const [serverPickerOpen, setServerPickerOpen] = React.useState(false)
   const [editingId, setEditingId] = React.useState<string | null>(null)
   const [removingId, setRemovingId] = React.useState<string | null>(null)
-  const { data } = useSuspenseQuery(tailscaleStacksQueryOptions())
+  const { data } = useSuspenseQuery(tailnetsQueryOptions())
   const { stacks } = data
   const selectedStack =
     stacks.find((stack) => stack.id === selectedNetworkId) ?? stacks[0] ?? null
@@ -123,7 +123,7 @@ export const TailscalePage = React.memo(function TailscalePage({
 
   return (
     <div className="mx-auto flex h-full min-h-[34rem] w-full max-w-[90rem] flex-col px-2 pb-3 sm:px-5 sm:pb-5">
-      {stacks.length > 0 ? <TailscaleNetworkPicker
+      {stacks.length > 0 ? <TailnetPicker
         selectedStack={selectedStack}
         stacks={stacks}
         onAdd={openCreate}
@@ -182,15 +182,15 @@ export const TailscalePage = React.memo(function TailscalePage({
   )
 })
 
-const TailscaleNetworkPicker = React.memo(function TailscaleNetworkPicker({
+const TailnetPicker = React.memo(function TailnetPicker({
   selectedStack,
   stacks,
   onAdd,
   onConfigure,
   onSelect,
 }: {
-  selectedStack: TailscaleStackOverview | null
-  stacks: Array<TailscaleStackOverview>
+  selectedStack: TailnetOverview | null
+  stacks: Array<TailnetOverview>
   onAdd: () => void
   onConfigure: (id: string) => void
   onSelect: (id: string) => void
@@ -372,7 +372,7 @@ const TailscaleRefreshButton = React.memo(function TailscaleRefreshButton() {
   const refresh = React.useCallback(
     () =>
       Promise.all([
-        queryClient.invalidateQueries({ queryKey: queryKeys.tailscaleStacks }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.tailnets }),
         queryClient.invalidateQueries({ queryKey: queryKeys.relay.snapshot }),
         queryClient.invalidateQueries({ queryKey: queryKeys.apps.directory }),
         queryClient.invalidateQueries({
@@ -391,7 +391,7 @@ const EditNetworkDialog = React.memo(function EditNetworkDialog({
   onOpenChange,
 }: {
   open: boolean
-  stack: TailscaleStackOverview
+  stack: TailnetOverview
   onRemove: () => void
   onOpenChange: (open: boolean) => void
 }) {
@@ -417,14 +417,14 @@ const RemoveNetworkDialog = React.memo(function RemoveNetworkDialog({
   onOpenChange,
 }: {
   open: boolean
-  stack: TailscaleStackOverview
+  stack: TailnetOverview
   onOpenChange: (open: boolean) => void
 }) {
   const queryClient = useQueryClient()
   const remove = useMutation({
-    mutationFn: () => removeTailscaleStack({ data: { id: stack.id } }),
+    mutationFn: () => removeTailnet({ data: { id: stack.id } }),
     onSuccess: (next) => {
-      queryClient.setQueryData(queryKeys.tailscaleStacks, next)
+      queryClient.setQueryData(queryKeys.tailnets, next)
       showToast({
         message: `Removing ${stack.name} in the background`,
         type: "success",
@@ -503,7 +503,7 @@ const NetworkForm = React.memo(function NetworkForm({
   defaultName?: string
   onDone: () => void
   onRemove?: () => void
-  stack?: TailscaleStackOverview
+  stack?: TailnetOverview
 }) {
   const queryClient = useQueryClient()
   const [name, setName] = React.useState(
@@ -526,7 +526,7 @@ const NetworkForm = React.memo(function NetworkForm({
         name: name.trim(),
         tag: tag.trim(),
       }
-      if (!stack) return createTailscaleNetwork({ data: input })
+      if (!stack) return createTailnet({ data: input })
 
       const configured = await configureTailscaleIntegration({
         data: {
@@ -539,7 +539,7 @@ const NetworkForm = React.memo(function NetworkForm({
         },
       })
       if (input.name !== stack.name || input.domain !== stack.domain) {
-        return saveTailscaleStack({
+        return saveTailnet({
           data: stackSaveInput(stack, {
             domain: input.domain,
             name: input.name,
@@ -549,7 +549,7 @@ const NetworkForm = React.memo(function NetworkForm({
       return configured.stacks
     },
     onSuccess: async (next) => {
-      queryClient.setQueryData(queryKeys.tailscaleStacks, next)
+      queryClient.setQueryData(queryKeys.tailnets, next)
       if (stack) {
         await queryClient.invalidateQueries({
           queryKey: queryKeys.relay.snapshot,
@@ -567,7 +567,7 @@ const NetworkForm = React.memo(function NetworkForm({
       if (!stack) return
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: queryKeys.tailscaleStacks,
+          queryKey: queryKeys.tailnets,
         }),
         queryClient.invalidateQueries({
           queryKey: queryKeys.relay.snapshot,
@@ -780,7 +780,7 @@ function normalizeTailscaleDomain(value: string): string {
 }
 
 function stackSaveInput(
-  stack: TailscaleStackOverview,
+  stack: TailnetOverview,
   overrides: { domain?: string; name?: string } = {}
 ): SaveStackInput {
   return {
@@ -798,7 +798,7 @@ function stackSaveInput(
   }
 }
 
-function bindingSummary(stack: TailscaleStackOverview): string {
+function bindingSummary(stack: TailnetOverview): string {
   const count = (matches: (memberId: string) => boolean) =>
     stack.bindings.filter(({ memberId }) => matches(memberId)).length
   const appServiceCount = count((memberId) => !!appTailscaleMember(memberId))
@@ -824,6 +824,6 @@ function bindingSummary(stack: TailscaleStackOverview): string {
   return counts.length > 0 ? counts.join(" · ") : "0 instances"
 }
 
-function connectedBindingCount(stack: TailscaleStackOverview): number {
+function connectedBindingCount(stack: TailnetOverview): number {
   return stack.bindings.filter(({ enabled }) => enabled).length
 }

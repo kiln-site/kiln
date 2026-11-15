@@ -36,11 +36,11 @@ import type {
   RelayInstanceWebRouteState,
   RelayProxyDiagnostics,
   RelayProxySettings,
-  RelayTailscaleStack,
-  RelayTailscaleStackApply,
-  RelayTailscaleStackConfig,
-  RelayTailscaleStackDns,
-  RelayTailscaleStackState,
+  Tunnel,
+  TunnelApply,
+  TunnelConfig,
+  TunnelDns,
+  TunnelState,
   RelayUpdateInstanceStartup,
   ProvisioningWorkPhase,
   ResourceLimits,
@@ -53,17 +53,14 @@ import {
   databaseTailscaleMember,
   instanceTailscaleMember,
   instanceTailscaleMemberId,
-  builtinTailscaleBrickId,
-  builtinTailscaleBrickSource,
   relayProxySettingsSchema,
   relayInstanceSchema,
   resolveResourceLimits,
   resourceLimitsEqual,
   migrateLegacyTailscaleBindings,
-  relayTailscaleStackConfigSchema,
-  relayTailscaleStackDnsSchema,
-  relayTailscaleStackSchema,
-  isTailscaleNode,
+  tunnelConfigSchema,
+  tunnelDnsSchema,
+  tunnelSchema,
 } from "@workspace/contracts"
 import type { BrickCatalog, GameServerBrick } from "./bricks.js"
 import type { RelayConfig, RelayInstanceConfig } from "./config.js"
@@ -120,16 +117,16 @@ import {
   physicalShortKey,
 } from "./instance-keys.js"
 import {
-  activeTailscaleStackBindings,
-  allocateTailscaleStackSubnet,
+  activeTunnelBindings,
+  allocateTunnelSubnet,
   assignTailscaleBindingAddresses,
-  tailscaleStackCoreDnsConfiguration,
-  tailscaleStackCoreDnsRecords,
-  tailscaleStackFirewallIsCurrent,
-  tailscaleStackFirewallRules,
-  tailscaleStackServiceAddress,
-  tailscaleStackWithoutMembers,
-  TAILSCALE_STACK_FORWARD_CHAIN,
+  tunnelCoreDnsConfiguration,
+  tunnelCoreDnsRecords,
+  tunnelFirewallIsCurrent,
+  tunnelFirewallRules,
+  tunnelServiceAddress,
+  tunnelWithoutMembers,
+  TUNNEL_FORWARD_CHAIN,
 } from "./private-network.js"
 import {
   discoverExternalTraefikContainer,
@@ -149,8 +146,20 @@ import type { TraefikCertificateGate } from "./web-certificates.js"
 type InfrastructureContainer = Omit<ContainerSpec, "name">
 const TAILSCALE_IMAGE = "tailscale/tailscale:stable"
 const COREDNS_IMAGE = "coredns/coredns:1.14.7"
-const TAILSCALE_STACK_DISK_BYTES = 128 * 1024 * 1024
-const TAILSCALE_STACK_MEMORY_BYTES = 64 * 1024 * 1024
+// A tunnel's two containers say whose they are and which they are. The
+// physical key names it, as its containers and folders are named.
+export const TUNNEL_ID_LABEL = "kiln.tunnel.id"
+const TUNNEL_COMPONENT_LABEL = "kiln.tunnel.component"
+
+function tunnelLabels(
+  id: string,
+  component: "dns" | "tailscale"
+): Record<string, string> {
+  return {
+    [TUNNEL_ID_LABEL]: physicalKey(id),
+    [TUNNEL_COMPONENT_LABEL]: component,
+  }
+}
 const PORT_LEASE_TTL_MS = 2 * 60_000
 
 interface PortLeaseRecord {
@@ -194,7 +203,7 @@ function lifecycleOperation<A>(
 }
 
 // What a stack's members are, to tell whether they changed.
-function tailscaleStackBasis(config: RelayTailscaleStackConfig | null): string {
+function tunnelBasis(config: TunnelConfig | null): string {
   return createHash("sha256")
     .update(
       JSON.stringify(
@@ -241,24 +250,18 @@ function nextManagedGamePort(input: {
   throw new Error(`No game ports are available in ${input.start}-${input.end}`)
 }
 
-function tailscaleStackPendingRemoval(
-  config: RelayTailscaleStackConfig,
-  snapshot: RelayTailscaleStack
-): RelayTailscaleStack {
-  return relayTailscaleStackSchema.parse({
+function tunnelPendingRemoval(
+  config: TunnelConfig,
+  snapshot: Tunnel
+): Tunnel {
+  return tunnelSchema.parse({
     ...snapshot,
     ...config,
     components: {
       coreDnsRunning: false,
       tailscaleRunning: false,
     },
-    instance: {
-      ...snapshot.instance,
-      containerId: null,
-      observedState: "stopped",
-      resources: null,
-      status: "Removal pending",
-    },
+    observedState: "stopped",
     status: {
       connected: false,
       ipv4Address: null,
@@ -437,7 +440,7 @@ export class LifecycleDriver {
   #platformEdgeError: string | null = null
   readonly #portLeases = new Map<string, PortLeaseRecord>()
   readonly #portLeaseTimers = new Map<string, NodeJS.Timeout>()
-  readonly #tailscaleConfigs = new Map<string, RelayTailscaleStackConfig>()
+  readonly #tailscaleConfigs = new Map<string, TunnelConfig>()
   #tailscaleConfigsDiscovered = false
   readonly #tailscaleFirewallGenerations = new Map<string, string>()
   #webRoutes: ReadonlyArray<RelayStoredWebRoute> = []
@@ -464,7 +467,93 @@ export class LifecycleDriver {
     this.certificates = certificates
   }
 
-  async tailscaleStacks(): Promise<Array<RelayTailscaleStack>> {
+  /**
+   * Starts, stops, restarts or kills a tunnel: its Tailscale container, and
+   * its CoreDNS, which lives in the Tailscale container's network and so
+   * stops first and starts after. A start waits for Tailscale to connect
+   * with the identity it keeps, then advertises its routes again.
+   */
+  async runTunnelAction(
+    id: string,
+    action: "start" | "stop" | "restart" | "kill"
+  ): Promise<Tunnel> {
+    const config = await this.#readTunnelConfig(id)
+    if (!config) throw new Error(`Tunnel ${id} was not found`)
+    const tailscale = this.#resources.tunnelContainer(id)
+    const coreDns = this.#resources.tunnelDnsContainer(id)
+    if (action === "stop" || action === "kill") {
+      await runLifecycle(
+        (action === "stop"
+          ? this.#engine.stopContainer(coreDns)
+          : this.#engine.killContainer(coreDns)
+        ).pipe(Effect.ignore)
+      )
+      await runLifecycle(
+        action === "stop"
+          ? this.#engine.stopContainer(tailscale, { timeout: 60_000 })
+          : this.#engine.killContainer(tailscale)
+      )
+      return this.#tunnel(config)
+    }
+    await this.#assertTunnelRemovalNotPending(id, action)
+    await runLifecycle(
+      action === "restart"
+        ? this.#engine.restartContainer(tailscale, { timeout: 60_000 })
+        : this.#engine.startContainer(tailscale, { timeout: 60_000 })
+    )
+    if (!(await this.#waitForTunnelConnection(id, 45_000))) {
+      throw new Error("Tailscale did not reconnect with its persisted identity")
+    }
+    await this.#configureTunnelRouting(config)
+    await runLifecycle(
+      (action === "restart"
+        ? this.#engine.restartContainer(coreDns)
+        : this.#engine.startContainer(coreDns)
+      ).pipe(Effect.ignore)
+    )
+    return this.#tunnel(config)
+  }
+
+  /**
+   * Makes each tunnel's containers again with a tunnel's labels, once:
+   * those made while tunnels ran as game servers carry a game server's. The
+   * Tailscale container keeps its state, so it reconnects as the same node
+   * advertising the same routes, and one that was stopped stays stopped.
+   * One whose container went missing, as when the Relay stopped between
+   * removing and making it, is made again. Runs at startup.
+   */
+  async relabelTunnels(): Promise<number> {
+    let relabeled = 0
+    for (const config of await this.#tunnelConfigs()) {
+      if (await this.#tunnelRemovalPending(config.id)) continue
+      const name = this.#resources.tunnelContainer(config.id)
+      const container = await recoverPromise(
+        () => runLifecycle(this.#engine.inspectContainer(name)),
+        () => null
+      )
+      if (container && stringLabels(container.Config.Labels)[TUNNEL_ID_LABEL])
+        continue
+      const running = container?.State.Running ?? true
+      await this.#ensureTunnelNetwork(config)
+      await this.#removeOwnedContainer(
+        this.#resources.tunnelDnsContainer(config.id)
+      )
+      await this.#replaceContainer(name, await this.#tunnelContainer(config))
+      await this.#renderTunnelDns(config)
+      if (!running) {
+        await runLifecycle(
+          this.#engine
+            .stopContainer(this.#resources.tunnelDnsContainer(config.id))
+            .pipe(Effect.ignore)
+        )
+        await runLifecycle(this.#engine.stopContainer(name))
+      }
+      relabeled += 1
+    }
+    return relabeled
+  }
+
+  async tunnels(): Promise<Array<Tunnel>> {
     const entries = await recoverPromise(
       () =>
         readdir(this.#config.rootDirectory, {
@@ -479,14 +568,14 @@ export class LifecycleDriver {
     const stacks = await Promise.all(
       entries.map(async (entry) => {
         const id = entry.isDirectory()
-          ? tailscaleStackDirectoryId(entry.name)
+          ? tunnelDirectoryId(entry.name)
           : null
-        const config = id ? await this.#readTailscaleStackConfig(id) : null
-        return config ? this.#tailscaleStack(config) : null
+        const config = id ? await this.#readTunnelConfig(id) : null
+        return config ? this.#tunnel(config) : null
       })
     )
     return stacks
-      .filter((stack): stack is RelayTailscaleStack => stack !== null)
+      .filter((stack): stack is Tunnel => stack !== null)
       .sort((left, right) => left.name.localeCompare(right.name))
   }
 
@@ -496,15 +585,16 @@ export class LifecycleDriver {
    * while it's being deleted, and whether its removal is pending. Hearth
    * builds every node's records from these.
    */
-  async tailscaleStackStates(): Promise<Array<RelayTailscaleStackState>> {
+  async tunnelStates(): Promise<Array<TunnelState>> {
     return Promise.all(
-      (await this.#tailscaleStackConfigs()).map(async (config) => ({
+      (await this.#tunnelConfigs()).map(async (config) => ({
         bindings: config.bindings.map((binding) => ({
           ...binding,
           frozen: this.#frozenMember(binding.memberId),
         })),
         id: config.id,
-        removalPending: await this.#tailscaleStackRemovalPending(config.id),
+        removalPending: await this.#tunnelRemovalPending(config.id),
+        tailnetId: config.tailnetId,
       }))
     )
   }
@@ -515,8 +605,8 @@ export class LifecycleDriver {
    * an apply or removal has since replaced. It carries on while the Relay is
    * paused, and skips a stack something else holds until the next pass.
    */
-  async reconcileTailscaleStackFirewalls(): Promise<void> {
-    const configs = await this.#knownTailscaleStackConfigs()
+  async reconcileTunnelFirewalls(): Promise<void> {
+    const configs = await this.#knownTunnelConfigs()
     const stackIds = new Set(configs.map(({ id }) => id))
     for (const id of this.#tailscaleFirewallGenerations.keys()) {
       if (!stackIds.has(id)) this.#tailscaleFirewallGenerations.delete(id)
@@ -556,26 +646,26 @@ export class LifecycleDriver {
   /**
    * A stack's members as saved now, for planning the locks a change to it
    * takes, and what they were planned from, which the change checks once
-   * it runs (`planned` on `applyTailscaleStack`, `removeTailscaleStack`).
+   * it runs (`planned` on `applyTunnel`, `removeTunnel`).
    */
-  async tailscaleStackPlan(stackId: string): Promise<{
+  async tunnelPlan(stackId: string): Promise<{
     basis: string
     bindings: ReadonlyArray<{ enabled: boolean; memberId: string }>
   }> {
-    const config = await this.#readTailscaleStackConfig(stackId)
+    const config = await this.#readTunnelConfig(stackId)
     return {
-      basis: tailscaleStackBasis(config),
+      basis: tunnelBasis(config),
       bindings: config?.bindings ?? [],
     }
   }
 
   // A change planned from other members than the stack has once it runs
   // may join or leave members it didn't lock.
-  #assertTailscaleStackPlanned(
-    config: RelayTailscaleStackConfig | null,
+  #assertTunnelPlanned(
+    config: TunnelConfig | null,
     planned: string | undefined
   ): void {
-    if (planned === undefined || planned === tailscaleStackBasis(config)) return
+    if (planned === undefined || planned === tunnelBasis(config)) return
     throw new Error(
       "This Tailscale network changed while the change waited its turn. Send it again."
     )
@@ -598,17 +688,20 @@ export class LifecycleDriver {
     }
   }
 
-  async applyTailscaleStack(
-    rawInput: RelayTailscaleStackApply,
+  async applyTunnel(
+    rawInput: TunnelApply,
     planned?: string
-  ): Promise<RelayTailscaleStack> {
+  ): Promise<Tunnel> {
     const input = rawInput
-    await this.#assertTailscaleStackRemovalNotPending(
+    await this.#assertTunnelRemovalNotPending(
       input.id,
       "apply changes to"
     )
-    const existing = await this.#readTailscaleStackConfig(input.id)
-    this.#assertTailscaleStackPlanned(existing, planned)
+    const existing = await this.#readTunnelConfig(input.id)
+    this.#assertTunnelPlanned(existing, planned)
+    if (existing && existing.tailnetId !== input.tailnetId) {
+      throw new Error("This tunnel belongs to another tailnet")
+    }
     const instances = await this.#docker.inspectInstances()
     for (const binding of input.bindings) {
       const app = appTailscaleMember(binding.memberId)
@@ -632,21 +725,18 @@ export class LifecycleDriver {
       if (!instanceId || !instance || !instance.managedByRelay) {
         throw new Error(`Game server ${binding.memberId} was not found`)
       }
-      if (isTailscaleNode(instance)) {
-        throw new Error("A Tailscale deployment cannot attach to itself")
-      }
     }
 
     this.#assertUniqueTailscaleHostnames(input.domain, input.bindings)
 
     const reservedSubnets = new Set(
-      (await this.#tailscaleStackConfigs())
+      (await this.#tunnelConfigs())
         .filter((config) => config.id !== input.id)
         .map((config) => config.subnet)
     )
     const subnet =
       existing?.subnet ??
-      allocateTailscaleStackSubnet(
+      allocateTunnelSubnet(
         input.id,
         this.#config.nodeId,
         reservedSubnets
@@ -656,16 +746,17 @@ export class LifecycleDriver {
       existing?.bindings ?? [],
       input.bindings
     )
-    const config = relayTailscaleStackConfigSchema.parse({
+    const config = tunnelConfigSchema.parse({
       bindings,
       domain: input.domain,
       hostname: input.hostname,
       id: input.id,
       name: input.name,
       subnet,
+      tailnetId: input.tailnetId,
     })
 
-    const containerName = this.#resources.tailscaleStackContainer(input.id)
+    const containerName = this.#resources.tunnelContainer(input.id)
     const containerExists = await this.#containerExists(containerName)
     if (!containerExists && !input.authKey) {
       throw new Error(
@@ -673,33 +764,33 @@ export class LifecycleDriver {
       )
     }
     const rollbackStackApply = () =>
-      this.#rollbackTailscaleStackApply(config, existing)
+      this.#rollbackTunnelApply(config, existing)
 
     return runLifecycle(
       lifecycleOperation(async () => {
-        await this.#ensureTailscaleStackNetwork(config)
-        await this.#writeTailscaleStackConfig(config)
+        await this.#ensureTunnelNetwork(config)
+        await this.#writeTunnelConfig(config)
         if (!containerExists) {
-          await this.#installTailscaleStack(config, input.authKey!)
+          await this.#installTunnel(config, input.authKey!)
         } else if (
           existing &&
           (existing.domain !== config.domain ||
             existing.hostname !== config.hostname ||
             existing.name !== config.name)
         ) {
-          await this.#restartTailscaleStack(config)
+          await this.#restartTunnel(config)
         }
         // Docker can attach and detach a running game container from this
         // private bridge without recreating or restarting it.
-        await this.#reconcileTailscaleStackBindings(
+        await this.#reconcileTunnelBindings(
           config.id,
           existing?.bindings ?? [],
           config.bindings
         )
-        await this.#configureTailscaleStackRouting(config)
+        await this.#configureTunnelRouting(config)
         // Hearth rewrites the records for the new members once this is done.
-        await this.#renderTailscaleStackDns(config)
-        return this.#tailscaleStack(config)
+        await this.#renderTunnelDns(config)
+        return this.#tunnel(config)
       }).pipe(
         Effect.catch((cause) =>
           Effect.gen(function* () {
@@ -734,14 +825,14 @@ export class LifecycleDriver {
     )
   }
 
-  async syncTailscaleStackDns(
-    input: RelayTailscaleStackDns
-  ): Promise<RelayTailscaleStack> {
-    await this.#assertTailscaleStackRemovalNotPending(
+  async syncTunnelDns(
+    input: TunnelDns
+  ): Promise<Tunnel> {
+    await this.#assertTunnelRemovalNotPending(
       input.id,
       "synchronize DNS for"
     )
-    const config = await this.#readTailscaleStackConfig(input.id)
+    const config = await this.#readTunnelConfig(input.id)
     if (!config) throw new Error("Tailscale stack not found")
     const duplicateHostname = input.records.find(
       (record, index, records) =>
@@ -754,48 +845,48 @@ export class LifecycleDriver {
         `Duplicate private hostname ${duplicateHostname.hostname}`
       )
     }
-    await this.#ensureTailscaleStackDns(config, input.records)
-    return this.#tailscaleStack(config)
+    await this.#ensureTunnelDns(config, input.records)
+    return this.#tunnel(config)
   }
 
-  async removeTailscaleStack(
+  async removeTunnel(
     id: string,
     mode: "commit" | "prepare" | "rollback" = "commit",
     controlPlaneDeviceRemoved = false,
     planned?: string
   ): Promise<void> {
-    this.#assertTailscaleStackPlanned(
-      await this.#readTailscaleStackConfig(id),
+    this.#assertTunnelPlanned(
+      await this.#readTunnelConfig(id),
       planned
     )
     if (mode === "prepare") {
-      await this.#prepareTailscaleStackRemoval(id)
+      await this.#prepareTunnelRemoval(id)
       return
     }
     if (mode === "rollback") {
-      await this.#rollbackTailscaleStackRemoval(id)
+      await this.#rollbackTunnelRemoval(id)
       return
     }
 
-    await this.#prepareTailscaleStackRemoval(id)
-    await this.#commitTailscaleStackRemoval(id, controlPlaneDeviceRemoved)
+    await this.#prepareTunnelRemoval(id)
+    await this.#commitTunnelRemoval(id, controlPlaneDeviceRemoved)
   }
 
-  async #prepareTailscaleStackRemoval(id: string): Promise<void> {
-    const config = await this.#readTailscaleStackConfig(id)
+  async #prepareTunnelRemoval(id: string): Promise<void> {
+    const config = await this.#readTunnelConfig(id)
     if (!config) return
-    const alreadyPending = await this.#tailscaleStackRemovalPending(id)
+    const alreadyPending = await this.#tunnelRemovalPending(id)
     if (!alreadyPending) {
-      const snapshot = await this.#tailscaleStack(config)
+      const snapshot = await this.#tunnel(config)
       await writeFile(
-        this.#tailscaleStackRemovalSnapshot(id),
+        this.#tunnelRemovalSnapshot(id),
         `${JSON.stringify(snapshot, null, 2)}\n`,
         { mode: 0o600 }
       )
-      const marker = this.#tailscaleStackRemovalMarker(id)
+      const marker = this.#tunnelRemovalMarker(id)
       await writeFile(marker, "prepared\n", { mode: 0o600 })
     }
-    const network = this.#resources.tailscaleStackNetwork(id)
+    const network = this.#resources.tunnelNetwork(id)
     await runLifecycle(
       lifecycleOperation(async () => {
         for (const binding of config.bindings) {
@@ -811,9 +902,9 @@ export class LifecycleDriver {
           }
         }
         await this.#removeOwnedContainer(
-          this.#resources.tailscaleStackDnsContainer(id)
+          this.#resources.tunnelDnsContainer(id)
         )
-        const container = this.#resources.tailscaleStackContainer(id)
+        const container = this.#resources.tunnelContainer(id)
         if (await this.#containerRunning(container)) {
           await runLifecycle(
             this.#engine.stopContainer(container, {
@@ -827,7 +918,7 @@ export class LifecycleDriver {
           (alreadyPending
             ? Effect.void
             : lifecycleOperation(() =>
-                this.#rollbackTailscaleStackRemoval(id)
+                this.#rollbackTunnelRemoval(id)
               ).pipe(Effect.ignore)
           ).pipe(Effect.flatMap(() => Effect.fail(cause)))
         )
@@ -835,36 +926,36 @@ export class LifecycleDriver {
     )
   }
 
-  async #rollbackTailscaleStackRemoval(id: string): Promise<void> {
-    if (!(await this.#tailscaleStackRemovalPending(id))) return
-    const config = await this.#readTailscaleStackConfig(id)
+  async #rollbackTunnelRemoval(id: string): Promise<void> {
+    if (!(await this.#tunnelRemovalPending(id))) return
+    const config = await this.#readTunnelConfig(id)
     if (!config) return
-    await this.#ensureTailscaleStackNetwork(config)
-    await this.#restartTailscaleStack(config)
-    await this.#reconcileTailscaleStackBindings(id, [], config.bindings)
-    await this.#configureTailscaleStackRouting(config)
-    await this.#renderTailscaleStackDns(config)
-    await rm(this.#tailscaleStackRemovalMarker(id), { force: true })
-    await rm(this.#tailscaleStackRemovalSnapshot(id), { force: true })
+    await this.#ensureTunnelNetwork(config)
+    await this.#restartTunnel(config)
+    await this.#reconcileTunnelBindings(id, [], config.bindings)
+    await this.#configureTunnelRouting(config)
+    await this.#renderTunnelDns(config)
+    await rm(this.#tunnelRemovalMarker(id), { force: true })
+    await rm(this.#tunnelRemovalSnapshot(id), { force: true })
   }
 
-  async #commitTailscaleStackRemoval(
+  async #commitTunnelRemoval(
     id: string,
     controlPlaneDeviceRemoved = false
   ): Promise<void> {
-    const config = await this.#readTailscaleStackConfig(id)
+    const config = await this.#readTunnelConfig(id)
     if (!config) return
-    const network = this.#resources.tailscaleStackNetwork(id)
-    const container = this.#resources.tailscaleStackContainer(id)
+    const network = this.#resources.tunnelNetwork(id)
+    const container = this.#resources.tunnelContainer(id)
     if (
       !controlPlaneDeviceRemoved &&
       !(await this.#containerExists(container)) &&
-      (await this.#tailscaleStackIdentityExists(id))
+      (await this.#tunnelIdentityExists(id))
     ) {
-      await this.#ensureTailscaleStackNetwork(config)
+      await this.#ensureTunnelNetwork(config)
       await this.#replaceContainer(
         container,
-        await this.#tailscaleStackContainer(config)
+        await this.#tunnelContainer(config)
       )
     }
     if (
@@ -875,7 +966,7 @@ export class LifecycleDriver {
         this.#engine.startContainer(container, { timeout: 30_000 })
       )
       await runLifecycle(
-        lifecycleOperation(() => this.#logoutTailscaleStack(container)).pipe(
+        lifecycleOperation(() => this.#logoutTunnel(container)).pipe(
           Effect.catch((cause) =>
             this.#engine
               .stopContainer(container, { seconds: 10, timeout: 30_000 })
@@ -897,7 +988,7 @@ export class LifecycleDriver {
       )
     }
     await this.#removeOwnedContainer(
-      this.#resources.tailscaleStackDnsContainer(id)
+      this.#resources.tunnelDnsContainer(id)
     )
     await this.#removeOwnedContainer(container)
     await this.#removeOwnedNetwork(network)
@@ -917,7 +1008,7 @@ export class LifecycleDriver {
     this.#tailscaleConfigs.delete(id)
   }
 
-  async #logoutTailscaleStack(container: string): Promise<void> {
+  async #logoutTunnel(container: string): Promise<void> {
     await Effect.runPromise(
       this.#engine
         .exec(container, ["tailscale", "logout"], { timeout: 30_000 })
@@ -931,11 +1022,11 @@ export class LifecycleDriver {
     )
   }
 
-  #tailscaleStackRemovalMarker(id: string): string {
+  #tunnelRemovalMarker(id: string): string {
     return join(this.#config.rootDirectory, physicalKey(id), ".removing")
   }
 
-  #tailscaleStackRemovalSnapshot(id: string): string {
+  #tunnelRemovalSnapshot(id: string): string {
     return join(
       this.#config.rootDirectory,
       physicalKey(id),
@@ -943,10 +1034,10 @@ export class LifecycleDriver {
     )
   }
 
-  async #tailscaleStackRemovalPending(id: string): Promise<boolean> {
+  async #tunnelRemovalPending(id: string): Promise<boolean> {
     return runLifecycle(
       lifecycleOperation(() =>
-        readFile(this.#tailscaleStackRemovalMarker(id))
+        readFile(this.#tunnelRemovalMarker(id))
       ).pipe(
         Effect.as(true),
         Effect.catch((cause) =>
@@ -958,24 +1049,24 @@ export class LifecycleDriver {
     )
   }
 
-  async #assertTailscaleStackRemovalNotPending(
+  async #assertTunnelRemovalNotPending(
     id: string,
     operation: string
   ): Promise<void> {
-    if (!(await this.#tailscaleStackRemovalPending(id))) return
+    if (!(await this.#tunnelRemovalPending(id))) return
     throw new Error(
       `Cannot ${operation} this Tailscale deployment while removal cleanup is pending. Retry removing the node from Infrastructure → Tailscale first.`
     )
   }
 
-  async #readTailscaleStackRemovalSnapshot(
+  async #readTunnelRemovalSnapshot(
     id: string
-  ): Promise<RelayTailscaleStack | null> {
+  ): Promise<Tunnel | null> {
     return runLifecycle(
       lifecycleOperation(async () =>
-        relayTailscaleStackSchema.parse(
+        tunnelSchema.parse(
           JSON.parse(
-            await readFile(this.#tailscaleStackRemovalSnapshot(id), "utf8")
+            await readFile(this.#tunnelRemovalSnapshot(id), "utf8")
           )
         )
       ).pipe(optionalWhenMissing())
@@ -1727,39 +1818,6 @@ export class LifecycleDriver {
     routes: ReadonlyArray<RelayInstanceWebRoute>,
     pendingPrimaryPort: RelayInstancePendingPrimaryPort | null = null
   ): Promise<RelayInstance> {
-    if (isTailscaleNode(instance)) {
-      if (action === "start" || action === "restart") {
-        await this.#assertTailscaleStackRemovalNotPending(instance.id, action)
-      }
-      const coreDns = this.#resources.tailscaleStackDnsContainer(instance.id)
-      if (action === "stop" || action === "kill") {
-        await runLifecycle(
-          (action === "stop"
-            ? this.#engine.stopContainer(coreDns)
-            : this.#engine.killContainer(coreDns)
-          ).pipe(Effect.ignore)
-        )
-        return this.#docker.runAction(instance, action)
-      }
-      const updated = await this.#docker.runAction(instance, action)
-      const config = await this.#readTailscaleStackConfig(instance.id)
-      if (
-        config &&
-        !(await this.#waitForTailscaleStackConnection(instance.id, 45_000))
-      ) {
-        throw new Error(
-          "Tailscale did not reconnect with its persisted identity"
-        )
-      }
-      if (config) await this.#configureTailscaleStackRouting(config)
-      await runLifecycle(
-        (action === "restart"
-          ? this.#engine.restartContainer(coreDns)
-          : this.#engine.startContainer(coreDns)
-        ).pipe(Effect.ignore)
-      )
-      return updated
-    }
     const pendingLimits =
       action === "start" || action === "restart"
         ? await this.#docker.pendingLimits(instance.id)
@@ -1904,11 +1962,6 @@ export class LifecycleDriver {
     if (!instance.managedByRelay) {
       throw new Error(
         "Relay can only configure ports for containers it created"
-      )
-    }
-    if (isTailscaleNode(instance)) {
-      throw new Error(
-        "Configure this Tailscale network from Infrastructure → Tailscale"
       )
     }
     const existingById = new Map(
@@ -2125,13 +2178,6 @@ export class LifecycleDriver {
           "Relay can only reserve ports for containers it created"
         )
       }
-      if (isTailscaleNode(instance)) {
-        return yield* portFailure(
-          "tailscale_managed",
-          "lease.reserve",
-          "Configure this Tailscale network from Infrastructure → Tailscale"
-        )
-      }
 
       const previous = input.leaseId
         ? this.#portLeases.get(input.leaseId)
@@ -2229,11 +2275,6 @@ export class LifecycleDriver {
     answers: Readonly<Record<string, BrickVariableValue>>
     placeholder: RelayInstance
   }> {
-    if (input.recipe === builtinTailscaleBrickSource) {
-      throw new Error(
-        "Create Tailscale from the Tailscale page so Hearth can place its node deployments"
-      )
-    }
     const definition =
       input.recipeDefinition ?? (await this.#bricks.recipe(input.recipe))
     const snapshotSha256 = await this.#bricks.saveSnapshot(definition)
@@ -2306,11 +2347,6 @@ export class LifecycleDriver {
     input: RelayCreateInstance,
     onPhase?: (phase: ProvisioningWorkPhase) => Promise<void>
   ): Promise<RelayInstance> {
-    if (input.recipe === builtinTailscaleBrickSource) {
-      throw new Error(
-        "Create Tailscale from the Tailscale page so Hearth can place its node deployments"
-      )
-    }
     return this.#provisionManagedInstance({
       grandfatheredDiskLimitBytes: null,
       grandfatheredMemoryLimitBytes: null,
@@ -2353,9 +2389,6 @@ export class LifecycleDriver {
     if (!instance.managedByRelay) {
       throw new Error("Relay can only change containers it created")
     }
-    if (isTailscaleNode(instance)) {
-      throw new Error("A Tailscale network's limits are its own")
-    }
     if (resourceLimitsEqual(limits, instance.limits)) {
       await this.#docker.setPendingLimits(instance.id, null)
       return
@@ -2396,11 +2429,6 @@ export class LifecycleDriver {
     if (!existing) throw new Error("Instance not found")
     if (!existing.managedByRelay) {
       throw new Error("Relay can only reconfigure containers it created")
-    }
-    if (isTailscaleNode(existing)) {
-      throw new Error(
-        "Configure this Tailscale network from Infrastructure → Tailscale"
-      )
     }
     if (!existing.ports.some((allocation) => allocation.kind === "primary")) {
       throw new Error(
@@ -3138,11 +3166,6 @@ export class LifecycleDriver {
     if (!instance.managedByRelay) {
       throw new Error("Relay can only delete containers it created")
     }
-    if (isTailscaleNode(instance)) {
-      throw new Error(
-        "Remove this logical network from Infrastructure → Tailscale so every node is cleaned up"
-      )
-    }
     await runLifecycle(
       this.#engine
         .stopContainer(instance.service, {
@@ -3588,7 +3611,7 @@ export class LifecycleDriver {
    * stack. Safe to repeat: a file already rewritten is left alone, and each
    * is replaced whole, so a restart midway leaves it old or new.
    */
-  async migrateTailscaleStackMembers(): Promise<number> {
+  async migrateTunnelMembers(): Promise<number> {
     const entries = await recoverPromise(
       () =>
         readdir(this.#config.rootDirectory, {
@@ -3602,16 +3625,16 @@ export class LifecycleDriver {
     )
     let migrated = 0
     for (const entry of entries) {
-      if (!entry.isDirectory() || !tailscaleStackDirectoryId(entry.name))
+      if (!entry.isDirectory() || !tunnelDirectoryId(entry.name))
         continue
       for (const [path, schema] of [
         [
           join(this.#config.rootDirectory, entry.name, "stack.json"),
-          relayTailscaleStackConfigSchema,
+          tunnelConfigSchema,
         ],
         [
-          this.#tailscaleStackRemovalSnapshot(entry.name),
-          relayTailscaleStackSchema,
+          this.#tunnelRemovalSnapshot(entry.name),
+          tunnelSchema,
         ],
       ] as const) {
         const saved = await recoverPromise(
@@ -3652,12 +3675,12 @@ export class LifecycleDriver {
     return migrated
   }
 
-  async #readTailscaleStackConfig(
+  async #readTunnelConfig(
     id: string
-  ): Promise<RelayTailscaleStackConfig | null> {
+  ): Promise<TunnelConfig | null> {
     return runLifecycle(
       lifecycleOperation(async () =>
-        relayTailscaleStackConfigSchema.parse(
+        tunnelConfigSchema.parse(
           JSON.parse(
             await readFile(
               join(this.#config.rootDirectory, physicalKey(id), "stack.json"),
@@ -3669,7 +3692,7 @@ export class LifecycleDriver {
     )
   }
 
-  async #tailscaleStackConfigs(): Promise<Array<RelayTailscaleStackConfig>> {
+  async #tunnelConfigs(): Promise<Array<TunnelConfig>> {
     const entries = await recoverPromise(
       () =>
         readdir(this.#config.rootDirectory, {
@@ -3684,30 +3707,30 @@ export class LifecycleDriver {
     const configs = await Promise.all(
       entries.map((entry) => {
         const id = entry.isDirectory()
-          ? tailscaleStackDirectoryId(entry.name)
+          ? tunnelDirectoryId(entry.name)
           : null
-        return id ? this.#readTailscaleStackConfig(id) : Promise.resolve(null)
+        return id ? this.#readTunnelConfig(id) : Promise.resolve(null)
       })
     )
     const found = configs.filter(
-      (config): config is RelayTailscaleStackConfig => config !== null
+      (config): config is TunnelConfig => config !== null
     )
     for (const config of found) this.#tailscaleConfigs.set(config.id, config)
     this.#tailscaleConfigsDiscovered = true
     return found
   }
 
-  async #knownTailscaleStackConfigs(): Promise<
-    Array<RelayTailscaleStackConfig>
+  async #knownTunnelConfigs(): Promise<
+    Array<TunnelConfig>
   > {
     if (!this.#tailscaleConfigsDiscovered) {
-      await this.#tailscaleStackConfigs()
+      await this.#tunnelConfigs()
     }
     return [...this.#tailscaleConfigs.values()]
   }
 
-  async #writeTailscaleStackConfig(
-    config: RelayTailscaleStackConfig
+  async #writeTunnelConfig(
+    config: TunnelConfig
   ): Promise<void> {
     const directory = join(this.#config.rootDirectory, physicalKey(config.id))
     await mkdir(directory, { recursive: true, mode: 0o700 })
@@ -3720,10 +3743,10 @@ export class LifecycleDriver {
     this.#tailscaleConfigsDiscovered = true
   }
 
-  async #ensureTailscaleStackNetwork(
-    config: RelayTailscaleStackConfig
+  async #ensureTunnelNetwork(
+    config: TunnelConfig
   ): Promise<void> {
-    const name = this.#resources.tailscaleStackNetwork(config.id)
+    const name = this.#resources.tunnelNetwork(config.id)
     const labels = await this.#networkLabels(name)
     if (labels) {
       if (
@@ -3758,20 +3781,20 @@ export class LifecycleDriver {
     return instanceId !== null && this.#lanes.isFrozen("instance", instanceId)
   }
 
-  async #reconcileTailscaleStackBindings(
+  async #reconcileTunnelBindings(
     stackId: string,
-    previous: ReadonlyArray<RelayTailscaleStackConfig["bindings"][number]>,
-    desired: ReadonlyArray<RelayTailscaleStackConfig["bindings"][number]>
+    previous: ReadonlyArray<TunnelConfig["bindings"][number]>,
+    desired: ReadonlyArray<TunnelConfig["bindings"][number]>
   ): Promise<void> {
-    const network = this.#resources.tailscaleStackNetwork(stackId)
+    const network = this.#resources.tunnelNetwork(stackId)
     const previousById = new Map(
-      activeTailscaleStackBindings(previous).map((binding) => [
+      activeTunnelBindings(previous).map((binding) => [
         binding.memberId,
         binding,
       ])
     )
     const desiredById = new Map(
-      activeTailscaleStackBindings(desired).map((binding) => [
+      activeTunnelBindings(desired).map((binding) => [
         binding.memberId,
         binding,
       ])
@@ -3802,8 +3825,8 @@ export class LifecycleDriver {
     }
   }
 
-  async #installTailscaleStack(
-    config: RelayTailscaleStackConfig,
+  async #installTunnel(
+    config: TunnelConfig,
     authKey: string
   ): Promise<void> {
     const stateDirectory = join(
@@ -3824,23 +3847,23 @@ export class LifecycleDriver {
         )
       )
     }
-    const name = this.#resources.tailscaleStackContainer(config.id)
+    const name = this.#resources.tunnelContainer(config.id)
     await runLifecycle(
       lifecycleOperation(async () => {
         await this.#replaceContainer(
           name,
-          await this.#tailscaleStackContainer(config, authKey)
+          await this.#tunnelContainer(config, authKey)
         )
-        if (!(await this.#waitForTailscaleStackConnection(config.id, 90_000))) {
+        if (!(await this.#waitForTunnelConnection(config.id, 90_000))) {
           throw new Error("Tailscale did not connect in time")
         }
         // Remove the one-time key from Docker metadata after the persisted
         // machine identity has authenticated.
         await this.#replaceContainer(
           name,
-          await this.#tailscaleStackContainer(config)
+          await this.#tunnelContainer(config)
         )
-        if (!(await this.#waitForTailscaleStackConnection(config.id, 45_000))) {
+        if (!(await this.#waitForTunnelConnection(config.id, 45_000))) {
           throw new Error(
             "Tailscale did not reconnect with its persisted identity"
           )
@@ -3857,8 +3880,8 @@ export class LifecycleDriver {
     )
   }
 
-  async #tailscaleStackContainer(
-    config: RelayTailscaleStackConfig,
+  async #tunnelContainer(
+    config: TunnelConfig,
     authKey?: string
   ): Promise<InfrastructureContainer> {
     const hostRoot = await this.#hostDataDirectory()
@@ -3880,33 +3903,13 @@ export class LifecycleDriver {
       },
       hostname: config.hostname,
       image: TAILSCALE_IMAGE,
-      labels: {
-        "kiln.relay.managed": "true",
-        "kiln.relay.owned": "true",
-        "kiln.server.id": physicalKey(config.id),
-        "kiln.brick.id": builtinTailscaleBrickId,
-        "kiln.brick.format": "kiln.brick/v1",
-        "kiln.brick.source": builtinTailscaleBrickSource,
-        "kiln.brick.variables": "{}",
-        "kiln.brick.kind": "game-server",
-        "kiln.brick.network-mode": "direct",
-        "kiln.brick.primary-port": "53",
-        "kiln.instance.name": config.name,
-        "kiln.instance.version": "stable",
-        "kiln.instance.java": "Tailscale + CoreDNS",
-        "kiln.instance.game": "Networking",
-        "kiln.instance.hostname": `${config.hostname}.${config.domain}`,
-        "kiln.instance.directory": physicalKey(config.id),
-        "kiln.instance.memory-bytes": String(TAILSCALE_STACK_MEMORY_BYTES),
-        "kiln.instance.disk-bytes": String(TAILSCALE_STACK_DISK_BYTES),
-        "kiln.instance.mount": "/config",
-      },
+      labels: tunnelLabels(config.id, "tailscale"),
       memory: "64m",
       memoryReservation: "16m",
       memorySwap: "64m",
       network: {
-        ipv4Address: tailscaleStackServiceAddress(config.subnet),
-        name: this.#resources.tailscaleStackNetwork(config.id),
+        ipv4Address: tunnelServiceAddress(config.subnet),
+        name: this.#resources.tunnelNetwork(config.id),
       },
       pidsLimit: 128,
       restart: "unless-stopped",
@@ -3917,26 +3920,26 @@ export class LifecycleDriver {
     }
   }
 
-  async #restartTailscaleStack(
-    config: RelayTailscaleStackConfig
+  async #restartTunnel(
+    config: TunnelConfig
   ): Promise<void> {
     await this.#removeOwnedContainer(
-      this.#resources.tailscaleStackDnsContainer(config.id)
+      this.#resources.tunnelDnsContainer(config.id)
     )
     await this.#replaceContainer(
-      this.#resources.tailscaleStackContainer(config.id),
-      await this.#tailscaleStackContainer(config)
+      this.#resources.tunnelContainer(config.id),
+      await this.#tunnelContainer(config)
     )
-    if (!(await this.#waitForTailscaleStackConnection(config.id, 45_000))) {
+    if (!(await this.#waitForTunnelConnection(config.id, 45_000))) {
       throw new Error("Tailscale did not reconnect with its persisted identity")
     }
   }
 
-  async #configureTailscaleStackRouting(
-    config: RelayTailscaleStackConfig
+  async #configureTunnelRouting(
+    config: TunnelConfig
   ): Promise<void> {
-    await this.#ensureTailscaleStackFirewall(config)
-    const container = this.#resources.tailscaleStackContainer(config.id)
+    await this.#ensureTunnelFirewall(config)
+    const container = this.#resources.tunnelContainer(config.id)
     await runLifecycle(
       this.#engine.exec(
         container,
@@ -3952,40 +3955,40 @@ export class LifecycleDriver {
   }
 
   readonly #repairStackFirewall = operation<string>()({
-    name: "relay.tailscale.stack.firewall",
+    name: "tunnel.firewall",
     locks: ({ input: stackId }) => [exclusive(laneKeys.instance(stackId))],
     onlyIfFree: true,
     carriesOnWhilePaused: true,
     run: ({ input: stackId }) =>
       Effect.annotateCurrentSpan("kiln.instance_id", stackId).pipe(
         Effect.andThen(
-          lifecycleOperation(() => this.#repairTailscaleStackFirewall(stackId))
+          lifecycleOperation(() => this.#repairTunnelFirewall(stackId))
         )
       ),
   })
 
   // Reads the stack again holding it, so the rules match what an apply or
   // removal that ran before left.
-  async #repairTailscaleStackFirewall(id: string): Promise<void> {
-    const config = await this.#readTailscaleStackConfig(id)
+  async #repairTunnelFirewall(id: string): Promise<void> {
+    const config = await this.#readTunnelConfig(id)
     const generation =
-      config && !(await this.#tailscaleStackRemovalPending(id))
-        ? await this.#tailscaleStackContainerGeneration(id)
+      config && !(await this.#tunnelRemovalPending(id))
+        ? await this.#tunnelContainerGeneration(id)
         : null
     if (!config || !generation) {
       this.#tailscaleFirewallGenerations.delete(id)
       return
     }
     if (this.#tailscaleFirewallGenerations.get(id) === generation) return
-    await this.#ensureTailscaleStackFirewall(config)
+    await this.#ensureTunnelFirewall(config)
     this.#tailscaleFirewallGenerations.set(id, generation)
   }
 
-  async #ensureTailscaleStackFirewall(
-    config: RelayTailscaleStackConfig
+  async #ensureTunnelFirewall(
+    config: TunnelConfig
   ): Promise<void> {
-    const container = this.#resources.tailscaleStackContainer(config.id)
-    const chain = TAILSCALE_STACK_FORWARD_CHAIN
+    const container = this.#resources.tunnelContainer(config.id)
+    const chain = TUNNEL_FORWARD_CHAIN
     const iptables = (...arguments_: Array<string>) =>
       runLifecycle(this.#engine.exec(container, ["iptables", ...arguments_]))
     const [hook, specification] = await Promise.all([
@@ -4000,10 +4003,10 @@ export class LifecycleDriver {
     ])
     if (
       specification &&
-      tailscaleStackFirewallIsCurrent(
+      tunnelFirewallIsCurrent(
         Boolean(hook),
         specification.stdout,
-        activeTailscaleStackBindings(config.bindings)
+        activeTunnelBindings(config.bindings)
       )
     ) {
       return
@@ -4016,60 +4019,60 @@ export class LifecycleDriver {
       await iptables("-I", "FORWARD", "1", "-i", "tailscale0", "-j", chain)
     }
     await iptables("-F", chain)
-    for (const rule of tailscaleStackFirewallRules(
-      activeTailscaleStackBindings(config.bindings)
+    for (const rule of tunnelFirewallRules(
+      activeTunnelBindings(config.bindings)
     )) {
       await iptables(...rule)
     }
   }
 
-  async #rollbackTailscaleStackApply(
-    attempted: RelayTailscaleStackConfig,
-    existing: RelayTailscaleStackConfig | null
+  async #rollbackTunnelApply(
+    attempted: TunnelConfig,
+    existing: TunnelConfig | null
   ): Promise<void> {
     if (existing) {
-      await this.#writeTailscaleStackConfig(existing)
-      await this.#restartTailscaleStack(existing)
-      await this.#reconcileTailscaleStackBindings(
+      await this.#writeTunnelConfig(existing)
+      await this.#restartTunnel(existing)
+      await this.#reconcileTunnelBindings(
         existing.id,
         attempted.bindings,
         existing.bindings
       )
-      await this.#configureTailscaleStackRouting(existing)
-      await this.#renderTailscaleStackDns(existing)
+      await this.#configureTunnelRouting(existing)
+      await this.#renderTunnelDns(existing)
       return
     }
 
     if (
       await this.#containerExists(
-        this.#resources.tailscaleStackContainer(attempted.id)
+        this.#resources.tunnelContainer(attempted.id)
       )
     ) {
-      await this.#prepareTailscaleStackRemoval(attempted.id)
-      await this.#commitTailscaleStackRemoval(attempted.id)
+      await this.#prepareTunnelRemoval(attempted.id)
+      await this.#commitTunnelRemoval(attempted.id)
       return
     }
-    if (await this.#tailscaleStackIdentityExists(attempted.id)) {
-      await this.#ensureTailscaleStackNetwork(attempted)
+    if (await this.#tunnelIdentityExists(attempted.id)) {
+      await this.#ensureTunnelNetwork(attempted)
       await this.#replaceContainer(
-        this.#resources.tailscaleStackContainer(attempted.id),
-        await this.#tailscaleStackContainer(attempted)
+        this.#resources.tunnelContainer(attempted.id),
+        await this.#tunnelContainer(attempted)
       )
-      await this.#prepareTailscaleStackRemoval(attempted.id)
-      await this.#commitTailscaleStackRemoval(attempted.id)
+      await this.#prepareTunnelRemoval(attempted.id)
+      await this.#commitTunnelRemoval(attempted.id)
       return
     }
 
-    await this.#reconcileTailscaleStackBindings(
+    await this.#reconcileTunnelBindings(
       attempted.id,
       attempted.bindings,
       []
     )
     await this.#removeOwnedContainer(
-      this.#resources.tailscaleStackDnsContainer(attempted.id)
+      this.#resources.tunnelDnsContainer(attempted.id)
     )
     await this.#removeOwnedNetwork(
-      this.#resources.tailscaleStackNetwork(attempted.id)
+      this.#resources.tunnelNetwork(attempted.id)
     )
     await rm(join(this.#config.rootDirectory, physicalKey(attempted.id)), {
       force: true,
@@ -4089,12 +4092,12 @@ export class LifecycleDriver {
 
   // Saves the records Hearth sent and serves them. Hearth is their only
   // writer: it builds every node's records from what each node reports
-  // (`tailscaleStackStates`), in the network's lane.
-  async #ensureTailscaleStackDns(
-    config: RelayTailscaleStackConfig,
+  // (`tunnelStates`), in the network's lane.
+  async #ensureTunnelDns(
+    config: TunnelConfig,
     records: ReadonlyArray<{ address: string; hostname: string }>
   ): Promise<void> {
-    const recordsPath = this.#tailscaleStackDnsRecordsPath(config.id)
+    const recordsPath = this.#tunnelDnsRecordsPath(config.id)
     await writeFile(
       recordsPath,
       `${JSON.stringify({ id: config.id, records }, null, 2)}\n`,
@@ -4107,7 +4110,7 @@ export class LifecycleDriver {
     )
     await writeFile(
       path,
-      tailscaleStackCoreDnsConfiguration(config.domain, records),
+      tunnelCoreDnsConfiguration(config.domain, records),
       { mode: 0o644 }
     )
     await chmod(path, 0o644)
@@ -4118,15 +4121,16 @@ export class LifecycleDriver {
       "Corefile"
     )
     await this.#replaceContainer(
-      this.#resources.tailscaleStackDnsContainer(config.id),
+      this.#resources.tunnelDnsContainer(config.id),
       {
         binds: [`${hostPath}:/etc/coredns/Corefile:ro`],
         capAdd: ["CAP_NET_BIND_SERVICE"],
         capDrop: ["ALL"],
         command: ["-conf", "/etc/coredns/Corefile"],
         image: COREDNS_IMAGE,
+        labels: tunnelLabels(config.id, "dns"),
         memory: "32m",
-        network: `container:${this.#resources.tailscaleStackContainer(config.id)}`,
+        network: `container:${this.#resources.tunnelContainer(config.id)}`,
         pidsLimit: 64,
         readOnly: true,
         restart: "unless-stopped",
@@ -4137,20 +4141,20 @@ export class LifecycleDriver {
 
   // Serves the records Hearth last sent again, as the stack's CoreDNS is
   // (re)created.
-  async #renderTailscaleStackDns(
-    config: RelayTailscaleStackConfig
+  async #renderTunnelDns(
+    config: TunnelConfig
   ): Promise<void> {
-    await this.#ensureTailscaleStackDns(
+    await this.#ensureTunnelDns(
       config,
-      await this.#readTailscaleStackDnsRecords(config)
+      await this.#readTunnelDnsRecords(config)
     )
   }
 
-  #tailscaleStackDnsRecordsPath(id: string): string {
+  #tunnelDnsRecordsPath(id: string): string {
     return join(this.#config.rootDirectory, physicalKey(id), "dns-records.json")
   }
 
-  async #tailscaleStackIdentityExists(id: string): Promise<boolean> {
+  async #tunnelIdentityExists(id: string): Promise<boolean> {
     return runLifecycle(
       lifecycleOperation(() =>
         access(
@@ -4174,12 +4178,12 @@ export class LifecycleDriver {
     )
   }
 
-  async #tailscaleStackContainerGeneration(id: string): Promise<string | null> {
+  async #tunnelContainerGeneration(id: string): Promise<string | null> {
     const inspected = await recoverPromise(
       () =>
         runLifecycle(
           this.#engine.inspectContainer(
-            this.#resources.tailscaleStackContainer(id)
+            this.#resources.tunnelContainer(id)
           )
         ),
       () => null
@@ -4189,16 +4193,16 @@ export class LifecycleDriver {
       : null
   }
 
-  async #readTailscaleStackDnsRecords(
-    config: RelayTailscaleStackConfig
+  async #readTunnelDnsRecords(
+    config: TunnelConfig
   ): Promise<Array<{ address: string; hostname: string }>> {
     return runLifecycle(
       lifecycleOperation(
         async () =>
-          relayTailscaleStackDnsSchema.parse(
+          tunnelDnsSchema.parse(
             JSON.parse(
               await readFile(
-                this.#tailscaleStackDnsRecordsPath(config.id),
+                this.#tunnelDnsRecordsPath(config.id),
                 "utf8"
               )
             )
@@ -4207,7 +4211,7 @@ export class LifecycleDriver {
         Effect.catch((cause) => {
           if (!hasErrorCode(cause, "ENOENT")) return Effect.fail(cause)
           return lifecycleOperation(async () =>
-            tailscaleStackCoreDnsRecords(
+            tunnelCoreDnsRecords(
               config.domain,
               await readFile(
                 join(
@@ -4231,24 +4235,24 @@ export class LifecycleDriver {
     )
   }
 
-  async #waitForTailscaleStackConnection(
+  async #waitForTunnelConnection(
     id: string,
     timeoutMs: number
   ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
-      const status = await this.#tailscaleStackAddresses(id)
+      const status = await this.#tunnelAddresses(id)
       if (status.ipv4Address || status.ipv6Address) return true
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000))
     }
     return false
   }
 
-  async #tailscaleStackAddresses(id: string): Promise<{
+  async #tunnelAddresses(id: string): Promise<{
     ipv4Address: string | null
     ipv6Address: string | null
   }> {
-    const name = this.#resources.tailscaleStackContainer(id)
+    const name = this.#resources.tunnelContainer(id)
     const [ipv4, ipv6] = await Promise.all(
       (["-4", "-6"] as const).map((family) =>
         recoverPromise(
@@ -4268,40 +4272,46 @@ export class LifecycleDriver {
     }
   }
 
-  async #tailscaleStack(
-    config: RelayTailscaleStackConfig
-  ): Promise<RelayTailscaleStack> {
-    if (await this.#tailscaleStackRemovalPending(config.id)) {
-      const snapshot = await this.#readTailscaleStackRemovalSnapshot(config.id)
+  async #tunnel(
+    config: TunnelConfig
+  ): Promise<Tunnel> {
+    if (await this.#tunnelRemovalPending(config.id)) {
+      const snapshot = await this.#readTunnelRemovalSnapshot(config.id)
       if (!snapshot) {
         throw new Error(
           `Tailscale stack ${config.name} is pending removal but its recovery snapshot is missing`
         )
       }
-      return tailscaleStackPendingRemoval(config, snapshot)
+      return tunnelPendingRemoval(config, snapshot)
     }
-    const instance = (await this.#docker.inspectInstances()).find(
-      (candidate) => candidate.id === config.id
+    const container = await recoverPromise(
+      () =>
+        runLifecycle(
+          this.#engine.inspectContainer(this.#resources.tunnelContainer(config.id))
+        ),
+      () => null
     )
-    if (!instance) {
+    if (!container) {
       throw new Error(
-        `Tailscale stack ${config.name} is configured but its container is missing`
+        `Tunnel ${config.name} is configured but its container is missing`
       )
     }
-    const [addresses, tailscaleRunning, coreDnsRunning] = await Promise.all([
-      this.#tailscaleStackAddresses(config.id),
-      this.#containerRunning(
-        this.#resources.tailscaleStackContainer(config.id)
-      ),
-      this.#containerRunning(
-        this.#resources.tailscaleStackDnsContainer(config.id)
-      ),
+    const tailscaleRunning = container.State.Running
+    const [addresses, coreDnsRunning] = await Promise.all([
+      this.#tunnelAddresses(config.id),
+      this.#containerRunning(this.#resources.tunnelDnsContainer(config.id)),
     ])
     const connected = Boolean(addresses.ipv4Address || addresses.ipv6Address)
-    return relayTailscaleStackSchema.parse({
+    return tunnelSchema.parse({
       ...config,
       components: { coreDnsRunning, tailscaleRunning },
-      instance,
+      observedState: container.State.Restarting
+        ? "starting"
+        : tailscaleRunning
+          ? "running"
+          : container.State.Status === "dead"
+            ? "failed"
+            : "stopped",
       status: {
         connected,
         ipv4Address: addresses.ipv4Address,
@@ -4541,13 +4551,13 @@ export class LifecycleDriver {
   async tailscaleMemberships(
     matches: (memberId: string) => boolean
   ): Promise<Array<{ address: string; memberId: string; network: string }>> {
-    return (await this.#tailscaleStackConfigs()).flatMap((config) =>
-      activeTailscaleStackBindings(config.bindings)
+    return (await this.#tunnelConfigs()).flatMap((config) =>
+      activeTunnelBindings(config.bindings)
         .filter((binding) => matches(binding.memberId))
         .map((binding) => ({
           address: binding.address,
           memberId: binding.memberId,
-          network: this.#resources.tailscaleStackNetwork(config.id),
+          network: this.#resources.tunnelNetwork(config.id),
         }))
     )
   }
@@ -4606,7 +4616,7 @@ export class LifecycleDriver {
   async removeFromTailscale(
     matches: (memberId: string) => boolean
   ): Promise<void> {
-    for (const candidate of await this.#tailscaleStackConfigs()) {
+    for (const candidate of await this.#tunnelConfigs()) {
       if (!candidate.bindings.some((binding) => matches(binding.memberId))) {
         continue
       }
@@ -4617,20 +4627,20 @@ export class LifecycleDriver {
             locks: [exclusive(laneKeys.instance(candidate.id))],
           },
           lifecycleOperation(async () => {
-            const previous = await this.#readTailscaleStackConfig(candidate.id)
+            const previous = await this.#readTunnelConfig(candidate.id)
             if (!previous) return
-            const next = tailscaleStackWithoutMembers(previous, matches)
+            const next = tunnelWithoutMembers(previous, matches)
             if (next.bindings.length === previous.bindings.length) return
-            await this.#reconcileTailscaleStackBindings(
+            await this.#reconcileTunnelBindings(
               previous.id,
               previous.bindings,
               next.bindings
             )
-            await this.#writeTailscaleStackConfig(next)
+            await this.#writeTunnelConfig(next)
             // A stack being removed is stopped. Rolling its removal back
             // routes what's saved then.
-            if (await this.#tailscaleStackRemovalPending(next.id)) return
-            await this.#configureTailscaleStackRouting(next)
+            if (await this.#tunnelRemovalPending(next.id)) return
+            await this.#configureTunnelRouting(next)
           })
         )
       )
@@ -4909,7 +4919,7 @@ function allocatesPort(
 // named after its ID, or after its old one before 12-character IDs
 // (instance-keys.ts). Game servers' folders share the directory, so only
 // one holding a `stack.json` is a network.
-function tailscaleStackDirectoryId(name: string): string | null {
+function tunnelDirectoryId(name: string): string | null {
   return /^(?:[a-f0-9]{40}|[a-f0-9]{12})$/u.test(name)
     ? instanceIdFrom(name)
     : null

@@ -1,7 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto"
 import { isIP } from "node:net"
 
-import { isTailscaleNode } from "@workspace/contracts"
 import { Effect, Result, Schema } from "effect"
 
 import {
@@ -154,9 +153,7 @@ export async function getGitHubSyncOverviewHandler(user: AuthenticatedUser) {
     admin || targetAllows(grants, target, write)
 
   const allTargets: Array<GitHubSyncTarget> = [
-    ...directory
-      .filter((record) => !isTailscaleNode(record))
-      .map((record) => ({
+    ...directory.map((record) => ({
         id: record.id,
         kind: "server" as const,
         name: record.name,

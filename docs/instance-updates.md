@@ -32,9 +32,6 @@ A Relay skips an instance that is deploying. Hearth keeps what each check
 found in `instance_update`, by instance ID; what a check found counts only
 until the instance's next deployment starts.
 
-Tailscale's nodes, which a Relay runs as game servers for now, aren't
-checked.
-
 ## What each instance chooses
 
 From **Updates**, whoever may deploy the instance (`instance.deploy`)
@@ -159,6 +156,7 @@ source, with the answers the instance already has:
   Kiln's own install is judged where the configuration is written, holding
   it: whether it is still Automatic, still offered and has waited. The
   deployment that follows isn't judged again.
+
 - **A database** deploys with the new recipe: the Relay resolves it with the
   database's saved answers, such as its version, and replaces the container
   over the same data volume. Its login stays exactly as the engine was

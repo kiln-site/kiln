@@ -49,7 +49,6 @@ import type {
   ResourceLimits,
 } from "@workspace/contracts"
 import {
-  isTailscaleNode,
   NO_RESOURCE_LIMITS,
   brickConsoleSchema,
   brickReadinessSchema,
@@ -2389,28 +2388,11 @@ export class DockerDriver {
   }
 
   async #consoleTargets(
-    instance: RelayInstanceConfig,
+    _instance: RelayInstanceConfig,
     discovered: DiscoveredInstance,
-    signal?: AbortSignal
+    _signal?: AbortSignal
   ): Promise<Array<ConsoleTarget>> {
-    if (!isTailscaleNode(instance)) {
-      return [{ component: null, container: discovered.container }]
-    }
-    const companionName = this.#resources.tailscaleStackDnsContainer(
-      instance.id
-    )
-    const companion = await Effect.runPromise(
-      this.#engine
-        .inspectContainer<DockerInspect>(companionName)
-        .pipe(Effect.catch(() => Effect.succeed(null))),
-      { signal }
-    )
-    return [
-      { component: "tailscale", container: discovered.container },
-      ...(companion
-        ? [{ component: "coredns" as const, container: companion }]
-        : []),
-    ]
+    return [{ component: null, container: discovered.container }]
   }
 
   // Runs on every snapshot: one listing, then one inspect per server, all on

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 
 import { assert, layer } from "@effect/vitest"
 import {
-  builtinTailscaleBrick,
   relayInstanceSchema,
   relaySnapshotSchema,
 } from "@workspace/contracts"
@@ -26,6 +25,7 @@ import {
   insertRows,
   selectRows,
 } from "@/test/seed"
+import { testBrick } from "@/test/bricks"
 import { stopScheduleDeliveries } from "@/server/schedule-deployment.server"
 
 // The Relay is the only network boundary these handlers cross: it answers
@@ -81,7 +81,7 @@ const instance = relayInstanceSchema.parse({
   javaVersion: "21",
   version: "1.21",
   connectAddress: "play.example.test:25565",
-  brickSource: builtinTailscaleBrick.source,
+  brickSource: testBrick.source,
   variables: {},
   limits: { diskBytes: 1024 ** 3, memoryBytes: 1024 ** 3 },
 })

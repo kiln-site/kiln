@@ -3,7 +3,6 @@ import { AppCache } from "@/effect/cache"
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { Effect, Layer } from "effect"
 import {
-  builtinTailscaleBrick,
   expandPermissionSelections,
   relayInstanceSchema,
   relaySnapshotSchema,
@@ -69,6 +68,7 @@ import {
   createCliBackupEffect,
   updateCliServerStartupEffect,
 } from "@/effect/cli-api"
+import { testBrick } from "@/test/bricks"
 const relayId = "1".repeat(12),
   instanceId = "a".repeat(12)
 const principal: CliPrincipal = {
@@ -87,7 +87,7 @@ const principal: CliPrincipal = {
 // Its memory limit is one input's answer, as a recipe converted from
 // kiln.brick/v1 has it.
 const recipe = {
-  ...builtinTailscaleBrick,
+  ...testBrick,
   inputs: [
     {
       key: "memory",
@@ -104,7 +104,7 @@ const recipe = {
       default: "hello",
     },
   ],
-  deploy: { ...builtinTailscaleBrick.deploy!, memory: "{{ memory }}" },
+  deploy: { ...testBrick.deploy!, memory: "{{ memory }}" },
 }
 const instance = relayInstanceSchema.parse({
   id: instanceId,

@@ -96,7 +96,7 @@ import {
   getRelayHostFiles,
   getRelays,
 } from "@/server/relays"
-import { getTailscaleStacks } from "@/server/tailscale"
+import { getTailnets } from "@/server/tunnels"
 import { getAuthState } from "@/server/auth"
 import type { ReleaseHistoryCursor } from "@/effect/kiln-release-feed"
 import type { UpdateEligibility } from "@/server/updates"
@@ -320,7 +320,7 @@ export const queryKeys = {
   relayWebRoutes: (relayId: string) => ["web-routes", relayId] as const,
   relayHostFiles: (relayId: string) =>
     ["relays", "host-files", relayId] as const,
-  tailscaleStacks: ["tailscale", "stacks"] as const,
+  tailnets: ["tailscale", "stacks"] as const,
   kilnPlatform: {
     all: ["kiln-platform"] as const,
   },
@@ -1013,10 +1013,10 @@ export function kilnPlatformQueryOptions() {
   })
 }
 
-export function tailscaleStacksQueryOptions() {
+export function tailnetsQueryOptions() {
   return queryOptions({
-    queryKey: queryKeys.tailscaleStacks,
-    queryFn: () => getTailscaleStacks(),
+    queryKey: queryKeys.tailnets,
+    queryFn: () => getTailnets(),
     retry: false,
     staleTime: 10_000,
   })

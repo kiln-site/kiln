@@ -1945,6 +1945,28 @@ const migrations = SqliteMigrator.fromRecord({
     `
     yield* sql`ALTER TABLE relay_web_routes DROP COLUMN is_primary`
   }),
+  // Each Tailscale network's stack becomes a tunnel with an ID of its own,
+  // keeping the network's folder and containers by its old key.
+  "48_tunnel_legacy_ids": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`DROP TABLE IF EXISTS relay_instance_legacy_ids_next`
+    yield* sql`CREATE TABLE relay_instance_legacy_ids_next (
+      id TEXT PRIMARY KEY NOT NULL,
+      kind TEXT NOT NULL CHECK (
+        kind IN ('relay', 'server', 'app', 'database', 'tailscale', 'tunnel')
+      ),
+      legacy_id TEXT NOT NULL UNIQUE
+    ) STRICT`
+    yield* sql`
+      INSERT INTO relay_instance_legacy_ids_next (id, kind, legacy_id)
+      SELECT id, kind, legacy_id FROM relay_instance_legacy_ids
+    `
+    yield* sql`DROP TABLE relay_instance_legacy_ids`
+    yield* sql`
+      ALTER TABLE relay_instance_legacy_ids_next
+      RENAME TO relay_instance_legacy_ids
+    `
+  }),
 })
 
 // Rewrites the actions of every client and invitation given actions of its

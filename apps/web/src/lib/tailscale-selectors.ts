@@ -1,5 +1,3 @@
-import { isTailscaleNode } from "@workspace/contracts"
-
 import type { FleetRelayInstance, RelayFleetSnapshot } from "@/lib/relay-fleet"
 
 export type TailscaleServer = Pick<
@@ -15,18 +13,11 @@ export type TailscaleServer = Pick<
   tailscaleSupported: boolean
 }
 
-/** The Relays that can change their Tailscale memberships, by ID. */
+/** The Relays whose instances can join a tailnet, by ID: all of them. */
 export function tailscaleSupportedRelayIds(
   snapshot: RelayFleetSnapshot
 ): Array<string> {
-  return snapshot.nodes
-    .flatMap((node) =>
-      node.capabilities.includes("tailscale-stacks") &&
-      node.capabilities.includes("tailscale-staged-removal")
-        ? [node.relayId]
-        : []
-    )
-    .sort()
+  return snapshot.nodes.map((node) => node.relayId).sort()
 }
 
 export function selectTailscaleServers(
@@ -34,22 +25,16 @@ export function selectTailscaleServers(
 ): Array<TailscaleServer> {
   const supportedRelayIds = new Set(tailscaleSupportedRelayIds(snapshot))
   return snapshot.instances
-    .flatMap((instance) =>
-      isTailscaleNode(instance)
-        ? []
-        : [
-            {
-              brickId: instance.brickId,
-              id: instance.id,
-              implementation: instance.implementation,
-              name: instance.name,
-              relayId: instance.relayId,
-              relayName: instance.relayName,
-              version: instance.version,
-              tailscaleSupported: supportedRelayIds.has(instance.relayId),
-            },
-          ]
-    )
+    .map((instance) => ({
+      brickId: instance.brickId,
+      id: instance.id,
+      implementation: instance.implementation,
+      name: instance.name,
+      relayId: instance.relayId,
+      relayName: instance.relayName,
+      version: instance.version,
+      tailscaleSupported: supportedRelayIds.has(instance.relayId),
+    }))
     .sort((left, right) => left.name.localeCompare(right.name))
 }
 

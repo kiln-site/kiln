@@ -1,5 +1,5 @@
 import { describe, expect, layer } from "@effect/vitest"
-import { migratedInstanceId } from "@workspace/contracts"
+import { migratedInstanceId, migratedTunnelId } from "@workspace/contracts"
 import { Effect } from "effect"
 import { SqlClient } from "effect/sql"
 
@@ -446,7 +446,10 @@ describeMysql("database migrations", () => {
             yield* insertNetwork(legacyNetwork, legacyNetwork, fingerprint)
             yield* sql`SET FOREIGN_KEY_CHECKS = 1`
 
-            yield* applyMigrations(migrations)
+            // Up to networks becoming tailnets, which keep the ID it gives.
+            yield* applyMigrations(
+              migrations.filter((migration) => migration.id <= 78)
+            )
 
             expect(yield* migratedNetwork).toEqual({
               deploymentId: network,
@@ -1996,6 +1999,125 @@ describeMysql("database migrations", () => {
              WHERE table_schema = DATABASE()
                AND table_name IN (${databaseTableName("instance_domain")},
                                   ${databaseTableName("web_hostname")})
+          `
+          expect(old).toEqual([])
+        }),
+      schemaBuildTimeout
+    )
+
+    // Each Tailscale network's node on a Relay becomes a tunnel with an ID
+    // of its own, which the Relay works out the same way, and the network a
+    // tailnet: the group of its tunnels, with what they share beside it.
+    it.effect(
+      "turns each network into a tailnet and each of its nodes into a tunnel",
+      () =>
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient
+          yield* dropAllTables
+          yield* applyMigrations(
+            migrations.filter((migration) => migration.id <= 78)
+          )
+          const networkId = "a".repeat(12)
+          const relayId = "1".repeat(12)
+          yield* insertRows("instance_id", {
+            created_at: 1,
+            id: networkId,
+            kind: "tailscale",
+          })
+          yield* insertRows("tailscale_network", {
+            created_at: 5,
+            domain: "kiln",
+            id: networkId,
+            name: "Home",
+            owner_id: "owner",
+            updated_at: 6,
+          })
+          yield* insertRows("tailscale_network_deployment", {
+            cleanup_next_attempt_at: 0,
+            deployment: JSON.stringify({
+              bindings: [],
+              id: networkId,
+              instance: { id: networkId, observedState: "running" },
+              relayId,
+              relayName: "Relay One",
+            }),
+            network_id: networkId,
+            observed_at: 0,
+            relay_id: relayId,
+            updated_at: 0,
+          })
+
+          yield* applyMigrations(migrations)
+
+          const tunnelId = yield* Effect.promise(() =>
+            migratedTunnelId(networkId, relayId)
+          )
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT id, kind FROM ${sql(databaseTableName("instance_id"))}
+               ORDER BY kind
+            `
+          ).toEqual([
+            { id: networkId, kind: "group" },
+            { id: tunnelId, kind: "tunnel" },
+          ])
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT id, name, created_by
+                FROM ${sql(databaseTableName("instance_group"))}
+            `
+          ).toEqual([{ created_by: "owner", id: networkId, name: "Home" }])
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT id, domain, owner_id
+                FROM ${sql(databaseTableName("tailnet"))}
+            `
+          ).toEqual([{ domain: "kiln", id: networkId, owner_id: "owner" }])
+          const [tunnel] = yield* sql<{
+            id: string
+            owner_id: string
+            relay_id: string
+            state: unknown
+            tailnet_id: string
+          }>`
+            SELECT id, tailnet_id, relay_id, owner_id, state
+              FROM ${sql(databaseTableName("tunnel"))}
+          `
+          expect(tunnel).toMatchObject({
+            id: tunnelId,
+            owner_id: "owner",
+            relay_id: relayId,
+            tailnet_id: networkId,
+          })
+          const state =
+            typeof tunnel?.state === "string"
+              ? JSON.parse(tunnel.state)
+              : tunnel?.state
+          expect(state).toMatchObject({
+            id: tunnelId,
+            observedState: "running",
+            relayName: "Relay One",
+            tailnetId: networkId,
+          })
+          expect(state).not.toHaveProperty("instance")
+          expect(
+            yield* sql<Record<string, unknown>>`
+              SELECT instance_id, group_id, instance_kind, relay_id
+                FROM ${sql(databaseTableName("instance_group_member"))}
+            `
+          ).toEqual([
+            {
+              group_id: networkId,
+              instance_id: tunnelId,
+              instance_kind: "tunnel",
+              relay_id: relayId,
+            },
+          ])
+          const old = yield* sql<{ name: string }>`
+            SELECT table_name AS name FROM information_schema.tables
+             WHERE table_schema = DATABASE()
+               AND table_name IN (${databaseTableName("tailscale_network")},
+                                  ${databaseTableName("tailscale_network_deployment")})
           `
           expect(old).toEqual([])
         }),

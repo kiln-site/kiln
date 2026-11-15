@@ -193,7 +193,7 @@ function relayControlRequest(path: string, init?: RequestInit) {
   }
   if (url.pathname === "/v1/tailscale/stacks" && method === "GET") {
     return {
-      operation: "relay.tailscale.stack.list" as const,
+      operation: "tunnel.list" as const,
       payload: {},
     }
   }
@@ -204,19 +204,19 @@ function relayControlRequest(path: string, init?: RequestInit) {
     const id = decodeURIComponent(tailscaleStackMatch[1])
     if (url.pathname.endsWith("/dns") && method === "PUT") {
       return {
-        operation: "relay.tailscale.stack.dns" as const,
+        operation: "tunnel.dns" as const,
         payload: { ...body, id },
       }
     }
     if (method === "PUT") {
       return {
-        operation: "relay.tailscale.stack.apply" as const,
+        operation: "tunnel.apply" as const,
         payload: { ...body, id },
       }
     }
     if (method === "DELETE") {
       return {
-        operation: "relay.tailscale.stack.remove" as const,
+        operation: "tunnel.remove" as const,
         payload: { id },
       }
     }

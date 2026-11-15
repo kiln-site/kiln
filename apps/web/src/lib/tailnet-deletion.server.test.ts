@@ -2,17 +2,17 @@ import { assert, layer } from "@effect/vitest"
 import { Effect, Layer, Schedule } from "effect"
 import { afterAll, vi } from "vite-plus/test"
 
-import { relayTailscaleStackSchema } from "@workspace/contracts"
+import { tunnelSchema } from "@workspace/contracts"
 
 import {
-  requestTailscaleNetworkCleanupEffect,
-  type PersistedTailscaleDeployment,
-} from "@/effect/tailscale-cleanup"
-import { createTailscaleNetworkDefinitionEffect } from "@/effect/tailscale-networks"
+  requestTailnetCleanupEffect,
+  type PersistedTunnel,
+} from "@/effect/tunnels"
+import { createTailnetDefinitionEffect } from "@/effect/tailnets"
 import {
-  deleteTailscaleNetwork,
-  startTailscaleNetworkDeletion,
-} from "@/lib/tailscale-cleanup.server"
+  deleteTailnet,
+  startTailnetDeletion,
+} from "@/lib/tailnet-deletion.server"
 import { disposeAppRuntime } from "@/effect/runtime"
 import { loadOperation } from "@/operations/records"
 import { testOperationsEngine } from "@/operations/test/engine"
@@ -37,7 +37,7 @@ vi.mock("@/lib/relay-connection", async (importOriginal) => ({
     operation: string,
     payload: unknown
   ) => {
-    if (operation !== "relay.tailscale.stack.remove") {
+    if (operation !== "tunnel.remove") {
       throw new Error(`Unexpected Relay operation ${operation}`)
     }
     const { id, mode } = payload as { id: string; mode: "commit" | "prepare" }
@@ -94,30 +94,31 @@ vi.stubEnv("BETTER_AUTH_SECRETS", `1:${"s".repeat(32)}`)
 
 const networkId = "a".repeat(12)
 const relayId = "b".repeat(12)
+const tunnelId = "c".repeat(12)
 const domain = "private.test"
 const hostname = "private-network"
-const stack = `${relayId}/${networkId}`
+const stack = `${relayId}/${tunnelId}`
 
 const networkRows = selectRows<{ cleanup_last_error: string | null }>(
-  "tailscale_network"
+  "tailnet"
 )
 const deploymentRows = selectRows<{
   cleanup_attempts: number
   cleanup_last_error: string | null
-}>("tailscale_network_deployment")
+}>("tunnel")
 
 // A Tailscale-integrated network deployed on one Relay, with deletion
 // requested.
 const seedNetworkBeingDeleted = Effect.gen(function* () {
   yield* resetDatabase
   yield* insertRelay(relayId, { name: "Relay One" })
-  yield* createTailscaleNetworkDefinitionEffect(
+  yield* createTailnetDefinitionEffect(
     { domain, id: networkId, name: "Private Network" },
     { clientId: "tailscale-client", scopes: [], tags: ["tag:kiln"] },
     fake.tailnetSecret,
     "user-one"
   )
-  yield* requestTailscaleNetworkCleanupEffect(networkId, "user-one", [
+  yield* requestTailnetCleanupEffect(networkId, "user-one", [
     deployment(),
   ])
 
@@ -132,7 +133,7 @@ const seedNetworkBeingDeleted = Effect.gen(function* () {
 
 afterAll(() => disposeAppRuntime())
 
-const Cleanup = testOperationsEngine(deleteTailscaleNetwork.layer).pipe(
+const Cleanup = testOperationsEngine(deleteTailnet.layer).pipe(
   Layer.provideMerge(TestDatabase)
 )
 
@@ -155,7 +156,7 @@ describeMysql("Tailscale network deletion", () => {
           yield* seedNetworkBeingDeleted
           fake.tailnetDown = true
 
-          const id = yield* startTailscaleNetworkDeletion(networkId, "user-one")
+          const id = yield* startTailnetDeletion(networkId, "user-one")
           const [queued] = yield* until(
             deploymentRows,
             ([row]) => row?.cleanup_attempts === 1
@@ -181,31 +182,15 @@ describeMysql("Tailscale network deletion", () => {
   })
 })
 
-function deployment(): PersistedTailscaleDeployment {
-  const parsed = relayTailscaleStackSchema.parse({
+function deployment(): PersistedTunnel {
+  const parsed = tunnelSchema.parse({
     bindings: [],
     components: { coreDnsRunning: true, tailscaleRunning: true },
     domain,
     hostname,
-    id: networkId,
-    instance: {
-      brickId: "tailscale",
-      connectAddress: `${hostname}.${domain}`,
-      containerId: "docker-container-id",
-      desiredState: "running",
-      directory: networkId,
-      game: "Networking",
-      id: networkId,
-      implementation: "Tailscale",
-      javaVersion: "Tailscale + CoreDNS",
-      managedByRelay: true,
-      name: "Private Network",
-      observedState: "running",
-      service: "kiln-ts-aaaaaaaa",
-      status: "Up",
-      version: "stable",
-    },
+    id: tunnelId,
     name: "Private Network",
+    observedState: "running",
     status: {
       connected: true,
       ipv4Address: null,
@@ -213,6 +198,7 @@ function deployment(): PersistedTailscaleDeployment {
       message: null,
     },
     subnet: "10.165.55.0/24",
+    tailnetId: networkId,
   })
   return { ...parsed, relayId, relayName: "Relay One" }
 }

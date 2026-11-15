@@ -67,7 +67,6 @@ import {
   useTailscaleMemberDirectory,
   type TailscaleMemberListing,
 } from "@/components/tailscale-member-directory"
-import { TailscaleRelayUpdateHint } from "@/components/tailscale-relay-update-hint"
 import { WorkspaceCopyValueButton } from "@/components/workspace-header"
 import {
   createDataTableColumnHelper,
@@ -77,7 +76,7 @@ import {
 import type { DataTableSearchStore } from "@/lib/data-table-search"
 import type { DataTableSource } from "@/lib/data-table-source"
 import { notALoginField } from "@/lib/not-a-login-field"
-import { queryKeys, tailscaleStacksQueryOptions } from "@/lib/query-options"
+import { queryKeys, tailnetsQueryOptions } from "@/lib/query-options"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 import { defaultTailscaleHostname } from "@/lib/tailscale-selectors"
 import {
@@ -88,19 +87,18 @@ import {
   type TailscaleOperationToast,
 } from "@/lib/tailscale-operation-toasts"
 import {
-  saveTailscaleStack,
-  type TailscaleStackOverview,
-  type TailscaleStacksResult,
-} from "@/server/tailscale"
+  saveTailnet,
+  type TailnetOverview,
+  type TailnetsResult,
+} from "@/server/tunnels"
 
-type StackBinding = TailscaleStackOverview["bindings"][number]
+type StackBinding = TailnetOverview["bindings"][number]
 
-const noTailscaleStacks: TailscaleStacksResult = {
+const noTailnets: TailnetsResult = {
   stacks: [],
-  unsupportedRelays: [],
   unavailableRelays: [],
 }
-type SaveStackInput = Parameters<typeof saveTailscaleStack>[0]["data"]
+type SaveStackInput = Parameters<typeof saveTailnet>[0]["data"]
 
 const emptyMembers: Array<TailscaleMemberListing> = []
 const emptyMemberKeys = new Set<string>()
@@ -109,7 +107,7 @@ const emptyMemberKeys = new Set<string>()
 // database, as the table shows it.
 type TailscaleMemberRow = {
   binding: StackBinding
-  deployment: TailscaleStackOverview["deployments"][number] | undefined
+  deployment: TailnetOverview["deployments"][number] | undefined
   domain: string
   member: TailscaleMemberListing
   stackId: string
@@ -126,7 +124,7 @@ export function TailscaleConnectedMembersTable({
   onSetup,
 }: {
   searchStore: DataTableSearchStore
-  stack: TailscaleStackOverview | null
+  stack: TailnetOverview | null
   onAddServers: () => void
   onSetup: () => void
 }) {
@@ -160,7 +158,7 @@ const ConnectedMembersTableContent = React.memo(
     onAddServers,
   }: {
     searchStore: DataTableSearchStore
-    stack: TailscaleStackOverview
+    stack: TailnetOverview
     onAddServers: () => void
   }) {
     const directory = useTailscaleMemberDirectory()
@@ -319,7 +317,7 @@ export const TailscaleConnectMembersPopover = React.memo(
     onOpenChange,
   }: {
     open: boolean
-    stack: TailscaleStackOverview | null
+    stack: TailnetOverview | null
     onOpenChange: (open: boolean) => void
   }) {
     const directory = useTailscaleMemberDirectory()
@@ -336,12 +334,9 @@ export const TailscaleConnectMembersPopover = React.memo(
       () =>
         available
           .map((member): InstancePickerItem => ({
-            disabled: !member.tailscaleSupported,
             identity: member.identity,
             key: tailscaleMemberKey(member.relayId, member.memberId),
-            meta: member.tailscaleSupported
-              ? `${member.relayName} · ${member.meta}`
-              : `${member.relayName} · Relay update needed`,
+            meta: `${member.relayName} · ${member.meta}`,
             name: member.name,
             searchText: `${member.identity.id} ${member.relayName}`,
           }))
@@ -457,14 +452,11 @@ export function TailscaleMembershipSection({
   title?: string
 }) {
   // Not suspended: the section waits for its networks, not the whole page.
-  const stacksQuery = useQuery(tailscaleStacksQueryOptions())
-  const { stacks, unsupportedRelays } = stacksQuery.data ?? noTailscaleStacks
+  const stacksQuery = useQuery(tailnetsQueryOptions())
+  const { stacks } = stacksQuery.data ?? noTailnets
   const availableStacks = React.useMemo(
     () => stacks.filter((stack) => !stack.cleanup),
     [stacks]
-  )
-  const relayUnsupported = unsupportedRelays.some(
-    ({ id }) => id === server.relayId
   )
   const save = useStackMembershipMutation()
   const [joiningStackId, setJoiningStackId] = React.useState<string | null>(
@@ -516,11 +508,6 @@ export function TailscaleMembershipSection({
         <div className="flex min-w-0 items-center gap-2.5">
           <Network className="size-4 shrink-0 text-primary-ink" />
           <h2 className="truncate text-sm font-semibold">{title}</h2>
-          <span className="grid size-4 shrink-0 place-items-center">
-            {relayUnsupported ? (
-              <TailscaleRelayUpdateHint relayName={server.relayName} />
-            ) : null}
-          </span>
         </div>
         <div className="flex items-center gap-1.5">
           <Button asChild size="sm" variant="ghost">
@@ -561,10 +548,7 @@ export function TailscaleMembershipSection({
                 key={stack.id}
                 noun={noun}
                 binding={binding}
-                disabled={
-                  save.isPending || (relayUnsupported && Boolean(binding))
-                }
-                joinDisabled={relayUnsupported}
+                disabled={save.isPending}
                 pending={
                   save.isPending && save.variables?.stack.id === stack.id
                 }
@@ -781,13 +765,6 @@ const MemberInstance = React.memo(function MemberInstance({
       }
       metaClassName="font-mono"
       name={member.name}
-      nameAccessory={
-        member.tailscaleSupported ? undefined : (
-          <span className="flex md:hidden">
-            <TailscaleRelayUpdateHint relayName={member.relayName} />
-          </span>
-        )
-      }
       nameClassName="transition-colors group-hover/member-link:text-primary-ink"
       showFavorite={false}
     />
@@ -852,11 +829,6 @@ const MemberRelay = React.memo(function MemberRelay({
         meta={server.relayId}
         metaClassName="font-mono"
         name={server.relayName}
-        nameAccessory={
-          server.tailscaleSupported ? undefined : (
-            <TailscaleRelayUpdateHint relayName={server.relayName} />
-          )
-        }
         nameClassName="transition-colors group-hover/relay-link:text-primary-ink"
         showFavorite={false}
       />
@@ -874,8 +846,6 @@ const MemberActions = React.memo(function MemberActions({
   onDisconnect: (row: TailscaleMemberRow) => void
 }) {
   const { member } = row
-  // A Relay that predates staged removal can't change its memberships.
-  const disabled = !member.tailscaleSupported
   return (
     <DataTableActionGroup>
       <Tooltip>
@@ -885,7 +855,6 @@ const MemberActions = React.memo(function MemberActions({
             size="icon-sm"
             variant="ghost"
             aria-label={`Configure ${member.name}`}
-            disabled={disabled}
             onClick={() => onConfigure(row)}
           >
             <Settings2 />
@@ -903,7 +872,6 @@ const MemberActions = React.memo(function MemberActions({
             variant="ghost"
             className="text-destructive hover:bg-destructive/10 hover:text-destructive light:hover:bg-destructive/20"
             aria-label={`Disconnect ${member.name}`}
-            disabled={disabled}
             onClick={() => onDisconnect(row)}
           >
             <Unplug />
@@ -1040,7 +1008,7 @@ const DisconnectMemberDialog = React.memo(function DisconnectMemberDialog({
 }: {
   pending: boolean
   row: TailscaleMemberRow
-  stack: TailscaleStackOverview
+  stack: TailnetOverview
   onClose: () => void
   onDisconnect: () => Promise<unknown>
 }) {
@@ -1092,7 +1060,6 @@ const DisconnectMemberDialog = React.memo(function DisconnectMemberDialog({
 const MembershipRow = React.memo(function MembershipRow({
   binding,
   disabled,
-  joinDisabled,
   memberId,
   noun,
   pending,
@@ -1103,12 +1070,11 @@ const MembershipRow = React.memo(function MembershipRow({
 }: {
   binding?: StackBinding
   disabled: boolean
-  joinDisabled: boolean
   memberId: string
   noun: string
   pending: boolean
   relayId: string
-  stack: TailscaleStackOverview
+  stack: TailnetOverview
   onJoin: (stackId: string) => void
   onSave: ReturnType<typeof useStackMembershipMutation>["mutateAsync"]
 }) {
@@ -1179,7 +1145,7 @@ const MembershipRow = React.memo(function MembershipRow({
               type="button"
               size="sm"
               variant="outline"
-              disabled={disabled || joinDisabled}
+              disabled={disabled}
               onClick={() => onJoin(stack.id)}
             >
               {pending ? (
@@ -1242,7 +1208,7 @@ const JoinNetworkDialog = React.memo(function JoinNetworkDialog({
   onJoin,
 }: {
   initialHostname?: string
-  network: TailscaleStackOverview
+  network: TailnetOverview
   open: boolean
   pending: boolean
   server: TailscaleMember
@@ -1339,19 +1305,19 @@ function useStackMembershipMutation() {
     }: {
       authKey?: string
       bindings: Array<StackBinding>
-      stack: TailscaleStackOverview
+      stack: TailnetOverview
     }) => {
       return recoverPromise(
         async () => ({
-          data: await saveTailscaleStack({
+          data: await saveTailnet({
             data: stackSaveInput(stack, bindings, authKey),
           }),
           reconcile: false,
         }),
         (cause) => {
           if (!isFailedFetch(cause)) throw cause
-          const pending = queryClient.getQueryData<TailscaleStacksResult>(
-            queryKeys.tailscaleStacks
+          const pending = queryClient.getQueryData<TailnetsResult>(
+            queryKeys.tailnets
           )
           if (pending) {
             return { data: pending, reconcile: true }
@@ -1361,12 +1327,12 @@ function useStackMembershipMutation() {
       )
     },
     onMutate: async ({ bindings, stack }) => {
-      await queryClient.cancelQueries({ queryKey: queryKeys.tailscaleStacks })
-      const previous = queryClient.getQueryData<TailscaleStacksResult>(
-        queryKeys.tailscaleStacks
+      await queryClient.cancelQueries({ queryKey: queryKeys.tailnets })
+      const previous = queryClient.getQueryData<TailnetsResult>(
+        queryKeys.tailnets
       )
-      queryClient.setQueryData<TailscaleStacksResult>(
-        queryKeys.tailscaleStacks,
+      queryClient.setQueryData<TailnetsResult>(
+        queryKeys.tailnets,
         (current) =>
           current
             ? {
@@ -1384,7 +1350,7 @@ function useStackMembershipMutation() {
       return { previous, toast }
     },
     onSuccess: (next) => {
-      queryClient.setQueryData(queryKeys.tailscaleStacks, next.data)
+      queryClient.setQueryData(queryKeys.tailnets, next.data)
       forkPromise(async () => {
         await queryClient.invalidateQueries({
           queryKey: queryKeys.relay.snapshot,
@@ -1392,20 +1358,20 @@ function useStackMembershipMutation() {
         if (next.reconcile) {
           await new Promise((resolve) => setTimeout(resolve, 1_500))
           await queryClient.invalidateQueries({
-            queryKey: queryKeys.tailscaleStacks,
+            queryKey: queryKeys.tailnets,
           })
         }
       })
     },
     onError: (cause, _input, context) => {
       if (context?.previous) {
-        queryClient.setQueryData(queryKeys.tailscaleStacks, context.previous)
+        queryClient.setQueryData(queryKeys.tailnets, context.previous)
       }
       if (context?.toast) {
         showTailscaleOperationError(context.toast, cause)
       }
       forkPromise(() =>
-        queryClient.invalidateQueries({ queryKey: queryKeys.tailscaleStacks })
+        queryClient.invalidateQueries({ queryKey: queryKeys.tailnets })
       )
     },
     onSettled: (_data, error, _input, context) => {
@@ -1417,7 +1383,7 @@ function useStackMembershipMutation() {
 }
 
 function membershipOperationToast(
-  stack: TailscaleStackOverview,
+  stack: TailnetOverview,
   bindings: Array<StackBinding>
 ): TailscaleOperationToast {
   const currentBindingKeys = new Set(stack.bindings.map(stackBindingKey))
@@ -1479,7 +1445,7 @@ function isFailedFetch(cause: unknown): boolean {
 }
 
 function stackSaveInput(
-  stack: TailscaleStackOverview,
+  stack: TailnetOverview,
   bindings: Array<StackBinding>,
   authKey?: string,
   domain = stack.domain
@@ -1499,7 +1465,7 @@ function stackSaveInput(
 }
 
 function findBinding(
-  stack: TailscaleStackOverview,
+  stack: TailnetOverview,
   relayId: string,
   memberId: string
 ) {
@@ -1509,7 +1475,7 @@ function findBinding(
 }
 
 function uniqueHostname(
-  stack: TailscaleStackOverview,
+  stack: TailnetOverview,
   server: { id: string; name: string }
 ): string {
   const base = defaultTailscaleHostname(server)
@@ -1530,16 +1496,8 @@ function uniqueHostname(
 function memberStatus({
   binding,
   deployment,
-  member: server,
 }: TailscaleMemberRow): IdentityStatusPresentation {
   if (!binding.enabled) return { label: "Paused", tone: "neutral" }
-  if (!server.tailscaleSupported) {
-    return {
-      detail: `Update ${server.relayName} before changing Tailscale memberships`,
-      label: "Update required",
-      tone: "warning",
-    }
-  }
   if (!deployment) return { label: "Provisioning", pulse: true, tone: "info" }
   if (
     deployment.status.connected &&
@@ -1582,7 +1540,7 @@ const cleanupRetryFormatter = new Intl.DateTimeFormat(undefined, {
   timeStyle: "short",
 })
 
-function TailscaleCleanupState({ stack }: { stack: TailscaleStackOverview }) {
+function TailscaleCleanupState({ stack }: { stack: TailnetOverview }) {
   const cleanup = stack.cleanup
   if (!cleanup) return null
   const pendingRelays = `${cleanup.pendingRelays} ${cleanup.pendingRelays === 1 ? "Relay" : "Relays"} pending`

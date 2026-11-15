@@ -1,23 +1,14 @@
 import * as React from "react"
-import { isTailscaleNode } from "@workspace/contracts"
 
 import {
-  createConsoleAggregateStreamStore,
   createConsoleStreamStore,
   createConsoleUiStore,
 } from "@/components/console/console-stores"
-import {
-  ConsoleStreamController,
-  TailscaleConsoleStreamController,
-} from "@/components/console/console-stream-controller"
+import { ConsoleStreamController } from "@/components/console/console-stream-controller"
 import { ConsoleCommandBar } from "@/components/console/console-command-bar"
 import { ConsoleLogViewportController } from "@/components/console/console-log-viewport"
 import { ConsoleToolbar } from "@/components/console/console-toolbar"
-import type {
-  ConsoleAggregateStreamStore,
-  ConsoleStreamStore,
-} from "@/components/console/console-stores"
-import { usePageContentSkipped } from "@/lib/page-timing"
+import type { ConsoleStreamStore } from "@/components/console/console-stores"
 import { createConsoleLoadTiming } from "@/lib/console-performance"
 import type { InstanceWorkspaceInstance } from "@/lib/relay-selectors"
 
@@ -54,41 +45,27 @@ function ConsoleWorkspaceSession({
   canShare: boolean
   canWrite: boolean
 }) {
-  const tailscale = isTailscaleNode(instance)
   const [uiStore] = React.useState(createConsoleUiStore)
-  const [streamStore] = React.useState<ConsoleStreamStore>(() =>
-    tailscale
-      ? createConsoleAggregateStreamStore(instance.id)
-      : createConsoleStreamStore()
+  const [streamStore] = React.useState<ConsoleStreamStore>(
+    createConsoleStreamStore
   )
   const [loadTiming] = React.useState(() =>
-    tailscale || typeof window === "undefined"
-      ? undefined
-      : createConsoleLoadTiming()
+    typeof window === "undefined" ? undefined : createConsoleLoadTiming()
   )
   React.useEffect(() => () => loadTiming?.cancel(), [loadTiming])
-  // The aggregate console has no load timing, so its page ends without one.
-  usePageContentSkipped(tailscale)
 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-card">
-      {tailscale ? (
-        <TailscaleConsoleStreamController
-          instanceId={instance.id}
-          streamStore={streamStore as ConsoleAggregateStreamStore}
-        />
-      ) : (
-        <ConsoleStreamController
-          canWrite={canWrite}
-          instanceId={instance.id}
-          loadTiming={loadTiming}
-          relayId={instance.relayId}
-          streamStore={streamStore}
-        />
-      )}
+      <ConsoleStreamController
+        canWrite={canWrite}
+        instanceId={instance.id}
+        loadTiming={loadTiming}
+        relayId={instance.relayId}
+        streamStore={streamStore}
+      />
       <ConsoleToolbar
         active={active}
-        canShare={canShare && !tailscale}
+        canShare={canShare}
         instance={instance}
         streamStore={streamStore}
         uiStore={uiStore}
@@ -102,9 +79,7 @@ function ConsoleWorkspaceSession({
 
       <ConsoleCommandBar
         active={active}
-        canWrite={
-          canWrite && !tailscale
-        }
+        canWrite={canWrite}
         instance={instance}
       />
     </section>
