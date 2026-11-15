@@ -10,7 +10,6 @@ import type {
   BrickReadiness,
   RelayInstancePortAllocation,
   RelayInstancePortProtocol,
-  RelayInstanceTailscale,
   RelayJoinLink,
   ResourceLimits,
 } from "@workspace/contracts"
@@ -50,7 +49,6 @@ export interface RelayInstanceConfig {
   publicHost?: string
   publicPort?: number
   service: string
-  tailscale: RelayInstanceTailscale
   variables?: Record<string, boolean | number | string>
   version: string
   managedByRelay: boolean

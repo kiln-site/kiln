@@ -2474,7 +2474,6 @@ async function instanceBackupManifest(
           diskBytes: instance.limits.diskBytes ?? 0,
           memoryBytes: instance.limits.memoryBytes ?? 0,
         },
-        tailscale: instance.tailscale,
         variables: instance.variables ?? {},
       },
       version: instance.version,

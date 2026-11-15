@@ -21,7 +21,6 @@ const server: DirectoryInstance = {
   implementation: "Paper",
   version: "1.21",
   connectAddress: "play.example.test:25565",
-  tailscale: { enabled: false },
 }
 
 describeMysql("instance directory synchronization", () => {

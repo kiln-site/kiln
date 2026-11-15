@@ -799,12 +799,15 @@ const backupArchiveServerConfigurationSchema = z
             memoryBytes: z.number().int().nonnegative(),
           })
           .strict(),
+        // Backups made before Tailscale networks recorded the game server's
+        // own Tailscale settings. Nothing reads them.
         tailscale: z
           .object({
             enabled: z.boolean(),
             subdomain: relayTailscaleSubdomainSchema.optional(),
           })
-          .strict(),
+          .strict()
+          .optional(),
         variables: z.record(
           z.string().regex(/^[a-z][a-z0-9_]{0,47}$/u),
           z.union([z.string().max(8_192), z.number().finite(), z.boolean()])

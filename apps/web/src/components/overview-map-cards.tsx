@@ -8,7 +8,7 @@ import {
 } from "@workspace/ui/components/tooltip"
 import { cn } from "@workspace/ui/lib/utils"
 
-import { CloudflareLogo, TailscaleLogo } from "@/components/brand-logos"
+import { CloudflareLogo } from "@/components/brand-logos"
 import { HearthMark } from "@/components/hearth-mark"
 import type { IdentityStatusPresentation } from "@/components/identity-name"
 import { nodeStyle } from "@/components/infra-map-canvas"
@@ -54,14 +54,11 @@ export interface OverviewInstance {
   relayId: string
   name: string
   meta: string
-  /** A game server on a tailnet. */
-  tailscale?: boolean
 }
 
 /** What a Relay or instance leans on outside Kiln, shown as logos. */
 export interface OverviewServices {
   cloudflare: boolean
-  tailscale: boolean
 }
 
 /** A Relay's machine, in percent of each. */
@@ -406,25 +403,18 @@ function Title({
   )
 }
 
-/** Cloudflare and Tailscale logos, when something uses them. */
+/** Cloudflare's logo, when something uses it. */
 function ServiceMarks({
   services,
 }: {
   services: OverviewServices | undefined
 }) {
-  if (!services?.cloudflare && !services?.tailscale) return null
+  if (!services?.cloudflare) return null
   return (
     <span className="flex items-center gap-2">
-      {services.cloudflare ? (
-        <Mark label="Cloudflare">
-          <CloudflareLogo className="size-3.5" />
-        </Mark>
-      ) : null}
-      {services.tailscale ? (
-        <Mark label="Tailscale">
-          <TailscaleLogo className="size-3 text-foreground/85" />
-        </Mark>
-      ) : null}
+      <Mark label="Cloudflare">
+        <CloudflareLogo className="size-3.5" />
+      </Mark>
     </span>
   )
 }

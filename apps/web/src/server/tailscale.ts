@@ -9,7 +9,7 @@ import {
   relayInstanceNameSchema,
   relaySnapshotSchema,
   relayTailscaleDomainSchema,
-  relayTailscaleInstallSchema,
+  relayTailscaleAuthKeySchema,
   relayTailscaleStackIdSchema,
   relayTailscaleStackSchema,
   relayTailscaleStacksSchema,
@@ -85,7 +85,7 @@ const stackBindingInputSchema = z.strictObject({
 const tailscaleClientSecretSchema = z.string().trim().min(20).max(512)
 
 const saveTailscaleStackSchema = z.strictObject({
-  authKey: relayTailscaleInstallSchema.shape.authKey.optional(),
+  authKey: relayTailscaleAuthKeySchema.optional(),
   bindings: z
     .array(stackBindingInputSchema)
     .max(MAXIMUM_TAILSCALE_STACK_BINDINGS),

@@ -1414,22 +1414,6 @@ export const brickVariableValuesSchema = z.record(
   brickVariableValueSchema
 )
 
-export const relayInstanceTailscaleSchema = z
-  .object({
-    enabled: z.boolean().default(false),
-    subdomain: relayTailscaleSubdomainSchema.optional(),
-  })
-  .strict()
-  .superRefine((value, context) => {
-    if (value.enabled && !value.subdomain) {
-      context.addIssue({
-        code: "custom",
-        message: "Enter a Tailscale subdomain",
-        path: ["subdomain"],
-      })
-    }
-  })
-
 export const relayCreateInstanceSchema = z.object({
   // The disk limit when `limits` names none.
   diskLimitBytes: relayRequestedDiskLimitBytesSchema.default(
@@ -1439,9 +1423,6 @@ export const relayCreateInstanceSchema = z.object({
   name: relayInstanceNameSchema.optional(),
   recipe: brickSourceSchema,
   recipeDefinition: brickRecipeSchema.optional(),
-  tailscale: relayInstanceTailscaleSchema
-    .default({ enabled: false })
-    .optional(),
   variables: brickVariableValuesSchema,
   start: z.boolean().default(true),
 })
@@ -1514,7 +1495,6 @@ export const relayUpdateInstanceStartupSchema = z
     // The deployment Hearth recorded a change of Brick as, which names its
     // log on the Relay. Absent for other startup changes.
     deploymentId: z.uuid().optional(),
-    tailscale: relayInstanceTailscaleSchema.optional(),
     variables: brickVariableValuesSchema.optional(),
     start: z.boolean().default(true),
   })
@@ -1528,24 +1508,12 @@ export const relayUpdateInstanceStartupSchema = z
     }
   })
 
-export const relayTailscaleSettingsSchema = z
-  .object({
-    dnsPort: z.number().int().min(1).max(65_535).default(53),
-    domain: relayTailscaleDomainSchema,
-    hostname: relayTailscaleHostnameSchema,
-  })
-  .strip()
-
-export const relayTailscaleInstallSchema = z
-  .object({
-    authKey: z
-      .string()
-      .trim()
-      .min(16)
-      .max(512)
-      .regex(/^tskey-[A-Za-z0-9?=_-]+$/u, "Enter a Tailscale auth key"),
-  })
-  .strict()
+export const relayTailscaleAuthKeySchema = z
+  .string()
+  .trim()
+  .min(16)
+  .max(512)
+  .regex(/^tskey-[A-Za-z0-9?=_-]+$/u, "Enter a Tailscale auth key")
 
 export const relayTailscaleStackIdSchema = instanceIdSchema
 
@@ -1563,7 +1531,7 @@ export const relayTailscaleStackBindingInputSchema = z
 
 export const relayTailscaleStackApplySchema = z
   .object({
-    authKey: relayTailscaleInstallSchema.shape.authKey.optional(),
+    authKey: relayTailscaleAuthKeySchema.optional(),
     bindings: z
       .array(relayTailscaleStackBindingInputSchema)
       .max(MAXIMUM_TAILSCALE_STACK_BINDINGS),
@@ -1595,46 +1563,6 @@ export const relayTailscaleStackRemoveSchema = z
     mode: z.enum(["prepare", "commit", "rollback"]).default("commit"),
   })
   .strict()
-
-export const relayTailscaleStatusSchema = z
-  .object({
-    connected: z.boolean(),
-    coreDnsRunning: z.boolean(),
-    dnsAddress: z.string().nullable(),
-    installed: z.boolean(),
-    ipv4Address: z.ipv4().nullable(),
-    ipv6Address: z.ipv6().nullable(),
-    message: z.string().nullable(),
-    state: z.enum([
-      "not-installed",
-      "stopped",
-      "connecting",
-      "connected",
-      "error",
-    ]),
-  })
-  .strict()
-
-export const relayTailscaleOverviewSchema = z
-  .object({
-    settings: relayTailscaleSettingsSchema.nullable(),
-    status: relayTailscaleStatusSchema,
-  })
-  .strict()
-
-export const relayNetworkingSchema = z.object({
-  enabled: z.boolean(),
-  domain: z
-    .string()
-    .trim()
-    .min(1)
-    .max(120)
-    .regex(
-      /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/u
-    ),
-  address: z.union([z.ipv4(), z.ipv6()]),
-  dnsPort: z.number().int().min(1).max(65_535).default(53),
-})
 
 export const relayProxyModeSchema = z.enum([
   "none",
@@ -2276,7 +2204,6 @@ export const relayInstanceSchema = z.object({
   publicPort: z.number().int().min(1).max(65_535).optional(),
   pendingPrimaryPort: relayInstancePendingPrimaryPortSchema.optional(),
   ports: relayInstancePortAllocationsSchema.or(z.tuple([])).default([]),
-  tailscale: relayInstanceTailscaleSchema.default({ enabled: false }),
   variables: brickVariableValuesSchema.optional(),
   managedByRelay: z.boolean().default(false),
   // Limits saved since its container was made, which it takes when it next
@@ -3515,17 +3442,6 @@ export type ProvisioningState = z.infer<typeof provisioningStateSchema>
 export type RelayUpdateInstanceStartup = z.infer<
   typeof relayUpdateInstanceStartupSchema
 >
-export type RelayNetworking = z.infer<typeof relayNetworkingSchema>
-export type RelayInstanceTailscale = z.infer<
-  typeof relayInstanceTailscaleSchema
->
-export type RelayTailscaleInstall = z.infer<typeof relayTailscaleInstallSchema>
-export type RelayTailscaleOverview = z.infer<
-  typeof relayTailscaleOverviewSchema
->
-export type RelayTailscaleSettings = z.infer<
-  typeof relayTailscaleSettingsSchema
->
 export type RelayTailscaleStack = z.infer<typeof relayTailscaleStackSchema>
 export type RelayTailscaleStackApply = z.infer<
   typeof relayTailscaleStackApplySchema
@@ -3539,7 +3455,6 @@ export type RelayTailscaleStackConfig = z.infer<
 export type RelayTailscaleStackDns = z.infer<
   typeof relayTailscaleStackDnsSchema
 >
-export type RelayTailscaleStatus = z.infer<typeof relayTailscaleStatusSchema>
 export type RelayProxyMode = z.infer<typeof relayProxyModeSchema>
 export type RelayProxyBrowserMetadata = z.infer<
   typeof relayProxyBrowserMetadataSchema

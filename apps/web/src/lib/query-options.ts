@@ -94,7 +94,6 @@ import {
   getRelayConnection,
   getRelayWebRoutes,
   getRelayHostFiles,
-  getRelayTailscale,
   getRelays,
 } from "@/server/relays"
 import { getTailscaleStacks } from "@/server/tailscale"
@@ -321,7 +320,6 @@ export const queryKeys = {
   relayWebRoutes: (relayId: string) => ["web-routes", relayId] as const,
   relayHostFiles: (relayId: string) =>
     ["relays", "host-files", relayId] as const,
-  tailscale: (relayId: string) => ["tailscale", "relays", relayId] as const,
   tailscaleStacks: ["tailscale", "stacks"] as const,
   kilnPlatform: {
     all: ["kiln-platform"] as const,
@@ -1000,15 +998,6 @@ export function relayHostFilesQueryOptions(
     queryKey: [...queryKeys.relayHostFiles(relayId), version] as const,
     retry: false,
     staleTime: 5 * 60_000,
-  })
-}
-
-export function relayTailscaleQueryOptions(relayId: string) {
-  return queryOptions({
-    queryKey: queryKeys.tailscale(relayId),
-    queryFn: () => getRelayTailscale({ data: { id: relayId } }),
-    retry: false,
-    staleTime: 5_000,
   })
 }
 

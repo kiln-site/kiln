@@ -63,13 +63,7 @@ export function kilnContainerOwner(
     }
   }
   const names = relayResourceNames(config)
-  const service = new Map([
-    [names.traefikContainer, "Traefik"],
-    [names.coreDnsContainer, "CoreDNS"],
-    [names.tailscaleContainer, "Tailscale"],
-    [names.limboContainer, "Limbo"],
-  ]).get(name)
-  if (service) return relay(service)
+  if (name === names.traefikContainer) return relay("Traefik")
   if (labels["kiln.relay.infrastructure"] === "desktop") return relay("Desktop")
   const role = labels[PLATFORM_ROLE_LABEL]
   if (config.mode === "platform" && role) {

@@ -59,8 +59,6 @@ export const laneKeys = {
    * change against the others and applying it happen together.
    */
   allocations: "relay:allocations",
-  /** The Relay's own Tailscale settings, which every stack runs under. */
-  tailscale: "relay:tailscale",
   /**
    * Kiln's own services, when the Relay hosts them: Hearth, its database,
    * and its cache. See platform.ts.

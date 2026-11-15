@@ -30,7 +30,6 @@ export function testInstance(
     name: "Instance One",
     ports: [],
     service: `kiln-${id}`,
-    tailscale: { enabled: false },
     version: "1.21.8",
     ...overrides,
   }

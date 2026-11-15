@@ -11,13 +11,13 @@ work. Update it as each step lands.
 
 ## Kinds
 
-| Kind        | Comes from       | Notes                                               |
-| ----------- | ---------------- | --------------------------------------------------- |
-| Relay       | The installer    | The host node. An instance, but never from a Brick. |
-| Game server | A Brick          | Called `instance` in permissions and the protocol.  |
-| Database    | A Brick          | One of Kiln's own, of an engine Kiln knows.         |
-| App         | A Brick          | One of Kiln's own, for what it deploys.             |
-| Tunnel      | Its type         | Today a built-in Brick that runs as a game server.  |
+| Kind        | Comes from    | Notes                                               |
+| ----------- | ------------- | --------------------------------------------------- |
+| Relay       | The installer | The host node. An instance, but never from a Brick. |
+| Game server | A Brick       | Called `instance` in permissions and the protocol.  |
+| Database    | A Brick       | One of Kiln's own, of an engine Kiln knows.         |
+| App         | A Brick       | One of Kiln's own, for what it deploys.             |
+| Tunnel      | Its type      | Today a built-in Brick that runs as a game server.  |
 
 A tunnel connects instances on one Relay to a private network outside it.
 Its type says which: Tailscale is the only one, and others (NetBird,
@@ -281,7 +281,7 @@ tailnet. Nothing here is built yet.
 - `relay.tailscale.stack.*` become `tunnel.*` requests, and the shared
   ones (`instance.action`, `instance.deploy`, `terminal.*`,
   `instance.deployment.read`, the Logs page's sources) take `kind:
-  "tunnel"`.
+"tunnel"`.
 
 ### Deleted
 

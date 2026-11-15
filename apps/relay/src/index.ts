@@ -90,7 +90,6 @@ import {
   relayInstancePortLeaseReleaseSchema,
   relayInstancePortLeaseRequestSchema,
   relayInstancePortInputsSchema,
-  relayNetworkingSchema,
   relayProxyBrowserMetadataSchema,
   relayProxyReadInputSchema,
   relayCertificateCheckInputSchema,
@@ -123,8 +122,6 @@ import {
   relayRemoteFileUploadResultSchema,
   relayRemoteFileUploadSchema,
   relaySaveFileInputSchema,
-  relayTailscaleInstallSchema,
-  relayTailscaleSettingsSchema,
   relayTailscaleStackApplySchema,
   relayTailscaleStackDnsSchema,
   relayTailscaleStackRemoveSchema,
@@ -674,6 +671,7 @@ const lifecycle = new LifecycleDriver(
 )
 // Before anything reads a Tailscale stack.
 await lifecycle.migrateTailscaleStackMembers()
+await lifecycle.removeRetiredInfrastructure()
 lifecycle.useDatabaseContainers((databaseId) =>
   databases.containerOf(databaseId)
 )
@@ -2488,22 +2486,6 @@ async function executeControlRequest(
       return { restarting: true }
     case "relay.resources.read":
       return { history: docker.relayResourceHistory() }
-    case "relay.networking.read":
-      return (await lifecycle.networking()) ?? null
-    case "relay.networking.write":
-      return lifecycle.configureNetworking(
-        relayNetworkingSchema.parse(request.payload)
-      )
-    case "relay.tailscale.read":
-      return lifecycle.tailscaleOverview()
-    case "relay.tailscale.write":
-      return lifecycle.configureTailscale(
-        relayTailscaleSettingsSchema.parse(request.payload)
-      )
-    case "relay.tailscale.install":
-      return lifecycle.installTailscale(
-        relayTailscaleInstallSchema.parse(request.payload).authKey
-      )
     case "relay.tailscale.stack.list":
       return lifecycle.tailscaleStacks()
     case "relay.tailscale.stack.state":

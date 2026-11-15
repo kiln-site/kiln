@@ -46,8 +46,7 @@ it exclusive, which waits for every part.
 | `database:<id>`                                    | Exclusive to database changes, connecting a member to it, and connecting it to another; shared by power, commands, dumps, backups, and Hearth's handover of Apps' connections                                                                                                                                                                                                                                                                                                                                                             |
 | `database:<id>/connections`                        | Exclusive to deleting the database; shared by a new App's job connecting to it, which doesn't wait for the database's provisioning                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `database:<id>/lifecycle`                          | Exclusive to power actions and scheduled commands; shared by dumps and backups, so neither stops or runs in a database mid-dump                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `relay:routes`                                     | Shared by starts; exclusive to route, port, proxy, public route trial, networking, and Tailscale settings writes, to rewriting bundled Traefik's routes when which certificates it asks for changes, to the step of creating, provisioning, reconfiguring, and deleting a game server that rewrites the Relay's CoreDNS, to the pass that keeps Coolify's Traefik attached to routed servers (skipped while busy or paused), and to repairing bundled Traefik for Hearth after a platform pass                                            |
-| `relay:tailscale`                                  | Exclusive to the Relay's Tailscale settings; shared by stack changes                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `relay:routes`                                     | Shared by starts; exclusive to route, port, proxy, and public route trial writes, to rewriting bundled Traefik's routes when which certificates it asks for changes, to the step of creating, provisioning, and reconfiguring a game server that makes its container, to the pass that keeps Coolify's Traefik attached to routed servers (skipped while busy or paused), and to repairing bundled Traefik for Hearth after a platform pass                                                                                               |
 | `relay:allocations`                                | Exclusive to checking limits and reserving the node's memory and disk (CPU is shared, so each limit need only fit the node): limit changes, a deployment's container start, and a game server's check before it's created or replaced, whose reservation stands in for it until its new container exists                                                                                                                                                                                                                                  |
 | `relay:desktop`                                    | Exclusive to attaching to the node's desktop, which starts its streamer, and to stopping the streamer once it's idle                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `relay:desktop-image`                              | Exclusive to downloading the desktop image in the background, so nothing attaching waits for it                                                                                                                                                                                                                                                                                                                                                                                                                                           |
@@ -132,28 +131,16 @@ Relays rewrite bindings saved with a
 game server's bare ID when they start, and Hearth its copies of them in a
 migration.
 
-The Relay's own CoreDNS (`infrastructure/coredns/Corefile` and its
-container) answers for every game server's private hostname, under the
-networking or Tailscale settings. Each change that rewrites it reads the
-game servers and settings, writes the file, and restarts or recreates the
-container while it holds `relay:routes` exclusively, so none can write a
-list or settings read before another's change landed. Networking and
-Tailscale settings writes, Tailscale's install, and port writes hold the
-routes for the whole change. A game server's create, provisioning, startup
-change, and deletion hold only the server as they arrive, and take the
-routes in a nested step (`instance.dns`) for the part that reads them: a
-create or startup change downloads its image first, and a deletion stops
-and removes the container and its data first, so route and port changes,
-other creates and deletions, and game server starts don't wait for that.
-A startup change stops the old container first but removes it only in
-that step, so its ports and Tailscale address stay claimed while it
-downloads, and no other create takes them. Holding the routes, the step
-reads the game servers and settings again, makes the container from them, and rewrites CoreDNS before it lets go;
-whatever changed the server list before it, a deletion's removal
-included, is in what it reads. A start that recreates a game server with
-its first game port refreshes CoreDNS too, holding the routes only shared:
-whatever changes what it reads rewrites CoreDNS holding them exclusively
-afterwards, so the last file written is current. A direct create
+A game server's create, provisioning, and startup change hold only the
+server as they arrive, and take the routes in a nested step
+(`instance.routes`) for the part that reads them: a create or startup
+change downloads its image first, so route and port changes, other creates
+and deletions, and game server starts don't wait for that. A startup change
+stops the old container first but removes it only in that step, so its
+ports stay claimed while it downloads, and no other create takes them.
+Holding the routes, the step reads the game servers, their routes and ports
+and the proxy settings again, and makes the container from them;
+whatever changed the server list before it is in what it reads. A direct create
 (`instance.create`) chooses the new server's ID as its request arrives, so
 it waits in that server's lane like a provisioning job.
 

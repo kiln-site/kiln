@@ -140,10 +140,7 @@ const hearthRealtimeQueryScopes = {
   "resource-deletions": [prefix(["resource-deletion"])],
   schedules: [exact(queryKeys.schedules.all)],
   security: [prefix(["security"])],
-  tailscale: [
-    exact(queryKeys.tailscaleStacks),
-    prefix(["tailscale", "relays"]),
-  ],
+  tailscale: [exact(queryKeys.tailscaleStacks)],
   // What web route hostnames' certificates wait for, read with their DNS.
   "web-certificates": [prefix(["domains"])],
 } satisfies Record<HearthRealtimeTopic, ReadonlyArray<HearthRealtimeQueryScope>>
@@ -243,12 +240,6 @@ function queryScopes(
       exact(queryKeys.relayProxyModes),
       exact(queryKeys.relayWebRoutes(scope.relayId)),
       prefix(["databases", scope.relayId]),
-    ]
-  }
-  if (topic === "tailscale" && scope) {
-    return [
-      exact(queryKeys.tailscaleStacks),
-      exact(queryKeys.tailscale(scope.relayId)),
     ]
   }
   return hearthRealtimeQueryScopes[topic]

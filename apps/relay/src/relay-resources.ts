@@ -25,13 +25,16 @@ export interface RelayResourceNames {
   // deployment runs as `<project>-<deployment>` until it takes over.
   appComposeProject(appId: string): string
   appNetwork(appId: string): string
+  /** Retired: removed as the Relay starts, if still there. */
   coreDnsContainer: string
   edgeNetwork: string
   gameNetwork: string
   instanceContainer(instanceId: string): string
+  /** Retired: removed as the Relay starts, if still there. */
   limboContainer: string
   relayEdgeAlias: string
   relayEdgeNetwork: string
+  /** Retired: removed as the Relay starts, if still there. */
   tailscaleContainer: string
   tailscaleStackContainer(stackId: string): string
   tailscaleStackDnsContainer(stackId: string): string

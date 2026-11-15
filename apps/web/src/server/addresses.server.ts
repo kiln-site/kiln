@@ -431,9 +431,7 @@ export const applyManagedDomainAddressesEffect = Effect.fn(
   const addresses = yield* loadManagedDomainAddressesEffect()
   return instances.map((instance) => ({
     ...instance,
-    connectAddress: instance.tailscale.enabled
-      ? instance.connectAddress
-      : managedAddressForInstance(addresses, instance),
+    connectAddress: managedAddressForInstance(addresses, instance),
   }))
 })
 

@@ -30,7 +30,6 @@ const server = (id: string): DirectoryInstance => ({
   implementation: "Paper",
   version: "1.21",
   connectAddress: "play.example.test:25565",
-  tailscale: { enabled: false },
 })
 
 const disabledCache = Layer.succeed(AppCache)({

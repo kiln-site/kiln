@@ -9,9 +9,6 @@ import {
   relayProxyDiagnosticsSchema,
   relayProxyModeSchema,
   relayProxySettingsSchema,
-  relayTailscaleInstallSchema,
-  relayTailscaleOverviewSchema,
-  relayTailscaleSettingsSchema,
 } from "@workspace/contracts"
 import { z } from "zod"
 
@@ -66,12 +63,6 @@ const relayProxyInputSchema = relayProxySettingsSchema.extend({
 const relayProxyResponseSchema = z.object({
   diagnostics: relayProxyDiagnosticsSchema,
   settings: relayProxySettingsSchema,
-})
-const relayTailscaleInputSchema = relayTailscaleSettingsSchema.extend({
-  relayId: relayFingerprintSchema,
-})
-const relayTailscaleInstallInputSchema = relayTailscaleInstallSchema.extend({
-  relayId: relayFingerprintSchema,
 })
 const relayRoleSchema = z.enum(["custom", "full_access", "read_only"])
 const createRelaySchema = z.object({
@@ -813,106 +804,6 @@ export const checkRelayPublicRoute = createServerFn({ method: "POST" })
       user: await requireEligibleResourceUser(),
     })
   )
-
-export const getRelayTailscale = createServerFn({ method: "GET" })
-  .validator(relayIdSchema)
-  .handler(async ({ data }) => {
-    await requireRelayAdministrator(data.id, "relay.configure")
-    const [relay, { relayRpc }] = await Promise.all([
-      enabledRelay(data.id),
-      import("@/lib/relay-connection"),
-    ])
-    return relayTailscaleOverviewSchema.parse(
-      await relayRpc(relay, "relay.tailscale.read", {}, 15_000)
-    )
-  })
-
-const saveRelayTailscale = operation<
-  z.infer<typeof relayTailscaleInputSchema>
->()({
-  name: "relay.tailscale.save",
-  doing: "Changing this Relay's Tailscale",
-  authorize: ({ input, user }) => relayAdministration(user, input.relayId),
-  locks: ({ input }) => [exclusive(relayPart(input.relayId, "tailscale"))],
-  run: ({ context: { user }, input }) =>
-    promiseEffect(async () => {
-      const [relay, { relayRpc }] = await Promise.all([
-        enabledRelay(input.relayId),
-        import("@/lib/relay-connection"),
-      ])
-      const settings = relayTailscaleSettingsSchema.parse({
-        dnsPort: input.dnsPort,
-        domain: input.domain,
-        hostname: input.hostname,
-      })
-      return relayTailscaleOverviewSchema.parse(
-        await relayRpc(
-          relay,
-          "relay.tailscale.write",
-          settings,
-          90_000,
-          user.id
-        )
-      )
-    }),
-  audit: ({ input }) => relayAudit(input.relayId),
-  publish: ({ input }) => publishRelayTailscaleChange(input.relayId),
-})
-
-export const updateRelayTailscale = createServerFn({ method: "POST" })
-  .validator(relayTailscaleInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(saveRelayTailscale, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
-
-const installTailscale = operation<
-  z.infer<typeof relayTailscaleInstallInputSchema>
->()({
-  name: "relay.tailscale.install",
-  doing: "Changing this Relay's Tailscale",
-  authorize: ({ input, user }) => relayAdministration(user, input.relayId),
-  locks: ({ input }) => [exclusive(relayPart(input.relayId, "tailscale"))],
-  run: ({ context: { user }, input }) =>
-    promiseEffect(async () => {
-      const [relay, { relayRpc }] = await Promise.all([
-        enabledRelay(input.relayId),
-        import("@/lib/relay-connection"),
-      ])
-      const install = relayTailscaleInstallSchema.parse({
-        authKey: input.authKey,
-      })
-      return relayTailscaleOverviewSchema.parse(
-        await relayRpc(
-          relay,
-          "relay.tailscale.install",
-          install,
-          240_000,
-          user.id
-        )
-      )
-    }),
-  audit: ({ input }) => relayAudit(input.relayId),
-  publish: ({ input }) => publishRelayTailscaleChange(input.relayId),
-})
-
-export const installRelayTailscale = createServerFn({ method: "POST" })
-  .validator(relayTailscaleInstallInputSchema)
-  .handler(async ({ data }) =>
-    runOperationPromise(installTailscale, data, {
-      user: await requireEligibleResourceUser(),
-    })
-  )
-
-function publishRelayTailscaleChange(relayId: string): void {
-  publishRealtimeChange({
-    audience: { kind: "relays", relayIds: [relayId] },
-    scope: { relayId },
-    topics: ["tailscale"],
-    type: "hearth.invalidate",
-  })
-}
 
 /** A machine client can operate directly against every child, so delegation uses Relay-wide authority. */
 function requireMachineClientDelegation(

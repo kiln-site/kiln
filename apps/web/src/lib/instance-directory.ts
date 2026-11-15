@@ -13,7 +13,6 @@ const Metadata = Schema.Struct({
   connectAddress: Schema.String,
   publicHost: Schema.optionalKey(Schema.String),
   publicPort: Schema.optionalKey(Schema.Number),
-  tailscaleEnabled: Schema.Boolean,
 })
 const MetadataJson = Schema.fromJsonString(Metadata)
 
@@ -28,7 +27,6 @@ export type DirectoryInstance = Pick<
   | "connectAddress"
   | "publicHost"
   | "publicPort"
-  | "tailscale"
 >
 
 export function instanceDirectoryMetadata(instance: DirectoryInstance) {
@@ -44,7 +42,6 @@ export function instanceDirectoryMetadata(instance: DirectoryInstance) {
     ...(instance.publicPort === undefined
       ? {}
       : { publicPort: instance.publicPort }),
-    tailscaleEnabled: instance.tailscale.enabled,
   })
 }
 

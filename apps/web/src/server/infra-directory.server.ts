@@ -42,22 +42,13 @@ export const readInfraServerDirectory = Effect.fn("Infra.directory.servers")(
         }).has("instance.read")
       )
         return []
-      const {
-        publicHost: _host,
-        publicPort: _port,
-        tailscaleEnabled,
-        ...metadata
-      } = record
+      const { publicHost: _host, publicPort: _port, ...metadata } = record
       return [
         {
           ...metadata,
           // A managed domain applies only while it still points at this
           // server's public endpoint.
-          connectAddress: tailscaleEnabled
-            ? record.connectAddress
-            : managedAddressForInstance(addresses, record),
-          // On a tailnet, where its connect address is the tailnet one.
-          tailscale: tailscaleEnabled,
+          connectAddress: managedAddressForInstance(addresses, record),
           relayName,
         },
       ]

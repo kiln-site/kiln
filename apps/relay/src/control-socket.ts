@@ -1818,17 +1818,9 @@ function actionForRequest(request: RelayControlRequest): RelayAction | null {
       return "relay.configure"
     case "relay.audit.list":
       return "relay.audit.read"
-    case "relay.networking.read":
-      return "instance.network.read"
-    case "relay.networking.write":
-      return "relay.configure"
-    case "relay.tailscale.read":
     case "relay.tailscale.stack.list":
     case "relay.tailscale.stack.state":
       return "instance.network.read"
-    case "relay.tailscale.install":
-    case "relay.tailscale.write":
-      return "relay.configure"
     case "relay.tailscale.stack.apply":
       return "instance.create"
     case "relay.tailscale.stack.dns":
