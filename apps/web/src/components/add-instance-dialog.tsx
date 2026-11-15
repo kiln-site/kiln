@@ -104,10 +104,7 @@ const panes = {
   tunnel: AddTunnelPane,
 } satisfies Record<AddableKind, unknown>
 
-const addableKinds: ReadonlyArray<AddableKind> = [
-  ...pickableBrickKinds,
-  "tunnel",
-]
+const addableKinds: ReadonlyArray<AddableKind> = pickableBrickKinds
 
 const someRelayCreates = ({
   relays,

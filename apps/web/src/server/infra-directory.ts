@@ -48,7 +48,9 @@ export const getServerNavigation = createServerFn({ method: "GET" })
   })
 
 export const getInfraRelayOptions = createServerFn({ method: "GET" })
-  .validator(Schema.decodeUnknownSync(Schema.Literals(["app", "database"])))
+  .validator(
+    Schema.decodeUnknownSync(Schema.Literals(["app", "database", "tunnel"]))
+  )
   .handler(async ({ data }) => {
     const user = await requireEligibleResourceUser()
     setResponseHeader("Cache-Control", "no-store")

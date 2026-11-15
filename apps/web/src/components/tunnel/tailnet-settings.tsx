@@ -61,11 +61,14 @@ export function loginComplete(
 }
 
 export function TailscaleLoginFields({
+  compact = false,
   disabled,
   hasSecret,
   values,
   onChange,
 }: {
+  /** One field a row, for a narrow column. */
+  compact?: boolean
   disabled?: boolean
   /** A saved secret stays when this is left blank. */
   hasSecret: boolean
@@ -77,7 +80,7 @@ export function TailscaleLoginFields({
     (event: React.ChangeEvent<HTMLInputElement>) =>
       onChange({ ...values, [field]: event.target.value })
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <div className={compact ? "grid gap-3" : "grid gap-4 sm:grid-cols-2"}>
       <label className="block">
         <span className="mb-2 block text-xs font-medium">OAuth client ID</span>
         <Input
@@ -100,7 +103,7 @@ export function TailscaleLoginFields({
           className="font-mono"
         />
       </label>
-      <label className="block sm:col-span-2">
+      <label className={compact ? "block" : "block sm:col-span-2"}>
         <span className="mb-2 block text-xs font-medium">
           OAuth client secret
         </span>

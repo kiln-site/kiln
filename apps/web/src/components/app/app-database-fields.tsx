@@ -1,9 +1,7 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import type { DatabaseEngine } from "@workspace/contracts"
-import { ChevronsUpDown, Plus } from "lucide-react"
-
-import { Button } from "@workspace/ui/components/button"
+import { Plus } from "lucide-react"
 
 import { engineLabel } from "@/components/database/database-presentation"
 import { NewDatabaseDialog } from "@/components/database/new-database-dialog"
@@ -11,13 +9,12 @@ import {
   newDatabaseInput,
   type NewDatabaseValues,
 } from "@/components/database/new-database-form"
-import {
-  DrawerPopover,
-  DrawerPopoverContent,
-  DrawerPopoverTrigger,
-} from "@/components/drawer-popover"
 import { InstanceCard } from "@/components/instance-card"
 import { DatabaseKindIcon } from "@/components/instance-kind-icon"
+import {
+  InstancePickerField,
+  PickerPlaceholder,
+} from "@/components/instance-picker-field"
 import {
   InstancePickerContent,
   InstancePickerFooterAction,
@@ -85,7 +82,6 @@ export const AppDatabaseFields = React.memo(function AppDatabaseFields({
   onChange: (draft: AppDatabaseDraft) => void
   relayId: string
 }) {
-  const [open, setOpen] = React.useState(false)
   const [creating, setCreating] = React.useState(false)
   const selectConnectable = React.useMemo(
     () => connectableOn(relayId),
@@ -119,53 +115,26 @@ export const AppDatabaseFields = React.memo(function AppDatabaseFields({
         kind: "existing",
         name: database.name,
       })
-      setOpen(false)
     },
     [databases, onChange]
   )
-  const selectNone = React.useCallback(() => {
-    onChange(noAppDatabase)
-    setOpen(false)
-  }, [onChange])
-  const startCreating = React.useCallback(() => {
-    setOpen(false)
-    setCreating(true)
-  }, [])
-  // The new database's dialog takes focus; the trigger mustn't take it back.
-  const keepCreatingFocus = React.useCallback(
-    (event: Event) => {
-      if (creating) event.preventDefault()
-    },
-    [creating]
-  )
-
   return (
     <div>
-      <span className="mb-2 block text-xs font-medium">Database</span>
-      <DrawerPopover open={open} onOpenChange={setOpen}>
-        <DrawerPopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            role="combobox"
-            aria-expanded={open}
-            aria-label="Database"
-            className="h-12 w-full justify-between gap-3 px-2 font-normal"
-          >
-            <AppDatabaseSummary
-              appName={appName}
-              draft={draft}
-              relayId={relayId}
-            />
-            <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
-          </Button>
-        </DrawerPopoverTrigger>
-        <DrawerPopoverContent
-          title="Databases"
-          align="start"
-          className="z-[70] w-(--radix-popover-trigger-width) min-w-72 overflow-hidden p-0"
-          onCloseAutoFocus={keepCreatingFocus}
-        >
+      <InstancePickerField
+        // The new database's dialog takes focus; the trigger mustn't take
+        // it back.
+        keepFocus={creating}
+        label="Database"
+        title="Databases"
+        value={
+          <AppDatabaseSummary
+            appName={appName}
+            draft={draft}
+            relayId={relayId}
+          />
+        }
+      >
+        {(close) => (
           <InstancePickerContent
             ariaLabel="Databases"
             emptyMessage="No databases on this Relay"
@@ -175,7 +144,10 @@ export const AppDatabaseFields = React.memo(function AppDatabaseFields({
                 <InstancePickerFooterAction
                   icon={Plus}
                   label="Create a new database"
-                  onClick={startCreating}
+                  onClick={() => {
+                    close()
+                    setCreating(true)
+                  }}
                 />
               )
             }
@@ -183,15 +155,21 @@ export const AppDatabaseFields = React.memo(function AppDatabaseFields({
               <InstancePickerHeaderAction
                 label="No database"
                 selected={draft.kind === "none"}
-                onClick={selectNone}
+                onClick={() => {
+                  onChange(noAppDatabase)
+                  close()
+                }}
               />
             }
             items={items}
             selectedKeys={selectedKeys}
-            onSelect={select}
+            onSelect={(item) => {
+              select(item)
+              close()
+            }}
           />
-        </DrawerPopoverContent>
-      </DrawerPopover>
+        )}
+      </InstancePickerField>
       <p className="type-meta mt-2 text-muted-foreground">
         A database joins the app's private network, with its credentials in the
         environment as <span className="font-mono">DB_*</span> variables.
@@ -241,22 +219,18 @@ function AppDatabaseSummary({
   }
   const creating = draft.kind === "new"
   return (
-    <span className="flex min-w-0 flex-1 items-center gap-2 text-left">
-      <span className="grid size-7 shrink-0 place-items-center rounded-md bg-muted/55">
-        <DatabaseKindIcon className="size-3.5" />
-      </span>
-      <span className="min-w-0">
-        <span className="type-control-sm block truncate">
-          {creating
-            ? draft.name.trim() || appName || "New database"
-            : "No database"}
-        </span>
-        <span className="type-meta block truncate text-muted-foreground">
-          {creating
-            ? `New ${engineLabel(draft.engine)} database`
-            : "Connect one later from the app's Network page"}
-        </span>
-      </span>
-    </span>
+    <PickerPlaceholder
+      icon={<DatabaseKindIcon className="size-3.5" />}
+      meta={
+        creating
+          ? `New ${engineLabel(draft.engine)} database`
+          : "Connect one later from the app's Network page"
+      }
+      name={
+        creating
+          ? draft.name.trim() || appName || "New database"
+          : "No database"
+      }
+    />
   )
 }

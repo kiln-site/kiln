@@ -6,11 +6,12 @@ import {
   HardDrive,
   RadioTower,
   Server,
-  Waypoints,
 } from "lucide-react"
 import type { LucideProps } from "lucide-react"
 
 import { cn } from "@workspace/ui/lib/utils"
+
+import { BoxesLinked } from "@/components/boxes-linked-icon"
 
 export type InstanceKind = "app" | "database" | "relay" | "server" | "tunnel"
 
@@ -74,7 +75,10 @@ export function DatabaseKindIcon({ className, ...props }: LucideProps) {
 
 export function TunnelKindIcon({ className, ...props }: LucideProps) {
   return (
-    <Waypoints className={cn(className, instanceKindTones.tunnel)} {...props} />
+    <BoxesLinked
+      className={cn(className, instanceKindTones.tunnel)}
+      {...props}
+    />
   )
 }
 

@@ -3,14 +3,16 @@ import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { Brick } from "@workspace/contracts"
 import { CircleAlert } from "lucide-react"
 
+import { InstanceCard } from "@/components/instance-card"
+import { RelayKindIcon } from "@/components/instance-kind-icon"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
-
+  InstancePickerContent,
+  type InstancePickerItem,
+} from "@/components/instance-picker"
+import {
+  InstancePickerField,
+  PickerPlaceholder,
+} from "@/components/instance-picker-field"
 import { normalizeArchitecture } from "@/lib/architecture"
 import { relayConnectionQueryOptions } from "@/lib/query-options"
 import { selectRelayConnected } from "@/lib/relay-selectors"
@@ -25,8 +27,6 @@ export interface BrickRelayOption {
   /** Unknown for a Relay that hasn't said, which then suits every Brick. */
   nodeArch?: string | null
 }
-
-const NO_RELAY_OPTION_VALUE = "__no-relay-option__"
 
 function relaySupportsBrick(
   relay: BrickRelayOption,
@@ -82,66 +82,74 @@ export const BrickRelayField = React.memo(function BrickRelayField({
   value: string
 }) {
   const { compatible, connected } = useBrickRelayReady(relays, value, brick)
-  const compatibleRelays = relays.filter((relay) =>
-    relaySupportsBrick(relay, brick)
+  const items = React.useMemo(
+    () => relays.map((relay) => relayItem(relay, brick)),
+    [brick, relays]
+  )
+  const selectedKeys = React.useMemo(
+    () => new Set(value ? [value] : []),
+    [value]
   )
   const selected = relays.find((relay) => relay.id === value)
+  const anyCompatible = items.some((item) => !item.disabled)
 
   return (
     <>
-      <label className="block space-y-1.5 text-xs font-medium text-muted-foreground">
-        <span>Relay</span>
-        <Select
-          value={value}
-          onValueChange={(next) => {
-            if (next !== NO_RELAY_OPTION_VALUE) onChange(next)
-          }}
-          disabled={disabled}
-          required
-        >
-          <SelectTrigger className="h-8 w-full [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:flex-1 [&_[data-slot=select-value]]:overflow-hidden [&_[data-slot=select-value]]:text-left [&_[data-slot=select-value]]:text-ellipsis [&_[data-slot=select-value]]:whitespace-nowrap">
-            <SelectValue
-              placeholder={
+      <InstancePickerField
+        disabled={disabled}
+        label="Relay"
+        labelClassName="mb-1.5 block text-xs font-medium text-muted-foreground"
+        title="Choose a Relay"
+        value={
+          selected ? (
+            <InstanceCard
+              className="min-w-0 flex-1 gap-2 text-left"
+              iconClassName="size-7 border-0 bg-muted/55"
+              instance={{
+                id: selected.id,
+                kind: "relay",
+                relayId: selected.id,
+              }}
+              meta={relayMeta(selected, brick)}
+              name={selected.name}
+              nameClassName="type-control-sm"
+              showFavorite={false}
+            />
+          ) : (
+            <PickerPlaceholder
+              icon={<RelayKindIcon className="size-3.5" />}
+              meta={
                 relays.length === 0
-                  ? "No Relays available"
-                  : compatibleRelays.length === 0
-                    ? "No compatible Relays"
-                    : "Select a Relay"
+                  ? "You can't create this on any Relay"
+                  : anyCompatible
+                    ? "Where it runs"
+                    : "None runs this Brick's architecture"
+              }
+              name={
+                relays.length === 0 || !anyCompatible
+                  ? "No Relay available"
+                  : "Choose a Relay"
               }
             />
-          </SelectTrigger>
-          <SelectContent>
-            {relays.length === 0 ? (
-              <SelectItem value={NO_RELAY_OPTION_VALUE} disabled>
-                No Relays available
-              </SelectItem>
-            ) : (
-              <>
-                {compatibleRelays.length === 0 ? (
-                  <SelectItem value={NO_RELAY_OPTION_VALUE} disabled>
-                    No compatible Relays
-                  </SelectItem>
-                ) : null}
-                {relays.map((relay) => {
-                  const supported = relaySupportsBrick(relay, brick)
-                  return (
-                    <SelectItem
-                      key={relay.id}
-                      value={relay.id}
-                      disabled={!supported}
-                    >
-                      {relay.name}
-                      {supported
-                        ? ""
-                        : ` — incompatible (${displayArchitecture(relay.nodeArch)})`}
-                    </SelectItem>
-                  )
-                })}
-              </>
-            )}
-          </SelectContent>
-        </Select>
-      </label>
+          )
+        }
+      >
+        {(close) => (
+          <InstancePickerContent
+            ariaLabel="Relays"
+            emptyMessage="No Relay you can create this on"
+            favoritesFilter={false}
+            filterBar={false}
+            includeKindGroups={false}
+            items={items}
+            selectedKeys={selectedKeys}
+            onSelect={(item) => {
+              onChange(item.key)
+              close()
+            }}
+          />
+        )}
+      </InstancePickerField>
 
       {compatible && !connected && value ? (
         <p className="text-xs leading-relaxed text-amber-300 light:text-amber-700">
@@ -161,3 +169,27 @@ export const BrickRelayField = React.memo(function BrickRelayField({
     </>
   )
 })
+
+// A Relay that can't run the Brick stays listed, disabled, saying why.
+function relayItem(
+  relay: BrickRelayOption,
+  brick: Brick | null
+): InstancePickerItem {
+  return {
+    disabled: !relaySupportsBrick(relay, brick),
+    identity: { id: relay.id, kind: "relay", relayId: relay.id },
+    key: relay.id,
+    meta: relayMeta(relay, brick),
+    name: relay.name,
+    searchText: relay.id,
+  }
+}
+
+function relayMeta(relay: BrickRelayOption, brick: Brick | null): string {
+  if (!relaySupportsBrick(relay, brick)) {
+    return `Runs ${displayArchitecture(relay.nodeArch)}, which this Brick doesn't`
+  }
+  return relay.nodeArch
+    ? `${relay.id} · ${normalizeArchitecture(relay.nodeArch)}`
+    : relay.id
+}

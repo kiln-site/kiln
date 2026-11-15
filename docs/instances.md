@@ -302,8 +302,10 @@ primary addresses. Its permissions of its own follow.
 
 ### Pages
 
-- **Infrastructure → Tunnels** (`/infra/tunnels`) lists tailnets and their
-  tunnels, and replaces `/infra/tailscale`. Anyone who reads instances on
+- **Infrastructure → Tunnels** (`/infra/tunnels`) lists every tunnel, one
+  row each on the table every kind's list uses, with the tailnet it joins as
+  a column; the Tailnets menu opens each tailnet's page, one with no tunnels
+  among them. It replaces `/infra/tailscale`. Anyone who reads instances on
   a Relay sees its tunnels there, each in its tailnet with what it
   connects on that Relay, and what they may do with each
   (`getTailnets`); only a platform administrator changes a tailnet.
@@ -311,9 +313,17 @@ primary addresses. Its permissions of its own follow.
   with its names, its TLDs, its Tailscale login, and deleting it.
 - **A tunnel's page** (`/tunnel/$id`): Info, Connected, Logs and Terminal,
   from the components every instance's pages share.
-- The one Add dialog has Tunnel, whose only type is Tailscale: pick a Relay,
-  then a new tailnet (its name, first TLD and Tailscale login) or one that
-  has no tunnel there yet. A tunnel comes from Kiln's `tailscale` Brick.
+- The one Add dialog has Tunnel, which browses the catalogs' tunnel Bricks as
+  every kind browses its own; Kiln's `tailscale` Brick is the only one. Beside
+  it, a Relay from the instance picker, as every kind's Add pane picks one,
+  and a tailnet from a picker that lists the ones with no tunnel on that
+  Relay and offers to create the one typed, asking then for its first TLD
+  and Tailscale login. Tailscale logs in before the tunnel is ready, which a
+  toast follows; a request dropped on the way back is checked against what
+  Hearth has before it reads as a failure. A field that picks with the
+  instance picker, and offers to create what's typed, is one shared piece
+  (`InstancePickerField`, `pickerCreateItem`), as volumes and an App's
+  database pick too.
 - A tailnet keeps the Relays it has tunnels on, so a tunnel can be added
   before anything connects through it, and deleted from its page, which
   disconnects what it connected. Built: the pages, the Add dialog, the
